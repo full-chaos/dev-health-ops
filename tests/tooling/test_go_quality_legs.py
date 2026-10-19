@@ -40,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CHECK_GO = ROOT / "ci" / "check_go.sh"
 WEIGHTS = ROOT / "ci" / "go_race_weights.tsv"
 SHARD_AWK = ROOT / "ci" / "go_race_shard.awk"
+SOLO = ROOT / "ci" / "go_race_solo.tsv"
 WORKFLOW = ROOT / ".github" / "workflows" / "go-quality.yml"
 DEFAULT_WEIGHT = 2
 
@@ -1118,3 +1119,194 @@ def test_the_goflags_scrub_stays_so_trimpath_is_explicit() -> None:
     assert "-u GOFLAGS" in line, (
         "the GOFLAGS scrub must stay: -trimpath is an explicit flag, not an inherited one"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. CHAOS-10289: packages that run alone in a race leg (ci/go_race_solo.tsv).
+# ---------------------------------------------------------------------------
+
+
+def _solo_rows() -> list[str]:
+    return [
+        line.split("\t")[0]
+        for line in SOLO.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+
+
+def _shard_part(
+    mod: str, pkgs: list[str], shard: int, count: int, *, solo: Path, part: str = ""
+) -> list[str]:
+    args = ["awk", "-v", f"mod={mod}", "-v", f"shard={shard}", "-v", f"count={count}"]
+    args += ["-v", f"weights={WEIGHTS}", "-v", f"solo={solo}"]
+    if part:
+        args += ["-v", f"part={part}"]
+    args += ["-f", str(SHARD_AWK)]
+    return subprocess.run(
+        args,
+        input="\n".join(pkgs) + "\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+
+
+def test_fixturescli_is_pinned_to_run_alone_in_a_race_leg() -> None:
+    # Its race time was 10.7 s beside idle packages and 430-600 s beside heavy ones: no weight places a package away from
+    # every heavy neighbour, so it leaves the weight-balanced split and runs alone, after the leg's other packages.
+    assert "internal/fixturescli" in _solo_rows()
+    reasons = [
+        line.split("\t")[1]
+        for line in SOLO.read_text().splitlines()
+        if line.startswith("internal/fixturescli\t")
+    ]
+    assert reasons and reasons[0].strip(), "a solo row without its reason"
+    mod, pkgs = _go_list()
+    pkgs = [p for p in pkgs if p != f"{mod}/internal/providersync"]
+    target = f"{mod}/internal/fixturescli"
+    assert target in pkgs
+    for count in (1, 2, 3, 4):
+        shared: list[str] = []
+        alone: list[str] = []
+        for k in range(1, count + 1):
+            shared += _shard_part(mod, pkgs, k, count, solo=SOLO)
+            alone += _shard_part(mod, pkgs, k, count, solo=SOLO, part="solo")
+        assert alone == [target], (count, alone)
+        assert target not in shared, (
+            f"{target} is still in a shared split at count={count}"
+        )
+        assert sorted(shared + alone) == sorted(pkgs), (
+            f"not a partition at count={count}"
+        )
+
+
+def test_a_shard_with_no_solo_file_splits_every_package_as_before(
+    tmp_path: Path,
+) -> None:
+    mod, pkgs = _go_list()
+    pkgs = [p for p in pkgs if p != f"{mod}/internal/providersync"]
+    missing = tmp_path / "none.tsv"
+    for count in (2, 3):
+        for k in range(1, count + 1):
+            assert _shard_part(mod, pkgs, k, count, solo=missing) == _shard(
+                mod, pkgs, k, count
+            )
+            assert _shard_part(mod, pkgs, k, count, solo=missing, part="solo") == []
+
+
+def test_the_solo_split_is_a_partition_whatever_the_solo_rows_say(
+    tmp_path: Path,
+) -> None:
+    pkgs = [f"m/p{i}" for i in range(23)]
+    solo = tmp_path / "solo.tsv"
+    solo.write_text("# c\np3\tr\np4\tr\np22\tr\nnot-a-package\tr\n", encoding="utf-8")
+    weights = tmp_path / "w.tsv"
+    weights.write_text("p3\t100000\np4\t0\np5\t-7\n", encoding="utf-8")
+    for count in (1, 2, 4, 7):
+        shared: list[str] = []
+        alone: list[str] = []
+        for k in range(1, count + 1):
+            for part, sink in (("", shared), ("solo", alone)):
+                args = [
+                    "awk",
+                    "-v",
+                    "mod=m",
+                    "-v",
+                    f"shard={k}",
+                    "-v",
+                    f"count={count}",
+                ]
+                args += [
+                    "-v",
+                    f"weights={weights}",
+                    "-v",
+                    f"solo={solo}",
+                    "-v",
+                    f"part={part}",
+                ]
+                args += ["-f", str(SHARD_AWK)]
+                sink += subprocess.run(
+                    args,
+                    input="\n".join(pkgs) + "\n",
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.split()
+        assert sorted(alone) == ["m/p22", "m/p3", "m/p4"], (count, alone)
+        assert sorted(shared + alone) == sorted(pkgs), count
+
+
+def test_the_race_leg_runs_its_solo_package_last_and_in_its_own_go_test(
+    tmp_path: Path,
+) -> None:
+    mod, pkgs = _go_list()
+    target = f"{mod}/internal/fixturescli"
+    owners = 0
+    for shard in (1, 2, 3):
+        proc, calls = _run_check_go(
+            tmp_path / f"s{shard}", "ci-leg", "race", str(shard), "3"
+        )
+        assert proc.returncode == 0, proc.stderr[-1500:] + proc.stdout[-1500:]
+        carrying = [i for i, c in enumerate(calls) if target in c.split()]
+        if not carrying:
+            continue
+        owners += 1
+        solo_at = carrying[0]
+        assert len(carrying) == 1, f"{target} runs more than once in a leg: {calls}"
+        shared_at = [
+            i
+            for i, c in enumerate(calls)
+            if f"{mod}/cmd/dho" in c.split() and target not in c.split()
+        ]
+        provider_at = [
+            i for i, c in enumerate(calls) if c.endswith("./internal/providersync")
+        ]
+        assert shared_at and provider_at, calls
+        assert solo_at > max(shared_at + provider_at), (
+            f"{target} must run after the leg's other packages and its providersync slice: {calls}"
+        )
+        assert [w for w in calls[solo_at].split() if w.startswith(mod)] == [target], (
+            "the solo package must be the only package of its own go test"
+        )
+        assert " -race " in f" {calls[solo_at]} "
+        assert "solo, alone" in proc.stdout
+    assert owners == 1, "exactly one race leg runs the solo package"
+
+
+def test_a_solo_package_is_a_real_weighed_package(tmp_path: Path) -> None:
+    def census(text: str):
+        solo = tmp_path / "solo.tsv"
+        solo.write_text(text, encoding="utf-8")
+        return subprocess.run(
+            ["bash", str(CHECK_GO), "race-weights-rows"],
+            cwd=ROOT,
+            env={**os.environ, "GO_RACE_SOLO": str(solo)},
+            capture_output=True,
+            text=True,
+            timeout=280,
+            check=False,
+        )
+
+    green = census(SOLO.read_text())
+    assert green.returncode == 0, green.stderr[-1500:]
+    assert "1 solo" in green.stdout
+    no_row = census("internal/zz-no-weights-row\treason\n")
+    assert (
+        no_row.returncode != 0 and "no row in ci/go_race_weights.tsv" in no_row.stderr
+    )
+    twice = census("internal/fixturescli\ta\ninternal/fixturescli\tb\n")
+    assert twice.returncode != 0 and "twice" in twice.stderr
+    unsorted = census("internal/storage/clickhouse\ta\ninternal/fixturescli\tb\n")
+    assert unsorted.returncode != 0 and "not sorted" in unsorted.stderr
+    providersync = census("internal/providersync\ta\n")
+    assert providersync.returncode != 0 and "cannot be solo" in providersync.stderr
+    gone = subprocess.run(
+        ["bash", str(CHECK_GO), "race-weights-rows"],
+        cwd=ROOT,
+        env={**os.environ, "GO_RACE_SOLO": str(tmp_path / "absent.tsv")},
+        capture_output=True,
+        text=True,
+        timeout=280,
+        check=False,
+    )
+    assert gone.returncode != 0 and "race solo file missing" in gone.stderr

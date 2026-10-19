@@ -37,7 +37,7 @@ func FuzzParseLimit(f *testing.F) {
 func FuzzParseForwardedTrust(f *testing.F) {
 	for _, seed := range []struct{ value, host string }{
 		{"*", "203.0.113.9"}, {"127.0.0.1", "127.0.0.1"}, {"10.0.0.0/8, 192.0.2.1", "10.1.2.3"},
-		{"10.0.0.1/8", "10.0.0.1"}, {"::1,fe80::/10", "::1"}, {"unix:/run/app.sock", "unix:/run/app.sock"}, {"", ""}, {",,", " "},
+		{"10.0.0.1/8", "10.0.0.1"}, {"::1,fe80::/10", "::1"}, {"unix:/run/app.sock", "unix:/run/app.sock"}, {"", ""}, {",,", " "}, {"::%/", "::%/"},
 	} {
 		f.Add(seed.value, seed.host)
 	}

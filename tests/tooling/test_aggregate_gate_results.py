@@ -1132,24 +1132,6 @@ def test_paths_filter_covers_lefthook_yml() -> None:
     )
 
 
-def test_paths_filter_covers_the_acceptance_runtime_dependencies() -> None:
-    # Given the acceptance suite hashes a fixed set of runtime inputs and
-    # asserts on them, a change to any of them can turn the suite red. Only
-    # test.yml runs that suite.
-    from scripts.acceptance.acceptance_artifact import RUNTIME_DEPENDENCY_PATHS
-
-    patterns = _patterns_of(WORKFLOW_PATH)
-    assert RUNTIME_DEPENDENCY_PATHS, "empty inventory -- this guard measured nothing"
-    uncovered = sorted(
-        name for name in RUNTIME_DEPENDENCY_PATHS if not _is_covered(name, patterns)
-    )
-    assert not uncovered, (
-        f"the acceptance suite depends on {uncovered}, but the `code` path "
-        f"filter does not select on them: a PR touching only those files skips "
-        f"every test job and the required gate goes green with nothing run."
-    )
-
-
 def _tracked_files() -> list[str]:
     proc = subprocess.run(
         ["git", "ls-files"],

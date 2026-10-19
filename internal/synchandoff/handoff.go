@@ -20,7 +20,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
+
+// ErrUnnamedCaller refuses a Mint whose input names no Caller.
+var ErrUnnamedCaller = errors.New("the trigger names no caller")
 
 const (
 	occurrenceIdentityVersion = "sync_scheduler_occurrence_v1"
@@ -142,7 +146,18 @@ type MintInput struct {
 // The occurrence is written once per identity: when an occurrence with this
 // identity already exists (a replayed webhook request), neither it nor its
 // trigger is written again, and the returned Trigger reports Existing.
+//
+// An input with no Caller is refused with ErrUnnamedCaller before anything is
+// written: every trigger path names itself.
 func Mint(ctx context.Context, tx pgx.Tx, config *Config, input MintInput, now time.Time) (Trigger, error) {
+	if input.Caller == "" {
+		synclog.Default().Warn(ctx, synclog.MsgSyncTriggerRefusedUnnamedCaller,
+			synclog.SyncConfig(synclog.ParseID(config.ID)),
+			synclog.Text(synclog.KeyTriggeredBy, synclog.ParseLabel(input.TriggeredBy)),
+			synclog.Text(synclog.KeyTriggerMode, synclog.ParseLabel(input.Mode)))
+		processRefusalMetrics.observe(refusalUnnamedCaller)
+		return Trigger{}, ErrUnnamedCaller
+	}
 	if err := checkSelectedSources(ctx, tx, config, input); err != nil {
 		return Trigger{}, err
 	}

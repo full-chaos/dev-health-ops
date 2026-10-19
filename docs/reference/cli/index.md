@@ -1810,7 +1810,8 @@ organization id. It prints counts only, under `carry_team_ids`: `teams`,
 `admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
 `teams_already_keyed`, `manual_members_folded`, `keyed_teams_activated`, `deleted_keyed_teams`, `memberships`, `project_ownership`, `repo_ownership`,
 `link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`, `identity_drift_changes`,
-`identities`, `fallbacks`, `malformed_team_ids`, and `rows_written` (0 with `--dry-run`). A second
+`identities`, `fallbacks`, `malformed_team_ids`, `rows_written` (0 with `--dry-run`), and
+`kept_teams_not_restated` (a kept row the run planned to write again that was deleted after the run read it). A second
 run reports zero.
 
 ```bash

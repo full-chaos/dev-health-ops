@@ -233,6 +233,7 @@ type runner struct {
 	ctx            context.Context
 	venue          *venueoracle.Venue
 	goBase         string
+	external       bool
 	pySink, goSink *smtpcapture.Server
 	receipt        strings.Builder
 	// mails are each plane's messages so far, by "recipient|subject", the
@@ -244,7 +245,11 @@ type runner struct {
 // compares every answer and then every message each plane sent.
 func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Response {
 	r.t.Helper()
-	flushValkey(r.t, r.ctx, r.venue.ValkeyURI, r.venue.PythonValkeyURI)
+	if r.external {
+		venueoracle.ResetLimiterKeys(r.t, r.ctx, r.venue.ValkeyURI)
+	} else {
+		flushValkey(r.t, r.ctx, r.venue.ValkeyURI, r.venue.PythonValkeyURI)
+	}
 	pyRequests := make([]venueoracle.Request, len(steps))
 	for index, s := range steps {
 		pyRequests[index] = s.python
@@ -457,15 +462,34 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	pySink, goSink := smtpcapture.Start(t), smtpcapture.Start(t)
+	// An external target (DEVHEALTH_AUTH_ORACLE_BASE_URL) is go-api or auth-service already running on its own
+	// stores; the corpus reaches it by URL and its stores by URI, as the session corpus does. Checked before
+	// anything starts.
+	externalBase := os.Getenv(sessionscenario.EnvBaseURL)
+	stores, isExternal, err := venueoracle.ExternalRequired(externalBase)
+	if err != nil {
+		t.Fatalf("%s: %v", sessionscenario.EnvBaseURL, err)
+	}
+	var external *venueoracle.ExternalStores
+	if isExternal {
+		external = &stores
+		if err := smtpcapture.ValidateExternalListen(smtpcapture.ListenAddr()); err != nil {
+			t.Fatalf("%s: %v", smtpcapture.EnvListen, err)
+		}
+	}
+	pySink, goSink := smtpcapture.Start(t), smtpcapture.StartAt(t, smtpcapture.ListenAddr())
 	pyHost, pyPort := pySink.HostPort(t)
-	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external,
 		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
 			"SMTP_HOST=" + pyHost, "SMTP_PORT=" + strconv.Itoa(pyPort), "APP_BASE_URL=" + appBaseURL},
 		Seed: seed,
 	})
-	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
+	metricsDatabases := []string{venue.PythonClickHouseDB, venue.GoClickHouseDB}
+	if external != nil {
+		metricsDatabases = metricsDatabases[:1]
+	}
+	for _, database := range metricsDatabases {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
 		if err != nil {
 			t.Fatal(err)
@@ -493,7 +517,10 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	}
 	r := &runner{golden: golden, t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
 		mails:  map[string]map[string][]sentMail{"python": {}, "go": {}},
-		goBase: startGoAPI(t, ctx, venue, admin.InviteConfig{Mail: goSender, TokenSecret: sessionscenario.Key, AppBaseURL: appBaseURL, AppBaseURLSet: true})}
+		goBase: externalBase, external: external != nil}
+	if r.goBase == "" {
+		r.goBase = startGoAPI(t, ctx, venue, admin.InviteConfig{Mail: goSender, TokenSecret: sessionscenario.Key, AppBaseURL: appBaseURL, AppBaseURLSet: true})
+	}
 	tok := venue.Tokens
 	const (
 		register = "/api/v1/auth/register"
@@ -620,15 +647,15 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		same("register: empty org name", post, register, "", `{"email": "emma@example.com", "password": "Emma-pass-2026", "full_name": "", "org_name": ""}`),
 		same("register: no names", post, register, "", `{"email": "ned@example.com", "password": "Ned-pass-2026"}`),
 	})
-	t.Setenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF ")
+	venueoracle.SetTargetEnv(t, isExternal, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF ")
 	r.batch("register without an org", []step{
 		same("register: solo, auto-org off", post, register, "", `{"email": "solo@example.com", "password": "Solo-pass-2026"}`),
 	})
-	t.Setenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", "maybe")
+	venueoracle.SetTargetEnv(t, isExternal, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", "maybe")
 	r.batch("register, unrecognized auto-org value", []step{
 		same("register: auto-org value not recognized keeps the default", post, register, "", `{"email": "maya@example.com", "password": "Maya-pass-2026"}`),
 	})
-	_ = os.Unsetenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER")
+	venueoracle.SetTargetEnv(t, isExternal, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", "")
 
 	// Batch: follow every link each plane mailed, with that plane's token.
 	link := func(recipient, subject string) func(string) string {

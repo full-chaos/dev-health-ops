@@ -113,8 +113,7 @@ func writtenIssueNumbers(result GitHubWorkItemsRESTResult) map[string]int {
 // An issue edited while the list is being read moves to the end of an update-ordered list and shifts every
 // later issue up by one place. Reading by page number then skips the issue that shifted across the page
 // boundary, and the window never writes it. 200 in-window issues, issue 50 edited after the first request
-// (its new update is past the window end): every other in-window issue must still be written exactly once, and
-// issue 50 at most once.
+// (its new update is past the window end): every in-window issue, issue 50 included, must be written exactly once.
 func TestGitHubWorkItemsIssueListSkipsNothingWhenAnIssueMovesWhileItIsRead(t *testing.T) {
 	t.Parallel()
 	updated := map[int]time.Time{}
@@ -139,8 +138,8 @@ func TestGitHubWorkItemsIssueListSkipsNothingWhenAnIssueMovesWhileItIsRead(t *te
 		}
 	}
 	// Issue 50 was read inside the window before it moved; its later update belongs to the next window.
-	if written["gh:Acme/API#50"] > 1 {
-		t.Fatalf("issue 50 written %d times, want at most once", written["gh:Acme/API#50"])
+	if written["gh:Acme/API#50"] != 1 {
+		t.Fatalf("issue 50 written %d times, want once", written["gh:Acme/API#50"])
 	}
 }
 
@@ -200,6 +199,62 @@ func TestGitHubWorkItemsIssueListTieGroupBeyondTheRequestCapFailsClosedWithAWarn
 		t.Fatal(err)
 	}
 	if want := `dev_health_github_work_items_issue_list_cap_exceeded_total{reason="page_cap"} 1`; !strings.Contains(rendered.String(), want) {
+		t.Errorf("metrics lack %q", want)
+	}
+}
+
+// The `since` key is sent in whole seconds, so the list holds an issue updated just before a fractional window
+// start, which the window before it wrote. The window writes only what is updated at or after its true start.
+func TestGitHubWorkItemsIssueListSkipsAnIssueBeforeAFractionalWindowStart(t *testing.T) {
+	t.Parallel()
+	claim := issueListClaim()
+	start := time.Date(2026, 7, 10, 12, 0, 0, 500_000_000, time.UTC)
+	claim.SinceAt = &start
+	sim := &issueListSimulator{t: t, updated: map[int]time.Time{
+		1: time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
+		2: time.Date(2026, 7, 10, 12, 0, 1, 0, time.UTC),
+	}}
+	result, err := (GitHubWorkItemsRESTCollector{}).Collect(
+		context.Background(), claim, gitHubPullRequestClient(t, fakehttp.Client(sim), "https://api.github.com"),
+		time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := writtenIssueNumbers(result)
+	if written["gh:Acme/API#1"] != 0 || written["gh:Acme/API#2"] != 1 {
+		t.Fatalf("written = %v, want issue 1 (before the start) skipped and issue 2 once", written)
+	}
+}
+
+// A same-second tie group of more than one page is paged by page number: the Info line carries the count and
+// the counter moves, so the operator sees how often the race window opens. A list without one counts nothing.
+func TestGitHubWorkItemsIssueListCountsATieGroupOfMoreThanOnePage(t *testing.T) {
+	var logged lockedLogBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	updated := map[int]time.Time{}
+	at := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	for number := 1; number <= 230; number++ {
+		updated[number] = at
+	}
+	sim := &issueListSimulator{t: t, updated: updated}
+	client := gitHubPullRequestClient(t, fakehttp.Client(sim), "https://api.github.com")
+	client.Metrics = providerfoundation.NewMetrics()
+	if _, err := (GitHubWorkItemsRESTCollector{}).Collect(
+		context.Background(), issueListClaim(), client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if output := logged.String(); !strings.Contains(output, "level=INFO msg=github_work_items_issue_list") ||
+		!strings.Contains(output, "tie_groups_over_one_page=1") || strings.Contains(output, "level=WARN") {
+		t.Errorf("Info line lacks the tie group count, or a Warn was logged: %s", output)
+	}
+	var rendered strings.Builder
+	if err := client.Metrics.WritePrometheus(&rendered); err != nil {
+		t.Fatal(err)
+	}
+	if want := `dev_health_github_work_items_issue_list_tie_paged_total{reason="same_second"} 1`; !strings.Contains(rendered.String(), want) {
 		t.Errorf("metrics lack %q", want)
 	}
 }

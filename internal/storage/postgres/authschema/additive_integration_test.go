@@ -269,6 +269,12 @@ var additiveExemptions = []additiveExemption{
 		reason: "(provider, subject) uniqueness is replaced by (issuer, provider, subject) in the same migration; " +
 			"keeping the old index would make issuer inert (CHAOS-10156, ruled by acp)",
 	},
+	{
+		version:    11,
+		regression: `constraint credential_registry.credential_registry_revoked_reason_code redefined "CHECK (((revoked_reason IS NULL) OR (revoked_reason ~ '^[a-z][a-z0-9_]{2,63}$'::text)))" -> "CHECK (((revoked_reason IS NULL) OR (revoked_reason = ANY (ARRAY['compromised'::text, 'owner_request'::text]))))"`,
+		reason: "revoked_reason is closed to the credential wire vocabulary; 0008's pattern admitted " +
+			"secret-shaped lowercase codes (CHAOS-10194, ruled by acp)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

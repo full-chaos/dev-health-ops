@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// m10Hash is a well-formed 32-byte digest, hex-prefixed for a bytea parameter.
+func m10Hash(tag string) string { return `\x` + tag + strings.Repeat("0", 64-len(tag)) }
+
 const (
 	m10Principal = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	m10Session   = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -86,10 +89,10 @@ func TestMigration0010SessionAndRefreshColumns(t *testing.T) {
 			t.Fatalf("insert %s: %v", token, err)
 		}
 	}
-	if err := guardedExec(ctx, env.admin, `UPDATE auth.refresh_credentials SET legacy_jti_hash = '\xbeef'::bytea WHERE token_hash = '\x03'::bytea`); err != nil {
+	if err := guardedExec(ctx, env.admin, `UPDATE auth.refresh_credentials SET legacy_jti_hash = $1::bytea WHERE token_hash = '\x03'::bytea`, m10Hash("beef")); err != nil {
 		t.Fatalf("set legacy_jti_hash: %v", err)
 	}
-	err = guardedExec(ctx, env.admin, `UPDATE auth.refresh_credentials SET legacy_jti_hash = '\xbeef'::bytea WHERE token_hash = '\x04'::bytea`)
+	err = guardedExec(ctx, env.admin, `UPDATE auth.refresh_credentials SET legacy_jti_hash = $1::bytea WHERE token_hash = '\x04'::bytea`, m10Hash("beef"))
 	m10Fail(t, err, "a second credential with the same legacy_jti_hash")
 	if err == nil || !strings.Contains(err.Error(), "legacy_jti_hash") {
 		t.Errorf("duplicate legacy_jti_hash must be refused by its unique index, got %v", err)
@@ -169,21 +172,21 @@ func TestMigration0010LinkCredentialsAndLoginAttempts(t *testing.T) {
 		return err
 	}
 	for _, purpose := range []string{"email_verification", "password_reset"} {
-		if err := link(purpose, `\x`+map[string]string{"email_verification": "a1", "password_reset": "a2"}[purpose]); err != nil {
+		if err := link(purpose, m10Hash(map[string]string{"email_verification": "a1", "password_reset": "a2"}[purpose])); err != nil {
 			t.Errorf("purpose %s refused: %v", purpose, err)
 		}
 	}
-	m10Fail(t, link("login", `\xa3`), "an unknown link purpose")
-	m10Fail(t, link("password_reset", `\xa2`), "a duplicate link token_hash")
+	m10Fail(t, link("login", m10Hash("a3")), "an unknown link purpose")
+	m10Fail(t, link("password_reset", m10Hash("a2")), "a duplicate link token_hash")
 
-	if _, err := env.admin.Exec(ctx, `INSERT INTO auth.login_attempts (identifier_hash) VALUES ('\xc1'::bytea)`); err != nil {
+	if _, err := env.admin.Exec(ctx, `INSERT INTO auth.login_attempts (identifier_hash) VALUES ($1::bytea)`, m10Hash("c1")); err != nil {
 		t.Fatalf("insert a login attempt: %v", err)
 	}
 	var count int
 	if err := env.admin.QueryRow(ctx, `SELECT attempt_count FROM auth.login_attempts`).Scan(&count); err != nil || count != 0 {
 		t.Errorf("attempt_count default = %d, %v; want 0", count, err)
 	}
-	_, err := env.admin.Exec(ctx, `INSERT INTO auth.login_attempts (identifier_hash) VALUES ('\xc1'::bytea)`)
+	_, err := env.admin.Exec(ctx, `INSERT INTO auth.login_attempts (identifier_hash) VALUES ($1::bytea)`, m10Hash("c1"))
 	m10Fail(t, err, "a second lockout row for the same identifier_hash")
 	_, err = env.admin.Exec(ctx, `UPDATE auth.login_attempts SET attempt_count = -1`)
 	m10Fail(t, err, "a negative attempt_count")
@@ -246,17 +249,119 @@ func TestMigration0010AppliesOverPopulatedSchema(t *testing.T) {
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
+	tables := []string{"principals", "sessions", "refresh_credentials", "external_identities"}
+	snapshot := func(strip string) map[string]string {
+		out := map[string]string{}
+		for _, table := range tables {
+			var doc string
+			if err := env.conn.QueryRow(ctx, `SELECT coalesce(jsonb_agg(to_jsonb(t) `+strip+` ORDER BY t.created_at, t.id::text), '[]')::text FROM auth.`+table+` t`).Scan(&doc); err != nil {
+				t.Fatalf("snapshot %s: %v", table, err)
+			}
+			if doc == "[]" {
+				t.Fatalf("snapshot of %s is empty; the control proves nothing", table)
+			}
+			out[table] = doc
+		}
+		return out
+	}
+	before := snapshot("")
 	if err := applyOne(ctx, env.conn, env.options, *tenth); err != nil {
 		t.Fatalf("0010 over populated rows: %v", err)
 	}
-	var revision int
-	var issuer string
-	var family string
-	if err := env.conn.QueryRow(ctx, `SELECT s.revision, e.issuer, r.family_id::text
-		FROM auth.sessions s, auth.external_identities e, auth.refresh_credentials r`).Scan(&revision, &issuer, &family); err != nil {
+	after := snapshot("- 'revision' - 'auth_time' - 'amr' - 'family_id' - 'parent_id' - 'legacy_jti_hash' - 'issuer'")
+	for _, table := range tables {
+		if before[table] != after[table] {
+			t.Errorf("0010 changed existing %s rows:\nbefore %s\nafter  %s", table, before[table], after[table])
+		}
+	}
+	var revision, rows int
+	var issuer, family string
+	if err := env.conn.QueryRow(ctx, `SELECT s.revision, e.issuer, r.family_id::text, (SELECT count(*) FROM auth.refresh_credentials)
+		FROM auth.sessions s, auth.external_identities e, auth.refresh_credentials r`).Scan(&revision, &issuer, &family, &rows); err != nil {
 		t.Fatalf("read migrated rows: %v", err)
 	}
-	if revision != 1 || issuer != "" || family == "" {
-		t.Errorf("migrated defaults = revision %d, issuer %q, family %q; want 1, empty, set", revision, issuer, family)
+	if revision != 1 || issuer != "" || family == "" || rows != 1 {
+		t.Errorf("migrated defaults = revision %d, issuer %q, family %q, rows %d; want 1, empty, set, 1", revision, issuer, family, rows)
+	}
+}
+
+// Hash columns take digests only: an address or a token written by mistake is
+// refused by the runtime role's own insert.
+func TestMigration0010HashColumnsRefuseNonDigests(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+	m10Seed(t, ctx, env)
+
+	_, err := env.runtime.Exec(ctx, `INSERT INTO auth.login_attempts (identifier_hash) VALUES ('alice@example.com'::bytea)`)
+	m10Fail(t, err, "an email address in login_attempts.identifier_hash")
+	_, err = env.runtime.Exec(ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at)
+		VALUES ($1, 'password_reset', 'plaintext-reset-token'::bytea, now() + interval '1 hour')`, m10Principal)
+	m10Fail(t, err, "a plaintext token in link_credentials.token_hash")
+	_, err = env.runtime.Exec(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, legacy_jti_hash)
+		VALUES ($1, $2, '\x21'::bytea, now() + interval '1 day', 'a-raw-jti'::bytea)`, m10Session, m10Principal)
+	m10Fail(t, err, "a raw jti in refresh_credentials.legacy_jti_hash")
+
+	if _, err := env.runtime.Exec(ctx, `INSERT INTO auth.login_attempts (identifier_hash) VALUES ($1::bytea)`, m10Hash("d1")); err != nil {
+		t.Errorf("a 32-byte digest was refused: %v", err)
+	}
+}
+
+// Every new security column refuses a write outside audit.Commit and accepts
+// the same write inside it, so the guard is exercised, not read from the
+// trigger text. Setting parent_id to NULL (the sweep's ON DELETE SET NULL)
+// stays allowed.
+func TestMigration0010SecurityColumnsAreGuardedByBehaviour(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+	m10Seed(t, ctx, env)
+
+	var first, second string
+	for i, token := range []string{`\x31`, `\x32`} {
+		var id string
+		if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+			VALUES ($1, $2, $3::bytea, now() + interval '1 day') RETURNING id::text`, m10Session, m10Principal, token).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = id
+		} else {
+			second = id
+		}
+	}
+	var linkID string
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at)
+		VALUES ($1, 'password_reset', $2::bytea, now() + interval '1 hour') RETURNING id::text`, m10Principal, m10Hash("e1")).Scan(&linkID); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		sql  string
+		args []any
+	}{
+		{"sessions.revision", `UPDATE auth.sessions SET revision = 2 WHERE id = $1`, []any{m10Session}},
+		{"sessions.auth_time", `UPDATE auth.sessions SET auth_time = now() WHERE id = $1`, []any{m10Session}},
+		{"sessions.amr", `UPDATE auth.sessions SET amr = '{pwd}' WHERE id = $1`, []any{m10Session}},
+		{"refresh_credentials.family_id", `UPDATE auth.refresh_credentials SET family_id = gen_random_uuid() WHERE id = $1`, []any{first}},
+		{"refresh_credentials.legacy_jti_hash", `UPDATE auth.refresh_credentials SET legacy_jti_hash = $2::bytea WHERE id = $1`, []any{first, m10Hash("f1")}},
+		{"refresh_credentials.parent_id", `UPDATE auth.refresh_credentials SET parent_id = $2::uuid WHERE id = $1`, []any{first, second}},
+		{"link_credentials.consumed_at", `UPDATE auth.link_credentials SET consumed_at = now() WHERE id = $1`, []any{linkID}},
+		{"link_credentials.expires_at", `UPDATE auth.link_credentials SET expires_at = now() + interval '1 year' WHERE id = $1`, []any{linkID}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := env.runtime.Exec(ctx, testCase.sql, testCase.args...)
+			if err == nil || !strings.Contains(err.Error(), "audit.Commit") {
+				t.Fatalf("an unguarded write was accepted or failed for another reason: %v", err)
+			}
+			if err := guardedExec(ctx, env.runtime, testCase.sql, testCase.args...); err != nil {
+				t.Fatalf("the same write inside a commit transaction was refused: %v", err)
+			}
+		})
+	}
+	if _, err := env.runtime.Exec(ctx, `UPDATE auth.refresh_credentials SET parent_id = NULL WHERE id = $1`, first); err != nil {
+		t.Errorf("clearing parent_id outside a commit transaction was refused: %v", err)
 	}
 }

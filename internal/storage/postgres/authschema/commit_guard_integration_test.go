@@ -184,7 +184,7 @@ var unguardedColumns = map[string]map[string]string{
 		"id": "lifecycle", "session_id": "lifecycle", "principal_id": "lifecycle", "superseded_by": "lifecycle",
 		"issued_at": "lifecycle", "consumed_at": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
 		"token_hash": "security", "expires_at": "security", "revoked_at": "security", "revoked_reason": "security",
-		"parent_id": "lifecycle", "family_id": "security", "legacy_jti_hash": "security",
+		"parent_id": "security", "family_id": "security", "legacy_jti_hash": "security",
 	},
 	"link_credentials": {
 		"id": "lifecycle", "created_at": "lifecycle",

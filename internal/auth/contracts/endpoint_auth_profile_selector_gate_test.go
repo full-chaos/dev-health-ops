@@ -283,11 +283,20 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 	case "credential_prefix":
 		return strings.HasPrefix(shape, name+"<")
 	case "authorization_scheme":
-		return strings.HasPrefix(head, "authorization: "+name)
+		rest, found := strings.CutPrefix(head, "authorization:")
+		return found && strings.EqualFold(markerTransportToken(rest), name)
 	case "dedicated_header", "signature_header":
-		return strings.HasPrefix(head, name)
+		return strings.EqualFold(markerTransportToken(head), name)
 	}
 	return false
+}
+
+func markerTransportToken(text string) string {
+	text = strings.TrimSpace(text)
+	if end := strings.IndexAny(text, " ,/("); end >= 0 {
+		return text[:end]
+	}
+	return text
 }
 
 func TestMarkerTransportCompareIsExact(t *testing.T) {

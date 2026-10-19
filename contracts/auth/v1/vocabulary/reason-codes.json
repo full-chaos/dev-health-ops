@@ -45,14 +45,19 @@
       "organization_updated",
       "principal_disabled",
       "principal_enabled",
+      "principal_projected",
+      "principal_provisioned",
+      "email_verified",
+      "password_changed",
       "identity_linked",
       "identity_unlinked",
+      "identity_projected",
       "policy_revision_activated",
       "entitlement_snapshot_applied",
       "denied_no_membership",
       "denied_no_grant",
       "denied_policy"
     ],
-    "note": "The codes used by authorization decisions and error.v1 in valid fixtures of this corpus, the revoked_reason values, and the 22 reason codes the merged audit producer (internal/audit attributeVocabulary) accepts. A Go test checks the producer's list against audit-event.v1."
+    "note": "The codes used by authorization decisions and error.v1 in valid fixtures of this corpus, the revoked_reason values, and the 27 reason codes the merged audit producer (internal/audit attributeVocabulary) accepts. A Go test checks the producer's list against audit-event.v1."
   }
 }

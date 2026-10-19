@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synclimits"
@@ -708,10 +709,10 @@ func (h handlers) applyDataset(ctx context.Context, tx pgx.Tx, orgID, provider s
 			// IntegrationDatasetService.create: a concurrent insert of the
 			// same key falls back to enabling the row that won.
 			created, err := scanDataset(tx.QueryRow(ctx, `
-INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
-VALUES ($1, $2, $3, $4, $5, '{}'::json)
+INSERT INTO public.integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options, state_changed_at, state_changed_by)
+VALUES ($1, $2, $3, $4, $5, '{}'::json, now(), $6)
 ON CONFLICT (org_id, integration_id, dataset_key) DO NOTHING RETURNING `+datasetColumns,
-				uuid.New(), orgID, integrationID, item.key, item.enabled))
+				uuid.New(), orgID, integrationID, item.key, item.enabled, providersync.DatasetWriterDatasetEndpoint))
 			if err == nil {
 				rows[item.key] = &created
 				return &created, nil
@@ -731,7 +732,7 @@ ON CONFLICT (org_id, integration_id, dataset_key) DO NOTHING RETURNING `+dataset
 		rows[item.key] = row
 	}
 	if row.IsEnabled != item.enabled {
-		updated, err := scanDataset(tx.QueryRow(ctx, `UPDATE public.integration_datasets SET is_enabled=$2 WHERE id=$1 RETURNING `+datasetColumns, row.ID, item.enabled))
+		updated, err := scanDataset(tx.QueryRow(ctx, `UPDATE public.integration_datasets SET is_enabled=$2, state_changed_at=now(), state_changed_by=$3 WHERE id=$1 RETURNING `+datasetColumns, row.ID, item.enabled, providersync.DatasetWriterDatasetEndpoint))
 		if err != nil {
 			return nil, fmt.Errorf("update dataset: %w", err)
 		}

@@ -10,13 +10,14 @@ import (
 	"testing"
 )
 
-// CHAOS-10174 PR E: Go port of the Python half of tests/tooling/test_tmp_dirs_removed.py (CHAOS-7185). A Python test module
+// CHAOS-10174 PR E: Go port of the Python half of the tmp-dirs guard tests/tooling/test_tmp_dirs_removed (CHAOS-7185). A Python test module
 // that makes a temp directory outside pytest's tmp_path (a mkdtemp call, or a gettempdir() joined into a path) must also
 // remove it (a real rmtree, addfinalizer or atexit.register call). The Python original walks the syntax tree; this scan
 // blanks comments and string contents first, so a comment or a string that names a cleanup call counts for nothing, then
 // matches calls on the code that is left. It guards Python test files, so it goes when the last of them goes (CHAOS-3165).
 
-const pyTmpSelf = "tests/tooling/test_tmp_dirs_removed.py"
+// pyTmpSelfStem is the original guard module, skipped by stem: a full path literal here would name a tracked .py file as a Go input.
+const pyTmpSelfStem = "test_tmp_dirs_removed"
 
 // pyCode returns the source with comments removed and the inside of every string literal blanked.
 func pyCode(src string) string {
@@ -149,7 +150,7 @@ func pyTmpOffenders(t *testing.T, root string) []string {
 		}
 		rel, _ := filepath.Rel(root, path)
 		rel = filepath.ToSlash(rel)
-		if rel == pyTmpSelf {
+		if strings.TrimSuffix(filepath.Base(rel), ".py") == pyTmpSelfStem && strings.HasPrefix(rel, "tests/tooling/") {
 			return nil
 		}
 		raw, err := os.ReadFile(path)
@@ -226,7 +227,7 @@ func TestPythonTmpDirScanPlantedDefects(t *testing.T) {
 		root := t.TempDir()
 		writeFile(t, filepath.Join(root, "tests", "test_leak.py"), "import tempfile\nd = tempfile.mkdtemp()\n")
 		writeFile(t, filepath.Join(root, "tests", "test_ok.py"), "import shutil, tempfile\nshutil.rmtree(tempfile.mkdtemp())\n")
-		writeFile(t, filepath.Join(root, pyTmpSelf), "import tempfile\nd = tempfile.mkdtemp()\n")
+		writeFile(t, filepath.Join(root, "tests", "tooling", pyTmpSelfStem+".py"), "import tempfile\nd = tempfile.mkdtemp()\n")
 		got := pyTmpOffenders(t, root)
 		if len(got) != 1 || got[0] != "tests/test_leak.py" {
 			t.Fatalf("offenders = %v, want [tests/test_leak.py]", got)

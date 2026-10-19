@@ -201,8 +201,8 @@ func TestAuthCorpusOverrideReleasesHostGlobalNamesAndPorts(t *testing.T) {
 				continue
 			}
 			for _, entry := range node.Content {
-				if !strings.HasPrefix(entry.Value, "127.0.0.1::") {
-					t.Errorf("service %s publishes %q: only loopback ephemeral ports (127.0.0.1::PORT) are allowed", name, entry.Value)
+				if !strings.HasPrefix(entry.Value, "127.0.0.1::") && !strings.HasPrefix(entry.Value, "127.0.0.1:${AUTH_CORPUS_") {
+					t.Errorf("service %s publishes %q: only loopback ports are allowed (127.0.0.1::PORT, or a port the script chose: 127.0.0.1:${AUTH_CORPUS_...}:PORT)", name, entry.Value)
 				}
 			}
 		}
@@ -244,4 +244,30 @@ func TestAuthCorpusOverrideTrustsTheGatewayOfItsNetwork(t *testing.T) {
 		}
 	}
 	t.Errorf("go-api's environment lacks %s: %v", want, override.Services.GoAPI.Environment)
+}
+
+// ci/auth_corpus_set_env.sh recreates go-api, and a recreated container gets a new ephemeral host port: the base URL
+// the corpus holds would then refuse connections. go-api's two published ports are chosen once by the script and
+// carried in the project state, so a recreate keeps them.
+func TestAuthCorpusGoAPIPortsSurviveARecreate(t *testing.T) {
+	var override struct {
+		Services struct {
+			GoAPI struct {
+				Ports []string `yaml:"ports"`
+			} `yaml:"go-api"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.override.yml")), &override); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"127.0.0.1:${AUTH_CORPUS_API_PORT}:8000", "127.0.0.1:${AUTH_CORPUS_OPERATOR_PORT}:8080"}
+	if strings.Join(override.Services.GoAPI.Ports, ",") != strings.Join(want, ",") {
+		t.Errorf("go-api ports = %v, want %v", override.Services.GoAPI.Ports, want)
+	}
+	script := readRepoFile(t, "ci", "auth_corpus_external.sh")
+	for _, name := range []string{"AUTH_CORPUS_API_PORT", "AUTH_CORPUS_OPERATOR_PORT"} {
+		if !regexp.MustCompile(`export ` + name + `=`).MatchString(script) {
+			t.Errorf("ci/auth_corpus_external.sh does not write %s into the project state", name)
+		}
+	}
 }

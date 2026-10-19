@@ -718,18 +718,18 @@ func Broken() int {
 
 func TestIntegrationVetCatchesABrokenTaggedFile(t *testing.T) {
 	t.Parallel()
-	root := rootOf(t)
-	// A leading underscore keeps the scratch package out of every `./...` expansion, so a concurrent check_go.sh run
-	// elsewhere in the tree cannot trip over this fixture while it exists; it is still addressable directly.
-	scratch, err := os.MkdirTemp(root, "_chaos4959_integration_vet_positive_control_")
-	if err != nil {
+	// The scratch package lives in its own module under t.TempDir: a directory inside the repository tree is walked by
+	// other packages' source scanners (internal/httpguard failed on it in the same race leg) and by `./...` runs.
+	scratch := t.TempDir()
+	if err := os.WriteFile(filepath.Join(scratch, "go.mod"), []byte("module positivecontrolscratch\n\ngo 1.27\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(scratch)
-	name := filepath.Base(scratch)
+	if err := os.WriteFile(filepath.Join(scratch, "ok.go"), []byte("package positivecontrolscratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	fixture := filepath.Join(scratch, "broken_fixture.go")
 	vet := func() cmdResult {
-		return cmdSpec{dir: root, env: inheritedEnv([]string{"GOFLAGS"})}.run("go", "vet", "-mod=readonly", "-tags=integration", "./"+name)
+		return cmdSpec{dir: scratch, env: inheritedEnv([]string{"GOFLAGS", "GOWORK"}, "GOFLAGS=-mod=readonly", "GOWORK=off")}.run("go", "vet", "-tags=integration", "./...")
 	}
 	if err := os.WriteFile(fixture, []byte(brokenFixture), 0o644); err != nil {
 		t.Fatal(err)
@@ -739,8 +739,12 @@ func TestIntegrationVetCatchesABrokenTaggedFile(t *testing.T) {
 		t.Fatalf("go vet -tags=integration exited 0 on a deliberately broken integration-tagged file: the tag is not reaching the compiler, "+
 			"so a real compile error under //go:build integration would go uncaught by check_integration_vet\nstdout: %s\nstderr: %s", broken.stdout, broken.stderr)
 	}
-	if !strings.Contains(broken.stderr, name) {
-		t.Fatalf("go vet failed, but not on the scratch package: confirm the failure is the injected error\nstdout: %s\nstderr: %s", broken.stdout, broken.stderr)
+	if !strings.Contains(broken.stderr, "broken_fixture.go") || !strings.Contains(broken.stderr, "not an int") {
+		t.Fatalf("go vet failed, but not on the injected error: confirm the failure is the planted one\nstdout: %s\nstderr: %s", broken.stdout, broken.stderr)
+	}
+	untagged := cmdSpec{dir: scratch, env: inheritedEnv([]string{"GOFLAGS", "GOWORK"}, "GOFLAGS=-mod=readonly", "GOWORK=off")}.run("go", "vet", "./...")
+	if untagged.code != 0 {
+		t.Fatalf("control: go vet WITHOUT the tag must not see the integration-tagged file, got exit %d\nstderr: %s", untagged.code, untagged.stderr)
 	}
 	fixed := strings.Replace(brokenFixture, `return "not an int"`, "return 0", 1)
 	if err := os.WriteFile(fixture, []byte(fixed), 0o644); err != nil {

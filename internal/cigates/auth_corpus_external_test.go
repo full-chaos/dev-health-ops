@@ -271,3 +271,48 @@ func TestAuthCorpusGoAPIPortsSurviveARecreate(t *testing.T) {
 		}
 	}
 }
+
+// On leg acp go-api also joins the auth network, and a request from the runner may reach it through that network's
+// gateway instead of the default network's. The acp override pins the auth network's subnet too and go-api trusts
+// both gateways, or the audit rows record the gateway instead of the forwarded client IP.
+func TestAuthCorpusAcpOverrideTrustsEveryGatewayItJoins(t *testing.T) {
+	gateway := func(file, network string) string {
+		var override struct {
+			Networks map[string]struct {
+				IPAM struct {
+					Config []struct {
+						Gateway string `yaml:"gateway"`
+					} `yaml:"config"`
+				} `yaml:"ipam"`
+			} `yaml:"networks"`
+		}
+		if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", file)), &override); err != nil {
+			t.Fatal(err)
+		}
+		config := override.Networks[network].IPAM.Config
+		if len(config) != 1 || config[0].Gateway == "" {
+			t.Errorf("%s does not pin the gateway of network %s", file, network)
+			return ""
+		}
+		return config[0].Gateway
+	}
+	defaultGateway := gateway("auth_corpus_external.override.yml", "default")
+	authGateway := gateway("auth_corpus_external.acp.override.yml", "auth_plane")
+	var acp struct {
+		Services struct {
+			GoAPI struct {
+				Environment []string `yaml:"environment"`
+			} `yaml:"go-api"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.acp.override.yml")), &acp); err != nil {
+		t.Fatal(err)
+	}
+	want := "TRUSTED_PROXIES=" + defaultGateway + "," + authGateway
+	for _, entry := range acp.Services.GoAPI.Environment {
+		if entry == want {
+			return
+		}
+	}
+	t.Errorf("the acp override's go-api environment lacks %q: %v", want, acp.Services.GoAPI.Environment)
+}

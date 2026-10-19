@@ -13,6 +13,7 @@ tests/authclient/test_error_envelope_contract_goldens.py
 tests/authclient/test_jwks_document_contract_goldens.py
 tests/authclient/test_principal_contract_goldens.py
 tests/authclient/test_provisioning_event_contract_goldens.py
+tests/authclient/test_session_contract_goldens.py
 tests/authclient/test_wire_int_guard.py
 tests/scripts/test_strip_agent_attribution.py
 tests/test_ci_closure_pins_match_uv_lock.py

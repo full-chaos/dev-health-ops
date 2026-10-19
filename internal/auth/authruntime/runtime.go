@@ -339,7 +339,7 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
-	logger.InfoContext(ctx, "auth API routes", "session_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra))
+	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra))
 	routes = withRequestIDs(append(routes, extra...))
 
 	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))

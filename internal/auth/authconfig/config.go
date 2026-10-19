@@ -190,9 +190,9 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("database_connect_timeout", c.DatabaseConnectTimeout.String()),
 		slog.Bool("signing_key_configured", c.SigningKeyPath != ""),
 		slog.String("signing_key_id", c.SigningKeyID),
-		slog.Bool("session_routes_enabled", c.Session.Enabled),
-		slog.String("access_token_issuer", c.Session.AccessIssuer),
-		slog.String("access_token_audience", c.Session.AccessAudience),
+		slog.Bool("api_routes_enabled", c.Session.Enabled),
+		slog.String("jwt_issuer", c.Session.AccessIssuer),
+		slog.String("jwt_audience", c.Session.AccessAudience),
 	}
 }
 

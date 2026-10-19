@@ -25,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -42,12 +43,14 @@ var publicReadGrants = []string{
 	`GRANT SELECT (id, email, username, full_name, password_hash, is_active, is_verified, is_superuser, token_version, auth_provider, auth_provider_id) ON public.users TO %q`,
 	`GRANT SELECT (user_id, org_id, role) ON public.memberships TO %q`,
 	`GRANT SELECT (id, org_id) ON public.sso_providers TO %q`,
+	`GRANT SELECT (id, slug, name, is_active) ON public.organizations TO %q`,
 }
 
 type routesEnv struct {
 	admin    *pgxpool.Pool
 	runtime  *pgxpool.Pool
 	sessions *session.Store
+	identity *identity.Store
 	front    *httptest.Server
 	client   *http.Client
 	edge     *principal.EdgeVerifier
@@ -152,6 +155,10 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identities, err := identity.New(identity.Config{Pool: runtime, Schema: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
 	// query-api's edge verifier over the go-api users table: the consumer
 	// that must keep accepting what auth-service mints.
 	edge, err := principal.NewEdgeVerifier(testAccessSecret, "dev-health-ops", "dev-health-api", policy.PGStore{Pool: admin})
@@ -162,7 +169,7 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, front: front,
+	return &routesEnv{admin: admin, runtime: runtime, sessions: sessions, identity: identities, front: front,
 		client: &http.Client{Timeout: 10 * time.Second}, edge: edge, root: wd}
 }
 
@@ -170,8 +177,9 @@ func contractsRoot() (string, error) {
 	return contracts.RepoRoot(".")
 }
 
-// seed inserts an organization, a user with a membership in it as go-api
-// writes them, the user's auth principal and the auth organization row.
+// seed inserts an organization and a user with a membership in it as go-api
+// writes them, then projects the user's principal and the organization into
+// the auth schema through the identity store, as the runtime role.
 func (e *routesEnv) seed(t *testing.T, ctx context.Context) (user, org uuid.UUID) {
 	t.Helper()
 	user, org = uuid.New(), uuid.New()
@@ -184,27 +192,16 @@ VALUES ($1, $2, 'Routes Org', 'community', true, '{}', 'self', now(), now())`, [
 		{`INSERT INTO users (id, email, username, full_name, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, 'routes', 'Routes User', NULL, 'local', true, true, false, 2, now(), now())`, []any{user, "routes-" + user.String()[:8] + "@example.test"}},
 		{`INSERT INTO memberships (id, user_id, org_id, role, joined_at, created_at) VALUES (gen_random_uuid(), $1, $2, 'owner', now(), now())`, []any{user, org}},
-		{`INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'routes')`, []any{user}},
 	} {
 		if _, err := e.admin.Exec(ctx, statement.sql, statement.args...); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	// auth.organizations is guarded (audit.Commit only); seed it in an armed
-	// transaction. Nothing projects organizations yet (Wave 4 owns them).
-	tx, err := e.admin.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
+	if err := e.identity.Project(ctx, user); err != nil {
+		t.Fatalf("project the principal: %v", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, slug, name) VALUES ($1, $2, 'Routes Org')`, org, "routes-"+org.String()[:8]); err != nil {
-		t.Fatalf("seed auth.organizations: %v", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
+	if err := e.identity.ProjectOrganization(ctx, org); err != nil {
+		t.Fatalf("project the organization: %v", err)
 	}
 	return user, org
 }
@@ -438,8 +435,8 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 // seams project the organization before they create a session:
 // auth.sessions.organization_id references auth.organizations, so an
 // organization only go-api's public.organizations holds is refused by the
-// foreign key (CHAOS-10228 finding; ruling: identity ProjectOrganization runs
-// first).
+// foreign key until identity.ProjectOrganization has run (CHAOS-10228
+// finding and ruling).
 func TestASessionCannotNameAnOrganizationAuthHasNotProjected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

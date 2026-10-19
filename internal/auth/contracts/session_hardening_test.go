@@ -94,3 +94,47 @@ func TestSecretBearingValuesNeverReachFormattersOrLoggers(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectedCredentialsNeverAppearInParserErrors(t *testing.T) {
+	root := testRoot(t)
+	// A runtime-built value keeps a credential-shaped literal out of the
+	// source; the trailing dot makes it fail the credential pattern, so the
+	// parser must reject it without repeating it.
+	dummy := "Zq" + strings.Repeat("k7", 24) + "."
+	cases := []struct {
+		name  string
+		file  string
+		field string
+		parse func(root string, raw []byte) error
+	}{
+		{"request refresh_credential", "refresh-request/valid-minimal.json", "refresh_credential", func(r string, b []byte) error { _, err := ParseRefreshRequest(r, b); return err }},
+		{"response access_token", "refresh-response/valid-full-lifetimes.json", "access_token", func(r string, b []byte) error { _, err := ParseRefreshResponse(r, b); return err }},
+		{"response refresh_credential", "refresh-response/valid-full-lifetimes.json", "refresh_credential", func(r string, b []byte) error { _, err := ParseRefreshResponse(r, b); return err }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join(root, "contracts/auth/v1/examples", c.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(raw, &doc); err != nil {
+				t.Fatal(err)
+			}
+			doc[c.field] = dummy
+			mutated, _ := json.Marshal(doc)
+			perr := c.parse(root, mutated)
+			if perr == nil {
+				t.Fatal("parser accepted a credential that fails the pattern")
+			}
+			if strings.Contains(perr.Error(), dummy) {
+				t.Fatalf("the parser error echoes the rejected credential: %v", perr)
+			}
+			var logged bytes.Buffer
+			slog.New(slog.NewJSONHandler(&logged, nil)).Info("rejected", "err", perr)
+			if strings.Contains(logged.String(), dummy) {
+				t.Fatalf("an Info log of the error echoes the credential: %s", logged.String())
+			}
+		})
+	}
+}

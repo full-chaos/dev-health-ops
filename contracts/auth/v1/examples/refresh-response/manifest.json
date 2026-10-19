@@ -5,8 +5,8 @@
       "why": "Today's lifetimes: 60 minute access, 7 day refresh."
     },
     {
-      "file": "valid-minimum-lifetimes.json",
-      "why": "Lower boundaries."
+      "file": "valid-minimum-refresh-lifetime.json",
+      "why": "Lower boundary of the refresh lifetime; the access lifetime is always 3600."
     }
   ],
   "reject": [
@@ -66,15 +66,27 @@
     },
     {
       "expect_instance_location": "/expires_in",
-      "expect_keyword": "minimum",
+      "expect_keyword": "const",
       "file": "invalid-expires-in-zero.json",
-      "why": "Lower boundary."
+      "why": "The access lifetime is exactly 3600."
     },
     {
       "expect_instance_location": "/expires_in",
-      "expect_keyword": "maximum",
+      "expect_keyword": "const",
+      "file": "invalid-expires-in-one-second.json",
+      "why": "Not the 60 minute lifetime."
+    },
+    {
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "const",
       "file": "invalid-expires-in-past-60-minutes.json",
-      "why": "The access lifetime ceiling is 60 minutes until Wave 3."
+      "why": "Above the 60 minute lifetime."
+    },
+    {
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "const",
+      "file": "invalid-expires-in-string.json",
+      "why": "A string is not the number 3600."
     },
     {
       "expect_instance_location": "/refresh_expires_in",
@@ -87,12 +99,6 @@
       "expect_keyword": "maximum",
       "file": "invalid-refresh-expires-in-past-7-days.json",
       "why": "Seven day ceiling."
-    },
-    {
-      "expect_instance_location": "/expires_in",
-      "expect_keyword": "type",
-      "file": "invalid-expires-in-string.json",
-      "why": "Type."
     },
     {
       "expect_instance_location": "/access_token",

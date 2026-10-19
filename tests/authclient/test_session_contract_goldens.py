@@ -148,3 +148,25 @@ def test_every_parser_refuses_documents_that_are_not_plain_utf8(
     _, parse = SURFACES[directory]
     with pytest.raises(ContractError):
         parse(text.encode(encoding))
+
+
+@pytest.mark.parametrize(
+    ("directory", "fixture", "field"),
+    [
+        ("refresh-request", "valid-minimal.json", "refresh_credential"),
+        ("refresh-response", "valid-full-lifetimes.json", "access_token"),
+        ("refresh-response", "valid-full-lifetimes.json", "refresh_credential"),
+    ],
+)
+def test_rejected_credentials_never_appear_in_parser_errors(
+    directory: str, fixture: str, field: str
+) -> None:
+    """A value that fails the pattern must be refused without being repeated."""
+    dummy = "Zq" + "k7" * 24 + "."
+    document = json.loads((_dir(directory) / fixture).read_text("utf-8"))
+    document[field] = dummy
+    _, parse = SURFACES[directory]
+    with pytest.raises(ContractError) as raised:
+        parse(json.dumps(document).encode())
+    assert dummy not in str(raised.value)
+    assert dummy not in repr(raised.value)

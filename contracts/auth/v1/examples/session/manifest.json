@@ -213,6 +213,10 @@
       "why": "Schema `integer` admits 3.0; every client refuses decimal-form tokens."
     },
     {
+      "file": "client-rejected-revision-past-int64.json",
+      "why": "Schema has no maximum (ajv cannot hold int64 exactly); Go refuses past int64, so Python must too."
+    },
+    {
       "file": "client-rejected-expires-before-created.json",
       "why": "Cross-field rule: expires_at is strictly after created_at."
     },

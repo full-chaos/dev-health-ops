@@ -15,6 +15,9 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -221,6 +224,14 @@ func errorLogAttrs(err error) []any {
 	root := err
 	for {
 		next := errors.Unwrap(root)
+		if multi, ok := root.(interface{ Unwrap() []error }); ok && next == nil {
+			for _, candidate := range multi.Unwrap() {
+				if candidate != nil {
+					next = candidate
+					break
+				}
+			}
+		}
 		if next == nil {
 			break
 		}
@@ -407,7 +418,7 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 			if len(failedSteps) > 0 {
 				failedEvidence := make(map[string]map[string]any, len(failedSteps))
 				for _, name := range failedSteps {
-					failedEvidence[name] = fragments[name]
+					failedEvidence[name] = loggableEvidence(fragments[name])
 				}
 				h.logger.Error("workgraph build: steps reported FAILED; the build ran every step",
 					slog.String("request_id", requestID), slog.String("organization_id", *organizationID),
@@ -415,7 +426,7 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 			}
 			return withFailedSteps(evidence, failedSteps), nil
 		},
-		func(_ context.Context, _ Claim, err error) error {
+		func(ctx context.Context, _ Claim, err error) error {
 			// Ambiguous exists to record a HALF-APPLIED Python write: the
 			// bridge may have succeeded before a later step failed, leaving
 			// rows that carry Python's values behind. Build has no bridge,
@@ -426,18 +437,32 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 			if isTransientStepError(err) {
 				return jobruntime.Retryable(err)
 			}
-			// Loud, not just returned: a permanent-cancel needs the
-			// underlying cause (e.g. a pre-step's ClickHouse bind failure)
-			// visible without correlating a ledger detail string back to it
-			// -- same reasoning the bridge-era permanent-cancel log carried,
-			// now without an ambiguous ledger row to also record it on.
-			h.logger.Error("workgraph build handler: permanent cancel after step failure",
-				slog.String("request_id", requestID), slog.String("organization_id", *organizationID),
-				slog.Any("error", err),
-			)
+			// Loud, not just returned: a permanent-cancel is logged with
+			// its class and root Go type, never the error text (it can
+			// hold a URL, an id or a response body). The error itself
+			// still travels in the returned Permanent error.
+			buildPermanentCancelCounter.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("error_class", retryableClass(err))))
+			h.logger.Warn("workgraph build handler: permanent cancel after step failure",
+				withErrorAttrs([]any{slog.String("request_id", requestID),
+					slog.String("organization_id", *organizationID)}, err)...)
 			return jobruntime.Permanent(err)
 		},
 	)
+}
+
+var buildPermanentCancelCounter = mustBuildCounter(
+	"dev_health_workgraph_build_permanent_cancels_total",
+	"workgraph.build requests permanently cancelled after a step failure, by error_class",
+)
+
+func mustBuildCounter(name, description string) metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/workgraph").
+		Int64Counter(name, metric.WithDescription(description))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
 }
 
 // materializeHandler runs investment.materialize through its NativeExecutor.
@@ -571,4 +596,31 @@ func (h *MaterializeHandler) Work(ctx context.Context, execution *jobruntime.Exe
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	return h.work(ctx, execution.Args.Payload.RequestID, execution.OrganizationID, execution.Envelope.Domain)
+}
+
+// ErrorAttr is the loggable description of err for a log call: error_class, the
+// root Go type, and a ClickHouse code or SQLSTATE when present. It never holds
+// the error text, which can carry a row value, a URL or provider output.
+func ErrorAttr(err error) slog.Attr {
+	return slog.Group("", errorLogAttrs(err)...)
+}
+
+// loggableEvidence keeps the numbers and booleans of a step's evidence for the
+// log, plus the step status when it is the fixed failed verdict. Every string
+// and map key is step-authored text that can carry error text, so it stays in
+// the ledger evidence and out of the log. Nested maps are dropped: their keys are
+// step-authored too.
+func loggableEvidence(evidence map[string]any) map[string]any {
+	logged := make(map[string]any, len(evidence))
+	for key, value := range evidence {
+		switch typed := value.(type) {
+		case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+			logged[key] = typed
+		case string:
+			if key == StepStatusKey && typed == StepStatusFailed {
+				logged[key] = typed
+			}
+		}
+	}
+	return logged
 }

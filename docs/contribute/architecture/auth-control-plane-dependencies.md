@@ -28,11 +28,13 @@ The code the Auth Control Plane itself imports is the standard library,
 `github.com/jackc/pgx/v5` (PostgreSQL) and OpenTelemetry. The **linked**
 footprint is wider than that, because the binaries import shared platform
 packages: `go list -deps ./cmd/auth-service ./cmd/auth-migrate` also shows the
-Prometheus client, gRPC and protobuf (OTLP export), and the ClickHouse driver
-(through `internal/storage/postgres`, which imports `internal/platform/config`).
-None of these is used by the service's behaviour, but all are in the image and in
-the reach of the vulnerability gate, which is why that gate scans the real
-import closure (`go list -deps`) and not a hand list. Everything else in the auth
+Prometheus client, gRPC and protobuf (the OTLP metrics exporter, the named
+reason for them). The ClickHouse driver is not linked:
+`ci/check_go.sh auth closure` fails when a module outside
+`ci/auth_closure_allow.tsv` enters the closure of either binary. None of these
+is used by the service's behaviour, but all are in the image and in the reach of
+the vulnerability gate, which is why that gate scans the real import closure
+(`go list -deps`) and not a hand list. Everything else in the auth
 tree is library code that later waves compose:
 
 | Module | Used by | Role |

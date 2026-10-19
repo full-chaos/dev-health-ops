@@ -272,6 +272,8 @@ func TestEveryMarkerIsDiscriminatedInItsClassTransport(t *testing.T) {
 				ok = strings.HasPrefix(shape, name+"<")
 			case "authorization_scheme":
 				ok = strings.HasPrefix(head, "authorization: "+name)
+			case "jwt_header_alg":
+				ok = strings.Contains(shape, name+" ") || strings.Contains(shape, name+"/")
 			case "dedicated_header", "signature_header":
 				ok = strings.HasPrefix(head, name)
 			}
@@ -283,5 +285,24 @@ func TestEveryMarkerIsDiscriminatedInItsClassTransport(t *testing.T) {
 	}
 	if counted == 0 {
 		t.Fatal("no class declares a marker; the check is vacuous")
+	}
+}
+
+func TestSelectorGateSeparatesTheTwoBearerJWTClassesByHeaderAlg(t *testing.T) {
+	pair := []any{"effective_principal_envelope", "ops_access_token_hs256"}
+	registry := realRegistry(t)
+	shared := multiClassProfile(t, pair, "authorization_scheme", "Bearer")
+	if err := CheckClassSelector(shared, registry); err == nil {
+		t.Fatal("gate accepted authorization_scheme/Bearer for two classes that both ride a Bearer header")
+	}
+	for _, alg := range []string{"HS256", "EdDSA"} {
+		profile := multiClassProfile(t, pair, "jwt_header_alg", alg)
+		if err := CheckClassSelector(profile, registry); err != nil {
+			t.Errorf("gate refused jwt_header_alg/%s for envelope vs ops access token: %v", alg, err)
+		}
+	}
+	wrongCase := multiClassProfile(t, pair, "jwt_header_alg", "hs256")
+	if err := CheckClassSelector(wrongCase, registry); err == nil {
+		t.Fatal("gate matched a JWT alg case-insensitively; the header alg is compared exactly")
 	}
 }

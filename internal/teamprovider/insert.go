@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -242,6 +243,107 @@ const storedIdentityQuery = storedIdentitySelect + " AND id IN {team_ids:Array(S
 // outside Insert joins it (ON stored_id = id) and selects
 // stored_team_id, stored_name and stored_gone: it is a writer of teams too.
 const StoredIdentityOfOrganization = storedIdentitySelect + " GROUP BY id"
+
+// Restatement is one stored team that a writer writes again from its newest
+// stored version: AddMembers are the manual members it gains (the ones it
+// holds already are not added twice), and Activate writes it active.
+type Restatement struct {
+	ID         string
+	AddMembers []string
+	Activate   bool
+}
+
+// Restate writes each team again in ONE INSERT INTO teams .. SELECT FROM
+// teams FINAL: every column but manual_members, is_active and created_at is
+// the newest stored version's own, at its own updated_at, so a write of
+// another writer that committed before the statement starts is the version it
+// copies and is not lost. created_at is the oldest creation evidence over
+// every version and the provider identity is Insert's rule. A team whose
+// newest version is deleted, or that has no row, is not written. It returns
+// the rows the server reports written; a connection that reports no progress
+// reports 0.
+func Restate(ctx context.Context, conn Execer, orgID string, rows []Restatement) (uint64, error) {
+	if isNilExecer(conn) || strings.TrimSpace(orgID) == "" {
+		return 0, ErrInvalidArguments
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	ids := make([]string, len(rows))
+	// []any of the element types Insert proves (Array(Array(String)),
+	// Array(UInt8)): the parameter-type census holds every bound type to an
+	// executed encoding case.
+	members := make([]any, len(rows))
+	activate := make([]any, len(rows))
+	seen := map[string]bool{}
+	for r, row := range rows {
+		if row.ID == "" || seen[row.ID] {
+			return 0, fmt.Errorf("%w: restatement %d has no team id or repeats one", ErrInvalidWrite, r)
+		}
+		seen[row.ID] = true
+		ids[r] = row.ID
+		members[r] = append([]string{}, row.AddMembers...)
+		activate[r] = uint8(0)
+		if row.Activate {
+			activate[r] = uint8(1)
+		}
+	}
+	var written uint64
+	ctx = clickhouse.Context(ctx, clickhouse.WithProgress(func(progress *clickhouse.Progress) {
+		written += progress.WroteRows
+	}))
+	err := conn.Exec(ctx, restateStatement(),
+		clickhouse.Named("restate_ids", ids),
+		clickhouse.Named("restate_members", members),
+		clickhouse.Named("restate_activate", activate),
+		clickhouse.Named("org_id", orgID),
+		clickhouse.Named("team_ids", ids),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return written, nil
+}
+
+// restateStatement selects every column of columnTypes (the teams schema
+// Insert writes) from the stored row, in a fixed order.
+func restateStatement() string {
+	columns := make([]string, 0, len(columnTypes))
+	for column := range columnTypes {
+		columns = append(columns, column)
+	}
+	sort.Strings(columns)
+	selected := make([]string, 0, len(columns)+3)
+	for _, column := range columns {
+		switch column {
+		case "manual_members":
+			selected = append(selected, "arrayConcat(t.manual_members, arrayDistinct(arrayFilter(m -> NOT has(t.manual_members, m), incoming.add_members)))")
+		case "is_active":
+			selected = append(selected, "if(incoming.activate = 1, toUInt8(1), t.is_active)")
+		case "created_at":
+			selected = append(selected, "oldest.created_min")
+		default:
+			selected = append(selected, "t."+column)
+		}
+	}
+	selected = append(selected,
+		"ifNull(stored.stored_team_id, '')", "ifNull(stored.stored_name, '')", "stored.stored_gone")
+	return "INSERT INTO teams (" + strings.Join(columns, ", ") + ", " + Columns + ") " +
+		"SELECT " + strings.Join(selected, ", ") + " " +
+		"FROM teams AS t FINAL " +
+		"INNER JOIN (SELECT incoming_row.1 AS restate_id, incoming_row.2 AS add_members, incoming_row.3 AS activate " +
+		"FROM (SELECT arrayJoin(arrayZip({restate_ids:Array(String)}, {restate_members:Array(Array(String))}, {restate_activate:Array(UInt8)})) AS incoming_row)) AS incoming " +
+		"ON incoming.restate_id = t.id " +
+		"LEFT JOIN (" + storedIdentityQuery + ") AS stored ON stored.stored_id = t.id " +
+		"LEFT JOIN (" + oldestCreatedQuery + ") AS oldest ON oldest.created_id = t.id " +
+		"WHERE t.org_id = {org_id:String} AND t.deleted_at IS NULL"
+}
+
+// oldestCreatedQuery is the oldest creation evidence of each team over every
+// stored version: a newer version written without created_at (NULL) must not
+// hide the time an older one holds.
+const oldestCreatedQuery = "SELECT id AS created_id, min(coalesce(created_at, updated_at)) AS created_min " +
+	"FROM teams WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)} GROUP BY id"
 
 // paramValue makes a value safe for a query parameter array of the column's
 // type: a time is sent as UTC text (the parameter type names UTC, so no

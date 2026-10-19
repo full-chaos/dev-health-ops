@@ -33,7 +33,8 @@ func FuzzParseLimit(f *testing.F) {
 // FuzzParseForwardedTrust drives the FORWARDED_ALLOW_IPS parser, an operator
 // configuration parser that decides which peers may set forwarded headers.
 // Properties: no panic on any value or peer; "*" trusts every peer; and every
-// plain IP address entry of the list trusts itself.
+// plain IP address entry of the list trusts itself, while an entry with a
+// slash that is no strict prefix never trusts itself (it stays a literal).
 func FuzzParseForwardedTrust(f *testing.F) {
 	for _, seed := range []struct{ value, host string }{
 		{"*", "203.0.113.9"}, {"127.0.0.1", "127.0.0.1"}, {"10.0.0.0/8, 192.0.2.1", "10.1.2.3"},
@@ -49,7 +50,17 @@ func FuzzParseForwardedTrust(f *testing.F) {
 		}
 		for _, raw := range strings.Split(value, ",") {
 			entry := strings.TrimFunc(raw, pythonparity.IsSpace)
-			if addr, err := netip.ParseAddr(entry); err == nil && !trust.trusts(entry) {
+			addr, err := netip.ParseAddr(entry)
+			if err != nil {
+				continue
+			}
+			if strings.Contains(entry, "/") {
+				if trust.trusts(entry) {
+					t.Fatalf("list %q trusts its slash entry %q (%s), which no peer address can equal", value, entry, addr)
+				}
+				continue
+			}
+			if !trust.trusts(entry) {
 				t.Fatalf("list %q does not trust its own address entry %q (%s)", value, entry, addr)
 			}
 		}

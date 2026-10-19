@@ -143,7 +143,7 @@ func buildWorkUnitExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (hand
 	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}.ForPurpose(llmorgsettings.PurposeExplain)
 
 	routeMux := routeswitch.NewMux(workUnitExplainSwitchFromEnv(getenv))
-	routeMux.Register(workUnitExplainOperation, newWorkUnitExplainHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}))
+	routeMux.Register(workUnitExplainOperation, newWorkUnitExplainHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}, newModelGate(orgSettingsPool, orgSettings)))
 
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -234,12 +234,17 @@ func newWorkUnitExplainHandler(
 	writer *investmentexplain.CacheWriter,
 	orgSettings llmorgsettings.Resolver,
 	budgetStore llmbudget.Store,
+	gate modelGate,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
 			// Defensive only -- the entry handler always authenticates first.
 			writeRESTUnauthorized(w, r, "work_unit_explain", "Not authenticated")
+			return
+		}
+		r, admitted := admitModel(gate, w, r, "work_unit_explain", claims.OrgID)
+		if !admitted {
 			return
 		}
 

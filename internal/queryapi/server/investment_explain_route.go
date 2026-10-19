@@ -227,7 +227,7 @@ func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (ha
 	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}.ForPurpose(llmorgsettings.PurposeExplain)
 
 	routeMux := routeswitch.NewMux(investmentExplainSwitchFromEnv(getenv))
-	routeMux.Register(investmentExplainOperation, newInvestmentExplainWorkHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}))
+	routeMux.Register(investmentExplainOperation, newInvestmentExplainWorkHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}, newModelGate(orgSettingsPool, orgSettings)))
 
 	// Auth runs BEFORE Dispatch, same order /query's newQueryHandler uses
 	// (query_route.go:1180-1194: resolve operation, THEN auth, THEN
@@ -389,6 +389,7 @@ func newInvestmentExplainWorkHandler(
 	writer *investmentexplain.CacheWriter,
 	orgSettings llmorgsettings.Resolver,
 	budgetStore llmbudget.Store,
+	gate modelGate,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := authctx.FromContext(r.Context())
@@ -399,6 +400,10 @@ func newInvestmentExplainWorkHandler(
 			// comment for the three real 401 shapes this route actually
 			// answers.
 			writeRESTUnauthorized(w, r, "investment_explain", "Not authenticated")
+			return
+		}
+		r, admitted := admitModel(gate, w, r, "investment_explain", claims.OrgID)
+		if !admitted {
 			return
 		}
 

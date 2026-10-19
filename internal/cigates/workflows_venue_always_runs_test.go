@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -143,17 +144,17 @@ func venueAlwaysRunsViolations(t *testing.T, root string) []string {
 			break
 		}
 	}
-	printfAt, exitAt := -1, -1
+	printfAt, firstExit := -1, -1
 	for i := at + 1; fi >= 0 && i < fi; i++ {
-		switch {
-		case code[i].indent > 0 && code[i].text == `printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"`:
+		if code[i].indent > 0 && code[i].text == `printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"` && printfAt < 0 {
 			printfAt = i
-		case code[i].indent > 0 && code[i].text == "exit 0":
-			exitAt = i
+		}
+		if firstExit < 0 && regexp.MustCompile(`^(exit|return)(\s|$)`).MatchString(code[i].text) {
+			firstExit = i
 		}
 	}
-	if fi < 0 || printfAt < 0 || exitAt < printfAt {
-		out = append(out, "the workflow_dispatch branch of the relevance step must write relevant=true and then exit 0 as its own statements, so the full suite runs")
+	if fi < 0 || printfAt < 0 || firstExit < printfAt || code[firstExit].text != "exit 0" {
+		out = append(out, "the workflow_dispatch branch of the relevance step must write relevant=true and then exit 0 as its own statements, with no exit or return before the write, so the full suite runs")
 	}
 	diff := -1
 	for i, l := range code {
@@ -210,6 +211,9 @@ func TestVenueJobAlwaysRunsPlantedDefects(t *testing.T) {
 		{"dispatch branch lost", []mutation{{f, `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`, `if [ "${EVENT_NAME}" = "workflow_call" ]; then`}}, []string{"does not branch on workflow_dispatch"}},
 		{"dispatch guard only echoed", []mutation{{f, `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`, `echo 'if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then'; if false; then`}}, []string{"does not branch on workflow_dispatch"}},
 		{"dispatch guard only in a comment", []mutation{{f, `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`, "# if [ \"${EVENT_NAME}\" = \"workflow_dispatch\" ]; then\n          if [ \"${EVENT_NAME}\" = \"workflow_call\" ]; then"}}, []string{"does not branch on workflow_dispatch"}},
+		{"an exit before the output write", []mutation{{f, `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`, "if [ \"${EVENT_NAME}\" = \"workflow_dispatch\" ]; then\n            exit 0"}}, []string{"no exit or return before the write"}},
+		{"a return before the output write", []mutation{{f, `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`, "if [ \"${EVENT_NAME}\" = \"workflow_dispatch\" ]; then\n            return 0"}}, []string{"no exit or return before the write"}},
+		{"the branch exits with a failure code", []mutation{{f, "printf 'relevant=true\\n' >> \"${GITHUB_OUTPUT}\"\n            exit 0", "printf 'relevant=true\\n' >> \"${GITHUB_OUTPUT}\"\n            exit 1"}}, []string{"must write relevant=true and then exit 0"}},
 		{"relevant=true only in a comment", []mutation{{f, `printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"`, `# printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"`}}, []string{"must write relevant=true and then exit 0"}},
 		{"exit 0 only echoed", []mutation{{f, "printf 'relevant=true\\n' >> \"${GITHUB_OUTPUT}\"\n            exit 0", "printf 'relevant=true\\n' >> \"${GITHUB_OUTPUT}\"\n            echo exit 0"}}, []string{"must write relevant=true and then exit 0"}},
 		{"the diff is only named in a comment", []mutation{{f, "bash ci/go_relevant_diff.sh > changed.txt || {", "# bash ci/go_relevant_diff.sh\n          bash ci/go_relevant_diffs.sh > changed.txt || {"}}, []string{"the diff is never read"}},

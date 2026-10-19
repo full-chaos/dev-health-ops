@@ -28,7 +28,12 @@ const (
 
 var matrixShardExpr = regexp.MustCompile(`\$\{\{\s*matrix\.shard\s*\}\}`)
 
-var venueVerbCall = regexp.MustCompile(`^bash ci/check_go\.sh venue-oracles\s+"\$\{\{\s*matrix\.shard\s*\}\}"\s+(\d+)\b`)
+var venueVerbCall = regexp.MustCompile(`^bash ci/check_go\.sh venue-oracles\s+"\$\{\{\s*matrix\.shard\s*\}\}"\s+(\d+)\s+2>&1\s*\|\s*tee\s+"\$\{RUNNER_TEMP\}/venue-oracle-receipt/receipt\.log"$`)
+
+var (
+	changedListCall = regexp.MustCompile(`^bash ci/check_go\.sh venue-oracles --changed changed\.txt --list "\$\{VENUE_LEG\}" "\$\{VENUE_LEGS\}" > listing\.txt$`)
+	changedRunCall  = regexp.MustCompile(`^bash ci/check_go\.sh venue-oracles --changed changed\.txt "\$\{VENUE_LEG\}" "\$\{VENUE_LEGS\}" 2>&1 \| tee "\$\{RUNNER_TEMP\}/venue-oracle-receipt/receipt\.log"$`)
+)
 
 func matrixShards(job yamlMap) ([]int, bool) {
 	var out []int
@@ -144,6 +149,7 @@ func venueShardsViolations(t *testing.T, root string) []string {
 		if !isOneToN(legs) {
 			out = append(out, fmt.Sprintf("venue-oracles-changed matrix legs %v are not 1..N", legs))
 		}
+		out = append(out, venueChangedVerbViolations(changed)...)
 		if keys := sortedKeys(asMap(asMap(changed["strategy"])["matrix"])); len(keys) != 1 || keys[0] != "shard" {
 			out = append(out, fmt.Sprintf("the venue-oracles-changed matrix declares %v, want only shard: an include or exclude can drop or add a leg", keys))
 		}
@@ -156,6 +162,46 @@ func venueShardsViolations(t *testing.T, root string) []string {
 		}
 	}
 	return append(out, venueWeightsViolations(t, root)...)
+}
+
+// venueChangedVerbViolations: the two verb calls of the changed-packages job read the leg and the leg count from the env
+// the matrix drives (a literal count would let the matrix and the verb disagree and drop rows while every leg is green).
+func venueChangedVerbViolations(job yamlMap) []string {
+	var out []string
+	var lines []string
+	seenList, seenRun := false, false
+	for _, st := range stepsOf(job) {
+		code := shellCode(asString(st["run"]))
+		pipefail := false
+		for _, l := range code {
+			if l.indent == 0 && l.text == "set -euo pipefail" {
+				pipefail = true
+			}
+			if !strings.Contains(l.text, "check_go.sh venue-oracles") {
+				continue
+			}
+			lines = append(lines, l.text)
+			switch {
+			case l.indent == 0 && changedListCall.MatchString(l.text):
+				seenList = true
+			case l.indent == 0 && changedRunCall.MatchString(l.text):
+				seenRun = true
+				if got := asString(st["if"]); got != "steps.select.outputs.run == 'true'" {
+					out = append(out, fmt.Sprintf("the changed-job verb step's if is %q, want steps.select.outputs.run == 'true'", got))
+				}
+			}
+			if !pipefail {
+				out = append(out, fmt.Sprintf("the changed-job verb call has no top-level `set -euo pipefail` before it: %q", l.text))
+			}
+			if v, has := st["continue-on-error"]; has {
+				out = append(out, fmt.Sprintf("the changed-job verb step declares continue-on-error: %v: a red leg must fail the job", v))
+			}
+		}
+	}
+	if !seenList || !seenRun || len(lines) != 2 {
+		out = append(out, fmt.Sprintf("the changed job must call the verb exactly twice as top-level statements, reading the leg and count from ${VENUE_LEG} and ${VENUE_LEGS} (a literal count, a suffix such as `|| true`, or an echo is not that call), found %v", lines))
+	}
+	return out
 }
 
 type venueRow struct{ pkg, test string }
@@ -344,6 +390,14 @@ func TestVenueShardsPlantedDefects(t *testing.T) {
 		muts []mutation
 		want []string
 	}{
+		{"verb failure is swallowed by || true", []mutation{{f, `bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"`, `bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log" || true`}}, []string{"not a top-level statement"}},
+		{"verb output goes through cat, not tee", []mutation{{f, `8 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"`, `8 2>&1 | cat`}}, []string{"not a top-level statement"}},
+		{"changed job passes a literal count to the run call", []mutation{{c, `"${VENUE_LEG}" "${VENUE_LEGS}" 2>&1`, `"${VENUE_LEG}" 4 2>&1`}}, []string{"must call the verb exactly twice"}},
+		{"changed job passes a literal count to the listing call", []mutation{{c, `"${VENUE_LEG}" "${VENUE_LEGS}" > listing.txt`, `"${VENUE_LEG}" 4 > listing.txt`}}, []string{"must call the verb exactly twice"}},
+		{"changed job matrix and env shrink while the verb count stays literal", []mutation{{c, "shard: [1, 2, 3, 4]", "shard: [1, 2, 3]"}, {c, "      VENUE_LEGS: 4\n", "      VENUE_LEGS: 3\n"}, {c, `"${VENUE_LEG}" "${VENUE_LEGS}" 2>&1`, `"${VENUE_LEG}" 4 2>&1`}}, []string{"must call the verb exactly twice"}},
+		{"changed job run call is swallowed", []mutation{{c, `/receipt.log"`, `/receipt.log" || true`}}, []string{"must call the verb exactly twice"}},
+		{"changed job verb step may fail silently", []mutation{{c, "      - name: Run the venue oracles of the changed packages\n", "      - name: Run the venue oracles of the changed packages\n        continue-on-error: true\n"}}, []string{"the changed-job verb step declares continue-on-error"}},
+		{"changed job run step is gated by something else", []mutation{{c, "      - name: Run the venue oracles of the changed packages\n        if: steps.select.outputs.run == 'true'\n", "      - name: Run the venue oracles of the changed packages\n        if: steps.select.outputs.run == 'false'\n"}}, []string{"changed-job verb step's if is"}},
 		{"matrix excludes a leg", []mutation{{f, "shard: [1, 2, 3, 4, 5, 6, 7, 8]", "shard: [1, 2, 3, 4, 5, 6, 7, 8]\n        exclude:\n          - shard: 8"}}, []string{"declares [exclude shard]"}},
 		{"matrix adds a leg by include", []mutation{{f, "shard: [1, 2, 3, 4, 5, 6, 7, 8]", "shard: [1, 2, 3, 4, 5, 6, 7, 8]\n        include:\n          - shard: 9"}}, []string{"declares [include shard]"}},
 		{"the verb call is only a comment", []mutation{{f, `bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1`, `# bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1`}}, []string{"found []"}},

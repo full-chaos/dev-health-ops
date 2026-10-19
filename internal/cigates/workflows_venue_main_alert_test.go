@@ -60,6 +60,9 @@ func venueMainAlertViolations(t *testing.T, root string) []string {
 	case run == nil:
 		out = append(out, "the workflow_run trigger is bare: it names no workflow and no type")
 	default:
+		if keys := sortedKeys(run); !reflect.DeepEqual(keys, []string{"types", "workflows"}) {
+			out = append(out, fmt.Sprintf("workflow_run declares %v, want only types and workflows: a branches or branches-ignore filter suppresses alerts for main runs", keys))
+		}
 		if got := asList(run["workflows"]); !reflect.DeepEqual(got, []any{venueName}) {
 			out = append(out, fmt.Sprintf("workflow_run.workflows is %v, want [%s]: the alert must listen to the venue workflow by its exact name", got, venueName))
 		}
@@ -151,6 +154,8 @@ func TestVenueMainAlertWorkflowPlantedDefects(t *testing.T) {
 		{"bare workflow_run trigger", []mutation{{f, trig, "workflow_run:\n"}}, []string{"workflow_run trigger is bare"}},
 		{"workflow_run replaced by push", []mutation{{f, trig, "push:\n"}}, []string{"no workflow_run trigger"}},
 		{"scalar trigger", []mutation{{f, "on:\n  " + trig, "on: push\n"}}, []string{"no workflow_run trigger"}},
+		{"workflow_run gains a branch filter", []mutation{{f, "types: [completed]", "types: [completed]\n    branches: [release]"}}, []string{"workflow_run declares [branches types workflows]"}},
+		{"workflow_run gains a branches-ignore filter", []mutation{{f, "types: [completed]", "types: [completed]\n    branches-ignore: [main]"}}, []string{"workflow_run declares [branches-ignore types workflows]"}},
 		{"the venue workflow is renamed", []mutation{{venueWorkflow, "name: Venue oracles\n", "name: Venue oracle suite\n"}}, []string{"workflow_run.workflows"}},
 		{"the push-only filter is dropped", []mutation{{f, " && github.event.workflow_run.event == 'push'", ""}}, []string{"only main push runs may alert"}},
 		{"top-level permissions granted", []mutation{{f, "permissions: {}\n", "permissions:\n  contents: read\n"}}, []string{"top-level permissions"}},

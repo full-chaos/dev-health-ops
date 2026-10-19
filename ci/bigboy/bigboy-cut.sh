@@ -30,6 +30,13 @@ R=$BIGBOY_ROOT; REC=$R/_records/bigboy-$N8
 HERE=$(cd "${BIGBOY_TOOLS_DIR:-$(dirname "$0")}" 2>/dev/null && pwd) || { echo "FAIL: BIGBOY_TOOLS_DIR=${BIGBOY_TOOLS_DIR:-} is not a directory" >&2; exit 1; }
 export BIGBOY_TOOLS_DIR=$HERE
 [ -f "$HERE/bigboy-repin.sh" ] || { echo "FAIL: BIGBOY_TOOLS_DIR=$HERE has no bigboy-repin.sh -- refusing to run with a directory that is not the bigboy cut tools" >&2; exit 1; }
+[ -f "$HERE/arm64-child-digest.sh" ] || { echo "FAIL: BIGBOY_TOOLS_DIR=$HERE has no arm64-child-digest.sh -- the cut tools travel together" >&2; exit 1; }
+# shellcheck source=arm64-child-digest.sh
+. "$HERE/arm64-child-digest.sh"
+# CHAOS-10137: every git read of the ops tree (cut-contents, grants check) uses BIGBOY_OPS_REPO, default the checkout these
+# tools come from; never the operator checkout. Checked here so a bad value stops the cut before any STEP, not at its end.
+OPS_REPO=$(cd "${BIGBOY_OPS_REPO:-$HERE/../..}" 2>/dev/null && pwd) || { echo "FAIL: BIGBOY_OPS_REPO=${BIGBOY_OPS_REPO:-$HERE/../..} is not a directory" >&2; exit 1; }
+[ -d "$OPS_REPO/.git" ] || [ -f "$OPS_REPO/.git" ] || { echo "FAIL: ops clone $OPS_REPO has no .git (set BIGBOY_OPS_REPO to an ops clone)" >&2; exit 1; }
 # Fail closed (D2895): refuse a root that is not shaped like a real bigboy tree, rather than
 # silently proceeding to `cd` into it and produce confusing failures many steps later.
 for need in _records/images.env _records; do
@@ -57,7 +64,7 @@ done
 # Resolve the operator digest BEFORE any STEP reads the compose file: compose.bigboy.yml
 # requires BIGBOY_OPERATOR_IMAGE, so a config read before this export fails on the missing variable
 # (the SSO group cut's secret-refs STEP reported five set secrets as BLANK for exactly that reason).
-BIGBOY_OPERATOR_DIGEST=$(docker buildx imagetools inspect ghcr.io/full-chaos/dev-health-go-operator:sha-$S7 --format '{{json .Manifest}}' | jq -r .digest)
+BIGBOY_OPERATOR_DIGEST=$(arm64_child_digest ghcr.io/full-chaos/dev-health-go-operator:sha-$S7)   # CHAOS-10137: the arm64 child, as images.env pins it
 case "$BIGBOY_OPERATOR_DIGEST" in sha256:*) ;; *) st operator-resolve 1; echo "FAIL: no operator digest for sha-$S7" >&2; exit 1 ;; esac
 export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@$BIGBOY_OPERATOR_DIGEST; echo "operator=$BIGBOY_OPERATOR_DIGEST" > $REC.operator.txt; st operator-resolve 0
 # CHAOS-6967(b)/CHAOS-6987 (D2728) staging (Trap #421 sibling): bigboy's query-api needs the
@@ -137,7 +144,9 @@ else
   echo "SKIPPED (not checked): the values-driven STEPs need DEPLOY_SHA (see deploy-pin above)." >&2
 fi
 docker pull -q $BIGBOY_OPERATOR_IMAGE > /dev/null 2>&1; st operator-pull $?   # --no-build never pulls: the digest must be local before the recreate (rev 190 first run: "No such image")
-$HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
+$HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; rc_repin=$?; st repin $rc_repin
+# CHAOS-10137: a failed re-pin stops the cut before the web repin, migrate and any recreate (D2801 class: they would run on the OLD images).
+[ $rc_repin = 0 ] || { echo "cut stops: re-pin failed rc=$rc_repin (see $REC.repin.out)"; exit 1; }
 [ -d $REC ] || { echo "no record dir"; exit 1; }
 # CHAOS-7019: `web` is a LOCAL BUILD service in the root compose.yml, unlike query-api/
 # go-api which the bigboy overlay pins to CI-built ghcr.io digests -- so a web-only merge (or a
@@ -192,8 +201,8 @@ $HERE/bigboy-log-checks.sh $REC > $REC/log-checks.out 2>&1; st log-checks $?; ta
 $HERE/bigboy-6889-checks.sh $REC > $REC/6889-checks.out 2>&1; st worker-checks $?; tail -4 $REC/6889-checks.out | cut -c1-200
 $HERE/bigboy-river-apply.sh > $REC/river-apply.out 2>&1; st river-apply $?
 $HERE/bigboy-hook-check.sh $REC > $REC/hook-check.out 2>&1; st hook-check $?
-$HERE/bigboy-grants-check.sh $REC > $REC/grants-check.out 2>&1; st ch-grants-check $?; tail -1 $REC/grants-check.out
-$HERE/cut-contents.sh $OLD8 $NEW $REC/pg-expect.txt > $REC/contents.txt 2>&1; st cut-contents $?; cat $REC/contents.txt
+BIGBOY_OPS_REPO=$OPS_REPO $HERE/bigboy-grants-check.sh $REC > $REC/grants-check.out 2>&1; st ch-grants-check $?; tail -1 $REC/grants-check.out
+BIGBOY_OPS_REPO=$OPS_REPO $HERE/cut-contents.sh $OLD8 $NEW $REC/pg-expect.txt > $REC/contents.txt 2>&1; st cut-contents $?; cat $REC/contents.txt
 [ "$(grep -vc "^#" $REC/pg-expect.txt)" -gt 0 ] && { $HERE/pg-grants-check.sh bigboy $REC/pg-expect.txt > $REC/pg-grants.out 2>&1; st pg-grants-readback $?; tail -4 $REC/pg-grants.out; } || echo "STEP pg-grants-readback SKIPPED (no PG grant deltas in the cut)"
 # CHAOS-6987/R460: the web-path smoke -- the only proof this cut serves the real org
 # through a real browser session, not a hand-minted token. Fails loud (rc=1) while

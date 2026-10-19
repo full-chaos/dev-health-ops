@@ -48,7 +48,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd)
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
 DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
-POSTURE=${DHO_API_CH_POSTURE_GO:-$HERE/../../internal/storage/clickhouse/authorization.go}
+# CHAOS-10137: BIGBOY_OPS_REPO names the ops clone when the tools run from a copy outside it.
+POSTURE=${DHO_API_CH_POSTURE_GO:-${BIGBOY_OPS_REPO:-$HERE/../..}/internal/storage/clickhouse/authorization.go}
 [ -f "$POSTURE" ] || { echo "CH_API_USER_FILE_FAIL: the posture manifest $POSTURE is not a file, so the canonical render cannot be computed (DHO_API_CH_POSTURE_GO)" >&2; exit 1; }
 [ -f "${CREDS:-/nonexistent}" ] || { echo "CH_API_USER_AUTH_FAIL: no readable credentials file (arg 2 or DHO_API_CH_CREDS), so dho_api_ch's login cannot be proven" >&2; exit 3; }
 # The password, as a pipe source only: the value of the last API_CH_PASSWORD= line, one pair of surrounding quotes removed,

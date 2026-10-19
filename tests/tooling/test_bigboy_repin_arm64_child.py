@@ -63,12 +63,11 @@ def _root(tmp_path: Path, pinned_dho_old: str) -> Path:
     (rec / f"bigboy-{OLD8}" / "bigboy-rest-commands.sh").write_text(
         "#!/usr/bin/env bash\nSTEP=x\nB=" + "0" * 40 + "\n"
     )
-    old = "sha256:" + "1" * 64
     (rec / "images.env").write_text(
         f"BIGBOY_DHO_IMAGE=ghcr.io/full-chaos/dev-health-go-dho@{pinned_dho_old}\n"
-        f"BIGBOY_API_TOOLS_IMAGE=ghcr.io/full-chaos/dev-health-go-api-tools@{old}\n"
-        f"BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@{old}\n"
-        f"BIGBOY_WEB_IMAGE=ghcr.io/full-chaos/dev-health-web@{old}\n"
+        f"BIGBOY_API_TOOLS_IMAGE=ghcr.io/full-chaos/dev-health-go-api-tools@sha256:{'1' * 64}\n"
+        f"BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@sha256:{'2' * 64}\n"
+        f"BIGBOY_WEB_IMAGE=ghcr.io/full-chaos/dev-health-web@sha256:{'3' * 64}\n"
     )
     return root
 
@@ -179,12 +178,7 @@ def test_the_cut_stops_before_migrate_when_the_repin_fails(tmp_path: Path) -> No
     ep._gh_stub(stub_bin)
     docker = stub_bin / "docker"
     wrong_old = "sha256:" + "9" * 64
-    docker.write_text(
-        docker.read_text().replace(
-            f'echo \'{{"digest":"{ep._OLD_DIGEST}"}}\'',
-            f'echo \'{{"digest":"{wrong_old}"}}\'',
-        )
-    )
+    docker.write_text(docker.read_text().replace(ep._OLD_DIGEST, wrong_old))
     proc = subprocess.run(
         ["bash", str(BIGBOY / "bigboy-cut.sh"), ep._OLD8, ep._NEW],
         capture_output=True,

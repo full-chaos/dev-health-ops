@@ -11,22 +11,36 @@ see an unwanted extra (a table-wide UPDATE also makes has_column_privilege true)
 gate's job (postgres.CheckRolePosture / CheckAPIAuthorization).
 """
 
+import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-OPS_REPO = "/home/ubuntu/devhealth/ops"
+
+def ops_repo():
+    """BIGBOY_OPS_REPO, else the checkout these tools come from; never the operator checkout (CHAOS-10137)."""
+    env = os.environ.get("BIGBOY_OPS_REPO")
+    if env:
+        return env
+    here = Path(__file__).resolve().parents[2]
+    return str(here) if (here / ".git").exists() else None
+
+
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "REFERENCES")
 
 
 def load(sha, gofile, func):
     """(tables, columns) of posture `func` in `gofile` at `sha`, or None when it cannot be read."""
+    repo = ops_repo()
+    if repo is None:
+        return None
     try:
         src = subprocess.check_output(
             [
                 "git",
                 "-C",
-                OPS_REPO,
+                repo,
                 "show",
                 f"{sha}:internal/storage/postgres/{gofile}",
             ],
@@ -59,7 +73,7 @@ def delta(role, gofile, func, unparsable):
     before, after = load(old, gofile, func), load(new, gofile, func)
     if before is None or after is None:
         print(unparsable)
-        sys.exit(0)
+        sys.exit(1)
     lines = []
     for table, privs in sorted(after[0].items()):
         had = before[0].get(table, {})

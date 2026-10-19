@@ -500,6 +500,7 @@ def _cut_with_a_fake_check(
         env={
             "PATH": f"{stub_bin}:/usr/bin:/bin",
             "BIGBOY_ROOT": str(root),
+            "BIGBOY_OPS_REPO": str(ROOT),
             "BIGBOY_TOOLS_DIR": str(tools),
             "DOCKER_STUB_ARGS_LOG": str(args_log),
             "TMPDIR": str(tmp_path),

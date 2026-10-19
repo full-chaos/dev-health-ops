@@ -52,8 +52,25 @@ func TestExternalFromEnv(t *testing.T) {
 	}
 }
 
+// useTargetEnvScript makes dir the repository root the hook runs in, holding ci/auth_corpus_set_env.sh with body
+// and mode.
+func useTargetEnvScript(t *testing.T, body string, mode os.FileMode) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "ci"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ci", "auth_corpus_set_env.sh"), []byte(body), mode); err != nil {
+		t.Fatal(err)
+	}
+	previous := targetEnvDir
+	targetEnvDir = dir
+	t.Cleanup(func() { targetEnvDir = previous })
+	return dir
+}
+
 func TestExternalRequiredFollowsTheBaseURL(t *testing.T) {
-	for _, name := range []string{EnvExternalPostgres, EnvExternalClickHouse, EnvExternalValkey, EnvExternalSetEnvCmd} {
+	for _, name := range []string{EnvExternalPostgres, EnvExternalClickHouse, EnvExternalValkey} {
 		t.Setenv(name, "")
 	}
 	if _, ok, err := ExternalRequired(""); ok || err != nil {
@@ -69,10 +86,17 @@ func TestExternalRequiredFollowsTheBaseURL(t *testing.T) {
 		t.Error("a base URL with unusable stores was accepted")
 	}
 	t.Setenv(EnvExternalValkey, "redis://h:6379/1")
+	previous := targetEnvDir
+	targetEnvDir = t.TempDir()
+	t.Cleanup(func() { targetEnvDir = previous })
 	if _, _, err := ExternalRequired("http://target.test"); err == nil {
-		t.Error("an external run with no target-environment command was accepted: the corpus changes the target's environment mid-run")
+		t.Error("an external run with no ci/auth_corpus_set_env.sh was accepted: the corpus changes the target's environment mid-run")
 	}
-	t.Setenv(EnvExternalSetEnvCmd, "/bin/true")
+	useTargetEnvScript(t, "#!/bin/sh\nexit 0\n", 0o644)
+	if _, _, err := ExternalRequired("http://target.test"); err == nil {
+		t.Error("a ci/auth_corpus_set_env.sh that is not executable was accepted")
+	}
+	useTargetEnvScript(t, "#!/bin/sh\nexit 0\n", 0o755)
 	for _, bad := range []string{"not-a-url", "ftp://target.test", "http://", "target.test:8080"} {
 		if _, _, err := ExternalRequired(bad); err == nil {
 			t.Errorf("malformed base URL %q was accepted", bad)
@@ -95,14 +119,9 @@ func TestSetTargetEnvInProcess(t *testing.T) {
 	}
 }
 
-func TestSetTargetEnvExternalRunsTheCommand(t *testing.T) {
-	dir := t.TempDir()
-	log := filepath.Join(dir, "calls")
-	script := filepath.Join(dir, "set-env.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s=%s\\n' \"$1\" \"$2\" >> "+log+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(EnvExternalSetEnvCmd, script)
+func TestSetTargetEnvExternalRunsTheStaticScript(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "calls")
+	dir := useTargetEnvScript(t, "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$PWD\" \"$1\" \"$2\" >> "+log+"\n", 0o755)
 	t.Setenv("ORACLE_TEST_NAME", "untouched")
 	SetTargetEnv(t, true, "ORACLE_TEST_NAME", " OFF ")
 	if got := os.Getenv("ORACLE_TEST_NAME"); got != " OFF " {
@@ -111,12 +130,12 @@ func TestSetTargetEnvExternalRunsTheCommand(t *testing.T) {
 	SetTargetEnv(t, true, "ORACLE_TEST_NAME", "")
 	got, err := os.ReadFile(log)
 	if err != nil {
-		t.Fatalf("the command did not run: %v", err)
+		t.Fatalf("the script did not run: %v", err)
 	}
-	if string(got) != "ORACLE_TEST_NAME= OFF \nORACLE_TEST_NAME=\n" {
-		t.Errorf("command calls = %q", got)
+	real, _ := filepath.EvalSymlinks(dir)
+	if want := real + "|ORACLE_TEST_NAME| OFF \n" + real + "|ORACLE_TEST_NAME|\n"; string(got) != want {
+		t.Errorf("script calls = %q, want %q (run in the repository root, name and value as arguments)", got, want)
 	}
-	// The frozen golden keys its calls by this process's environment, so it follows the target's.
 	if _, set := os.LookupEnv("ORACLE_TEST_NAME"); set {
 		t.Errorf("after the unset the process still holds ORACLE_TEST_NAME=%q", os.Getenv("ORACLE_TEST_NAME"))
 	}
@@ -126,11 +145,7 @@ func TestSetTargetEnvExternalRunsTheCommand(t *testing.T) {
 // the auto-create-org setting changed in the process, so an external run must key the call the same way, or the
 // run stops at the first changed batch ("recorded under another extra environment").
 func TestExternalSetTargetEnvKeysTheGoldenCallLikeInProcess(t *testing.T) {
-	script := filepath.Join(t.TempDir(), "set-env.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(EnvExternalSetEnvCmd, script)
+	useTargetEnvScript(t, "#!/bin/sh\nexit 0\n", 0o755)
 	golden, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
 	if err != nil {
 		t.Fatal(err)

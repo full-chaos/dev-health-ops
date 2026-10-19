@@ -140,6 +140,13 @@ func startExternal(t *testing.T, ctx context.Context, options Options, v *Venue)
 	return v
 }
 
+// targetEnvScript is what an external run calls, as `./ci/auth_corpus_set_env.sh NAME VALUE` (empty VALUE = unset)
+// in targetEnvDir, to change the environment of the target it drives (it reconfigures or restarts the target).
+const targetEnvScript = "./ci/auth_corpus_set_env.sh"
+
+// targetEnvDir is the repository root the script runs in; the tests of this package point it at a temporary tree.
+var targetEnvDir string
+
 // limiterKeyPattern matches the keys of the go-api rate-limit store (ratelimitvalkey keyPrefix "dho:rl:").
 const limiterKeyPattern = "dho:rl:*"
 

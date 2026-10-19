@@ -109,7 +109,7 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			return
 		case errors.Is(err, ErrCredentialScope):
 			logger.InfoContext(ctx, "acr llm-config: scope refused", slog.String("credential_id", credentialID))
-			countLLMConfig(ctx, "forbidden_scope")
+			countLLMConfig(ctx, "forbidden")
 			writeDetail(w, http.StatusForbidden, "Forbidden")
 			return
 		case err != nil:

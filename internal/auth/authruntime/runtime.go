@@ -93,17 +93,6 @@ func sessionRoutes(
 	})
 }
 
-// withRequestIDs gives every route the server-minted request id that audit
-// rows and error.v1 bodies carry (internal/auth/requestid).
-func withRequestIDs(routes []httpapi.Route) []httpapi.Route {
-	out := make([]httpapi.Route, len(routes))
-	for i, route := range routes {
-		route.Handler = requestid.Middleware(route.Handler)
-		out[i] = route
-	}
-	return out
-}
-
 // Main runs the command and exits with its status.
 func Main() {
 	os.Exit(Execute(context.Background(), os.Args[1:], envsecrets.ProcessLookup, IO{
@@ -340,7 +329,7 @@ func configureWithRoutes(
 		return nil, err
 	}
 	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra))
-	routes = withRequestIDs(append(routes, extra...))
+	routes = append(routes, extra...)
 
 	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))
 	if err != nil {
@@ -508,6 +497,13 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		RateLimit:      cfg.RateLimit.PerSecond,
 		RateLimitBurst: cfg.RateLimit.Burst,
 		MaxInFlight:    maxInFlightRequests,
+		// The server-minted request id (internal/auth/requestid) wraps the
+		// whole mux, so the transport's own refusals (404, 405, 413, 429)
+		// carry X-Auth-Request-ID as route answers do.
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware},
+		// The transport id is always minted here, never a client's
+		// X-Request-ID: it reaches every log line and envelope.
+		AcceptRequestID: func(string) bool { return false },
 	}
 }
 

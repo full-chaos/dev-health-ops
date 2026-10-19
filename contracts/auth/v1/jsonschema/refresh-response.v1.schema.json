@@ -29,10 +29,8 @@
       "description": "Lowercase `bearer`, as go-api emits today."
     },
     "expires_in": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 3600,
-      "description": "Access token lifetime in seconds; the 60 minute ceiling is today's accessExpiresIn."
+      "const": 3600,
+      "description": "Access token lifetime in seconds: exactly 3600 (60 minutes), go-api's accessExpiresIn, until the asymmetric issuer of Wave 3 changes it. Integer token only; 3600.0 passes the schema (const compares numbers) and both clients refuse it."
     },
     "refresh_credential": {
       "type": "string",

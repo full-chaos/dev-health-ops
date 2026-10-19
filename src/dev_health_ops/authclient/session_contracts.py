@@ -18,8 +18,9 @@ from dev_health_ops.authclient.contracts import (
     ContractError,
     parse_rfc3339,
     require_wire_int,
-    validate,
+    violations,
 )
+from dev_health_ops.authclient.principal import INT64_MAX
 
 SESSION: Final = "session.v1"
 REFRESH_REQUEST: Final = "refresh-request.v1"
@@ -69,7 +70,12 @@ def _load(surface: str, raw: bytes | str) -> dict[str, Any]:
         document = json.loads(raw, object_pairs_hook=_refuse_duplicates_for(surface))
     except json.JSONDecodeError as exc:
         raise ContractError(f"{surface}: document is not valid JSON: {exc}") from exc
-    validate(surface, document)
+    found = violations(surface, document)
+    if found:
+        # The validators' messages repeat the rejected value, which on the
+        # refresh surfaces is a credential: report location and keyword only.
+        joined = "; ".join(f"{v.instance_location} violates {v.keyword}" for v in found)
+        raise ContractError(f"{surface}: {joined}")
     return document
 
 
@@ -92,6 +98,10 @@ def parse_session(raw: bytes | str) -> Session:
     document = _load(SESSION, raw)
     revision = require_wire_int(document, "revision", SESSION)
     assert revision is not None  # required by the schema
+    if revision > INT64_MAX:
+        raise ContractError(
+            f"{SESSION}: /revision is outside the int64 range Go can represent"
+        )
     auth_time = parse_rfc3339(document["auth_time"], SESSION, "auth_time")
     created_at = parse_rfc3339(document["created_at"], SESSION, "created_at")
     expires_at = parse_rfc3339(document["expires_at"], SESSION, "expires_at")

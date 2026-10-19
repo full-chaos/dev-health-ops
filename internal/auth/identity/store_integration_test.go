@@ -269,8 +269,8 @@ FROM auth.principals p JOIN auth.users u ON u.principal_id = p.id WHERE p.id = $
 	if hash != nil {
 		t.Fatalf("projection copied the password verifier; auth.users.password_hash must stay NULL until the users cutover")
 	}
-	if n := e.auditRows(t, ctx, "auth.principal.projection_updated", id.String()); n != 0 {
-		t.Fatalf("a first projection wrote %d audit rows; it writes unguarded inserts only", n)
+	if p, u := e.auditRows(t, ctx, "auth.principal.projected", id.String()), e.auditRows(t, ctx, "auth.principal.projection_updated", id.String()); p != 1 || u != 0 {
+		t.Fatalf("a first projection wrote %d creation and %d update audit rows, want 1 and 0", p, u)
 	}
 }
 

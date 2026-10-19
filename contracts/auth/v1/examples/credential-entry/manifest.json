@@ -152,7 +152,7 @@
     {
       "file": "invalid-revoked-reason-prose.json",
       "expect_instance_location": "/revoked_reason",
-      "expect_keyword": "pattern",
+      "expect_keyword": "enum",
       "why": "The database column is free text; the wire form is a reason code, never prose or an address."
     },
     {

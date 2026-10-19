@@ -74,7 +74,7 @@
     {
       "file": "invalid-attributes-reason-code-prose.json",
       "expect_instance_location": "/attributes/reason_code",
-      "expect_keyword": "pattern",
+      "expect_keyword": "enum",
       "why": "A reason code is a stable token, not prose or an address."
     },
     {

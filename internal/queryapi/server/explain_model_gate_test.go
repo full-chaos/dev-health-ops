@@ -71,6 +71,8 @@ var explainGateRows = []struct {
 	{"B1-off saved config, acr_service_model off", gateSource{in: llmorgsettings.Inputs{Saved: true, ConfigUsable: true}}, false, http.StatusForbidden, "ai_features_turned_off"},
 	{"B1-unknown entitlement read fails", gateSource{err: errors.New("entitlement read failed")}, false, http.StatusServiceUnavailable, "Service unavailable"},
 	{"B1' saved but unusable", gateSource{in: llmorgsettings.Inputs{Saved: true, ServiceModelOn: true}}, false, http.StatusServiceUnavailable, "Service unavailable"},
+	{"flag off, saved config, gate closed", gateSource{in: llmorgsettings.Inputs{Saved: true, GateClosed: true, Fallback: true}}, false, http.StatusForbidden, "ai_features_turned_off"},
+	{"flag off, saved and unusable", gateSource{in: llmorgsettings.Inputs{Saved: true}}, false, http.StatusForbidden, "ai_features_turned_off"},
 	{"B2 saved behind a closed gate, with the grant", gateSource{in: llmorgsettings.Inputs{Saved: true, GateClosed: true, ServiceModelOn: true, Fallback: true}}, false, http.StatusForbidden, "own_model_gate_closed"},
 	{"B3 no config, acr_service_model and platform_model_fallback: platform model", gateSource{in: llmorgsettings.Inputs{ServiceModelOn: true, Fallback: true}}, true, 0, ""},
 	{"B4 no config, acr_service_model only", gateSource{in: llmorgsettings.Inputs{ServiceModelOn: true}}, false, http.StatusForbidden, "service_model_not_entitled"},

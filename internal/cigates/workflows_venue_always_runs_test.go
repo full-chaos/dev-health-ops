@@ -127,7 +127,7 @@ func venueAlwaysRunsViolations(t *testing.T, root string) []string {
 	return out
 }
 
-func TestVenueOraclesAlwaysRun(t *testing.T) {
+func TestVenueJobAlwaysRuns(t *testing.T) {
 	expectNoViolations(t, venueAlwaysRunsViolations(t, repoRoot(t)))
 }
 
@@ -140,7 +140,7 @@ func venueAlwaysRunsFiles(t *testing.T, root string) []string {
 	return files
 }
 
-func TestVenueOraclesAlwaysRunPlantedDefects(t *testing.T) {
+func TestVenueJobAlwaysRunsPlantedDefects(t *testing.T) {
 	root := repoRoot(t)
 	const f = venueWorkflow
 	const triggers = "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n"

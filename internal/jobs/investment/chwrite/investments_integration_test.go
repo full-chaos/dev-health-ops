@@ -407,6 +407,23 @@ func TestWriteTokenUsageAgainstRealClickHouse(t *testing.T) {
 		testOrgID, TokenUsageSourceInvestmentMaterialize); got != "legacy" {
 		t.Errorf("use_case: got %q, want %q", got, "legacy")
 	}
+	if got := scanString(t, ctx, conn,
+		"SELECT credential_source FROM llm_token_usage WHERE org_id = ? AND source = ?",
+		testOrgID, TokenUsageSourceInvestmentMaterialize); got != CredentialSourcePlatform {
+		t.Errorf("credential_source: got %q, want %q", got, CredentialSourcePlatform)
+	}
+	if _, err := writer.WriteTokenUsage(ctx, testOrgID, TokenUsageRecord{
+		RunID: "22222222-2222-4222-8222-222222222222", Provider: "anthropic", Model: "claude-haiku-5-5",
+		Source: "org_run", InputTokens: 1, OutputTokens: 1, Calls: 1, CredentialSource: CredentialSourceOrg,
+		ComputedAt: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("WriteTokenUsage org: %v", err)
+	}
+	if got := scanString(t, ctx, conn,
+		"SELECT credential_source FROM llm_token_usage WHERE org_id = ? AND source = ?",
+		testOrgID, "org_run"); got != CredentialSourceOrg {
+		t.Errorf("credential_source: got %q, want %q", got, CredentialSourceOrg)
+	}
 }
 
 // TestWriteTokenUsageSkipsAnAllZeroRow pins the early return

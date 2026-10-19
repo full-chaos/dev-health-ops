@@ -51,31 +51,6 @@ def _get_db_url() -> str:
     )
 
 
-def _merge_sync_flags(sync_targets: list[str]) -> dict[str, bool]:
-    from dev_health_ops.processors.sync import _sync_flags_for_target
-
-    merged_flags: dict[str, bool] = {}
-    for target in sync_targets:
-        flags = _sync_flags_for_target(target)
-        for key, enabled in flags.items():
-            if enabled:
-                merged_flags[key] = True
-
-    for key in (
-        "sync_git",
-        "sync_prs",
-        "sync_cicd",
-        "sync_deployments",
-        "sync_incidents",
-        "sync_security",
-        "sync_tests",
-        "blame_only",
-    ):
-        merged_flags.setdefault(key, False)
-
-    return merged_flags
-
-
 def _extract_owner_repo(
     config_name: str, sync_options: dict[str, Any]
 ) -> tuple[str, str] | None:

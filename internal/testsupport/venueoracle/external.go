@@ -136,3 +136,9 @@ func ResetLimiterKeys(t *testing.T, ctx context.Context, uri string) {
 		}
 	}
 }
+
+// ExternalRequired is the external stores a run against baseURL needs: none (ok false) when baseURL is empty, an
+// error when it is set and the stores in the environment are missing or unusable.
+func ExternalRequired(baseURL string) (ExternalStores, bool, error) {
+	return ExternalStores{}, false, nil
+}

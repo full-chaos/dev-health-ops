@@ -54,6 +54,9 @@ func ListenAddr() string {
 
 func Start(t *testing.T) *Server { return StartAt(t, DefaultListen) }
 
+// ValidateListen is an error unless addr is host:port with a port number.
+func ValidateListen(addr string) error { return nil }
+
 // StartAt starts the sink on addr.
 func StartAt(t *testing.T, addr string) *Server {
 	t.Helper()

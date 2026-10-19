@@ -69,7 +69,7 @@ esac
 WEB_S7=${WEB_SHA:0:7}
 
 WEB_DIGEST=""
-for i in $(seq 1 "$WAIT_TRIES"); do
+for _ in $(seq 1 "$WAIT_TRIES"); do
   WEB_DIGEST=$(arm64_child_digest "ghcr.io/full-chaos/dev-health-web:sha-$WEB_S7" || true)
   [[ ${WEB_DIGEST:-} == sha256:* ]] && break
   sleep "$WAIT_SECS"

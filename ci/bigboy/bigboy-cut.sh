@@ -51,23 +51,30 @@ done
 # CHAOS-7162: dho_api_ch is declared by a host file mounted into ClickHouse's users.d (compose.bigboy.yml), so a
 # ClickHouse recreate no longer loses it. The overlay requires the path; the default is the credentials directory's file.
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
+# CHAOS-10137: the cut changes directory to $R below, so every path a caller names must be absolute by then.
+abs_path() { case $1 in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
+export DHO_API_CH_USERS_XML; DHO_API_CH_USERS_XML=$(abs_path "$DHO_API_CH_USERS_XML")
+DHO_API_CH_CREDS=$(abs_path "${DHO_API_CH_CREDS:-$R/.go-api-dev/go-api.creds}"); export DHO_API_CH_CREDS
+[ -z "${DHO_API_CH_POSTURE_GO:-}" ] || { DHO_API_CH_POSTURE_GO=$(abs_path "$DHO_API_CH_POSTURE_GO"); export DHO_API_CH_POSTURE_GO; }
+[ -z "${TMPDIR:-}" ] || { TMPDIR=$(abs_path "$TMPDIR"); export TMPDIR; }
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
+# shellcheck disable=SC2046  # intentional: unset every COMPOSE_* name
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
 DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
-cd "$R"
+cd "$R" || exit
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 echo "cut start $(date -u +%T) new=$NEW root=$R tools=$HERE"
-for i in $(seq 1 240); do
-  ok=1; for img in dev-health-go-operator dev-health-go-dho dev-health-go-api-tools; do docker buildx imagetools inspect ghcr.io/full-chaos/$img:sha-$S7 >/dev/null 2>&1 || ok=0; done
+for _ in $(seq 1 240); do
+  ok=1; for img in dev-health-go-operator dev-health-go-dho dev-health-go-api-tools; do docker buildx imagetools inspect ghcr.io/full-chaos/$img:sha-"$S7" >/dev/null 2>&1 || ok=0; done
   [ $ok = 1 ] && break; sleep 30
 done
 [ "${ok:-0}" = 1 ] || { st images-wait 1; exit 1; }; st images-ready 0
 # Resolve the operator digest BEFORE any STEP reads the compose file: compose.bigboy.yml
 # requires BIGBOY_OPERATOR_IMAGE, so a config read before this export fails on the missing variable
 # (the SSO group cut's secret-refs STEP reported five set secrets as BLANK for exactly that reason).
-BIGBOY_OPERATOR_DIGEST=$(arm64_child_digest ghcr.io/full-chaos/dev-health-go-operator:sha-$S7)   # CHAOS-10137: the arm64 child, as images.env pins it
+BIGBOY_OPERATOR_DIGEST=$(arm64_child_digest ghcr.io/full-chaos/dev-health-go-operator:sha-"$S7")   # CHAOS-10137: the arm64 child, as images.env pins it
 case "$BIGBOY_OPERATOR_DIGEST" in sha256:*) ;; *) st operator-resolve 1; echo "FAIL: no operator digest for sha-$S7" >&2; exit 1 ;; esac
-export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@$BIGBOY_OPERATOR_DIGEST; echo "operator=$BIGBOY_OPERATOR_DIGEST" > $REC.operator.txt; st operator-resolve 0
+export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@$BIGBOY_OPERATOR_DIGEST; echo "operator=$BIGBOY_OPERATOR_DIGEST" > "$REC".operator.txt; st operator-resolve 0
 # CHAOS-6967(b)/CHAOS-6987 (D2728) staging (Trap #421 sibling): bigboy's query-api needs the
 # same ~23 GO_API_*_ENABLED env vars prod's deploy chart sets (this switch is a plain in-memory
 # flag flipped once at query-api boot, never Postgres, never the routeswitch ledger), PLUS the
@@ -144,11 +151,11 @@ else
   st query-api-enabled-flags-current 2  # SKIPPED, not a pass: no pinned values (DEPLOY_SHA) -- this STEP did not run, it did not pass
   echo "SKIPPED (not checked): the values-driven STEPs need DEPLOY_SHA (see deploy-pin above)." >&2
 fi
-docker pull -q $BIGBOY_OPERATOR_IMAGE > /dev/null 2>&1; st operator-pull $?   # --no-build never pulls: the digest must be local before the recreate (rev 190 first run: "No such image")
-$HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; rc_repin=$?; st repin $rc_repin
+docker pull -q "$BIGBOY_OPERATOR_IMAGE" > /dev/null 2>&1; st operator-pull $?   # --no-build never pulls: the digest must be local before the recreate (rev 190 first run: "No such image")
+"$HERE"/bigboy-repin.sh "$OLD8" "$NEW" > "$REC".repin.out 2>&1; rc_repin=$?; st repin $rc_repin
 # CHAOS-10137: a failed re-pin stops the cut before the web repin, migrate and any recreate (D2801 class: they would run on the OLD images).
 [ $rc_repin = 0 ] || { echo "cut stops: re-pin failed rc=$rc_repin (see $REC.repin.out)"; exit 1; }
-[ -d $REC ] || { echo "no record dir"; exit 1; }
+[ -d "$REC" ] || { echo "no record dir"; exit 1; }
 # CHAOS-7019: `web` is a LOCAL BUILD service in the root compose.yml, unlike query-api/
 # go-api which the bigboy overlay pins to CI-built ghcr.io digests -- so a web-only merge (or a
 # web+ops merge landing together, like CHAOS-6262) left a stale host build silently serving
@@ -158,7 +165,7 @@ $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; rc_repin=$?; st repin $r
 # CHAOS-7901: the caller picks the web build by the environment of THIS script: WEB_REPIN=skip (web stays as it is),
 # WEB_REPIN=<40-hex web commit> (that build) or unset/`head` (web main HEAD, the default). Cut 4 waited 10 minutes and
 # ended `repin-web rc=3` because web main HEAD was a CI-only commit with no image; WEB_REPIN=skip avoids that wait.
-$HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; rc_web=$?; st repin-web $rc_web
+"$HERE"/bigboy-repin-web.sh > "$REC".repin-web.out 2>&1; rc_web=$?; st repin-web $rc_web
 # CHAOS-7687: a re-pin that could not resolve an image FAILS the cut here, before migrate and before any recreate
 # (a web smoke on the OLD web, with no failed cut, read as a measurement that did not happen). WEB_REPIN=skip is the
 # explicit way to keep the current web pin.
@@ -169,23 +176,23 @@ $HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; rc_web=$?; st repin-web $rc
 # substitution referencing a var that ONLY lives in ops/.env (e.g. query-api's
 # GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}) silently resolves to a blank string with no
 # error -- caught live tonight when a first apply went out with an empty edge-JWT secret.
-"${DC[@]}" run --rm --no-deps -T migrate > $REC/migrate.out 2>&1; st migrate $?
+"${DC[@]}" run --rm --no-deps -T migrate > "$REC"/migrate.out 2>&1; st migrate $?
 # CHAOS-7162: go-api's ClickHouse login must be declared durably and be live BEFORE go-api is recreated: without
 # `dho_api_ch` in system.users every ClickHouse call fails with code 516 (rev 198, after a ClickHouse recreate rebuilt
 # users.d from the image). Names only; the check refuses a file ClickHouse could not read (it would exit on it).
 # The credentials file is passed to the check BY PATH (arg 2), never sourced here: the password is not in this shell, in the
 # check's environment, or in any child's (CHAOS-8382). The check reads it by pipe and proves dho_api_ch authenticates. Nothing
 # prints it. The check needs a private TMPDIR (not /tmp), set by the cut's launcher.
-"$HERE/check-dho-api-ch-user.sh" "$DHO_API_CH_USERS_XML" "${DHO_API_CH_CREDS:-$R/.go-api-dev/go-api.creds}" > $REC/ch-api-user.out 2>&1; rc_chu=$?; st ch-api-user $rc_chu
-[ "$rc_chu" = 0 ] || { echo "FAIL: dho_api_ch is not usable (see $REC/ch-api-user.out); ABORTING before go-api is recreated" >&2; cat $REC/ch-api-user.out >&2; exit 1; }
+"$HERE/check-dho-api-ch-user.sh" "$DHO_API_CH_USERS_XML" "$DHO_API_CH_CREDS" > "$REC"/ch-api-user.out 2>&1; rc_chu=$?; st ch-api-user $rc_chu
+[ "$rc_chu" = 0 ] || { echo "FAIL: dho_api_ch is not usable (see $REC/ch-api-user.out); ABORTING before go-api is recreated" >&2; cat "$REC"/ch-api-user.out >&2; exit 1; }
 # CHAOS-8361: no `api` in this list (the Python api is retired). `--no-deps` skips nothing these three need:
 # the one dependency the cut owns, `migrate`, ran on the line above, and the bigboy chain declares no
 # envelope-keys-init service (query-api and the venue one-offs read the key files of .go-api-dev).
-"${DC[@]}" up -d --no-deps --no-build query-api go-api web > $REC/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
+"${DC[@]}" up -d --no-deps --no-build query-api go-api web > "$REC"/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
 # CHAOS-7131: the recreated web must still carry the names the router overlay sets (names only, never values).
 "$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names-after-up" 2>/dev/null
 "$HERE/check-web-env-required.sh" "$REC.web-env-names-after-up" BACKEND_URL AUTH_URL; st web-env-after-up $?
-"${DC[@]}" up -d --no-deps --no-build go-worker go-worker-heavy go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
+"${DC[@]}" up -d --no-deps --no-build go-worker go-worker-heavy go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > "$REC"/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
 sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | grep -q 200; st go-api-ready $?
 # R467: every path the router sends to a Go plane has a handler in the build just started (405/401 to a
 # ROUTEPROBE request; 404 = values ahead of the build). Runs only with pinned values.
@@ -198,13 +205,13 @@ if [ -n "$VALUES" ]; then python3 "$HERE/check-route-coverage.py" "$VALUES"; st 
 # below. The catalog is still fetched at THIS cut's sha: the web-path smoke reads it
 # (DHO_SMOKE_CATALOG_FILE).
 gh api "repos/full-chaos/dev-health-ops/contents/contracts/graphql/v1/go_api_operations.json?ref=$NEW" -H 'Accept: application/vnd.github.raw' > "$REC.catalog.json" 2>/dev/null && chmod 644 "$REC.catalog.json"
-$HERE/bigboy-log-checks.sh $REC > $REC/log-checks.out 2>&1; st log-checks $?; tail -6 $REC/log-checks.out
-$HERE/bigboy-6889-checks.sh $REC > $REC/6889-checks.out 2>&1; st worker-checks $?; tail -4 $REC/6889-checks.out | cut -c1-200
-$HERE/bigboy-river-apply.sh > $REC/river-apply.out 2>&1; st river-apply $?
-$HERE/bigboy-hook-check.sh $REC > $REC/hook-check.out 2>&1; st hook-check $?
-BIGBOY_OPS_REPO=$OPS_REPO $HERE/bigboy-grants-check.sh $REC > $REC/grants-check.out 2>&1; st ch-grants-check $?; tail -1 $REC/grants-check.out
-BIGBOY_OPS_REPO=$OPS_REPO $HERE/cut-contents.sh $OLD8 $NEW $REC/pg-expect.txt > $REC/contents.txt 2>&1; st cut-contents $?; cat $REC/contents.txt
-[ "$(grep -vc "^#" $REC/pg-expect.txt)" -gt 0 ] && { $HERE/pg-grants-check.sh bigboy $REC/pg-expect.txt > $REC/pg-grants.out 2>&1; st pg-grants-readback $?; tail -4 $REC/pg-grants.out; } || echo "STEP pg-grants-readback SKIPPED (no PG grant deltas in the cut)"
+"$HERE"/bigboy-log-checks.sh "$REC" > "$REC"/log-checks.out 2>&1; st log-checks $?; tail -6 "$REC"/log-checks.out
+"$HERE"/bigboy-6889-checks.sh "$REC" > "$REC"/6889-checks.out 2>&1; st worker-checks $?; tail -4 "$REC"/6889-checks.out | cut -c1-200
+"$HERE"/bigboy-river-apply.sh > "$REC"/river-apply.out 2>&1; st river-apply $?
+"$HERE"/bigboy-hook-check.sh "$REC" > "$REC"/hook-check.out 2>&1; st hook-check $?
+BIGBOY_OPS_REPO=$OPS_REPO "$HERE"/bigboy-grants-check.sh "$REC" > "$REC"/grants-check.out 2>&1; st ch-grants-check $?; tail -1 "$REC"/grants-check.out
+BIGBOY_OPS_REPO=$OPS_REPO "$HERE"/cut-contents.sh "$OLD8" "$NEW" "$REC"/pg-expect.txt > "$REC"/contents.txt 2>&1; st cut-contents $?; cat "$REC"/contents.txt
+[ "$(grep -vc "^#" "$REC"/pg-expect.txt)" -gt 0 ] && { "$HERE"/pg-grants-check.sh bigboy "$REC"/pg-expect.txt > "$REC"/pg-grants.out 2>&1; st pg-grants-readback $?; tail -4 "$REC"/pg-grants.out; } || echo "STEP pg-grants-readback SKIPPED (no PG grant deltas in the cut)"
 # CHAOS-6987/R460: the web-path smoke -- the only proof this cut serves the real org
 # through a real browser session, not a hand-minted token. Fails loud (rc=1) while
 # DHO_SMOKE_ADMIN_EMAIL/DHO_SMOKE_ADMIN_PASSWORD_FILE are absent from ops/.env; that
@@ -212,6 +219,6 @@ BIGBOY_OPS_REPO=$OPS_REPO $HERE/cut-contents.sh $OLD8 $NEW $REC/pg-expect.txt > 
 # chris actually hit as a P1 (R460: "plane-only passes missed 2 structural breaks").
 export DHO_SMOKE_RECEIPT_PATH="/receipts/bigboy-$N8/web-path-smoke-receipt.json"
 export DHO_SMOKE_CATALOG_FILE="$REC.catalog.json"
-mkdir -p $REC
-bash $HERE/web-path-smoke.sh > $REC/web-path-smoke.out 2>&1; st web-path-smoke $?; tail -6 $REC/web-path-smoke.out
+mkdir -p "$REC"
+bash "$HERE"/web-path-smoke.sh > "$REC"/web-path-smoke.out 2>&1; st web-path-smoke $?; tail -6 "$REC"/web-path-smoke.out
 echo "cut done $(date -u +%T)"

@@ -46,6 +46,7 @@ if [ "$(stat -c '%a %u' "$tmp_root")" != "700 $(id -u)" ]; then
 fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd)
+# shellcheck disable=SC2046  # intentional: unset every COMPOSE_* name
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
 DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 # CHAOS-10137: BIGBOY_OPS_REPO names the ops clone when the tools run from a copy outside it.

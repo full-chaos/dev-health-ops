@@ -44,8 +44,9 @@ KEY_ID=${PROVE_KEY_ID:-local-dev-20260906}  # D2726: the kid bigboy's query-api 
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 fail=0
 mkdir -p "$OUT/proof/bodies"; chmod 0755 "$OUT" "$OUT/proof" "$OUT/proof/bodies"
-cd "$R"
+cd "$R" || exit
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
+# shellcheck disable=SC2046  # intentional: unset every COMPOSE_* name
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
 DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 

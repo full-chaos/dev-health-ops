@@ -462,6 +462,7 @@ def _cut_with_a_fake_check(
     check_rc: int,
     ops_repo: str | None = None,
     cwd: str | None = None,
+    creds_relative: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the real cut end to end past the carry block with a tools directory whose check is a fake
     returning `check_rc`; the stub docker logs every call so a `compose ... up` is observable."""
@@ -505,6 +506,11 @@ def _cut_with_a_fake_check(
             "PATH": f"{stub_bin}:/usr/bin:/bin",
             "BIGBOY_ROOT": str(root),
             "BIGBOY_OPS_REPO": ops_repo or str(ROOT),
+            **(
+                {"DHO_API_CH_CREDS": os.path.relpath(creds, cwd or ".")}
+                if creds_relative
+                else {}
+            ),
             "BIGBOY_TOOLS_DIR": str(tools),
             "DOCKER_STUB_ARGS_LOG": str(args_log),
             "TMPDIR": str(tmp_path),
@@ -788,3 +794,22 @@ def test_the_cut_hands_the_check_an_absolute_ops_repo_for_a_relative_setting(
         if line.startswith("BIGBOY_OPS_REPO=")
     ]
     assert seen == [f"BIGBOY_OPS_REPO={ROOT}"], seen
+
+
+def test_the_cut_hands_the_check_absolute_paths_for_relative_settings(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-10137: the cut changes directory to BIGBOY_ROOT, so a relative credentials path named at launch
+    must reach the check as an absolute path."""
+    proc, _ = _cut_with_a_fake_check(
+        tmp_path, 0, creds_relative=True, cwd=str(tmp_path)
+    )
+    assert "STEP ch-api-user rc=0" in proc.stdout, (proc.stdout, proc.stderr)
+    args = [
+        line
+        for line in (tmp_path / "fake-check.log").read_text().splitlines()
+        if line.startswith("args=")
+    ]
+    assert len(args) == 1, args
+    for path in args[0][len("args=") :].split():
+        assert path.startswith("/"), args

@@ -568,7 +568,7 @@ func TestStoreFailuresAreLoggedWithoutTheirText(t *testing.T) {
 	if strings.Contains(logs, leak) || strings.Contains(logs, "already exists") {
 		t.Fatalf("the log carries the error text: %s", logs)
 	}
-	if !strings.Contains(logs, `"error_class":"users_store"`) || !strings.Contains(logs, `"sqlstate":"23505"`) {
+	if !strings.Contains(logs, `"failure":"users_store"`) || !strings.Contains(logs, `"code":"23505"`) {
 		t.Fatalf("the log lacks the error class and SQLSTATE: %s", logs)
 	}
 }

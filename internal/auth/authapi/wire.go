@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
@@ -19,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // auth-outcome.v1 operations of these routes.
@@ -109,7 +109,8 @@ func (rec recorder) record(ctx context.Context, operation, result, reason string
 	}
 	switch {
 	case err != nil && result == "error":
-		rec.logger.ErrorContext(ctx, "auth session route failed", append(attrs, errorAttrs(err)...)...)
+		rec.logger.ErrorContext(ctx, "auth session route failed",
+			append(attrs, slog.String("failure", failureClass(err)), logging.ErrorAttr(err))...)
 	case result == "denied":
 		rec.logger.InfoContext(ctx, "auth session route refused", attrs...)
 	default:
@@ -117,31 +118,25 @@ func (rec recorder) record(ctx context.Context, operation, result, reason string
 	}
 }
 
-// errorAttrs names a failure by a fixed class and, for a PostgreSQL error, its
-// SQLSTATE: never the error text, which for a database error can carry key
-// values (a pg error's Detail) and for a client error a URL with secrets.
-func errorAttrs(err error) []any {
-	class := "internal"
+// failureClass names a route failure for the log. The error itself is
+// logged by logging.ErrorAttr (class, type and a valid SQLSTATE, never text).
+func failureClass(err error) string {
 	switch {
 	case errors.Is(err, session.ErrGraceUnavailable):
-		class = "grace_successor_unavailable"
+		return "grace_successor_unavailable"
 	case errors.Is(err, session.ErrStore):
-		class = "session_store"
+		return "session_store"
 	case errors.Is(err, errUsersStore):
-		class = "users_store"
+		return "users_store"
 	case errors.Is(err, errMultipleRows):
-		class = "users_store_multiple_rows"
+		return "users_store_multiple_rows"
 	case errors.Is(err, errIssue):
-		class = "token_issue"
+		return "token_issue"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		class = "context_done"
+		return "context_done"
+	default:
+		return "internal"
 	}
-	attrs := []any{slog.String("error_class", class)}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		attrs = append(attrs, slog.String("sqlstate", pgErr.Code))
-	}
-	return attrs
 }
 
 // refuse writes the error.v1 answer and records it.

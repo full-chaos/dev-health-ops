@@ -140,7 +140,10 @@ type gitHubDeploymentStatusPayload struct {
 
 // GitHubDeploymentsRouteHandler mirrors _fetch_github_deployments_async. It
 // owns only deployments, including Python's release and PR enrichment.
-type GitHubDeploymentsRouteHandler struct{ MaxDeployments int }
+type GitHubDeploymentsRouteHandler struct {
+	MaxDeployments int
+	RepoIdentity   GitLabRepoIdentityReader
+}
 
 func (handler GitHubDeploymentsRouteHandler) Collect(
 	ctx context.Context,
@@ -167,7 +170,7 @@ func (handler GitHubDeploymentsRouteHandler) Collect(
 	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := repositoryIdentity(repoPayload.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repoPayload)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

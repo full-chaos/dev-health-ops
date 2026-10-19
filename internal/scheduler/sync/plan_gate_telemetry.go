@@ -29,6 +29,9 @@ const (
 	// unit the same way several times in a row and is tried once a day, so no
 	// unit is planned for it on this tick. Recorded under "work-items".
 	planGateOutcomeSlowedDown = "slowed_down"
+	// planGateOutcomeFullQueryWindow: a work-items family whose own query is not bounded by the window (Jira
+	// fetch_all, a JQL override) is planned as ONE window instead of bounded windows. An expected path.
+	planGateOutcomeFullQueryWindow = "full_query_window"
 )
 
 // planGateKey identifies one (provider, dataset, outcome) series.

@@ -2,7 +2,6 @@ package providersync
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 )
@@ -265,26 +264,19 @@ func (adapter LinearProjectCatalogClickHouseAdapter) WriteLinearWorkItemEffect(
 			return ErrInvalidConfiguration
 		}
 	}
-	keep := linearProjectEnsureKeep(ctx, adapter.Delegate.Conn, identity.OrgID, rows)
-	keptRaw := make([]json.RawMessage, 0, len(effect.Rows))
-	for index, raw := range effect.Rows {
-		if keep[index] {
-			keptRaw = append(keptRaw, raw)
-		}
-	}
-	if len(keptRaw) == len(effect.Rows) {
-		return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, linearRawEffectIdentity(identity), effect)
-	}
-	if len(keptRaw) == 0 {
-		return nil
-	}
-	narrowed, err := BuildEffectBatch(effect.Destination, effect.Recovery, keptRaw)
+	narrowed, empty, err := narrowProjectEnsureEffect(ctx, adapter.Delegate.Conn, "linear", identity.OrgID, effect, rows)
 	if err != nil {
 		return err
 	}
+	if empty {
+		return nil
+	}
 	narrowedIdentity := linearRawEffectIdentity(identity)
-	narrowedIdentity.ContentDigest, narrowedIdentity.RowCount = narrowed.ContentDigest, len(narrowed.Rows)
-	return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, narrowedIdentity, narrowed)
+	if len(narrowed.Rows) != len(effect.Rows) {
+		narrowedIdentity.ContentDigest, narrowedIdentity.RowCount = narrowed.ContentDigest, len(narrowed.Rows)
+		return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, narrowedIdentity, narrowed)
+	}
+	return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, narrowedIdentity, effect)
 }
 
 // InspectLinearWorkItemEffect deliberately does NOT delegate to the GitHub

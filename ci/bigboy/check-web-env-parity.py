@@ -40,6 +40,11 @@ CLASSIFIED: dict[str, str] = {
     "ACR_WEB_ASSERTION_AUDIENCE": "base: venue-local ACR wiring (compose.yml)",
     "ACR_WEB_ASSERTION_KID": "base: venue-local ACR wiring (compose.yml)",
     "ACR_WEB_ASSERTION_KEY_FILE": "base: venue-local ACR wiring (compose.yml)",
+    # CHAOS-10137: social sign-in names from deploy #537/#538 (CHAOS-9847); bigboy's web gets them from compose.yml.
+    "AUTH_GITHUB_ID": "base: social sign-in credential set by compose.yml (CHAOS-9847)",
+    "AUTH_GITHUB_SECRET": "base: social sign-in credential set by compose.yml (CHAOS-9847)",
+    "AUTH_GOOGLE_ID": "base: social sign-in credential set by compose.yml (CHAOS-9847)",
+    "AUTH_GOOGLE_SECRET": "base: social sign-in credential set by compose.yml (CHAOS-9847)",
 }
 
 # Public, non-secret values the overlay must carry (D2724 router target, D2736 origin).

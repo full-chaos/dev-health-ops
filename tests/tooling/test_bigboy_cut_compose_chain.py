@@ -7,6 +7,7 @@ origin). With one file there is no chain to omit it from; these tests resolve th
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -494,7 +495,13 @@ def test_pg_grants_check_prod_branch_runs_psql_w_without_a_password(
 
 def test_grants_check_uses_compose_exec_only(tmp_path: Path) -> None:
     script = _c_stage(tmp_path, "bigboy-grants-check.sh")
-    p, fake = _c_run(tmp_path, script, str(tmp_path / "host" / "rec"))
+    (tmp_path / "host" / "ops" / ".git").mkdir(parents=True, exist_ok=True)
+    p, fake = _c_run(
+        tmp_path,
+        script,
+        str(tmp_path / "host" / "rec"),
+        extra_env={"BIGBOY_OPS_REPO": str(tmp_path / "host" / "ops")},
+    )
     calls = _c_calls(
         fake
     )  # the later git/compare steps may fail in the sandbox; the exec call is the subject
@@ -744,6 +751,10 @@ def _c_stage_posture_delta(
 def _c_run_delta(staged: Path, old: str, new: str, out: Path):
     return subprocess.run(
         [sys.executable, str(staged), old, new, str(out)],
+        env={
+            **os.environ,
+            "BIGBOY_OPS_REPO": str(staged.parent.parent / "host" / "ops"),
+        },
         capture_output=True,
         text=True,
         timeout=60,

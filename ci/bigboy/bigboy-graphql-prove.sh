@@ -35,19 +35,23 @@ esac
 # BIGBOY_ROOT is the running tree (compose files, _records, ops/.env): the same root parameter
 # the bigboy-cut.sh family reads, with the same default.
 R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd); HERE=$(cd "$(dirname "$0")" && pwd)
+# CHAOS-10137: images.env pins the linux/arm64 child, so the candidate build is compared as its arm64 child, not the index.
+# shellcheck source=arm64-child-digest.sh
+. "$HERE/arm64-child-digest.sh"
 TS=$(date -u +%Y%m%dT%H%M%SZ); OUT=$R/_records/bigboy-$N8/graphql-prove-$TS
 LOCAL_ADMIN_EMAIL=${LOCAL_ADMIN_EMAIL:-admin@test.com}
 KEY_ID=${PROVE_KEY_ID:-local-dev-20260906}  # D2726: the kid bigboy's query-api JWKS trusts
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 fail=0
 mkdir -p "$OUT/proof/bodies"; chmod 0755 "$OUT" "$OUT/proof" "$OUT/proof/bodies"
-cd "$R"
+cd "$R" || exit
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
+# shellcheck disable=SC2046  # intentional: unset every COMPOSE_* name
 unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
 DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 
 # 1. prover build == candidate build
-want=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-api-tools:sha-$S7" --format '{{json .Manifest}}' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])' 2>/dev/null)
+want=$(arm64_child_digest "ghcr.io/full-chaos/dev-health-go-api-tools:sha-$S7")
 pinned=$(grep -oE 'dev-health-go-api-tools@sha256:[0-9a-f]{64}' _records/images.env | head -1 | cut -d@ -f2)   # venue-prove runs ${BIGBOY_API_TOOLS_IMAGE}
 if [ -n "$want" ] && [ "$want" = "$pinned" ]; then st prover-image 0; else
   st prover-image 1; echo "REFUSED: venue-prove image ${pinned:-<none>} is not go-api-tools:sha-$S7 (${want:-unresolved}) -- re-pin before proving" >&2; exit 1; fi

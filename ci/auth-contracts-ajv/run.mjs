@@ -41,7 +41,94 @@ const REQUIRED_GROUPS = {
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
+// Closed vocabularies (CHAOS-10194): contracts/auth/v1/vocabulary/reason-codes.json
+// is the single source for these three fields. Each entry builds a document
+// from a fixture that carries the field, then sets the field to a value.
+// Approved lists, written by hand on purpose: widening the vocabulary file and
+// the schema enums together must also need a deliberate edit here (CHAOS-10194).
+const APPROVED_REVOKED = [
+  "compromised",
+  "owner_request",
+];
+const APPROVED_AUDIT = [
+  "allowed_by_repository_grant",
+  "grant_absent",
+  "repository_not_granted",
+  "platform_role_absent",
+  "credential_missing",
+  "rate_limited",
+  "current_state_unavailable",
+  "authority_unavailable",
+  "upstream_unavailable",
+  "not_found",
+  "revision_conflict",
+  "internal_error",
+  "compromised",
+  "owner_request",
+  "role_granted",
+  "role_revoked",
+  "membership_added",
+  "membership_removed",
+  "membership_status_changed",
+  "grant_created",
+  "grant_revoked",
+  "credential_issued",
+  "credential_rotated",
+  "credential_revoked",
+  "session_revoked",
+  "organization_created",
+  "organization_updated",
+  "principal_disabled",
+  "principal_enabled",
+  "identity_linked",
+  "identity_unlinked",
+  "policy_revision_activated",
+  "entitlement_snapshot_applied",
+  "denied_no_membership",
+  "denied_no_grant",
+  "denied_policy",
+];
+const NOT_IN_THE_VOCABULARY = [
+  "secret_0123456789abcdef0123",
+  "key_compromised",
+  "Compromised",
+  "compromised ",
+  "compromise",
+  "owner_request_",
+  "",
+  "revoked because bob@example.test leaked it",
+];
+const VOCABULARY_SURFACES = {
+  "credential-entry": {
+    list: "revoked_reason",
+    schemaPath: ["properties", "revoked_reason"],
+    base: "valid-revoked.json",
+    set: (doc, v) => { doc.revoked_reason = v; },
+  },
+  "credential-list": {
+    list: "revoked_reason",
+    schemaPath: ["properties", "items", "items", "properties", "revoked_reason"],
+    base: "valid-two-items.json",
+    set: (doc, v) => { doc.items[1].revoked_reason = v; },
+  },
+  "audit-event": {
+    list: "audit_reason_code",
+    schemaPath: ["properties", "attributes", "properties", "reason_code"],
+    base: "invalid-attributes-reason-code-prose.json",
+    set: (doc, v) => { doc.attributes.reason_code = v; },
+  },
+};
+
 const REQUIRED_SWEEPS = ["jwks"];
+
+// The Unicode general categories, written out here and not read from a sweep
+// file, so a deleted sweep entry cannot also lower its own count. Cs and LC are
+// the two the sweep excludes; every other category must have an entry.
+const JS_GENERAL_CATEGORIES = [
+  "Cc", "Cf", "Cn", "Co", "Ll", "Lm", "Lo", "Lt", "Lu", "Mc", "Me", "Mn", "Nd", "Nl", "No",
+  "Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps", "Sc", "Sk", "Sm", "So", "Zl", "Zp", "Zs",
+];
+
 const sweepExpand = (v) =>
   v && typeof v === "object" && !Array.isArray(v) && "$repeat" in v
     ? (v.prefix ?? "") + v.$repeat[0].repeat(v.$repeat[1]) + (v.suffix ?? "")
@@ -285,8 +372,18 @@ for (const surface of surfaces) {
       claimed.add(name);
       checked += 1;
       const fixture = readFixture(path.join(dir, name));
-      if (fixture.duplicate && group !== "reject_by_client") {
-        fail(`${surface}/${name} [${group}]: ${fixture.duplicate}; only reject_by_client may carry a duplicate member`);
+      // A duplicate member is legitimate only in a reject_by_client fixture that
+      // DECLARES it (`"duplicate_member": true`), and a declaration must be true.
+      // Undeclared, a clients-refuse fixture could be refused for an accidental
+      // duplicate instead of the rule it exists to pin, and the ajv leg (which
+      // runs no client parser) would never see the difference.
+      const declared = group === "reject_by_client" && entry.duplicate_member === true;
+      if (fixture.duplicate && !declared) {
+        fail(`${surface}/${name} [${group}]: ${fixture.duplicate}; only a reject_by_client entry declaring "duplicate_member": true may carry one`);
+        continue;
+      }
+      if (declared && !fixture.duplicate) {
+        fail(`${surface}/${name}: declares "duplicate_member": true but carries no duplicate member`);
         continue;
       }
       const ok = validate(fixture.document);
@@ -330,6 +427,37 @@ for (const surface of surfaces) {
   }
   for (const name of claimed) {
     if (!existsSync(path.join(dir, name))) fail(`${surface}/${name} is claimed but absent`);
+  }
+  const vocabulary = VOCABULARY_SURFACES[surface];
+  if (vocabulary) {
+    const vocabPath = path.join(v1, "vocabulary", "reason-codes.json");
+    if (!existsSync(vocabPath)) {
+      fail(`${surface}: vocabulary file ${path.relative(root, vocabPath)} is missing`);
+    } else {
+      const values = readJSON(vocabPath)[vocabulary.list]?.values ?? [];
+      if (values.length === 0) fail(`${surface}: the ${vocabulary.list} vocabulary is empty`);
+      const approved = vocabulary.list === "revoked_reason" ? APPROVED_REVOKED : APPROVED_AUDIT;
+      if (JSON.stringify([...values].sort()) !== JSON.stringify([...approved].sort())) {
+        fail(`${surface}: the ${vocabulary.list} vocabulary file differs from the approved list in run.mjs`);
+      }
+      const build = (v) => {
+        const doc = structuredClone(readJSON(path.join(dir, vocabulary.base)));
+        vocabulary.set(doc, v);
+        return doc;
+      };
+      for (const v of values) {
+        checked += 1;
+        if (!validate(build(v))) fail(`${surface}: listed ${vocabulary.list} value ${JSON.stringify(v)} is refused`);
+      }
+      for (const v of NOT_IN_THE_VOCABULARY) {
+        checked += 1;
+        if (validate(build(v))) fail(`${surface}: ${JSON.stringify(v)} is not in the ${vocabulary.list} vocabulary but validates`);
+      }
+      const node = vocabulary.schemaPath.reduce((at, step) => at?.[step], readJSON(schemaPath));
+      if (JSON.stringify([...(node?.enum ?? [])].sort()) !== JSON.stringify([...values].sort())) {
+        fail(`${surface}: the schema enum differs from the ${vocabulary.list} vocabulary`);
+      }
+    }
   }
   const sweepPath = path.join(v1, "sweeps", `${surface}.property-sweep.json`);
   if (REQUIRED_SWEEPS.includes(surface) && !existsSync(sweepPath)) {
@@ -385,13 +513,31 @@ for (const surface of surfaces) {
       if (JSON.stringify(Object.keys(sweep.unicode_categories_excluded ?? {}).sort()) !== '["Cs","LC"]') {
         fail(`${surface}: excluded Unicode categories must be exactly Cs and LC`);
       }
+      const listedCategories = (sweep.unicode_categories ?? []).map((e) => e.category).sort();
+      if (JSON.stringify(listedCategories) !== JSON.stringify([...JS_GENERAL_CATEGORIES].sort())) {
+        fail(`${surface}: sweep categories ${listedCategories.join(",")} differ from the Unicode general categories`);
+      }
+      const anyCategory = new RegExp(`^(?:${JS_GENERAL_CATEGORIES.map((c) => `\\p{${c}}`).join("|")})$`, "u");
+      for (let code = 0; code <= 0x10ffff; code += 1) {
+        if (code >= 0xd800 && code <= 0xdfff) continue;
+        if (!anyCategory.test(String.fromCodePoint(code))) {
+          fail(`${surface}: U+${code.toString(16)} is in no listed Unicode general category`);
+          break;
+        }
+      }
+      for (const entry of sweep.unicode_categories ?? []) {
+        const ch = String.fromCodePoint(parseInt(entry.rune.slice(2), 16));
+        if (!new RegExp(`^\\p{${entry.category}}$`, "u").test(ch)) {
+          fail(`${surface}/category ${entry.category}: ${entry.rune} is not in that category`);
+        }
+      }
       const alphabet = new Set(sweep.alphabets.x_characters);
       if (alphabet.size !== 64) fail(`${surface}: the x alphabet must hold 64 characters`);
       const [lo, hi] = sweep.alphabets.kid_range.map((v) => parseInt(v.slice(2), 16));
       const xPrefix = sweep.base_document.keys[0].x.slice(0, 42);
       for (let code = 0; code <= 0x10ffff; code += 1) {
         if (code >= 0xd800 && code <= 0xdfff) continue;
-        if (code > 0xffff && code % 61 !== 0) continue;
+        if (code > 0xffff) continue;
         const ch = String.fromCodePoint(code);
         const xDoc = structuredClone(sweep.base_document);
         xDoc.keys[0].x = xPrefix + ch;
@@ -404,6 +550,23 @@ for (const surface of surfaces) {
         kDoc.keys[0].kid = ch;
         if (verdict(kDoc) !== (code >= lo && code <= hi ? "accept" : "refuse")) {
           fail(`${surface}: kid U+${code.toString(16)} has the wrong verdict`);
+          break;
+        }
+      }
+      if (Math.max(...[...alphabet].map((c) => c.codePointAt(0)), hi) > 0xffff) {
+        fail(`${surface}: the literal alphabets must be BMP-only for the astral sweep's refuse expectation`);
+      }
+      // Every astral code point through the compiled validator, mutating one
+      // document in place; no stride, so one admitted code point is found.
+      const astralX = structuredClone(sweep.base_document);
+      const astralKid = structuredClone(sweep.base_document);
+      for (let code = 0x10000; code <= 0x10ffff; code += 1) {
+        const ch = String.fromCodePoint(code);
+        astralX.keys[0].x = xPrefix + ch;
+        astralKid.keys[0].kid = ch;
+        checked += 2;
+        if (verdict(astralX) !== "refuse" || verdict(astralKid) !== "refuse") {
+          fail(`${surface}: astral U+${code.toString(16)} is accepted as an x ending or a kid`);
           break;
         }
       }

@@ -138,6 +138,15 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickhouseConn.Close() })
+	// The github routes read the stored repository identity before they write.
+	if err := clickhouseConn.Exec(ctx, `CREATE TABLE repos (
+  id UUID, org_id String DEFAULT 'default', repo String, ref Nullable(String),
+  created_at DateTime64(3, 'UTC'), settings Nullable(String), tags Nullable(String),
+  provider String DEFAULT 'unknown', source_id Nullable(UUID), last_synced DateTime64(3, 'UTC'),
+  provider_repo_id String DEFAULT '', identity_path String DEFAULT ''
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`); err != nil {
+		t.Fatal(err)
+	}
 
 	valkey, err := containers.StartValkey(ctx)
 	if err != nil {

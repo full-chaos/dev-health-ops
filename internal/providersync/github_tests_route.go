@@ -292,6 +292,7 @@ type githubTestsRequiredPayload struct {
 // bounded collection fails the unit when a next page exists, so incomplete
 // work never commits effects or advances the watermark.
 type GitHubTestsRouteHandler struct {
+	RepoIdentity       GitLabRepoIdentityReader
 	MaxRuns            int
 	MaxArtifactsPerRun int
 	MaxJobPages        int
@@ -320,7 +321,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	if err := fetchObjectRoute(ctx, client, githubRepoRoute, root, &repo); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := repositoryIdentity(repo.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repo)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -891,7 +892,7 @@ func downloadGitHubTestsArtifact(
 	ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string,
 	maxBytes int64,
 ) (archive []byte, used int, notFound bool, err error) {
-	response, err := client.DoRoute(ctx, http.MethodGet, githubRepoRoute+"/actions/artifacts/{artifact}/zip", root+"/actions/artifacts/"+url.PathEscape(artifactID)+"/zip", nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, githubArtifactZipRoute, root+"/actions/artifacts/"+url.PathEscape(artifactID)+"/zip", nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {
@@ -904,12 +905,12 @@ func downloadGitHubTestsArtifact(
 		location := response.Header.Get("Location")
 		response.Body.Close()
 		if location == "" {
-			return nil, requests, false, fmt.Errorf(
+			return nil, requests, false, withRoute(fmt.Errorf(
 				"%w: redirect status=%d carried no Location header",
 				ErrGitHubTestsArtifactUnavailable, response.StatusCode,
-			)
+			), githubArtifactZipRoute)
 		}
-		response, err = client.DoUnauthenticated(ctx, http.MethodGet, location)
+		response, err = client.DoUnauthenticatedRoute(ctx, http.MethodGet, githubArtifactZipRoute, location)
 		requests++
 		if err != nil {
 			return nil, requests, false, err
@@ -922,21 +923,22 @@ func downloadGitHubTestsArtifact(
 	if response.StatusCode >= 400 {
 		message, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 		if readErr != nil {
-			return nil, requests, false, logging.TransportFailure(readErr)
+			return nil, requests, false, withRoute(logging.TransportFailure(readErr), githubArtifactZipRoute)
 		}
 		// Classified like the GitLab artifact route: a rate limit of the
 		// artifact store defers the unit with its dimension; every other
 		// failure keeps the class ClassifyHTTPForRequest gives it.
 		if classified := providerfoundation.ClassifyHTTPForRequest("github", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
+			classified.Route = githubArtifactZipRoute
 			return nil, requests, false, classified
 		}
-		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
+		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: githubArtifactZipRoute}
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 	if readErr != nil {
-		return nil, requests, false, fmt.Errorf(
+		return nil, requests, false, withRoute(fmt.Errorf(
 			"%w: artifact download read failed: %w", ErrGitHubTestsIncomplete, logging.TransportFailure(readErr),
-		)
+		), githubArtifactZipRoute)
 	}
 	if int64(len(body)) > maxBytes {
 		// len(body) is capped at maxBytes+1 by the LimitReader above, so it

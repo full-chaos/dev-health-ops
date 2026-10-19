@@ -1,0 +1,373 @@
+{
+  "accept": [
+    {
+      "file": "valid-denied.json",
+      "why": "A denial."
+    },
+    {
+      "file": "valid-success.json",
+      "why": "The success reason."
+    },
+    {
+      "file": "valid-success-grace-replay.json",
+      "why": "A concurrent refresh answered with the same successor is a success, not reuse."
+    },
+    {
+      "file": "valid-error.json",
+      "why": "The service could not decide."
+    },
+    {
+      "file": "valid-with-session-id.json",
+      "why": "Optional session reference."
+    },
+    {
+      "file": "valid-reason-accepted.json",
+      "why": "Closed vocabulary member `accepted`."
+    },
+    {
+      "file": "valid-reason-refresh-grace-replay.json",
+      "why": "Closed vocabulary member `refresh_grace_replay`."
+    },
+    {
+      "file": "valid-reason-malformed.json",
+      "why": "Closed vocabulary member `malformed`."
+    },
+    {
+      "file": "valid-reason-bad-signature.json",
+      "why": "Closed vocabulary member `bad_signature`."
+    },
+    {
+      "file": "valid-reason-audience.json",
+      "why": "Closed vocabulary member `audience`."
+    },
+    {
+      "file": "valid-reason-issuer.json",
+      "why": "Closed vocabulary member `issuer`."
+    },
+    {
+      "file": "valid-reason-expired.json",
+      "why": "Closed vocabulary member `expired`."
+    },
+    {
+      "file": "valid-reason-not-yet-valid.json",
+      "why": "Closed vocabulary member `not_yet_valid`."
+    },
+    {
+      "file": "valid-reason-missing-sub.json",
+      "why": "Closed vocabulary member `missing_sub`."
+    },
+    {
+      "file": "valid-reason-missing-type.json",
+      "why": "Closed vocabulary member `missing_type`."
+    },
+    {
+      "file": "valid-reason-type-mismatch.json",
+      "why": "Closed vocabulary member `type_mismatch`."
+    },
+    {
+      "file": "valid-reason-refresh-unknown.json",
+      "why": "Closed vocabulary member `refresh_unknown`."
+    },
+    {
+      "file": "valid-reason-refresh-expired.json",
+      "why": "Closed vocabulary member `refresh_expired`."
+    },
+    {
+      "file": "valid-reason-refresh-reused.json",
+      "why": "Closed vocabulary member `refresh_reused`."
+    },
+    {
+      "file": "valid-reason-session-revoked.json",
+      "why": "Closed vocabulary member `session_revoked`."
+    },
+    {
+      "file": "valid-reason-session-expired.json",
+      "why": "Closed vocabulary member `session_expired`."
+    },
+    {
+      "file": "valid-reason-principal-not-found.json",
+      "why": "Closed vocabulary member `principal_not_found`."
+    },
+    {
+      "file": "valid-reason-principal-deactivated.json",
+      "why": "Closed vocabulary member `principal_deactivated`."
+    },
+    {
+      "file": "valid-reason-revision-stale.json",
+      "why": "Closed vocabulary member `revision_stale`."
+    },
+    {
+      "file": "valid-reason-invalid-credentials.json",
+      "why": "Closed vocabulary member `invalid_credentials`."
+    },
+    {
+      "file": "valid-reason-account-locked.json",
+      "why": "Closed vocabulary member `account_locked`."
+    },
+    {
+      "file": "valid-reason-email-unverified.json",
+      "why": "Closed vocabulary member `email_unverified`."
+    },
+    {
+      "file": "valid-reason-email-collision.json",
+      "why": "Closed vocabulary member `email_collision`."
+    },
+    {
+      "file": "valid-reason-rate-limited.json",
+      "why": "Closed vocabulary member `rate_limited`."
+    },
+    {
+      "file": "valid-reason-store-unavailable.json",
+      "why": "Closed vocabulary member `store_unavailable`."
+    },
+    {
+      "file": "valid-reason-dependency-unavailable.json",
+      "why": "Closed vocabulary member `dependency_unavailable`."
+    },
+    {
+      "file": "valid-operation-login.json",
+      "why": "Closed operation member `login`."
+    },
+    {
+      "file": "valid-operation-refresh.json",
+      "why": "Closed operation member `refresh`."
+    },
+    {
+      "file": "valid-operation-logout.json",
+      "why": "Closed operation member `logout`."
+    },
+    {
+      "file": "valid-operation-session-current.json",
+      "why": "Closed operation member `session_current`."
+    },
+    {
+      "file": "valid-operation-session-revoke.json",
+      "why": "Closed operation member `session_revoke`."
+    },
+    {
+      "file": "valid-operation-session-revoke-all.json",
+      "why": "Closed operation member `session_revoke_all`."
+    },
+    {
+      "file": "valid-operation-register.json",
+      "why": "Closed operation member `register`."
+    },
+    {
+      "file": "valid-operation-verify-email.json",
+      "why": "Closed operation member `verify_email`."
+    },
+    {
+      "file": "valid-operation-password-reset.json",
+      "why": "Closed operation member `password_reset`."
+    },
+    {
+      "file": "valid-operation-password-change.json",
+      "why": "Closed operation member `password_change`."
+    },
+    {
+      "file": "valid-operation-social-exchange.json",
+      "why": "Closed operation member `social_exchange`."
+    },
+    {
+      "file": "valid-operation-sso-exchange.json",
+      "why": "Closed operation member `sso_exchange`."
+    }
+  ],
+  "reject": [
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-operation.json",
+      "why": "`operation` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-result.json",
+      "why": "`result` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-reason-code.json",
+      "why": "`reason_code` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-request-id.json",
+      "why": "`request_id` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-occurred-at.json",
+      "why": "`occurred_at` is required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-schema-version.json",
+      "why": "`schema_version` is required."
+    },
+    {
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "file": "invalid-schema-version-wrong.json",
+      "why": "Unknown denies."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "enum",
+      "file": "invalid-reason-unknown.json",
+      "why": "The vocabulary is closed, though the string fits error.v1's pattern."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "enum",
+      "file": "invalid-reason-prose.json",
+      "why": "Prose and addresses are unrepresentable."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "enum",
+      "file": "invalid-reason-uppercase.json",
+      "why": "Case matters."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "enum",
+      "file": "invalid-reason-empty.json",
+      "why": "Empty."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "enum",
+      "file": "invalid-reason-null.json",
+      "why": "Null is not a reason."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "enum",
+      "file": "invalid-success-with-denied-reason.json",
+      "why": "A success carries only a success reason."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "file": "invalid-denied-with-success-reason.json",
+      "why": "A denial cannot claim `accepted`."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "file": "invalid-error-with-success-reason.json",
+      "why": "Same rule for result=error."
+    },
+    {
+      "expect_instance_location": "/operation",
+      "expect_keyword": "enum",
+      "file": "invalid-operation-unknown.json",
+      "why": "Closed."
+    },
+    {
+      "expect_instance_location": "/result",
+      "expect_keyword": "enum",
+      "file": "invalid-result-unknown.json",
+      "why": "Closed."
+    },
+    {
+      "expect_instance_location": "/request_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-request-id-wrong-prefix.json",
+      "why": "As error.v1."
+    },
+    {
+      "expect_instance_location": "/occurred_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-occurred-at-not-rfc3339.json",
+      "why": "Instant shape."
+    },
+    {
+      "expect_instance_location": "/session_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-session-id-wrong-prefix.json",
+      "why": "Same shape as session.v1."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-refresh-credential.json",
+      "why": "`refresh_credential` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-access-token.json",
+      "why": "`access_token` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-token.json",
+      "why": "`token` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-message.json",
+      "why": "`message` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-detail.json",
+      "why": "`detail` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-email.json",
+      "why": "`email` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-ip-address.json",
+      "why": "`ip_address` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-user-agent.json",
+      "why": "`user_agent` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-principal-id.json",
+      "why": "`principal_id` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-discloses-provider-response.json",
+      "why": "`provider_response` has no field in auth-outcome.v1: no prose, credential, address or identity. Joining to a principal happens server-side by request_id."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-duplicate-reason-code.json",
+      "why": "Duplicate member: the first value would never be validated.",
+      "duplicate_member": true
+    },
+    {
+      "file": "client-rejected-occurred-at-february-30.json",
+      "why": "Lexically valid, names no day."
+    },
+    {
+      "file": "client-rejected-utc-range-underflow.json",
+      "why": "Offset carries the instant to UTC year 0000."
+    }
+  ]
+}

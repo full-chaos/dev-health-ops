@@ -3,6 +3,11 @@
 # billing-edge, router and the one-off overlays smoke, prove, hook-check, river-apply); `docker compose config` of the old live chain
 # and of this file was byte-identical when this file was made (PR of CHAOS-9962; tests/tooling/test_bigboy_one_compose_file.py keeps the service list of each old set). Start it with plain docker compose:
 #   docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env -f ops/ci/bigboy/compose.bigboy.yml up -d --no-deps --no-build <service>
+# Restarts (CHAOS-10181): every long-running service has `restart: unless-stopped`, a one-shot none (internal/bigboycompose
+# restart_policy_test.go). A docker daemon restart (an apt upgrade of docker-ce or containerd) stops every container; after
+# one, check `docker ps -a --filter name=dev-health-acr-mcp` and the acr projector replay state. Any `-p dev-health`
+# down/up/restart carries `--profile acr` or names only the ops services, and is announced to MCP first (as is a docker-ce
+# or containerd upgrade).
 # Profiles: smoke (web-smoke), venue (venue-prove, venue-tools), venue-hook, venue-river (one profile each: the old hook-check and river-apply
 # chains held only their own one-off), retired-python-api, retired-billing-edge,
 # and the others of the base file. A one-off service reads its variables with a default, never `:?`: compose interpolates the
@@ -1617,6 +1622,7 @@ services:
     - GO_API_WORK_UNITS_ENABLED=true
     - GO_API_WORK_UNIT_EXPLAIN_ENABLED=true
     - LLM_MODEL=${LLM_MODEL}
+    - LLM_MODEL_EXPLAIN=${LLM_MODEL_EXPLAIN:-}
     - LLM_PROVIDER=${LLM_PROVIDER}
     - OPENAI_API_KEY=${OPENAI_API_KEY}
     - QUERY_API_INTERNAL_ADDR=:8095
@@ -2109,6 +2115,7 @@ services:
       acr:
         aliases: [postgres]
     profiles: [acr, acr-venue]
+    restart: unless-stopped
     secrets: [acr_postgres_password]
     volumes:
     - type: bind
@@ -2139,6 +2146,7 @@ services:
     networks:
       acr: null
     profiles: [acr, acr-venue]
+    restart: unless-stopped
     secrets: [acr_entitlement_token]
     volumes:
     - type: bind
@@ -2201,6 +2209,7 @@ services:
       dho-clickhouse-readers: null
       dho-query-internal: null
     profiles: [acr]
+    restart: unless-stopped
     secrets:
     - acr_runtime_dsn
     - acr_clickhouse_dsn
@@ -2247,6 +2256,7 @@ services:
       acr: null
       dho-clickhouse-readers: null
     profiles: [acr]
+    restart: unless-stopped
     secrets: [acr_runtime_dsn, acr_clickhouse_dsn]
     user: 1001:1001
   acr-falkordb:
@@ -2270,6 +2280,7 @@ services:
       acr:
         aliases: [falkordb]
     profiles: [acr]
+    restart: unless-stopped
     volumes:
     - type: bind
       source: /var/lib/oci-cache/mcp-venue/falkordb-data
@@ -2308,6 +2319,7 @@ services:
       published: '8081'
       protocol: tcp
     profiles: [acr]
+    restart: unless-stopped
 volumes:
   clickhouse_data:
     driver: local

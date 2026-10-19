@@ -60,6 +60,12 @@
       "why": "A token field. Secrets are made unrepresentable, not prohibited."
     },
     {
+      "file": "invalid-attributes-credential-secret.json",
+      "expect_instance_location": "/attributes",
+      "expect_keyword": "additionalProperties",
+      "why": "A credential secret value in an audit payload (CHAOS-4934: a secret appears only in the receipt, never in audit metadata)."
+    },
+    {
       "file": "invalid-attributes-authorization-header.json",
       "expect_instance_location": "/attributes",
       "expect_keyword": "additionalProperties",
@@ -68,7 +74,7 @@
     {
       "file": "invalid-attributes-reason-code-prose.json",
       "expect_instance_location": "/attributes/reason_code",
-      "expect_keyword": "pattern",
+      "expect_keyword": "enum",
       "why": "A reason code is a stable token, not prose or an address."
     },
     {
@@ -100,6 +106,18 @@
       "expect_instance_location": "/policy_revision",
       "expect_keyword": "maximum",
       "why": "2^53+1 as an integer token, RAW TEXT."
+    },
+    {
+      "file": "invalid-attributes-reason-code-secret-shaped.json",
+      "expect_instance_location": "/attributes/reason_code",
+      "expect_keyword": "enum",
+      "why": "A lowercase secret-shaped value fits the old code pattern; the audit reason_code is a closed enum."
+    },
+    {
+      "file": "invalid-attributes-reason-code-unlisted-code.json",
+      "expect_instance_location": "/attributes/reason_code",
+      "expect_keyword": "enum",
+      "why": "A plausible code outside the closed vocabulary."
     }
   ],
   "reject_by_client": [

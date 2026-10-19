@@ -266,17 +266,7 @@ func TestEveryMarkerIsDiscriminatedInItsClassTransport(t *testing.T) {
 			counted++
 			marker := raw.(map[string]any)
 			kind, name := marker["kind"].(string), strings.ToLower(marker["name"].(string))
-			ok := false
-			switch kind {
-			case "credential_prefix":
-				ok = strings.HasPrefix(shape, name+"<")
-			case "authorization_scheme":
-				ok = strings.HasPrefix(head, "authorization: "+name)
-			case "jwt_header_alg":
-				ok = strings.Contains(shape, name+" ") || strings.Contains(shape, name+"/")
-			case "dedicated_header", "signature_header":
-				ok = strings.HasPrefix(head, name)
-			}
+			ok := markerMatchesTransport(kind, name, head, shape)
 			if !ok {
 				t.Errorf("class %v marker %s/%q is not how its transport text presents the credential (header_or_cookie %q, shape %q)",
 					class["class_id"], kind, name, transport["header_or_cookie"], transport["shape"])
@@ -285,6 +275,56 @@ func TestEveryMarkerIsDiscriminatedInItsClassTransport(t *testing.T) {
 	}
 	if counted == 0 {
 		t.Fatal("no class declares a marker; the check is vacuous")
+	}
+}
+
+func markerMatchesTransport(kind, name, head, shape string) bool {
+	switch kind {
+	case "credential_prefix":
+		return strings.HasPrefix(shape, name+"<")
+	case "authorization_scheme":
+		rest, found := strings.CutPrefix(head, "authorization:")
+		return found && strings.EqualFold(markerTransportToken(rest), name)
+	case "jwt_header_alg":
+		return strings.EqualFold(markerTransportToken(shape), name)
+	case "dedicated_header", "signature_header":
+		return strings.EqualFold(markerTransportToken(head), name)
+	}
+	return false
+}
+
+func markerTransportToken(text string) string {
+	text = strings.TrimSpace(text)
+	if end := strings.IndexAny(text, " ,/("); end >= 0 {
+		return text[:end]
+	}
+	return text
+}
+
+func TestMarkerTransportCompareIsExact(t *testing.T) {
+	cases := []struct {
+		kind, name, head, shape string
+		want                    bool
+	}{
+		{"dedicated_header", "x-api-key", "x-api-key", "", true},
+		{"dedicated_header", "X-API-Key", "x-api-key", "", true},
+		{"dedicated_header", "x-api-", "x-api-key", "", false},
+		{"signature_header", "x-hub-signature", "x-hub-signature-256", "", false},
+		{"signature_header", "x-hub-signature-256", "x-hub-signature-256", "", true},
+		{"authorization_scheme", "Bearer", "authorization: bearer (by construction)", "", true},
+		{"authorization_scheme", "bear", "authorization: bearer", "", false},
+		{"authorization_scheme", "Bearer", "authorization: bearer/token sent by ops", "", true},
+		{"authorization_scheme", "bearer", "x-authorization: bearer", "", false},
+		{"jwt_header_alg", "HS256", "", "hs256 jwt, type=access", true},
+		{"jwt_header_alg", "EdDSA", "", "eddsa/ed25519 jwt, kid header", true},
+		{"jwt_header_alg", "HS256", "", "xhs256 jwt, type=access", false},
+		{"jwt_header_alg", "HS25", "", "hs256 jwt, type=access", false},
+	}
+	for _, c := range cases {
+		got := markerMatchesTransport(c.kind, strings.ToLower(c.name), strings.ToLower(c.head), strings.ToLower(c.shape))
+		if got != c.want {
+			t.Errorf("%s/%q against %q / %q: got %v, want %v", c.kind, c.name, c.head, c.shape, got, c.want)
+		}
 	}
 }
 
@@ -304,5 +344,32 @@ func TestSelectorGateSeparatesTheTwoBearerJWTClassesByHeaderAlg(t *testing.T) {
 	wrongCase := multiClassProfile(t, pair, "jwt_header_alg", "hs256")
 	if err := CheckClassSelector(wrongCase, registry); err == nil {
 		t.Fatal("gate matched a JWT alg case-insensitively; the header alg is compared exactly")
+	}
+}
+
+func TestTokensKeySetEqualsTheAcceptedPinnedClassesInTheSchema(t *testing.T) {
+	root := testRoot(t)
+	valid := loadEndpointAuthProfileFixture(t, "valid-multi-class-envelope-vs-ops-token.json").(map[string]any)
+	if err := Validate(root, EndpointAuthProfileSurface, valid); err != nil {
+		t.Fatalf("the schema refused the valid two-algorithm fixture: %v", err)
+	}
+	tokens := valid["tokens"].(map[string]any)
+	mutate := func(edit func(map[string]any)) map[string]any {
+		doc := loadEndpointAuthProfileFixture(t, "valid-multi-class-envelope-vs-ops-token.json").(map[string]any)
+		edit(doc["tokens"].(map[string]any))
+		return doc
+	}
+	cases := map[string]map[string]any{
+		"missing key": mutate(func(m map[string]any) { delete(m, "ops_access_token_hs256") }),
+		"extra key":   mutate(func(m map[string]any) { m["user_access_token"] = tokens["ops_access_token_hs256"] }),
+		"renamed key": mutate(func(m map[string]any) {
+			m["ops_refresh_token"] = m["ops_access_token_hs256"]
+			delete(m, "ops_access_token_hs256")
+		}),
+	}
+	for name, doc := range cases {
+		if err := Validate(root, EndpointAuthProfileSurface, doc); err == nil {
+			t.Errorf("%s: the schema accepted a tokens key set that differs from the accepted pinned classes", name)
+		}
 	}
 }

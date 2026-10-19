@@ -76,8 +76,9 @@ type WorkItemRow struct {
 	RepoID     uuid.UUID
 	WorkItemID string
 	Provider   string
-	// CurrentPath is a renamed GitLab repository's current path, when it is not
-	// the path in WorkItemID (CHAOS-3383); empty otherwise.
+	// CurrentPath is a renamed GitLab or GitHub repository's current path,
+	// when it is not the path in WorkItemID (CHAOS-3383, CHAOS-9879); empty
+	// otherwise.
 	CurrentPath string
 }
 
@@ -205,6 +206,9 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 		if issueprlinks.IsPullRequestWorkItem(wi.WorkItemID) {
 			continue
 		}
+		if wi.WorkItemID == "" {
+			continue
+		}
 		lookup.byID[strings.ToLower(wi.WorkItemID)] = wi.WorkItemID
 		switch wi.Provider {
 		case "jira", "linear":
@@ -224,24 +228,45 @@ func buildProviderLookup(workItems []WorkItemRow) providerLookup {
 			}
 		}
 	}
-	// A renamed GitLab project's items keep the path their repository id was
-	// minted from, while a group/project#n in text names its current path.
-	// That path names this project now, also over another project's item that
-	// still carries it.
+	// A renamed GitLab project's or GitHub repository's items keep the path
+	// their repository id was minted from, while a group/project#n or
+	// owner/repo#n in text names its current path. That path names the
+	// repository that holds it now (a repository with no work item still
+	// holds it), also over another repository's item that still carries it as
+	// its minted path.
+	prefixes := map[string]string{"gitlab": "gitlab:", "github": "gh:"}
+	holders := map[string]uuid.UUID{}
 	for _, wi := range workItems {
-		if wi.Provider != "gitlab" || wi.CurrentPath == "" || issueprlinks.IsPullRequestWorkItem(wi.WorkItemID) {
+		if prefix := prefixes[wi.Provider]; prefix != "" && wi.CurrentPath != "" {
+			holders[strings.ToLower(prefix+wi.CurrentPath)] = wi.RepoID
+		}
+	}
+	for _, wi := range workItems {
+		prefix := prefixes[wi.Provider]
+		if prefix == "" || wi.WorkItemID == "" || issueprlinks.IsPullRequestWorkItem(wi.WorkItemID) {
 			continue
 		}
 		if idx := strings.LastIndex(wi.WorkItemID, "#"); idx >= 0 {
-			// The key keeps the "gitlab:" prefix, so it never answers a GitHub
-			// owner/repo#n: provider-scoped by construction.
-			key := strings.ToLower("gitlab:" + wi.CurrentPath + wi.WorkItemID[idx:])
-			if held, ok := lookup.byID[key]; ok && held != wi.WorkItemID {
-				lookup.renamedPathCollisions++
-				slog.Default().Debug("issue-pr text refs: a GitLab current path names another project's minted path",
-					slog.String("key", key), slog.String("replaced_work_item_id", held), slog.String("work_item_id", wi.WorkItemID))
+			holder, held := holders[strings.ToLower(wi.WorkItemID[:idx])]
+			if held && holder != wi.RepoID {
+				if _, indexed := lookup.byID[strings.ToLower(wi.WorkItemID)]; indexed {
+					lookup.renamedPathCollisions++
+				}
+				delete(lookup.byID, strings.ToLower(wi.WorkItemID))
 			}
-			lookup.byID[key] = wi.WorkItemID
+		}
+	}
+	if lookup.renamedPathCollisions > 0 {
+		slog.Default().Warn("issue-pr text refs: work items minted from a path another repository holds now are not linkable by that path",
+			slog.Int("suppressed_work_items", lookup.renamedPathCollisions))
+	}
+	for _, wi := range workItems {
+		prefix := prefixes[wi.Provider]
+		if prefix == "" || wi.CurrentPath == "" || wi.WorkItemID == "" || issueprlinks.IsPullRequestWorkItem(wi.WorkItemID) {
+			continue
+		}
+		if idx := strings.LastIndex(wi.WorkItemID, "#"); idx >= 0 {
+			lookup.byID[strings.ToLower(prefix+wi.CurrentPath+wi.WorkItemID[idx:])] = wi.WorkItemID
 		}
 	}
 	return lookup

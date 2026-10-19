@@ -61,12 +61,12 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
 	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
 	// The provider worlds (producedWorlds).
-	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "8ea3f743e98fe9b24afc701d0995fb4b924a84a7062d2412850169dbdd6496ad",
-	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "68555247e7ef5227c054f544a5ead4229ff4b971e3c99e92270c54015434cb68",
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "f98553415321df613b811763024ed200dfec570c99188c88197278a42b60b840",
+	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "8caad356246435346041a78afd9ff09bdc9cf8f0bd3f0f0544fc61b20019f206",
 	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "b215c3948955c2ad0097385e6f15a7639ead28431f83f55055bc7f1fe212dffc",
-	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "fe98c225a4ac4cfc09ec9a473ebd9a5e7d8a54da6e1c3ad6029fc0ca19443d54",
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "c71db98114171f64bc4eea161abf41b61edcac267e9d20bc8416bca82650cba9",
 	// The mixed-provider demo world (provider_worlds_demo_*).
-	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz": "455f84af8f811e809c650a74f97e366c38adf4f2dadb267af49d02b460bb17f7",
+	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz": "b0395375a13207831d44f2b3fe241cc8f319b3ff569699cc938faae2e11e67a3",
 }
 
 // producedWorlds are the provider worlds (github of the real shape, gitlab, jira, linear): written by the

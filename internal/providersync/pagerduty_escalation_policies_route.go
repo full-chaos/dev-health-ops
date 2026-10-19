@@ -136,7 +136,7 @@ func (handler PagerDutyEscalationPoliciesRouteHandler) Collect(
 	counted.Doer = pagerDutyEscalationPoliciesCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/escalation_policies", DataKey: "escalation_policies",
+			Path: "/escalation_policies", Route: "/escalation_policies", DataKey: "escalation_policies",
 			PerPage: perPage, MaxPages: maxPages,
 		},
 	)

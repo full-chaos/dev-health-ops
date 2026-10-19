@@ -147,10 +147,10 @@ def test_old8_registry_lookup_uses_the_seven_character_image_tag(
         "#!/bin/bash\n"
         f'echo "$*" >> "{calls}"\n'
         'case "$*" in\n'
-        '  *dev-health-go-dho:sha-f03f57d\\ *) echo \'{"digest":"sha256:'
+        '  *dev-health-go-dho:sha-f03f57d) echo \'{"manifests":[{"digest":"sha256:'
         + "a"
         * 64
-        + "\"}' ;;\n"
+        + '","platform":{"os":"linux","architecture":"arm64"}}]}\' ;;\n'
         "  *) exit 1 ;;\n"
         "esac\n"
     )

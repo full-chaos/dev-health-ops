@@ -104,6 +104,7 @@ func buildJiraProducerBatchOracleRow(
 ) jiraBatchOracleRow {
 	t.Helper()
 	claim := nativeTestClaim("jira", "work-items")
+	claim = jiraFixtureWindow(claim)
 	claim.OrgID = stringFrom(input["org_id"])
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{

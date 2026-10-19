@@ -1,0 +1,7 @@
+{
+  "occurred_at": "2026-10-18T10:00:00Z",
+  "operation": "refresh",
+  "reason_code": "refresh_reused",
+  "request_id": "req_EXAMPLE0000000000000000001",
+  "schema_version": "auth-outcome.v1"
+}

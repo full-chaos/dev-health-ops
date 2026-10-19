@@ -103,6 +103,32 @@ test("a manifest with a duplicate member fails", () => {
   assert.notEqual(result.status, 0, result.stdout + result.stderr);
 });
 
+test("an UNDECLARED duplicate member in a reject_by_client fixture fails", () => {
+  const result = withCopy((e) => {
+    const file = path.join(e, "credential-entry", "client-rejected-revoked-at-changed.json");
+    const text = readFileSync(file, "utf8");
+    writeFileSync(file, text.replace('"status"', '"status": "active", "status"'));
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+});
+
+test("a duplicate_member declaration on a fixture with no duplicate fails", () => {
+  const result = withCopy((e) =>
+    editManifest(e, "credential-entry", (m) => {
+      m.reject_by_client[0].duplicate_member = true;
+    }),
+  );
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+});
+
+test("the deliberate duplicate-member fixture is declared and passes", () => {
+  const manifest = JSON.parse(
+    readFileSync(path.join(repo, "contracts", "auth", "v1", "examples", "error", "manifest.json"), "utf8"),
+  );
+  const entry = manifest.reject_by_client.find((e) => e.file === "client-rejected-duplicate-reason-code.json");
+  assert.equal(entry.duplicate_member, true);
+});
+
 test("a strictRequired schema edit exits 2 (compile failure, not a fixture failure)", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "ajv-runner-"));
   try {

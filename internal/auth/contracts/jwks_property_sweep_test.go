@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -523,14 +524,24 @@ func TestEveryCodePointAsXAndAsKidMatchesTheLiteralAlphabets(t *testing.T) {
 	lo, hi := parseRune(t, sweep.Alphabets.KidRange[0]), parseRune(t, sweep.Alphabets.KidRange[1])
 	prefix := sweep.Base["keys"].([]any)[0].(map[string]any)["x"].(string)
 	prefix = prefix[:42]
+	astralProbes := map[rune]bool{}
+	for plane := rune(1); plane <= 16; plane++ {
+		first := plane * 0x10000
+		astralProbes[first], astralProbes[first+1], astralProbes[first+0xffff] = true, true, true
+	}
+	for _, c := range sweep.Categories {
+		if r := parseRune(t, c.Rune); r > 0xffff {
+			astralProbes[r] = true
+		}
+	}
 	checked := 0
-	// Every code point of the BMP, then every 61st above it (the astral planes
+	// Every code point of the BMP, then every 61st above it and the plane probes (the astral planes
 	// hold no ASCII, and a stride keeps the race build inside its time).
 	for r := rune(0); r <= unicode.MaxRune; r++ {
 		if r >= 0xd800 && r <= 0xdfff {
 			continue
 		}
-		if r > 0xffff && r%61 != 0 {
+		if r > 0xffff && r%61 != 0 && !astralProbes[r] {
 			continue
 		}
 		wantX := "refuse"
@@ -551,6 +562,65 @@ func TestEveryCodePointAsXAndAsKidMatchesTheLiteralAlphabets(t *testing.T) {
 	}
 	if checked < 0x10000 {
 		t.Fatalf("only %d code points checked", checked)
+	}
+}
+
+// The astral code points of the kid and x patterns, against the schema's own
+// patterns: every one in a normal build (jwks_astral_full_test.go), the stride
+// and plane probes under -race (jwks_astral_race_test.go), where one million
+// regex matches cost more than the race budget. The expectation is the literal
+// alphabets, which are all inside the BMP, so each of them must be refused.
+func TestNoAstralCodePointIsAdmittedByTheKidOrXPattern(t *testing.T) {
+	sweep := loadSweep(t)
+	for _, r := range sweep.Alphabets.XCharacters {
+		if r > 0xffff {
+			t.Fatalf("x alphabet holds the astral U+%04X; the refuse expectation below would be wrong", r)
+		}
+	}
+	if parseRune(t, sweep.Alphabets.KidRange[1]) > 0xffff {
+		t.Fatal("kid range reaches the astral planes; the refuse expectation below would be wrong")
+	}
+	raw, err := os.ReadFile(filepath.Join(testRoot(t), "contracts/auth/v1/jsonschema/jwks.v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Keys struct {
+				Items struct {
+					Properties struct {
+						Kid struct {
+							Pattern string `json:"pattern"`
+						} `json:"kid"`
+						X struct {
+							Pattern string `json:"pattern"`
+						} `json:"x"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"keys"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	kidPattern := regexp.MustCompile(schema.Properties.Keys.Items.Properties.Kid.Pattern)
+	xPattern := regexp.MustCompile(schema.Properties.Keys.Items.Properties.X.Pattern)
+	prefix := sweep.Base["keys"].([]any)[0].(map[string]any)["x"].(string)[:42]
+	if !kidPattern.MatchString("a") || !xPattern.MatchString(prefix+"A") {
+		t.Fatal("the patterns do not admit the base document's own characters: the schema layout moved")
+	}
+	runes := astralRunes()
+	if len(runes) < astralMinimum {
+		t.Fatalf("astral set %q holds %d code points, want at least %d", astralSet, len(runes), astralMinimum)
+	}
+	t.Logf("astral set %q: %d code points", astralSet, len(runes))
+	for _, r := range runes {
+		if kidPattern.MatchString(string(r)) {
+			t.Fatalf("kid pattern admits the astral U+%04X", r)
+		}
+		if xPattern.MatchString(prefix + string(r)) {
+			t.Fatalf("x pattern admits the astral U+%04X as its last character", r)
+		}
 	}
 }
 

@@ -273,14 +273,17 @@
     },
     {
       "file": "client-rejected-duplicate-principal-id.json",
+      "duplicate_member": true,
       "why": "Two `principal_id` members. Every parser keeps the LAST, so a validator only sees the survivor while the wire bytes carry another value. RAW TEXT ON PURPOSE: no JSON writer emits a duplicate member, so regenerating this file through a serialiser silently deletes the defect it carries (CHAOS-4916). Do not normalise it."
     },
     {
       "file": "client-rejected-duplicate-credential-audience.json",
+      "duplicate_member": true,
       "why": "A duplicate NESTED one level down, inside `credential`. error.v1 is flat, so nothing in that corpus shows the guard reaches depth; without this fixture the nesting property is inherited, not demonstrated. RAW TEXT, do not normalise."
     },
     {
       "file": "client-rejected-duplicate-actor-chain-reason.json",
+      "duplicate_member": true,
       "why": "A duplicate inside an `actor_chain` entry (inside an array element), the place a delegated principal's smuggled value would live. Exercises the array branch of the walk as well as the object branch. RAW TEXT, do not normalise."
     }
   ],

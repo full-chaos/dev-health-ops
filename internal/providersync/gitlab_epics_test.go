@@ -269,3 +269,29 @@ func TestGitLabWorkItemsRouteSkipsAnUnusableEpicVisibly(t *testing.T) {
 		}
 	}
 }
+
+// The group epics list is bounded by an inclusive updated_before, like the issue and merge-request lists: an
+// epic updated outside [since, before) belongs to another window and is not written by this one.
+func TestGitLabWorkItemsRouteKeepsOnlyTheEpicsInTheHalfOpenWindow(t *testing.T) {
+	responses := gitLabEpicResponses()
+	responses["/api/v4/groups/acme/epics?page=1"] = []string{`[
+		{"iid":4,"title":"inside","state":"opened","created_at":"2026-06-01T08:00:00Z","updated_at":"2026-07-10T08:00:00Z","labels":[]},
+		{"iid":6,"title":"at the start","state":"opened","created_at":"2026-06-01T08:00:00Z","updated_at":"2026-07-01T00:00:00Z","labels":[]},
+		{"iid":7,"title":"at the end","state":"opened","created_at":"2026-06-01T08:00:00Z","updated_at":"2026-07-31T23:59:59Z","labels":[]},
+		{"iid":8,"title":"before the start","state":"opened","created_at":"2026-06-01T08:00:00Z","updated_at":"2026-06-30T23:00:00Z","labels":[]},
+		{"iid":9,"title":"after the end","state":"opened","created_at":"2026-06-01T08:00:00Z","updated_at":"2026-08-01T01:00:00Z","labels":[]}]`, `[]`}
+	for _, iid := range []string{"6", "7", "8", "9"} {
+		responses["/api/v4/groups/acme/epics/"+iid+"/resource_state_events?page=1"] = []string{`[]`}
+		responses["/api/v4/groups/acme/epics/"+iid+"/notes?page=1"] = []string{`[]`}
+	}
+	batch, err := collectGitLabEpicUnit(t, &gitLabWorkItemsDoer{responses: responses})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epics := epicRowsOf(t, batch)
+	for iid, want := range map[string]bool{"4": true, "6": true, "7": false, "8": false, "9": false} {
+		if _, written := epics["gitlab:acme:epic:"+iid]; written != want {
+			t.Errorf("epic %s written = %v, want %v (rows: %v)", iid, written, want, len(epics))
+		}
+	}
+}

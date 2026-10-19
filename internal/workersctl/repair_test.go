@@ -229,3 +229,19 @@ func TestValidateReviewEvidenceRejectsOverlongText(t *testing.T) {
 // is codex round 1's P2 finding on the CLI's own dispatch path (not just the
 // parser unit): --output-evidence null previously unmarshalled successfully
 // into a nil map and was sent as literal JSON null, which the bridge only
+
+func TestGenerationRepairOwnsItsBudgetAndBoundsTimeout(t *testing.T) {
+	if !ownsItsBudget([]string{"metrics", "generation-repair"}) || ownsItsBudget([]string{"metrics", "daily-redrive"}) {
+		t.Fatal("only metrics generation-repair sets its own budget")
+	}
+	for _, timeout := range []string{"0s", "-1m", "61m"} {
+		var stdout, stderr bytes.Buffer
+		code := dispatchMetricsGenerationRepair(context.Background(), &operatorRuntime{}, []string{
+			"--org", testAmbiguousRequestID, "--from", "2026-10-01", "--to", "2026-10-02",
+			"--dry-run", "--timeout", timeout,
+		}, &stdout, &stderr)
+		if code == 0 || !strings.Contains(stderr.String(), "invalid_request") {
+			t.Fatalf("--timeout %s = %d %q, want invalid_request", timeout, code, stderr.String())
+		}
+	}
+}

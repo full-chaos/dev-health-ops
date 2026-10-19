@@ -20,14 +20,16 @@
 #
 # Every step prints what it measured. The project is private to this run
 # (-p) and is removed with its volumes on exit. CI only: compose.yml gives
-# postgres a fixed container_name, so this cannot run beside another stack
-# that uses it.
+# postgres a fixed container_name, so the proof overlays
+# ci/auth_compose_proof.override.yml (no container_name, no published port) and
+# refuses a project that already has resources, and asserts that every container of its project carries the project prefix.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
-PROJECT="${AUTH_COMPOSE_PROOF_PROJECT:-authproof$$}"
-PORT="${AUTH_SERVICE_OPERATOR_HOST_PORT:-18096}"
+# The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
+# resource that already carries the project name, so the name must not be guessable.
+PROJECT="${AUTH_COMPOSE_PROOF_PROJECT:-authproof$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
 AUTH_SERVICES=(auth-service auth-migrate auth-provision auth-keys-init)
 
 die() {
@@ -38,10 +40,25 @@ die() {
 command -v docker >/dev/null 2>&1 || die "docker is required"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 
+# Refuse before the cleanup trap exists (it would remove the project): compose recreates the
+# containers of a reused project name and cleanup deletes its volumes and networks, so any
+# container, volume or network that carries the project's label or name is a stop.
+refuse_if_present() {
+  local kind="$1" found
+  shift
+  found="$("$@")"
+  [ -z "${found}" ] || die "a ${kind} of the compose project ${PROJECT} exists; refusing to recreate or remove it"
+}
+refuse_if_present container docker ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT}"
+refuse_if_present container docker ps -aq --no-trunc --filter "name=^/${PROJECT}[-_]"
+refuse_if_present volume docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}"
+refuse_if_present volume docker volume ls -q --filter "name=^${PROJECT}_"
+refuse_if_present network docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}"
+refuse_if_present network docker network ls -q --filter "name=^${PROJECT}_"
+
 # compose.yml interpolates this at parse time for a service the proof never
 # starts; any non-empty value satisfies it.
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-auth-compose-proof}"
-export AUTH_SERVICE_OPERATOR_HOST_PORT="${PORT}"
 # Passwords with every URI-reserved character the DSNs must survive: the DSNs
 # are keyword-form, so none of these may break a connection (a URI form failed
 # on a trailing '#').
@@ -50,7 +67,7 @@ export AUTH_RUNTIME_DATABASE_PASSWORD="${AUTH_RUNTIME_DATABASE_PASSWORD:-au#th@p
 export COMMIT="${COMMIT:-0000000000000000000000000000000000000000}"
 
 compose() {
-  docker compose -p "${PROJECT}" -f "${ROOT}/compose.yml" "$@"
+  docker compose -p "${PROJECT}" -f "${ROOT}/compose.yml" -f "${SCRIPT_DIR}/auth_compose_proof.override.yml" "$@"
 }
 
 cleanup() {
@@ -65,8 +82,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Every container of this project must carry the project prefix. Ownership is the project label,
+# never a host-wide before/after diff: other users of a shared host create and remove containers.
+assert_project_prefixed() {
+  local id name count=0
+  for id in $(docker ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT}"); do
+    name="$(docker inspect --format '{{.Name}}' "${id}")"
+    case "${name}" in "/${PROJECT}"[-_]*) ;; *) die "container ${name} does not carry the ${PROJECT} prefix" ;; esac
+    count=$((count + 1))
+  done
+  printf 'every container of project %s carries the prefix: %s\n' "${PROJECT}" "${count}"
+}
+
+
 printf 'step 1: up --build --wait auth-service\n'
 compose --profile auth up --build --detach --wait --wait-timeout 600 auth-service
+assert_project_prefixed
+PORT="$(compose --profile auth port auth-service 8096 | sed 's/.*://')"
+[[ "${PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral operator port (${PORT})"
+printf 'operator port (ephemeral): %s\n' "${PORT}"
 
 health="$(docker inspect --format '{{.State.Health.Status}}' "$(compose --profile auth ps -q auth-service)")"
 printf 'auth-service container health: %s\n' "${health}"
@@ -121,7 +155,8 @@ printf 'auth-service networks: %s\n' "${nets}"
 [ "${nets}" = "${PROJECT}_auth_plane " ] || die "auth-service is on '${nets}', want only ${PROJECT}_auth_plane"
 members="$(docker network inspect "${PROJECT}_auth_plane" --format '{{range .Containers}}{{.Name}} {{end}}' | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')"
 printf 'auth_plane members: %s\n' "${members}"
-[ "${members}" = "$(compose --profile auth ps -q auth-service | xargs docker inspect --format '{{.Name}}' | tr -d '/') postgres " ] || die "auth_plane has members other than auth-service and postgres: ${members}"
+expected="$(compose --profile auth ps -q auth-service postgres | xargs docker inspect --format '{{.Name}}' | tr -d '/' | sort | tr '\n' ' ')"
+[ "${members}" = "${expected}" ] || die "auth_plane has members other than auth-service and postgres: ${members} (want ${expected})"
 
 printf 'step 4d: no auth service is on the default network\n'
 compose --profile auth config --format json | python3 -c '
@@ -157,10 +192,11 @@ if bad:
 ' || die "a secret reaches a process argument (visible to docker top)"
 
 printf 'step 5: signing key custody\n'
-key_stat="$(docker run --rm --entrypoint stat -v "${PROJECT}_auth_signing_keys:/k:ro" \
+key_stat="$(docker run --rm --name "${PROJECT}-keystat" --entrypoint stat -v "${PROJECT}_auth_signing_keys:/k:ro" \
   postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15 \
   -c '%a %u' /k/private/envelope-private-key.pem)"
 printf 'key mode and uid: %s\n' "${key_stat}"
+assert_project_prefixed
 [ "${key_stat}" = "400 65532" ] || die "signing key is '${key_stat}', want '400 65532'"
 
 printf 'step 6: rollback\n'
@@ -176,4 +212,5 @@ if compose config --services | grep -E '^auth-' >/dev/null; then
 fi
 printf 'default service list names no auth service\n'
 
+assert_project_prefixed
 printf 'AUTH COMPOSE PROOF PASSED\n'

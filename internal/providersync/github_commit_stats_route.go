@@ -77,7 +77,10 @@ type gitHubCommitFilePayload struct {
 // MaxCommits is the upstream sync cap; a zero value uses Python's configured
 // hard ceiling, while an incremental window that exceeds either cap is skipped
 // rather than written partially.
-type GitHubCommitStatsRouteHandler struct{ MaxCommits int }
+type GitHubCommitStatsRouteHandler struct {
+	MaxCommits   int
+	RepoIdentity GitLabRepoIdentityReader
+}
 
 func (handler GitHubCommitStatsRouteHandler) Collect(
 	ctx context.Context,
@@ -101,10 +104,10 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 	counted.Doer = gitHubCommitStatsCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "repos", owner, repository)
 	var repoPayload gitHubRepositoryPayload
-	if err := fetchObject(ctx, &counted, root, &repoPayload); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := repositoryIdentity(repoPayload.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repoPayload)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -129,7 +132,7 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 		ctx,
 		&counted,
 		providerfoundation.GitHubPageOptions{
-			Path: root + "/commits", Query: query, MaxPages: pages,
+			Path: root + "/commits", Route: githubCommitsRoute, Query: query, MaxPages: pages,
 		},
 	)
 	if err != nil {
@@ -165,7 +168,7 @@ func (handler GitHubCommitStatsRouteHandler) Collect(
 			continue
 		}
 		var detail gitHubCommitDetailPayload
-		if err := fetchObject(ctx, &counted, root+"/commits/"+url.PathEscape(commit.SHA), &detail); err != nil {
+		if err := fetchObjectRoute(ctx, &counted, githubCommitRoute, root+"/commits/"+url.PathEscape(commit.SHA), &detail); err != nil {
 			if isRateLimited(err) {
 				return CompleteRouteBatch{}, err
 			}

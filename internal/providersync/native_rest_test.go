@@ -305,7 +305,7 @@ func TestFetchObjectReturnsTypedErrorWhenTheSharedCapIsExceeded(t *testing.T) {
 	})
 	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	var target any
-	err := fetchObject(context.Background(), client, "/repos/acme/api/git/trees/big?recursive=true", &target)
+	err := fetchObjectRoute(context.Background(), client, githubTreeRoute, "/repos/acme/api/git/trees/big?recursive=true", &target)
 
 	var tooLarge *providerfoundation.ObjectTooLargeError
 	if !errors.As(err, &tooLarge) {
@@ -366,7 +366,7 @@ func TestFetchObjectReturnsTypedErrorEvenWhenTheCapCrossingReadAlsoErrors(t *tes
 	})
 	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	var target any
-	err := fetchObject(context.Background(), client, "/repos/acme/api/git/trees/big?recursive=true", &target)
+	err := fetchObjectRoute(context.Background(), client, githubTreeRoute, "/repos/acme/api/git/trees/big?recursive=true", &target)
 
 	var tooLarge *providerfoundation.ObjectTooLargeError
 	if !errors.As(err, &tooLarge) {
@@ -393,7 +393,7 @@ func TestFetchObjectStillReturnsBareNormalizationInvalidForGenuinelyMalformedJSO
 	})
 	client := gitHubRepositoryClient(t, fakehttp.Client(doer), "https://api.github.com")
 	var target any
-	err := fetchObject(context.Background(), client, "/repos/acme/api", &target)
+	err := fetchObjectRoute(context.Background(), client, githubRepoRoute, "/repos/acme/api", &target)
 	if !errors.Is(err, providerfoundation.ErrNormalizationInvalid) {
 		t.Fatalf("error=%v, want ErrNormalizationInvalid", err)
 	}

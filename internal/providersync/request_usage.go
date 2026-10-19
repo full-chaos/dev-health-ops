@@ -838,6 +838,8 @@ func (executor CompleteRouteExecutor) Execute(
 	}
 	ledger := NewRequestLedger()
 	ctx = WithRequestLedger(ctx, ledger)
+	unitLedger := providerfoundation.NewRequestLedger()
+	ctx = providerfoundation.WithUnitLedger(ctx, unitLedger)
 	executor.Doer = CountRequests(executor.Doer)
 	if executor.RequestUsage != nil {
 		recorder := newRequestUsageRecorder(executor.RequestUsage, ledger, session.Claim, executor.now)
@@ -848,5 +850,6 @@ func (executor CompleteRouteExecutor) Execute(
 	}
 	result, err := executor.executeRoute(ctx, session, descriptor)
 	result.RequestUsage = ledger.Totals()
+	result.RequestLedger.Entries, result.RequestLedger.Dropped = unitLedger.Snapshot()
 	return result, err
 }

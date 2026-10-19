@@ -111,10 +111,9 @@ func (c *HTTPClient) ledgerKey(ctx context.Context, path string) LedgerKey {
 // The first attempt and every retry each count: each draws on the provider's
 // budget. A redirect the client then follows is counted by recordRedirectHop.
 func (c *HTTPClient) recordWireRequest(ctx context.Context, path string) {
-	if c.Ledger == nil {
-		return
+	if ledger := c.ledgerFor(ctx); ledger != nil {
+		ledger.Record(c.ledgerKey(ctx, path))
 	}
-	c.Ledger.Record(c.ledgerKey(ctx, path))
 }
 
 type hopRecorderKey struct{}
@@ -129,10 +128,11 @@ type hopRecorder struct {
 // newHopRecorder is the recorder of one call: the ledger and the account its
 // redirect hops are counted under (nil when the client has no ledger).
 func (c *HTTPClient) newHopRecorder(ctx context.Context, path string) *hopRecorder {
-	if c.Ledger == nil {
+	ledger := c.ledgerFor(ctx)
+	if ledger == nil {
 		return nil
 	}
-	return &hopRecorder{ledger: c.Ledger, key: c.ledgerKey(ctx, path), seen: map[*http.Request]struct{}{}}
+	return &hopRecorder{ledger: ledger, key: c.ledgerKey(ctx, path), seen: map[*http.Request]struct{}{}}
 }
 
 // record counts one followed redirect hop as a wire request, once: the request
@@ -175,4 +175,23 @@ func recordRedirectHop(request *http.Request) {
 func WithRequestFamily(ctx context.Context, routeFamily string) context.Context {
 	account, _ := ctx.Value(requestAccountKey{}).(requestAccount)
 	return WithRequestAccount(ctx, routeFamily, account.dimension)
+}
+
+type unitLedgerKey struct{}
+
+// WithUnitLedger makes every HTTPClient that has no Ledger of its own count the
+// requests it sends with ctx (or a context derived from it) into ledger: the
+// execution of a unit counts all of its clients, whichever route built them. A
+// client's own Ledger wins, so a request is never counted twice.
+func WithUnitLedger(ctx context.Context, ledger *RequestLedger) context.Context {
+	return context.WithValue(ctx, unitLedgerKey{}, ledger)
+}
+
+// ledgerFor is the ledger a request of this client with ctx is counted into.
+func (c *HTTPClient) ledgerFor(ctx context.Context) *RequestLedger {
+	if c.Ledger != nil {
+		return c.Ledger
+	}
+	ledger, _ := ctx.Value(unitLedgerKey{}).(*RequestLedger)
+	return ledger
 }

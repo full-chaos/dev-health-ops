@@ -567,15 +567,6 @@ def sync_teams(ns: argparse.Namespace) -> int:
         finally:
             atlassian_client.close()
 
-    elif provider == "synthetic":
-        from dev_health_ops.fixtures.generator import SyntheticDataGenerator
-
-        generator = SyntheticDataGenerator()
-        teams_data = generator.generate_teams(count=8)
-        for team in teams_data:
-            setattr(team, "members_complete", True)
-        logging.info(f"Generated {len(teams_data)} synthetic teams.")
-
     elif provider == "github":
         from github import Auth, Github
 
@@ -910,7 +901,6 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
             "config",
             "jira",
             "jira-ops",
-            "synthetic",
             "linear",
             "ms-teams",
             "github",

@@ -31,6 +31,8 @@ var unguardedTables = map[string]string{
 	"signing_keys":        "public metadata only; the runtime role has no write privilege",
 	"link_credentials":    "single-use link tokens swept on expiry and removed with their principal; consuming or retargeting one is guarded by column (security columns below)",
 	"login_attempts":      "high-rate lockout counters keyed by an identifier hash; rate limiting, not authority",
+	"sso_flow_states":     "short-lived SSO flow state, consumed once even when the callback is rejected, so its consume cannot require an audit transaction; consumed_at is write-once and every other column is immutable by trigger",
+	"saml_assertion_uses": "insert-only replay ledger swept after expiry; a row exists to be refused a second time",
 	versionTable:          "auth-migrate bookkeeping, unreachable by the runtime role",
 }
 
@@ -189,6 +191,13 @@ var unguardedColumns = map[string]map[string]string{
 	"link_credentials": {
 		"id": "lifecycle", "created_at": "lifecycle",
 		"principal_id": "security", "purpose": "security", "token_hash": "security", "expires_at": "security", "consumed_at": "security",
+	},
+	"sso_flow_states": {
+		"id": "lifecycle", "protocol": "lifecycle", "provider_id": "lifecycle", "flow_hash": "lifecycle", "binding_hash": "lifecycle",
+		"expires_at": "lifecycle", "consumed_at": "lifecycle", "created_at": "lifecycle",
+	},
+	"saml_assertion_uses": {
+		"issuer": "lifecycle", "assertion_id_hash": "lifecycle", "expires_at": "lifecycle", "created_at": "lifecycle",
 	},
 	"login_attempts": {
 		"id": "lifecycle", "identifier_hash": "lifecycle", "attempt_count": "lifecycle", "first_attempt_at": "lifecycle",

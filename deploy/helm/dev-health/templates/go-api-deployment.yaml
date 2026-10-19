@@ -34,6 +34,23 @@ dev-health-api.
 {{- end }}
 {{- end }}
 {{- end }}
+{{- /*
+CHAOS-10231: the /api/v1/auth/* proxy flags. Each renders only when on, so
+the default render carries no AUTH_PROXY_* variable and dho api keeps every
+route (its own default is off). The URL is this release's auth-service.
+*/}}
+{{- $proxy := .Values.goApi.authProxy }}
+{{- $proxyFlags := list (list "sessions" "AUTH_PROXY_SESSIONS") (list "localLogin" "AUTH_PROXY_LOCAL_LOGIN") (list "credentials" "AUTH_PROXY_CREDENTIALS") (list "social" "AUTH_PROXY_SOCIAL") (list "oidc" "AUTH_PROXY_OIDC") (list "saml" "AUTH_PROXY_SAML") }}
+{{- $proxyOn := eq (include "dev-health.authProxyOn" .) "true" }}
+{{- if and $proxyOn (not .Values.authService.enabled) }}
+{{- fail "goApi.authProxy flags need authService.enabled: a flag on forwards its routes to this release's auth-service" }}
+{{- end }}
+{{- if and $proxyOn (not $proxy.sessions) }}
+{{- fail "goApi.authProxy.sessions must be on when any other goApi.authProxy flag is: the refresh credentials those flows issue are rotated only by the sessions owner" }}
+{{- end }}
+{{- range .Values.goApi.extraEnv }}
+{{- if hasPrefix "AUTH_PROXY_" .name }}{{- fail "goApi.extraEnv must not set AUTH_PROXY_*: use goApi.authProxy, which the chart checks" }}{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -123,6 +140,16 @@ spec:
               valueFrom: {configMapKeyRef: {name: {{ include "dev-health.configMapName" . }}, key: SYNC_WATERMARK_OVERLAP, optional: true}}
             - name: SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS
               valueFrom: {configMapKeyRef: {name: {{ include "dev-health.configMapName" . }}, key: SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS, optional: true}}
+            {{- if $proxyOn }}
+            - name: AUTH_PROXY_URL
+              value: {{ printf "http://%s-auth-service:%v" (include "dev-health.fullname" .) .Values.authService.port | quote }}
+            {{- range $proxyFlags }}
+            {{- if index $proxy (index . 0) }}
+            - name: {{ index . 1 }}
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- end }}
           {{- with .Values.goApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}

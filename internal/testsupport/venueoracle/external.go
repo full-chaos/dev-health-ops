@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
+	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/jackc/pgx/v5"
 	valkeygo "github.com/valkey-io/valkey-go"
 )
@@ -93,6 +95,13 @@ func (e ExternalStores) ClickHouseDatabase() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("clickhouse %w", err)
 	}
+	options, err := clickhousego.ParseDSN(e.ClickHouseURI)
+	if err != nil {
+		return "", fmt.Errorf("clickhouse URI: %w", err)
+	}
+	if options.Auth.Database != database {
+		return "", fmt.Errorf("clickhouse URI selects database %q by query but names %q by path", options.Auth.Database, database)
+	}
 	return database, nil
 }
 
@@ -177,9 +186,33 @@ func ExternalRequired(baseURL string) (ExternalStores, bool, error) {
 	if err := stores.Validate(true); err != nil {
 		return ExternalStores{}, false, err
 	}
+	if parsed, err := url.Parse(baseURL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return ExternalStores{}, false, fmt.Errorf("base URL %q is not an http(s) URL with a host", baseURL)
+	}
+	if os.Getenv(EnvExternalSetEnvCmd) == "" {
+		return ExternalStores{}, false, fmt.Errorf("%s is not set: the corpus changes the target's environment mid-run and an external target needs a command that does it", EnvExternalSetEnvCmd)
+	}
 	return stores, true, nil
 }
 
 // SetTargetEnv sets (or, with an empty value, unsets) name for the target the corpus drives: in this process for an
 // in-process go-api, through EnvExternalSetEnvCmd for an external target.
-func SetTargetEnv(t *testing.T, external bool, name, value string) {}
+func SetTargetEnv(t *testing.T, external bool, name, value string) {
+	t.Helper()
+	if !external {
+		if value == "" {
+			t.Setenv(name, "")
+			_ = os.Unsetenv(name)
+		} else {
+			t.Setenv(name, value)
+		}
+		return
+	}
+	command := os.Getenv(EnvExternalSetEnvCmd)
+	if command == "" {
+		t.Fatalf("%s is not set", EnvExternalSetEnvCmd)
+	}
+	if output, err := exec.Command(command, name, value).CombinedOutput(); err != nil {
+		t.Fatalf("%s %s: %v\n%s", command, name, err, output)
+	}
+}

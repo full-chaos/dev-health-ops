@@ -70,7 +70,15 @@ func ValidateListen(addr string) error {
 
 // ValidateExternalListen is ValidateListen plus a fixed port: an already-running target is configured with the
 // sink's address before the test starts, so a random port cannot reach it.
-func ValidateExternalListen(addr string) error { return nil }
+func ValidateExternalListen(addr string) error {
+	if err := ValidateListen(addr); err != nil {
+		return err
+	}
+	if _, port, _ := net.SplitHostPort(addr); port == "0" {
+		return fmt.Errorf("listen address %q has port 0: set %s to a fixed port", addr, EnvListen)
+	}
+	return nil
+}
 
 // StartAt starts the sink on addr.
 func StartAt(t *testing.T, addr string) *Server {

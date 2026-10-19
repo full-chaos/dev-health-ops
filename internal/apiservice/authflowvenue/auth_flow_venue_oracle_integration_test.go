@@ -473,7 +473,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	var external *venueoracle.ExternalStores
 	if isExternal {
 		external = &stores
-		if err := smtpcapture.ValidateListen(smtpcapture.ListenAddr()); err != nil {
+		if err := smtpcapture.ValidateExternalListen(smtpcapture.ListenAddr()); err != nil {
 			t.Fatalf("%s: %v", smtpcapture.EnvListen, err)
 		}
 	}
@@ -647,15 +647,15 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		same("register: empty org name", post, register, "", `{"email": "emma@example.com", "password": "Emma-pass-2026", "full_name": "", "org_name": ""}`),
 		same("register: no names", post, register, "", `{"email": "ned@example.com", "password": "Ned-pass-2026"}`),
 	})
-	t.Setenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF ")
+	venueoracle.SetTargetEnv(t, isExternal, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF ")
 	r.batch("register without an org", []step{
 		same("register: solo, auto-org off", post, register, "", `{"email": "solo@example.com", "password": "Solo-pass-2026"}`),
 	})
-	t.Setenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER", "maybe")
+	venueoracle.SetTargetEnv(t, isExternal, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", "maybe")
 	r.batch("register, unrecognized auto-org value", []step{
 		same("register: auto-org value not recognized keeps the default", post, register, "", `{"email": "maya@example.com", "password": "Maya-pass-2026"}`),
 	})
-	_ = os.Unsetenv("AUTH_AUTO_CREATE_ORG_ON_REGISTER")
+	venueoracle.SetTargetEnv(t, isExternal, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", "")
 
 	// Batch: follow every link each plane mailed, with that plane's token.
 	link := func(recipient, subject string) func(string) string {

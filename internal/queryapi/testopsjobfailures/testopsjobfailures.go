@@ -149,6 +149,13 @@ func groupsStatement(scopeFilter string) string {
                 SELECT repo_id, run_id, pipeline_name, provider
                 FROM ci_pipeline_runs FINAL
                 WHERE org_id = {org_id:String}` + scopeFilter + `
+                  AND (repo_id, run_id) IN (
+                      SELECT repo_id, run_id
+                      FROM ci_job_runs
+                      WHERE org_id = {org_id:String}
+                        AND toDate(started_at) >= {since_date:Date}
+                        AND toDate(started_at) <= {until_date:Date}` + scopeFilter + `
+                  )
             ) AS p ON p.repo_id = j.repo_id AND p.run_id = j.run_id
             WHERE j.status IN {terminal_statuses:Array(String)}
             GROUP BY workflow_name, job_name, provider

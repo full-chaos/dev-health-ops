@@ -93,10 +93,10 @@ func scopeSources(config *Config, requested, enabled, selected []string) ([]stri
 // selection (a whole-integration configuration, or a pinned one with no
 // sync_targets) a key passes when its row is on or when it has no row at all:
 // the planner runs a key with no row once and writes none (CHAOS-8819, decision
-// C6 of CHAOS-8795), so the schedule is unchanged. A key whose row is off is
-// refused, because the planner skips an off row and the run would plan nothing.
-// A pinned configuration with sync_targets is held to the keys they select. The
-// result is in the provider's key order.
+// C6 of CHAOS-8795), so the schedule is unchanged. A pinned configuration with
+// sync_targets is held to the keys they select. Whatever the shape, a key whose
+// row is off is refused, because the planner skips an off row and the run would
+// plan nothing. The result is in the provider's key order.
 //
 // current is the key list Validate resolved. When it is empty (a configuration
 // pinned to one source with no sync_targets, or an integration with no enabled
@@ -109,8 +109,9 @@ func scopeDatasets(config *Config, provider string, requested, current, enabledR
 	supported := schedsync.SupportedDatasetKeys(provider)
 	rowOwned := rowsOwnSelection(config) || len(current) == 0
 	allowed, why := current, "is not selected by the sync_targets of sync configuration "+config.ID
+	disabledWhy := "is not enabled for integration " + deref(config.IntegrationID)
 	if rowOwned {
-		why = "is not enabled for integration " + deref(config.IntegrationID)
+		why = disabledWhy
 	}
 	if len(current) == 0 {
 		allowed = enabledRows
@@ -121,7 +122,10 @@ func scopeDatasets(config *Config, provider string, requested, current, enabledR
 			return nil, RefusedError{Message: fmt.Sprintf("backfill run: --dataset-keys %q is not a dataset key of provider %q (known: %s): nothing was started",
 				key, provider, strings.Join(supported, ", "))}
 		}
-		if !slices.Contains(allowed, key) && (!rowOwned || slices.Contains(disabledRows, key)) {
+		if slices.Contains(disabledRows, key) || (!slices.Contains(allowed, key) && !rowOwned) {
+			if slices.Contains(disabledRows, key) {
+				why = disabledWhy
+			}
 			return nil, RefusedError{Message: fmt.Sprintf("backfill run: --dataset-keys %q %s, and a backfill does not switch a dataset on: nothing was started", key, why)}
 		}
 		wanted[key] = true

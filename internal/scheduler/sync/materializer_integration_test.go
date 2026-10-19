@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -1691,6 +1690,7 @@ func TestNativeMaterializerPlansExplicitlyRequestedDatasetWithoutARow(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	counterBefore := explicitDatasetsWithoutRowTotal.Load()
 	plan, err := materializeAndCommit(t, fixture, materializer, occurrence)
 	if err != nil {
 		t.Fatal(err)
@@ -1720,15 +1720,17 @@ func TestNativeMaterializerPlansExplicitlyRequestedDatasetWithoutARow(t *testing
 	}
 
 	// CHAOS-10088: planning a key with no row is the expected path (an Info
-	// log, no Warn) and moves a counter, so an operator can see one-off runs
-	// of datasets the schedule does not carry.
+	// log, no Warn) and moves a counter by exactly the keys planned, so an
+	// operator can see one-off runs of datasets the schedule does not carry.
+	if got := explicitDatasetsWithoutRowTotal.Load() - counterBefore; got != 1 {
+		t.Fatalf("explicit datasets without a row counted %d for this plan, want 1 (work-item-labels)", got)
+	}
 	var metrics bytes.Buffer
 	if err := materializer.WritePrometheus(&metrics); err != nil {
 		t.Fatal(err)
 	}
-	counter := regexp.MustCompile(`(?m)^dev_health_scheduler_explicit_datasets_without_row_total ([0-9]+)$`).FindStringSubmatch(metrics.String())
-	if counter == nil || counter[1] == "0" {
-		t.Fatalf("dev_health_scheduler_explicit_datasets_without_row_total did not move after a key with no row was planned:\n%s", metrics.String())
+	if !strings.Contains(metrics.String(), "# TYPE dev_health_scheduler_explicit_datasets_without_row_total counter\n") {
+		t.Fatalf("the counter is not scraped:\n%s", metrics.String())
 	}
 }
 

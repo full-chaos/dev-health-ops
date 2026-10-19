@@ -222,6 +222,12 @@ func TestScopeDatasets(t *testing.T) {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
+	t.Run("a pinned configuration refuses a key its sync_targets select when the row is off", func(t *testing.T) {
+		_, err := scopeDatasets(pinned(sourceA), "github", []string{"commits"}, []string{"commits", "files"}, nil, []string{"commits"})
+		if message := refusal(t, err); !strings.Contains(message, `"commits"`) || !strings.Contains(message, "does not switch a dataset on") {
+			t.Fatalf("message %q", message)
+		}
+	})
 	t.Run("a pinned configuration with no sync_targets is held to the enabled rows", func(t *testing.T) {
 		got, err := scopeDatasets(pinned(sourceA), "github", []string{"commits"}, nil, []string{"commits", "files"}, nil)
 		if err != nil || !reflect.DeepEqual(got, []string{"commits"}) {

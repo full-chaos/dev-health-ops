@@ -231,10 +231,13 @@ func TestBackfillRunAllowsADatasetKeyWithNoRow(t *testing.T) {
 	}
 	for _, s := range []struct {
 		n       int
+		pinned  bool
 		on, off []string
 	}{
 		{n: 301, on: []string{"work-items"}, off: []string{"work-item-comments"}},
 		{n: 302},
+		// Pinned to one source with sync_targets that select work-items, whose row is off.
+		{n: 303, pinned: true, off: []string{"work-items"}},
 	} {
 		integration, config := uuidN(0x1a, s.n), uuidN(0xc0, s.n)
 		exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
@@ -242,9 +245,15 @@ VALUES ($1::uuid, $2, 'jira', $3, '{}'::json, true, now(), now())`, integration,
 		exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
 VALUES ($1::uuid, $2, $3::uuid, 'jira', 'repo', $4, $4, $4, '{}'::json, true, now(), now())`,
 			uuidN(0x5a, s.n*10), testOrg, integration, fmt.Sprintf("org/repo-%d", s.n))
-		exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, integration_id, created_at, updated_at)
+		if s.pinned {
+			exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, integration_id, source_id, created_at, updated_at)
+VALUES ($1::uuid, $2, $3, 'jira', '["work-items"]'::json, '{}'::json, true, false, $4::uuid, $5::uuid, now(), now())`,
+				config, testOrg, fmt.Sprintf("rows-%d", s.n), integration, uuidN(0x5a, s.n*10))
+		} else {
+			exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, integration_id, created_at, updated_at)
 VALUES ($1::uuid, $2, $3, 'jira', '["work-items"]'::json, '{}'::json, true, true, $4::uuid, now(), now())`,
-			config, testOrg, fmt.Sprintf("rows-%d", s.n), integration)
+				config, testOrg, fmt.Sprintf("rows-%d", s.n), integration)
+		}
 		for _, key := range s.on {
 			exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES (gen_random_uuid(), $1, $2::uuid, $3, true, '{}'::json)`, testOrg, integration, key)
 		}
@@ -277,6 +286,7 @@ VALUES ($1::uuid, $2, $3, 'jira', '["work-items"]'::json, '{}'::json, true, true
 		{name: "no row at all on the integration", n: 302, keys: "work-items", want: []string{"work-items"}},
 		{name: "a disabled row stays refused", n: 301, keys: "work-item-comments", message: "does not switch a dataset on"},
 		{name: "an unsupported key stays refused", n: 301, keys: "no-such-dataset", message: "is not a dataset key of provider"},
+		{name: "a pinned configuration refuses a key its sync_targets select when the row is off", n: 303, keys: "work-items", message: "does not switch a dataset on"},
 		{name: "a refused key refuses the whole run", n: 301, keys: "work-item-labels,work-item-comments", message: "does not switch a dataset on"},
 	} {
 		run := scenario{name: c.name, id: uuidN(0xc0, c.n), args: []string{"--backfill", "1", "--before", "2026-03-10", "--dataset-keys", c.keys}}

@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -107,41 +109,209 @@ func NewFlows(cfg FlowsConfig) (*Flows, error) {
 	return f, nil
 }
 
-var (
-	_ = rand.Read
-	_ = sha256.Sum256
-	_ = base64.RawURLEncoding
-	_ = fmt.Sprint
-	_ = contracts.NewSecretString
-	_ = identity.ErrEmailTaken
-	_ = passwordpolicy.Validate
-)
+func (f *Flows) gate() error {
+	if !f.owned {
+		return identity.ErrSignupNotAvailable
+	}
+	return nil
+}
+
+// newSecret is a 32-byte random URL-safe secret and the SHA-256 of its text,
+// the only form that is stored.
+func newSecret() (contracts.SecretString, [32]byte, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return contracts.SecretString{}, [32]byte{}, fmt.Errorf("local: no randomness for a link secret: %w", err)
+	}
+	text := base64.RawURLEncoding.EncodeToString(raw)
+	return contracts.NewSecretString(text), sha256.Sum256([]byte(text)), nil
+}
+
+// issueAndSend stores a new credential and sends its link. A zero principal
+// is a decoy: the same two calls, nothing stored and nothing sent.
+func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose Purpose, ttl time.Duration, to string, name *string) error {
+	secret, hash, err := newSecret()
+	if err != nil {
+		return err
+	}
+	if err := f.links.Issue(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); err != nil {
+		return fmt.Errorf("local: issuing a link credential: %w", err)
+	}
+	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: principal != uuid.Nil}
+	if err := f.mail.Send(ctx, msg); err != nil {
+		slog.WarnContext(ctx, "local: link mail not sent", "purpose", string(purpose), "error", err)
+	}
+	return nil
+}
+
+func passwordRefusal(password string, applyPolicy bool) []string {
+	if applyPolicy {
+		if v := passwordpolicy.Validate(password); len(v) > 0 {
+			return v
+		}
+	}
+	if len(password) > MaxPasswordBytes {
+		return []string{ViolationTooLong}
+	}
+	return nil
+}
 
 // Register creates a local account and sends its verification link.
 func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome, error) {
-	return FlowOutcome{}, errNotImplemented
+	if err := f.gate(); err != nil {
+		return FlowOutcome{}, err
+	}
+	email := Normalize(req.Email)
+	if v := passwordRefusal(req.Password, true); v != nil {
+		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
+	}
+	existing, err := f.accounts.ByEmail(ctx, email)
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: loading the user: %w", err)
+	}
+	if existing != nil {
+		return FlowOutcome{Kind: FlowEmailTaken}, nil
+	}
+	hash, err := f.hash(req.Password)
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: hashing the password: %w", err)
+	}
+	id, err := f.accounts.ProvisionLocal(ctx, ProvisionLocalRequest{Email: email, FullName: req.FullName, PasswordHash: hash})
+	if errors.Is(err, identity.ErrEmailTaken) {
+		return FlowOutcome{Kind: FlowEmailTaken}, nil
+	}
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: creating the account: %w", err)
+	}
+	if err := f.issueAndSend(ctx, id, PurposeEmailVerification, VerificationTTL, email, req.FullName); err != nil {
+		return FlowOutcome{}, err
+	}
+	return FlowOutcome{Kind: FlowOK, PrincipalID: id}, nil
 }
 
 // Verify consumes a verification link and marks the e-mail verified.
 func (f *Flows) Verify(ctx context.Context, secret string) (FlowOutcome, error) {
-	return FlowOutcome{}, errNotImplemented
+	if err := f.gate(); err != nil {
+		return FlowOutcome{}, err
+	}
+	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposeEmailVerification, TokenHash: sha256.Sum256([]byte(secret))})
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: redeeming a verification link: %w", err)
+	}
+	if !ok {
+		return FlowOutcome{Kind: FlowInvalidToken}, nil
+	}
+	if err := f.accounts.SetEmailVerified(ctx, id); err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: marking the e-mail verified: %w", err)
+	}
+	return FlowOutcome{Kind: FlowOK, PrincipalID: id}, nil
 }
 
 // Resend issues a new verification link for an unverified account. Its
 // result and call sequence are the same for every address.
-func (f *Flows) Resend(ctx context.Context, email string) error { return errNotImplemented }
+func (f *Flows) Resend(ctx context.Context, email string) error {
+	return f.reissue(ctx, email, PurposeEmailVerification, VerificationTTL, func(u *User) bool { return !u.IsVerified })
+}
 
 // Forgot issues a password reset link. Its result and call sequence are the
 // same for every address.
-func (f *Flows) Forgot(ctx context.Context, email string) error { return errNotImplemented }
+func (f *Flows) Forgot(ctx context.Context, email string) error {
+	return f.reissue(ctx, email, PurposePasswordReset, ResetTTL, func(*User) bool { return true })
+}
+
+func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl time.Duration, eligible func(*User) bool) error {
+	if err := f.gate(); err != nil {
+		return err
+	}
+	normalized := Normalize(email)
+	user, err := f.accounts.ByEmail(ctx, normalized)
+	if err != nil {
+		return fmt.Errorf("local: loading the user: %w", err)
+	}
+	principal := uuid.Nil
+	if user != nil && eligible(user) {
+		principal = user.ID
+	}
+	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, nil)
+}
 
 // Reset consumes a reset link, sets the password and revokes every session.
 func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutcome, error) {
-	return FlowOutcome{}, errNotImplemented
+	if err := f.gate(); err != nil {
+		return FlowOutcome{}, err
+	}
+	// go-api applies no strength policy on reset beyond the model's length.
+	// The refusal comes before the consume, so the link stays usable.
+	if v := passwordRefusal(newPassword, false); v != nil {
+		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
+	}
+	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: sha256.Sum256([]byte(secret))})
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: redeeming a reset link: %w", err)
+	}
+	if !ok {
+		return FlowOutcome{Kind: FlowInvalidToken}, nil
+	}
+	hash, err := f.hash(newPassword)
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: hashing the password: %w", err)
+	}
+	if err := f.accounts.SetPasswordHash(ctx, id, hash); err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: setting the password: %w", err)
+	}
+	if _, err := f.sessions.RevokeAll(ctx, id, session.Actor{PrincipalID: &id}); err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: revoking sessions: %w", err)
+	}
+	return FlowOutcome{Kind: FlowOK, PrincipalID: id}, nil
 }
 
 // Change sets a signed-in user's password, revokes every session and issues
 // the caller a new one.
 func (f *Flows) Change(ctx context.Context, req ChangeRequest) (FlowOutcome, error) {
-	return FlowOutcome{}, errNotImplemented
+	if err := f.gate(); err != nil {
+		return FlowOutcome{}, err
+	}
+	if req.Impersonated {
+		return FlowOutcome{Kind: FlowNotAllowed}, nil
+	}
+	if v := passwordRefusal(req.New, true); v != nil {
+		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
+	}
+	user, err := f.accounts.ByID(ctx, req.PrincipalID)
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: loading the user: %w", err)
+	}
+	if user == nil || !user.IsActive {
+		return FlowOutcome{Kind: FlowNotAllowed}, nil
+	}
+	provider := "local"
+	if user.AuthProvider != nil {
+		provider = *user.AuthProvider
+	}
+	if provider != "local" || user.PasswordHash == nil {
+		return FlowOutcome{Kind: FlowManagedAccount}, nil
+	}
+	if !f.compare(*user.PasswordHash, req.Current) {
+		return FlowOutcome{Kind: FlowCurrentRejected}, nil
+	}
+	hash, err := f.hash(req.New)
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: hashing the password: %w", err)
+	}
+	if err := f.accounts.SetPasswordHash(ctx, user.ID, hash); err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: setting the password: %w", err)
+	}
+	actor := req.Actor
+	if actor.PrincipalID == nil {
+		id := user.ID
+		actor.PrincipalID = &id
+	}
+	if _, err := f.sessions.RevokeAll(ctx, user.ID, actor); err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: revoking sessions: %w", err)
+	}
+	issued, err := f.sessions.Create(ctx, user.ID, req.OrganizationID, []string{"pwd"})
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: creating the session: %w", err)
+	}
+	return FlowOutcome{Kind: FlowOK, PrincipalID: user.ID, Issued: &issued}, nil
 }

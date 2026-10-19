@@ -516,7 +516,7 @@ func TestCorpusAuthFlowDecisionRows(t *testing.T) {
 
 	s, b := post("/register", `{"email":"TAKEN@example.com","password":"`+sessionscenario.Password+`xxxx"}`)
 	check("register: taken, other case", s, b, "")
-	s, b = post("/register", `{"email":"new@example.com","password":"short"}`)
+	s, b = post("/register", `{"email":"new@example.com","password":"Short-pass1"}`)
 	check("register: policy, too short", s, b, "")
 	s, b = post("/register", `{"email":"new@example.com","password":"password1234"}`)
 	check("register: common password", s, b, "")

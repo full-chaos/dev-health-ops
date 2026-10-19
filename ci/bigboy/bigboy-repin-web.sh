@@ -10,6 +10,9 @@ set -euo pipefail
 # byte-identical to the hardcoded path this script always used.
 R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/_records/images.env
 echo "repin-web start root=$R"
+# CHAOS-10137: images.env pins linux/arm64 CHILD digests; arm64_child_digest never returns the index digest.
+# shellcheck source=arm64-child-digest.sh
+. "$(dirname "${BASH_SOURCE[0]}")/arm64-child-digest.sh"
 [ -e "$R/_records/images.env" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing _records/images.env -- refusing to run against a root that is not a real bigboy tree" >&2; exit 4; }
 
 # CHAOS-7901: which web build this cut takes, chosen by the caller and never inferred when it names one.
@@ -66,8 +69,8 @@ esac
 WEB_S7=${WEB_SHA:0:7}
 
 WEB_DIGEST=""
-for i in $(seq 1 "$WAIT_TRIES"); do
-  WEB_DIGEST=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-web:sha-$WEB_S7" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest || true)
+for _ in $(seq 1 "$WAIT_TRIES"); do
+  WEB_DIGEST=$(arm64_child_digest "ghcr.io/full-chaos/dev-health-web:sha-$WEB_S7" || true)
   [[ ${WEB_DIGEST:-} == sha256:* ]] && break
   sleep "$WAIT_SECS"
 done

@@ -132,7 +132,8 @@ def _run_repin(
     _stub(
         bindir / "docker",
         f'echo "docker $*" >> "{log}"\n'
-        f'case "$* " in {cases}) echo \'{{"digest":"{NEW_DIGEST}"}}\' ;; esac\n',
+        # CHAOS-10137: `--raw` answers the index whose linux/arm64 child is NEW_DIGEST (what is pinned)
+        f'case "$* " in {cases}) if [[ "$*" == *--raw* ]]; then echo \'{{"manifests":[{{"digest":"{NEW_DIGEST}","platform":{{"os":"linux","architecture":"arm64"}}}}]}}\'; else echo \'{{"digest":"{NEW_DIGEST}"}}\'; fi ;; esac\n',
     )
     env = {
         "PATH": f"{bindir}:{os.environ['PATH']}",

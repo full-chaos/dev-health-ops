@@ -11,22 +11,36 @@ see an unwanted extra (a table-wide UPDATE also makes has_column_privilege true)
 gate's job (postgres.CheckRolePosture / CheckAPIAuthorization).
 """
 
+import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-OPS_REPO = "/home/ubuntu/devhealth/ops"
+
+def ops_repo():
+    """BIGBOY_OPS_REPO, else the checkout these tools come from; never the operator checkout (CHAOS-10137)."""
+    env = os.environ.get("BIGBOY_OPS_REPO")
+    if env:
+        return env
+    here = Path(__file__).resolve().parents[2]
+    return str(here) if (here / ".git").exists() else None
+
+
 PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "REFERENCES")
 
 
 def load(sha, gofile, func):
     """(tables, columns) of posture `func` in `gofile` at `sha`, or None when it cannot be read."""
+    repo = ops_repo()
+    if repo is None:
+        return None
     try:
         src = subprocess.check_output(
             [
                 "git",
                 "-C",
-                OPS_REPO,
+                repo,
                 "show",
                 f"{sha}:internal/storage/postgres/{gofile}",
             ],
@@ -35,10 +49,14 @@ def load(sha, gofile, func):
         body = src.split(f"func {func}()", 1)[1].split("\nfunc ", 1)[0]
     except (subprocess.CalledProcessError, OSError, IndexError):
         return None
+    body = re.sub(r"//[^\n]*", "", body)
     tables = {}
+    tables_seen = []
     for m in re.finditer(
-        r'\{"(\w+)", (true|false), (true|false), (true|false)\}', body
+        r'\{\s*"(\w+)"\s*,\s*(true|false)\s*,\s*(true|false)\s*,\s*(true|false)\s*\}',
+        body,
     ):
+        tables_seen.append(m.group(1))
         tables[m.group(1)] = {
             "SELECT": True,
             "INSERT": m.group(2) == "true",
@@ -46,10 +64,26 @@ def load(sha, gofile, func):
             "DELETE": m.group(4) == "true",
         }
     columns = {}
+    column_rows = 0
     for m in re.finditer(
-        r'\{"(\w+)", "(\w+)", "(SELECT|INSERT|UPDATE|REFERENCES)"\}', body
+        r'\{\s*"(\w+)"\s*,\s*"(\w+)"\s*,\s*"(SELECT|INSERT|UPDATE|REFERENCES)"\s*\}',
+        body,
     ):
         columns.setdefault(f"{m.group(1)}.{m.group(2)}", set()).add(m.group(3))
+        column_rows += 1
+    # A posture function whose rows the patterns do not recognise must fail, never read as "no privileges".
+    # Every `{` of the body after its signature line is a row, except the struct and slice literals that hold
+    # the rows (a `{` that follows an identifier or `]`); each row must be one of the two recognised shapes.
+    rows_text = body.split("\n", 1)[1] if "\n" in body else ""
+    literal_rows = len(re.findall(r"(?<![\w\]])\{", rows_text))
+    table_matches = len(tables_seen)
+    # The read-back covers tables and columns only: any other keyed grant list, whatever its value (RequiredSequences: []string{...}, a name or a call) is a grant it
+    # cannot read back, so it must fail rather than vanish from the delta.
+    keys = set(re.findall(r"\b(\w+)\s*:(?!=)", body))
+    if keys - {"RequiredTables", "ColumnScoped"}:
+        return None
+    if not tables or literal_rows != table_matches + column_rows:
+        return None
     return tables, columns
 
 
@@ -59,7 +93,7 @@ def delta(role, gofile, func, unparsable):
     before, after = load(old, gofile, func), load(new, gofile, func)
     if before is None or after is None:
         print(unparsable)
-        sys.exit(0)
+        sys.exit(1)
     lines = []
     for table, privs in sorted(after[0].items()):
         had = before[0].get(table, {})

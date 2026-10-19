@@ -146,7 +146,7 @@ _DRAFT_GATE_PREFIX = (
 
 
 def _without_draft_gate(value: str) -> str:
-    """Strip the CHAOS-9949 draft gate; test_self_hosted_runner_allowlist pins it."""
+    """Strip the CHAOS-9949 draft gate; internal/cigates/workflows_runner_allowlist_test.go pins it."""
     if value.startswith(_DRAFT_GATE_PREFIX) and value.endswith(")"):
         return value[len(_DRAFT_GATE_PREFIX) : -1]
     return value

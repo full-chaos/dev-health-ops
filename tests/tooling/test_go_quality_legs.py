@@ -23,6 +23,8 @@ must never silently drop a stage, so this file pins:
    job-level `if`, and `fail-fast` is off.
 """
 
+# CHAOS-10177: the YAML-shape tests of this file moved to internal/cigates/workflows_quality_legs_test.go; the tests left here execute
+# scripts and move in CHAOS-10178 (PR C), which then deletes this file.
 from __future__ import annotations
 
 import json
@@ -34,13 +36,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECK_GO = ROOT / "ci" / "check_go.sh"
 WEIGHTS = ROOT / "ci" / "go_race_weights.tsv"
 SHARD_AWK = ROOT / "ci" / "go_race_shard.awk"
-WORKFLOW = ROOT / ".github" / "workflows" / "go-quality.yml"
 DEFAULT_WEIGHT = 2
 
 STAND_IN_GO = """#!/usr/bin/env bash
@@ -213,28 +213,6 @@ def _run_check_go(
 # ---------------------------------------------------------------------------
 # 1. Coverage: the legs are exactly `ci`.
 # ---------------------------------------------------------------------------
-
-
-def _case_block(script: str, start: str, end: str) -> str:
-    a = script.index(start)
-    return script[a : script.index(end, a)]
-
-
-def test_the_legs_run_exactly_the_stages_of_ci() -> None:
-    script = CHECK_GO.read_text(encoding="utf-8")
-    ci_block = _case_block(script, "\n  ci)\n", "\n  all)\n")
-    ci_steps = re.findall(r"^    ((?:check|plan)_\w+)$", ci_block, flags=re.M)
-    leg_block = _case_block(script, "check_ci_leg() {", "\n}\n")
-    leg_steps = re.findall(r"ci_leg_stage (?:\"[^\"]*\"|\S+) (\w+)", leg_block)
-    # The race stage runs sharded inside its leg; it stands for `check_race`.
-    leg_steps = ["check_race" if s == "check_race_shard" else s for s in leg_steps]
-    assert ci_steps, "could not read the `ci` case"
-    assert sorted(leg_steps) == sorted(ci_steps), (
-        "the legs' stages differ from `check_go.sh ci`: "
-        f"only in legs {sorted(set(leg_steps) - set(ci_steps))}, "
-        f"only in ci {sorted(set(ci_steps) - set(leg_steps))}"
-    )
-    assert len(leg_steps) == len(set(leg_steps)), "a stage runs in two legs"
 
 
 # ---------------------------------------------------------------------------
@@ -453,77 +431,6 @@ def test_fast_ci_all_and_the_static_leg_run_the_weights_census() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _jobs() -> dict:
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
-
-
-def test_the_matrix_carries_exactly_the_legs_the_script_knows() -> None:
-    leg = _jobs()["go-quality-leg"]
-    entries = leg["strategy"]["matrix"]["include"]
-    args = [e["args"] for e in entries]
-    names = [e["name"] for e in entries]
-    assert len(set(names)) == len(names), "duplicate leg names"
-    non_race = sorted(a for a in args if not a.startswith("race "))
-    assert non_race == ["static", "test"], args
-    races = sorted(a for a in args if a.startswith("race "))
-    count = len(races)
-    assert count >= 1
-    assert races == [f"race {k} {count}" for k in range(1, count + 1)], (
-        f"the race entries {races} are not 1..N of N (a gap or a stale COUNT leaves "
-        "packages unrun or run twice)"
-    )
-    assert leg["strategy"]["fail-fast"] is False
-    assert "if" not in leg, (
-        "a job-level `if` on the legs would let GitHub report them skipped; "
-        "relevance is decided by a STEP inside each leg"
-    )
-    runs = [s["run"] for s in leg["steps"] if isinstance(s.get("run"), str)]
-    assert any("ci-leg ${{ matrix.args }}" in r for r in runs)
-    assert leg["timeout-minutes"] <= 30
-
-
-def test_the_fan_in_keeps_the_required_context_and_fails_on_a_missing_leg() -> None:
-    jobs = _jobs()
-    fan_in = jobs["go-quality"]
-    assert fan_in["name"] == "go-quality", "the required context name changed"
-    assert str(fan_in["if"]).replace(" ", "") == "always()", (
-        "the fan-in must be always(): under any condition that lets it skip, a "
-        "cancelled run leaves the REQUIRED check skipped"
-    )
-    assert fan_in["needs"] == ["go-quality-leg"]
-    step = next(
-        s for s in fan_in["steps"] if "aggregate_gate_results" in str(s.get("run", ""))
-    )
-    env = step["env"]
-    assert env["GATE_NAME"] == "go-quality"
-    assert env["GATE_HAS_SELECTOR"] == "false"
-    assert (
-        env["GATED_JOB_1"]
-        == "go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}"
-    ), (
-        "the fan-in must judge the legs `unconditional`: a skipped, cancelled or "
-        "missing leg fails the gate"
-    )
-    assert "GATED_JOB_2" not in env
-
-
-def test_only_the_static_leg_runs_the_static_only_steps() -> None:
-    leg = _jobs()["go-quality-leg"]
-    static_only = (
-        "Prove the migration matrix contract",
-        "Check the gqlgen output",
-        "Install pinned shellcheck",
-        "Check the shellcheck pin",
-        "Validate River compatibility harness",
-        "Prepare base job contracts",
-        "Check the migration matrix has not gone stale",
-    )
-    for step in leg["steps"]:
-        name = step.get("name", "")
-        if name.startswith(static_only):
-            assert "matrix.name == 'static'" in str(step.get("if", "")), name
-
-
 # ---------------------------------------------------------------------------
 # 5. CHAOS-8135: every race package has an explicit weights row (static guard).
 # ---------------------------------------------------------------------------
@@ -686,12 +593,6 @@ def test_every_race_excluded_test_is_listed() -> None:
         "tests compiled without -race only and ci/race_excluded_tests.tsv differ: "
         f"unlisted {sorted(found - listed)}, listed but compiled in the race leg {sorted(listed - found)}"
     )
-
-
-def test_check_test_runs_the_race_excluded_proof() -> None:
-    script = CHECK_GO.read_text(encoding="utf-8")
-    body = _case_block(script, "check_test() {", "\n}\n")
-    assert "check_race_excluded_ran" in body
 
 
 # ---------------------------------------------------------------------------
@@ -1110,11 +1011,3 @@ def test_the_stand_in_sees_trimpath_on_every_recorded_race_call(tmp_path: Path) 
     assert proc.returncode == 0, proc.stderr[-1500:]
     assert calls, "no go test call was recorded"
     assert all(" -trimpath " in f" {c} " for c in calls), calls
-
-
-def test_the_goflags_scrub_stays_so_trimpath_is_explicit() -> None:
-    text = CHECK_GO.read_text(encoding="utf-8")
-    line = next(row for row in text.splitlines() if row.startswith("GO_ENV_OFF=("))
-    assert "-u GOFLAGS" in line, (
-        "the GOFLAGS scrub must stay: -trimpath is an explicit flag, not an inherited one"
-    )

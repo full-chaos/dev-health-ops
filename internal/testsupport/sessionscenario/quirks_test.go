@@ -75,3 +75,38 @@ func TestCheckQuirksDetectorEntryNeedsAHit(t *testing.T) {
 		t.Error("a detector entry with no matching golden answer was silently accepted")
 	}
 }
+
+// wantClasses repeats the class of every table entry on purpose: reclassing a quirk changes the contract the
+// reimplementation is held to, so it takes an edit here as well as in the table.
+var wantClasses = map[string]QuirkClass{
+	"validation-echo":                     Unsafe,
+	"lone-surrogate-500":                  Accidental,
+	"origin-urlparse-500":                 Accidental,
+	"non-ascii-signature-500":             Accidental,
+	"forged-claim-type-500":               Accidental,
+	"unknown-org-500":                     Accidental,
+	"password-over-72-bytes-register-500": Accidental,
+	"provider-payload-shape-500":          Accidental,
+	"provider-not-configured-503":         Contractual,
+	"social-link-by-email":                Unsafe,
+	"refresh-grace-window":                Contractual,
+	"display-name-email-login":            Accidental,
+}
+
+func TestQuirkClassesArePinned(t *testing.T) {
+	seen := map[string]bool{}
+	for _, q := range Quirks {
+		seen[q.ID] = true
+		want, ok := wantClasses[q.ID]
+		if !ok {
+			t.Errorf("quirk %s has no pinned class: add it to wantClasses", q.ID)
+		} else if q.Class != want {
+			t.Errorf("quirk %s is %s, pinned %s", q.ID, q.Class, want)
+		}
+	}
+	for id := range wantClasses {
+		if !seen[id] {
+			t.Errorf("pinned quirk %s is not in the table", id)
+		}
+	}
+}

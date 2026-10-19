@@ -18,7 +18,7 @@ import (
 // Environment names of an external target (CHAOS-10157): the corpus runs against any server that answers
 // the auth routes at BaseURL, go-api today and auth-service later. The target must share Key as its signing
 // key, run SocialEnv with its provider endpoints on a FakeProvider, trust loopback peers, and use the
-// migrated Postgres (and the ClickHouse, when given) the URIs name, which the corpus seeds.
+// migrated Postgres and ClickHouse the URIs name, which the corpus seeds.
 const (
 	EnvBaseURL       = "DEVHEALTH_AUTH_ORACLE_BASE_URL"
 	EnvPostgresURI   = "DEVHEALTH_AUTH_ORACLE_POSTGRES_URI"
@@ -43,6 +43,9 @@ func (tg Target) Validate() error {
 	}
 	if tg.PostgresURI == "" {
 		return fmt.Errorf("no Postgres URI: the corpus seeds and reads rows in the target's Postgres")
+	}
+	if tg.ClickHouseURI == "" {
+		return fmt.Errorf("no ClickHouse URI: the corpus seeds the activity tables that decide the active organization at login")
 	}
 	if tg.ValkeyURI == "" && tg.ResetLimits == nil {
 		return fmt.Errorf("no %s and no limit reset: the rate-limit steps share one window and answer 429", EnvValkeyURI)
@@ -111,22 +114,23 @@ func deleteKeys(t *testing.T, ctx context.Context, client valkeygo.Client, patte
 // Prepare seeds the target's stores and mints the seed access tokens.
 func Prepare(t *testing.T, ctx context.Context, tg Target) map[string]string {
 	t.Helper()
+	if err := tg.Validate(); err != nil {
+		t.Fatalf("target unusable: %v", err)
+	}
 	pool := venueoracle.OpenPool(t, ctx, tg.PostgresURI)
 	hash, err := bcrypt.GenerateFromPassword([]byte(Password), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
 	}
 	specs := Seed(t, ctx, pool, string(hash))
-	if tg.ClickHouseURI != "" {
-		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(tg.ClickHouseURI))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = conn.Close() }()
-		for _, statement := range MetricsStatements {
-			if err := conn.Exec(ctx, statement); err != nil {
-				t.Fatalf("seed metrics: %v", err)
-			}
+	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(tg.ClickHouseURI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	for _, statement := range MetricsStatements {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("seed metrics: %v", err)
 		}
 	}
 	return MintTokens(t, specs)

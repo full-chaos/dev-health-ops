@@ -85,10 +85,11 @@ func TestCeilingFollowsTheTableTTL(t *testing.T) {
 func TestTTLScanRejectsWhatIsNotATableTTL(t *testing.T) {
 	base := "CREATE TABLE product_telemetry_events (`a` String COMMENT 'x') ENGINE = ReplacingMergeTree ORDER BY a "
 	cases := map[string]string{
-		"quoted comment": "CREATE TABLE t (`a` String COMMENT 'TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
-		"escaped quote":  "CREATE TABLE t (`a` String COMMENT 'it\\'s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
-		"doubled quote":  "CREATE TABLE t (`a` String COMMENT 'it''s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
-		"no ttl":         base + "SETTINGS index_granularity = 8192",
+		"quoted comment":  "CREATE TABLE t (`a` String COMMENT 'TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"escaped quote":   "CREATE TABLE t (`a` String COMMENT 'it\\'s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"doubled quote":   "CREATE TABLE t (`a` String COMMENT 'it''s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"no ttl":          base + "SETTINGS index_granularity = 8192",
+		"column ttl only": "CREATE TABLE t (`a` DateTime TTL a + toIntervalDay(180), `b` String) ENGINE = MergeTree ORDER BY a",
 	}
 	for name, create := range cases {
 		if days, ok := ttlDays(create); ok {
@@ -96,9 +97,10 @@ func TestTTLScanRejectsWhatIsNotATableTTL(t *testing.T) {
 		}
 	}
 	for create, want := range map[string]int{
-		base + "TTL toDateTime(occurred_at) + toIntervalDay(90) SETTINGS a = 1":           90,
-		base + "TTL occurred_at + INTERVAL 45 DAY DELETE":                                 45,
-		"CREATE TABLE t (`a` String COMMENT 'it''s') ENGINE = M TTL d + toIntervalDay(7)": 7,
+		base + "TTL toDateTime(occurred_at) + toIntervalDay(90) SETTINGS a = 1":                                                       90,
+		base + "TTL occurred_at + INTERVAL 45 DAY DELETE":                                                                             45,
+		"CREATE TABLE t (`a` String COMMENT 'it''s') ENGINE = M TTL d + toIntervalDay(7)":                                             7,
+		"CREATE TABLE t (`a` DateTime TTL a + toIntervalDay(30), `b` String) ENGINE = MergeTree ORDER BY a TTL a + toIntervalDay(90)": 90,
 	} {
 		if days, ok := ttlDays(create); !ok || days != want {
 			t.Errorf("%q: got %d,%v want %d", create, days, ok, want)

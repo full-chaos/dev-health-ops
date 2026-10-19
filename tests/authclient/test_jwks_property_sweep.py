@@ -206,6 +206,30 @@ def test_every_code_point_as_x_and_as_kid_matches_the_literal_alphabets() -> Non
         assert verdict(doc) == ("accept" if lo <= code <= hi else "refuse"), hex(code)
 
 
+def test_no_astral_code_point_is_admitted_by_the_kid_or_x_pattern() -> None:
+    """Every astral code point against the schema's patterns, no stride.
+
+    The literal alphabets sit inside the BMP, so every astral code point must be
+    refused; one admitted code point fails.
+    """
+    assert max(ord(c) for c in SWEEP["alphabets"]["x_characters"]) <= 0xFFFF
+    assert int(SWEEP["alphabets"]["kid_range"][1].removeprefix("U+"), 16) <= 0xFFFF
+    schema = json.loads(
+        (contracts_dir() / "jsonschema" / "jwks.v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    members = schema["properties"]["keys"]["items"]["properties"]
+    kid = strictly_anchored(members["kid"]["pattern"])
+    x = strictly_anchored(members["x"]["pattern"])
+    prefix = SWEEP["base_document"]["keys"][0]["x"][:42]
+    assert kid.search("a") and x.search(prefix + "A")
+    for code in range(0x10000, 0x110000):
+        char = chr(code)
+        assert not kid.search(char), hex(code)
+        assert not x.search(prefix + char), hex(code)
+
+
 def _parse(raw: bytes) -> Any:
     return json.loads(raw.decode("utf-8"))
 

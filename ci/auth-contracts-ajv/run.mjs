@@ -51,18 +51,6 @@ const JS_GENERAL_CATEGORIES = [
   "Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps", "Sc", "Sk", "Sm", "So", "Zl", "Zp", "Zs",
 ];
 
-// First, second and last code point of every astral plane, so a pattern that
-// admits one astral code point cannot hide between the stride's samples.
-function astralPlaneProbes() {
-  const probes = new Set();
-  for (let plane = 1; plane <= 16; plane += 1) {
-    const first = plane * 0x10000;
-    probes.add(first);
-    probes.add(first + 1);
-    probes.add(first + 0xffff);
-  }
-  return probes;
-}
 const sweepExpand = (v) =>
   v && typeof v === "object" && !Array.isArray(v) && "$repeat" in v
     ? (v.prefix ?? "") + v.$repeat[0].repeat(v.$repeat[1]) + (v.suffix ?? "")
@@ -424,18 +412,13 @@ for (const surface of surfaces) {
           fail(`${surface}/category ${entry.category}: ${entry.rune} is not in that category`);
         }
       }
-      const astralProbes = astralPlaneProbes();
-      for (const entry of sweep.unicode_categories ?? []) {
-        const code = parseInt(entry.rune.slice(2), 16);
-        if (code > 0xffff) astralProbes.add(code);
-      }
       const alphabet = new Set(sweep.alphabets.x_characters);
       if (alphabet.size !== 64) fail(`${surface}: the x alphabet must hold 64 characters`);
       const [lo, hi] = sweep.alphabets.kid_range.map((v) => parseInt(v.slice(2), 16));
       const xPrefix = sweep.base_document.keys[0].x.slice(0, 42);
       for (let code = 0; code <= 0x10ffff; code += 1) {
         if (code >= 0xd800 && code <= 0xdfff) continue;
-        if (code > 0xffff && code % 61 !== 0 && !astralProbes.has(code)) continue;
+        if (code > 0xffff) continue;
         const ch = String.fromCodePoint(code);
         const xDoc = structuredClone(sweep.base_document);
         xDoc.keys[0].x = xPrefix + ch;
@@ -448,6 +431,23 @@ for (const surface of surfaces) {
         kDoc.keys[0].kid = ch;
         if (verdict(kDoc) !== (code >= lo && code <= hi ? "accept" : "refuse")) {
           fail(`${surface}: kid U+${code.toString(16)} has the wrong verdict`);
+          break;
+        }
+      }
+      if (Math.max(...[...alphabet].map((c) => c.codePointAt(0)), hi) > 0xffff) {
+        fail(`${surface}: the literal alphabets must be BMP-only for the astral sweep's refuse expectation`);
+      }
+      // Every astral code point through the compiled validator, mutating one
+      // document in place; no stride, so one admitted code point is found.
+      const astralX = structuredClone(sweep.base_document);
+      const astralKid = structuredClone(sweep.base_document);
+      for (let code = 0x10000; code <= 0x10ffff; code += 1) {
+        const ch = String.fromCodePoint(code);
+        astralX.keys[0].x = xPrefix + ch;
+        astralKid.keys[0].kid = ch;
+        checked += 2;
+        if (verdict(astralX) !== "refuse" || verdict(astralKid) !== "refuse") {
+          fail(`${surface}: astral U+${code.toString(16)} is accepted as an x ending or a kid`);
           break;
         }
       }

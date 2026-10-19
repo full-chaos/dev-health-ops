@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -561,6 +562,59 @@ func TestEveryCodePointAsXAndAsKidMatchesTheLiteralAlphabets(t *testing.T) {
 	}
 	if checked < 0x10000 {
 		t.Fatalf("only %d code points checked", checked)
+	}
+}
+
+// Every astral code point against the schema's own kid and x patterns, with
+// no stride: one admitted code point fails. The expectation is the literal
+// alphabets, which are all inside the BMP, so every astral code point must be
+// refused.
+func TestNoAstralCodePointIsAdmittedByTheKidOrXPattern(t *testing.T) {
+	sweep := loadSweep(t)
+	for _, r := range sweep.Alphabets.XCharacters {
+		if r > 0xffff {
+			t.Fatalf("x alphabet holds the astral U+%04X; the refuse expectation below would be wrong", r)
+		}
+	}
+	if parseRune(t, sweep.Alphabets.KidRange[1]) > 0xffff {
+		t.Fatal("kid range reaches the astral planes; the refuse expectation below would be wrong")
+	}
+	raw, err := os.ReadFile(filepath.Join(testRoot(t), "contracts/auth/v1/jsonschema/jwks.v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Keys struct {
+				Items struct {
+					Properties struct {
+						Kid struct {
+							Pattern string `json:"pattern"`
+						} `json:"kid"`
+						X struct {
+							Pattern string `json:"pattern"`
+						} `json:"x"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"keys"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	kidPattern := regexp.MustCompile(schema.Properties.Keys.Items.Properties.Kid.Pattern)
+	xPattern := regexp.MustCompile(schema.Properties.Keys.Items.Properties.X.Pattern)
+	prefix := sweep.Base["keys"].([]any)[0].(map[string]any)["x"].(string)[:42]
+	if !kidPattern.MatchString("a") || !xPattern.MatchString(prefix+"A") {
+		t.Fatal("the patterns do not admit the base document's own characters: the schema layout moved")
+	}
+	for r := rune(0x10000); r <= unicode.MaxRune; r++ {
+		if kidPattern.MatchString(string(r)) {
+			t.Fatalf("kid pattern admits the astral U+%04X", r)
+		}
+		if xPattern.MatchString(prefix + string(r)) {
+			t.Fatalf("x pattern admits the astral U+%04X as its last character", r)
+		}
 	}
 }
 

@@ -841,18 +841,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	logPromptRedactions(ctx, m.logger, cfg.OrgID, cfg.RunID, promptRedactions)
 
-	if stats.LLMFailures > 0 {
-		level := slog.LevelWarn
-		if stats.LLMAllFailed {
-			level = slog.LevelError
-		}
-		m.logger.Log(ctx, level, "investment categorization llm failures",
-			"org_id", cfg.OrgID, "run_id", cfg.RunID,
-			"failures", stats.LLMFailures, "succeeded", stats.llmSucceeded,
-			"all_failed", stats.LLMAllFailed,
-			"by_class", categorize.FormatFailureSummary(stats.llmSucceeded, stats.LLMFailureCounts),
-		)
-	}
+	logLLMFailureSummary(ctx, m.logger, cfg, stats)
 
 	m.logger.InfoContext(ctx, "investment materialization complete",
 		"components", stats.Components, "records", stats.Records, "quotes", stats.Quotes,
@@ -868,6 +857,24 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// no result on purpose: see shadowphase.go.
 	m.runShadow(ctx, cfg, all)
 	return stats, nil
+}
+
+// logLLMFailureSummary logs the run's per-class failure counts: WARN when some
+// calls failed, ERROR when no unit got a model answer.
+func logLLMFailureSummary(ctx context.Context, logger *slog.Logger, cfg Config, stats Stats) {
+	if stats.LLMFailures == 0 {
+		return
+	}
+	level := slog.LevelWarn
+	if stats.LLMAllFailed {
+		level = slog.LevelError
+	}
+	logger.Log(ctx, level, "investment categorization llm failures",
+		"org_id", cfg.OrgID, "run_id", cfg.RunID,
+		"failures", stats.LLMFailures, "succeeded", stats.llmSucceeded,
+		"all_failed", stats.LLMAllFailed,
+		"by_class", categorize.FormatFailureSummary(stats.llmSucceeded, stats.LLMFailureCounts),
+	)
 }
 
 // failedUnitOutcome is the fallback outcome of a unit whose LLM call failed;

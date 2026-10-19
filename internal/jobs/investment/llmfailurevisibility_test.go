@@ -94,3 +94,33 @@ func TestCategorizeAccountCountsSuccessSoAllFailedNeedsZero(t *testing.T) {
 		t.Fatalf("succeeded=%d failures=%d", account.stats.llmSucceeded, account.stats.LLMFailures)
 	}
 }
+
+func TestLLMFailureSummaryLogsPerClassCountsAtLevelByOutcome(t *testing.T) {
+	cfg := Config{OrgID: "org-1", RunID: "run-1"}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	ctx := context.Background()
+
+	logLLMFailureSummary(ctx, logger, cfg, Stats{})
+	if buf.Len() != 0 {
+		t.Fatalf("no failures must log nothing: %s", buf.String())
+	}
+
+	partial := Stats{LLMFailures: 3, llmSucceeded: 2, LLMFailureCounts: map[string]int{"rate_limit": 2, "llm_error": 1}}
+	logLLMFailureSummary(ctx, logger, cfg, partial)
+	out := buf.String()
+	if !strings.Contains(out, "level=WARN") || strings.Contains(out, "level=ERROR") {
+		t.Fatalf("partial failure must be WARN: %s", out)
+	}
+	if !strings.Contains(out, "rate_limit") || !strings.Contains(out, "all_failed=false") {
+		t.Fatalf("per-class counts missing: %s", out)
+	}
+
+	buf.Reset()
+	all := Stats{LLMFailures: 3, LLMAllFailed: true, LLMFailureCounts: map[string]int{"rate_limit": 3}}
+	logLLMFailureSummary(ctx, logger, cfg, all)
+	out = buf.String()
+	if !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "all_failed=true") {
+		t.Fatalf("all-failed must be ERROR: %s", out)
+	}
+}

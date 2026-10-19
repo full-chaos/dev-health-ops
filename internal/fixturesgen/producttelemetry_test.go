@@ -40,7 +40,7 @@ func ttlDays(create string) (int, bool) {
 		}
 		out.WriteByte('\'')
 	}
-	m := ttlClause.FindStringSubmatch(create)
+	m := ttlClause.FindStringSubmatch(out.String())
 	if m == nil {
 		return 0, false
 	}

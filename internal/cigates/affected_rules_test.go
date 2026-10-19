@@ -245,6 +245,7 @@ func TestFullPlanStaysForRunnerAndSharedInputs(t *testing.T) {
 		"scripts/x.py":                           "x",
 		"go.mod":                                 "module m\n",
 		"internal/testsupport/h.go":              "package h\n",
+		"docs/testdata/g.json":                   "{}",
 	})
 	cases := []struct{ path, want string }{
 		{"ci/go_integration_shards.d/_shards.tsv", "FULL integration runner input: ci/go_integration_shards.d/_shards.tsv\n"},
@@ -253,6 +254,7 @@ func TestFullPlanStaysForRunnerAndSharedInputs(t *testing.T) {
 		{"scripts/x.py", "FULL non-Go file with no owning package input: scripts/x.py\n"},
 		{"go.mod", "FULL shared change: go.mod\n"},
 		{"internal/testsupport/h.go", "FULL shared change: internal/testsupport/h.go\n"},
+		{"docs/testdata/g.json", "FULL non-Go file with no owning package input: docs/testdata/g.json\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) { wantPlan(t, f.plan(t, true, c.path), c.want) })

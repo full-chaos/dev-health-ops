@@ -107,7 +107,8 @@ func (r *planRules) classifyInput(p string) (full string, direct []string, handl
 // literalReaders returns the integration keys whose test binary names p (or a directory above it, or a trailing part
 // of it) in a string literal: the package's own Go and test files, or the production files of any dependency.
 func (r *planRules) literalReaders(p string) ([]string, bool, error) {
-	if !hasAnyPrefix(p, literalScanPrefixes) {
+	// Repo-wide walkers (internal/testsupport/recordedfiles, venueoracle golden checks) read every testdata dir.
+	if !hasAnyPrefix(p, literalScanPrefixes) || strings.Contains("/"+p, "/testdata/") {
 		return nil, false, nil
 	}
 	if r.literals == nil {

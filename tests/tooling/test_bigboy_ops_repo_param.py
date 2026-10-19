@@ -228,3 +228,82 @@ def test_without_the_variable_the_default_is_the_tools_own_checkout_never_the_op
 def test_check_dho_api_ch_user_posture_default_follows_the_ops_repo_variable() -> None:
     text = (BIGBOY / "check-dho-api-ch-user.sh").read_text()
     assert "BIGBOY_OPS_REPO" in text
+
+
+def test_cut_contents_reads_a_clone_path_with_spaces(tmp_path: Path) -> None:
+    repo, old, new = _clone(tmp_path)
+    spaced = tmp_path / "a clone with spaces"
+    repo.rename(spaced)
+    bindir, log = _git_logger(tmp_path)
+    done = subprocess.run(
+        ["bash", str(BIGBOY / "cut-contents.sh"), old, new, str(tmp_path / "o.txt")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=_env(tmp_path, bindir, spaced),
+        stdin=subprocess.DEVNULL,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "IN   CHAOS-6666" in done.stdout, done.stdout
+    assert "fatal" not in done.stderr, done.stderr
+
+
+def _rewrite_manifest(repo: Path, text: str) -> str:
+    target = repo / "internal" / "storage" / "postgres" / "api_authorization.go"
+    target.write_text(text)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "reshape")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_a_compact_but_valid_posture_row_is_still_read(tmp_path: Path) -> None:
+    repo, _, new = _clone(tmp_path)
+    compact = _rewrite_manifest(repo, POSTURE_V2.replace(", ", ","))
+    bindir, _ = _git_logger(tmp_path)
+    out = tmp_path / "pg-expect.txt"
+    done = subprocess.run(
+        [
+            "python3",
+            str(BIGBOY / "cut-contents-pg-api-posture.py"),
+            new,
+            compact,
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=_env(tmp_path, bindir, repo),
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "unparsable" not in done.stdout, done.stdout
+
+
+def test_a_manifest_the_parser_does_not_recognise_fails_the_cut_contents_step(
+    tmp_path: Path,
+) -> None:
+    repo, _, new = _clone(tmp_path)
+    bindir, _ = _git_logger(tmp_path)
+    for broken in (
+        POSTURE_V2.replace(
+            '{"beta", true, true, false}', '{"beta", "yes", true, false}'
+        ),
+        POSTURE_V2.replace('{"beta", true, true, false}', '{"beta", true, true}'),
+        POSTURE_V1.replace('{"alpha", true, false, false},', ""),
+    ):
+        bad = _rewrite_manifest(repo, broken)
+        done = subprocess.run(
+            [
+                "bash",
+                str(BIGBOY / "cut-contents.sh"),
+                new,
+                bad,
+                str(tmp_path / "o.txt"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=_env(tmp_path, bindir, repo),
+            stdin=subprocess.DEVNULL,
+        )
+        assert done.returncode != 0, (broken, done.stdout, done.stderr)
+        assert "unparsable" in done.stdout, done.stdout

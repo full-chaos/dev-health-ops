@@ -49,9 +49,11 @@ def load(sha, gofile, func):
         body = src.split(f"func {func}()", 1)[1].split("\nfunc ", 1)[0]
     except (subprocess.CalledProcessError, OSError, IndexError):
         return None
+    body = re.sub(r"//[^\n]*", "", body)
     tables = {}
     for m in re.finditer(
-        r'\{"(\w+)", (true|false), (true|false), (true|false)\}', body
+        r'\{\s*"(\w+)"\s*,\s*(true|false)\s*,\s*(true|false)\s*,\s*(true|false)\s*\}',
+        body,
     ):
         tables[m.group(1)] = {
             "SELECT": True,
@@ -60,10 +62,28 @@ def load(sha, gofile, func):
             "DELETE": m.group(4) == "true",
         }
     columns = {}
+    column_rows = 0
     for m in re.finditer(
-        r'\{"(\w+)", "(\w+)", "(SELECT|INSERT|UPDATE|REFERENCES)"\}', body
+        r'\{\s*"(\w+)"\s*,\s*"(\w+)"\s*,\s*"(SELECT|INSERT|UPDATE|REFERENCES)"\s*\}',
+        body,
     ):
         columns.setdefault(f"{m.group(1)}.{m.group(2)}", set()).add(m.group(3))
+        column_rows += 1
+    # A posture function whose rows the patterns do not recognise must fail, never read as "no privileges".
+    table_rows = len(re.findall(r"\{\s*\"\w+\"\s*,\s*(?:true|false)\b", body))
+    openers = len(re.findall(r'\{\s*"\w+"\s*,', body))
+    table_matches = len(
+        re.findall(
+            r'\{\s*"\w+"\s*,\s*(?:true|false)\s*,\s*(?:true|false)\s*,\s*(?:true|false)\s*\}',
+            body,
+        )
+    )
+    if (
+        not tables
+        or table_rows != table_matches
+        or openers != table_matches + column_rows
+    ):
+        return None
     return tables, columns
 
 

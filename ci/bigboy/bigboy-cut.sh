@@ -36,6 +36,7 @@ export BIGBOY_TOOLS_DIR=$HERE
 # CHAOS-10137: every git read of the ops tree (cut-contents, grants check) uses BIGBOY_OPS_REPO, default the checkout these
 # tools come from; never the operator checkout. Checked here so a bad value stops the cut before any STEP, not at its end.
 OPS_REPO=$(cd "${BIGBOY_OPS_REPO:-$HERE/../..}" 2>/dev/null && pwd) || { echo "FAIL: BIGBOY_OPS_REPO=${BIGBOY_OPS_REPO:-$HERE/../..} is not a directory" >&2; exit 1; }
+export BIGBOY_OPS_REPO=$OPS_REPO   # absolute: the cut changes directory below, and the check scripts read the variable
 [ -d "$OPS_REPO/.git" ] || [ -f "$OPS_REPO/.git" ] || { echo "FAIL: ops clone $OPS_REPO has no .git (set BIGBOY_OPS_REPO to an ops clone)" >&2; exit 1; }
 # Fail closed (D2895): refuse a root that is not shaped like a real bigboy tree, rather than
 # silently proceeding to `cd` into it and produce confusing failures many steps later.

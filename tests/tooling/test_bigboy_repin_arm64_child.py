@@ -178,7 +178,15 @@ def test_the_cut_stops_before_migrate_when_the_repin_fails(tmp_path: Path) -> No
     ep._gh_stub(stub_bin)
     docker = stub_bin / "docker"
     wrong_old = "sha256:" + "9" * 64
-    docker.write_text(docker.read_text().replace(ep._OLD_DIGEST, wrong_old))
+    stub = docker.read_text().replace(ep._OLD_DIGEST, wrong_old)
+    # a bare or --format call answers the INDEX descriptor; only --raw carries the arm64 child
+    index = "sha256:" + "e" * 64
+    docker.write_text(
+        stub.replace(
+            f'echo \'{{"digest":"{ep._NEW_DIGEST}"}}\'',
+            f'echo \'{{"digest":"{index}"}}\'',
+        )
+    )
     proc = subprocess.run(
         ["bash", str(BIGBOY / "bigboy-cut.sh"), ep._OLD8, ep._NEW],
         capture_output=True,
@@ -197,3 +205,5 @@ def test_the_cut_stops_before_migrate_when_the_repin_fails(tmp_path: Path) -> No
     assert proc.returncode != 0, (proc.returncode, proc.stdout)
     assert "STEP repin-web" not in proc.stdout, proc.stdout
     assert "STEP migrate" not in proc.stdout, proc.stdout
+    operator = (root / "_records" / f"bigboy-{ep._NEW[:8]}.operator.txt").read_text()
+    assert operator.strip() == f"operator={ep._NEW_DIGEST}", operator

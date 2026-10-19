@@ -55,6 +55,7 @@ def test_credentials_never_on_argv_or_stdout() -> None:
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 DIGEST = "sha256:" + "ab" * 32
+INDEX_DIGEST = "sha256:" + "cd" * 32
 
 # A `docker` that records every call (one line, tab-separated argv) and answers the three
 # read-only questions the harness asks before it proves: the tools image digest, the local
@@ -62,20 +63,27 @@ DIGEST = "sha256:" + "ab" * 32
 DOCKER_STUB = f"""#!/usr/bin/env bash
 {{ printf 'CALL'; printf '\\t%s' "$@"; printf '\\n'; }} >> "$STUB_LOG"
 case "$1" in
-  buildx) echo '{{"digest":"{DIGEST}"}}' ;;
+  buildx)
+    if [[ "$*" == *--raw* ]]; then
+      echo '{{"manifests":[{{"digest":"{DIGEST}","platform":{{"os":"linux","architecture":"arm64"}}}}]}}'
+    else
+      echo '{{"digest":"{INDEX_DIGEST}"}}'
+    fi ;;
   exec) cat > /dev/null; echo 11111111-1111-4111-8111-111111111111 ;;
   compose) echo 'stub compose run' ;;
 esac
 """
 
 
-def _run_harness(tmp_path: Path, *args: str) -> tuple[int, list[list[str]]]:
+def _run_harness(
+    tmp_path: Path, *args: str, pin: str = DIGEST
+) -> tuple[int, list[list[str]]]:
     """Run the harness in an isolated root with a recording docker and gh; return its exit
     status and every docker call it made."""
     root = tmp_path / "root"
     (root / "_records").mkdir(parents=True)
     (root / "_records" / "images.env").write_text(
-        f"BIGBOY_API_TOOLS_IMAGE=ghcr.io/full-chaos/dev-health-go-api-tools@{DIGEST}\n",
+        f"BIGBOY_API_TOOLS_IMAGE=ghcr.io/full-chaos/dev-health-go-api-tools@{pin}\n",
         encoding="utf-8",
     )
     (root / ".remember/lanes/team-lead").mkdir(parents=True)
@@ -167,3 +175,21 @@ def test_the_org_read_runs_without_the_prove_overlay_and_the_prover_with_it(
     assert any(a.endswith("compose.bigboy.yml") for a in proves[0])
     assert not any("stack.sh" in a for a in execs[0] + proves[0])
     assert "venue" in proves[0] and "venue" in execs[0]
+
+
+def test_prover_image_check_compares_the_arm64_child_not_the_index(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-10137: images.env pins the arm64 child, and the stub's index digest differs from it."""
+    assert DIGEST != INDEX_DIGEST
+    rc, calls = _run_harness(tmp_path, SHA)
+    assert rc == 0, calls
+    _prove_command(calls)
+
+
+def test_prover_image_check_refuses_a_pin_that_is_the_index_digest(
+    tmp_path: Path,
+) -> None:
+    rc, calls = _run_harness(tmp_path, SHA, pin=INDEX_DIGEST)
+    assert rc == 1, calls
+    assert not [call for call in calls if "venue-prove" in call]

@@ -458,7 +458,10 @@ def test_the_cut_hands_the_credentials_path_to_the_check_and_the_password_to_no_
 
 
 def _cut_with_a_fake_check(
-    tmp_path: Path, check_rc: int
+    tmp_path: Path,
+    check_rc: int,
+    ops_repo: str | None = None,
+    cwd: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the real cut end to end past the carry block with a tools directory whose check is a fake
     returning `check_rc`; the stub docker logs every call so a `compose ... up` is observable."""
@@ -497,10 +500,11 @@ def _cut_with_a_fake_check(
         text=True,
         timeout=120,
         check=False,
+        cwd=cwd,
         env={
             "PATH": f"{stub_bin}:/usr/bin:/bin",
             "BIGBOY_ROOT": str(root),
-            "BIGBOY_OPS_REPO": str(ROOT),
+            "BIGBOY_OPS_REPO": ops_repo or str(ROOT),
             "BIGBOY_TOOLS_DIR": str(tools),
             "DOCKER_STUB_ARGS_LOG": str(args_log),
             "TMPDIR": str(tmp_path),
@@ -767,3 +771,20 @@ def test_a_missing_posture_manifest_or_credential_is_refused_not_skipped(
         proc.returncode == 1 and "canonical render could not be computed" in proc.stderr
     )
     assert not (tmp_path / "docker-args.log").exists()
+
+
+def test_the_cut_hands_the_check_an_absolute_ops_repo_for_a_relative_setting(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-10137: the cut changes directory to BIGBOY_ROOT, so a relative BIGBOY_OPS_REPO must reach the
+    check (and every other child) as the absolute path it named at launch."""
+    proc, _ = _cut_with_a_fake_check(
+        tmp_path, 0, ops_repo=ROOT.name, cwd=str(ROOT.parent)
+    )
+    assert "STEP ch-api-user rc=0" in proc.stdout, (proc.stdout, proc.stderr)
+    seen = [
+        line
+        for line in (tmp_path / "fake-check.log").read_text().splitlines()
+        if line.startswith("BIGBOY_OPS_REPO=")
+    ]
+    assert seen == [f"BIGBOY_OPS_REPO={ROOT}"], seen

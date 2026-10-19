@@ -224,6 +224,8 @@
             "enum": [
               "user.created",
               "user.email_verified",
+              "user.email_unverified",
+              "user.email_changed",
               "user.credentials_changed",
               "user.tokens_invalidated"
             ]

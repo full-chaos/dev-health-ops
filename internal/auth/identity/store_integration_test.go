@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -162,7 +163,8 @@ func (e *env) auditRows(t *testing.T, ctx context.Context, eventType, subject st
 
 func (e *env) outboxRows(t *testing.T, ctx context.Context, eventType, aggregate string) int {
 	t.Helper()
-	return e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = $1 AND aggregate_id::text = $2`, eventType, aggregate)
+	return e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = $1
+AND aggregate_id IN ('prn_' || $2, 'idn_' || $2, 'org_' || $2)`, eventType, aggregate)
 }
 
 func (e *env) project(t *testing.T, ctx context.Context, id uuid.UUID) {
@@ -319,8 +321,8 @@ FROM auth.security_audit_events WHERE event_type = 'auth.principal.projection_up
 	if reason != "principal_disabled" || len(fields) != 2 || fields[0] != "disabled_at" || fields[1] != "email_verified_at" {
 		t.Fatalf("audit row reason %q changed_fields %v", reason, fields)
 	}
-	if n := e.outboxRows(t, ctx, "principal.projected", id.String()); n != 1 {
-		t.Fatalf("outbox rows = %d, want 1", n)
+	if d, v := e.outboxRows(t, ctx, "principal.disabled", id.String()), e.outboxRows(t, ctx, "user.email_verified", id.String()); d != 1 || v != 1 {
+		t.Fatalf("principal.disabled rows %d, user.email_verified rows %d; want 1 and 1", d, v)
 	}
 
 	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = true WHERE id = $1`, id); err != nil {
@@ -352,6 +354,9 @@ func TestProjectEmailChangeIsAudited(t *testing.T) {
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.principal.projection_updated'
 AND subject_principal_id::text = $1 AND attributes->>'reason_code' = 'principal_projected' AND attributes->'changed_fields' = '["email"]'::jsonb`, id.String()); n != 1 {
 		t.Fatalf("email change audit rows = %d, want 1", n)
+	}
+	if n := e.outboxRows(t, ctx, "user.email_changed", id.String()); n != 1 {
+		t.Fatalf("user.email_changed rows = %d, want 1", n)
 	}
 }
 
@@ -540,8 +545,8 @@ func TestALegacyEmptyIssuerRowIsNotMatched(t *testing.T) {
 		},
 		Audit: audit.AuditEvent{EventType: "auth.identity.linked", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal,
 			Attributes: map[string]any{"reason_code": "identity_linked", "target_kind": "external_identity", "target_id": legacy}},
-		Event: audit.OutboxEvent{AggregateType: "external_identity", AggregateID: legacy, EventType: "external_identity.linked",
-			IdempotencyKey: "external_identity.linked:" + legacy},
+		Events: []audit.OutboxEvent{{AggregateType: "external_identity", AggregateID: "idn_" + legacy, EventType: "external_identity.linked",
+			Change: map[string]any{"provider": "google"}}},
 	}); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}
@@ -1117,22 +1122,22 @@ AND subject_principal_id::text = $1 AND actor_principal_id::text = $1 AND reques
 		t.Fatalf("local provision audit rows = %d, want 1", n)
 	}
 
-	// The disable-then-enable inside the commit leaves exactly one audit row and
-	// one outbox row for the creation, and nothing else for this principal.
+	// The creation leaves exactly one audit row and the principal and user
+	// created events, and nothing else for this principal.
 	var auditTypes, outboxTypes []string
 	if err := e.admin.QueryRow(ctx, `SELECT ARRAY(SELECT event_type || ':' || (attributes->>'reason_code') FROM auth.security_audit_events
 WHERE subject_principal_id::text = $1 OR actor_principal_id::text = $1 OR attributes->>'target_id' = $1 ORDER BY id)`, id.String()).Scan(&auditTypes); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.admin.QueryRow(ctx, `SELECT ARRAY(SELECT aggregate_type || ':' || event_type FROM auth.auth_outbox_events
-WHERE aggregate_id::text = $1 ORDER BY id)`, id.String()).Scan(&outboxTypes); err != nil {
+WHERE aggregate_id = 'prn_' || $1 ORDER BY id)`, id.String()).Scan(&outboxTypes); err != nil {
 		t.Fatal(err)
 	}
 	if len(auditTypes) != 1 || auditTypes[0] != "auth.principal.provisioned:principal_provisioned" {
 		t.Fatalf("ProvisionLocal audit rows = %v, want exactly [auth.principal.provisioned:principal_provisioned]", auditTypes)
 	}
-	if len(outboxTypes) != 1 || outboxTypes[0] != "principal:principal.provisioned" {
-		t.Fatalf("ProvisionLocal outbox rows = %v, want exactly [principal:principal.provisioned]", outboxTypes)
+	if len(outboxTypes) != 2 || outboxTypes[0] != "principal:principal.created" || outboxTypes[1] != "user:user.created" {
+		t.Fatalf("ProvisionLocal outbox rows = %v, want exactly [principal:principal.created user:user.created]", outboxTypes)
 	}
 
 	got, err := e.owned.ByEmail(ctx, key)
@@ -1297,8 +1302,10 @@ WHERE a.id = $1 AND a.slug = p.slug AND a.name = p.name AND a.disabled_at IS NUL
 	if got := e.orgAudit(t, ctx, org); len(got) != 2 || got[1] != "auth.organization.projection_updated:organization_updated" {
 		t.Fatalf("audit rows after rename = %v", got)
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'organization' AND aggregate_id::text = $1`, org.String()); n != 2 {
-		t.Fatalf("organization outbox rows = %d, want 2", n)
+	// Created, then the rename (organization.updated) and the deactivation
+	// (organization.suspended) in one commit.
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'organization' AND aggregate_id = 'org_' || $1`, org.String()); n != 3 {
+		t.Fatalf("organization outbox rows = %d, want 3", n)
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM public.organizations WHERE id = $1 AND name = 'renamed'`, org); n != 1 {
 		t.Fatal("public.organizations changed")
@@ -1428,5 +1435,106 @@ func TestByIDFollowsTheLiveReadRule(t *testing.T) {
 		if got, err := s.ByID(ctx, uuid.New()); err != nil || got != nil {
 			t.Fatalf("ByID(unknown) = %+v, %v; want nil, nil", got, err)
 		}
+	}
+}
+
+// TestEveryOutboxRowIsAProvisioningEvent: auth_outbox_events is the
+// provisioning-event.v1 stream (the envelope is the outbox row). Every row this
+// store writes must parse as that contract, and its idempotency key must be
+// the contract's dedupe key.
+func TestEveryOutboxRowIsAProvisioningEvent(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	root, err := contracts.RepoRoot(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var since int64
+	if err := e.admin.QueryRow(ctx, `SELECT COALESCE(max(id), 0) FROM auth.auth_outbox_events`).Scan(&since); err != nil {
+		t.Fatal(err)
+	}
+
+	org := e.seedOrg(t, ctx)
+	if err := e.store.ProjectOrganization(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET is_active = false WHERE id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.ProjectOrganization(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	user := e.seedLegacy(t, ctx, uniqueEmail("wire"), "github", "wire-"+uuid.NewString(), true)
+	e.project(t, ctx, user)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = false, is_verified = false WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	e.project(t, ctx, user)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = true WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	e.project(t, ctx, user)
+	issuer, _ := SocialIssuer(ProviderGitHub)
+	var subject string
+	if err := e.admin.QueryRow(ctx, `SELECT auth_provider_id FROM public.users WHERE id = $1`, user).Scan(&subject); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.store.IdentityBySubject(ctx, issuer, ProviderGitHub, subject, socialLegacy(ProviderGitHub)); err != nil {
+		t.Fatal(err)
+	}
+	key := googleKey("wire-" + uuid.NewString())
+	if _, err := e.store.LinkIdentity(ctx, key, user, Actor{PrincipalID: &user}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.UnlinkIdentity(ctx, key, user, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	request := uuid.NewString()
+	hash := testBcrypt
+	local, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: "wire-" + uuid.NewString()[:8] + "@example.com", PasswordHash: &hash, Actor: SelfSignUp(&request)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.owned.SetEmailVerified(ctx, local, time.Now(), Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.owned.SetPasswordHash(ctx, local, testBcrypt, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: googleKey("wire-fed-" + uuid.NewString()),
+		Email: "wire-fed-" + uuid.NewString()[:8] + "@example.com", Actor: SelfSignUp(nil)}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := e.admin.Query(ctx, `SELECT json_build_object(
+	'schema_version', 'provisioning-event.v1', 'aggregate_type', aggregate_type, 'aggregate_id', aggregate_id,
+	'event_type', event_type, 'idempotency_key', idempotency_key,
+	'created_at', to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), 'payload', payload)::text
+FROM auth.auth_outbox_events WHERE id > $1 ORDER BY id`, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		n++
+		event, err := contracts.ParseProvisioningEvent(root, []byte(raw))
+		if err != nil {
+			t.Errorf("outbox row is not provisioning-event.v1: %v\n%s", err, raw)
+			continue
+		}
+		if event.IdempotencyKey != event.DedupeKey() {
+			t.Errorf("idempotency_key %q is not the dedupe key %q", event.IdempotencyKey, event.DedupeKey())
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if n < 10 {
+		t.Fatalf("the scenario wrote %d outbox rows; expected every producer to write", n)
 	}
 }

@@ -10,6 +10,14 @@
       "why": "The minimal event: no optional members and an empty change. A user event carries no change members at all."
     },
     {
+      "file": "valid-user-email-changed.json",
+      "why": "An email change says only that the email changed: the address is a high-cardinality identity and has no member."
+    },
+    {
+      "file": "valid-user-email-unverified.json",
+      "why": "Verification removed (the projected source is no longer verified). Like every user event it carries no change member."
+    },
+    {
       "file": "valid-external-identity-linked.json",
       "why": "An identity link names the provider's short name, never the provider's subject or issuer."
     },

@@ -61,6 +61,7 @@ package audit
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,7 +141,11 @@ type OutboxEvent struct {
 	EventType      string
 	Payload        map[string]any
 	IdempotencyKey string
+	Change         map[string]any
 }
+
+// OffStreamSessionLifecycle marks a mutation with no provisioning event.
+const OffStreamSessionLifecycle = "session_lifecycle"
 
 // TxOps is what a mutation may do inside the transaction.
 //
@@ -316,12 +321,21 @@ func (e errRow) Scan(...any) error { return e.err }
 // other than the audit and outbox tables), not reported by the callback; zero
 // rolls everything back with ErrNoStateChange.
 type Mutation struct {
-	Apply func(ctx context.Context, tx TxOps) error
-	Audit AuditEvent
-	Event OutboxEvent
+	Apply     func(ctx context.Context, tx TxOps) error
+	Audit     AuditEvent
+	Event     OutboxEvent
+	Events    []OutboxEvent
+	OffStream string
 }
 
 func (m Mutation) validate() error {
+	if m.Event.AggregateType == "" && len(m.Events) > 0 {
+		m.Event = m.Events[0]
+		m.Event.IdempotencyKey = "pending"
+	}
+	if m.Event.AggregateType == "" && m.OffStream != "" {
+		m.Event = OutboxEvent{AggregateType: "off", AggregateID: "off", EventType: "off", IdempotencyKey: "off"}
+	}
 	switch {
 	case m.Apply == nil:
 		return fmt.Errorf("%w: no state mutation", ErrMutationFailed)
@@ -413,8 +427,18 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 			"the outbox event and audit row could not be written atomically with it",
 			ErrMutationFailed, string(status))
 	}
-	if err := insertOutboxEvent(ctx, tx, schema, m.Event); err != nil {
-		return err
+	events := m.Events
+	if m.Event.AggregateType != "" {
+		events = []OutboxEvent{m.Event}
+	}
+	for _, e := range events {
+		if e.IdempotencyKey == "" {
+			e.IdempotencyKey = e.AggregateType + ":" + e.AggregateID + ":" + pgUUID()
+			e.Payload = map[string]any{"change": orEmpty(e.Change)}
+		}
+		if err := insertOutboxEvent(ctx, tx, schema, e); err != nil {
+			return err
+		}
 	}
 	if err := insertAuditEvent(ctx, tx, schema, m.Audit); err != nil {
 		return err
@@ -457,6 +481,12 @@ func insertAuditEvent(ctx context.Context, tx pgx.Tx, schema authschema.Validate
 		return fmt.Errorf("%w: inserting the audit row: %w", ErrMutationFailed, err)
 	}
 	return nil
+}
+
+func pgUUID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("%x", b)
 }
 
 func orEmpty(m map[string]any) map[string]any {

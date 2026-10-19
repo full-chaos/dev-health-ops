@@ -501,19 +501,27 @@ func TestMigration0010RefreshChildInheritsTheParentsFamily(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for name, insert := range map[string]string{
-		"family_id omitted":       `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, parent_id) VALUES ($1, $2, $3::bytea, now() + interval '1 day', $4) RETURNING family_id::text`,
-		"another family supplied": `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, parent_id, family_id) VALUES ($1, $2, $3::bytea, now() + interval '1 day', $4, gen_random_uuid()) RETURNING family_id::text`,
-	} {
+	insertChild := func(token, familyExpr string) (string, error) {
 		var family string
-		token := m10Hash(map[string]string{"family_id omitted": "61", "another family supplied": "62"}[name])
-		if err := env.runtime.QueryRow(ctx, insert, m10Session, m10Principal, token, parent).Scan(&family); err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		if family != parentFamily {
-			t.Errorf("%s: child family %s, want the parent's %s", name, family, parentFamily)
-		}
+		err := env.runtime.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, parent_id, family_id)
+			VALUES ($1, $2, $3::bytea, now() + interval '1 day', $4, `+familyExpr+`) RETURNING family_id::text`,
+			m10Session, m10Principal, token, parent).Scan(&family)
+		return family, err
+	}
+	if family, err := insertChild(m10Hash("61"), "NULL"); err != nil || family != parentFamily {
+		t.Errorf("a NULL family_id: family %q, %v; want the parent's %s", family, err, parentFamily)
+	}
+	if family, err := insertChild(m10Hash("62"), "'"+parentFamily+"'"); err != nil || family != parentFamily {
+		t.Errorf("a matching family_id: family %q, %v; want %s", family, err, parentFamily)
+	}
+	if _, err := insertChild(m10Hash("63"), "gen_random_uuid()"); err == nil || !strings.Contains(err.Error(), "family") {
+		t.Errorf("a mismatched family_id: err = %v, want a refusal naming the family", err)
+	}
+	// Omitting family_id on a child gets the column's random default, which
+	// does not match the parent, so it is refused rather than silently split.
+	if _, err := env.runtime.Exec(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, parent_id)
+		VALUES ($1, $2, $3::bytea, now() + interval '1 day', $4)`, m10Session, m10Principal, m10Hash("64"), parent); err == nil {
+		t.Error("a child inserted without a family_id was accepted into a random family")
 	}
 
 	// Re-pointing a credential at a parent of another family is refused.

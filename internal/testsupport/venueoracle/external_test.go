@@ -2,7 +2,6 @@ package venueoracle
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -53,7 +52,7 @@ func TestExternalFromEnv(t *testing.T) {
 }
 
 func TestExternalRequiredFollowsTheBaseURL(t *testing.T) {
-	for _, name := range []string{EnvExternalPostgres, EnvExternalClickHouse, EnvExternalValkey, EnvExternalSetEnvCmd} {
+	for _, name := range []string{EnvExternalPostgres, EnvExternalClickHouse, EnvExternalValkey} {
 		t.Setenv(name, "")
 	}
 	if _, ok, err := ExternalRequired(""); ok || err != nil {
@@ -69,10 +68,6 @@ func TestExternalRequiredFollowsTheBaseURL(t *testing.T) {
 		t.Error("a base URL with unusable stores was accepted")
 	}
 	t.Setenv(EnvExternalValkey, "redis://h:6379/1")
-	if _, _, err := ExternalRequired("http://target.test"); err == nil {
-		t.Error("an external run with no target-environment command was accepted: the corpus changes the target's environment mid-run")
-	}
-	t.Setenv(EnvExternalSetEnvCmd, "/bin/true")
 	for _, bad := range []string{"not-a-url", "ftp://target.test", "http://", "target.test:8080"} {
 		if _, _, err := ExternalRequired(bad); err == nil {
 			t.Errorf("malformed base URL %q was accepted", bad)
@@ -95,23 +90,15 @@ func TestSetTargetEnvInProcess(t *testing.T) {
 	}
 }
 
-func TestSetTargetEnvExternalRunsTheCommand(t *testing.T) {
-	dir := t.TempDir()
-	log := filepath.Join(dir, "calls")
-	script := filepath.Join(dir, "set-env.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s=%s\\n' \"$1\" \"$2\" >> "+log+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(EnvExternalSetEnvCmd, script)
+func TestSetTargetEnvExternalSkipsTheCase(t *testing.T) {
 	t.Setenv("ORACLE_TEST_NAME", "untouched")
-	SetTargetEnv(t, true, "ORACLE_TEST_NAME", " OFF ")
-	SetTargetEnv(t, true, "ORACLE_TEST_NAME", "")
-	got, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatalf("the command did not run: %v", err)
-	}
-	if string(got) != "ORACLE_TEST_NAME= OFF \nORACLE_TEST_NAME=\n" {
-		t.Errorf("command calls = %q", got)
+	reached := false
+	t.Run("external", func(sub *testing.T) {
+		SetTargetEnv(sub, true, "ORACLE_TEST_NAME", " OFF ")
+		reached = true
+	})
+	if reached {
+		t.Error("an env-dependent case ran against an external target, whose configuration the test cannot change")
 	}
 	if os.Getenv("ORACLE_TEST_NAME") != "untouched" {
 		t.Error("an external run changed the test process environment")

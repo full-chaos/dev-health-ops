@@ -724,10 +724,16 @@ func fetchGitHubProjectV2GraphQL(
 	}
 	evidence.Pages++
 	defer response.Body.Close()
-	decoder := json.NewDecoder(response.Body)
-	decoder.UseNumber()
-	if err := decoder.Decode(destination); err != nil {
-		return providerfoundation.ErrPaginationInvalid
+	paginationCause := func(error) error { return providerfoundation.ErrPaginationInvalid }
+	raw, readErr := providerfoundation.ReadResponseBodyWith(response, providerResponseMaxBytes, paginationCause)
+	if readErr != nil {
+		return readErr
+	}
+	if len(raw) > providerResponseMaxBytes {
+		return providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, providerfoundation.ErrPaginationInvalid)
+	}
+	if err := providerfoundation.DecodeResponseJSONWith(response, raw, destination, providerfoundation.DecodeUseNumber, paginationCause); err != nil {
+		return err
 	}
 	var errorsHolder interface{ graphQLErrors() []json.RawMessage }
 	if typed, ok := destination.(interface{ graphQLErrors() []json.RawMessage }); ok {

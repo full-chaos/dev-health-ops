@@ -194,7 +194,7 @@ func causeClass(err error, timedOut bool) string {
 		return causeClassBudgetContended
 	}
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) {
+	if errors.As(err, &providerErr) && !providerErr.AfterResponse() {
 		if _, known := providerErrorClasses[providerErr.Class]; known {
 			return causeClassProviderPrefix + string(providerErr.Class)
 		}

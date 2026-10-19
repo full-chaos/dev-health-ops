@@ -417,6 +417,22 @@ type ProviderError struct {
 	// belongs to (see RateLimitDimension), empty on every other class and when
 	// no request went out (a gate denial).
 	Dimension string
+
+	// cause is set only by ResponseFailure, from a sentinel or a sanitised
+	// logging.TransportFailure / DecodeFailure error, so Error() may print it.
+	cause error
+}
+
+// AfterResponse reports a failure raised after a 2xx response arrived (a body
+// that failed to read or decode), not an HTTP status classification. Callers
+// that read Class as the provider's verdict skip these.
+func (e *ProviderError) AfterResponse() bool { return e != nil && e.cause != nil }
+
+func (e *ProviderError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
 }
 
 const maxProviderErrorBodyInMessage = 500
@@ -431,6 +447,9 @@ func (e *ProviderError) Error() string {
 	}
 	if e.Reason != "" {
 		message += fmt.Sprintf(" reason=%s", e.Reason)
+	}
+	if e.cause != nil {
+		message += ": " + e.cause.Error()
 	}
 	return message
 }

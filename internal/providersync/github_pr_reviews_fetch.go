@@ -220,11 +220,16 @@ func (fetcher GitHubPullRequestReviewFetcher) fetchPage(
 	}
 	result.Evidence.Pages++
 	defer response.Body.Close()
-	decoder := json.NewDecoder(response.Body)
-	decoder.UseNumber()
+	raw, readErr := providerfoundation.ReadResponseBodyWith(response, providerResponseMaxBytes, func(error) error { return providerfoundation.ErrPaginationInvalid })
+	if readErr != nil {
+		return nil, readErr
+	}
+	if len(raw) > providerResponseMaxBytes {
+		return nil, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, providerfoundation.ErrPaginationInvalid)
+	}
 	var envelope gitHubPullRequestReviewGraphQLEnvelope
-	if err := decoder.Decode(&envelope); err != nil {
-		return nil, providerfoundation.ErrPaginationInvalid
+	if err := providerfoundation.DecodeResponseJSONWith(response, raw, &envelope, providerfoundation.DecodeUseNumber, func(error) error { return providerfoundation.ErrPaginationInvalid }); err != nil {
+		return nil, err
 	}
 	if len(envelope.Errors) > 0 || envelope.Data.Repository == nil {
 		return nil, providerfoundation.ErrGraphQLResponse
@@ -258,7 +263,7 @@ func gitHubPullRequestReviewFailureCause(err error) string {
 		return "pagination_cap"
 	}
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) && providerErr != nil {
+	if errors.As(err, &providerErr) && providerErr != nil && !providerErr.AfterResponse() {
 		return string(providerErr.Class)
 	}
 	return "invalid_response"

@@ -1060,13 +1060,13 @@ func discoverJiraLegacyProjects(ctx context.Context, client *providerfoundation.
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("legacy jira project listing: unexpected status %d", response.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, 32<<20))
+	body, err := providerfoundation.ReadResponseBodyTransport(response, 32<<20-1)
 	if err != nil {
-		return nil, logging.TransportFailure(err)
+		return nil, err
 	}
 	var items []json.RawMessage
 	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	return items, nil
 }

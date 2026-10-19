@@ -428,12 +428,12 @@ func CollectLinearGraphQLPages(
 		}
 		connection, err := nestedJSONObject(payload, append([]string{"data"}, options.ConnectionPath...)...)
 		if err != nil {
-			return PageCollection{}, err
+			return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 		}
 		var nodes []json.RawMessage
 		if rawNodes, ok := connection["nodes"]; ok {
 			if err := json.Unmarshal(rawNodes, &nodes); err != nil {
-				return PageCollection{}, ErrPaginationInvalid
+				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 			}
 		}
 		result.Pages++
@@ -444,14 +444,14 @@ func CollectLinearGraphQLPages(
 		}
 		if rawPageInfo, ok := connection["pageInfo"]; ok {
 			if err := json.Unmarshal(rawPageInfo, &pageInfo); err != nil {
-				return PageCollection{}, ErrPaginationInvalid
+				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 			}
 		}
 		if !pageInfo.HasNextPage {
 			return result, nil
 		}
 		if pageInfo.EndCursor == "" || pageInfo.EndCursor == cursor {
-			return PageCollection{}, ErrPaginationInvalid
+			return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 		}
 		cursor = pageInfo.EndCursor
 	}
@@ -513,7 +513,7 @@ func CollectJiraTokenOffsetPages(
 		var items []json.RawMessage
 		if rawItems, ok := payload[options.DataKey]; ok {
 			if err := json.Unmarshal(rawItems, &items); err != nil {
-				return PageCollection{}, ErrPaginationInvalid
+				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 			}
 		}
 		result.Pages++
@@ -524,7 +524,7 @@ func CollectJiraTokenOffsetPages(
 		var isLast bool
 		if rawIsLast, ok := payload["isLast"]; ok && string(rawIsLast) != "null" {
 			if err := json.Unmarshal(rawIsLast, &isLast); err != nil {
-				return PageCollection{}, ErrPaginationInvalid
+				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 			}
 		}
 		if isLast {
@@ -533,12 +533,12 @@ func CollectJiraTokenOffsetPages(
 		next := ""
 		if rawNext, ok := payload["nextPageToken"]; ok && string(rawNext) != "null" {
 			if err := json.Unmarshal(rawNext, &next); err != nil {
-				return PageCollection{}, ErrPaginationInvalid
+				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 			}
 		}
 		if next != "" {
 			if next == token {
-				return PageCollection{}, ErrPaginationInvalid
+				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 			}
 			token = next
 			continue
@@ -590,7 +590,7 @@ func CollectLaunchDarklyOffsetPages(
 		var items []json.RawMessage
 		if rawItems, ok := payload["items"]; ok {
 			if err := json.Unmarshal(rawItems, &items); err != nil {
-				return PageCollection{}, ErrPaginationInvalid
+				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 			}
 		}
 		result.Pages++
@@ -598,7 +598,7 @@ func CollectLaunchDarklyOffsetPages(
 		total := len(result.Items)
 		if rawTotal, ok := payload["totalCount"]; ok {
 			if err := json.Unmarshal(rawTotal, &total); err != nil || total < 0 {
-				return PageCollection{}, ErrPaginationInvalid
+				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 			}
 		}
 		if len(result.Items) >= total || len(items) < launchDarklyFlagPageSize {
@@ -652,7 +652,7 @@ func CollectLaunchDarklyAuditPages(
 		var items []json.RawMessage
 		if rawItems, ok := payload["items"]; ok {
 			if err := json.Unmarshal(rawItems, &items); err != nil {
-				return PageCollection{}, ErrPaginationInvalid
+				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
 			}
 		}
 		result.Pages++
@@ -705,15 +705,21 @@ func cloneValues(values url.Values) url.Values {
 	return cloned
 }
 
+func paginationInvalid(response *http.Response, reason string) error {
+	return ResponseFailure(response, reason, ErrPaginationInvalid)
+}
+
 func decodePage(response *http.Response, dataKey string) ([]json.RawMessage, error) {
 	if response == nil || response.Body == nil {
-		return nil, ErrPaginationInvalid
+		return nil, paginationInvalid(response, ReasonBodyDecode)
 	}
 	defer response.Body.Close()
-	limited := io.LimitReader(response.Body, maxProviderPageBody+1)
-	body, err := io.ReadAll(limited)
-	if err != nil || len(body) > maxProviderPageBody {
-		return nil, ErrPaginationInvalid
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxProviderPageBody+1))
+	if err != nil {
+		return nil, paginationInvalid(response, ReasonBodyRead)
+	}
+	if len(body) > maxProviderPageBody {
+		return nil, paginationInvalid(response, ReasonBodyTooLarge)
 	}
 	// json.Unmarshal reads a top-level null as a nil slice or map without an
 	// error, so a 200 `null` body would decode as a page with zero items.
@@ -722,18 +728,18 @@ func decodePage(response *http.Response, dataKey string) ([]json.RawMessage, err
 		topLevel = '['
 	}
 	if trimmed := bytes.TrimSpace(body); len(trimmed) == 0 || trimmed[0] != topLevel {
-		return nil, ErrPaginationInvalid
+		return nil, paginationInvalid(response, ReasonBodyDecode)
 	}
 	if dataKey == "" {
 		var items []json.RawMessage
 		if err := json.Unmarshal(body, &items); err != nil {
-			return nil, ErrPaginationInvalid
+			return nil, paginationInvalid(response, ReasonBodyDecode)
 		}
 		return items, nil
 	}
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, ErrPaginationInvalid
+		return nil, paginationInvalid(response, ReasonBodyDecode)
 	}
 	raw, ok := envelope[dataKey]
 	if !ok {
@@ -741,23 +747,26 @@ func decodePage(response *http.Response, dataKey string) ([]json.RawMessage, err
 	}
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, ErrPaginationInvalid
+		return nil, paginationInvalid(response, ReasonBodyDecode)
 	}
 	return items, nil
 }
 
 func decodeJSONObject(response *http.Response) (map[string]json.RawMessage, error) {
 	if response == nil || response.Body == nil {
-		return nil, ErrPaginationInvalid
+		return nil, paginationInvalid(response, ReasonBodyDecode)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxProviderPageBody+1))
-	if err != nil || len(body) > maxProviderPageBody {
-		return nil, ErrPaginationInvalid
+	if err != nil {
+		return nil, paginationInvalid(response, ReasonBodyRead)
+	}
+	if len(body) > maxProviderPageBody {
+		return nil, paginationInvalid(response, ReasonBodyTooLarge)
 	}
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, ErrPaginationInvalid
+		return nil, paginationInvalid(response, ReasonBodyDecode)
 	}
 	return payload, nil
 }

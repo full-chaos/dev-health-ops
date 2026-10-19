@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -799,7 +798,8 @@ func fetchGitHubTestsPolicy(ctx context.Context, client *providerfoundation.HTTP
 	}
 	defer response.Body.Close()
 	var payload githubTestsRequiredPayload
-	if json.NewDecoder(io.LimitReader(response.Body, nativeMaxObjectBytes+1)).Decode(&payload) != nil {
+	raw, readErr := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
+	if readErr != nil || len(raw) > nativeMaxObjectBytes || providerfoundation.DecodeResponseJSON(response, raw, &payload, 0) != nil {
 		return githubTestsPolicy{provenance: "github.branch_protection.invalid_payload"}, nil
 	}
 	required := map[string]struct{}{}
@@ -905,10 +905,10 @@ func downloadGitHubTestsArtifact(
 		location := response.Header.Get("Location")
 		response.Body.Close()
 		if location == "" {
-			return nil, requests, false, withRoute(fmt.Errorf(
+			return nil, requests, false, providerfoundation.ResponseFailure(response, "redirect", fmt.Errorf(
 				"%w: redirect status=%d carried no Location header",
 				ErrGitHubTestsArtifactUnavailable, response.StatusCode,
-			), githubArtifactZipRoute)
+			))
 		}
 		response, err = client.DoUnauthenticatedRoute(ctx, http.MethodGet, githubArtifactZipRoute, location)
 		requests++
@@ -921,9 +921,9 @@ func downloadGitHubTestsArtifact(
 		return nil, requests, true, nil
 	}
 	if response.StatusCode >= 400 {
-		message, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		message, readErr := providerfoundation.ReadResponseBodyTransport(response, 1<<20-1)
 		if readErr != nil {
-			return nil, requests, false, withRoute(logging.TransportFailure(readErr), githubArtifactZipRoute)
+			return nil, requests, false, readErr
 		}
 		// Classified like the GitLab artifact route: a rate limit of the
 		// artifact store defers the unit with its dimension; every other
@@ -934,11 +934,11 @@ func downloadGitHubTestsArtifact(
 		}
 		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: githubArtifactZipRoute}
 	}
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
+	body, readErr := providerfoundation.ReadResponseBodyTransport(response, maxBytes)
 	if readErr != nil {
-		return nil, requests, false, withRoute(fmt.Errorf(
-			"%w: artifact download read failed: %w", ErrGitHubTestsIncomplete, logging.TransportFailure(readErr),
-		), githubArtifactZipRoute)
+		return nil, requests, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyRead, fmt.Errorf(
+			"%w: artifact download read failed: %w", ErrGitHubTestsIncomplete, errors.Unwrap(readErr),
+		))
 	}
 	if int64(len(body)) > maxBytes {
 		// len(body) is capped at maxBytes+1 by the LimitReader above, so it
@@ -949,9 +949,9 @@ func downloadGitHubTestsArtifact(
 		// the message) so the chunked route's durable marker
 		// (GitHubTestsSkippedArtifact, CHAOS-4315) gets real ints, not a
 		// re-parse of formatted text.
-		return nil, requests, false, &githubTestsArtifactOversizedError{
+		return nil, requests, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, &githubTestsArtifactOversizedError{
 			SizeBytes: int64(len(body)), CapBytes: maxBytes,
-		}
+		})
 	}
 	return body, requests, false, nil
 }

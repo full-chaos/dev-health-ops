@@ -705,11 +705,17 @@ func collectLinearReferenceConnection(
 			return items, pages, false, err
 		}
 		var envelope linearReferenceGraphQLEnvelope
-		if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
-			response.Body.Close()
-			return items, pages, false, logging.DecodeFailure(err)
-		}
+		raw, readErr := providerfoundation.ReadResponseBodyWith(response, providerResponseMaxBytes, logging.DecodeFailure)
 		response.Body.Close()
+		if readErr != nil {
+			return items, pages, false, readErr
+		}
+		if len(raw) > providerResponseMaxBytes {
+			return items, pages, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, logging.DecodeFailure(providerfoundation.ErrNormalizationInvalid))
+		}
+		if err := providerfoundation.DecodeResponseJSONWith(response, raw, &envelope, 0, logging.DecodeFailure); err != nil {
+			return items, pages, false, err
+		}
 		if len(envelope.Errors) > 0 {
 			if strings.Contains(strings.ToLower(envelope.Errors[0].Message), "complexity") {
 				return items, pages, false, providerfoundation.ErrGraphQLComplexity

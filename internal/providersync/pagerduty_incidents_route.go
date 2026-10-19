@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"math"
 	"math/big"
 	"net/http"
@@ -495,9 +494,12 @@ func requestPagerDutyIncidentFamilyPage(
 		return nil, false, err
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
+	body, err := providerfoundation.ReadResponseBodyWith(response, providerResponseMaxBytes, func(error) error { return providerfoundation.ErrPaginationInvalid })
 	if err != nil {
-		return nil, false, providerfoundation.ErrPaginationInvalid
+		return nil, false, err
+	}
+	if len(body) > providerResponseMaxBytes {
+		return nil, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, providerfoundation.ErrPaginationInvalid)
 	}
 	return endpoint.decode(body)
 }

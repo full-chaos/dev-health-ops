@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -997,12 +996,15 @@ func collectJiraGraphQLWorklogs(ctx context.Context, client *providerfoundation.
 		}
 		if response.StatusCode != http.StatusOK {
 			_ = response.Body.Close()
-			return nil, requests, providerfoundation.ErrNormalizationInvalid
+			return nil, requests, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonStatus)
 		}
-		raw, err := io.ReadAll(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
+		raw, err := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
 		_ = response.Body.Close()
-		if err != nil || len(raw) > nativeMaxObjectBytes {
-			return nil, requests, providerfoundation.ErrNormalizationInvalid
+		if err != nil {
+			return nil, requests, err
+		}
+		if len(raw) > nativeMaxObjectBytes {
+			return nil, requests, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 		}
 		var payload struct {
 			Data struct {
@@ -1021,7 +1023,7 @@ func collectJiraGraphQLWorklogs(ctx context.Context, client *providerfoundation.
 			Errors []any `json:"errors"`
 		}
 		if err := decodeJiraJSON(raw, &payload); err != nil || len(payload.Errors) > 0 || payload.Data.Issue.Worklogs.Edges == nil {
-			return nil, requests, providerfoundation.ErrNormalizationInvalid
+			return nil, requests, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 		}
 		for _, edge := range payload.Data.Issue.Worklogs.Edges {
 			if edge.Node == nil {

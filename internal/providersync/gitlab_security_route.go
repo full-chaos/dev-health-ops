@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -209,13 +208,13 @@ func fetchGitLabSecurityObjects(
 		return nil, 0, providerfoundation.ErrNormalizationInvalid
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	body, err := providerfoundation.ReadResponseBodyTransport(response, 2<<20-1)
 	if err != nil {
-		return nil, 0, logging.TransportFailure(err)
+		return nil, 0, err
 	}
 	var rawItems []json.RawMessage
 	if err := json.Unmarshal(body, &rawItems); err != nil {
-		return nil, 0, providerfoundation.ErrNormalizationInvalid
+		return nil, 0, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	objects := make([]gitLabSecurityObject, 0, len(rawItems))
 	source := "gitlab_vulnerability"

@@ -385,10 +385,19 @@ func fetchGitHubFileContents(
 			} `json:"data"`
 			Errors json.RawMessage `json:"errors"`
 		}
-		decodeErr := json.NewDecoder(response.Body).Decode(&envelope)
+		raw, readErr := providerfoundation.ReadResponseBody(response, providerResponseMaxBytes)
 		closeErr := response.Body.Close()
-		if decodeErr != nil || closeErr != nil || len(envelope.Errors) > 0 {
-			return nil, providerfoundation.ErrNormalizationInvalid
+		if readErr != nil {
+			return nil, readErr
+		}
+		if len(raw) > providerResponseMaxBytes {
+			return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+		}
+		if decodeErr := providerfoundation.DecodeResponseJSON(response, raw, &envelope, 0); decodeErr != nil {
+			return nil, decodeErr
+		}
+		if closeErr != nil || len(envelope.Errors) > 0 {
+			return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 		}
 		for index, filePath := range chunk {
 			blob, ok := envelope.Data.Repository["f"+strconv.Itoa(index)]

@@ -89,3 +89,4 @@ For a suspected compromise:
 6. follow the security incident process for exposure assessment and notification.
 
 Continue with [Check synchronization status and freshness](../sync-and-coverage/status-and-freshness.md) after any credential change.
+

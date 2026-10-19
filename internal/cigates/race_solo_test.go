@@ -315,15 +315,6 @@ func TestRaceSoloCensusNamesEachDefect(t *testing.T) {
 	}
 }
 
-func contains(l []string, s string) bool {
-	for _, x := range l {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
 func sameMultiset(a, b []string) bool {
 	x := append([]string{}, a...)
 	y := append([]string{}, b...)

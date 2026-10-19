@@ -28,7 +28,7 @@ var (
 	authFuzzRow    = regexp.MustCompile(`"\S+ (Fuzz\w+)"`)
 	authStageCall  = regexp.MustCompile(`^\s*bash ci/check_go\.sh auth ([a-z-]+)`)
 	authClosureFn  = regexp.MustCompile(`(?s)check_auth_closure\(\) \{(.*?)\n\}`)
-	authStagesWant = []string{"fmt", "vet", "test", "race", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
+	authStagesWant = []string{"fmt", "vet", "test", "race", "race-integration", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
 )
 
 func authViolations(t *testing.T, root string) []string {

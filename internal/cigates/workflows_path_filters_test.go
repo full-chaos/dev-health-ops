@@ -27,7 +27,6 @@ import (
 const fxDir = "tests/fix" + "tures/"
 
 var uncoveredFixtureDirectories = map[string]string{
-	"src/dev_health_ops/fixtures":                       "the Python source tree, not Go testdata: no Go test reads these, so requiring them to trigger the Go workflow would run the Go suite for every Python-only fixture change",
 	"tests/testops/fixtures":                            "read by the Python testops suite, not by Go tests; covered by the Python workflow's own filters",
 	"tests/docs/fixtures":                               "documentation-lint fixtures consumed by the docs workflow; markdown and mkdocs config, with no Go reader",
 	"tools/codex-review/fixtures":                       "log excerpts read only by tools/codex-review/test-exec-classify.sh, a shell proof no workflow runs; no Go test reads them",

@@ -72,33 +72,36 @@ JWT_KEY="$(sed -n 's/^const Key = "\(.*\)"$/\1/p' "${ROOT}/internal/testsupport/
 # shellcheck disable=SC1090
 . "${STATE}"
 
+COMPOSE_FILES=(-f "${ROOT}/compose.yml" -f "${SCRIPT_DIR}/auth_corpus_external.override.yml")
+if [ "${LEG}" = "acp" ]; then
+  COMPOSE_FILES+=(-f "${SCRIPT_DIR}/auth_corpus_external.acp.override.yml")
+fi
 compose() {
-  local files=(-f "${ROOT}/compose.yml" -f "${SCRIPT_DIR}/auth_corpus_external.override.yml")
-  if [ "${LEG}" = "acp" ]; then
-    files+=(-f "${SCRIPT_DIR}/auth_corpus_external.acp.override.yml")
-  fi
-  docker compose -p "${PROJECT}" "${files[@]}" --profile auth "$@"
+  docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth "$@"
 }
 
 cleanup() {
   local status=$?
   if [ "${status}" -ne 0 ]; then
     printf '\n--- services at failure ---\n' >&2
-    compose ps --all >&2 || true
-    compose logs --no-color --tail 80 go-api go-river-migrate migrate >&2 || true
+    timeout --kill-after=5 60 docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth ps --all >&2 || true
+    timeout --kill-after=5 60 docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth logs --no-color --tail 80 go-api go-river-migrate migrate >&2 || true
   fi
-  compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  # Bounded: a hung docker daemon must not hold the step until the job timeout.
+  timeout --kill-after=10 "${AUTH_CORPUS_DOWN_SECONDS:-180}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth down --volumes --remove-orphans >/dev/null 2>&1 || true
   rm -rf -- "${WORK}"
   exit "${status}"
 }
 trap cleanup EXIT
 
-services=(go-api)
+# compose.yml's migrate service refuses a database that already holds objects but no alembic_version table, and
+# auth-migrate creates the auth schema: leg acp starts go-api (and with it migrate) first and auth-service after it.
+printf 'step 1: up --build --wait go-api (project %s)\n' "${PROJECT}"
+compose up --build --detach --wait --wait-timeout 900 go-api
 if [ "${LEG}" = "acp" ]; then
-  services+=(auth-service)
+  printf 'step 1b: up --build --wait auth-service\n'
+  compose up --build --detach --wait --wait-timeout 900 auth-service
 fi
-printf 'step 1: up --build --wait %s (project %s)\n' "${services[*]}" "${PROJECT}"
-compose up --build --detach --wait --wait-timeout 900 "${services[@]}"
 
 hostport() {
   local port

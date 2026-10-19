@@ -34,13 +34,13 @@ func TestMigration0012FlowStateAndAssertionConstraints(t *testing.T) {
 			VALUES ($1, gen_random_uuid(), $2::bytea, $3::bytea, now() + interval '10 minutes')`, protocol, flow, binding2)
 		return err
 	}
-	for _, protocol := range []string{"oidc", "oauth", "saml"} {
-		if err := flow(protocol, m10Hash("a"+protocol[:2]), ""); err != nil {
+	for index, protocol := range []string{"oidc", "oauth", "saml"} {
+		if err := flow(protocol, m10Hash("a"+string(rune('1'+index))), ""); err != nil {
 			t.Errorf("protocol %s with no binding refused: %v", protocol, err)
 		}
 	}
 	m10Fail(t, flow("ldap", m10Hash("b1"), ""), "an unknown protocol")
-	m10Fail(t, flow("oidc", m10Hash("aoi"), ""), "a duplicate flow_hash")
+	m10Fail(t, flow("oidc", m10Hash("a1"), ""), "a duplicate flow_hash")
 	m10Fail(t, flow("oidc", `\x0102`, ""), "a short flow_hash")
 	m10Fail(t, flow("oidc", "plaintext-state-value", ""), "a plaintext flow_hash")
 	m10Fail(t, flow("oidc", m10Hash("b2"), `\x0102`), "a short binding_hash")

@@ -2,9 +2,7 @@ package joboperator
 
 import (
 	"context"
-	"os"
 	"reflect"
-	"regexp"
 	"slices"
 	"sort"
 	"testing"
@@ -249,33 +247,6 @@ func TestEveryAuditedMutationIsInAuditedActions(t *testing.T) {
 	}
 	if !maps(seen, want) {
 		t.Fatalf("audited actions = %v, serviceAuditedActions = %v", sortedKeys(seen), sortedKeys(want))
-	}
-}
-
-// TestAuditActionMigrationMatchesAuditedActions reads the migration that
-// sets the audit table's action check and asserts its action tuple equals
-// AuditedActions, so the Go list and the database check cannot drift. The
-// Postgres integration test applies the real chain and runs one audited
-// mutation per Action.
-func TestAuditActionMigrationMatchesAuditedActions(t *testing.T) {
-	source, err := os.ReadFile("../../src/dev_health_ops/alembic/versions/0138_worker_operator_audits_direct_write_actions.py")
-	if err != nil {
-		t.Fatal(err)
-	}
-	block := regexp.MustCompile(`(?ms)^_ACTIONS\s*=\s*\((.*?)\)`).FindSubmatch(source)
-	if block == nil {
-		t.Fatal("0138 has no _ACTIONS tuple")
-	}
-	migration := map[string]bool{}
-	for _, match := range regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(block[1], -1) {
-		migration[string(match[1])] = true
-	}
-	want := map[string]bool{}
-	for _, action := range AuditedActions {
-		want[string(action)] = true
-	}
-	if !maps(migration, want) {
-		t.Fatalf("0138 actions = %v, AuditedActions = %v", sortedKeys(migration), sortedKeys(want))
 	}
 }
 

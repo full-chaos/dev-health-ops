@@ -1,6 +1,6 @@
 // Package writerinventory (tests only) finds every Go SQL writer (INSERT, UPDATE, DELETE, TRUNCATE, ON CONFLICT DO UPDATE) of an auth table and compares it with a keyed allowlist (stale entries fail).
 //
-// The scan cannot see SQL built at runtime (Sprintf, table names from variables, constants imported from another package) or SQL outside non-test Go files.
+// The scan cannot see SQL built at runtime (Sprintf, table names from variables, constants imported from another package), SQL joined to a map field with a runtime suffix beyond the field text, or SQL outside non-test Go files of the root module.
 package writerinventory
 
 import (
@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,39 +32,249 @@ var publicTables = []string{
 	"login_attempts", "org_invites", "memberships", "sso_providers", "impersonation_sessions",
 }
 
-var skipDirs = map[string]bool{
-	".git": true, "node_modules": true, "third_party": true, "vendor": true,
-	"testdata": true, "src": true, "tests": true,
-}
-
 const unresolved = "\x00"
 
-var (
-	reInsert   = regexp.MustCompile(`(?i)\binsert\s+into\s+(?:only\s+)?([a-z0-9_."]+)`)
-	reUpdate   = regexp.MustCompile(`(?i)\bupdate\s+(?:only\s+)?([a-z0-9_."]+)\s+(?:(?:as\s+)?[a-z0-9_]+\s+)?set\b`)
-	reDelete   = regexp.MustCompile(`(?i)\bdelete\s+from\s+(?:only\s+)?([a-z0-9_."]+)`)
-	reTruncate = regexp.MustCompile(`(?i)\btruncate\s+(?:table\s+)?(?:only\s+)?([a-z0-9_."]+(?:\s*,\s*(?:only\s+)?[a-z0-9_."]+)*)`)
-	reUpsert   = regexp.MustCompile(`(?i)\bon\s+conflict\b.*?\bdo\s+update\b`)
-	reCreate   = regexp.MustCompile(`(?i)create\s+(?:unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?(?:"?auth"?\s*\.\s*)?"?([a-z0-9_]+)"?`)
-	reComment  = regexp.MustCompile(`(?s)/\*.*?\*/|--[^\n]*`)
-	reSpace    = regexp.MustCompile(`\s+`)
-)
+// tok is one SQL token: a lowercase word, a quoted identifier (q, case kept), a string literal ("'", q), or one punctuation rune.
+type tok struct {
+	s string
+	q bool
+}
+
+func isWordRune(r byte) bool {
+	return r == '_' || r == '$' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r >= 0x80
+}
+
+// sqlTokens lexes SQL: comments (nested /* */ and --) are dropped, string literals collapse to one token, quoted identifiers keep their case.
+func sqlTokens(sql string) []tok {
+	var out []tok
+	for i := 0; i < len(sql); {
+		c := sql[i]
+		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f':
+			i++
+		case c == '-' && i+1 < len(sql) && sql[i+1] == '-':
+			for i < len(sql) && sql[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(sql) && sql[i+1] == '*':
+			depth := 0
+			for i < len(sql) {
+				if strings.HasPrefix(sql[i:], "/*") {
+					depth++
+					i += 2
+				} else if strings.HasPrefix(sql[i:], "*/") {
+					depth--
+					i += 2
+					if depth == 0 {
+						break
+					}
+				} else {
+					i++
+				}
+			}
+		case c == '\'':
+			escapes := i > 0 && (sql[i-1] == 'e' || sql[i-1] == 'E')
+			i++
+			for i < len(sql) {
+				if escapes && sql[i] == '\\' {
+					i += 2
+					continue
+				}
+				if sql[i] == '\'' {
+					if i+1 < len(sql) && sql[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			out = append(out, tok{s: "'", q: true})
+		case c == '"':
+			i++
+			var b strings.Builder
+			for i < len(sql) {
+				if sql[i] == '"' {
+					if i+1 < len(sql) && sql[i+1] == '"' {
+						b.WriteByte('"')
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				b.WriteByte(sql[i])
+				i++
+			}
+			out = append(out, tok{s: b.String(), q: true})
+		case isWordRune(c):
+			j := i
+			for j < len(sql) && isWordRune(sql[j]) {
+				j++
+			}
+			out = append(out, tok{s: strings.ToLower(sql[i:j])})
+			i = j
+		default:
+			out = append(out, tok{s: string(c)})
+			i++
+		}
+	}
+	return out
+}
+
+func kw(ts []tok, i int, w string) bool {
+	return i >= 0 && i < len(ts) && !ts[i].q && ts[i].s == w
+}
+
+func isIdent(t tok) bool {
+	if t.q {
+		return t.s != "'"
+	}
+	return t.s != "" && (t.s[0] == '_' || (t.s[0] >= 'a' && t.s[0] <= 'z'))
+}
+
+// qname reads ident or ident.ident at i and returns the schema ("" if none), name and the next index.
+func qname(ts []tok, i int) (schema, name string, next int, ok bool) {
+	if i >= len(ts) || !isIdent(ts[i]) {
+		return "", "", i, false
+	}
+	if i+2 < len(ts) && ts[i+1].s == "." && !ts[i+1].q && isIdent(ts[i+2]) {
+		return ts[i].s, ts[i+2].s, i + 3, true
+	}
+	return "", ts[i].s, i + 1, true
+}
+
+func qualified(schema, name string) string {
+	if schema == "" {
+		schema = "public"
+	}
+	return schema + "." + name
+}
+
+// sqlWriters returns the (table, verb) pairs one SQL string writes, watched tables only.
+func sqlWriters(sql string, watched map[string]bool) [][2]string {
+	ts := sqlTokens(sql)
+	var out [][2]string
+	add := func(schema, name, verb string) {
+		if t := qualified(schema, name); watched[t] {
+			out = append(out, [2]string{t, verb})
+		}
+	}
+	skipOnly := func(i int) int {
+		if kw(ts, i, "only") {
+			return i + 1
+		}
+		return i
+	}
+	for i := range ts {
+		if ts[i].q {
+			continue
+		}
+		switch ts[i].s {
+		case "insert":
+			if !kw(ts, i+1, "into") {
+				continue
+			}
+			schema, name, j, ok := qname(ts, skipOnly(i+2))
+			if !ok {
+				continue
+			}
+			verb := "INSERT"
+			conflict := false
+			for k := j; k < len(ts); k++ {
+				if kw(ts, k, ";") || (kw(ts, k, "insert") && kw(ts, k+1, "into")) {
+					break
+				}
+				if kw(ts, k, "on") && kw(ts, k+1, "conflict") {
+					conflict = true
+				}
+				if conflict && kw(ts, k, "do") && kw(ts, k+1, "update") {
+					verb = "UPSERT"
+					break
+				}
+			}
+			add(schema, name, verb)
+		case "update":
+			if kw(ts, i-1, "do") || kw(ts, i-1, "for") {
+				continue
+			}
+			schema, name, j, ok := qname(ts, skipOnly(i+1))
+			if !ok {
+				continue
+			}
+			if kw(ts, j, "as") {
+				j++
+			}
+			if !kw(ts, j, "set") && j < len(ts) && isIdent(ts[j]) {
+				j++
+			}
+			if kw(ts, j, "set") {
+				add(schema, name, "UPDATE")
+			}
+		case "delete":
+			if !kw(ts, i+1, "from") {
+				continue
+			}
+			if schema, name, _, ok := qname(ts, skipOnly(i+2)); ok {
+				add(schema, name, "DELETE")
+			}
+		case "truncate":
+			j := i + 1
+			if kw(ts, j, "table") {
+				j++
+			}
+			for {
+				schema, name, next, ok := qname(ts, skipOnly(j))
+				if !ok {
+					break
+				}
+				add(schema, name, "TRUNCATE")
+				if !kw(ts, next, ",") {
+					break
+				}
+				j = next + 1
+			}
+		}
+	}
+	return out
+}
 
 // AuthSchemaTables reads the auth-schema table names from the embedded migration lineage.
 func AuthSchemaTables(root string) ([]string, error) {
 	dir := filepath.Join(root, "internal", "storage", "postgres", "authschema", "migrations")
-	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
-	for _, f := range files {
-		b, err := os.ReadFile(f)
+	for _, e := range entries {
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".sql") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			return nil, err
 		}
-		for _, m := range reCreate.FindAllStringSubmatch(string(b), -1) {
-			seen["auth."+strings.ToLower(m[1])] = true
+		ts := sqlTokens(string(b))
+		for i := range ts {
+			if !kw(ts, i, "create") {
+				continue
+			}
+			j := i + 1
+			if kw(ts, j, "unlogged") || kw(ts, j, "temporary") || kw(ts, j, "temp") {
+				j++
+			}
+			if !kw(ts, j, "table") {
+				continue
+			}
+			j++
+			if kw(ts, j, "if") && kw(ts, j+1, "not") && kw(ts, j+2, "exists") {
+				j += 3
+			}
+			if schema, name, _, ok := qname(ts, j); ok && (schema == "" || schema == "auth") {
+				seen["auth."+name] = true
+			}
 		}
 	}
 	out := make([]string, 0, len(seen))
@@ -92,57 +301,42 @@ func Watched(root string) (map[string]bool, error) {
 	return w, nil
 }
 
-func normTable(raw string) string {
-	t := strings.ToLower(strings.ReplaceAll(raw, `"`, ""))
-	if !strings.Contains(t, ".") {
-		return "public." + t
-	}
-	return t
-}
-
-// sqlWriters returns the (table, verb) pairs one SQL string writes, watched tables only.
-func sqlWriters(sql string, watched map[string]bool) [][2]string {
-	sql = reSpace.ReplaceAllString(reComment.ReplaceAllString(sql, " "), " ")
-	var out [][2]string
-	add := func(re *regexp.Regexp, verb string) {
-		for _, m := range re.FindAllStringSubmatchIndex(sql, -1) {
-			v := verb
-			if verb == "INSERT" {
-				// an ON CONFLICT ... DO UPDATE in the rest of this statement makes it an upsert
-				rest := sql[m[1]:]
-				if i := strings.Index(strings.ToLower(rest), "insert into"); i >= 0 {
-					rest = rest[:i]
-				}
-				if reUpsert.MatchString(rest) {
-					v = "UPSERT"
-				}
-			}
-			for _, raw := range strings.Split(sql[m[2]:m[3]], ",") {
-				raw = strings.TrimSpace(raw)
-				raw = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(raw), "only "))
-				if t := normTable(raw); watched[t] {
-					out = append(out, [2]string{t, v})
-				}
-			}
-		}
-	}
-	add(reInsert, "INSERT")
-	add(reUpdate, "UPDATE")
-	add(reDelete, "DELETE")
-	add(reTruncate, "TRUNCATE")
-	return out
+type decl struct {
+	spec *ast.ValueSpec
+	expr ast.Expr
 }
 
 type pkgDecls struct {
-	vals map[string]ast.Expr
+	vals map[string]decl
 	used map[string]bool
 }
 
 type evaluator struct {
 	pkg      *pkgDecls
-	local    map[string]ast.Expr
+	local    map[string]decl
 	inFunc   bool
 	visiting map[string]bool
+}
+
+// lookup resolves an identifier lexically: a use whose parser object is a different declaration (a parameter, a shadowing local) is not the package-level or local constant.
+func (e *evaluator) lookup(id *ast.Ident) (d decl, local, ok bool) {
+	if id.Obj != nil {
+		spec, isSpec := id.Obj.Decl.(*ast.ValueSpec)
+		if !isSpec {
+			return decl{}, false, false
+		}
+		if l, found := e.local[id.Name]; found && l.spec == spec {
+			return l, true, true
+		}
+		if p, found := e.pkg.vals[id.Name]; found && p.spec == spec {
+			return p, false, true
+		}
+		return decl{}, false, false
+	}
+	if p, found := e.pkg.vals[id.Name]; found {
+		return p, false, true
+	}
+	return decl{}, false, false
 }
 
 func (e *evaluator) eval(x ast.Expr) string {
@@ -160,27 +354,22 @@ func (e *evaluator) eval(x ast.Expr) string {
 			return e.eval(n.X) + e.eval(n.Y)
 		}
 	case *ast.Ident:
-		if v, ok := e.local[n.Name]; ok && !e.visiting[n.Name] {
-			e.visiting[n.Name] = true
-			defer delete(e.visiting, n.Name)
-			return e.eval(v)
-		}
-		if v, ok := e.pkg.vals[n.Name]; ok && !e.visiting[n.Name] {
-			if e.inFunc {
+		if d, isLocal, ok := e.lookup(n); ok && !e.visiting[n.Name] {
+			if !isLocal && e.inFunc {
 				e.pkg.used[n.Name] = true
 			}
 			e.visiting[n.Name] = true
 			defer delete(e.visiting, n.Name)
-			return e.eval(v)
+			return e.eval(d.expr)
 		}
 	}
 	return unresolved
 }
 
-// specPairs yields (name, value) for each spec of a const or var block; a const spec with no values repeats the previous values.
-func specPairs(gd *ast.GenDecl) (names []string, values []ast.Expr) {
+// specPairs yields (name, spec, value) for each spec of a const or var block; a const spec with no values repeats the previous values.
+func specPairs(gd *ast.GenDecl) (names []string, specs []*ast.ValueSpec, values []ast.Expr) {
 	if gd.Tok != token.CONST && gd.Tok != token.VAR {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var prev []ast.Expr
 	for _, sp := range gd.Specs {
@@ -196,17 +385,30 @@ func specPairs(gd *ast.GenDecl) (names []string, values []ast.Expr) {
 		}
 		for i, nm := range vs.Names {
 			names = append(names, nm.Name)
+			specs = append(specs, vs)
 			values = append(values, vals[i])
 		}
 	}
-	return names, values
+	return names, specs, values
 }
 
-func collectDecls(gd *ast.GenDecl, into map[string]ast.Expr) {
-	names, values := specPairs(gd)
+func collectDecls(gd *ast.GenDecl, into map[string]decl) {
+	names, specs, values := specPairs(gd)
 	for i, n := range names {
-		into[n] = values[i]
+		into[n] = decl{spec: specs[i], expr: values[i]}
 	}
+}
+
+func isStringExpr(x ast.Expr) bool {
+	switch n := x.(type) {
+	case *ast.BasicLit, *ast.Ident:
+		return true
+	case *ast.ParenExpr:
+		return isStringExpr(n.X)
+	case *ast.BinaryExpr:
+		return n.Op == token.ADD
+	}
+	return false
 }
 
 func funcName(fd *ast.FuncDecl) string {
@@ -232,20 +434,7 @@ func funcName(fd *ast.FuncDecl) string {
 	}
 }
 
-// isStringExpr reports whether x is a literal, a concatenation, or a name of one; other package-level values (maps, structs) are keyed on the declaration.
-func isStringExpr(x ast.Expr) bool {
-	switch n := x.(type) {
-	case *ast.BasicLit, *ast.Ident:
-		return true
-	case *ast.ParenExpr:
-		return isStringExpr(n.X)
-	case *ast.BinaryExpr:
-		return n.Op == token.ADD
-	}
-	return false
-}
-
-// walkStrings calls fn for each maximal string expression under root.
+// walkStrings calls fn for each maximal string expression under root; a sum is both evaluated whole and walked into, so a map field inside it is still attributed.
 func walkStrings(root ast.Node, ev *evaluator, fn func(string)) {
 	ast.Inspect(root, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -257,7 +446,6 @@ func walkStrings(root ast.Node, ev *evaluator, fn func(string)) {
 		case *ast.BinaryExpr:
 			if x.Op == token.ADD {
 				fn(ev.eval(x))
-				return false
 			}
 		case *ast.SelectorExpr:
 			// X[key].field on a package-level map or struct: only the keyed field values are this function's SQL
@@ -275,12 +463,12 @@ func walkStrings(root ast.Node, ev *evaluator, fn func(string)) {
 			if !ok {
 				return true
 			}
-			v, ok := ev.pkg.vals[id.Name]
-			if !ok || isStringExpr(v) || ev.local[id.Name] != nil {
+			d, isLocal, ok := ev.lookup(id)
+			if !ok || isStringExpr(d.expr) {
 				return true
 			}
 			var found bool
-			ast.Inspect(v, func(m ast.Node) bool {
+			ast.Inspect(d.expr, func(m ast.Node) bool {
 				if kv, ok := m.(*ast.KeyValueExpr); ok {
 					if k, ok := kv.Key.(*ast.Ident); ok && k.Name == x.Sel.Name {
 						found = true
@@ -293,31 +481,39 @@ func walkStrings(root ast.Node, ev *evaluator, fn func(string)) {
 			if !found {
 				return true
 			}
-			if ev.inFunc {
+			if ev.inFunc && !isLocal {
 				ev.pkg.used[id.Name] = true
 			}
 			return false
 		case *ast.Ident:
-			if v, ok := ev.local[x.Name]; ok {
-				if !ev.visiting[x.Name] {
-					ev.visiting[x.Name] = true
-					walkStrings(v, ev, fn)
-					delete(ev.visiting, x.Name)
-				}
-			} else if v, ok := ev.pkg.vals[x.Name]; ok && !ev.visiting[x.Name] {
-				if ev.inFunc {
-					ev.pkg.used[x.Name] = true
-				}
-				ev.visiting[x.Name] = true
-				walkStrings(v, ev, fn)
-				delete(ev.visiting, x.Name)
+			d, isLocal, ok := ev.lookup(x)
+			if !ok || ev.visiting[x.Name] {
+				return true
 			}
+			if !isLocal && ev.inFunc {
+				ev.pkg.used[x.Name] = true
+			}
+			ev.visiting[x.Name] = true
+			walkStrings(d.expr, ev, fn)
+			delete(ev.visiting, x.Name)
 		}
 		return true
 	})
 }
 
-// Scan walks root and returns every writer of a watched table in non-test Go files.
+func skipDir(path, name string) bool {
+	switch name {
+	case ".git", "node_modules", "vendor", "testdata":
+		return true
+	}
+	if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(path, "go.mod"))
+	return err == nil
+}
+
+// Scan walks root and returns every writer of a watched table in non-test Go files of the root module (nested modules, vendor and testdata are skipped).
 func Scan(root string, watched map[string]bool) ([]Writer, error) {
 	byDir := map[string][]string{}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -325,7 +521,7 @@ func Scan(root string, watched map[string]bool) ([]Writer, error) {
 			return err
 		}
 		if d.IsDir() {
-			if p != root && (skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
+			if p != root && skipDir(p, d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -348,10 +544,10 @@ func Scan(root string, watched map[string]bool) ([]Writer, error) {
 	fset := token.NewFileSet()
 	for _, files := range byDir {
 		sort.Strings(files)
-		pkg := &pkgDecls{vals: map[string]ast.Expr{}, used: map[string]bool{}}
+		pkg := &pkgDecls{vals: map[string]decl{}, used: map[string]bool{}}
 		parsed := map[string]*ast.File{}
 		for _, f := range files {
-			af, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
+			af, err := parser.ParseFile(fset, f, nil, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -370,7 +566,7 @@ func Scan(root string, watched map[string]bool) ([]Writer, error) {
 				if !ok || fd.Body == nil {
 					continue
 				}
-				local := map[string]ast.Expr{}
+				local := map[string]decl{}
 				ast.Inspect(fd.Body, func(n ast.Node) bool {
 					if ds, ok := n.(*ast.DeclStmt); ok {
 						if gd, ok := ds.Decl.(*ast.GenDecl); ok {
@@ -392,7 +588,7 @@ func Scan(root string, watched map[string]bool) ([]Writer, error) {
 				if !ok {
 					continue
 				}
-				names, values := specPairs(gd)
+				names, _, values := specPairs(gd)
 				for i, name := range names {
 					if pkg.used[name] {
 						continue

@@ -95,7 +95,7 @@ internal/auth/passwordhash	11
 internal/auth/passwordpolicy	1
 internal/auth/ratelimitvalkey	1
 internal/auth/signedtoken	1
-internal/auth/writerinventory	60
+internal/auth/writerinventory	20
 internal/backfillrun	1
 internal/bigboycompose	1
 internal/billingcli	1

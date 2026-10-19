@@ -128,6 +128,30 @@ func Hint(db interface{ Exec(string, ...any) }) {
 	db.Exec("INSERT /* hint */ INTO -- note\n users (id) VALUES ($1)")
 }
 
+func FalseUpsert(db interface{ Exec(string, ...any) }) {
+	db.Exec("INSERT INTO users (x) VALUES ('ON CONFLICT (x) DO UPDATE SET y = 1')")
+}
+
+func QuotedCTE(db interface{ Exec(string, ...any) }) {
+	db.Exec("WITH c AS (SELECT '--' AS x) UPDATE users SET a = 1")
+}
+
+func QualifiedComment(db interface{ Exec(string, ...any) }) {
+	db.Exec("UPDATE public /* c */ . users SET a = 1")
+}
+
+const shadowSQL = "INSERT INTO org_invites (id) VALUES ($1)"
+
+func Shadow(db interface{ Exec(string, ...any) }, shadowSQL string) {
+	db.Exec(shadowSQL)
+}
+
+var queries = map[string]struct{ ins string }{"a": {ins: "INSERT INTO sso_providers (id)"}}
+
+func Suffix(db interface{ Exec(string, ...any) }, k string) {
+	db.Exec(queries[k].ins + " VALUES ($1)")
+}
+
 func Trunc(db interface{ Exec(string, ...any) }) {
 	db.Exec("TRUNCATE TABLE users, refresh_tokens CASCADE")
 }
@@ -176,6 +200,13 @@ func TestPlantedWritersAreRedAndStaleEntriesFail(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "p", "planted.go"), []byte(plantedSource), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hidden := "package h\n\nfunc Hidden(db interface{ Exec(string, ...any) }) { db.Exec(\"INSERT INTO users (id) VALUES ($1)\") }\n"
+	if err := os.WriteFile(filepath.Join(dir, "src", "h.go"), []byte(hidden), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	found, err := Scan(dir, watched)
 	if err != nil {
 		t.Fatal(err)
@@ -184,16 +215,22 @@ func TestPlantedWritersAreRedAndStaleEntriesFail(t *testing.T) {
 		"p/planted.go|Concat|auth.sessions|DELETE",
 		"p/planted.go|Cte|auth.principals|UPDATE",
 		"p/planted.go|Direct|public.refresh_tokens|UPDATE",
+		"p/planted.go|FalseUpsert|public.users|INSERT",
 		"p/planted.go|Hint|public.users|INSERT",
 		"p/planted.go|Other|public.password_reset_tokens|INSERT",
+		"p/planted.go|QualifiedComment|public.users|UPDATE",
+		"p/planted.go|QuotedCTE|public.users|UPDATE",
 		"p/planted.go|Replace|public.password_reset_tokens|DELETE",
+		"p/planted.go|Suffix|public.sso_providers|INSERT",
 		"p/planted.go|Trunc|public.refresh_tokens|TRUNCATE",
 		"p/planted.go|Trunc|public.users|TRUNCATE",
 		"p/planted.go|Upsert|public.memberships|UPSERT",
 		"p/planted.go|UsesSecond|public.login_attempts|INSERT",
 		"p/planted.go|ViaConst|public.users|INSERT",
 		"p/planted.go|pkgdecl:firstSQL|public.login_attempts|INSERT",
+		"p/planted.go|pkgdecl:shadowSQL|public.org_invites|INSERT",
 		"p/planted.go|pkgdecl:tableSQL|auth.sessions|TRUNCATE",
+		"src/h.go|Hidden|public.users|INSERT",
 	}
 	var got []string
 	for _, w := range found {
@@ -232,15 +269,23 @@ func TestWatchedReadsQuotedAndQualifiedMigrationTables(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sql := "CREATE TABLE \"new_table\" (id int);\nCREATE TABLE IF NOT EXISTS auth.other (id int);\nCREATE UNLOGGED TABLE plain (id int);\n"
+	sql := "-- CREATE TABLE phantom (id int);\n/* CREATE TABLE phantom2 (id int); */\nCREATE TABLE public.wrong (id int);\nCREATE TABLE \"new_table\" (id int);\nCREATE TABLE IF NOT EXISTS auth.other (id int);\nCREATE UNLOGGED TABLE plain (id int);\n"
 	if err := os.WriteFile(filepath.Join(dir, "0001.sql"), []byte(sql), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "0002.SQL"), []byte("CREATE TABLE uppercase_ext (id int);"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	w, err := Watched(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"auth.new_table", "auth.other", "auth.plain"} {
+	for _, not := range []string{"auth.phantom", "auth.phantom2", "auth.public", "auth.wrong", "public.wrong"} {
+		if w[not] {
+			t.Errorf("%s must not be watched", not)
+		}
+	}
+	for _, want := range []string{"auth.new_table", "auth.other", "auth.plain", "auth.uppercase_ext"} {
 		if !w[want] {
 			t.Errorf("%s missing from the watched set: %v", want, w)
 		}

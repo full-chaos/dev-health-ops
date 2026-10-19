@@ -131,3 +131,63 @@ func TestStatedColumnsAreTheListBeforeTheIdentity(t *testing.T) {
 		t.Fatalf("a list without the identity: %v", err)
 	}
 }
+
+// Restate is one INSERT..SELECT from teams FINAL: every teams column is
+// selected from the stored row (members and is_active computed from it), the
+// identity by Insert's rule, and a deleted row is not selected.
+func TestRestateIsOneStatementFromTheStoredRow(t *testing.T) {
+	conn := &recordingExec{}
+	rows := []teamprovider.Restatement{
+		{ID: "custom:eng", AddMembers: []string{"admin@example.com"}, Activate: true},
+		{ID: "gh:ops"},
+	}
+	if _, err := teamprovider.Restate(context.Background(), conn, "org-1", rows); err != nil {
+		t.Fatal(err)
+	}
+	if conn.calls != 1 {
+		t.Fatalf("Exec calls = %d, want 1", conn.calls)
+	}
+	head := conn.query[:strings.Index(conn.query, ") SELECT ")]
+	for column := range teamprovider.ColumnTypes() {
+		if !strings.Contains(head, column) {
+			t.Errorf("the statement does not write %s", column)
+		}
+	}
+	for _, part := range []string{
+		"INSERT INTO teams (",
+		teamprovider.Columns + ") SELECT ",
+		"arrayConcat(t.manual_members, arrayDistinct(arrayFilter(m -> NOT has(t.manual_members, m), incoming.add_members)))",
+		"if(incoming.activate = 1, toUInt8(1), t.is_active)",
+		"t.updated_at",
+		"FROM teams AS t FINAL",
+		"argMaxIf(provider_team_id, (updated_at, last_synced), provider_team_id != '')",
+		"min(coalesce(created_at, updated_at))",
+		"WHERE t.org_id = {org_id:String} AND t.deleted_at IS NULL",
+	} {
+		if !strings.Contains(conn.query, part) {
+			t.Errorf("the statement does not hold %q", part)
+		}
+	}
+}
+
+func TestRestateRefusesARowItCannotWrite(t *testing.T) {
+	for name, rows := range map[string][]teamprovider.Restatement{
+		"no team id":    {{ID: ""}},
+		"a repeated id": {{ID: "gh:a"}, {ID: "gh:a", Activate: true}},
+	} {
+		conn := &recordingExec{}
+		if _, err := teamprovider.Restate(context.Background(), conn, "org-1", rows); !errors.Is(err, teamprovider.ErrInvalidWrite) {
+			t.Errorf("%s: err = %v, want ErrInvalidWrite", name, err)
+		}
+		if conn.calls != 0 {
+			t.Errorf("%s: a refused write ran a statement", name)
+		}
+	}
+	if _, err := teamprovider.Restate(context.Background(), nil, "org-1", []teamprovider.Restatement{{ID: "gh:a"}}); !errors.Is(err, teamprovider.ErrInvalidArguments) {
+		t.Errorf("nil connection: %v", err)
+	}
+	conn := &recordingExec{}
+	if written, err := teamprovider.Restate(context.Background(), conn, "org-1", nil); err != nil || written != 0 || conn.calls != 0 {
+		t.Errorf("no rows: %d, %v, calls %d; want no statement", written, err, conn.calls)
+	}
+}

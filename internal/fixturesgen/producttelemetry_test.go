@@ -12,40 +12,58 @@ import (
 	"time"
 )
 
-var ttlClause = regexp.MustCompile(`(?is)\bTTL\s+[^;]*?\+\s*(?:toIntervalDay\(\s*(\d+)\s*\)|INTERVAL\s+(\d+)\s+DAY)`)
+var (
+	ttlKeyword = regexp.MustCompile(`(?i)\bTTL\b`)
+	ttlClause  = regexp.MustCompile(`(?is)^TTL\s+[^;]*?\+\s*(?:toIntervalDay\(\s*(\d+)\s*\)|INTERVAL\s+(\d+)\s+DAY)`)
+)
 
-// ttlDays returns the table-level TTL in days. Single-quoted strings (COMMENT, DEFAULT) are
-// blanked first, honouring \' and ” escapes, so a quoted TTL is not a clause.
+// ttlDays returns the table-level TTL in days. Quoted strings and quoted identifiers are blanked
+// (honouring backslash and doubled-quote escapes), and only a TTL outside the column list
+// (paren depth 0) counts, so neither quoted text nor a column TTL is taken for the table TTL.
 func ttlDays(create string) (int, bool) {
-	var out strings.Builder
+	masked := []byte(create)
+	depth := make([]int, len(create))
+	d := 0
 	for i := 0; i < len(create); i++ {
 		c := create[i]
-		if c != '\'' {
-			out.WriteByte(c)
-			continue
-		}
-		out.WriteByte(c)
-		for i++; i < len(create); i++ {
-			if create[i] == '\\' {
-				i++
-				continue
-			}
-			if create[i] == '\'' {
-				if i+1 < len(create) && create[i+1] == '\'' {
+		switch c {
+		case '(':
+			d++
+		case ')':
+			d--
+		case '\'', '"', '`':
+			for i++; i < len(create); i++ {
+				if create[i] == '\\' && c != '`' && i+1 < len(create) {
+					masked[i], masked[i+1] = ' ', ' '
 					i++
 					continue
 				}
-				break
+				if create[i] == c {
+					if i+1 < len(create) && create[i+1] == c {
+						masked[i], masked[i+1] = ' ', ' '
+						i++
+						continue
+					}
+					break
+				}
+				masked[i] = ' '
 			}
 		}
-		out.WriteByte('\'')
+		if i < len(depth) {
+			depth[i] = d
+		}
 	}
-	m := ttlClause.FindStringSubmatch(out.String())
-	if m == nil {
-		return 0, false
+	text := string(masked)
+	for _, loc := range ttlKeyword.FindAllStringIndex(text, -1) {
+		if depth[loc[0]] != 0 {
+			continue
+		}
+		if m := ttlClause.FindStringSubmatch(text[loc[0]:]); m != nil {
+			n, _ := strconv.Atoi(m[1] + m[2])
+			return n, true
+		}
 	}
-	n, _ := strconv.Atoi(m[1] + m[2])
-	return n, true
+	return 0, false
 }
 
 func telemetryCreate(t *testing.T) string {

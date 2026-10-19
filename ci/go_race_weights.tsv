@@ -119,7 +119,7 @@ internal/goapicli/routing	4
 internal/goapidigest	1
 internal/goapiproof	130
 internal/goapiproof/writeproof	1
-internal/gqlgenguard	414
+internal/gqlgenguard	50
 internal/httpguard	10
 internal/identityalias	1
 internal/ingressplanes	2

@@ -565,10 +565,11 @@ func TestEveryCodePointAsXAndAsKidMatchesTheLiteralAlphabets(t *testing.T) {
 	}
 }
 
-// Every astral code point against the schema's own kid and x patterns, with
-// no stride: one admitted code point fails. The expectation is the literal
-// alphabets, which are all inside the BMP, so every astral code point must be
-// refused.
+// The astral code points of the kid and x patterns, against the schema's own
+// patterns: every one in a normal build (jwks_astral_full_test.go), the stride
+// and plane probes under -race (jwks_astral_race_test.go), where one million
+// regex matches cost more than the race budget. The expectation is the literal
+// alphabets, which are all inside the BMP, so each of them must be refused.
 func TestNoAstralCodePointIsAdmittedByTheKidOrXPattern(t *testing.T) {
 	sweep := loadSweep(t)
 	for _, r := range sweep.Alphabets.XCharacters {
@@ -608,7 +609,12 @@ func TestNoAstralCodePointIsAdmittedByTheKidOrXPattern(t *testing.T) {
 	if !kidPattern.MatchString("a") || !xPattern.MatchString(prefix+"A") {
 		t.Fatal("the patterns do not admit the base document's own characters: the schema layout moved")
 	}
-	for r := rune(0x10000); r <= unicode.MaxRune; r++ {
+	runes := astralRunes()
+	if len(runes) < astralMinimum {
+		t.Fatalf("astral set %q holds %d code points, want at least %d", astralSet, len(runes), astralMinimum)
+	}
+	t.Logf("astral set %q: %d code points", astralSet, len(runes))
+	for _, r := range runes {
 		if kidPattern.MatchString(string(r)) {
 			t.Fatalf("kid pattern admits the astral U+%04X", r)
 		}

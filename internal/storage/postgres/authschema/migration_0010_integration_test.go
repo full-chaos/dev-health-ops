@@ -365,3 +365,51 @@ func TestMigration0010SecurityColumnsAreGuardedByBehaviour(t *testing.T) {
 		t.Errorf("clearing parent_id outside a commit transaction was refused: %v", err)
 	}
 }
+
+// A consumed link credential is immutable: a second use, a clear of
+// consumed_at and a retarget are all refused, even inside a commit
+// transaction, and the atomic "WHERE consumed_at IS NULL" consume returns no
+// row on replay.
+func TestMigration0010ConsumedLinkCredentialIsImmutable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+	m10Seed(t, ctx, env)
+
+	var id string
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at)
+		VALUES ($1, 'password_reset', $2::bytea, now() + interval '1 hour') RETURNING id::text`, m10Principal, m10Hash("b1")).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	consume := func() (int64, error) {
+		tx, err := env.runtime.Begin(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
+			return 0, err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE auth.link_credentials SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL`, id)
+		if err != nil {
+			return 0, err
+		}
+		return tag.RowsAffected(), tx.Commit(ctx)
+	}
+	if n, err := consume(); err != nil || n != 1 {
+		t.Fatalf("first consume = %d, %v; want 1", n, err)
+	}
+	if n, err := consume(); err != nil || n != 0 {
+		t.Errorf("replayed atomic consume = %d, %v; want 0 rows", n, err)
+	}
+	for name, statement := range map[string]string{
+		"a second consume":     `UPDATE auth.link_credentials SET consumed_at = now() WHERE id = $1`,
+		"clearing consumed_at": `UPDATE auth.link_credentials SET consumed_at = NULL WHERE id = $1`,
+		"extending expiry":     `UPDATE auth.link_credentials SET expires_at = now() + interval '1 year' WHERE id = $1`,
+	} {
+		err := guardedExec(ctx, env.runtime, statement, id)
+		if err == nil || !strings.Contains(err.Error(), "consumed") {
+			t.Errorf("%s on a consumed link credential: err = %v, want a refusal naming the consumed state", name, err)
+		}
+	}
+}

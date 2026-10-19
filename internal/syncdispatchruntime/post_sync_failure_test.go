@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"os"
@@ -158,8 +161,8 @@ func TestFanoutPanicLogsTheFailedLineCountsItAndPanicsOn(t *testing.T) {
 	if got := strings.Count(logs.String(), `"msg":"post_sync_fanout.failed"`); got != 1 || !strings.Contains(logs.String(), `"reason":"panic"`) {
 		t.Fatalf("failed lines = %d:\n%s", got, logs.String())
 	}
-	if !strings.Contains(logs.String(), `"step":"args"`) {
-		t.Fatalf("the panic line must carry the stage the fan-out had reached (args):\n%s", logs.String())
+	if !strings.Contains(logs.String(), `"step":"begin"`) {
+		t.Fatalf("the panic line must carry the stage the fan-out had reached (begin):\n%s", logs.String())
 	}
 	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.PostSyncFanoutOutcomeError {
 		t.Fatalf("counter outcomes = %v, want one error", observer.outcomes)
@@ -243,7 +246,7 @@ func TestChainDefectIsNamedForADeepChainATypedNilAndAPanickingUnwrap(t *testing.
 	}
 	var logs bytes.Buffer
 	service := &NativePostSyncService{logger: synclog.New(slog.New(slog.NewJSONHandler(&logs, nil)))}
-	service.observeFanoutFailure(context.Background(), PostSyncArgs{TransportArgs{OrgID: "00000000-0000-4000-8000-000000000001", RunID: "00000000-0000-4000-8000-000000000002"}}, deep, true)
+	service.observeFanoutFailure(context.Background(), PostSyncArgs{TransportArgs{OrgID: "00000000-0000-4000-8000-000000000001", RunID: "00000000-0000-4000-8000-000000000002"}}, deep, stageArgs, true)
 	if !strings.Contains(logs.String(), `"msg":"post_sync_fanout.chain_defect"`) || !strings.Contains(logs.String(), `"level":"WARN"`) || !strings.Contains(logs.String(), `"reason":"chain_bound"`) {
 		t.Fatalf("no chain-defect Warn line:\n%s", logs.String())
 	}
@@ -300,4 +303,41 @@ func TestChainDefectCounterIsIncremented(t *testing.T) {
 		}
 	}
 	t.Fatal("post_sync_error_chain_defect_total was not recorded")
+}
+
+func TestStepLabelIsAClosedVocabulary(t *testing.T) {
+	if got := stepLabel(postSyncStage("free text from anywhere")); got != synclog.ParseLabel("unknown") {
+		t.Fatalf("a free string reached the step label: %v", got)
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), "post_sync_failure.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := 0
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value := spec.(*ast.ValueSpec)
+			if ident, ok := value.Type.(*ast.Ident); !ok || ident.Name != "postSyncStage" {
+				continue
+			}
+			for index, name := range value.Names {
+				literal, ok := value.Values[index].(*ast.BasicLit)
+				if !ok {
+					t.Fatalf("stage %s is not a string literal", name.Name)
+				}
+				declared++
+				text := strings.Trim(literal.Value, `"`)
+				if _, known := postSyncStages[postSyncStage(text)]; !known || stepLabel(postSyncStage(text)) != synclog.ParseLabel(text) {
+					t.Errorf("stage constant %s (%q) is missing from postSyncStages", name.Name, text)
+				}
+			}
+		}
+	}
+	if declared != len(postSyncStages) || declared < 25 {
+		t.Fatalf("%d stage constants, %d in postSyncStages", declared, len(postSyncStages))
+	}
 }

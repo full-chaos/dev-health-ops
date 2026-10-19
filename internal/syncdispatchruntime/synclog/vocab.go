@@ -94,6 +94,7 @@ var (
 	KeyDatasetKey                   = Key{"dataset_key"}
 	KeyCostClass                    = Key{"cost_class"}
 	KeyReason                       = Key{"reason"}
+	KeyStep                         = Key{"step"}
 	KeyDeliveryRouteGeneration      = Key{"delivery_route_generation"}
 	KeyCurrentRouteGeneration       = Key{"current_route_generation"}
 	KeyClaimDeferredOutsideSnapshot = Key{"claim.deferred_outside_snapshot"}

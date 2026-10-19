@@ -175,6 +175,7 @@ on:
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
+      - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
       # contracts, so editing the page or either contract must run the gate
@@ -386,6 +387,7 @@ on:
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
+      - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
       # contracts, so editing the page or either contract must run the gate

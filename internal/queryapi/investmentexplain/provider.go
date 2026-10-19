@@ -2,46 +2,52 @@
 // investment-mix-explanation LLM call, reusing
 // internal/jobs/investment/categorize's already-ported Provider
 // abstraction (Provider/CompletionRequest/CompletionResult,
-// InvestmentMixExplanationRequest, MockProvider/OpenAIProvider/
-// LocalProvider, ResolveProviderKind/NewProviderFromEnv) rather than a
+// InvestmentMixExplanationRequest, MockProvider/SharedProvider,
+// ResolveProviderKind/NewProviderFromEnv) rather than a
 // second, parallel port -- that package already anticipated this caller
 // (InvestmentMixExplanationRequest's own doc comment: "No Go caller
 // builds this prompt yet; this constructor exists so a Provider
 // implementation has something concrete to be tested against today,
 // ahead of that caller landing").
 //
-// SCOPE, matching categorize.ResolveProviderKind's own documented
-// narrowing: this file resolves and constructs a provider for the
-// platform-default path only (mock, none, openai, local, ollama) -- org BYO
-// credential/model resolution (llm/credentials.py's
-// resolve_llm_org_settings_model / org_byo_provider_matches /
-// resolve_llm_credentials) and the anthropic/gemini/qwen backends have
-// no Go port anywhere in this repo yet, categorize's included. Widening
-// that is a separate, larger task than "wire provider.Complete with the
-// mock provider."
+// SCOPE: this file resolves and constructs a provider for the
+// platform-default path (mock, none, openai, anthropic, gemini, qwen, local,
+// ollama); provider_org.go adds the org BYO resolution.
 package investmentexplain
 
 import (
 	"context"
 	"fmt"
-	"os"
+	"log/slog"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // modelEnvByProvider ports llm/providers/__init__.py's
 // _MODEL_ENV_BY_PROVIDER, narrowed to the providers this port can
 // actually construct (categorize.IsProviderKindImplemented).
 var modelEnvByProvider = map[categorize.ProviderKind][]string{
-	categorize.ProviderKindOpenAI: {"LLM_MODEL_OPENAI"},
-	categorize.ProviderKindLocal:  {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
+	categorize.ProviderKindOpenAI:    {"LLM_MODEL_OPENAI"},
+	categorize.ProviderKindAnthropic: {"LLM_MODEL_ANTHROPIC"},
+	categorize.ProviderKindGemini:    {"LLM_MODEL_GEMINI", "GEMINI_MODEL"},
+	categorize.ProviderKindQwen:      {"LLM_MODEL_QWEN", "QWEN_MODEL"},
+	categorize.ProviderKindLocal:     {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
 }
 
-// defaultModelByProvider ports llm/providers/base.py's
-// DEFAULT_MODEL_BY_PROVIDER, narrowed the same way.
-var defaultModelByProvider = map[categorize.ProviderKind]string{
-	categorize.ProviderKindOpenAI: "gpt-5-mini",
-	categorize.ProviderKindLocal:  "llama3.2",
+// platformDefaultModel is the model a provider kind this package resolves
+// uses when nothing names one: the one resolver the runtime and the admin
+// budget status share (llmbudget.DefaultModel, ruling D6043), so the status
+// prices the model that would run. found is false for a kind outside
+// modelEnvByProvider, as before.
+func platformDefaultModel(kind categorize.ProviderKind) (string, bool) {
+	if _, resolved := modelEnvByProvider[kind]; !resolved {
+		return "", false
+	}
+	model := categorize.PlatformDefaultModel(kind)
+	return model, model != ""
 }
 
 // ResolveModelName ports resolve_model_name (llm/providers/__init__.py:
@@ -62,18 +68,28 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 	if model != "" {
 		return model, true
 	}
-	for _, envName := range modelEnvByProvider[kind] {
-		if value := os.Getenv(envName); value != "" {
-			return value, true
-		}
-	}
-	if value := os.Getenv("LLM_MODEL"); value != "" {
+	if value := platformExplainModel(); value != "" {
 		return value, true
 	}
-	if def, ok := defaultModelByProvider[kind]; ok {
+	if def, ok := platformDefaultModel(kind); ok {
 		return def, true
 	}
 	return "", false
+}
+
+// explainPurpose names this package's purpose in the platform purpose model
+// setting (LLM_MODEL_EXPLAIN).
+const explainPurpose = "explain"
+
+// platformExplainModel is LLM_MODEL_EXPLAIN, logged at Info whenever it
+// decides the model so an operator can see the setting taking effect.
+func platformExplainModel() string {
+	value := llmbudget.PlatformPurposeModel(explainPurpose, envsecrets.ProcessLookup)
+	if value != "" {
+		slog.Info("investmentexplain: model chosen by the platform purpose setting",
+			"purpose", explainPurpose, "setting", "LLM_MODEL_"+strings.ToUpper(explainPurpose), "model", value)
+	}
+	return value
 }
 
 // IsLLMAvailable ports is_llm_available (llm/providers/__init__.py:
@@ -118,7 +134,8 @@ func providerHasRequiredConfig(kind categorize.ProviderKind) bool {
 		return true
 	case categorize.ProviderKindNone:
 		return false
-	case categorize.ProviderKindOpenAI, categorize.ProviderKindLocal, categorize.ProviderKindOllama:
+	case categorize.ProviderKindOpenAI, categorize.ProviderKindAnthropic, categorize.ProviderKindGemini,
+		categorize.ProviderKindQwen, categorize.ProviderKindLocal, categorize.ProviderKindOllama:
 		provider, err := categorize.NewProviderFromEnv(kind)
 		if err != nil {
 			return false
@@ -182,12 +199,9 @@ const (
 )
 
 var goUnsupportedButPythonKnownProviderKinds = map[categorize.ProviderKind]struct{}{
-	categorize.ProviderKindAnthropic: {},
-	categorize.ProviderKindGemini:    {},
-	categorize.ProviderKindQwen:      {},
-	providerKindLMStudio:             {},
-	providerKindQwenLocal:            {},
-	providerKindQwenLMStudio:         {},
+	providerKindLMStudio:     {},
+	providerKindQwenLocal:    {},
+	providerKindQwenLMStudio: {},
 }
 
 // ResolveUnsupportedProviderKind resolves requestedProvider the same way

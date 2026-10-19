@@ -1058,34 +1058,38 @@ func normalizeGitHubProjectV2Item(
 		state = *content.State
 	}
 	status := githubProjectV2Status(statusRaw, labels, state)
-	row := githubWorkItemRow{
-		WorkItemID: workItemID, Provider: "github", Title: content.Title, Type: "issue",
-		Status: status, StatusRaw: nullableString(statusRaw), Description: content.Body,
-		RepoID: nil, ProjectID: stringPointer(projectScopeID), Assignees: assignees,
-		Reporter: reporter, CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(),
-		ClosedAt: closedAt, Labels: labels, StoryPoints: storyPoints, URL: content.URL,
-		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
+	source := githubWorkItemSource{
+		kind: githubProjectV2ItemSourceKind,
+		validate: func(row githubWorkItemRow, claim Claim) error {
+			return validateGitHubProjectV2Row(claim, row)
+		},
+		workItemID: workItemID, title: content.Title, typeName: "issue", status: status,
+		statusRaw: nullableString(statusRaw), description: content.Body,
+		projectID: stringPointer(projectScopeID), assignees: assignees, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), closedAt: closedAt,
+		labels: labels, storyPoints: storyPoints, url: content.URL,
 	}
 	if statusRaw == "" {
-		row.StatusRaw = nullableString(state)
+		source.statusRaw = nullableString(state)
 	}
 	if sprintID != "" {
-		row.SprintID = &sprintID
+		source.sprintID = &sprintID
 	}
 	if sprintName != "" {
-		row.SprintName = &sprintName
+		source.sprintName = &sprintName
 	}
 	if closedAt != nil {
 		completed := closedAt.UTC()
-		row.CompletedAt = &completed
+		source.completedAt = &completed
 	}
 	if content.Typename == "Issue" {
-		row.Type = githubIssueType(labels)
+		source.typeName = githubIssueType(labels)
 	}
-	if row.Description != nil && *row.Description == "" {
-		row.Description = nil
+	if source.description != nil && *source.description == "" {
+		source.description = nil
 	}
-	if err := validateGitHubProjectV2Row(claim, row); err != nil {
+	row, err := buildWorkItemRow(claim, source, normalizedAt)
+	if err != nil {
 		return githubWorkItemRow{}, nil, false, err
 	}
 	return row, transitions, true, nil

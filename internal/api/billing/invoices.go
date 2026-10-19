@@ -272,7 +272,7 @@ func (h handlers) voidInvoice(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := client.V1Invoices.VoidInvoice(ctx, inv.StripeInvoiceID, nil); err != nil {
 			h.logger.ErrorContext(ctx, "billing: stripe invoice void failed", "error", pyStripeError(err))
-			return detail(http.StatusBadGateway, "Failed to void invoice: "+pyStripeError(err)), nil
+			return detail(http.StatusBadGateway, "Failed to void invoice"), nil
 		}
 		now := h.nowUTC()
 		if _, err := tx.Exec(ctx, `UPDATE invoices SET status = 'void', voided_at = $2, updated_at = $2,

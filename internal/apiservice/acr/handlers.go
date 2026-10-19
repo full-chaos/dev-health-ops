@@ -1,14 +1,15 @@
-// Package acr serves the two internal routes acr's entitlement client calls
-// directly (bypassing ingress): GET /api/v1/internal/acr/health and
-// GET /api/v1/internal/acr/entitlements/{org_id}. Both routes are reachable
-// only inside the cluster network, so neither carries the bearer/mint check
-// or audit trail the Python routes had (api/internal/acr.py's credential
-// lookup and its InternalServiceCredentialAudit rows are not ported) -- the
-// network boundary is the control, not a per-request token
-// (deploy/helm/dev-health's TestInternalACRRoutesStayOffThePublicIngress
-// pins that no Ingress routes to the Go api). CHAOS-7181: apiservice mounts
-// these routes on the internal listener only (apiservice.InternalRoutes); the
-// public api listener has none. The
+// Package acr serves the internal routes acr's entitlement client calls
+// directly (bypassing ingress): GET /api/v1/internal/acr/health,
+// GET /api/v1/internal/acr/entitlements/{org_id} and the org llm-config
+// route. All are reachable only inside the cluster network (deploy/helm/dev-health's
+// TestInternalACRRoutesStayOffThePublicIngress pins that no Ingress routes to
+// the Go api) and every one also checks a svc_acr_ bearer. Health and
+// entitlements port api/internal/acr.py (CHAOS-9993): 100/minute per client
+// address (429), the credential looked up by token hash (401 unknown or
+// inactive, 403 without entitlements:read), and on the entitlement route
+// last_used_at plus one internal_service_credential_audits row per outcome.
+// CHAOS-7181: apiservice mounts these routes on the internal listener only
+// (apiservice.InternalRoutes); the public api listener has none. The
 // agent_context_runtime entitlement decision itself is ported in full via
 // internal/api/licensing, this package's only dependency for it.
 //
@@ -40,23 +41,50 @@ import (
 type Deps struct {
 	Store  EntitlementStore
 	Logger *slog.Logger
+	// LLMConfig and Credentials serve the llm-config route. Either nil makes
+	// that route answer 503; it never serves unauthenticated.
+	LLMConfig   LLMConfigSource
+	Credentials CredentialVerifier
+	// Auth and Limiter guard the health and entitlement routes with the
+	// svc_acr_ bearer check (api/internal/acr.py). A nil Auth makes them
+	// answer 503; they never serve unauthenticated. A nil Limiter does not
+	// rate limit.
+	Auth    CredentialStore
+	Limiter *httpapi.KeyedLimiter
+	// CategorizeLLMConfig and WorkerCredentials serve the worker llm-config
+	// route: the org's resolved categorize config for the heavy worker, which
+	// does not hold the settings encryption key. Either nil makes it answer 503.
+	CategorizeLLMConfig LLMConfigSource
+	WorkerCredentials   CredentialVerifier
 }
 
-// Routes is the acr area's route set. Both paths are internal, reachable
-// only inside the cluster network, so neither carries Credentials/Authz/
-// Tenant/Feature/Audit: the internal_svc_acr_token bearer check and its
-// audit trail (api/internal/acr.py) are not ported -- the network boundary
-// is the control, not a per-request token.
+// Routes is the acr area's route set. Every path is internal and checks its
+// own svc_acr_ bearer (routeAuth), so none carries the public Credentials/
+// Authz/Tenant/Feature/Audit middleware.
 func Routes(deps Deps) []httpapi.Route {
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
+	deps.Limiter.Declare()
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: "/api/v1/internal/acr/health", Handler: healthHandler(deps.Store, logger)},
+		{
+			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/health",
+			Handler: healthHandler(deps.Store, routeAuth{store: deps.Auth, limiter: deps.Limiter, logger: logger, route: routeHealth}, logger),
+		},
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/entitlements/{org_id}",
-			Handler: entitlementHandler(deps.Store, logger),
+			Handler: entitlementHandler(deps.Store, routeAuth{
+				store: deps.Auth, limiter: deps.Limiter, logger: logger, route: routeEntitlement, audited: true,
+			}, logger),
+		},
+		{
+			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/orgs/{org_id}/llm-config",
+			Handler: llmConfigHandler(deps.Credentials, deps.LLMConfig, logger),
+		},
+		{
+			Method: http.MethodGet, Pattern: "/api/v1/internal/workers/orgs/{org_id}/llm-config/categorize",
+			Handler: llmConfigHandler(deps.WorkerCredentials, deps.CategorizeLLMConfig, logger),
 		},
 	}
 }
@@ -80,19 +108,24 @@ type healthResponse struct {
 // (its credential lookup, api/internal/acr.py:93-103) and answers 503
 // "Service unavailable" when that read fails, so the Go route makes the
 // entitlement store's decision read (EntitlementStore.Ready): a nil store
-// or a failed read is that 503, anything else the static success body. No credential is checked (see the package comment).
-func healthHandler(store EntitlementStore, logger *slog.Logger) http.Handler {
+// or a failed read is that 503, anything else the static success body. The bearer is checked first (routeAuth).
+func healthHandler(store EntitlementStore, auth routeAuth, logger *slog.Logger) http.Handler {
 	response := healthResponse{
 		SchemaVersion: healthSchemaVersion, Service: "dev-health-ops", Status: "ok",
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.authenticate(w, r, ""); !ok {
+			return
+		}
 		if store == nil {
 			logger.ErrorContext(r.Context(), "acr health: no entitlement store configured")
+			countInternal(r.Context(), routeHealth, "unconfigured")
 			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
 			return
 		}
 		if err := store.Ready(r.Context()); err != nil {
 			logger.ErrorContext(r.Context(), "acr health: entitlement store unreachable", slog.Any("error", err))
+			countInternal(r.Context(), routeHealth, "store_unavailable")
 			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
 			return
 		}
@@ -100,6 +133,7 @@ func healthHandler(store EntitlementStore, logger *slog.Logger) http.Handler {
 		body.Set("schema_version", response.SchemaVersion)
 		body.Set("service", response.Service)
 		body.Set("status", response.Status)
+		countInternal(r.Context(), routeHealth, outcomeSuccess)
 		writeModel(w, http.StatusOK, body)
 	})
 }
@@ -110,39 +144,61 @@ func healthHandler(store EntitlementStore, logger *slog.Logger) http.Handler {
 // 404 (malformed id, unrouted path, proxy) is not.
 const UnknownOrganizationCode = "acr_organization_unknown"
 
-func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handler {
+func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		orgID := r.PathValue("org_id")
-		if store == nil {
-			logger.ErrorContext(r.Context(), "acr entitlement lookup: no entitlement store configured",
-				slog.String("org_id", orgID))
-			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+		cred, ok := auth.authenticate(w, r, orgID)
+		if !ok {
 			return
 		}
-		entitlement, err := store.Lookup(r.Context(), orgID)
+		// finish writes the audit row for outcome before the answer, as
+		// Python commits it before returning; an audit that cannot be
+		// written is 503, never an unaudited answer.
+		finish := func(outcome string, write func()) {
+			if !auth.audit(ctx, cred.ID, orgID, outcome) {
+				auth.unavailable(w, r, "audit_failed")
+				return
+			}
+			countInternal(ctx, routeEntitlement, outcome)
+			logger.InfoContext(ctx, "acr entitlement lookup: answered",
+				slog.String("org_id", orgID), slog.String("credential_id", cred.ID), slog.String("outcome", outcome))
+			write()
+		}
+		if store == nil {
+			logger.ErrorContext(ctx, "acr entitlement lookup: no entitlement store configured",
+				slog.String("org_id", orgID))
+			finish(outcomeLookupFailed, func() { writeDetail(w, http.StatusServiceUnavailable, "Service unavailable") })
+			return
+		}
+		entitlement, err := store.Lookup(ctx, orgID)
 		switch {
 		case err == nil:
-			body := pyjson.NewObject()
-			body.Set("schema_version", entitlementSchemaVersion)
-			body.Set("org_id", entitlement.OrgID)
-			body.Set("agent_context_runtime", entitlement.AgentContextRuntime)
-			body.Set("acr_service_model", entitlement.ACRServiceModel)
-			writeModel(w, http.StatusOK, body)
+			finish(outcomeSuccess, func() {
+				body := pyjson.NewObject()
+				body.Set("schema_version", entitlementSchemaVersion)
+				body.Set("org_id", entitlement.OrgID)
+				body.Set("agent_context_runtime", entitlement.AgentContextRuntime)
+				body.Set("acr_service_model", entitlement.ACRServiceModel)
+				writeModel(w, http.StatusOK, body)
+			})
 		case errors.Is(err, ErrOrgUnknown):
-			body := pyjson.NewObject()
-			body.Set("detail", "Not found")
-			body.Set("code", UnknownOrganizationCode)
-			writeModel(w, http.StatusNotFound, body)
+			finish(outcomeOrgNotFound, func() {
+				body := pyjson.NewObject()
+				body.Set("detail", "Not found")
+				body.Set("code", UnknownOrganizationCode)
+				writeModel(w, http.StatusNotFound, body)
+			})
 		case errors.Is(err, ErrOrgNotFound):
-			writeDetail(w, http.StatusNotFound, "Not found")
+			finish(outcomeOrgNotFound, func() { writeDetail(w, http.StatusNotFound, "Not found") })
 		case errors.Is(err, ErrUnavailable):
-			logger.ErrorContext(r.Context(), "acr entitlement lookup: store unavailable",
+			logger.ErrorContext(ctx, "acr entitlement lookup: store unavailable",
 				slog.String("org_id", orgID), slog.Any("error", err))
-			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+			finish(outcomeLookupFailed, func() { writeDetail(w, http.StatusServiceUnavailable, "Service unavailable") })
 		default:
-			logger.ErrorContext(r.Context(), "acr entitlement lookup: unclassified error",
+			logger.ErrorContext(ctx, "acr entitlement lookup: unclassified error",
 				slog.String("org_id", orgID), slog.Any("error", err))
-			policy.WriteInternal(w)
+			finish(outcomeLookupFailed, func() { policy.WriteInternal(w) })
 		}
 	})
 }

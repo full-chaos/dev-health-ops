@@ -1,21 +1,30 @@
 #!/usr/bin/env bash
 # POST-ROLL STEP LINE (named): Postgres role privilege READ-BACK via has_table_privilege (CHAOS-6666 deploy-order note: the migrate hook
 # must grant BEFORE the api serves the route, else the route answers a generic 500 "permission denied").
-# usage: pg-grants-check.sh <bigboy|prod> <expect-file>   expect-file lines: `<role> <table> <PRIV>[,<PRIV>...]`  (# comments ok)
+# usage: pg-grants-check.sh <bigboy|prod> <expect-file>   expect-file lines: `<role> <table> <PRIV>[,<PRIV>...]` or `<role> <table>.<column> <PRIV>[,...]`  (# comments ok)
+# An added-privileges read-back (a privilege held), not an exactness check: exactness is the readiness gate's job (CheckAPIAuthorization).
 # CHAOS-8371 (D4566 class rules): bigboy reaches Postgres with `docker compose exec -T postgres` (compose verbs only, never a container
 # name); psql runs with `-w` and NO PGPASSWORD (the approved read-only psql form): no password is set, read or expanded anywhere, host or container.
 # Read-only. PG_OK when every expected privilege is held; PG_FAIL lists the missing ones. Role/table names only, no secrets.
 set -u
+HERE=$(cd "$(dirname "$0")" && pwd)
 MODE=${1:?bigboy|prod}; EXP=${2:?expect file}
 run_psql() {
-  if [ "$MODE" = bigboy ]; then (cd /home/ubuntu/devhealth && docker compose --env-file ops/.env exec -T postgres sh -c 'psql -w -U $POSTGRES_USER -d ${POSTGRES_DB:-devhealth} -X -A -t')
+  if [ "$MODE" = bigboy ]; then (R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd); cd "$R"; unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null; docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml" exec -T postgres sh -c 'psql -w -U $POSTGRES_USER -d ${POSTGRES_DB:-devhealth} -X -A -t')
   else KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n dev-health exec -i dev-health-ops-postgresql-0 -- sh -c 'psql -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -A -t'; fi
 }
 SQL=""; N=0
 while read -r role table privs; do
   [ -z "${role:-}" ] && continue; case "$role" in \#*) continue;; esac
   for p in ${privs//,/ }; do
-    SQL+="select '$role','$table','$p', coalesce((select has_table_privilege('$role','public.$table','$p') where to_regclass('public.$table') is not null),false), to_regclass('public.$table') is not null;"$'\n'; N=$((N+1))
+    case "$table" in
+      *.*) # `<table>.<column>`: a column-scoped privilege (CHAOS-10113); a column that does not exist reads as missing, not as a psql error
+        tbl=${table%%.*}; col=${table#*.}
+        SQL+="select '$role','$table','$p', coalesce((select has_column_privilege('$role','public.$tbl','$col','$p') where exists (select 1 from pg_attribute where attrelid = to_regclass('public.$tbl') and attname = '$col' and not attisdropped)),false), to_regclass('public.$tbl') is not null;"$'\n';;
+      *)
+        SQL+="select '$role','$table','$p', coalesce((select has_table_privilege('$role','public.$table','$p') where to_regclass('public.$table') is not null),false), to_regclass('public.$table') is not null;"$'\n';;
+    esac
+    N=$((N+1))
   done
 done < "$EXP"
 [ "$N" -gt 0 ] || { echo "PG_FAIL no expectations parsed"; exit 1; }

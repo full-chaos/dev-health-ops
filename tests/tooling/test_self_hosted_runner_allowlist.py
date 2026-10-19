@@ -149,6 +149,65 @@ def _iter_string_values(node, path=""):
         yield path, node
 
 
+# CHAOS-9949: heavy jobs are ANDed with the draft gate, so a draft PR without the
+# `ci:full` label skips them. The gate is a prefix; the allow-list condition behind
+# it must stay EXACTLY as pinned below.
+DRAFT_GATE = (
+    "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && "
+    "!contains(github.event.pull_request.labels.*.name, 'ci:full')))"
+)
+DRAFT_GATED_JOBS = {
+    ("codeql-analysis.yml", "analyze"),
+    ("docker-images.yml", "dind-smoke-test"),
+    ("docker-images.yml", "go-api-tools-build"),
+    ("docker-images.yml", "go-build"),
+    ("docker-images.yml", "go-build-dho-arm64"),
+    ("go-auth-service.yml", "auth-changes"),
+    ("go.yml", "dind-smoke-test"),
+    ("go.yml", "go-auth-compose-proof"),
+    ("go.yml", "go-arm64-numeric-parity"),
+    ("go.yml", "go-container-reproducibility"),
+    ("go.yml", "go-container-reproducibility-self-hosted"),
+    ("go.yml", "go-container-security"),
+    ("go.yml", "go-container-smoke"),
+    ("go.yml", "go-storage-integration-plan"),
+    ("go.yml", "graphql-wire-parity"),
+    ("live-e2e.yml", "live-e2e"),
+    ("live-e2e.yml", "metrics-executed-proof"),
+    ("security-scan.yml", "pip-audit"),
+    ("security-scan.yml", "semgrep"),
+    ("venue-oracles-changed.yml", "venue-oracles-changed"),
+}
+
+
+def _ungated(value: str) -> str:
+    prefix = DRAFT_GATE + " && ("
+    if value.startswith(prefix) and value.endswith(")"):
+        return value[len(prefix) : -1]
+    return value
+
+
+def test_draft_gated_jobs_carry_the_draft_gate() -> None:
+    for fname, job_name in sorted(DRAFT_GATED_JOBS):
+        value = str(yaml.safe_load(_read(fname))["jobs"][job_name]["if"])
+        assert value == DRAFT_GATE or value.startswith(DRAFT_GATE + " && ("), (
+            f"{fname}:{job_name} lost the draft gate -- got {value!r}"
+        )
+
+
+def test_every_draft_gated_job_is_pinned() -> None:
+    found = set()
+    for path in sorted(WORKFLOWS_DIR.glob("*.yml")):
+        jobs = yaml.safe_load(path.read_text(encoding="utf-8")).get("jobs") or {}
+        for job_name, job in jobs.items():
+            if "'ci:full'" in str(job.get("if", "")):
+                found.add((path.name, job_name))
+    assert found == DRAFT_GATED_JOBS, (
+        f"unpinned: {sorted(found - DRAFT_GATED_JOBS)}; "
+        f"pinned but not gated: {sorted(DRAFT_GATED_JOBS - found)}"
+    )
+
+
 def test_no_deny_list_fragment_survives_in_routed_workflows() -> None:
     offenders = []
     for name in ROUTED_WORKFLOW_FILES:
@@ -235,6 +294,8 @@ def test_go_container_reproducibility_twin_is_a_literal_negation() -> None:
     jobs = yaml.safe_load(_read("go.yml"))["jobs"]
     hosted = str(jobs["go-container-reproducibility"]["if"])
     self_hosted = str(jobs["go-container-reproducibility-self-hosted"]["if"])
+    self_hosted = _ungated(self_hosted)
+    hosted = _ungated(hosted)
     assert self_hosted == ALLOWLIST_CONDITION, (
         f"go-container-reproducibility-self-hosted's if: does not EXACTLY "
         f"match the allow-list condition -- got {self_hosted!r}, want {ALLOWLIST_CONDITION!r}"
@@ -268,7 +329,7 @@ def test_dind_smoke_test_and_integration_use_the_allowlist_condition() -> None:
     for (fname, job_name), field in _REMAINING_IF_SITES.items():
         jobs = yaml.safe_load(_read(fname))["jobs"]
         assert job_name in jobs, f"{fname}: job {job_name!r} not found"
-        value = str(jobs[job_name].get(field, ""))
+        value = _ungated(str(jobs[job_name].get(field, "")))
         assert value == ALLOWLIST_CONDITION, (
             f"{fname}:{job_name} {field} does not EXACTLY match the "
             f"allow-list condition -- got {value!r}, want {ALLOWLIST_CONDITION!r}"

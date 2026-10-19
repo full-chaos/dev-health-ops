@@ -13,6 +13,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider/teamprovidertest"
 )
 
 type productSink struct {
@@ -59,6 +61,28 @@ func (s *productSink) PrepareBatch(_ context.Context, query string, _ ...driver.
 	return s.batch, nil
 }
 
+// Exec stands in for the team.v1 write (teamprovider.Insert): it takes the
+// next batch as PrepareBatch does and appends each row's stated values.
+func (s *productSink) Exec(ctx context.Context, query string, args ...any) error {
+	if !teamprovidertest.IsInsert(query) {
+		return fmt.Errorf("productSink: unexpected Exec %q", query)
+	}
+	batch, err := s.PrepareBatch(ctx, query)
+	if err != nil {
+		return err
+	}
+	_, writes, err := teamprovidertest.Decode(query, args)
+	if err != nil {
+		return err
+	}
+	for _, write := range writes {
+		if err := batch.Append(write.Values...); err != nil {
+			return err
+		}
+	}
+	return batch.Send()
+}
+
 func (s *productSink) Query(_ context.Context, query string, args ...any) (driver.Rows, error) {
 	// The team id carry's count read (providersync.CarryTeamIDs) runs before
 	// every team.v1 and identity.v1 write; this store holds no bare id.
@@ -76,6 +100,9 @@ func (s *productSink) Query(_ context.Context, query string, args ...any) (drive
 			rows[index] = []any{id}
 		}
 		return &productRows{rows: rows}, nil
+	}
+	if query == teamprovider.Query {
+		return &productRows{}, nil // no stored provider identity
 	}
 	if query == teamcreated.Query {
 		s.createdCalls++

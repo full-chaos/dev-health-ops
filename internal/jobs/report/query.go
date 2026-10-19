@@ -322,16 +322,18 @@ func mustLoadMetricRegistry() map[string]metricDefinition {
 // and applied to each entry at load (applyGoDeclarations).
 //
 // registryTableToSchemaTable maps a source table the registry names to the
-// table the migrations create. The Python registry names two tables that no
-// migration builds, and one it still names that the Go writers retired: the rule
-// classifier's investment_metrics_daily is no longer written (CHAOS-9264), and
-// its counts are read from work_item_completion_daily. The registry's
+// table the migrations create. The registry names one table that the Go writers
+// retired: the rule classifier's investment_metrics_daily is no longer written
+// (CHAOS-9264), and its counts are read from work_item_completion_daily. The two
+// Python names no migration built (ic_landscape_rolling, work_item_state_duration_daily)
+// stay as read aliases of an older registry artifact; the current artifact names the
+// migrated tables. The registry's
 // investment_area and project_stream entries stay text and are refused as
-// charts; churn_loc is read from the new table (it holds 0 there, as it did).
+// charts; churn_loc is read from the new table (NULL there when no sized pull request is linked, CHAOS-9920).
 var registryTableToSchemaTable = map[string]string{
+	"investment_metrics_daily":       "work_item_completion_daily",
 	"ic_landscape_rolling":           "ic_landscape_rolling_30d",
 	"work_item_state_duration_daily": "work_item_state_durations_daily",
-	"investment_metrics_daily":       "work_item_completion_daily",
 }
 
 // nonNumericMetrics names the registry entries whose column is not a number:
@@ -359,6 +361,8 @@ const (
 
 func applyGoDeclarations(definition metricDefinition) metricDefinition {
 	if table, ok := registryTableToSchemaTable[definition.SourceTable]; ok {
+		slog.Debug("report metric registry source table aliased to the migrated table",
+			"metric", definition.CanonicalName, "registry_table", definition.SourceTable, "table", table)
 		definition.SourceTable = table
 	}
 	definition.ValueKind = valueKindNumeric
@@ -658,7 +662,7 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		definition.hasDimension("day") {
 		xExpression, xType, temporal = "toDate("+day+")", "Date", true
 	}
-	yExpression := averageExpression(definition.SourceTable, spec.Metric)
+	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
 		// sum() of an unsigned integer column is UInt64 in ClickHouse and the
 		// chart read scans y into a float64, which the driver refuses. Cast

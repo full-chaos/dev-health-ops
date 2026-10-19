@@ -151,6 +151,12 @@ type PlannerInput struct {
 	Sources              []PlanSource
 	Datasets             []PlanDataset
 	Watermarks           map[WatermarkKey]time.Time
+	// FailureStreaks is, per PlanSource.ID, the run of equal failures that
+	// ended the source's newest work-items units (CHAOS-8802). A cause class
+	// of "result too large" or "time limit" halves the next window; the
+	// threshold slows the source down to one try a day. Nil or a missing key
+	// plans exactly as before.
+	FailureStreaks map[string]providersync.FailureStreak
 	// ExecutedProof is the CHAOS-4060 durable, tri-state evidence snapshot:
 	// which provider/dataset pairs have at least one live sync_run_units row
 	// that completed with persisted-row evidence (proven), have been
@@ -544,6 +550,19 @@ func buildWorkItemFamilyUnit(
 	// which exists because the pre-fix index-aligned merge raised on a
 	// mismatched window count and took down a merely partially-caught-up
 	// plan.
+	streak := input.FailureStreaks[source.ID]
+	if streak.SlowedDownAt(now) {
+		globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeSlowedDown)
+		slog.Default().Info("sync.plan.work_items_slowed_down",
+			slog.String("provider", provider),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID),
+			slog.String("cause_class", streak.Class),
+			slog.Int("failures_in_a_row", streak.Count),
+			slog.Time("last_failure_at", streak.LastAt),
+			slog.Duration("retry_interval", providersync.FailureStreakRetryInterval))
+		return PlannedUnit{}, false
+	}
 	var earliest *time.Time
 	var latest time.Time
 	contributing := make([]PlanDataset, 0, len(family))
@@ -575,6 +594,37 @@ func buildWorkItemFamilyUnit(
 	}
 	if openStart {
 		earliest = nil
+	}
+	// The members are capped one by one above, each from its OWN start, so the
+	// merged span (earliest start, latest end) can still be wider than one
+	// capped window when their watermarks differ. The unit's size follows the
+	// merged span, so the same rule is applied to it. The end only moves in
+	// (clause C4): a member whose start is later than the capped end is
+	// covered by a later tick, and the monotonic watermark write keeps its
+	// watermark where it is.
+	uncapped := latest
+	latest = applyHeavyWindowRatchet(
+		input.Mode, WindowRatchetClass(provider, canonicalWorkItemsDataset, canonical.CostClass),
+		earliest, latest, input.WatermarkOverlap,
+	)
+	if latest.Before(uncapped) && earliest != nil {
+		slog.Default().Debug("sync.plan.work_items_window_capped",
+			slog.String("provider", provider),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID),
+			slog.Duration("window_before", uncapped.Sub(*earliest)),
+			slog.Duration("window_after", latest.Sub(*earliest)))
+	}
+	if halved, ok := halveWindowAfterFailures(earliest, latest, streak); ok {
+		slog.Default().Info("sync.plan.work_items_window_halved",
+			slog.String("provider", provider),
+			slog.String("org_id", input.OrgID),
+			slog.String("source_id", source.ID),
+			slog.String("cause_class", streak.Class),
+			slog.Int("size_or_time_failures_in_a_row", streak.ShrinkCount),
+			slog.Duration("window_before", latest.Sub(*earliest)),
+			slog.Duration("window_after", halved.Sub(*earliest)))
+		latest = halved
 	}
 	flags := cloneFlags(canonical.ProcessorFlags)
 	// CHAOS-3606: the native work-item route has one indivisible all-five
@@ -726,9 +776,51 @@ func resolveWindow(
 	now, before time.Time,
 ) (*time.Time, time.Time, bool) {
 	start := resolveWindowStart(input, source, dataset, spec, now)
-	end := applyHeavyWindowRatchet(input.Mode, spec.CostClass, start, before, input.WatermarkOverlap)
+	end := applyHeavyWindowRatchet(
+		input.Mode, WindowRatchetClass(source.Provider, dataset.Key, spec.CostClass), start, before, input.WatermarkOverlap,
+	)
 	return normalizeStampingWindow(start, end, now, input.WatermarkOverlap)
 }
+
+// WindowRatchetClass is the class the incremental window ratchet scopes on
+// for one provider dataset: the registry cost class, except that a work-item
+// family dataset of a provider in workItemWindowBoundedProviders is ratcheted
+// like a HEAVY one.
+//
+// A work-items unit is one in-memory batch per destination table, bounded at
+// 100,000 rows and 64 MiB a table and at the job time limit, and its size is
+// linear in the window span exactly as a HEAVY unit's is. A first sync or a
+// long catch-up planned as ONE window can exceed those bounds for a large
+// source; it is then refused after the whole fetch, no watermark is stamped,
+// and the next tick plans the identical unfittable span for ever -- the
+// failure mode the ratchet exists to remove.
+//
+// The registry cost class itself stays untouched on purpose. It also selects
+// the provider request budget and the dispatch admission cap (4/2/1 by
+// class), and a planned unit's cost_class must equal the capability
+// registry's value or claim validation rejects it. Only the WINDOW rule
+// widens here.
+func WindowRatchetClass(provider, dataset, costClass string) string {
+	if _, bounded := workItemWindowBoundedProviders[strings.ToLower(provider)]; bounded &&
+		workitemcontract.IsFamilyDataset(dataset) {
+		return heavyCostClass
+	}
+	return costClass
+}
+
+// workItemWindowBoundedProviders are the providers whose work-items route
+// leaves out every item updated after the window END, so a capped window is a
+// smaller unit: GitHub skips those issues and pull requests after the list
+// call, and Linear filters updatedAt on both ends.
+//
+// GitLab and Jira are absent because their routes bound the window START
+// only: GitLab sends updated_after and no updated_before, and the Jira query
+// has no upper bound on `updated` and always includes every open issue. For
+// them a capped window would fetch the whole remaining depth in every window
+// -- the same largest unit as today, repeated once per window -- so the cap
+// would add cost and bound nothing. They join this set when their route
+// honours the window end.
+var workItemWindowBoundedProviders = setOf("github", "linear")
 
 func resolveWindowStart(input PlannerInput, source PlanSource, dataset PlanDataset, spec datasetSpec, now time.Time) *time.Time {
 	if input.Mode == SyncModeIncremental {
@@ -835,7 +927,8 @@ func effectiveHeavyMaxWindow(overlap time.Duration) time.Duration {
 // (CHAOS-3412 clauses C2-C6), mirroring the ratchet block in Python's
 // _resolve_windows.
 //
-//   - C2 SCOPE: HEAVY cost class only, resolved from the dataset registry.
+//   - C2 SCOPE: HEAVY cost class, resolved from the dataset registry, and the
+//     work-item family of the providers WindowRatchetClass names.
 //   - C3 APPLICATION: both incremental sub-cases -- cold start (no watermark)
 //     AND behind-watermark. A long-idle org ratchets like a cold-start one.
 //   - C4 DIRECTION: a MIN, never an assignment. window_start never moves, and
@@ -1004,4 +1097,27 @@ func setOf(values ...string) map[string]struct{} {
 		result[value] = struct{}{}
 	}
 	return result
+}
+
+// halveWindowAfterFailures shortens the end of a work-items window to
+// span / 2^failures after a run of size or time-limit failures (CHAOS-8802),
+// never below providersync.WindowHalvingFloor and never past the natural end.
+// An open start has no span to halve. The watermark stamps at the new end, so
+// the following runs continue from there.
+func halveWindowAfterFailures(start *time.Time, end time.Time, streak providersync.FailureStreak) (time.Time, bool) {
+	if start == nil || !streak.ShrinksWindow() {
+		return end, false
+	}
+	span := end.Sub(*start)
+	halved := span
+	for i := 0; i < streak.ShrinkCount && halved > providersync.WindowHalvingFloor; i++ {
+		halved /= 2
+	}
+	if halved < providersync.WindowHalvingFloor {
+		halved = providersync.WindowHalvingFloor
+	}
+	if halved >= span {
+		return end, false
+	}
+	return start.Add(halved), true
 }

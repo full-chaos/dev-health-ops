@@ -32,7 +32,8 @@ const (
 
 	graphQLRoute = "/graphql"
 
-	gitlabProjectRoute = "/projects/{project}"
+	gitlabProjectRoute    = "/projects/{project}"
+	gitlabGroupEpicsRoute = "/groups/{group}/epics"
 
 	gitlabCommitsRoute       = gitlabProjectRoute + "/repository/commits"
 	gitlabMergeRequestsRoute = gitlabProjectRoute + "/merge_requests"

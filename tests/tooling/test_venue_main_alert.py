@@ -108,7 +108,9 @@ def _run(
     writes = [
         line
         for line in lines
-        if line.startswith(("issue create", "issue comment", "issue close", "label create"))
+        if line.startswith(
+            ("issue create", "issue comment", "issue close", "label create")
+        )
     ]
     return proc, writes
 
@@ -119,7 +121,8 @@ def _issue(number: int, body: str = "", comments: list[str] | None = None) -> di
 
 def _api_calls(tmp_path: Path) -> list[str]:
     return [
-        line for line in (tmp_path / "calls.log").read_text().splitlines()
+        line
+        for line in (tmp_path / "calls.log").read_text().splitlines()
         if line.startswith("api ")
     ]
 
@@ -127,7 +130,10 @@ def _api_calls(tmp_path: Path) -> list[str]:
 def test_failed_run_opens_one_labelled_issue(tmp_path):
     proc, writes = _run(tmp_path, [(300, "failure", RED), (200, "success", GREEN)], 300)
     assert proc.returncode == 0, proc.stderr
-    assert [w.split(" -R")[0] for w in writes] == ["label create venue-oracles-main-red", "issue create"]
+    assert [w.split(" -R")[0] for w in writes] == [
+        "label create venue-oracles-main-red",
+        "issue create",
+    ]
     create = writes[1]
     assert f"--label {LABEL}" in create
     assert "actions/runs/300" in create
@@ -176,7 +182,14 @@ def test_a_run_already_on_the_issue_is_not_commented_twice(tmp_path):
         tmp_path,
         [(300, "failure", RED)],
         300,
-        issues=[_issue(41, comments=["Still red. Run https://github.com/o/r/actions/runs/300 at x"])],
+        issues=[
+            _issue(
+                41,
+                comments=[
+                    "Still red. Run https://github.com/o/r/actions/runs/300 at x"
+                ],
+            )
+        ],
     )
     assert proc.returncode == 0, proc.stderr
     assert writes == []
@@ -194,7 +207,9 @@ def test_a_run_id_that_is_a_prefix_of_a_reported_id_is_still_reported(tmp_path):
 
 
 def test_the_lowest_numbered_open_issue_is_the_one(tmp_path):
-    proc, writes = _run(tmp_path, [(300, "failure", RED)], 300, issues=[_issue(50), _issue(41)])
+    proc, writes = _run(
+        tmp_path, [(300, "failure", RED)], 300, issues=[_issue(50), _issue(41)]
+    )
     assert proc.returncode == 0, proc.stderr
     assert len(writes) == 1 and writes[0].startswith("issue comment 41 ")
 
@@ -244,13 +259,17 @@ def test_success_with_no_open_issue_reads_nothing(tmp_path):
 
 def test_other_conclusions_do_nothing(tmp_path):
     for conclusion in ("skipped", "neutral", "action_required", "stale"):
-        proc, writes = _run(tmp_path, [(300, conclusion, GREEN)], 300, issues=[_issue(41)])
+        proc, writes = _run(
+            tmp_path, [(300, conclusion, GREEN)], 300, issues=[_issue(41)]
+        )
         assert proc.returncode == 0, proc.stderr
         assert writes == []
 
 
 def test_a_failed_issue_read_fails_the_job(tmp_path):
-    proc, writes = _run(tmp_path, [(300, "failure", RED)], 300, FAKE_GH_FAIL_ISSUE_LIST="1")
+    proc, writes = _run(
+        tmp_path, [(300, "failure", RED)], 300, FAKE_GH_FAIL_ISSUE_LIST="1"
+    )
     assert proc.returncode != 0
     assert writes == []
 

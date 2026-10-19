@@ -701,7 +701,7 @@ func fetchGitHubBlame(
 	if err != nil {
 		return nil, providerfoundation.ErrNormalizationInvalid
 	}
-	response, err := client.DoRoute(ctx, "POST", graphQLRoute, gitHubGraphQLURL(client), bytes.NewReader(body))
+	response, err := client.DoRoute(providerfoundation.WithBudgetDimension(ctx, BudgetContentsBlob), "POST", graphQLRoute, gitHubGraphQLURL(client), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

@@ -1,4 +1,4 @@
-// Package bigboycompose pins bigboy's compose overlays (ci/bigboy). Test-only.
+// Package bigboycompose pins bigboy's compose file (ci/bigboy/compose.bigboy.yml). Test-only.
 package bigboycompose_test
 
 import (
@@ -28,6 +28,11 @@ func toolsDir(t *testing.T) string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "ci", "bigboy")
 }
 
+func toolsPath(t *testing.T, name string) string {
+	t.Helper()
+	return filepath.Join(toolsDir(t), name)
+}
+
 func read(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -37,13 +42,62 @@ func read(t *testing.T, path string) string {
 	return string(raw)
 }
 
+// environment reads a compose `environment` as a mapping or as a KEY=VALUE list (the merged file keeps both forms).
+type environment map[string]string
+
+func (e *environment) UnmarshalYAML(node *yaml.Node) error {
+	out := map[string]string{}
+	switch node.Kind {
+	case yaml.MappingNode:
+		if err := node.Decode(&out); err != nil {
+			return err
+		}
+	case yaml.SequenceNode:
+		var items []string
+		if err := node.Decode(&items); err != nil {
+			return err
+		}
+		for _, item := range items {
+			key, value, _ := strings.Cut(item, "=")
+			out[key] = value
+		}
+	}
+	*e = out
+	return nil
+}
+
+const composeName = "compose.bigboy.yml"
+
+// commandArgs reads a compose command given as a list or as a shell-form string.
+type commandArgs []string
+
+func (c *commandArgs) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		*c = strings.Fields(node.Value)
+		return nil
+	}
+	var items []string
+	if err := node.Decode(&items); err != nil {
+		return err
+	}
+	*c = items
+	return nil
+}
+
+// labelMap reads compose labels given as a mapping or as a KEY=VALUE list.
+type labelMap map[string]string
+
+func (l *labelMap) UnmarshalYAML(node *yaml.Node) error {
+	return (*environment)(l).UnmarshalYAML(node)
+}
+
 type override struct {
 	Services map[string]struct {
-		Command     []string          `yaml:"command"`
-		Environment map[string]string `yaml:"environment"`
-		Labels      map[string]string `yaml:"labels"`
-		Profiles    []string          `yaml:"profiles"`
-		Other       map[string]any    `yaml:",inline"`
+		Command     commandArgs    `yaml:"command"`
+		Environment environment    `yaml:"environment"`
+		Labels      labelMap       `yaml:"labels"`
+		Profiles    []string       `yaml:"profiles"`
+		Other       map[string]any `yaml:",inline"`
 	} `yaml:"services"`
 }
 
@@ -51,7 +105,7 @@ func load(t *testing.T) override {
 	t.Helper()
 	var o override
 	// compose's `!override` tag is read as the value it wraps.
-	if err := yaml.Unmarshal([]byte(read(t, filepath.Join(toolsDir(t), "compose.bigboy.billing-edge.yml"))), &o); err != nil {
+	if err := yaml.Unmarshal([]byte(read(t, filepath.Join(toolsDir(t), composeName))), &o); err != nil {
 		t.Fatalf("parse the override: %v", err)
 	}
 	return o
@@ -62,7 +116,7 @@ func TestGoAPIGetsTheBillingListenerAndTheRouterLabels(t *testing.T) {
 	if !ok {
 		t.Fatal("the override has no go-api service")
 	}
-	if want := []string{"api", "--api-billing-edge-addr=:8010"}; !reflect.DeepEqual(goAPI.Command, want) {
+	if want := []string{"api", "--api-billing-edge-addr=:8010"}; !reflect.DeepEqual([]string(goAPI.Command), want) {
 		t.Fatalf("go-api command = %v, want %v", goAPI.Command, want)
 	}
 	want := map[string]string{
@@ -73,7 +127,7 @@ func TestGoAPIGetsTheBillingListenerAndTheRouterLabels(t *testing.T) {
 		"traefik.http.routers.billing-go.service":                   "billing-go",
 		"traefik.http.services.billing-go.loadbalancer.server.port": "8010",
 	}
-	if !reflect.DeepEqual(goAPI.Labels, want) {
+	if !reflect.DeepEqual(map[string]string(goAPI.Labels), want) {
 		t.Fatalf("go-api labels = %v, want %v", goAPI.Labels, want)
 	}
 }
@@ -81,9 +135,6 @@ func TestGoAPIGetsTheBillingListenerAndTheRouterLabels(t *testing.T) {
 func TestTheThreeValuesAreNameOnlyPassThrough(t *testing.T) {
 	env := load(t).Services["go-api"].Environment
 	names := []string{"STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "LICENSE_PRIVATE_KEY"}
-	if len(env) != len(names) {
-		t.Fatalf("go-api environment = %v, want exactly %v", env, names)
-	}
 	for _, name := range names {
 		if got, want := env[name], "${"+name+":-}"; got != want {
 			t.Fatalf("%s = %q, want the name-only pass-through %q", name, got, want)
@@ -96,15 +147,15 @@ func TestThePythonBillingEdgeServiceIsRetiredByProfile(t *testing.T) {
 	if !ok {
 		t.Fatal("the override does not retire billing-edge")
 	}
-	if !reflect.DeepEqual(edge.Profiles, []string{"retired-billing-edge"}) || len(edge.Command)+len(edge.Environment)+len(edge.Labels)+len(edge.Other) != 0 {
-		t.Fatalf("billing-edge = %+v, want only the profile retired-billing-edge", edge)
+	if !reflect.DeepEqual(edge.Profiles, []string{"retired-billing-edge"}) {
+		t.Fatalf("billing-edge profiles = %v, want exactly [retired-billing-edge]", edge.Profiles)
 	}
 	entries, err := os.ReadDir(toolsDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == "compose.bigboy.billing-edge.yml" {
+		if entry.IsDir() || entry.Name() == composeName {
 			continue
 		}
 		if strings.Contains(read(t, filepath.Join(toolsDir(t), entry.Name())), "retired-billing-edge") && !strings.HasSuffix(entry.Name(), ".md") {
@@ -113,33 +164,20 @@ func TestThePythonBillingEdgeServiceIsRetiredByProfile(t *testing.T) {
 	}
 }
 
-func TestTheOverrideIsInTheCutChainBeforeTheRouter(t *testing.T) {
-	var chain string
-	for _, line := range strings.Split(read(t, filepath.Join(toolsDir(t), "bigboy-cut.sh")), "\n") {
-		if strings.HasPrefix(line, "export COMPOSE_FILE=") {
-			chain = strings.TrimPrefix(line, "export COMPOSE_FILE=")
-		}
+// The billing listener and the router labels are part of the one compose file the cut runs, so go-api is never
+// recreated without them (CHAOS-9962: there is no chain order left to get wrong).
+func TestTheCutRunsTheOneComposeFileWithTheBillingListener(t *testing.T) {
+	cut := read(t, filepath.Join(toolsDir(t), "bigboy-cut.sh"))
+	if !strings.Contains(cut, `-f "$HERE/compose.bigboy.yml"`) {
+		t.Fatal("bigboy-cut.sh does not run compose.bigboy.yml")
 	}
-	if chain == "" {
-		t.Fatal("the cut exports no COMPOSE_FILE")
-	}
-	files := strings.Split(strings.TrimSpace(chain), ":")
-	index := func(name string) int {
-		for i, file := range files {
-			if file == name {
-				return i
-			}
-		}
-		return -1
-	}
-	billing, router := index("$HERE/compose.bigboy.billing-edge.yml"), index("$HERE/compose.bigboy.router.yml")
-	if billing < 0 || router < 0 || billing >= router || router != len(files)-1 {
-		t.Fatalf("billing override at %d, router at %d of %d: the override must be in the chain before the router, which stays last (%v)", billing, router, len(files), files)
+	if _, ok := load(t).Services["go-api"]; !ok {
+		t.Fatal("compose.bigboy.yml has no go-api service")
 	}
 }
 
 func TestNoSecretValueIsWrittenInTheFile(t *testing.T) {
-	text := read(t, filepath.Join(toolsDir(t), "compose.bigboy.billing-edge.yml"))
+	text := read(t, filepath.Join(toolsDir(t), composeName))
 	if regexp.MustCompile(`sk_(live|test)_|whsec_|-----BEGIN`).MatchString(text) {
 		t.Fatal("the override holds a secret-shaped value")
 	}

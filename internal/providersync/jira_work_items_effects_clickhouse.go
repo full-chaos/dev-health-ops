@@ -154,7 +154,7 @@ func NewJiraWorkItemClickHouseEffects(
 ) JiraWorkItemClickHouseEffects {
 	return JiraWorkItemClickHouseEffects{
 		Lease:              lease,
-		Sprints:            GitHubSprintsClickHouseAdapter{Conn: conn},
+		Sprints:            GitHubSprintsClickHouseAdapter{Conn: conn, SharedAcrossUnits: true},
 		Dependencies:       GitHubWorkItemDependenciesClickHouseAdapter{Conn: conn},
 		Interactions:       GitHubWorkItemInteractionsClickHouseAdapter{Conn: conn},
 		Reopens:            GitHubWorkItemReopenEventsClickHouseAdapter{Conn: conn},

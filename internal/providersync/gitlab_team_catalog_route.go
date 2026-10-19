@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,11 @@ const (
 // straight off ref.SyncOptions, the run's own canonical
 // sync_configurations.sync_options, the same source Python's
 // _gitlab_group falls back to.
-type GitLabTeamCatalogRouteHandler struct{}
+type GitLabTeamCatalogRouteHandler struct {
+	// RepoIdentity names the path each project's sprint refs are keyed by
+	// (the work-items route's minted path). Nil keys them by the current path.
+	RepoIdentity GitLabRepoIdentityBatchReader
+}
 
 type GitLabTeamCatalogEvidence struct {
 	Provider string `json:"provider"`
@@ -303,6 +308,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		// guard added for finding #4 above and discard otherwise valid
 		// member rows.
 		var projectKeys []string
+		nativeProjectIDs := map[string]string{}
 		projectListingProven, projectListingResponses := false, 0
 		if selections.Teams || selections.Projects {
 			projectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
@@ -328,6 +334,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					continue
 				}
 				projectKeys = append(projectKeys, path)
+				nativeProjectIDs[path] = strings.TrimSpace(project.ID.String())
 			}
 		}
 
@@ -352,9 +359,15 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					continue
 				}
 				seenOwnership[key] = true
-				if ownership, ok := normalizeGitLabOwnershipRow(ref.OrgID, teamID, path, specificity, normalizedAt); ok {
-					rows.Ownership = append(rows.Ownership, ownership)
+				ownership, ok := normalizeGitLabOwnershipRow(ref.OrgID, teamID, nativeProjectIDs[path], path, specificity, normalizedAt)
+				if !ok {
+					// A listed project with no numeric id cannot be keyed: its grant is
+					// left out (and logged) instead of falling back to the path.
+					slog.WarnContext(ctx, "providersync.gitlab_team_catalog.ownership_project_without_id",
+						"org_id", ref.OrgID)
+					continue
 				}
+				rows.Ownership = append(rows.Ownership, ownership)
 			}
 		}
 
@@ -726,6 +739,12 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.MembershipsClosed = membershipOutcome.Closed
+		var droppedMembers LinkDrop
+		membershipRows, droppedMembers, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, "team_memberships", membershipRows,
+			func(r gitlabTeamCatalogMembershipRow) string { return r.OrgID }, func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
+		if reuseErr != nil {
+			return result, reuseErr
+		}
 		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, membershipRows)
 		if effectErr != nil {
 			return result, effectErr
@@ -733,8 +752,10 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, membershipsEffect); err != nil {
 			return result, err
 		}
-		result.MembershipsWritten = len(keptMemberships)
-		result.MembersWritten = len(distinctGitLabMembershipMembers(keptMemberships))
+		writtenMemberships := KeptLinks(droppedMembers, keptMemberships,
+			func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
+		result.MembershipsWritten = len(writtenMemberships)
+		result.MembersWritten = len(distinctGitLabMembershipMembers(writtenMemberships))
 	}
 	if selections.Projects {
 		if batch.Effects.Ownership != nil {
@@ -759,6 +780,12 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			}
 			closed := len(plan.Retract)
 			ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, plan)
+			var droppedOwnership LinkDrop
+			ownershipRows, droppedOwnership, snapshotErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, "team_project_ownership", ownershipRows,
+				func(r gitlabTeamCatalogOwnershipRow) string { return r.OrgID }, func(r gitlabTeamCatalogOwnershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogOwnershipRow) bool { return r.ValidTo == nil })
+			if snapshotErr != nil {
+				return result, snapshotErr
+			}
 			ownershipEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
 			if effectErr != nil {
 				return result, effectErr
@@ -771,7 +798,8 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			slog.Default().InfoContext(ctx, "gitlab_team_catalog_ownership_snapshot",
 				"org_id", ref.OrgID, "teams_listed", len(batch.Rows.OwnershipListedTeamIDs), "teams_dropped_gone", len(decision.gone),
 				"teams_closable", len(decision.closable), "grants_written", len(batch.Rows.Ownership), "grants_unchanged", plan.UnchangedCount(), "rows_closed", closed)
-			result.OwnershipWritten = batch.Result.TeamProjectOwnershipImported
+			result.OwnershipWritten = len(KeptLinks(droppedOwnership, batch.Rows.Ownership,
+				func(r gitlabTeamCatalogOwnershipRow) string { return r.TeamID }, func(r gitlabTeamCatalogOwnershipRow) bool { return r.ValidTo == nil }))
 			result.OwnershipUnchanged = plan.UnchangedCount()
 		}
 		if batch.Effects.Projects != nil {
@@ -823,6 +851,11 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 	normalizedAt time.Time,
 ) error {
 	read, failed, incomplete, overBudget, archived, withTarget, noneDated, groupSeen, groupTarget := 0, 0, 0, 0, 0, 0, 0, 0, 0
+	ambiguous := 0
+	refPaths, err := handler.projectRefPaths(ctx, orgID, projects, nativeIDByProject)
+	if err != nil {
+		return err
+	}
 	for index := range projects {
 		row := &projects[index]
 		nativeID := nativeIDByProject[row.ID.String()]
@@ -832,6 +865,14 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 		}
 		if read+failed+incomplete >= gitlabTeamCatalogMilestoneProjectBudget {
 			overBudget++
+			continue
+		}
+		projectRefPath, provable := refPaths.pathOf(nativeID, *row.ProjectKey)
+		if !provable {
+			// The work-items route refuses this project's identity too: state no
+			// target for it (the write keeps what the key holds) rather than key a
+			// sprint ref by its current path.
+			ambiguous++
 			continue
 		}
 		pages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
@@ -875,7 +916,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 				date = *milestone.DueDate
 			}
 			candidate := projectTargetCandidate{
-				ID: id, Ref: gitlabMilestoneSprintID(*row.ProjectKey, id), Name: milestone.Title, Date: date,
+				ID: id, Ref: gitlabMilestoneSprintID(projectRefPath, id), Name: milestone.Title, Date: date,
 				Open: strings.EqualFold(strings.TrimSpace(milestone.State), "active"),
 			}
 			if milestone.isGroupMilestone() {
@@ -900,9 +941,71 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 			noneDated++
 		}
 	}
+	if ambiguous > 0 {
+		slog.Default().WarnContext(ctx, "gitlab_team_catalog_project_targets_identity_ambiguous",
+			"org_id", orgID, "projects_total", len(projects), "projects_skipped", ambiguous)
+	}
 	slog.Default().DebugContext(ctx, "gitlab_team_catalog_project_targets",
 		"org_id", orgID, "projects_total", len(projects), "projects_read", read, "read_failed", failed,
-		"read_incomplete", incomplete, "over_budget", overBudget, "archived_skipped", archived,
+		"read_incomplete", incomplete, "over_budget", overBudget, "archived_skipped", archived, "identity_ambiguous_skipped", ambiguous,
 		"with_target", withTarget, "none_dated", noneDated, "group_milestones_seen", groupSeen, "group_milestone_targets", groupTarget)
 	return nil
+}
+
+// gitlabProjectRefPaths holds, per numeric project id, the path its milestone
+// sprints are keyed by. keyed is false when the handler has no store reader: a
+// route without one mints every identity from the current path.
+type gitlabProjectRefPaths struct {
+	keyed     bool
+	paths     map[string]string
+	ambiguous map[string]struct{}
+}
+
+// pathOf is the ref path of a project and whether it is provable. A project the
+// store reader could not decide, or did not resolve, is not provable.
+func (paths gitlabProjectRefPaths) pathOf(nativeID, current string) (string, bool) {
+	if !paths.keyed {
+		return current, true
+	}
+	if _, bad := paths.ambiguous[nativeID]; bad {
+		return "", false
+	}
+	minted, ok := paths.paths[nativeID]
+	return minted, ok && minted != ""
+}
+
+// projectRefPaths is, per numeric project id, the path the work-items route
+// keys the project's milestone sprints by, read once for all listed projects.
+func (handler GitLabTeamCatalogRouteHandler) projectRefPaths(
+	ctx context.Context,
+	orgID string,
+	projects []gitlabTeamCatalogProjectRow,
+	nativeIDByProject map[string]string,
+) (gitlabProjectRefPaths, error) {
+	paths := gitlabProjectRefPaths{paths: map[string]string{}, ambiguous: map[string]struct{}{}}
+	if handler.RepoIdentity == nil {
+		return paths, nil
+	}
+	paths.keyed = true
+	listed := make([]GitLabProjectPath, 0, len(projects))
+	for _, row := range projects {
+		native, parseErr := strconv.ParseInt(nativeIDByProject[row.ID.String()], 10, 64)
+		if row.ProjectKey == nil || parseErr != nil || native < 1 {
+			continue
+		}
+		listed = append(listed, GitLabProjectPath{ProjectID: native, Path: *row.ProjectKey})
+	}
+	resolution, err := resolveGitLabRepoIdentityPaths(ctx, handler.RepoIdentity, orgID, listed)
+	if err != nil {
+		return gitlabProjectRefPaths{}, err
+	}
+	for native, path := range resolution.Paths {
+		paths.paths[strconv.FormatInt(native, 10)] = path
+	}
+	for native := range resolution.Ambiguous {
+		paths.ambiguous[strconv.FormatInt(native, 10)] = struct{}{}
+	}
+	slog.Default().DebugContext(ctx, "gitlab_team_catalog_ref_paths", "org_id", orgID, "projects", len(listed),
+		"resolved", len(resolution.Paths), "ambiguous", len(resolution.Ambiguous))
+	return paths, nil
 }

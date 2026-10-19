@@ -308,6 +308,7 @@ A Jira **project** is not a team. The automatic team import that runs after a Ji
 - **`--provider github`** `--owner <github-org> [--auth <token>]` (the token else `GITHUB_TOKEN`; a GitHub Enterprise base URL from `GITHUB_URL` or `GITHUB_BASE_URL`) runs the provider's **team catalog**: the producer the worker's post-sync team autoimport runs. It writes the ClickHouse team dimensions the team-attribution contract prescribes (`teams` rows of `provider_access`, `team_memberships`, `team_repo_ownership`; see `architecture/team-attribution.md` §0). A missing owner, a missing token, or an empty result without `--allow-empty` exits 1; a provider or write failure exits 1 with nothing written. A `403` on one team's repositories fails the run with exit 1 and writes nothing. A team with a non-zero `sync_policy` in `team_sync_policies` is left untouched and reported as `teams_skipped_policy`, not as an empty catalog. A team row has `id` `gh:<slug>`, a trimmed `name`, the provider's `description`, `members` as provider-scoped identity facets (`github:<login>` plus the member's public email, lower-cased), a stable `team_uuid` (uuid5 of the team id), `provider` `github`, `native_team_key` (the slug), `repo_patterns` (the team's repositories as `owner/name`), and `manual_members` (an admin override survives). The catalog writes its tables in order and not in one transaction: a write that fails part way leaves the earlier tables written, and the next run finishes them.
 - **`--provider gitlab`** `--owner <group-path> [--auth <token>]` (the token else `GITLAB_TOKEN`; the instance URL from `GITLAB_URL`, default `https://gitlab.com`) runs the same team catalog seam for GitLab. The group and its direct subgroups become `teams` rows (`provider_access`, `id` `gl:<full_path>`, `native_team_key` the group's `full_path`, `project_keys` the group's own `path_with_namespace` values). The group's own projects populate `team_project_ownership`, members populate `team_memberships` (identity facets `gitlab:<username>` plus the member's email), and the group's full project tree, including subgroups, populates the native `projects` catalog (CHAOS-3380).
 - **`--provider linear`** `[--auth <token>]` (the token else `LINEAR_API_KEY`; `LINEAR_URL` points the verb at a fake API for testing only) needs no `--owner`: an API key scopes the whole Linear workspace, so every team is in scope. Teams become `teams` rows (`provider_access`, `id` `linear:<key>`, `native_team_key` the team's key). Members populate `team_memberships` and the shared `members` dimension (identity facets `linear:<email-or-id>`, lower-cased), and an inactive member is excluded. Linear's own projects populate the native `projects` catalog and `team_project_ownership` when `--projects` is selected. An org-archived Linear team is included, as the workspace returns it. No description is invented when the provider has none.
+- **Concurrency (`github`, `gitlab`, `linear`).** The catalog takes the same per-(organization, provider) turn the worker's team catalog takes (a durable lease in PostgreSQL, kind `team_catalog.<provider>`, one holder per organization), so a CLI run and a worker run, or two CLI runs, of one organization and provider take turns instead of stamping the same new membership twice. The turn is taken in the domain database: `--db`, else `POSTGRES_URI`. The run logs `waiting for the team catalog turn` and waits until the holder releases it or the lease expires; `Ctrl-C` ends the wait and nothing is written. A lease the run loses while it lives ends the run before it writes (exit 1). A DSN that cannot be used, or a lease that cannot be taken, exits 1 with `turn_unavailable`; the run never goes on without a turn it was asked to take. With no DSN, or an `--org` that is not a UUID, the run logs `team catalog turn not taken` (reason `no_postgres_dsn` or `org_not_uuid`) and runs without it: a concurrent worker or CLI run of that organization and provider is then not excluded.
 
 ---
 
@@ -584,6 +585,32 @@ dho admin users update \
 | `--role` | Membership role with `--org`: `owner`, `admin`, `member`, `viewer` |
 | `--remove-from-org` | Org slug or ID: remove the user's membership |
 
+### `admin users delete`
+
+Delete a user (identified by `--id`, `--email`, or `--username`). The default is a **soft delete**: the user row and its profile stay, `is_active` becomes false (no login), access tokens stop working (`token_version` goes up), refresh tokens are revoked and password-reset and email-verification tokens are removed. `--force` is a **permanent delete**: the user row and every personal field are removed, together with the rows that belong to the user (memberships, tokens, Ask Dev conversations). The billing-audit log, the refund history, the impersonation sessions and the audit log are **kept**, with the user reference set to null (financial and security records that a legal or accounting duty keeps; GDPR Art. 17(3)(b), CCPA). The audit, impersonation, billing-audit and refund records keep their stored text verbatim after a delete (an enterprise audit feature); only the user reference is nulled, and rows that merely describe the deleted user (an admin's audit entry about them) are left as they are.
+
+If a row that references the user cannot be kept with a null reference (its column is NOT NULL), `--force` fails with an error that names the table and column, nothing is changed, and the user stays. The API's `DELETE /api/v1/admin/users/{user_id}` does the same: soft by default, `?force=true` for the permanent delete (`{"deleted": true}` in both cases).
+
+```bash
+# Report what would happen (exit 1, nothing changed)
+dho admin users delete --email user@example.com
+
+# Soft delete
+dho admin users delete --email user@example.com --yes
+
+# Permanent delete
+dho admin users delete --email user@example.com --force --yes
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--id` / `--email` / `--username` | Identify the user to delete |
+| `--force` | Delete the user permanently instead of the default soft delete |
+| `--yes` | Confirm. Without it the user and the memberships are printed with what would happen, and nothing is changed (exit 1) |
+
+A soft delete ends every credential (access tokens through `token_version`, refresh tokens, password-reset and email-verification tokens) on every call, so it can be repeated; for a user that is already inactive with no token left it prints `User already inactive: ...` and the API answers 404. On success the verb prints `Soft-deleted user: <email> (id: <id>)...` or `Permanently deleted user: <email> (id: <id>)` (followed by one line per table whose rows were kept with a null user). It logs on stderr: `admin: user soft-deleted` or `admin: user permanently deleted` (user id, mode, rows kept) and `admin: user delete by the operator CLI`. An unknown user, a missing identifier and a malformed id print `Error: ...` and exit 1.
+
 ### `admin orgs delete`
 
 Delete an organization and all of its scoped data.
@@ -712,11 +739,23 @@ dho backfill run \
 
 **Which datasets run.** For a configuration that covers a whole integration, the backfill names the datasets that are enabled for that integration (its dataset rows), not the configuration's `sync_targets` list. A dataset that is off, or that has no row, is not backfilled and is not switched on. When the integration has no enabled dataset, the verb refuses the run (exit code 3) and writes nothing; enable a dataset in the connection's synchronization settings first. A configuration pinned to a single source still names the datasets its own `sync_targets` select, and so does a PagerDuty configuration (the platform manages the PagerDuty datasets as one set, so its list must be exactly `operational`).
 
+**Scoping a run under the unit cap.** A run plans units = selected sources x planned datasets x 7-day chunks of the window; a GitHub source plans about ten units per chunk with every dataset on, because the pull-request, test and work-item families fold into one unit each. For example, 33 sources over thirty days (five chunks) plan about 1650 units, while the same sources limited to `--dataset-keys prs,commits` plan about 2 units per source per chunk, and a three-month window (thirteen chunks) fits. A plan over the unit cap (the `max_sync_units` tier limit, else 1000) is quarantined with `invalid_plan`, so a configuration with many sources cannot backfill a long window in one run. `--source-ids` and `--dataset-keys` limit the run to part of the configuration. Each takes a comma list and may be repeated; an empty item is an argument error. Every source id must be an enabled source of the configuration's integration that the configuration selects (an enabled source the configuration does not select is refused: its scheduled runs never plan it). Every dataset key must be one the run could already name (see above): a key the provider does not have is unknown, and a key whose dataset is off is refused, because a backfill never switches a dataset on. A refused value is named in the error, the verb exits with code 3 and nothing is written. The values are written to the same `source_ids` and `dataset_keys` columns of the trigger that the admin Backfill wizard writes, in the enabled-source order and the provider's dataset order. Without the flags the run covers the sources a scheduled run of the configuration plans, the ones selected for it in Sync admin (CHAOS-10064: for one window a backfill covers the hourly run's scope; before, it covered every enabled source of the integration, selected or not), and every enabled dataset. A configuration pinned to a single source accepts only that source, and only while the source is enabled; its dataset keys must name enabled dataset rows of the integration (or keys its own `sync_targets` select).
+
+```bash
+dho backfill run \
+  --config-id "550e8400-e29b-41d4-a716-446655440000" \
+  --since 2024-01-01 --before 2024-03-01 \
+  --source-ids "0d5c0d1e-2f1b-4f55-9d0e-6a3f2c1b7a10,5b6a43a4-86a0-4a2e-8f3f-9c7e1d2b3c41" \
+  --dataset-keys commits,files
+```
+
 **Options:**
 
 | Option | Description |
 |--------|-------------|
 | `--config-id` | Sync configuration UUID (required) |
+| `--source-ids` | Limit the run to these enabled sources (comma list; repeatable) |
+| `--dataset-keys` | Limit the run to these datasets (comma list; repeatable) |
 | `--since` | Start date (ISO `YYYY-MM-DD`). Mutually exclusive with `--backfill` |
 | `--before` | End date (exclusive, default: today). The window ends the day before |
 | `--backfill N` | Backfill N days ending before `--before` (default 1). Mutually exclusive with `--since` |
@@ -967,8 +1006,8 @@ partition job before the ledger repair only reproduces `ambiguous_refused`
 and re-terminalizes the partition `failed_permanent`, undoing the reset):
 
 1. **Ledger repair first.** Repairs the ledger through the coordinator
-   database role (the operator credential must hold `workers:operate`; no
-   API base URL and no separate repair token) for every `running` run in
+   database role (the operator CLI carries no bearer token: pod exec plus the
+   database DSNs are the boundary; no API base URL and no separate repair token) for every `running` run in
    scope, applying the SAME `retry_safe` CAS `metrics execution-repair`
    uses to every `ambiguous`/stuck-`executing` ledger row
    underneath them, carrying your `--review-evidence` text. This path only ever authorizes `retry_safe` —
@@ -1034,8 +1073,7 @@ dho workers metrics daily-finalize \
 
 `--run` additionally repairs the named run's finalize ledger
 row through the coordinator database role before publishing (see
-"Finalize-ledger repair" below); the operator credential must hold
-`workers:operate`, and a failed ledger repair fails closed with
+"Finalize-ledger repair" below); the operator CLI is authorized as its fixed operator principal, and a failed ledger repair fails closed with
 `{"error": {"code": "ledger_repair_unavailable"}}` before any write.
 `--all-complete` does NOT repair ledger rows: it never touches a run whose finalize
 ledger row could be stuck (see that flag's own note below for why).
@@ -1312,6 +1350,34 @@ process). `redriven_failed` is different: it is observed by
 `ReleaseFinalize` path whenever it closes a run's finalize-redrive event as
 `'closed_failed'` — this one IS live, scraped from the worker process that
 actually processes the redriven job, not from this CLI.
+
+#### `metrics generation-repair` (CHAOS-10072)
+
+Before CHAOS-4442 the range finalize redrive replaced a run's whole generation
+with `redrive:<nonce>`, which dropped the producer prefix
+(`fixed-schedule:daily_metrics_fanout:`) that partition recompute, manual
+`daily-start` coverage and the recommendations readiness gate match. The
+original value was stored nowhere, but a run id is
+`uuid5(org|target_day|generation)`, so a candidate generation is proven by
+hashing to the run's own id. Every family the runner mints is tried:
+`fixed-schedule:` (occurrence second near `created_at`), `post-sync:<sync run
+id>` (the organization's `sync_runs` created before the run),
+`touched-drain:<n|e>:<daily run id>` and `manual-daily:` (without a repository
+list or rerun tag).
+
+```bash
+dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 --dry-run
+dho workers metrics generation-repair --org <uuid> --from 2025-05-01 --to 2026-10-31 \
+  --reason generation_repair --correlation-id CHAOS-10072
+```
+
+Output: `examined`, `repaired`, `would_repair`, `not_provable` (created under
+another generation, for example `post-sync:`), `not_settled` (still
+redriving: not `succeeded`/`succeeded`, or an open redrive event), `raced`,
+`full_org_flipped` (fan-out rows only), `by_family` (proven rows per family), and one entry per row. Every row is logged at Warn with the
+old and new generation. The write is a compare-and-set on the old generation,
+so a second pass repairs nothing. Audited under the `metrics.finalize_redrive`
+action.
 
 #### `metrics partition-recompute` (CHAOS-4459)
 
@@ -1658,6 +1724,18 @@ The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 
+**A route command leaves no delivery behind (CHAOS-9964).** Every `routes apply|pause|drain|resume` call, an `apply` that changed
+nothing included, reconciles the deliveries of its kind that sit at a route generation other than the route's, after the
+route change (if any) is committed. For `finalize_sync_run` it re-arms every such delivery whose River job is missing, completed,
+discarded or cancelled and whose run is ready to finalize (so the real Finalize runs at the current generation), walking all of
+them in (dispatched_at, id) order; a delivery with a live job (available, pending, retryable, running, scheduled), a run that is
+already terminal and a run with an open unit are left as they are. For the other kinds the command only counts such
+deliveries and warns, it does not re-arm them. The output adds `generation_reconcile` (`rearmed`, `skipped_live_job`,
+`skipped_not_ready`, `skipped_locked_job`, `other_kinds`; the skip counts cover every delivery seen) beside the route state; a
+failed reconcile prints `generation_reconcile_error` and exits 1 (the route change stays). Each re-armed row logs the Warn
+`syncreconciler.finalize_delivery_other_generation_rearmed`; the counter is `sync_route_generation_stranded_total{kind,action}`.
+A paused route re-arms nothing. The scheduled repair keeps its generation fence.
+
 The checked-in transport for all four sync-dispatch kinds is River, and no
 rollback transport is recorded against them (`rollback_route: none`). `routes apply`
 converges one unpaused legacy-transport route to its checked-in River transport after proving the
@@ -1714,6 +1792,9 @@ hold) moves to `custom:<id>` (`admin_teams_to_custom`): an admin team and a
 pushed `custom` team are one kind of team, in one namespace; when a pushed
 team already holds `custom:<id>`, that row stays, takes the admin row's
 manual members (`manual_members_folded`), and the admin row goes inactive.
+A custom team carries as the active team: an inactive kept row is written
+again active (`keyed_teams_activated`), and over a row an admin deleted the
+custom team is written as a new team (`deleted_keyed_teams`).
 A custom team is written with provider `""`.
 
 Not moved: ids that already hold a provider key, an
@@ -1727,7 +1808,7 @@ is no `--org`, with the stdin rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
 organization id. It prints counts only, under `carry_team_ids`: `teams`,
 `admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
-`teams_already_keyed`, `manual_members_folded`, `memberships`, `project_ownership`, `repo_ownership`,
+`teams_already_keyed`, `manual_members_folded`, `keyed_teams_activated`, `deleted_keyed_teams`, `memberships`, `project_ownership`, `repo_ownership`,
 `link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`, `identity_drift_changes`,
 `identities`, `fallbacks`, `malformed_team_ids`, and `rows_written` (0 with `--dry-run`). A second
 run reports zero.
@@ -1849,6 +1930,49 @@ kubectl exec -i <worker-pod> -- dho workers providersync compact-ownership-inter
   --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
 ```
 
+#### `providersync drain-removed-dependencies` (CHAOS-9706)
+
+A data step. A link removed at the provider leaves its `work_item_dependencies`
+row behind (the table is insert-only), and nothing removed it. This verb deletes
+the blocking rows (`blocks`, `blocked_by`, canonical semantics) that the end
+rule of the blocked intervals calls gone (an item that writes the relation has a
+later read that did not write it) and whose `last_synced` is older than
+`--retain-days` (default 90, floor 30). It keeps:
+
+- every current relation, and every relation the rule cannot decide (an end that
+  is no stored item, another semantics version);
+- every removed row inside the retention: it is the only record that the graph
+  projector can still retract the edge from, and the blocked-hours recompute
+  still reads it;
+- every row of another relationship type (blocking never drives team
+  attribution);
+- `work_item_dependency_first_seen` and `work_item_relations_read`.
+
+**It deletes rows, so it writes nothing unless `--apply` is given.** A dry run
+(the default) reads, plans, proves that the blocked intervals of every item,
+clipped to the retention window, are the same without the rows to delete, and
+reports. `--apply` needs `--workers-paused` (the statement that the sync workers
+that write `work_item_dependencies` are paused), `--reason` and
+`--correlation-id`, and is refused (`work_item_dependency_drain_writes_active`)
+while a part of `work_item_dependencies` or `work_items` was modified within
+`--quiet-seconds` (default 60). It copies the rows to
+`work_item_dependencies_drain_bak` under a run id, deletes exactly the versions
+it read (a row a sync wrote after the read has a newer `last_synced` and
+survives), and reads the relations back. `--restore-run <run_id>` puts the saved
+rows back, except a key a sync has written since with a newer `last_synced`
+(also dry by default). Output: counts only, under `drain_removed_dependencies`,
+per organization (numbered) and in total: `relations`, `current`, `undecided`,
+`removed`, `drainable`, `kept_in_retention`, `oldest_drainable_days`,
+`newest_drainable_days`, `differential_items`, `differential_mismatches`,
+`backup_rows`, `deleted`, `survived_the_delete`, `restored`, `elapsed_ms`.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers providersync drain-removed-dependencies \
+  --all-orgs
+kubectl exec -i <worker-pod> -- dho workers providersync drain-removed-dependencies \
+  --all-orgs --apply --workers-paused --reason <code> --correlation-id <id>
+```
+
 #### `providersync retire-jira-project-as-team` (CHAOS-8888)
 
 Earlier versions of the Jira team catalog made a team of every Jira project
@@ -1897,7 +2021,7 @@ usage error (exit 2). The verb prints no organization id on stdout, stderr or
 in its own log lines; the audit row holds it. It prints counts only, under
 `retire_jira_project_as_team`: found (`teams`, `teams_with_manual_members`,
 `teams_with_sync_policy`, `ownership_rows`, `membership_rows`,
-`repo_ownership_rows`) and written (`teams_retired`, `ownership_closed`,
+`repo_ownership_rows`, `teams_without_provider_identity`) and written (`teams_retired`, `ownership_closed`,
 `memberships_closed`, `repo_ownership_closed`; 0 with `--dry-run`). A second
 run reports zero.
 
@@ -1937,18 +2061,18 @@ dho maintenance cleanup-all
 
 ## Service Credentials
 
-Internal service credentials are the bearer tokens the ACR entitlement lookup (`acr`) and the worker operator API (`worker-operator`) present to the API. The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read`; `worker-operator` holds `workers:read` and `workers:operate`.
+Internal service credentials are the bearer tokens the ACR entitlement and LLM config lookups (`acr`) present to the API. The `worker-operator` service is retired: nothing validates a `svc_worker_*` token, so its credentials authorize nothing (`dho workers` carries no token since CHAOS-6289). The token is printed **once**, on stdout, when a credential is created or rotated; the database keeps only its SHA-256 and its first 16 characters (`token_prefix`), and `list` never prints a secret. Uses `POSTGRES_URI`. `--service` chooses the service (default `acr`), and a service can hold only its own scopes: `acr` holds `entitlements:read` and `llm_config:read` (the org LLM config route). `worker-operator` still accepts `workers:read` and `workers:operate` at creation, but they authorize nothing; do not create new ones. `worker-llm-config` (token prefix `svc_wllm_`) holds only `llm_config:read`: it is the investment worker's credential for the resolved categorize config route (`ORG_LLM_CONFIG_TOKEN`).
 
 ```bash
 # Create a credential (the token is printed once)
 dho service-credentials create --service acr --scope entitlements:read
 
-# A worker-operator credential with both scopes that lapses at a fixed time
-dho service-credentials create --service worker-operator \
-  --scope workers:read --scope workers:operate --expires-at 2027-01-01T00:00:00+00:00
+# A credential that lapses at a fixed time
+dho service-credentials create --service acr \
+  --scope entitlements:read --expires-at 2027-01-01T00:00:00+00:00
 
-# List one service's credentials (metadata only)
-dho service-credentials list --service worker-operator
+# List one service's credentials (metadata only; worker-operator lists leftovers to revoke)
+dho service-credentials list --service acr
 
 # Rotate: issue a replacement now; the old credential stays valid for 5 more minutes
 dho service-credentials rotate <credential-id> --scope entitlements:read --overlap-seconds 300
@@ -1961,7 +2085,7 @@ dho service-credentials revoke <credential-id>
 |------------|-------------|
 | `create` | `--service {acr,worker-operator}` (default `acr`), `--scope` (required, repeatable), `--expires-at` (ISO 8601 with a timezone, in the future), `--created-by-user-id` (a user id) |
 | `list` | `--service` (default `acr`); one JSON line: `id`, `service_name`, `token_prefix`, `scopes`, `expires_at`, `revoked_at`, `last_used_at`, `is_valid` (computed: not revoked and not past `expires_at`) |
-| `rotate` | `<credential_id>` then the `create` options plus `--overlap-seconds` (0 to 3600, default 0). The credential must belong to `--service` (the default is `acr`: pass `--service worker-operator` to rotate a worker-operator credential) and be active; its expiry is set to now + the overlap (even if it had less time left) and a replacement is issued |
+| `rotate` | `<credential_id>` then the `create` options plus `--overlap-seconds` (0 to 3600, default 0). The credential must belong to `--service` (the default is `acr`) and be active; its expiry is set to now + the overlap (even if it had less time left) and a replacement is issued |
 | `revoke` | `<credential_id>`; sets `revoked_at` to now, also on an already revoked credential |
 
 > **Notes:** the database is `MIGRATION_DATABASE_URI`, else `POSTGRES_URI` (as every `dho admin` verb); a missing one is exit 1. `rotate` locks the credential row while it checks and changes it. `--help` prints usage on stdout (exit 0). A refusal is one JSON error line on stderr with exit 1. `list` prints `is_valid` (computed: not revoked and not past `expires_at`), so an expired credential no longer prints like a live one.

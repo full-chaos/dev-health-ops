@@ -222,14 +222,18 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	counted := *client
 	counted.Doer = jiraAtlassianCountingDoer{delegate: client.Doer, attempts: &requests}
 	client = &counted
+	// As in the legacy JQL route: enrichment unless a request says otherwise.
+	ctx = budgetAccount(ctx, "jira_issue_enrichment")
 	if handler.GraphQLClient != nil {
 		countedGraphQL := *handler.GraphQLClient
 		countedGraphQL.Doer = jiraAtlassianCountingDoer{delegate: handler.GraphQLClient.Doer, attempts: &requests}
+		countedGraphQL.Ledger = client.Ledger
 		handler.GraphQLClient = &countedGraphQL
 	}
 
 	jql := jiraWorkItemsJQL(claim, projectKey)
 	issues, searchPages, err := collectJiraAtlassianIssues(ctx, client, jql, maxPages, maxRows, perPage)
+	logJiraWorkItemsWindow(ctx, claim, projectKey, jql, len(issues), searchPages, err)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -283,6 +287,16 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	jiraProjectCache := make(map[string]jiraProjectCatalogEntry)
 	unresolvedProjectMemberships := 0
 
+	var pointsFields []string
+	if jiraStoryPointsDiscoveryNeeded(claim) {
+		discovered, discoverErr := discoverJiraStoryPointsFields(ctx, client)
+		if discoverErr != nil {
+			return CompleteRouteBatch{}, discoverErr
+		}
+		pointsFields = discovered
+	}
+	var pointsStats jiraStoryPointsStats
+	defer func() { pointsStats.log(ctx) }()
 	for _, issue := range issues {
 		key := stringFrom(issue["key"])
 		if key == "" {
@@ -295,13 +309,14 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		}
 		issue["changelog"] = map[string]any{"histories": changelog}
 		item, transitions, normalizeErr := normalizeJiraWorkItem(
-			claim, jiraWorkItemFixtureInput{Raw: issue, AtlassianShape: true}, handler.StatusMapping,
+			claim, jiraWorkItemFixtureInput{Raw: issue, AtlassianShape: true, PointsFields: pointsFields}, handler.StatusMapping,
 			handler.Identity, normalizedAt,
 		)
 		if normalizeErr != nil {
 			return CompleteRouteBatch{}, normalizeErr
 		}
 		rows.WorkItems = append(rows.WorkItems, item)
+		pointsStats.observe(item)
 		rows.Transitions = append(rows.Transitions, transitions...)
 		rows.Dependencies = append(rows.Dependencies,
 			normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)...)
@@ -513,7 +528,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 					commentCtx, cancelComments = context.WithDeadline(ctx, commentsStopAt)
 				}
 				comments, _, commentErr := collectJiraIssueComments(
-					commentCtx, client, item.WorkItemID, maxPages, perPage, issueLimit,
+					budgetAccount(commentCtx, jiraCommentsFamily(claim)), client, item.WorkItemID, maxPages, perPage, issueLimit,
 				)
 				innerDeadline := commentsHaveDeadline && ctx.Err() == nil &&
 					errors.Is(commentCtx.Err(), context.DeadlineExceeded)
@@ -900,7 +915,7 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 	graphqlRequests := 0
 	if graphql && strings.TrimSpace(cloudID) != "" {
 		observation.GraphQLAttempted = true
-		if values, requests, err := collectJiraGraphQLWorklogs(ctx, graphqlClient, issueKey, maxPages, cloudID); err == nil {
+		if values, requests, err := collectJiraGraphQLWorklogs(budgetAccount(ctx, "jira_gql_enrichment"), graphqlClient, issueKey, maxPages, cloudID); err == nil {
 			observation.GraphQLRequests = requests
 			observation.GraphQLSucceeded = true
 			return values, requests, observation, nil
@@ -926,7 +941,7 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 			Worklogs []json.RawMessage `json:"worklogs"`
 			Total    *int              `json:"total"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/{issue}/worklog", "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/worklog?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(budgetAccount(ctx, "jira_worklogs"), client, http.MethodGet, "/rest/api/3/issue/{issue}/worklog", "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/worklog?"+query.Encode(), nil, &page); err != nil {
 			observation.RESTRequests = requests + 1
 			return nil, graphqlRequests + requests + 1, observation, err
 		}

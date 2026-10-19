@@ -375,7 +375,12 @@ type unreclaimableJobReader interface {
 }
 
 type UnreclaimableSweep struct {
-	begin    leaseRepairBeginFunc
+	begin leaseRepairBeginFunc
+	// wake arms the run of each unit this sweep terminalizes for its next
+	// dispatch pass after the commit (CHAOS-10013): the unit's slot is free
+	// and a planned or retrying sibling may be waiting for it. The domain
+	// pool in production; nil only on the begin-func test constructor.
+	wake     syncrunrollup.Execer
 	routes   unreclaimableRouteReader
 	jobs     unreclaimableJobReader
 	jobState string
@@ -398,9 +403,14 @@ func NewUnreclaimableSweep(
 		!riverSchemaPattern.MatchString(riverSchema) || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
-	return newUnreclaimableSweep(
+	sweep, err := newUnreclaimableSweep(
 		coordinatorPool, domainPool.Begin, queueControlPool, riverSchema, config,
 	)
+	if err != nil {
+		return nil, err
+	}
+	sweep.wake = domainPool
+	return sweep, nil
 }
 
 func newUnreclaimableSweep(
@@ -637,6 +647,7 @@ func (sweep *UnreclaimableSweep) Step(
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 
+	var wakeRuns []string
 	for _, candidate := range candidates {
 		affected, err := sweep.terminalize(ctx, tx, candidate, now)
 		if err != nil {
@@ -646,6 +657,9 @@ func (sweep *UnreclaimableSweep) Step(
 			return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepTerminalizeRows, nil)
 		}
 		result.Terminalized += int(affected)
+		if affected == 1 {
+			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
+		}
 	}
 
 	// ROUTE FENCE (adversarial review finding). The writes above are staged
@@ -695,6 +709,7 @@ func (sweep *UnreclaimableSweep) Step(
 	if commitErr != nil {
 		return UnreclaimableSweepResult{}, sweepUnavailable(sweepStepCommit, commitErr)
 	}
+	wakeDispatchAfterCommit(ctx, sweep.wake, wakeRuns, now, syncrunrollup.DispatchWakePathUnreclaimableSweep)
 	return result, nil
 }
 

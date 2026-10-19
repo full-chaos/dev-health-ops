@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/aftercommit"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -1111,5 +1112,110 @@ WHERE sync_run_id=$1 AND kind='team_autoimport'`, runID).Scan(&markers); err != 
 					testCase.syncOptionsJSON, gotMarker, testCase.wantMarker)
 			}
 		})
+	}
+}
+
+// hookingRemaining is a remaining writer that, for dora, queues a signal for
+// after the commit the way the remaining store does for the dora overlap report
+// (CHAOS-9841). It records when the signal ran and, at that moment, whether the
+// dora marker was already visible to another connection.
+type hookingRemaining struct {
+	markerRemaining
+	pool   *pgxpool.Pool
+	ranAt  *[]string
+	queued *int
+}
+
+func (writer hookingRemaining) StartRunTx(ctx context.Context, tx pgx.Tx, family string, plan PostSyncPlan, prerequisite string) (string, error) {
+	completion, err := writer.markerRemaining.StartRunTx(ctx, tx, family, plan, prerequisite)
+	if err != nil || family != "dora" {
+		return completion, err
+	}
+	signal := func() {
+		var committed int
+		if err := writer.pool.QueryRow(context.Background(),
+			`SELECT count(*) FROM post_sync_markers WHERE sync_run_id=$1 AND kind='dora'`, plan.SyncRunID,
+		).Scan(&committed); err != nil {
+			*writer.ranAt = append(*writer.ranAt, "error: "+err.Error())
+			return
+		}
+		*writer.ranAt = append(*writer.ranAt, fmt.Sprintf("dora markers visible: %d", committed))
+	}
+	if aftercommit.Defer(ctx, signal) {
+		*writer.queued++
+	} else {
+		signal()
+	}
+	return completion, nil
+}
+
+// A signal a remaining writer stages inside the post-sync transaction runs after
+// that transaction commits, and never when a later stage rolls it back.
+func TestNativePostSyncFanoutRunsAStagedSignalOnlyAfterTheCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createPostSyncTables(t, ctx, pool)
+
+	const (
+		orgID         = "00000000-0000-4000-8000-000000000051"
+		runID         = "00000000-0000-4000-8000-000000000052"
+		outboxID      = "00000000-0000-4000-8000-000000000053"
+		integrationID = "00000000-0000-4000-8000-000000000054"
+		repositoryID  = "00000000-0000-4000-8000-000000000055"
+	)
+	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
+	args := PostSyncArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
+	}}
+	// A later stage fails after the dora writer queued its signal: the whole
+	// transaction rolls back and the signal never runs.
+	{
+		var ranAt []string
+		var queued int
+		service, err := NewNativePostSyncService(pool, markerDaily{}, hookingRemaining{pool: pool, ranAt: &ranAt, queued: &queued}, markerWorkGraph{}, unavailableTeamWriter{}, markerTeamRepoOwnership{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+		if err := service.Fanout(ctx, args); err == nil {
+			t.Fatal("the fanout with an unavailable team writer succeeded: the test does not exercise a rollback")
+		}
+		if queued != 1 {
+			t.Fatalf("the dora writer queued %d signals, want 1 (the context must carry the hooks)", queued)
+		}
+		if len(ranAt) != 0 {
+			t.Fatalf("a signal ran although the transaction rolled back: %v", ranAt)
+		}
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM post_sync_markers WHERE sync_run_id=$1`, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Everything commits: the signal runs once, after the commit.
+	{
+		var ranAt []string
+		var queued int
+		service, err := NewNativePostSyncService(pool, markerDaily{}, hookingRemaining{pool: pool, ranAt: &ranAt, queued: &queued}, markerWorkGraph{}, markerTeam{}, markerTeamRepoOwnership{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+		if err := service.Fanout(ctx, args); err != nil {
+			t.Fatal(err)
+		}
+		if queued != 1 || len(ranAt) != 1 || ranAt[0] != "dora markers visible: 1" {
+			t.Fatalf("queued %d, ran %v: the signal must run once, after the commit made the dora marker visible", queued, ranAt)
+		}
 	}
 }

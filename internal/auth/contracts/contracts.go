@@ -57,9 +57,12 @@ package contracts
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
@@ -109,6 +112,55 @@ type validatorCache struct {
 
 var cache = validatorCache{byKey: map[string]*jsonschema.Resolved{}}
 
+// wireIDPrefix is the $id namespace every contract schema declares. A $ref
+// leaving one schema for another resolves under it.
+const wireIDPrefix = "https://fullchaos.dev/contracts/auth/v1/"
+
+// localLoader resolves a cross-schema $ref to the file beneath root and
+// refuses everything else. It never fetches over the network: a $ref that
+// escapes the contracts namespace is a hard error, because following it would
+// validate against a document this tree does not own.
+func localLoader(root string) jsonschema.Loader {
+	return func(uri *url.URL) (*jsonschema.Schema, error) {
+		full := uri.String()
+		rel, ok := strings.CutPrefix(full, wireIDPrefix)
+		if !ok || rel == "" || strings.Contains(rel, "..") {
+			return nil, fmt.Errorf("refusing $ref %q: only %s... is loadable", full, wireIDPrefix)
+		}
+		path := filepath.Join(ContractsDir(root), filepath.FromSlash(rel))
+		if err := requireInsideContracts(root, path); err != nil {
+			return nil, err
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading referenced schema %s: %w", path, err)
+		}
+		var schema jsonschema.Schema
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			return nil, fmt.Errorf("parsing referenced schema %s: %w", path, err)
+		}
+		return &schema, nil
+	}
+}
+
+// requireInsideContracts refuses a path whose real location, after following
+// symlinks, is outside the contracts directory. The textual namespace check
+// cannot see that an in-tree file is a link to somewhere else.
+func requireInsideContracts(root, path string) error {
+	base, err := filepath.EvalSymlinks(ContractsDir(root))
+	if err != nil {
+		return fmt.Errorf("resolving contracts directory: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolving referenced schema %s: %w", path, err)
+	}
+	if real != base && !strings.HasPrefix(real, base+string(filepath.Separator)) {
+		return fmt.Errorf("refusing referenced schema %s: it resolves to %s, outside %s", path, real, base)
+	}
+	return nil
+}
+
 // Validator returns the resolved Draft 2020-12 validator for one wire surface.
 //
 // A schema that cannot be read, parsed or resolved is a hard error, never a
@@ -131,7 +183,7 @@ func Validator(root, surface string) (*jsonschema.Resolved, error) {
 	if err := json.Unmarshal(raw, &schema); err != nil {
 		return nil, fmt.Errorf("parsing wire schema %s: %w", path, err)
 	}
-	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{})
+	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{Loader: localLoader(root)})
 	if err != nil {
 		return nil, fmt.Errorf("resolving wire schema %s: %w", path, err)
 	}
@@ -160,6 +212,60 @@ func Validate(root, surface string, document any) error {
 	}
 	if err := resolved.Validate(document); err != nil {
 		return fmt.Errorf("%s: %w", surface, err)
+	}
+	return nil
+}
+
+// RefuseDecimalForm refuses a raw JSON number token written in decimal or
+// exponent form: any token containing '.', 'e' or 'E', even when its value is
+// integral (1.0, 1e0).
+//
+// It decides on the TOKEN TEXT, never on a float64 parse. By the time a float64
+// exists the token has been rounded: 9007199254740990.1 and
+// 1.0000000000000000001 are indistinguishable from the integers they round to,
+// so no magnitude bound can be sound. An integer token is exact and never
+// reaches this refusal. The Python twin is
+// authclient.contracts.refuse_decimal_form.
+//
+// Wire-integer TYPE for a field decoded by encoding/json into an
+// integer-typed Go field needs no helper: the decoder already refuses 403.0,
+// which is how ErrorEnvelope.Status and RetryAfterSeconds are guarded. This is
+// for custom unmarshalers that hold the raw token (Revision).
+func RefuseDecimalForm(token string) error {
+	if strings.ContainsAny(token, ".eE") {
+		return fmt.Errorf(
+			"%s is in decimal or exponent form; refused because a float64 reader has "+
+				"already rounded such a token (9007199254740990.1 reads as 9007199254740990), "+
+				"so it is indistinguishable from the integer it rounds to. "+
+				"Send an integer token, which stays exact", token)
+	}
+	return nil
+}
+
+// ParseWireTimestamp is the ONE timestamp rule for every timestamp member of
+// the event surfaces (envelope created_at, payload.change.expires_at, audit
+// occurred_at). A value passes when it names a real calendar day (the pattern
+// bounds components, not the calendar: 2026-02-30 is lexically valid) and its
+// UTC instant lies in 0001-01-01..9999-12-31 (the pattern bounds the LOCAL
+// fields, and an offset can carry the instant out of range: 0001-01-01T00:00:00+23:59
+// is UTC year 0000). Python's twin is authclient.contracts.parse_rfc3339; both
+// replay the same timestamp_vectors from the provisioning manifest.
+func ParseWireTimestamp(surface, field, raw string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s: /%s = %q is not a valid RFC 3339 instant: %w", surface, field, raw, err)
+	}
+	if err := checkInstantInRange(surface, field, parsed); err != nil {
+		return time.Time{}, err
+	}
+	return parsed, nil
+}
+
+func checkInstantInRange(surface, field string, moment time.Time) error {
+	if year := moment.UTC().Year(); year < 1 || year > 9999 {
+		return fmt.Errorf("%s: /%s = %s normalises to UTC year %d, outside 0001-01-01..9999-12-31 "+
+			"(not a valid RFC 3339 instant for this contract): the pattern bounds the local fields, "+
+			"the offset carries the instant past the bound", surface, field, moment.Format(time.RFC3339Nano), year)
 	}
 	return nil
 }

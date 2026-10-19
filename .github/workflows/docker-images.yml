@@ -2,7 +2,7 @@ name: Build Docker images
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   push:
     branches:
@@ -168,10 +168,11 @@ jobs:
     #
     # PRs keep the filter. Nothing here changes what a PR builds.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true'
+      needs.changes.outputs.code == 'true')
     runs-on: ${{ matrix.runner }}
     # Every matrix leg checks out the SAME ref, so they all resolve the
     # same commit -- reusing the existing `commit` output is safe here
@@ -186,6 +187,8 @@ jobs:
           - contractcheck
           - migrate
           - dho
+          - auth-service
+          - auth-migrate
         platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
@@ -335,7 +338,7 @@ jobs:
   # a container, in isolation, before the real build leg risks a
   # registry write.
   dind-smoke-test:
-    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 5
     steps:
@@ -411,14 +414,15 @@ jobs:
     name: go-build-dho-arm64
     needs: [changes, dind-smoke-test]
     if: >-
-      always() &&
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (always() &&
       needs.changes.result == 'success' &&
       needs.dind-smoke-test.result != 'failure' &&
       needs.dind-smoke-test.result != 'cancelled' &&
       (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true')
+      needs.changes.outputs.code == 'true'))
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
@@ -542,6 +546,8 @@ jobs:
           - contractcheck
           - migrate
           - dho
+          - auth-service
+          - auth-migrate
     steps:
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -602,10 +608,11 @@ jobs:
     # above (CHAOS-4921 M2): the artefact for this commit must exist
     # whatever the paths filter says.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      needs.changes.outputs.code == 'true'
+      needs.changes.outputs.code == 'true')
     runs-on: ${{ matrix.runner }}
     outputs:
       sha: ${{ steps.versioning.outputs.commit }}
@@ -1092,7 +1099,7 @@ jobs:
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
           # second copy is how the next target goes untagged.
-          families="dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-go-api-tools"
+          families="dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-go-auth-service dev-health-go-auth-migrate dev-health-go-api-tools"
           short_sha="$(echo "${BUILT_SHA}" | cut -c1-7)"
           # codex round 3, P2: every family shares this ONE short_sha, so an
           # UNKNOWN source-tag registry error (rc==2) on it is not a

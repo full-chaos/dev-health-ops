@@ -4,18 +4,21 @@
 # contract 2, celery cutover flag) -- against the bigboy stores. bigboy's compose `migrate` service runs `dho migrate upgrade --river`
 # from the dho image (the cut's own migrate step); this check is the hook's verb (`--river=false`) from the OPERATOR image, the image the prod Job runs. nothing printed but step names/exit codes. usage: bigboy-hook-check.sh [record-dir]
 # CHAOS-8371 (D4566 class rules): no credential is read, held or passed by this script. The operator runs as the compose one-off
-# `venue-hook` (compose.bigboy.hook-check.yml); compose interpolates both DSNs from ops/.env itself. No printenv out of a
+# `venue-hook` (compose.bigboy.yml, profile venue); compose interpolates both DSNs from ops/.env itself. No printenv out of a
 # container, no script-written env file, no bare `docker run`: compose verbs only.
 set -euo pipefail; umask 077
-R=/home/ubuntu/devhealth
+R=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" && pwd)
 REC=${1:-$R/_records/bigboy-a2b9bf79}; SHA=$(cat "$REC/sha.txt")   # the pinned ops sha (Trap #328: derived, not typed)
 OP=ghcr.io/full-chaos/dev-health-go-operator@$(docker buildx imagetools inspect ghcr.io/full-chaos/dev-health-go-operator:sha-${SHA:0:7} --format '{{json .Manifest}}' | jq -r .digest)
 [[ $OP == *@sha256:* ]] || { echo "no operator image for sha-${SHA:0:7}"; exit 3; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$R"   # compose project root (bigboy-cut.sh runs from here too)
-export COMPOSE_FILE="${COMPOSE_FILE:-compose.yml}:$HERE/compose.bigboy.hook-check.yml"   # by hand: the stack file supplies the network
+export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
+unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 export HOOK_OPERATOR_IMAGE=$OP   # an image reference, not a credential
-HC=(docker compose --env-file ops/.env --profile venue run --rm --no-deps -T venue-hook)
+export BIGBOY_OPERATOR_IMAGE="${BIGBOY_OPERATOR_IMAGE:-$OP}"
+HC=("${DC[@]}" --profile venue --profile venue-hook run --rm --no-deps -T venue-hook)
 RC=0
 OUT1=$("${HC[@]}" migrate upgrade --river=false 2>&1) || RC1=$?
 echo "$OUT1" | grep -E '"msg":"migrate step|"action"|"error"|step_failed' | sed -E 's/"time":"[^"]*",//' | cut -c1-200

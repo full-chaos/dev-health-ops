@@ -230,11 +230,11 @@ FROM users u WHERE u.id = $1`, users[name]).Scan(&out)
 				body: `{"full_name":"Self","is_superuser":true}`, watch: "admin"})
 		},
 		func() step {
-			return refused(step{name: "org admin demotes a superuser", bearer: orgAdmin, method: "PATCH", path: users2 + users["orgroot"].String(),
+			return refused(step{name: "org admin demotes a superuser", bearer: orgAdmin, method: "PATCH", path: users2 + users["orgroot"].String() + "?force=true",
 				body: `{"is_superuser":false}`, watch: "orgroot"})
 		},
 		func() step {
-			return refused(step{name: "org admin patches a superuser's profile", bearer: orgAdmin, method: "PATCH", path: users2 + users["orgroot"].String(),
+			return refused(step{name: "org admin patches a superuser's profile", bearer: orgAdmin, method: "PATCH", path: users2 + users["orgroot"].String() + "?force=true",
 				body: `{"email":"su-moved@example.com","full_name":"Moved"}`, watch: "orgroot"})
 		},
 		func() step {
@@ -242,7 +242,7 @@ FROM users u WHERE u.id = $1`, users[name]).Scan(&out)
 				body: setPassword, watch: "orgroot"})
 		},
 		func() step {
-			return refused(step{name: "org admin deletes a superuser", bearer: orgAdmin, method: "DELETE", path: users2 + users["delroot"].String(),
+			return refused(step{name: "org admin deletes a superuser", bearer: orgAdmin, method: "DELETE", path: users2 + users["delroot"].String() + "?force=true",
 				watch: "delroot"})
 		},
 		func() step {
@@ -296,11 +296,11 @@ FROM users u WHERE u.id = $1`, users[name]).Scan(&out)
 				status: http.StatusOK, check: func() string { return field("outsider", 4) }, want: "-"}
 		},
 		func() step {
-			return step{name: "org admin deletes a member", bearer: orgAdmin, method: "DELETE", path: users2 + users["spare"].String(),
+			return step{name: "org admin deletes a member", bearer: orgAdmin, method: "DELETE", path: users2 + users["spare"].String() + "?force=true",
 				status: http.StatusOK, check: func() string { return state("spare") }, want: "absent"}
 		},
 		func() step {
-			return step{name: "superuser patches a superuser's profile", bearer: root, method: "PATCH", path: users2 + users["orgroot"].String(),
+			return step{name: "superuser patches a superuser's profile", bearer: root, method: "PATCH", path: users2 + users["orgroot"].String() + "?force=true",
 				body: `{"full_name":"Root Renamed"}`, status: http.StatusOK,
 				check: func() string { return field("orgroot", 2) }, want: "Root Renamed"}
 		},
@@ -340,7 +340,7 @@ FROM users u WHERE u.id = $1`, users[name]).Scan(&out)
 				check: func() string { return fmt.Sprint(strings.Contains(state("admin"), orgID.String()+":owner")) }, want: "true"}
 		},
 		func() step {
-			return step{name: "superuser deletes a superuser", bearer: root, method: "DELETE", path: users2 + users["orgroot"].String(),
+			return step{name: "superuser deletes a superuser", bearer: root, method: "DELETE", path: users2 + users["orgroot"].String() + "?force=true",
 				status: http.StatusOK, check: func() string { return state("orgroot") }, want: "absent"}
 		},
 	}

@@ -58,17 +58,25 @@ func TokenAuth(header, prefix string, token secrets.Value) Auth {
 }
 
 type HTTPClient struct {
-	Provider  string
-	BaseURL   *url.URL
-	Doer      HTTPDoer
-	Auth      Auth
-	Retry     RetryPolicy
-	Lease     LeaseGuard
-	Gate      BackoffGate
-	Budget    BudgetStore
-	BudgetKey BudgetKey
-	Metrics   *Metrics
-	entropy   io.Reader
+	// Ledger, when set, counts every wire request per (route family, dimension).
+	Ledger *RequestLedger
+	// GateWaitMax bounds how long, in total, one request sleeps in place at
+	// the shared backoff gate before the try ends with the wait that remains
+	// (CHAOS-8830; Python slept at most 300 s). Zero sleeps not at all, which
+	// is the old behaviour: any gate wait ends the try. NewHTTPClient sets it
+	// to RateLimitMaxHonoredDelay.
+	GateWaitMax time.Duration
+	Provider    string
+	BaseURL     *url.URL
+	Doer        HTTPDoer
+	Auth        Auth
+	Retry       RetryPolicy
+	Lease       LeaseGuard
+	Gate        BackoffGate
+	Budget      BudgetStore
+	BudgetKey   BudgetKey
+	Metrics     *Metrics
+	entropy     io.Reader
 
 	// ReservationReleaseTimeout bounds cleanup independently from a cancelled
 	// request. Zero uses defaultReservationReleaseTimeout.
@@ -95,7 +103,7 @@ func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryP
 	if err := admitDoer(doer); err != nil {
 		return nil, err
 	}
-	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: originGuardedAtConstruction(doer), Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
+	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: originGuardedAtConstruction(doer), Auth: auth, Retry: retry, Lease: lease, GateWaitMax: RateLimitMaxHonoredDelay, entropy: rand.Reader}, nil
 }
 
 // admitDoer is the ONE admission every constructor that sends a credential through a doer calls (NewHTTPClient, NewGitHubAppAuth,
@@ -145,19 +153,15 @@ func (c *HTTPClient) resolveTarget(path string) (*url.URL, error) {
 		joined.RawQuery, joined.Fragment, joined.RawFragment = ref.RawQuery, ref.Fragment, ref.RawFragment
 		target = &joined
 	}
-	if target.Host != c.BaseURL.Host || target.Scheme != c.BaseURL.Scheme {
+	if !sameOrigin(target, c.BaseURL) {
+		httpguard.RecordLeftOrigin(context.Background(), httpguard.ActionRefused, "provider.follow_url", c.BaseURL, target)
 		return nil, ErrCredentialInvalid
 	}
 	return target, nil
 }
 
-// sameOrigin reports whether u is on the scheme and host (with port) of base.
-func sameOrigin(u, base *url.URL) bool {
-	return u != nil && base != nil && u.Scheme == base.Scheme && u.Host == base.Host
-}
-
-// credentialHeaders are the request headers that carry a credential.
-var credentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "Private-Token", "X-Api-Key", "X-Auth-Token"}
+// sameOrigin is the one origin rule of internal/httpguard (scheme, host and port).
+func sameOrigin(u, base *url.URL) bool { return httpguard.SameOrigin(u, base) }
 
 // DropCredentialsOnHostChange is an http.Client CheckRedirect for a client that must follow redirects (it
 // also makes unauthenticated reads) but must never replay a credential to another host: it follows like
@@ -169,9 +173,8 @@ func DropCredentialsOnHostChange(req *http.Request, via []*http.Request) error {
 		return errors.New("stopped after 10 redirects")
 	}
 	if len(via) > 0 && !sameOrigin(req.URL, via[0].URL) {
-		for _, name := range credentialHeaders {
-			req.Header.Del(name)
-		}
+		httpguard.StripCredentials(req)
+		httpguard.RecordLeftOrigin(req.Context(), httpguard.ActionStripped, "provider.drop_on_host_change", via[0].URL, req.URL)
 	}
 	return nil
 }
@@ -218,18 +221,19 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 		if !known {
 			// A decorator dropped the request context, so the credential origin is lost: fail closed. The hop is followed (a
 			// redirect to presigned storage must keep working) with EVERY credential header removed.
-			for _, name := range credentialHeaders {
-				req.Header.Del(name)
-			}
+			httpguard.StripCredentials(req)
 			req.Header.Set(strippedMarker, "1")
 			slog.Warn("provider redirect without a credential origin in the request context: credential headers stripped")
+			recordRedirectHop(req)
 			return nil
 		}
 		// The hop would be followed: stop it where it leaves the credential origin and say so.
 		if !sameOrigin(req.URL, state.target) {
+			httpguard.RecordLeftOrigin(req.Context(), httpguard.ActionRefused, "provider.redirect", state.target, req.URL)
 			state.left.Store(true)
 			return http.ErrUseLastResponse
 		}
+		recordRedirectHop(req)
 		return nil
 	}
 	return &guarded
@@ -242,9 +246,9 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 // at the first hop that leaves target's origin (the original policy still
 // decides every same-origin hop) and sets the returned flag. Any other Doer is
 // returned as is (a decorator is rebuilt around its guarded inner doer); responseLeftOrigin still detects a redirect it followed.
-func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) {
+func originGuardedDoer(doer HTTPDoer, target *url.URL, hop func(*http.Request)) (HTTPDoer, *atomic.Bool) {
 	if wrapper, ok := doer.(httpguard.Wrapper); ok { // a decorator cannot hide a following client from the origin guard
-		inner, left := originGuardedDoer(wrapper.Unwrap(), target)
+		inner, left := originGuardedDoer(wrapper.Unwrap(), target, hop)
 		if rebuilt, ok := wrapper.Rewrap(inner).(HTTPDoer); ok {
 			return rebuilt, left
 		}
@@ -267,8 +271,12 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) 
 			return errors.New("stopped after 10 redirects")
 		}
 		if !sameOrigin(req.URL, target) {
+			httpguard.RecordLeftOrigin(req.Context(), httpguard.ActionRefused, "provider.redirect", target, req.URL)
 			left.Store(true)
 			return http.ErrUseLastResponse
+		}
+		if hop != nil {
+			hop(req)
 		}
 		return nil
 	}
@@ -323,12 +331,8 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 	if err := c.Lease.Assert(ctx); err != nil {
 		return nil, err
 	}
-	if c.Gate != nil {
-		if wait, err := c.Gate.Wait(ctx); err != nil {
-			return nil, err
-		} else if wait > 0 {
-			return nil, &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
-		}
+	if err := c.awaitGate(ctx); err != nil {
+		return nil, err
 	}
 	var requestBody []byte
 	if body != nil {
@@ -379,8 +383,19 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		if err := c.Lease.Assert(ctx); err != nil {
 			return nil, err
 		}
+		// The first attempt passed the gate above. A retry is a wire attempt too:
+		// a sibling may have armed or extended the shared gate while this request
+		// waited to retry.
+		if attempt > 1 {
+			if err := c.awaitGate(ctx); err != nil {
+				return nil, err
+			}
+		}
 		callLeft := new(atomic.Bool)
-		request, err := http.NewRequestWithContext(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), method, target.String(), bytes.NewReader(requestBody))
+		// Each followed redirect hop counts as one more wire request: through the context for a guard behind a route's
+		// decorator, and through the per-call guard for a decorator that drops the context (a hop is counted once).
+		recorder := c.newHopRecorder(ctx, target.Path)
+		request, err := http.NewRequestWithContext(withHopRecorder(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), recorder), method, target.String(), bytes.NewReader(requestBody))
 		if err != nil {
 			return nil, ErrCredentialInvalid
 		}
@@ -388,7 +403,8 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			return nil, err
 		}
 		var requestErr error
-		guarded, leftOrigin := originGuardedDoer(c.Doer, target)
+		guarded, leftOrigin := originGuardedDoer(c.Doer, target, recorder.record)
+		c.recordWireRequest(ctx, target.Path)
 		response, requestErr = guarded.Do(request)
 		if callLeft.Load() || leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target) && !strippedOfCredentials(response.Request)) {
 			// A redirect took the authenticated request off the credential's
@@ -412,13 +428,13 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			}
 			continue
 		}
-		classification := ClassifyHTTP(c.Provider, response.StatusCode, response.Header)
+		classification := ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, "")
 		if classification == nil {
 			c.observe("")
 			return response, nil
 		}
 		message, _ := io.ReadAll(io.LimitReader(response.Body, maxProviderErrorBody))
-		classification = ClassifyHTTPWithMessage(c.Provider, response.StatusCode, response.Header, string(message))
+		classification = ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, string(message))
 		// CHAOS-4582: message was already being read off the response body
 		// (above) to let ClassifyHTTPWithMessage sniff GitHub/GitLab
 		// rate-limit bodies -- it was then discarded rather than attached to
@@ -430,6 +446,9 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		classification.Path = target.Path
 		classification.Route = routeTemplate(ctx)
 		classification.Body = string(message)
+		if dimension := budgetDimension(ctx); dimension != "" && classification.Class == ErrorRateLimited {
+			classification.Dimension = dimension
+		}
 		retryDelay := c.retryDelay(attempt, classification.RetryAfter, classification.Class)
 		if classification.Class == ErrorRateLimited && c.Gate != nil {
 			// The gate is shared cross-runtime (Celery workers read the same
@@ -485,12 +504,8 @@ func (c *HTTPClient) DoUnauthenticated(
 	if err := c.Lease.Assert(ctx); err != nil {
 		return nil, err
 	}
-	if c.Gate != nil {
-		if wait, err := c.Gate.Wait(ctx); err != nil {
-			return nil, err
-		} else if wait > 0 {
-			return nil, &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
-		}
+	if err := c.awaitGate(ctx); err != nil {
+		return nil, err
 	}
 	var reservation Reservation
 	if c.Budget != nil {
@@ -524,23 +539,106 @@ func (c *HTTPClient) DoUnauthenticated(
 			err = errors.Join(err, releaseErr)
 		}()
 	}
-	request, requestErr := http.NewRequestWithContext(ctx, method, target.String(), nil)
+	request, requestErr := http.NewRequestWithContext(withHopRecorder(ctx, c.newHopRecorder(ctx, target.Path)), method, target.String(), nil)
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}
+	c.recordWireRequest(ctx, target.Path)
 	response, err = c.Doer.Do(request)
 	if err != nil {
 		failure := c.transportFailure(ctx, err, 1)
 		c.observe(failure.Class)
 		return nil, failure
 	}
-	classification := ClassifyHTTP(c.Provider, response.StatusCode, response.Header)
-	if classification == nil {
+	if classification := classifyResponseWithBody(c.Provider, target.Path, response); classification == nil {
 		c.observe("")
 	} else {
 		c.observe(classification.Class)
 	}
 	return response, nil
+}
+
+// bodyPeekTimeout bounds how long classification waits for a body to start
+// and finish within maxProviderErrorBody; a slower body keeps the
+// status-and-headers classification.
+const bodyPeekTimeout = 2 * time.Second
+
+// peekedBody serves the bytes (and the read error, if any) of a background
+// bounded read first and the rest of the original body after, so the caller
+// sees exactly what the unwrapped body would have given it.
+type peekedBody struct {
+	done   chan struct{}
+	peeked []byte
+	err    error
+	offset int
+	rest   io.ReadCloser
+}
+
+func (b *peekedBody) Read(p []byte) (int, error) {
+	<-b.done
+	if b.offset < len(b.peeked) {
+		n := copy(p, b.peeked[b.offset:])
+		b.offset += n
+		if b.offset == len(b.peeked) && b.err != nil {
+			return n, b.err // the original body returned its data and error together
+		}
+		return n, nil
+	}
+	if b.err != nil {
+		return 0, b.err
+	}
+	return b.rest.Read(p)
+}
+
+func (b *peekedBody) Close() error { return b.rest.Close() }
+
+// classifyResponseWithBody classifies a response from status, headers and a
+// bounded, time-bounded peek of the body, so a limit whose only signal is the
+// body message (a GitHub secondary or abuse limit on a 403) is rate_limited
+// with its dimension. Only that case consults the body (ClassifyHTTPWithMessage).
+// The caller still reads the full body, with any read error it would have got,
+// except after a peek timeout, which closes the body so no reader goroutine leaks.
+func classifyResponseWithBody(provider, requestPath string, response *http.Response) *ProviderError {
+	classification := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, "")
+	if classification == nil || response.Body == nil || classification.Class == ErrorRateLimited ||
+		provider != "github" || response.StatusCode != http.StatusForbidden {
+		return classification
+	}
+	body := &peekedBody{done: make(chan struct{}), rest: response.Body}
+	go func() {
+		body.peeked, body.err = io.ReadAll(io.LimitReader(body.rest, maxProviderErrorBody))
+		close(body.done)
+	}()
+	response.Body = body
+	timer := time.NewTimer(bodyPeekTimeout)
+	defer timer.Stop()
+	select {
+	case <-body.done:
+	case <-timer.C:
+		_ = body.rest.Close() // ends the reader goroutine; the caller's later read fails
+		logBodyPeekTimeout(provider, response.StatusCode, classification.Class)
+		return classification
+	}
+	withBody := ClassifyHTTPForRequest(provider, requestPath, response.StatusCode, response.Header, string(body.peeked))
+	if withBody == nil {
+		return classification
+	}
+	if withBody.Class != classification.Class {
+		logBodyReclassification(provider, response.StatusCode, classification.Class, withBody.Class, withBody.Dimension)
+	}
+	return withBody
+}
+
+func logBodyPeekTimeout(provider string, status int, class ErrorClass) {
+	slog.Warn("provider error body not read in time, classified from status and headers; body closed",
+		"provider", provider, "status", status, "class", string(class), "timeout_ms", bodyPeekTimeout.Milliseconds())
+}
+
+// logBodyReclassification logs only closed-set values (provider, status,
+// class names, dimension name), never body or error text.
+func logBodyReclassification(provider string, status int, from, to ErrorClass, dimension string) {
+	slog.Debug("provider response reclassified from its body",
+		"provider", provider, "status", status, "from_class", string(from), "to_class", string(to), "dimension", dimension)
 }
 
 func (c *HTTPClient) retryDelay(attempt int, retryAfter time.Duration, class ErrorClass) time.Duration {
@@ -588,6 +686,46 @@ func retryJitter(entropy io.Reader, limit time.Duration) time.Duration {
 		return 0
 	}
 	return time.Duration(jitter.Int64())
+}
+
+// awaitGate sleeps out the shared backoff gate in place, as Python's gate_call
+// did, so a unit that another unit's rate limit paused continues its fetch
+// instead of ending the try and restarting from zero. It sleeps only while the
+// total stays within GateWaitMax and the context outlasts the wait; otherwise
+// the try ends with ErrorRateLimited carrying the wait that remains, which the
+// provider-unit handler turns into a persisted deferral.
+func (c *HTTPClient) awaitGate(ctx context.Context) error {
+	if c.Gate == nil {
+		return nil
+	}
+	var slept time.Duration
+	for {
+		wait, err := c.Gate.Wait(ctx)
+		if err != nil {
+			return err
+		}
+		if wait <= 0 {
+			if slept > 0 {
+				slog.InfoContext(ctx, "provider_gate_wait_slept", "provider", c.Provider, "slept_ms", slept.Milliseconds())
+			}
+			return nil
+		}
+		if slept+wait > c.GateWaitMax {
+			slog.InfoContext(ctx, "provider_gate_wait_deferred", "provider", c.Provider, "wait_ms", wait.Milliseconds(), "slept_ms", slept.Milliseconds(), "bound_ms", c.GateWaitMax.Milliseconds())
+			return &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
+			slog.InfoContext(ctx, "provider_gate_wait_deferred", "provider", c.Provider, "wait_ms", wait.Milliseconds(), "slept_ms", slept.Milliseconds(), "reason", "deadline")
+			return &ProviderError{Class: ErrorRateLimited, RetryAfter: wait}
+		}
+		if err := c.wait(ctx, wait); err != nil {
+			return err
+		}
+		slept += wait
+		if err := c.Lease.Assert(ctx); err != nil {
+			return err
+		}
+	}
 }
 
 func (c *HTTPClient) wait(ctx context.Context, wait time.Duration) error {
@@ -774,4 +912,60 @@ func CollectPages[T any](ctx context.Context, maxPages int, fetch PageFunc[T]) (
 		cursor = next
 	}
 	return nil, errors.New("provider pagination budget exhausted")
+}
+
+type budgetDimensionKey struct{}
+
+// WithBudgetDimension names the dispatch budget dimension the requests made
+// with ctx are accounted to, for a route whose dimension is not the one its
+// request path implies: GitHub's file and blame blob reads go through GraphQL
+// but their budget estimates are contents_blob. A rate limit on such a request
+// carries this dimension, so the cooldown gate matches the units that budgeted
+// it.
+func WithBudgetDimension(ctx context.Context, dimension string) context.Context {
+	return context.WithValue(ctx, budgetDimensionKey{}, dimension)
+}
+
+func budgetDimension(ctx context.Context) string {
+	dimension, _ := ctx.Value(budgetDimensionKey{}).(string)
+	return dimension
+}
+
+// ClassifyHTTPForRequest is ClassifyHTTPWithMessage for a response whose
+// request path is known: a rate-limited classification also carries the
+// budget dimension of that request (RateLimitDimension). Every code that
+// classifies a provider response itself, rather than through HTTPClient.Do,
+// must use it, or its rate limits are recorded without a dimension.
+func ClassifyHTTPForRequest(provider, requestPath string, status int, headers http.Header, message string) *ProviderError {
+	classification := ClassifyHTTPWithMessage(provider, status, headers, message)
+	if classification != nil && classification.Class == ErrorRateLimited {
+		classification.Dimension = RateLimitDimension(provider, requestPath, message)
+	}
+	return classification
+}
+
+// RateLimitDimension names the budget dimension a rate-limited request drew
+// from, read from the request alone: a GitHub secondary or abuse limit is
+// secondary_abuse_risk, the search API is search (also under a GitHub
+// Enterprise Server /api/v3 prefix), a Jira JQL search under /rest/api/ is search,
+// a path ending in /graphql is graphql_cost,
+// anything else rest_core. These are the dimension names the dispatch budget
+// buckets and the cooldown gate use.
+func RateLimitDimension(provider, path, message string) string {
+	if provider == "github" {
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "secondary") || strings.Contains(lower, "abuse") {
+			return "secondary_abuse_risk"
+		}
+		if strings.HasPrefix(strings.TrimPrefix(path, "/api/v3"), "/search/") {
+			return "search"
+		}
+	}
+	if provider == "jira" && strings.Contains(path, "/rest/api/") && strings.Contains(path, "/search") {
+		return "search"
+	}
+	if strings.HasSuffix(path, "/graphql") {
+		return "graphql_cost"
+	}
+	return "rest_core"
 }

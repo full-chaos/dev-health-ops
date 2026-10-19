@@ -45,6 +45,8 @@ func (doer *jiraWorkItemsDoer) Do(request *http.Request) (*http.Response, error)
 		body = `{"comments":[{"id":"10001","created":"2026-07-21T11:00:00Z","author":{"accountId":"jira-commenter"},"body":"verified"}],"isLast":true}`
 	case request.URL.Path == "/rest/agile/1.0/sprint/9001":
 		body = `{"id":9001,"name":"July support","state":"closed","startDate":"2026-07-01T00:00:00Z","endDate":"2026-07-15T00:00:00Z","completeDate":"2026-07-16T00:00:00Z"}`
+	case request.URL.Path == "/rest/api/3/field":
+		body = `[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`
 	default:
 		doer.t.Fatalf("unexpected Jira request %s", request.URL.String())
 	}
@@ -107,7 +109,7 @@ func TestJiraWorkItemsRouteCollectsCanonicalFamilyAndWithholdsWatermarkOnOptiona
 	if len(batch.Effects) != 8 {
 		t.Fatalf("effects=%v", batch.Effects)
 	}
-	if batch.Evidence.Records != 1 || batch.Evidence.Pages != 1 || batch.Evidence.Requests != 3 {
+	if batch.Evidence.Records != 1 || batch.Evidence.Pages != 1 || batch.Evidence.Requests != 4 {
 		t.Fatalf("evidence=%+v", batch.Evidence)
 	}
 	foundSearch := false
@@ -117,7 +119,7 @@ func TestJiraWorkItemsRouteCollectsCanonicalFamilyAndWithholdsWatermarkOnOptiona
 			continue
 		}
 		foundSearch = true
-		wantJQL := "project = 'OPS' AND (updated >= '2026-07-01' OR (statusCategory != Done AND created <= '2026-07-31')) ORDER BY updated DESC"
+		wantJQL := "project = 'OPS' AND updated >= '2026-06-30' AND updated < '2026-08-02' ORDER BY updated DESC"
 		if got := parsed.Query().Get("jql"); got != wantJQL {
 			t.Fatalf("JQL=%q want=%q", got, wantJQL)
 		}
@@ -201,6 +203,8 @@ func TestJiraWorkItemsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 		case request.URL.Path == "/rest/agile/1.0/sprint/9001":
 			sprintAttempts++
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		case request.URL.Path == "/rest/api/3/field":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected Jira request %s", request.URL.String())
 			return nil, nil
@@ -230,9 +234,9 @@ func TestJiraWorkItemsRouteCountsFailedAndRetriedAttempts(t *testing.T) {
 	if batch.Result["sprints_synced"] != 0 {
 		t.Fatalf("result=%#v: a failed sprint fetch must not synthesize a row", batch.Result)
 	}
-	// 1 search + 2 comments + 2 sprint = 5.
-	if batch.Evidence.Requests != 5 {
-		t.Fatalf("evidence=%+v want Requests=5 (every physical attempt, from one source)", batch.Evidence)
+	// 1 search + 1 field list + 2 comments + 2 sprint = 6.
+	if batch.Evidence.Requests != 6 {
+		t.Fatalf("evidence=%+v want Requests=6 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 
@@ -243,6 +247,9 @@ func TestJiraWorkItemsRouteOptionalCommentFailureIsTypedAndDoesNotAdvance(t *tes
 	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path == "/rest/api/3/search/jql" {
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"issues":[{"key":"OPS-103","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-103","fields":{"project":{"key":"OPS"},"summary":"Optional child failure","status":{"name":"Open","statusCategory":{"key":"new"}},"issuetype":{"name":"Task"},"labels":[],"created":"2026-07-20T00:00:00Z","updated":"2026-07-21T00:00:00Z"},"changelog":{"histories":[]}}],"isLast":true}`)), Request: request}, nil
+		}
+		if request.URL.Path == "/rest/api/3/field" {
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		}
 		return nil, errors.New("comments endpoint unavailable")
 	})
@@ -347,5 +354,99 @@ func TestJiraWorkItemsEffectsFenceTenantLeaseAndReadbackRecovery(t *testing.T) {
 	}
 	if err := sink.WriteEffect(context.Background(), foreign, workItemsEffect); err == nil {
 		t.Fatal("foreign tenant write unexpectedly accepted")
+	}
+}
+
+// CHAOS-8805 (chris D2, 2026-10-06): the Jira fetch is bounded to the window on
+// both ends and no longer carries every open issue. The upper date bound is a
+// superset of the window in any Jira user time zone.
+func TestJiraWorkItemsJQLIsBoundedToTheWindowOnBothEnds(t *testing.T) {
+	claim := nativeTestClaim("jira", "work-items")
+	cases := []struct {
+		name          string
+		since, before time.Time
+		want          string
+	}{
+		{"hourly window inside a day", time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC),
+			"project = 'OPS' AND updated >= '2026-10-16' AND updated < '2026-10-18' ORDER BY updated DESC"},
+		{"window ending at midnight", time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC),
+			"project = 'OPS' AND updated >= '2026-10-15' AND updated < '2026-10-18' ORDER BY updated DESC"},
+		{"month boundary", time.Date(2026, 7, 31, 22, 0, 0, 0, time.UTC), time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC),
+			"project = 'OPS' AND updated >= '2026-07-31' AND updated < '2026-08-02' ORDER BY updated DESC"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			since, before := tc.since, tc.before
+			claim.SinceAt, claim.BeforeAt = &since, &before
+			got := jiraWorkItemsJQL(claim, "OPS")
+			if got != tc.want {
+				t.Fatalf("JQL = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(got, "statusCategory") {
+				t.Fatal("the open-issue clause is back: the unit grows with the open backlog")
+			}
+		})
+	}
+}
+
+// The date bounds are a superset of the window for a Jira user in ANY time zone
+// (review round 1: the lower bound used to be the start's own UTC day, which
+// drops an in-window update for a user west of UTC), and stay within 50h
+// of the window on either side.
+func TestJiraDateBoundsContainTheWindowInEveryUserTimeZone(t *testing.T) {
+	starts := []time.Time{
+		time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC),
+	}
+	for _, start := range starts {
+		for _, span := range []time.Duration{time.Hour, 24 * time.Hour, 5*24*time.Hour + 7*time.Hour} {
+			end := start.Add(span)
+			for offset := -12; offset <= 14; offset++ {
+				zone := time.FixedZone("user", offset*3600)
+				// JQL reads a date-only literal as midnight of that date in the user's zone.
+				lower, lowerErr := time.ParseInLocation("2006-01-02", jiraUpdatedSinceDate(start), zone)
+				upper, upperErr := time.ParseInLocation("2006-01-02", jiraUpdatedBeforeDate(end), zone)
+				if lowerErr != nil || upperErr != nil {
+					t.Fatal(lowerErr, upperErr)
+				}
+				if lower.After(start) {
+					t.Fatalf("UTC%+d: lower bound %s is after the window start %s: an in-window update is dropped", offset, lower, start)
+				}
+				// The upper bound is exclusive and the window is half-open: a bound equal to the end is exact.
+				if upper.Before(end) {
+					t.Fatalf("UTC%+d: upper bound %s is before the window end %s", offset, upper, end)
+				}
+				// The padding is the spread of the zones (26h) plus the date rounding: at most 50h on each side.
+				if start.Sub(lower) > 50*time.Hour || upper.Sub(end) > 50*time.Hour {
+					t.Fatalf("UTC%+d: bounds [%s, %s) are wider than 50h around the window [%s, %s)", offset, lower, upper, start, end)
+				}
+			}
+		}
+	}
+}
+
+// The JQL search, the per-issue enrichment and the comments are accounted to the
+// families the dispatch estimate names for them (jira_jql, jira_issue_enrichment,
+// jira_comments); every request of the route is labelled.
+func TestJiraWorkItemsRouteLabelsEveryRequestWithTheEstimatesFamilies(t *testing.T) {
+	for dataset, wantFamilies := range map[string][]string{
+		"work-items":         {"jira_jql", "jira_issue_enrichment"},
+		"work-item-comments": {"jira_jql", "jira_issue_enrichment", "jira_comments"},
+	} {
+		t.Run(dataset, func(t *testing.T) {
+			claim := nativeTestClaim("jira", dataset)
+			claim.SourceExternalID = "OPS"
+			claim.DatasetOptions = map[string]any{"fetch_comments": true, "comments_limit": 10, "sprint_field": "customfield_10020"}
+			doer := &jiraWorkItemsDoer{t: t}
+			client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			client.Ledger = providerfoundation.NewRequestLedger()
+			if _, err := (JiraWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), Identity: jiraRouteIdentity}).Collect(
+				context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+			); err != nil {
+				t.Fatal(err)
+			}
+			assertRouteRequestsAreLabelled(t, "jira", dataset, client.Ledger, wantFamilies...)
+		})
 	}
 }

@@ -1520,6 +1520,16 @@ func assertVersionedRowsAreReadAsNewest(t *testing.T, ctx context.Context, conn 
 	if !sameFloats(got.CycleTimeByDay, []float64{12.0, 8.0}) {
 		t.Errorf("versions org: Go cycle times = %v, want [12 8]: the tuple-wrapped argMax lets the NULL newest row of 08-07 win and drops the day (CHAOS-4547, PR 2568)", got.CycleTimeByDay)
 	}
+	// CHAOS-9888: the slope's x is the sample's calendar day, so the days travel with the values and a dropped
+	// NULL day leaves a gap in them (the Python reference has no day list).
+	if len(got.CycleTimeDays) != len(got.CycleTimeByDay) {
+		t.Errorf("versions org: %d cycle-time days for %d values", len(got.CycleTimeDays), len(got.CycleTimeByDay))
+	}
+	for index := 1; index < len(got.CycleTimeDays); index++ {
+		if !got.CycleTimeDays[index].After(got.CycleTimeDays[index-1]) {
+			t.Errorf("versions org: cycle-time days %v are not strictly increasing", got.CycleTimeDays)
+		}
+	}
 	want.CycleTimeByDay = bitsHex(got.CycleTimeByDay)
 	compareSnapshotAgainstPython(t, "versions-org", got, want, false)
 }

@@ -16,6 +16,7 @@ ci/venue_oracle_triggers.d/ declares such paths. These tests hold:
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -131,7 +132,9 @@ def test_a_change_of_a_teams_write_selects_the_protected_routes_test(
 
 
 def test_a_change_far_from_any_venue_test_still_selects_nothing(tmp_path: Path) -> None:
-    assert _real_selected(tmp_path, "internal/chmigrate/runner.go") == []
+    # internal/chmigrate is no longer "far": the venue servers link it, so the dependency closure
+    # (CHAOS-9935) selects for a change there; internal/scheduler/fixed is linked by no venue test.
+    assert _real_selected(tmp_path, "internal/scheduler/fixed/x.go") == []
     assert _real_selected(tmp_path, "docs/index.md") == []
 
 
@@ -144,7 +147,9 @@ def test_the_real_trigger_rows_pass_the_static_check() -> None:
         for line in file.read_text(encoding="utf-8").splitlines()
         if line.strip()
     )
-    assert f"venue-oracle-triggers: {declared} declared path(s)" in proc.stdout, proc.stdout
+    assert f"venue-oracle-triggers: {declared} declared path(s)" in proc.stdout, (
+        proc.stdout
+    )
 
 
 # --- the selection rule -----------------------------------------------------
@@ -402,6 +407,8 @@ def _run_select_step(tree: Path) -> tuple[subprocess.CompletedProcess[str], str]
             "BASE_SHA": base,
             "HEAD_SHA": head,
             "GITHUB_OUTPUT": str(output),
+            "VENUE_LEG": "1",
+            "VENUE_LEGS": "1",
         },
         capture_output=True,
         text=True,
@@ -438,3 +445,303 @@ def test_the_job_step_fails_on_a_trigger_file_it_cannot_read(tree: Path) -> None
         + proc.stdout
     )
     assert output == ""
+
+
+def test_a_missing_closure_directory_fails_loudly_in_the_real_layout(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-9935 round 3: with ci/venue_oracle_closure.d/ gone the selection used to drop every dependency rule and exit 0 with
+    "nothing to run". In a tree that holds the closure generator the directory is required, and so is a file per venue package."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    changed = tree / "changed.txt"
+    changed.write_text("internal/auth/signedtoken/x.go\n", encoding="utf-8")
+    # control: a scratch tree without the generator keeps the package and row rules and no closure directory
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert proc.returncode == 0, proc.stderr
+    # the real layout: the generator is there, the closure directory is not
+    (tree / "internal" / "testsupport" / "venuechanged").mkdir(parents=True)
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert (
+        proc.returncode != 0 and "ci/venue_oracle_closure.d is missing" in proc.stderr
+    ), (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+    # an empty directory: no file for the venue package
+    (tree / "ci" / "venue_oracle_closure.d").mkdir()
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert (
+        proc.returncode != 0 and "internal__apiservice.txt is missing" in proc.stderr
+    ), proc.stderr[-300:]
+
+
+def _list_rc(tree: Path):
+    changed = tree / "changed.txt"
+    changed.write_text("internal/auth/signedtoken/x.go\n", encoding="utf-8")
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    return proc
+
+
+def test_the_selection_never_reads_an_unreadable_or_empty_registry_as_nothing_to_run(
+    tmp_path: Path,
+) -> None:
+    """The listing loop was fed by a process substitution, so a registry that could not be read printed an error and ended as
+    exit 0 and "nothing selected"."""
+    tree = _scratch_tree(
+        tmp_path / "missing", {"internal/apiservice": ["TestVenueOracleX"]}
+    )
+    shutil.rmtree(tree / "ci" / "venue_oracle_registry.d")
+    proc = _list_rc(tree)
+    assert proc.returncode != 0 and "could not be read" in proc.stderr, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+    tree = _scratch_tree(
+        tmp_path / "local-only",
+        {"internal/apiservice": ["TestVenueOracleX"]},
+        local=("TestVenueOracleX",),
+    )
+    proc = _list_rc(tree)
+    assert proc.returncode != 0 and "holds no run row" in proc.stderr, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+
+
+def test_a_closure_file_that_is_empty_or_malformed_is_refused(tmp_path: Path) -> None:
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    closure.mkdir()
+    file = closure / "internal__apiservice.txt"
+    for body, message in (
+        ("", "is empty"),
+        ("\n", "has a line that is not a package directory"),
+        ("internal/a\x01b\n", "has a line that is not a package directory"),
+        ("~\n", "has a line that is not a package directory"),
+    ):
+        file.write_text(body, encoding="utf-8")
+        proc = _list_rc(tree)
+        assert proc.returncode != 0 and message in proc.stderr, (
+            body,
+            proc.returncode,
+            proc.stderr[-300:],
+        )
+    file.write_text(
+        "internal/auth/signedtoken\n~internal/auth/passwordpolicy/data\n",
+        encoding="utf-8",
+    )
+    proc = _list_rc(tree)
+    assert proc.returncode == 0 and "TestVenueOracleX" in proc.stdout, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+
+
+def test_a_closure_line_with_a_space_or_a_comma_selects(tmp_path: Path) -> None:
+    """A directory the module owns may hold a space or a comma (an embed pattern allows both); the line is read whole."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    closure.mkdir()
+    (closure / "internal__apiservice.txt").write_text(
+        "internal/dep_test\n~internal/dep_test/a,b\n~internal/dep_test/assets/a b\n",
+        encoding="utf-8",
+    )
+    for changed in (
+        "internal/dep_test/x.go",
+        "internal/dep_test/a,b/value.txt",
+        "internal/dep_test/assets/a b/value.txt",
+    ):
+        assert _selected(tree, changed) == [
+            ("internal/apiservice", "TestVenueOracleX")
+        ], changed
+    assert _selected(tree, "internal/dep_test/assets/ab/value.txt") == []
+
+
+def test_a_closure_path_that_is_a_directory_is_refused(tmp_path: Path) -> None:
+    """A closure file that is a directory (or unreadable) used to read as 'no closure' and select nothing."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    (closure / "internal__apiservice.txt").mkdir(parents=True)
+    proc = _list_rc(tree)
+    assert proc.returncode != 0 and "not a readable regular file" in proc.stderr, (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+
+
+def _leg_rows(tree: Path, changed: Path, shard: int, count: int) -> list[str]:
+    proc, _ = _run_verb(
+        tree, "--changed", str(changed), "--list", str(shard), str(count)
+    )
+    assert proc.returncode == 0, proc.stderr
+    return [line for line in proc.stdout.splitlines() if line.startswith("SELECT\t")]
+
+
+def test_the_legs_of_a_change_set_partition_its_selection(tmp_path: Path) -> None:
+    """D6039a: `--changed FILE --list SHARD COUNT` hands each leg a slice of the selected rows; the slices are disjoint and
+    their union is the whole selection, whatever COUNT is (more legs than rows leaves some legs empty)."""
+    tree = _scratch_tree(
+        tmp_path,
+        {
+            "internal/a": ["TestVenueOracleA1", "TestVenueOracleA2"],
+            "internal/b": ["TestVenueOracleB"],
+            "internal/c": ["TestVenueOracleC"],
+            "internal/d": ["TestVenueOracleD"],
+        },
+    )
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\ninternal/b/x.go\ninternal/c/x.go\n")
+    whole = [
+        line
+        for line in _run_verb(tree, "--changed", str(changed), "--list")[
+            0
+        ].stdout.splitlines()
+        if line.startswith("SELECT\t")
+    ]
+    assert len(whole) == 4, whole
+    for count in (1, 2, 3, 7):
+        legs = [_leg_rows(tree, changed, shard, count) for shard in range(1, count + 1)]
+        flat = [row for leg in legs for row in leg]
+        assert sorted(flat) == sorted(whole), (count, legs)
+        assert len(flat) == len(set(flat)), (count, legs)
+    assert any(not _leg_rows(tree, changed, shard, 7) for shard in range(1, 8))
+
+
+def test_a_leg_with_an_empty_slice_is_a_green_no_op(tmp_path: Path) -> None:
+    tree = _scratch_tree(tmp_path, {"internal/a": ["TestVenueOracleA"]})
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\n")
+    empty = [s for s in (1, 2, 3) if not _leg_rows(tree, changed, s, 3)]
+    assert empty, "one row cannot fill three legs"
+    proc, _ = _run_verb(tree, "--changed", str(changed), str(empty[0]), "3")
+    assert proc.returncode == 0 and "nothing to run" in proc.stdout, (
+        proc.returncode,
+        proc.stdout[-300:],
+        proc.stderr[-300:],
+    )
+
+
+def test_a_leg_outside_one_to_count_is_refused_with_a_change_set(
+    tmp_path: Path,
+) -> None:
+    tree = _scratch_tree(tmp_path, {"internal/a": ["TestVenueOracleA"]})
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\n")
+    for args in (("0", "3"), ("4", "3"), ("x", "3")):
+        proc, _ = _run_verb(tree, "--changed", str(changed), "--list", *args)
+        assert proc.returncode != 0, args
+
+
+def test_the_run_of_a_leg_runs_only_its_slice(tmp_path: Path) -> None:
+    tree = _scratch_tree(
+        tmp_path,
+        {"internal/a": ["TestVenueOracleA"], "internal/b": ["TestVenueOracleB"]},
+    )
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\ninternal/b/x.go\n")
+    ran = []
+    for shard in (1, 2):
+        proc, _ = _run_verb(tree, "--changed", str(changed), str(shard), "2")
+        assert proc.returncode == 0, proc.stderr[-300:]
+        ran.append(
+            sorted(line for line in proc.stdout.splitlines() if "  RUN  " in line)
+        )
+    assert len(ran[0]) == 1 and len(ran[1]) == 1 and ran[0] != ran[1], ran
+
+
+def test_the_changed_job_matrix_holds_the_whole_registry_within_its_timeout() -> None:
+    """D6039a: a change that selects every row is the worst case. The legs of the matrix and the count each passes to the verb
+    agree, and the cost-balanced plan of the WHOLE registry over them fits the job timeout with room for setup."""
+    import yaml
+
+    job = yaml.safe_load(CHANGED_WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "venue-oracles-changed"
+    ]
+    legs = job["strategy"]["matrix"]["shard"]
+    assert legs == list(range(1, len(legs) + 1)), legs
+    assert str(job["env"]["VENUE_LEGS"]) == str(len(legs))
+    assert job["env"]["VENUE_LEG"] == "${{ matrix.shard }}"
+    proc = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "ci" / "check_go.sh"),
+            "venue-oracle-plan",
+            str(len(legs)),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    seconds = [
+        float(line.split("\t")[3])
+        for line in proc.stdout.splitlines()
+        if line.startswith("#leg\t")
+    ]
+    assert len(seconds) == len(legs), proc.stdout[-400:]
+    limit = job["timeout-minutes"] * 60 - 600
+    assert max(seconds) <= limit, (max(seconds), limit)
+
+
+def test_a_change_inside_the_venue_package_still_validates_its_closure_file(
+    tmp_path: Path,
+) -> None:
+    """The package rule used to return before the closure file was read, so a missing or malformed file hid behind it."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    closure.mkdir()
+    changed = tree / "changed.txt"
+    changed.write_text("internal/apiservice/x.go\n", encoding="utf-8")
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert (
+        proc.returncode != 0 and "internal__apiservice.txt is missing" in proc.stderr
+    ), (
+        proc.returncode,
+        proc.stderr[-300:],
+    )
+    (closure / "internal__apiservice.txt").write_text("internal/a\n", encoding="utf-8")
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list")
+    assert proc.returncode == 0 and "TestVenueOracleX" in proc.stdout, proc.stderr[
+        -300:
+    ]
+
+
+def test_a_closure_line_that_can_never_match_is_refused(tmp_path: Path) -> None:
+    """`~dir/` gets a second slash appended by the matcher and never matches; the generator never writes one."""
+    tree = _scratch_tree(tmp_path, {"internal/apiservice": ["TestVenueOracleX"]})
+    closure = tree / "ci" / "venue_oracle_closure.d"
+    closure.mkdir()
+    file = closure / "internal__apiservice.txt"
+    for body in (
+        "~internal/dep/data/\n",
+        "internal/dep/\n",
+        "~/abs\n",
+        "internal//dep\n",
+        "~internal/./dep\n",
+        "../up\n",
+    ):
+        file.write_text(body, encoding="utf-8")
+        proc = _list_rc(tree)
+        assert (
+            proc.returncode != 0 and "not a clean relative directory" in proc.stderr
+        ), (
+            body,
+            proc.returncode,
+            proc.stderr[-300:],
+        )
+
+
+def test_the_leg_receipt_counts_the_selected_rows_not_the_registry(
+    tmp_path: Path,
+) -> None:
+    tree = _scratch_tree(
+        tmp_path,
+        {"internal/a": ["TestVenueOracleA"], "internal/b": ["TestVenueOracleB"]},
+    )
+    changed = tree / "changed.txt"
+    changed.write_text("internal/a/x.go\n", encoding="utf-8")
+    proc, _ = _run_verb(tree, "--changed", str(changed), "--list", "1", "1")
+    assert proc.returncode == 0, proc.stderr
+    assert "takes 1 of 1 selected row(s)" in proc.stderr, proc.stderr

@@ -35,8 +35,10 @@ const (
 // atomic routing change so no one of the three aliases can become a second
 // writer for a ReplacingMergeTree row.
 type GitLabPullRequestRouteHandler struct {
-	PerPage  int
-	MaxPages int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+	PerPage      int
+	MaxPages     int
 }
 
 // gitLabMergeRequestPayload contains the fields consumed by the live Python
@@ -121,7 +123,7 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 	counted.Doer = gitLabPullRequestCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
+	if err := fetchObjectRoute(budgetAccount(ctx, "merge_requests"), &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -129,7 +131,7 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -179,7 +181,7 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 			return err
 		}
 		links, linkPages, err := fetchGitLabMergeRequestCommitLinks(
-			ctx, &counted, claim, projectID, iid, repoID, normalizedAt, perPage, maxPages,
+			budgetAccount(ctx, "merge_requests"), &counted, claim, projectID, iid, repoID, normalizedAt, perPage, maxPages,
 		)
 		if err != nil {
 			return err
@@ -204,7 +206,7 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 		return nil
 	}
 	_, listPages, capReached, err := collectGitLabPullRequestPages(
-		ctx, &counted, root+"/merge_requests", claim, perPage, maxPages, consume,
+		budgetAccount(ctx, "merge_requests"), &counted, root+"/merge_requests", claim, perPage, maxPages, consume,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
@@ -496,7 +498,7 @@ func fetchGitLabMergeRequestReviews(
 	result := gitLabMergeRequestReviewFetch{}
 	var approvals map[string]any
 	approvalPath := providerRelativePath(client, "api", "v4", "projects", projectID, "merge_requests", strconv.Itoa(iid), "approvals")
-	if err := fetchObjectRoute(ctx, client, gitlabMergeRequestsRoute+"/{iid}/approvals", approvalPath, &approvals); err != nil {
+	if err := fetchObjectRoute(budgetAccount(ctx, "merge_requests"), client, gitlabMergeRequestsRoute+"/{iid}/approvals", approvalPath, &approvals); err != nil {
 		if controlErr := gitLabPullRequestControlError(ctx, err); controlErr != nil {
 			return result, controlErr
 		}
@@ -505,8 +507,14 @@ func fetchGitLabMergeRequestReviews(
 		approvals = nil
 	}
 	notesPath := providerRelativePath(client, "api", "v4", "projects", projectID, "merge_requests", strconv.Itoa(iid), "notes")
+	// The pr-comments estimate names the notes as their own family; the prs and
+	// pr-reviews estimates carry them in merge_requests.
+	notesFamily := "merge_requests"
+	if claim.Dataset == "pr-comments" {
+		notesFamily = "notes"
+	}
 	notes, pages, capReached, err := collectGitLabRawPages(
-		ctx, client, gitlabMergeRequestsRoute+"/{iid}/notes", notesPath,
+		budgetAccount(ctx, notesFamily), client, gitlabMergeRequestsRoute+"/{iid}/notes", notesPath,
 		url.Values{"sort": {"asc"}, "order_by": {"created_at"}},
 		perPage, maxPages, nil, nil,
 	)

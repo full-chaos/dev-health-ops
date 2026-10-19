@@ -112,9 +112,11 @@ type gitLabServiceRepositoryMappingRow struct {
 }
 
 type GitLabIncidentsRouteHandler struct {
-	MaxIssues int
-	MaxPages  int
-	PerPage   int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+	MaxIssues    int
+	MaxPages     int
+	PerPage      int
 }
 
 func (handler GitLabIncidentsRouteHandler) limits() (int, int, int, error) {
@@ -164,7 +166,7 @@ func (handler GitLabIncidentsRouteHandler) Collect(
 	counted.Doer = gitLabIncidentCountingDoer{delegate: client.Doer, attempts: &requests}
 	root := providerRelativePath(client, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
+	if err := fetchObjectRoute(budgetAccount(ctx, "project"), &counted, gitlabProjectRoute, root, &project); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	parsedProjectID, err := project.ID.Int64()
@@ -172,7 +174,7 @@ func (handler GitLabIncidentsRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	repoFullName := gitLabProjectFullName(project)
-	repoIDText, err := repositoryIdentity(repoFullName)
+	repoIDText, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, repoFullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -192,7 +194,7 @@ func (handler GitLabIncidentsRouteHandler) Collect(
 		"updated_before": {claim.BeforeAt.UTC().Format(time.RFC3339Nano)},
 	}
 	items, pages, err := collectGitLabIncidentPages(
-		ctx, &counted, gitlabIssuesRoute, root+"/issues", query, maxIssues, maxPages, perPage,
+		budgetAccount(ctx, "issues"), &counted, gitlabIssuesRoute, root+"/issues", query, maxIssues, maxPages, perPage,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err

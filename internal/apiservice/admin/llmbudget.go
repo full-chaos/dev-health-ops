@@ -59,7 +59,7 @@ func (h *handlers) getLLMBudget(w http.ResponseWriter, r *http.Request) {
 	}
 	model := orEmpty(modelText)
 	if model == "" {
-		model = llmbudget.DefaultModelByProvider[provider]
+		model = budgetStatusDefaultModel(provider)
 	}
 	baseURL, err := h.settingText(ctx, orgID, llmCategory, "base_url")
 	if err != nil {
@@ -88,4 +88,11 @@ func (h *handlers) getLLMBudget(w http.ResponseWriter, r *http.Request) {
 	out.Set("maximum_limit_micro_usd", optionalBig(status.MaximumLimit))
 	out.Set("pricing_version", optionalString(status.PricingVersion))
 	policy.WriteModel(w, http.StatusOK, out, nil)
+}
+
+// budgetStatusDefaultModel is the model the runtime would use for an org with
+// no stored model: the one resolver the categorize worker and both explain
+// routes read, with the platform provider filled in (CHAOS-10011).
+func budgetStatusDefaultModel(provider string) string {
+	return llmbudget.DefaultModel(provider, llmbudget.PlatformLookup(lookupEnv))
 }

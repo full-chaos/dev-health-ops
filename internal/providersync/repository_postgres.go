@@ -277,6 +277,7 @@ func (repository *PostgresRepository) Complete(
 		return ErrInvalidConfiguration
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
+	repository.wakeDispatch(ctx, claim, completedAt)
 	return nil
 }
 
@@ -360,6 +361,7 @@ func (repository *PostgresRepository) CompleteLinearWorkItemFamily(
 		return ErrInvalidConfiguration
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "success", rollupCompleted, rollupFailed, rollupTotal)
+	repository.wakeDispatch(ctx, claim, completedAt)
 	return nil
 }
 
@@ -421,30 +423,95 @@ func (repository *PostgresRepository) RateLimitEpisode(
 	return episode, nil
 }
 
+// RateLimitObservation is the normalized, durable record of the rate limit that
+// deferred a unit (provider_rate_limit_observations): the budget dimension the
+// limited request drew from and the provider's own delay. The unit's route
+// family is not known at the moment of a 429 (dispatch does not keep its
+// estimates), so the row carries the ambiguous-dimension attribution the
+// dispatch cooldown gate reads: it gates on provider, integration and
+// dimension and never on a guessed family. Nothing here is raw provider text.
+type RateLimitObservation struct {
+	Dimension  string
+	RetryAfter time.Duration
+}
+
+// AmbiguousDimensionAttribution is the route_family_attribution value the
+// dispatch cooldown gate (internal/syncdispatchruntime) reads as "gate on
+// provider + integration + dimension, never on a guessed family".
+const AmbiguousDimensionAttribution = "ambiguous_dimension"
+
+// rateLimitObservationReason is the closed reason category stored with every
+// observation this repository writes.
+const rateLimitObservationReason = "provider_rate_limited"
+
 // DeferForRateLimit keeps a rate-limited unit claimable without consuming its
 // bounded failure budget, mirroring Python's treatment of a 429 as deferred
 // work rather than a failure. The attempt decrement matches
 // DeferForBudgetContention: River's snooze is already attempt-neutral, and the
-// authoritative sync-unit attempt must stay neutral with it.
+// authoritative sync-unit attempt must stay neutral with it. The observation
+// row is written in the same transaction as the RETRYING stamp, so the table
+// never holds a row for a deferral that did not happen, nor misses one that did.
 func (repository *PostgresRepository) DeferForRateLimit(
 	ctx context.Context,
 	claim Claim,
 	availableAt time.Time,
 	now time.Time,
+	observation RateLimitObservation,
 ) error {
 	if repository == nil || repository.Pool == nil || ctx == nil ||
 		claim.Validate() != nil || now.IsZero() || !availableAt.After(now) ||
 		availableAt.Sub(now) > rateLimitMaxTotalWait {
 		return ErrInvalidConfiguration
 	}
-	command, err := repository.Pool.Exec(
+	tx, err := repository.Pool.Begin(ctx)
+	if err != nil {
+		return ErrLeaseLost
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	command, err := tx.Exec(
 		ctx, deferForRateLimitSQL,
 		claim.ID, claim.Owner, now.UTC(), availableAt.UTC(),
 	)
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
+	// A row with no dimension gates nothing (the cooldown reader skips an
+	// ambiguous row without one), so a limit that carries none, such as a
+	// gate denial before any request went out, writes no row.
+	if observation.Dimension != "" {
+		attribution := AmbiguousDimensionAttribution
+		if _, err := tx.Exec(
+			ctx, insertRateLimitObservationSQL,
+			uuid.NewString(), claim.OrgID, claim.Provider, claim.IntegrationID, claim.SyncRunID, claim.ID,
+			attribution, observation.Dimension, observation.retryAfterSeconds(), rateLimitObservationReason, now.UTC(),
+		); err != nil {
+			return err
+		}
+	} else {
+		slog.DebugContext(ctx, "sync_rate_limit_observation_skipped", "unit_id", claim.ID, "provider", claim.Provider, "reason", "no_dimension")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrLeaseLost
+	}
+	if observation.Dimension != "" {
+		slog.InfoContext(ctx, "sync_rate_limit_observation_written",
+			"unit_id", claim.ID, "provider", claim.Provider, "dimension", observation.Dimension)
+	}
 	return nil
+}
+
+// retryAfterSeconds is the provider's delay, finite, never negative, capped at
+// the longest deferral this repository schedules.
+func (observation RateLimitObservation) retryAfterSeconds() *float64 {
+	if observation.RetryAfter <= 0 {
+		return nil
+	}
+	delay := observation.RetryAfter
+	if delay > rateLimitMaxTotalWait {
+		delay = rateLimitMaxTotalWait
+	}
+	seconds := delay.Seconds()
+	return &seconds
 }
 
 // rateLimitMaxTotalWait bounds a single deferral's not-before fence. It equals
@@ -661,6 +728,9 @@ func (repository *PostgresRepository) failTx(
 			return ErrInvalidConfiguration
 		}
 	}
+	if claim.Dataset == workItemsCanonicalDataset {
+		stampNeedsAttention(ctx, tx, claim)
+	}
 	// Unlike a prepared recovery snapshot, a chunk checkpoint is only ever
 	// resumable by a RUNNING unit of the same generation. Terminalizing the
 	// unit makes its sidecars unreachable, so keeping them would retain
@@ -678,6 +748,7 @@ func (repository *PostgresRepository) failTx(
 		return ErrInvalidConfiguration
 	}
 	recordSyncRunRollupBump(ctx, repository.Metrics, claim.SyncRunID, "failed", rollupCompleted, rollupFailed, rollupTotal)
+	repository.wakeDispatch(ctx, claim, completedAt)
 	// CHAOS-4078: attribute the failure to whichever alias dataset(s) this
 	// claim actually represents, not just the persisted canonical identity
 	// -- see metricDatasetKeys.
@@ -1016,6 +1087,12 @@ WHERE unit.id = $1::uuid
   AND unit.lease_expires_at IS NOT NULL
   AND unit.lease_expires_at > $3`
 
+const insertRateLimitObservationSQL = `
+INSERT INTO public.provider_rate_limit_observations (
+  id, org_id, provider, integration_id, sync_run_id, sync_run_unit_id,
+  route_family_attribution, dimension, retry_after_seconds, reason, observed_at
+) VALUES ($1::uuid, $2, $3, $4::uuid, $5::uuid, $6::uuid, $7, $8, $9, $10, $11)`
+
 const deferForChunkContinuationSQL = `
 UPDATE public.sync_run_units AS unit
 SET status = 'dispatching',
@@ -1114,6 +1191,13 @@ func bumpSyncRunRollup(
 	return syncrunrollup.Bump(ctx, tx, syncRunID)
 }
 
+// wakeDispatch arms the run's next dispatch pass now that this unit has left
+// its concurrency slot (CHAOS-10013). It runs after the unit's commit, as its
+// own statement, and never fails the completion: see syncrunrollup.WakeDispatch.
+func (repository *PostgresRepository) wakeDispatch(ctx context.Context, claim Claim, completedAt time.Time) {
+	syncrunrollup.WakeDispatch(ctx, repository.Pool, claim.SyncRunID, completedAt, syncrunrollup.DispatchWakePathProviderUnit)
+}
+
 // recordSyncRunRollupBumpPath is the path label for every call in this
 // file (CHAOS-4586): providersync has exactly one rollup-bump mechanism,
 // the normal per-unit success/failure commit CHAOS-4559 added.
@@ -1210,3 +1294,89 @@ SET last_synced_at = CASE
     updated_at = EXCLUDED.updated_at`
 
 var _ LeaseRepository = (*PostgresRepository)(nil)
+
+const workItemsCanonicalDataset = "work-items"
+
+// stampNeedsAttention marks the work-items dataset of the claim's integration
+// once the source has failed FailureStreakThreshold times in a row with one
+// cause class (CHAOS-8802). The next terminal success clears the marker
+// (clearDatasetUnavailableSQL). It runs in a savepoint and never fails the
+// terminalization: a lost stamp only delays the owner-facing hint.
+func stampNeedsAttention(ctx context.Context, tx pgx.Tx, claim Claim) {
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		slog.Default().Warn("providersync.needs_attention_streak_unavailable",
+			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+			slog.String("failure", "savepoint_begin_failed"))
+		return
+	}
+	streak, err := sourceFailureStreak(ctx, savepoint, claim)
+	if err != nil || streak.Count < FailureStreakThreshold {
+		_ = savepoint.Rollback(ctx)
+		if err != nil {
+			slog.Default().Warn("providersync.needs_attention_streak_unavailable",
+				slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+				slog.String("failure", "streak_query_failed"))
+		}
+		return
+	}
+	// Only the canonical row: the generic Complete clears exactly claim.Dataset,
+	// so a stamp on an alias row would never clear after a success.
+	tag, err := savepoint.Exec(ctx, markDatasetUnavailableSQL,
+		claim.OrgID, claim.IntegrationID, claim.Dataset, streak.NeedsAttentionReason(), streak.LastAt.UTC(),
+	)
+	if err != nil {
+		_ = savepoint.Rollback(ctx)
+		slog.Default().Warn("providersync.needs_attention_stamp_failed",
+			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+			slog.String("failure", "stamp_failed"))
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		_ = savepoint.Rollback(ctx)
+		slog.Default().Warn("providersync.needs_attention_stamp_no_dataset_row",
+			slog.String("org_id", claim.OrgID),
+			slog.String("integration_id", claim.IntegrationID),
+			slog.String("source_id", claim.SourceID),
+			slog.String("dataset", claim.Dataset),
+			slog.Int("failures_in_a_row", streak.Count))
+		return
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		slog.Default().Warn("providersync.needs_attention_stamp_failed",
+			slog.String("org_id", claim.OrgID), slog.String("source_id", claim.SourceID),
+			slog.String("failure", "commit_failed"))
+		return
+	}
+	slog.Default().Info("providersync.needs_attention_stamped",
+		slog.String("org_id", claim.OrgID),
+		slog.String("integration_id", claim.IntegrationID),
+		slog.String("source_id", claim.SourceID),
+		slog.String("provider", claim.Provider),
+		slog.String("cause_class", streak.Class),
+		slog.Int("failures_in_a_row", streak.Count),
+		slog.Duration("retry_interval", FailureStreakRetryInterval))
+}
+
+// sourceFailureStreak reads the streak of one source from its newest terminal
+// work-items units, the unit being terminalized included.
+func sourceFailureStreak(ctx context.Context, tx pgx.Tx, claim Claim) (FailureStreak, error) {
+	rows, err := tx.Query(ctx, RecentTerminalUnitsSQL,
+		claim.OrgID, claim.IntegrationID, workItemsCanonicalDataset, RecentTerminalUnitsLimit)
+	if err != nil {
+		return FailureStreak{}, err
+	}
+	defer rows.Close()
+	var outcomes []UnitOutcome
+	for rows.Next() {
+		var sourceID string
+		var outcome UnitOutcome
+		if err := rows.Scan(&sourceID, &outcome.Failed, &outcome.CauseClass, &outcome.At); err != nil {
+			return FailureStreak{}, err
+		}
+		if sourceID == claim.SourceID {
+			outcomes = append(outcomes, outcome)
+		}
+	}
+	return FailureStreakOf(outcomes), rows.Err()
+}

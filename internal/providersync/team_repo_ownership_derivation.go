@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/linktier"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"sort"
 	"strconv"
@@ -387,49 +388,24 @@ var teamRepoOwnershipInheritableRelationshipTypes = map[string]bool{
 	"external_issue_key": true,
 }
 
-// teamRepoOwnershipLinkTier* index a candidate's link count by the
-// work_graph_issue_pr provenance tier of the link that produced it. A lower
-// index outranks every higher one: native, then explicit_text, then
-// heuristic, then any other recorded provenance (counted, never dropped,
-// and never above a named tier).
-const (
-	teamRepoOwnershipLinkTierNative = iota
-	teamRepoOwnershipLinkTierExplicitText
-	teamRepoOwnershipLinkTierHeuristic
-	teamRepoOwnershipLinkTierOther
-	teamRepoOwnershipLinkTierCount
-)
-
-// teamRepoOwnershipIssuePRLinkTier maps a work_graph_issue_pr.provenance
-// value to its tier. A pull request's or merge request's own repo_id, and
+// teamRepoOwnershipLinkCounts is one team's link count per link tier on one
+// repo, indexed by linktier.Rank: native, explicit_text, heuristic, and
+// at rank 0 any other recorded provenance (counted, never dropped, and never
+// above a named tier). A pull request's or merge request's own repo_id, and
 // its work_item_dependencies donor edge, are provider-recorded facts: the
 // issue<->PR link builder stamps the same dependency row "native", so those
 // candidates count as native. A donor reached only through a key parsed from
 // the pull request's text (`extkey:KEY`) is the exception: it counts as
 // explicit_text (see isTextKeyTarget).
-func teamRepoOwnershipIssuePRLinkTier(provenance string) int {
-	switch provenance {
-	case "native":
-		return teamRepoOwnershipLinkTierNative
-	case "explicit_text":
-		return teamRepoOwnershipLinkTierExplicitText
-	case "heuristic":
-		return teamRepoOwnershipLinkTierHeuristic
-	default:
-		return teamRepoOwnershipLinkTierOther
-	}
-}
-
-// teamRepoOwnershipLinkCounts is one team's link count per tier on one repo.
-type teamRepoOwnershipLinkCounts [teamRepoOwnershipLinkTierCount]int
+type teamRepoOwnershipLinkCounts map[int]int
 
 // compare ranks two teams' link counts lexicographically by tier: the team
 // with more native links wins; only an equal native count looks at
 // explicit_text, and so on. 0 means equal at every tier.
 func (counts teamRepoOwnershipLinkCounts) compare(other teamRepoOwnershipLinkCounts) int {
-	for tier := range counts {
-		if counts[tier] != other[tier] {
-			if counts[tier] > other[tier] {
+	for rank := linktier.Rank(linktier.Native); rank >= 0; rank-- {
+		if counts[rank] != other[rank] {
+			if counts[rank] > other[rank] {
 				return 1
 			}
 			return -1
@@ -461,6 +437,12 @@ type TeamRepoOwnershipTie struct {
 type teamRepoOwnershipDerivation struct {
 	Rows []DerivedTeamRepoOwnershipRow
 	Ties []TeamRepoOwnershipTie
+	// CoOwnersBelowShareFloor counts the co-owners the share floor gave no row.
+	CoOwnersBelowShareFloor int
+	// DroppedBelowShareFloor names those co-owners. The share is a measure
+	// over the whole history, so a dropped co-owner held no share on any day:
+	// the write side voids its rows instead of closing them at the run.
+	DroppedBelowShareFloor []teamRepoOwnershipClaimRef
 	// TextKeyCandidates counts the candidates a key parsed from pull request
 	// text gave (explicit_text tier); TextKeysSkippedForNative counts the pull
 	// requests whose text key was not used because they have a native link.
@@ -485,6 +467,17 @@ func changeRequestNumber(workItemID string) string {
 	return workItemID[index+1:]
 }
 
+// teamRepoOwnershipClaimRef names one team's claim on one repository.
+type teamRepoOwnershipClaimRef struct {
+	TeamID string
+	RepoID string
+}
+
+// teamRepoOwnershipCoOwnerShareFloor is the smallest linked share a co-owner
+// needs for a row (chris, 2026-10-15: "Drop them if they're < 1%"). A main
+// owner keeps its row whatever its share.
+const teamRepoOwnershipCoOwnerShareFloor = 0.01
+
 // deriveTeamRepoOwnership implements both signal paths plus PR inheritance
 // against ALREADY-LOADED rows for one org (loading is the caller's job --
 // this function does no I/O, so it is exhaustively unit-testable). Returns
@@ -503,7 +496,8 @@ func changeRequestNumber(workItemID string) string {
 // its share. When two or more teams tie for the top at every tier, the repo is
 // reported in Ties and the tied teams are marked Tied: the write side keeps
 // the tied team that is already the main owner, else the repo has no main
-// owner.
+// owner. A co-owner whose share is below teamRepoOwnershipCoOwnerShareFloor
+// gets no row; the shares of the other rows keep their denominator.
 func deriveTeamRepoOwnership(
 	// orgID is unused inside this function as of CHAOS-4537 (the last
 	// internal use, reconstructing the linear_team_key identity, is gone --
@@ -554,20 +548,20 @@ func deriveTeamRepoOwnership(
 	nativeDonorTeamID := buildDonorTeamIDResolver(byID, nativeEdges, projectToTeam, knownLinearTeamKeys)
 	nativeLinkedPRs := map[[2]string]bool{}
 	for _, link := range issuePRLinks {
-		if teamRepoOwnershipIssuePRLinkTier(link.Provenance) == teamRepoOwnershipLinkTierNative {
+		if link.Provenance == linktier.Native {
 			nativeLinkedPRs[[2]string{link.RepoID, strconv.FormatUint(uint64(link.PRNumber), 10)}] = true
 		}
 	}
 
-	tallies := map[string]map[string]*teamRepoOwnershipLinkCounts{}
+	tallies := map[string]map[string]teamRepoOwnershipLinkCounts{}
 	repoArm := map[string]map[string]string{}
 	earliest := map[string]map[string]time.Time{}
-	assign := func(repoID, teamID, arm string, tier int, at time.Time) {
+	assign := func(repoID, teamID, arm string, rank int, at time.Time) {
 		if repoID == "" || teamID == "" {
 			return
 		}
 		if tallies[repoID] == nil {
-			tallies[repoID] = map[string]*teamRepoOwnershipLinkCounts{}
+			tallies[repoID] = map[string]teamRepoOwnershipLinkCounts{}
 			repoArm[repoID] = map[string]string{}
 			earliest[repoID] = map[string]time.Time{}
 		}
@@ -577,9 +571,9 @@ func deriveTeamRepoOwnership(
 			}
 		}
 		if tallies[repoID][teamID] == nil {
-			tallies[repoID][teamID] = &teamRepoOwnershipLinkCounts{}
+			tallies[repoID][teamID] = teamRepoOwnershipLinkCounts{}
 		}
-		tallies[repoID][teamID][tier]++
+		tallies[repoID][teamID][rank]++
 		// Same repo, same team, resolved again via a (possibly different)
 		// arm: keep whichever arm ranks higher by
 		// teamRepoOwnershipResolutionArmPriority, deterministically, rather
@@ -598,7 +592,7 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		if teamID, arm := nativeDonorTeamID(item.WorkItemID); teamID != "" {
-			assign(item.RepoID, teamID, arm, teamRepoOwnershipLinkTierNative, item.CreatedAt)
+			assign(item.RepoID, teamID, arm, linktier.Rank(linktier.Native), item.CreatedAt)
 			continue
 		}
 		teamID, arm := donorTeamID(item.WorkItemID)
@@ -610,7 +604,7 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		result.TextKeyCandidates++
-		assign(item.RepoID, teamID, arm, teamRepoOwnershipLinkTierExplicitText, item.CreatedAt)
+		assign(item.RepoID, teamID, arm, linktier.Rank(linktier.ExplicitText), item.CreatedAt)
 	}
 
 	// PR inheritance: work_graph_issue_pr's OWN repo_id, resolved via the
@@ -621,14 +615,14 @@ func deriveTeamRepoOwnership(
 		if link.RepoID == "" {
 			continue
 		}
-		tier := teamRepoOwnershipIssuePRLinkTier(link.Provenance)
+		rank := linktier.Rank(link.Provenance)
 		if teamID, arm := nativeDonorTeamID(link.WorkItemID); teamID != "" {
-			assign(link.RepoID, teamID, arm, tier, link.EvidenceAt)
+			assign(link.RepoID, teamID, arm, rank, link.EvidenceAt)
 			continue
 		}
 		if teamID, arm := donorTeamID(link.WorkItemID); teamID != "" {
 			result.TextKeyCandidates++
-			assign(link.RepoID, teamID, arm, max(tier, teamRepoOwnershipLinkTierExplicitText), link.EvidenceAt)
+			assign(link.RepoID, teamID, arm, min(rank, linktier.Rank(linktier.ExplicitText)), link.EvidenceAt)
 		}
 	}
 
@@ -648,7 +642,7 @@ func deriveTeamRepoOwnership(
 		for teamID, counts := range teams {
 			switch {
 			case len(leaders) == 0 || counts.compare(best) > 0:
-				leaders, best = []string{teamID}, *counts
+				leaders, best = []string{teamID}, counts
 			case counts.compare(best) == 0:
 				leaders = append(leaders, teamID)
 			}
@@ -677,6 +671,10 @@ func deriveTeamRepoOwnership(
 			if leader[teamID] {
 				row.IsPrimary = teamRepoOwnershipMainOwner
 				row.EvidenceFrom = repoEarliest
+			} else if row.Share < teamRepoOwnershipCoOwnerShareFloor {
+				result.CoOwnersBelowShareFloor++
+				result.DroppedBelowShareFloor = append(result.DroppedBelowShareFloor, teamRepoOwnershipClaimRef{TeamID: teamID, RepoID: repoID})
+				continue
 			}
 			result.Rows = append(result.Rows, row)
 		}
@@ -688,6 +686,13 @@ func deriveTeamRepoOwnership(
 		return result.Rows[i].TeamID < result.Rows[j].TeamID
 	})
 	sort.Slice(result.Ties, func(i, j int) bool { return result.Ties[i].RepoID < result.Ties[j].RepoID })
+	sort.Slice(result.DroppedBelowShareFloor, func(i, j int) bool {
+		a, b := result.DroppedBelowShareFloor[i], result.DroppedBelowShareFloor[j]
+		if a.RepoID != b.RepoID {
+			return a.RepoID < b.RepoID
+		}
+		return a.TeamID < b.TeamID
+	})
 	return result
 }
 

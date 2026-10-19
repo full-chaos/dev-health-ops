@@ -2,8 +2,9 @@ package contracts
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -43,90 +44,33 @@ const PrincipalSchemaVersion = "principal.v1"
 // languages land on the same integer.
 type Revision int64
 
-// UnmarshalJSON accepts an integer or an integral decimal and rejects a
-// genuinely fractional value.
+// UnmarshalJSON accepts an integer TOKEN and nothing else.
 //
-// A fractional revision is refused rather than truncated: silently turning
-// 1.5 into 1 would make two different wire documents produce one in-memory
-// principal, and a revision is a cache-invalidation key (G-31) where two
-// inputs collapsing to one value is precisely the failure mode.
+// The guard decides on the raw token text, never on the value a float64 parse
+// produced: a token containing '.', 'e' or 'E' is refused even when its value
+// is integral (1.0, 1e0). A decimal-form token has already been rounded by any
+// float64 reader, so 9007199254740990.1 and 1.0000000000000000001 are
+// indistinguishable from the integers they round to, and a revision is a
+// cache-invalidation key (G-31) where two wire values collapsing to one is the
+// failure mode. An earlier version normalised integral decimals (1.0 -> 1);
+// that is withdrawn (CHAOS-4940), and error.v1's integers were already strict.
+//
+// A value outside int64 is refused rather than clamped.
 func (r *Revision) UnmarshalJSON(data []byte) error {
-	number := json.Number(strings.TrimSpace(string(data)))
-	if integer, err := number.Int64(); err == nil {
-		*r = Revision(integer)
-		return nil
+	token := strings.TrimSpace(string(data))
+	if err := RefuseDecimalForm(token); err != nil {
+		return fmt.Errorf("revision %w", err)
 	}
-	asFloat, err := number.Float64()
+	integer, err := strconv.ParseInt(token, 10, 64)
 	if err != nil {
-		return fmt.Errorf("revision %s is not a number: %w", number, err)
-	}
-	if asFloat != math.Trunc(asFloat) {
-		return fmt.Errorf("revision %s has a fractional part; a revision is a whole counter", number)
-	}
-	// Compare against the exact powers of two, NOT against math.MaxInt64.
-	//
-	// float64(math.MaxInt64) rounds UP to 2^63, so `asFloat > math.MaxInt64`
-	// is FALSE for asFloat == 2^63 and the conversion below then SILENTLY
-	// CLAMPS to MaxInt64. Measured: input 9223372036854775808 decoded to
-	// 9223372036854775807, so 2^63 and 2^63-1 -- two different wire
-	// documents -- produced the SAME revision. That is precisely the
-	// collapse the fractional check above exists to prevent, reintroduced by
-	// a lossy comparison in the guard meant to prevent it (codex round 2 P2,
-	// sharpened by the lane's own re-execution: the round reported a
-	// rejection, the real behaviour was a silent clamp).
-	//
-	// 2^63 and -2^63 are both exactly representable as float64, so these
-	// comparisons are exact.
-	// FAIL CLOSED past float64's exact-integer range.
-	//
-	// Reaching this branch means the token did NOT parse as an integer, i.e.
-	// it arrived in decimal form. float64 represents every integer up to 2^53
-	// exactly and only every SECOND one above it, so beyond that the value has
-	// already been rounded to the nearest representable double before this
-	// code sees it -- in either direction. Measured on both clients:
-	// 9007199254740993.0 decoded to ...992, and 9007199254740995.0 decoded to
-	// ...996, so a revision can come back LARGER than it was sent and two
-	// distinct revisions can collapse to one. A revision is a G-31 cache key;
-	// a collision there is the failure the key exists to prevent, and a value
-	// that never existed is worse than a rejection.
-	//
-	// This is the THIRD defect found in this function, after representation
-	// (round 1) and magnitude (round 2), and the Float64 fallback added for
-	// the first is what produced the third. The full repair is to parse the
-	// raw JSON token as a decimal string and never touch float64 -- tracked
-	// as a follow-up, because Python cannot implement it at its current
-	// dict-taking entry point (json.load has already destroyed the precision
-	// before the client runs). Until then this refuses what it cannot
-	// represent faithfully. Integer-form tokens are unaffected: they take the
-	// Int64 path above and stay exact to 2^63.
-	// The bound is >=, not >, and the reason is the finding itself.
-	//
-	// 2^53 IS exactly representable, so a decimal token of exactly
-	// "9007199254740992.0" is faithful -- but "9007199254740993.0" ROUNDS DOWN
-	// to the same double, and by the time this code holds a float64 the two
-	// are indistinguishable. Verified while writing this guard: a first
-	// version used > and did not fire, because the very value it was meant to
-	// catch had already become 2^53. Refusing AT the boundary is the only
-	// honest position, since the question "was this faithful?" cannot be
-	// answered from the value that survived. It costs the exact-2^53 decimal,
-	// which an integer token expresses without loss.
-	const maxExactFloatInteger = 9007199254740992.0 // 2^53
-	if asFloat >= maxExactFloatInteger || asFloat <= -maxExactFloatInteger {
-		return fmt.Errorf(
-			"revision %s arrived in decimal form with a magnitude past 2^53, where float64 "+
-				"cannot represent every integer; refused rather than silently rounded, "+
-				"because a rounded revision breaks the G-31 cache key. Send it as an "+
-				"integer token instead, which stays exact", number)
-	}
-	const maxInt64AsFloat = 9223372036854775808.0  // 2^63, one past MaxInt64
-	const minInt64AsFloat = -9223372036854775808.0 // -2^63, exactly MinInt64
-	if asFloat >= maxInt64AsFloat || asFloat < minInt64AsFloat {
-		return fmt.Errorf(
-			"revision %s is outside the int64 range this contract can represent "+
+		if errors.Is(err, strconv.ErrRange) {
+			return fmt.Errorf("revision %s is outside the int64 range this contract can represent "+
 				"in both languages; refused rather than clamped, because two wire "+
-				"values collapsing to one revision breaks the G-31 cache key", number)
+				"values collapsing to one revision breaks the G-31 cache key", token)
+		}
+		return fmt.Errorf("revision %s is not an integer: %w", token, err)
 	}
-	*r = Revision(int64(asFloat))
+	*r = Revision(integer)
 	return nil
 }
 
@@ -179,6 +123,55 @@ func (t *Timestamp) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("timestamp %q is not RFC 3339: %w", raw, err)
 	}
 	t.Time = parsed
+	return nil
+}
+
+// principalInstantInRange refuses a timestamp whose UTC-normalised instant is
+// outside 0001-01-01..9999-12-31.
+//
+// ONLY AGREEMENT NEEDS THIS. time.Time represents UTC year 0 and year 10000
+// without complaint, so Go itself has no use for the bound; it exists so this
+// client and the Python one accept the same documents. Python's datetime
+// cannot hold those instants and raised an uncaught OverflowError on the first
+// astimezone() of an accepted value. Do not remove it as dead code.
+//
+// The schema pattern bounds the LOCAL fields; the instant is fields x offset,
+// and 0001-01-01T00:00:00+23:59 is UTC year 0000. A regex cannot see that.
+// principal.v1 has no clock-skew check, so there is no ordering to preserve.
+func principalInstantInRange(field string, moment time.Time) error {
+	if year := moment.UTC().Year(); year < 1 || year > 9999 {
+		return fmt.Errorf(
+			"%s: /%s %s normalises to UTC year %d, outside 0001-01-01..9999-12-31",
+			PrincipalSurface, field, moment.Format(time.RFC3339), year)
+	}
+	return nil
+}
+
+// checkTimestampRange applies principalInstantInRange to every timestamp the
+// document carries. It lives here and not in Timestamp.UnmarshalJSON because
+// Timestamp is shared with provisioning-event.v1 and audit-event.v1, which
+// report the same rule under their own surface.
+func checkTimestampRange(p *Principal) error {
+	for _, field := range []struct {
+		name   string
+		moment time.Time
+	}{
+		{"authentication/authenticated_at", p.Authentication.AuthenticatedAt.Time},
+		{"issued_at", p.IssuedAt.Time},
+		{"expires_at", p.ExpiresAt.Time},
+	} {
+		if err := principalInstantInRange(field.name, field.moment); err != nil {
+			return err
+		}
+	}
+	for index, hop := range p.ActorChain {
+		if err := principalInstantInRange(fmt.Sprintf("actor_chain/%d/started_at", index), hop.StartedAt.Time); err != nil {
+			return err
+		}
+		if err := principalInstantInRange(fmt.Sprintf("actor_chain/%d/expires_at", index), hop.ExpiresAt.Time); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -392,6 +385,9 @@ func checkDelegationBounds(chain []Delegation) error {
 // first would silently drop any field the struct does not declare, which is
 // exactly the divergence additionalProperties:false exists to catch.
 func PrincipalFromWire(root string, raw []byte) (*Principal, error) {
+	if err := refuseDuplicateMembers(raw); err != nil {
+		return nil, err
+	}
 	var document any
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return nil, fmt.Errorf("%s: not valid JSON: %w", PrincipalSurface, err)
@@ -402,6 +398,9 @@ func PrincipalFromWire(root string, raw []byte) (*Principal, error) {
 	var principal Principal
 	if err := json.Unmarshal(raw, &principal); err != nil {
 		return nil, fmt.Errorf("%s: decoding validated document: %w", PrincipalSurface, err)
+	}
+	if err := checkTimestampRange(&principal); err != nil {
+		return nil, err
 	}
 	if err := checkDelegationBounds(principal.ActorChain); err != nil {
 		return nil, err

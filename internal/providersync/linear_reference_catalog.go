@@ -101,6 +101,10 @@ type linearReferenceTeamRow struct {
 	Provider      string    `json:"provider"`
 	NativeTeamKey *string   `json:"native_team_key"`
 	ParentTeamID  *string   `json:"parent_team_id"`
+	// ProviderTeamID is the provider's immutable id of the team and ProviderName its own
+	// name (teams.provider_team_id, provider_name); empty when the run did not read them.
+	ProviderTeamID string `json:"provider_team_id,omitempty"`
+	ProviderName   string `json:"provider_name,omitempty"`
 }
 
 type linearReferenceMemberRow struct {
@@ -353,7 +357,8 @@ func normalizeLinearReferenceTeam(
 		// native_team_key attribution arm) resolve unchanged.
 		Members: members, ProjectKeys: []string{}, RepoPatterns: []string{}, IsActive: 1,
 		UpdatedAt: normalizedAt, OrgID: claim.OrgID, Provider: "linear",
-		NativeTeamKey: &nativeTeamKey,
+		NativeTeamKey:  &nativeTeamKey,
+		ProviderTeamID: strings.TrimSpace(payload.ID), ProviderName: strings.TrimSpace(payload.Name),
 	}, nil
 }
 

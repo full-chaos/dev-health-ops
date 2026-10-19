@@ -25,13 +25,18 @@ import (
 // sum, but it is a row to a count (sankey coverage) and a bucket to a team, repository or category dimension. A key
 // with no measurement is not a bucket with a value of 0.
 var workItemCompletionDedupSource = workItemCompletionNewestRows(
-	"\n    HAVING " + liverow.NewestPredicate("work_item_completion_daily", ""))
+	"\n    HAVING "+liverow.NewestPredicate("work_item_completion_daily", ""),
+	liverow.NewestValue("churn_loc", ""))
 
 // workItemCompletionEveryNewestRow is the same source with the retraction rows kept: the text the frozen catalog
 // golden pins. Only the catalog reads it (catalog.go), and only to order the ACTIVE teams it lists by a row count.
-var workItemCompletionEveryNewestRow = workItemCompletionNewestRows("")
+//
+// The catalog counts rows per team and never reads churn_loc, so its source keeps the plain argMax text the golden pins.
+var workItemCompletionEveryNewestRow = workItemCompletionNewestRows("", "argMax(churn_loc, computed_at)")
 
-func workItemCompletionNewestRows(having string) string {
+// churnNewest is the expression of the newest churn_loc of a key: churn_loc is Nullable (CHAOS-9920) and argMax skips
+// a NULL newest row, so a reader of the value takes liverow.NewestValue.
+func workItemCompletionNewestRows(having, churnNewest string) string {
 	return `(
     SELECT
         org_id,
@@ -41,7 +46,7 @@ func workItemCompletionNewestRows(having string) string {
         argMax(delivery_units, computed_at) AS delivery_units,
         argMax(work_items_completed, computed_at) AS work_items_completed,
         argMax(prs_merged, computed_at) AS prs_merged,
-        argMax(churn_loc, computed_at) AS churn_loc,
+        ` + churnNewest + ` AS churn_loc,
         argMax(cycle_p50_hours, computed_at) AS cycle_p50_hours
     FROM work_item_completion_daily
     WHERE org_id = {org_id:String}
@@ -179,14 +184,10 @@ func TimeseriesRequestFromInput(input model.TimeseriesRequestInput) (TimeseriesR
 }
 
 // firstDateFilterToken ports templates.py's `date_col =
-// date_filter.split(" ")[0]` (templates.py:41) exactly -- including
-// investment path's slightly odd consequence: its date_filter
-// (compiler.py:227) is "work_unit_investments.from_ts < ... AND
-// work_unit_investments.to_ts >= ...", so the timeseries bucket column
-// becomes `work_unit_investments.from_ts` (the work unit's START
-// timestamp), not a generic "day" column -- a real Python behavior this
-// port reproduces faithfully rather than "fixing" into something that
-// reads more sensibly.
+// date_filter.split(" ")[0]` (templates.py:41). The investment date filter
+// (InvestmentWindowClause, CHAOS-9016) starts with work_unit_investments.to_ts,
+// so the timeseries buckets a work unit by its END timestamp, the same stamp
+// that puts it in exactly one window.
 func firstDateFilterToken(dateFilter string) string {
 	fields := strings.Fields(dateFilter)
 	if len(fields) == 0 {
@@ -218,6 +219,10 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 	var contextBindings []clickhouse.Binding
 	if useInvestment {
 		ictx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+		ictx, err = ictx.sizedFor(req.Measure)
+		if err != nil {
+			return compiledQuery{}, err
+		}
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		contextBindings = ictx.Bindings
 		measureExpr, err = ictx.measure(req.Measure)
@@ -238,6 +243,9 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 		if err != nil {
 			return compiledQuery{}, err
 		}
+	}
+	if measureExpr, err = exactSums(measureExpr); err != nil {
+		return compiledQuery{}, err
 	}
 	// Force a uniform Float64 result type. ClickHouse returns UInt64 for
 	// the SUM()-based measures (COUNT, THROUGHPUT, CHURN_LOC) and Float64

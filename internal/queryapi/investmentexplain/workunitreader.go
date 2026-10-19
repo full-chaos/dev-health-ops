@@ -192,8 +192,8 @@ SELECT
     categorization_run_id,
     latest_computed_at AS computed_at
 FROM %s%s
-WHERE work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}
+WHERE work_unit_investments.to_ts >= {start_date:Date}
+  AND work_unit_investments.to_ts < {end_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
 %s
 %s
@@ -287,7 +287,8 @@ WHERE id IN {repo_ids:Array(String)}
 }
 
 // FetchRepoIdentities ports fetch_repo_identities
-// (work_unit_investments.py:111-172).
+// (work_unit_investments.py:111-172). A GitLab slug is repos.identity_path,
+// the path its merge-request ids carry (CHAOS-3383); only GitLab rows hold one.
 func (reader *Reader) FetchRepoIdentities(ctx context.Context, orgID string, repoIDs []string) (map[string]repoIdentity, error) {
 	if reader == nil || reader.client == nil {
 		return nil, ErrUnavailable
@@ -300,7 +301,7 @@ func (reader *Reader) FetchRepoIdentities(ctx context.Context, orgID string, rep
 	query := fmt.Sprintf(`
 SELECT
     toString(id) AS repo_id,
-    argMax(repo, last_synced) AS repo,
+    argMax(if(repos.provider = 'gitlab' AND identity_path != '', identity_path, repos.repo), last_synced) AS repo_slug,
     if(uniqExact(provider) = 1, argMax(provider, last_synced), '') AS provider
 FROM repos
 WHERE id IN {repo_ids:Array(String)}
@@ -379,7 +380,8 @@ WHERE work_item_id IN {work_item_ids:Array(String)}
 			return nil, fmt.Errorf("query work item team assignments: %w", err)
 		}
 		for rows.Next() {
-			var workItemID, teamID, teamName string
+			var workItemID string
+			var teamID, teamName *string
 			if err := rows.Scan(&workItemID, &teamID, &teamName); err != nil {
 				rows.Close()
 				return nil, fmt.Errorf("scan work item team assignment row: %w", err)

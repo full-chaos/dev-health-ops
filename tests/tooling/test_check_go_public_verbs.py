@@ -45,6 +45,7 @@ _FAST_STEPS = (
     "check_build",
     "check_contract",
     "check_ratchets",
+    "check_race_weights_rows",
     "check_integration_vet",
     "plan_integration_shards",
     "plan_providersync_test_shards",
@@ -58,6 +59,7 @@ _CI_STEPS = (
     "check_build",
     "check_contract",
     "check_ratchets",
+    "check_race_weights_rows",
     "check_integration_vet",
     "plan_integration_shards",
     "plan_providersync_test_shards",
@@ -71,6 +73,7 @@ _ALL_STEPS = (
     "check_build",
     "check_contract",
     "check_ratchets",
+    "check_race_weights_rows",
     "check_integration_vet",
     "check_integration",
     "check_multi_replica_workers",
@@ -149,7 +152,7 @@ def test_help_completes_and_documents_every_public_verb() -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     # The Go toolchain directive may fetch a newer patch release on a cold
-    # cache and announces it on stderr ("go: downloading go1.27.0 ...").
+    # cache and announces it on stderr ("go: downloading go1.27.2 ...").
     # That is environment noise, not help output. So is the one informational
     # line check_go.sh prints when no Go cache dir is configured (CHAOS-5268;
     # every hosted run). Anything else on stderr still fails.

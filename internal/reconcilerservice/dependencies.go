@@ -19,11 +19,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/pgconfig"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -135,7 +137,7 @@ func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerD
 	// always-constructed outbox relay reads worker_job_routes, which is
 	// coordinator-exclusive. WithCoordinator makes the coordinator DSN a
 	// startup requirement rather than an optional extra.
-	runtimeConfig := postgres.RuntimeConfigFromPlatform(cfg).WithCoordinator()
+	runtimeConfig := pgconfig.RuntimeConfig(cfg).WithCoordinator()
 	pools, err := postgres.NewRuntimePools(ctx, runtimeConfig)
 	if err != nil {
 		return nil, err
@@ -744,6 +746,11 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	// saturation is a metric plus a loud log line, never a readiness input.
 	// The sampler is a component: it logs saturation on its own ticker, so the
 	// warning does not depend on a metrics scrape.
+	// CHAOS-10013: dispatch wakes after an expired-lease repair (LeaseRepair).
+	if err := registry.RegisterMetrics("sync_dispatch_woken", syncrunrollup.DispatchWakeMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
 	saturation := poolstat.New("reconciler_database_pool_saturation_ratio", dependencies.database.DomainPool(), logger)
 	if err := registry.RegisterMetrics("reconciler_domain_pool", saturation); err != nil {
 		dependencies.close()

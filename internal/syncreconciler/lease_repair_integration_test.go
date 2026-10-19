@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
@@ -274,6 +275,55 @@ func TestLeaseRepairPostgresContract(t *testing.T) {
 		assertLeaseRepairState(t, ctx, pool, leaseRepairUnitA, "retrying", nil, leaseTimePointer(now.Add(expiredLeaseDefaultRetryBackoff)), "worker_lost", false, 1)
 		assertLeaseRepairState(t, ctx, pool, leaseRepairUnitB, "running", leaseStringPointer("worker-a"), nil, "", false, 0)
 		assertLeaseRepairState(t, ctx, pool, leaseRepairUnitC, "running", leaseStringPointer("worker-a"), nil, "", false, 0)
+	})
+
+	// CHAOS-10013: the expired lease held one of its bucket's slots. Once the
+	// repair commits, the run's next dispatch pass is due now when a unit of the
+	// run waits for a slot -- and not at all when none does.
+	//
+	// RED CONTROL: drop LeaseRepair.Step's post-commit WakeDispatch loop and
+	// run A has no dispatch_sync_run row.
+	t.Run("a repaired lease wakes dispatch only for a run with a unit waiting", func(t *testing.T) {
+		resetLeaseRepairTables(t, ctx, pool)
+		seedLeaseRepairRun(t, ctx, pool, leaseRepairRunA, "org-a", "running")
+		seedLeaseRepairRun(t, ctx, pool, leaseRepairRunB, "org-b", "running")
+		seedLeaseRepairUnit(t, ctx, pool, leaseRepairUnitA, leaseRepairRunA, "org-a", "github", "backfill", "work_items", 0, now.Add(-2*time.Minute))
+		seedLeaseRepairUnit(t, ctx, pool, leaseRepairUnitC, leaseRepairRunA, "org-a", "github", "backfill", "work_items", 0, now.Add(time.Hour))
+		if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET status = 'planned', lease_owner = NULL, lease_expires_at = NULL WHERE id = $1`, leaseRepairUnitC); err != nil {
+			t.Fatal(err)
+		}
+		seedLeaseRepairUnit(t, ctx, pool, leaseRepairUnitB, leaseRepairRunB, "org-b", "github", "backfill", "work_items", 0, now.Add(-time.Minute))
+		armedBefore := syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathLeaseRepair, syncrunrollup.DispatchWakeOutcomeArmed)
+
+		repair, err := NewLeaseRepair(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result, err := repair.Step(ctx, now, 3); err != nil || result.Failed != 2 {
+			t.Fatalf("Step() = %#v, %v, want both expired leases failed", result, err)
+		}
+		wakes := map[string]string{}
+		rows, err := pool.Query(ctx, `SELECT sync_run_id::text, status || '@' || to_char(available_at AT TIME ZONE 'UTC', 'HH24:MI:SS') FROM public.sync_dispatch_outbox WHERE kind = 'dispatch_sync_run'`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var runID, state string
+			if err := rows.Scan(&runID, &state); err != nil {
+				t.Fatal(err)
+			}
+			wakes[runID] = state
+		}
+		rows.Close()
+		if wakes[leaseRepairRunA] != "pending@12:00:00" {
+			t.Fatalf("run A dispatch wake = %q, want pending at the repair instant (12:00:00); all wakes %v", wakes[leaseRepairRunA], wakes)
+		}
+		if state, ok := wakes[leaseRepairRunB]; ok {
+			t.Fatalf("run B dispatch wake = %q, want none: nothing in run B waits for a slot", state)
+		}
+		if moved := syncrunrollup.DispatchWakeCount(syncrunrollup.DispatchWakePathLeaseRepair, syncrunrollup.DispatchWakeOutcomeArmed) - armedBefore; moved != 1 {
+			t.Fatalf("lease_repair armed counter moved %d, want 1", moved)
+		}
 	})
 }
 

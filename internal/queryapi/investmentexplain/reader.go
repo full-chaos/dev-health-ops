@@ -29,7 +29,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/readers"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -137,7 +139,7 @@ type BreakdownFilters struct {
 	DatedByEnd bool
 	// Measure says what a row's value counts, and every read of this package REQUIRES one (ErrMeasureRequired):
 	// MeasureCount is the share of the unit the row stands for, the Investment page's COUNT
-	// (InvestmentShareMeasure for the REST investment endpoint, the Home tile and the Operating Review).
+	// (the per-surface measures of measure.go for the REST investment endpoint, the Home tile and the Operating Review).
 	Measure string
 }
 
@@ -145,26 +147,24 @@ type BreakdownFilters struct {
 // Lines of code are not a measure of Investment (CHAOS-9695, D6014), and MeasureValueSQL is the one definition of it.
 const MeasureCount = "COUNT"
 
+// MeasureIssueSize is Investment measured by work-unit issue size (CHAOS-9619, D5999): each unit weighs the sum of
+// its issues' story points, 1 when it has none. Lines of code never.
+const MeasureIssueSize = "ISSUE_SIZE"
+
 // NormalizeMeasure maps a request measure to the measure of an explain mix read. THROUGHPUT is
 // COUNT on the investment path (analytics dbExpression). ok is false for any other name.
 func NormalizeMeasure(name string) (measure string, ok bool) {
 	switch strings.ToUpper(strings.TrimSpace(name)) {
 	case "COUNT", "THROUGHPUT":
 		return MeasureCount, true
+	case MeasureIssueSize:
+		return MeasureIssueSize, true
 	}
 	return "", false
 }
 
-// dateWindowClause is the window predicate of the work-unit reads of this package:
-// the overlap of the unit's range with [start, end) (the Investment page), or the unit's
-// end day within it (DatedByEnd).
 func (f BreakdownFilters) dateWindowClause() string {
-	if f.DatedByEnd {
-		return `work_unit_investments.to_ts >= {start_date:Date}
-  AND work_unit_investments.to_ts < {end_date:Date}`
-	}
-	return `work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}`
+	return analytics.InvestmentWindowClause(f.DatedByEnd)
 }
 
 func (f BreakdownFilters) categoryClause() (filterSQL string, bindings []dhclickhouse.Binding) {
@@ -262,6 +262,11 @@ func (reader *Reader) FetchInvestmentBreakdown(ctx context.Context, filters Brea
 	if err != nil {
 		return nil, err
 	}
+	source, err := MeasureSource(filters.Measure, filters.unitSource(scopeSQL))
+	if err != nil {
+		return nil, err
+	}
+	slog.DebugContext(ctx, "investmentexplain: breakdown measure", "measure", filters.Measure, "scoped", filters.scoped(scopeSQL), "dated_by_end", filters.DatedByEnd)
 
 	query := fmt.Sprintf(`
 SELECT
@@ -277,7 +282,7 @@ WHERE %s
 GROUP BY subcategory, theme
 ORDER BY value DESC
 %s
-`, valueSQL, filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, valueSQL, source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -297,6 +302,54 @@ ORDER BY value DESC
 		return nil, fmt.Errorf("iterate investment breakdown rows: %w", err)
 	}
 	return results, nil
+}
+
+// FetchSizingCoverage counts the distinct units FetchInvestmentBreakdown reads for the same filters (same source,
+// window, scope and category clauses) and the ones among them that carry an issue size.
+func (reader *Reader) FetchSizingCoverage(ctx context.Context, filters BreakdownFilters) (readers.SizingCoverage, error) {
+	if reader == nil || reader.client == nil {
+		return readers.SizingCoverage{}, ErrUnavailable
+	}
+	categorySQL, categoryBindings := filters.categoryClause()
+	scopeSQL, scopeBindings := filters.scopeClause()
+	source, err := MeasureSource(MeasureIssueSize, filters.unitSource(scopeSQL))
+	if err != nil {
+		return readers.SizingCoverage{}, err
+	}
+	bindings := filters.baseBindings()
+	bindings = append(bindings, scopeBindings...)
+	bindings = append(bindings, categoryBindings...)
+	query := fmt.Sprintf(`
+SELECT
+%s
+FROM %s
+ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
+WHERE %s
+  AND work_unit_investments.org_id = {org_id:String}
+%s
+%s
+%s
+`, readers.SizingCoverageSelectList("work_unit_investments.work_unit_id"), source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+	rows, err := reader.client.Query(ctx, query, bindings)
+	if err != nil {
+		return readers.SizingCoverage{}, fmt.Errorf("query investment sizing coverage: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return readers.SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
+		}
+		return readers.SizingCoverage{}, fmt.Errorf("query investment sizing coverage: no row")
+	}
+	coverage, err := readers.ScanSizingCoverage(rows)
+	if err != nil {
+		return readers.SizingCoverage{}, err
+	}
+	if err := rows.Err(); err != nil {
+		return readers.SizingCoverage{}, fmt.Errorf("iterate investment sizing coverage: %w", err)
+	}
+	slog.DebugContext(ctx, "investmentexplain: sizing coverage", "sized_units", coverage.SizedUnits, "units", coverage.Units, "scoped", filters.scoped(scopeSQL))
+	return coverage, nil
 }
 
 // FetchMockFixtureInvestmentRowCount ports
@@ -321,8 +374,7 @@ func (reader *Reader) FetchMockFixtureInvestmentRowCount(ctx context.Context, fi
 SELECT count() AS count
 FROM %s AS work_unit_investments
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
-WHERE work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}
+WHERE %s
   AND work_unit_investments.org_id = {org_id:String}
   AND (
     lower(ifNull(work_unit_investments.provider, '')) IN ('mock', 'fixture', 'fixtures', 'synthetic')
@@ -333,7 +385,7 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
 %s
 %s
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, analytics.LatestWorkUnitInvestmentsSource(), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -359,15 +411,23 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
 }
 
 // FetchInvestmentDataVersion reads the version of an organization's work-unit
-// investments: the newest write and the row count. The explain cache key carries it,
-// so an answer built on older work units (other quality, quotes or counts, even with
-// the same mix shares) is never served for the same filters.
+// investments: the newest write and the row count of work_unit_investments and of
+// work_unit_investment_quotes, in one query. The explain cache key carries it, so an
+// answer built on older work units or older quotes (other quality, quote text or
+// counts, even with the same mix shares) is never served for the same filters. The
+// quotes are part of it because the explain puts their text in the prompt and a run
+// that dies between its quote write and its work-unit write changes them alone
+// (CHAOS-9582). The cost is a scan of the organization's rows of both tables per call.
 func (reader *Reader) FetchInvestmentDataVersion(ctx context.Context, orgID string) (string, error) {
 	if reader == nil || reader.client == nil {
 		return "", ErrUnavailable
 	}
 	query := fmt.Sprintf(`
-SELECT toString(max(computed_at)) AS latest, toString(count()) AS row_count
+SELECT
+    toString(max(computed_at)) AS latest,
+    toString(count()) AS row_count,
+    (SELECT toString(max(computed_at)) FROM work_unit_investment_quotes WHERE org_id = {org_id:String}) AS quotes_latest,
+    (SELECT toString(count()) FROM work_unit_investment_quotes WHERE org_id = {org_id:String}) AS quotes_count
 FROM work_unit_investments
 WHERE org_id = {org_id:String}
 %s
@@ -384,13 +444,24 @@ WHERE org_id = {org_id:String}
 		return "none", nil
 	}
 	var latest, rowCount string
-	if err := rows.Scan(&latest, &rowCount); err != nil {
+	var quotesLatest, quotesCount *string
+	if err := rows.Scan(&latest, &rowCount, &quotesLatest, &quotesCount); err != nil {
 		return "", fmt.Errorf("scan investment data version: %w", err)
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("iterate investment data version: %w", err)
 	}
-	return latest + "/" + rowCount, nil
+	return latest + "/" + rowCount + "/" + dataVersionPart(quotesLatest) + "/" + dataVersionPart(quotesCount), nil
+}
+
+// dataVersionPart renders one part of the data-version cache key. A NULL is
+// "null", which no toString() result can equal, so NULL never shares a key
+// with an empty string.
+func dataVersionPart(value *string) string {
+	if value == nil {
+		return "null"
+	}
+	return *value
 }
 
 func dedupeStrings(values []string) []string {
@@ -415,7 +486,7 @@ func joinOR(conditions []string) string {
 }
 
 // ThemeEffortRow is one theme of FetchInvestmentThemeEffort: the value of the theme in the measure the
-// filters name (BreakdownFilters.Measure; InvestmentShareMeasure for the Home tile and the Operating
+// filters name (BreakdownFilters.Measure; HomeTileMeasure / OperatingReviewMeasure for the Home tile and the Operating
 // Review), the part of the units' effort measured in changed lines of code (effort_metric churn_loc; the
 // Home tile's churn_loc line, never a weight and never an Investment measure), and the pull requests of the
 // units' evidence weighted by the theme share.
@@ -446,6 +517,10 @@ func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters Br
 	if err != nil {
 		return nil, err
 	}
+	source, err := MeasureSource(filters.Measure, filters.unitSource(scopeSQL))
+	if err != nil {
+		return nil, err
+	}
 	bindings := filters.baseBindings()
 	bindings = append(bindings, scopeBindings...)
 	bindings = append(bindings, shareBindings...)
@@ -466,7 +541,7 @@ WHERE %[4]s
 GROUP BY theme
 ORDER BY value DESC, theme ASC
 %[7]s
-`, shareSQL, filters.unitWeight(scopeSQL), filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime(), valueSQL)
+`, shareSQL, filters.unitWeight(scopeSQL), source, filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime(), valueSQL)
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {

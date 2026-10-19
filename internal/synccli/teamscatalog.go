@@ -2,6 +2,7 @@ package synccli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -86,6 +87,10 @@ type catalogRequest struct {
 	members    bool
 	projects   bool
 	dsn        string
+	// pgDSN is the domain database the catalog turn is taken in (--db, else POSTGRES_URI); empty takes no turn.
+	pgDSN string
+	// turn serializes this run with the worker's and other CLI runs of the same organization and provider.
+	turn providersync.TeamCatalogSerializer
 }
 
 // buildCatalogCollector resolves the provider's credential, HTTP client and
@@ -99,7 +104,8 @@ func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, t
 	if collector == nil {
 		return nil, credential, client, exitCode
 	}
-	return providersync.CarryFirstTeamCatalogCollector{Conn: conn, Writer: "team_catalog_cli:" + request.provider, Collector: collector}, credential, client, exitCode
+	return providersync.CarryFirstTeamCatalogCollector{Conn: conn, Writer: "team_catalog_cli:" + request.provider, Collector: collector,
+		Serializer: request.turn, Provider: request.provider}, credential, client, exitCode
 }
 
 func buildProviderCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, token string, conn driver.Conn) (providersync.TeamCatalogCollector, providerfoundation.Credential, *providerfoundation.HTTPClient, int) {
@@ -147,7 +153,7 @@ func buildProviderCatalogCollector(env cli.Env, d deps, request catalogRequest, 
 			return nil, providerfoundation.Credential{}, nil, writeError(env.Stderr, cli.ExitFailure, "client_invalid", clientBuildDetail("GitLab", err))
 		}
 		collector := providersync.GitLabTeamCatalogCollector{
-			Handler: providersync.GitLabTeamCatalogRouteHandler{},
+			Handler: providersync.GitLabTeamCatalogRouteHandler{RepoIdentity: providersync.GitLabRepoIdentityClickHouseReader{Conn: conn, Lease: teamCatalogLease{}}},
 			Sink:    providersync.GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: teamCatalogLease{}},
 		}
 		return collector, credential, client, 0
@@ -189,10 +195,11 @@ func clientBuildDetail(provider string, err error) string {
 // runCatalogTeams runs one provider's catalog into the ClickHouse the DSN names.
 func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRequest) int {
 	boundary := secrets.NewBoundary(request.dsn)
-	redact := func(err error) string { return boundary.Redact(err).Error() }
+	pgBoundary := secrets.NewBoundary(request.pgDSN)
+	redact := func(err error) string { return pgBoundary.Redact(boundary.Redact(err)).Error() }
 	// What the collector logs (the roster-preservation warnings carry the
 	// driver's error) is redacted with the same boundary.
-	defer redactProcessLogger(boundary.RedactText)()
+	defer redactProcessLogger(func(text string) string { return pgBoundary.RedactText(boundary.RedactText(text)) })()
 	spec, ok := catalogProviderSpecs[request.provider]
 	if !ok {
 		return writeError(env.Stderr, cli.ExitUsage, "unsupported_provider", "provider "+request.provider+" has no team catalog verb")
@@ -221,18 +228,30 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 	}
 	defer func() { _ = conn.Close() }()
 
+	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
+	turn, closeTurn, code := openCatalogTurn(ctx, env, d, request, logger)
+	if code != 0 {
+		return code
+	}
+	defer closeTurn()
+	if turn != nil {
+		request.turn = turn
+	}
+
 	collector, credential, client, exitCode := buildCatalogCollector(env, d, request, owner, token, conn)
 	if collector == nil {
 		return exitCode
 	}
 
 	selections := providersync.TeamCatalogSelections{Teams: request.structure, Members: request.members, Projects: request.projects}
-	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
 	started := time.Now()
 	now := d.now()
 	result, err := collector.CollectTeamCatalog(ctx, providersync.TeamCatalogReference{OrgID: request.orgID, SyncRunID: uuid.NewString(), Strict: true},
 		credential, client, selections, now)
 	if err != nil {
+		if turn != nil && turn.acquireFailed() && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return writeError(env.Stderr, cli.ExitFailure, "turn_unavailable", redact(err))
+		}
 		return writeError(env.Stderr, cli.ExitFailure, "sync_failed", redact(err))
 	}
 	// An empty catalog is a provider that returned no teams AND wrote nothing else. A team the

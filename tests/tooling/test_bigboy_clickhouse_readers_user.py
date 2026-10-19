@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-COMPOSE = ROOT / "ci" / "bigboy" / "compose.bigboy.images.yml"
+COMPOSE = ROOT / "ci" / "bigboy" / "compose.bigboy.yml"
 READERS_SQL = ROOT / "ci" / "bigboy" / "prepare-clickhouse-readonly-user.sql"
 
 
@@ -48,6 +48,8 @@ def test_readers_user_host_ip_is_the_readers_network_subnet() -> None:
 def test_clickhouse_enables_access_management_so_the_readers_sql_can_apply() -> None:
     """The image writes access_management=0 for the default user; CREATE USER needs 1."""
     env = _compose()["services"]["clickhouse"]["environment"]
+    if isinstance(env, list):
+        env = dict(item.split("=", 1) for item in env)
     assert env["CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT"] == "1"
 
 
@@ -62,21 +64,18 @@ def test_readers_profile_forbids_writes_but_allows_per_query_settings_within_pin
     assert re.search(r"max_memory_usage\s*=\s*4000000000\s+MAX\s+4000000000\b", sql)
 
 
-def test_readers_user_is_granted_select_on_exactly_34_distinct_default_objects() -> (
+def test_readers_user_is_granted_select_on_the_default_database_and_two_system_tables_only() -> (
     None
 ):
-    """Whole-table SELECT only; the work-unit membership tables are part of the grant."""
+    """GWC 2026-10-17: prod's acr reads through acr_ro with database-wide SELECT, bigboy rehearses that shape; the per-table list
+    broke the acr projector (497). Nothing but SELECT is granted, and the profile keeps every write out."""
     sql = READERS_SQL.read_text()
-    grants = re.findall(
-        r"^GRANT SELECT ON default\.(\w+) TO mcp_readonly;", sql, re.MULTILINE
-    )
-    assert len(grants) == len(set(grants)) == 34
-    for name in (
-        "work_unit_membership_runs",
-        "work_unit_supersessions",
-        "work_unit_membership",
-    ):
-        assert name in grants
-    assert not re.search(
-        r"^GRANT (?!SELECT ON default\.\w+ TO mcp_readonly;)", sql, re.MULTILINE
-    )
+    grants = re.findall(r"^GRANT (.+?) TO (\w+);", sql, re.MULTILINE)
+    assert grants == [
+        ("SELECT ON default.*", "mcp_readonly"),
+        ("SELECT ON system.tables", "mcp_readonly"),
+        ("SELECT ON system.columns", "mcp_readonly"),
+    ]
+    assert not re.search(r"^GRANT (?!SELECT ON )", sql, re.MULTILINE)
+    assert not re.search(r"^GRANT SELECT ON default\.\w+ ", sql, re.MULTILINE)
+    assert re.search(r"readonly\s*=\s*2\b", sql)

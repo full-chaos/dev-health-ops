@@ -220,13 +220,14 @@ func TestTheLandscapeTeamIsTheOwnerOfTheRepositoryOfEachProvider(t *testing.T) {
 				teamID = row.TeamID
 			case "gitlab":
 				teamID = gitlabTeamID("acme/ops")
-				row, ok := normalizeGitLabOwnershipRow(org, teamID, "acme/owned-gitlab", 100, grantedAt)
+				row, ok := normalizeGitLabOwnershipRow(org, teamID, testGitLabNativeProjectID("acme/owned-gitlab"), "acme/owned-gitlab", 100, grantedAt)
 				if !ok {
 					t.Fatal("the GitLab normalizer refused the project grant")
 				}
 				if err := (GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}).writeOwnership(ctx, []gitlabTeamCatalogOwnershipRow{row}); err != nil {
 					t.Fatal(err)
 				}
+				// A GitLab work item names its project by the catalog id, as the grant does.
 				seedWorkItemOfType(t, ctx, conn, org, "gitlab:acme/owned-gitlab!1", "gitlab", "merge_request", owned, row.ProjectID.String(), grantedAt)
 			case "jira", "linear":
 				teamID = provider + "-team-core"

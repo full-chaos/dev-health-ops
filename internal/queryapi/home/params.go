@@ -50,6 +50,11 @@ type Filters struct {
 	Scope ScopeFilter
 	What  WhatFilter
 	Why   WhyFilter
+
+	// TileMeasure is the measure the Home investment tile is read in, set by the caller and never by the request:
+	// empty is the default (investmentexplain.HomeTileMeasure, COUNT). A caller sets ISSUE_SIZE only when the answer
+	// it builds carries the tile's sizing coverage (D6027).
+	TileMeasure string
 }
 
 // DefaultFilters ports MetricFilter's own default_factory chain --

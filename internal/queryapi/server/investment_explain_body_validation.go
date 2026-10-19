@@ -20,9 +20,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 )
 
-// explainMeasureValues are the measures the explain request names: the Investment page's COUNT and
-// THROUGHPUT (the same number). Lines of code are not an Investment measure (CHAOS-9695, D6014).
-var explainMeasureValues = []string{"COUNT", "THROUGHPUT"}
+// explainMeasureValues are the measures the explain request names: ISSUE_SIZE (the page's measure and the default,
+// CHAOS-9809), COUNT and THROUGHPUT (the same number as COUNT). Lines of code are not an Investment measure
+// (CHAOS-9695, D6014).
+var explainMeasureValues = []string{"ISSUE_SIZE", "COUNT", "THROUGHPUT"}
 
 // decodeExplainDateRange reads the page's dateRange: both dates are required, and the range
 // obeys the page's own rule (analytics.ValidateDateRange).

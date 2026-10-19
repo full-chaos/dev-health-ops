@@ -217,10 +217,9 @@ go-served ledger does not name is refused, never proven by its candidate alone.
 An operation that was Go-only from its first day has no two-plane record: its ledger entry
 is the `unproven_reason` form, and it prints `GO_ONLY_UNPROVEN`. `TestEveryProofSpecOperationIsInTheLedgerOrAMutation`
 fails for a proof-spec operation that is in neither the ledger nor the mutation list.
-An unproven entry with `born_in_go: true` marks an operation that never had a Python counterpart. In the
-MCP class proof (doc-route mode) a MATCHED shape of such an operation is counted although no document
-receipt can exist, and the class receipt names it in `shapes_born_in_go`. A diverging shape still blocks,
-and `-allow-excluded` gives a born-in-Go shape nothing.
+An unproven entry with `born_in_go: true` marks an operation that never had a Python counterpart. MCP and GraphQL
+parity for such an operation, as for every MCP class root, is held by the CI step `TestMCPClassParityVenueOracle`
+(CHAOS-9802): the per-root class proof is retired (D6024).
 
 Go-edge mode refuses, each by its own name:
 
@@ -295,13 +294,13 @@ pin and the history table below work exactly as before.
 
 A schema change no longer un-routes anything (CHAOS-8702, CHAOS-8704, CHAOS-8735). query-api's `/query` and
 `/graphql` serve every registered operation and read no routing row. An MCP class root is decided by ONE row in
-`go_api_class_decision`, keyed by the operation alone (`mcp:<root>`), written by `seed`, `enable` (after a per-root
-class receipt at the live digest) and `disable`, and read by the class switch, the proof route and `status`: the digest
-cannot matter, and nothing has to move the row on a roll. `dho goapi routing carry`, the helm pre-upgrade carry hook and
+`go_api_class_decision`, keyed by the operation alone (`mcp:<root>`), written by `seed`, `enable` (the operator's recorded
+decision; the per-root class receipt that used to gate it is retired, D6024) and `disable`, and read by the class switch
+and `status`: the digest cannot matter, and nothing has to move the row on a roll. `dho goapi routing carry`, the helm pre-upgrade carry hook and
 the stale-rows alarm are gone.
 
-`repoint` rewrites the build a class decision names, and never its mode or `decided_at`; it works after a schema move.
-`dho goapi prove` of a document operation reads no routing row: it measures every registered operation through the edge
+The `repoint` verb is retired with the class proof (D6024): a class decision names the build `enable` read from
+`/buildinfo`, and nothing re-points it after a roll. `dho goapi prove` of a document operation reads no routing row: it measures every registered operation through the edge
 against the running build.
 
 ### After alembic 0129: every earlier proof reads UNPROVEN until re-proven
@@ -322,9 +321,9 @@ proofs.
 `cmd/go-api-routing` binary into the `dho` operator binary's `goapi
 routing` verb) is the Go implementation of the same contract, built
 because the cutover rule forbids new Python compute on the critical path
-of a rollout operation. The verbs `seed`, `enable`, `disable` and `repoint` take MCP class
+of a rollout operation. The verbs `seed`, `enable` and `disable` take MCP class
 operations only (`-operations mcp:<root>[,...]` or `all-mcp`) and refuse a catalog operation: query-api serves
-every registered operation, so there is nothing to seed, enable, disable or repoint for it. `status` lists both.
+every registered operation, so there is nothing to seed, enable or disable for it. `status` lists both.
 
 ```bash
 # A typed -postgres-uri flag value reaches /proc/<pid>/cmdline and shell
@@ -345,8 +344,8 @@ dho goapi routing status -registry-url http://query-api:8090/registry
 #    that can only FAIL a run, never the source of what is written. The
 #    credential is the effective-principal ENVELOPE in
 #    GO_API_ROUTING_BEARER -- an env var, not a flag, because a flag value
-#    reaches `ps` and shell history. The root needs a per-root receipt for
-#    the running build (dho goapi prove -mcp-roots ...).
+#    reaches `ps` and shell history. No proof run is needed
+#    first: MCP/GraphQL parity is the CI step TestMCPClassParityVenueOracle.
 GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -registry-url  http://query-api:8090/registry \
   -buildinfo-url http://query-api:8090/buildinfo \
@@ -364,10 +363,6 @@ dho goapi routing disable \
 dho goapi routing disable \
   -operations all-mcp -mode python -apply \
   -recorded-by <who> -review-evidence '<why>'
-
-# 4. Provenance only: point decisions at the running build without touching a
-#    single column that decides reachability.
-GO_API_ROUTING_BEARER=<envelope> dho goapi routing repoint ... -dry-run
 ```
 
 This is every point where the Go verbs deliberately behave differently
@@ -407,7 +402,7 @@ decision.
   same as this binary's own top-level `-h` and Python's argparse --  not a
   refusal (exit 2).
 * **A dead database exits 1, matching Python.** Python's
-  `disable`/`enable`/`repoint` against a dead database crash with an
+  `disable`/`enable` against a dead database crash with an
   unhandled `ConnectionRefusedError`, exit 1; `connectPostgres`'s
   dial-failure path classifies the same way. A malformed DSN (a
   parse-time failure, the operator's own typo) is unaffected and stays
@@ -445,7 +440,7 @@ the one number that says whether anything is enabled at all.
 The refusal exit code is 2 (a state the operator must resolve), on both
 planes, with one exception. `classifyWriteError` in `main.go`
 distinguishes a genuine, server-raised failure from a hand-authored
-refusal at the one place `enable`/`repoint`/`disable` reach the database
+refusal at the one place `enable`/`disable` reach the database
 write: a `*pgconn.PgError` -- a deadlock abort (SQLSTATE 40P01), a
 trigger's `RAISE EXCEPTION`, any other
 error the POSTGRES SERVER itself raised inside an already-open
@@ -476,7 +471,7 @@ unrelated things become impossible to aggregate separately later.
 | verb | `action` | `credential_class` | `principal_id` |
 |---|---|---|---|
 | `enable` | `enable` | `effective_principal_envelope` | the envelope's `sub` |
-| `repoint` | `repoint` | `effective_principal_envelope` | the envelope's `sub` |
+| `repoint` (retired, D6024; its rows stay as history) | `repoint` | `effective_principal_envelope` | the envelope's `sub` |
 | `disable` | `disable` | `operator_direct` | NULL |
 | `status` | — writes no row — | | |
 
@@ -504,12 +499,11 @@ Each row also carries the routing key (`schema_digest`, `document_digest`,
 `selected_operation`) and the **before and after** of both
 `candidate_build` and `mode`. That last pair is what turns two contracts
 into something a reader can check rather than take on trust: a `repoint`
-row shows the same mode on both sides (it never touches reachability), and
+row (a retired verb; old rows stay) shows the same mode on both sides, and
 a `disable` row shows the same candidate build on both sides (it changes
 mode only).
 
-Only rows that ACTUALLY moved are audited: a `repoint` that finds every row
-already naming the running build writes no audit rows, and a `disable`
+Only rows that ACTUALLY moved are audited: a `disable`
 naming a class root with no decision audits nothing for it. An entry for an
 unchanged row would record a change that did not happen, in a table nothing
 can later correct.
@@ -599,13 +593,19 @@ appear here.
 | `sha256:6274c9d9d153ae81c635c5e2843148d4753f42d559ecf047f89303c49dc2ff79` | this revision | CHAOS-9630, adding the nullable field `changeFailureEvidence: ChangeFailureEvidence` to `MetricDelta` (Home) and to `OperatingReviewMetric`, and the type `ChangeFailureEvidence` (`basis`, `deployments`, `deploymentsWithStatus`, `coverage`, `unknownReason`): what a change failure rate stands on, from the rule of CHAOS-9621: the evidence basis (`status`, `incident` or `both`), the deployments D, the deployments with a final status K, their coverage K / D and, when there is no rate, the unknown reason (`not_collected`, `no_deployments_in_window` or `deployments_without_outcome`). Served for change failure rate whatever its state; null for every other metric. | Current. Additive: no existing field, argument or type changes; a client that does not select the field is not affected. The registered `home` and `operatingReview` documents gain the selection; the previous texts stay registered as legacy texts (Home V10, OperatingReview V4). The REST Home and `/explain` bodies are unchanged. query-api serves every registered operation at any digest, so nothing has to be carried on a roll. |
 | `sha256:adc182efbdd7656456b59fb2863b2671865ac88137aff2e762e88591fd0798e8` | 2026-10-14 | CHAOS-9604, changing the count fields of the AI impact types from `Int!` to `Float!` (`AIComparisonSide`, `AIImpactBucketRow`, `AIImpactBucketTotals`, `AIImpactScopeRollupRow`, `AIImpactSummary`, `AIReviewLoadRow`, `AIRiskBreakdownRow`): a co-owning team holds a share of a repository's pull requests (D5988), so a count can be a fraction. No field is added or removed. | superseded |
 | `sha256:61c902ddf9d1ba635cb381080f7af036eef0274260362a2e485ff4753d1378dd` | this revision | CHAOS-9695, removing the `LOC` value of the `SankeyValueUnit` enum (the Sankey unit is `WORK_UNITS` only; the Investment contract offers no lines of code). No field is added; one enum value is removed. | A client that sends or reads `SankeyValueUnit` `LOC` must stop (web follows in its own change). |
-| `sha256:01da073a54d964e5fae38b3760b5ed01755030be4a06add78b380fcb828089bf` | this revision | CHAOS-9736, adding the enum `TimeseriesScope` (DIMENSION, ORG) and the non-null field `TimeseriesResult.scope`: DIMENSION for a series of the requested dimension, ORG for the one org-level series of PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT (non-investment path), a true org rate from the stored counts over all repositories of the org. | Current. Additive: a client that does not select `scope` is not affected, so nothing changes for it: the ORG series is served only to an operation that selects `scope`. Such an operation is a new document text, and query-api's registered-document map (`query_route.go`, digestByOperation) must carry it before the web sends it: an unregistered text is refused with 404. The web copy of the SDL follows in the web ticket. |
+| `sha256:01da073a54d964e5fae38b3760b5ed01755030be4a06add78b380fcb828089bf` | 2026-10-15 | CHAOS-9736, adding the enum `TimeseriesScope` (DIMENSION, ORG) and the non-null field `TimeseriesResult.scope`: DIMENSION for a series of the requested dimension, ORG for the one org-level series of PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT (non-investment path), a true org rate from the stored counts over all repositories of the org. | Additive: a client that does not select `scope` is not affected, so nothing changes for it: the ORG series is served only to an operation that selects `scope`. Such an operation is a new document text, and query-api's registered-document map (`query_route.go`, digestByOperation) must carry it before the web sends it: an unregistered text is refused with 404. The web copy of the SDL follows in the web ticket. |
+| `sha256:6bcbab244bdc79378cb8e4d0348be513467883a9e7fc7ca0c41e1d3112630885` | 2026-10-15 | CHAOS-9817, adding the nullable field `priorValue: Float` to `MetricDelta` (Home): the value the comparison window stored, in the unit and scale of `value`, read by the query that sets `hasPriorData`. Null exactly when `hasPriorData` is false; a stored zero is 0. | Superseded. Additive: no existing field, argument or type changes; a client that does not select the field is not affected. The registered `home` document gains the selection right after `hasPriorData`; the previous text stays registered as a legacy text (Home V11). The Home signal's `priorValue` string is now this measured value too (it was back-solved from the current value and the percent, so it was missing at -100 % and could carry float drift). The REST Home body is unchanged. query-api serves every registered operation at any digest, so nothing has to be carried on a roll. |
+| `sha256:f6b76a374d63fe33897da78b25dd3c054d142977356919e7c26d41885279eeb8` | 2026-10-15 | CHAOS-9619, adding the `MeasureInput` value `ISSUE_SIZE` (Investment measured by work-unit issue size, D5999: the sum of the story points of a unit's issues, an unsized unit counts 1, lines of code never), the `SankeyValueUnit` value `ISSUE_SIZE` (the unit of a Sankey read in `ISSUE_SIZE`), and the nullable fields `SankeyCoverage.sizingCoverage` (share of the window's work units that carry a size) and `SankeyCoverage.unsizedUnitCount`. | Current. Additive: a client that sends `COUNT` and selects neither new field is not affected. The web's new `InvestmentFull` text (selecting the two coverage fields) is registered; the previous text stays registered as legacy. |
+| `sha256:13ebac7fb0c2f1281354b100f8ed8bc098b60e6997d0268be688dc4a58e6fa4a` | this revision | CHAOS-9797, changing only the description of `TimeseriesResult.scope` (ORG): it now names TEST_FLAKE_RATE with PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT, which already serve an ORG series (`internal/queryapi/analytics/timeseries.go` `orgRateTerms`). No field, enum value or type changes; clients are not affected, the text is documentation in introspection only. | Description only: a client reading the schema text sees the corrected list; no operation or response changes. |
+| `sha256:742865f7b26158649c84e2b56290a12c377dea7f3774c1dc882ee6c2f1714b13` | 2026-10-16 | CHAOS-8573, adding the nullable field `driver: String` to `HomeSignal`: one sentence on where the signal's move appears largest ("<Metric> appears to have moved most in A, B and C."), built from the display names of the top three drivers of a metric signal with a stated, non-zero move, with one hedge word; null on any other signal and when no driver has a name. | Superseded. Additive: no existing field, argument or type changes; a client that does not select the field is not affected. The registered `home` document gains the selection right after `repoFilterApplied` in `signals`; the previous text stays registered as a legacy text (Home V12). The REST Home body is unchanged. query-api serves every registered operation at any digest, so nothing has to be carried on a roll. |
+| `sha256:a4f3994c2c17cc89af006eaf7d8750a717764ebae1d27192357097540eb67892` | this revision | CHAOS-9624, adding to `ReworkThemeAllocation` (the Home investment tile) the non-null `measure: SankeyValueUnit!` (`WORK_UNITS` for COUNT, `ISSUE_SIZE`), the non-null `denominator: Float!` (the total `allocationPct` divides by; `allocation` is the numerator) and the nullable `sizingCoverage: Float`, `unsizedUnitCount: Int`, `workUnitCount: Int` (the sizing of the work units behind the tile; null unless `measure` is `ISSUE_SIZE`, and null when the window holds no unit: not measured, never 0). | Additive: a client that selects none of the new fields is not affected. The registered `home` document gains the five selections right after `churnLoc`; the previous text stays registered as a legacy text (Home V13). The REST Home body is unchanged. query-api serves every registered operation at any digest, so nothing has to be carried on a roll. |
+| `sha256:70c727ac76a2203a8f5a48378f9d9911bbd1275d52db2a6f625ceed2ee72c821` | this revision | CHAOS-9873, adding the type `OperatingReviewSizing` (`measure`, `sizingCoverage`, `unsizedUnitCount`, `workUnitCount`) and the nullable field `sizing: OperatingReviewSizing` to `OperatingReviewSection`: the measure the Investment section is read in and how much of it is sized (D6027, D6032). ISSUE_SIZE weighs each work unit by its issue size, an unsized unit counts 1 (D5999); the sizing fields are read over the week's units and are null unless the measure is ISSUE_SIZE and the week holds a unit (not measured, never 0). | Current. Additive: a client that does not select the field is not affected. The registered `operatingReview` document gains the selection right after `worsened`; the previous text stays registered as a legacy text (OperatingReview V5). Only a document that selects the measure and the whole sizing reads the investment section in ISSUE_SIZE (metric unit "issue size"); every other text reads it in work units, unchanged in value. query-api serves every registered operation at any digest, so nothing has to be carried on a roll. |
 
 
 ### Where `bigboy-cut.sh` finds its tools and its tree (CHAOS-7135)
 
 `ci/bigboy/bigboy-cut.sh` separates the two: `BIGBOY_ROOT` (default `/home/ubuntu/devhealth`) is the
-running tree the cut acts on (`compose/compose.bigboy.images.yml`, `_records/`, `ops/.env`), and the
+running tree the cut acts on (`_records/images.env`, `_records/`, `ops/.env`), and the
 tools (the sibling `bigboy-repin.sh`, `bigboy-repin-web.sh`, the check scripts) come from
 `BIGBOY_TOOLS_DIR`, which defaults to the directory the script itself runs from. A cut launched from
 a git worktree therefore needs no `ci/bigboy` symlink under the root; set `BIGBOY_TOOLS_DIR` only to
@@ -615,7 +615,7 @@ the cut refuses a tools directory that is not one (`is not a directory`, or no `
 ### go-api's ClickHouse login on bigboy (CHAOS-7162)
 
 `dho_api_ch` is declared to ClickHouse as a `users.d` file, not created inside the running container: the
-compose overlay `ci/bigboy/compose.bigboy.clickhouse-users.yml` mounts the host file `DHO_API_CH_USERS_XML`
+compose file `ci/bigboy/compose.bigboy.yml` mounts the host file `DHO_API_CH_USERS_XML`
 (default `$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml`) read-only at
 `/etc/clickhouse-server/users.d/dho_api_ch.xml`, so recreating the ClickHouse container no longer loses the
 user (a recreate that did, after the login was `docker cp`ed in, is what made go-api fail every ClickHouse call
@@ -653,9 +653,7 @@ overrides `working_dir` to `/work` (a host-mounted scratch dir, always
 empty), so those relative defaults never resolve there -- `CARRY_ARGS`
 points `-catalog`/`-documents` at the same files by their absolute,
 image-baked path instead (still the tools image's own catalog/documents,
-never a separately fetched copy). `repoint` has no `-catalog`/`-documents`
-flags at all, so callers running under an overridden `working_dir` are
-unaffected for that verb. Either way, the image's own binary is what says
+never a separately fetched copy). Either way, the image's own binary is what says
 which documents the deployment it was built from will register.
 
 The runtime base is a small Debian, not distroless: this image doubles as
@@ -785,3 +783,7 @@ scaffold, and the comparator (CHAOS-4366 deliverable 5, CHAOS-4381 signed
 off 2026-08-27 19:44 PT). None of these is wired into a live request
 path yet — that is a later wave, per plan §6's Wave-0 scope ("no
 user-facing porting").
+
+## Envelope signing key custody
+
+One contract for signing-key files across the platform (web `readPrivateKey`, `internal/auth/keystore`, `internal/envelopemint`): opened `O_NOFOLLOW`, a regular file, 1 byte to a size bound (16 KiB here), no group or other permission bits (0600 or stricter), and it must parse as Ed25519 or the load fails. The envelope key is supplied as `GO_API_ENVELOPE_PRIVATE_KEY_FILE` (a path). The raw `GO_API_ENVELOPE_PRIVATE_KEY` value is deprecated: it still works, logs a warning that names only the variable, and loses to the file when both are set. `mint-envelope -key-file` follows the same contract. Mounted Secret files need `defaultMode: 0400`.

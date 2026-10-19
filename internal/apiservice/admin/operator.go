@@ -32,6 +32,15 @@ type Operator struct {
 	Pool *pgxpool.Pool
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
+	// Logger receives the user-delete telemetry (Info outcome, Debug per reference); nil discards it.
+	Logger *slog.Logger
+}
+
+func (o Operator) logger() *slog.Logger {
+	if o.Logger != nil {
+		return o.Logger
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 // OperatorError is a refusal the operator reads: its Message is the text the
@@ -222,6 +231,126 @@ func pyUUID(text string) (uuid.UUID, error) {
 	return uuid.Parse(digits[0:8] + "-" + digits[8:12] + "-" + digits[12:16] + "-" + digits[16:20] + "-" + digits[20:])
 }
 
+// findUser is the lookup of the user verbs: by id, else email, else username (the first one given and
+// non-empty). No identifier, a malformed id and an unknown user are refusals.
+func findUser(ctx context.Context, store pgStore, id, email, username *string) (*fullUser, error) {
+	var user *fullUser
+	var err error
+	switch {
+	case id != nil && *id != "":
+		parsed, parseErr := pyUUID(*id)
+		if parseErr != nil {
+			return nil, refuse("%s", parseErr.Error())
+		}
+		user, err = store.fullUserByID(ctx, parsed)
+	case email != nil && *email != "":
+		user, err = store.userByEmail(ctx, *email)
+	case username != nil && *username != "":
+		user, err = store.userByUsername(ctx, *username)
+	default:
+		return nil, refuse("Identify the user with --id, --email, or --username.")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, refuse("User not found.")
+	}
+	return user, nil
+}
+
+// DeleteUserInput is `admin users delete`: the identifiers as for update, Confirm, which is the operator's --yes (without it
+// nothing is written), and Force, which is --force: a permanent delete instead of the default soft delete.
+type DeleteUserInput struct {
+	ID, Email, Username *string
+	Confirm             bool
+	Force               bool
+}
+
+// DeleteUserResult is what a delete did, or with Deleted false what it would do. Mode says which delete it was (or would be).
+// KeptReferences lists, for a permanent delete, the tables whose rows were kept with the user reference set to null.
+type DeleteUserResult struct {
+	User            User
+	Memberships     int
+	Deleted         bool
+	Mode            DeleteMode
+	AlreadyInactive bool
+	KeptReferences  map[string]int64
+}
+
+// DeleteUser is the API's delete_user run by the operator (CHAOS-10019, D6051), who stands where a superuser caller stands:
+// the API's refusal of a non-superuser caller has no counterpart here. By default the user is soft-deleted (the row stays,
+// is_active false, no login). With Force the row and its personal fields go for good, and the billing-audit, refund and
+// impersonation rows stay with a null user; a reference that cannot be nulled fails the delete and leaves the user.
+// The user row is locked first, as the API's superuser-guarded write locks it, and the work runs in one transaction.
+// Without Confirm the user and the memberships are reported and nothing is written.
+func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUserResult, error) {
+	mode := DeleteSoft
+	if in.Force {
+		mode = DeleteForce
+	}
+	var result *DeleteUserResult
+	var forceRefs []userRefDecision
+	var softResult softDeleteResult
+	err := o.inTransaction(ctx, func(store pgStore) error {
+		user, err := findUser(ctx, store, in.ID, in.Email, in.Username)
+		if err != nil {
+			return err
+		}
+		var memberships int
+		if err := store.Pool.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE user_id = $1`, user.ID).Scan(&memberships); err != nil {
+			return err
+		}
+		result = &DeleteUserResult{User: *userView(user), Memberships: memberships, Mode: mode}
+		if !in.Confirm {
+			return nil
+		}
+		if _, err := store.Pool.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, user.ID); err != nil {
+			return err
+		}
+		logger := o.logger()
+		if mode == DeleteForce {
+			found, refs, err := store.forceDeleteUser(ctx, logger, user.ID)
+			forceRefs = refs
+			if err != nil {
+				return err
+			}
+			if !found {
+				return refuse("User not found.")
+			}
+			result.KeptReferences = map[string]int64{}
+			for _, ref := range refs {
+				if ref.Rows > 0 {
+					result.KeptReferences[ref.Name+"."+ref.Column] = ref.Rows
+				}
+			}
+		} else {
+			soft, err := store.softDeleteUser(ctx, logger, user.ID)
+			if err != nil {
+				return err
+			}
+			if !soft.Found {
+				return refuse("User not found.")
+			}
+			softResult = soft
+			result.AlreadyInactive = soft.AlreadyDone
+		}
+		result.Deleted = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.Deleted {
+		if mode == DeleteForce {
+			logForceDeleted(ctx, o.logger(), result.User.ID, forceRefs)
+		} else {
+			logSoftDeleted(ctx, o.logger(), result.User.ID, softResult)
+		}
+	}
+	return result, nil
+}
+
 // UpdateUser is the `admin users update` session: the user is found, the profile
 // fields, the password and the memberships change in one transaction, and any
 // refusal rolls the whole update back.
@@ -236,27 +365,9 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 	}
 	var result *UpdateUserResult
 	err := o.inTransaction(ctx, func(store pgStore) error {
-		var user *fullUser
-		var err error
-		switch {
-		case in.ID != nil && *in.ID != "":
-			id, parseErr := pyUUID(*in.ID)
-			if parseErr != nil {
-				return refuse("%s", parseErr.Error())
-			}
-			user, err = store.fullUserByID(ctx, id)
-		case in.Email != nil && *in.Email != "":
-			user, err = store.userByEmail(ctx, *in.Email)
-		case in.Username != nil && *in.Username != "":
-			user, err = store.userByUsername(ctx, *in.Username)
-		default:
-			return refuse("Identify the user with --id, --email, or --username.")
-		}
+		user, err := findUser(ctx, store, in.ID, in.Email, in.Username)
 		if err != nil {
 			return err
-		}
-		if user == nil {
-			return refuse("User not found.")
 		}
 		changes := []string{}
 		shownEmail := user.Email

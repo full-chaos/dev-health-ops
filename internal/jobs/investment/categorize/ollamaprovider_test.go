@@ -225,7 +225,7 @@ func TestOllamaProviderExplicitZeroTemperatureIsSentVerbatim(t *testing.T) {
 }
 
 func TestOllamaProviderRedactsSecretInErrorBody(t *testing.T) {
-	// Same structural-sanitizer parity LocalProvider/OpenAIProvider get:
+	// Same structural-sanitizer parity the TypeSafe client gets:
 	// classifyProviderError's Error() runs every raw provider error message
 	// through sanitizeMessage before it ever reaches a caller/log, and this
 	// provider's own error paths (both the non-2xx httpStatusError and the

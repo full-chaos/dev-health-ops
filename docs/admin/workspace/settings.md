@@ -32,6 +32,35 @@ organization-administrator one, see
 Context Fabric Validation is a platform-administrator diagnostic surface. It is
 not granted by `ask_dev`, `byo_llm`, or organization-administrator status.
 
+## BYO LLM per purpose
+
+The organization's BYO LLM row is its default. A purpose can carry its own
+override, so a small explanation does not run on the model chosen for a complex
+investigation. The purposes are a fixed list:
+
+| Purpose | Used by |
+| --- | --- |
+| `investigate` | Ask Dev interpretation and synthesis (served to Context Fabric by the internal `llm-config` route) |
+| `explain` | Investment and work unit explanations |
+| `categorize` | Investment categorization (the `heavy` worker reads the resolved config through the api; the operator enables it with `ORG_LLM_CONFIG_URL`/`ORG_LLM_CONFIG_TOKEN`, see the environment reference) |
+
+For each purpose the model is the override when one is stored, otherwise the
+default row, otherwise the platform model. An override never
+borrows the base URL of the default row. A model is required with
+every override. An override for the same provider as the default row, with no
+api key of its own, uses the default row's key, so one provider key can serve
+several models; an override for a different provider needs its own key (a
+provider that needs none, such as a local one, does not). The override lives in the same `llm` settings category as the
+default row (keys `purpose:<purpose>:provider`, `model`, `api_key`,
+`base_url`), and the api key is encrypted like the default one.
+
+Admin API, all on `/api/v1/admin/llm-settings`: `PUT` with a `purpose` field
+writes an override, `GET ?purpose=<purpose>` reads one (404 when none),
+`DELETE ?purpose=<purpose>` removes one, and the plain `GET` lists every stored
+override under `purposes`. `concurrency` and `budget_limit_micro_usd` apply to
+the default row only. The plain `DELETE` removes the default row and leaves the
+overrides.
+
 ## BYO LLM budget
 
 An organization administrator can set a calendar-month monetary ceiling for

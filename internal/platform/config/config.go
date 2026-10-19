@@ -17,6 +17,7 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/queuecontrol"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -135,16 +136,14 @@ const (
 	devHealthEnv = "DEV_HEALTH_ENV"
 )
 
-// QueueControlMode describes the endpoint semantics promised by the operator.
-// Direct PostgreSQL and PgBouncer session pooling preserve River's required
-// session semantics. Transaction pooling cannot propagate cancellation to a
-// running River worker.
-type QueueControlMode string
+// QueueControlMode is defined in queuecontrol so that internal/storage/postgres
+// can name it without importing this package (and the ClickHouse driver).
+type QueueControlMode = queuecontrol.Mode
 
 const (
-	QueueControlDirect      QueueControlMode = "direct"
-	QueueControlSession     QueueControlMode = "session"
-	QueueControlTransaction QueueControlMode = "transaction"
+	QueueControlDirect      = queuecontrol.Direct
+	QueueControlSession     = queuecontrol.Session
+	QueueControlTransaction = queuecontrol.Transaction
 )
 
 // Spec describes the immutable configuration surface of one executable.
@@ -995,8 +994,8 @@ func Load(spec Spec) (Config, error) {
 			cfg.APIExpectedWorkerGroups = &groups
 		}
 		cfg.APIBilling = loadBillingConfig(lookup)
-		cfg.APIJWTIssuer = envOrDefault(lookup, "JWT_ISSUER", defaultJWTIssuer)
-		cfg.APIJWTAudience = envOrDefault(lookup, "JWT_AUDIENCE", defaultJWTAudience)
+		cfg.APIJWTIssuer = presenceOrDefault(lookup, "JWT_ISSUER", defaultJWTIssuer)
+		cfg.APIJWTAudience = presenceOrDefault(lookup, "JWT_AUDIENCE", defaultJWTAudience)
 	}
 	if cfg.Service == QueryAPIServiceName {
 		cfg.QueryAPIAddress = envOrDefault(lookup, "QUERY_API_ADDR", defaultQueryAPIAddress)
@@ -1260,6 +1259,17 @@ func boundedIntEnv(
 		return 0, fmt.Errorf("%s must be between %d and %d", key, minimum, maximum)
 	}
 	return value, nil
+}
+
+// presenceOrDefault mirrors os.getenv(key, default): the default applies only
+// when the variable is absent. A present empty or blank value is returned
+// verbatim, as the Python api reads JWT_ISSUER and JWT_AUDIENCE; the api
+// service refuses an empty one at startup.
+func presenceOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
+	if value, present := lookup(key); present {
+		return value
+	}
+	return fallback
 }
 
 func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {

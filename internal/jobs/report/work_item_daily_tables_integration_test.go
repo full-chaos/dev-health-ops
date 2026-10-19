@@ -52,7 +52,8 @@ INSERT INTO issue_type_metrics_daily
  cycle_p50_hours, cycle_p90_hours, lead_p50_hours, computed_at, org_id) VALUES
 ('`+repoID+`', '2026-01-03', 'github', '',       'bug', 0, 1, 0, 0, 0, 34, '2026-01-03 10:00:00', 'org-1'),
 ('`+repoID+`', '2026-01-03', 'github', 'team-x', 'bug', 0, 1, 0, 0, 0, 20, '2026-01-03 10:00:00', 'org-1'),
-('`+repoID+`', '2026-01-03', 'github', 'team-x', 'bug', 0, 0, 0, 0, 0, 0,  '2026-01-03 11:05:00', 'org-1')`); err != nil {
+('`+repoID+`', '2026-01-03', 'github', 'team-x', 'bug', 0, 0, 0, 0, 0, NULL,  '2026-01-03 11:05:00', 'org-1'),
+('`+repoID+`', '2026-01-03', 'github', 'team-y', 'bug', 0, 2, 0, 0, 0, NULL,  '2026-01-03 10:00:00', 'org-1')`); err != nil {
 		t.Fatal(err)
 	}
 	chart := func(metric string) float64 {
@@ -83,7 +84,7 @@ INSERT INTO issue_type_metrics_daily
 	}
 	if got := chart("lead_p50_hours"); got != 34 {
 		t.Errorf("lead_p50_hours = %v, want 34: the one key with a completed item. "+
-			"17 counts the row of zeros as a measured 0; 27 counts the older row of the key that lost its completion; "+
+			"17 counts the row of zeros, or the key whose completed items have no usable creation time, as a measured value; 27 counts the older row of the key that lost its completion; "+
 			"18 is every row", got)
 	}
 }

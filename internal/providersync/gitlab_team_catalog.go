@@ -76,6 +76,10 @@ type gitlabTeamCatalogTeamRow struct {
 	Provider      string    `json:"provider"`
 	NativeTeamKey *string   `json:"native_team_key"`
 	ParentTeamID  *string   `json:"parent_team_id"`
+	// ProviderTeamID is the provider's immutable id of the team and ProviderName its own
+	// name (teams.provider_team_id, provider_name); empty when the run did not read them.
+	ProviderTeamID string `json:"provider_team_id,omitempty"`
+	ProviderName   string `json:"provider_name,omitempty"`
 }
 
 type gitlabTeamCatalogOwnershipRow struct {
@@ -315,19 +319,23 @@ func normalizeGitLabTeamRow(
 		Members: []string{}, ProjectKeys: append([]string(nil), projectKeys...), RepoPatterns: []string{},
 		IsActive: 1, UpdatedAt: normalizedAt, OrgID: orgID, Provider: gitlabTeamCatalogProvider,
 		NativeTeamKey: &nativeTeamKey, ParentTeamID: gitlabParentTeamID(fullPath),
+		ProviderTeamID: group.ID.String(), ProviderName: strings.TrimSpace(group.Name),
 	}
 }
 
+// normalizeGitLabOwnershipRow keys a group's project grant by the project's
+// catalog id (the projects.id of the same project), so a rename keeps the row;
+// the current path is its project_key.
 func normalizeGitLabOwnershipRow(
-	orgID, teamID, projectPath string,
+	orgID, teamID, nativeProjectID, projectPath string,
 	specificity uint16,
 	normalizedAt time.Time,
 ) (gitlabTeamCatalogOwnershipRow, bool) {
-	projectID, ok := GitLabPathOwnershipProjectID(projectPath)
-	if !ok {
+	projectKey := strings.TrimSpace(projectPath)
+	projectID, ok := GitLabCatalogProjectID(orgID, strings.TrimSpace(nativeProjectID))
+	if !ok || projectKey == "" {
 		return gitlabTeamCatalogOwnershipRow{}, false
 	}
-	projectKey := projectPath
 	return gitlabTeamCatalogOwnershipRow{
 		OrgID: orgID, Provider: gitlabTeamCatalogProvider, TeamID: teamID,
 		ProjectID: projectID, ProjectKey: &projectKey, Source: gitlabTeamCatalogSource,

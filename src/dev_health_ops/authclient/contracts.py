@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import json
 import re
+import sysconfig
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,8 @@ import jsonschema
 import jsonschema.exceptions
 import jsonschema.protocols
 import jsonschema.validators
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 #: Repo-relative location of the v1 wire schemas. Resolved from this file's
 #: own path rather than from a working directory, so a caller's cwd cannot
@@ -48,18 +52,28 @@ class ContractError(RuntimeError):
 
 
 def repo_root() -> Path:
-    """Return the ops repo root that owns the contracts directory.
+    """Return the directory that owns ``contracts/auth/v1/jsonschema``.
 
-    Walks up from this module until a directory containing
-    ``contracts/auth/v1/jsonschema`` is found. Raises rather than guessing:
-    a wrong root would validate against a contract that is not this tree's.
+    In a checkout that is the ops repo root, found by walking up from this
+    module. In an INSTALLED package there is no checkout: the schemas ship as
+    wheel data files (``[tool.setuptools.data-files]`` in pyproject.toml, the
+    same mechanism ``contracts/jobs`` uses) and land under the interpreter's
+    data prefix, so that prefix is the fallback. Packaging and resolution are one
+    contract: dropping either half makes every parser fail outside a checkout,
+    which ``tests/tooling/test_authclient_installed_wheel.py`` proves by
+    installing the built wheel in an isolated environment.
+
+    Raises rather than guessing: a wrong root would validate against a contract
+    that is not this tree's.
     """
-    for candidate in (Path(__file__).resolve(), *Path(__file__).resolve().parents):
+    candidates = [*Path(__file__).resolve().parents, Path(sysconfig.get_path("data"))]
+    for candidate in candidates:
         if (candidate / _CONTRACTS_SUBPATH / "jsonschema").is_dir():
             return candidate
     raise ContractError(
-        "could not locate the ops repo root above "
-        f"{Path(__file__).resolve()} -- no ancestor contains "
+        "could not locate the contracts directory above "
+        f"{Path(__file__).resolve()} or under the data prefix "
+        f"{sysconfig.get_path('data')} -- none contains "
         f"{_CONTRACTS_SUBPATH / 'jsonschema'}. Refusing to guess a root, "
         "because validating against the wrong contracts directory reports "
         "success while checking a different contract."
@@ -196,10 +210,52 @@ def _validator_for(schema_path_str: str) -> jsonschema.protocols.Validator:
     # document happens to reach that field.
     for pattern in _every_pattern(schema):
         strictly_anchored(pattern)
+    registry = _contract_registry(Path(schema_path_str).parent.parent)
+    for document in registry_documents(registry):
+        for pattern in _every_pattern(document):
+            strictly_anchored(pattern)
     return StrictDraft202012Validator(
         schema,
         format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER,
+        registry=registry,
     )
+
+
+@cache
+def _contract_registry(contracts_root_str: str) -> Registry:
+    """Every contract schema under *contracts_root*, keyed by its ``$id``.
+
+    A cross-schema ``$ref`` resolves ONLY against this registry, which is built
+    from files in this tree. Nothing is fetched: ``referencing`` has no
+    retrieval hook installed, so a ``$ref`` outside the registry is an error
+    rather than a network read, matching the Go loader.
+    """
+    root = Path(contracts_root_str)
+    registry: Registry = Registry()
+    paths = sorted((root / "jsonschema").glob("*.schema.json"))
+    paths += sorted(root.glob("*.schema.json"))
+    real_root = root.resolve()
+    for path in paths:
+        if not path.resolve().is_relative_to(real_root):
+            raise ContractError(
+                f"{path} resolves to {path.resolve()}, outside {real_root}; "
+                "a contract schema must live inside the contracts directory"
+            )
+        document = load_json(path)
+        schema_id = document.get("$id")
+        if not isinstance(schema_id, str):
+            raise ContractError(f"{path}: contract schema declares no $id")
+        registry = registry.with_resource(
+            schema_id,
+            Resource.from_contents(document, default_specification=DRAFT202012),
+        )
+    return registry
+
+
+def registry_documents(registry: Registry) -> Iterator[Any]:
+    """Yield the contents of every resource in *registry*."""
+    for uri in registry:
+        yield registry.get_or_retrieve(uri).value.contents
 
 
 def _every_pattern(node: Any) -> Iterator[str]:
@@ -276,3 +332,79 @@ def validate(surface: str, document: Any, root: Path | None = None) -> None:
     if found:
         joined = "; ".join(str(v) for v in found)
         raise ContractError(f"{surface}: {joined}")
+
+
+def refuse_bool(raw: object, surface: str, field: str, noun: str) -> None:
+    """Refuse a JSON boolean where a number is required.
+
+    ``bool`` subclasses ``int`` in Python, so this MUST run before any
+    ``isinstance(raw, int)`` check or ``True`` silently becomes ``1``.
+    """
+    if isinstance(raw, bool):
+        raise ContractError(f"{surface}: /{field} is a boolean, not {noun}")
+
+
+def refuse_decimal_form(raw: object, surface: str, field: str) -> None:
+    """Refuse a number that arrived in decimal or exponent form.
+
+    ``json`` hands back a ``float`` for exactly the tokens containing ``.``,
+    ``e`` or ``E`` and an ``int`` for every other number token, so any ``float``
+    here IS a decimal-form token -- including ``1.0``, ``1e0`` and the tokens
+    that round to an integer (``9007199254740990.1``, ``1.0000000000000000001``).
+    A float64 reader has already rounded such a token, so it is indistinguishable
+    from the integer it rounds to, and no magnitude bound can be sound. Integer
+    tokens are arbitrary-precision in Python and stay exact. The Go twin is
+    ``contracts.RefuseDecimalForm``, which reads the token text.
+    """
+    if isinstance(raw, float):
+        raise ContractError(
+            f"{surface}: /{field} = {raw!r} arrived in decimal or exponent form; "
+            "refused because a float64 reader has already rounded such a token, so "
+            "it is indistinguishable from the integer it rounds to. Send an integer "
+            "token, which stays exact"
+        )
+
+
+def require_wire_int(document: dict[str, Any], field: str, surface: str) -> int | None:
+    """Return an optional integer field, refusing a zero-fraction decimal.
+
+    JSON Schema's ``integer`` admits ``403.0`` -- "a number with no fractional
+    part", not "a JSON integer literal" -- so the schema accepts it in all three
+    languages and cannot be the place this is caught. Go's clients decode into
+    an integer-typed field and refuse ``403.0`` outright; Python's ``json``
+    hands back a ``float``, so without this check the SAME document is accepted
+    by one client and rejected by the other. Refusing here keeps both on the
+    stricter reading. The matching fixtures are ``reject_by_client``, not
+    ``reject``: the schema validates them.
+
+    Absent or null returns ``None``.
+    """
+    raw = document.get(field)
+    if raw is None:
+        return None
+    refuse_bool(raw, surface, field, "an integer")
+    refuse_decimal_form(raw, surface, field)
+    if isinstance(raw, int):
+        return raw
+    raise ContractError(f"{surface}: /{field} = {raw!r} is not an integer")
+
+
+def parse_rfc3339(raw: str, surface: str, field: str) -> datetime:
+    """Parse a timestamp the schema pattern has accepted, refusing what it cannot see.
+
+    The pattern bounds each component but not the calendar: ``2026-02-30``,
+    ``2026-04-31`` and ``2027-02-29`` are lexically valid and name no day. Go's
+    ``time.Parse`` refuses them, so a client that did not parse would accept
+    what its Go counterpart rejects. The instant is also normalised to UTC, so
+    an offset that carries it outside 0001..9999 is refused rather than raising
+    ``OverflowError`` later.
+    """
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("no timezone")
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError, OSError) as exc:
+        raise ContractError(
+            f"{surface}: /{field} = {raw!r} is not a valid RFC 3339 instant ({exc})"
+        ) from exc

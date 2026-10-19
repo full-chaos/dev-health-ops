@@ -343,7 +343,7 @@ func (a *PagerDutyClientCredentialsAuth) accessToken(ctx context.Context) (secre
 		return secrets.Value{}, transportProviderError("pagerduty", err, 1)
 	}
 	defer response.Body.Close()
-	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
+	if classification := ClassifyHTTPForRequest("pagerduty", request.URL.Path, response.StatusCode, response.Header, ""); classification != nil {
 		return secrets.Value{}, classification
 	}
 	var payload struct {
@@ -477,7 +477,7 @@ func (a *GitHubAppAuth) installationToken(ctx context.Context) (secrets.Value, e
 		return secrets.Value{}, transportProviderError("github", err, 1)
 	}
 	defer response.Body.Close()
-	if classification := ClassifyHTTP("github", response.StatusCode, response.Header); classification != nil {
+	if classification := classifyResponseWithBody("github", request.URL.Path, response); classification != nil {
 		return secrets.Value{}, classification
 	}
 	var payload struct {

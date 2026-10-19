@@ -3,6 +3,8 @@ package home
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-go/readers"
+	"log/slog"
 	"math"
 	"sort"
 	"time"
@@ -14,7 +16,7 @@ import (
 
 // fetchInvestmentThemeAllocation is the Home tile "Investment by theme" (CHAOS-9195, D5933;
 // the wire field is still rework_theme_allocation): the work over the five canonical themes, in the
-// measure investmentexplain.InvestmentShareMeasure names (COUNT, CHAOS-9622, D5999: lines of code are
+// measure Filters.TileMeasure names (COUNT by default, investmentexplain.HomeTileMeasure; ISSUE_SIZE, investmentexplain.HomeTileSizedMeasure, when the caller serves the sizing coverage with it, CHAOS-9624, D5999: lines of code are
 // not a measure of effort), that the Jev categorization writes (work_unit_investments), NOT the legacy rule classifier's
 // investment_area keys (D5932: that classifier is removed; before this the tile showed two themes
 // covering 2.5% of the completed items on real data). It is the Investment page's own read
@@ -31,6 +33,17 @@ import (
 //
 // DECLARED DIVERGENCE from the reference (which read investment_metrics_daily).
 func fetchInvestmentThemeAllocation(ctx context.Context, client QueryClient, f Filters, orgID string, startDay, endDay time.Time, asOf time.Time) ([]ReworkThemeAllocation, error) {
+	measure := investmentexplain.HomeTileMeasure
+	if f.TileMeasure == investmentexplain.HomeTileSizedMeasure {
+		measure = f.TileMeasure
+	}
+	return fetchThemeAllocationIn(ctx, client, f, orgID, startDay, endDay, asOf, measure)
+}
+
+// fetchThemeAllocationIn is the tile read in one named measure. Under ISSUE_SIZE it also reads the sizing
+// coverage of the same units (Reader.FetchSizingCoverage, the filters of the theme read), so the tile says how
+// much of its share is sized work (CHAOS-9624).
+func fetchThemeAllocationIn(ctx context.Context, client QueryClient, f Filters, orgID string, startDay, endDay time.Time, asOf time.Time, measure string) ([]ReworkThemeAllocation, error) {
 	reader, err := investmentexplain.NewReader(client)
 	if err != nil {
 		return nil, fmt.Errorf("home: investment by theme: %w", err)
@@ -47,7 +60,7 @@ func fetchInvestmentThemeAllocation(ctx context.Context, client QueryClient, f F
 		RepoIDs:    repoIDs,
 		ReposNamed: len(refs) > 0,
 		DatedByEnd: true,
-		Measure:    investmentexplain.InvestmentShareMeasure,
+		Measure:    measure,
 	}
 	if f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
 		filters.TeamScopeCondition, filters.TeamScopeBindings = teamscope.RepoCondition(orgID, "repo_id", f.Scope.IDs, asOf)
@@ -59,12 +72,29 @@ func fetchInvestmentThemeAllocation(ctx context.Context, client QueryClient, f F
 	if err != nil {
 		return nil, fmt.Errorf("home: investment by theme: %w", err)
 	}
-	return themeAllocationFromEffort(rows), nil
+	var sizing *readers.SizingCoverage
+	if measure == investmentexplain.MeasureIssueSize {
+		coverage, err := reader.FetchSizingCoverage(ctx, filters)
+		if err != nil {
+			return nil, fmt.Errorf("home: investment by theme sizing: %w", err)
+		}
+		sizing = &coverage
+	}
+	slog.DebugContext(ctx, "home: investment by theme", "measure", measure, "themes", len(rows), "sized_read", sizing != nil)
+	return themeAllocationFromEffort(rows, measure, sizing), nil
+}
+
+// tileMeasureUnit names the measure on the wire: the SankeyValueUnit of the Investment views.
+func tileMeasureUnit(measure string) string {
+	if measure == investmentexplain.MeasureIssueSize {
+		return "ISSUE_SIZE"
+	}
+	return "WORK_UNITS"
 }
 
 // themeAllocationFromEffort rolls the theme rows into the tile: the canonical themes only, the
 // largest value first (ties by theme), the share of the total in allocation_pct.
-func themeAllocationFromEffort(rows []investmentexplain.ThemeEffortRow) []ReworkThemeAllocation {
+func themeAllocationFromEffort(rows []investmentexplain.ThemeEffortRow, measure string, sizing *readers.SizingCoverage) []ReworkThemeAllocation {
 	kept := make([]investmentexplain.ThemeEffortRow, 0, len(rows))
 	total := 0.0
 	for _, row := range rows {
@@ -82,6 +112,19 @@ func themeAllocationFromEffort(rows []investmentexplain.ThemeEffortRow) []Rework
 		}
 		return kept[i].Theme < kept[j].Theme
 	})
+	// The sizing coverage is read over the units of the window, one answer for every row; nil unless the
+	// measure is ISSUE_SIZE and the window holds a unit.
+	var sizingCoverage *float64
+	var unsized, units *int64
+	if sizing != nil && measure == investmentexplain.MeasureIssueSize && sizing.Units > 0 {
+		sizingCoverage = sizing.Share()
+		if u := sizing.Unsized(); u != nil {
+			v := int64(*u)
+			unsized = &v
+		}
+		v := int64(sizing.Units)
+		units = &v
+	}
 	out := make([]ReworkThemeAllocation, 0, len(kept))
 	for _, row := range kept {
 		pct := 0.0
@@ -95,6 +138,12 @@ func themeAllocationFromEffort(rows []investmentexplain.ThemeEffortRow) []Rework
 			AllocationPct: pct,
 			PRsMerged:     int64(math.Round(row.PRs)),
 			ChurnLOC:      int64(math.Round(row.ChurnLOC)),
+
+			Measure:          tileMeasureUnit(measure),
+			Denominator:      total,
+			SizingCoverage:   sizingCoverage,
+			UnsizedUnitCount: unsized,
+			WorkUnitCount:    units,
 		})
 	}
 	return out

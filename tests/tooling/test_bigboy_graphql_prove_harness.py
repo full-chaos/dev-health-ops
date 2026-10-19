@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "ci" / "bigboy" / "bigboy-graphql-prove.sh"
-OVERLAY = ROOT / "ci" / "bigboy" / "compose.bigboy.prove.yml"
+COMPOSE_FILE = ROOT / "ci" / "bigboy" / "compose.bigboy.yml"
 
 
 def test_script_parses() -> None:
@@ -42,9 +42,15 @@ def test_credentials_never_on_argv_or_stdout() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     assert "GO_API_PROVE_PROOF_BEARER" not in text
     assert 'echo "$PROVE_ORG' not in text and "echo $PROVE_ORG" not in text
-    overlay = OVERLAY.read_text(encoding="utf-8")
-    assert "JWT_SECRET_KEY: ${JWT_SECRET_KEY:?" in overlay
-    assert "PROVE_ORG: ${PROVE_ORG:?" in overlay
+    compose = COMPOSE_FILE.read_text(encoding="utf-8")
+    assert (
+        "JWT_SECRET_KEY=${JWT_SECRET_KEY:-}" in compose
+    )  # by compose substitution only, never a script variable
+    assert "PROVE_ORG=${PROVE_ORG:-}" in compose
+    # a one-off service reads its variables with a default (a `:?` would fail every command: compose interpolates inactive
+    # profiles too), so the script refuses by name when the credential is absent
+    assert "JWT_SECRET_KEY has no value in ops/.env" in text
+    assert "JWT_SECRET_KEY=" not in text.replace("^JWT_SECRET_KEY=", "")
 
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -67,10 +73,18 @@ def _run_harness(tmp_path: Path, *args: str) -> tuple[int, list[list[str]]]:
     """Run the harness in an isolated root with a recording docker and gh; return its exit
     status and every docker call it made."""
     root = tmp_path / "root"
-    (root / "compose").mkdir(parents=True)
-    (root / "compose" / "compose.bigboy.images.yml").write_text(
-        f"services:\n  venue-prove:\n    image: ghcr.io/example/go-api-tools@{DIGEST}\n",
+    (root / "_records").mkdir(parents=True)
+    (root / "_records" / "images.env").write_text(
+        f"BIGBOY_API_TOOLS_IMAGE=ghcr.io/full-chaos/dev-health-go-api-tools@{DIGEST}\n",
         encoding="utf-8",
+    )
+    (root / ".remember/lanes/team-lead").mkdir(parents=True)
+    (root / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
+        "services: {}\n", encoding="utf-8"
+    )
+    (root / "ops").mkdir()
+    (root / "ops/.env").write_text(
+        "JWT_SECRET_KEY=fixture-not-a-secret\n", encoding="utf-8"
     )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -138,3 +152,18 @@ def test_an_unknown_edge_argument_is_refused_before_anything_runs(
     """The edge is never guessed from a misspelt flag: usage, exit 2, and no docker call."""
     rc, calls = _run_harness(tmp_path, SHA, second)
     assert rc == 2 and calls == []
+
+
+def test_the_org_read_runs_without_the_prove_overlay_and_the_prover_with_it(
+    tmp_path: Path,
+) -> None:
+    """The psql exec reads the org the prover needs; both run on the one compose file under the venue profile."""
+    status, calls = _run_harness(tmp_path, SHA)
+    assert status == 0, calls
+    execs = [c for c in calls if "exec" in c and "postgres" in c]
+    proves = [c for c in calls if "venue-prove" in c and "run" in c]
+    assert len(execs) == 1 and len(proves) == 1, calls
+    assert any(a.endswith("compose.bigboy.yml") for a in execs[0])
+    assert any(a.endswith("compose.bigboy.yml") for a in proves[0])
+    assert not any("stack.sh" in a for a in execs[0] + proves[0])
+    assert "venue" in proves[0] and "venue" in execs[0]

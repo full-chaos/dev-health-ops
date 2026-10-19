@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,14 @@ func newBatchVenueIDs() batchVenueIDs {
 	}
 	return ids
 }
+
+// gitlabListingFailure is the 400 detail for a failed group listing. Python
+// appends GitLab's message; Go keeps it out of the body (a named divergence),
+// so both planes are reduced to the fixed lead text.
+var gitlabListingFailure = regexp.MustCompile(`"(Failed to list GitLab projects for group '[^']*')(?:: [^"]*)?"`)
+
+// gitlabListingLeadOnly matches the Go detail with no provider suffix.
+var gitlabListingLeadOnly = regexp.MustCompile(`^Failed to list GitLab projects for group '[^']*'$`)
 
 // TestSyncConfigBatchCreateVenueOracle sends POST
 // /api/v1/admin/sync-configs/batch to the real Python api and the Go api
@@ -164,14 +173,34 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 		{Name: "list after", Method: "GET", Path: "/api/v1/admin/sync-configs", Headers: a},
 	}
 	python := golden.Python(t, venue, requests)
+	listingFailures := 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		// The reduction below hides the provider suffix on both planes, so the raw Go body is
+		// asserted to hold the lead and no suffix: the reduction cannot mask a regression.
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if request.Name != "gitlab missing group" && request.Name != "gitlab invalid token" {
+				return
+			}
+			listingFailures++
+			var answer struct {
+				Detail string `json:"detail"`
+			}
+			if err := json.Unmarshal([]byte(goResponse.Body), &answer); err != nil || goResponse.Status != 400 ||
+				!gitlabListingLeadOnly.MatchString(answer.Detail) {
+				t.Errorf("%s: go answered %d %s, want 400 with the fixed lead and no provider suffix", request.Name, goResponse.Status, goResponse.Body)
+			}
+		},
 		Normalize: func(request venueoracle.Request, body string) string {
 			body = fakeJiraAddress.ReplaceAllString(body, "127.0.0.1:<port>")
+			body = gitlabListingFailure.ReplaceAllString(body, `"$1"`)
 			return uuidPattern.ReplaceAllString(body, `"id":"<uuid4>"`)
 		},
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
+	if listingFailures != 2 {
+		t.Errorf("inspected %d GitLab listing failures, want 2", listingFailures)
+	}
 
 	orgs := fmt.Sprintf("'%s','%s'", ids.orgA, ids.orgB)
 	queries := createVenueRowQueries(orgs, "true")

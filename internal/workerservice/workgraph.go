@@ -14,7 +14,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuepredges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/prcommit"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
+	"github.com/full-chaos/dev-health-ops/internal/orgllmconfig"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
 )
@@ -70,7 +73,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	// cutover would appear complete while production kept running the old
 	// plane -- exactly the state this ticket exists to end, and one nothing
 	// downstream could detect. Same reasoning as workgraphBuildPreSteps'.
-	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, observer, logger)
+	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, observer, logger, postgresDatabase.pools.Domain)
 	if nativeErr != nil {
 		return workerFamily{}, nativeErr
 	}
@@ -170,6 +173,10 @@ func workgraphBuildPreSteps(
 	if issuePREdgesServiceErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
+	issuePRFallbackRetractionStep, issuePRFallbackRetractionStepErr := newIssuePRFallbackRetractionPreStep(issuePREdgesService)
+	if issuePRFallbackRetractionStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
 	issuePREdgesSharedWindow := newSharedIssuePREdgesWindow()
 	issuePREdgesFastPathStep, issuePREdgesFastPathStepErr := newIssuePREdgesFastPathPreStep(issuePREdgesService, issuePREdgesSharedWindow)
 	if issuePREdgesFastPathStepErr != nil {
@@ -181,6 +188,11 @@ func workgraphBuildPreSteps(
 	}
 	issuePREdgesHeuristicStep, issuePREdgesHeuristicStepErr := newIssuePREdgesHeuristicPreStep(issuePREdgesService, issuePREdgesSharedWindow)
 	if issuePREdgesHeuristicStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
+	issuePRFallbackInvariantStep, issuePRFallbackInvariantStepErr := newIssuePRFallbackInvariantPreStep(issuePREdgesService)
+	if issuePRFallbackInvariantStepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 
@@ -253,7 +265,8 @@ func workgraphBuildPreSteps(
 
 	steps := []workgraph.NativePreStep{
 		staleDependencyCleanupStep,
-		step, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issueCommitStep, issuePREdgesHeuristicStep,
+		step, issuePRFallbackRetractionStep, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issueCommitStep, issuePREdgesHeuristicStep,
+		issuePRFallbackInvariantStep,
 		prCommitLinksStep, prCommitEdgesStep, commitFileEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
 	}
 
@@ -311,7 +324,10 @@ func buildPostStepOrder() []string {
 // action, before any derivation stage) -- it is pure cleanup deleting a
 // legacy mislabelled-edge shape and reads/writes nothing another pre-step
 // touches, so its position is free by the ordering invariant; first is
-// simply the position it always held. "issue_pr_edges_fast_path"
+// simply the position it always held. "issue_pr_fallback_retraction"
+// (CHAOS-9821) READS the native rows "issue_pr_links" WRITES and removes the
+// explicit_text/heuristic rows they outrank, so it registers right after it
+// and before every step that READS work_graph_issue_pr. "issue_pr_edges_fast_path"
 // (CHAOS-4924) READS work_graph_issue_pr, which "issue_pr_links" WRITES, so
 // it must register strictly after it; "issue_pr_edges_text_parse" has no such
 // table dependency on the fast-path step, but registers immediately after it
@@ -322,8 +338,10 @@ func buildPostStepOrder() []string {
 // work_graph_issue_pr fresh (see issuepredges.ExplicitLink's doc comment for
 // why: it needs to see every row the native issue_pr_links step AND the two
 // steps ahead of it here have already committed), so it must register after
-// all three of those. "pr_commit_edges" (CHAOS-5264) is the realized case the
-// ordering invariant was written for: it READS work_graph_pr_commit, which
+// all three of those. "issue_pr_fallback_invariant" (CHAOS-10062) READS
+// work_graph_issue_pr after every step that WRITES it, so it registers right
+// after "issue_pr_edges_heuristic", the last of them. "pr_commit_edges"
+// (CHAOS-5264) is the realized case the ordering invariant was written for: it READS work_graph_pr_commit, which
 // "pr_commit_links" WRITES, so it must register strictly after it -- unlike
 // issue_pr_links' still-Python fast-path half, both halves of the PR<->commit
 // straddle are native here, registered back to back. "flag_guards_edges" and
@@ -350,7 +368,9 @@ func buildPreStepOrder() []string {
 	return []string{
 		"stale_pr_dependency_issue_edges_cleanup",
 		"issue_pr_links",
+		"issue_pr_fallback_retraction",
 		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_commit_edges", "issue_pr_edges_heuristic",
+		"issue_pr_fallback_invariant",
 		"pr_commit_links", "pr_commit_edges", "commit_file_edges",
 		"flag_guards_edges", "operational_incident_edges", "issue_issue_edges",
 	}
@@ -404,6 +424,7 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 // a nil into a refusal at the one place it matters -- the materialize case.
 func buildNativeInvestmentExecutor(
 	cfg config.Config, specs []jobruntime.HandlerSpec, observer jobruntime.Observer, logger *slog.Logger,
+	domainPool llmbudget.Pool,
 ) (workgraph.NativeExecutor, error) {
 	materializeSelected := false
 	for _, spec := range specs {
@@ -433,6 +454,18 @@ func buildNativeInvestmentExecutor(
 	executor, executorErr := investment.NewNativeExecutor(reader, writer, logger)
 	if executorErr != nil {
 		return nil, errWorkerDependencyUnavailable
+	}
+	// Org-aware categorization (CHAOS-10041): both ORG_LLM_CONFIG_* unset keeps
+	// the platform environment as the only source. A half-set pair refuses the
+	// family rather than quietly running a BYO org on the platform provider.
+	orgConfig, orgConfigErr := orgllmconfig.FromEnv(secrets.GetenvNamed)
+	if orgConfigErr != nil {
+		logger.Error("investment materialize is refused: the org llm config client is half-configured",
+			slog.String("error", orgConfigErr.Error()))
+		return nil, errWorkerDependencyUnavailable
+	}
+	if orgConfig != nil {
+		executor.SetOrgLLMConfig(orgConfig, llmbudget.PgStore{Pool: domainPool})
 	}
 	if collector := metricsCollectorFromObserver(observer); collector != nil {
 		executor.SetObserver(investment.CollectorRepoAttributionObserver{Collector: collector})

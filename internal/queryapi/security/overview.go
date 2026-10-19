@@ -184,12 +184,15 @@ ORDER BY day ASC`
 	defer rows.Close()
 	out := []model.TrendPoint{}
 	for rows.Next() {
-		var day time.Time
+		var day *time.Time
 		var opened, fixed uint64
 		if err := rows.Scan(&day, &opened, &fixed); err != nil {
 			return nil, fmt.Errorf("security: trend scan: %w", err)
 		}
-		out = append(out, model.TrendPoint{Day: graphqldate.New(day), Opened: int(opened), Fixed: int(fixed)})
+		if day == nil {
+			continue
+		}
+		out = append(out, model.TrendPoint{Day: graphqldate.New(*day), Opened: int(opened), Fixed: int(fixed)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("security: trend rows: %w", err)

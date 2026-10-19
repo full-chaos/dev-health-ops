@@ -104,7 +104,7 @@ func TestGitHubWorkItemEngineDeriverDerivesIssueTypesPerDay(t *testing.T) {
 			RepoID: &repoID, Day: "2026-08-04", Provider: "github",
 			TeamID: "payments", IssueTypeNorm: "bug",
 			CreatedCount: 1, CompletedCount: 2, ActiveCount: 2,
-			CycleP50Hours: 9, CycleP90Hours: 9, LeadP50Hours: 0,
+			CycleP50Hours: 9, CycleP90Hours: 9, LeadP50Hours: floatPointer(86),
 			ComputedAt: wantStamp, OrgID: claim.OrgID,
 		},
 		{

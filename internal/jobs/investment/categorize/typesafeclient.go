@@ -32,7 +32,7 @@ import (
 // constructs this client (ProviderKindTypeSafe is not in
 // goImplementedProviderKinds).
 //
-// What is shared with OpenAIProvider (same code, not a copy): the hardened
+// What is shared with OllamaProvider (same code, not a copy): the hardened
 // HTTP client (no redirects, no ambient proxy, bounded timeout), the
 // no-redirect guard on the credentialed request, error classification
 // (classifyProviderError), retryability (isRetryable), the exponential backoff

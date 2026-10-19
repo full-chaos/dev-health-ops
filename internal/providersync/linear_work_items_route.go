@@ -624,7 +624,7 @@ func (handler LinearWorkItemsRouteHandler) resolveLinearTeam(
 	} else if team, ok := linearReferenceTeamPayload(handler.ReferenceTeams, teamKey); ok {
 		return team, 0, nil
 	}
-	return collectLinearTeam(ctx, client, teamKey)
+	return collectLinearTeam(budgetAccount(ctx, "teams"), client, teamKey)
 }
 
 func linearReferenceTeamPayloads(rows []LinearReferenceTeam) []linearTeamPayload {
@@ -1282,7 +1282,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 		if len(teams) == 0 {
 			var teamErr error
 			var teamPages int
-			teams, teamPages, teamErr = collectLinearTeams(ctx, client, maxPages)
+			teams, teamPages, teamErr = collectLinearTeams(budgetAccount(ctx, "teams"), client, maxPages)
 			pagesSeen += teamPages
 			if teamErr != nil {
 				return CompleteRouteBatch{}, teamErr
@@ -1343,7 +1343,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					}
 				}
 			} else {
-				cycles, cyclePages, cycleErr := collectLinearCycles(ctx, client, team.ID)
+				cycles, cyclePages, cycleErr := collectLinearCycles(budgetAccount(ctx, "cycles"), client, team.ID)
 				pagesSeen += cyclePages
 				if cycleErr != nil {
 					return CompleteRouteBatch{}, cycleErr
@@ -1361,7 +1361,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 			}
 		}
 		page, pageErr := providerfoundation.CollectLinearGraphQLPages(
-			ctx, client, providerfoundation.LinearPageOptions{
+			budgetAccount(ctx, "issues"), client, providerfoundation.LinearPageOptions{
 				Query:          linearWorkItemsQuery,
 				Variables:      map[string]any{"filter": filter},
 				ConnectionPath: []string{"issues"}, PerPage: perPage, MaxPages: maxPages,
@@ -1391,7 +1391,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				labels, labelPages, labelErr := collectLinearIssueLabels(
-					ctx, client, payload.ID, cursor, len(payload.Labels.Nodes),
+					budgetAccount(ctx, "issues"), client, payload.ID, cursor, len(payload.Labels.Nodes),
 				)
 				pagesSeen += labelPages
 				if labelErr != nil {
@@ -1406,7 +1406,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				attachments, attachmentPages, attachmentErr := collectLinearIssueAttachments(
-					ctx, client, payload.ID, cursor, len(payload.Attachments.Nodes),
+					budgetAccount(ctx, "attachments"), client, payload.ID, cursor, len(payload.Attachments.Nodes),
 				)
 				pagesSeen += attachmentPages
 				if attachmentErr != nil {
@@ -1421,7 +1421,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				history, historyPages, historyErr := collectLinearIssueHistory(
-					ctx, client, payload.ID, cursor, len(payload.History.Nodes),
+					budgetAccount(ctx, "history"), client, payload.ID, cursor, len(payload.History.Nodes),
 				)
 				pagesSeen += historyPages
 				if historyErr != nil {
@@ -1436,7 +1436,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				comments, commentPages, commentErr := collectLinearIssueComments(
-					ctx, client, payload.ID, cursor, len(payload.Comments.Nodes),
+					budgetAccount(ctx, "comments"), client, payload.ID, cursor, len(payload.Comments.Nodes),
 				)
 				pagesSeen += commentPages
 				if commentErr != nil {
@@ -1451,7 +1451,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				relations, relationPages, relationErr := collectLinearIssueRelations(
-					ctx, client, payload.ID, false, cursor, len(payload.Relations.Nodes),
+					budgetAccount(ctx, "relations"), client, payload.ID, false, cursor, len(payload.Relations.Nodes),
 				)
 				pagesSeen += relationPages
 				if relationErr != nil {
@@ -1466,7 +1466,7 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				relations, relationPages, relationErr := collectLinearIssueRelations(
-					ctx, client, payload.ID, true, cursor, len(payload.InverseRelations.Nodes),
+					budgetAccount(ctx, "relations"), client, payload.ID, true, cursor, len(payload.InverseRelations.Nodes),
 				)
 				pagesSeen += relationPages
 				if relationErr != nil {
@@ -1623,11 +1623,6 @@ func normalizeLinearWorkItem(
 			sprintName = &cycleName
 		}
 	}
-	var parentID *string
-	if payload.Parent != nil && payload.Parent.Identifier != "" {
-		value := "linear:" + payload.Parent.Identifier
-		parentID = &value
-	}
 	var nativeTeamKey *string
 	if payload.Team != nil && payload.Team.Key != "" {
 		nativeTeamKey = &payload.Team.Key
@@ -1645,32 +1640,29 @@ func normalizeLinearWorkItem(
 	if payload.Description != nil && *payload.Description != "" {
 		description = payload.Description
 	}
-	createdUTC, updatedUTC := createdAt.UTC(), updatedAt.UTC()
-	item := linearWorkItemRow{
-		WorkItemID: "linear:" + payload.Identifier, Provider: "linear", Title: payload.Title,
-		Type: itemType, Status: status, StatusRaw: nullableLinearString(stateName),
-		Description: description, RepoID: nil, NativeTeamKey: nativeTeamKey, ProjectKey: nil,
-		ProjectID: projectID, ProjectName: projectName, Assignees: assignees, Reporter: reporter,
-		CreatedAt: createdUTC, UpdatedAt: updatedUTC, StartedAt: parseLinearTimePtr(payload.StartedAt),
-		CompletedAt: parseLinearTimePtr(payload.CompletedAt), ClosedAt: nil, Labels: labels,
-		StoryPoints: payload.Estimate, SprintID: sprintID, SprintName: sprintName,
-		ParentID: parentID, EpicID: nil, URL: payload.URL, PriorityRaw: priorityRaw,
-		ServiceClass: serviceClass, DueAt: parseLinearTimePtr(payload.DueDate),
-		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
+	completedAt := parseLinearTimePtr(payload.CompletedAt)
+	var closedAt *time.Time
+	if completedAt != nil {
+		closed := completedAt.UTC()
+		closedAt = &closed
 	}
-	if item.CompletedAt != nil {
-		closed := item.CompletedAt.UTC()
-		item.ClosedAt = &closed
+	if closedAt == nil && payload.CanceledAt != nil {
+		closedAt = parseLinearTime(*payload.CanceledAt)
 	}
-	if item.ClosedAt == nil && payload.CanceledAt != nil {
-		canceled := parseLinearTime(*payload.CanceledAt)
-		if canceled != nil {
-			item.ClosedAt = canceled
-		}
-	}
-	if err := item.validate(claim); err != nil {
+	row, err := buildWorkItemRow(claim, linearIssueSource{
+		payload: payload, workItemID: "linear:" + payload.Identifier, typeName: itemType,
+		status: status, statusRaw: nullableLinearString(stateName), description: description,
+		nativeTeamKey: nativeTeamKey, projectID: projectID, projectName: projectName,
+		assignees: assignees, reporter: reporter, createdAt: createdAt.UTC(),
+		updatedAt: updatedAt.UTC(), startedAt: parseLinearTimePtr(payload.StartedAt),
+		completedAt: completedAt, closedAt: closedAt, labels: labels,
+		sprintID: sprintID, sprintName: sprintName, priorityRaw: priorityRaw,
+		serviceClass: serviceClass,
+	}, normalizedAt)
+	if err != nil {
 		return linearWorkItemRow{}, nil, err
 	}
+	item := linearWorkItemRowFromBase(row)
 	transitions := normalizeLinearTransitions(
 		claim, item.WorkItemID, payload.History.Nodes, normalizedAt,
 	)
@@ -2044,3 +2036,61 @@ func linearPriority(priority *int) (*string, *string) {
 }
 
 var _ CompleteRouteHandler = LinearWorkItemsRouteHandler{}
+
+const linearIssueSourceKind = "linear_issue"
+
+// linearIssueSource is how a Linear issue fills the shared work-item row.
+type linearIssueSource struct {
+	payload linearWorkItemPayload
+
+	workItemID, typeName, status                                  string
+	statusRaw, description, nativeTeamKey, projectID, projectName *string
+	reporter, sprintID, sprintName, priorityRaw, serviceClass     *string
+	assignees, labels                                             []string
+	createdAt, updatedAt                                          time.Time
+	startedAt, completedAt, closedAt                              *time.Time
+}
+
+func (s linearIssueSource) sourceKind() string { return linearIssueSourceKind }
+func (s linearIssueSource) validateRow(claim Claim, row workItemRow) error {
+	return linearWorkItemRowFromBase(row).validate(claim)
+}
+func (s linearIssueSource) WorkItemID() string      { return s.workItemID }
+func (s linearIssueSource) Provider() string        { return "linear" }
+func (s linearIssueSource) Title() string           { return s.payload.Title }
+func (s linearIssueSource) Type() string            { return s.typeName }
+func (s linearIssueSource) Status() string          { return s.status }
+func (s linearIssueSource) StatusRaw() *string      { return s.statusRaw }
+func (s linearIssueSource) Description() *string    { return s.description }
+func (s linearIssueSource) RepoID() *uuid.UUID      { return nil }
+func (s linearIssueSource) NativeTeamKey() *string  { return s.nativeTeamKey }
+func (s linearIssueSource) ProjectKey() *string     { return nil }
+func (s linearIssueSource) ProjectID() *string      { return s.projectID }
+func (s linearIssueSource) ProjectName() *string    { return s.projectName }
+func (s linearIssueSource) Assignees() []string     { return s.assignees }
+func (s linearIssueSource) Reporter() *string       { return s.reporter }
+func (s linearIssueSource) CreatedAt() time.Time    { return s.createdAt }
+func (s linearIssueSource) UpdatedAt() time.Time    { return s.updatedAt }
+func (s linearIssueSource) StartedAt() *time.Time   { return s.startedAt }
+func (s linearIssueSource) CompletedAt() *time.Time { return s.completedAt }
+func (s linearIssueSource) ClosedAt() *time.Time    { return s.closedAt }
+func (s linearIssueSource) Labels() []string        { return s.labels }
+func (s linearIssueSource) StoryPoints() *float64   { return s.payload.Estimate }
+func (s linearIssueSource) SprintID() *string       { return s.sprintID }
+func (s linearIssueSource) SprintName() *string     { return s.sprintName }
+func (s linearIssueSource) URL() *string            { return s.payload.URL }
+func (s linearIssueSource) PriorityRaw() *string    { return s.priorityRaw }
+func (s linearIssueSource) ServiceClass() *string   { return s.serviceClass }
+func (s linearIssueSource) DueAt() *time.Time       { return parseLinearTimePtr(s.payload.DueDate) }
+
+// ParentID reads the parent issue's identifier (Python linear/normalize.py:369-370).
+func (s linearIssueSource) ParentID() workItemRef {
+	if s.payload.Parent == nil {
+		return workItemRefAbsent()
+	}
+	return workItemRefKey(s.payload.Parent.Identifier)
+}
+
+func (s linearIssueSource) EpicID() workItemRef {
+	return declaredWorkItemException(linearIssueSourceKind, workItemFieldEpicID)
+}

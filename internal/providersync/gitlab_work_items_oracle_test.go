@@ -179,12 +179,33 @@ func buildGitLabFetchWorkItemOracleRow(t *testing.T, input map[string]any) gitla
 	}
 	labels := gitlabLabelEventsFromOracle(t, input)
 	row, _, err := normalizeGitLabIssueWorkItem(
-		claim, input["repo_full_name"].(string), repoID, payload, labels,
+		claim, input["repo_full_name"].(string), input["repo_full_name"].(string), "org:gitlab:1", repoID, payload, labels,
 		loadRealStatusMapping(t), nil, gitlabWorkItemsOracleNormalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The pair's producer is gitlab_issue_to_work_item alone; Python's provider
+	// adds the label priority right after it (provider.py:261), and the Go
+	// adapter reads it in the same row (CHAOS-9852). Compare the normalizer.
+	row.PriorityRaw, row.ServiceClass = nil, nil
+	return gitlabRowWithPythonProjectIdentity(t, row)
+}
+
+// gitlabRowWithPythonProjectIdentity is the declared pair excuse for CHAOS-3383
+// (chris ruling 2026-10-15, Linear comments 44d5a42b and df93837e): a GitLab
+// item's project_id is the catalog id {org}:gitlab:{N} and its project_key the
+// current path, where the frozen Python row holds the path in project_id and
+// no project_key. The catalog id is asserted, then the path is compared in the
+// field Python holds it in, so the rest of the row stays compared and a path
+// that drifts still fails the pair. A frozen answer is never refrozen to hide
+// this.
+func gitlabRowWithPythonProjectIdentity(t *testing.T, row gitlabWorkItemRow) gitlabWorkItemRow {
+	t.Helper()
+	if row.ProjectID == nil || *row.ProjectID != "org:gitlab:1" || row.ProjectKey == nil {
+		t.Fatalf("project_id = %v, project_key = %v, want the catalog id org:gitlab:1 and a project_key", row.ProjectID, row.ProjectKey)
+	}
+	row.ProjectID, row.ProjectKey = row.ProjectKey, nil
 	return row
 }
 
@@ -197,7 +218,7 @@ func buildGitLabFetchStatusTransitionOracleRow(t *testing.T, input map[string]an
 		t.Fatal(err)
 	}
 	row, transitions, err := normalizeGitLabIssueWorkItem(
-		claim, input["repo_full_name"].(string), repoID, payload, gitlabLabelEventsFromOracle(t, input),
+		claim, input["repo_full_name"].(string), input["repo_full_name"].(string), "org:gitlab:1", repoID, payload, gitlabLabelEventsFromOracle(t, input),
 		loadRealStatusMapping(t), nil, gitlabWorkItemsOracleNormalizedAt,
 	)
 	if err != nil {

@@ -123,20 +123,20 @@ Or use `--patch-file` to avoid credential exposure (Trap #121).
 
 **A catalog operation needs no routing row, and no routing row can hold it dark.** query-api's `/query` and `/graphql` serve every registered operation and read no routing row to decide (CHAOS-8702). The table that held them, `go_api_routing_state`, is dropped by migration 0147 (CHAOS-8706), so there is nothing to seed and nothing to hold an operation dark: a fresh stack serves the whole catalog, and this step is not part of a first start. To hold a catalog operation dark, change the code and deploy.
 
-**MCP class roots are decided by one row per root, in `go_api_class_decision` (CHAOS-8735), not by a routing row.** The row is keyed by the operation alone (`mcp:<root>`), so a schema change moves nothing: the class switch, the proof route, `status`, `enable`, `disable`, `seed` and `repoint` all read and write that one row, and no step has to carry it to a new schema digest. `enable` still needs a class receipt for the running build at the live schema digest (a proof is a fact about a build at a schema digest); `repoint` rewrites only the build the decision names and never its mode or `decided_at`. Migration 0146 creates the table and copies into it, for each class root, exactly the `go_api_routing_state` row the running (old) query-api serves: the row at that build's schema digest under the class document digest. A root with no row at that digest gets no decision and stays dark, as the old build answers; a newer row at another digest is never copied. The upgrade reads the old build's digest from `DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`: read `schema_digest` from the running query-api's `GET /registry` before the upgrade starts and set it on the migrate step. When class rows exist and the value is unset, malformed (`sha256:` and 64 lowercase hex) or holds no class row, the migration fails and changes nothing. A database with no class rows needs no value. Migration 0147 (CHAOS-8706) then drops `go_api_routing_state`, so a rollback to an image older than 0146 is no longer possible once 0147 has run (a downgrade of 0147 recreates the table empty).
+**MCP class roots are decided by one row per root, in `go_api_class_decision` (CHAOS-8735), not by a routing row.** The row is keyed by the operation alone (`mcp:<root>`), so a schema change moves nothing: the class switch, `status`, `enable`, `disable` and `seed` all read and write that one row, and no step has to carry it to a new schema digest. `enable` is the operator's recorded decision: the per-root class receipt and the `repoint` verb are retired (D6024), and MCP/GraphQL parity is held by the CI step `TestMCPClassParityVenueOracle` (CHAOS-9802). Migration 0146 creates the table and copies into it, for each class root, exactly the `go_api_routing_state` row the running (old) query-api serves: the row at that build's schema digest under the class document digest. A root with no row at that digest gets no decision and stays dark, as the old build answers; a newer row at another digest is never copied. The upgrade reads the old build's digest from `DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST`: read `schema_digest` from the running query-api's `GET /registry` before the upgrade starts and set it on the migrate step. When class rows exist and the value is unset, malformed (`sha256:` and 64 lowercase hex) or holds no class row, the migration fails and changes nothing. A database with no class rows needs no value. Migration 0147 (CHAOS-8706) then drops `go_api_routing_state`, so a rollback to an image older than 0146 is no longer possible once 0147 has run (a downgrade of 0147 recreates the table empty).
 
-**Roll sheet: make no routing writes during the roll.** Do not run `enable`, `disable`, `seed` or `repoint` between the migration and the new query-api serving: an old tools image writes the old table.
+**Roll sheet: make no routing writes during the roll.** Do not run `enable`, `disable` or `seed` between the migration and the new query-api serving: an old tools image writes the old table.
 
-`seed`, `enable`, `disable` and `repoint` take the roots by name (`-operations mcp:<root>`, or `all-mcp`): `seed` writes a shadow decision, `enable` a canary or primary one after the class receipt, `disable` any other mode, `repoint` the build. They refuse a catalog operation (CHAOS-8705): it has no routing state to write. Nothing is typed but the root names; the schema digest and the build come from the running query-api's `/registry` and `/buildinfo`. Run from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
+`seed`, `enable` and `disable` take the roots by name (`-operations mcp:<root>`, or `all-mcp`): `seed` writes a shadow decision, `enable` a canary decision, `disable` any other mode. They refuse a catalog operation (CHAOS-8705): it has no routing state to write. Nothing is typed but the root names; the schema digest and the build come from the running query-api's `/registry` and `/buildinfo`. Run from the tools image of the same cut, with the Postgres DSN and the envelope key in the environment (never argv):
 
 ```bash
 dho goapi routing seed -operations mcp:hotspots \
   -recorded-by <operator> -review-evidence "<why>" -dry-run
-# then again without -dry-run; then prove the root, then:
+# then again without -dry-run; then:
 dho goapi routing enable -operations mcp:hotspots -recorded-by <operator> -review-evidence "<why>"
 ```
 
-`seed` writes a **shadow** decision and never changes an existing one. It prints `created`, `already-present` or `refused` (exit 3): a decision in any other mode. `enable` needs a per-root `deployed_executed` receipt for the running build (`dho goapi prove -mcp-roots <root>`), and there is no waiver flag. `repoint` points every decision at the running build and never changes a mode.
+`seed` writes a **shadow** decision and never changes an existing one. It prints `created`, `already-present` or `refused` (exit 3): a decision in any other mode. `enable` needs no proof run first, and there is no waiver flag.
 
 ## Step 7: Real proof (go-api-prove)
 
@@ -251,7 +251,7 @@ response carries the candidate build. A match removes its dataset; anything else
 
 ### Enable the MCP class roots
 
-Only an MCP class operation (`mcp:<root>`) is enabled: it needs a per-root `deployed_executed` receipt for the running build. A catalog operation is served by query-api whenever it is registered, and `enable` refuses it. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Roots are one comma-separated value (or `all-mcp`):
+Only an MCP class operation (`mcp:<root>`) is enabled, with no proof run in front of it. A catalog operation is served by query-api whenever it is registered, and `enable` refuses it. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Roots are one comma-separated value (or `all-mcp`):
 
 ```bash
 GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
@@ -263,7 +263,7 @@ GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -review-evidence "First-time enable on prod k3s, JOB 7 step 6"
 ```
 
-Add `-dry-run` first to see which roots would be admitted; a refusal names the class roots that have no per-root receipt.
+Add `-dry-run` first to see what would be written.
 
 ## Step 8: Enable the investment explanation (optional, requires encryption keys)
 

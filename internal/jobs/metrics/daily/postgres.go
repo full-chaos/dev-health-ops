@@ -1412,7 +1412,8 @@ func (store *PostgresStore) ClaimFinalize(ctx context.Context, runID string) (*F
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
-	var status, finalizationStatus string
+	var status, finalizationStatus, orgID string
+	var targetDay time.Time
 	var leaseExpiresAt *time.Time
 	var partitionsReady bool
 	err = tx.QueryRow(ctx, `
@@ -1420,10 +1421,11 @@ SELECT run.status, run.finalization_status, run.finalization_lease_expires_at,
   NOT EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
-  )
+  ),
+  run.org_id::text, run.target_day
 FROM public.daily_metrics_runs AS run
 WHERE run.id = $1::uuid
-FOR UPDATE OF run`, runID).Scan(&status, &finalizationStatus, &leaseExpiresAt, &partitionsReady)
+FOR UPDATE OF run`, runID).Scan(&status, &finalizationStatus, &leaseExpiresAt, &partitionsReady, &orgID, &targetDay)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -1447,6 +1449,12 @@ FOR UPDATE OF run`, runID).Scan(&status, &finalizationStatus, &leaseExpiresAt, &
 		if !partitionsReady {
 			return nil, nil
 		}
+	}
+	if deferral, err := store.deferToOtherRunOfOrgDay(ctx, tx, runID, orgID, targetDay, now); err != nil {
+		return nil, err
+	} else if deferral != nil {
+		store.observeLease(jobruntime.DailyMetricsLeaseStageFinalize, jobruntime.DailyMetricsLeaseResultSnoozed)
+		return nil, deferral
 	}
 	var claim FinalizeClaim
 	err = tx.QueryRow(ctx, `

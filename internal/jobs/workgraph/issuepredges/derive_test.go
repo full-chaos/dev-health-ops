@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
 
 func TestDeriveFastPathEdgesBuildsAnImplementsEdge(t *testing.T) {
@@ -104,7 +105,7 @@ func TestDeriveTextParseEdgesMatchesJiraReferenceAgainstLookup(t *testing.T) {
 	}}
 	workItems := []WorkItemRow{{RepoID: repoID, WorkItemID: "jira:ABC-123", Provider: "jira"}}
 
-	result := DeriveTextParseEdges(prs, workItems, buildTime)
+	result := DeriveTextParseEdges(prs, workItems, issueprlinks.NativeLinks{}, buildTime)
 	if result.JiraRefsFound != 1 {
 		t.Fatalf("JiraRefsFound = %d, want 1", result.JiraRefsFound)
 	}
@@ -143,7 +144,7 @@ func TestDeriveTextParseEdgesGitHubCloseKeywordImplementsEdge(t *testing.T) {
 	}}
 	workItems := []WorkItemRow{{RepoID: repoID, WorkItemID: "gh:owner/repo#55", Provider: "github"}}
 
-	result := DeriveTextParseEdges(prs, workItems, buildTime)
+	result := DeriveTextParseEdges(prs, workItems, issueprlinks.NativeLinks{}, buildTime)
 	if len(result.Edges) != 1 {
 		t.Fatalf("got %d edges, want 1", len(result.Edges))
 	}
@@ -157,7 +158,7 @@ func TestDeriveTextParseEdgesSkipsPRWithNoText(t *testing.T) {
 	prs := []PullRequestRow{{RepoID: repoID, Number: 1}}
 	workItems := []WorkItemRow{{RepoID: repoID, WorkItemID: "jira:ABC-1", Provider: "jira"}}
 
-	result := DeriveTextParseEdges(prs, workItems, time.Now())
+	result := DeriveTextParseEdges(prs, workItems, issueprlinks.NativeLinks{}, time.Now())
 	if len(result.Edges) != 0 || len(result.Links) != 0 {
 		t.Fatalf("a PR with no title/body/head_branch must be skipped, got edges=%d links=%d", len(result.Edges), len(result.Links))
 	}
@@ -177,28 +178,35 @@ func TestExplicitTextTierProviderMatrix(t *testing.T) {
 		wantEdge  string
 		wantAmbig int
 	}{
-		{"jira row named", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-2", "jira"}}, "jira:PAY-2", "references", 0},
-		{"jira key no row", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-9", "jira"}}, "", "", 0},
-		{"linear row named", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-1", "linear"}}, "linear:MOB-1", "references", 0},
-		{"linear key no row", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-2", "linear"}}, "", "", 0},
+		{"jira row named", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-2", "jira", ""}}, "jira:PAY-2", "references", 0},
+		{"jira key no row", "Fix PAY-2 totals", []WorkItemRow{{repoID, "jira:PAY-9", "jira", ""}}, "", "", 0},
+		{"linear row named", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-1", "linear", ""}}, "linear:MOB-1", "references", 0},
+		{"linear key no row", "MOB-1 checkout layout", []WorkItemRow{{repoID, "linear:MOB-2", "linear", ""}}, "", "", 0},
 		{"jira-looking prefix, org has no rows of it", "ABC-77 thing", nil, "", "", 0},
-		{"same key in jira and linear is ambiguous", "ABC-1 thing", []WorkItemRow{{repoID, "jira:ABC-1", "jira"}, {repoID, "linear:ABC-1", "linear"}}, "", "", 1},
-		{"github same-repo #n", "Closes #5", []WorkItemRow{{repoID, "gh:o/r#5", "github"}}, "gh:o/r#5", "implements", 0},
-		{"github #n no row", "Closes #6", []WorkItemRow{{repoID, "gh:o/r#5", "github"}}, "", "", 0},
-		{"github owner/repo#n", "Relates to other/lib#12", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github"}}, "gh:other/lib#12", "references", 0},
-		{"github owner/repo#n no row", "Relates to other/lib#13", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github"}}, "", "", 0},
-		{"gitlab same-repo #n", "see #7", []WorkItemRow{{repoID, "gitlab:g/p#7", "gitlab"}}, "gitlab:g/p#7", "references", 0},
-		{"gitlab group/project#n", "see grp/sub/proj#8", []WorkItemRow{{uuid.New(), "gitlab:grp/sub/proj#8", "gitlab"}}, "gitlab:grp/sub/proj#8", "references", 0},
-		{"github repo name is case-insensitive", "Closes acme/api#5", []WorkItemRow{{uuid.New(), "gh:Acme/API#5", "github"}}, "gh:Acme/API#5", "implements", 0},
-		{"github glued suffix is no reference", "see o/r#5abc", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}}, "", "", 0},
-		{"unicode letter before owner is no reference", "see \u00e9o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}}, "", "", 0},
-		{"owner/repo#n held by github and gitlab is ambiguous", "see o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github"}, {uuid.New(), "gitlab:o/r#5", "gitlab"}}, "", "", 1},
-		{"gitlab !n is a merge request", "see g/p!9", []WorkItemRow{{repoID, "gitlab:g/p#9", "gitlab"}}, "", "", 0},
+		{"same key in jira and linear is ambiguous", "ABC-1 thing", []WorkItemRow{{repoID, "jira:ABC-1", "jira", ""}, {repoID, "linear:ABC-1", "linear", ""}}, "", "", 1},
+		{"github same-repo #n", "Closes #5", []WorkItemRow{{repoID, "gh:o/r#5", "github", ""}}, "gh:o/r#5", "implements", 0},
+		{"github #n no row", "Closes #6", []WorkItemRow{{repoID, "gh:o/r#5", "github", ""}}, "", "", 0},
+		{"github owner/repo#n", "Relates to other/lib#12", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github", ""}}, "gh:other/lib#12", "references", 0},
+		{"github owner/repo#n no row", "Relates to other/lib#13", []WorkItemRow{{uuid.New(), "gh:other/lib#12", "github", ""}}, "", "", 0},
+		{"gitlab same-repo #n", "see #7", []WorkItemRow{{repoID, "gitlab:g/p#7", "gitlab", ""}}, "gitlab:g/p#7", "references", 0},
+		{"gitlab group/project#n", "see grp/sub/proj#8", []WorkItemRow{{uuid.New(), "gitlab:grp/sub/proj#8", "gitlab", ""}}, "gitlab:grp/sub/proj#8", "references", 0},
+		{"github repo name is case-insensitive", "Closes acme/api#5", []WorkItemRow{{uuid.New(), "gh:Acme/API#5", "github", ""}}, "gh:Acme/API#5", "implements", 0},
+		{"github glued suffix is no reference", "see o/r#5abc", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github", ""}}, "", "", 0},
+		{"unicode letter before owner is no reference", "see \u00e9o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github", ""}}, "", "", 0},
+		{"owner/repo#n held by github and gitlab is ambiguous", "see o/r#5", []WorkItemRow{{uuid.New(), "gh:o/r#5", "github", ""}, {uuid.New(), "gitlab:o/r#5", "gitlab", ""}}, "", "", 1},
+		{"gitlab !n is a merge request", "see g/p!9", []WorkItemRow{{repoID, "gitlab:g/p#9", "gitlab", ""}}, "", "", 0},
+		// CHAOS-3383: a renamed project's items keep their minted path.
+		{"gitlab renamed project by its current path", "see team/web#3", []WorkItemRow{{uuid.New(), "gitlab:team/old-name#3", "gitlab", "team/web"}}, "gitlab:team/old-name#3", "references", 0},
+		{"gitlab renamed project by its minted path", "see team/old-name#3", []WorkItemRow{{uuid.New(), "gitlab:team/old-name#3", "gitlab", "team/web"}}, "gitlab:team/old-name#3", "references", 0},
+		{"gitlab current path names the project there now", "see acme/api#4", []WorkItemRow{
+			{uuid.New(), "gitlab:acme/api#4", "gitlab", "platform/api-v2"},
+			{uuid.New(), "gitlab:acme/api@456#4", "gitlab", "acme/api"},
+		}, "gitlab:acme/api@456#4", "references", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			prs := []PullRequestRow{{RepoID: repoID, Number: 1, Title: tc.title}}
-			result := DeriveTextParseEdges(prs, tc.items, time.Now())
+			result := DeriveTextParseEdges(prs, tc.items, issueprlinks.NativeLinks{}, time.Now())
 			if tc.wantItem == "" {
 				if len(result.Links) != 0 || len(result.Edges) != 0 {
 					t.Fatalf("want no link, got links=%+v", result.Links)
@@ -215,6 +223,28 @@ func TestExplicitTextTierProviderMatrix(t *testing.T) {
 				t.Fatalf("AmbiguousKeys = %d, want %d", result.AmbiguousKeys, tc.wantAmbig)
 			}
 		})
+	}
+}
+
+// CHAOS-3383: a GitLab current-path key keeps the "gitlab:" prefix, so it never
+// replaces a GitHub item of the same owner/repo, and it is counted when it
+// replaces another GitLab project's item.
+func TestGitLabCurrentPathKeysStayUnderTheGitLabPrefix(t *testing.T) {
+	github := WorkItemRow{RepoID: uuid.New(), WorkItemID: "gh:org/api#4", Provider: "github"}
+	renamed := WorkItemRow{RepoID: uuid.New(), WorkItemID: "gitlab:org/old#4", Provider: "gitlab", CurrentPath: "org/api"}
+	lookup := buildProviderLookup([]WorkItemRow{github, renamed})
+	if lookup.byID["gh:org/api#4"] != "gh:org/api#4" || lookup.byID["gitlab:org/api#4"] != "gitlab:org/old#4" {
+		t.Fatalf("byID = %v", lookup.byID)
+	}
+	if lookup.renamedPathCollisions != 0 {
+		t.Fatalf("collisions = %d, want 0 (two providers are two key spaces)", lookup.renamedPathCollisions)
+	}
+	taken := WorkItemRow{RepoID: uuid.New(), WorkItemID: "gitlab:acme/api#4", Provider: "gitlab", CurrentPath: "platform/api-v2"}
+	taker := WorkItemRow{RepoID: uuid.New(), WorkItemID: "gitlab:acme/api@456#4", Provider: "gitlab", CurrentPath: "acme/api"}
+	result := DeriveTextParseEdges([]PullRequestRow{{RepoID: uuid.New(), Number: 1, Title: "see acme/api#4"}},
+		[]WorkItemRow{taken, taker}, issueprlinks.NativeLinks{}, time.Now())
+	if result.RenamedPathCollisions != 1 || len(result.Links) != 1 || result.Links[0].WorkItemID != taker.WorkItemID {
+		t.Fatalf("collisions=%d links=%+v, want 1 and one link to %s", result.RenamedPathCollisions, result.Links, taker.WorkItemID)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // JiraTeamCatalogClickHouseEffects is the concrete bridge from the
@@ -28,7 +29,9 @@ type JiraTeamCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const jiraTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+// jiraTeamCatalogTeamsColumns is the teams columns this writer states;
+// teamprovider.Insert keeps the stored provider identity in the same statement.
+var jiraTeamCatalogTeamsColumns = []string{"id", "team_uuid", "name", "description", "manual_members", "project_keys", "repo_patterns", "is_active", "updated_at", "org_id", "provider", "native_team_key", "parent_team_id", "created_at"}
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const jiraTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -224,11 +227,7 @@ func (sink JiraTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, cla
 	if err != nil {
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, jiraTeamCatalogTeamsInsert)
-	if err != nil {
-		return err
-	}
-	defer batch.Abort()
+	writes := make([]teamprovider.Write, 0, len(rows))
 	for _, row := range rows {
 		teamUUID, err := uuid.Parse(row.TeamUUID)
 		if err != nil {
@@ -238,18 +237,16 @@ func (sink JiraTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, cla
 		if manualMembers == nil {
 			manualMembers = []string{}
 		}
-		if err := batch.Append(
+		writes = append(writes, teamprovider.Write{Values: []any{
 			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
 			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
 			teamcreated.For(createdAt, row.ID, row.UpdatedAt),
-		); err != nil {
-			return err
-		}
+		}, Gone: teamprovider.GoneKept})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	return batch.Send()
+	return teamprovider.Insert(ctx, sink.Conn, claim.OrgID, jiraTeamCatalogTeamsColumns, writes)
 }
 
 func (sink JiraTeamCatalogClickHouseEffects) writeOwnership(ctx context.Context, rows []jiraTeamCatalogOwnershipRow) error {

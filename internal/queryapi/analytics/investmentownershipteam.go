@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"github.com/full-chaos/dev-health-go/readers"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -55,6 +56,8 @@ func ownershipDbExpression(measure Measure, shareExpr string) (string, error) {
 	switch measure {
 	case MeasureCount, MeasureThroughput:
 		return "SUM(subcategory_kv.2 * allocation_weight * " + shareExpr + ")", nil
+	case MeasureIssueSize:
+		return "SUM(subcategory_kv.2 * allocation_weight * " + readers.UnitSizeWeightColumn + " * " + shareExpr + ")", nil
 	case MeasureCycleTimeHours:
 		return "SUM(dateDiff('hour', from_ts, to_ts) * allocation_weight * " + shareExpr + ") / NULLIF(SUM(allocation_weight * " + shareExpr + "), 0)", nil
 	}

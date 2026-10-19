@@ -221,8 +221,8 @@ func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
 // NO stored model and no explicit request-level model must construct
 // with ResolveModelNameForOrg's own provider-default fallback
 // ("gpt-5-mini" for openai, defaultModelByProvider in provider.go) --
-// not categorize's OWN, DIFFERENT default (openaiprovider.go's
-// "gpt-5-nano"), which is what construction silently fell back to when
+// not categorize's OWN, DIFFERENT default (the since-deleted ops OpenAI
+// client's "gpt-5-nano"), which is what construction silently fell back to when
 // CompleteInvestmentMixExplanationForOrg passed the RAW (empty)
 // requestedModel into newProviderForOrg instead of the fully-resolved
 // value ResolveModelNameForOrg had already computed.
@@ -404,6 +404,7 @@ func TestResolveModelNameForOrg_ExplicitModelAlwaysWins(t *testing.T) {
 }
 
 func TestResolveModelNameForOrg_FallsBackToEnvWhenNotMatched(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_MODEL_OPENAI", "")
 	t.Setenv("LLM_MODEL", "platform-model")
 	resolver := &fakeOrgResolver{matches: false}
@@ -635,7 +636,7 @@ func TestLogOrgBaseURLSSRFFallback_NoFireWhenLookupErrors(t *testing.T) {
 // modelCapturingServer runs a real HTTP server and records the "model"
 // field of the last request body it received -- every wire protocol this
 // package's providers speak (OpenAI's Responses API, the OpenAI-compatible
-// Chat Completions API LocalProvider/org-BYO-ollama use, Ollama's native
+// Chat Completions API the shared local kind and org-BYO-ollama use, Ollama's native
 // /api/chat) puts the model on a top-level "model" JSON field, so one
 // generic handler captures all three. The response status/body do not
 // matter: resolvedModel is read back from the constructed Provider BEFORE
@@ -702,9 +703,12 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 	srv := newModelCapturingServer(t)
 
 	wireBacked := map[categorize.ProviderKind]bool{
-		categorize.ProviderKindOpenAI: true,
-		categorize.ProviderKindLocal:  true,
-		categorize.ProviderKindOllama: true,
+		categorize.ProviderKindOpenAI:    true,
+		categorize.ProviderKindAnthropic: true,
+		categorize.ProviderKindGemini:    true,
+		categorize.ProviderKindQwen:      true,
+		categorize.ProviderKindLocal:     true,
+		categorize.ProviderKindOllama:    true,
 	}
 	// noWireExpected pins mock/none's fixed, config-independent model --
 	// both ignore any requested/resolved model entirely (categorize's own
@@ -723,9 +727,12 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 	// exactly what the enumerated "provider_specific_env_unknown_to_this_package"
 	// scenario below proves no longer breaks the invariant.
 	providerSpecificEnvVar := map[categorize.ProviderKind]string{
-		categorize.ProviderKindOpenAI: "LLM_MODEL_OPENAI",
-		categorize.ProviderKindLocal:  "LLM_MODEL_LOCAL",
-		categorize.ProviderKindOllama: "OLLAMA_MODEL",
+		categorize.ProviderKindOpenAI:    "LLM_MODEL_OPENAI",
+		categorize.ProviderKindAnthropic: "LLM_MODEL_ANTHROPIC",
+		categorize.ProviderKindGemini:    "LLM_MODEL_GEMINI",
+		categorize.ProviderKindQwen:      "LLM_MODEL_QWEN",
+		categorize.ProviderKindLocal:     "LLM_MODEL_LOCAL",
+		categorize.ProviderKindOllama:    "OLLAMA_MODEL",
 	}
 
 	for _, kind := range categorize.ImplementedProviderKinds() {
@@ -781,14 +788,14 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 				// constructor dials through the SSRF guard, which refuses loopback).
 				plain := &http.Client{}
 				switch kind {
-				case categorize.ProviderKindOpenAI:
-					return categorize.NewOpenAIProvider(categorize.OpenAIProviderConfig{
-						APIKey: secrets.NewHidden(apiKey), BaseURL: baseURL, Model: model, HTTPClient: plain,
-					}), nil
+				case categorize.ProviderKindOpenAI, categorize.ProviderKindAnthropic, categorize.ProviderKindGemini, categorize.ProviderKindQwen:
+					return categorize.NewSharedProvider(categorize.SharedProviderConfig{
+						Kind: kind, APIKey: secrets.NewHidden(apiKey), BaseURL: baseURL, Model: model, HTTPClient: plain,
+					})
 				case categorize.ProviderKindLocal, categorize.ProviderKindOllama:
-					return categorize.NewLocalProvider(categorize.LocalProviderConfig{
-						APIKey: secrets.NewHidden(apiKey), BaseURL: baseURL, Model: model, HTTPClient: plain,
-					}), nil
+					return categorize.NewSharedProvider(categorize.SharedProviderConfig{
+						Kind: categorize.ProviderKindLocal, APIKey: secrets.NewHidden(apiKey), BaseURL: baseURL, Model: model, HTTPClient: plain,
+					})
 				}
 				return categorize.NewProviderFromCredentials(kind, apiKey, baseURL, model)
 			}

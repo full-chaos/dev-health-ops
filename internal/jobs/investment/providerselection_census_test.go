@@ -27,8 +27,13 @@ import (
 //   - every text reader (the two explanation routes, through investmentexplain)
 //     uses categorize.ResolveTextProviderKind / ResolveTextProviderKindForOrg,
 //     which never gives the decision kind for the platform default.
-//   - the literal "LLM_PROVIDER" is read in one place (providerkind.go); the
-//     explain route names it only in an error hint.
+//   - the literal "LLM_PROVIDER" is read in three places: providerkind.go
+//     (the selection), llmbudget (DefaultModel, which applies the generic
+//     LLM_MODEL to a provider only when LLM_PROVIDER names that same
+//     provider; and PlatformLookup, which answers LLM_PROVIDER with the text
+//     provider a call runs by default -- a decision kind names no text
+//     provider, so the keys decide, CHAOS-10011); the explain route names it
+//     only in an error hint.
 //   - the TypeSafe client is built only by the investment worker.
 //
 // Non-Go files: no Python source, script or CI file reads LLM_PROVIDER; the
@@ -72,6 +77,7 @@ func TestEveryReaderOfTheProviderSelectionIsKnown(t *testing.T) {
 		"categorize.NewTypeSafeClient":        {},
 		`literal "LLM_PROVIDER"`: {
 			"internal/jobs/investment/categorize/providerkind.go": 1,
+			"internal/llmbudget/llmbudget.go":                     2,
 			"internal/queryapi/server/workunit_explain_route.go":  1,
 		},
 	}
@@ -163,10 +169,10 @@ func TestEveryReaderOfTheProviderSelectionIsKnown(t *testing.T) {
 		readers["compose.yml"] = true
 	}
 	wantReaders := map[string]bool{
-		"ci/bigboy/bigboy-cut.sh":             true, // a comment that names the Secret keys
-		"ci/bigboy/compose.bigboy.images.yml": true, // passes LLM_PROVIDER to query-api
-		"deploy/helm/dev-health/values.yaml":  true, // a comment on query-api envFrom
-		"compose.yml":                         true, // passes LLM_PROVIDER to query-api
+		"ci/bigboy/bigboy-cut.sh":            true, // a comment that names the Secret keys
+		"ci/bigboy/compose.bigboy.yml":       true, // passes LLM_PROVIDER to query-api
+		"deploy/helm/dev-health/values.yaml": true, // a comment on query-api envFrom
+		"compose.yml":                        true, // passes LLM_PROVIDER to query-api
 	}
 	if !reflect.DeepEqual(readers, wantReaders) {
 		t.Errorf("non-Go files that name LLM_PROVIDER: %v, the census lists %v", readers, wantReaders)

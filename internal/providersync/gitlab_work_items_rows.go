@@ -2,6 +2,8 @@ package providersync
 
 import (
 	"encoding/json"
+	"errors"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/google/uuid"
 )
 
@@ -87,6 +90,46 @@ type gitlabIssueWorkItemPayload struct {
 	Weight      *float64                     `json:"weight"`
 	Milestone   *gitlabIssueMilestonePayload `json:"milestone"`
 	DueDate     *string                      `json:"due_date"`
+	// Epic is the issue's epic (GitLab Premium/Ultimate); absent otherwise.
+	Epic *gitlabIssueEpicPayload `json:"epic"`
+}
+
+// withFetchEpics is the issue payload a route reads under Python's
+// GITLAB_FETCH_EPICS flag (default on): off, the issue is never linked to its
+// epic (providers/gitlab/provider.py:263).
+func (payload gitlabIssueWorkItemPayload) withFetchEpics(fetchEpics bool) gitlabIssueWorkItemPayload {
+	if !fetchEpics {
+		payload.Epic = nil
+	}
+	return payload
+}
+
+// gitlabIssueEpicPayload keeps the two epic keys raw, because Python formats
+// whatever scalar the API sent (build_epic_id_for_issue).
+type gitlabIssueEpicPayload struct {
+	IID     json.RawMessage `json:"iid"`
+	GroupID json.RawMessage `json:"group_id"`
+}
+
+// gitlabEpicPayload is a group epic as GET /groups/:id/epics answers it
+// (Premium/Ultimate). The parent keys stay raw: Python formats whatever scalar
+// the API sent (gitlab_epic_to_work_item).
+type gitlabEpicPayload struct {
+	IID         json.RawMessage            `json:"iid"`
+	Title       string                     `json:"title"`
+	Description *string                    `json:"description"`
+	State       string                     `json:"state"`
+	CreatedAt   *string                    `json:"created_at"`
+	UpdatedAt   *string                    `json:"updated_at"`
+	ClosedAt    *string                    `json:"closed_at"`
+	StartDate   *string                    `json:"start_date"`
+	DueDate     *string                    `json:"due_date"`
+	Labels      []string                   `json:"labels"`
+	Author      *gitlabWorkItemUserPayload `json:"author"`
+	WebURL      *string                    `json:"web_url"`
+	URL         *string                    `json:"url"`
+	ParentID    json.RawMessage            `json:"parent_id"`
+	ParentIID   json.RawMessage            `json:"parent_iid"`
 }
 
 type gitlabMergeRequestWorkItemPayload struct {
@@ -222,7 +265,7 @@ func gitlabWorkItemLabels(labels []string) []string {
 
 func normalizeGitLabIssueWorkItem(
 	claim Claim,
-	fullName string,
+	fullName, identityPath, catalogProjectID string,
 	repoID uuid.UUID,
 	payload gitlabIssueWorkItemPayload,
 	labelEvents []gitlabLabelEventPayload,
@@ -231,7 +274,7 @@ func normalizeGitLabIssueWorkItem(
 	normalizedAt time.Time,
 ) (gitlabWorkItemRow, []gitlabWorkItemTransitionRow, error) {
 	if claim.Validate() != nil || claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
-		strings.TrimSpace(fullName) == "" || repoID == uuid.Nil || payload.IID < 1 ||
+		strings.TrimSpace(fullName) == "" || strings.TrimSpace(identityPath) == "" || strings.TrimSpace(catalogProjectID) == "" || repoID == uuid.Nil || payload.IID < 1 ||
 		strings.TrimSpace(payload.Title) == "" || statusMapping == nil || normalizedAt.IsZero() {
 		return gitlabWorkItemRow{}, nil, ErrInvalidConfiguration
 	}
@@ -279,24 +322,165 @@ func normalizeGitLabIssueWorkItem(
 		name := payload.Milestone.Title
 		milestoneName = &name
 	}
-	row := gitlabWorkItemRow{
-		WorkItemID: "gitlab:" + fullName + "#" + strconv.Itoa(payload.IID),
-		Provider:   "gitlab", Title: payload.Title, Type: typeValue, Status: status,
-		StatusRaw: nullableString(payload.State), Description: description, RepoID: &repoID,
-		ProjectID: stringPointer(fullName), Assignees: assignees, Reporter: reporter,
-		CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(), ClosedAt: closedAt,
-		Labels: labels, StoryPoints: payload.Weight, SprintID: milestoneID,
-		SprintName: milestoneName, URL: urlValue, DueAt: parseGitLabWorkItemTime(payload.DueDate),
-		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
-	}
+	// The id carries the path the repository identity was minted from, so a
+	// renamed project keeps it (CHAOS-3383); project_id stays the current path.
+	workItemID := "gitlab:" + identityPath + "#" + strconv.Itoa(payload.IID)
 	transitions := normalizeGitLabIssueLabelTransitions(
-		claim, row.WorkItemID, labelEvents, createdAt.UTC(), statusMapping, normalizedAt,
+		claim, workItemID, labelEvents, createdAt.UTC(), statusMapping, normalizedAt,
 	)
-	row.StartedAt, row.CompletedAt = gitlabWorkItemLifecycle(transitions, row.ClosedAt)
-	if err := validateGitLabWorkItemRow(row, claim); err != nil {
+	startedAt, completedAt := gitlabWorkItemLifecycle(transitions, closedAt)
+	// Python's provider enriches every issue with the label priority right
+	// after gitlab_issue_to_work_item (providers/gitlab/provider.py:261).
+	priority, serviceClass := gitlabPriorityFromLabels(labels)
+	row, err := buildWorkItemRow(claim, gitlabWorkItemSource{
+		kind: gitlabIssueSourceKind, workItemID: workItemID, fullName: fullName, epic: payload.Epic,
+		title: payload.Title, typeName: typeValue, status: status,
+		statusRaw: nullableString(payload.State), description: description, repoID: &repoID,
+		projectID: stringPointer(catalogProjectID), projectKey: stringPointer(identityPath), assignees: assignees, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: startedAt,
+		completedAt: completedAt, closedAt: closedAt, labels: labels, storyPoints: payload.Weight,
+		sprintID: milestoneID, sprintName: milestoneName, url: urlValue,
+		priorityRaw: priority, serviceClass: serviceClass,
+		dueAt: parseGitLabWorkItemTime(payload.DueDate),
+	}, normalizedAt)
+	if err != nil {
 		return gitlabWorkItemRow{}, nil, err
 	}
 	return row, transitions, nil
+}
+
+// normalizeGitLabEpicWorkItem mirrors gitlab_epic_to_work_item
+// (providers/gitlab/normalize.py:655): a group epic is a work item of type
+// "epic" with the id "gitlab:<group>:epic:<iid>", the group path as its
+// project_id, no repository and no project key, and its parent epic (parent_id,
+// else parent_iid) as epic_id. Transitions come from the epic's resource state
+// events only: closed is done, opened and reopened are todo.
+func normalizeGitLabEpicWorkItem(
+	claim Claim,
+	groupPath string,
+	payload gitlabEpicPayload,
+	stateEvents []gitlabStateEventPayload,
+	statusMapping *StatusMapping,
+	resolveIdentity gitlabIdentityResolver,
+	normalizedAt time.Time,
+) (gitlabWorkItemRow, []gitlabWorkItemTransitionRow, []gitlabWorkItemReopenRow, error) {
+	iidText, _, _ := pythonJSONScalar(payload.IID)
+	iid, iidErr := strconv.Atoi(iidText)
+	if claim.Validate() != nil || claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
+		strings.TrimSpace(groupPath) == "" || iidErr != nil || iid < 1 ||
+		strings.TrimSpace(payload.Title) == "" || statusMapping == nil || normalizedAt.IsZero() {
+		return gitlabWorkItemRow{}, nil, nil, ErrInvalidConfiguration
+	}
+	createdAt := parseGitLabWorkItemTime(payload.CreatedAt)
+	if createdAt == nil {
+		fallback := normalizedAt.UTC()
+		createdAt = &fallback
+	}
+	updatedAt := parseGitLabWorkItemTime(payload.UpdatedAt)
+	if updatedAt == nil {
+		copy := *createdAt
+		updatedAt = &copy
+	}
+	closedAt := parseGitLabWorkItemTime(payload.ClosedAt)
+	labels := gitlabWorkItemLabels(payload.Labels)
+	status := statusMapping.NormalizeStatus("gitlab", "", labels, payload.State)
+	var reporter *string
+	if payload.Author != nil {
+		identity := resolveGitLabWorkItemIdentity(*payload.Author, resolveIdentity)
+		if identity != "" && identity != "unknown" {
+			reporter = &identity
+		}
+	}
+	urlValue := payload.WebURL
+	if urlValue == nil || *urlValue == "" {
+		urlValue = payload.URL
+	}
+	description := payload.Description
+	if description != nil && *description == "" {
+		description = nil
+	}
+	priority, serviceClass := gitlabPriorityFromLabels(labels)
+	parentKey := ""
+	if text, _, truthy := pythonJSONScalar(payload.ParentID); truthy {
+		parentKey = text
+	} else if text, _, truthy := pythonJSONScalar(payload.ParentIID); truthy {
+		parentKey = text
+	}
+	workItemID := "gitlab:" + groupPath + ":epic:" + strconv.Itoa(iid)
+	row, err := buildWorkItemRow(claim, gitlabWorkItemSource{
+		kind: gitlabEpicSourceKind, workItemID: workItemID, title: payload.Title, typeName: "epic", status: status,
+		statusRaw: nullableString(payload.State), description: description,
+		projectID: stringPointer(groupPath), assignees: []string{}, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: parseGitLabWorkItemTime(payload.StartDate),
+		completedAt: closedAt, closedAt: closedAt, labels: labels, url: urlValue,
+		priorityRaw: priority, serviceClass: serviceClass, dueAt: parseGitLabWorkItemTime(payload.DueDate),
+		epicParentRef: epicParentRef(groupPath, parentKey),
+	}, normalizedAt)
+	if err != nil {
+		return gitlabWorkItemRow{}, nil, nil, err
+	}
+	transitions := normalizeGitLabEpicStateEvents(claim, row.WorkItemID, stateEvents, createdAt.UTC(), resolveIdentity, normalizedAt)
+	reopens := normalizeGitLabIssueReopens(claim, row.WorkItemID, stateEvents, resolveIdentity, normalizedAt)
+	return row, transitions, reopens, nil
+}
+
+func epicParentRef(groupPath, parentKey string) string {
+	if parentKey == "" {
+		return ""
+	}
+	return groupPath + ":epic:" + parentKey
+}
+
+// normalizeGitLabEpicStateEvents is gitlab_epic_to_work_item's transition loop:
+// events by time; closed is done, opened and reopened are todo, any other state
+// is skipped; the first from-status is "unknown".
+func normalizeGitLabEpicStateEvents(
+	claim Claim,
+	workItemID string,
+	events []gitlabStateEventPayload,
+	createdAt time.Time,
+	resolveIdentity gitlabIdentityResolver,
+	normalizedAt time.Time,
+) []gitlabWorkItemTransitionRow {
+	sorted := append([]gitlabStateEventPayload(nil), events...)
+	sort.SliceStable(sorted, func(left, right int) bool {
+		return gitlabEventTime(sorted[left].CreatedAt).Before(gitlabEventTime(sorted[right].CreatedAt))
+	})
+	transitions := make([]gitlabWorkItemTransitionRow, 0, len(sorted))
+	previous := "unknown"
+	for _, event := range sorted {
+		state := strings.ToLower(strings.TrimSpace(event.State))
+		toStatus := ""
+		switch state {
+		case "closed":
+			toStatus = "done"
+		case "opened", "reopened":
+			toStatus = "todo"
+		default:
+			continue
+		}
+		occurred := parseGitLabWorkItemTime(event.CreatedAt)
+		if occurred == nil {
+			occurred = &createdAt
+		}
+		var actor *string
+		if event.User != nil {
+			identity := resolveGitLabWorkItemIdentity(*event.User, resolveIdentity)
+			if identity != "" && identity != "unknown" {
+				actor = &identity
+			}
+		}
+		transition := gitlabWorkItemTransitionRow{
+			WorkItemID: workItemID, Provider: "gitlab", OccurredAt: occurred.UTC(),
+			FromStatusRaw: nil, ToStatusRaw: stringPointer(state), FromStatus: previous,
+			ToStatus: toStatus, Actor: actor, OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
+		}
+		if validateGitLabTransitionRow(transition, claim) == nil {
+			transitions = append(transitions, transition)
+		}
+		previous = toStatus
+	}
+	return transitions
 }
 
 func normalizeGitLabIssueLabelTransitions(
@@ -352,7 +536,7 @@ func normalizeGitLabIssueLabelTransitions(
 
 func normalizeGitLabMergeRequestWorkItem(
 	claim Claim,
-	fullName string,
+	fullName, identityPath, catalogProjectID string,
 	repoID uuid.UUID,
 	payload gitlabMergeRequestWorkItemPayload,
 	stateEvents []gitlabStateEventPayload,
@@ -360,7 +544,7 @@ func normalizeGitLabMergeRequestWorkItem(
 	normalizedAt time.Time,
 ) (gitlabWorkItemRow, []gitlabWorkItemTransitionRow, []gitlabWorkItemReopenRow, error) {
 	if claim.Validate() != nil || claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
-		strings.TrimSpace(fullName) == "" || repoID == uuid.Nil || payload.IID < 1 ||
+		strings.TrimSpace(fullName) == "" || strings.TrimSpace(identityPath) == "" || strings.TrimSpace(catalogProjectID) == "" || repoID == uuid.Nil || payload.IID < 1 ||
 		strings.TrimSpace(payload.Title) == "" || normalizedAt.IsZero() {
 		return gitlabWorkItemRow{}, nil, nil, ErrInvalidConfiguration
 	}
@@ -426,23 +610,23 @@ func normalizeGitLabMergeRequestWorkItem(
 	if closedValue == nil {
 		closedValue = mergedAt
 	}
-	row := gitlabWorkItemRow{
-		WorkItemID: "gitlab:" + fullName + "!" + strconv.Itoa(payload.IID),
-		Provider:   "gitlab", Title: payload.Title, Type: "merge_request", Status: status,
-		StatusRaw: nullableString(statusRaw), Description: description, RepoID: &repoID,
-		ProjectID: stringPointer(fullName), Assignees: assignees, Reporter: reporter,
-		CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(), StartedAt: createdAt,
-		CompletedAt: completedAt, ClosedAt: closedValue, Labels: labels,
-		StoryPoints: payload.Weight, SprintID: milestoneID, SprintName: milestoneName,
-		URL: urlValue, PriorityRaw: priority, ServiceClass: serviceClass,
-		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
+	row, err := buildWorkItemRow(claim, gitlabWorkItemSource{
+		kind:       gitlabMergeRequestSourceKind,
+		workItemID: "gitlab:" + identityPath + "!" + strconv.Itoa(payload.IID),
+		title:      payload.Title, typeName: "merge_request", status: status,
+		statusRaw: nullableString(statusRaw), description: description, repoID: &repoID,
+		projectID: stringPointer(catalogProjectID), projectKey: stringPointer(identityPath), assignees: assignees, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: createdAt,
+		completedAt: completedAt, closedAt: closedValue, labels: labels,
+		storyPoints: payload.Weight, sprintID: milestoneID, sprintName: milestoneName,
+		url: urlValue, priorityRaw: priority, serviceClass: serviceClass,
+	}, normalizedAt)
+	if err != nil {
+		return gitlabWorkItemRow{}, nil, nil, err
 	}
 	transitions, reopens := normalizeGitLabMRStateEvents(
 		claim, row.WorkItemID, stateEvents, createdAt.UTC(), resolveIdentity, normalizedAt,
 	)
-	if err := validateGitLabWorkItemRow(row, claim); err != nil {
-		return gitlabWorkItemRow{}, nil, nil, err
-	}
 	return row, transitions, reopens, nil
 }
 
@@ -898,6 +1082,18 @@ func validateGitLabWorkItemRow(row gitlabWorkItemRow, claim Claim) error {
 	return nil
 }
 
+// validateGitLabEpicRow is validateGitLabWorkItemRow for a group epic, which
+// belongs to no repository (Python writes repo_id None).
+func validateGitLabEpicRow(row gitlabWorkItemRow, claim Claim) error {
+	if row.Provider != "gitlab" || row.OrgID == "" || row.OrgID != claim.OrgID ||
+		row.WorkItemID == "" || row.RepoID != nil || row.Type != "epic" ||
+		row.Title == "" || row.Status == "" || row.CreatedAt.IsZero() ||
+		row.UpdatedAt.IsZero() || row.Assignees == nil || row.Labels == nil || row.LastSynced.IsZero() {
+		return providerfoundation.ErrInvalidScope
+	}
+	return nil
+}
+
 func validateGitLabTransitionRow(row gitlabWorkItemTransitionRow, claim Claim) error {
 	if row.WorkItemID == "" || row.Provider != "gitlab" || row.OccurredAt.IsZero() ||
 		row.FromStatus == "" || row.ToStatus == "" || row.OrgID == "" || row.OrgID != claim.OrgID ||
@@ -939,4 +1135,130 @@ func validateGitLabSprintRow(row gitlabSprintRow, claim Claim) error {
 		return providerfoundation.ErrInvalidScope
 	}
 	return nil
+}
+
+const (
+	gitlabIssueSourceKind        = "gitlab_issue"
+	gitlabMergeRequestSourceKind = "gitlab_merge_request"
+	gitlabEpicSourceKind         = "gitlab_epic"
+)
+
+// gitlabWorkItemSource is how a GitLab issue or merge request fills the shared
+// work-item row.
+type gitlabWorkItemSource struct {
+	kind     string
+	fullName string
+	epic     *gitlabIssueEpicPayload
+	// epicParentRef is a group epic's parent epic ("<group>:epic:<key>"), written
+	// to epic_id as Python does; empty for an epic with no parent.
+	epicParentRef string
+
+	workItemID, title, typeName, status                          string
+	statusRaw, description, projectID, projectKey, reporter, url *string
+	sprintID, sprintName, priorityRaw, serviceClass              *string
+	repoID                                                       *uuid.UUID
+	assignees, labels                                            []string
+	createdAt, updatedAt                                         time.Time
+	startedAt, completedAt, closedAt, dueAt                      *time.Time
+	storyPoints                                                  *float64
+}
+
+func (s gitlabWorkItemSource) sourceKind() string { return s.kind }
+func (s gitlabWorkItemSource) validateRow(claim Claim, row workItemRow) error {
+	if s.kind == gitlabEpicSourceKind {
+		return validateGitLabEpicRow(row, claim)
+	}
+	return validateGitLabWorkItemRow(row, claim)
+}
+func (s gitlabWorkItemSource) WorkItemID() string      { return s.workItemID }
+func (s gitlabWorkItemSource) Provider() string        { return "gitlab" }
+func (s gitlabWorkItemSource) Title() string           { return s.title }
+func (s gitlabWorkItemSource) Type() string            { return s.typeName }
+func (s gitlabWorkItemSource) Status() string          { return s.status }
+func (s gitlabWorkItemSource) StatusRaw() *string      { return s.statusRaw }
+func (s gitlabWorkItemSource) Description() *string    { return s.description }
+func (s gitlabWorkItemSource) RepoID() *uuid.UUID      { return s.repoID }
+func (s gitlabWorkItemSource) NativeTeamKey() *string  { return nil }
+func (s gitlabWorkItemSource) ProjectKey() *string     { return s.projectKey }
+func (s gitlabWorkItemSource) ProjectID() *string      { return s.projectID }
+func (s gitlabWorkItemSource) ProjectName() *string    { return nil }
+func (s gitlabWorkItemSource) Assignees() []string     { return s.assignees }
+func (s gitlabWorkItemSource) Reporter() *string       { return s.reporter }
+func (s gitlabWorkItemSource) CreatedAt() time.Time    { return s.createdAt }
+func (s gitlabWorkItemSource) UpdatedAt() time.Time    { return s.updatedAt }
+func (s gitlabWorkItemSource) StartedAt() *time.Time   { return s.startedAt }
+func (s gitlabWorkItemSource) CompletedAt() *time.Time { return s.completedAt }
+func (s gitlabWorkItemSource) ClosedAt() *time.Time    { return s.closedAt }
+func (s gitlabWorkItemSource) Labels() []string        { return s.labels }
+func (s gitlabWorkItemSource) StoryPoints() *float64   { return s.storyPoints }
+func (s gitlabWorkItemSource) SprintID() *string       { return s.sprintID }
+func (s gitlabWorkItemSource) SprintName() *string     { return s.sprintName }
+func (s gitlabWorkItemSource) URL() *string            { return s.url }
+func (s gitlabWorkItemSource) PriorityRaw() *string    { return s.priorityRaw }
+func (s gitlabWorkItemSource) ServiceClass() *string   { return s.serviceClass }
+func (s gitlabWorkItemSource) DueAt() *time.Time       { return s.dueAt }
+func (s gitlabWorkItemSource) ParentID() workItemRef {
+	return declaredWorkItemException(s.kind, workItemFieldParentID)
+}
+
+// EpicID is Python's provider link from an issue to its epic
+// (providers/gitlab/provider.py:263-273 and build_epic_id_for_issue,
+// normalize.py:786-800): only for a project inside a group, the key
+// "<epic.group_id, else the project's group path>:epic:<epic.iid>".
+func (s gitlabWorkItemSource) EpicID() workItemRef {
+	if s.kind == gitlabEpicSourceKind {
+		if s.epicParentRef == "" {
+			return workItemRefAbsent()
+		}
+		return workItemRefKey(s.epicParentRef)
+	}
+	if s.kind != gitlabIssueSourceKind {
+		return declaredWorkItemException(s.kind, workItemFieldEpicID)
+	}
+	parts := strings.Split(s.fullName, "/")
+	if s.epic == nil || len(parts) < 2 {
+		return workItemRefAbsent()
+	}
+	iid, present, _ := pythonJSONScalar(s.epic.IID)
+	if !present {
+		return workItemRefAbsent()
+	}
+	group, _, truthy := pythonJSONScalar(s.epic.GroupID)
+	if !truthy {
+		group = strings.Join(parts[:len(parts)-1], "/")
+	}
+	return workItemRefKey(group + ":epic:" + iid)
+}
+
+// pythonJSONScalar renders a JSON scalar the way Python's f-string renders
+// what json.loads made of it (an int stays exact, a number with a fraction or
+// an exponent is a float printed by repr), and reports whether it is present
+// (not null) and truthy.
+func pythonJSONScalar(raw json.RawMessage) (text string, present bool, truthy bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	switch {
+	case trimmed == "" || trimmed == "null":
+		return "", false, false
+	case trimmed == "true":
+		return "True", true, true
+	case trimmed == "false":
+		return "False", true, false
+	case strings.HasPrefix(trimmed, `"`):
+		var value string
+		if json.Unmarshal(raw, &value) != nil {
+			return "", false, false
+		}
+		return value, true, value != ""
+	case strings.ContainsAny(trimmed, ".eE"):
+		value, err := strconv.ParseFloat(trimmed, 64)
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
+			return "", false, false
+		}
+		return pythonparity.Repr(value), true, value != 0
+	}
+	value, ok := new(big.Int).SetString(trimmed, 10)
+	if !ok {
+		return "", false, false
+	}
+	return value.String(), true, value.Sign() != 0
 }

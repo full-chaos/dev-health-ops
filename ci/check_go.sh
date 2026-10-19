@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
-GO_TOOLCHAIN="go1.27.0"
+GO_TOOLCHAIN="go1.27.2"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
 # CHAOS-5224 / CHAOS-5268: precedence is an explicit DEV_HEALTH_GO_CACHE first,
 # then an already-inherited GOCACHE, then a GOCACHE CONFIGURED on the machine
@@ -105,8 +105,12 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
+  auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
+         -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
+         registered parser (each its own proof marker), govulncheck pinned and strict. STAGE is
+         fmt|vet|test|race|fuzz [TARGET]|fuzz-registry|vuln|middleware|closure|relevant BASE HEAD|paths-selftest|scope-selftest|all.
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
   test   Run go test ./... in every Go module.
@@ -139,14 +143,20 @@ usage() {
          A slice that selects zero rows fails; no arguments runs every row.
          Each leg logs its predicted and actual test seconds against
          VENUE_LEG_BUDGET_SECONDS (default 1800) and warns when over.
-  venue-oracles --changed FILE [--list]
+  venue-oracles --changed FILE [--list] [SHARD COUNT]
          (CHAOS-7653) Run only the registry rows of the packages that the paths in
          FILE (NUL- or newline-separated, repo-relative) lie in: the form the
          pull_request job runs, with a cost bounded by the packages a PR changes.
          A path that ci/venue_oracle_triggers.d/ declares for a test (code outside
          its package whose behaviour the test compares; CHAOS-9172) selects that
-         test too. No row selected is a loud no-op. With --list print the selected rows
+         test too, and so does a file directly in a package of the dependency
+         closure (ci/venue_oracle_closure.d/, CHAOS-9935). No row selected is a loud no-op. With --list print the selected rows
          (SELECT, package, test, tab-separated) and run nothing.
+         With SHARD COUNT (D6039a, CHAOS-9935) only the SHARD-th of COUNT
+         cost-balanced slices of the SELECTED rows (ci/venue_oracle_shard.awk,
+         weights ci/venue_oracle_weights.d/): the hosted job runs COUNT matrix
+         legs, each within its time limit however many rows a change selects. A
+         leg whose slice is empty is a plain no-op.
   venue-oracle-plan COUNT
          Print the cost-balanced plan of COUNT legs: every run row with its leg
          and weight, then one "#leg" line per leg (rows, predicted seconds).
@@ -182,13 +192,20 @@ usage() {
          Validate ci/go_integration_shards.d/ against live package discovery,
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
-         output when GITHUB_OUTPUT is set. No Docker required.
+         output (and `legs`, the leg count) when GITHUB_OUTPUT is set. No Docker
+         required. With INTEGRATION_AFFECTED_FILE set to the output of
+         ci/go_affected_integration.py (CHAOS-9947), the matrix holds only the legs
+         that cover an affected package; unset, or a FULL first line, keeps every leg.
   ratchets
          Hold every closed list named in ci/ratchets.tsv to its size on the merge base: a list may
          shrink and never grow, and no pull request edits a shared number to say so (CHAOS-7904).
          The base is RATCHET_BASE_SHA when set (CI sets it to the base commit of the pull request), else the merge
          base with origin/main (the parent when HEAD is origin/main). A base that cannot be read is a
          failure, never a pass.
+  race-weights-rows
+         Hold ci/go_race_weights.tsv to the package list without running a test: every package has a
+         row, no row names a package that is gone, rows are sorted and unique (CHAOS-4233). `fast`, `ci`
+         and the static leg run it, so the stale row is named before push.
   integration-images
          Print "<key>\t<image>" for every image declared by the Go test
          container harness. The single source of truth for the dependency set:
@@ -377,8 +394,37 @@ check_race_excluded_ran() {
   printf 'race-excluded-ran: %d test(s) ran and passed without -race\n' "${count}"
 }
 
+# SERIAL_HEAVY_TEST_PACKAGE (CHAOS-9867): internal/gqlgenguard runs ~8 whole-repository gqlgen generations one after
+# another (no t.Parallel: it moves the working directory), each a `go run` that type-checks every package. Beside the
+# other test binaries of one `go test ./...` it is starved of CPU: 545 s in the hosted test leg against 393 s in a race
+# leg and ~213 s alone, with the default 600 s go test timeout as the only margin, so one slow runner timed it out
+# (run 38786639144). It now runs alone, after the rest, so its time no longer depends on what else is scheduled.
+SERIAL_HEAVY_TEST_PACKAGE="github.com/full-chaos/dev-health-ops/internal/gqlgenguard"
+
 check_test() {
-  run_in_modules "go test" go test -mod=readonly -trimpath ./...
+  local module_dir all rest ran_heavy=0
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    printf 'go test: %s\n' "${module_dir}"
+    all="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./...)" \
+      || die "go list failed in ${module_dir}"
+    rest="$(printf '%s\n' "${all}" | grep -vx -- "${SERIAL_HEAVY_TEST_PACKAGE}" || true)"
+    (
+      cd "${ROOT}/${module_dir}"
+      if [ -n "${rest}" ]; then
+        # shellcheck disable=SC2086
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${rest}
+      fi
+    ) || return 1
+    if printf '%s\n' "${all}" | grep -qx -- "${SERIAL_HEAVY_TEST_PACKAGE}"; then
+      ran_heavy=1
+      printf 'go test (alone): %s\n' "${SERIAL_HEAVY_TEST_PACKAGE}"
+      (
+        cd "${ROOT}/${module_dir}"
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath "${SERIAL_HEAVY_TEST_PACKAGE}"
+      ) || return 1
+    fi
+  done
+  [ "${ran_heavy}" -eq 1 ] || die "check_test never ran ${SERIAL_HEAVY_TEST_PACKAGE}: it was split out of ./... and must run alone"
   check_race_excluded_ran
 }
 
@@ -491,6 +537,31 @@ check_ratchets() {
   )
 }
 
+# check_race_weights_rows (CHAOS-4233): the census of ci/go_race_weights.tsv, run by `fast`, `ci` and the static leg so a
+# package added, removed or renamed names the stale row on the author's machine. tests/tooling/test_go_quality_legs.py
+# keeps the same three checks (the CI-side guard); this one removes the surprise, not that test.
+check_race_weights_rows() {
+  local modpath listed missing stale
+  [ -f "${GO_RACE_WEIGHTS}" ] || die "race weights file missing: ${GO_RACE_WEIGHTS}"
+  modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
+  listed="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...)" || die "go list ./... failed"
+  missing="$(printf '%s\n' "${listed}" | awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_missing_rows.awk")" \
+    || die "ci/go_race_missing_rows.awk failed"
+  [ -z "${missing}" ] \
+    || die "race package(s) with NO row in ci/go_race_weights.tsv (add each: its measured go test -race seconds, 1 if it has no test; CI-side guard tests/tooling/test_go_quality_legs.py::test_every_package_of_the_root_module_has_a_weights_row): $(printf '%s' "${missing}" | tr '\n' ' ')"
+  stale="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_WEIGHTS}" | cut -f1 | LC_ALL=C sort -u \
+    | LC_ALL=C comm -23 - <(printf '%s\n' "${listed}" | awk -v mod="${modpath}" '{ if ($0 == mod) print "."; else if (index($0, mod "/") == 1) print substr($0, length(mod) + 2); else print $0 }' | LC_ALL=C sort))"
+  [ -z "${stale}" ] \
+    || die "ci/go_race_weights.tsv names package(s) that no longer exist (delete each row; CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean): $(printf '%s' "${stale}" | tr '\n' ' ')"
+  local rows
+  rows="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_WEIGHTS}" | cut -f1)"
+  printf '%s\n' "${rows}" | LC_ALL=C sort -c 2>/dev/null \
+    || die "ci/go_race_weights.tsv is not sorted (LC_ALL=C) or weighs a package twice (CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean)"
+  [ -z "$(printf '%s\n' "${rows}" | LC_ALL=C sort | uniq -d)" ] \
+    || die "ci/go_race_weights.tsv weighs a package twice (CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean)"
+  printf 'race-weights-rows: %d row(s) match the package list\n' "$(printf '%s\n' "${rows}" | wc -l)"
+}
+
 ci_leg_stage() {
   local name="$1" started
   shift
@@ -515,6 +586,7 @@ check_ci_leg() {
       ci_leg_stage build check_build
       ci_leg_stage contract check_contract
       ci_leg_stage ratchets check_ratchets
+      ci_leg_stage race-weights-rows check_race_weights_rows
       ci_leg_stage integration-vet check_integration_vet
       ci_leg_stage plan-integration-shards plan_integration_shards
       ci_leg_stage plan-providersync-shards plan_providersync_test_shards
@@ -631,8 +703,13 @@ venue_oracle_run_rows() {
 # venue_oracle_assign SHARD COUNT [plan]: the shard's rows ("<package dir>\t<test>"),
 # or with `plan` every row with its shard and weight plus one "#leg" line per shard.
 venue_oracle_assign() {
+  venue_oracle_run_rows | venue_oracle_assign_stdin "$@"
+}
+# venue_oracle_assign_stdin SHARD COUNT [plan]: the same assignment over the "<package dir>\t<test>" rows on stdin
+# (the rows a change set selected, for `--changed FILE SHARD COUNT`).
+venue_oracle_assign_stdin() {
   local shard="$1" count="$2" plan="${3:-}"
-  venue_oracle_run_rows | awk -v shard="${shard}" -v count="${count}" -v plan="${plan:+1}" \
+  awk -v shard="${shard}" -v count="${count}" -v plan="${plan:+1}" \
     -v weights=<(venue_oracle_weight_rows) -v defw="${VENUE_ORACLE_DEFAULT_WEIGHT}" -f "${ROOT}/ci/venue_oracle_shard.awk"
 }
 # venue_oracle_weight_rows prints every weight row (the concatenation of the weights
@@ -684,17 +761,61 @@ check_venue_oracle_plan() {
 # With NAME it also succeeds when a changed path is equal to, or under, a path that
 # ci/venue_oracle_triggers.d/ declares for the test NAME of DIR (CHAOS-9172): the code
 # outside its package whose behaviour that venue test compares.
+# vo_grep / vo_awk: a match test whose own failure (rc above 1: unreadable file, bad program) is an error, never "no match".
+vo_grep() {
+  local rc=0
+  grep "$@" || rc=$?
+  [ "${rc}" -le 1 ] || die "venue-oracles --changed: grep failed (rc ${rc}) reading the change set or a selection file"
+  return "${rc}"
+}
+vo_awk() {
+  local rc=0
+  awk "$@" || rc=$?
+  [ "${rc}" -le 1 ] || die "venue-oracles --changed: awk failed (rc ${rc}) reading the change set or a selection file"
+  return "${rc}"
+}
 venue_oracle_changed_selects() {
   local escaped pkg name path
   escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
-  if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}/([^/]+|testdata/.+)$"; then
-    return 0
+  # grep -q stops at its first match: it reads a process substitution, never a pipe whose writer would die of SIGPIPE and
+  # fail the whole pipeline under pipefail on a large change set (the match was lost and the run read as "nothing to run").
+  local own=1
+  if vo_grep -qE "^${escaped}/([^/]+|testdata/.+)$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+    own=0
   fi
+  # The dependency closure of the package's test binary (ci/venue_oracle_closure.d/, CHAOS-9935): a
+  # file directly in, or under testdata of, any package the test binary links selects every
+  # test of the package. Derived by a Go test from `go list -test`, so a missing hand row cannot
+  # hide a dependency. The directory is absent in a scratch tree that holds no Go module.
+  if [ -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
+    local closure_file="${ROOT}/ci/venue_oracle_closure.d/${1//\//__}.txt"
+    [ -f "${closure_file}" ] && [ -r "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is missing or not a readable regular file; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    # a file that is empty, or holds a line that is not `<dir>` or `~<dir>`, was not written by the generator: refuse it
+    [ -s "${closure_file}" ] || die "venue-oracles --changed: ${closure_file} is empty; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    if vo_grep -qvE '^(~[^[:cntrl:]]+|[^~[:cntrl:]][^[:cntrl:]]*)$' "${closure_file}"; then
+      die "venue-oracles --changed: ${closure_file} has a line that is not a package directory or ~directory; regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    fi
+    # a path with an empty, "." or ".." segment, a leading slash or a trailing slash can never match a changed path
+    if vo_grep -qE '^~?/|//|/$|(^|[~/])\.\.?(/|$)' "${closure_file}"; then
+      die "venue-oracles --changed: ${closure_file} has a line that is not a clean relative directory (empty, dot or slash segment); regenerate it (VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged)"
+    fi
+    [ "${own}" -ne 0 ] || return 0
+    if [ -n "${VENUE_CHANGED_DIRS:-}" ] && vo_grep -qxFf "${closure_file}" < <(printf '%s\n' "${VENUE_CHANGED_DIRS}"); then
+      return 0
+    fi
+    # "~dir" lines: a changed file anywhere under a directory a linked package embeds files from.
+    if vo_awk 'FNR == NR { if (substr($0, 1, 1) == "~") prefix[substr($0, 2) "/"] = 1; next }
+            { for (p in prefix) if (index($0, p) == 1) { found = 1; exit } }
+            END { exit !found }' "${closure_file}" <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
+      return 0
+    fi
+  fi
+  [ "${own}" -ne 0 ] || return 0
   [ -n "${2:-}" ] || return 1
   while IFS=$'\t' read -r pkg name path; do
     { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
     escaped="$(printf '%s' "${path}" | sed 's/[][\\.*^$/]/\\&/g')"
-    if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}(/.*)?$"; then
+    if vo_grep -qE "^${escaped}(/.*)?$" < <(tr '\0' '\n' < "${VENUE_CHANGED_FILE}"); then
       return 0
     fi
   done <<< "${VENUE_TRIGGER_ROWS:-}"
@@ -705,9 +826,17 @@ check_venue_oracles() {
   local shard="${1:-}" shard_count="${2:-}" changed="${VENUE_CHANGED_FILE:-}"
   if [ -n "${changed}" ]; then
     [ -r "${changed}" ] || die "venue-oracles --changed: ${changed} is missing or unreadable"
-    [ -z "${shard}${shard_count}" ] || die "venue-oracles --changed does not combine with SHARD COUNT"
   fi
   if [ -n "${changed}" ]; then
+    # CHAOS-9935: in the real tree (it holds the generator of the closure files) a missing closure directory is an
+    # error, never "no closure": the selection would silently drop every dependency rule and read as a green no-op.
+    # A scratch tree with no Go module has neither the generator nor the directory and keeps the package and row rules.
+    if [ -d "${ROOT}/internal/testsupport/venuechanged" ] && [ ! -d "${ROOT}/ci/venue_oracle_closure.d" ]; then
+      die "venue-oracles --changed: ${ROOT}/ci/venue_oracle_closure.d is missing; run VENUE_CLOSURE_WRITE=1 go test ./internal/testsupport/venuechanged -run TestClosureFilesMatchTheTestBinaryDependencies"
+    fi
+    # The package directory of every changed path (a path under .../testdata belongs to the package
+    # above it), for the closure rule of venue_oracle_changed_selects.
+    VENUE_CHANGED_DIRS="$(tr '\0' '\n' < "${changed}" | awk 'NF { d = $0; sub(/\/[^\/]*$/, "", d); sub(/\/testdata(\/.*)?$/, "", d); print d }' | LC_ALL=C sort -u)"
     VENUE_TRIGGER_ROWS="$(venue_oracle_trigger_rows)" \
       || die "venue-oracles --changed: ci/venue_oracle_triggers.d/ could not be read (see above)"
   fi
@@ -717,16 +846,45 @@ check_venue_oracles() {
     { [ "${shard}" -ge 1 ] && [ "${shard_count}" -ge 1 ] && [ "${shard}" -le "${shard_count}" ]; } \
       || die "venue-oracles shard ${shard} is outside 1..${shard_count}"
   fi
+  # `--changed FILE SHARD COUNT`: this leg's slice of the rows the change set selects (CHAOS-9935). The legs read the same
+  # change set and registry, so each computes the same cost-balanced partition of the same selection; a leg whose slice is
+  # empty is a plain no-op (a small change set selects fewer rows than there are legs).
+  local changed_slice=""
+  if [ -n "${changed}" ] && [ -n "${shard}" ]; then
+    local sel_rows sel_dir sel_name
+    sel_rows="$(venue_oracle_run_rows)" || die "venue-oracles --changed: the registry ci/venue_oracle_registry.d/ could not be read (see above)"
+    while IFS=$'\t' read -r sel_dir sel_name; do
+      [ -n "${sel_dir}" ] || continue
+      if venue_oracle_changed_selects "${sel_dir}" "${sel_name}"; then
+        changed_slice+="${sel_dir}"$'\t'"${sel_name}"$'\n'
+      fi
+    done <<< "${sel_rows}"
+    local sel_count
+    sel_count="$(printf '%s' "${changed_slice}" | awk 'NF' | wc -l | tr -d ' ')"
+    if [ -n "${changed_slice}" ]; then
+      changed_slice="$(printf '%s' "${changed_slice}" | venue_oracle_assign_stdin "${shard}" "${shard_count}")" \
+        || die "venue-oracles --changed: could not plan the legs (see above)"
+    fi
+    printf 'venue-oracles: leg %s/%s of the change set takes %d of %d selected row(s)\n' "${shard}" "${shard_count}" \
+      "$(printf '%s' "${changed_slice}" | awk 'NF' | wc -l | tr -d ' ')" "${sel_count}" >&2
+  fi
   if [ -n "${changed}" ] && [ "${VENUE_CHANGED_LIST_ONLY:-}" = "--list" ]; then
     # CHAOS-7653: print the registry rows the changed paths select and run nothing (no
     # Go, jq, containers or Python needed). The registry-against-tree validation is the
     # run's own first step; the selection reads the registry rows alone, so it is fast.
-    local list_dir list_name list_kind
+    local list_dir list_name list_kind list_rows
+    # The rows are read first, so a registry that cannot be read (or holds no run row) is an error: a loop fed by a process
+    # substitution cannot see the failure of its producer and read it as "nothing selected".
+    list_rows="$(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)" \
+      || die "venue-oracles --changed: the registry ci/venue_oracle_registry.d/ could not be read (see above)"
+    [ -n "$(printf '%s\n' "${list_rows}" | awk '$3 == "run"')" ] \
+      || die "venue-oracles --changed: ci/venue_oracle_registry.d/ holds no run row, so nothing could ever be selected"
     while read -r list_dir list_name list_kind; do
-      if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}" "${list_name}"; then
+      if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}" "${list_name}" \
+          && { [ -z "${shard}" ] || grep -qxF -- "${list_dir}"$'\t'"${list_name}" <<< "${changed_slice}"; }; then
         printf 'SELECT\t%s\t%s\n' "${list_dir}" "${list_name}"
       fi
-    done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)
+    done <<< "${list_rows}"
     return 0
   fi
   command -v jq >/dev/null 2>&1 \
@@ -742,7 +900,10 @@ check_venue_oracles() {
   local -a vo_dirs=() vo_names=() local_only=()
   leg_started="$(date +%s)"
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
-  if [ -n "${shard}" ]; then
+  if [ -n "${shard}" ] && [ -n "${changed}" ]; then
+    slice_file="${proof_dir}/slice.tsv"
+    printf '%s\n' "${changed_slice}" > "${slice_file}"
+  elif [ -n "${shard}" ]; then
     # This leg's rows, from the cost-balanced plan; and what the plan predicts for it.
     slice_file="${proof_dir}/slice.tsv"
     venue_oracle_assign "${shard}" "${shard_count}" > "${slice_file}" \
@@ -777,7 +938,8 @@ check_venue_oracles() {
         pkg_has_run=1
         registered_runs=$((registered_runs + 1))
         if [ -n "${changed}" ]; then
-          if venue_oracle_changed_selects "${dir}" "${name}"; then
+          if venue_oracle_changed_selects "${dir}" "${name}" \
+              && { [ -z "${shard}" ] || grep -qxF -- "${dir}"$'\t'"${name}" "${slice_file}"; }; then
             names="${names:+${names}|}${name}"
             total=$((total + 1))
           fi
@@ -985,6 +1147,8 @@ check_contract() {
 declare -A INTEGRATION_DENYLIST=()
 declare -A INTEGRATION_SHARD_WEIGHTS=()
 declare -A INTEGRATION_SHARD_BY_KEY=()
+declare -A AFFECTED_KEYS=()
+AFFECTED_FILTER_ACTIVE=0
 declare -a INTEGRATION_SHARD_TOTALS=()
 declare -a INTEGRATION_SHARD_PACKAGE_COUNTS=()
 declare -a INTEGRATION_SHARD_NON_PROVIDER_COUNTS=()
@@ -2453,37 +2617,96 @@ check_remaining_test_shard() {
   )
 }
 
+# load_affected_selection reads INTEGRATION_AFFECTED_FILE, the output of
+# ci/go_affected_integration.py (CHAOS-9947). Unset, empty, or a first line other
+# than "AFFECTED <n>" means the whole suite. An AFFECTED key that is not a
+# planned package is a failure, never an ignored line.
+load_affected_selection() {
+  AFFECTED_FILTER_ACTIVE=0
+  AFFECTED_KEYS=()
+  local file="${INTEGRATION_AFFECTED_FILE:-}" first line count=0 declared
+  if [ -z "${file}" ]; then
+    return 0
+  fi
+  [ -f "${file}" ] || die "INTEGRATION_AFFECTED_FILE not found: ${file}"
+  first="$(head -n 1 "${file}")"
+  case "${first}" in
+    "AFFECTED "*) ;;
+    "FULL "*)
+      printf 'integration affected selection: %s -- running the full suite\n' "${first}"
+      return 0
+      ;;
+    *) die "INTEGRATION_AFFECTED_FILE ${file} has an unknown first line '${first}'" ;;
+  esac
+  declared="${first#AFFECTED }"
+  case "${declared}" in ""|*[!0-9]*) die "INTEGRATION_AFFECTED_FILE count is not numeric: '${declared}'" ;; esac
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    [ -n "${INTEGRATION_SHARD_WEIGHTS[${line}]+set}" ] \
+      || die "affected selection names '${line}', which is not a planned integration package"
+    [ -z "${AFFECTED_KEYS[${line}]+set}" ] \
+      || die "affected selection lists '${line}' more than once"
+    AFFECTED_KEYS["${line}"]=1
+    count=$((count + 1))
+  done < <(tail -n +2 "${file}")
+  [ "${count}" -eq "${declared}" ] \
+    || die "affected selection declares ${declared} package(s) but lists ${count}"
+  AFFECTED_FILTER_ACTIVE=1
+  printf 'integration affected selection: %d package(s)\n' "${count}"
+  for line in "${!AFFECTED_KEYS[@]}"; do
+    printf '  AFFECTED %s\n' "${line}"
+  done | LC_ALL=C sort
+}
+
+# affected_includes KEY: true when the whole suite runs or KEY is selected.
+affected_includes() {
+  [ "${AFFECTED_FILTER_ACTIVE}" -eq 0 ] || [ -n "${AFFECTED_KEYS[$1]+set}" ]
+}
+
 emit_integration_shard_matrix() {
-  local matrix='{"include":[' separator="" shard
-  for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"providersync\",\"shard\":${shard}}"
-    separator=","
-  done
-  for ((shard = 1; shard <= DAILY_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"daily\",\"shard\":${shard}}"
-    separator=","
-  done
-  for ((shard = 1; shard <= WORKERSERVICE_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"workerservice\",\"shard\":${shard}}"
-    separator=","
-  done
-  for ((shard = 1; shard <= QAPISERVER_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"queryapiserver\",\"shard\":${shard}}"
-    separator=","
-  done
-  for ((shard = 1; shard <= REMAINING_TEST_SHARD_COUNT; shard++)); do
-    matrix+="${separator}{\"target\":\"remaining\",\"shard\":${shard}}"
-    separator=","
+  load_affected_selection
+  local matrix='{"include":[' separator="" shard key count=0
+  local -a split_keys=(
+    "${PROVIDER_INTEGRATION_PACKAGE_KEY}" "${DAILY_INTEGRATION_PACKAGE_KEY}"
+    "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" "${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+    "${REMAINING_INTEGRATION_PACKAGE_KEY}"
+  )
+  local -a split_targets=(providersync daily workerservice queryapiserver remaining)
+  local -a split_counts=(
+    "${PROVIDER_TEST_SHARD_COUNT}" "${DAILY_TEST_SHARD_COUNT}"
+    "${WORKERSERVICE_TEST_SHARD_COUNT}" "${QAPISERVER_TEST_SHARD_COUNT}"
+    "${REMAINING_TEST_SHARD_COUNT}"
+  )
+  local i
+  for i in "${!split_targets[@]}"; do
+    affected_includes "${split_keys[${i}]}" || continue
+    for ((shard = 1; shard <= split_counts[i]; shard++)); do
+      matrix+="${separator}{\"target\":\"${split_targets[${i}]}\",\"shard\":${shard}}"
+      separator=","
+      count=$((count + 1))
+    done
   done
   for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
     [ "${INTEGRATION_SHARD_NON_PROVIDER_COUNTS[${shard}]}" -gt 0 ] || continue
+    if [ "${AFFECTED_FILTER_ACTIVE}" -eq 1 ]; then
+      local hit=0
+      for key in "${!INTEGRATION_SHARD_BY_KEY[@]}"; do
+        [ "${INTEGRATION_SHARD_BY_KEY[${key}]}" -eq "${shard}" ] || continue
+        for i in "${!split_keys[@]}"; do [ "${key}" != "${split_keys[${i}]}" ] || continue 2; done
+        [ -z "${AFFECTED_KEYS[${key}]+set}" ] || hit=1
+      done
+      [ "${hit}" -eq 1 ] || continue
+    fi
     matrix+="${separator}{\"target\":\"packages\",\"shard\":${shard}}"
     separator=","
+    count=$((count + 1))
   done
   matrix+=']}'
   printf 'integration shard matrix: %s\n' "${matrix}"
+  printf 'integration shard legs: %d\n' "${count}"
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     printf 'matrix=%s\n' "${matrix}" >> "${GITHUB_OUTPUT}"
+    printf 'legs=%d\n' "${count}" >> "${GITHUB_OUTPUT}"
   fi
 }
 
@@ -2901,10 +3124,384 @@ check_integration_vet() {
   run_in_modules "go vet -tags=integration" go vet -mod=readonly -trimpath -tags=integration ./...
 }
 
+# --- Auth Control Plane gates (CHAOS-4887) -----------------------------------
+# `check_go.sh auth [STAGE]` runs the Go quality and release gates for the
+# auth-service tree ALONE, so an auth-only change does not need the fleet-wide
+# suite and an unrelated change does not need these. The packages are the real
+# tree (cmd/auth-service, cmd/auth-migrate, internal/auth/..., the auth schema
+# adapter); a new auth package under those roots is covered automatically.
+AUTH_PACKAGES=(
+  ./cmd/auth-service/...
+  ./cmd/auth-migrate/...
+  ./internal/auth/...
+  ./internal/audit/...
+  ./internal/storage/postgres/authschema/...
+)
+# One fuzz target per parser, each its own corpus (the target's f.Add seeds plus
+# any testdata/fuzz/<Target> entries) and its own proof marker. Format:
+# "<package> <FuzzTarget>". check_auth_fuzz_registry fails when a Fuzz function
+# exists in the tree without a row here, or a row names a function that does not.
+AUTH_FUZZ_TARGETS=(
+  "./internal/auth/contracts FuzzParseErrorEnvelope"
+  "./internal/auth/contracts FuzzRevisionUnmarshal"
+  "./internal/auth/contracts FuzzTimestampUnmarshal"
+  "./internal/auth/edgetoken FuzzVerifyToken"
+  "./internal/auth/signedtoken FuzzValidSignedToken"
+  "./internal/auth/httpapi FuzzParseLimit"
+  "./internal/auth/httpapi FuzzParseForwardedTrust"
+  "./internal/auth/keystore FuzzParseEd25519Key"
+  "./internal/auth/authconfig FuzzConfigLoad"
+)
+AUTH_FUZZTIME="${AUTH_FUZZTIME:-20s}"
+AUTH_GOVULNCHECK_VERSION="v1.9.0"
+# Marker the production-stack test logs once it has mounted and driven the real
+# middleware stack (internal/auth/authruntime/production_stack_test.go).
+AUTH_STACK_MARKER="AUTH_PRODUCTION_STACK_EXECUTED"
+
+auth_go() {
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go "$@")
+}
+
+check_auth_fmt() {
+  local output
+  output="$(cd "${ROOT}" && git ls-files --cached --others --exclude-standard -z -- \
+    'cmd/auth-service/*.go' 'cmd/auth-migrate/*.go' 'internal/auth/*.go' 'internal/audit/*.go' 'internal/storage/postgres/authschema/*.go' \
+    | xargs -0 -r "${GOFMT}" -l)"
+  if [ -n "${output}" ]; then
+    printf 'auth gofmt: these files need formatting:\n%s\n' "${output}" >&2
+    return 1
+  fi
+  printf 'auth gofmt: clean\n'
+}
+
+check_auth_vet() {
+  printf 'auth go vet\n'
+  auth_go vet -mod=readonly -trimpath "${AUTH_PACKAGES[@]}"
+}
+
+check_auth_test() {
+  printf 'auth go test\n'
+  auth_go test -mod=readonly -trimpath -count=1 "${AUTH_PACKAGES[@]}"
+}
+
+# check_auth_history (CHAOS-4765): the endpoint-profile inventories' source_commit must resolve, be an
+# ancestor of HEAD, and every anchor line must read the same there as in the tree. It needs full git history,
+# so it is built only under -tags authhistory and run only here (auth-test job, fetch-depth: 0). A shallow
+# checkout, or a run that never printed the per-inventory proof marker, FAILS: it never skips.
+check_auth_history() {
+  local out
+  printf 'auth source_commit history check\n'
+  [ "$(cd "${ROOT}" && git rev-parse --is-shallow-repository)" = "false" ] \
+    || die "auth history: shallow checkout; this check needs full history (actions/checkout fetch-depth: 0)"
+  out="$(auth_go test -mod=readonly -trimpath -count=1 -v -tags authhistory -run '^TestEveryEndpointProfileInventoryDeclaresAVerifiableSourceCommit$' ./internal/auth/contracts 2>&1)" \
+    || { printf '%s\n' "${out}" >&2; die "auth history: an inventory source_commit does not verify"; }
+  printf '%s\n' "${out}"
+  printf '%s\n' "${out}" | grep -q 'AUTH_SOURCE_COMMIT_VERIFIED ' \
+    || die "auth history: no inventory was verified (the proof marker never printed)"
+}
+
+check_auth_race() {
+  printf 'auth go test -race\n'
+  auth_go test -mod=readonly -trimpath -count=1 -race "${AUTH_PACKAGES[@]}"
+}
+
+check_auth_fuzz_registry() {
+  local listed registered
+  listed="$(cd "${ROOT}" && grep -rhoE '^func Fuzz[A-Za-z0-9_]+' \
+    cmd/auth-service cmd/auth-migrate internal/auth internal/audit internal/storage/postgres/authschema --include='*_test.go' \
+    | sed 's/^func //' | LC_ALL=C sort)"
+  registered="$(printf '%s\n' "${AUTH_FUZZ_TARGETS[@]}" | awk '{print $2}' | LC_ALL=C sort)"
+  [ -n "${registered}" ] || die "auth fuzz registry is empty: the gate would measure nothing"
+  [ "${listed}" = "${registered}" ] \
+    || die "auth fuzz registry and the Fuzz functions of the auth tree differ: registry=[$(printf '%s' "${registered}" | tr '\n' ' ')] tree=[$(printf '%s' "${listed}" | tr '\n' ' ')]"
+  printf 'auth fuzz registry: %s targets match the tree\n' "$(printf '%s\n' "${registered}" | wc -l | tr -d ' ')"
+}
+
+# check_auth_fuzz [TARGET]: run every registered target (or only TARGET) with the
+# fuzz engine for AUTH_FUZZTIME, each in its own invocation. The proof marker is
+# per target and is printed only when the engine really ran ("fuzz: elapsed"
+# line) and the run passed: a target satisfied by the seed corpus alone, or by
+# a neighbour, prints nothing and fails.
+check_auth_fuzz() {
+  local only="${1:-}" entry package target output execs ran=0
+  check_auth_fuzz_registry
+  # A budget below the engine's baseline-coverage pass runs zero fuzz iterations and
+  # would still print PASS: refuse it, and refuse a run that reports none below.
+  [[ "${AUTH_FUZZTIME}" =~ ^[0-9]+s$ ]] || die "AUTH_FUZZTIME=${AUTH_FUZZTIME} must be whole seconds such as 20s"
+  [ "${AUTH_FUZZTIME%s}" -ge 5 ] || die "AUTH_FUZZTIME=${AUTH_FUZZTIME} is below the 5s floor: the fuzz engine would run no iteration"
+  for entry in "${AUTH_FUZZ_TARGETS[@]}"; do
+    package="${entry% *}"
+    target="${entry##* }"
+    if [ -n "${only}" ] && [ "${only}" != "${target}" ]; then continue; fi
+    output="$(mktemp)"
+    if ! (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -run '^$' \
+      -fuzz "^${target}\$" -fuzztime "${AUTH_FUZZTIME}" "${package}") >"${output}" 2>&1; then
+      cat "${output}" >&2
+      rm -f "${output}"
+      die "fuzz target ${target} failed"
+    fi
+    execs="$(grep -oE '^fuzz: elapsed: [^,]*, execs: [0-9]+' "${output}" | tail -n 1 | grep -oE '[0-9]+$' || true)"
+    if ! grep -q '^fuzz: elapsed:' "${output}" || ! grep -q '^PASS$' "${output}" || [ "${execs:-0}" -le 0 ]; then
+      cat "${output}" >&2
+      rm -f "${output}"
+      die "fuzz target ${target} did not run the fuzz engine to a pass"
+    fi
+    tail -n 3 "${output}"
+    rm -f "${output}"
+    printf 'auth-fuzz-proof: %s %s ran for %s (%s executions)\n' "${package}" "${target}" "${AUTH_FUZZTIME}" "${execs}"
+    ran=$((ran + 1))
+  done
+  [ "${ran}" -gt 0 ] || die "auth fuzz: no target ran (TARGET=${only:-all})"
+}
+
+# check_auth_vuln: govulncheck over the auth packages only, pinned. ANY
+# reachable finding fails the gate: there is no ignore list, so a pull request
+# cannot whitelist a vulnerability.
+check_auth_vuln() {
+  local report
+  report="$(mktemp)"
+  printf 'auth govulncheck %s\n' "${AUTH_GOVULNCHECK_VERSION}"
+  if ! (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly -trimpath "golang.org/x/vuln/cmd/govulncheck@${AUTH_GOVULNCHECK_VERSION}" \
+    -format json "${AUTH_PACKAGES[@]}") >"${report}" 2>"${report}.err"; then
+    # govulncheck -format json exits 0 even with findings; a non-zero exit is a tool failure.
+    cat "${report}.err" >&2
+    rm -f "${report}" "${report}.err"
+    die "govulncheck failed to run"
+  fi
+  rm -f "${report}.err"
+  python3 "${ROOT}/ci/auth_govulncheck.py" <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
+  rm -f "${report}"
+}
+
+# check_auth_closure: CHAOS-10131. Every module in the `go list -deps` closure of
+# the two auth binaries must be a row of ci/auth_closure_allow.tsv. A ClickHouse
+# driver or any other new module entering the closure fails here, not at review.
+# The closure is the UNION over the shipped build configurations: the Docker
+# image builds with CGO_ENABLED=0 for linux/amd64 and linux/arm64
+# (docker/go-worker.Dockerfile), the CI runner with cgo on, and a `!cgo` or
+# per-GOARCH file can import a module only one of them links.
+# AUTH_CLOSURE_ALLOW names another allow-list (the selftest uses it).
+check_auth_closure() {
+  local actual="" allowed extra stale cgo arch part allow_file="${AUTH_CLOSURE_ALLOW:-${ROOT}/ci/auth_closure_allow.tsv}"
+  for cgo in 0 1; do
+    for arch in amd64 arm64; do
+      part="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off CGO_ENABLED="${cgo}" GOOS=linux GOARCH="${arch}" go list -mod=readonly -deps \
+        -f '{{if .Module}}{{.Module.Path}}{{end}}' ./cmd/auth-service ./cmd/auth-migrate)" || die "auth closure: go list failed (CGO_ENABLED=${cgo} linux/${arch})"
+      actual+="${part}"$'\n'
+    done
+  done
+  actual="$(printf '%s' "${actual}" | LC_ALL=C sort -u | sed '/^$/d')"
+  [ -n "${actual}" ] || die "auth closure: go list returned no modules"
+  allowed="$(awk -F'\t' '$1 !~ /^#/ && $1 != "" { print $1 }' "${allow_file}" | LC_ALL=C sort -u)"
+  extra="$(LC_ALL=C comm -23 <(printf '%s\n' "${actual}") <(printf '%s\n' "${allowed}"))"
+  stale="$(LC_ALL=C comm -13 <(printf '%s\n' "${actual}") <(printf '%s\n' "${allowed}"))"
+  if [ -n "${stale}" ]; then
+    printf 'auth closure: ci/auth_closure_allow.tsv lists modules the binaries no longer link (remove the rows):\n%s\n' "${stale}" >&2
+    return 1
+  fi
+  if [ -n "${extra}" ]; then
+    printf 'auth closure: the auth binaries link modules outside ci/auth_closure_allow.tsv:\n%s\n' "${extra}" >&2
+    return 1
+  fi
+  printf 'auth closure: %s modules, all allowed\n' "$(printf '%s\n' "${actual}" | wc -l | tr -d ' ')"
+}
+
+# check_auth_middleware: G-69. Runs the production-stack test verbosely and
+# fails unless it logged its marker: the test mounted the real middleware stack
+# (built from the service's own apiServerOptions) and drove it. A green test
+# name without the marker is not evidence.
+check_auth_middleware() {
+  local output
+  output="$(mktemp)"
+  if ! (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -v \
+    -run '^TestProductionMiddlewareStackIsMountedAndDriven$' ./internal/auth/authruntime) >"${output}" 2>&1; then
+    cat "${output}" >&2
+    rm -f "${output}"
+    die "the production middleware stack test failed"
+  fi
+  if ! grep -q "${AUTH_STACK_MARKER}" "${output}"; then
+    cat "${output}" >&2
+    rm -f "${output}"
+    die "the production middleware stack test passed without logging ${AUTH_STACK_MARKER}: it did not drive the stack"
+  fi
+  grep "${AUTH_STACK_MARKER}" "${output}"
+  rm -f "${output}"
+}
+
+# auth_relevant BASE HEAD: print relevant=true|false. A change is relevant when
+# it touches a file of the auth packages' own import closure inside this module
+# (computed with go list, so a change to internal/platform/secrets, which the
+# service imports, counts and a change to an unrelated package does not), the
+# auth contracts, the module files, or the gate's own files.
+auth_relevant() {
+  local base="$1" head="$2" closure changed file relevant=false
+  closure="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -deps \
+    -test -f '{{if not .Standard}}{{.Dir}}{{end}}' "${AUTH_PACKAGES[@]}" | sed "s|^${ROOT}/||" | LC_ALL=C sort -u)"
+  [ -n "${closure}" ] || die "auth relevance: go list returned an empty closure"
+  # Packages the scope selftest governs (auth-looking names, importers of the
+  # schema adapter) select the gates too, as directories relative to the root.
+  closure+=$'\n'"$(auth_scope_candidates | sed "s|^$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)/||")"
+  # The exemption file's packages too: deleting one leaves a stale exemption that
+  # only the scope selftest rejects, so a change under it must select the gates.
+  closure+=$'\n'"$(awk -F'\t' -v m="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)/" '$1 !~ /^#/ && $1 != "" { sub("^" m, "", $1); print $1 }' "${ROOT}/ci/auth_gate_scope_exempt.txt")"
+  # --no-renames: a file moved OUT of the auth tree must report its old path too.
+  changed="$(git -C "${ROOT}" diff --name-only --no-renames "${base}" "${head}")"
+  while IFS= read -r file; do
+    [ -n "${file}" ] || continue
+    if auth_path_relevant "${file}" "${closure}"; then
+      printf 'auth relevance: %s\n' "${file}" >&2
+      relevant=true
+      break
+    fi
+  done <<<"${changed}"
+  printf 'relevant=%s\n' "${relevant}"
+}
+
+auth_path_relevant() {
+  local file="$1" closure="$2" dir
+  case "${file}" in
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_scope_candidates.py|.github/workflows/go-auth-service.yml)
+      return 0
+      ;;
+  esac
+  # A Go-package area path with an auth* or audit* directory segment: a package
+  # that is new, deleted or moved is not in the head-tree candidate list.
+  case "${file}" in
+    *.go)
+      [[ "${file%/*}" =~ (^|/)(auth|audit)[^/]*(/|$) ]] && return 0
+      ;;
+  esac
+  # Any file (Go, testdata, golden, embedded asset) under a directory of the
+  # import closure can change what the auth packages do or test.
+  while IFS= read -r dir; do
+    [ -n "${dir}" ] && [ "${dir}" != "." ] || continue
+    case "${file}" in "${dir}"/*) return 0 ;; esac
+  done <<<"${closure}"
+  return 1
+}
+
+# check_auth_paths_selftest: the path filter's two outcomes, executed on a
+# fixed closure: files inside the auth tree select, files outside do not.
+check_auth_paths_selftest() {
+  local closure inside outside file
+  closure="$(printf 'internal/auth/authruntime\ninternal/platform/secrets\n')"
+  inside=(internal/authnew/a.go internal/some/auth_helper/x.go internal/audit/audit.go internal/auth/contracts/deleted_package/x.go cmd/auth-service/main.go internal/auth/authruntime/runtime.go internal/platform/secrets/secrets.go internal/auth/authruntime/testdata/fixture.txt internal/platform/secrets/testdata/nested/golden.json contracts/auth/v1/README.md go.mod ci/check_go.sh)
+  outside=(internal/providersync/sync.go docs/index.md web/README.md internal/platform/other/x.go internal/platform/secretsx/y.go src/dev_health_ops/cli.py)
+  for file in "${inside[@]}"; do
+    auth_path_relevant "${file}" "${closure}" || die "auth path filter: ${file} must select the auth gates and does not"
+    printf 'auth path filter: %s -> relevant\n' "${file}"
+  done
+  for file in "${outside[@]}"; do
+    if auth_path_relevant "${file}" "${closure}"; then die "auth path filter: ${file} must NOT select the auth gates and does"; fi
+    printf 'auth path filter: %s -> not relevant\n' "${file}"
+  done
+}
+
+# check_auth_scope_selftest (CHAOS-10103): the auth package set is not a hand list
+# a new package can miss. Every Go package of the module that LOOKS like auth (any
+# path segment starting with auth or audit) or imports the auth schema adapter
+# must be inside the gate (AUTH_PACKAGES) or named, with a reason, in
+# ci/auth_gate_scope_exempt.txt (package<TAB>reason). An exemption that is
+# gated, or that names no package, is stale and fails.
+# auth_scope_candidates: the import path of every Go package of the module that
+# LOOKS like auth (a path segment starting with auth or audit) or imports the
+# auth schema adapter. One definition for the scope selftest AND the relevance
+# filter, so a package the selftest would demand a decision for also selects the
+# auth gates (a new such package must not be able to skip the very check that
+# would reject it).
+# auth_scope_tags: every build tag NAMED in a //go:build line of the module (minus
+# the toolchain's own GOOS/GOARCH/unix/ignore constraints), derived from the repo
+# so a new tag cannot hide a package from the scope check.
+auth_scope_tags() {
+  (cd "${ROOT}" && git ls-files -z -- '*.go' | xargs -0 -r grep -hE '^//go:build ' \
+    | sed 's#^//go:build ##' | tr -c 'A-Za-z0-9_.\n' ' ' | tr ' ' '\n' \
+    | grep -vxE '|unix|ignore|cgo|linux|darwin|windows|freebsd|openbsd|netbsd|js|wasip1|amd64|arm64|arm|386|wasm|go[0-9.]+' \
+    | LC_ALL=C sort -u)
+}
+
+# auth_scope_candidates: discovery runs once with no tag, once with every derived
+# tag, and once per tag (a `!tag` file is visible only without it; an `a && b`
+# file only with both), and unions the results.
+auth_scope_candidates() {
+  local module tag tags all=""
+  module="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -m)"
+  tags="$(auth_scope_tags)"
+  [ -n "${tags}" ] || die "auth scope: no build tag found in the module; derivation is broken"
+  for tag in ${tags}; do all+="${all:+,}${tag}"; done
+  {
+    for set in "" "${all}" ${tags}; do
+      auth_go list -mod=readonly -tags="${set}" -e -json ./... | python3 "${ROOT}/ci/auth_scope_candidates.py" "${module}"
+    done
+  } | LC_ALL=C sort -u
+}
+
+check_auth_scope_selftest() {
+  local exempt="${ROOT}/ci/auth_gate_scope_exempt.txt" gated candidates missing stale pkg reason
+  gated="$(auth_go list -mod=readonly "${AUTH_PACKAGES[@]}" | LC_ALL=C sort -u)"
+  [ -n "${gated}" ] || die "auth scope: the gate selects no package"
+  candidates="$(auth_scope_candidates)"
+  [ -n "${candidates}" ] || die "auth scope: no candidate package found; the selftest would measure nothing"
+  missing=""
+  while IFS= read -r pkg; do
+    [ -n "${pkg}" ] || continue
+    printf '%s\n' "${gated}" | grep -qx -- "${pkg}" && continue
+    grep -qE "^${pkg//\//\\/}	" "${exempt}" 2>/dev/null && continue
+    missing+="${pkg} "
+  done <<<"${candidates}"
+  [ -z "${missing}" ] || die "auth scope: package(s) look like auth or import the auth schema but are neither in the gate nor exempt with a reason in ci/auth_gate_scope_exempt.txt: ${missing}"
+  stale=""
+  while IFS=$'\t' read -r pkg reason; do
+    case "${pkg}" in ''|'#'*) continue ;; esac
+    [[ "${reason}" =~ [^[:space:]] ]] || stale+="${pkg}(no reason) "
+    if printf '%s\n' "${gated}" | grep -qx -- "${pkg}" || ! printf '%s\n' "${candidates}" | grep -qx -- "${pkg}"; then stale+="${pkg} "; fi
+  done <"${exempt}"
+  [ -z "${stale}" ] || die "auth scope: stale or reasonless exemption(s) (gated, no longer a candidate, or no reason): ${stale}"
+  printf 'auth scope: %s candidate packages, all gated or exempt\n' "$(printf '%s\n' "${candidates}" | wc -l | tr -d ' ')"
+}
+
+check_auth() {
+  case "${1:-all}" in
+    fmt) check_auth_fmt ;;
+    vet) check_auth_vet ;;
+    test) check_auth_test ;;
+    race) check_auth_race ;;
+    history) check_auth_history ;;
+    fuzz) check_auth_fuzz "${2:-}" ;;
+    fuzz-registry) check_auth_fuzz_registry ;;
+    vuln) check_auth_vuln ;;
+    middleware) check_auth_middleware ;;
+    closure) check_auth_closure ;;
+    relevant)
+      [ "$#" -eq 3 ] || die "auth relevant accepts BASE HEAD"
+      auth_relevant "$2" "$3"
+      ;;
+    paths-selftest) check_auth_paths_selftest ;;
+    scope-selftest) check_auth_scope_selftest ;;
+    all)
+      check_auth_paths_selftest
+      check_auth_scope_selftest
+      check_auth_fmt
+      check_auth_vet
+      check_auth_test
+      check_auth_race
+      check_auth_history
+      check_auth_middleware
+      check_auth_closure
+      check_auth_fuzz
+      check_auth_vuln
+      ;;
+    *) die "auth accepts fmt|vet|test|race|history|fuzz [TARGET]|fuzz-registry|vuln|middleware|relevant BASE HEAD|paths-selftest|scope-selftest|all" ;;
+  esac
+}
+
 discover_modules
 print_modules
 
 case "${1:-all}" in
+  auth)
+    shift
+    check_auth "$@"
+    ;;
   fmt)
     check_format
     ;;
@@ -2919,10 +3516,17 @@ case "${1:-all}" in
     ;;
   venue-oracles)
     if [ "${2:-}" = "--changed" ]; then
-      { [ "$#" -eq 3 ] || { [ "$#" -eq 4 ] && [ "$4" = "--list" ]; }; } || die "venue-oracles --changed accepts FILE [--list]"
+      local_usage="venue-oracles --changed accepts FILE [--list] [SHARD COUNT]"
+      [ "$#" -ge 3 ] || die "${local_usage}"
       VENUE_CHANGED_FILE="$3"
-      VENUE_CHANGED_LIST_ONLY="${4:-}"
-      check_venue_oracles
+      VENUE_CHANGED_LIST_ONLY=""
+      shift 3
+      if [ "${1:-}" = "--list" ]; then
+        VENUE_CHANGED_LIST_ONLY="--list"
+        shift
+      fi
+      { [ "$#" -eq 0 ] || [ "$#" -eq 2 ]; } || die "${local_usage}"
+      check_venue_oracles "${1:-}" "${2:-}"
     else
       { [ "$#" -eq 1 ] || [ "$#" -eq 3 ]; } || die "venue-oracles accepts no arguments, or SHARD COUNT (1-based shard of COUNT), or --changed FILE [--list]"
       check_venue_oracles "${2:-}" "${3:-}"
@@ -2969,6 +3573,10 @@ case "${1:-all}" in
     [ "$#" -eq 1 ] || die "ratchets accepts no arguments"
     check_ratchets
     ;;
+  race-weights-rows)
+    [ "$#" -eq 1 ] || die "race-weights-rows accepts no arguments"
+    check_race_weights_rows
+    ;;
   race-excluded-ran)
     [ "$#" -eq 1 ] || die "race-excluded-ran accepts no arguments"
     check_race_excluded_ran
@@ -2989,6 +3597,7 @@ case "${1:-all}" in
     check_build
     check_contract
     check_ratchets
+    check_race_weights_rows
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
@@ -3011,6 +3620,7 @@ case "${1:-all}" in
     check_build
     check_contract
     check_ratchets
+    check_race_weights_rows
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
@@ -3024,6 +3634,7 @@ case "${1:-all}" in
     check_build
     check_contract
     check_ratchets
+    check_race_weights_rows
     check_integration_vet
     check_integration
     check_multi_replica_workers

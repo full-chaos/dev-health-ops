@@ -101,6 +101,10 @@ type MetricsSnapshot struct {
 	AfterHoursRatio      float64
 	AfterHoursRatioKnown bool
 	CycleTimeByDay       []float64
+	// CycleTimeDays is the calendar day of each CycleTimeByDay value, same
+	// length and order. The sustainability slope is per calendar day, so the
+	// x of every sample is its day, not its list position (CHAOS-9888).
+	CycleTimeDays []time.Time
 
 	HotspotComplexityDelta      float64
 	HotspotComplexityDeltaKnown bool
@@ -122,6 +126,11 @@ type MetricsSnapshot struct {
 	// is above zero, in the order of the four inputs. Only these are named
 	// as compounding; an input present at zero contribution is not.
 	CompoundingRiskDrivers []string
+	// CompoundingRiskAsOfDay is the calendar day (YYYY-MM-DD) of the row the
+	// score was read from. The loader window is [WindowStart, WindowEnd), so
+	// this is the last day before WindowEnd that has a row, not WindowEnd.
+	// Empty means the day is unknown and the rationale does not name one.
+	CompoundingRiskAsOfDay string
 }
 
 // EvidenceRef mirrors the reference's frozen EvidenceRef. Value is already
@@ -396,12 +405,19 @@ func evaluateSustainabilityRisk(snapshot MetricsSnapshot, now time.Time) (*Recom
 	if len(cycleTimes) < 2 {
 		return nil, nil
 	}
-	// The length guard above is redundant with LinearSlope's own < 2 check --
+	// The length guard above is redundant with the slope's own < 2 check --
 	// but only for the RESULT, not for the CONTROL FLOW. Without it a
 	// one-element list would give slope 0.0, fail the threshold and return None
 	// anyway; with a threshold of <= 0.0 it would not. Kept because the
 	// reference has it and its redundancy is contingent on a constant.
-	ctSlope := LinearSlope(cycleTimes)
+	//
+	// Hours per CALENDAR day, not per sample (CHAOS-9888): the series drops
+	// null days, so list position is not a day count. The Python twin is
+	// index-based; chris's ruling overrides parity here.
+	ctSlope, err := LinearSlopePerDay(snapshot.CycleTimeDays, cycleTimes)
+	if err != nil {
+		return nil, err
+	}
 	if ctSlope < cycleTimeRisingSlopeThreshold {
 		return nil, nil
 	}
@@ -520,7 +536,11 @@ func compoundingRiskFromComposite(snapshot MetricsSnapshot, now time.Time) (*Rec
 			rationale = fmt.Sprintf("%s, computed from %.0f%% of its inputs (%s)",
 				rationale, percent, strings.Join(snapshot.CompoundingRiskInputs, ", "))
 		}
-		rationale += "." + compoundingRiskDriverSentence(snapshot.CompoundingRiskDrivers)
+		rationale += "."
+		if snapshot.CompoundingRiskAsOfDay != "" {
+			rationale += " Score as of " + snapshot.CompoundingRiskAsOfDay + "."
+		}
+		rationale += compoundingRiskDriverSentence(snapshot.CompoundingRiskDrivers)
 	}
 
 	recommendationSeverity := "warning"

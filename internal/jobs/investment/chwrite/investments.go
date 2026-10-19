@@ -101,6 +101,49 @@ type RepoEffortRecord struct {
 	ComputedAt          time.Time
 }
 
+// IssueSizeRecord is one work_unit_issue_size row (migration 130, CHAOS-9619): the unit's size in the
+// Investment measure. It has no Python counterpart.
+type IssueSizeRecord struct {
+	WorkUnitID          string
+	IssueSize           float64
+	SizedIssueCount     uint32
+	IssueCount          uint32
+	CategorizationRunID string
+	ComputedAt          time.Time
+}
+
+// WriteIssueSizes inserts work_unit_issue_size rows, stamping every row with orgID.
+func (w *Writer) WriteIssueSizes(ctx context.Context, orgID string, records []IssueSizeRecord) (int, error) {
+	if w == nil || w.conn == nil {
+		return 0, fmt.Errorf("chwrite: writer unavailable")
+	}
+	if strings.TrimSpace(orgID) == "" {
+		return 0, fmt.Errorf("%w: organization id is required to write work_unit_issue_size", ErrInvalidState)
+	}
+	if len(records) == 0 {
+		return 0, nil
+	}
+	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO work_unit_issue_size (
+		org_id, work_unit_id, issue_size, sized_issue_count, issue_count,
+		categorization_run_id, computed_at
+	)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare work_unit_issue_size batch: %w", err)
+	}
+	for _, record := range records {
+		if err := batch.Append(
+			orgID, record.WorkUnitID, record.IssueSize, record.SizedIssueCount, record.IssueCount,
+			record.CategorizationRunID, record.ComputedAt.UTC(),
+		); err != nil {
+			return 0, fmt.Errorf("append work_unit_issue_size row: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return 0, fmt.Errorf("send work_unit_issue_size batch: %w", err)
+	}
+	return len(records), nil
+}
+
 // QuoteRecord is one work_unit_investment_quotes row -- the Go counterpart of
 // WorkUnitInvestmentEvidenceQuoteRecord written by
 // write_work_unit_investment_quotes (sinks/clickhouse/investment.py:171-188).

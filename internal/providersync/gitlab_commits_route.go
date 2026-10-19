@@ -48,8 +48,10 @@ type gitLabCommitPayload struct {
 // data is advertised fails closed so an incomplete traversal cannot advance
 // the unit watermark.
 type GitLabCommitsRouteHandler struct {
-	PerPage  int
-	MaxPages int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+	PerPage      int
+	MaxPages     int
 }
 
 func (handler GitLabCommitsRouteHandler) Collect(
@@ -81,7 +83,7 @@ func (handler GitLabCommitsRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

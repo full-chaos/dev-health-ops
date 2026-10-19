@@ -96,14 +96,14 @@ func TestRuntimeRolePostureAgainstLivePostgres(t *testing.T) {
 
 	const password = "posture-test-not-a-real-credential"
 	for _, statement := range []string{
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", migrationRole, password),
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", runtimeRole, password),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(migrationRole)), password),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(runtimeRole)), password),
 		// The migration role needs CREATE on the database to make the schema.
 		// The runtime role is deliberately given NOTHING here: every privilege
 		// it ends up with must come from ApplyRuntimeGrants, or this test
 		// would be proving the setup rather than the code.
-		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %q TO %q", database, migrationRole),
-		fmt.Sprintf("GRANT CONNECT ON DATABASE %q TO %q", database, runtimeRole),
+		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(migrationRole))),
+		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(runtimeRole))),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("setup %q: %v", statement, err)
@@ -196,7 +196,7 @@ func TestRuntimeRolePostureAgainstLivePostgres(t *testing.T) {
 		// The audit insert exercises the SEQUENCE grant as well as the table
 		// grant: without USAGE on security_audit_events_id_seq this fails on
 		// nextval even though the INSERT privilege is present.
-		if _, err := runtimePool.Exec(ctx, `
+		if err := guardedExec(ctx, runtimePool, `
 			INSERT INTO auth.security_audit_events (event_type, outcome)
 			VALUES ('posture.control', 'allowed')`,
 		); err != nil {
@@ -329,8 +329,8 @@ func TestApplyRefusesWhenTheMigrationRoleIsTheRuntimeRole(t *testing.T) {
 	}
 	const password = "posture-test-not-a-real-credential"
 	for _, statement := range []string{
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", role, password),
-		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %q TO %q", database, role),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(role)), password),
+		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(role))),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("setup %q: %v", statement, err)
@@ -389,7 +389,7 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 		{
 			name: "membership in the object-owning migration role",
 			escalate: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, database, migrationRole, runtimeRole string) {
-				if _, err := admin.Exec(ctx, fmt.Sprintf("GRANT %q TO %q", migrationRole, runtimeRole)); err != nil {
+				if _, err := admin.Exec(ctx, fmt.Sprintf("GRANT %s TO %s", Quote(mustValidatedIdentifier(migrationRole)), Quote(mustValidatedIdentifier(runtimeRole)))); err != nil {
 					t.Fatalf("grant membership: %v", err)
 				}
 			},
@@ -398,7 +398,7 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 		{
 			name: "CREATE on the database",
 			escalate: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, database, migrationRole, runtimeRole string) {
-				if _, err := admin.Exec(ctx, fmt.Sprintf("GRANT CREATE ON DATABASE %q TO %q", database, runtimeRole)); err != nil {
+				if _, err := admin.Exec(ctx, fmt.Sprintf("GRANT CREATE ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(runtimeRole)))); err != nil {
 					t.Fatalf("grant database CREATE: %v", err)
 				}
 			},
@@ -444,10 +444,10 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 
 			const password = "posture-test-not-a-real-credential"
 			for _, statement := range []string{
-				fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", migrationRole, password),
-				fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", runtimeRole, password),
-				fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %q TO %q", database, migrationRole),
-				fmt.Sprintf("GRANT CONNECT ON DATABASE %q TO %q", database, runtimeRole),
+				fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(migrationRole)), password),
+				fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(runtimeRole)), password),
+				fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(migrationRole))),
+				fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(runtimeRole))),
 			} {
 				if _, err := admin.Exec(ctx, statement); err != nil {
 					t.Fatalf("setup %q: %v", statement, err)
@@ -488,7 +488,7 @@ func TestApplyFailsWhenTheRuntimeRoleCanEscalate(t *testing.T) {
 
 			switch testCase.wantKind {
 			case "role_membership":
-				if _, err := runtimePool.Exec(ctx, fmt.Sprintf("SET ROLE %q", migrationRole)); err != nil {
+				if _, err := runtimePool.Exec(ctx, fmt.Sprintf("SET ROLE %s", Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 					t.Fatalf("the granted membership is not usable, so the finding is mislabelled: %v", err)
 				}
 				t.Log("confirmed: the runtime role really can SET ROLE to the schema owner")
@@ -514,4 +514,57 @@ func pgMessage(err error) string {
 		return pgErr.Message
 	}
 	return err.Error()
+}
+
+// A guarded table refuses a write made outside a transaction that carries the
+// commit guard's setting, whatever connection or SQL text produced it.
+func TestGuardedTablesRefuseWritesOutsideACommitTransaction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+
+	for _, statement := range []string{
+		`INSERT INTO auth.organizations (id, slug, name) VALUES (gen_random_uuid(), 'direct', 'Direct')`,
+		// The table name is assembled at run time, as a text scan cannot see.
+		`DO $$ BEGIN EXECUTE 'INSERT INTO auth.' || 'auth_outbox_' || 'events (aggregate_type, aggregate_id, event_type, payload, idempotency_key) VALUES (''a'', ''b'', ''c'', ''{}'', ''direct-1'')'; END $$`,
+		`INSERT INTO auth.security_audit_events (event_type, outcome) VALUES ('direct', 'allowed')`,
+	} {
+		_, err := env.runtime.Exec(ctx, statement)
+		if err == nil {
+			t.Errorf("direct write was accepted: %s", statement)
+			continue
+		}
+		if !strings.Contains(err.Error(), "audit.Commit") {
+			t.Errorf("write refused for another reason (%v): %s", err, statement)
+		}
+	}
+
+	// UPDATE and DELETE are guarded too, not only INSERT. Seed a row the proper
+	// way, then try to change it from outside a Commit-style transaction.
+	if err := guardedExec(ctx, env.runtime, `INSERT INTO auth.organizations (id, slug, name) VALUES (gen_random_uuid(), 'victim', 'Victim')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	for _, statement := range []string{
+		`UPDATE auth.organizations SET name = 'changed' WHERE slug = 'victim'`,
+		`DELETE FROM auth.organizations WHERE slug = 'victim'`,
+	} {
+		if _, err := env.admin.Exec(ctx, statement); err == nil {
+			t.Errorf("unguarded %s was accepted", statement)
+		} else if !strings.Contains(err.Error(), "audit.Commit") {
+			t.Errorf("refused for another reason (%v): %s", err, statement)
+		}
+	}
+
+	// A wrong value is refused as well as an absent one.
+	tx, err := env.runtime.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', '1', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, slug, name) VALUES (gen_random_uuid(), 'wrong', 'Wrong')`); err == nil {
+		t.Error("a write under a forged transaction id was accepted")
+	}
 }

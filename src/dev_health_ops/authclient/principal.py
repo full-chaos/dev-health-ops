@@ -21,12 +21,18 @@ compatibility implementation this migration retires.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from dev_health_ops.authclient.contracts import ContractError, validate
+from dev_health_ops.authclient.contracts import (
+    ContractError,
+    refuse_bool,
+    refuse_decimal_form,
+    validate,
+)
 
 SCHEMA_VERSION = "principal.v1"
 SURFACE = "principal.v1"
@@ -61,6 +67,19 @@ SURFACE = "principal.v1"
 MAX_DELEGATION_DURATION = timedelta(minutes=15)
 
 
+def _refuse_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """``object_pairs_hook`` that rejects a repeated member instead of collapsing it."""
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise ContractError(
+                f"{SURFACE}: duplicate object member {key!r}. Parsers keep the "
+                f"last value, so an earlier one would never reach validation"
+            )
+        seen.add(key)
+    return dict(pairs)
+
+
 def _parse_timestamp(raw: str, field: str) -> datetime:
     """Parse one RFC 3339 timestamp the schema has already accepted.
 
@@ -72,81 +91,58 @@ def _parse_timestamp(raw: str, field: str) -> datetime:
     rather than as a traceback.
     """
     try:
-        return datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(raw)
     except ValueError as exc:
         raise ContractError(
             f"{SURFACE}: /{field} passed schema validation but is not parseable "
             f"by datetime.fromisoformat: {raw!r} ({exc})"
         ) from exc
+    return _require_utc_instant_in_range(parsed, field)
+
+
+def _require_utc_instant_in_range(moment: datetime, field: str) -> datetime:
+    """Refuse an instant whose UTC normalisation is outside 0001-01-01..9999-12-31.
+
+    ONLY AGREEMENT NEEDS THIS CHECK on the Go side, and Python needs it for
+    itself. The schema pattern bounds the LOCAL fields; the instant is
+    (fields x offset), and ``0001-01-01T00:00:00+23:59`` is UTC year 0000 -- a
+    composition a regex cannot see. Without it that value parsed cleanly and
+    raised an uncaught ``OverflowError`` on the caller's first ``astimezone``.
+    Go mirrors the check although ``time.Time`` needs no such bound, so the two
+    clients accept the same documents. principal.v1 has no clock-skew check, so
+    there is no ordering against one to preserve.
+    """
+    try:
+        moment.astimezone(timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ContractError(
+            f"{SURFACE}: /{field} {moment.isoformat()} normalises to a UTC "
+            f"instant outside 0001-01-01..9999-12-31. The schema bounds the "
+            f"local fields; the offset carries the instant past that bound, "
+            f"which a pattern cannot express"
+        ) from exc
+    return moment
 
 
 def _parse_revision(raw: object, field: str) -> int:
-    """Normalise a revision the way the CONTRACT permits, not the way Python parses.
+    """Accept a revision only as an integer TOKEN, within int64.
 
-    JSON Schema draft 2020-12 defines ``"type": "integer"`` as any number with
-    a zero fractional part, so ``1.0`` IS a valid integer by the specification
-    and the schema is right to accept it. ``json.load`` gives that back as a
-    Python ``float``, and Go's ``encoding/json`` refuses it outright against an
-    ``int64``.
-
-    That produced a real cross-language split, found by codex round 1 and
-    re-executed before fixing: ``{"membership_revision": 1.0}`` validated in
-    BOTH planes, then Python built a principal carrying ``1.0`` as a float and
-    Go failed to decode the same bytes. The disagreement lives DOWNSTREAM of a
-    validation both passed, which is why the golden corpus could not see it --
-    every fixture assertion stops at "does it validate".
-
-    A fractional value is refused rather than truncated: silently turning 1.5
-    into 1 would let two different wire documents produce one in-memory
-    principal, and a revision is a cache-invalidation key (G-31) where two
-    inputs collapsing to one value is exactly the failure mode.
+    JSON Schema's ``"type": "integer"`` admits ``1.0``, so the schema validates
+    it; Go's client and Python then disagreed about it downstream of a
+    validation both passed (found by codex round 1 of CHAOS-4884). A decimal- or
+    exponent-form token is now refused outright (``refuse_decimal_form``): by the
+    time ``json`` has produced a float the token is indistinguishable from the
+    integer it rounds to, and a revision is a cache-invalidation key (G-31)
+    where two wire values collapsing to one is the failure mode. An earlier
+    version normalised integral decimals (``1.0`` -> ``1``); that is withdrawn.
     """
-    if isinstance(raw, bool):
-        # bool is a subclass of int in Python; True would otherwise become 1.
-        raise ContractError(f"{SURFACE}: /{field} is a boolean, not a revision")
+    refuse_bool(raw, SURFACE, field, "a revision")
+    refuse_decimal_form(raw, SURFACE, field)
     if isinstance(raw, int):
         _require_int64_range(raw, field)
         return raw
-    if isinstance(raw, float):
-        # FAIL CLOSED past float64's exact-integer range. A float here means
-        # the token arrived in decimal form, and above 2^53 json.load has
-        # ALREADY rounded it to the nearest representable double -- in either
-        # direction. Measured: 9007199254740993.0 became ...992 and
-        # 9007199254740995.0 became ...996, identically in Go, so two distinct
-        # revisions collapse and a revision can come back larger than it was
-        # sent. Refused rather than rounded, because a revision is a G-31
-        # cache key. Integer-form tokens are unaffected and stay exact.
-        if abs(raw) >= _MAX_EXACT_FLOAT_INTEGER:
-            raise ContractError(
-                f"{SURFACE}: /{field} = {raw!r} arrived in decimal form with a magnitude "
-                "past 2**53, where float64 cannot represent every integer; refused rather "
-                "than silently rounded, because a rounded revision breaks the G-31 cache "
-                "key. Send it as an integer token instead, which stays exact"
-            )
-        if raw != int(raw):
-            raise ContractError(
-                f"{SURFACE}: /{field} = {raw!r} has a fractional part; "
-                "a revision is a whole counter"
-            )
-        coerced = int(raw)
-        _require_int64_range(coerced, field)
-        return coerced
     raise ContractError(f"{SURFACE}: /{field} = {raw!r} is not a number")
 
-
-#: The widest revision both clients can represent. Python's ints are
-#: arbitrary-precision and Go's are not, so the CONTRACT's range is Go's.
-#: float64 represents every integer up to 2**53 exactly and only every second
-#: one above it. Past that a decimal-form revision has already been rounded
-#: before any validator sees it, so the boundary is a property of the wire
-#: encoding rather than of this client.
-#:
-#: The comparison against it is ``>=``, not ``>``. 2**53 itself is exactly
-#: representable, but 2**53 + 1 ROUNDS DOWN to it, and a float64 cannot say
-#: which of the two arrived. A first version of this guard used ``>`` and did
-#: not fire on the value it was written for. Refusing at the boundary is the
-#: only honest position; an integer token expresses the same number exactly.
-_MAX_EXACT_FLOAT_INTEGER = 2**53
 
 INT64_MAX = 2**63 - 1
 INT64_MIN = -(2**63)
@@ -290,6 +286,23 @@ class Principal:
     entitlement_revision: int
     issued_at: datetime
     expires_at: datetime
+
+    @classmethod
+    def from_wire_bytes(cls, raw: bytes | str, root: Path | None = None) -> Principal:
+        """Parse the RAW body. Prefer this wherever the bytes are available.
+
+        It is the only entry point that can refuse a duplicate object member,
+        at any depth: ``object_pairs_hook`` fires for every object, including
+        those inside ``credential`` and ``actor_chain`` entries. Once a document
+        is decoded the earlier value is gone, so :meth:`from_wire` cannot.
+        """
+        try:
+            document = json.loads(raw, object_pairs_hook=_refuse_duplicate_members)
+        except json.JSONDecodeError as exc:
+            raise ContractError(
+                f"{SURFACE}: document is not valid JSON: {exc}"
+            ) from exc
+        return cls.from_wire(document, root)
 
     @classmethod
     def from_wire(cls, document: Any, root: Path | None = None) -> Principal:

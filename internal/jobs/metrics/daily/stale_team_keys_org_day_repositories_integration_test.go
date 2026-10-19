@@ -249,7 +249,10 @@ func TestARunOfTheWholeOrganizationLeavesTheKeysOfARepositoryTheOrganizationHold
 		if float(impactHeld, org, day, gone) != 10 || float(teamHeld, org, day, gone) != 7 {
 			t.Fatalf("the repository that is gone has no stored rows: the case is not set")
 		}
-		impactKeys := liveKeys("ai_impact_metrics_daily", "prs_total", "tuple(team_id, work_type, attribution_bucket)", org, late)
+		// A group column (human_prs, unknown_prs) repeats on every bucket row of its
+		// group, so the empty unknown row of a group with a human pull request
+		// still holds a measure, as the key-left count of the run reads it.
+		impactKeys := liveKeys("ai_impact_metrics_daily", "prs_total + human_prs + unknown_prs", "tuple(team_id, work_type, attribution_bucket)", org, late)
 
 		// The run of the whole organization, with the list of its dispatch, ends.
 		orgRun := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: snapshot}

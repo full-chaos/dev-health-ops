@@ -49,7 +49,11 @@ type gitLabSecurityAlertRow struct {
 // GitLabSecurityRouteHandler mirrors
 // processors.gitlab._fetch_gitlab_security_alerts_sync. It deliberately has
 // no switch/registry wiring in this slice; the parent lane owns activation.
-type GitLabSecurityRouteHandler struct{ MaxAlerts int }
+type GitLabSecurityRouteHandler struct {
+	MaxAlerts int
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
+}
 
 type gitLabSecurityResponseObserver struct {
 	attempts    *int
@@ -112,7 +116,7 @@ func (handler GitLabSecurityRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

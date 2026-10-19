@@ -51,6 +51,10 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemStatusTransition,
 )
+from dev_health_ops.storage.repo_anchor import REPO_ANCHOR_COLUMNS, fetch_repo_anchor
+from dev_health_ops.storage.team_provider_identity import (
+    fetch_team_provider_identity,
+)
 
 from .operational_current import current_operational_rows_sql
 from .operational_ordering_guard import (
@@ -361,6 +365,21 @@ class ClickHouseStore:
         """
         assert self.client is not None
         row = build_repository_insert_row(repo)
+        # CHAOS-3383: provider_repo_id and identity_path belong to the Go
+        # provider sync; this writer never knows them, so it carries them from
+        # the stored versions it replaces.
+        org_id = str(getattr(self, "org_id", None) or "default")
+        async with self._lock:
+            stored = await asyncio.to_thread(
+                fetch_repo_anchor, self.client, [(org_id, row["id"])]
+            )
+        row.update(
+            zip(
+                REPO_ANCHOR_COLUMNS,
+                stored.get((org_id, row["id"]), ("", "")),
+                strict=True,
+            )
+        )
         await self._insert_rows(
             "repos",
             [
@@ -373,6 +392,7 @@ class ClickHouseStore:
                 "provider",
                 "last_synced",
                 "source_id",
+                *REPO_ANCHOR_COLUMNS,
             ],
             [row],
         )
@@ -1728,6 +1748,11 @@ class ClickHouseStore:
         if rows_missing_manual_members:
             await self._preserve_existing_manual_members(rows_missing_manual_members)
 
+        # CHAOS-9432: provider_team_id, provider_name and gone_at belong to the
+        # provider's catalog sync (Go); this writer never knows them, so it
+        # carries them from the stored versions it replaces.
+        await self._carry_team_provider_identity(rows)
+
         await self._insert_rows(
             "teams",
             [
@@ -1747,9 +1772,31 @@ class ClickHouseStore:
                 "native_team_key",
                 "parent_team_id",
                 "source_id",
+                "provider_team_id",
+                "provider_name",
+                "gone_at",
             ],
             rows,
         )
+
+    async def _carry_team_provider_identity(self, rows: list[dict[str, Any]]) -> None:
+        """Set ``provider_team_id``, ``provider_name`` and ``gone_at`` on ROWS
+        (mutated in place) from the stored versions of their ``(org_id, id)``
+        (CHAOS-9432); see ``storage.team_provider_identity``."""
+        assert self.client is not None
+        async with self._lock:
+            stored = await asyncio.to_thread(
+                fetch_team_provider_identity,
+                self.client,
+                [(str(row["org_id"]), str(row["id"])) for row in rows],
+            )
+        for row in rows:
+            provider_team_id, provider_name, gone_at = stored.get(
+                (str(row["org_id"]), str(row["id"])), ("", "", None)
+            )
+            row["provider_team_id"] = provider_team_id
+            row["provider_name"] = provider_name
+            row["gone_at"] = gone_at
 
     async def _preserve_existing_manual_members(
         self, rows: list[dict[str, Any]]

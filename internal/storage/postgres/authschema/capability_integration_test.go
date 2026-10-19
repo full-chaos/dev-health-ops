@@ -42,7 +42,7 @@ func insertFixtures(ids map[string]string) []struct {
 		{"workloads", `INSERT INTO auth.workloads (principal_id, organization_id, name, trust_domain, issuer, namespace, service_account_name, audience) VALUES ($1, $2, 'cap-wl', 'td', 'iss', 'ns', 'sa', 'aud')`, []any{ids["wlPrincipal"], ids["org"]}},
 		{"sessions", `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at) VALUES ($1, $2, '\xdeadbeef'::bytea, now() + interval '1 hour')`, []any{ids["session"], ids["principal"]}},
 		{"refresh_credentials", `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at) VALUES ($1, $2, '\xfeedface'::bytea, now() + interval '1 day')`, []any{ids["session"], ids["principal"]}},
-		{"credential_registry", `INSERT INTO auth.credential_registry (principal_id, credential_class, secret_hash, hash_algorithm) VALUES ($1, 'cap-class', '\xabad1dea'::bytea, 'sha256')`, []any{ids["principal"]}},
+		{"credential_registry", `INSERT INTO auth.credential_registry (principal_id, credential_class, secret_hash, hash_algorithm, fingerprint) VALUES ($1, 'cap-class', '\xabad1dea'::bytea, 'sha256', '0123456789abcdef')`, []any{ids["principal"]}},
 		{"resource_grants", `INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ($1, $2, 'cap.role', 'repo', 'r1')`, []any{ids["principal"], ids["org"]}},
 		{"policy_revisions", `INSERT INTO auth.policy_revisions (revision, digest, document) VALUES (1, '\x01'::bytea, '{}'::jsonb)`, nil},
 		{"entitlement_snapshots", `INSERT INTO auth.entitlement_snapshots (organization_id, sequence, document, digest) VALUES ($1, 1, '{}'::jsonb, '\x02'::bytea)`, []any{ids["org"]}},
@@ -60,9 +60,9 @@ func insertFixtures(ids map[string]string) []struct {
 // statements FAIL on a table the manifest grants read-only.
 func probeStatements(table, column string) map[string]string {
 	return map[string]string{
-		"SELECT": fmt.Sprintf(`SELECT count(*) FROM auth.%s`, table),
-		"UPDATE": fmt.Sprintf(`UPDATE auth.%s SET %s = %s WHERE false`, table, column, column),
-		"DELETE": fmt.Sprintf(`DELETE FROM auth.%s WHERE false`, table),
+		"SELECT": fmt.Sprintf(`SELECT count(*) FROM auth.%s`, Quote(mustValidatedIdentifier(table))),
+		"UPDATE": fmt.Sprintf(`UPDATE auth.%s SET %s = %s WHERE false`, Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(column)), Quote(mustValidatedIdentifier(column))),
+		"DELETE": fmt.Sprintf(`DELETE FROM auth.%s WHERE false`, Quote(mustValidatedIdentifier(table))),
 	}
 }
 
@@ -141,7 +141,7 @@ func TestRuntimeCanExerciseEveryDeclaredPrivilege(t *testing.T) {
 		if !declared || !entry.Insert {
 			continue
 		}
-		if _, err := env.runtime.Exec(ctx, fixture.SQL, fixture.Args...); err != nil {
+		if err := guardedExec(ctx, env.runtime, fixture.SQL, fixture.Args...); err != nil {
 			t.Errorf("INSERT on auth.%s was refused or invalid: %v", fixture.Table, err)
 			continue
 		}

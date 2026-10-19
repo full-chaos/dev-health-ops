@@ -114,7 +114,7 @@ func (sink repositoryClickHouseEffects) WriteEffect(
 	for _, row := range rows {
 		if err := batch.Append(
 			row.ID, row.OrgID, row.Repo, row.Ref, row.CreatedAt, row.Settings,
-			row.Tags, row.Provider, row.LastSynced,
+			row.Tags, row.Provider, row.LastSynced, row.ProviderRepoID, row.IdentityPath,
 		); err != nil {
 			return err
 		}
@@ -219,6 +219,8 @@ SELECT
   argMax(ifNull(tags, ''), last_synced)                AS winning_tags,
   argMax(provider, last_synced)                        AS winning_provider,
   argMax(ifNull(toString(source_id), ''), last_synced) AS winning_source_id,
+  argMax(provider_repo_id, last_synced)                AS winning_provider_repo_id,
+  argMax(identity_path, last_synced)                   AS winning_identity_path,
   max(last_synced)                                     AS winning_version
 FROM repos
 WHERE org_id = ? AND id = ?`,
@@ -238,7 +240,7 @@ WHERE org_id = ? AND id = ?`,
 	for rows.Next() {
 		if err := rows.Scan(
 			&actual.Repo, &ref, &actual.CreatedAt, &actual.Settings,
-			&actual.Tags, &actual.Provider, &sourceID, &lastSynced,
+			&actual.Tags, &actual.Provider, &sourceID, &actual.ProviderRepoID, &actual.IdentityPath, &lastSynced,
 		); err != nil {
 			return EffectConflict, err
 		}
@@ -296,6 +298,8 @@ func compareRepositoryVersion(
 		actual.Row.Settings == expected.Settings &&
 		actual.Row.Tags == expected.Tags &&
 		actual.Row.Provider == expected.Provider &&
+		actual.Row.ProviderRepoID == expected.ProviderRepoID &&
+		actual.Row.IdentityPath == expected.IdentityPath &&
 		actual.SourceID == "" &&
 		actual.Row.CreatedAt.UTC().Equal(expected.CreatedAt.UTC()) {
 		return EffectExact

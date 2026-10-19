@@ -432,7 +432,17 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 	pythonProvider := strings.Split(golden.InspectRows(t, "python provider requests", func() string {
 		return strings.Join(stub.take(), "\n")
 	}), "\n")
-	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Golden: golden})
+	failuresChecked := 0
+	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
+		Golden:    golden,
+		Normalize: reduceProviderFailure,
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			assertProviderFailureSentence(t, request, goResponse, &failuresChecked)
+		},
+	})
+	if failuresChecked != 2 {
+		t.Errorf("checked %d provider failure answers, want 2", failuresChecked)
+	}
 	goProvider := stub.take()
 
 	providerSame := len(goProvider) > 0 && strings.Join(pythonProvider, "\n") == strings.Join(goProvider, "\n")

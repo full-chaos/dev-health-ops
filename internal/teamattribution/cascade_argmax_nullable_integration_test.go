@@ -46,6 +46,13 @@ func openTeamAttributionSchema(ctx context.Context, t *testing.T) stdclickhouse.
 	// 051_team_attribution_dimensions.sql) and 051 itself, restricted to the
 	// columns these three readers actually project.
 	statements := []string{
+		// repos: LoadProjects and LoadRepos read it to move a path-keyed GitLab
+		// ownership row to the catalog id of the project its path names.
+		`CREATE TABLE repos (
+			id UUID, repo String, identity_path String DEFAULT '', provider String,
+			provider_repo_id String DEFAULT '', settings Nullable(String), org_id String,
+			last_synced DateTime64(3, 'UTC') DEFAULT now64(3)
+		) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 		`CREATE TABLE teams (
 			org_id String, id String, name String,
 			updated_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')

@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider/teamprovidertest"
 )
 
 type createdConn struct {
@@ -18,6 +20,7 @@ type createdConn struct {
 	created    map[string]time.Time
 	createdErr error
 	batch      *createdBatch
+	writes     []teamprovider.Write
 }
 
 func (c *createdConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
@@ -37,6 +40,21 @@ func (c *createdConn) Query(_ context.Context, query string, _ ...any) (driver.R
 func (c *createdConn) PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error) {
 	c.batch = &createdBatch{}
 	return c.batch, nil
+}
+
+// Exec is the teams write (teamprovider.Insert): its rows reach the batch.
+func (c *createdConn) Exec(_ context.Context, query string, args ...any) error {
+	_, writes, err := teamprovidertest.Decode(query, args)
+	if err != nil {
+		return err
+	}
+	c.batch, c.writes = &createdBatch{}, writes
+	for _, write := range writes {
+		if err := c.batch.Append(write.Values...); err != nil {
+			return err
+		}
+	}
+	return c.batch.Send()
 }
 
 type createdRows struct {

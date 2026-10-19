@@ -105,6 +105,8 @@ type ownershipRow struct {
 	Specificity, Priority int
 }
 
+func (row ownershipRow) joinID() string { return row.ProjectID }
+
 func (row ownershipRow) validAt(at time.Time) bool {
 	return !row.ValidFrom.After(at) && (row.ValidTo == nil || row.ValidTo.After(at))
 }
@@ -344,8 +346,10 @@ func (facts matrixFacts) ownersAt(rows []ownershipRow, at time.Time) map[string]
 
 // isTeamKeyProject is the project a Linear team key stands for ("<org>:linear:<key>", the team-key
 // ownership kind): the team's own key, not a project of the projects catalog.
+// isTeamKeyProject is an ownership row keyed by a team key ({org}:linear:{key})
+// rather than a project; a GitLab catalog id ({org}:gitlab:{n}) is a project.
 func (facts matrixFacts) isTeamKeyProject(projectID string) bool {
-	return strings.HasPrefix(projectID, facts.org+":")
+	return strings.HasPrefix(projectID, facts.org+":") && !strings.HasPrefix(projectID, facts.org+":gitlab:")
 }
 
 func (facts matrixFacts) repoOwnerRows(repoID string) []ownershipRow {
@@ -362,7 +366,7 @@ func (facts matrixFacts) repoOwnerRows(repoID string) []ownershipRow {
 func (facts matrixFacts) projectOwnerRows(projectID string) []ownershipRow {
 	var out []ownershipRow
 	for _, row := range facts.projOwners {
-		if projectID != "" && row.ProjectID == projectID {
+		if projectID != "" && row.joinID() == projectID {
 			out = append(out, row)
 		}
 	}
@@ -1050,22 +1054,22 @@ var matrixChecks = map[string]matrixCheck{
 	"project_ownership_starts_at_its_evidence": {"projects", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
 		seen := map[string]bool{}
 		for _, row := range f.projOwners {
-			if row.Provider != p || seen[row.ProjectID] || f.isTeamKeyProject(row.ProjectID) {
+			if row.Provider != p || seen[row.joinID()] || f.isTeamKeyProject(row.ProjectID) {
 				continue
 			}
 			var first time.Time
 			for _, item := range f.items {
-				if item.ProjectID == row.ProjectID && (first.IsZero() || item.CreatedAt.Before(first)) {
+				if item.ProjectID == row.joinID() && (first.IsZero() || item.CreatedAt.Before(first)) {
 					first = item.CreatedAt
 				}
 			}
 			if first.IsZero() {
 				continue
 			}
-			seen[row.ProjectID] = true
+			seen[row.joinID()] = true
 			r.Subjects++
 			var earliest time.Time
-			for _, candidate := range f.projectOwnerRows(row.ProjectID) {
+			for _, candidate := range f.projectOwnerRows(row.joinID()) {
 				if earliest.IsZero() || candidate.ValidFrom.Before(earliest) {
 					earliest = candidate.ValidFrom
 				}
@@ -1386,7 +1390,7 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 			for index := range rows {
 				var first time.Time
 				for _, item := range f.items {
-					if item.ProjectID == rows[index].ProjectID && (first.IsZero() || item.CreatedAt.Before(first)) {
+					if item.ProjectID == rows[index].joinID() && (first.IsZero() || item.CreatedAt.Before(first)) {
 						first = item.CreatedAt
 					}
 				}

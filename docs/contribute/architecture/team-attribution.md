@@ -764,7 +764,35 @@ project's work items by `(provider, project_id)`; no reader has to join on `proj
 | jira | native project id (`10001`) | the same id | the same id | one id |
 | linear | raw project UUID | the same UUID | the same UUID | one id |
 | github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
-| gitlab | `{org_id}:gitlab:{native id}` | the project PATH | none: a GitLab project is this schema's repository | **known gap** (CHAOS-8883): ownership and catalog meet only through `project_key` |
+| gitlab | `{org_id}:gitlab:{native id}` | the same id (CHAOS-8883); the path is `project_key` | the same id (CHAOS-3383 PR 3b2); `work_items.project_key` is the project's minted `identity_path` (stable across a rename, so the metric work scope does not split) | one id for catalog, ownership and work items. A GitLab item written before 3b2 holds the path in `project_id`; the attribution reads map it, through its `repo_id` and `repos.provider_repo_id`, to the catalog id (`teamattribution.AnchorGitLabSubjectProjects`), and the old path is its project key. Name joins (repo ownership by full name, manual repo and project rules) accept both the current path and the identity path of the item's GitLab `repos` row, except an identity path another GitLab row now holds as its current path (a reused path belongs to the project at it; the old project's items answer only to their current path). The team issue-project key lookup follows the same set. A path is never an ownership join key: a stale item at a reused path joins nothing of the path's new owner |
+
+GitLab ownership rows written before CHAOS-8883 hold the path as `project_id`. Until that sync, the attribution reads map such a row on the fly: a path-keyed GitLab ownership row is moved to the catalog id of the ONE project the `repos` rows name at that path (current or minted path; `teamattribution.LoadGitLabProjectNativesByPath`, `RemapLegacyGitLabProjectFacts`), so it lands on the same key as an item anchored to that id. A path two projects have used is not a grant for either: the row joins no item (the team still holds the ownership). The same rule applies to a repository-ownership row keyed by full name (it joins by the catalog id of the one project its path names); a path no `repos` row names stays as it is.
+The next GitLab team-catalog sync
+moves an open one to the catalog id of the same project: the listed project at that path, or, when the store has seen
+exactly one project id at the path (`projects.project_key`, or a `repos` row whose `repo` or `identity_path` is the
+path, its project named as the repository identity resolver names it: `provider_repo_id`, else `settings.project_id`
+for a row from before migration 134), that project wherever it is listed now (a rename before the sync). The catalog-keyed row takes the grant's first instant,
+and the path row it replaces (and any duplicate of it) becomes an empty-interval tombstone (valid_to = valid_from, as
+the repository-ownership supersede writes), so at every instant exactly one row of the grant is valid. It does not move a row to the listed project at its path when the store has
+seen another project id at that path (a path a new project took over). That row is closed at the run, and the new
+project's grant starts at the run.
+
+GitLab repository identity (CHAOS-3383, chris's option A, 2026-10-15). A GitLab project's `repo_id` and work-item
+ids no longer follow its current path. Every GitLab route resolves the identity through `repos`
+(`internal/providersync/gitlab_repo_identity.go`):
+
+- A project the store holds (a `repos` row naming its numeric id) keeps that row's `repo_id` and the path the id was
+  minted from, `repos.identity_path`. A rename or transfer changes `repos.repo` (the current path) and nothing else.
+- A project the store does not hold mints from its current path.
+- A new project at a path another project's id was minted from mints from `{path}@{N}` (path reuse, delete and
+  recreate).
+- GitLab work-item ids are `gitlab:{identity_path}#{iid}` and `!{iid}`. A reference a payload makes by another
+  project's current path is stored under that project's identity path. Readers that turn a slug into a repository
+  (`issueprlinks`, `issuepredges`, investment explain) accept the identity path and the current path, each under
+  its own provider: a GitLab identity path never answers a GitHub slug, and a GitHub repository never answers a
+  GitLab one.
+- Not changed yet: `work_items.project_id` and sprint ids keep the current path. Until they move to the catalog id,
+  a project at a reused path shares `project_id` with the old project's items, and so its ownership join.
 
 Jira before this change: the three team-catalog writers (project-as-team, the legacy
 `jira_project_ops_team_links` carry-forward, Atlassian Teams) built the id from the project KEY
@@ -1213,7 +1241,12 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
     with the table label `project_as_team_retired` (observed only when a run retired rows, next to the
     `team_project_links_*` labels above); the Info line `jira_project_as_team_retired` (counts only:
     `teams`, `ownership`, `memberships`, `repo_ownership`, `teams_with_manual_members`,
-    `teams_with_sync_policy`).
+    `teams_with_sync_policy`, `teams_without_provider_identity`).
+  - **Provider identity.** The retire is a writer of `teams`: the inactive version takes `provider_team_id`,
+    `provider_name` and `gone_at` from `teamprovider.StoredIdentityOfOrganization` (section 0.4i), not from
+    the newest version, so a blank newest version over an older one with the identity does not erase it at
+    the next merge. `teams_without_provider_identity` counts the found rows that no stored version gives a
+    provider team id (a project-as-team row was last written before migration 137 added the column).
   - **Operator verb.** `dho workers providersync retire-jira-project-as-team --org-stdin` runs the same
     function for one organization now (section 1.1, operator cleanups).
   - **Team discovery.** `GET /api/v1/admin/teams/discover?provider=jira` lists the active Atlassian teams the
@@ -1221,6 +1254,7 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
     cannot write a project-as-team row again.
 
   Tests: `TestRetireJiraProjectAsTeamRowsClosesOnlyThatClass`,
+  `TestRetireJiraProjectAsTeamRowsKeepsTheStoredProviderIdentity`,
   `TestRetireJiraProjectAsTeamRowsClosesTheDerivedRepoOwnershipOfARetiredTeam`,
   `TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership`, `TestAPartialJiraSnapshotClosesNoOwnership`,
   `TestAnArchivedJiraProjectKeepsItsOwnership`, `TestAnInactiveTeamTakesNoWorkItemForEveryProvider`
@@ -1251,7 +1285,22 @@ controls: a link that is gone and an explicit empty list are closed).
 > share as the share they have."* The measure (lead D5988, from the D5432 ranking in section 1.1): a team's share of a
 > repository is its **linked share**, the link counts per tier (`native`, then `explicit_text`, then `heuristic`); the
 > team with the largest linked share is the main owner and keeps `is_primary` over the whole history, and every other
-> owning team gets a row with its own share. The writer stores the share (`team_repo_ownership.share`, section 1.1)
+> owning team gets a row with its own share. **Co-owner share floor (chris, 2026-10-15, verbatim): *"Drop them if
+> they're < 1%"*.** A co-owner whose linked share is below 0.01 gets no row (`teamRepoOwnershipCoOwnerShareFloor` in
+> `internal/providersync/team_repo_ownership_derivation.go`); a co-owner at exactly 0.01 keeps its row, and the main
+> owner (every tied main owner too) keeps its row whatever its share. The kept rows store their linked share over all
+> links of the repository, dropped teams included. An open row of a dropped co-owner, and an open row that no current
+> link supports, is retracted by the derivation's own diff (`diffTeamRepoOwnershipRetractions`: a replacement row
+> with `valid_to` set and a newer `updated_at`, never a delete), under the retraction guard (CHAOS-9045). The run logs
+> `team_repo_ownership_derivation.co_owner_below_share_floor` with the count (tests:
+> `team_repo_ownership_co_owner_floor_test.go`, every provider pair). **A dropped co-owner holds no share on any day
+> (CHAOS-9913).** The share is a measure over the whole history (D5988), so a co-owner below the floor now was below it
+> on every day: its rows, the open one and every earlier closed one, are voided (`valid_to = valid_from`, the
+> supersede tombstone form), not closed at the run, and as-of readers (`teamownership.OwnerSharesByRepo`, filter
+> `valid_from <= asOf < valid_to`) give it nothing on any day, so a trailing recompute of a daily team table cannot write
+> its share back. Logged as `team_repo_ownership_derivation.co_owner_voided`, stat `CoOwnersVoided`; test
+> `TestADroppedCoOwnerHoldsNoShareOnAnyDay` (real ClickHouse, jira, linear, github and gitlab). Every other retraction
+> (no supporting link left, a reassigned project) still closes at the run and keeps the history. The writer stores the share (`team_repo_ownership.share`, section 1.1)
 > and the investment and quadrant readers weigh a co-owned repository by it (CHAOS-9408, `teamscope.OwnerShares`,
 > next to "The team review quadrant" and "Every analytics team grouping on the investment path" below). Other text
 > below that says "same rank", "owners at the winner's rank" or "shared equally" about the attribution cascade
@@ -1270,7 +1319,7 @@ controls: a link that is gone and an explicit empty list are closed).
 > **The daily team tables read the owner shares too (CHAOS-9410).** `teamownership.OwnerSharesByRepo` is the one Go
 > reader of "who owns a repository": the main owner (every tied team of a full tie, D5990) first, then every lesser
 > owner, each with its own share (`team_repo_ownership.share`, the largest non-NULL share of the team's open rows,
-> divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap, D5991).
+> divided by the sum over all owners; equal where any owner has no measure; no rounding, threshold or cap in the reader, D5991; the writer's co-owner floor above decides which rows exist).
 > `AuthoritativeOwnersByRepo` is the same read cut to the main owners. A caller picks its rule by the kind of measure:
 > - **An additive measure** (a sum over repositories) takes each owner at its share. `team_cognitive_load_daily`
 >   does so: the pull-request interruption load, the review request load and the context-spread count are the sums
@@ -1285,10 +1334,38 @@ controls: a link that is gone and an explicit empty list are closed).
 >   `ai_impact_metrics_daily` does the same since migration 128 (CHAOS-9604, D5998): its twelve count columns are
 >   Float64 and the AI impact GraphQL count fields are `Float!`. A pull request that the ownership read gives to a
 >   team counts in that team's rows at the owner's share (`total`, `merged`, the bucket counts, rework, follow-up
->   commits, reverts, incidents, test-gap pull requests, and the leverage pull-request component); the ratios, the
+>   commits, reverts, test-gap pull requests, and the leverage pull-request component; incidents are not shares, see below); the ratios, the
 >   averages (cycle time, reviews per pull request) and the baselines are the repository's own and are never scaled,
 >   so a lesser owner reads the repository's rates and a fraction of its counts. The readers that add rows (the impact
 >   summary, the comparison, the risk breakdown, the review load) add the fractions and weight the averages by them.
+>   An incident is not a pull request and is not split by ownership share (D6040, D6041, CHAOS-9915): it counts
+>   once, for one team, on one row, so `incidents_count` is always a whole number and, over every row of a
+>   repository and day, adds up to the incidents that started that day. The team is the first of:
+>   1. the team the incident source names: the owning team of the incident's service, a provider reference mapped
+>      through the team catalog (the active team of the organization with that provider and `native_team_key`). A
+>      reference that is not in the catalog, or names several teams, names none; it is never matched by equality with
+>      a team id;
+>   2. the team that owned the triggering pull request: the pull request of the deployment the incident is linked to
+>      (`work_graph_deployment_incident_edges` of the best tier, native > explicit_text > heuristic, then
+>      `deployments.pull_request_number`), owned by the primary team of the work item linked to it in
+>      `work_graph_issue_pr` (best tier only: a native link shadows a lower one, for the owner and for the pull request's
+>      AI bucket and work type alike, and the day's pull request facts read the same best-tier link, so an incident and its triggering pull request share one row; the work item's attribution row of the pull request's own repository wins, and
+>      rows of other repositories count only when they all name one team; a pull request whose best-tier links name no
+>      team or several has no owner);
+>   3. the main owner of the repository. Among tied main owners (D5990) the incident goes to the tied team that owned
+>      the most recently merged pull request of the repository before the incident started, else to the lowest team
+>      id. A repository no team owns keeps its incidents in its no-team rows.
+>      An incident whose service maps to several repositories is one incident: it sits on the repository of its
+>      triggering pull request when the service maps to it, else on the lowest repository id the service maps to, whichever
+>      partition computes the day, so it is counted once. `ai_impact` runs after `work_item_attribution` and
+>      `work_graph_edges`, whose rows it reads.
+>
+>   The row is the triggering pull request's own (team, repository, `work_type`, AI bucket). An incident without a
+>   triggering pull request has no AI evidence: it sits on the `human` bucket with `work_type` `incident` (a value of
+>   the work item type enum). Every other row of the repository and day carries 0 of it, a team that attribution rows
+>   name but that owns neither the triggering pull request nor the repository takes none, and a group with no pull
+>   request of the day gets an empty row so the incident still counts. `incident_drag_rate` is the row's incidents over
+>   the row's merged pull requests (it was the repository's incidents over the group's). The source's team reference is mapped only through the team catalog; no Postgres mapping bridges the two.
 > - **The share is the weight of a repository in a team's aggregate (D5998, CHAOS-9620).** `compounding_risk_daily`
 >   (team scope) gives every owner, main and lesser, a row. Its additive columns are the pooled review-window counts
 >   (`merged_prs_30d`, `reviewed_prs_30d`, Float64 since migration 124): the sum over the team's repositories of the
@@ -1744,6 +1821,15 @@ write, and on a store write that does not refuse a bare id before its batch.
     (`manual_members_folded`), written at the stored version (ReplacingMergeTree keeps the last inserted row
     of an equal version), so a later write of its own writer stamped at or after that version still wins. Manual members are an admin's statement that no other writer restores; the kept row and
     the moved team are one team.
+    A custom team (an admin's own or a pushed one, stored with provider `""`) carries as the ACTIVE team
+    (chris D6023, CHAOS-9003: custom = admin = push API): when the kept row's current version is inactive, the
+    same new version of the kept row is written with `is_active = 1` (`keyed_teams_activated`), also when it
+    holds every member already, so one active team holds the admin team and its members. When an admin
+    deleted the kept row, that id has no team (a write under the id of a deleted team is a new team, as in the
+    admin store): the custom team is written under the id as a new team, with its own values and a version
+    past the delete (`deleted_keyed_teams`). Nothing is folded into a deleted row: a new version of it would
+    not carry `deleted_at`. A provider's own team that moves onto an inactive or deleted row of its id leaves
+    that row as it is (the provider's newer word).
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
     rows gives the new row's values, and the team's origin (provider, native key, parent, source) stays the
     provider row's (chris D5682). An admin edit of an id that two providers' teams hold is neither team: it
@@ -1759,7 +1845,8 @@ write, and on a store write that does not refuse a bare id before its batch.
   - An id that already holds a key is never rewritten (chris D5427). When the new id already has a row (a
     prefixed writer wrote it), that row is kept and the old row goes inactive; the kept row only takes the old
     row's manual members it does not hold yet (lead D5698, see `manual_members_folded` above), so an admin's
-    members are not lost.
+    members are not lost, and a custom team makes an inactive kept row active (chris D6023, see
+    `keyed_teams_activated` above).
   - An id that is only a provider prefix (`gh:`, `linear: `, `atlassian:`) is no team of any provider:
     `teamid.Of` would give it a second prefix (`linear:gh:`). The carry leaves it, counts it as
     `malformed_team_ids` (the team rows and observations of such an id) and logs `team_ids_malformed_skipped`
@@ -1853,6 +1940,35 @@ Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderT
 - **Carry.** Every Go writer of `teams` reads `internal/teamcreated.Carry` before its INSERT: `min(coalesce(created_at, updated_at))` over every stored version of the team (not `FINAL`, so unmerged older versions count). A team with no stored row gets `created_at = updated_at` of its first write. A failed read aborts the write. The writers are the admin API (`internal/api/teamsidentity`), the GitHub, GitLab, Jira and Linear catalog sinks, `internal/atlassianteams`, the `team.v1` push sink and, as column copies, the team id carry and the Jira project-as-team retire. A census test fails when an `INSERT INTO teams` drops the column.
 - **Legacy rows.** Rows written before migration 113, and rows written by a Python writer, have `created_at = NULL`. No mutation backfills them (versions already merged away cannot be recovered). The carry fills the column from the oldest surviving version at the team's next Go write. Until then readers show `coalesce(created_at, updated_at)`, so for such a team `created_at` can equal `updated_at`; this is a fallback, not a measured creation time.
 - **Reader.** The admin teams API (`GET/POST/PATCH /admin/teams`) renders the stored `created_at` and an unchanged `updated_at`. `identities` still render `created_at = updated_at`.
+
+#### 0.4i A team's provider identity (`teams.provider_team_id`, `provider_name`, `gone_at`; CHAOS-9432)
+
+Migration 137 adds three columns to `teams`. `provider_team_id` is the provider's immutable id of the team as text (the
+GitHub team id, the GitLab group id, the Linear team uuid, the Atlassian team uuid), `provider_name` is the name the
+provider reports (the `name` column can be edited by an admin under the team's sync policy), and `gone_at` is the time
+a run proved the team gone at the provider; NULL = not gone. The row id is minted once from the first slug, path or key
+the sync saw and is never changed: a rename at the provider changes `native_team_key`, and the stored provider id is
+what tells the sync it is the same team (the rename change builds on it). `is_active` is not touched by `gone_at`: a
+gone team keeps its past reads and attribution (chris ruling, CHAOS-9432: never deactivate a gone team).
+
+- **Carry, inside the write (CHAOS-9999).** Every Go writer of `teams` writes through `internal/teamprovider.Insert`:
+  one `INSERT ... SELECT` that reads the stored values of the three columns in the same statement. `provider_team_id`
+  and `provider_name` are the run's own value when it has one, else the newest NON-EMPTY value over every stored
+  version (a writer that does not know the provider's id never erases it); `gone_at` is NULL for a catalog write of a
+  listed team, the moved team's own value for the team id carry's new row, else the newest version's value. A read
+  before a separate insert is not allowed: a catalog write that commits between the two is overwritten by the newer
+  version, and after a merge (ReplacingMergeTree keeps one row per id) no read can find it again. Residual window: the
+  SELECT reads a snapshot taken when the statement starts, so a write that commits while that one statement runs is
+  still overwritten (ClickHouse has no transaction); `provider_team_id` and `provider_name` are written again by the
+  next catalog sync that lists the team, `gone_at` is not. The fix stays inside `teams` (chris ruling on CHAOS-9999: no
+  second table, no duplicated columns). The Python `insert_teams` writers (not run by any deployed workload: the
+  chart runs only the `dho` image) still read before they insert. A census test (`internal/teamprovider`) fails when a
+  Go writer of `teams` does not write through `Insert` (or an `INSERT ... SELECT` that joins
+  `teamprovider.StoredIdentityOfOrganization` and selects the three columns), and
+  `Carry` is left for the catalog writers' Tally only.
+- **Fill.** The GitHub, GitLab and Linear catalog writers store the provider's id and name of each listed team on every
+  run, so an existing row gets its provider id on the first sync that lists the team (no backfill job). A team listed
+  under a key whose stored provider id differs is logged at Warn with counts (`team_provider_identity_written`).
 
 #### 0.4g A stored day after a team id changes (CHAOS-9026)
 
@@ -2263,8 +2379,12 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
 selects projects (`GitLabTeamCatalogCollector.CollectTeamCatalog`, `internal/providersync/gitlab_team_catalog_route.go`)
 asks `GitLabTeamCatalogClickHouseEffects.SnapshotOwnership` for the rows of the ownership write: the grants the group
 `/projects` listings returned, plus a closing version (the same sort key written again with `valid_to` set) of every
-open row GitLab no longer returns. It is the same one rule as GitHub and Jira, `PlanOwnershipSnapshot` (the project path
-is the project id); only the open-row read and the listed-team set are GitLab's. Scope of a close, all of it required:
+open row GitLab no longer returns. It is the same one rule as GitHub and Jira, `PlanOwnershipSnapshot` (the project id
+is the catalog id `{org}:gitlab:{native id}`, CHAOS-8883); only the open-row read and the listed-team set are GitLab's.
+The absence question for a catalog-keyed row asks GitLab by the numeric id (`GET /projects/:id`, a rename does not
+hide it): the project still in the group's namespace holds the row; another namespace, or GitLab's own
+`404 Project Not Found`, proves it gone; any other answer proves nothing. A row of the older path form is asked by
+its path as before. Scope of a close, all of it required:
 
 - org = the run's org, `provider = 'gitlab'`, `source = 'provider_access'`. A row of another org, another source
   (`manual`) or another provider (jira, linear, github) is never read and never closed, even with the same team id and
@@ -2406,6 +2526,16 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > paths (Jira/Linear sprint and cycle discovery) run unconditionally, because dispatch depends on
 > the `SyncRunReferenceDiscovery` ledger status, never on those CH rows existing. See the Manual QA
 > walkthrough in §4 for the sync-config UI path.
+>
+> **The switches stay independent, and a link needs an imported team (chris 2026-10-14, CHAOS-9123).**
+> A run with members or projects on and teams off writes a `team_memberships` or `team_project_ownership`
+> row only for a team that already has a `teams` row (in any version: an inactive or deleted team was
+> imported); a team the same run writes (teams on) counts too. The open link rows of a team that was never
+> imported are not written; a closed row is always written, because it closes a row the store holds. One
+> shared helper decides it for every catalog (`providersync.KeepLinksOfImportedTeams`: GitHub, GitLab,
+> Linear and Jira catalogs, and the Atlassian teams write), and it logs `team_links_of_unimported_teams_not_written`
+> with counts. The `jira_legacy` ops-team ownership rows are exempt: they name `jira:<ops team id>` (the ops-team
+> links row of "Team ids"), an id no writer of `teams` holds by design.
 >
 > **A fourth, architecturally SEPARATE `team_repo_ownership` producer (CHAOS-4365 item 1b,
 > implemented): the sync-derived `inferred` row, never routed through `team_autoimport_<provider>.populate()`
@@ -3316,9 +3446,56 @@ cycle-time consumer, and DOES apply to Linear). Today:
 | Provider | PRIMARY (provider-attached PR mapping) | Go port (`internal/providersync`) | Path-B fallback (`work_graph/builder.py` text-parse) |
 |---|---|---|---|
 | Linear | `extract_linear_dependencies` (`providers/linear/normalize.py`) — issue attachments, sourceType + trusted-host gated | `normalizeLinearDependencies`/`linearAttachmentWorkItemID` (`linear_work_items_route.go`) — **ported with equivalent trust-gate semantics (sourceType + host allowlist), no loss.** One minor divergence: Python's PR/MR-number match requires digits (`\d+`, `normalize.py:77`); Go accepts any final path segment (`linear_work_items_route.go:890`) — functionally inert (a non-numeric segment can't match a real `git_pull_requests.number`), not literally byte-for-byte. | Excluded from THIS Path-B fallback by design (`builder.py:1112-1114` — Linear's links arrive as attachments via the dependency pass above, not via text parsing here). §2's Secondary/Tertiary above is Linear's own (Path A) fallback and is very much used. |
-| Jira | **Built, Go-only** (CHAOS-4757) — `fetchJiraDevStatusPullRequests`/`extractJiraDevStatusDependencies` (`internal/providersync/jira_dev_status.go`) call `GET /rest/dev-status/1.0/issue/detail` once per application type, `GitHub` then `GitLab` (CHAOS-8526; a GitLab merge-request URL becomes a `gitlab:<path>!<n>` source, a GitHub pull URL `ghpr:<owner>/<repo>#<n>`; both share the `dev_status_max_requests` budget; a failing type does not hide the links the other returned; each type's outcome — synced, empty, `dev_status_unavailable`, failed, `cap_skipped` — is logged per issue and counted as `dev_health_jira_dev_status_total{outcome="<type>_<outcome>"}`, so a wrong application-type value reads as a loud zero), gated behind a `fetch_dev_status` claim option (default false — an extra REST call per issue). A 400/404 (no app configured for this issue) is a ruled clean typed no-op (`dev_status_unavailable`, `dev_health_jira_dev_status_total` metric), never an error. `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) remains issue↔issue `issuelinks` only — no Python dev-status ingestion exists or is planned | **No Python producer** — per the standing sync-ownership rule, this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from. **Fixtures-only proof**: no local org has the GitHub-for-Jira app installed, so this has not been proven against real dev-status data; live proof awaits such an org | Still active alongside the new PRIMARY (not gated on its presence): `jira_key_lookup`'s text-parse continues to run unconditionally Hosts beyond public GitHub/GitLab.com are trusted through `JIRA_TRUSTED_SCM_HOSTS` (`host` or `host/root`; the root is the instance's relative URL root, stripped before the project path, case-sensitive). |
-| GitLab | **Built, Go-only** (CHAOS-8526) — per issue, `GET /projects/:id/issues/:iid/closed_by` (`collectGitLabClosingMergeRequests`, under the `fetch_links` option) → `normalizeGitLabClosingMergeRequests` (`internal/providersync/gitlab_work_items_rows.go`) emits MR-source / issue-target rows of raw kind `gitlab_closing_reference`; the `issueprlinks` admission for it accepts only a well-formed `gitlab:<path>#<n>` issue target. **State rule (same as GitHub's `closingIssuesReferences`):** every MR `closed_by` returns links, open, merged or closed-unmerged; the MR's state is not a filter. A failing `closed_by` fetch is logged with the issue, counted (`dev_health_gitlab_closing_mr_fetch_total`, `closing_reference_fetch_failed`), listed under `incomplete`; the batch goes on. **Transient** failures (5xx, timeout, 429, network) hold the watermark so the next run asks again; **terminal** ones, which repeat on every run for the same issue, advance it: 404/403 (`terminal_unavailable`), page cap exceeded (`terminal_page_cap`), answer does not decode (`terminal_undecodable`) (D4771). A cancelled run stops (no test yet) | **No Python producer.** Fixtures-only proof: no live GitLab org read yet | The text-parse fallback stays; an `extkey:` prefix is never a donor row |
-| GitHub Issues | **Built, Go-only** (CHAOS-4757) — `extractGitHubClosingIssueReferences` (`internal/providersync/github_work_items_rows.go`) parses `closingIssuesReferences` off the existing per-PR GraphQL social fetch (`gitHubWorkItemPRSocialFetcher`, `github_work_items_social_fetch.go`), requested unconditionally on the top-level (non-continuation) page and tolerated as absent rather than erroring — a deliberate leniency for a best-effort supplementary field, unlike the strict Comments/TimelineItems connections | **No Python producer** — per the standing sync-ownership rule (no Python sync changes for anything Go workers run), this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from | Still active alongside the new PRIMARY (not gated on its presence, matching the Linear-vs-Secondary/Tertiary pattern above): `gh_issue_lookup`'s text-parse continues to run unconditionally. The GitHub `work-items` native route's planner-level veto was lifted (CHAOS-4731), but this org had **zero** `work_items` rows for `provider = 'github'` as of the CHAOS-4752 investigation (2026-09-01) — an operator/sync-config fact for THIS org, not a code-level gate; a different org with that dataset enabled would have rows to look up against. |
+| Jira | **Built, Go-only** (CHAOS-4757) — `fetchJiraDevStatusPullRequests`/`extractJiraDevStatusDependencies` (`internal/providersync/jira_dev_status.go`) call `GET /rest/dev-status/1.0/issue/detail` once per application type, `GitHub` then `GitLab` (CHAOS-8526; a GitLab merge-request URL becomes a `gitlab:<path>!<n>` source, a GitHub pull URL `ghpr:<owner>/<repo>#<n>`; both share the `dev_status_max_requests` budget; a failing type does not hide the links the other returned; each type's outcome — synced, empty, `dev_status_unavailable`, failed, `cap_skipped` — is logged per issue and counted as `dev_health_jira_dev_status_total{outcome="<type>_<outcome>"}`, so a wrong application-type value reads as a loud zero), gated behind a `fetch_dev_status` claim option (default false — an extra REST call per issue). A 400/404 (no app configured for this issue) is a ruled clean typed no-op (`dev_status_unavailable`, `dev_health_jira_dev_status_total` metric), never an error. `extract_jira_issue_dependencies` (`providers/jira/normalize.py`) remains issue↔issue `issuelinks` only — no Python dev-status ingestion exists or is planned | **No Python producer** — per the standing sync-ownership rule, this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from. **Fixtures-only proof**: no local org has the GitHub-for-Jira app installed, so this has not been proven against real dev-status data; live proof awaits such an org | A fallback only (chris, 2026-10-15): the text-parse links a key only when neither the pull request nor the issue has a native link; see the tier rule below the table. Hosts beyond public GitHub/GitLab.com are trusted through `JIRA_TRUSTED_SCM_HOSTS` (`host` or `host/root`; the root is the instance's relative URL root, stripped before the project path, case-sensitive). |
+| GitLab | **Built, Go-only** (CHAOS-8526) — per issue, `GET /projects/:id/issues/:iid/closed_by` (`collectGitLabClosingMergeRequests`, under the `fetch_links` option) → `normalizeGitLabClosingMergeRequests` (`internal/providersync/gitlab_work_items_rows.go`) emits MR-source / issue-target rows of raw kind `gitlab_closing_reference`; the `issueprlinks` admission for it accepts only a well-formed `gitlab:<path>#<n>` issue target. **State rule (same as GitHub's `closingIssuesReferences`):** every MR `closed_by` returns links, open, merged or closed-unmerged; the MR's state is not a filter. A failing `closed_by` fetch is logged with the issue, counted (`dev_health_gitlab_closing_mr_fetch_total`, `closing_reference_fetch_failed`), listed under `incomplete`; the batch goes on. **Transient** failures (5xx, timeout, 429, network) hold the watermark so the next run asks again; **terminal** ones, which repeat on every run for the same issue, advance it: 404/403 (`terminal_unavailable`), page cap exceeded (`terminal_page_cap`), answer does not decode (`terminal_undecodable`) (D4771). A cancelled run stops (no test yet) | **No Python producer.** Fixtures-only proof: no live GitLab org read yet | The text-parse fallback stays, gated by the tier rule below the table; an `extkey:` prefix is never a donor row |
+| GitHub Issues | **Built, Go-only** (CHAOS-4757) — `extractGitHubClosingIssueReferences` (`internal/providersync/github_work_items_rows.go`) parses `closingIssuesReferences` off the existing per-PR GraphQL social fetch (`gitHubWorkItemPRSocialFetcher`, `github_work_items_social_fetch.go`), requested unconditionally on the top-level (non-continuation) page and tolerated as absent rather than erroring — a deliberate leniency for a best-effort supplementary field, unlike the strict Comments/TimelineItems connections | **No Python producer** — per the standing sync-ownership rule (no Python sync changes for anything Go workers run), this PRIMARY mechanism was implemented directly in Go with no Python side to "port" from | A fallback only (chris, 2026-10-15): the text-parse links an issue only when neither the pull request nor the issue has a native link; see the tier rule below the table. The GitHub `work-items` native route's planner-level veto was lifted (CHAOS-4731), but this org had **zero** `work_items` rows for `provider = 'github'` as of the CHAOS-4752 investigation (2026-09-01) — an operator/sync-config fact for THIS org, not a code-level gate; a different org with that dataset enabled would have rows to look up against. |
+
+**Tier rule: text and heuristic links are a fallback only (chris, 2026-10-15, verbatim):** *"Text inferred when
+there's a PR link should have never happened, that's a been a hardfast rule since the start. Inferred is 100% a
+fallback only."* In `work_graph_issue_pr` a pull request (`repo_id`, `pr_number`) that has a `native` link gets no
+`explicit_text` or `heuristic` link to any issue, and an issue (`work_item_id`) that has a `native` link gets no
+lower-tier link to any pull request. The rule is provider-agnostic: it reads the pull request and the issue by id,
+whatever tracker or code host minted them (tests: `TestTextParseGivesNoLinkToAPullRequestWithANativeLink`,
+`TestTextParseGivesNoLinkToAnIssueWithANativeLink`, `TestHeuristicGivesNoLinkToAPullRequestWithANativeLink`, each
+over Jira, Linear, GitHub and GitLab). Where it is held:
+
+- **Writers.** `issuepredges.DeriveTextParseEdges` and `issuepredges.DeriveHeuristicEdges` read the native links
+  org-wide (`Loader.LoadNativeLinks`) and skip a reference whose pull request or issue has one; the text-parse step
+  logs the count as `outranked_by_native`.
+- **Stored rows.** The work-graph build pre-step `issue_pr_fallback_retraction` (registered right after
+  `issue_pr_links`, before every step that reads `work_graph_issue_pr`) removes the lower-tier rows a native link
+  outranks from `work_graph_issue_pr` (one `ALTER TABLE ... DELETE` naming exactly those rows; the table has no
+  tombstone column) and tombstones their `work_graph_edges` rows. It runs for the whole organization on every build,
+  so a row written before the rule, or before its native link arrived, is gone after the next build. The one edge it
+  keeps is an `implements` edge between a natively linked pair, which the fast-path step rewrites as native. To clean
+  an organization without waiting for its next sync, enqueue one build: `dho workers workgraph trigger --org <org id>
+  --review-evidence "<why>"` (no window is needed; the retraction is org-wide). The step's ledger evidence and its log
+  line `issue-pr fallback retraction done` report `links_retracted` and `edges_retired`. Ownership rows that a
+  retracted link supported are re-derived by the next `sync.team_repo_ownership_derivation` run (§0.4d).
+- **A pull request is never the issue side.** A pull or merge request work item (`ghpr:<owner>/<repo>#<n>`,
+  `gitlab:<path>!<n>`, `issueprlinks.IsPullRequestWorkItem`) is no issue: the text matcher's issue lookup and the
+  heuristic's work items skip it, and `issue_pr_fallback_retraction` retracts a stored lower-tier row and edge whose
+  issue side is one (prod had `ghpr:...#120 -> 121` text rows and heuristic self-links). Tests:
+  `pr_never_issue_side_test.go`.
+- **Invariant check (CHAOS-10062).** The pre-step `issue_pr_fallback_invariant` runs after
+  `issue_pr_edges_heuristic`, the last step that writes `work_graph_issue_pr`. It counts the lower-tier rows that
+  still break the rule: beside a native link (by pull request side, by issue side) or with a pull request work item as the
+  issue side, and the total (each row once; the same rows `issue_pr_fallback_retraction` removes). The count must be 0. The step repairs
+  nothing. It sets the gauge `workgraph_issue_pr_fallback_beside_native_rows` per `organization_id` on every build (0
+  included), and one gauge per side (`workgraph_issue_pr_fallback_beside_native_pull_request_rows`,
+  `..._beside_native_issue_rows`, `..._pull_request_issue_side_rows`; a row can be on several sides, so they do not add up to the total). On a nonzero count it logs a WARN `issue-pr fallback invariant breached` with the organization and the
+  counts (never row contents) and reports FAILED: it returns a `workgraph.StepFailure`, so its evidence fragment
+  carries `status: failed` with `organization_id` and the counts, the build evidence names it under `failed_steps`, the build logs an ERROR
+  naming it, and the later steps still run. The request still completes (`succeeded`): the request ledger has no
+  partial state, and a `failed` build would hold the post-sync request that waits on its completion key. A nonzero
+  value is a writer regression. Tests: `fallback_invariant_test.go`,
+  `invariant_test.go`, `fallback_invariant_integration_test.go`.
+- **Readers.** Every reader of the link table, `team_repo_ownership` derivation (§0.4d) included, sees only links the
+  rule allows once the build has run; no reader re-applies it.
+
+The prod case that showed the defect: acr pull requests whose bodies quoted test keys (`API-1->BILL-1`) had a native
+Linear link, and the text matcher still linked the real Jira issues `API-1`, `BILL-1` and `FC-1`, which made three
+Jira teams co-owners of the repository.
 
 A PR whose PM-provider integration was never configured for that issue (chris: *"if it's not
 setup to attach github ↔ project management that's the user's problem"*) legitimately falls
@@ -3576,7 +3753,9 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   (§0.4 CHAOS-2416 bullet) — it is not read by the team-attribution resolver at all. Both answer
   "which table carries the cross-provider link," for different readers.
   For the entity tree, `work_graph_issue_pr` is the issue <> pull request link of record; its
-  `provenance` tier ranks native > explicit_text > heuristic, and a consumer names the tier.
+  `provenance` tier ranks native > explicit_text > heuristic, and a consumer names the tier. The two
+  lower tiers are a fallback only: a pull request or an issue with a native link has no lower-tier
+  link (§2, "Tier rule").
 - **`git_pull_requests` is not a work item and carries no `work_item_id`.** It is the raw
   git-log-sourced PR fact table (`000_raw_tables.sql`, tenant-scoped by `org_id` since migration
   `027`) used for git-side PR metrics (review load, cycle time from the git side) — with no

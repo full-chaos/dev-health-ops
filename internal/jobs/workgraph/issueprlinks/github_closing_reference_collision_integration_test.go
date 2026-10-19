@@ -63,7 +63,7 @@ func TestGithubClosingReferenceCollisionSurvivesRealMerge(t *testing.T) {
 	inputs := issueprlinks.Inputs{
 		OrgID:        org,
 		Dependencies: []issueprlinks.DependencyRow{dependency},
-		Repos:        []issueprlinks.RepoRow{{OrgID: org, ID: repoID, Repo: repoSlug}},
+		Repos:        []issueprlinks.RepoRow{{OrgID: org, ID: repoID, Repo: repoSlug, Provider: issueprlinks.ProviderGitHub}},
 		PullRequests: []issueprlinks.PullRequestRow{{OrgID: org, RepoID: repoID, Number: prNumber}},
 		WorkItems:    []issueprlinks.WorkItemRow{{OrgID: org, WorkItemID: workItemID}},
 		// RESERVED shape: the admission table exactly as it stood before this

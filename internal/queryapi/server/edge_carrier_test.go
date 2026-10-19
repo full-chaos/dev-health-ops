@@ -425,7 +425,7 @@ func TestEdgeCarrier_PlatformWideOrgSkipsMembershipCheck(t *testing.T) {
 func TestEdgeCarrier_ClaimsMatchTheEnvelopeCarrierForTheSameIdentity(t *testing.T) {
 	verifier, priv := iaVerifier(t)
 	envelopeHandler, envelopeSeen := iaDispatch(t, verifier)
-	envelopeToken := iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin", IsSuperuser: true, ImpersonationActive: false})
+	envelopeToken := iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin", IsSuperuser: true, IsSuperuserVerified: true, ImpersonationActive: false})
 	if code := iaPost(t, envelopeHandler, func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+envelopeToken) }); code != http.StatusOK {
 		t.Fatalf("envelope carrier: %d", code)
 	}

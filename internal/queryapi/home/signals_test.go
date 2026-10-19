@@ -134,7 +134,7 @@ func TestSelectConstraintNeedsTwoMeasuredWindows(t *testing.T) {
 func TestMetricSignalOfAOneSidedDeltaStatesNoMove(t *testing.T) {
 	deltas := []MetricDelta{
 		{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: pctp(0), HasData: true, HasPriorData: false},
-		{Metric: "cycle_time", Label: "Cycle Time", Unit: "days", Value: 4, DeltaPct: pctp(-20), HasData: true, HasPriorData: true},
+		{Metric: "cycle_time", Label: "Cycle Time", Unit: "days", Value: 4, DeltaPct: pctp(-20), HasData: true, HasPriorData: true, PriorValue: pctp(5)},
 	}
 	signals := BuildMetricSignals(deltas, Filters{}, DataConfidence{})
 	byMetric := map[string]Signal{}
@@ -207,7 +207,7 @@ func TestGroupThousands(t *testing.T) {
 
 // The signal a caller reads carries the grouped value, current and prior.
 func TestBuildMetricSignalsServesGroupedValues(t *testing.T) {
-	deltas := []MetricDelta{{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 3387254, DeltaPct: pctp(25), HasData: true, HasPriorData: true}}
+	deltas := []MetricDelta{{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 3387254, DeltaPct: pctp(25), HasData: true, HasPriorData: true, PriorValue: pctp(2709803.2)}}
 	signals := BuildMetricSignals(deltas, Filters{Scope: ScopeFilter{Level: "org"}}, DataConfidence{})
 	if len(signals) != 1 {
 		t.Fatalf("signals = %d, want 1", len(signals))
@@ -216,7 +216,7 @@ func TestBuildMetricSignalsServesGroupedValues(t *testing.T) {
 		t.Errorf("currentValue = %q, want %q", signals[0].CurrentValue, "3,387,254 loc")
 	}
 	if signals[0].PriorValue == nil || *signals[0].PriorValue != "2,709,803 loc" {
-		t.Errorf("priorValue = %v, want 2,709,803 loc (3387254 / 1.25, grouped)", signals[0].PriorValue)
+		t.Errorf("priorValue = %v, want 2,709,803 loc (the measured prior, grouped)", signals[0].PriorValue)
 	}
 }
 
@@ -252,7 +252,7 @@ func TestRiskSignalCarriesTheCoverageOfItsScore(t *testing.T) {
 // is undefined: the sentence and the signal state the change in absolute values,
 // never "held steady", "flat", a percent or the current value as the prior.
 func TestAMeasuredZeroPriorIsNeverSteadyOrAPercent(t *testing.T) {
-	fromZero := MetricDelta{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: nil, HasData: true, HasPriorData: true}
+	fromZero := MetricDelta{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: nil, HasData: true, HasPriorData: true, PriorValue: pctp(0)}
 	if got := MoveWords(fromZero); got != "rose from 0 loc to 5 loc" {
 		t.Errorf("MoveWords from a measured zero = %q", got)
 	}
@@ -427,3 +427,66 @@ func TestNamesDriversOnlyForAMove(t *testing.T) {
 		}
 	}
 }
+
+// The prior value beside a signal is the comparison window's stored value
+// (CHAOS-9817), not the current value divided by the percent. A fall to 0 keeps
+// its prior, a prior that is not stored states none (never "0"), a measured 0
+// stays 0, and a prior is not recomputed from the percent.
+func TestSignalPriorValueIsTheMeasuredPriorNotDerivedFromThePercent(t *testing.T) {
+	cases := []struct {
+		name  string
+		delta MetricDelta
+		want  *string
+	}{
+		{"fall to zero", MetricDelta{Value: 0, DeltaPct: pctp(-100), HasData: true, HasPriorData: true, PriorValue: pctp(120)}, strp("120 loc")},
+		{"measured zero to zero", MetricDelta{Value: 0, DeltaPct: pctp(0), HasData: true, HasPriorData: true, PriorValue: pctp(0)}, strp("0 loc")},
+		{"rise from measured zero", MetricDelta{Value: 5, HasData: true, HasPriorData: true, PriorValue: pctp(0)}, strp("0 loc")},
+		{"prior not stored", MetricDelta{Value: 5, HasData: true, HasPriorData: false}, nil},
+		{"prior rounds, percent would drift", MetricDelta{Value: 3, DeltaPct: pctp((3.0 - 7.0) / 7.0 * 100), HasData: true, HasPriorData: true, PriorValue: pctp(7)}, strp("7 loc")},
+		{"percent disagrees with the measured prior", MetricDelta{Value: 50, DeltaPct: pctp(100), HasData: true, HasPriorData: true, PriorValue: pctp(40)}, strp("40 loc")},
+	}
+	for _, tc := range cases {
+		tc.delta.Metric, tc.delta.Label, tc.delta.Unit = "churn", "Code Churn", "loc"
+		signals := BuildMetricSignals([]MetricDelta{tc.delta}, Filters{}, DataConfidence{})
+		if len(signals) != 1 {
+			t.Fatalf("%s: signals = %d, want 1", tc.name, len(signals))
+		}
+		got := signals[0].PriorValue
+		switch {
+		case tc.want == nil && got != nil:
+			t.Errorf("%s: prior value = %q, want none", tc.name, *got)
+		case tc.want != nil && got == nil:
+			t.Errorf("%s: prior value is none, want %q", tc.name, *tc.want)
+		case tc.want != nil && *got != *tc.want:
+			t.Errorf("%s: prior value = %q, want %q", tc.name, *got, *tc.want)
+		}
+	}
+}
+
+// measuredPriorValue is the comparison window's value in the unit of the
+// delta's value, and nil exactly when that window has no data.
+func TestMeasuredPriorValueFollowsHasPriorData(t *testing.T) {
+	days := metricSpec{Metric: "cycle_time", Transform: hoursToDaysTransform}
+	ident := metricSpec{Metric: "churn", Transform: identityTransform}
+	for _, tc := range []struct {
+		name         string
+		spec         metricSpec
+		prev         float64
+		hasData, has bool
+		want         *float64
+	}{
+		{"present", ident, 120, true, true, pctp(120)},
+		{"present with no current data", ident, 120, false, true, pctp(120)},
+		{"measured zero", ident, 0, true, true, pctp(0)},
+		{"missing is not zero", ident, 0, true, false, nil},
+		{"missing with a stale placeholder", ident, 99, true, false, nil},
+		{"transformed to the unit of the value", days, 48, true, true, pctp(2)},
+	} {
+		got := measuredPriorValue(tc.spec, tc.prev, tc.hasData, tc.has)
+		if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+			t.Errorf("%s: measuredPriorValue = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func strp(s string) *string { return &s }

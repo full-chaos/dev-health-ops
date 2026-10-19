@@ -25,6 +25,7 @@ contracts/sync-dispatch/v1	1
 deploy/helm/dev-health	27
 internal/admincli	1
 internal/adminops	19
+internal/aftercommit	1
 internal/aicli	1
 internal/api/apimetrics	1
 internal/api/audit	1
@@ -82,6 +83,7 @@ internal/apiservice/metricsvenue	1
 internal/apiservice/ownershipvenue	1
 internal/apiservice/ssovenue	1
 internal/atlassianteams	18
+internal/audit	96
 internal/auth/authconfig	1
 internal/auth/authruntime	5
 internal/auth/authstore	1
@@ -178,6 +180,7 @@ internal/jobs/workgraph/edges	35
 internal/jobs/workgraph/issuecommitedges	1
 internal/jobs/workgraph/issuepredges	2
 internal/jobs/workgraph/issueprlinks	6
+internal/jobs/workgraph/linktier	1
 internal/jobs/workgraph/operationaledges	1
 internal/jobs/workgraph/prcommit	1
 internal/jobs/workgraph/textrefs	5
@@ -196,6 +199,7 @@ internal/mintcli/envelope	1
 internal/mintcli/envelopekeys	2
 internal/operationalbackfill	2
 internal/operationalordering	35
+internal/orgllmconfig	2
 internal/pgmigrate	6
 internal/platform/buildstamp	1
 internal/platform/config	12
@@ -209,6 +213,7 @@ internal/platform/logging	22
 internal/platform/otlpmetrics	4
 internal/platform/poolstat	1
 internal/platform/postureguard	1
+internal/platform/queuecontrol	1
 internal/platform/secrets	23
 internal/platform/selfprobe	1
 internal/platform/shell	12
@@ -276,6 +281,7 @@ internal/queryapi/reports/writeproofcases	1
 internal/queryapi/reviewedges	1
 internal/queryapi/routeswitch	1
 internal/queryapi/sankey	1
+internal/queryapi/scancensus	1
 internal/queryapi/scopelabel	1
 internal/queryapi/security	1
 internal/queryapi/server	26
@@ -299,6 +305,7 @@ internal/storage/clickhouse/latestrow	1
 internal/storage/clickhouse/liverow	11
 internal/storage/postgres	29
 internal/storage/postgres/authschema	1
+internal/storage/postgres/pgconfig	1
 internal/storage/river	1
 internal/storage/roleacl	1
 internal/storage/roleprovision	1
@@ -325,6 +332,8 @@ internal/teamcreated	21
 internal/teamid	1
 internal/teamkeytables	1
 internal/teamownership	1
+internal/teamprovider	20
+internal/teamprovider/teamprovidertest	1
 internal/teamresolve	1
 internal/testsupport/chlogin	1
 internal/testsupport/chquery	1

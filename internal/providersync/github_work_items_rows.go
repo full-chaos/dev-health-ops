@@ -253,14 +253,30 @@ func normalizeGitHubIssueWorkItem(
 	resolveIdentity githubIdentityResolver,
 	normalizedAt time.Time,
 ) (githubWorkItemRow, error) {
+	source, err := githubIssueWorkItemSource(claim, repoFullName, repoID, raw, resolveIdentity, normalizedAt)
+	if err != nil {
+		return githubWorkItemRow{}, err
+	}
+	return buildWorkItemRow(claim, source, normalizedAt)
+}
+
+// githubIssueWorkItemSource reads a REST issue payload into the GitHub adapter.
+func githubIssueWorkItemSource(
+	claim Claim,
+	repoFullName string,
+	repoID uuid.UUID,
+	raw json.RawMessage,
+	resolveIdentity githubIdentityResolver,
+	normalizedAt time.Time,
+) (githubWorkItemSource, error) {
 	if claim.Validate() != nil || claim.Provider != "github" ||
 		!isWorkItemFamilyDataset(claim.Dataset) || strings.TrimSpace(repoFullName) == "" ||
 		repoID == uuid.Nil || normalizedAt.IsZero() {
-		return githubWorkItemRow{}, ErrInvalidConfiguration
+		return githubWorkItemSource{}, ErrInvalidConfiguration
 	}
 	var issue githubIssueWorkItemPayload
 	if json.Unmarshal(raw, &issue) != nil || issue.Number < 1 || strings.TrimSpace(issue.Title) == "" {
-		return githubWorkItemRow{}, providerfoundation.ErrNormalizationInvalid
+		return githubWorkItemSource{}, providerfoundation.ErrNormalizationInvalid
 	}
 	createdAt := parseGitHubWorkItemTime(issue.CreatedAt)
 	if createdAt == nil {
@@ -309,23 +325,20 @@ func normalizeGitHubIssueWorkItem(
 	}
 	projectID := repoFullName
 	priority, serviceClass := githubPriorityFromLabels(labels)
-	row := githubWorkItemRow{
-		WorkItemID: "gh:" + repoFullName + "#" + strconv.Itoa(issue.Number),
-		Provider:   "github", Title: issue.Title, Type: itemType, Status: status,
-		StatusRaw: nullableString(state), Description: description, RepoID: &repoID,
-		ProjectID: &projectID, Assignees: assignees, Reporter: reporter,
-		CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(), ClosedAt: closedAt,
-		Labels: labels, URL: url, PriorityRaw: priority, ServiceClass: serviceClass,
-		OrgID: claim.OrgID, LastSynced: normalizedAt.UTC(),
-	}
+	var completedAt *time.Time
 	if closedAt != nil {
 		copy := closedAt.UTC()
-		row.CompletedAt = &copy
+		completedAt = &copy
 	}
-	if err := row.validate(claim); err != nil {
-		return githubWorkItemRow{}, err
-	}
-	return row, nil
+	return githubWorkItemSource{
+		kind: githubIssueSourceKind, validate: githubWorkItemRow.validate,
+		workItemID: "gh:" + repoFullName + "#" + strconv.Itoa(issue.Number),
+		title:      issue.Title, typeName: itemType, status: status,
+		statusRaw: nullableString(state), description: description, repoID: &repoID,
+		projectID: &projectID, assignees: assignees, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), completedAt: completedAt,
+		closedAt: closedAt, labels: labels, url: url, priorityRaw: priority, serviceClass: serviceClass,
+	}, nil
 }
 
 func normalizeGitHubSprint(
@@ -390,17 +403,16 @@ func normalizeGitHubIssueBundle(
 	resolveIdentity githubIdentityResolver,
 	normalizedAt time.Time,
 ) (githubWorkItemRows, error) {
-	item, err := normalizeGitHubIssueWorkItem(
+	source, err := githubIssueWorkItemSource(
 		claim, repoFullName, repoID, raw, resolveIdentity, normalizedAt,
 	)
 	if err != nil {
 		return githubWorkItemRows{}, err
 	}
-	// The base row models the no-events fallback. The active Python producer
-	// prefers the first terminal transition and uses closed_at only when no
-	// such transition exists, so recompute the two derived timestamps here.
-	item.StartedAt = nil
-	item.CompletedAt = nil
+	item, err := buildWorkItemRow(claim, source, normalizedAt)
+	if err != nil {
+		return githubWorkItemRows{}, err
+	}
 	transitions, reopens, err := normalizeGitHubWorkItemEvents(
 		claim, item.WorkItemID, false, events, item.CreatedAt,
 		resolveIdentity, normalizedAt,
@@ -408,21 +420,12 @@ func normalizeGitHubIssueBundle(
 	if err != nil {
 		return githubWorkItemRows{}, err
 	}
-	for _, transition := range transitions {
-		if item.StartedAt == nil && transition.ToStatus == "in_progress" {
-			started := transition.OccurredAt
-			item.StartedAt = &started
-		}
-		if item.CompletedAt == nil &&
-			(transition.ToStatus == "done" || transition.ToStatus == "canceled") {
-			completed := transition.OccurredAt
-			item.CompletedAt = &completed
-			break
-		}
-	}
-	if item.CompletedAt == nil && item.ClosedAt != nil {
-		completed := item.ClosedAt.UTC()
-		item.CompletedAt = &completed
+	// The issue alone models the no-events fallback. The active Python producer
+	// prefers the first terminal transition and uses closed_at only when no
+	// such transition exists, so the bundle reads the lifecycle from the events.
+	source.startedAt, source.completedAt = githubIssueLifecycle(transitions, source.closedAt)
+	if item, err = buildWorkItemRow(claim, source, normalizedAt); err != nil {
+		return githubWorkItemRows{}, err
 	}
 	interactions, err := normalizeGitHubWorkItemComments(
 		claim, item.WorkItemID, comments, resolveIdentity, normalizedAt,
@@ -530,24 +533,25 @@ func normalizeGitHubPullRequestBundle(
 	projectID := repoFullName
 	priority, serviceClass := githubPriorityFromLabels(labels)
 	startedAt := createdAt.UTC()
-	item := githubWorkItemRow{
-		WorkItemID: "ghpr:" + repoFullName + "#" + strconv.Itoa(pull.Number),
-		Provider:   "github", Title: pull.Title, Type: "pr", Status: status,
-		StatusRaw: nullableString(statusRaw), Description: description, RepoID: &repoID,
-		ProjectID: &projectID, Assignees: assignees, Reporter: reporter,
-		CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC(), StartedAt: &startedAt,
-		ClosedAt: closedAt, Labels: labels, URL: urlValue,
-		PriorityRaw: priority, ServiceClass: serviceClass, OrgID: claim.OrgID,
-		LastSynced: normalizedAt.UTC(),
-	}
+	var completedAt *time.Time
 	if mergedAt != nil {
 		completed := mergedAt.UTC()
-		item.CompletedAt = &completed
+		completedAt = &completed
 	} else if closedAt != nil && (status == "done" || status == "canceled") {
 		completed := closedAt.UTC()
-		item.CompletedAt = &completed
+		completedAt = &completed
 	}
-	if err := item.validate(claim); err != nil {
+	item, err := buildWorkItemRow(claim, githubWorkItemSource{
+		kind: githubPullRequestSourceKind, validate: githubWorkItemRow.validate,
+		workItemID: "ghpr:" + repoFullName + "#" + strconv.Itoa(pull.Number),
+		title:      pull.Title, typeName: "pr", status: status,
+		statusRaw: nullableString(statusRaw), description: description, repoID: &repoID,
+		projectID: &projectID, assignees: assignees, reporter: reporter,
+		createdAt: createdAt.UTC(), updatedAt: updatedAt.UTC(), startedAt: &startedAt,
+		completedAt: completedAt, closedAt: closedAt, labels: labels, url: urlValue,
+		priorityRaw: priority, serviceClass: serviceClass,
+	}, normalizedAt)
+	if err != nil {
 		return githubWorkItemRows{}, err
 	}
 	transitions, reopens, err := normalizeGitHubWorkItemEvents(
@@ -1380,4 +1384,89 @@ func (row githubAIAttributionRow) validate(claim Claim) error {
 		return providerfoundation.ErrInvalidScope
 	}
 	return nil
+}
+
+const (
+	githubIssueSourceKind         = "github_issue"
+	githubPullRequestSourceKind   = "github_pull_request"
+	githubProjectV2ItemSourceKind = "github_project_v2_item"
+)
+
+// githubWorkItemSource is how a GitHub issue, pull request or Projects v2 item
+// fills the shared work-item row. GitHub collects no hierarchy yet; the three
+// kinds state their declared exceptions (workItemHierarchyExceptions).
+type githubWorkItemSource struct {
+	kind     string
+	validate func(row githubWorkItemRow, claim Claim) error
+
+	workItemID, title, typeName, status              string
+	statusRaw, description, projectID, reporter, url *string
+	sprintID, sprintName, priorityRaw, serviceClass  *string
+	repoID                                           *uuid.UUID
+	assignees, labels                                []string
+	createdAt, updatedAt                             time.Time
+	startedAt, completedAt, closedAt                 *time.Time
+	storyPoints                                      *float64
+}
+
+func (s githubWorkItemSource) sourceKind() string { return s.kind }
+func (s githubWorkItemSource) validateRow(claim Claim, row workItemRow) error {
+	return s.validate(row, claim)
+}
+func (s githubWorkItemSource) WorkItemID() string      { return s.workItemID }
+func (s githubWorkItemSource) Provider() string        { return "github" }
+func (s githubWorkItemSource) Title() string           { return s.title }
+func (s githubWorkItemSource) Type() string            { return s.typeName }
+func (s githubWorkItemSource) Status() string          { return s.status }
+func (s githubWorkItemSource) StatusRaw() *string      { return s.statusRaw }
+func (s githubWorkItemSource) Description() *string    { return s.description }
+func (s githubWorkItemSource) RepoID() *uuid.UUID      { return s.repoID }
+func (s githubWorkItemSource) NativeTeamKey() *string  { return nil }
+func (s githubWorkItemSource) ProjectKey() *string     { return nil }
+func (s githubWorkItemSource) ProjectID() *string      { return s.projectID }
+func (s githubWorkItemSource) ProjectName() *string    { return nil }
+func (s githubWorkItemSource) Assignees() []string     { return s.assignees }
+func (s githubWorkItemSource) Reporter() *string       { return s.reporter }
+func (s githubWorkItemSource) CreatedAt() time.Time    { return s.createdAt }
+func (s githubWorkItemSource) UpdatedAt() time.Time    { return s.updatedAt }
+func (s githubWorkItemSource) StartedAt() *time.Time   { return s.startedAt }
+func (s githubWorkItemSource) CompletedAt() *time.Time { return s.completedAt }
+func (s githubWorkItemSource) ClosedAt() *time.Time    { return s.closedAt }
+func (s githubWorkItemSource) Labels() []string        { return s.labels }
+func (s githubWorkItemSource) StoryPoints() *float64   { return s.storyPoints }
+func (s githubWorkItemSource) SprintID() *string       { return s.sprintID }
+func (s githubWorkItemSource) SprintName() *string     { return s.sprintName }
+func (s githubWorkItemSource) URL() *string            { return s.url }
+func (s githubWorkItemSource) PriorityRaw() *string    { return s.priorityRaw }
+func (s githubWorkItemSource) ServiceClass() *string   { return s.serviceClass }
+func (s githubWorkItemSource) DueAt() *time.Time       { return nil }
+func (s githubWorkItemSource) ParentID() workItemRef {
+	return declaredWorkItemException(s.kind, workItemFieldParentID)
+}
+func (s githubWorkItemSource) EpicID() workItemRef {
+	return declaredWorkItemException(s.kind, workItemFieldEpicID)
+}
+
+// githubIssueLifecycle is the started/completed reading of an issue with its
+// events: the first in_progress and the first terminal transition, and
+// closed_at when no terminal transition exists.
+func githubIssueLifecycle(transitions []githubWorkItemTransitionRow, closedAt *time.Time) (*time.Time, *time.Time) {
+	var startedAt, completedAt *time.Time
+	for _, transition := range transitions {
+		if startedAt == nil && transition.ToStatus == "in_progress" {
+			started := transition.OccurredAt
+			startedAt = &started
+		}
+		if completedAt == nil &&
+			(transition.ToStatus == "done" || transition.ToStatus == "canceled") {
+			completed := transition.OccurredAt
+			completedAt = &completed
+			break
+		}
+	}
+	if completedAt == nil && closedAt != nil {
+		completed := closedAt.UTC()
+		completedAt = &completed
+	}
+	return startedAt, completedAt
 }

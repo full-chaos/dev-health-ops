@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -29,11 +30,13 @@ type gitlabOwnershipOpenRow struct {
 }
 
 // openGitLabOwnership reads what the readers see: the newest version of each
-// row key whose valid_to is empty or in the future.
+// row key whose valid_to is empty or in the future. Project is the row's path:
+// project_key for a GitLab row keyed by the catalog id, else project_id (a
+// row a test seeds in the older path form, or a row of another provider).
 func openGitLabOwnership(ctx context.Context, t *testing.T, conn driver.Conn, orgID, provider string) []gitlabOwnershipOpenRow {
 	t.Helper()
 	result, err := conn.Query(ctx,
-		`SELECT team_id, project_id, toString(source), valid_from FROM team_project_ownership FINAL `+
+		`SELECT team_id, project_id, ifNull(project_key, ''), toString(source), valid_from FROM team_project_ownership FINAL `+
 			`WHERE org_id = ? AND provider = ? AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
 		orgID, provider)
 	if err != nil {
@@ -43,8 +46,14 @@ func openGitLabOwnership(ctx context.Context, t *testing.T, conn driver.Conn, or
 	var out []gitlabOwnershipOpenRow
 	for result.Next() {
 		var row gitlabOwnershipOpenRow
-		if err := result.Scan(&row.TeamID, &row.Project, &row.Source, &row.ValidFrom); err != nil {
+		var projectID string
+		if err := result.Scan(&row.TeamID, &projectID, &row.Project, &row.Source, &row.ValidFrom); err != nil {
 			t.Fatal(err)
+		}
+		if provider != gitlabTeamCatalogProvider || !strings.HasPrefix(projectID, orgID+":gitlab:") {
+			row.Project = projectID
+		} else if row.Project == "" {
+			t.Errorf("open row %s: catalog-keyed project_id %q has no path as project_key", row.TeamID, projectID)
 		}
 		out = append(out, row)
 	}
@@ -102,7 +111,11 @@ func newGitLabSnapshotServer(t *testing.T) *gitlabSnapshotServer {
 		return map[string]any{"id": id, "full_path": fullPath, "name": fullPath, "description": nil}
 	}
 	projectPayload := func(path string) map[string]any {
-		return map[string]any{"id": len(path) + 1000, "path_with_namespace": path, "name": path, "archived": false,
+		id, err := strconv.ParseUint(testGitLabNativeProjectID(path), 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]any{"id": id, "path_with_namespace": path, "name": path, "archived": false,
 			"web_url": "https://gitlab.example.com/" + path}
 	}
 	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +205,12 @@ func gitlabSnapshotRunAs(
 	selections TeamCatalogSelections, strict bool, at time.Time, integrationID string, census OwnershipScopeCensus,
 ) (TeamCatalogResult, error) {
 	t.Helper()
+	// The groups were imported by an earlier teams run: a run with teams off
+	// writes links only for imported teams.
+	fake.mu.Lock()
+	groups := append([]string{"gl:org"}, prefixed("gl:", fake.subgroups)...)
+	fake.mu.Unlock()
+	seedCatalogTeams(ctx, t, conn, orgID, "gitlab", groups...)
 	collector := GitLabTeamCatalogCollector{Sink: GitLabTeamCatalogClickHouseEffects{
 		Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	}, ScopeCensus: census}
@@ -602,4 +621,12 @@ func (conn openOwnershipReadFailingConn) Query(ctx context.Context, query string
 		return nil, errors.New("injected team_project_ownership read failure")
 	}
 	return conn.Conn.Query(ctx, query, args...)
+}
+
+func prefixed(prefix string, values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, prefix+value)
+	}
+	return out
 }

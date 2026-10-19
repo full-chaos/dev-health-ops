@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
@@ -95,6 +97,9 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	counted := *client
 	counted.Doer = jiraWorkItemsCountingDoer{delegate: client.Doer, attempts: &requests}
 	client = &counted
+	// The requests of this route draw on the estimate's jira_issue_enrichment
+	// family unless they say otherwise (the JQL search, the comments).
+	ctx = budgetAccount(ctx, "jira_issue_enrichment")
 
 	jql := jiraWorkItemsJQL(claim, projectKey)
 	fetchAll := jiraOptionBool(claim, "fetch_all", false)
@@ -104,6 +109,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	issues, searchPages, err := collectJiraWorkItemIssues(
 		ctx, client, jql, maxPages, maxRows, perPage, true,
 	)
+	logJiraWorkItemsWindow(ctx, claim, projectKey, jql, len(issues), searchPages, err)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -141,15 +147,25 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		}
 		sprintCache[sprint.SprintID] = sprint
 	}
+	var pointsFields []string
+	if jiraStoryPointsDiscoveryNeeded(claim) {
+		discovered, discoverErr := discoverJiraStoryPointsFields(ctx, client)
+		if discoverErr != nil {
+			return CompleteRouteBatch{}, discoverErr
+		}
+		pointsFields = discovered
+	}
+	var pointsStats jiraStoryPointsStats
 	for _, issue := range issues {
 		item, transitions, normalizeErr := normalizeJiraWorkItem(
-			claim, jiraWorkItemFixtureInput{Raw: issue}, handler.StatusMapping,
+			claim, jiraWorkItemFixtureInput{Raw: issue, PointsFields: pointsFields}, handler.StatusMapping,
 			handler.Identity, normalizedAt,
 		)
 		if normalizeErr != nil {
 			return CompleteRouteBatch{}, normalizeErr
 		}
 		rows.WorkItems = append(rows.WorkItems, item)
+		pointsStats.observe(item)
 		rows.Transitions = append(rows.Transitions, transitions...)
 		dependencies := normalizeJiraDependencies(claim, item.WorkItemID, issue, normalizedAt)
 		rows.Dependencies = append(rows.Dependencies, dependencies...)
@@ -201,7 +217,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 
 		if fetchComments {
 			comments, _, commentErr := collectJiraIssueComments(
-				ctx, client, item.WorkItemID, maxPages, perPage, commentsLimit,
+				budgetAccount(ctx, jiraCommentsFamily(claim)), client, item.WorkItemID, maxPages, perPage, commentsLimit,
 			)
 			if commentErr != nil {
 				optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
@@ -216,6 +232,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		}
 	}
 
+	pointsStats.log(ctx)
 	for sprintID := range sprintIDs {
 		if sprint, ok := sprintCache[sprintID]; ok {
 			rows.Sprints = append(rows.Sprints, sprint)
@@ -298,9 +315,48 @@ func jiraWorkItemsJQL(claim Claim, projectKey string) string {
 	if jiraOptionBool(claim, "fetch_all", false) {
 		return fmt.Sprintf("project = '%s' ORDER BY updated DESC", projectKey)
 	}
-	updatedSince := claim.SinceAt.UTC().Format("2006-01-02")
-	activeUntil := claim.BeforeAt.UTC().Format("2006-01-02")
-	return fmt.Sprintf("project = '%s' AND (updated >= '%s' OR (statusCategory != Done AND created <= '%s')) ORDER BY updated DESC", projectKey, updatedSince, activeUntil)
+	return fmt.Sprintf("project = '%s' AND updated >= '%s' AND updated < '%s' ORDER BY updated DESC",
+		projectKey, jiraUpdatedSinceDate(claim.SinceAt.UTC()), jiraUpdatedBeforeDate(claim.BeforeAt.UTC()))
+}
+
+// JQL compares a date-only literal at midnight in the Jira USER's time zone,
+// which is anywhere from UTC-12 to UTC+14. The two date bounds below are the
+// smallest dates that are still a SUPERSET of the window in every zone: the
+// lower date is the UTC date of (start - 12h) (midnight of that date in UTC-12
+// is at or before the start), the upper date the UTC date of (end + 14h) rounded
+// up (midnight of it in UTC+14 is at or after the end). An item updated inside
+// the window is never dropped; the unit may also carry items updated up to
+// 50h before the start and 50h after the end (the 26h spread of the zones plus
+// the rounding to a whole date), which the idempotent writes absorb (CHAOS-8805). The old lower bound (the start's own UTC
+// date, also on main) dropped an in-window update for a user west of UTC.
+func jiraUpdatedSinceDate(start time.Time) string {
+	return start.Add(-12 * time.Hour).Truncate(24 * time.Hour).Format("2006-01-02")
+}
+
+// jiraUpdatedBeforeDate is the exclusive date bound of a window's end: see above.
+func jiraUpdatedBeforeDate(end time.Time) string {
+	shifted := end.Add(14 * time.Hour)
+	day := shifted.Truncate(24 * time.Hour)
+	if shifted.After(day) {
+		day = day.Add(24 * time.Hour)
+	}
+	return day.Format("2006-01-02")
+}
+
+// logJiraWorkItemsWindow is the one Info line of a Jira work-items unit, shared
+// by both routes that build the JQL (the canonical route and the Atlassian one
+// the selector constructs): the window bound, the issues it fetched.
+func logJiraWorkItemsWindow(ctx context.Context, claim Claim, projectKey, jql string, issues, searchPages int, searchErr error) {
+	searchFailed, errorClass := false, ""
+	if searchErr != nil {
+		searchFailed, errorClass = true, logging.ErrorClass(searchErr) // never the error text (CHAOS-7933)
+	}
+	slog.Default().InfoContext(ctx, "jira_work_items_window",
+		"search_failed", searchFailed, "error_class", errorClass,
+		"org_id", claim.OrgID, "unit_id", claim.ID, "project_key", projectKey, "jql", jql,
+		"fetch_all", jiraOptionBool(claim, "fetch_all", false),
+		"jql_override", jiraOptionString(claim, "jql_override", "") != "",
+		"issues", issues, "search_pages", searchPages)
 }
 
 // collectJiraWorkItemIssues walks /rest/api/3/search/jql by cursor
@@ -344,7 +400,7 @@ func collectJiraWorkItemIssues(
 			IsLast        *bool             `json:"isLast"`
 			NextPageToken string            `json:"nextPageToken"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/search/jql", "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(budgetAccount(ctx, "jira_jql"), client, http.MethodGet, "/rest/api/3/search/jql", "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
 			client.Metrics.RecordJiraSearchPage("request_failed")
 			return nil, pages + 1, err
 		}
@@ -608,4 +664,14 @@ func jiraOptionInt(claim Claim, key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+// jiraCommentsFamily is the route family a comments request is accounted to:
+// the work-item-comments estimate names jira_comments as its own family; the
+// other work-item datasets carry the comment reads in the enrichment family.
+func jiraCommentsFamily(claim Claim) string {
+	if claim.Dataset == "work-item-comments" {
+		return "jira_comments"
+	}
+	return "jira_issue_enrichment"
 }

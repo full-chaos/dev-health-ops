@@ -2,9 +2,7 @@ package categorize
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/google/uuid"
 
@@ -12,16 +10,20 @@ import (
 )
 
 // WithBudget returns provider guarded by an organization's BYO LLM budget
-// (llm/budget.py's attach_llm_budget_guard). An OpenAIProvider is guarded per
-// HTTP attempt, so a retry is reserved and settled as its own billable call;
-// any other provider is guarded per Complete. Mock and none providers make no
+// (llm/budget.py's attach_llm_budget_guard). A SharedProvider is guarded per
+// HTTP attempt by the shared client, so a retry is reserved and settled as its
+// own billable call; any other provider is guarded per Complete. Mock and none providers make no
 // provider call and are returned unchanged.
 func WithBudget(provider Provider, guard llmbudget.Guard) Provider {
 	switch typed := provider.(type) {
-	case *OpenAIProvider:
-		guarded := *typed
-		guarded.cfg.Budget = &guard
-		return &guarded
+	case *SharedProvider:
+		guarded, err := typed.withBudget(guard)
+		if err != nil {
+			// The same config already built once; guard per Complete rather
+			// than ever returning the unguarded provider.
+			return &budgetedProvider{inner: provider, guard: guard}
+		}
+		return guarded
 	case MockProvider, NoneProvider, nil:
 		return provider
 	}
@@ -56,40 +58,6 @@ func (p *budgetedProvider) Complete(ctx context.Context, request CompletionReque
 		return CompletionResult{}, err
 	}
 	return result, nil
-}
-
-// guardedResponses runs one Responses API attempt under the budget guard. The
-// reservation covers the request body's byte length as the maximum input and
-// its max_output_tokens.
-func (p *OpenAIProvider) guardedResponses(ctx context.Context, requestKey string, attempt int, body openAIResponsesRequest) (openAICompletionText, string, error) {
-	if p.cfg.Budget == nil {
-		return p.executeResponsesRequest(withLLMAttempt(ctx, attempt), body)
-	}
-	// The reservation covers the WHOLE serialized request (instructions,
-	// input, structured-output schema, reasoning and text options), as the
-	// Python guard did: bytes bound tokens from above, so the reserved maximum
-	// never undercounts the input the provider bills.
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return openAICompletionText{}, "", &llmbudget.AccountingError{Message: "BYO LLM budget reservation is temporarily unavailable.", Cause: err}
-	}
-	var (
-		out    openAICompletionText
-		reason string
-	)
-	err = p.cfg.Budget.Run(ctx, llmbudget.Call{
-		IdempotencyKey:  fmt.Sprintf("%s:attempt:%d", requestKey, attempt),
-		MaxInputTokens:  int64(max(1, len(encoded))),
-		MaxOutputTokens: int64(body.MaxOutputTokens),
-	}, func(ctx context.Context) (llmbudget.Usage, error) {
-		var err error
-		out, reason, err = p.executeResponsesRequest(withLLMAttempt(ctx, attempt), body)
-		if err != nil {
-			return llmbudget.Usage{}, err
-		}
-		return llmbudget.UsageFrom(out.inputTokens, out.outputTokens, out.cachedInputTokens), nil
-	})
-	return out, reason, err
 }
 
 // budgetRefusal reports whether err is the budget guard's own answer (an

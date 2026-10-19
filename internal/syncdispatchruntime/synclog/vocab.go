@@ -18,6 +18,7 @@ var (
 	MsgDispatchSyncRunBudgetGuardEnforceFailed           = Msg{"dispatch_sync_run.budget_guard_enforce_failed"}
 	MsgDispatchSyncRunBudgetGuardDeferred                = Msg{"dispatch_sync_run.budget_guard_deferred"}
 	MsgDispatchSyncRunBudgetGuardAllowed                 = Msg{"dispatch_sync_run.budget_guard_allowed"}
+	MsgDispatchSyncRunBudgetEstimatesPersisted           = Msg{"dispatch_sync_run.budget_estimates_persisted"}
 	MsgDispatchSyncRunBudgetGuardDryRunFailed            = Msg{"dispatch_sync_run.budget_guard_dry_run_failed"}
 	MsgDispatchSyncRunBudgetGuardDryRun                  = Msg{"dispatch_sync_run.budget_guard_dry_run"}
 	MsgDispatchSyncRunRateLimitCooldownReconfirmed       = Msg{"dispatch_sync_run.rate_limit_cooldown_reconfirmed"}
@@ -28,6 +29,8 @@ var (
 	MsgDispatchSyncRunBudgetSurplusWithdrawn             = Msg{"dispatch_sync_run.budget_surplus_withdrawn"}
 	MsgDispatchSyncRunClaimDeferredOutsideGuardSnapshot  = Msg{"dispatch_sync_run.claim_deferred_outside_guard_snapshot"}
 	MsgSyncDispatchAdmissionCaps                         = Msg{"sync_dispatch_admission_caps"}
+	MsgTeamsInsertCarriesProviderIdentity                = Msg{"teams_insert.carries_provider_identity"}
+	MsgSyncTriggerRefusedUnselectedSource                = Msg{"sync_trigger.refused_unselected_source"}
 	MsgDispatchGuardBucketDecision                       = Msg{"dispatch_guard.bucket_decision"}
 	MsgDispatchSyncRunBudgetEstimateUnitFailed           = Msg{"dispatch_sync_run.budget_estimate_unit_failed"}
 	MsgDispatchSyncRunLockBusyRequeued                   = Msg{"dispatch_sync_run.lock_busy_requeued"}
@@ -48,10 +51,13 @@ var (
 	MsgDispatchSyncRunDeniedWithActiveUnits              = Msg{"dispatch_sync_run.denied_with_active_units"}
 	MsgDispatchSyncRunDenied                             = Msg{"dispatch_sync_run.denied"}
 	MsgFinalizeSyncRunZeroUnitFinalized                  = Msg{"finalize_sync_run.zero_unit_finalized"}
+	MsgFinalizeSyncRunDeliveryNotCurrent                 = Msg{"finalize_sync_run.delivery_not_current"}
 	MsgFinalizeSyncRunCoverageCacheInvalidationFailed    = Msg{"finalize_sync_run.coverage_cache_invalidation_failed"}
 	MsgFinalizeSyncRunCoverageCacheInvalidated           = Msg{"finalize_sync_run.coverage_cache_invalidated"}
 	MsgFinalizeSyncRunComputeCheckpointUnitFailed        = Msg{"finalize_sync_run.compute_checkpoint_unit_failed"}
 	MsgPostSyncFanout                                    = Msg{"post_sync_fanout"}
+	MsgPostSyncFanoutFailed                              = Msg{"post_sync_fanout.failed"}
+	MsgPostSyncFanoutChainDefect                         = Msg{"post_sync_fanout.chain_defect"}
 	MsgPostSyncTouchedDays                               = Msg{"post_sync_fanout.touched_days"}
 	MsgPostSyncTouchedDaysFailed                         = Msg{"post_sync_fanout.touched_days_failed"}
 	MsgTouchedDaysDrainPass                              = Msg{"touched_days_drain.pass"}
@@ -62,6 +68,8 @@ var (
 	MsgSyncRunRollupBumped                               = Msg{"sync_run.rollup_bumped"}
 	MsgDispatchSyncRunRedispatchRearmFailed              = Msg{"dispatch_sync_run.redispatch_rearm_failed"}
 	MsgDispatchSyncRunRedispatchRearmed                  = Msg{"dispatch_sync_run.redispatch_rearmed"}
+	MsgDispatchSyncRunWokenByUnitCompletion              = Msg{"dispatch_sync_run.woken_by_unit_completion"}
+	MsgDispatchSyncRunUnitCompletionWakeFailed           = Msg{"dispatch_sync_run.unit_completion_wake_failed"}
 	MsgTeamRepoOwnershipDerivation                       = Msg{"team_repo_ownership_derivation"}
 )
 
@@ -86,6 +94,8 @@ var (
 	KeyDatasetKey                   = Key{"dataset_key"}
 	KeyCostClass                    = Key{"cost_class"}
 	KeyReason                       = Key{"reason"}
+	KeyDeliveryRouteGeneration      = Key{"delivery_route_generation"}
+	KeyCurrentRouteGeneration       = Key{"current_route_generation"}
 	KeyClaimDeferredOutsideSnapshot = Key{"claim.deferred_outside_snapshot"}
 	KeyClaimDeferredUnitIdSample    = Key{"claim.deferred_unit_id_sample"}
 	KeyAdmissionCapLight            = Key{"admission_cap_light"}
@@ -107,6 +117,15 @@ var (
 	KeyLockWaitBudget               = Key{"lock_wait_budget"}
 	KeyInvalidClaimUnits            = Key{"invalid_claim_units"}
 	KeyCappedCount                  = Key{"capped_count"}
+	KeyTeamRows                     = Key{"rows"}
+	KeyGoneKept                     = Key{"gone_kept"}
+	KeyGoneCleared                  = Key{"gone_cleared"}
+	KeyGoneStated                   = Key{"gone_stated"}
+	KeyTriggerCaller                = Key{"caller"}
+	KeyTriggeredBy                  = Key{"triggered_by"}
+	KeyTriggerMode                  = Key{"mode"}
+	KeyRefusedSourceCount           = Key{"refused_source_count"}
+	KeyRequestedSourceCount         = Key{"requested_source_count"}
 	KeyUnroutableUnits              = Key{"unroutable_units"}
 	KeyTerminalDeliveryPublishes    = Key{"terminal_delivery_publishes"}
 	KeyQueuedUnits                  = Key{"queued_units"}
@@ -135,6 +154,7 @@ var (
 	KeyDrainDaysSkipped             = Key{"drain_days_skipped"}
 	KeyDrainDaysRetried             = Key{"drain_days_retried"}
 	KeyDrainDaysNotMarked           = Key{"drain_days_not_marked"}
+	KeyDrainRunsSkippedUnended      = Key{"drain_runs_skipped_unended"}
 	KeyDrainRunsInFlight            = Key{"drain_runs_in_flight"}
 	KeyDrainOldestPendingDay        = Key{"drain_oldest_pending_day"}
 	KeyDrainNewestSkippedDay        = Key{"drain_newest_skipped_day"}
@@ -146,6 +166,7 @@ var (
 	KeyCount                        = Key{"count"}
 	KeyPath                         = Key{"path"}
 	KeyCountdown                    = Key{"countdown"}
+	KeyKeptEarlierWakeup            = Key{"kept_earlier_wakeup"}
 	KeyRowsWritten                  = Key{"rows_written"}
 	KeyRowsRetracted                = Key{"rows_retracted"}
 	KeyRowsRetractionHeld           = Key{"rows_retraction_held"}

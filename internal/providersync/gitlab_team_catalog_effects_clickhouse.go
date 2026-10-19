@@ -2,7 +2,9 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // GitLabTeamCatalogClickHouseEffects is the concrete bridge from the
@@ -34,7 +37,9 @@ type GitLabTeamCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+// gitlabTeamCatalogTeamsColumns is the teams columns this writer states;
+// teamprovider.Insert adds the provider identity in the same statement.
+var gitlabTeamCatalogTeamsColumns = []string{"id", "team_uuid", "name", "description", "manual_members", "project_keys", "repo_patterns", "is_active", "updated_at", "org_id", "provider", "native_team_key", "parent_team_id", "created_at"}
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const gitlabTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -226,11 +231,13 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 	if err != nil {
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, gitlabTeamCatalogTeamsInsert)
+	// Read for the tally only: the written identity is read inside the insert.
+	stored, err := teamprovider.Carry(ctx, sink.Conn, claim.OrgID, teamIDs)
 	if err != nil {
 		return err
 	}
-	defer batch.Abort()
+	writes := make([]teamprovider.Write, 0, len(rows))
+	var tally teamprovider.Tally
 	for _, row := range rows {
 		teamUUID, err := uuid.Parse(row.TeamUUID)
 		if err != nil {
@@ -240,18 +247,24 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 		if manualMembers == nil {
 			manualMembers = []string{}
 		}
-		if err := batch.Append(
-			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
-			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
-			teamcreated.For(createdAt, row.ID, row.UpdatedAt),
-		); err != nil {
-			return err
-		}
+		tally.Add(stored, row.ID, row.ProviderTeamID)
+		writes = append(writes, teamprovider.Write{
+			Values: []any{
+				row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
+				row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
+				teamcreated.For(createdAt, row.ID, row.UpdatedAt),
+			},
+			ProviderTeamID: row.ProviderTeamID, ProviderName: row.ProviderName, Gone: teamprovider.GoneCleared,
+		})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	return batch.Send()
+	if err := teamprovider.Insert(ctx, sink.Conn, claim.OrgID, gitlabTeamCatalogTeamsColumns, writes); err != nil {
+		return err
+	}
+	logTeamProviderIdentity(ctx, tally, gitlabTeamCatalogProvider, claim.OrgID)
+	return nil
 }
 
 // openProviderAccessOwnership reads the open provider_access rows of the
@@ -328,8 +341,193 @@ func (sink GitLabTeamCatalogClickHouseEffects) SnapshotOwnership(
 	if err != nil {
 		return nil, SnapshotPlan{}, err
 	}
-	rows, plan := gitlabOwnershipSnapshot(fresh, open, at, grants)
+	catalogAtPath, err := sink.catalogIDsAtPaths(ctx, orgID, gitlabOwnershipPathFormKeys(open))
+	if err != nil {
+		return nil, SnapshotPlan{}, err
+	}
+	rows, plan := gitlabOwnershipSnapshot(fresh, open, catalogAtPath, at, grants)
 	return rows, plan, nil
+}
+
+// gitlabOwnershipPathForm reports whether a GitLab ownership row is of the form
+// a store wrote before rows were keyed by the catalog id: its project_id is
+// the project's path. A GitLab path holds no ':'; a catalog id always does.
+func gitlabOwnershipPathForm(row gitlabTeamCatalogOwnershipRow) bool {
+	return !strings.Contains(row.ProjectID.String(), ":")
+}
+
+func gitlabOwnershipPathFormKeys(open []gitlabTeamCatalogOwnershipRow) []string {
+	seen := map[string]bool{}
+	var paths []string
+	for _, row := range open {
+		if path := row.ProjectID.String(); gitlabOwnershipPathForm(row) && !seen[path] {
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// catalogIDsAtPaths reads, for each path, the catalog ids of the GitLab
+// projects the org's store has seen at it: the projects rows that hold it as
+// project_key (a deleted project's row keeps its last path, so a path a new
+// project took over shows two ids), and the repos rows of that path that name
+// the provider's numeric id (repos.provider_repo_id; a renamed project's row
+// under its old path keeps it). A failed read is an error, never "no project".
+func (sink GitLabTeamCatalogClickHouseEffects) catalogIDsAtPaths(
+	ctx context.Context, orgID string, paths []string,
+) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(paths) == 0 {
+		return out, nil
+	}
+	result, err := sink.Conn.Query(ctx, `
+SELECT ifNull(project_key, ''), id FROM projects FINAL
+WHERE org_id = ? AND provider = ? AND project_key IN ?`,
+		orgID, gitlabTeamCatalogProvider, paths)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	for result.Next() {
+		var path, id string
+		if err := result.Scan(&path, &id); err != nil {
+			return nil, err
+		}
+		out[path] = append(out[path], id)
+	}
+	if err := result.Err(); err != nil {
+		return nil, err
+	}
+	// A repos row keeps its project's current path in repo and, since its id
+	// stays across renames (CHAOS-3383), the path it was minted at in
+	// identity_path: both are paths the store has seen the project at. The
+	// project is the one the identity resolver names the row by (heldBy:
+	// provider_repo_id, else settings.project_id for a row from before 134).
+	held, err := readGitLabStoredRepoIdentitiesAtPaths(ctx, sink.Conn, orgID, paths)
+	if err != nil {
+		return nil, err
+	}
+	requested := make(map[string][]string, len(paths))
+	for _, path := range paths {
+		key := strings.ToLower(strings.TrimSpace(path))
+		requested[key] = append(requested[key], path)
+	}
+	for _, row := range held {
+		id, ok := GitLabCatalogProjectID(orgID, row.heldBy())
+		if !ok {
+			continue
+		}
+		seenAt := []string{strings.ToLower(row.Repo)}
+		if identityPath := strings.ToLower(row.IdentityPath); identityPath != "" && identityPath != seenAt[0] {
+			seenAt = append(seenAt, identityPath)
+		}
+		for _, key := range seenAt {
+			for _, path := range requested[key] {
+				out[path] = append(out[path], id.String())
+			}
+		}
+	}
+	return out, nil
+}
+
+// gitlabOwnershipCarry is what a run does with the open path-form rows that
+// match one of its fresh rows (same team, source, and path = project_key).
+type gitlabOwnershipCarry struct {
+	// moved is the path row a fresh row continues, by the fresh row's index:
+	// the fresh row takes its valid_from and the path row is tombstoned.
+	moved map[int]gitlabTeamCatalogOwnershipRow
+	// ended are path rows of a path the store has seen another project id at
+	// (a path a new project took over): the grant is not carried to the fresh
+	// project, and the path row is closed at the run.
+	ended []gitlabTeamCatalogOwnershipRow
+	// duplicates are later path rows of a grant another path row is carried
+	// for: tombstoned too, so they never stand beside the carried row.
+	duplicates []gitlabTeamCatalogOwnershipRow
+}
+
+// gitlabOwnershipPathRowsToCarry takes the matched path-form rows out of the
+// open rows the snapshot rule reads. catalogAtPath is catalogIDsAtPaths: the
+// project ids the store has seen at each path. A path-form row of a team and
+// source matches the fresh row of the same team and source
+//   - whose project_key is the row's path, unless the store has seen another
+//     project id at that path (a path a new project took over); or
+//   - whose catalog id is the one id the store has seen at the row's path (the
+//     same project, renamed before this run, whatever holds the path now).
+//
+// A row of a taken-over path that matches no fresh row by id is ended at the
+// run, not carried.
+//
+// A path the store has seen no id at is carried by path (the org's projects
+// were never listed). A path-form row no fresh row matches stays in the open
+// rows and is handled by the snapshot rule as before.
+func gitlabOwnershipPathRowsToCarry(
+	fresh, open []gitlabTeamCatalogOwnershipRow, catalogAtPath map[string][]string,
+) ([]gitlabTeamCatalogOwnershipRow, gitlabOwnershipCarry) {
+	key := func(teamID, source, value string) string { return teamID + "\x00" + source + "\x00" + value }
+	freshByPath := map[string]int{}
+	freshByID := map[string]int{}
+	for index, row := range fresh {
+		if row.ProjectKey != nil && strings.TrimSpace(*row.ProjectKey) != "" {
+			freshByPath[key(row.TeamID, row.Source, strings.TrimSpace(*row.ProjectKey))] = index
+		}
+		freshByID[key(row.TeamID, row.Source, row.ProjectID.String())] = index
+	}
+	carry := gitlabOwnershipCarry{moved: map[int]gitlabTeamCatalogOwnershipRow{}}
+	kept := make([]gitlabTeamCatalogOwnershipRow, 0, len(open))
+	for _, row := range open {
+		if !gitlabOwnershipPathForm(row) {
+			kept = append(kept, row)
+			continue
+		}
+		path := row.ProjectID.String()
+		seen := map[string]bool{}
+		for _, id := range catalogAtPath[path] {
+			seen[id] = true
+		}
+		direct, atPath := freshByPath[key(row.TeamID, row.Source, path)]
+		takenOver := false
+		if atPath {
+			for id := range seen {
+				if id != fresh[direct].ProjectID.String() {
+					takenOver = true
+				}
+			}
+		}
+		index, match := direct, atPath && !takenOver
+		if !match && len(seen) == 1 {
+			// The one project the store has seen at the path, wherever it is now.
+			for id := range seen {
+				index, match = freshByID[key(row.TeamID, row.Source, id)]
+			}
+		}
+		if !match {
+			if takenOver {
+				carry.ended = append(carry.ended, row)
+			} else {
+				kept = append(kept, row)
+			}
+			continue
+		}
+		if earlier, held := carry.moved[index]; held && !row.ValidFrom.Before(earlier.ValidFrom) {
+			carry.duplicates = append(carry.duplicates, row)
+			continue
+		} else if held {
+			carry.duplicates = append(carry.duplicates, earlier)
+		}
+		carry.moved[index] = row
+	}
+	return kept, carry
+}
+
+func sortedOwnershipCarryIndexes(moved map[int]gitlabTeamCatalogOwnershipRow) []int {
+	indexes := make([]int, 0, len(moved))
+	for index := range moved {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	return indexes
 }
 
 // gitlabOwnershipSnapshot applies the shared snapshot rule
@@ -337,7 +535,8 @@ func (sink GitLabTeamCatalogClickHouseEffects) SnapshotOwnership(
 // reached a confirmed end; an open row of a team outside it is of no kind and
 // is never closed.
 func gitlabOwnershipSnapshot(
-	fresh, open []gitlabTeamCatalogOwnershipRow, at time.Time, grants KindSnapshot[OwnershipSnapshotRow],
+	fresh, open []gitlabTeamCatalogOwnershipRow, catalogAtPath map[string][]string,
+	at time.Time, grants KindSnapshot[OwnershipSnapshotRow],
 ) ([]gitlabTeamCatalogOwnershipRow, SnapshotPlan) {
 	facts := func(rows []gitlabTeamCatalogOwnershipRow) []OwnershipSnapshotRow {
 		out := make([]OwnershipSnapshotRow, len(rows))
@@ -350,14 +549,49 @@ func gitlabOwnershipSnapshot(
 		}
 		return out
 	}
+	open, carry := gitlabOwnershipPathRowsToCarry(fresh, open, catalogAtPath)
 	plan := PlanOwnershipSnapshot(facts(fresh), facts(open), at, grants)
-	rows := make([]gitlabTeamCatalogOwnershipRow, 0, len(fresh)+len(plan.Retract))
+	rows := make([]gitlabTeamCatalogOwnershipRow, 0, len(fresh)+len(plan.Retract)+len(carry.moved)+len(carry.ended)+len(carry.duplicates))
 	for index, row := range fresh {
-		if plan.Unchanged[index] {
+		pathRow, carried := carry.moved[index]
+		if plan.Unchanged[index] && !carried {
 			continue
 		}
 		row.ValidFrom = plan.ValidFrom[index]
+		if carried && pathRow.ValidFrom.Before(row.ValidFrom) {
+			row.ValidFrom = pathRow.ValidFrom
+		}
 		rows = append(rows, row)
+	}
+	// A replaced path row is closed at its own valid_from: a deliberate
+	// empty-interval tombstone, as supersedeTeamRepoOwnershipRows writes, exempt
+	// from intervalCloseAt. A closed row overlapping the catalog-keyed row that
+	// now starts at the same instant would double-count the grant; readers
+	// ignore the tombstone through valid_to > valid_from, so at every instant
+	// exactly one row of the grant is valid.
+	superseded := make([]gitlabTeamCatalogOwnershipRow, 0, len(carry.moved)+len(carry.duplicates))
+	for _, index := range sortedOwnershipCarryIndexes(carry.moved) {
+		superseded = append(superseded, carry.moved[index])
+	}
+	for _, pathRow := range append(superseded, carry.duplicates...) {
+		end := pathRow.ValidFrom
+		pathRow.ValidTo = &end
+		pathRow.UpdatedAt = at
+		rows = append(rows, pathRow)
+	}
+	for _, pathRow := range carry.ended {
+		end := intervalCloseAt(pathRow.ValidFrom, at)
+		if !pathRow.ValidFrom.Before(at) {
+			end = pathRow.ValidFrom // dated at or after the run: a tombstone, never beside the new project's row
+		}
+		pathRow.ValidTo = &end
+		pathRow.UpdatedAt = at
+		rows = append(rows, pathRow)
+	}
+	if len(carry.moved) > 0 || len(carry.ended) > 0 || len(carry.duplicates) > 0 {
+		slog.Default().Info("providersync.gitlab_team_catalog.ownership_path_rows_carried",
+			"rows_moved", len(carry.moved), "rows_ended_path_taken_over", len(carry.ended),
+			"rows_duplicate_ended", len(carry.duplicates))
 	}
 	for _, retraction := range plan.Retract {
 		row := open[retraction.Open]

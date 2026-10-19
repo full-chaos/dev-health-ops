@@ -81,6 +81,9 @@ type operatorRuntime struct {
 	streams               []streamProfileStatus
 	queueStatusSource     workerQueueStatusSource
 	queueControlMode      platformconfig.QueueControlMode
+	// routeReconciler leaves no delivery behind at the old generation after a route command (CHAOS-9964).
+	// configureRuntime always sets it; a runtime built without pools (tests) has none.
+	routeReconciler routeReconciler
 	// registry is the same job-descriptor registry configureRuntime already
 	// loads for jobRouteController -- `metrics daily-redrive` (CHAOS-4358)
 	// reuses it to construct a daily.PostgresPublisher without a second
@@ -540,6 +543,11 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		streamDeploymentState: string(manifest.DeploymentState), streams: streams, queueControlMode: mode,
 		registry: registry, lookup: lookup,
 	}
+	reconciler, reconcilerErr := syncreconciler.NewTerminalDeliveryRepair(pools.QueueControl, coordinatorPool, schema)
+	if reconcilerErr != nil {
+		return nil, writeError(stderr, "operator_backend_unavailable")
+	}
+	runtime.routeReconciler = reconciler
 	runtime.queueStatusSource = manifestQueueStatusSource{
 		service: service, principal: runtime.principal, manifest: manifest, budget: budget,
 		presence: func(ctx context.Context) ([]jobruntime.WorkerPresenceSummary, error) {
@@ -742,7 +750,31 @@ func dispatchRoutes(ctx context.Context, runtime *operatorRuntime, args []string
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}
-	return writeResult(stdout, stderr, state)
+	if runtime.routeReconciler == nil {
+		return writeResult(stdout, stderr, state)
+	}
+	// A command shouldn't leave garbage around (CHAOS-9964): every routes verb, an apply that changed nothing included,
+	// reconciles the kind's deliveries left at another generation before it ends. A route change is already committed.
+	report, reconcileErr := runtime.routeReconciler.ReconcileOtherGenerations(ctx, time.Now().UTC(), kind)
+	result := routeMutationResult{RouteState: state, Reconcile: &report}
+	if reconcileErr != nil {
+		result.ReconcileError = "reconcile_failed"
+		writeResult(stdout, stderr, result)
+		return 1
+	}
+	return writeResult(stdout, stderr, result)
+}
+
+type routeReconciler interface {
+	ReconcileOtherGenerations(ctx context.Context, now time.Time, kind string) (syncreconciler.GenerationReconcileReport, error)
+}
+
+// routeMutationResult is the route state after a generation-changing command plus what the command did to the
+// deliveries the change left at the old generation.
+type routeMutationResult struct {
+	syncroute.RouteState
+	Reconcile      *syncreconciler.GenerationReconcileReport `json:"generation_reconcile,omitempty"`
+	ReconcileError string                                    `json:"generation_reconcile_error,omitempty"`
 }
 
 func dispatchJobs(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
@@ -846,6 +878,8 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		return dispatchMetricsFinalizeRedrive(ctx, runtime, args[1:], stdout, stderr)
 	case "partition-recompute":
 		return dispatchMetricsPartitionRecompute(ctx, runtime, args[1:], stdout, stderr)
+	case "generation-repair":
+		return dispatchMetricsGenerationRepair(ctx, runtime, args[1:], stdout, stderr)
 	case "execution-repair":
 		return dispatchMetricsExecutionRepair(ctx, runtime, args[1:], stdout, stderr)
 	case "list-ambiguous-executions":
@@ -1568,6 +1602,57 @@ func dispatchMetricsFinalizeRedrive(
 	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsFinalizeRedrive, "organization", *org, perform)
 }
 
+// dispatchMetricsGenerationRepair handles `metrics generation-repair`
+// (CHAOS-10072): restores the scheduled fan-out generation of runs the
+// pre-CHAOS-4442 finalize redrive rewrote to "redrive:<nonce>". A row is
+// rewritten only when its run id proves the original generation; every other
+// row is counted and left alone. Idempotent. Audited under the
+// finalize-redrive action: the damage and its repair are the same family.
+func dispatchMetricsGenerationRepair(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("metrics generation-repair")
+	org := flags.String("org", "", "organization id (uuid)")
+	from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
+	dryRun := flags.Bool("dry-run", false, "report which rows a real pass would restore, and which cannot be proven, without writing")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
+		return writeError(stderr, "invalid_request")
+	}
+	parsedOrg, err := uuid.Parse(*org)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	canonicalOrg := parsedOrg.String()
+	fromDay, err := time.Parse("2006-01-02", *from)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	toDay, err := time.Parse("2006-01-02", *to)
+	if err != nil || toDay.Before(fromDay) {
+		return writeError(stderr, "invalid_request")
+	}
+	perform := func(ctx context.Context) int {
+		if runtime.pools == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		store, err := daily.NewPostgresStore(runtime.pools.Domain)
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		outcome, err := store.RepairLegacyRedriveGenerations(ctx, canonicalOrg, fromDay, toDay, *dryRun, *mutation.reason)
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, map[string]any{"generation_repair": outcome, "dry_run": *dryRun})
+	}
+	if *dryRun {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionMetricsFinalizeRedrive, "organization", canonicalOrg, perform)
+	}
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsFinalizeRedrive, "organization", canonicalOrg, perform)
+}
+
 // dispatchProvidersync handles the `providersync` verb group.
 func dispatchProvidersync(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -1586,6 +1671,8 @@ func dispatchProvidersync(ctx context.Context, runtime *operatorRuntime, args []
 		return dispatchProvidersyncCarryTeamIDs(ctx, runtime, args[1:], stdout, stderr)
 	case "compact-ownership-intervals":
 		return dispatchProvidersyncCompactOwnershipIntervals(ctx, runtime, args[1:], stdout, stderr)
+	case "drain-removed-dependencies":
+		return dispatchProvidersyncDrainRemovedDependencies(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
@@ -1868,6 +1955,110 @@ func dispatchProvidersyncCompactOwnershipIntervals(
 		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionProvidersyncCleanup, "organization", scope, perform)
 	}
 	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", scope, false, perform)
+}
+
+// dispatchProvidersyncDrainRemovedDependencies handles `providersync
+// drain-removed-dependencies` (CHAOS-9706): a data step that deletes the
+// blocking rows of work_item_dependencies that the provider no longer reports
+// (the end rule of the blocked intervals) and that were last seen before the
+// retention. It DELETES rows, so it is dry unless --apply is given; the dry
+// run reads, plans, proves that every interval inside the retention is the
+// same without the rows, and reports. --restore-run puts the rows of an
+// earlier run back from the backup table (also dry by default). The
+// organization comes from stdin (--org-stdin) or the verb takes every
+// organization (--all-orgs); the output holds counts only.
+func dispatchProvidersyncDrainRemovedDependencies(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("providersync drain-removed-dependencies")
+	orgStdin := flags.Bool("org-stdin", false, orgStdinUsage)
+	allOrgs := flags.Bool("all-orgs", false, "drain every organization that holds a blocking row")
+	retainDays := flags.Int("retain-days", providersync.WorkItemDependencyDrainDefaultRetainDays, fmt.Sprintf("keep every removed row last seen within this many days (floor %d)", providersync.WorkItemDependencyDrainMinRetainDays))
+	apply := flags.Bool("apply", false, "write: back up and delete the drainable rows. EXCEPTION to the house pattern (the sibling verbs write unless --dry-run is given): this verb deletes rows, so it is dry unless --apply is given")
+	dryRun := flags.Bool("dry-run", false, "the default, accepted for the habit of the other verbs; refused together with --apply")
+	restoreRun := flags.String("restore-run", "", "put the rows of this earlier run back from its backup table (with --apply; without it, counts only)")
+	workersPaused := flags.Bool("workers-paused", false, "required with --apply: the statement that the sync workers that write work_item_dependencies are paused (no per-organization lease exists for the tool to take)")
+	quietSeconds := flags.Int("quiet-seconds", 60, "with --apply: refuse while a part of work_item_dependencies or work_items was modified within this many seconds (0 turns the check off)")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || *orgStdin == *allOrgs || (*apply && *dryRun) || *quietSeconds < 0 ||
+		*retainDays < providersync.WorkItemDependencyDrainMinRetainDays || !mutation.valid(!*apply) {
+		return writeError(stderr, "invalid_request")
+	}
+	org, scope := "", "*"
+	if *orgStdin {
+		var code int
+		if org, code = resolveOrgFlag(runtime, "", true, stderr); code != 0 {
+			return code
+		}
+		scope = org
+	}
+	options := providersync.WorkItemDependencyDrainOptions{AllOrgs: *allOrgs, RetainDays: *retainDays, Apply: *apply,
+		WorkersPaused: *workersPaused, QuietSeconds: *quietSeconds}
+	if org != "" {
+		options.Orgs = []string{org}
+	}
+	perform := func(ctx context.Context) int {
+		if *apply && !*workersPaused {
+			return writeError(stderr, "work_item_dependency_drain_workers_not_paused")
+		}
+		if runtime.lookup == nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		dsn, err := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
+		if err != nil {
+			return writeConfigError(stderr, err)
+		}
+		logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse", dsn)
+		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
+		if err != nil {
+			return writeError(stderr, "operator_backend_unavailable")
+		}
+		defer func() { _ = conn.Close() }()
+		var outcome providersync.WorkItemDependencyDrainOutcome
+		key := "drain_removed_dependencies"
+		if *restoreRun != "" {
+			key = "restore_removed_dependencies"
+			outcome, err = providersync.RestoreWorkItemDependencyDrain(ctx, conn, *restoreRun, options)
+		} else {
+			outcome, err = providersync.DrainWorkItemDependencies(ctx, conn, options)
+		}
+		if err != nil {
+			// The report so far goes to stdout so that an operator sees how far the run got; the error is a
+			// fixed code, never the driver text.
+			_ = writeResult(stdout, stderr, map[string]any{key: outcome, "error": workItemDependencyDrainErrorCode(err)})
+			return writeError(stderr, workItemDependencyDrainErrorCode(err))
+		}
+		return writeResult(stdout, stderr, map[string]any{key: outcome})
+	}
+	if !*apply {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionProvidersyncCleanup, "organization", scope, perform)
+	}
+	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", scope, false, perform)
+}
+
+// workItemDependencyDrainErrorCode names why a drain run stopped, with a fixed code. Nothing of the error text is
+// printed: it can hold ids.
+func workItemDependencyDrainErrorCode(err error) string {
+	switch {
+	case errors.Is(err, providersync.ErrWorkItemDependencyDrainDifferential):
+		return "work_item_dependency_drain_differential_failed"
+	case errors.Is(err, providersync.ErrWorkItemDependencyDrainBackup):
+		return "work_item_dependency_drain_backup_failed"
+	case errors.Is(err, providersync.ErrWorkItemDependencyDrainReadback):
+		return "work_item_dependency_drain_readback_failed"
+	case errors.Is(err, providersync.ErrWorkItemDependencyDrainMutation):
+		return "work_item_dependency_drain_mutation_failed"
+	case errors.Is(err, providersync.ErrWorkItemDependencyDrainNotPaused):
+		return "work_item_dependency_drain_workers_not_paused"
+	case errors.Is(err, providersync.ErrWorkItemDependencyDrainWritesActive):
+		return "work_item_dependency_drain_writes_active"
+	case errors.Is(err, providersync.ErrWorkItemDependencyDrainTable):
+		return "work_item_dependency_drain_table_unexpected"
+	case errors.Is(err, providersync.ErrWorkItemDependencyDrainRetention):
+		return "work_item_dependency_drain_retention_below_floor"
+	default:
+		return "work_item_dependency_drain_failed"
+	}
 }
 
 // ownershipCompactionErrorCode names why a compaction run stopped, with a fixed
@@ -3412,6 +3603,7 @@ var orgStdinVerbNames = map[string]bool{
 	"providersync retire-jira-project-as-team": true,
 	"providersync carry-team-ids":              true,
 	"providersync compact-ownership-intervals": true,
+	"providersync drain-removed-dependencies":  true,
 }
 
 // orgStdinVerb reports whether args (after the optional leading "workers")

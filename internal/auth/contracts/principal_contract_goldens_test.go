@@ -1,7 +1,9 @@
 package contracts
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -39,6 +41,14 @@ type fixtureManifest struct {
 		File string `json:"file"`
 		Why  string `json:"why"`
 	} `json:"reject_by_client"`
+	// GoSchemaGap holds documents Python and ajv refuse at the schema layer
+	// (by `format`) and Go's Validate accepts, because the library ignores
+	// `format` and a regex cannot know the calendar. The typed client refuses
+	// them. See TestGoSchemaValidateAcceptsACalendarImpossibleDay.
+	GoSchemaGap []struct {
+		File string `json:"file"`
+		Why  string `json:"why"`
+	} `json:"go_schema_gap"`
 }
 
 // goMessageForKeyword maps a JSON Schema keyword to the token
@@ -183,6 +193,9 @@ func TestEveryFixtureFileOnDiskIsClaimedByTheManifest(t *testing.T) {
 	for _, r := range manifest.RejectByClient {
 		claimed[r.File] = true
 	}
+	for _, r := range manifest.GoSchemaGap {
+		claimed[r.File] = true
+	}
 	var unclaimed, missing []string
 	for name := range onDisk {
 		if !claimed[name] {
@@ -249,6 +262,39 @@ func TestAcceptedFixturesValidate(t *testing.T) {
 	}
 }
 
+// zeroInstantFixtures are the accept fixtures whose authenticated_at IS Go's
+// zero time, so IsZero cannot tell "decoded" from "not decoded" for them.
+// Exact names, and TestZeroInstantFixturesAreAcceptedAndExist fails if one is
+// renamed or removed, so the exemption cannot outlive its fixture.
+var zeroInstantFixtures = map[string]bool{
+	"valid-authenticated-at-earliest-instant.json":  true,
+	"valid-authenticated-at-exact-lower-limit.json": true,
+}
+
+func TestZeroInstantFixturesAreAcceptedAndExist(t *testing.T) {
+	accepted := map[string]bool{}
+	for _, entry := range loadManifest(t).Accept {
+		accepted[entry.File] = true
+	}
+	for name := range zeroInstantFixtures {
+		if !accepted[name] {
+			t.Errorf("%s is exempt from the IsZero check but is not an accept fixture", name)
+		}
+		var document struct {
+			Authentication struct {
+				AuthenticatedAt string `json:"authenticated_at"`
+			} `json:"authentication"`
+		}
+		if err := json.Unmarshal(loadFixture(t, name), &document); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		parsed, err := time.Parse(time.RFC3339, document.Authentication.AuthenticatedAt)
+		if err != nil || !parsed.IsZero() {
+			t.Errorf("%s authenticated_at %q is not the zero instant; the exemption is unneeded", name, document.Authentication.AuthenticatedAt)
+		}
+	}
+}
+
 func TestAcceptedFixturesRoundTripThroughTheClient(t *testing.T) {
 	// Validation alone does not prove the Go type can read the document: a
 	// struct field with the wrong JSON tag validates fine and decodes to a
@@ -290,7 +336,8 @@ func TestAcceptedFixturesRoundTripThroughTheClient(t *testing.T) {
 			if principal.Authentication.Assurance == "" {
 				t.Error("authentication.assurance decoded empty -- check the JSON tag")
 			}
-			if principal.Authentication.AuthenticatedAt.IsZero() {
+			if principal.Authentication.AuthenticatedAt.IsZero() &&
+				!zeroInstantFixtures[entry.File] {
 				t.Error("authentication.authenticated_at decoded to the zero time")
 			}
 			if len(principal.Authentication.Methods) == 0 {
@@ -421,22 +468,20 @@ func TestTheDelegationBoundIsTheADRValueNotALiteral(t *testing.T) {
 	}
 }
 
-// TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne pins the
-// cross-language agreement codex round 1 found missing.
-//
-// Draft 2020-12 defines "type": "integer" as any number with a zero fractional
-// part, so 1.0 IS a valid integer and both languages must land on the same
-// value. Before the fix Python produced a float and Go refused to decode.
-func TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne(t *testing.T) {
+// TestRevisionDecodesIntegerTokensAndRefusesDecimalForm: the token text decides.
+// An integral decimal (1.0, 42.000) is refused like a fractional one; the
+// withdrawn normalisation is documented on Revision.UnmarshalJSON. The
+// exhaustive token table lives in wire_int_guard_test.go.
+func TestRevisionDecodesIntegerTokensAndRefusesDecimalForm(t *testing.T) {
 	for _, testCase := range []struct {
 		raw     string
 		want    Revision
 		wantErr bool
 	}{
 		{raw: "1", want: 1},
-		{raw: "1.0", want: 1},
 		{raw: "0", want: 0},
-		{raw: "42.000", want: 42},
+		{raw: "1.0", wantErr: true},
+		{raw: "42.000", wantErr: true},
 		{raw: "1.5", wantErr: true},
 		{raw: "-1.5", wantErr: true},
 	} {
@@ -445,66 +490,100 @@ func TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne(t *testing.T) 
 			err := json.Unmarshal([]byte(testCase.raw), &got)
 			if testCase.wantErr {
 				if err == nil {
-					t.Fatalf("%s decoded to %d; a fractional revision must be refused, never "+
-						"truncated -- two wire documents collapsing to one revision breaks the "+
-						"G-31 cache key", testCase.raw, got)
+					t.Fatalf("%s decoded to %d; a decimal-form revision must be refused", testCase.raw, got)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("%s: %v", testCase.raw, err)
-			}
-			if got != testCase.want {
-				t.Errorf("%s decoded to %d, want %d", testCase.raw, got, testCase.want)
+			if err != nil || got != testCase.want {
+				t.Fatalf("%s: %v %d, want %d", testCase.raw, err, got, testCase.want)
 			}
 		})
 	}
 }
 
-// TestPrincipalDecodesAnIntegralDecimalRevision tests the WIRING, not the type.
-//
-// TestRevisionAcceptsAnIntegralDecimalAndRejectsAFractionalOne unmarshals into
-// a bare Revision and so proves only that the TYPE behaves. It says nothing
-// about whether Principal's fields actually USE that type -- and they very
-// nearly did not: the edit that introduced Revision changed the type
-// declaration but silently failed to change the four struct fields, because
-// gofmt had realigned them and an exact-match replacement no-opped. The build
-// stayed green, the type test stayed green, and only decoding a whole document
-// showed Go still rejecting 1.0.
-//
-// So this decodes a real fixture with a decimal revision through
-// PrincipalFromWire, which is the path production takes. Reverting any of the
-// four fields to int64 turns it red.
-func TestPrincipalDecodesAnIntegralDecimalRevision(t *testing.T) {
+// TestPrincipalRefusesADecimalFormRevisionInEveryField tests the WIRING, not
+// the type: it decodes a real fixture with a decimal-form revision through
+// PrincipalFromWire, the path production takes, so reverting any of the four
+// fields to a plain int64 (which would accept 7.0 as 7) turns it red.
+func TestPrincipalRefusesADecimalFormRevisionInEveryField(t *testing.T) {
 	root := testRoot(t)
 	for _, field := range []string{
 		"membership_revision", "policy_revision", "grant_revision", "entitlement_revision",
 	} {
-		t.Run(field, func(t *testing.T) {
-			var document map[string]any
-			if err := json.Unmarshal(loadFixture(t, "valid-human-minimal.json"), &document); err != nil {
-				t.Fatalf("fixture is not valid JSON: %v", err)
-			}
-			document[field] = json.RawMessage("7.0")
-			raw, err := json.Marshal(document)
-			if err != nil {
-				t.Fatalf("re-marshalling: %v", err)
-			}
-			principal, err := PrincipalFromWire(root, raw)
-			if err != nil {
-				t.Fatalf("PrincipalFromWire refused an integral decimal, which draft 2020-12 "+
-					"defines as a valid integer and the Python client accepts: %v", err)
-			}
-			got := map[string]Revision{
-				"membership_revision":  principal.MembershipRevision,
-				"policy_revision":      principal.PolicyRevision,
-				"grant_revision":       principal.GrantRevision,
-				"entitlement_revision": principal.EntitlementRevision,
-			}[field]
-			if got != 7 {
-				t.Errorf("%s = %d, want 7", field, got)
-			}
-		})
+		for _, token := range []string{"7.0", "7e0", "1.0000000000000000001"} {
+			t.Run(field+"/"+token, func(t *testing.T) {
+				var document map[string]any
+				if err := json.Unmarshal(loadFixture(t, "valid-human-minimal.json"), &document); err != nil {
+					t.Fatalf("fixture is not valid JSON: %v", err)
+				}
+				document[field] = json.RawMessage(token)
+				raw, err := json.Marshal(document)
+				if err != nil {
+					t.Fatalf("re-marshalling: %v", err)
+				}
+				if _, err := PrincipalFromWire(root, raw); err == nil {
+					t.Fatalf("PrincipalFromWire accepted %s in %s", token, field)
+				}
+			})
+		}
+	}
+}
+
+// TestPrincipalWireKeepsIntegerRevisionsAboveTwoToThe53Exact is the Go twin of
+// the Python from_wire_bytes pins (CHAOS-4910). A pin, not red-first: the
+// behaviour already held. It runs through PrincipalFromWire, so a revision
+// field that went through float64 would turn it red.
+func TestPrincipalWireKeepsIntegerRevisionsAboveTwoToThe53Exact(t *testing.T) {
+	root := testRoot(t)
+	for _, field := range []string{
+		"membership_revision", "policy_revision", "grant_revision", "entitlement_revision",
+	} {
+		for _, token := range []string{"9007199254740993", "9223372036854775807"} {
+			t.Run(field+"/"+token, func(t *testing.T) {
+				var document map[string]any
+				if err := json.Unmarshal(loadFixture(t, "valid-human-minimal.json"), &document); err != nil {
+					t.Fatalf("fixture is not valid JSON: %v", err)
+				}
+				document[field] = json.RawMessage(token)
+				raw, err := json.Marshal(document)
+				if err != nil {
+					t.Fatalf("re-marshalling: %v", err)
+				}
+				principal, err := PrincipalFromWire(root, raw)
+				if err != nil {
+					t.Fatalf("PrincipalFromWire refused integer token %s in %s: %v", token, field, err)
+				}
+				var round map[string]any
+				out, err := json.Marshal(principal)
+				if err != nil {
+					t.Fatalf("marshal: %v", err)
+				}
+				dec := json.NewDecoder(bytes.NewReader(out))
+				dec.UseNumber()
+				if err := dec.Decode(&round); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if got := fmt.Sprint(round[field]); got != token {
+					t.Fatalf("%s = %s after PrincipalFromWire, want %s", field, got, token)
+				}
+			})
+		}
+		for _, token := range []string{"9007199254740993.0", "9007199254740992.0"} {
+			t.Run(field+"/"+token, func(t *testing.T) {
+				var document map[string]any
+				if err := json.Unmarshal(loadFixture(t, "valid-human-minimal.json"), &document); err != nil {
+					t.Fatalf("fixture is not valid JSON: %v", err)
+				}
+				document[field] = json.RawMessage(token)
+				raw, err := json.Marshal(document)
+				if err != nil {
+					t.Fatalf("re-marshalling: %v", err)
+				}
+				if _, err := PrincipalFromWire(root, raw); err == nil {
+					t.Fatalf("PrincipalFromWire accepted decimal-form %s in %s", token, field)
+				}
+			})
+		}
 	}
 }
 
@@ -542,7 +621,7 @@ func TestRevisionRangeBoundary(t *testing.T) {
 		{raw: "9223372036854775808", wantErr: true},             // 2^63, silently clamped before the fix
 		{raw: "1e19", wantErr: true},                            // integral but far past the range
 		// 1e18 is inside int64 and OUTSIDE float64's exact-integer range, and
-		// it arrives in decimal form, so it is refused by the 2^53 guard. That
+		// it arrives in decimal form, so it is refused as decimal-form. That
 		// expectation changed when the guard landed: this row previously
 		// asserted acceptance, and updating it is the point rather than an
 		// inconvenience -- an in-range value the parser has already rounded is
@@ -551,7 +630,7 @@ func TestRevisionRangeBoundary(t *testing.T) {
 		{raw: "1e18", wantErr: true},
 		{raw: "1000000000000000000", want: 1000000000000000000}, // integer token, exact
 		{raw: "9007199254740991", want: 9007199254740991},       // 2^53-1, integer token
-		{raw: "9007199254740991.0", want: 9007199254740991},     // decimal, just under the bound
+		{raw: "9007199254740991.0", wantErr: true},              // decimal form: refused whatever the value
 		{raw: "9007199254740992.0", wantErr: true},              // decimal AT 2^53: cannot be
 		//                                                          distinguished from 2^53+1
 		{raw: "9007199254740993.0", wantErr: true}, // decimal that ROUNDS to 2^53
@@ -650,5 +729,77 @@ func TestSubMicrosecondPrecisionIsTruncatedOnTheWire(t *testing.T) {
 	}
 	if err := Validate(root, PrincipalSurface, document); err != nil {
 		t.Fatalf("truncated output still fails the schema: %v", err)
+	}
+}
+
+// TestClientRefusalsNameTheRuleThatRefused asserts WHICH rule fired, not just
+// that something did. Two rules can both be capable of refusing a value, and a
+// test that only asserts refusal cannot tell them apart.
+func TestClientRefusalsNameTheRuleThatRefused(t *testing.T) {
+	root := testRoot(t)
+	for file, want := range map[string]string{
+		"client-rejected-utc-range-underflow.json":              "outside 0001-01-01..9999-12-31",
+		"client-rejected-utc-range-just-below-lower-limit.json": "outside 0001-01-01..9999-12-31",
+		"client-rejected-utc-range-overflow.json":               "outside 0001-01-01..9999-12-31",
+		"client-rejected-duplicate-principal-id.json":           "duplicate object member",
+		"client-rejected-duplicate-credential-audience.json":    "duplicate object member",
+		"client-rejected-duplicate-actor-chain-reason.json":     "duplicate object member",
+	} {
+		t.Run(file, func(t *testing.T) {
+			_, err := PrincipalFromWire(root, loadFixture(t, file))
+			if err == nil {
+				t.Fatalf("PrincipalFromWire accepted %s", file)
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("refused by the wrong rule: %v, want text %q", err, want)
+			}
+		})
+	}
+}
+
+// TestTheExactUTCLowerLimitIsInclusive: the pair is one second wide.
+func TestTheExactUTCLowerLimitIsInclusive(t *testing.T) {
+	root := testRoot(t)
+	if _, err := PrincipalFromWire(root, loadFixture(t, "valid-authenticated-at-exact-lower-limit.json")); err != nil {
+		t.Fatalf("0001-01-01T00:00:00Z exactly must be accepted: %v", err)
+	}
+	if _, err := PrincipalFromWire(root, loadFixture(t, "client-rejected-utc-range-just-below-lower-limit.json")); err == nil {
+		t.Fatal("one second below the limit must be refused")
+	}
+}
+
+// TestGoSchemaValidateAcceptsACalendarImpossibleDay pins a DECLARED divergence
+// on purpose (CHAOS-10135, option A). The schema pattern bounds components and
+// not the calendar, and google/jsonschema-go ignores `format`, so Go's Validate
+// accepts 2026-02-30 and 2026-04-31 while Python and ajv refuse them by
+// `format`. This test asserts the acceptance so that it cannot change
+// silently: if a future library version asserts `format`, this goes red and
+// the go_schema_gap fixtures move to `reject`. The typed client is the floor
+// and must refuse every one of them.
+func TestGoSchemaValidateAcceptsACalendarImpossibleDay(t *testing.T) {
+	root := testRoot(t)
+	entries := loadManifest(t).GoSchemaGap
+	if len(entries) < 2 {
+		t.Fatalf("go_schema_gap holds %d fixtures, want the February 30 and April 31 pair", len(entries))
+	}
+	for _, entry := range entries {
+		t.Run(entry.File, func(t *testing.T) {
+			raw := loadFixture(t, entry.File)
+			var document any
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatalf("fixture is not valid JSON: %v", err)
+			}
+			if err := Validate(root, PrincipalSurface, document); err != nil {
+				t.Fatalf("Go Validate now refuses it (%v): the library may assert `format` now; "+
+					"move this fixture to `reject` and retire the declared divergence", err)
+			}
+			_, err := PrincipalFromWire(root, raw)
+			if err == nil {
+				t.Fatalf("the typed client ACCEPTED a calendar-impossible day; %s", entry.Why)
+			}
+			if !strings.Contains(err.Error(), "day out of range") {
+				t.Fatalf("refused by the wrong rule: %v, want the calendar refusal", err)
+			}
+		})
 	}
 }

@@ -45,7 +45,7 @@
           "type": "array"
         },
         "action": {
-          "description": "Bounded action/permission this route performs, where the code names one explicitly (e.g. an Action/Scope enum). null + gaps note otherwise.",
+          "description": "Bounded action/permission this route performs, where the code names one explicitly (e.g. an Action/Scope enum). ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
@@ -58,21 +58,21 @@
           ]
         },
         "current_state_cache_behavior": {
-          "description": "TRD §14 cache class, where applicable (e.g. epoch_scoped, no-cache webhook, stateless). null + gaps note otherwise.",
+          "description": "TRD §14 cache class, where applicable (e.g. epoch_scoped, no-cache webhook, stateless). ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
           ]
         },
         "disclosure_behavior": {
-          "description": "Safe 401/403/404 disclosure behavior (TRD §18), where determinable at the family level.",
+          "description": "Safe 401/403/404 disclosure behavior (TRD §18), where determinable at the family level. ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
           ]
         },
         "entitlement_requirement": {
-          "description": "A licensing/gating.py feature key gating this route, where present. null when none.",
+          "description": "A licensing/gating.py feature key gating this route, where present. ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
@@ -188,7 +188,7 @@
           "type": "array"
         },
         "resource_resolver": {
-          "description": "How the target resource/org is resolved from the request (path param, body field, credential claim). null + gaps note otherwise.",
+          "description": "How the target resource/org is resolved from the request (path param, body field, credential claim). ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
@@ -208,7 +208,8 @@
             "dev-health-ops-billing-edge",
             "dev-health-web",
             "dev-health-acr-api",
-            "dev-health-acr-mcp"
+            "dev-health-acr-mcp",
+            "dev-health-query-api"
           ]
         },
         "source": {
@@ -253,7 +254,7 @@
           ]
         },
         "token_shape": {
-          "description": "Issuer/audience/token-type/algorithm, where determinable and applicable (TRD §10). null fields inside the object are fine; the object itself is null when no field applies at all (e.g. a public route, or an HMAC-signature route with no issuer/audience concept).",
+          "description": "Issuer/audience/token-type/algorithm, where determinable and applicable (TRD §10). null fields inside the object are fine; the object itself is ABSENT when no field applies at all (e.g. a public route, or an HMAC-signature route with no issuer/audience concept), and null only when undetermined, paired with a gaps entry naming token_shape, i.e. one that begins with \"token_shape:\" (CHAOS-4744, B10 shape b).",
           "properties": {
             "algorithm": {
               "type": [

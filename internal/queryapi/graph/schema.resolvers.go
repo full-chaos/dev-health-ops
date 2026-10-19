@@ -288,6 +288,7 @@ func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.F
 
 	now := time.Now().UTC()
 	homeFilters := homeFiltersFromGraphQL(filters, window)
+	homeFilters.TileMeasure = homeTileMeasure(ctx)
 	resp, err := home.BuildResponse(ctx, r.ClickHouse, pgClient, authorizedOrgID, homeFilters, now)
 	if err != nil {
 		return nil, fmt.Errorf("home: %w", err)
@@ -995,6 +996,9 @@ func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input
 		}
 	}
 
+	if operatingReviewSized(ctx) {
+		spanCtx = operatingreview.WithSizedInvestment(spanCtx)
+	}
 	result, err := operatingreview.ResolveInput(spanCtx, r.ClickHouse, claims.OrgID, input.TeamID, input.TeamIds, input.WeekStart)
 	if err != nil {
 		finish("error")

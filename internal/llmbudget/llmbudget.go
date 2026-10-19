@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/llm"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -117,17 +118,141 @@ func MonthWindow(now time.Time) (start, reset time.Time) {
 	return start, start.AddDate(0, 1, 0)
 }
 
-// DefaultModelByProvider is llm/providers/base.py's DEFAULT_MODEL_BY_PROVIDER.
-var DefaultModelByProvider = map[string]string{
-	"openai":        "gpt-5-mini",
-	"anthropic":     "claude-3-haiku-20240307",
-	"gemini":        "gemini-3",
-	"local":         "llama3.2",
-	"ollama":        "llama3.2",
-	"lmstudio":      "local-model",
-	"qwen":          "qwen-plus",
-	"qwen-local":    "qwen2.5:7b",
-	"qwen-lmstudio": "local-model",
+// providerModelEnv is the ops platform setting that names a provider's model
+// (credentials.py's _MODEL_ENV_BY_PROVIDER), in priority order.
+var providerModelEnv = map[string][]string{
+	"openai":    {"LLM_MODEL_OPENAI"},
+	"anthropic": {"LLM_MODEL_ANTHROPIC"},
+	"gemini":    {"LLM_MODEL_GEMINI", "GEMINI_MODEL"},
+	"qwen":      {"LLM_MODEL_QWEN", "QWEN_MODEL"},
+	"local":     {"LLM_MODEL_LOCAL", "LOCAL_LLM_MODEL"},
+	"ollama":    {"LLM_MODEL_OLLAMA", "OLLAMA_MODEL"},
+}
+
+// packageDefaultModel is the model a provider kind uses when nothing names
+// one: the shared llm package's default for every kind it serves (each a
+// current, listed model); base.py's values for the names no Go client
+// serves.
+func packageDefaultModel(provider string) string {
+	switch provider {
+	case "openai", "anthropic", "gemini", "qwen", "local":
+		return llm.DefaultModel(llm.Kind(provider))
+	case "ollama":
+		return "llama3.2"
+	case "lmstudio", "qwen-lmstudio":
+		return "local-model"
+	case "qwen-local":
+		return "qwen2.5:7b"
+	}
+	return ""
+}
+
+// PlatformPurposeModel is the ops platform setting that names the model of
+// one purpose (LLM_MODEL_EXPLAIN, LLM_MODEL_INVESTIGATE, LLM_MODEL_CATEGORIZE),
+// "" when unset. It is not tied to a provider, so a caller applies it only on
+// the platform path (never to an organization's own provider), between the
+// organization's configured model and the provider-level settings (D6071).
+func PlatformPurposeModel(purpose string, lookup LookupEnv) string {
+	if lookup == nil {
+		return ""
+	}
+	value, ok := lookup("LLM_MODEL_" + strings.ToUpper(purpose))
+	if !ok {
+		return ""
+	}
+	return pythonparity.Strip(value)
+}
+
+// DefaultModel is the model a provider's call uses when neither the request
+// nor the organization's settings name one: the ops platform setting for
+// that provider (its own LLM_MODEL_<PROVIDER> name, or the generic LLM_MODEL
+// when LLM_PROVIDER names this provider), else the shared package's default.
+// The explain routes, the categorize worker and the admin budget status all
+// read this one resolver, so the status prices the model that would run
+// (ruling D6043). "" for a provider with no default.
+func DefaultModel(provider string, lookup LookupEnv) string {
+	normalized := pythonparity.Lower(pythonparity.Strip(provider))
+	set := func(name string) string {
+		if lookup == nil {
+			return ""
+		}
+		value, ok := lookup(name)
+		if !ok {
+			return ""
+		}
+		return pythonparity.Strip(value)
+	}
+	for _, name := range providerModelEnv[normalized] {
+		if value := set(name); value != "" {
+			return value
+		}
+	}
+	if platform := pythonparity.Lower(set("LLM_PROVIDER")); platform != "" && platform == normalized {
+		if value := set("LLM_MODEL"); value != "" {
+			return value
+		}
+	}
+	return packageDefaultModel(normalized)
+}
+
+// IsDecisionProvider reports an LLM_PROVIDER value that names a decision
+// backend (it writes no text), so it is no platform text provider.
+func IsDecisionProvider(name string) bool {
+	return name == DecisionProviderTypeSafe
+}
+
+// DecisionProviderTypeSafe is the one decision backend's LLM_PROVIDER name.
+const DecisionProviderTypeSafe = "typesafe"
+
+// DetectProvider is the platform text provider the configured keys name when
+// LLM_PROVIDER does not: the one order of the key auto-detection.
+func DetectProvider(lookup LookupEnv) (string, bool) {
+	has := func(names ...string) bool {
+		for _, name := range names {
+			if value, ok := lookup(name); ok && value != "" {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("OPENAI_API_KEY"):
+		return "openai", true
+	case has("ANTHROPIC_API_KEY"):
+		return "anthropic", true
+	case has("GEMINI_API_KEY"):
+		return "gemini", true
+	case has("LOCAL_LLM_BASE_URL"):
+		return "local", true
+	case has("DASHSCOPE_API_KEY", "QWEN_API_KEY"):
+		return "qwen", true
+	case has("OLLAMA_MODEL", "OLLAMA_BASE_URL"):
+		return "ollama", true
+	}
+	return "", false
+}
+
+// PlatformLookup answers LLM_PROVIDER with the text provider a call runs by
+// default: the variable itself when it names one, else (unset, "auto" or a
+// decision backend) the provider the keys auto-detect. DefaultModel applies
+// the generic LLM_MODEL to that provider only (CHAOS-4978, D6043,
+// CHAOS-10011); the categorize worker, both explain routes and the admin
+// budget status all read the model through it.
+func PlatformLookup(base LookupEnv) LookupEnv {
+	return func(name string) (string, bool) {
+		value, ok := base(name)
+		if name != "LLM_PROVIDER" {
+			return value, ok
+		}
+		named := pythonparity.Lower(pythonparity.Strip(value))
+		if named != "" && named != "auto" && !IsDecisionProvider(named) {
+			return value, ok
+		}
+		if detected, found := DetectProvider(base); found {
+			return detected, true
+		}
+		return value, ok
+	}
 }
 
 // Reason is BudgetReason.
@@ -198,12 +323,12 @@ func Compute(ctx context.Context, db DB, lookup LookupEnv, orgID string, in Inpu
 	if in.BaseURL != nil {
 		baseURL = *in.BaseURL
 	}
-	priced, err := ReliablePrice(in.Provider, in.Model, baseURL)
+	price, err := PriceAt(in.Provider, in.Model, baseURL, now)
 	if err != nil {
 		return Status{}, err
 	}
 	base := Status{Window: Window, ResetAt: resetAt, MaximumLimit: maximum}
-	if !priced {
+	if price == nil {
 		base.Limit = limit
 		base.EnforcementAvail = false
 		base.Reason = ReasonPricingUnavailable
@@ -212,7 +337,7 @@ func Compute(ctx context.Context, db DB, lookup LookupEnv, orgID string, in Inpu
 		}
 		return base, nil
 	}
-	version := PricingVersion
+	version := price.Version
 	base.PricingVersion = &version
 
 	used := new(big.Int)
@@ -359,8 +484,17 @@ func canonicalPricedModel(model string) (string, bool) {
 // prices this provider, model and endpoint. An absent pair is unavailable,
 // never zero.
 func ReliablePrice(provider, model, baseURL string) (bool, error) {
-	rates, err := PriceRates(provider, model, baseURL)
-	return rates != nil, err
+	price, err := PriceAt(provider, model, baseURL, time.Now())
+	return price != nil, err
+}
+
+// pricingVersionOf is the version stored with a reservation: the version of
+// the list that priced it.
+func pricingVersionOf(status Status) string {
+	if status.PricingVersion != nil {
+		return *status.PricingVersion
+	}
+	return PricingVersion
 }
 
 // PriceRates is reliable_price: the rates of this provider, model and

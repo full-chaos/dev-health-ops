@@ -54,15 +54,10 @@ comes from the framework and the location still comes from real source.
     at. Enumerating the served objects changed the count by nine, and every
     one of the nine was a defect the old count concealed:
 
-    - **+8 REST.** `/openapi.json`, `/docs`, `/docs/oauth2-redirect` and
-      `/redoc` (registered by the `FastAPI()` constructor's `docs_url`/
-      `openapi_url` arguments), `/metrics` (registered by
-      `Instrumentator().expose()`), and `GET`/`POST`/`WEBSOCKET /graphql`
-      (registered by mounting strawberry's router). All are served by the
-      main app; none is written in ops source, so no source-text pattern
-      could ever have matched them. Each now has a row anchored at the
-      ops-source line that REGISTERS it, with a `gaps` entry naming the
-      providing package — the gate rejects such a row without one.
+    - **+8 REST.** Eight surfaces that no source-text pattern could match,
+      because the framework registered them rather than ops source. They were
+      served only by the Python api; that api was removed (ops #3761), so the
+      eight surfaces no longer exist and are not listed here.
     - **+3 GraphQL.** The three `@strawberry.subscription` resolvers in
       `api/graphql/subscriptions.py` (`:60`, `:97`, `:134`). They were always
       authenticated — all three go through the same connect-time
@@ -138,6 +133,21 @@ path**, not from reading every route body. The remaining fields (`action`,
 `resource_resolver`, `entitlement_requirement`, cache class) are filled where
 cheaply determinable at the family level and `null` with a `gaps` note
 otherwise — a stated reason, not a guess, per the brief's standing rule.
+
+## Absent versus null
+
+On the advisory fields (`action`, `resource_resolver`,
+`current_state_cache_behavior`, `entitlement_requirement`,
+`disclosure_behavior`, `token_shape`) the two states differ (CHAOS-4744,
+decision sheet B10 shape b):
+
+| State | Meaning | Gate |
+| --- | --- | --- |
+| absent | Not applicable. Code evidence shows the route has nothing to say. | none |
+| `null` | Undetermined in this pass. | The row's `gaps` must contain an entry that begins with `<field>:` (for example `action: not traced`). An entry for another field, or prose that merely mentions the field, does not excuse it. |
+
+Never infer "absent" from silence: a missing note is not an examination. This
+matches `issued_credential` and `exposure`, which already work this way.
 
 ## Reachable-but-not-owner findings
 
@@ -272,6 +282,25 @@ device-flow surfaces — but "obvious" is a family pattern, and this inventory
 does not record family patterns as facts. They are tracked as an explicit gap
 rather than guessed.
 
+## `source_commit`: what is verified and what is not (CHAOS-4765)
+
+Every `contracts/auth/v1/endpoint-profiles.*.json` carries a top-level
+`source_commit`, the commit its `file:line` anchors were derived against. The
+`auth-test` job (`ci/check_go.sh auth history`, full git history) enforces:
+
+- **Reachable.** `source_commit` is a 40-hex id that resolves in the repo and is
+  an ancestor of `HEAD`. A shallow checkout fails the check and says so; it is
+  the one benign cause.
+- **Not stale.** Every anchor line in this repo (a `path`/`line` anchor or a
+  row's `source` `file`/`line`) reads the same at `source_commit` as in the
+  tree under test. An ancestor check alone would pass a stale base, so this
+  half is what catches an inventory whose anchors moved after it was derived.
+
+Not verified: that the anchored line is the right symbol (the rows gate in
+`internal/queryapi/server` owns that), and anchors that name another repo.
+When you move an anchor, bump `source_commit` to a commit on `main` at which
+every anchor line holds.
+
 ## Contributor guide: registering a new route or credential class
 
 1. **New route, existing credential class.** Add a row to
@@ -294,7 +323,10 @@ rather than guessed.
    `public_rationale` — every public row must justify why no credential is
    required, not just assert it.
 4. **Anything you can't determine.** Leave the field `null` and add a
-   `gaps` entry naming what you searched and why it's undetermined. A stated
+   `gaps` entry that **begins with `<field>:`** and says what you searched and why
+   it's undetermined. Where the code shows the field does not apply (a health
+   check has no `action`), leave the field **absent**; never write `null` for
+   "not applicable". See [Absent versus null](#absent-versus-null). A stated
    reason is correct; an unstated guess is a defect (see this file's own
    `gaps` entries for the pattern to follow — e.g. billing/router.py's
    per-route Depends() was not individually re-verified for the ~20 routes

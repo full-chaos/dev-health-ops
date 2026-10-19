@@ -18,8 +18,14 @@ type WorkItemCompletionDailyRow struct {
 	DeliveryUnits      int
 	WorkItemsCompleted int
 	PRsMerged          int
-	ChurnLOC           int
-	CycleP50Hours      float64
+	// ChurnLOC is nil when no pull request linked to the key's completed items has a size: no data, never 0 (CHAOS-9920).
+	ChurnLOC      *int
+	CycleP50Hours float64
+}
+
+type linkedPRKey struct {
+	repoID uuid.UUID
+	number uint32
 }
 
 type completionKey struct {
@@ -74,6 +80,25 @@ func ComputeWorkItemCompletionDaily(
 			return nil, ErrUnrepresentableDeliveryUnits
 		}
 		bucket.deliveryUnits += int(math.Trunc(points))
+		for _, pr := range item.LinkedPRs {
+			if bucket.prs == nil {
+				bucket.prs = make(map[linkedPRKey]struct{})
+			}
+			prKey := linkedPRKey{repoID: pr.RepoID, number: pr.Number}
+			if _, counted := bucket.prs[prKey]; counted {
+				continue
+			}
+			bucket.prs[prKey] = struct{}{}
+			// Each part counts on its own; a pull request with neither adds nothing.
+			if pr.Additions != nil {
+				bucket.churn += int(*pr.Additions)
+				bucket.sized = true
+			}
+			if pr.Deletions != nil {
+				bucket.churn += int(*pr.Deletions)
+				bucket.sized = true
+			}
+		}
 		if item.StartedAt != nil {
 			cycle := completed.Sub(item.StartedAt.UTC()).Hours()
 			if cycle >= 0 {
@@ -90,14 +115,53 @@ func ComputeWorkItemCompletionDaily(
 		if len(bucket.cycleHours) > 0 {
 			p50 = bucket.cycleHours[len(bucket.cycleHours)/2]
 		}
+		var churn *int
+		if bucket.sized {
+			churn = &bucket.churn
+		}
 		rows = append(rows, WorkItemCompletionDailyRow{
 			RepoID:             key.repoID.pointer(),
 			TeamID:             key.teamID,
 			DeliveryUnits:      bucket.deliveryUnits,
 			WorkItemsCompleted: bucket.completed,
-			ChurnLOC:           bucket.churn,
+			ChurnLOC:           churn,
 			CycleP50Hours:      p50,
 		})
 	}
 	return rows, nil
+}
+
+// ChurnStats describes the inputs of a day's churn_loc: it explains a churn of 0 on a day with completed items, which
+// means no linked pull request (or none with a size), not that no lines changed.
+type ChurnStats struct {
+	CompletedItems       int
+	ItemsWithoutLinkedPR int
+	LinksByTier          map[string]int
+	LinkedPRsWithoutSize int
+}
+
+// ChurnInputs counts, for the items completed in [dayUTC, end), the links by provenance tier and the linked pull
+// requests with no stored size. The caller logs it; this package holds no logger.
+func ChurnInputs(items []Item, dayUTC, end time.Time) ChurnStats {
+	stats := ChurnStats{LinksByTier: map[string]int{}}
+	for _, item := range items {
+		if item.CompletedAt == nil {
+			continue
+		}
+		done := item.CompletedAt.UTC()
+		if done.Before(dayUTC) || !done.Before(end) {
+			continue
+		}
+		stats.CompletedItems++
+		if len(item.LinkedPRs) == 0 {
+			stats.ItemsWithoutLinkedPR++
+		}
+		for _, pr := range item.LinkedPRs {
+			stats.LinksByTier[pr.Provenance]++
+			if pr.Additions == nil && pr.Deletions == nil {
+				stats.LinkedPRsWithoutSize++
+			}
+		}
+	}
+	return stats
 }

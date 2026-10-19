@@ -202,10 +202,10 @@ func (h handlers) listGitLabRepos(w http.ResponseWriter, r *http.Request, creden
 				policy.WriteModel(w, http.StatusOK, repoListing("gitlab", nil), nil)
 				return
 			case "AuthenticationException":
-				policy.WriteDetail(w, http.StatusUnauthorized, listErr.Message, nil)
+				h.providerFailure(w, r, "list repositories", listErr.Class, err)
 				return
 			case "RateLimitException":
-				policy.WriteDetail(w, http.StatusTooManyRequests, listErr.Message, nil)
+				h.providerFailure(w, r, "list repositories", listErr.Class, err)
 				return
 			}
 		}
@@ -368,13 +368,13 @@ func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, creden
 				policy.WriteModel(w, http.StatusOK, githubRepoListing(nil, scope), nil)
 				return
 			case "AuthenticationException":
-				policy.WriteDetail(w, http.StatusUnauthorized, listErr.Message, nil)
+				h.providerFailure(w, r, "list repositories", listErr.Class, err)
 				return
 			case "RateLimitException":
-				policy.WriteDetail(w, http.StatusTooManyRequests, listErr.Message, nil)
+				h.providerFailure(w, r, "list repositories", listErr.Class, err)
 				return
 			case "APIException":
-				policy.WriteDetail(w, http.StatusBadGateway, listErr.Message, nil)
+				h.providerFailure(w, r, "list repositories", listErr.Class, err)
 				return
 			}
 		}

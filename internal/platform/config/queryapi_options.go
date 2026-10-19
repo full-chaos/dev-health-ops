@@ -179,7 +179,7 @@ var queryAPIOptions = func() []Option {
 		{
 			Flag: "proof-write-route-enabled", Env: "GO_API_PROOF_WRITE_ROUTE_ENABLED", Kind: KindBool,
 			Default: "false", Services: q, Group: GroupRoutes,
-			Usage: "enable the internal listener's operator proof routes (default off): /query/proof-write (CHAOS-7096, mutation-only) and /query/proof-mcp (CHAOS-7214, the MCP caller class's measurement route), each gated per request by the go_api_proof_orgs allowlist (empty by default)",
+			Usage: "enable the internal listener's operator proof route (default off): /query/proof-write (CHAOS-7096, mutation-only), gated per request by the go_api_proof_orgs allowlist (empty by default)",
 		},
 		{
 			Flag: "quadrant-enabled", Env: "GO_API_QUADRANT_ENABLED", Kind: KindBool,
@@ -211,7 +211,13 @@ var queryAPIOptions = func() []Option {
 	for _, env := range []struct{ name, usage string }{
 		{"IDENTITY_MAPPING_PATH", "identity mapping file the heatmap, people and quadrant routes read"},
 		{"LLM_MODEL", "model the investment explain route asks its provider for, when no provider-specific one is set"},
+		{"LLM_MODEL_EXPLAIN", "model the investment and work unit explain routes ask the platform provider for; wins over LLM_MODEL and the provider-specific names, never over an organization's own model"},
 		{"LLM_MODEL_OPENAI", "model the investment explain route asks the OpenAI provider for"},
+		{"LLM_MODEL_ANTHROPIC", "model the investment explain route asks the Anthropic provider for"},
+		{"LLM_MODEL_GEMINI", "model the investment explain route asks the Gemini provider for"},
+		{"GEMINI_MODEL", "alias of LLM_MODEL_GEMINI"},
+		{"LLM_MODEL_QWEN", "model the investment explain route asks the Qwen provider for"},
+		{"QWEN_MODEL", "alias of LLM_MODEL_QWEN"},
 		{"LLM_MODEL_LOCAL", "model the investment explain route asks a local provider for"},
 		{"LOCAL_LLM_MODEL", "alias of LLM_MODEL_LOCAL"},
 		{"OPERATIONAL_ORDERING_CONTRACT", "operational ordering contract version the work-graph display names follow (2 selects the new one)"},

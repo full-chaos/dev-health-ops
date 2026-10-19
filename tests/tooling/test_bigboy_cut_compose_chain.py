@@ -1,14 +1,12 @@
-"""bigboy-cut.sh: the compose chain carries the router overlay (CHAOS-7131).
+"""bigboy-cut.sh runs the ONE compose file, and the router settings are in it (CHAOS-7131, CHAOS-9962).
 
-compose.bigboy.router.yml sets web's BACKEND_URL (the plane-split router) and AUTH_URL. The cut's
-COMPOSE_FILE omitted it, so the `up` that recreates web built it from the base file alone: web lost
-both names, REST calls returned 500 and the auth callback/logout used the wrong origin. These tests
-resolve the chain the script actually exports, so removing the overlay fails them.
+compose.bigboy.yml sets web's BACKEND_URL (the plane-split router) and AUTH_URL. The cut used to chain a router overlay and a
+`up` built from a chain that omitted it left web without both names (REST calls 500'd, the auth callback used the wrong
+origin). With one file there is no chain to omit it from; these tests resolve the real file, so removing the settings fails them.
 """
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import subprocess
@@ -19,78 +17,28 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 CUT = ROOT / "ci" / "bigboy" / "bigboy-cut.sh"
-ROUTER = ROOT / "ci" / "bigboy" / "compose.bigboy.router.yml"
 REQUIRED = ROOT / "ci" / "bigboy" / "check-web-env-required.sh"
 
 
-def _chain() -> list[str]:
-    match = re.search(r"^export COMPOSE_FILE=(\S+)$", CUT.read_text(), re.MULTILINE)
-    assert match, "bigboy-cut.sh no longer exports COMPOSE_FILE"
-    return match.group(1).split(":")
-
-
-def test_chain_includes_the_router_overlay_last() -> None:
-    chain = _chain()
-    assert "$HERE/compose.bigboy.router.yml" in chain, chain
-    assert chain[-1] == "$HERE/compose.bigboy.router.yml", (
-        "the router overlay must come last so its web.environment wins"
+def test_the_cut_runs_the_one_compose_file_and_no_overlay_chain() -> None:
+    """CHAOS-9962: the router settings, the ClickHouse users mount, the billing edge and every other overlay are part of
+    ci/bigboy/compose.bigboy.yml; the cut names that one file and no other."""
+    text = CUT.read_text()
+    assert '-f "$HERE/compose.bigboy.yml"' in text
+    assert text.count('-f "$HERE/compose.bigboy.yml"') == 1, (
+        "the cut must hand compose exactly one -f"
     )
+    assert "COMPOSE_FILE" not in text.replace("grep '^COMPOSE_'", "")
+    for old in ("stack.sh", "stack.files", "compose.bigboy.router.yml"):
+        assert old not in text.replace("# ", ""), old
 
 
 def test_resolved_web_service_carries_backend_url_and_auth_url(tmp_path: Path) -> None:
-    """Materialize the chain the script exports (stub base files, the REAL router overlay) and
-    let `docker compose config` merge it: web must come out with BACKEND_URL and AUTH_URL."""
-    tools = tmp_path / "tools"
-    tools.mkdir()
-    (tools / "compose.bigboy.router.yml").write_text(ROUTER.read_text())
-    users_overlay = ROUTER.parent / "compose.bigboy.clickhouse-users.yml"
-    (tools / "compose.bigboy.clickhouse-users.yml").write_text(
-        users_overlay.read_text()
-    )
-    # CHAOS-7055: the billing override is part of the chain too.
-    (tools / "compose.bigboy.billing-edge.yml").write_text(
-        (ROUTER.parent / "compose.bigboy.billing-edge.yml").read_text()
-    )
-    # CHAOS-7976: the workers overlay moved from the untracked host file compose/compose.bigboy.workers.yml
-    # into the chain through $HERE. It requires BIGBOY_OPERATOR_IMAGE and resets services this stub base does
-    # not define, so the test stages the same empty overlay the stubbed host path used to get.
-    (tools / "compose.bigboy.workers.yml").write_text("services: {}\n")
-    users_file = tmp_path / "dho_api_ch.xml"
-    users_file.write_text("<clickhouse/>")
-    chain = [entry.replace("$HERE", str(tools)) for entry in _chain()]
-    for entry in chain:
-        if entry.startswith(str(tools)):
-            continue
-        target = tmp_path / entry
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if entry == "compose.yml":
-            target.write_text(
-                "services:\n"
-                "  web:\n    image: web:test\n    environment:\n      BACKEND_URL: http://api:8000\n"
-                "  traefik:\n    image: traefik:test\n"
-                "  clickhouse:\n    image: clickhouse:test\n"
-                "  go-api:\n    image: go-api:test\n"
-                "  billing-edge:\n    image: billing-edge:test\n"
-            )
-        else:
-            target.write_text("services: {}\n")
-    (tmp_path / ".traefik-dynamic").mkdir()
-    proc = subprocess.run(
-        ["docker", "compose", "config", "--format", "json"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-        env={
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
-            "HOME": str(tmp_path),
-            "COMPOSE_FILE": ":".join(chain),
-            "DHO_API_CH_USERS_XML": str(users_file),
-        },
-    )
-    assert proc.returncode == 0, proc.stderr
-    web_env = json.loads(proc.stdout)["services"]["web"]["environment"]
+    """Let `docker compose config` resolve the real file: web must come out with BACKEND_URL and AUTH_URL (CHAOS-7131: a web
+    recreated without them lost the plane-split router and the auth origin)."""
+    from tests.tooling import test_bigboy_one_compose_file as bb
+
+    web_env = bb.services(bb.scratch_root(tmp_path))["web"]["environment"]
     assert web_env["BACKEND_URL"] == "http://traefik:3000", web_env
     assert "AUTH_URL" in web_env, sorted(web_env)
 
@@ -174,6 +122,8 @@ cat /dev/stdin > "$d/stdin.$n" 2>/dev/null < /dev/stdin || true
 case "$1" in
   buildx) echo '{"digest":"'"$FAKE_DIGEST"'"}'; exit 0 ;;
   compose)
+    if printf '%s\n' "$@" | grep -qx 'config'; then echo "ghcr.io/full-chaos/dev-health-go-dho@$FAKE_DIGEST"; exit 0; fi
+    if printf '%s\n' "$@" | grep -qx 'ps'; then [ -n "${FAKE_NO_RECONCILER:-}" ] && exit 0; echo "ghcr.io/full-chaos/dev-health-go-operator@$FAKE_DIGEST"; exit 0; fi
     if printf '%s\n' "$@" | grep -qx 'venue-hook'; then
       h=$(( $(cat "$d/hook-n" 2>/dev/null || echo 0) + 1 )); echo "$h" > "$d/hook-n"
       echo '{"msg":"migrate step ok","time":"t"}'; echo '{"state":"clean"}'
@@ -210,6 +160,9 @@ def _c_closed_bin(tmp: Path) -> Path:
         "date",
         "tr",
         "mktemp",
+        "sort",
+        "paste",
+        "git",
     ):
         p = shutil.which(tool)
         assert p, tool
@@ -227,17 +180,21 @@ def _c_stage(tmp: Path, name: str, text: str | None = None) -> Path:
     host = tmp / "host"
     (host / "ops").mkdir(parents=True, exist_ok=True)
     (host / "ops" / ".env").write_text("X=1\n")
-    (host / "compose").mkdir(exist_ok=True)
-    (host / "compose" / "compose.bigboy.images.yml").write_text(
-        f"image: ghcr.io/full-chaos/dev-health-go-dho@sha256:{'cd' * 32}\n"
+    (host / "_records").mkdir(exist_ok=True)
+    (host / "_records" / "images.env").write_text(
+        f"BIGBOY_DHO_IMAGE=ghcr.io/full-chaos/dev-health-go-dho@sha256:{'cd' * 32}\n"
     )
     rec = host / "rec"
     rec.mkdir(exist_ok=True)
     (rec / "sha.txt").write_text("1234567abcdef\n")
     ci = tmp / "ci"
     ci.mkdir(exist_ok=True)
-    for f in _c_BB.glob("compose.bigboy.*.yml"):
-        shutil.copy(f, ci)
+    for f in ("compose.bigboy.yml", "compose-config-redacted.sh"):
+        shutil.copy(_c_BB / f, ci)
+    (host / ".remember/lanes/team-lead").mkdir(parents=True, exist_ok=True)
+    (host / ".remember/lanes/team-lead/reconciler-sweep-override.yml").write_text(
+        "services: {}\n"
+    )
     src = text if text is not None else (_c_BB / name).read_text()
     out = ci / name
     out.write_text(src.replace(_c_HOST_ROOT, str(host)))
@@ -313,12 +270,14 @@ def _c_violations(calls: list[dict]) -> list[str]:
                 and not a.startswith("--env-file=")
             ):
                 v.append(f"env-passing flag {a!r}")
-        # EVERY --env-file value must be compose's own substitution file
+        # EVERY --env-file value must be compose's own substitution file (ops/.env) or the image pins file (digests only)
         for i, a in enumerate(argv):
             val = argv[i + 1] if a == "--env-file" and i + 1 < len(argv) else None
             if a.startswith("--env-file="):
                 val = a.split("=", 1)[1]
-            if val is not None and val != "ops/.env":
+            if val is not None and not re.fullmatch(
+                r"(?:/[^\s]*/)?(?:ops/\.env|_records/images\.env)", val
+            ):
                 v.append(f"foreign --env-file {val!r}")
         if any(a in ("printenv",) for a in argv):
             v.append("printenv out of a container")
@@ -364,18 +323,22 @@ def test_hook_check_obeys_every_class_rule(tmp_path: Path) -> None:
     assert p.returncode == 0, (p.stdout, p.stderr)
     calls = _c_calls(fake)
     assert _c_violations(calls) == []
-    runs = [c for c in calls if c["argv"][0] == "compose"]
-    assert len(runs) == 2 and all("venue-hook" in c["argv"] for c in runs)
+    runs = [c for c in calls if c["argv"][0] == "compose" and "venue-hook" in c["argv"]]
+    assert len(runs) == 2 and all("run" in c["argv"] for c in runs)
     assert runs[0]["argv"][-3:] == ["migrate", "upgrade", "--river=false"]
     assert runs[1]["argv"][-4:] == ["migrate", "clickhouse", "status", "--check"]
     for c in runs:
-        assert c["env"]["COMPOSE_FILE"].endswith("compose.bigboy.hook-check.yml")
+        assert (
+            "COMPOSE_FILE" not in c["env"]
+        )  # CHAOS-9962: the one file is a -f argument
+        assert any(a.endswith("/compose.bigboy.yml") for a in c["argv"])
+        assert "venue-hook" in c["argv"]  # the one-off has its own profile
         assert c["env"]["HOOK_OPERATOR_IMAGE"].endswith(
             "@" + _c_DIGEST
         )  # positive control: derived, passed as an image ref
-        assert str(tmp_path / "host") not in " ".join(
+        assert str(tmp_path / "host" / "rec") not in " ".join(
             c["argv"]
-        )  # no host path in the one-off's argv
+        )  # no record path in the one-off's argv
     # no script-written env file is left or used
     assert not list(tmp_path.glob("tmp.*"))
     assert "hook_upgrade_rc=0" in p.stdout and "ch_status_check_rc=0" in p.stdout
@@ -402,32 +365,46 @@ def test_each_hook_check_gate_fails_the_script_on_its_own(tmp_path: Path) -> Non
         assert p.returncode == 1 and marker in p.stdout, (call, p.stdout)
 
 
-def test_compose_file_chain_is_kept_or_defaults_to_the_stack_file(
-    tmp_path: Path,
-) -> None:
-    """Called by hand with COMPOSE_FILE unset the overlay must still get compose.yml (it needs its network);
-    from the cut the exported chain stays first."""
+def test_an_inherited_compose_file_never_decides_the_chain(tmp_path: Path) -> None:
+    """CHAOS-8693: hook-check and river-apply run the one compose file whatever COMPOSE_FILE the caller exported."""
     for name, args in (
         ("bigboy-hook-check.sh", lambda t: [str(t / "host" / "rec")]),
         ("bigboy-river-apply.sh", lambda t: []),
     ):
-        for given in (None, "compose.yml:compose/x.yml"):
-            case = tmp_path / f"{name}-{given is None}"
-            case.mkdir()
-            script = _c_stage(case, name)
-            p, fake = _c_run(
-                case,
-                script,
-                *args(case),
-                extra_env={"COMPOSE_FILE": given} if given else {},
+        case = tmp_path / name
+        case.mkdir()
+        script = _c_stage(case, name)
+        p, fake = _c_run(
+            case,
+            script,
+            *args(case),
+            extra_env={"COMPOSE_FILE": "compose.yml:compose/x.yml"},
+        )
+        assert p.returncode == 0, (name, p.stdout, p.stderr)
+        last = _c_calls(fake)[-1]
+        assert "COMPOSE_FILE" not in last["env"], name
+        files = [last["argv"][i + 1] for i, a in enumerate(last["argv"]) if a == "-f"]
+        assert len(files) == 1 and files[0].endswith("/compose.bigboy.yml"), (
+            name,
+            files,
+        )
+        assert (
+            "--profile" in last["argv"]
+            and "venue" in last["argv"]
+            and any(
+                profile in last["argv"] for profile in ("venue-hook", "venue-river")
             )
-            assert p.returncode == 0, (name, given, p.stdout, p.stderr)
-            cf = _c_calls(fake)[-1]["env"]["COMPOSE_FILE"]
-            assert cf.startswith(given or "compose.yml") and ":" in cf, (
-                name,
-                given,
-                cf,
-            )
+        ), name
+
+
+def test_river_apply_by_hand_needs_no_running_reconciler(tmp_path: Path) -> None:
+    """Standalone (BIGBOY_OPERATOR_IMAGE unset, no go-reconciler running) the apply still runs: the one-off starts
+    no worker (--no-deps), so the worker overlay's image reference only has to interpolate."""
+    script = _c_stage(tmp_path, "bigboy-river-apply.sh")
+    p, fake = _c_run(tmp_path, script, extra_env={"FAKE_NO_RECONCILER": "1"})
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert [c for c in _c_calls(fake) if "venue-river" in c["argv"]]
+    assert "river_apply_rc=0" in p.stdout
 
 
 def test_river_apply_redacts_the_dsn_it_prints(tmp_path: Path) -> None:
@@ -446,10 +423,15 @@ def test_river_apply_obeys_every_class_rule(tmp_path: Path) -> None:
     assert p.returncode == 0, (p.stdout, p.stderr)
     calls = _c_calls(fake)
     assert _c_violations(calls) == []
-    assert len(calls) == 1 and "venue-river" in calls[0]["argv"]
-    assert calls[0]["argv"][-3:] == ["migrate", "river", "--apply-and-check"]
-    assert calls[0]["env"]["COMPOSE_FILE"].endswith("compose.bigboy.river-apply.yml")
-    assert calls[0]["env"]["RIVER_DHO_IMAGE"].endswith("@sha256:" + "cd" * 32)
+    runs = [c for c in calls if "venue-river" in c["argv"]]
+    assert len(runs) == 1
+    assert runs[0]["argv"][-3:] == ["migrate", "river", "--apply-and-check"]
+    assert "COMPOSE_FILE" not in runs[0]["env"]
+    assert any(a.endswith("/compose.bigboy.yml") for a in runs[0]["argv"])
+    assert "venue-river" in runs[0]["argv"]
+    assert (
+        "image=sha256:" + "cd" * 32 in p.stdout
+    )  # the dho pin of _records/images.env, as an image reference only
     assert "river_apply_rc=0" in p.stdout
 
 
@@ -473,12 +455,12 @@ def test_pg_grants_check_bigboy_uses_compose_exec_only(tmp_path: Path) -> None:
     )
     calls = _c_calls(fake)
     assert _c_violations(calls) == []
-    argv = calls[0]["argv"]
+    argv = [c for c in calls if "exec" in c["argv"]][0]["argv"]
     assert (
-        argv[:4] == ["compose", "--env-file", "ops/.env", "exec"]
-        and "-T" in argv
-        and "postgres" in argv
+        argv[:3] == ["compose", "-p", "dev-health"]
+        and argv[argv.index("--env-file") + 1] == "ops/.env"
     )
+    assert argv.index("exec") < argv.index("-T") < argv.index("postgres")
     # no password is set or expanded anywhere (D4344 pattern): psql runs with -w and no PGPASSWORD
     assert not any("PGPASSWORD" in a or "POSTGRES_PASSWORD" in a for a in argv)
     assert any("psql -w -U" in a for a in argv)
@@ -515,33 +497,39 @@ def test_grants_check_uses_compose_exec_only(tmp_path: Path) -> None:
     p, fake = _c_run(tmp_path, script, str(tmp_path / "host" / "rec"))
     calls = _c_calls(
         fake
-    )  # the later git/compare steps may fail in the sandbox; the first docker call is the subject
+    )  # the later git/compare steps may fail in the sandbox; the exec call is the subject
     assert calls and _c_violations(calls) == []
-    assert calls[0]["argv"][:4] == ["compose", "--env-file", "ops/.env", "exec"]
-    assert "clickhouse" in calls[0]["argv"] and "clickhouse-client" in calls[0]["argv"]
+    ex = [c for c in calls if "exec" in c["argv"]][0]["argv"]
+    assert (
+        ex[:3] == ["compose", "-p", "dev-health"]
+        and ex[ex.index("--env-file") + 1] == "ops/.env"
+    )
+    assert "clickhouse" in ex and "clickhouse-client" in ex and "-T" in ex
 
 
-def test_overlays_carry_no_literal_credential_and_use_compose_substitution() -> None:
-    for name, svc, imgvar in (
-        ("compose.bigboy.hook-check.yml", "venue-hook", "HOOK_OPERATOR_IMAGE"),
-        ("compose.bigboy.river-apply.yml", "venue-river", "RIVER_DHO_IMAGE"),
+def _c_env(service: dict) -> dict:
+    env = service["environment"]
+    return dict(i.split("=", 1) for i in env) if isinstance(env, list) else env
+
+
+def test_one_offs_carry_no_literal_credential_and_use_compose_substitution() -> None:
+    doc = yaml.safe_load((_c_BB / "compose.bigboy.yml").read_text())
+    for svc, image_prefix in (
+        ("venue-hook", "${HOOK_OPERATOR_IMAGE:-"),
+        ("venue-river", "${BIGBOY_DHO_IMAGE:?"),
     ):
-        doc = yaml.safe_load((_c_BB / name).read_text())
         s = doc["services"][svc]
-        assert s["profiles"] == ["venue"] and s["networks"] == ["dev-health"]
-        assert s["image"].startswith("${" + imgvar + ":?")
-        env = s["environment"]
+        assert s["profiles"] == [svc] and list(s["networks"]) == ["dev-health"]
+        assert s["image"].startswith(image_prefix), s["image"]
         assert re.fullmatch(
             r"postgresql://devhealth:\$\{POSTGRES_PASSWORD:-devhealth\}@postgres:5432/devhealth\?sslmode=disable",
-            env["MIGRATION_DATABASE_URI"],
+            _c_env(s)["MIGRATION_DATABASE_URI"],
         )
         assert "env_file" not in s  # never the whole ops/.env
-    river = yaml.safe_load((_c_BB / "compose.bigboy.river-apply.yml").read_text())[
-        "services"
-    ]["venue-river"]
+    river = doc["services"]["venue-river"]
     assert river["entrypoint"] == ["/usr/local/bin/dho"]
     assert {
-        k: v for k, v in river["environment"].items() if k != "MIGRATION_DATABASE_URI"
+        k: v for k, v in _c_env(river).items() if k != "MIGRATION_DATABASE_URI"
     } == {
         "RIVER_DATABASE_SCHEMA": "river",
         "RIVER_DOMAIN_DATABASE_ROLE": "devhealth_domain",
@@ -549,10 +537,8 @@ def test_overlays_carry_no_literal_credential_and_use_compose_substitution() -> 
         "RIVER_COORDINATOR_DATABASE_ROLE": "devhealth_coordinator",
         "API_DATABASE_ROLE": "devhealth_api",
     }
-    hook = yaml.safe_load((_c_BB / "compose.bigboy.hook-check.yml").read_text())[
-        "services"
-    ]["venue-hook"]
-    assert hook["environment"]["CLICKHOUSE_URI"] == (
+    hook = doc["services"]["venue-hook"]
+    assert _c_env(hook)["CLICKHOUSE_URI"] == (
         "clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/default"
     )
 
@@ -613,13 +599,11 @@ def test_no_env_passing_flag_on_any_docker_line_and_no_password_expansion() -> N
 
 def test_graphql_prove_psql_line_is_a_compose_exec_on_the_stack_files() -> None:
     line = next(ln for ln in _c_code("bigboy-graphql-prove.sh") if "PROVE_ORG=$(" in ln)
-    assert 'docker compose "${BASE[@]}" exec -T postgres psql -U devhealth' in line, (
-        line
-    )
+    assert '"${DC[@]}" --profile venue exec -T postgres psql -U devhealth' in line, line
 
 
 def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
-    """--env-file ops/.env first, --profile venue, run --rm --no-deps -T on the one-off service: pinned for BOTH."""
+    """-p dev-health, --env-file ops/.env, --profile <the one-off's own profile>, run --rm --no-deps -T on the one-off service: pinned for BOTH."""
     for name, service, args in (
         ("bigboy-hook-check.sh", "venue-hook", True),
         ("bigboy-river-apply.sh", "venue-river", False),
@@ -629,14 +613,15 @@ def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
         script = _c_stage(case, name)
         p, fake = _c_run(case, script, *([str(case / "host" / "rec")] if args else []))
         assert p.returncode == 0, (name, p.stdout, p.stderr)
-        runs = [c for c in _c_calls(fake) if c["argv"][0] == "compose"]
+        runs = [c for c in _c_calls(fake) if service in c["argv"]]
         assert runs, name
         for c in runs:
             a = c["argv"]
-            assert a[:3] == ["compose", "--env-file", "ops/.env"], (name, a)
+            assert a[:3] == ["compose", "-p", "dev-health"], (name, a)
+            assert a[a.index("--env-file") + 1] == "ops/.env", (name, a)
             for needed in (
                 "--profile",
-                "venue",
+                service,
                 "run",
                 "--rm",
                 "--no-deps",
@@ -644,4 +629,201 @@ def test_the_one_offs_keep_their_compose_shape(tmp_path: Path) -> None:
                 service,
             ):
                 assert needed in a, (name, needed, a)
-            assert a.index("--profile") + 1 == a.index("venue")
+            profiles = [a[i + 1] for i, x in enumerate(a) if x == "--profile"]
+            assert profiles == ["venue", service], (name, profiles)
+
+
+# ============================================================================
+# CHAOS-10113: the cut proof's PG posture deltas read the column-scoped privileges too.
+#
+# The proof is an ADDED-privileges read-back (has_table_privilege / has_column_privilege): it tells the
+# operator which grants the cut added and checks they are held. It cannot see an unwanted extra (a
+# table-wide UPDATE also makes has_column_privilege true); exactness is the readiness gate's job
+# (postgres.CheckAPIAuthorization). Method: the REAL scripts run against a tmp git repo whose
+# api_authorization.go / domain_authorization.go differ between two commits; the repo path literal is
+# substituted in the tmp copy, as for the scripts above.
+# ============================================================================
+
+_c_GIT = [
+    "git",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@t",
+]
+
+_c_API_OLD = """package postgres
+
+func apiPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"users", true, true, true},
+			{"billing_audit_log", true, false, true},
+		},
+	}
+}
+"""
+
+_c_API_NEW = """package postgres
+
+func apiPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"users", true, true, true},
+			{"billing_audit_log", true, false, true},
+			{"settings", false, true, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"billing_audit_log", "actor_id", "UPDATE"},
+		},
+	}
+}
+"""
+
+_c_DOMAIN_OLD = """package postgres
+
+func domainPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"sync_runs", true, true, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"integration_credentials", "is_active", "UPDATE"},
+		},
+	}
+}
+"""
+
+_c_DOMAIN_NEW = """package postgres
+
+func domainPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"sync_runs", true, true, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"integration_credentials", "is_active", "UPDATE"},
+			{"integration_credentials", "updated_at", "UPDATE"},
+			{"worker_job_completion_fences", "completion_key", "SELECT"},
+			{"worker_job_completion_fences", "completion_key", "INSERT"},
+		},
+	}
+}
+"""
+
+
+def _c_stage_posture_delta(
+    tmp: Path, script: str, gofile: str, old: str, new: str
+) -> tuple[Path, str, str]:
+    """Stage the real posture script (and its sibling python helpers) and a tmp ops repo with two commits."""
+    staged = _c_stage(tmp, script)
+    for helper in _c_BB.glob("*.py"):
+        if helper.name != script:
+            (staged.parent / helper.name).write_text(
+                helper.read_text().replace(_c_HOST_ROOT, str(tmp / "host"))
+            )
+    repo = tmp / "host" / "ops"
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    target = repo / "internal" / "storage" / "postgres" / gofile
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shas = []
+    for text in (old, new):
+        target.write_text(text)
+        subprocess.run([*_c_GIT, "add", "-A", "internal"], cwd=repo, check=True)
+        subprocess.run([*_c_GIT, "commit", "-q", "-m", "m"], cwd=repo, check=True)
+        shas.append(
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+        )
+    return staged, shas[0], shas[1]
+
+
+def _c_run_delta(staged: Path, old: str, new: str, out: Path):
+    return subprocess.run(
+        [sys.executable, str(staged), old, new, str(out)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def test_cut_api_posture_delta_expects_added_column_privileges(tmp_path: Path) -> None:
+    staged, old, new = _c_stage_posture_delta(
+        tmp_path,
+        "cut-contents-pg-api-posture.py",
+        "api_authorization.go",
+        _c_API_OLD,
+        _c_API_NEW,
+    )
+    out = tmp_path / "pg-expect.txt"
+    p = _c_run_delta(staged, old, new, out)
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    lines = out.read_text().splitlines()
+    assert "devhealth_api settings SELECT,UPDATE" in lines, lines
+    assert "devhealth_api billing_audit_log.actor_id UPDATE" in lines, lines
+    assert not any(line.startswith("devhealth_api users") for line in lines), lines
+    assert "billing_audit_log.actor_id UPDATE" in p.stdout, p.stdout
+
+
+def test_cut_api_posture_delta_expects_no_column_line_for_an_unchanged_column(
+    tmp_path: Path,
+) -> None:
+    staged, old, new = _c_stage_posture_delta(
+        tmp_path,
+        "cut-contents-pg-api-posture.py",
+        "api_authorization.go",
+        _c_API_NEW,
+        _c_API_NEW.replace(
+            '{"settings", false, true, false},\n',
+            '{"settings", false, true, false},\n\t\t\t{"tier_limits", false, false, false},\n',
+        ),
+    )
+    out = tmp_path / "pg-expect.txt"
+    p = _c_run_delta(staged, old, new, out)
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    assert out.read_text().splitlines() == ["devhealth_api tier_limits SELECT"], (
+        out.read_text()
+    )
+
+
+def test_cut_domain_posture_delta_expects_added_column_privileges(
+    tmp_path: Path,
+) -> None:
+    staged, old, new = _c_stage_posture_delta(
+        tmp_path,
+        "cut-contents-pg-domain-posture.py",
+        "domain_authorization.go",
+        _c_DOMAIN_OLD,
+        _c_DOMAIN_NEW,
+    )
+    out = tmp_path / "pg-expect.txt"
+    p = _c_run_delta(staged, old, new, out)
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    lines = out.read_text().splitlines()
+    assert "devhealth_domain integration_credentials.updated_at UPDATE" in lines, lines
+    assert (
+        "devhealth_domain worker_job_completion_fences.completion_key SELECT,INSERT"
+        in lines
+    ), lines
+    assert not any("integration_credentials.is_active" in line for line in lines), lines
+
+
+def test_pg_grants_check_reads_a_column_expectation_with_has_column_privilege(
+    tmp_path: Path,
+) -> None:
+    script = _c_stage(tmp_path, "pg-grants-check.sh")
+    exp = tmp_path / "exp.txt"
+    exp.write_text("r t SELECT\nr billing_audit_log.actor_id UPDATE\n")
+    p, fake = _c_run(tmp_path, script, "bigboy", str(exp))
+    sql = "".join(f.read_text() for f in sorted(fake.glob("stdin.*")))
+    assert (
+        "has_column_privilege('r','public.billing_audit_log','actor_id','UPDATE')"
+        in sql
+    ), (sql, p.stdout, p.stderr)
+    assert "has_table_privilege('r','public.t','SELECT')" in sql, sql
+    assert "has_table_privilege('r','public.billing_audit_log.actor_id'" not in sql, sql
+    assert _c_violations(_c_calls(fake)) == []

@@ -27,5 +27,5 @@ Consequences:
   operation is served.
 - Enabling a class root (`dho goapi routing enable -operations mcp:<root>`) changes only the `:8092` route for that root.
 - A catalog operation being served does not serve the MCP listener, and an enabled class decision does not change what the catalog switch serves.
-- The class receipt proves the root through the MCP pipeline against the Go document route (`dho goapi prove -mcp-roots`); it does not prove
+- MCP and GraphQL parity for a class root is held by the CI step `TestMCPClassParityVenueOracle` (CHAOS-9802; the class receipt and `dho goapi prove -mcp-roots` are retired); it does not prove
   `run_operation`. Read the real consumer through the tool that uses the route under test.

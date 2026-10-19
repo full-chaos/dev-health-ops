@@ -33,8 +33,8 @@ func TestDeriveProviderMatrixTrackersByPullRequestSources(t *testing.T) {
 	inputs := Inputs{
 		OrgID: testOrg,
 		Repos: []RepoRow{
-			{OrgID: testOrg, ID: githubRepo, Repo: "acme/api"},
-			{OrgID: testOrg, ID: gitlabRepo, Repo: "grp/proj"},
+			{OrgID: testOrg, ID: githubRepo, Repo: "acme/api", Provider: ProviderGitHub},
+			{OrgID: testOrg, ID: gitlabRepo, Repo: "grp/proj", Provider: ProviderGitLab},
 		},
 		PullRequests: []PullRequestRow{
 			{OrgID: testOrg, RepoID: githubRepo, Number: 12},
@@ -108,6 +108,7 @@ func TestDeriveGitlabClosingReferenceAdmitsOnlyAGitlabIssueTarget(t *testing.T) 
 	}
 	// The well-formed shape, with a path that itself contains "#", is admitted.
 	inputs := baseInputs()
+	inputs.Repos[0].Provider = ProviderGitLab
 	target := "gitlab:grp/pro#j#5"
 	inputs.Dependencies[0].SourceWorkItemID = "gitlab:" + testSlug + "!12"
 	inputs.Dependencies[0].RelationshipTypeRaw = "gitlab_closing_reference"

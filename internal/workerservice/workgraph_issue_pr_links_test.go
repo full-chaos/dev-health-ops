@@ -178,7 +178,9 @@ func TestBuildPreStepOrderIsPinned(t *testing.T) {
 	want := []string{
 		"stale_pr_dependency_issue_edges_cleanup",
 		"issue_pr_links",
+		"issue_pr_fallback_retraction",
 		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_commit_edges", "issue_pr_edges_heuristic",
+		"issue_pr_fallback_invariant",
 		"pr_commit_links", "pr_commit_edges", "commit_file_edges",
 		"flag_guards_edges", "operational_incident_edges", "issue_issue_edges",
 	}

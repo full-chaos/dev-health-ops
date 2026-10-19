@@ -96,16 +96,25 @@ type loginRule struct {
 // its value). A value shorter than MinRegisteredLength is not registered and is
 // reported once.
 func Register(name, value string) {
+	registerField(name, "", value)
+}
+
+// registerField is Register for a secret that lives in a named field of a
+// credential: setting is the credential class, field the key inside it. The
+// two travel as separate log attributes because the log redactor reads
+// "integration credential client_secret" as the key "credential" with the
+// value "client_secret" and hides the field name.
+func registerField(setting, field, value string) {
 	if value == "" {
 		return
 	}
 	if len(value) < MinRegisteredLength {
-		warnShort(name)
+		warnShort(setting, field)
 		registerShaped(value)
 		return
 	}
 	if commonWords[strings.ToLower(value)] {
-		warnCommonWord(name)
+		warnCommonWord(setting, field)
 		registerShaped(value)
 		return
 	}
@@ -235,32 +244,86 @@ var commonWords = map[string]bool{
 	"database": true, "disabled": true, "enabled": true, "standard": true, "external": true,
 }
 
-func warnCommonWord(name string) {
+func warnCommonWord(name, field string) {
 	if name == "" {
 		return
 	}
 	registry.Lock()
-	_, seen := registry.warned["common:"+name]
-	registry.warned["common:"+name] = struct{}{}
+	key := "common:" + name + "/" + warnedField(field)
+	_, seen := registry.warned[key]
+	registry.warned[key] = struct{}{}
 	registry.Unlock()
 	if !seen {
-		warn("secret_is_a_common_word_redacted_only_in_credential_shapes", "setting", name)
+		warn("secret_is_a_common_word_redacted_only_in_credential_shapes", warnAttrs(name, field)...)
 	}
 }
 
-func warnShort(name string) {
+func warnShort(name, field string) {
 	if name == "" {
 		return
 	}
 	registry.Lock()
-	_, seen := registry.warned[name]
-	registry.warned[name] = struct{}{}
+	key := name + "/" + warnedField(field)
+	_, seen := registry.warned[key]
+	registry.warned[key] = struct{}{}
 	registry.Unlock()
 	if !seen {
+		detail := "the value is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word"
+		if field == "" {
+			detail = "password for " + name + " is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word"
+		}
 		warn("secret_shorter_than_minimum_not_redactable_by_value",
-			"setting", name, "minimum_length", MinRegisteredLength,
-			"detail", "password for "+name+" is shorter than the minimum: redacted only in credential shapes (a password key with its value, or a user and password in front of the @ of a URL), not as a bare word")
+			append(warnAttrs(name, field), "minimum_length", MinRegisteredLength, "detail", detail)...)
 	}
+}
+
+// declaredCredentialFields are the secret-bearing keys of a stored integration
+// credential that the platform reads (providers' Secret("...") reads and the
+// credential key map). A short-secret warning names a credential field only
+// when it is one of these, and then logs this canonical spelling, never the
+// text the credential carried: a key is caller-supplied and can hold anything.
+// TestDeclaredCredentialFieldsCoverTheKeysTheCodeReads keeps the list in step
+// with the code.
+var declaredCredentialFields = []string{
+	"access_token", "api_key", "api_token", "authorization", "bearer_token", "client_secret",
+	"email", "password", "passwd", "private_key", "private_key_path", "private_token",
+	"refresh_token", "secret", "signing_key", "token", "webhook_secret", "webhook_signing_secret",
+}
+
+// declaredCredentialField returns the canonical declared spelling of field: the
+// match ignores case, underscores and hyphens, so apiKey and API-KEY are api_key.
+func declaredCredentialField(field string) (string, bool) {
+	normalized := normalizedField(field)
+	for _, declared := range declaredCredentialFields {
+		if normalizedField(declared) == normalized {
+			return declared, true
+		}
+	}
+	return "", false
+}
+
+// warnedField is the field's identity for the once-only warning: every spelling of
+// a declared field is one field. An undeclared name keeps its own text (the text
+// stays in memory, never in a log line).
+func warnedField(field string) string {
+	if declared, ok := declaredCredentialField(field); ok {
+		return declared
+	}
+	return "undeclared:" + field
+}
+
+// warnAttrs names the setting, and the credential field when there is one. The
+// field travels as its own attribute: its key is not a protected word and a
+// declared name survives the redactor. A name the platform does not declare is
+// reported by length only.
+func warnAttrs(name, field string) []any {
+	if field == "" {
+		return []any{"setting", name}
+	}
+	if declared, ok := declaredCredentialField(field); ok {
+		return []any{"setting", name, "field", declared}
+	}
+	return []any{"setting", name, "field", "undeclared_name", "field_length", len(field)}
 }
 
 // RegisterLogin puts a login name into the registry: it is redacted only in the
@@ -430,7 +493,7 @@ func registerCredentialFields(fields map[string]any) {
 		switch typed := value.(type) {
 		case string:
 			if isSecretField(name) {
-				Register("integration credential "+name, typed)
+				registerField("integration credential", name, typed)
 			}
 		case map[string]any:
 			registerCredentialFields(typed)

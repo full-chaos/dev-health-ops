@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 )
 
 // Observer receives the outcome of one mapping production. It is the CHAOS-4757
@@ -35,7 +37,11 @@ type Outcome struct {
 	// in ReservedAdmissions -- the signal that activating one would now do
 	// something. See ReservedAdmissions for the sequencing this protects.
 	ReservedSeenByRawKind map[string]int
-	Duration              time.Duration
+	// RepoSlugCollisions counts repository slugs two repos hold (Result).
+	RepoSlugCollisions int
+	// RepoSlugOtherProviderOnly is Result.RepoSlugOtherProviderOnly.
+	RepoSlugOtherProviderOnly int
+	Duration                  time.Duration
 	// Balanced is false when the read count does not equal written plus
 	// rejected -- an accounting bug in this package, not a data condition.
 	Balanced bool
@@ -101,7 +107,7 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 		service.logger.Error("issue-pr links: load failed",
 			slog.String("organization_id", orgID),
 			slog.Any("window_from", window.From), slog.Any("window_to", window.To),
-			slog.Any("error", err),
+			workgraph.ErrorAttr(err),
 		)
 		return Outcome{OrganizationID: orgID}, err
 	}
@@ -123,20 +129,22 @@ func (service *Service) Produce(ctx context.Context, orgID string, window Window
 		service.logger.Error("issue-pr links: write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("links_derived", len(result.Links)),
-			slog.Any("error", err),
+			workgraph.ErrorAttr(err),
 		)
 		return Outcome{OrganizationID: orgID}, fmt.Errorf("write issue-pr links: %w", err)
 	}
 
 	outcome := Outcome{
-		OrganizationID:        orgID,
-		DependenciesRead:      result.DependenciesRead,
-		AdmittedByRawKind:     result.AdmittedByRawKind,
-		Written:               result.Written(),
-		Rejected:              result.Rejected,
-		ReservedSeenByRawKind: result.ReservedSeenByRawKind,
-		Duration:              service.now().Sub(started),
-		Balanced:              result.Balanced(),
+		OrganizationID:            orgID,
+		DependenciesRead:          result.DependenciesRead,
+		AdmittedByRawKind:         result.AdmittedByRawKind,
+		Written:                   result.Written(),
+		Rejected:                  result.Rejected,
+		ReservedSeenByRawKind:     result.ReservedSeenByRawKind,
+		RepoSlugCollisions:        result.RepoSlugCollisions,
+		RepoSlugOtherProviderOnly: result.RepoSlugOtherProviderOnly,
+		Duration:                  service.now().Sub(started),
+		Balanced:                  result.Balanced(),
 	}
 	service.observe(outcome)
 	return outcome, nil
@@ -148,6 +156,8 @@ func (service *Service) observe(outcome Outcome) {
 		slog.Int("dependencies_read", outcome.DependenciesRead),
 		slog.Int("rows_written", outcome.Written),
 		slog.Bool("accounting_balanced", outcome.Balanced),
+		slog.Int("repo_slug_collisions", outcome.RepoSlugCollisions),
+		slog.Int("rejected_unknown_repo_other_provider_only", outcome.RepoSlugOtherProviderOnly),
 		slog.Duration("duration", outcome.Duration),
 	}
 	// Fixed order, from AllRejectionReasons -- ranging a map here would make

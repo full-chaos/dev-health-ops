@@ -48,7 +48,10 @@ const (
 	BucketAgentCreated AttributionBucket = "agent_created"
 	BucketAIReview     AttributionBucket = "ai_review"
 	BucketHuman        AttributionBucket = "human"
-	BucketUnknown      AttributionBucket = "unknown"
+	// BucketBot is a pull request with no AI signal whose author login ends in
+	// "[bot]" (dependabot and the like): neither human nor AI (chris, D6045).
+	BucketBot     AttributionBucket = "bot"
+	BucketUnknown AttributionBucket = "unknown"
 )
 
 // isAIBucket mirrors AI_BUCKETS (ai_impact.py:40).
@@ -62,7 +65,7 @@ func isAIBucket(bucket AttributionBucket) bool {
 // put ai_assisted first. Row order within a group is observable, so this is
 // pinned as a literal rather than recomputed.
 var bucketEmitOrder = []AttributionBucket{
-	BucketAgentCreated, BucketAIAssisted, BucketAIReview, BucketHuman, BucketUnknown,
+	BucketAgentCreated, BucketAIAssisted, BucketAIReview, BucketHuman, BucketBot, BucketUnknown,
 }
 
 // PullRequestRow is the subset of PullRequestRow (metrics/schemas.py) this
@@ -78,6 +81,8 @@ type PullRequestRow struct {
 	Additions             *uint32
 	Deletions             *uint32
 	ChangedFiles          *uint32
+	// AuthorName is the pull request author login; nil when unknown.
+	AuthorName *string
 }
 
 type PullRequestReviewRow struct {
@@ -96,8 +101,15 @@ type AttributionRow struct {
 }
 
 type IncidentRow struct {
+	ID        string
 	RepoID    uuid.UUID
 	StartedAt time.Time
+	// SourceTeamID is the team the incident source names (the owning team of
+	// its service); nil when it names none.
+	SourceTeamID *string
+	// Trigger is the pull request that triggered the incident; nil when none is
+	// linked.
+	Trigger *IncidentTrigger
 }
 
 // CommitStatRow carries the PR-commit linkage columns _is_test_path and
@@ -180,6 +192,13 @@ type Params struct {
 	// row itself named, is share 1.
 	OwnerShare    func(repoID uuid.UUID, teamID string) float64
 	RepoNamesByID map[uuid.UUID]string
+	// MainOwners lists the main owners of a repository: one, or every tied team
+	// of a full ownership tie (D5990). An incident counts for exactly one of
+	// them (D6040, D6041); see incidentTeam.
+	MainOwners func(repoID uuid.UUID) []string
+	// RepoMergedPRTeams lists the merged pull requests of a repository with
+	// their owning team. It is read only for a repository with tied main owners.
+	RepoMergedPRTeams map[uuid.UUID][]MergedPRTeam
 }
 
 // PRKey is the (repo_id, number) tuple Python uses as a dict key throughout.
@@ -304,6 +323,29 @@ func safeBucket(kind *string) AttributionBucket {
 	return BucketUnknown
 }
 
+// ClassifyBucket is the bucket of one pull request. An AI attribution kind
+// decides first. A pull request with no AI signal is human by default (chris,
+// D6045: "by default everything is human unless it's AI"), or bot when the
+// author login ends in "[bot]". Only a non-empty kind that names no bucket is
+// unknown: that is bad data, never a default.
+func ClassifyBucket(kind, authorName *string) AttributionBucket {
+	if kind != nil && *kind != "" {
+		// A stored "human" kind is no AI signal: the author still decides
+		// between human and bot.
+		if bucket := safeBucket(kind); bucket != BucketHuman {
+			return bucket
+		}
+	}
+	if authorName != nil && isBotLogin(*authorName) {
+		return BucketBot
+	}
+	return BucketHuman
+}
+
+func isBotLogin(login string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(login)), "[bot]")
+}
+
 // isTestPath ports _is_test_path (:116). Same ASCII-containment argument as
 // safeBucket: every literal compared here is ASCII.
 func isTestPath(path *string) bool {
@@ -383,7 +425,7 @@ func Compute(params Params) []Record {
 			}
 			teamID = attribution.TeamID
 		}
-		bucket := safeBucket(kind)
+		bucket := ClassifyBucket(kind, pr.AuthorName)
 		teamIDs := []*string{teamID}
 		shares := []float64{1}
 		if teamID == nil && params.TeamResolver != nil {
@@ -440,15 +482,17 @@ func Compute(params Params) []Record {
 		}
 	}
 
-	incidentsByRepo := make(map[uuid.UUID]uint32)
+	anchored := make(map[anchorKey]uint32)
 	for _, incident := range params.Incidents {
 		startedAt := toUTC(incident.StartedAt)
 		if !startedAt.Before(start) && startedAt.Before(end) {
-			incidentsByRepo[incident.RepoID]++
+			incident.StartedAt = startedAt
+			anchor := anchorIncident(params, incident)
+			anchored[anchorKey{group: anchor.team, bucket: anchor.bucket}]++
 		}
 	}
 
-	return buildRecords(params, start, facts, incidentsByRepo)
+	return buildRecords(params, start, facts, anchored)
 }
 
 func derefUint32(value *uint32) uint32 {
@@ -698,7 +742,7 @@ type groupKey struct {
 // oracle asserts set equality keyed by the table's ORDER BY key plus a
 // separate order-invariance property, rather than pretending an order exists.
 func buildRecords(
-	params Params, day time.Time, facts []prFact, incidentsByRepo map[uuid.UUID]uint32,
+	params Params, day time.Time, facts []prFact, anchored map[anchorKey]uint32,
 ) []Record {
 	grouped := make(map[groupKey][]prFact)
 	var order []groupKey
@@ -711,6 +755,14 @@ func buildRecords(
 			order = append(order, key)
 		}
 		grouped[key] = append(grouped[key], fact)
+	}
+	// An incident sits on one row (D6040). Its group may hold no pull request of
+	// the day: the group is then created empty, so the incident still counts.
+	for anchor := range anchored {
+		if _, seen := grouped[anchor.group]; !seen {
+			grouped[anchor.group] = nil
+			order = append(order, anchor.group)
+		}
 	}
 	sort.SliceStable(order, func(i, j int) bool {
 		left, right := order[i], order[j]
@@ -729,7 +781,7 @@ func buildRecords(
 	var records []Record
 	for _, key := range order {
 		groupFacts := grouped[key]
-		baseline := aggregateFacts(filterBucket(groupFacts, BucketHuman), 0)
+		baseline := aggregateFacts(filterBucket(groupFacts, BucketHuman), anchored[anchorKey{group: key, bucket: BucketHuman}])
 		groupTotal := uint32(len(groupFacts))
 
 		var aiCount, aiAssistedCount, agentCreatedCount, humanCount, unknownCount uint32
@@ -754,11 +806,6 @@ func buildRecords(
 				weightedUnknown += fact.share
 			}
 		}
-		// The incidents of a repository are counted once per group; they enter
-		// the group's rows at the group's share (every pull request of one
-		// (team, repository) group carries the same share).
-		groupShare := groupFacts[0].share
-
 		var teamID *string
 		if key.hasTeam {
 			team := key.teamID
@@ -768,12 +815,12 @@ func buildRecords(
 		for _, bucket := range bucketEmitOrder {
 			bucketFacts := filterBucket(groupFacts, bucket)
 			// The unknown bucket ALWAYS emits a row, even when empty (:419).
-			if len(bucketFacts) == 0 && bucket != BucketUnknown {
+			// Kept on purpose: the key has no computed_at, so the empty row is
+			// what supersedes a stale unknown row (prs_total > 0) from before
+			// the human default when a day is recomputed.
+			bucketIncidents := anchored[anchorKey{group: key, bucket: bucket}]
+			if len(bucketFacts) == 0 && bucket != BucketUnknown && bucketIncidents == 0 {
 				continue
-			}
-			var bucketIncidents uint32
-			if isAIBucket(bucket) {
-				bucketIncidents = incidentsByRepo[key.repoID]
 			}
 			agg := aggregateFacts(bucketFacts, bucketIncidents)
 
@@ -800,7 +847,7 @@ func buildRecords(
 				ReworkPRs:             agg.weightedRework, ReworkDragRate: agg.reworkRate,
 				FollowupCommitsCount: agg.weightedFollowup,
 				RevertPRs:            agg.weightedRevert, RevertRate: agg.revertRate,
-				IncidentsCount: float64(float64(agg.incidentsCount) * groupShare), IncidentDragRate: agg.incidentRate,
+				IncidentsCount: float64(agg.incidentsCount), IncidentDragRate: agg.incidentRate,
 				TestGapPRs: agg.weightedTestGaps, TestGapRate: agg.testGapRate,
 				LeveragePRsComponent: weightedAI,
 				LeverageCycleTime:    componentDelta(agg.cycleAvg, baseline.cycleAvg, true),

@@ -746,6 +746,11 @@ var (
 	billingIntegrity = regexp.MustCompile(`"((?:[^"\\]|\\.)*?) \(([^)]*)\): (?:[^"\\]|\\.)*duplicate key value violates unique constraint(?:[^"\\]|\\.)*"`)
 )
 
+// billingStripeFailure is a 502 detail that names a Stripe failure. Python
+// appends Stripe's message; Go keeps it out of the body (a named divergence),
+// so both planes are reduced to the fixed lead text.
+var billingStripeFailure = regexp.MustCompile(`"(Failed to (?:void invoice|create refund))(?:: [^"]*)?"`)
+
 // billingNormalizer blanks ids the planes generate (never a seeded one)
 // and clock times taken during the run; seeded times are kept. A pull
 // report's constraint-failure text is reduced to its product (the error
@@ -759,6 +764,7 @@ var (
 func billingNormalizer(seeded map[string]bool, start time.Time) func(string) string {
 	return func(body string) string {
 		body = sortRecordKeys(body)
+		body = billingStripeFailure.ReplaceAllString(body, `"$1"`)
 		body = billingIntegrity.ReplaceAllString(body, `"$1 ($2): <unique violation>"`)
 		body = venueUUID.ReplaceAllStringFunc(body, func(match string) string {
 			if seeded[strings.ToLower(match)] {

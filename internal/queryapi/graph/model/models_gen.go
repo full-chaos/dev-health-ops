@@ -981,6 +981,8 @@ type HomeSignal struct {
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
 	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta.
 	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
+	// One sentence on where the signal's move appears largest ("Cycle Time appears to have moved most in A, B and C."), built from the display names of its top drivers with one hedge word. Null when the signal has no stated non-zero move, no driver has a name, or the signal is not a metric signal (risk, recommendation). Never a placeholder.
+	Driver *string `json:"driver,omitempty"`
 }
 
 type HomeTile struct {
@@ -1089,8 +1091,10 @@ type MetricDelta struct {
 	// Whether the current window has one or more stored source rows. A stored zero has this field set to true.
 	HasData bool `json:"hasData"`
 	// Whether the comparison window has one or more stored source rows.
-	HasPriorData bool         `json:"hasPriorData"`
-	Spark        []SparkPoint `json:"spark"`
+	HasPriorData bool `json:"hasPriorData"`
+	// The value the comparison window stored, in the unit and scale of value (the same transform), read by the query that sets hasPriorData. Null exactly when hasPriorData is false: a window with no stored value is unknown, never 0. A stored zero is 0. Not derived from value and deltaPct (CHAOS-9817).
+	PriorValue *float64     `json:"priorValue,omitempty"`
+	Spark      []SparkPoint `json:"spark"`
 	// Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric.
 	RateState *string `json:"rateState,omitempty"`
 	// The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window, of every stored day: a day stored before the review counts existed is in the denominator only, so a window that is partly not counted has a low coverage. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when no stored day of the window holds a merged pull request, when rateState is null (no stored day of the window holds review counts), and for every other metric.
@@ -1175,6 +1179,16 @@ type OperatingReviewSection struct {
 	Changed  []string                `json:"changed"`
 	Improved []string                `json:"improved"`
 	Worsened []string                `json:"worsened"`
+	// The measure and the sizing coverage of the section (CHAOS-9873). Null for every section but investment. The investment section is read in ISSUE_SIZE only for a document that selects measure, sizingCoverage, unsizedUnitCount and workUnitCount here, so a client never receives issue-size values it cannot label (D6027); any other document reads WORK_UNITS and gets measure WORK_UNITS with the sizing fields null.
+	Sizing *OperatingReviewSizing `json:"sizing,omitempty"`
+}
+
+// What the Investment section's work is measured in and how much of it is sized (CHAOS-9873, D6027, D6032). ISSUE_SIZE weighs each work unit by its issue size, an unsized unit counts 1; WORK_UNITS counts each unit 1. The sizing fields are read over the week's units, the ones the section's current-week values come from. They are null unless “measure“ is ISSUE_SIZE, and null when the week holds no unit: null is "not measured", never 0.
+type OperatingReviewSizing struct {
+	Measure          SankeyValueUnit `json:"measure"`
+	SizingCoverage   *float64        `json:"sizingCoverage,omitempty"`
+	UnsizedUnitCount *int            `json:"unsizedUnitCount,omitempty"`
+	WorkUnitCount    *int            `json:"workUnitCount,omitempty"`
 }
 
 type PageInfo struct {
@@ -1458,12 +1472,17 @@ type ReviewEdgesResult struct {
 }
 
 type ReworkThemeAllocation struct {
-	Theme         string  `json:"theme"`
-	Label         string  `json:"label"`
-	Allocation    float64 `json:"allocation"`
-	AllocationPct float64 `json:"allocationPct"`
-	PrsMerged     int     `json:"prsMerged"`
-	ChurnLoc      int     `json:"churnLoc"`
+	Theme            string          `json:"theme"`
+	Label            string          `json:"label"`
+	Allocation       float64         `json:"allocation"`
+	AllocationPct    float64         `json:"allocationPct"`
+	PrsMerged        int             `json:"prsMerged"`
+	ChurnLoc         int             `json:"churnLoc"`
+	Measure          SankeyValueUnit `json:"measure"`
+	Denominator      float64         `json:"denominator"`
+	SizingCoverage   *float64        `json:"sizingCoverage,omitempty"`
+	UnsizedUnitCount *int            `json:"unsizedUnitCount,omitempty"`
+	WorkUnitCount    *int            `json:"workUnitCount,omitempty"`
 }
 
 type SankeyRequestInput struct {
@@ -2443,6 +2462,7 @@ type MeasureInput string
 
 const (
 	MeasureInputCount                MeasureInput = "COUNT"
+	MeasureInputIssueSize            MeasureInput = "ISSUE_SIZE"
 	MeasureInputChurnLoc             MeasureInput = "CHURN_LOC"
 	MeasureInputPrReworkRatio        MeasureInput = "PR_REWORK_RATIO"
 	MeasureInputCycleTimeHours       MeasureInput = "CYCLE_TIME_HOURS"
@@ -2467,6 +2487,7 @@ const (
 
 var AllMeasureInput = []MeasureInput{
 	MeasureInputCount,
+	MeasureInputIssueSize,
 	MeasureInputChurnLoc,
 	MeasureInputPrReworkRatio,
 	MeasureInputCycleTimeHours,
@@ -2491,7 +2512,7 @@ var AllMeasureInput = []MeasureInput{
 
 func (e MeasureInput) IsValid() bool {
 	switch e {
-	case MeasureInputCount, MeasureInputChurnLoc, MeasureInputPrReworkRatio, MeasureInputCycleTimeHours, MeasureInputThroughput, MeasureInputPipelineSuccessRate, MeasureInputPipelineFailureRate, MeasureInputPipelineDurationP95, MeasureInputPipelineQueueTime, MeasureInputPipelineRerunRate, MeasureInputTestPassRate, MeasureInputTestFailureRate, MeasureInputTestFlakeRate, MeasureInputTestSuiteDurationP95, MeasureInputCoverageLinePct, MeasureInputCoverageBranchPct, MeasureInputCoverageDeltaPct, MeasureInputFlagFrictionDelta, MeasureInputFlagErrorRateDelta, MeasureInputFlagCoverageRatio, MeasureInputFlagActivationRate:
+	case MeasureInputCount, MeasureInputIssueSize, MeasureInputChurnLoc, MeasureInputPrReworkRatio, MeasureInputCycleTimeHours, MeasureInputThroughput, MeasureInputPipelineSuccessRate, MeasureInputPipelineFailureRate, MeasureInputPipelineDurationP95, MeasureInputPipelineQueueTime, MeasureInputPipelineRerunRate, MeasureInputTestPassRate, MeasureInputTestFailureRate, MeasureInputTestFlakeRate, MeasureInputTestSuiteDurationP95, MeasureInputCoverageLinePct, MeasureInputCoverageBranchPct, MeasureInputCoverageDeltaPct, MeasureInputFlagFrictionDelta, MeasureInputFlagErrorRateDelta, MeasureInputFlagCoverageRatio, MeasureInputFlagActivationRate:
 		return true
 	}
 	return false
@@ -2565,15 +2586,17 @@ type SankeyValueUnit string
 
 const (
 	SankeyValueUnitWorkUnits SankeyValueUnit = "WORK_UNITS"
+	SankeyValueUnitIssueSize SankeyValueUnit = "ISSUE_SIZE"
 )
 
 var AllSankeyValueUnit = []SankeyValueUnit{
 	SankeyValueUnitWorkUnits,
+	SankeyValueUnitIssueSize,
 }
 
 func (e SankeyValueUnit) IsValid() bool {
 	switch e {
-	case SankeyValueUnitWorkUnits:
+	case SankeyValueUnitWorkUnits, SankeyValueUnitIssueSize:
 		return true
 	}
 	return false
@@ -3015,7 +3038,7 @@ func (e TimeGranularity) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 
-// Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
+// Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE, COVERAGE_LINE_PCT and TEST_FLAKE_RATE carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
 type TimeseriesScope string
 
 const (

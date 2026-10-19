@@ -1,49 +1,133 @@
 # ci/bigboy — tracked bigboy venue tooling
 
-Tracked home of the bigboy-cut.sh script family and the bigboy-specific compose overlays
+Tracked home of the bigboy-cut.sh script family and the bigboy compose file
 (CHAOS-6964, CHAOS-6977). The host's own operational copies live in `_records/` on the bigboy
 host and are kept byte-identical to this directory by hand at every change (there is no automated
 sync yet).
 
-## Compose invocation (CHAOS-6987, D2724/D2726/D2728)
+## Operating the stack: ONE compose file (CHAOS-9962)
 
-Every `docker compose` invocation against this stack MUST pass `--env-file ops/.env` explicitly.
-Docker Compose's own default `.env` auto-load only reads a `.env` at the **project root**, never
-`ops/.env` -- so any compose-level `${VAR}` substitution referencing a var that only lives in
-`ops/.env` (e.g. `query-api`'s `GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}`) silently resolves to a
-blank string with a `"variable is not set"` warning easy to miss, not a hard failure. `bigboy-cut.sh`
-passes it on every invocation; do the same for any manual `docker compose up` against this overlay.
-
-The full invocation (from `/home/ubuntu/devhealth`):
+The bigboy stack is one compose file, `ci/bigboy/compose.bigboy.yml`, with profiles for the optional services, started with
+plain `docker compose` (the earlier `stack.sh` over twelve overlay files is retired; the file's header says what each of the
+twelve was). The project directory is the bigboy root, the env files are `ops/.env` and the pins file, the project is `dev-health`:
 
 ```
-export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@<digest>
-docker compose --env-file ops/.env \
-  -f compose.yml -f compose/compose.go.workers.yml \
-  -f .remember/lanes/team-lead/reconciler-sweep-override.yml \
-  -f compose/compose.bigboy.images.yml -f ci/bigboy/compose.bigboy.workers.yml \
-  -f compose/compose.bigboy.router.yml \
-  up -d --no-deps --no-build <service...>
+cd "$BIGBOY_ROOT"      # /home/ubuntu/devhealth, the running tree (the checkout is ops/)
+docker compose -p dev-health --project-directory "$BIGBOY_ROOT" \
+  --env-file ops/.env --env-file _records/images.env \
+  -f ops/ci/bigboy/compose.bigboy.yml \
+  up -d --no-deps --no-build query-api go-api web
 ```
 
-`compose/compose.bigboy.router.yml` (this repo's tracked copy also lives here as
-`ci/bigboy/compose.bigboy.router.yml`) is REQUIRED in that `-f` list from now on -- omitting it
-silently drops the plane-split router (see below): web then gets the base file's `BACKEND_URL`, which
-names the retired Python api.
+(`--profile` only for the optional services, e.g. `--profile smoke run --rm --no-deps -T web-smoke`; none for the live stack.)
+
+| What | Command (after the lines above) |
+|---|---|
+| render, read-only | `ci/bigboy/compose-config-redacted.sh <the arguments above>` (NAME=<length> only; never a bare `config` into a pipe) |
+| status, logs | `ps`, `logs --tail=200 <service>` |
+| start or recreate a service | `up -d --no-deps --no-build <service>...` (never the whole stack) |
+| one-off container | `run --rm --no-deps -T <service> [cmd...]` |
+| the optional services | add `--profile smoke` (web-smoke), `--profile venue` (venue-prove, venue-tools), `--profile venue-hook` (venue-hook) or `--profile venue-river` (venue-river) |
+
+Do not export `COMPOSE_FILE`, `COMPOSE_PROFILES` or any other `COMPOSE_*` variable: the cut scripts unset them so nothing adds a file
+or a profile. `docker compose` interpolates every service of the file, also those of a profile that is not enabled, so a variable a
+one-off needs is read with an empty default (`${PROVE_ORG:-}`) and the script that starts the one-off checks it
+(web-path-smoke.sh, bigboy-graphql-prove.sh); only the variables the live stack needs are required (`:?`): the three image pins
+and `DHO_API_CH_USERS_XML` (the host file mounted into ClickHouse's users.d), all four named in `_records/images.env`, which the
+command passes. `BIGBOY_OPERATOR_IMAGE` alone has a default, the placeholder tag `:not-resolved`, so a plain `ps` or `config`
+renders without it and a worker cannot start from it (the pull fails); the cut exports the real digest and repin writes it into
+`_records/images.env`.
+
+**Pins.** The digests of the four images (`BIGBOY_DHO_IMAGE`, `BIGBOY_API_TOOLS_IMAGE`, `BIGBOY_WEB_IMAGE`, `BIGBOY_OPERATOR_IMAGE`) live
+in `_records/images.env`, the one file a cut rewrites (`bigboy-repin*.sh`; they also write the operator pin, so a plain
+`docker compose ps` needs nothing exported). The tracked `ci/bigboy/images.env` is the last pin a PR recorded; copy it to
+`_records/` to start a bigboy root. `BIGBOY_OPERATOR_IMAGE` is absent from the tracked copy: the cut exports it, and repin writes it into `_records/images.env`.
+
+**First use on a root that still has the old pin file** (read-only until the last line; GWC owns the switch window): the new file renders
+the live `stack` byte-identically (so no container is recreated by the switch itself), but the pins now come from an env file. Make
+`_records/images.env` from the digests the old `_records/compose.bigboy.images.yml` pins, with grep only (no value is a secret):
+
+```
+cd "$BIGBOY_ROOT"
+for pair in BIGBOY_DHO_IMAGE:dev-health-go-dho BIGBOY_API_TOOLS_IMAGE:dev-health-go-api-tools BIGBOY_WEB_IMAGE:dev-health-web BIGBOY_OPERATOR_IMAGE:dev-health-go-operator; do
+  var=${pair%%:*}; img=${pair##*:}
+  ref=$(grep -ohE "ghcr.io/full-chaos/$img@sha256:[0-9a-f]{64}" _records/compose.bigboy.images.yml | head -1) || true
+  [ -n "$ref" ] && echo "$var=$ref"
+done > _records/images.env
+printf 'DHO_API_CH_USERS_XML=%s\n' "$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml" >> _records/images.env
+```
+
+then compare the render (names only: `ci/bigboy/compose-config-redacted.sh` with the arguments above) before running any `up`.
+
+What `stack.sh` did and is gone: it refused any verb but a short list (now: type the command above), it refused to start a worker
+without `BIGBOY_OPERATOR_IMAGE` (now compose refuses: the variable is required), and it appended one line per mutating verb to
+`_records/stack-runs.log` (not kept: the cut's own `STEP` lines and `$REC/*.out` are the record).
+
+## The acr venue stack (CHAOS-10004)
+
+The acr pre-prod venue (acr-api, acr-projector, acr-mcp, its postgres and falkordb, the entitlement stand-in and the one-offs that
+prepare the database) is in the same file, in the same project, started with the same command and a profile:
+
+```
+cd "$BIGBOY_ROOT"
+docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env \
+  -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-deps --no-build <service>
+```
+
+- `--profile acr` holds every acr service. `--profile acr-venue` holds only what must exist before acr-api: `acr-postgres`, `acr-db-init`
+  (roles), `acr-migrate`, `acr-db-acl` (grants) and `acr-entitlement-standin`. Pass both when you want to name no service.
+  Services do not clash with the dev-health ones: the database and the graph are `acr-postgres` and `acr-falkordb`, answering to the
+  names `postgres` and `falkordb` on the acr network only.
+- Data does not move. The bind mounts are the old paths, `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data`; the one named
+  volume has the explicit name `dev-health-acr-entitlement-tmp`; the network is `dev-health-acr`. `container_name` is the old project's
+  (`dev-health-acr-mcp-<service>-1`). acr-api and acr-projector reach `dho-query-internal` and `dho-clickhouse-readers` as before; no acr
+  service is on the `dev-health` network. The data URLs use the alias `query-api`, never an address.
+- Secrets are files under `/var/lib/oci-cache/mcp-venue/secrets/`, mounted by compose as `/run/secrets/<name>`; the file holds the paths
+  (overridable by the `ACR_*_FILE` variables) and no value. Non-secret settings (`ACR_DB_NAME`, the role names, the projector org) default to
+  what the old `.env` held.
+- Images: all pinned by registry digest in the pins file (`BIGBOY_ACR_*_IMAGE`, each REQUIRED: with one missing every compose command fails and names it, so a host's `_records/images.env` must hold the acr lines before its checkout holds this file). acr-api (which also
+  runs the projector and the migrations) and acr-mcp are the images of the acr release build, `ghcr.io/full-chaos/dev-health-acr/acr-api` and `.../acr-mcp`. A build
+  on this host needs `--build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>`; without both args acr-api refuses the sidecar with a 426.
+- acr-api talks to the real ops, as the venue does after its move off the stand-in: `ACR_DEV_HEALTH_ENTITLEMENT_URL` defaults to `http://go-api:8091` (the go-api internal listener, by alias, on `dho-query-internal`) and the bearer is the file-backed secret `acr_ops_svc_token` (the file `/var/lib/oci-cache/mcp-venue/secrets/ops_svc_acr_token`, or the path in `ACR_OPS_SVC_TOKEN_FILE`; no value is in the repository). BYO LLM config (CHAOS-9989): `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` is passed through and is EMPTY unless the environment of one `up` sets it; no env file on bigboy sets it (a persistent BYO setting would bill a key), and `ops` needs the scope `llm_config:read` on the token. The entitlement stand-in is no longer needed by acr-api; it stays defined (profile `acr-venue`) for a rollback: set `ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088` and `ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token`, and start the stand-in.
+- The one-time move from the old project `dev-health-acr-mcp` to this file is a recreate of the acr stack (new project label, same container
+  names and data). Run it only in a window MCP opens. The new file fixes the old project's container names, so the old containers must be
+  REMOVED, not only stopped (a stopped container keeps its name and the new `up` fails with `Conflict. The container name ... is already in use`;
+  executed in a scratch project). The steps, in this order:
+  1. Before: render the acr services from the old `compose.yml` and from this file and diff them (names, images, environment, volumes, networks):
+     only the image reference, the project-prefixed secret/volume/network names and the services' network name may differ.
+  2. Save the graph first (MCP): `docker exec dev-health-acr-mcp-falkordb-1 redis-cli BGSAVE`, wait until `redis-cli LASTSAVE` changes, then copy the dump to a dated backup
+     path, `cp /var/lib/oci-cache/mcp-venue/falkordb-data/dump.rdb /var/lib/oci-cache/mcp-venue/falkordb-data.backup-$(date -u +%Y%m%dT%H%MZ).rdb` (outside the bind-mounted directory).
+     Note the repository count for step 5: `docker exec dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"`, the `<graph>` being
+     the one `redis-cli GRAPH.LIST` shows besides `_acr_health` (34 on 2026-10-17).
+  3. Remove the old project's containers and its own network, keeping the data: `cd /home/ubuntu/devhealth/dev-health-acr-mcp && docker compose -p dev-health-acr-mcp -f compose.yml down`
+     (NEVER `-v`, and never `--rmi`). The bind mounts `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data` are host paths and stay; the networks
+     `dho-query-internal` and `dho-clickhouse-readers` are external and stay.
+  4. Set the projector switch in bigboy's env BEFORE the `up`: `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true` must be a line of the host's `_records/images.env` (the tracked
+     `ci/bigboy/images.env` has it; the compose file defaults it to false, as the old file did, and the projector writes nothing without it). Then start ONLY the nine acr services,
+     by name (a bare `--profile acr up -d` also starts or recreates every default-profile dev-health service, 42 containers instead of 9, checked with a dry-run):
+     `cd "$BIGBOY_ROOT" && docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-build acr-postgres acr-db-init acr-migrate acr-db-acl acr-entitlement-standin acr-falkordb acr-api acr-projector acr-mcp`
+     (their `depends_on` stays inside the acr profiles, so a dry-run of exactly this command creates the nine acr containers and nothing else). Then `ps`, and confirm the images are the pinned digests: `docker inspect --format '{{.Image}}' dev-health-acr-mcp-acr-api-1 dev-health-acr-mcp-acr-mcp-1`
+     must print the ids in `BIGBOY_ACR_API_IMAGE` and `BIGBOY_ACR_MCP_IMAGE` of the host's `_records/images.env` (fb4c745e: `01cab48f...` and `38aeb351...`).
+  5. Readback: the venue answers, and the graph still holds the repository count noted in step 2 (34): run the same
+     `docker exec dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"` again and compare. Also check that the host's
+     `_records/images.env` carries `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true` (the file defaults it to false; the projector writes nothing without it).
+  6. After the readback, the old named volume `dev-health-acr-mcp_acr_entitlement_tmp` is left behind on purpose (it only held the stand-in's generated
+     nginx.conf; the new file uses `dev-health-acr-entitlement-tmp`): remove it with `docker volume rm dev-health-acr-mcp_acr_entitlement_tmp` when the
+     readback is good, or leave it.
 
 ## Go-only stack (CHAOS-8361)
 
 The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the stack is a host file
 (not in this repository), so the tracked files do the work:
 
-- `compose.bigboy.images.yml` moves the base file's `api` service to the profile `retired-python-api`,
+- `compose.bigboy.yml` moves the base file's `api` service to the profile `retired-python-api`,
   which nothing enables; states web's `depends_on` again without `api`; runs `migrate` from the dho
   image (`dho migrate upgrade --river`); and puts `venue-prove` on the stack's networks (it shared the
   api container's network namespace). No service names the Python api image.
 - The cut's chain no longer holds the host side file `compose/compose.metrics-api.local.yml` (the Python
   `metrics-api` service), and the cut's `up` list is `query-api go-api web`.
-- `compose.bigboy.smoke.yml` runs the web-path smoke as `dho smoke web-path`; its image is the dho image
-  by digest, set in `compose.bigboy.images.yml` with the other dho pins.
+- `compose.bigboy.yml` runs the web-path smoke as `dho smoke web-path`; its image is the dho image
+  by digest, set in `compose.bigboy.yml` with the other dho pins.
 - `bigboy-graphql-prove.sh` proves through the routed `/graphql` in Go-edge mode only.
 - The router file names no Python backend: `/docs`, `/redoc`, `/openapi.json` and `/metrics` reach the
   default backend (the Go api's 404), as in prod. Regenerate `.traefik-dynamic/planes.yml` with the cut.
@@ -58,8 +142,8 @@ The bigboy stack runs no Python api, as prod does. The base `compose.yml` of the
   `--no-deps` on the cut's `up` skips none.
 
 ORDER for the first cut with these files (the same order the billing-edge retirement used): (1) put
-the tracked `compose.bigboy.images.yml` in place of the host copy `compose/compose.bigboy.images.yml`,
-keeping the digests the host copy has (web-path-smoke.sh reads the HOST overlay, so the `web-smoke` block of the tracked file, which carries the smoke's image, must be in it); and repin the dho digests to a build that has the `dho smoke web-path` verb (the smoke works only with both); (2) with the OLD chain still exported, name and remove the two
+the tracked `images.env` in place of the pin file `_records/images.env`,
+keeping the digests the host copy has; and repin the dho digests to a build that has the `dho smoke web-path` verb (the smoke works only with both); (2) with the OLD chain still exported, name and remove the two
 Python containers with compose verbs (`docker compose ... ps api metrics-api`, then
 `docker compose ... rm -sf api metrics-api`; one approved line, run on the lead's GO); (3) regenerate
 `.traefik-dynamic/planes.yml`; (4) run the cut.
@@ -74,7 +158,7 @@ real-org dashboard showing "no data" through the `commanderkeen.dev` Cloudflare 
 
 Fix: `generate-plane-split-router.py` derives a traefik file-provider dynamic config (routers +
 services, one per plane) straight from `ingress.goApiPaths`/`ingress.queryApiPaths` -- never
-hand-maintained. `compose.bigboy.router.yml` adds traefik's `--providers.file.directory` flag +
+hand-maintained. `compose.bigboy.yml` adds traefik's `--providers.file.directory` flag +
 volume mount for that generated file, and points `web`'s `BACKEND_URL` at the router
 (`http://traefik:3000`) instead of straight at `api:8000`, so both browser-origin traffic
 (`commanderkeen.dev`) and web's own server-side calls get the same split.
@@ -179,7 +263,7 @@ query-api at all -- a real user's JWT was rejected outright with no way to serve
 `bigboy-cut.sh`'s `query-api-enabled-flags-current` STEP now does two checks, both required for
 `DEPLOY_SHA=<pinned deploy commit>` (see "Pinned deploy values" below):
 1. Every NAME the generator emits (flags + secret refs) is present in the checked-in
-   `compose/compose.bigboy.images.yml` -- fails loud (STEP rc=1) naming exactly which name(s) are
+   `_records/images.env` -- fails loud (STEP rc=1) naming exactly which name(s) are
    missing, rather than a silent 404/401 surfacing hours later through a real user.
 2. Every secret-ref NAME resolves to a non-blank value through the LIVE, `--env-file`-substituted
    compose config -- fails loud (separate STEP `query-api-secret-refs-nonblank`, rc=1) if any
@@ -210,7 +294,7 @@ quiet retry on Python.
 
 ## Web-path smoke (CHAOS-6987/R460)
 
-`web-path-smoke.sh` (+ the `dho smoke web-path` verb in `internal/websmoke`, `compose.bigboy.smoke.yml`) is the one proof that
+`web-path-smoke.sh` (+ the `dho smoke web-path` verb in `internal/websmoke`, `compose.bigboy.yml`) is the one proof that
 closes the loop for a REAL browser session, not a hand-minted token: it logs in through web's own
 `/api/v1/auth/login` route as the bigboy admin, then issues the EXACT operations web's Cockpit
 (`/api/v1/home`, `/api/v1/investment`, `/api/v1/opportunities` REST threads) and Diagnose
@@ -241,7 +325,7 @@ block (`deploy/values.prod.yaml:1015-1016`) sets `AUTH_URL: https://www.fullchao
 with its own doc comment: "without it web derives its origin from the request URL... every
 [Origin-checked] approval is refused" -- the exact same drift-without-a-generator-check failure
 CHAOS-6987 already exists to close, just on a different service. Fixed: `AUTH_URL:
-https://www.commanderkeen.dev` added to `web`'s environment in `compose.bigboy.router.yml`.
+https://www.commanderkeen.dev` added to `web`'s environment in `compose.bigboy.yml`.
 Verified live: `GET /api/auth/session` through the router now sets
 `__Secure-authjs.callback-url=https%3A%2F%2Fwww.commanderkeen.dev`, not the bind address.
 
@@ -268,7 +352,7 @@ Every check below fails loud with a named finding; none can pass on an empty or 
   deploy sha (see "Pinned deploy values" below).
 - **Web env parity** (`check-web-env-parity.py`, STEP `web-env-parity`): every prod `ops.web.env` /
   `ops.web.extraEnv` NAME must be classified (overlay vs venue-local base) -- a new prod name fails,
-  named; overlay names (`BACKEND_URL`, `AUTH_URL`) must be in `compose.bigboy.router.yml` with the
+  named; overlay names (`BACKEND_URL`, `AUTH_URL`) must be in `compose.bigboy.yml` with the
   expected public values; the running web container (names via `container-env-names.sh`) must carry
   every prod name. `AUTH_URL` stays hand-maintained per the lead's ruling; this check is what makes
   the hand list loud.
@@ -301,7 +385,7 @@ Every check below fails loud with a named finding; none can pass on an empty or 
 
 ## GraphQL prove harness (CHAOS-6993, partial)
 
-`bigboy-graphql-prove.sh <full ops sha> [--go-edge]` + `compose.bigboy.prove.yml` run the prove leg of
+`bigboy-graphql-prove.sh <full ops sha> [--go-edge]` + `compose.bigboy.yml` run the prove leg of
 prod's STEP 216 (`pod-r216.sh`) on the compose stack, from `venue-prove`. The edge is the ROUTED
 `/graphql` (`http://traefik:3000/graphql`, which the plane-split router sends to query-api:
 CHAOS-6263, the prover's Go-edge mode, `dho goapi prove -go-edge`). There is no Python edge
@@ -354,13 +438,12 @@ Regenerate the live router from a pinned sha:
 ## Billing host on go-api; the Python billing-edge is retired (CHAOS-7055)
 
 Prod serves the Stripe webhook host from go-api's billing-edge listener (:8010) and has no Python
-`billing-edge`. `compose.bigboy.billing-edge.yml` does the same here: go-api gains
+`billing-edge`. `compose.bigboy.yml` does the same here: go-api gains
 `--api-billing-edge-addr=:8010` and a traefik router for `Host(billing.localhost)` (the rule and entrypoint the
 Python service carried) to port 8010; `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `LICENSE_PRIVATE_KEY`
 reach go-api by name from `ops/.env` (never written in the file; unset, the listener's `/health` names the
 missing one with a 503); the Python `billing-edge` service moves to the profile `retired-billing-edge`, which
-nothing enables. The file is in `bigboy-cut.sh`'s `COMPOSE_FILE` chain before the router (the router stays
-last), so go-api is never recreated without them.
+nothing enables. The file is the one compose file the cut runs, so go-api is never recreated without them.
 
 Applying it recreates go-api, so it goes in with a cut, never on its own while go-api is in use, and the
 checkout the cut's scripts read (line 39's list) is pulled to the merge right before that cut, not earlier. ORDER:

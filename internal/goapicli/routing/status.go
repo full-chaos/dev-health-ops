@@ -56,17 +56,8 @@ type statusReportMCPRoot struct {
 	Mode                  *string  `json:"mode"`
 	CurrentCandidateBuild *string  `json:"current_candidate_build"`
 	Reachable             bool     `json:"reachable"`
-	Proven                bool     `json:"proven"`
 	Dark                  bool     `json:"dark"`
 	StaleDigests          []string `json:"stale_digests"`
-	// ProofReference/ProofShapesCounted/ProofShapesMatched/ProofShapesExcluded: what the
-	// admissible class receipt for the live build rests on (empty when unproven).
-	ProofReference      string   `json:"proof_reference"`
-	ProofShapesCounted  int      `json:"proof_shapes_counted"`
-	ProofShapesMatched  int      `json:"proof_shapes_matched"`
-	ProofShapesExcluded []string `json:"proof_shapes_excluded"`
-	// ProofShapesStochastic names the shapes proven under the stochastic leaf class (counted, never matched).
-	ProofShapesStochastic []string `json:"proof_shapes_stochastic"`
 }
 
 // statusReportOperation is one catalog operation. query-api serves every registered operation without a routing
@@ -282,15 +273,8 @@ func printMCPClassStatus(report statusReport) {
 		return
 	}
 	fmt.Fprintln(stdout, "(class rows are enabled in canary only: they have no edge route, so primary is never admitted)")
-	fmt.Fprintf(stdout, "%-30s %-8s %-10s %-8s %s\n", "MCP CLASS ROOT", "DIGEST", "MODE", "PROOF", "LISTENER")
+	fmt.Fprintf(stdout, "%-30s %-8s %-10s %s\n", "MCP CLASS ROOT", "DIGEST", "MODE", "LISTENER")
 	for _, row := range report.MCPClass {
-		proof := "-"
-		if row.DigestState == goapiproof.DigestMatch {
-			proof = "UNPROVEN"
-			if row.Proven {
-				proof = "ok"
-			}
-		}
 		listener := "DARK (answers 404 root_field_not_enabled)"
 		if row.Reachable {
 			listener = "serves"
@@ -298,24 +282,9 @@ func printMCPClassStatus(report statusReport) {
 		if !row.ServedByBinary {
 			listener += "; NOT a Query root of this binary's SDL"
 		}
-		fmt.Fprintf(stdout, "%-30s %-8s %-10s %-8s %s\n", row.Operation, row.DigestState, derefOr(row.Mode, "-"), proof, listener)
+		fmt.Fprintf(stdout, "%-30s %-8s %-10s %s\n", row.Operation, row.DigestState, derefOr(row.Mode, "-"), listener)
 		if len(row.StaleDigests) > 0 {
 			fmt.Fprintf(stdout, "    rows at other schema or document digests, never read: %v\n", row.StaleDigests)
-		}
-		if row.Proven && (row.ProofReference != "" || row.ProofShapesCounted > 0 || len(row.ProofShapesExcluded) > 0) {
-			// A receipt written before the reference was recorded still has counts and
-			// exclusions worth showing; it says so rather than hiding them.
-			reference := row.ProofReference
-			if reference == "" {
-				reference = "(not recorded)"
-			}
-			fmt.Fprintf(stdout, "    proof: reference=%s shapes counted=%d matched=%d excluded=%d\n", reference, row.ProofShapesCounted, row.ProofShapesMatched, len(row.ProofShapesExcluded))
-			for _, stochastic := range row.ProofShapesStochastic {
-				fmt.Fprintf(stdout, "      proven under the stochastic leaf class (not a match): %s\n", stochastic)
-			}
-			for _, excluded := range row.ProofShapesExcluded {
-				fmt.Fprintf(stdout, "      excluded: %s\n", excluded)
-			}
 		}
 	}
 }
@@ -334,14 +303,7 @@ func mcpClassStatus(ctx context.Context, pool *pgxpool.Pool, liveDigest string) 
 	out := make([]statusReportMCPRoot, 0, len(rows))
 	for _, row := range rows {
 		entry := statusReportMCPRoot{Root: row.Root, Operation: row.Operation, ServedByBinary: row.ServedByBinary,
-			DigestState: row.DigestState, Reachable: row.Reachable, Proven: row.Proven, Dark: row.Dark, StaleDigests: row.StaleDigests,
-			ProofReference: row.ProofReference, ProofShapesCounted: row.ProofExecuted, ProofShapesMatched: row.ProofMatched, ProofShapesExcluded: row.ProofExcluded, ProofShapesStochastic: row.ProofStochastic}
-		if entry.ProofShapesStochastic == nil {
-			entry.ProofShapesStochastic = []string{}
-		}
-		if entry.ProofShapesExcluded == nil {
-			entry.ProofShapesExcluded = []string{}
-		}
+			DigestState: row.DigestState, Reachable: row.Reachable, Dark: row.Dark, StaleDigests: row.StaleDigests}
 		if row.DigestState == goapiproof.DigestMatch {
 			entry.Mode, entry.CurrentCandidateBuild = stringPtr(row.Mode), stringPtr(row.CurrentCandidateBuild)
 		}

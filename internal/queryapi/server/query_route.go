@@ -374,7 +374,71 @@ const registeredOperatingReviewV4Document = `query OperatingReview($orgId: Strin
 // text below. The line is here so the field can be asked for at all (a
 // field no registered text selects is unreachable); the web's real wire
 // text wins over this one if they differ when the web selects the field.
+//
+// The `sizing` selection of a section (CHAOS-9873) is NOT from the web file until the web change that selects it
+// lands: it sits right after `worsened`, in the form urql prints. A document that selects the section's measure and
+// the whole sizing reads the investment section in ISSUE_SIZE; every older text reads it in work units. The web's
+// real wire text wins over this one if they differ.
 const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      sizing {
+        measure
+        sizingCoverage
+        unsizedUnitCount
+        workUnitCount
+        __typename
+      }
+      metrics {
+        key
+        label
+        value
+        unit
+        hasData
+        scope
+        rateState
+        changeFailureEvidence {
+          basis
+          deployments
+          deploymentsWithStatus
+          coverage
+          unknownReason
+          __typename
+        }
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+          hasPriorData
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    recommendations
+    recommendationsEmptyState
+    __typename
+  }
+}`
+
+// registeredOperatingReviewV5Document is the text of `operatingReview` BEFORE the investment section carried its
+// measure and sizing coverage (CHAOS-9873, `sizing`): the text of CHAOS-9630, with `changeFailureEvidence`. It stays a
+// legacy text (see legacyDigestsByOperation) beside V1 to V4, so a web build still sending it keeps working and
+// reads the investment section in work units. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/operatingreview_v5_captured.graphql).
+const registeredOperatingReviewV5Document = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
   operatingReview(orgId: $orgId, input: $input) {
     orgId
     teamId
@@ -1363,56 +1427,11 @@ const registeredHomeV10Document = `query Home($orgId: String!, $filters: FilterI
   }
 }`
 
-// registeredHomeDocument is the registered document for the home
-// operation: the wire form of the web app's HOME_QUERY (variables orgId,
-// filters, window), kept byte-identical in
-// testdata/wire_capture/home_captured.graphql (see that directory's
-// README for how the wire form is produced from the web repo's own
-// pinned urql). Its selection set covers the schema's own
-// type declarations (contracts/graphql/v1/schema.graphql: HomeResult,
-// Freshness, HomeFreshnessSource, Coverage, MetricDelta, SparkPoint,
-// ReworkThemeAllocation, SummarySentence, HomeTileEntry, HomeTile,
-// ConstraintCard, ConstraintEvidence, EventItem, HealthState, HomeSignal,
-// ScopeEntityRef, SignalAttribution, SignalAttributionSourceCount,
-// SignalAttributionConfidenceCount, HomeLimitingFactor, HomeDataConfidence,
-// HomeScopeDataConfidence -- every field each type declares, not a hand-picked
-// subset), formatted to match
-// this file's other entries' urql-print convention (multi-line,
-// `__typename` on every object selection). The digest of the captured
-// wire fixture must equal this constant's
-// (query_route_wire_capture_test.go's
-// TestRegisteredHomeDocument_MatchesCapturedWireFixture); the web repo's
-// graphql-wire-parity check runs the current HOME_QUERY against the
-// digest registered here. query_route_integration_test.go's
-// TestHomeRoute_ReachableOnlyWhenSwitchEnabled proves an in-process
-// request built from THIS EXACT constant reaches queryResolver.Home
-// (routing/auth gating only -- it does not assert response content),
-// and registered_home_document_schema_parity_test.go's
-// TestRegisteredHomeDocumentSelectsEveryHomeResultField is the content
-// side: it fails the moment this constant's selection set falls behind
-// what contracts/graphql/v1/schema.graphql's HomeResult (recursively)
-// declares -- the defect class where the schema grows but the registered
-// document does not (see the comment below).
-//
-// Why the selection must track the schema: growing HomeResult's SDL and
-// homeResultFromResponse's mapping to the full home payload while leaving
-// THIS constant selecting only the original 3 fields
-// (freshness/deltas/reworkThemeAllocation) would leave every new field the SDL
-// and the resolver now support (summary/tiles/constraint/events/
-// healthState/signals/limitingFactor/dataConfidence,
-// freshness.latestSuccessfulSyncAt, freshness.sources)
-// UNREACHABLE through /query: operationForDocument matches by exact
-// document digest (see that function below), so any client selecting a
-// new field got a 404 digest-miss even though queryResolver.Home mapped
-// it correctly. So this selection set is exhaustive per type.
-//
-// Two lines are NOT a capture: `rateState` in deltas (the state of a rate
-// that is a ratio of stored counts) and `rateCoverage` after it (the coverage
-// of the pull request rework ratio). The web selects neither yet and sends
-// the V4 text below; the lines are here because a field no registered text
-// selects is unreachable. The web's real capture wins over this text if they
-// differ when the web selects the fields (testdata/wire_capture/README.md).
-const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+// registeredHomeV11Document is the Home text from before a delta carried the value its comparison window stored
+// (CHAOS-9817: `MetricDelta.priorValue`): the V10 text plus `changeFailureEvidence` (CHAOS-9630). It stays a legacy
+// text (see legacyDigestsByOperation) so every web build that does not select the field remains accepted. Remove it
+// with the cleanup ticket once no client sends it (testdata/wire_capture/home_v11_captured.graphql).
+const registeredHomeV11Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
   home(orgId: $orgId, filters: $filters, window: $window) {
     freshness {
       lastIngestedAt
@@ -1542,6 +1561,610 @@ const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInpu
       }
       coverage
       repoFilterApplied
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    filterEmptyReason
+    __typename
+  }
+}`
+
+// registeredHomeV12Document is the Home text from before a Home signal carried its driver caption
+// (CHAOS-8573: `HomeSignal.driver`): the V11 text plus `priorValue` in deltas (CHAOS-9817). It stays a legacy text
+// (see legacyDigestsByOperation) so every web build that does not select the field remains accepted. Remove it
+// with the cleanup ticket once no client sends it.
+const registeredHomeV12Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      priorValue
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      repoFilterApplied
+      repoLinkState
+      repoLinkBasis {
+        native
+        explicitText
+        heuristic
+        __typename
+      }
+      repoLinkMultiRepoItems
+      repoLinkCoverage {
+        linkedItems
+        itemsInWindow
+        __typename
+      }
+      changeFailureEvidence {
+        basis
+        deployments
+        deploymentsWithStatus
+        coverage
+        unknownReason
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      repoFilterApplied
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    filterEmptyReason
+    __typename
+  }
+}`
+
+// registeredHomeV13Document is the Home text from before the investment tile said what its share is a share of
+// (CHAOS-9624: `ReworkThemeAllocation.measure`, `denominator`, `sizingCoverage`, `unsizedUnitCount`, `workUnitCount`): the
+// current text less those five selections. It stays a legacy text (see legacyDigestsByOperation) so every web build that
+// does not select them remains accepted. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/home_v13_captured.graphql).
+const registeredHomeV13Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      priorValue
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      repoFilterApplied
+      repoLinkState
+      repoLinkBasis {
+        native
+        explicitText
+        heuristic
+        __typename
+      }
+      repoLinkMultiRepoItems
+      repoLinkCoverage {
+        linkedItems
+        itemsInWindow
+        __typename
+      }
+      changeFailureEvidence {
+        basis
+        deployments
+        deploymentsWithStatus
+        coverage
+        unknownReason
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      repoFilterApplied
+      driver
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    filterEmptyReason
+    __typename
+  }
+}`
+
+// registeredHomeDocument is the registered document for the home
+// operation: the wire form of the web app's HOME_QUERY (variables orgId,
+// filters, window), kept byte-identical in
+// testdata/wire_capture/home_captured.graphql (see that directory's
+// README for how the wire form is produced from the web repo's own
+// pinned urql). Its selection set covers the schema's own
+// type declarations (contracts/graphql/v1/schema.graphql: HomeResult,
+// Freshness, HomeFreshnessSource, Coverage, MetricDelta, SparkPoint,
+// ReworkThemeAllocation, SummarySentence, HomeTileEntry, HomeTile,
+// ConstraintCard, ConstraintEvidence, EventItem, HealthState, HomeSignal,
+// ScopeEntityRef, SignalAttribution, SignalAttributionSourceCount,
+// SignalAttributionConfidenceCount, HomeLimitingFactor, HomeDataConfidence,
+// HomeScopeDataConfidence -- every field each type declares, not a hand-picked
+// subset), formatted to match
+// this file's other entries' urql-print convention (multi-line,
+// `__typename` on every object selection). The digest of the captured
+// wire fixture must equal this constant's
+// (query_route_wire_capture_test.go's
+// TestRegisteredHomeDocument_MatchesCapturedWireFixture); the web repo's
+// graphql-wire-parity check runs the current HOME_QUERY against the
+// digest registered here. query_route_integration_test.go's
+// TestHomeRoute_ReachableOnlyWhenSwitchEnabled proves an in-process
+// request built from THIS EXACT constant reaches queryResolver.Home
+// (routing/auth gating only -- it does not assert response content),
+// and registered_home_document_schema_parity_test.go's
+// TestRegisteredHomeDocumentSelectsEveryHomeResultField is the content
+// side: it fails the moment this constant's selection set falls behind
+// what contracts/graphql/v1/schema.graphql's HomeResult (recursively)
+// declares -- the defect class where the schema grows but the registered
+// document does not (see the comment below).
+//
+// Why the selection must track the schema: growing HomeResult's SDL and
+// homeResultFromResponse's mapping to the full home payload while leaving
+// THIS constant selecting only the original 3 fields
+// (freshness/deltas/reworkThemeAllocation) would leave every new field the SDL
+// and the resolver now support (summary/tiles/constraint/events/
+// healthState/signals/limitingFactor/dataConfidence,
+// freshness.latestSuccessfulSyncAt, freshness.sources)
+// UNREACHABLE through /query: operationForDocument matches by exact
+// document digest (see that function below), so any client selecting a
+// new field got a 404 digest-miss even though queryResolver.Home mapped
+// it correctly. So this selection set is exhaustive per type.
+//
+// The line `priorValue` in deltas (CHAOS-9817, the value the comparison window stored), right after
+// `hasPriorData`, is NOT a capture either; the web change that selects it puts it at that place.
+// The line `driver` in signals (CHAOS-8573, the driver caption), right after `repoFilterApplied`, is NOT a capture
+// either; the web change that selects it puts it at that place.
+// Two other lines are NOT a capture: `rateState` in deltas (the state of a rate
+// that is a ratio of stored counts) and `rateCoverage` after it (the coverage
+// of the pull request rework ratio). The web selects neither yet and sends
+// the V4 text below; the lines are here because a field no registered text
+// selects is unreachable. The web's real capture wins over this text if they
+// differ when the web selects the fields (testdata/wire_capture/README.md).
+//
+// The lines `measure`, `denominator`, `sizingCoverage`, `unsizedUnitCount` and `workUnitCount` in rework theme allocations
+// (CHAOS-9624, what the investment tile's share is a share of), after `churnLoc`, are NOT a capture either; the web change
+// that selects them puts them at that place.
+const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      priorValue
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      repoFilterApplied
+      repoLinkState
+      repoLinkBasis {
+        native
+        explicitText
+        heuristic
+        __typename
+      }
+      repoLinkMultiRepoItems
+      repoLinkCoverage {
+        linkedItems
+        itemsInWindow
+        __typename
+      }
+      changeFailureEvidence {
+        basis
+        deployments
+        deploymentsWithStatus
+        coverage
+        unknownReason
+        __typename
+      }
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      measure
+      denominator
+      sizingCoverage
+      unsizedUnitCount
+      workUnitCount
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      repoFilterApplied
+      driver
       attribution {
         items
         sources {
@@ -2537,6 +3160,47 @@ const registeredInvestmentEvidenceQualityDocument = `query InvestmentEvidenceQua
   }
 }`
 
+// registeredInvestmentFullV1Document is the InvestmentFull text the web sent before CHAOS-9808: coverage without
+// sizingCoverage and unsizedUnitCount. Kept registered (legacyDigestsByOperation) so a web build of either side of the
+// rollout routes.
+const registeredInvestmentFullV1Document = `query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    sankey {
+      nodes {
+        id
+        label
+        dimension
+        value
+        __typename
+      }
+      edges {
+        source
+        target
+        value
+        __typename
+      }
+      coverage {
+        teamCoverage
+        repoCoverage
+        __typename
+      }
+      unit
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredInvestmentFullDocument is CHAOS-4538's registered document
 // for the combined investment breakdowns+sankey `analytics` query --
 // same contract as registeredInvestmentBreakdownDocument above. Copied
@@ -2583,6 +3247,8 @@ const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, 
       coverage {
         teamCoverage
         repoCoverage
+        sizingCoverage
+        unsizedUnitCount
         __typename
       }
       unit
@@ -5201,9 +5867,6 @@ type queryRouteHandlers struct {
 	// gqlgen server, ClickHouse client and routing rows. Mounted only on
 	// Plane.MCPHandler, which only the MCP listener serves.
 	MCP http.Handler
-	// MCPProof is the proof variant of MCP (CHAOS-7214): POST /query/proof-mcp,
-	// mounted only by mountProofMCPRoute and only on Plane.InternalHandler.
-	MCPProof http.Handler
 	// Probes are /query's live dependency checks, one per dependency class, in the
 	// order readinessCheck runs them. dho query-api registers each as its own
 	// required readiness check, so the operator /readyz names the failing class
@@ -5299,8 +5962,6 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: build the MCP caller-class ClickHouse client: %w", err)
 	}
 	mcpHandler := newMCPHandler(mcpClient, pgPool, classSwitch, getenv)
-	// CHAOS-7214: the proof variant over a switch that also admits shadow rows.
-	mcpProofHandler := newMCPProofHandler(mcpHandler, routeswitch.NewClassDecisionProofSwitch(pgPool, mcpRoutingDigests()), verifier, newProofOrgAllowed(pgPool))
 	handlers := queryRouteHandlers{
 		Query:      handler,
 		Proof:      proofHandler,
@@ -5308,7 +5969,6 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		Registry:   registryHandler,
 		BuildInfo:  newBuildInfoHandler(verifier),
 		MCP:        mcpHandler,
-		MCPProof:   mcpProofHandler,
 		Probes:     readinessProbes(chClient, pgPool, verifier, posture),
 	}
 	// The one registry pool, for Build's edge users check (CHAOS-6290). Set outside the
@@ -5866,14 +6526,7 @@ func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depth
 	// it is a size bound, not a redaction guarantee -- this log line was
 	// already carrying backend-authored diagnostic text before this
 	// change and still does, just with a hard ceiling on how much.
-	gqlHandler.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
-		chain := []string{err.Error()}
-		for unwrapped := errors.Unwrap(err); unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
-			chain = append(chain, unwrapped.Error())
-		}
-		log.Printf("query-api: resolver error unwrap chain: %s", truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
-		return withMutationLocation(ctx, graphql.DefaultErrorPresenter(ctx, err))
-	})
+	gqlHandler.SetErrorPresenter(safeGraphQLErrorPresenter("query", nil))
 	return gqlHandler
 }
 
@@ -5926,6 +6579,9 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 // run" must never read as "the check passed."
 func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool, gates ...documentGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !isGraphQLEdge(r.Context()) {
+			r = bindRequestID(w, r)
+		}
 		// /graphql (graphql_edge_route.go) runs this same pipeline. Its
 		// differences are keyed on a context value only that route sets:
 		// GET is a request for a registered query, the identity is checked
@@ -5944,6 +6600,24 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// Identity first: /query authenticates before it reads or parses any
+		// part of the body, so an anonymous caller gets 401 for every body and
+		// learns nothing about body validity (CHAOS-10149). /graphql does the
+		// same, below, through its own carrier check.
+		var claims authctx.Claims
+		if !edge {
+			// Authenticate BEFORE the document lookup too, so every carrier
+			// outcome (ambiguous, none, malformed, invalid, accepted) is decided
+			// before the unregistered-document 404 can answer (CHAOS-6757 r1).
+			// Python parity: the edge's GraphQLRouter resolves get_context (401
+			// "Authentication required") before it picks an operation.
+			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
+			if !ok {
+				return
+			}
+			claims = authenticated
+		}
+
 		var bodyBytes []byte
 		if !viaGET {
 			// Same body-size contract the Python edge's
@@ -5971,10 +6645,8 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			bodyBytes = read
 		}
 
-		// /graphql checks the identity before it parses the body (the Python
-		// app resolved its GraphQL context first); /query keeps its order,
-		// below.
-		var claims authctx.Claims
+		// /graphql checks the identity after its own body-size read (its limit
+		// ran earlier, in graphQLEdgeLimits) and before it parses the body.
 		if edge {
 			authenticated, ok := authenticateGraphQLEdge(w, r)
 			if !ok {
@@ -6018,23 +6690,6 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 				return
 			}
 			query = parsed.Query
-
-			// Authenticate BEFORE the document lookup, so every carrier outcome
-			// (ambiguous, none, malformed, invalid, accepted) is decided before the
-			// unregistered-document 404 can answer (CHAOS-6757 r1: an ambiguous or
-			// unauthenticated request for an unregistered document got 404).
-			// Python parity: the edge's GraphQLRouter resolves get_context (401
-			// "Authentication required") before it picks an operation. The body
-			// refusals above stay where they were: the size 413 and the 4300-digit
-			// 500 are documented above as Python-edge behaviour that precedes this
-			// route; the malformed-JSON 400 keeps its old position and is NOT
-			// verified against Python's order. (/graphql authenticated earlier,
-			// before any parse.)
-			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
-			if !ok {
-				return
-			}
-			claims = authenticated
 		}
 
 		operation, ok := operationForDocument(query, operationByDigest)
@@ -6157,10 +6812,11 @@ var legacyDigestsByOperation = map[string][]string{
 	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
-	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document), digestHex(registeredHomeV10Document), digestHex(registeredHomeV11Document), digestHex(registeredHomeV12Document), digestHex(registeredHomeV13Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
-	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document)},
+	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document), digestHex(registeredOperatingReviewV4Document), digestHex(registeredOperatingReviewV5Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
+	"investmentFull":        {digestHex(registeredInvestmentFullV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

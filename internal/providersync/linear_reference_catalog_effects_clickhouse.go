@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
 )
 
 // LinearReferenceCatalogClickHouseEffects is the concrete bridge from the
@@ -25,7 +26,10 @@ type LinearReferenceCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+// linearReferenceTeamsColumns is the teams columns this writer states;
+// teamprovider.Insert adds the provider identity in the same statement.
+var linearReferenceTeamsColumns = []string{"id", "team_uuid", "name", "description", "manual_members", "project_keys", "repo_patterns", "is_active", "updated_at", "org_id", "provider", "native_team_key", "parent_team_id", "created_at"}
+
 const linearReferenceMembersInsert = `INSERT INTO members (org_id, member_id, name, email, provider_identities, is_active, updated_at)`
 const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 
@@ -306,25 +310,33 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	batch, err := sink.Conn.PrepareBatch(ctx, linearReferenceTeamsInsert)
+	// Read for the tally only: the written identity is read inside the insert.
+	stored, err := teamprovider.Carry(ctx, sink.Conn, rows[0].OrgID, teamIDs)
 	if err != nil {
 		return err
 	}
-	defer batch.Abort()
+	writes := make([]teamprovider.Write, 0, len(rows))
+	var tally teamprovider.Tally
 	for _, row := range rows {
 		teamUUID, err := uuid.Parse(row.TeamUUID)
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
 		manualMembers := existingManualMembers[row.ID]
-		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt)); err != nil {
-			return err
-		}
+		tally.Add(stored, row.ID, row.ProviderTeamID)
+		writes = append(writes, teamprovider.Write{
+			Values:         []any{row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt)},
+			ProviderTeamID: row.ProviderTeamID, ProviderName: row.ProviderName, Gone: teamprovider.GoneCleared,
+		})
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
 		return err
 	}
-	return batch.Send()
+	if err := teamprovider.Insert(ctx, sink.Conn, rows[0].OrgID, linearReferenceTeamsColumns, writes); err != nil {
+		return err
+	}
+	logTeamProviderIdentity(ctx, tally, "linear", rows[0].OrgID)
+	return nil
 }
 
 func (sink LinearReferenceCatalogClickHouseEffects) writeMembers(ctx context.Context, rows []linearReferenceMemberRow) error {
@@ -484,7 +496,17 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectSprints(ctx context.C
 		if found == 0 {
 			return EffectAbsent, nil
 		}
-		if found != 1 || !equalLinearReferenceSprint(row, actual) {
+		if found != 1 {
+			return EffectConflict, nil
+		}
+		// The Linear work-items unit writes the same linear:cycle:<id> key, so a
+		// newer row is that unit's later write.
+		if actual.LastSynced.After(row.LastSynced) {
+			sameContent := row
+			sameContent.LastSynced = actual.LastSynced
+			return sprintNewerRowVerdict(ctx, row, equalLinearReferenceSprint(sameContent, actual), true), nil
+		}
+		if !equalLinearReferenceSprint(row, actual) {
 			return EffectConflict, nil
 		}
 		return EffectExact, nil

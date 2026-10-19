@@ -26,7 +26,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"log"
 	"net/url"
-	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
@@ -161,22 +160,19 @@ func ResolveModelNameForOrg(
 				if orgModel != "" {
 					return orgModel, true
 				}
-				if def, ok := defaultModelByProvider[kind]; ok {
+				// The organization's own provider: the platform purpose
+				// model is not tied to it, so it does not apply here.
+				if def, ok := platformDefaultModel(kind); ok {
 					return def, true
 				}
 				return "", false
 			}
 		}
 	}
-	for _, envName := range modelEnvByProvider[kind] {
-		if value := os.Getenv(envName); value != "" {
-			return value, true
-		}
-	}
-	if value := os.Getenv("LLM_MODEL"); value != "" {
+	if value := platformExplainModel(); value != "" {
 		return value, true
 	}
-	if def, ok := defaultModelByProvider[kind]; ok {
+	if def, ok := platformDefaultModel(kind); ok {
 		return def, true
 	}
 	return "", false
@@ -213,9 +209,9 @@ func ResolveModelNameForOrg(
 // not the FULLY RESOLVED model -- so when an org had BYO credentials but
 // NO stored model, this function's own orgSettings.Model call returned ""
 // too, and construction fell through to categorize's OWN per-provider
-// default (e.g. openaiprovider.go's "gpt-5-nano") instead of
-// ResolveModelNameForOrg's already-computed default (e.g.
-// defaultModelByProvider[openai] == "gpt-5-mini") -- two DIFFERENT
+// default (e.g. the since-deleted ops OpenAI client's "gpt-5-nano") instead of
+// ResolveModelNameForOrg's already-computed default (llmbudget.DefaultModel)
+// -- two DIFFERENT
 // hardcoded defaults disagreeing on which model a BYO request with no
 // explicit/stored model actually gets. Passing the ALREADY-RESOLVED value
 // straight through eliminates the second, independent derivation

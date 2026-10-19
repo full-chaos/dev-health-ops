@@ -174,6 +174,7 @@ func TestCatalogMatchesTheFrozenGolden(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveCatalog: %v", err)
 			}
+			got.Measures = withoutMeasuresAfterTheRecording(t, got.Measures)
 
 			if len(client.statements) != len(tc.PyQueries) {
 				t.Fatalf("%d queries, want %d", len(client.statements), len(tc.PyQueries))
@@ -253,6 +254,32 @@ func TestCatalogMatchesTheFrozenGolden(t *testing.T) {
 			}
 		})
 	}
+}
+
+// catalogMeasuresAfterTheRecording names each measure the Go catalog lists that the reference resolver did not
+// have when the golden was recorded: measure -> why it was added. The golden is a recording and is not edited; a
+// named measure is taken out of the result before the comparison, and must be present.
+var catalogMeasuresAfterTheRecording = map[string]string{
+	"issue_size": "CHAOS-9619: Investment measured by work-unit issue size (D5999)",
+}
+
+func withoutMeasuresAfterTheRecording(t *testing.T, measures []model.CatalogMeasure) []model.CatalogMeasure {
+	t.Helper()
+	seen := map[string]bool{}
+	kept := make([]model.CatalogMeasure, 0, len(measures))
+	for _, measure := range measures {
+		if _, named := catalogMeasuresAfterTheRecording[measure.Name]; named {
+			seen[measure.Name] = true
+			continue
+		}
+		kept = append(kept, measure)
+	}
+	for name := range catalogMeasuresAfterTheRecording {
+		if !seen[name] {
+			t.Errorf("catalogMeasuresAfterTheRecording names %q, but the catalog does not list it: remove the entry", name)
+		}
+	}
+	return kept
 }
 
 func jsonNumberText(f float64) string {

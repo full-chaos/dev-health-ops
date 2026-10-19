@@ -36,6 +36,7 @@
     "growth": 3.0
   },
   "unit": null,
-  "measure": "COUNT",
-  "denominator": 23.0
+  "measure": "ISSUE_SIZE",
+  "denominator": 23.0,
+  "unsized_unit_count": 0
 }

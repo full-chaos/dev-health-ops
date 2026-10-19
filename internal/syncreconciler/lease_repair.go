@@ -26,10 +26,9 @@ const (
 
 type leaseRepairBeginFunc func(context.Context) (pgx.Tx, error)
 
-// LeaseRepairResult contains only committed state transitions. It does not
-// materialize a dispatch wakeup: that remains the responsibility of the
-// existing materializer, so future wiring can choose an explicit transaction
-// boundary for wakeup delivery.
+// LeaseRepairResult contains only committed state transitions. The wakeups a
+// repair arms (finalize_sync_run in its transaction, dispatch_sync_run after
+// its commit) are not part of it.
 type LeaseRepairResult struct {
 	Selected int
 	Retried  int
@@ -63,6 +62,12 @@ func (config LeaseRepairConfig) valid() bool {
 type LeaseRepair struct {
 	begin  leaseRepairBeginFunc
 	config LeaseRepairConfig
+	// wake arms each repaired unit's run for its next dispatch pass after the
+	// repair commits (CHAOS-10013): the expired lease held a concurrency slot,
+	// and nothing else tells dispatch it is free before the redispatch
+	// countdown. The production constructor always sets it; only the
+	// begin-func constructor the unit tests use leaves it nil.
+	wake syncrunrollup.Execer
 }
 
 func NewLeaseRepair(pool *pgxpool.Pool) (*LeaseRepair, error) {
@@ -73,7 +78,12 @@ func NewLeaseRepairWithConfig(pool *pgxpool.Pool, config LeaseRepairConfig) (*Le
 	if pool == nil {
 		return nil, ErrInvalidConfiguration
 	}
-	return newLeaseRepairWithConfig(pool.Begin, config)
+	repair, err := newLeaseRepairWithConfig(pool.Begin, config)
+	if err != nil {
+		return nil, err
+	}
+	repair.wake = pool
+	return repair, nil
 }
 
 func newLeaseRepair(begin leaseRepairBeginFunc) (*LeaseRepair, error) {
@@ -87,9 +97,11 @@ func newLeaseRepairWithConfig(begin leaseRepairBeginFunc, config LeaseRepairConf
 	return &LeaseRepair{begin: begin, config: config}, nil
 }
 
-// Step repairs one deterministic window of expired RUNNING sync units. It
-// never creates transport/outbox rows. A future command owner must arrange
-// any wakeup materialization separately after this committed state change.
+// Step repairs one deterministic window of expired RUNNING sync units. In its
+// transaction it re-arms finalize_sync_run for each failed unit's run
+// (syncrunrollup.ArmFinalize); after the commit it wakes dispatch_sync_run for
+// each repaired unit's run whose units still wait for a slot (CHAOS-10013,
+// wakeDispatchAfterCommit).
 func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (LeaseRepairResult, error) {
 	if repair == nil || repair.begin == nil || ctx == nil || now.IsZero() ||
 		limit < leaseRepairMinimumLimit || limit > leaseRepairMaximumLimit {
@@ -165,6 +177,7 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 		return candidates[left].syncRunID < candidates[right].syncRunID
 	})
 	result := LeaseRepairResult{Selected: len(candidates)}
+	wakeRuns := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
 		decision := decideExpiredLeaseRepair(candidate, repair.config)
 		var affected int64
@@ -214,10 +227,14 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 		if affected < 0 || affected > 1 {
 			return LeaseRepairResult{}, ErrUnavailable
 		}
+		if affected == 1 {
+			wakeRuns = appendWakeRun(wakeRuns, candidate.syncRunID)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return LeaseRepairResult{}, ErrUnavailable
 	}
+	wakeDispatchAfterCommit(ctx, repair.wake, wakeRuns, now, syncrunrollup.DispatchWakePathLeaseRepair)
 	return result, nil
 }
 

@@ -23,8 +23,25 @@ func (c *recordingCH) Query(_ context.Context, statement string, _ []clickhouse.
 	c.mu.Lock()
 	c.sqls = append(c.sqls, statement)
 	c.mu.Unlock()
+	// An aggregate read without GROUP BY answers one row even over no unit (the home tile's sizing coverage).
+	if strings.Contains(statement, "AS sized_units") {
+		return &oneZeroRow{}, nil
+	}
 	return noRows{}, nil
 }
+
+type oneZeroRow struct{ done bool }
+
+func (r *oneZeroRow) Next() bool {
+	if r.done {
+		return false
+	}
+	r.done = true
+	return true
+}
+func (*oneZeroRow) Scan(...any) error { return nil }
+func (*oneZeroRow) Err() error        { return nil }
+func (*oneZeroRow) Close() error      { return nil }
 
 type noRows struct{}
 

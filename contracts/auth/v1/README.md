@@ -6,7 +6,11 @@ Plane's wire format (TRD §21). The JSON Schemas, the OpenAPI document that
 TypeScript types are implementations of them, never the other way round.
 
 Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
-(CHAOS-4884), `error.v1` (CHAOS-4929). The remaining five are CHAOS-4930–4934.
+(CHAOS-4884), `error.v1` (CHAOS-4929), `jwks.v1` and `discovery.v1`
+(CHAOS-4930), `provisioning-event.v1` and `audit-event.v1` (CHAOS-4933),
+`endpoint-auth-profile.v1` (CHAOS-4931), `authorization_request.v1`,
+`authorization_decision.v1` and the two batch forms (CHAOS-4932). The remaining
+is CHAOS-4934.
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists
@@ -47,33 +51,33 @@ Every integer field needs an explicit client-side check, and the fixtures for it
 belong in `reject_by_client`, not `reject`: the schema genuinely accepts these
 documents, and filing them as `reject` would assert a check that does not exist.
 
-`principal.v1` also carries a `2**53` bound for revision fields, where the
-concern is exact float representability rather than type.
+**The guard decides on the raw number TOKEN, never on a parsed value.** A token
+containing `.`, `e` or `E` is refused even when its value is integral (`1.0`,
+`1e0`): a float64 reader has already rounded `9007199254740990.1` and
+`1.0000000000000000001` to integers, so no value-based or magnitude-based check
+can tell them from the integers they round to. Integer tokens are exact and are
+the only accepted form (CHAOS-4940 withdrew the earlier normalisation of
+integral decimals such as `1.0`). Python's `json` returns a `float` for exactly
+the decimal-form tokens, so a `float` at the guard is a decimal-form token; Go's
+custom unmarshalers hold the token text.
 
-**There is no shared guard yet, and an earlier version of this file told you to
-reuse one.** That instruction was unactionable and worse than silence: a remedy
-that does not exist looks like the problem is solved, so the next author
-searches, finds nothing, re-derives, and does not know they re-derived. That is
-not hypothetical — it is what produced `error.v1`'s integral-decimal P1, in a
-surface written by the author of the note telling them to reuse it.
+**Reuse these; do not re-derive them** (CHAOS-4940 extracted them, after the
+class bit `error.v1` once because no shared guard existed):
 
-What actually exists today, to copy from:
-
-| | where | covers |
+| concern | Go | Python |
 | --- | --- | --- |
-| Go | `principal.go` — a function-local `const` inside `Revision.UnmarshalJSON` | 2^53 only, and not callable from outside that method |
-| Python | `error_envelope.py` `_require_wire_int` | zero-fraction decimals, and `bool` before `int` (order matters — `bool` subclasses `int`) |
-| Python | `principal.py` `_parse_revision` | a separate copy, plus the 2^53 bound |
+| wire-integer TYPE: is this an integer token, not `403.0` or `1e0`? | an ordinary field: decode into an integer-typed field (`encoding/json` refuses `403.0`, pinned by `TestDecodingIntoAnIntegerFieldRefusesAZeroFractionDecimal`); a custom unmarshaler: `contracts.RefuseDecimalForm(token)` | `authclient.contracts.require_wire_int`, or `refuse_decimal_form` for a field with its own range rule |
+| a boolean where a number is required | the decoder refuses it | `authclient.contracts.refuse_bool` (before any `int` check: `bool` subclasses `int`) |
 
-`contracts.py`, the shared module every surface already imports, contains
-neither. **CHAOS-4940 tracks extracting one guard per language**; until it
-lands, copy from the table above and expect to delete your copy afterwards.
+`error.v1`'s `status` and `retry_after_seconds` and `principal.v1`'s revisions
+use the same rule; revisions add the int64 range. Fixtures for these rules
+belong in `reject_by_client`.
 
 ### Constraints live in the cross-language dialect intersection
 
-Five divergences are known. **They are enforced by three different mechanisms,
+Six divergences are known. **They are enforced by four different mechanisms,
 and one of them is not enforced at all** — an earlier version of this table
-attributed all five to one Go test, which was false for two of them.
+attributed all of them to one Go test, which was false for two.
 
 | divergence | consequence | actually enforced by |
 | --- | --- | --- |
@@ -81,14 +85,16 @@ attributed all five to one Go test, which was false for two of them.
 | `\d` `\w` `\s` `\b` are Unicode in Python `re`, ASCII in RE2 and ECMA-262 | no shorthand classes | same test |
 | `(?i)` is valid in RE2 and Python, a SyntaxError in ECMA-262 | no inline flag groups | same test |
 | a trailing `$` matches before a final newline in Python only | the Python client rewrites it to `\Z`, failing closed on shapes it cannot rewrite | **the client, not a schema guard** — `authclient/contracts.py` `strictly_anchored` |
-| ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema | **review only — there is no ajv runner in this repository** |
+| ajv strict mode refuses `required` in a subschema that does not define the property | an ajv lint, not a spec rule; declare the property in the subschema | **the ajv runner** — `ci/auth-contracts-ajv/run.mjs` (strict mode; `--self-test` proves it is on), run by the `Auth Contracts ajv` workflow |
+| `maxLength` counts CODE POINTS; Go's `len()` counts BYTES | to mirror a Go byte bound, restrict the alphabet to one-byte characters so the two counts coincide | the `jwks.v1` corpus — `invalid-kid-non-ascii.json` plus `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` |
 
-That last row is a real gap, not a formality. **No committed code or CI job runs
-ajv against these contracts**, so the ECMA-262 leg of every "three languages
-agree" claim rests on a runner the author supplied locally. A schema edit that
-breaks ECMA compatibility passes everything in this repo. Treat the ECMA column
-of any proof table as unreproducible until that changes. **CHAOS-4941 tracks
-committing a runner and wiring it into CI.**
+The ECMA-262 leg is committed: `ci/auth-contracts-ajv/run.mjs` validates every
+`examples/*/manifest.json` corpus with ajv 2020-12 in **strict mode** (ajv is
+pinned by `package-lock.json`, because `strictRequired` is a lint and can move
+between releases) and runs in CI on any change under `contracts/auth/v1/**`.
+It reads the same manifests as the Go and Python runners and enumerates nothing
+itself. Exit codes: 1 = a fixture disagrees, 2 = a schema failed to compile.
+Run it locally: `cd ci/auth-contracts-ajv && npm ci && node run.mjs`.
 
 **Redundant keywords are not free.** A `maxLength` beside a pattern that already
 bounds the same range makes Go report `maxLength` (first violation only) and
@@ -155,10 +161,199 @@ Go has no such limit — `time.Time` represents both instants happily — and
 mirrors the check anyway, because a wire contract's job is that the two clients
 agree about which documents are acceptable.
 
+That makes a **third category of constraint**, beside the two already
+documented. Name it at each site that meets it:
+
+| category | example | why it exists |
+| -- | -- | -- |
+| the language needs it | Python's `_require_wire_int` refusing `403.0` | Go's decoder would reject the same document |
+| the contract needs it | `additionalProperties: false` | the wire format forbids the field |
+| **only agreement needs it** | Go's UTC range check | neither language requires the bound; the two clients must not disagree |
+
+A reader who asks only whether Go needs the check will call it dead code, which
+is why the comment at each such site says the reason is the *other* client. Any
+constraint where the runtimes differ in representable range, precision or
+tolerance produces one. `principal.v1` carries the same rule (Go
+`principalInstantInRange`, Python `_require_utc_instant_in_range`) with no
+clock-skew check to order it against.
+
 **A regex cannot know February has 28 days.** `2026-02-30` satisfies the
 pattern; both clients refuse it at parse. That is a genuine client-enforced
 rule and it has a `reject_by_client` fixture stating so — the alternative is a
 gap that reads as an oversight rather than as a boundary.
+
+For `principal.v1` the schema layer itself disagrees on that day, and the
+disagreement is declared rather than hidden: Go's `Validate` ACCEPTS
+`2026-02-30` and `2026-04-31` (google/jsonschema-go ignores `format`), while
+Python and ajv refuse them by `format`. Those fixtures live in the manifest's
+`go_schema_gap` group, which is neither `reject` (that asserts Go's `Validate`
+refuses) nor `reject_by_client` (that asserts every validator accepts). Every
+typed client refuses the document. `TestGoSchemaValidateAcceptsACalendarImpossibleDay`
+pins the Go acceptance, so a library that starts asserting `format` turns it red
+and the fixtures move to `reject`. Decided in CHAOS-10135: the typed client is
+the floor, as `ParseWireTimestamp` is on the event surfaces.
+
+### A contract with one real consumer is pinned in BOTH directions
+
+Most surfaces here are validated by two clients this repository owns. `jwks.v1`
+is not: dev-health-go's `authverify.Ed25519JWKSVerifier` **consumes** it, from
+another module, and nothing in this repository parses it. That changes what the
+corpus has to prove.
+
+A schema for a surface like this can fail in two opposite ways, and only one of
+them is habitually tested:
+
+* **looser than the consumer** — the schema certifies a document the only
+  reader refuses. This is the familiar direction, and the `accept` fixtures are
+  run through the real `Keys()` to close it.
+* **stricter than the consumer** — the schema refuses a document the reader
+  would have accepted. Nobody writes this test, because a rejection always
+  looks like the schema working. It is the more dangerous direction: the false
+  alarm eventually gets "fixed" by loosening whichever rule was load-bearing.
+  `TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` closes it — **but
+  only against the cases the corpus actually contains**; see "State a narrowing
+  as a FIXTURE" below for how that test stayed green while four narrowings went
+  undeclared.
+
+Where the schema is deliberately narrower than the consumer, give it a fixture
+in `narrower_than_consumer` — never a `reject` entry, which would force the
+second test above to be weakened, and never prose alone, which cannot fail.
+
+**Pin the producer when one exists.** No JWKS producer exists in this
+repository yet. When the Go auth-service publishes `/.well-known/jwks.json`, its
+real output must be validated by a test beside the Go runner, or the schema can
+describe an idealised document, pass its own corpus forever, and never touch
+what production writes.
+
+### Provisioning and audit events: the consumer is the deliverable (CHAOS-4933)
+
+`provisioning-event.v1` is one `auth_outbox_events` row as a consumer receives
+it; `audit-event.v1` is one `security_audit_events` row crossing a service
+boundary (TRD §9, §13).
+
+* **The envelope is the producer's row, derived not hand-picked.**
+  `provisioning-event.v1`'s members are exactly the `auth_outbox_events` columns
+  that cross a service boundary (`aggregate_type`, `aggregate_id`, `event_type`,
+  `idempotency_key`, `created_at`, `payload`); `audit-event.v1`'s are the
+  `security_audit_events` columns. `TestWireEnvelopesMatchTheirProducersColumnsInBothDirections`
+  parses the 0005 migration and fails if a column is neither a member nor
+  excluded with a reason, or a member has no column. Excluded: surrogate ids,
+  delivery bookkeeping (`available_at`, `published_at`, `attempts`,
+  `last_error`) and `client_ip`.
+* **The idempotency key is `(aggregate_type, aggregate_id, payload.revision)`,
+  and `revision` is per aggregate.** Nothing implies an ordering across
+  aggregates, so a consumer that sorts the whole stream is wrong. The
+  `idempotency_key` column (UNIQUE) must equal
+  `aggregate_type:aggregate_id:revision`; a pattern cannot compare two members,
+  so the clients enforce it (`reject_by_client`).
+* **Consumer rule, with golden vectors** (`consumer_vectors` in the
+  provisioning manifest, replayed by Go and Python): apply when the revision is
+  last+1 (1 for an aggregate never seen); ignore a revision at or below the last
+  applied one; a larger one is a gap, which is not applied and means resync.
+* **`payload.revision` is 1..2^53-1** and guarded on the raw token like every wire
+  integer (above): `1.0`, `1e0` and `9007199254740990.1` are `reject_by_client`;
+  2^53 and past are refused by the schema.
+* **`change` and audit `attributes` are allowlists.** A schema cannot assert
+  "no secrets", so the members that would carry one are unrepresentable: the
+  provisioning `change` object names, per aggregate type, exactly the members it
+  may carry (`propertyNames` in a per-aggregate conditional; a `user` event
+  carries none), and audit `attributes` is a closed object. Emails, provider
+  subjects, display names and client addresses have no member. An arbitrary key
+  fails, and a test fails if an aggregate type lacks its conditional branch.
+* **Each aggregate type pins its id prefix and event vocabulary**, so an
+  `organization` event with a `prn_` id disagrees in shape and fails. `idn_`,
+  `mbr_`, `pra_`, `grt_` and `rol_` are introduced here; `prn_` and `org_` are
+  `principal.v1`'s. A grant event carries `expires_at` (TRD §9; Q2 default keep).
+* **Scope, decided:** entitlement snapshots are a consumed projection, not a
+  provisioning event (ACP-ADR-07); ACR and External Push lifecycle are
+  metadata projections owned by the credential surface and are not in this
+  stream in v1 (ACP-ADR-08, ACP-ADR-09); mutation request bodies are caller
+  hints, never authority, and belong with each route when it is mounted.
+
+### JWKS and discovery: one issuer, one key use (CHAOS-4930)
+
+`jwks.v1` and `discovery.v1` are the two documents behind TRD §15's
+`/.well-known/jwks.json` and `/.well-known/openid-configuration`.
+
+* **Private members are absent from the schema, not prohibited.** `d p q dp dq
+  qi k` are not declared and `additionalProperties` is false; each has a reject
+  fixture and a test reads the schema to confirm none is declared.
+* **`alg=none`, symmetric `alg` and symmetric `kty` are reject fixtures.**
+* **Rotation is the normal case:** `valid-two-keys-during-rotation.json`. A
+  consumer that meets an unknown `kid` refreshes once, boundedly, then denies;
+  a schema cannot express that, so it is a consumer rule (TRD §12).
+* **A JWKS has no issuer member.** The binding is made by discovery: a verifier
+  reaches the JWKS only through the `jwks_uri` of a discovery document from the
+  issuer it has pinned for that credential class. ACR Web-assertion keys are
+  another issuer (TRD §12); keeping them apart is the pin, and token-class
+  confusion is settled by the token's own `typ`/`aud`/`iss`, not by discovery.
+  No custom discovery member is used.
+* **Two rules are client rules:** `jwks_uri == issuer + "/.well-known/jwks.json"`
+  and `issuer == the pinned issuer`. They need a cross-member and a
+  configuration comparison JSON Schema cannot make. `ParseDiscovery` (Go) and
+  `parse_discovery` (Python) take the trusted issuer as a required argument, and
+  the `reject_by_client` fixtures are valid against the schema on purpose.
+* **Discovery-endpoint errors use the shared `error.v1` envelope.** OpenAPI
+  `paths` stays empty until the service mounts routes (see the OpenAPI
+  description); the `Jwks` and `Discovery` components are the deliverable now.
+* **Known gaps, owned elsewhere:** duplicate members and trailing content in a
+  JWKS file are accepted by `authverify` (CHAOS-4951); the property-based sweep
+  of the `kid` and member-name narrowings is CHAOS-4958.
+
+### A wrong length: what is true, and what was overstated
+
+`ed25519.Verify` **panics** on a 31- or 33-byte public key rather than returning
+an error, and *both* languages' base64 decoders accept those lengths without
+complaint — the decode never checks. Those two facts are real and were executed.
+
+**The conclusion drawn from them was not.** An earlier version of this section
+said the length "has to be pinned in the schema or it is pinned nowhere". The
+consumer checks it itself: `Keys()` compares the decoded length against
+`ed25519.PublicKeySize` before returning a key, so the panic is unreachable
+through it. The schema pin is defence-in-depth and a statement of the wire form.
+
+Keeping the correction visible because of *how* it happened: the disproving
+line was in a function this lane had read and quoted in its own review context
+minutes earlier. Two verified facts were joined into a claim about a third
+thing, and the third thing was never executed. That is the house failure mode,
+committed inside the document that names it.
+
+`^[A-Za-z0-9_-]{43}$` is still the right pattern, for the reasons that survive:
+43 characters of the URL-safe alphabet always decode to exactly 32 bytes
+(verified across 200000 random such strings), the alphabet excludes `+` and `/`,
+and the fixed count excludes `=` padding. Python's `urlsafe_b64decode` accepts
+padding *and* the standard alphabet; Go's `RawURLEncoding` rejects both.
+
+### State a narrowing as a FIXTURE, never as a sentence
+
+The rule this surface paid for. Where a schema is deliberately stricter than the
+client it describes, that gap needs a fixture in a category of its own —
+`narrower_than_consumer` — with a test asserting **both** halves: the client
+accepts it, the schema refuses it.
+
+A prose list cannot be executed, and this one was wrong: it declared two
+narrowings and there were five. The missing ones were case-variant member names (Go's `encoding/json` matches
+field names **case-insensitively**, and `DisallowUnknownFields` compares *after*
+that match), `use: null` decoding to the zero string, and a `kid` carrying NUL or
+surrounding spaces — `unicode.IsSpace` does not consider NUL a space, so
+`TrimSpace` leaves it.
+
+**Round 2 then blocked it again for a FIFTH**, `use: ""`, which had a predicate
+in the harness and a sentence in the schema and no fixture. A predicate without a
+fixture is worse than prose: prose merely fails to test the narrowing, while a
+predicate actively *excuses* the disagreement, so the differential stays green
+over an asymmetry nothing asserts. The correspondence between predicates and
+fixtures is now asserted in both directions — remembering to add both is what
+failed twice.
+
+**And the test built to catch exactly this passed the whole time.**
+`TestRejectedJWKSFixturesAreAlsoRefusedByTheRealConsumer` runs every reject
+fixture through the real client for precisely this purpose. It was green,
+because not one of the twenty reject fixtures happened to exercise any of the
+four. A correct instrument fed a corpus that cannot trip it reports coverage it
+does not have — which is worse than no test, because it is cited as evidence.
+Adding the category is what converts each sentence into an assertion that fails
+when it stops being true.
 
 ### The manifest is the single inventory
 
@@ -201,8 +396,7 @@ shape instead. This is correct behaviour and has caught two authors.
 ## Proof obligation
 
 Every surface ships an executed cross-language run on one tip — Go, Python and
-ajv-2020 validating the same corpus, output pasted, not described (G-70) — with
-the standing caveat above that **the ajv leg is run from a local runner and is
-not reproducible from this repository** — and
-a mutation table showing the corpus can fail: delete each guard, confirm exactly
+ajv-2020 validating the same corpus, output pasted, not described (G-70) — the
+ajv leg is `ci/auth-contracts-ajv/run.mjs`, so the pasted run is reproducible —
+and a mutation table showing the corpus can fail: delete each guard, confirm exactly
 the predicted fixtures go red, restore.

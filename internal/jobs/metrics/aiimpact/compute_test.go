@@ -324,8 +324,18 @@ func loadFrozenAIImpactGolden(t *testing.T) []pythonRecord {
 // what a naive sum or the wrong division order produces -- fails the test
 // rather than hiding inside a tolerance.
 func TestAIImpactMatchesFrozenPythonGolden(t *testing.T) {
+	// One deliberate divergence from the frozen Python (chris, D6045 "by
+	// default everything is human unless it's AI"): a pull request with no AI
+	// signal is human, not unknown. So the unattributed PR 8 is pinned to the
+	// explicit "unknown" kind, keeping the unknown-bucket arithmetic under
+	// comparison.
 	want := loadFrozenAIImpactGolden(t)
-	got := Compute(fixtureParams())
+	params := fixtureParams()
+	params.Incidents = nil
+	params.Attributions = append(params.Attributions, AttributionRow{
+		RepoID: fixtureRepo, Number: 8, Kind: strPtr("unknown"), WorkType: strPtr("pull_request"),
+	})
+	got := Compute(params)
 
 	if len(got) != len(want) {
 		t.Fatalf("row count: go=%d frozen golden=%d", len(got), len(want))
@@ -345,6 +355,11 @@ func TestAIImpactMatchesFrozenPythonGolden(t *testing.T) {
 		if !found {
 			t.Fatalf("go produced a row the frozen golden did not: %s", key)
 		}
+		// The frozen Python counts a repository's incidents in every AI bucket
+		// row of every group. D6040 counts an incident once, on one team's one
+		// row (incidentteam_test.go), so the three incident columns are not
+		// compared here.
+		expected, converted = withoutIncidentColumns(expected), withoutIncidentColumns(converted)
 		wantJSON, _ := json.Marshal(expected)
 		gotJSON, _ := json.Marshal(converted)
 		if !bytes.Equal(wantJSON, gotJSON) {
@@ -644,6 +659,7 @@ func TestComputeIsOrderInvariantOverItsInput(t *testing.T) {
 // request without an attributed team counts whole in each owner's records.
 func TestComputeCountsAPullRequestWholeInEachOwnerWithoutShares(t *testing.T) {
 	params := fixtureParams()
+	params.Incidents = nil
 	params.Attributions = nil
 	params.TeamResolver = func(uuid.UUID, string) []string { return []string{"team-b", "team-a"} }
 	totals := map[string]float64{}
@@ -654,6 +670,7 @@ func TestComputeCountsAPullRequestWholeInEachOwnerWithoutShares(t *testing.T) {
 		totals[*record.TeamID] += record.PRsTotal
 	}
 	single := fixtureParams()
+	single.Incidents = nil
 	single.Attributions = nil
 	single.TeamResolver = func(uuid.UUID, string) []string { return []string{"team-a"} }
 	var want float64
@@ -671,6 +688,7 @@ func TestComputeCountsAPullRequestWholeInEachOwnerWithoutShares(t *testing.T) {
 // repository's own and never scaled by the share.
 func TestComputeTakesCountsAtTheOwnersShareAndRatiosFromTheRepository(t *testing.T) {
 	whole := fixtureParams()
+	whole.Incidents = nil
 	whole.Attributions = nil
 	whole.TeamResolver = func(uuid.UUID, string) []string { return []string{"main"} }
 	wholeByKey := map[string]Record{}
@@ -682,6 +700,7 @@ func TestComputeTakesCountsAtTheOwnersShareAndRatiosFromTheRepository(t *testing
 	}
 
 	shared := fixtureParams()
+	shared.Incidents = nil
 	shared.Attributions = nil
 	shared.TeamResolver = func(uuid.UUID, string) []string { return []string{"main", "lesser"} }
 	shares := map[string]float64{"main": 0.7, "lesser": 0.3}
@@ -727,4 +746,86 @@ func TestComputeTakesCountsAtTheOwnersShareAndRatiosFromTheRepository(t *testing
 func withTeam(record Record, team string) Record {
 	record.TeamID = &team
 	return record
+}
+
+func withoutIncidentColumns(row pythonRecord) pythonRecord {
+	row.IncidentsCount, row.IncidentDragRate, row.LeverageIncident = 0, nil, nil
+	return row
+}
+
+// The frozen Python golden cannot carry incidents (D6040 counts them once, on
+// one row). The same fixture with its incidents is held here instead: the two
+// incidents of the day sit on the repository's human bucket, work type
+// "incident", once; the one of another day is not counted.
+func TestFixtureIncidentsCountOnceOnTheirOwnRow(t *testing.T) {
+	var sum float64
+	var rows int
+	for _, record := range Compute(fixtureParams()) {
+		sum += record.IncidentsCount
+		if record.IncidentsCount == 0 {
+			continue
+		}
+		rows++
+		if record.WorkType != IncidentWorkType || record.AttributionBucket != BucketHuman || record.IncidentsCount != 2 {
+			t.Errorf("incident row %s/%s incidents_count %v, want 2 on human/%s", record.WorkType, record.AttributionBucket, record.IncidentsCount, IncidentWorkType)
+		}
+	}
+	if sum != 2 || rows != 1 {
+		t.Errorf("incidents_count adds up to %v over %d rows, want 2 over 1", sum, rows)
+	}
+}
+
+// TestClassifyBucketDefaultsToHumanAndRoutesBots pins chris's ruling D6045: no
+// AI signal means human, a [bot] author means bot, AI kinds win over the
+// author, and unknown is never a default.
+func TestClassifyBucketDefaultsToHumanAndRoutesBots(t *testing.T) {
+	for name, tc := range map[string]struct {
+		kind, author *string
+		want         AttributionBucket
+	}{
+		"no signal, no author":          {nil, nil, BucketHuman},
+		"no signal, empty kind":         {strPtr(""), strPtr("octocat"), BucketHuman},
+		"no signal, human author":       {nil, strPtr("octocat"), BucketHuman},
+		"bot author":                    {nil, strPtr("dependabot[bot]"), BucketBot},
+		"bot author, case and space":    {nil, strPtr("  Renovate[BOT] "), BucketBot},
+		"bot-like name without suffix":  {nil, strPtr("botmaster"), BucketHuman},
+		"ai kind beats bot author":      {strPtr("agent_created"), strPtr("copilot[bot]"), BucketAgentCreated},
+		"ai kind, human author":         {strPtr("ai_assisted"), strPtr("octocat"), BucketAIAssisted},
+		"stored human kind, bot author": {strPtr("human"), strPtr("dependabot[bot]"), BucketBot},
+		"stored human kind, human":      {strPtr("human"), strPtr("octocat"), BucketHuman},
+		"garbage kind stays unknown":    {strPtr("vibes"), strPtr("octocat"), BucketUnknown},
+	} {
+		if got := ClassifyBucket(tc.kind, tc.author); got != tc.want {
+			t.Errorf("%s: ClassifyBucket = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// TestComputeWritesHumanAndBotRowsForUnsignalledPRs asserts the written rows,
+// not the classifier: unattributed human PRs land on a human row with
+// prs_total > 0, a bot PR on a bot row, and no unknown row counts a PR (the
+// empty unknown row is still written, with prs_total 0).
+func TestComputeWritesHumanAndBotRowsForUnsignalledPRs(t *testing.T) {
+	params := fixtureParams()
+	params.Incidents = nil
+	params.Attributions = nil
+	bot := "dependabot[bot]"
+	for index := range params.PullRequests {
+		if params.PullRequests[index].Number == 1 {
+			params.PullRequests[index].AuthorName = &bot
+		}
+	}
+	totals := map[AttributionBucket]float64{}
+	for _, record := range Compute(params) {
+		totals[record.AttributionBucket] += record.PRsTotal
+		if record.AttributionBucket == BucketUnknown && record.PRsTotal != 0 {
+			t.Errorf("unknown row counts PRs: %+v", record)
+		}
+	}
+	if totals[BucketHuman] <= 0 {
+		t.Errorf("human prs_total = %v, want > 0", totals[BucketHuman])
+	}
+	if totals[BucketBot] != 1 {
+		t.Errorf("bot prs_total = %v, want 1", totals[BucketBot])
+	}
 }

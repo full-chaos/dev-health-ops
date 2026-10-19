@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
 )
 
@@ -81,7 +82,7 @@ func (service *Service) ProduceLinks(ctx context.Context, orgID string, window W
 	inputs, err := service.loader.Load(ctx, orgID, window)
 	if err != nil {
 		service.logger.Error("pr-commit links: load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return LinksOutcome{OrganizationID: orgID}, err
 	}
 	result := Derive(inputs)
@@ -97,7 +98,7 @@ func (service *Service) ProduceLinks(ctx context.Context, orgID string, window W
 	native, err := service.loader.LoadNativeLinkKeys(ctx, orgID, candidateRepos)
 	if err != nil {
 		service.logger.Error("pr-commit links: native link read failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return LinksOutcome{OrganizationID: orgID}, fmt.Errorf("read native pr-commit links: %w", err)
 	}
 	if len(native) > 0 {
@@ -122,7 +123,7 @@ func (service *Service) ProduceLinks(ctx context.Context, orgID string, window W
 		service.logger.Error("pr-commit links: write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("links_derived", len(result.Links)),
-			slog.Any("error", err))
+			workgraph.ErrorAttr(err))
 		return LinksOutcome{OrganizationID: orgID}, fmt.Errorf("write pr-commit links: %w", err)
 	}
 
@@ -154,7 +155,7 @@ func (service *Service) ProduceEdges(ctx context.Context, orgID string, window W
 	rows, err := service.loader.LoadFastPath(ctx, orgID, window)
 	if err != nil {
 		service.logger.Error("pr-commit edges: load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return EdgesOutcome{OrganizationID: orgID}, err
 	}
 
@@ -166,7 +167,7 @@ func (service *Service) ProduceEdges(ctx context.Context, orgID string, window W
 		service.logger.Error("pr-commit edges: write failed",
 			slog.String("organization_id", orgID),
 			slog.Int("rows_read", len(rows)),
-			slog.Any("error", err))
+			workgraph.ErrorAttr(err))
 		return EdgesOutcome{OrganizationID: orgID}, fmt.Errorf("write pr-commit edges: %w", err)
 	}
 

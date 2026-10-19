@@ -1240,3 +1240,30 @@ func TestMCPRefusesPersonSelectorsForeignOrgsAndOversizedSimulationsEverywhere(t
 		}
 	}
 }
+
+// A masked MCP resolver error carries a request id even when the caller sent none, the same id as
+// the response header; an acceptable caller id is kept.
+func TestMCPMaskedResolverErrorCarriesARequestID(t *testing.T) {
+	l := newMCPTestListeners(t, &countingMCPClient{err: errors.New("code: 60, store-host.internal secret")}, allMCPRootsEnabled(), mcpDefaultLimits())
+	for name, caller := range map[string]string{"no caller id": "", "caller id": "mcp-caller-1"} {
+		header := validMCPHeaders()
+		if caller != "" {
+			header.Set("X-Request-Id", caller)
+		}
+		rec := mcpDo(l.mcp, http.MethodPost, header, mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
+		var body struct {
+			Errors []struct {
+				Message    string         `json:"message"`
+				Extensions map[string]any `json:"extensions"`
+			} `json:"errors"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Errors) != 1 {
+			t.Fatalf("%s: %s", name, rec.Body.String())
+		}
+		id, _ := body.Errors[0].Extensions["request_id"].(string)
+		if strings.Contains(rec.Body.String(), "store-host") || body.Errors[0].Message != graphQLInternalMessage ||
+			id == "" || id != rec.Header().Get("X-Request-Id") || (caller != "" && id != caller) {
+			t.Fatalf("%s: message %q extensions %v header %q body %s", name, body.Errors[0].Message, body.Errors[0].Extensions, rec.Header().Get("X-Request-Id"), rec.Body.String())
+		}
+	}
+}

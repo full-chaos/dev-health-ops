@@ -139,9 +139,22 @@ def _inner_timeout_minutes(run_text: str) -> int:
     return int(match.group(1))
 
 
+_DRAFT_GATE_PREFIX = (
+    "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && "
+    "!contains(github.event.pull_request.labels.*.name, 'ci:full'))) && ("
+)
+
+
+def _without_draft_gate(value: str) -> str:
+    """Strip the CHAOS-9949 draft gate; test_self_hosted_runner_allowlist pins it."""
+    if value.startswith(_DRAFT_GATE_PREFIX) and value.endswith(")"):
+        return value[len(_DRAFT_GATE_PREFIX) : -1]
+    return value
+
+
 def test_reproducibility_bundle_is_gated_on_complementary_conditions() -> None:
-    hosted_if = str(_job(_REPRO_HOSTED).get("if", ""))
-    self_hosted_if = str(_job(_REPRO_SELF_HOSTED).get("if", ""))
+    hosted_if = _without_draft_gate(str(_job(_REPRO_HOSTED).get("if", "")))
+    self_hosted_if = _without_draft_gate(str(_job(_REPRO_SELF_HOSTED).get("if", "")))
     assert hosted_if == _HOSTED_CONDITION, (
         f"{WORKFLOW_PATH.name}: {_REPRO_HOSTED!r}'s `if:` ({hosted_if!r}) "
         f"does not match the expected hosted-fallback condition"
@@ -279,11 +292,18 @@ def test_storage_integration_shard_is_hosted_only() -> None:
     unconditionally (no SELF_HOSTED_RUNNERS gate) and no self-hosted twin
     exists anywhere in go.yml."""
     job = _job(_SHARD_HOSTED)
-    assert "if" not in job, (
-        f"{WORKFLOW_PATH.name}: {_SHARD_HOSTED!r} still carries an `if:` "
-        f"({job.get('if')!r}) -- the revert to hosted-only means this job "
-        "always runs, no SELF_HOSTED_RUNNERS gate"
+    # CHAOS-9947: the only `if:` allowed is the plan's own "run these legs"
+    # gate; it must never mention the self-hosted switch.
+    expected = (
+        "needs.go-storage-integration-plan.result == 'success' && "
+        "needs.go-storage-integration-plan.outputs.legs != '0'"
     )
+    assert job.get("if", expected) == expected, (
+        f"{WORKFLOW_PATH.name}: {_SHARD_HOSTED!r} carries an unexpected `if:` "
+        f"({job.get('if')!r}) -- the revert to hosted-only means no "
+        "SELF_HOSTED_RUNNERS gate, only the plan's legs gate"
+    )
+    assert "SELF_HOSTED_RUNNERS" not in str(job.get("if", ""))
     assert job.get("runs-on") == "ubuntu-latest", (
         f"{WORKFLOW_PATH.name}: {_SHARD_HOSTED!r} must run on "
         f"ubuntu-latest, got {job.get('runs-on')!r}"

@@ -51,13 +51,6 @@ func disableClassRequest(op string, apply bool) DisableRequest {
 	}
 }
 
-func repointClassRequest(dryRun bool, operations ...string) RepointRequest {
-	return RepointRequest{
-		SchemaDigest: testSchemaDigest, RunningBuild: verbsRunningBuild, Operations: operations,
-		RecordedBy: "lane-routing-verbs", ReviewEvidence: "CHAOS-8705 repoint", PrincipalID: testPrincipalID, DryRun: dryRun,
-	}
-}
-
 func TestDisableTurnsAClassDecisionOffWithoutTouchingItsBuild(t *testing.T) {
 	pool := startAuditedRegistryPostgres(t)
 	op := mcpclass.Operation("analytics")
@@ -131,59 +124,6 @@ func TestDisableGuardRefusesADecisionThatMovedAndWritesNothing(t *testing.T) {
 	}
 }
 
-func TestRepointMovesAClassDecisionsBuildAndKeepsItsMode(t *testing.T) {
-	pool := startAuditedRegistryPostgres(t)
-	shadow, canary := mcpclass.Operation("analytics"), mcpclass.Operation("hotspots")
-	seedClassDecisionRow(t, pool, shadow, "shadow", testCandidateBuild)
-	seedClassDecisionRow(t, pool, canary, "canary", testCandidateBuild)
-
-	outcomes, err := Repoint(context.Background(), pool, repointClassRequest(false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := Summarize(outcomes); got.Total != 2 || got.Changed != 2 {
-		t.Fatalf("summary = %+v, want both moved", got)
-	}
-	for op, mode := range map[string]string{shadow: "shadow", canary: "canary"} {
-		if got := classRowMode(t, pool, op); got != mode {
-			t.Fatalf("%s mode = %s, want %s: repoint must never touch reachability", op, got, mode)
-		}
-		if build := classBuild(t, pool, op); build != verbsRunningBuild {
-			t.Fatalf("%s build = %s, want the running build", op, build)
-		}
-	}
-	again, err := Repoint(context.Background(), pool, repointClassRequest(false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := Summarize(again); got.Changed != 0 || got.Unchanged != 2 {
-		t.Fatalf("a second repoint = %+v, want no change", got)
-	}
-	if audits := readAuditRows(t, context.Background(), pool); len(audits) != 2 {
-		t.Fatalf("%d audit rows, want only the two rows that moved", len(audits))
-	}
-}
-
-func TestRepointDryRunWritesNothingAndANamedRootWithNoDecisionIsRefused(t *testing.T) {
-	pool := startAuditedRegistryPostgres(t)
-	op := mcpclass.Operation("analytics")
-	seedClassDecisionRow(t, pool, op, "canary", testCandidateBuild)
-
-	if _, err := Repoint(context.Background(), pool, repointClassRequest(true)); err != nil {
-		t.Fatal(err)
-	}
-	if build := classBuild(t, pool, op); build != testCandidateBuild {
-		t.Fatalf("a dry run wrote: build = %s", build)
-	}
-	_, err := Repoint(context.Background(), pool, repointClassRequest(false, op, mcpclass.Operation("hotspots")))
-	if !errors.Is(err, ErrRepointUnknownOperation) {
-		t.Fatalf("err = %v, want ErrRepointUnknownOperation for a root with no decision", err)
-	}
-	if build := classBuild(t, pool, op); build != testCandidateBuild {
-		t.Fatalf("a refused repoint wrote: build = %s", build)
-	}
-}
-
 func TestSeedCreatesAShadowDecisionAndNeverChangesAnExistingOne(t *testing.T) {
 	pool := startAuditedRegistryPostgres(t)
 	fresh, live := mcpclass.Operation("analytics"), mcpclass.Operation("hotspots")
@@ -226,16 +166,14 @@ func TestEveryVerbRefusesACatalogOperationAndWritesNothing(t *testing.T) {
 		RolloutPercentage: EnforcedRolloutPercentage, RecordedBy: "lane-routing-verbs", ReviewEvidence: "CHAOS-8705", PrincipalID: testPrincipalID,
 	}
 	disable := disableClassRequest(document, true)
-	repoint := repointClassRequest(false, document)
 	seed := SeedRequest{
 		SchemaDigest: testSchemaDigest, RunningBuild: verbsRunningBuild, Operations: []string{document},
 		DocumentDigest: map[string]string{document: testDocumentDigest}, RecordedBy: "lane-routing-verbs", ReviewEvidence: "CHAOS-8705", PrincipalID: testPrincipalID,
 	}
 	_, enableErr := Enable(ctx, pool, enable)
 	_, disableErr := Disable(ctx, pool, disable)
-	_, repointErr := Repoint(ctx, pool, repoint)
 	_, seedErr := Seed(ctx, pool, seed)
-	for verb, err := range map[string]error{"enable": enableErr, "disable": disableErr, "repoint": repointErr, "seed": seedErr} {
+	for verb, err := range map[string]error{"enable": enableErr, "disable": disableErr, "seed": seedErr} {
 		if !errors.Is(err, ErrDocumentOperationNotRouted) {
 			t.Fatalf("%s = %v, want ErrDocumentOperationNotRouted", verb, err)
 		}

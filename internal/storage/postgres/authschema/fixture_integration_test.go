@@ -73,13 +73,13 @@ func newAuthFixture(t *testing.T, ctx context.Context) *authFixture {
 	}
 
 	for _, statement := range []string{
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", migrationRole, fixturePassword),
-		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", runtimeRole, fixturePassword),
-		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %q TO %q", database, migrationRole),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(migrationRole)), fixturePassword),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(runtimeRole)), fixturePassword),
+		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(migrationRole))),
 		// The runtime role gets CONNECT and nothing else. Every privilege it
 		// ends up with must come from ApplyRuntimeGrants, or the capability
 		// suite would be proving the setup rather than the code.
-		fmt.Sprintf("GRANT CONNECT ON DATABASE %q TO %q", database, runtimeRole),
+		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(runtimeRole))),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("setup %q: %v", statement, err)
@@ -204,7 +204,7 @@ func newAuthMigrationOnly(t *testing.T, ctx context.Context) *migrationOnlyFixtu
 	if err != nil {
 		t.Fatalf("derive runtime role: %v", err)
 	}
-	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE ROLE %q", runtimeRole)); err != nil {
+	if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE ROLE %s", Quote(mustValidatedIdentifier(runtimeRole)))); err != nil {
 		t.Fatalf("create runtime role: %v", err)
 	}
 
@@ -213,4 +213,23 @@ func newAuthMigrationOnly(t *testing.T, ctx context.Context) *migrationOnlyFixtu
 		t.Fatalf("ensure schema: %v", err)
 	}
 	return &migrationOnlyFixture{conn: conn, schema: options.Schema, options: options}
+}
+
+// guardedExec runs one statement in a transaction that carries the commit
+// guard's setting, the way internal/audit.Commit does. Migration 0006 refuses
+// a write to a guarded table otherwise, so fixtures that seed those tables
+// directly must say they are doing so on purpose.
+func guardedExec(ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

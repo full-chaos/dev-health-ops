@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"math"
 	"math/big"
 	"net/http"
@@ -223,7 +224,7 @@ func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (ha
 			decryptorErr,
 		)
 	}
-	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}
+	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}.ForPurpose(llmorgsettings.PurposeExplain)
 
 	routeMux := routeswitch.NewMux(investmentExplainSwitchFromEnv(getenv))
 	routeMux.Register(investmentExplainOperation, newInvestmentExplainWorkHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}))
@@ -346,7 +347,8 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 				// error bodies never carry attacker-controlled data, so a
 				// hand-written literal is safe and exact, not a shortcut.
 				writeStreamErrorChunks(w, flusher)
-				log.Printf("query-api: investment/explain streaming error: %v", result.err)
+				slog.Default().ErrorContext(ctx, "query-api: investment/explain streaming error",
+					slog.String("request_id", w.Header().Get("X-Request-Id")), slog.String("error", result.err.Error()))
 				return
 			}
 			// result.body is EncodeInvestmentMixExplanation's own JSON
@@ -444,12 +446,15 @@ func newInvestmentExplainWorkHandler(
 
 		opts, buildErr := buildExplainOptions(r.Context(), reader, claims.OrgID, reqBody, llmProvider, forceRefresh)
 		if buildErr != nil {
-			// Python's `except ValueError as exc: raise HTTPException(400,
-			// detail=str(exc))` (main.py:1345-1346) -- buildErr's own
-			// message text is already the ported parity string (see
-			// resolve_repo_filter_ids's citation in this file's own package
-			// doc comment), so only the encoding changes here.
-			writeRESTError(w, r, "investment_explain", claims.OrgID, http.StatusBadRequest, buildErr.Error())
+			// buildExplainOptions fails only on a store read (the repo ref
+			// lookup), never on a request value, so the cause goes to the log
+			// and the client sees a generic answer.
+			status, message, _ := policy.MapError(buildErr)
+			echoRequestID(w, r)
+			slog.Default().ErrorContext(r.Context(), "query-api: investment_explain: building the options failed",
+				slog.String("org_id", claims.OrgID), slog.String("request_id", envelopeRequestID(r)),
+				slog.Int("status", status), slog.String("error", buildErr.Error()))
+			writeRESTError(w, r, "investment_explain", claims.OrgID, status, message)
 			return
 		}
 
@@ -487,6 +492,7 @@ func newInvestmentExplainWorkHandler(
 				ctx, requestedProvider, requestedModel, claims.OrgID, orgSettings, budgetStore, fullPrompt)
 		}
 
+		echoRequestID(w, r)
 		writeKeepAliveJSON(r.Context(), w, func(ctx context.Context) ([]byte, error) {
 			explanation, err := reader.ExplainInvestmentMix(ctx, writer, available, complete, opts)
 			if err != nil {
@@ -572,7 +578,7 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		filtersForCacheKey = investmentexplain.DefaultMetricFilterForCacheKey()
 	}
 
-	measure := investmentexplain.MeasureCount
+	measure := investmentexplain.ExplanationDefaultMeasure
 	if body.Measure != nil {
 		measure, _ = investmentexplain.NormalizeMeasure(*body.Measure)
 	}

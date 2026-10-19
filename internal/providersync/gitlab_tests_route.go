@@ -80,6 +80,8 @@ type gitLabTestsCasePayload struct {
 // same fetch, normalization, and six-effect boundary; only request evidence
 // retains the claimed dataset identity.
 type GitLabTestsRouteHandler struct {
+	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
+	RepoIdentity GitLabRepoIdentityReader
 	MaxPipelines int
 	MaxPages     int
 }
@@ -136,7 +138,7 @@ func (handler GitLabTestsRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	fullName := gitLabProjectFullName(project)
-	repoID, err := repositoryIdentity(fullName)
+	repoID, err := resolveGitLabRepoID(ctx, handler.RepoIdentity, claim, parsedProjectID, fullName)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -852,7 +854,7 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 		if readErr != nil {
 			return nil, logging.TransportFailure(readErr)
 		}
-		if classified := providerfoundation.ClassifyHTTPWithMessage("gitlab", response.StatusCode, response.Header, string(message)); classified != nil {
+		if classified := providerfoundation.ClassifyHTTPForRequest("gitlab", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
 			return nil, classified
 		}
 		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
@@ -885,3 +887,12 @@ func gitLabTestsOptionalError(ctx context.Context, err error) error {
 }
 
 var _ CompleteRouteHandler = GitLabTestsRouteHandler{}
+
+// responsePath is the URL path of the request a response answers, empty when
+// the response carries none.
+func responsePath(response *http.Response) string {
+	if response == nil || response.Request == nil || response.Request.URL == nil {
+		return ""
+	}
+	return response.Request.URL.Path
+}

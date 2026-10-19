@@ -1,0 +1,177 @@
+# Quality and release gates for the Auth Control Plane tree (CHAOS-4887, Wave 1
+# of CHAOS-3274): go test and -race scoped to the auth packages, the
+# production-middleware stack test (G-69), one fuzz run per parser, vet, gofmt,
+# and a strict govulncheck (any reachable finding fails; no ignore list). The gate logic lives in `ci/check_go.sh auth`;
+# this file only schedules it.
+#
+# RELEVANCE IS DECIDED INSIDE, not in the trigger (the go-quality.yml design,
+# CHAOS-4834): the workflow runs on every pull request, `auth-changes` computes
+# whether the change touches the auth packages' import closure, the auth
+# contracts, go.mod/go.sum or the gate's own files (`check_go.sh auth relevant`),
+# and the gate jobs run only then. `auth-gate` ALWAYS reports: it fails when a
+# gate job failed, was cancelled, or was skipped on a relevant change, and says
+# in plain text when the change was not relevant. Two outcomes, both executed in
+# CI: an auth change runs every job below; a change outside the closure runs only
+# `auth-changes` and `auth-gate`.
+#
+# JOB NAMES must not reuse a required context (test, lint, go-quality,
+# metrics-executed-proof; ops main ruleset 5324160): a second producer of a
+# required context is the CHAOS-4834 defect class. tests/tooling/
+# test_go_auth_service_workflow.py pins the names, the fuzz matrix against the
+# registry in ci/check_go.sh, and the gate's fan-in.
+name: Go auth service
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: ['**']
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+
+jobs:
+  auth-changes:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      relevant: ${{ steps.relevance.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+      - name: Does the change touch the auth service tree?
+        id: relevance
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT}" != "pull_request" ]; then
+            echo "relevant=true" >> "${GITHUB_OUTPUT}"
+            echo "auth gates run: ${EVENT} is not a pull request"
+            exit 0
+          fi
+          bash ci/check_go.sh auth paths-selftest
+          mb="$(git merge-base "${BASE_SHA}" "${HEAD_SHA}")"
+          echo "merge base ${mb}"
+          git diff --name-only "${mb}" "${HEAD_SHA}"
+          bash ci/check_go.sh auth relevant "${mb}" "${HEAD_SHA}" | tee relevance.txt
+          grep -E '^relevant=(true|false)$' relevance.txt >> "${GITHUB_OUTPUT}"
+
+  auth-go-quality:
+    needs: [auth-changes]
+    if: needs.auth-changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+      - name: Path filter outcomes (fixed closure)
+        run: bash ci/check_go.sh auth paths-selftest
+      - name: Gate scope covers every auth-looking package
+        run: bash ci/check_go.sh auth scope-selftest
+      - name: gofmt
+        run: bash ci/check_go.sh auth fmt
+      - name: go vet
+        run: bash ci/check_go.sh auth vet
+      - name: Fuzz registry matches the tree
+        run: bash ci/check_go.sh auth fuzz-registry
+      - name: govulncheck (auth packages, pinned, strict)
+        run: bash ci/check_go.sh auth vuln
+
+  auth-test:
+    needs: [auth-changes]
+    if: needs.auth-changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+      - name: go test (auth packages)
+        run: bash ci/check_go.sh auth test
+      - name: go test -race (auth packages)
+        run: bash ci/check_go.sh auth race
+      - name: Dependency closure of the auth binaries (CHAOS-10131)
+        run: bash ci/check_go.sh auth closure
+      - name: Endpoint-profile source_commit resolves and anchors read the same there (CHAOS-4765)
+        run: bash ci/check_go.sh auth history
+      - name: Production middleware stack is mounted and driven (G-69)
+        run: bash ci/check_go.sh auth middleware
+
+  auth-fuzz:
+    needs: [auth-changes]
+    if: needs.auth-changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzParseErrorEnvelope
+          - FuzzRevisionUnmarshal
+          - FuzzTimestampUnmarshal
+          - FuzzVerifyToken
+          - FuzzValidSignedToken
+          - FuzzParseLimit
+          - FuzzParseForwardedTrust
+          - FuzzParseEd25519Key
+          - FuzzConfigLoad
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+      - name: Fuzz ${{ matrix.target }} (its own corpus, its own proof marker)
+        run: bash ci/check_go.sh auth fuzz "${{ matrix.target }}"
+
+  auth-gate:
+    if: always()
+    needs: [auth-changes, auth-go-quality, auth-test, auth-fuzz]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RELEVANT: ${{ needs.auth-changes.outputs.relevant }}
+      CHANGES: ${{ needs.auth-changes.result }}
+      QUALITY: ${{ needs.auth-go-quality.result }}
+      TEST: ${{ needs.auth-test.result }}
+      FUZZ: ${{ needs.auth-fuzz.result }}
+    steps:
+      - name: Fan in
+        run: |
+          set -euo pipefail
+          if [ "${CHANGES}" = "skipped" ]; then
+            echo "draft pull request without ci:full: auth gates not run"
+            exit 0
+          fi
+          [ "${CHANGES}" = "success" ] || { echo "auth-changes: ${CHANGES}" >&2; exit 1; }
+          if [ "${RELEVANT}" = "false" ]; then
+            echo "the change is outside the auth service tree: gate jobs skipped by design (quality=${QUALITY} test=${TEST} fuzz=${FUZZ})"
+            exit 0
+          fi
+          [ "${RELEVANT}" = "true" ] || { echo "auth-changes produced no relevance verdict" >&2; exit 1; }
+          for pair in "auth-go-quality=${QUALITY}" "auth-test=${TEST}" "auth-fuzz=${FUZZ}"; do
+            [ "${pair#*=}" = "success" ] || { echo "${pair}: a relevant change needs every gate job to pass" >&2; exit 1; }
+          done
+          echo "all auth gate jobs passed"

@@ -67,6 +67,17 @@ import (
 //     for the same reason, and its repo_id is a NON-nullable UUID there.
 //   - that table's source/confidence are Enum8, not String.
 const seededCoverageExtraDDL = `
+CREATE TABLE work_unit_issue_size (
+    org_id String,
+    work_unit_id String,
+    issue_size Float64,
+    sized_issue_count UInt32,
+    issue_count UInt32,
+    categorization_run_id String,
+    computed_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (org_id, work_unit_id);
+
 CREATE TABLE work_unit_repo_effort (
     work_unit_id String,
     repo_id Nullable(UUID),
@@ -562,8 +573,8 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_SplitPartitionsExactly(t *te
 		t.Fatal("compiled coverage SQL returned no rows")
 	}
 	var rawTotal, rawAssignedTeam, rawRepoTotal, rawAssignedRepo float64
-	var rawDirect, rawFallback, rawFanout *float64
-	if err := raw.Scan(&rawTotal, &rawAssignedTeam, &rawRepoTotal, &rawAssignedRepo, &rawDirect, &rawFallback, &rawFanout); err != nil {
+	var rawDirect, rawFallback, rawFanout, rawSizedUnits, rawUnits *float64
+	if err := raw.Scan(&rawTotal, &rawAssignedTeam, &rawRepoTotal, &rawAssignedRepo, &rawDirect, &rawFallback, &rawFanout, &rawSizedUnits, &rawUnits); err != nil {
 		_ = raw.Close()
 		t.Fatalf("scan compiled coverage SQL: %v", err)
 	}
@@ -902,8 +913,8 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWit
 			t.Fatalf("%s: compiled SQL returned no rows", label)
 		}
 		var total, assignedTeam float64
-		var dir, fb, fan *float64
-		if err := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &dir, &fb, &fan); err != nil {
+		var dir, fb, fan, sizedUnits, units *float64
+		if err := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &dir, &fb, &fan, &sizedUnits, &units); err != nil {
 			t.Fatalf("%s: scan: %v", label, err)
 		}
 		if dir == nil || fb == nil {
@@ -1183,8 +1194,8 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveW
 			t.Fatalf("%s: compiled SQL returned no rows", label)
 		}
 		var total, assignedTeam, repoTotal, assignedRepo float64
-		var dir, fb, fan *float64
-		if err := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &dir, &fb, &fan); err != nil {
+		var dir, fb, fan, sizedUnits, units *float64
+		if err := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &dir, &fb, &fan, &sizedUnits, &units); err != nil {
 			t.Fatalf("%s: scan: %v", label, err)
 		}
 		return repoTotal

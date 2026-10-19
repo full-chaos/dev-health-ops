@@ -436,12 +436,18 @@ ORDER BY (org_id, day, provider, work_scope_id, ifNull(team_id, ''))`,
 	run := Run{OrganizationID: orgA, TargetDay: day}
 	partition := Partition{ID: "partition-work-item", RepoIDs: []RepositoryID{RepositoryID(repo)}}
 
+	spanning := useManualMeterProvider(t)
 	workItemExecutor, err := NewWorkItemExecutor(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := workItemExecutor.ComputeFamily(ctx, run, partition); err != nil {
 		t.Fatalf("work_item ComputeFamily: %v", err)
+	}
+	// The frozen golden holds one person (github, unassigned) under two teams: the
+	// executor counts that person once, through the production call in ComputeFamily.
+	if got := spanningCounterByProvider(t, spanning); got["github"] != 1 || len(got) != 1 {
+		t.Fatalf("%s = %v, want github 1 for the person of the golden that spans two teams", WorkItemUserRowsSpanningTeamsCounter, got)
 	}
 	estimateExecutor, err := NewWorkItemEstimateExecutor(conn)
 	if err != nil {
@@ -573,6 +579,43 @@ FROM work_item_cycle_times WHERE org_id = ?`, orgA,
 	// TestComputeEstimateCoverageMatchesPythonGolden (workitemmetrics/
 	// golden_test.go), which compares against its OWN frozen golden, not
 	// this shared one.
+
+	t.Run("work_item_user_metrics_daily holds one row for the person that spans two teams", func(t *testing.T) {
+		// The golden holds (github, scope "", unassigned) under team-jira (one item created,
+		// no measure) and under unassigned (one started, in progress): the persisted
+		// row is the sums, labelled by the lowest team id on the tie (golden_test.go
+		// declaredMergedUserRows).
+		rows, err := conn.Query(ctx, `
+SELECT work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day
+FROM work_item_user_metrics_daily FINAL
+WHERE org_id = ? AND provider = 'github' AND work_scope_id = '' AND user_identity = 'unassigned'`, orgA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		count := 0
+		for rows.Next() {
+			var (
+				scope, teamID, teamName string
+				started, completed, wip uint32
+			)
+			if err := rows.Scan(&scope, &teamID, &teamName, &started, &completed, &wip); err != nil {
+				t.Fatal(err)
+			}
+			count++
+			if scope != "" || teamID != "team-jira" || teamName != "Jira Team" ||
+				started != 1 || completed != 0 || wip != 1 {
+				t.Errorf("persisted row = (%q,%q,%q, started %d, completed %d, wip %d), want (\"\",\"team-jira\",\"Jira Team\", 1, 0, 1)",
+					scope, teamID, teamName, started, completed, wip)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("work_item_user_metrics_daily holds %d rows for the person, want 1", count)
+		}
+	})
 
 	t.Run("org B's rows are untouched", func(t *testing.T) {
 		var count uint64

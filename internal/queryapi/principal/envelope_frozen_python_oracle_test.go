@@ -247,11 +247,22 @@ func TestVerifierMatchesFrozenPythonIssuedEnvelopeStructure(t *testing.T) {
 		if got.UserID() != c["sub"] || got.OrgID != c["org_id"] || got.Role != c["role"] || got.Tier != c["tier"] {
 			t.Errorf("%s: identity = (%q, %q, %q, %q), recorded (%v, %v, %v, %v)", label, got.UserID(), got.OrgID, got.Role, got.Tier, c["sub"], c["org_id"], c["role"], c["tier"])
 		}
-		if got.IsSuperuser != c["is_superuser"] {
-			t.Errorf("%s: IsSuperuser = %v, recorded %v", label, got.IsSuperuser, c["is_superuser"])
+		// The recorded claims are what the issuer wrote; the verifier then applies
+		// the superuser discipline (CHAOS-4738): superuser only with both flags
+		// and no impersonation, a verified flag only where nothing contradicts it.
+		recSU, _ := c["is_superuser"].(bool)
+		recVer, _ := c["is_superuser_verified"].(bool)
+		recImp, _ := c["impersonation_active"].(bool)
+		if by, ok := c["impersonated_by"].(string); ok && by != "" {
+			recImp = true
 		}
-		if got.IsSuperuserVerified != c["is_superuser_verified"] {
-			t.Errorf("%s: IsSuperuserVerified = %v, recorded %v", label, got.IsSuperuserVerified, c["is_superuser_verified"])
+		wantSU := recSU && recVer && !recImp
+		wantVer := recVer && (wantSU || (!recSU && !recImp))
+		if got.IsSuperuser != wantSU {
+			t.Errorf("%s: IsSuperuser = %v, want %v (recorded %v)", label, got.IsSuperuser, wantSU, c["is_superuser"])
+		}
+		if got.IsSuperuserVerified != wantVer {
+			t.Errorf("%s: IsSuperuserVerified = %v, want %v (recorded %v)", label, got.IsSuperuserVerified, wantVer, c["is_superuser_verified"])
 		}
 		if got.ImpersonationActive != c["impersonation_active"] {
 			t.Errorf("%s: ImpersonationActive = %v, recorded %v", label, got.ImpersonationActive, c["impersonation_active"])

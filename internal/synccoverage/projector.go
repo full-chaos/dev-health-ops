@@ -15,6 +15,9 @@ import (
 var (
 	ErrPoolUnavailable = errors.New("sync coverage PostgreSQL pool is unavailable")
 	ErrConfigNotFound  = errors.New("sync coverage configuration was not found")
+	// ErrInvalidProcessorFlags marks a stored processor_flags value the
+	// rebuild cannot read, which Python also fails on.
+	ErrInvalidProcessorFlags = errors.New("sync coverage processor_flags is invalid")
 )
 
 type Projector struct {

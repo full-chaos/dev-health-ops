@@ -280,9 +280,17 @@ func prRefWorkItemID(prRef string, repoIdentities map[string]repoIdentity) (stri
 
 // teamAssignment is fetch_work_item_team_assignments' per-work-item
 // primary team attribution.
+// A nil field is a NULL column (no team / no name), not an empty string.
 type teamAssignment struct {
-	TeamID   string
-	TeamName string
+	TeamID   *string
+	TeamName *string
+}
+
+func derefOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // majorityTeamForIssues ports work_units.py's _majority_team_for_issues
@@ -295,8 +303,8 @@ func majorityTeamForIssues(issueIDs []string, teamMap map[string]teamAssignment)
 	labels := map[string]string{}
 	for _, id := range dedupeStrings(issueIDs) {
 		assignment := teamMap[id]
-		trimmedTeamID := pythonparity.Strip(assignment.TeamID)
-		trimmedTeamName := pythonparity.Strip(assignment.TeamName)
+		trimmedTeamID := pythonparity.Strip(derefOrEmpty(assignment.TeamID))
+		trimmedTeamName := pythonparity.Strip(derefOrEmpty(assignment.TeamName))
 		if trimmedTeamID == "" {
 			continue
 		}

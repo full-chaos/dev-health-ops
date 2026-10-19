@@ -15,6 +15,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func recordSpans(t *testing.T) *tracetest.SpanRecorder {
@@ -212,12 +214,18 @@ func assertAllClass(t *testing.T, spans []sdktrace.ReadOnlySpan, n int, class st
 	}
 }
 
-// The seam is shared: OpenAI goes through it with no code of its own.
+// The span seam is the same for OpenAI on the shared client: one span per
+// attempt with the same name, attributes and class.
 func TestLLMSpanOpenAIProviderUsesTheSameSeam(t *testing.T) {
 	recorder := recordSpans(t)
-	provider, _ := newTestOpenAIProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-	})
+	}))
+	t.Cleanup(server.Close)
+	provider, err := NewSharedProvider(SharedProviderConfig{Kind: ProviderKindOpenAI, APIKey: secrets.NewHidden("test-key"), BaseURL: server.URL, Model: "gpt-5-nano"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, _ = provider.Complete(context.Background(), CategorizationRequest("p"))
 	spans := llmSpans(recorder)
 	assertAllClass(t, spans, 1, "auth")

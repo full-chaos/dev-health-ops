@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -120,6 +121,37 @@ func demoGateWorkItems(world FrozenWorld) map[string]map[string]any {
 
 // demoGateRepoOwners are each repository's current owning teams (team_repo_ownership rows that are not
 // closed), by repository id.
+// demoGateRepoShares is each repository's current owners with their ownership share (1 when the row
+// carries none).
+func demoGateRepoShares(world FrozenWorld) map[string]map[string]float64 {
+	byName := map[string]string{}
+	for _, row := range demoGateRows(world, "repos") {
+		byName[gateText(row["repo"])] = gateText(row["id"])
+	}
+	shares := map[string]map[string]float64{}
+	for _, row := range demoGateRows(world, "team_repo_ownership") {
+		if row["valid_to"] != nil {
+			continue
+		}
+		repoID := gateText(row["repo_id"])
+		if repoID == "" {
+			repoID = byName[gateText(row["repo_full_name"])]
+		}
+		if repoID == "" {
+			continue
+		}
+		if shares[repoID] == nil {
+			shares[repoID] = map[string]float64{}
+		}
+		share, ok := gateNumber(row["share"])
+		if !ok || share <= 0 {
+			share = 1
+		}
+		shares[repoID][gateText(row["team_id"])] = share
+	}
+	return shares
+}
+
 func demoGateRepoOwners(world FrozenWorld) map[string]map[string]bool {
 	byName := map[string]string{}
 	for _, row := range demoGateRows(world, "repos") {
@@ -980,4 +1012,173 @@ func TestDemoGateG11TrackerItemsHaveAStatusHistory(t *testing.T) {
 		t.Fatal("the world has no tracker item")
 	}
 	t.Logf("%d tracker or blocker items checked, %d without a history", checked, without)
+}
+
+// G12: the measured complexity of a demo repository is where real code is. The complexity job measured
+// 411 to 520 cyclomatic per thousand lines on files that held nothing but branches; real code is about 10 to 60.
+// Each repository's measured day (the as-of day's repo_complexity_daily row, which the job wrote from the
+// repository's files) reads between 20 and 80.
+func TestDemoGateG12MeasuredComplexityIsRealistic(t *testing.T) {
+	world, _ := demoGateWorld(t)
+	rows := demoGateRows(world, "repo_complexity_daily")
+	newest := ""
+	for _, row := range rows {
+		if day := gateText(row["day"]); day > newest {
+			newest = day
+		}
+	}
+	checked := 0
+	for _, row := range rows {
+		if gateText(row["day"]) != newest {
+			continue
+		}
+		checked++
+		perKLOC, _ := gateNumber(row["cyclomatic_per_kloc"])
+		if perKLOC < 20 || perKLOC > 80 {
+			t.Errorf("repository %v measures %.1f cyclomatic per thousand lines on %s, want 20..80", row["repo_id"], perKLOC, newest)
+		}
+	}
+	if checked < 18 {
+		t.Fatalf("%d repositories measured on %s, want all 18", checked, newest)
+	}
+}
+
+// Commit hours are spread over the day: the world's commits fall at many hours, some before 09:00 or
+// after 17:00 UTC and some on weekends, and the share of a team's weekday commits outside 09:00-17:00
+// differs between the teams (no share held by more than half of them) and stays near the team's
+// AfterHoursShare (no shared constant such as one early commit per repository day).
+func TestDemoGateCommitHoursSpread(t *testing.T) {
+	world, frozenAt := demoGateWorld(t)
+	type tally struct{ weekday, after, weekend, recentWeekday, recentAfter int }
+	byRepo := map[string]*tally{}
+	// Per repository and day: commits and after-hours commits (the team metrics row of that day).
+	type dayCount struct{ commits, after int }
+	byRepoDay := map[string]map[string]*dayCount{}
+	hours := map[int]bool{}
+	early, late, weekend := 0, 0, 0
+	for _, row := range demoGateRows(world, "git_commits") {
+		at, ok := gateTime(row["committer_when"])
+		if !ok {
+			continue
+		}
+		at = at.UTC()
+		hours[at.Hour()] = true
+		repoID := gateText(row["repo_id"])
+		if byRepo[repoID] == nil {
+			byRepo[repoID] = &tally{}
+		}
+		counts := byRepo[repoID]
+		if byRepoDay[repoID] == nil {
+			byRepoDay[repoID] = map[string]*dayCount{}
+		}
+		day := at.Format(time.DateOnly)
+		if byRepoDay[repoID][day] == nil {
+			byRepoDay[repoID][day] = &dayCount{}
+		}
+		byRepoDay[repoID][day].commits++
+		recent := frozenAt.Sub(at) <= 30*24*time.Hour
+		if at.Weekday() == time.Saturday || at.Weekday() == time.Sunday {
+			counts.weekend++
+			weekend++
+			continue
+		}
+		counts.weekday++
+		if at.Hour() < 9 || at.Hour() >= 17 {
+			byRepoDay[repoID][day].after++
+		}
+		if recent {
+			counts.recentWeekday++
+		}
+		if at.Hour() < 9 || at.Hour() >= 17 {
+			counts.after++
+			if recent {
+				counts.recentAfter++
+			}
+			if at.Hour() < 9 {
+				early++
+			} else {
+				late++
+			}
+		}
+	}
+	if len(hours) < 10 || early == 0 || late == 0 || weekend == 0 {
+		t.Errorf("commits fall at %d distinct UTC hours (%d before 09:00, %d from 17:00, %d on weekends), want at least 10 hours and some of each", len(hours), early, late, weekend)
+	}
+	shares := map[string][]string{}
+	latestRatios := map[string][]string{}
+	ownerShares := demoGateRepoShares(world)
+	names := demoGateTeamNames(world)
+	for team, repos := range demoGateTeamRepos(world) {
+		latest := ""
+		for _, repoID := range repos {
+			for day := range byRepoDay[repoID] {
+				if weekday, err := time.Parse(time.DateOnly, day); err == nil && weekday.Weekday() != time.Saturday && weekday.Weekday() != time.Sunday {
+					latest = max(latest, day)
+				}
+			}
+		}
+		// The team row takes each repository's counts at the team's ownership share, as the writer does.
+		var latestCommits, latestAfter float64
+		for _, repoID := range repos {
+			counts := byRepoDay[repoID][latest]
+			if counts == nil {
+				continue
+			}
+			share := 1.0
+			for teamID, owned := range ownerShares[repoID] {
+				if names[teamID] == team {
+					share = owned
+				}
+			}
+			latestCommits += share * float64(counts.commits)
+			latestAfter += share * float64(counts.after)
+		}
+		if latestCommits > 0 {
+			ratio := fmt.Sprintf("%.2f", latestAfter/latestCommits)
+			latestRatios[ratio] = append(latestRatios[ratio], team+" "+latest)
+			t.Logf("%s: latest weekday %s after-hours ratio %s (%.2f of %.2f share-weighted commits)", team, latest, ratio, latestAfter, latestCommits)
+		}
+		var sum tally
+		for _, repoID := range repos {
+			if counts := byRepo[repoID]; counts != nil {
+				sum.weekday += counts.weekday
+				sum.after += counts.after
+				sum.weekend += counts.weekend
+				sum.recentWeekday += counts.recentWeekday
+				sum.recentAfter += counts.recentAfter
+			}
+		}
+		if sum.weekday == 0 {
+			t.Errorf("%s: no weekday commit", team)
+			continue
+		}
+		share := float64(sum.after) / float64(sum.weekday)
+		recentShare := 0.0
+		if sum.recentWeekday > 0 {
+			recentShare = float64(sum.recentAfter) / float64(sum.recentWeekday)
+		}
+		t.Logf("%s: %d of %d weekday commits outside 09:00-17:00 UTC (%.2f), last 30 days %d of %d (%.2f), %d weekend commits", team, sum.after, sum.weekday, share, sum.recentAfter, sum.recentWeekday, recentShare, sum.weekend)
+		want := float64(demoTeamNamed(strings.Fields(strings.ToLower(team))[0]).AfterHoursShare) / 100
+		if math.Abs(share-want) > 0.15 {
+			t.Errorf("%s: %.2f of the weekday commits are outside 09:00-17:00 UTC, want within 0.15 of the team's AfterHoursShare %.2f", team, share, want)
+		}
+		key := fmt.Sprintf("%.2f", share)
+		shares[key] = append(shares[key], team)
+	}
+	// The served team metrics row is the latest day's. On a weekday no non-zero value may stand for more
+	// than half the teams, and no value at all for six or more (a 0 is a day with no after-hours commit,
+	// common on a day of one or two commits; on a weekend every ratio is 0 by the rule).
+	teamCount := len(demoGateTeamRepos(world))
+	for ratio, teams := range latestRatios {
+		if (ratio != "0.00" && 2*len(teams) > teamCount) || len(teams) >= 6 {
+			sort.Strings(teams)
+			t.Errorf("%d teams share the after-hours ratio %s on their latest weekday with commits: %v", len(teams), ratio, teams)
+		}
+	}
+	for share, teams := range shares {
+		if 2*len(teams) > teamCount {
+			sort.Strings(teams)
+			t.Errorf("teams %v share the after-hours share %s of their weekday commits", teams, share)
+		}
+	}
 }

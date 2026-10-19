@@ -6,7 +6,7 @@
 # river apply -> hook check -> CH grants check -> PG grants read-back -> the web-path smoke (R460).
 # Every step prints one `STEP <name> rc=<n>` line; nothing secret is printed.
 # CHAOS-8361: the stack is Go-only. The Python `api` and `metrics-api` services are not in this cut:
-# `api` is in a profile nothing enables (compose.bigboy.images.yml) and the metrics-api side file is out
+# `api` is in a profile nothing enables (compose.bigboy.yml) and the metrics-api side file is out
 # of the chain. The two-plane legs (the proof-token bootstrap, the pass-bigboy*.sh scripts and the REST
 # two-leg proof of the record directory) ran INSIDE the Python api container and compared the Go plane
 # with the Python plane; with no Python plane they have no subject and the cut does not run them.
@@ -18,7 +18,8 @@ OLD8=${1:?old8}; NEW=${2:?full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
 # three at an isolated tree gets a fully self-consistent sandbox. Exported so those sibling
 # scripts, invoked below via $HERE, see the SAME resolved value rather than each independently
 # falling back to the real default.
-export BIGBOY_ROOT="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"
+BIGBOY_ROOT=$(cd "${BIGBOY_ROOT:-/home/ubuntu/devhealth}" 2>/dev/null && pwd) || { echo "FAIL: BIGBOY_ROOT=${BIGBOY_ROOT:-} is not a directory" >&2; exit 1; }
+export BIGBOY_ROOT
 R=$BIGBOY_ROOT; REC=$R/_records/bigboy-$N8
 # CHAOS-7135: the tools (this family of scripts) come from BIGBOY_TOOLS_DIR, default this script's own
 # directory, so a cut run from a git worktree needs no ci/bigboy symlink under BIGBOY_ROOT. The root is
@@ -31,18 +32,20 @@ export BIGBOY_TOOLS_DIR=$HERE
 [ -f "$HERE/bigboy-repin.sh" ] || { echo "FAIL: BIGBOY_TOOLS_DIR=$HERE has no bigboy-repin.sh -- refusing to run with a directory that is not the bigboy cut tools" >&2; exit 1; }
 # Fail closed (D2895): refuse a root that is not shaped like a real bigboy tree, rather than
 # silently proceeding to `cd` into it and produce confusing failures many steps later.
-for need in compose/compose.bigboy.images.yml _records; do
+for need in _records/images.env _records; do
   [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 1; }
 done
-# CHAOS-7131: the router overlay is part of the chain. It sets web's BACKEND_URL (the plane-split router)
+# CHAOS-7131: the router settings are part of the one compose file. It sets web's BACKEND_URL (the plane-split router)
 # and AUTH_URL; without it `up` below recreated web from the base file alone and web lost both -- REST
 # calls 500'd and the auth callback/logout used the wrong origin. It stays last so its web.environment wins.
 # It is a tools file, so it is named from $HERE (absolute), not from the root: the other entries are relative
 # to $R, where compose runs, and a root without ci/bigboy (CHAOS-7135) would not find it.
-# CHAOS-7162: dho_api_ch is declared by a host file mounted into ClickHouse's users.d (compose.bigboy.clickhouse-users.yml), so a
+# CHAOS-7162: dho_api_ch is declared by a host file mounted into ClickHouse's users.d (compose.bigboy.yml), so a
 # ClickHouse recreate no longer loses it. The overlay requires the path; the default is the credentials directory's file.
 export DHO_API_CH_USERS_XML="${DHO_API_CH_USERS_XML:-$R/.go-api-dev/dho_api_ch.xml}"
-export COMPOSE_FILE=compose.yml:compose/compose.go.workers.yml:.remember/lanes/team-lead/reconciler-sweep-override.yml:compose/compose.bigboy.images.yml:$HERE/compose.bigboy.workers.yml:$HERE/compose.bigboy.clickhouse-users.yml:$HERE/compose.bigboy.billing-edge.yml:$HERE/compose.bigboy.router.yml
+export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
+unset $(compgen -v | grep '^COMPOSE_') 2>/dev/null   # CHAOS-9962: the file, project, env files and profiles come from DC only
+DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --env-file _records/images.env -f "$HERE/compose.bigboy.yml")
 cd "$R"
 st() { echo "STEP $1 rc=$2 $(date -u +%T)"; }
 echo "cut start $(date -u +%T) new=$NEW root=$R tools=$HERE"
@@ -51,7 +54,7 @@ for i in $(seq 1 240); do
   [ $ok = 1 ] && break; sleep 30
 done
 [ "${ok:-0}" = 1 ] || { st images-wait 1; exit 1; }; st images-ready 0
-# Resolve the operator digest BEFORE any STEP reads the compose chain: compose.bigboy.workers.yml
+# Resolve the operator digest BEFORE any STEP reads the compose file: compose.bigboy.yml
 # requires BIGBOY_OPERATOR_IMAGE, so a config read before this export fails on the missing variable
 # (the SSO group cut's secret-refs STEP reported five set secrets as BLANK for exactly that reason).
 BIGBOY_OPERATOR_DIGEST=$(docker buildx imagetools inspect ghcr.io/full-chaos/dev-health-go-operator:sha-$S7 --format '{{json .Manifest}}' | jq -r .digest)
@@ -89,20 +92,20 @@ fi
 if [ -n "$VALUES" ]; then
   python3 "$HERE/generate-query-api-enabled-flags.py" "$VALUES" --out "$REC.query-api-enabled-flags.generated" 2>"$REC.query-api-enabled-flags.err"
   GEN_NAMES=$(awk -F: '{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' ' | sort)
-  LIVE_NAMES=$(awk -F: '/^      [A-Za-z_]+:/{print $1}' "$R"/compose/compose.bigboy.images.yml | tr -d ' ' | sort -u)
+  LIVE_NAMES=$(awk '/^  query-api:$/{f=1;e=0;next} /^  [A-Za-z0-9_.-]+:$/{f=0;e=0} f&&/^    [a-z_]+:/{e=($0 ~ /^    environment:/)} e&&/^      [A-Za-z_]+:/{n=$1; sub(/:.*/,"",n); print n} e&&/^    - [A-Za-z_][A-Za-z0-9_]*=/{n=$2; sub(/=.*/,"",n); print n}' "$HERE/compose.bigboy.yml" | sort -u)   # the query-api environment, as a mapping or as a KEY=VALUE list
   MISSING=$(comm -23 <(echo "$GEN_NAMES") <(echo "$LIVE_NAMES"))
   if [ -z "$MISSING" ]; then
     st query-api-enabled-flags-current 0
   else
     st query-api-enabled-flags-current 1
-    echo "DRIFT: compose/compose.bigboy.images.yml's query-api block is missing name(s) values.prod.yaml's ops.queryApi.extraEnv now has -- regenerate it (see $HERE/generate-query-api-enabled-flags.py) before trusting this cut: $MISSING" >&2
+    echo "DRIFT: compose.bigboy.yml's query-api block is missing name(s) values.prod.yaml's ops.queryApi.extraEnv now has -- regenerate it (see $HERE/generate-query-api-enabled-flags.py) before trusting this cut: $MISSING" >&2
   fi
   # Fail loud on any blank substitution (D2728 class): every secret-ref name from the generated
   # list must resolve to a non-empty value in the LIVE, --env-file-substituted config.
   # CHAOS-6987 (team-lead, hard rule): `docker compose config` output never reaches a pipe, a
   # file, or a screen except through ONE redacting filter (compose-config-redacted.sh) -- it
   # emits NAME=<length> only, never a resolved value, even for a length-only check like this one.
-  REDACTED=$($HERE/compose-config-redacted.sh --env-file ops/.env -f compose.yml -f compose/compose.go.workers.yml -f .remember/lanes/team-lead/reconciler-sweep-override.yml -f compose/compose.bigboy.images.yml -f $HERE/compose.bigboy.workers.yml); RED_RC=$?
+  REDACTED=$("$HERE/compose-config-redacted.sh" "${DC[@]:2}"); RED_RC=$?
   BLANK=""
   for entry in $(awk -F': \\$\\{' '/\$\{[A-Z_]+\}$/{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' '); do
     LEN=$(echo "$REDACTED" | awk -F= -v n="$entry" '$1==n{print $2}')
@@ -128,7 +131,7 @@ if [ -n "$VALUES" ]; then
   # CHAOS-6987 (D2736): web env-name parity with prod, NAMES only -- the running web container's
   # names come from container-env-names.sh (the only sanctioned container env reader, R462).
   "$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names" 2>/dev/null
-  python3 "$HERE/check-web-env-parity.py" "$VALUES" "$HERE/compose.bigboy.router.yml" --live-names "$REC.web-env-names"; st web-env-parity $?
+  python3 "$HERE/check-web-env-parity.py" "$VALUES" "$HERE/compose.bigboy.yml" --live-names "$REC.web-env-names"; st web-env-parity $?
 else
   st query-api-enabled-flags-current 2  # SKIPPED, not a pass: no pinned values (DEPLOY_SHA) -- this STEP did not run, it did not pass
   echo "SKIPPED (not checked): the values-driven STEPs need DEPLOY_SHA (see deploy-pin above)." >&2
@@ -139,7 +142,7 @@ $HERE/bigboy-repin.sh $OLD8 $NEW > $REC.repin.out 2>&1; st repin $?
 # CHAOS-7019: `web` is a LOCAL BUILD service in the root compose.yml, unlike query-api/
 # go-api which the bigboy overlay pins to CI-built ghcr.io digests -- so a web-only merge (or a
 # web+ops merge landing together, like CHAOS-6262) left a stale host build silently serving
-# pages the backend underneath had already changed shape for. compose.bigboy.images.yml now
+# pages the backend underneath had already changed shape for. _records/images.env now
 # pins `web` by digest too (build: !reset null); this STEP repins it to the CI image for web's
 # OWN main branch HEAD, every cut, no host build, before `up` recreates it below.
 # CHAOS-7901: the caller picks the web build by the environment of THIS script: WEB_REPIN=skip (web stays as it is),
@@ -156,7 +159,7 @@ $HERE/bigboy-repin-web.sh > $REC.repin-web.out 2>&1; rc_web=$?; st repin-web $rc
 # substitution referencing a var that ONLY lives in ops/.env (e.g. query-api's
 # GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}) silently resolves to a blank string with no
 # error -- caught live tonight when a first apply went out with an empty edge-JWT secret.
-docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out 2>&1; st migrate $?
+"${DC[@]}" run --rm --no-deps -T migrate > $REC/migrate.out 2>&1; st migrate $?
 # CHAOS-7162: go-api's ClickHouse login must be declared durably and be live BEFORE go-api is recreated: without
 # `dho_api_ch` in system.users every ClickHouse call fails with code 516 (rev 198, after a ClickHouse recreate rebuilt
 # users.d from the image). Names only; the check refuses a file ClickHouse could not read (it would exit on it).
@@ -168,11 +171,11 @@ docker compose --env-file ops/.env run --rm --no-deps migrate > $REC/migrate.out
 # CHAOS-8361: no `api` in this list (the Python api is retired). `--no-deps` skips nothing these three need:
 # the one dependency the cut owns, `migrate`, ran on the line above, and the bigboy chain declares no
 # envelope-keys-init service (query-api and the venue one-offs read the key files of .go-api-dev).
-docker compose --env-file ops/.env up -d --no-deps --no-build query-api go-api web > $REC/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
+"${DC[@]}" up -d --no-deps --no-build query-api go-api web > $REC/up.out 2>&1; st up $?   # CHAOS-7019: web recreated from its repinned digest here too, never a host build
 # CHAOS-7131: the recreated web must still carry the names the router overlay sets (names only, never values).
 "$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names-after-up" 2>/dev/null
 "$HERE/check-web-env-required.sh" "$REC.web-env-names-after-up" BACKEND_URL AUTH_URL; st web-env-after-up $?
-docker compose --env-file ops/.env up -d --no-deps --no-build go-worker go-worker-heavy go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
+"${DC[@]}" up -d --no-deps --no-build go-worker go-worker-heavy go-worker-ops go-scheduler go-reconciler go-stream-ingest go-stream-external go-stream-pagerduty > $REC/up-workers.out 2>&1; rcw=$?; st up-workers $rcw; [ $rcw = 0 ] || { echo "ABORT: worker plane not recreated = INCOMPLETE pass (Trap #420)"; exit 1; }   # Trap #420: every plane from the cut's CI digests
 sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | grep -q 200; st go-api-ready $?
 # R467: every path the router sends to a Go plane has a handler in the build just started (405/401 to a
 # ROUTEPROBE request; 404 = values ahead of the build). Runs only with pinned values.

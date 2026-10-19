@@ -113,6 +113,9 @@ type TouchedDaysDrainRuns interface {
 	// the last window that have a take time. At most limit, newest first; the
 	// flag says that more exist.
 	MarkingRunsToCheck(ctx context.Context, organizationID, endedRunID string, window time.Duration, limit int) ([]TouchedRunKeys, bool, error)
+	// UnendedMarkingRunsBeforeCut counts the marking runs that are not ended and
+	// began before the cut of MarkingRunsToCheck: no later pass reads them.
+	UnendedMarkingRunsBeforeCut(ctx context.Context, organizationID string, window time.Duration) (int, error)
 	// StampTakeTx records the take time on every run of the pass that has none.
 	// It returns ErrTouchedTakeTimeUnwritten, and writes nothing, when the
 	// database cannot hold it.
@@ -151,7 +154,7 @@ func NewTouchedDaysDrain(
 	pool *pgxpool.Pool, store TouchedDaysDrainStore, runs TouchedDaysDrainRuns, logger *synclog.Logger,
 ) (*TouchedDaysDrain, error) {
 	if pool == nil || store == nil || runs == nil || runs.RepositoryLimit() < 1 {
-		return nil, ErrPostSyncUnavailable
+		return nil, unavailable(stageDrainConstruct, nil)
 	}
 	if logger == nil {
 		logger = synclog.Default()
@@ -261,7 +264,7 @@ func (drain *TouchedDaysDrain) DrainTouchedDays(ctx context.Context, organizatio
 func (drain *TouchedDaysDrain) inFlight(ctx context.Context, organizationID string) (int, string, error) {
 	tx, err := drain.pool.Begin(ctx)
 	if err != nil {
-		return 0, "", ErrPostSyncUnavailable
+		return 0, "", unavailable(stageDrainInFlightBeg, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	runsState, err := drain.runs.RunsStateTx(ctx, tx, organizationID)
@@ -321,6 +324,15 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("stop_check_truncated")),
 			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
 		drain.observe(jobruntime.TouchedDaysDrainStopCheckTruncated, 1)
+	}
+	if skipped, err := drain.runs.UnendedMarkingRunsBeforeCut(ctx, pass.organizationID, touchedDrainInFlightWindow); err != nil {
+		return false, err
+	} else if skipped > 0 {
+		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
+			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("stop_check_skipped_unended")),
+			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID),
+			synclog.Count(synclog.KeyDrainRunsSkippedUnended, skipped))
+		drain.observe(jobruntime.TouchedDaysDrainStopCheckSkippedUnended, 1)
 	}
 	checkable := make([]TouchedRunKeys, 0, len(runs))
 	for _, run := range runs {
@@ -497,12 +509,12 @@ const touchedDrainLockNamespace = 8846
 func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass) error {
 	tx, err := drain.pool.Begin(ctx)
 	if err != nil {
-		return ErrPostSyncUnavailable
+		return unavailable(stageDrainStartBegin, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
 		touchedDrainLockNamespace, pass.organizationID); err != nil {
-		return ErrPostSyncUnavailable
+		return unavailable(stageDrainStartLock, err)
 	}
 	inFlight, err := drain.runs.InFlightTx(
 		ctx, tx, pass.organizationID, drain.now().UTC().Add(-touchedDrainInFlightWindow))
@@ -546,7 +558,7 @@ func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return ErrPostSyncUnavailable
+		return unavailable(stageDrainStartCommit, err)
 	}
 	pass.started, pass.alreadyStarted = started, alreadyStarted
 	if takeUnwritten {

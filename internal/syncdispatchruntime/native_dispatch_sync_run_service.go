@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 )
 
 // ErrDispatchSyncRunUnavailable ports the bare execution-failure class every
@@ -415,7 +416,6 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		return err
 	}
 	emitClaimSnapshotDeferral(ctx, service.logger, run.id, deferredOutsideSnapshot)
-
 	riverQueued := 0
 	// terminalDeliveryPublishes counts units whose publish landed on an
 	// already-terminal outbox row (joboutbox.ErrDeliveryAlreadyTerminal).
@@ -427,6 +427,11 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	terminalDeliveryPublishes := 0
 	var unroutableUnits []budgetUnit
 	var invalidClaimUnits []invalidClaimUnit
+	// routedUnits are the claimed units whose delivery was published: only they
+	// keep the estimates they were admitted on, for the comparison at their
+	// finish. A unit terminalized below, or one whose publish hit a terminal
+	// delivery, keeps the result it has.
+	var routedUnits []budgetUnit
 	for _, unit := range claimedUnits {
 		// Atomic provider families are admitted before transport selection,
 		// so a malformed claim can reach neither River nor a stranded state.
@@ -510,6 +515,7 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 				}
 				return err
 			}
+			routedUnits = append(routedUnits, unit)
 			riverQueued++
 			continue
 		}
@@ -517,6 +523,12 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		// runtime to publish it to. Terminalize instead of leaving it
 		// wedged (CHAOS-3990).
 		unroutableUnits = append(unroutableUnits, unit)
+	}
+
+	if persisted, err := persistBudgetEstimates(ctx, tx, routedUnits, budgetResult.estimatesByUnit); err != nil {
+		return err
+	} else if persisted > 0 {
+		service.logger.Debug(ctx, synclog.MsgDispatchSyncRunBudgetEstimatesPersisted, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyCount, persisted))
 	}
 
 	if len(invalidClaimUnits) > 0 {
@@ -568,7 +580,19 @@ WHERE id = $1::uuid`,
 	if err := tx.Commit(ctx); err != nil {
 		return ErrDispatchSyncRunUnavailable
 	}
+	// CHAOS-10013: every unit this pass terminalized (budget exhaustion, an
+	// invalid or unroutable claim) was counted against its bucket when the
+	// capacity decision was made, so a sibling the cap held back is due a pass
+	// as soon as this one commits. Read from the pass's rollup tally -- the
+	// one record of every terminal write in this transaction -- so a new
+	// in-pass terminal path is covered without a second list. Deferred so it
+	// lands AFTER whichever countdown re-arm below this pass makes and merges
+	// into it by LEAST; the countdown stays the bound if the wake is lost.
+	slotsFreedInPass := pendingRollupBumps(ctx)
 	flushRollupBumpTally(ctx, service.metrics)
+	if slotsFreedInPass > 0 {
+		defer syncrunrollup.WakeDispatch(ctx, service.pool, run.id, service.nowUTC(), syncrunrollup.DispatchWakePathDispatchPass)
+	}
 
 	if riverQueued > 0 {
 		switch {

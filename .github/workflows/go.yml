@@ -143,11 +143,14 @@ on:
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
       - 'ci/bigboy/compose.bigboy.*.yml'
+      - 'ci/bigboy/compose.bigboy.yml'
+      - 'ci/bigboy/images.env'
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.d/**'
       - 'ci/venue_oracle_triggers.d/**'
+      - 'ci/venue_oracle_closure.d/**'
       - 'ci/venue_oracle_trigger_gaps.tsv'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       - 'ci/venue_oracle_weights.d/**'
@@ -170,6 +173,7 @@ on:
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
+      - 'ci/check_auth_compose.sh'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
       # contracts, so editing the page or either contract must run the gate
@@ -209,6 +213,7 @@ on:
       - 'Makefile'
       - '.github/workflows/go.yml'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: ['**']
     paths:
       - '**/*.go'
@@ -343,11 +348,14 @@ on:
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
       - 'ci/bigboy/compose.bigboy.*.yml'
+      - 'ci/bigboy/compose.bigboy.yml'
+      - 'ci/bigboy/images.env'
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.d/**'
       - 'ci/venue_oracle_triggers.d/**'
+      - 'ci/venue_oracle_closure.d/**'
       - 'ci/venue_oracle_trigger_gaps.tsv'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       - 'ci/venue_oracle_weights.d/**'
@@ -370,6 +378,7 @@ on:
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
+      - 'ci/check_auth_compose.sh'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
       # contracts, so editing the page or either contract must run the gate
@@ -533,12 +542,13 @@ jobs:
   go-arm64-numeric-parity:
     name: go-arm64-numeric-parity
     if: >-
-      vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
       github.event_name == 'release' ||
-      github.event_name == 'schedule')
+      github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     timeout-minutes: 10
     env:
@@ -607,18 +617,49 @@ jobs:
           fi
 
   go-storage-integration-plan:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      legs: ${{ steps.plan.outputs.legs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+
+      # CHAOS-9947: a pull request runs only the integration shards whose test
+      # binaries contain a changed package (go list -test, ci/go_affected_integration.py).
+      # A shared change, an unplaceable file or any failure here selects the FULL
+      # suite; main, merge_group and manual runs never run this step.
+      - name: Select the integration packages the change can affect
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          out="${RUNNER_TEMP}/affected.txt"
+          full() { printf 'FULL %s\n' "$1" > "${out}"; echo "::warning title=INTEGRATION SELECTION FELL BACK TO THE FULL SUITE::$1"; }
+          if ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
+            full "could not compute the changed-file list"
+          elif ! bash ci/check_go.sh integration-coverage | sed -n 's/^  RUN  //p' > "${RUNNER_TEMP}/keys.txt" \
+            || [ ! -s "${RUNNER_TEMP}/keys.txt" ]; then
+            full "could not list the integration packages"
+          elif ! go list -mod=readonly -tags=integration -test -json ./... > "${RUNNER_TEMP}/golist.json"; then
+            full "go list failed"
+          elif ! python3 -I ci/go_affected_integration.py --changed "${RUNNER_TEMP}/changed.txt" \
+            --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
+            --root "${GITHUB_WORKSPACE}" > "${out}"; then
+            full "selection script failed"
+          fi
+          cat "${out}"
+          echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
 
       - name: Validate and emit deterministic integration shards
         id: plan
@@ -653,7 +694,7 @@ jobs:
   # (16m44s, well under its own 25m cap) and are not matrix/concurrency-
   # sensitive the way six simultaneous shard legs are.
   dind-smoke-test:
-    if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): job-level `concurrency:` serialization was tried
     # here and on go-container-reproducibility-self-hosted, then REVERTED
@@ -707,6 +748,7 @@ jobs:
   go-storage-integration-shard:
     name: go-storage-integration-shard-${{ matrix.target }}-${{ matrix.shard }}
     needs: go-storage-integration-plan
+    if: needs.go-storage-integration-plan.result == 'success' && needs.go-storage-integration-plan.outputs.legs != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -764,6 +806,7 @@ jobs:
     env:
       PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
       SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
+      PLAN_LEGS: ${{ needs.go-storage-integration-plan.outputs.legs }}
     steps:
       - name: Require the plan and every shard to have passed
         run: |
@@ -772,6 +815,12 @@ jobs:
             echo "integration plan result: ${PLAN_RESULT}" >&2
             exit 1
           fi
+          if [ "${PLAN_LEGS}" = "0" ] && [ "${SHARD_RESULT}" = "skipped" ]; then
+            # CHAOS-9947: the plan selected no package (no integration test binary
+            # contains the change). Skipped is valid ONLY with an explicit zero.
+            echo "plan selected 0 integration shards; none ran"
+            exit 0
+          fi
           if [ "${SHARD_RESULT}" != "success" ]; then
             echo "shard result: ${SHARD_RESULT}" >&2
             exit 1
@@ -779,6 +828,7 @@ jobs:
           echo "all deterministic Go integration shards passed"
 
   go-container-smoke:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     # Every Go image is smoked on both architectures it ships for. The arm64
     # leg runs on the same x64 host: the Dockerfile's build stage is
     # `--platform=$BUILDPLATFORM` (Go cross-compiles natively), and only the
@@ -810,12 +860,13 @@ jobs:
         run: bash ci/check_go_containers.sh smoke
 
   go-container-security:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        target: [operator, contractcheck, migrate, dho]
+        target: [operator, contractcheck, migrate, dho, auth-service, auth-migrate]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -897,12 +948,13 @@ jobs:
   go-container-reproducibility:
     name: go-container-reproducibility
     if: >-
-      !(vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (!(vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
       github.event_name == 'release' ||
-      github.event_name == 'schedule'))
+      github.event_name == 'schedule')))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -915,12 +967,13 @@ jobs:
     name: go-container-reproducibility
     needs: dind-smoke-test
     if: >-
-      vars.SELF_HOSTED_RUNNERS == 'enabled' &&
+      (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) &&
+      (vars.SELF_HOSTED_RUNNERS == 'enabled' &&
       ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') ||
       github.event_name == 'release' ||
-      github.event_name == 'schedule')
+      github.event_name == 'schedule'))
     runs-on: [self-hosted, oci-arc-runners]
     # CHAOS-4906 (09-04): a job-level `concurrency:` group was added here
     # the same day to serialize pool access (two concurrent
@@ -980,7 +1033,24 @@ jobs:
         # ambiguous job-level cancellation.
         run: timeout 51m bash ci/check_go_containers.sh reproducible
 
+  # CHAOS-4886: the executed proof that the dormant Auth Control Plane starts
+  # from images built from this tree through the Compose `auth` profile, that
+  # its runtime login is unprivileged, and that removing it leaves the rest of
+  # the stack alone. Both binaries' images are also built, scanned (Trivy,
+  # SBOM) and rebuilt for reproducibility by the matrix jobs above; this job
+  # is the part that RUNS them together.
+  go-auth-compose-proof:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compose up the auth profile, probe it, roll it back
+        run: bash ci/check_auth_compose.sh
+
   graphql-wire-parity:
+    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))
     # CHAOS-4696: query-api's registered-document consts must digest-match
     # what a real client actually sends. The wire form can ONLY be
     # computed correctly by the web repo's own pinned @urql/core/graphql

@@ -18,7 +18,8 @@ import (
 )
 
 // reposDDL mirrors the production table after migrations 024 (org_id), 027
-// (sorting key), 028 (provider), and 065 (source_id). The engine and version
+// (sorting key), 028 (provider), 065 (source_id), 134 (provider_repo_id) and
+// 138 (identity_path). The engine and version
 // column are the point of this suite: the readback must resolve the winning
 // ReplacingMergeTree version rather than every physical row.
 const reposDDL = `
@@ -32,7 +33,9 @@ CREATE TABLE repos (
   tags Nullable(String),
   provider String DEFAULT 'unknown',
   source_id Nullable(UUID) DEFAULT NULL,
-  last_synced DateTime64(3, 'UTC')
+  last_synced DateTime64(3, 'UTC'),
+  provider_repo_id String DEFAULT '',
+  identity_path String DEFAULT ''
 ) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (org_id, id)`
 
@@ -399,6 +402,81 @@ SELECT count() FROM repos WHERE org_id = 'org-acme' AND id = ?`,
 	}
 	if rows != want {
 		t.Fatalf("physical repos versions=%d want %d", rows, want)
+	}
+}
+
+// The provider writer states provider_repo_id and identity_path only when its
+// row has them: a later row with none keeps the held value (FINAL and the
+// readback agree), a row with another value replaces it. The control: a blind
+// insert that does not name the column resets it, so the carry is what keeps
+// the value.
+func TestRepositoryWriteKeepsTheHeldRepositoryAnchor(t *testing.T) {
+	for _, column := range []struct {
+		name  string
+		set   func(row *repositoryRow, value string)
+		first string
+		next  string
+	}{
+		{"provider_repo_id", func(row *repositoryRow, value string) { row.ProviderRepoID = value }, "123", "456"},
+		{"identity_path", func(row *repositoryRow, value string) { row.IdentityPath = value }, "Acme/API", "acme/first"},
+	} {
+		t.Run(column.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			harness := startRepositoryReadbackHarness(t, ctx)
+			claim, sink, now := harness.claim, harness.sink, harness.now
+			read := func() string {
+				t.Helper()
+				var value string
+				if err := harness.conn.QueryRow(ctx,
+					`SELECT `+column.name+` FROM repos FINAL WHERE org_id = ? AND id = ?`,
+					claim.OrgID, repositoryFixtureRow(claim.OrgID, now).ID,
+				).Scan(&value); err != nil {
+					t.Fatal(err)
+				}
+				return value
+			}
+			write := func(at time.Time, value string) EffectBatch {
+				t.Helper()
+				row := repositoryFixtureRow(claim.OrgID, at)
+				column.set(&row, value)
+				effect := repositoryEffect(t, claim, row)
+				if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+					t.Fatal(err)
+				}
+				return effect
+			}
+
+			write(now, column.first)
+			if got := read(); got != column.first {
+				t.Fatalf("after a row that states %s: FINAL %s=%q", column.first, column.name, got)
+			}
+			silent := write(now.Add(time.Minute), "")
+			if got := read(); got != column.first {
+				t.Fatalf("after a row that states none: FINAL %s=%q, want the held %s", column.name, got, column.first)
+			}
+			if inspection, err := sink.InspectEffect(ctx, claim, silent); err != nil || inspection != EffectExact {
+				t.Fatalf("readback of the row that states none: inspection=%s error=%v, want exact", inspection, err)
+			}
+			write(now.Add(2*time.Minute), column.next)
+			if got := read(); got != column.next {
+				t.Fatalf("after a row that states %s: FINAL %s=%q", column.next, column.name, got)
+			}
+			row := repositoryFixtureRow(claim.OrgID, now)
+			if err := harness.conn.Exec(ctx, `
+INSERT INTO repos (
+  id, org_id, repo, ref, created_at, settings, tags, provider, source_id,
+  last_synced
+) VALUES (?, ?, ?, 'main', ?, '{}', '[]', ?, ?, ?)`,
+				row.ID, row.OrgID, row.Repo, row.CreatedAt, row.Provider,
+				"22222222-2222-4222-8222-222222222222", now.Add(3*time.Minute),
+			); err != nil {
+				t.Fatal(err)
+			}
+			if got := read(); got != "" {
+				t.Fatalf("a blind insert without the column reads %q; the check above did not measure the carry", got)
+			}
+		})
 	}
 }
 

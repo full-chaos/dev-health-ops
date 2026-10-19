@@ -433,6 +433,7 @@ func jiraTeamCatalogSearchProjects(
 	ctx context.Context, client *providerfoundation.HTTPClient, status string,
 ) (search jiraTeamCatalogProjectSearchPayload, complete bool, pages int, stop string, err error) {
 	stop = "page_bound"
+	lastPageHadNoMarker := false
 	for pages < jiraTeamCatalogProjectSearchMaxPages {
 		query := url.Values{"maxResults": {strconv.Itoa(jiraTeamCatalogProjectSearchMaxResults)}}
 		if len(search.Values) > 0 {
@@ -455,12 +456,18 @@ func jiraTeamCatalogSearchProjects(
 			return search, false, pages, "error_body", nil
 		}
 		search.Values = append(search.Values, page.Values...)
-		if page.endOfData(len(search.Values), jiraTeamCatalogProjectSearchMaxResults) {
+		if page.endOfData(len(search.Values)) {
 			return search, true, pages, "", nil
 		}
 		if len(page.Values) == 0 {
+			if lastPageHadNoMarker {
+				// The page before carried neither isLast nor total: the end was
+				// never stated, so the search is not complete.
+				return search, false, pages, "no_end_marker", nil
+			}
 			return search, false, pages, "empty_page", nil
 		}
+		lastPageHadNoMarker = !page.hasEndMarker()
 	}
 	return search, false, pages, stop, nil
 }
@@ -751,7 +758,8 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		slog.Default().InfoContext(ctx, "jira_project_as_team_retired",
 			"teams", retired.TeamsRetired, "ownership", retired.OwnershipClosed, "memberships", retired.MembershipClosed,
 			"repo_ownership", retired.RepoOwnershipClosed,
-			"teams_with_manual_members", retired.TeamsWithManualMembers, "teams_with_sync_policy", retired.TeamsWithSyncPolicy)
+			"teams_with_manual_members", retired.TeamsWithManualMembers, "teams_with_sync_policy", retired.TeamsWithSyncPolicy,
+			"teams_without_provider_identity", retired.TeamsWithoutProviderIdentity)
 	}
 	batch, err := collector.Handler.CollectTeamCatalog(ctx, ref, credential, client, selections, normalizedAt)
 	if err != nil {
@@ -820,6 +828,11 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 	if selections.Members {
 		// CHAOS-9007: a membership keeps the valid_from it was first seen with.
 		keptMemberships, reuseErr := reuseJiraMembershipFirstSeen(ctx, collector.Sink.Conn, ref.OrgID, keptMemberships)
+		if reuseErr != nil {
+			return result, reuseErr
+		}
+		keptMemberships, _, reuseErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_memberships", keptMemberships,
+			func(r jiraTeamCatalogMembershipRow) string { return r.OrgID }, func(r jiraTeamCatalogMembershipRow) string { return r.TeamID }, func(r jiraTeamCatalogMembershipRow) bool { return r.ValidTo == nil })
 		if reuseErr != nil {
 			return result, reuseErr
 		}
@@ -918,6 +931,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		var retracted []jiraTeamCatalogOwnershipRow
 		var plan SnapshotPlan
 		freshOwnership := len(ownership)
+		freshRows := ownership
 		ownership, retracted, plan = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshot)
 		result.OwnershipSnapshotIncomplete = judgeJiraOwnershipSnapshot(ctx, ref.OrgID, plan, len(open)+len(held))
 		result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
@@ -930,6 +944,20 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_unchanged",
 			"org_id", ref.OrgID, "fresh", freshOwnership, "unchanged", result.OwnershipUnchanged, "written", len(ownership))
 		ownership = append(ownership, retracted...)
+		// A jira_legacy row is not filtered: it names an Atlassian ops team of
+		// jira_project_ops_team_links as jira:<ops team id> (team-attribution.md,
+		// "Team ids": the ops-team links row), and no writer of teams holds that
+		// id (the retired Python jira-ops sync stored its ops teams as ops:<id>),
+		// so its team is never a teams row.
+		var droppedOwnership LinkDrop
+		ownership, droppedOwnership, openErr = KeepLinksOfImportedTeams(ctx, collector.Sink.Conn, ref.OrgID, jiraTeamCatalogProvider, "team_project_ownership", ownership,
+			func(r jiraTeamCatalogOwnershipRow) string { return r.OrgID }, func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID },
+			func(r jiraTeamCatalogOwnershipRow) bool {
+				return r.ValidTo == nil && r.Source != jiraTeamCatalogLegacySource
+			})
+		if openErr != nil {
+			return result, openErr
+		}
 
 		ownershipEffect, effectErr := effectBatchFromValues(jiraTeamCatalogOwnershipDestination, EffectReadbackRequired, ownership)
 		if effectErr != nil {
@@ -938,7 +966,11 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, ownershipEffect); err != nil {
 			return result, err
 		}
-		result.OwnershipWritten = freshOwnership
+		result.OwnershipWritten = len(KeptLinks(droppedOwnership, freshRows,
+			func(r jiraTeamCatalogOwnershipRow) string { return r.TeamID },
+			func(r jiraTeamCatalogOwnershipRow) bool {
+				return r.ValidTo == nil && r.Source != jiraTeamCatalogLegacySource
+			}))
 		// The archived read is the later one: a project the first live read
 		// also named is written once, as archived. Rows.Projects itself is
 		// left as it is, because the ownership write reads it as what still

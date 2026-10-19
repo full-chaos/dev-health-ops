@@ -887,8 +887,8 @@ func (emptyHomeRowScanner) Close() error      { return nil }
 
 type emptyHomeCHClient struct{}
 
-func (emptyHomeCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
-	return emptyHomeRowScanner{}, nil
+func (emptyHomeCHClient) Query(_ context.Context, query string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	return emptyOrSizingRow(query), nil
 }
 
 // TestHomeRoute_IsServedByTheCatalog is CHAOS-6084/CHAOS-7042's

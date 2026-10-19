@@ -222,25 +222,14 @@ func (h *handlers) createRetentionPolicy(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	// The uuid.UUID(...) arguments sit inside the route's try/except
-	// ValueError, so a malformed org claim or X-User-Id is a 400 carrying
-	// the exception text; the service's own checks follow.
 	org, err := pythonparity.ParseUUID(orgID)
 	if err != nil {
 		detail, _ := pythonparity.UUIDValidationDetail(orgID)
 		policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
 		return
 	}
-	var createdBy *uuid.UUID
-	if header := firstHeader(r, "X-User-Id"); header != "" {
-		id, err := pythonparity.ParseUUID(header)
-		if err != nil {
-			detail, _ := pythonparity.UUIDValidationDetail(header)
-			policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
-			return
-		}
-		createdBy = &id
-	}
+	// CHAOS-10082, a named divergence from Python: see createIPAllowlistEntry.
+	createdBy := verifiedActorID(ctx)
 	if !containsString(retentionResourceTypes, resourceType) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Invalid resource type: "+resourceType, nil)
 		return
@@ -455,12 +444,11 @@ func (h *handlers) executeRetentionPolicy(w http.ResponseWriter, r *http.Request
 		count, err = h.store.applyRetention(ctx, found, cutoff, dryRun, now)
 		if err != nil {
 			// execute_policy catches any exception from the count or delete
-			// and returns it as the response's error text with a zero
-			// count (status 200); the transaction is rolled back. The text
-			// is the driver's own message, so it differs from Python's.
-			h.logger.ErrorContext(ctx, "admin: execute retention policy failed", "error", err)
+			// and returns a zero count with status 200; the transaction is
+			// rolled back. Unlike Python, the body carries an authored
+			// sentence and a reference, never the driver's message.
 			count = 0
-			text := err.Error()
+			text := h.retentionRunFailure(ctx, found, dryRun, err)
 			message = &text
 		}
 	}
@@ -468,6 +456,16 @@ func (h *handlers) executeRetentionPolicy(w http.ResponseWriter, r *http.Request
 	out.Set("deleted_count", count)
 	out.Set("error", optionalString(message))
 	policy.WriteModel(w, http.StatusOK, out, nil)
+}
+
+// retentionRunFailure logs the driver error under a fresh reference and
+// returns the sentence the response carries in its error field.
+func (h *handlers) retentionRunFailure(ctx context.Context, p *retentionPolicy, dryRun bool, err error) string {
+	reference := uuid.NewString()
+	h.logger.ErrorContext(ctx, "admin: execute retention policy failed",
+		"error", err, "reference", reference, "policy_id", p.ID, "org_id", p.OrgID,
+		"resource_type", p.ResourceType, "dry_run", dryRun)
+	return "Retention run failed. Reference: " + reference
 }
 
 // applyRetention counts (dry run) or deletes the org's audit_logs older than

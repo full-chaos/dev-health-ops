@@ -14,6 +14,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
+	"github.com/full-chaos/dev-health-ops/internal/teamprovider/teamprovidertest"
 	"github.com/google/uuid"
 )
 
@@ -26,6 +28,7 @@ import (
 type fakeGitLabWriteTeamsConn struct {
 	driver.Conn
 	statement  string
+	columns    []string
 	created    map[string]time.Time
 	createdErr error
 	batch      *fakeGitLabWriteTeamsBatch
@@ -38,6 +41,8 @@ func (f *fakeGitLabWriteTeamsConn) Query(_ context.Context, query string, _ ...a
 			return nil, f.createdErr
 		}
 		return &fakeGitLabCreatedRows{rows: f.created, index: -1}, nil
+	case query == teamprovider.Query:
+		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil
 	case strings.Contains(query, "manual_members"):
 		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil
 	default:
@@ -49,6 +54,23 @@ func (f *fakeGitLabWriteTeamsConn) PrepareBatch(_ context.Context, statement str
 	f.statement = statement
 	f.batch = &fakeGitLabWriteTeamsBatch{}
 	return f.batch, nil
+}
+
+// Exec is the teams write (teamprovider.Insert): it records the columns the
+// writer states and the rows, as PrepareBatch does.
+func (f *fakeGitLabWriteTeamsConn) Exec(_ context.Context, statement string, args ...any) error {
+	columns, writes, err := teamprovidertest.Decode(statement, args)
+	if err != nil {
+		return err
+	}
+	f.statement, f.columns = statement, columns
+	f.batch = &fakeGitLabWriteTeamsBatch{}
+	for _, write := range writes {
+		if err := f.batch.Append(write.Values...); err != nil {
+			return err
+		}
+	}
+	return f.batch.Send()
 }
 
 // fakeGitLabWriteTeamsBatch is a driver.Batch double: Append just records
@@ -112,7 +134,7 @@ func TestWriteTeamsWritesNoRosterColumn(t *testing.T) {
 	if conn.batch == nil || !conn.batch.sent || len(conn.batch.appendedIDs) != 2 {
 		t.Fatalf("batch = %+v, want both rows sent", conn.batch)
 	}
-	columns := strings.Split(conn.statement[strings.Index(conn.statement, "(")+1:strings.Index(conn.statement, ")")], ",")
+	columns := conn.columns
 	for _, column := range columns {
 		if strings.TrimSpace(column) == "members" {
 			t.Fatalf("the teams INSERT names the roster column: %s", conn.statement)

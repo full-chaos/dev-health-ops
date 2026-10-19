@@ -69,7 +69,11 @@ func SelectWorkItemsRouteHandler(provider, dataset string, deps WorkItemsRouteDe
 		// nested list that default is the 100-page hard ceiling
 		// (gitLabWorkItemsNestedHardMaxPages, CHAOS-8777). A limit set here could
 		// only lower the ceiling (the route clamps it), never raise it.
-		return GitLabWorkItemsRouteHandler{StatusMapping: deps.StatusMapping}, true
+		return GitLabWorkItemsRouteHandler{
+			StatusMapping: deps.StatusMapping,
+			FetchEpics:    gitLabFetchEpicsFromEnv(),
+			RepoIdentity:  GitLabRepoIdentityClickHouseReader{Conn: deps.Conn, Lease: deps.Lease},
+		}, true
 	case "jira":
 		return JiraAtlassianRouteHandler{StatusMapping: deps.StatusMapping}, true
 	case "linear":

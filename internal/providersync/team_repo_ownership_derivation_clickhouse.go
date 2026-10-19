@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // team_repo_ownership_derivation_clickhouse.go loads the already-synced
@@ -123,6 +125,10 @@ type TeamRepoOwnershipDerivationStats struct {
 	// Superseded is how many open rows the run closed because the claim they
 	// record now starts at its evidence time (a row at that time was written).
 	Superseded int
+	// CoOwnersBelowShareFloor is how many co-owners the run gave no row because their linked share is below 1%.
+	CoOwnersBelowShareFloor int
+	// CoOwnersVoided is how many rows of those co-owners, open or closed earlier, the run voided (valid_to = valid_from).
+	CoOwnersVoided int
 	// TextKeyCandidates is how many candidates a key parsed from pull request text gave, counted at the explicit_text tier;
 	// TextKeysSkippedForNative is how many pull requests' text keys the run did not use because the pull request has a
 	// native issue link.
@@ -244,6 +250,12 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 
 	derivation := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
 
+	stats.CoOwnersBelowShareFloor = derivation.CoOwnersBelowShareFloor
+	if derivation.CoOwnersBelowShareFloor > 0 {
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.co_owner_below_share_floor",
+			"org_id", orgID, "co_owners", derivation.CoOwnersBelowShareFloor, "floor", teamRepoOwnershipCoOwnerShareFloor)
+	}
+
 	stats.TextKeyCandidates = derivation.TextKeyCandidates
 	stats.TextKeysSkippedForNative = derivation.TextKeysSkippedForNative
 	if derivation.TextKeyCandidates > 0 || derivation.TextKeysSkippedForNative > 0 {
@@ -310,11 +322,32 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	}
 	stats.RetractionsHeld = held + heldRoles + repoHeld
 	reportTeamRepoOwnershipRetractionHeld(ctx, orgID, append(heldKinds, heldRoleKinds...))
-	if len(toRetract) > 0 {
-		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
+	// A co-owner the share floor dropped held no share on any day (the share
+	// is a whole-history measure), so its rows are voided, open and closed
+	// alike; every other retraction closes at the run, as before.
+	voids, closes := splitFloorDroppedRows(toRetract, derivation.DroppedBelowShareFloor)
+	openVoids := len(voids)
+	if len(derivation.DroppedBelowShareFloor) > 0 {
+		closed, err := loadTeamRepoOwnershipClosedInferredRows(ctx, service.Conn, orgID)
 		if err != nil {
 			return 0, 0, true, nil, err
 		}
+		earlier, _ := splitFloorDroppedRows(closed, derivation.DroppedBelowShareFloor)
+		voids = append(voids, earlier...)
+	}
+	if len(closes) > 0 {
+		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, closes)
+		if err != nil {
+			return 0, 0, true, nil, err
+		}
+	}
+	if len(voids) > 0 {
+		voided, err := voidTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, voids)
+		if err != nil {
+			return 0, retracted, true, nil, err
+		}
+		retracted += openVoids
+		stats.CoOwnersVoided = voided
 	}
 	if len(keptRoleCloses) > 0 {
 		changed, err := retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, keptRoleCloses)
@@ -992,11 +1025,13 @@ SELECT
     o.project_id,
     o.team_id,
     argMax(o.is_primary, (o.version_at, o.valid_from)) AS is_primary,
-    argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity
+    argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity,
+    (argMax(tuple(o.project_key), (o.version_at, o.valid_from))).1 AS project_key
 FROM (
     SELECT
         v.provider, v.project_id, v.team_id, v.source, v.valid_from,
         (argMax(tuple(v.valid_to), v.updated_at)).1 AS valid_to,
+        (argMax(tuple(v.project_key), v.updated_at)).1 AS project_key,
         argMax(v.is_primary, v.updated_at) AS is_primary,
         argMax(v.specificity, v.updated_at) AS specificity,
         max(v.updated_at) AS version_at
@@ -1018,13 +1053,70 @@ GROUP BY o.provider, o.project_id, o.team_id`,
 	for rows.Next() {
 		var link TeamRepoOwnershipProjectLink
 		var isPrimary uint8
-		if err := rows.Scan(&link.Provider, &link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity); err != nil {
+		var projectKey *string
+		if err := rows.Scan(&link.Provider, &link.ProjectID, &link.TeamID, &isPrimary, &link.Specificity, &projectKey); err != nil {
 			return nil, err
 		}
 		link.IsPrimary = isPrimary == 1
 		out = append(out, link)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return remapLegacyGitLabProjectLinks(ctx, conn, orgID, out)
+}
+
+// remapLegacyGitLabProjectLinks moves a GitLab project ownership link written
+// before CHAOS-8883 (project_id holds the path) to the catalog id of the one
+// project its path names, so it joins the items anchored to that id. A link
+// whose path two projects have used is dropped; a link whose path no repos row
+// names stays as it is.
+func remapLegacyGitLabProjectLinks(
+	ctx context.Context, conn driver.Conn, orgID string, links []TeamRepoOwnershipProjectLink,
+) ([]TeamRepoOwnershipProjectLink, error) {
+	var paths []string
+	seen := map[string]struct{}{}
+	for _, link := range links {
+		if link.Provider != "gitlab" || link.ProjectID == "" || teamattribution.IsGitLabCatalogProjectID(link.ProjectID) {
+			continue
+		}
+		path := strings.ToLower(strings.TrimSpace(link.ProjectID))
+		if _, dup := seen[path]; !dup {
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return links, nil
+	}
+	natives, ambiguous, err := teamattribution.LoadGitLabProjectNativesByPath(ctx, conn, orgID, paths)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TeamRepoOwnershipProjectLink, 0, len(links))
+	remapped, dropped := 0, 0
+	for _, link := range links {
+		if link.Provider == "gitlab" && link.ProjectID != "" && !teamattribution.IsGitLabCatalogProjectID(link.ProjectID) {
+			path := strings.ToLower(strings.TrimSpace(link.ProjectID))
+			if _, bad := ambiguous[path]; bad {
+				dropped++
+				continue
+			}
+			if native, ok := natives[path]; ok {
+				link.ProjectID = teamattribution.GitLabCatalogProjectIDString(orgID, native)
+				remapped++
+			}
+		}
+		out = append(out, link)
+	}
+	if remapped+dropped > 0 {
+		level := slog.LevelDebug
+		if dropped > 0 {
+			level = slog.LevelInfo
+		}
+		slog.Default().Log(ctx, level, "gitlab_legacy_ownership_links_remapped", "org_id", orgID, "remapped", remapped, "ambiguous_dropped", dropped)
+	}
+	return out, nil
 }
 
 // loadTeamRepoOwnershipTeamLinkProviders reads every (provider, team) pair a
@@ -1111,7 +1203,49 @@ WHERE org_id = ?`,
 		}
 		out = append(out, item)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return anchorGitLabOwnershipWorkItems(ctx, conn, orgID, out)
+}
+
+// anchorGitLabOwnershipWorkItems gives a GitLab work item written before the
+// numeric-id anchoring (project_id holds the path) the catalog id of the
+// project its repo names, so it joins the same project ownership as an item
+// written after. An item whose repo names no project keeps its path and joins
+// nothing.
+func anchorGitLabOwnershipWorkItems(
+	ctx context.Context, conn driver.Conn, orgID string, items []TeamRepoOwnershipWorkItem,
+) ([]TeamRepoOwnershipWorkItem, error) {
+	repoSet := map[string]struct{}{}
+	for _, item := range items {
+		if item.Provider == "gitlab" && item.RepoID != "" && !teamattribution.IsGitLabCatalogProjectID(item.ProjectID) {
+			repoSet[item.RepoID] = struct{}{}
+		}
+	}
+	if len(repoSet) == 0 {
+		return items, nil
+	}
+	repoIDs := make([]string, 0, len(repoSet))
+	for id := range repoSet {
+		repoIDs = append(repoIDs, id)
+	}
+	native, err := teamattribution.LoadGitLabRepoRows(ctx, conn, orgID, repoIDs)
+	if err != nil {
+		return nil, err
+	}
+	anchored := 0
+	for index, item := range items {
+		if item.Provider != "gitlab" || teamattribution.IsGitLabCatalogProjectID(item.ProjectID) {
+			continue
+		}
+		if row, ok := native[item.RepoID]; ok && row.NativeProjectID != "" {
+			items[index].ProjectID = teamattribution.GitLabCatalogProjectIDString(orgID, row.NativeProjectID)
+			anchored++
+		}
+	}
+	slog.Default().DebugContext(ctx, "team_repo_ownership_gitlab_items_anchored", "org_id", orgID, "repos", len(repoIDs), "anchored", anchored)
+	return items, nil
 }
 
 // loadTeamRepoOwnershipKnownTeams loads this org's CURRENT team catalog
@@ -1379,15 +1513,89 @@ func retractTeamRepoOwnershipRows(
 // retire and carry paths). Contract: a close never lands at or before its own
 // open, so the row it closes keeps a non-empty interval (valid_to >
 // valid_from). A row opened in the same millisecond as the run, or ahead of
-// the run clock, closes 1 ms after its open. The only deliberate empty
-// interval is the supersede tombstone (supersedeTeamRepoOwnershipRows), which
-// the readers' filter "valid_to > valid_from" relies on.
+// the run clock, closes 1 ms after its open. The deliberate empty intervals
+// are the supersede tombstones (supersedeTeamRepoOwnershipRows, and the GitLab
+// ownership path rows a catalog-keyed row replaces, gitlabOwnershipSnapshot),
+// which the readers' filter "valid_to > valid_from" relies on.
 func intervalCloseAt(validFrom, now time.Time) time.Time {
 	floor := validFrom.UTC().Add(time.Millisecond)
 	if now.Before(floor) {
 		return floor
 	}
 	return now
+}
+
+// splitFloorDroppedRows splits rows into the rows of a floor-dropped claim
+// and the rest. A claim is a team on a repository.
+func splitFloorDroppedRows(rows []teamRepoOwnershipActiveRow, dropped []teamRepoOwnershipClaimRef) (ofDropped, rest []teamRepoOwnershipActiveRow) {
+	if len(dropped) == 0 {
+		return nil, rows
+	}
+	set := make(map[teamRepoOwnershipClaimRef]bool, len(dropped))
+	for _, claim := range dropped {
+		set[claim] = true
+	}
+	for _, row := range rows {
+		if set[teamRepoOwnershipClaimRef{TeamID: row.TeamID, RepoID: row.RepoID.String()}] {
+			ofDropped = append(ofDropped, row)
+			continue
+		}
+		rest = append(rest, row)
+	}
+	return ofDropped, rest
+}
+
+// loadTeamRepoOwnershipClosedInferredRows reads the org's closed inferred
+// rows that still cover an interval (valid_to > valid_from).
+func loadTeamRepoOwnershipClosedInferredRows(
+	ctx context.Context, conn driver.Conn, orgID string,
+) ([]teamRepoOwnershipActiveRow, error) {
+	rows, err := conn.Query(ctx, `
+SELECT provider, team_id, repo_id, repo_full_name, match_type, is_primary, specificity, priority, valid_from, share
+FROM team_repo_ownership FINAL
+WHERE org_id = ?
+  AND source = 'inferred'
+  AND valid_to IS NOT NULL
+  AND valid_to > valid_from
+  AND valid_to <= now64(3, 'UTC')`,
+		orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []teamRepoOwnershipActiveRow
+	for rows.Next() {
+		var row teamRepoOwnershipActiveRow
+		var repoID uuid.UUID
+		if err := rows.Scan(
+			&row.Provider, &row.TeamID, &repoID, &row.RepoFullName, &row.MatchType,
+			&row.IsPrimary, &row.Specificity, &row.Priority, &row.ValidFrom, &row.Share,
+		); err != nil {
+			return nil, err
+		}
+		row.RepoID = repoID
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// voidTeamRepoOwnershipRows voids each row: the empty-interval form
+// (valid_to = valid_from) supersedeTeamRepoOwnershipRows writes, so as-of
+// readers give the team no share on any day the row covered. Logged with the
+// count.
+func voidTeamRepoOwnershipRows(
+	ctx context.Context,
+	conn driver.Conn,
+	orgID string,
+	now time.Time,
+	rows []teamRepoOwnershipActiveRow,
+) (int, error) {
+	n, err := writeEmptyIntervalTeamRepoOwnershipRows(ctx, conn, orgID, now, rows)
+	if err != nil {
+		return 0, err
+	}
+	slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.co_owner_voided", "org_id", orgID, "rows", n)
+	return n, nil
 }
 
 // supersedeTeamRepoOwnershipRows closes each row at its own valid_from: a
@@ -1398,6 +1606,23 @@ func intervalCloseAt(validFrom, now time.Time) time.Time {
 // updated_at. The row then covers no instant, and the claim's row at its
 // evidence time is the one open row. Logged with the count.
 func supersedeTeamRepoOwnershipRows(
+	ctx context.Context,
+	conn driver.Conn,
+	orgID string,
+	now time.Time,
+	rows []teamRepoOwnershipActiveRow,
+) (int, error) {
+	n, err := writeEmptyIntervalTeamRepoOwnershipRows(ctx, conn, orgID, now, rows)
+	if err != nil || n == 0 {
+		return n, err
+	}
+	slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.superseded_by_evidence_start", "org_id", orgID, "rows", n)
+	return n, nil
+}
+
+// writeEmptyIntervalTeamRepoOwnershipRows replaces each row under its own key
+// with valid_to = valid_from and a newer updated_at.
+func writeEmptyIntervalTeamRepoOwnershipRows(
 	ctx context.Context,
 	conn driver.Conn,
 	orgID string,
@@ -1423,7 +1648,6 @@ func supersedeTeamRepoOwnershipRows(
 	if err := batch.Send(); err != nil {
 		return 0, err
 	}
-	slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.superseded_by_evidence_start", "org_id", orgID, "rows", len(rows))
 	return len(rows), nil
 }
 

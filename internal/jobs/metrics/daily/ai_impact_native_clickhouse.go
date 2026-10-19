@@ -96,7 +96,7 @@ func LoadAIImpactPullRequests(
 
 	rows, err := conn.Query(ctx, `
 SELECT repo_id, number, created_at, merged_at, reviews_count,
-       changes_requested_count, additions, deletions, changed_files
+       changes_requested_count, additions, deletions, changed_files, author_name
 FROM git_pull_requests FINAL
 WHERE org_id = ? AND repo_id IN ?
   AND ((created_at >= ? AND created_at < ?)
@@ -122,9 +122,10 @@ ORDER BY repo_id, number`,
 			additions             *uint32
 			deletions             *uint32
 			changedFiles          *uint32
+			authorName            *string
 		)
 		if err := rows.Scan(&repoID, &number, &createdAt, &mergedAt, &reviewsCount,
-			&changesRequestedCount, &additions, &deletions, &changedFiles); err != nil {
+			&changesRequestedCount, &additions, &deletions, &changedFiles, &authorName); err != nil {
 			return nil, fmt.Errorf("scan ai impact pull request row: %w", err)
 		}
 		// reviews_count / changes_requested_count are non-nullable UInt32 with
@@ -138,6 +139,7 @@ ORDER BY repo_id, number`,
 			RepoID: repoID, Number: int64(number), CreatedAt: createdAt, MergedAt: mergedAt,
 			ReviewsCount: &reviews, ChangesRequestedCount: &changesRequested,
 			Additions: additions, Deletions: deletions, ChangedFiles: changedFiles,
+			AuthorName: authorName,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -219,7 +221,9 @@ ORDER BY repo_id, number, review_id`,
 // (metrics/loaders/ai_impact.py:22) -- a UNION ALL of two linkage paths,
 // ordered, then deduped to the FIRST row per (repo_id, number).
 //
-// Path 1 reaches the attribution through work_graph_issue_pr, so the work item
+// Path 1 reaches the attribution through work_graph_issue_pr (only the best
+// provenance tier of a pull request's links: native > explicit_text >
+// heuristic, as the incident trigger read does), so the work item
 // supplies work_type; path 2 matches the attribution directly against the PR
 // number (or a "<repo>#<number>" subject id) and hard-codes "pull_request".
 //
@@ -264,7 +268,20 @@ FROM (
         coalesce(nullIf(wi.type, ''), 'pull_request') AS work_type,
         pr.merged_at AS merged_at
     FROM git_pull_requests AS pr
-    INNER JOIN work_graph_issue_pr AS link
+    INNER JOIN (
+        SELECT org_id, repo_id, work_item_id, pr_number
+        FROM (
+            SELECT org_id, repo_id, work_item_id, pr_number, tier_rank,
+                   max(tier_rank) OVER (PARTITION BY org_id, repo_id, pr_number) AS best_rank
+            FROM (
+                SELECT org_id, repo_id, work_item_id, pr_number,
+                       multiIf(provenance = 'native', 3, provenance = 'explicit_text', 2, provenance = 'heuristic', 1, 0) AS tier_rank
+                FROM work_graph_issue_pr FINAL
+                WHERE org_id = ? AND repo_id IN ?
+            )
+        )
+        WHERE tier_rank = best_rank
+    ) AS link
         ON link.org_id = pr.org_id AND link.repo_id = pr.repo_id AND link.pr_number = pr.number
     INNER JOIN ai_attribution_resolved AS attr
         ON attr.subject_type = 'pull_request'
@@ -298,6 +315,7 @@ FROM (
         OR (pr.merged_at IS NOT NULL AND pr.merged_at >= ? AND pr.merged_at < ?))
 )
 ORDER BY merged_at DESC NULLS LAST, repo_id, number DESC, work_type`,
+		organizationID, repositoryUUIDStrings(repoIDs),
 		repositoryUUIDStrings(repoIDs), organizationID, organizationID,
 		start.UTC(), end.UTC(), start.UTC(), end.UTC(),
 		repositoryUUIDStrings(repoIDs), organizationID, organizationID,

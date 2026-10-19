@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -31,6 +32,8 @@ type jiraAtlassianDoer struct {
 	devStatus         int
 	devStatusStatuses []int
 	devStatusBody     string
+	// searchStatus, when set, is the status of every search request (a failing search).
+	searchStatus int
 }
 
 func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error) {
@@ -42,6 +45,9 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 	var body string
 	status := http.StatusOK
 	switch {
+	case request.URL.Path == "/rest/api/3/search/jql" && doer.searchStatus != 0:
+		status = doer.searchStatus
+		body = `{"errorMessages":["bad request"]}`
 	case request.URL.Path == "/rest/api/3/search/jql":
 		body = `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":["support"],"priority":{"name":"Highest"},"assignee":{"accountId":"assignee-201","displayName":"Assignee"},"reporter":{"emailAddress":"reporter@example.com","accountId":"reporter-201","displayName":"Reporter"},"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z","customfield_10020":[{"id":9001,"name":"August"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-202"}}]}}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
@@ -67,6 +73,8 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 			status = doer.devStatusStatuses[len(doer.devStatusStatuses)-1]
 		}
 		body = doer.devStatusBody
+	case request.URL.Path == "/rest/api/3/field":
+		body = `[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`
 	default:
 		doer.t.Fatalf("unexpected Atlassian request %s", request.URL.String())
 	}
@@ -146,7 +154,7 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 	if batch.Result["worklogs_synced"] != 1 || batch.Result["sprints_synced"] != 1 || batch.Result["dependencies_synced"] != 1 || batch.Result["interactions_synced"] != 1 {
 		t.Fatalf("result=%#v", batch.Result)
 	}
-	if batch.Evidence.Requests != 6 || batch.Evidence.Pages != 1 {
+	if batch.Evidence.Requests != 7 || batch.Evidence.Pages != 1 {
 		t.Fatalf("evidence=%+v", batch.Evidence)
 	}
 	var worklog jiraWorklogRow
@@ -221,6 +229,8 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedAttemptsAcrossPaths(t *testing.
 		case request.URL.Path == "/rest/agile/1.0/board":
 			boardAttempts++
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		case request.URL.Path == "/rest/api/3/field":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected Atlassian request %s", request.URL.String())
 			return nil, nil
@@ -244,10 +254,10 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedAttemptsAcrossPaths(t *testing.
 	if batch.Result["sprints_synced"] != 0 {
 		t.Fatalf("result=%#v: a failed boards fetch must skip the board-sprints call entirely", batch.Result)
 	}
-	// 1 search + 2 changelog + 1 comments + 1 worklog + 2 boards = 7. Board
+	// 1 search + 1 field list + 2 changelog + 1 comments + 1 worklog + 2 boards = 8. Board
 	// sprints never fires because the boards fetch never returns any boards.
-	if batch.Evidence.Requests != 7 {
-		t.Fatalf("evidence=%+v want Requests=7 (every physical attempt, from one source)", batch.Evidence)
+	if batch.Evidence.Requests != 8 {
+		t.Fatalf("evidence=%+v want Requests=8 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 
@@ -285,6 +295,8 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedWorklogAndSprintAttempts(t *tes
 		case request.URL.Path == "/rest/agile/1.0/board/77/sprint":
 			sprintAttempts++
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		case request.URL.Path == "/rest/api/3/field":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected Atlassian request %s", request.URL.String())
 			return nil, nil
@@ -308,9 +320,9 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedWorklogAndSprintAttempts(t *tes
 	if batch.Result["sprints_synced"] != 0 {
 		t.Fatalf("result=%#v: a failed board-sprints fetch must not synthesize a sprint", batch.Result)
 	}
-	// 1 search + 1 changelog + 1 comments + 2 worklog + 1 board + 2 sprint = 8.
-	if batch.Evidence.Requests != 8 {
-		t.Fatalf("evidence=%+v want Requests=8 (every physical attempt, from one source)", batch.Evidence)
+	// 1 search + 1 field list + 1 changelog + 1 comments + 2 worklog + 1 board + 2 sprint = 9.
+	if batch.Evidence.Requests != 9 {
+		t.Fatalf("evidence=%+v want Requests=9 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 
@@ -453,8 +465,8 @@ func TestJiraAtlassianRouteDevStatusCapLimitsRealWireAttempts(t *testing.T) {
 	// board-sprint) plus the 1 capped dev-status attempt: the counting Doer
 	// at the HTTP boundary is the only source, so the cap that limited the
 	// real wire attempts is exactly what FetchEvidence.Requests reports too.
-	if batch.Evidence.Requests != 7 {
-		t.Fatalf("evidence=%+v want Requests=7 (every physical attempt, from one source)", batch.Evidence)
+	if batch.Evidence.Requests != 8 {
+		t.Fatalf("evidence=%+v want Requests=8 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 
@@ -485,6 +497,8 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 			// retrying client (MaxAttempts=3), OPS-301 alone should consume
 			// exactly the remaining budget (2), leaving 0 for OPS-302.
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		case request.URL.Path == "/rest/api/3/field":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected request %s", request.URL.String())
 			return nil, nil
@@ -548,6 +562,8 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 			// Transient: retryable, but only 1 of the shared budget of 2
 			// should remain after OPS-401's single no-op call.
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"errorMessages":["temporarily unavailable"]}`)), Request: request}, nil
+		case request.URL.Path == "/rest/api/3/field":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 		default:
 			t.Fatalf("unexpected request %s", request.URL.String())
 			return nil, nil
@@ -776,6 +792,8 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 						return respond(c.gitlabStatus, c.gitlabBody)
 					}
 					return respond(http.StatusOK, github)
+				case request.URL.Path == "/rest/api/3/field":
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`[{"id":"summary","name":"Summary","custom":false,"schema":{"type":"string"}}]`)), Request: request}, nil
 				default:
 					t.Fatalf("unexpected request %s", request.URL.String())
 					return nil, nil
@@ -820,5 +838,112 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 				t.Fatalf("by application type=%v", byType)
 			}
 		})
+	}
+}
+
+// CHAOS-8805, review round 1: the route the selector constructs for Jira (this
+// one) emits the window line, with the bounded JQL, so a regression in the bound
+// is visible at Info on the active route.
+func TestJiraAtlassianRouteLogsItsFetchWindowAtInfo(t *testing.T) {
+	var logged lockedLogBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	claim := jiraAtlassianClaim()
+	doer := &jiraAtlassianDoer{t: t}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if _, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	); err != nil {
+		t.Fatal(err)
+	}
+	line := logged.String()
+	if !strings.Contains(line, "msg=jira_work_items_window") || !strings.Contains(line, "issues=1") ||
+		!strings.Contains(line, "updated >= '2026-06-30' AND updated < '2026-08-02'") || strings.Contains(line, "statusCategory") {
+		t.Fatalf("the active Jira route did not log its bounded window: %q", line)
+	}
+}
+
+// A failed search still emits the window line (search_failed=true, the error
+// class, never its text): a planned unit that read nothing is not silent at Info.
+func TestJiraAtlassianRouteLogsItsFetchWindowWhenTheSearchFails(t *testing.T) {
+	var logged lockedLogBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	claim := jiraAtlassianClaim()
+	doer := &jiraAtlassianDoer{t: t, searchStatus: http.StatusBadRequest}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	if _, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	); err == nil {
+		t.Fatal("the failed search returned no error")
+	}
+	line := logged.String()
+	if !strings.Contains(line, "msg=jira_work_items_window") || !strings.Contains(line, "search_failed=true") || !strings.Contains(line, "issues=0") {
+		t.Fatalf("a failed search emitted no window line: %q", line)
+	}
+}
+
+// The Atlassian route accounts its search, changelog, board and sprint reads to
+// jira_jql / jira_issue_enrichment and the worklog reads to jira_worklogs, the
+// families the dispatch estimate names; none is left unlabelled.
+func TestJiraAtlassianRouteLabelsEveryRequestWithTheEstimatesFamilies(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	doer := &jiraAtlassianDoer{t: t}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client.Ledger = providerfoundation.NewRequestLedger()
+	if _, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertRouteRequestsAreLabelled(t, "jira", claim.Dataset, client.Ledger, "jira_jql", "jira_issue_enrichment", "jira_worklogs")
+}
+
+// The GraphQL client of the route is a second client; its wire requests are
+// part of the unit and are counted in the unit's ledger with the REST ones.
+func TestJiraAtlassianRouteCountsTheGraphQLClientsRequestsInTheUnitLedger(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	claim.DatasetOptions["atlassian_gql_enabled"] = true
+	rest := &jiraAtlassianDoer{t: t}
+	restHits, graphqlHits := 0, 0
+	restCounting := jiraAtlassianDoerFunc(func(request *http.Request) (*http.Response, error) {
+		restHits++
+		return rest.Do(request)
+	})
+	graphql := jiraAtlassianDoerFunc(func(request *http.Request) (*http.Response, error) {
+		graphqlHits++
+		body := `{"data":{"issue":{"worklogs":{"pageInfo":{"hasNextPage":false,"endCursor":""},"edges":[]}}}}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)), Request: request,
+		}, nil
+	})
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(restCounting), lease)
+	client.Ledger = providerfoundation.NewRequestLedger()
+	handler := jiraAtlassianCompleteHandler(t)
+	handler.CloudID, handler.GraphQLClient = "cloud-301", jiraWorkItemsTestClient(t, fakehttp.Client(graphql), lease)
+	if _, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if graphqlHits == 0 {
+		t.Fatal("the route sent no GraphQL request, so nothing below tests anything")
+	}
+	entries, dropped := client.Ledger.Snapshot()
+	counted := 0
+	for _, entry := range entries {
+		counted += entry.Requests
+	}
+	if counted != restHits+graphqlHits || dropped != 0 {
+		t.Fatalf("ledger counted %d (dropped %d), want %d REST + %d GraphQL wire requests: %v", counted, dropped, restHits, graphqlHits, entries)
 	}
 }

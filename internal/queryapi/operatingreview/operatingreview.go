@@ -132,6 +132,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -140,6 +141,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/readers"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
@@ -899,7 +901,7 @@ func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, st
 	return out, rows.Err()
 }
 
-// investmentRow is one canonical theme of the week: its work (InvestmentShareMeasure) over the units that END in the
+// investmentRow is one canonical theme of the week: its work (OperatingReviewMeasure) over the units that END in the
 // week (the Jev categorization, work_unit_investments: the Investment page's own read; CHAOS-9199).
 type investmentRow struct {
 	theme string
@@ -922,27 +924,56 @@ func ownershipAsOf(weekEnd time.Time) time.Time {
 // A team selection narrows to the repositories the teams own (teamscope), never to a team column.
 // DECLARED DIVERGENCE from the reference, which summed delivery_units of
 // investment_metrics_daily by the legacy rule classifier's investment_area (CHAOS-9195, D5933).
-func fetchInvestment(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]investmentRow, error) {
+func fetchInvestment(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time, sized bool) ([]investmentRow, *readers.SizingCoverage, error) {
 	reader, err := investmentexplain.NewReader(client)
 	if err != nil {
-		return nil, fmt.Errorf("operatingreview: investment: %w", err)
+		return nil, nil, fmt.Errorf("operatingreview: investment: %w", err)
 	}
-	filters := investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end, DatedByEnd: true, Measure: investmentexplain.InvestmentShareMeasure}
+	measure := investmentexplain.OperatingReviewMeasure
+	if sized {
+		measure = investmentexplain.OperatingReviewSizedMeasure
+	}
+	filters := investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end, DatedByEnd: true, Measure: measure}
 	if len(teams) > 0 {
 		filters.TeamScopeCondition, filters.TeamScopeBindings = teamscope.RepoCondition(orgID, "repo_id", []string(teams), ownershipAsOf(end))
 		filters.TeamIDs, filters.TeamAsOf = []string(teams), ownershipAsOf(end)
 	}
 	themeRows, err := reader.FetchInvestmentThemeEffort(ctx, filters)
 	if err != nil {
-		return nil, fmt.Errorf("operatingreview: investment query: %w", err)
+		return nil, nil, fmt.Errorf("operatingreview: investment query: %w", err)
 	}
+	// ISSUE_SIZE is never served without the coverage that labels it (D6027): a failed coverage read fails the
+	// whole investment read, which the caller degrades to "no data" like any other failed table.
+	var sizing *readers.SizingCoverage
+	if sized {
+		coverage, err := reader.FetchSizingCoverage(ctx, filters)
+		if err != nil {
+			return nil, nil, fmt.Errorf("operatingreview: investment sizing query: %w", err)
+		}
+		sizing = &coverage
+	}
+	slog.DebugContext(ctx, "operatingreview: investment read", "measure", measure, "themes", len(themeRows), "sized_read", sizing != nil)
 	var out []investmentRow
 	for _, row := range themeRows {
 		if units.IsTheme(row.Theme) {
 			out = append(out, investmentRow{theme: row.Theme, value: row.Value})
 		}
 	}
-	return out, nil
+	return out, sizing, nil
+}
+
+type sizedInvestmentKey struct{}
+
+// WithSizedInvestment asks for the investment section in ISSUE_SIZE with its sizing coverage (CHAOS-9873, D6027,
+// D6032). The GraphQL resolver sets it only for a document that selects the section's whole sizing; every other
+// caller reads the section in work units.
+func WithSizedInvestment(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sizedInvestmentKey{}, true)
+}
+
+func sizedInvestmentRequested(ctx context.Context) bool {
+	sized, _ := ctx.Value(sizedInvestmentKey{}).(bool)
+	return sized
 }
 
 type aiImpactRow struct {
@@ -1028,6 +1059,16 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams 
 		var aiCycleTimeDelta, aiReviewAmp, reworkDrag, testGap, incidentDrag *float64
 		if scanErr := rows.Scan(&bucket, &prsTotal, &aiAssistedPrs, &agentCreatedPrs, &humanPrs, &unknownPrs, &aiCycleTimeDelta, &aiReviewAmp, &reworkDrag, &testGap, &incidentDrag); scanErr != nil {
 			return nil, fmt.Errorf("operatingreview: ai_impact scan: %w", scanErr)
+		}
+		switch bucket {
+		case "ai_assisted", "agent_created", "ai_review":
+		default:
+			// Only AI buckets measure AI impact. Human rows are the baseline
+			// the deltas are taken against (CHAOS-10020) and bot rows are
+			// neither AI nor human (chris, D6045); both still count as pull
+			// requests, but neither is a term in an AI average.
+			aiCycleTimeDelta, aiReviewAmp, reworkDrag, testGap, incidentDrag = nil, nil, nil, nil, nil
+			slog.DebugContext(ctx, "operatingreview: non-AI bucket excluded from AI measures", "bucket", bucket)
 		}
 		out = append(out, aiImpactRow{
 			prsTotal:              prsTotal,
@@ -1229,8 +1270,13 @@ type periodRows struct {
 	changeFailure  []changeFailureAggRow
 	incidents      []incidentsAggRow
 	investment     []investmentRow
-	aiImpact       []aiImpactRow
-	aiGovernance   []aiGovernanceRawRow
+	// investmentSizing is the sizing coverage of the week's units, read only when the investment section is read in
+	// ISSUE_SIZE (CHAOS-9873); nil otherwise.
+	investmentSizing *readers.SizingCoverage
+	// investmentSized says the investment rows above are in ISSUE_SIZE: the section's unit and its sizing follow it.
+	investmentSized bool
+	aiImpact        []aiImpactRow
+	aiGovernance    []aiGovernanceRawRow
 }
 
 // liveRowHaving keeps a key of a daily table only when its newest row is a
@@ -1337,9 +1383,13 @@ func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, team
 	errSwallow(ctx, "incidents", err)
 	incidents = discardOnError(incidents, err)
 
-	investment, err := fetchInvestment(ctx, client, orgID, teams, start, end)
+	sized := sizedInvestmentRequested(ctx)
+	investment, investmentSizing, err := fetchInvestment(ctx, client, orgID, teams, start, end, sized)
 	errSwallow(ctx, "investment", err)
 	investment = discardOnError(investment, err)
+	if err != nil {
+		investmentSizing = nil
+	}
 
 	aiImpact, err := fetchAIImpact(ctx, client, orgID, teams, start, end)
 	errSwallow(ctx, "ai_impact", err)
@@ -1355,17 +1405,19 @@ func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, team
 	changeFailure = discardOnError(changeFailure, err)
 
 	return periodRows{
-		workItems:      workItems,
-		stateDurations: stateDurations,
-		repoMetrics:    repoMetrics,
-		hotspots:       hotspots,
-		complexity:     complexity,
-		deployments:    deployments,
-		changeFailure:  changeFailure,
-		incidents:      incidents,
-		investment:     investment,
-		aiImpact:       aiImpact,
-		aiGovernance:   aiGovernance,
+		workItems:        workItems,
+		stateDurations:   stateDurations,
+		repoMetrics:      repoMetrics,
+		hotspots:         hotspots,
+		complexity:       complexity,
+		deployments:      deployments,
+		changeFailure:    changeFailure,
+		incidents:        incidents,
+		investment:       investment,
+		investmentSizing: investmentSizing,
+		investmentSized:  sized,
+		aiImpact:         aiImpact,
+		aiGovernance:     aiGovernance,
 	}
 }
 
@@ -1714,9 +1766,11 @@ func hasAIOpportunityInputs(p periodRows) bool {
 }
 
 type reviewSection struct {
-	key      string
-	title    string
-	metrics  []reviewMetric
+	key     string
+	title   string
+	metrics []reviewMetric
+	// sizing is the measure and the sizing coverage of the investment section only (CHAOS-9873).
+	sizing   *model.OperatingReviewSizing
 	changed  []string
 	improved []string
 	worsened []string
@@ -1984,7 +2038,7 @@ var investmentThemes = []struct{ key, label string }{
 	{"risk", "Risk / security"},
 }
 
-// investmentUnits is the work per canonical theme (InvestmentShareMeasure); a theme with no work is 0.
+// investmentUnits is the work per canonical theme (OperatingReviewMeasure); a theme with no work is 0.
 func investmentUnits(rows []investmentRow) map[string]float64 {
 	out := make(map[string]float64, len(investmentThemes))
 	for _, theme := range investmentThemes {
@@ -2096,6 +2150,7 @@ func toGraphQLSection(s reviewSection) model.OperatingReviewSection {
 		Changed:  changed,
 		Improved: improved,
 		Worsened: worsened,
+		Sizing:   s.sizing,
 	}
 }
 
@@ -2199,12 +2254,16 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 }
 
 // investmentSection is the week's work per canonical theme (CHAOS-9199), in the measure
-// investmentexplain.InvestmentShareMeasure names (COUNT, CHAOS-9622, D5999: the share of the
-// units, never their lines of code). The metrics are named <theme>_work with the unit "work units"
+// investmentexplain.OperatingReviewMeasure names (COUNT) or, for a document that selects the section's sizing,
+// OperatingReviewSizedMeasure (ISSUE_SIZE) with that sizing (CHAOS-9873, D6027); never the units' lines of code. The metrics are named <theme>_work with the unit "work units"
 // (they were <theme>_effort and "effort" while the value was the unit's churn_loc effort_value). Feature delivery
 // reads higher-is-better and maintenance lower-is-better, as "new value" and "KTLO" did; the
 // other themes are neutral.
 func investmentSection(current, prior periodRows) reviewSection {
+	unit := "work units"
+	if current.investmentSized {
+		unit = "issue size"
+	}
 	currentUnits := investmentUnits(current.investment)
 	priorUnits := investmentUnits(prior.investment)
 	metrics := make([]reviewMetric, 0, len(investmentThemes))
@@ -2216,9 +2275,28 @@ func investmentSection(current, prior periodRows) reviewSection {
 		case "maintenance":
 			direction = lowerIsBetter
 		}
-		metrics = append(metrics, buildMetric(theme.key+"_work", theme.label, currentUnits[theme.key], priorUnits[theme.key], "work units", direction).dataIn(current, prior, hasInvestmentRows))
+		metrics = append(metrics, buildMetric(theme.key+"_work", theme.label, currentUnits[theme.key], priorUnits[theme.key], unit, direction).dataIn(current, prior, hasInvestmentRows))
 	}
-	return buildSection("investment", "Investment", metrics)
+	section := buildSection("investment", "Investment", metrics)
+	section.sizing = investmentSizing(current)
+	return section
+}
+
+// investmentSizing is the section's measure and, in ISSUE_SIZE, the sizing coverage of the current week's units: the
+// three sizing fields are null when the week holds no unit (not measured, never 0).
+func investmentSizing(current periodRows) *model.OperatingReviewSizing {
+	if !current.investmentSized {
+		return &model.OperatingReviewSizing{Measure: model.SankeyValueUnitWorkUnits}
+	}
+	out := &model.OperatingReviewSizing{Measure: model.SankeyValueUnitIssueSize}
+	if current.investmentSizing == nil || current.investmentSizing.Units == 0 {
+		return out
+	}
+	units := current.investmentSizing.Units
+	out.SizingCoverage = current.investmentSizing.Share()
+	out.UnsizedUnitCount = current.investmentSizing.Unsized()
+	out.WorkUnitCount = &units
+	return out
 }
 
 // aiWorkflowSection ports _ai_workflow_section (metrics/operating_review.py:

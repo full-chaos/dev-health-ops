@@ -1061,6 +1061,8 @@ type HomeSignal {
   attribution: SignalAttribution
   "Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta."
   repoFilterApplied: Boolean
+  "One sentence on where the signal's move appears largest (\"Cycle Time appears to have moved most in A, B and C.\"), built from the display names of its top drivers with one hedge word. Null when the signal has no stated non-zero move, no driver has a name, or the signal is not a metric signal (risk, recommendation). Never a placeholder."
+  driver: String
 }
 
 """Source and confidence distribution for the work items behind one Home signal."""
@@ -1277,6 +1279,7 @@ type MappingCoverage {
 
 enum MeasureInput {
   COUNT
+  ISSUE_SIZE
   CHURN_LOC
   PR_REWORK_RATIO
   CYCLE_TIME_HOURS
@@ -1310,6 +1313,8 @@ type MetricDelta {
   hasData: Boolean!
   "Whether the comparison window has one or more stored source rows."
   hasPriorData: Boolean!
+  "The value the comparison window stored, in the unit and scale of value (the same transform), read by the query that sets hasPriorData. Null exactly when hasPriorData is false: a window with no stored value is unknown, never 0. A stored zero is 0. Not derived from value and deltaPct (CHAOS-9817)."
+  priorValue: Float
   spark: [SparkPoint!]!
   "Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric."
   rateState: String
@@ -1464,6 +1469,16 @@ enum OperatingReviewMetricScope {
   ORGANIZATION
 }
 
+"""
+What the Investment section's work is measured in and how much of it is sized (CHAOS-9873, D6027, D6032). ISSUE_SIZE weighs each work unit by its issue size, an unsized unit counts 1; WORK_UNITS counts each unit 1. The sizing fields are read over the week's units, the ones the section's current-week values come from. They are null unless ``measure`` is ISSUE_SIZE, and null when the week holds no unit: null is "not measured", never 0.
+"""
+type OperatingReviewSizing {
+  measure: SankeyValueUnit!
+  sizingCoverage: Float
+  unsizedUnitCount: Int
+  workUnitCount: Int
+}
+
 type OperatingReviewSection {
   key: String!
   title: String!
@@ -1471,6 +1486,10 @@ type OperatingReviewSection {
   changed: [String!]!
   improved: [String!]!
   worsened: [String!]!
+  """
+  The measure and the sizing coverage of the section (CHAOS-9873). Null for every section but investment. The investment section is read in ISSUE_SIZE only for a document that selects measure, sizingCoverage, unsizedUnitCount and workUnitCount here, so a client never receives issue-size values it cannot label (D6027); any other document reads WORK_UNITS and gets measure WORK_UNITS with the sizing fields null.
+  """
+  sizing: OperatingReviewSizing
 }
 
 type PageInfo {
@@ -1935,6 +1954,11 @@ type ReworkThemeAllocation {
   allocationPct: Float!
   prsMerged: Int!
   churnLoc: Int!
+  measure: SankeyValueUnit!
+  denominator: Float!
+  sizingCoverage: Float
+  unsizedUnitCount: Int
+  workUnitCount: Int
 }
 
 type SankeyCoverage {
@@ -1943,6 +1967,8 @@ type SankeyCoverage {
   directRepoCoverage: Float
   teamFallbackRepoCoverage: Float
   repoFanoutReposPerUnit: Float
+  sizingCoverage: Float
+  unsizedUnitCount: Int
 }
 
 type SankeyEdge {
@@ -1976,6 +2002,7 @@ type SankeyResult {
 
 enum SankeyValueUnit {
   WORK_UNITS
+  ISSUE_SIZE
 }
 
 type SavedReportConnection {
@@ -2324,7 +2351,7 @@ input TimeseriesRequestInput {
 }
 
 """
-Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE and COVERAGE_LINE_PCT carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
+Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE, COVERAGE_LINE_PCT and TEST_FLAKE_RATE carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
 """
 enum TimeseriesScope {
   DIMENSION

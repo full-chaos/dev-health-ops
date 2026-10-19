@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -26,11 +27,19 @@ type gitLabWorkItemsDoer struct {
 	// forceNextHeader overrides X-Next-Page for one response key
 	// ("<path>?page=N"), to model a provider whose header disagrees with its body.
 	forceNextHeader map[string]string
+	// statusByPath answers every request of a path with that status and an empty error body.
+	statusByPath map[string]int
 }
 
 func (doer *gitLabWorkItemsDoer) Do(request *http.Request) (*http.Response, error) {
 	doer.requests = append(doer.requests, request.Clone(request.Context()))
 	path := request.URL.Path
+	if status, ok := doer.statusByPath[path]; ok {
+		return &http.Response{
+			StatusCode: status, Status: http.StatusText(status), Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"message":"refused"}`)), Request: request,
+		}, nil
+	}
 	key := path
 	if request.URL.Query().Get("page") != "" {
 		key = path + "?page=" + request.URL.Query().Get("page")
@@ -80,9 +89,10 @@ func gitLabWorkItemsClient(t *testing.T, doer providerfoundation.HTTPDoer) *prov
 func gitLabWorkItemResponses() map[string][]string {
 	root := "/api/v4/projects/123"
 	return map[string][]string{
-		root:                        {`{"id":123,"path":"api","path_with_namespace":"acme/api","name":"api"}`},
-		root + "/milestones?page=1": {`[{"id":7,"title":"July","state":"closed","start_date":"2026-07-01","due_date":"2026-07-31"}]`, `[]`},
-		root + "/issues?page=1":     {`[{"iid":42,"title":"Fix the API","description":"blocks #7 and see CHAOS-9","state":"opened","created_at":"2026-07-02T09:00:00Z","updated_at":"2026-07-03T09:00:00Z","closed_at":null,"labels":["bug","in progress","priority::high"],"assignees":[{"email":"Alice@EXAMPLE.COM","username":"alice","name":"Alice"}],"author":{"email":"bob@example.com","username":"bob","name":"Bob"},"web_url":"https://gitlab.example/acme/api/-/issues/42","weight":3,"milestone":{"id":7,"title":"July"},"due_date":"2026-07-20"}]`, `[]`},
+		root:                               {`{"id":123,"path":"api","path_with_namespace":"acme/api","name":"api"}`},
+		"/api/v4/groups/acme/epics?page=1": {`[]`},
+		root + "/milestones?page=1":        {`[{"id":7,"title":"July","state":"closed","start_date":"2026-07-01","due_date":"2026-07-31"}]`, `[]`},
+		root + "/issues?page=1":            {`[{"iid":42,"title":"Fix the API","description":"blocks #7 and see CHAOS-9","state":"opened","created_at":"2026-07-02T09:00:00Z","updated_at":"2026-07-03T09:00:00Z","closed_at":null,"labels":["bug","in progress","priority::high"],"assignees":[{"email":"Alice@EXAMPLE.COM","username":"alice","name":"Alice"}],"author":{"email":"bob@example.com","username":"bob","name":"Bob"},"web_url":"https://gitlab.example/acme/api/-/issues/42","weight":3,"milestone":{"id":7,"title":"July"},"due_date":"2026-07-20"}]`, `[]`},
 		root + "/issues/42/resource_label_events?page=1":        {`[{"action":"add","created_at":"2026-07-02T10:00:00Z","label":{"name":"done"}}]`, `[]`},
 		root + "/issues/42/resource_state_events?page=1":        {`[{"state":"reopened","created_at":"2026-07-03T10:00:00Z","user":{"username":"bob","name":"Bob"}}]`, `[]`},
 		root + "/issues/42/links?page=1":                        {`[{"link_type":"blocks","iid":7,"references":{"full":"acme/api#7"}}]`, `[]`},
@@ -107,6 +117,7 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 	client := gitLabWorkItemsClient(t, fakehttp.Client(doer))
 	leftToDaily := providerfoundation.NewMetrics()
 	client.Metrics = leftToDaily
+	client.Ledger = providerfoundation.NewRequestLedger()
 	batch, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
@@ -119,6 +130,7 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 		}
 		t.Fatalf("err=%v requests=%s", err, strings.Join(paths, "\n"))
 	}
+	assertRouteRequestsAreLabelled(t, "gitlab", "work-items", client.Ledger, "project", "milestones", "issues", "notes", "merge_requests", "epics")
 	byDestination := map[string]EffectBatch{}
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect
@@ -240,7 +252,8 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJ
 	for _, request := range doer.requests {
 		if strings.HasSuffix(request.URL.Path, "/issues") || strings.HasSuffix(request.URL.Path, "/merge_requests") {
 			query := request.URL.Query()
-			if query.Get("updated_after") == "" || query.Get("updated_before") != "" || query.Get("state") != "all" {
+			// CHAOS-8805: the fetch carries both ends of the window.
+			if query.Get("updated_after") != "2026-07-01T00:00:00Z" || query.Get("updated_before") != "2026-07-31T23:59:59Z" || query.Get("state") != "all" {
 				t.Fatalf("window query=%s", request.URL.String())
 			}
 		}
@@ -413,5 +426,27 @@ func TestGitLabWorkItemsRouteWritesGroupMilestoneSprintRows(t *testing.T) {
 				t.Fatalf("milestone read %s lacks the ancestor parameters", request.URL.String())
 			}
 		}
+	}
+}
+
+// A unit that fails binding its project (here: the project endpoint is missing)
+// still names its window at Info: the line is not behind the project lookup.
+func TestGitLabWorkItemsRouteLogsItsWindowEvenWhenTheProjectLookupFails(t *testing.T) {
+	var logged lockedLogBuffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	claim := nativeTestClaim("gitlab", "work-items")
+	client := gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: map[string][]string{}}))
+	handler := GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}
+	if _, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
+		client, time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("the failed project lookup returned no error")
+	}
+	line := logged.String()
+	if !strings.Contains(line, "msg=gitlab_work_items_window") || !strings.Contains(line, "updated_after=2026-07-01T00:00:00Z") ||
+		!strings.Contains(line, "updated_before=2026-07-31T23:59:59Z") {
+		t.Fatalf("a unit failing at the project lookup named no window: %q", line)
 	}
 }

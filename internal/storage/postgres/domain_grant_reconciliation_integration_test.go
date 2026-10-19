@@ -314,6 +314,7 @@ func reconciliationTables() []domainTable {
 			// followed by a keyed DELETE, not a bare unconditional one.
 			exercise: []string{
 				"SELECT id FROM public.provider_rate_limit_observations WHERE provider = 'github' FOR UPDATE SKIP LOCKED",
+				"INSERT INTO public.provider_rate_limit_observations (id, provider, observed_at) VALUES (gen_random_uuid(), 'github', now())",
 				"UPDATE public.provider_rate_limit_observations SET observed_at = now() WHERE id = gen_random_uuid()",
 				"DELETE FROM public.provider_rate_limit_observations WHERE id = gen_random_uuid()",
 			},

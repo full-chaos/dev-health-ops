@@ -34,8 +34,10 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/google/uuid"
 )
 
 // restErrorBody is FastAPI's default HTTPException response envelope.
@@ -286,4 +288,41 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 		return authctx.Claims{}, false
 	}
 	return authctx.Claims{OrgID: claims.OrgID}, true
+}
+
+// echoRequestID puts the caller's X-Request-Id on the response so an operator
+// can join a client report to the log line. The query-api has no request-id
+// middleware, so a route that logs a masked cause calls this itself. The id is
+// echoed only when it is short and made of unreserved URL characters, which is
+// what keeps a header value from carrying anything else.
+func echoRequestID(w http.ResponseWriter, r *http.Request) {
+	if id := envelopeRequestID(r); acceptableCorrelationID(id) {
+		w.Header().Set("X-Request-Id", id)
+	}
+}
+
+// bindRequestID gives r a correlation id: the caller's X-Request-Id when it is acceptable, else a new
+// one. The id is set on the response header and the request context, and written back to the request
+// header so every reader of it sees one value. A class without the api's request-id middleware (MCP,
+// /query) calls it first, so an error body, a log line and the response header carry the same id.
+func bindRequestID(w http.ResponseWriter, r *http.Request) *http.Request {
+	if acceptableCorrelationID(envelopeRequestID(r)) {
+		echoRequestID(w, r)
+	} else {
+		r.Header.Set("X-Request-Id", uuid.NewString())
+		echoRequestID(w, r)
+	}
+	return r.WithContext(httpapi.WithRequestID(r.Context(), r.Header.Get("X-Request-Id")))
+}
+
+func acceptableCorrelationID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~') {
+			return false
+		}
+	}
+	return true
 }

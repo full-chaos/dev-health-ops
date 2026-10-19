@@ -20,6 +20,8 @@ package analytics
 
 import (
 	"fmt"
+	"github.com/full-chaos/dev-health-go/readers"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -339,6 +341,21 @@ func allocationWeightExpr(effortAlias, totalsAlias string) string {
 // its whole effort and weight 1. The sum over the repositories of a unit is the unit's effort (CHAOS-9221).
 func RepoAllocationInvestmentSource() string { return repoAllocationInvestmentSource() }
 
+// sizedFor is the context a read of measure m runs on: for ISSUE_SIZE its source carries UnitSizeWeightColumn
+// (IssueSizedSource); for every other measure it is the context unchanged, so their SQL does not move.
+func (c investmentContext) sizedFor(m Measure) (investmentContext, error) {
+	if m != MeasureIssueSize {
+		return c, nil
+	}
+	source, err := readers.IssueSizedSource(c.Source, c.Alias)
+	if err != nil {
+		return investmentContext{}, err
+	}
+	slog.Debug("analytics: investment measure selected", "measure", string(m), "repo_allocation", c.UseRepoAllocation, "ownership_team", c.OwnershipTeam, "scope_share", c.ScopeShare != "")
+	c.Source = source
+	return c, nil
+}
+
 // --- investment.py:214-256: LATEST_WORK_UNIT_AUTHORS_CTE ----------------
 
 // workUnitAuthorsSource ports LATEST_WORK_UNIT_AUTHORS_CTE (investment.py:
@@ -619,7 +636,7 @@ func investmentContextFor(orgID string, dimensions []Dimension, forceTeamJoin, r
 		// ClickHouse implicitly promotes a Date value to midnight UTC
 		// DateTime for this comparison, matching Python's own date (not
 		// datetime) request.start_date/end_date parameters.
-		DateFilter:        "work_unit_investments.from_ts < {end_date:Date} AND work_unit_investments.to_ts >= {start_date:Date}",
+		DateFilter:        InvestmentWindowClause(true),
 		ExtraClauses:      strings.Join(joins, "\n"),
 		UseInvestment:     true,
 		UseRepoAllocation: useRepoAllocation,

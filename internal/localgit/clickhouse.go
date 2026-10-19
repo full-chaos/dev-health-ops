@@ -90,7 +90,7 @@ func checkRepresentable(what string, times ...time.Time) error {
 func (w Writer) InsertRepo(ctx context.Context, id uuid.UUID, name, tagsJSON string) error {
 	synced := w.now()
 	return w.writeContracted(ctx, repositoryContract, repoInsert,
-		[][]any{{id, w.effectiveOrg(), name, nil, synced, nil, tagsJSON, "local", synced}})
+		[][]any{{id, w.effectiveOrg(), name, nil, synced, nil, tagsJSON, "local", synced, "", ""}})
 }
 
 func nullable(text *string) any {

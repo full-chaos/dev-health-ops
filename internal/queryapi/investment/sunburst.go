@@ -36,7 +36,7 @@ type SunburstFilters struct {
 	Themes        []string
 	Subcategories []string
 	Limit         int
-	// Measure is what a slice's value counts: investmentexplain.InvestmentShareMeasure (CHAOS-9622).
+	// Measure is what a slice's value counts: investmentexplain.SunburstMeasure (CHAOS-9622).
 	// Empty is refused; there is no effort_value default.
 	Measure string
 }
@@ -99,6 +99,10 @@ func (r *Reader) FetchInvestmentSunburst(ctx context.Context, filters SunburstFi
 	if err != nil {
 		return nil, err
 	}
+	source, err := investmentexplain.MeasureSource(filters.Measure, sunburstSource(scopeSQL))
+	if err != nil {
+		return nil, err
+	}
 
 	query := fmt.Sprintf(`
 SELECT
@@ -109,8 +113,7 @@ SELECT
 FROM %s
 LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
-WHERE work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}
+WHERE %s
   AND work_unit_investments.org_id = {org_id:String}
 %s
 %s
@@ -118,7 +121,7 @@ GROUP BY theme, subcategory, scope
 ORDER BY value DESC
 LIMIT {limit:Int64}
 %s
-`, valueSQL, sunburstSource(scopeSQL), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, valueSQL, source, analytics.InvestmentWindowClause(true), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	// filters.Limit is bound AS GIVEN -- no clamping, no zero/negative
 	// default-substitution here. Python's own investment_sunburst query

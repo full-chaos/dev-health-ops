@@ -277,8 +277,10 @@ func StoredVersionSpecs() map[string][]storedversion.Spec {
 		}},
 		"repos": {{
 			Name: "provider sync repositories", Contract: repositoryContract, Insert: repositoryInsert,
-			Carry: func(map[string]any) map[string]bool {
-				return repositoryContract.Carry(func(string) bool { return false })
+			Carry: func(payload map[string]any) map[string]bool {
+				_, statesID := payload[repositoryProviderRepoIDField]
+				_, statesPath := payload[repositoryIdentityPathField]
+				return repositoryCarry(statesID, statesPath)
 			},
 		}},
 		"git_commits": {{
@@ -435,6 +437,7 @@ func writeWorkItemsKeepingHeldColumns(
 		contract.Log(ctx, orgID, storedVersionCarriedEvent, storedVersionRefusedEvent, outcomes)
 	}
 	logWorkItemDueDates(ctx, rows)
+	logWorkItemHierarchy(ctx, rows)
 	batch, err := conn.PrepareBatch(ctx, extended)
 	if err != nil {
 		return err
@@ -509,14 +512,22 @@ func logWorkItemDueDates(ctx context.Context, rows []workItemStoredRow) {
 
 const repositoryInsert = `
 INSERT INTO repos (
-  id, org_id, repo, ref, created_at, settings, tags, provider, last_synced
+  id, org_id, repo, ref, created_at, settings, tags, provider, last_synced, provider_repo_id, identity_path
 )`
+
+const (
+	repositoryProviderRepoIDField = "provider_repo_id"
+	repositoryIdentityPathField   = "identity_path"
+)
 
 // repositoryContract is the provider-sync repository writer's contract table
 // (github and gitlab share it). The provider row never carries a default
-// branch, so ref is R1 and keeps the value the key already holds; every other
-// column is stated by the provider fetch. source_id is not written: a
-// provider version names no external source.
+// branch, so ref is R1 and keeps the value the key already holds.
+// provider_repo_id is R2: a row that names the provider's stable id states
+// it, a row without one (GitHub today) keeps the held id. identity_path, the
+// path the id was minted from, is R2 the same way. Every other column
+// is stated by the provider fetch. source_id is not written: a provider
+// version names no external source.
 var repositoryContract = storedversion.Contract{Writer: "provider_sync", Table: "repos", Columns: joinColumns(
 	contractColumns(storedversion.Identity, "id"),
 	contractColumns(storedversion.Writer, "org_id"),
@@ -524,17 +535,25 @@ var repositoryContract = storedversion.Contract{Writer: "provider_sync", Table: 
 	[]storedversion.Column{{Name: "ref", Rule: storedversion.NoField}},
 	contractColumns(storedversion.Stated, "created_at", "settings", "tags"),
 	contractColumns(storedversion.Writer, "provider", "last_synced"),
+	contractColumns(storedversion.Unstated, repositoryProviderRepoIDField, repositoryIdentityPathField),
 )}
 
+func repositoryCarry(statesProviderRepoID, statesIdentityPath bool) map[string]bool {
+	return repositoryContract.Carry(func(field string) bool {
+		return (field == repositoryProviderRepoIDField && !statesProviderRepoID) ||
+			(field == repositoryIdentityPathField && !statesIdentityPath)
+	})
+}
+
 // applyRepositoryContract reads the held version of every row's key and
-// writes the kept ref back into the rows; WriteEffect and the recovery
-// readback's expected rows both go through it.
+// writes the kept ref, provider_repo_id and identity_path back into the rows; WriteEffect
+// and the recovery readback's expected rows both go through it.
 func applyRepositoryContract(ctx context.Context, conn storedversion.Querier, claim Claim, rows []repositoryRow, log bool) error {
 	stored := make([]storedversion.Row, len(rows))
 	for i, row := range rows {
 		stored[i] = storedversion.Row{
-			Values: []any{row.ID, row.OrgID, row.Repo, nullableStringPointer(row.Ref), row.CreatedAt, row.Settings, row.Tags, row.Provider, row.LastSynced},
-			Carry:  repositoryContract.Carry(func(string) bool { return false }),
+			Values: []any{row.ID, row.OrgID, row.Repo, nullableStringPointer(row.Ref), row.CreatedAt, row.Settings, row.Tags, row.Provider, row.LastSynced, row.ProviderRepoID, row.IdentityPath},
+			Carry:  repositoryCarry(row.ProviderRepoID != "", row.IdentityPath != ""),
 		}
 	}
 	outcomes, err := repositoryContract.Apply(ctx, conn, claim.OrgID, repositoryInsert, stored)
@@ -553,6 +572,22 @@ func applyRepositoryContract(ctx context.Context, conn storedversion.Querier, cl
 			rows[i].Ref = &held
 		default:
 			return fmt.Errorf("stored version: repos ref %T is not a string", held)
+		}
+		switch held := stored[i].Values[positions[repositoryProviderRepoIDField]].(type) {
+		case nil:
+			rows[i].ProviderRepoID = ""
+		case string:
+			rows[i].ProviderRepoID = held
+		default:
+			return fmt.Errorf("stored version: repos provider_repo_id %T is not a string", held)
+		}
+		switch held := stored[i].Values[positions[repositoryIdentityPathField]].(type) {
+		case nil:
+			rows[i].IdentityPath = ""
+		case string:
+			rows[i].IdentityPath = held
+		default:
+			return fmt.Errorf("stored version: repos identity_path %T is not a string", held)
 		}
 	}
 	if log {

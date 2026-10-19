@@ -224,6 +224,16 @@ func TestMigrationOptionsRejectHalfConfiguredCoordinatorProvisioning(t *testing.
 		t.Fatalf("ValidateMigrationOptions(column-scoped coordinator) error = %v", err)
 	}
 
+	// A mixed relation (CHAOS-6747): table-wide flags plus a column privilege
+	// on top of them, as the api posture declares for billing_audit_log.
+	mixed := valid
+	mixed.CoordinatorGrants = append(append([]TableGrant(nil), grants...),
+		TableGrant{TableName: "billing_audit_log", AllowInsert: true, AllowDelete: true})
+	mixed.CoordinatorColumnGrants = []ColumnGrant{{TableName: "billing_audit_log", ColumnName: "actor_id", Privilege: "UPDATE"}}
+	if err := ValidateMigrationOptions(mixed); err != nil {
+		t.Fatalf("ValidateMigrationOptions(mixed relation) error = %v", err)
+	}
+
 	tests := []struct {
 		name   string
 		mutate func(*MigrationOptions)
@@ -282,14 +292,27 @@ func TestMigrationOptionsRejectHalfConfiguredCoordinatorProvisioning(t *testing.
 				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
 			}
 		}},
-		// Table-wide AND column-scoped on one relation is the combination the
-		// readiness posture check refuses outright, so the migration refuses to
-		// create it.
-		{"relation granted both table-wide and column-scoped", func(o *MigrationOptions) {
+		// A column privilege the relation's table-wide grant already holds adds
+		// nothing and is a declaration error (SELECT is always table-wide).
+		{"column privilege already held table-wide", func(o *MigrationOptions) {
 			o.CoordinatorGrants = append(o.CoordinatorGrants,
 				TableGrant{TableName: "worker_job_completion_fences"})
 			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "SELECT"},
+			}
+		}},
+		{"column insert already held table-wide", func(o *MigrationOptions) {
+			o.CoordinatorGrants = append(o.CoordinatorGrants,
+				TableGrant{TableName: "worker_job_completion_fences", AllowInsert: true})
+			o.CoordinatorColumnGrants = []ColumnGrant{
 				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "INSERT"},
+			}
+		}},
+		{"column update already held table-wide", func(o *MigrationOptions) {
+			o.CoordinatorGrants = append(o.CoordinatorGrants,
+				TableGrant{TableName: "worker_job_completion_fences", AllowUpdate: true})
+			o.CoordinatorColumnGrants = []ColumnGrant{
+				{TableName: "worker_job_completion_fences", ColumnName: "completion_key", Privilege: "UPDATE"},
 			}
 		}},
 	}
@@ -517,7 +540,7 @@ func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T
 		"DO $$ BEGIN IF to_regclass('public.feature_flags') IS NOT NULL THEN GRANT SELECT ON TABLE public.feature_flags TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.org_feature_overrides') IS NOT NULL THEN GRANT SELECT ON TABLE public.org_feature_overrides TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.org_licenses') IS NOT NULL THEN GRANT SELECT ON TABLE public.org_licenses TO \"domain_runtime\"; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.provider_rate_limit_observations') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.provider_rate_limit_observations TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.provider_rate_limit_observations') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.provider_rate_limit_observations TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.report_runs') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.report_runs TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.saved_reports') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.saved_reports TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.tier_limits') IS NOT NULL THEN GRANT SELECT ON TABLE public.tier_limits TO \"domain_runtime\"; END IF; END $$",

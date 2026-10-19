@@ -88,11 +88,12 @@ func materializeClaim(t *testing.T, scope string) workgraph.Claim {
 
 // TestExecuteRefusesAProviderKindWithNoNativeClient is P1-a.
 //
-// `NewProviderFromEnv` returns an `unimplementedProvider` with a NIL ERROR for
-// anthropic/gemini/qwen. Unchecked, every Complete() fails, the failure
-// classifies as non-deterministic, the run CONTINUES, and every unit is written
+// A provider name Python serves and this port has no client for
+// (lmstudio, qwen-local, qwen-lmstudio) must be refused before any work:
+// unchecked, every Complete() would fail, the failure would classify as
+// non-deterministic, the run would CONTINUE, and every unit would be written
 // with a fallback distribution -- a plausible-looking wrong answer over real
-// data, while Python has a real client for all three.
+// data.
 //
 // The collaborators below are REAL Reader/Writer values over fake connections
 // that panic if queried. That is the assertion: the refusal must land before
@@ -101,18 +102,10 @@ func materializeClaim(t *testing.T, scope string) workgraph.Claim {
 // the wrong reason -- Execute's own nil guard short-circuits first, returning
 // ErrUnavailable before provider resolution is ever reached.)
 func TestExecuteRefusesAProviderKindWithNoNativeClient(t *testing.T) {
-	for _, kind := range []categorize.ProviderKind{
-		categorize.ProviderKindAnthropic,
-		categorize.ProviderKindGemini,
-		categorize.ProviderKindQwen,
-	} {
+	for _, kind := range []categorize.ProviderKind{"lmstudio", "qwen-local", "qwen-lmstudio"} {
 		t.Run(string(kind), func(t *testing.T) {
 			if categorize.IsProviderKindImplemented(kind) {
-				t.Skipf("%s now has a native client; drop it from this table", kind)
-			}
-			provider, err := categorize.NewProviderFromEnv(kind)
-			if err != nil || provider == nil {
-				t.Fatalf("precondition: NewProviderFromEnv(%s) must return a stub with a nil error, got %v/%v", kind, provider, err)
+				t.Fatalf("%s now has a client; this table names only kinds without one", kind)
 			}
 
 			executor := &NativeExecutor{
@@ -148,6 +141,7 @@ func TestExecuteRefusesAProviderKindWithNoNativeClient(t *testing.T) {
 // The live post-sync producer sets NO ModelRef (sync_dispatch.go:298-308), so
 // an empty model_ref is the PRODUCTION path, not an edge case.
 func TestStampedModelIsTheModelThatRunsNotTheProviderName(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_MODEL", "gpt-env-default")
 	got := resolvedModelName(Config{ProviderName: "openai", Model: ""})
 	if got == "openai" {
@@ -165,10 +159,11 @@ func TestStampedModelCannotDriftFromTheProviderModel(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"generic_only":             {"LLM_MODEL": "gpt-generic"},
 		"provider_specific_only":   {"LLM_MODEL_OPENAI": "gpt-specific"},
-		"both_generic_wins":        {"LLM_MODEL": "gpt-generic", "LLM_MODEL_OPENAI": "gpt-specific"},
+		"both_specific_wins":       {"LLM_MODEL": "gpt-generic", "LLM_MODEL_OPENAI": "gpt-specific"},
 		"neither_platform_default": {},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Setenv("LLM_PROVIDER", "openai")
 			t.Setenv("LLM_MODEL", "")
 			t.Setenv("LLM_MODEL_OPENAI", "")
 			for k, v := range env {
@@ -198,15 +193,20 @@ func TestRequestedModelWinsOverTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestGenericEnvBeatsProviderSpecific pins chris's CHAOS-4978 precedence, which
-// INVERTS Python's order. Following Python here would re-open r2's P1: the
-// provider path is ruled generic-first, so a stamp on Python's order would
-// again record a model the run did not use.
-func TestGenericEnvBeatsProviderSpecific(t *testing.T) {
+// TestProviderSpecificEnvBeatsGenericOnThePlatformProvider pins the one order
+// (chris's CHAOS-4978 word with ruling D6043, CHAOS-10011): LLM_MODEL_<P> first,
+// then the generic LLM_MODEL for the platform provider only. A stamp on any
+// other order would record a model the run did not use.
+func TestProviderSpecificEnvBeatsGenericOnThePlatformProvider(t *testing.T) {
+	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_MODEL", "gpt-generic")
 	t.Setenv("LLM_MODEL_OPENAI", "gpt-specific")
+	if got := categorize.ResolveModelName(categorize.ProviderKindOpenAI, ""); got != "gpt-specific" {
+		t.Fatalf("model = %q, want the provider-specific %q", got, "gpt-specific")
+	}
+	t.Setenv("LLM_MODEL_OPENAI", "")
 	if got := categorize.ResolveModelName(categorize.ProviderKindOpenAI, ""); got != "gpt-generic" {
-		t.Fatalf("model = %q, want the GENERIC override %q (CHAOS-4978)", got, "gpt-generic")
+		t.Fatalf("model = %q, want the generic %q for the platform provider", got, "gpt-generic")
 	}
 }
 

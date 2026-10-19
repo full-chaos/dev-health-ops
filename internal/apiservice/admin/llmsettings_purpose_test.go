@@ -122,20 +122,36 @@ VALUES ($1, 'llmpurpose-admin@example.com', true, true, false, 0, now(), now())`
 	})
 
 	t.Run("same provider reuses the default key; a different provider needs its own", func(t *testing.T) {
-		if status, body := call("PUT", route, `{"purpose":"categorize","provider":"anthropic","model":"small-model"}`); status != 200 {
+		if status, body := call("PUT", route, `{"purpose":"explain","provider":"anthropic","model":"small-model"}`); status != 200 {
 			t.Fatalf("same provider without a key: %d %v, want 200", status, body)
 		}
-		if keys()["purpose:categorize:api_key"] {
+		if keys()["purpose:explain:api_key"] {
 			t.Fatal("the default key was copied into the override instead of reused")
 		}
-		if status, body := call("PUT", route, `{"purpose":"categorize","provider":"openai","model":"small-model"}`); status != 422 {
+		if status, body := call("PUT", route, `{"purpose":"explain","provider":"openai","model":"small-model"}`); status != 422 {
 			t.Fatalf("other provider without a key: %d %v, want 422", status, body)
 		}
-		if status, body := call("PUT", route, `{"purpose":"categorize","provider":"ollama","model":"llama"}`); status != 200 {
+		if status, body := call("PUT", route, `{"purpose":"explain","provider":"ollama","model":"llama"}`); status != 200 {
 			t.Fatalf("keyless provider: %d %v, want 200", status, body)
 		}
-		if status, _ := call("DELETE", route+"?purpose=categorize", ""); status != 200 {
+		if status, _ := call("DELETE", route+"?purpose=explain", ""); status != 200 {
 			t.Fatalf("cleanup: %d", status)
+		}
+	})
+
+	t.Run("categorize is not a purpose: every verb is refused with its own reason", func(t *testing.T) {
+		for _, c := range []struct{ verb, path, body string }{
+			{"PUT", route, `{"purpose":"categorize","provider":"anthropic","model":"small-model"}`},
+			{"GET", route + "?purpose=categorize", ""},
+			{"DELETE", route + "?purpose=categorize", ""},
+		} {
+			status, body := call(c.verb, c.path, c.body)
+			if status != 400 || fmt.Sprint(body["error"]) != "purpose_not_configurable" {
+				t.Fatalf("%s: status=%d body=%v, want 400 purpose_not_configurable", c.verb, status, body)
+			}
+		}
+		if keys()["purpose:categorize:provider"] {
+			t.Fatal("a refused categorize write left rows behind")
 		}
 	})
 
@@ -168,7 +184,7 @@ VALUES ($1, 'llmpurpose-admin@example.com', true, true, false, 0, now(), now())`
 		if status, get := call("GET", route+"?purpose=explain", ""); status != 200 || get["model"] != "small-explain" {
 			t.Fatalf("GET purpose: %d %v", status, get)
 		}
-		if status, _ := call("GET", route+"?purpose=categorize", ""); status != 404 {
+		if status, _ := call("GET", route+"?purpose=investigate", ""); status != 404 {
 			t.Fatalf("GET empty purpose: %d, want 404", status)
 		}
 		status, def := call("GET", route, "")

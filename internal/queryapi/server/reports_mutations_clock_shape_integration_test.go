@@ -40,4 +40,15 @@ func TestNormalizeMutationBodyLiveClockShape(t *testing.T) {
 	if got := normalize(strings.Replace(otherField, "%s", "2026-10-19T12:00:09Z", 1), "go"); got == frozen {
 		t.Errorf("a timestamp outside the live-clock list keeps its shape in the compare: %s", got)
 	}
+
+	nested := func(top, inner string) string {
+		return `{"data": {"createSavedReport": {"reportPlan": {"createdAt": "` + inner + `", "list": [{"updatedAt": "` + inner + `"}]}, "createdAt": "` + top + `"}}}`
+	}
+	nestedWant := normalize(nested("<ts:frac:+00:00>", "<ts:frac:+00:00>"), "python")
+	if got := normalize(nested("2026-10-19T12:00:09Z", "2026-10-19T12:00:09Z"), "go"); got == nestedWant {
+		t.Errorf("a createdAt/updatedAt inside user JSON (reportPlan) is data and keeps its shape: %s", got)
+	}
+	if got := normalize(nested("2026-10-19T12:00:09Z", "2026-10-19T12:00:09.5Z"), "go"); got != nestedWant {
+		t.Errorf("the nested members with the recorded shape, and a live top-level member of either shape, compare equal: %s", got)
+	}
 }

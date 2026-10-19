@@ -445,14 +445,64 @@ func normalizeMutationBody(body, plane string) (string, error) {
 // whose microsecond is zero (about one in a million) prints without a fraction in both Python's isoformat
 // and Go, so frac versus nofrac is a per-plane reading for these members and is masked. Every other
 // timestamp keeps its shape in the compare, and the offset form stays checked for all of them.
-var liveClockFields = []string{"createdAt", "updatedAt"}
+// Only the member of a mutation payload itself is masked (data.<mutation>.<member>): a member of that
+// name inside user JSON (a report plan, its parameters) is data and keeps its shape.
+var liveClockFields = map[string]bool{"createdAt": true, "updatedAt": true}
 
-var liveClockShape = func() *regexp.Regexp {
-	return regexp.MustCompile(`("(?:` + strings.Join(liveClockFields, "|") + `)": "<ts:)(?:frac|nofrac)>"`)
-}()
+var liveClockPlaceholder = regexp.MustCompile(`<ts:(?:frac|nofrac)>`)
 
 func maskLiveClockShape(canonical string) string {
-	return liveClockShape.ReplaceAllString(canonical, "${1}clock>\"")
+	type frame struct {
+		key       string
+		expectKey bool
+	}
+	dec := json.NewDecoder(strings.NewReader(canonical))
+	var stack []*frame
+	var out strings.Builder
+	copied := 0
+	done := func() {
+		if len(stack) > 0 {
+			stack[len(stack)-1].expectKey = true
+		}
+	}
+	for {
+		lo := int(dec.InputOffset())
+		token, err := dec.Token()
+		if err != nil {
+			break
+		}
+		hi := int(dec.InputOffset())
+		switch value := token.(type) {
+		case json.Delim:
+			if value == '{' {
+				stack = append(stack, &frame{expectKey: true})
+			} else if value == '[' {
+				stack = append(stack, &frame{})
+			} else {
+				stack = stack[:len(stack)-1]
+				done()
+			}
+		case string:
+			top := (*frame)(nil)
+			if len(stack) > 0 {
+				top = stack[len(stack)-1]
+			}
+			if top != nil && top.expectKey {
+				top.key, top.expectKey = value, false
+				continue
+			}
+			if len(stack) == 3 && stack[0].key == "data" && liveClockFields[top.key] {
+				out.WriteString(canonical[copied:lo])
+				out.WriteString(liveClockPlaceholder.ReplaceAllString(canonical[lo:hi], "<ts:clock>"))
+				copied = hi
+			}
+			done()
+		default:
+			done()
+		}
+	}
+	out.WriteString(canonical[copied:])
+	return out.String()
 }
 
 // orderErrorMembers writes each error object with its members in one fixed

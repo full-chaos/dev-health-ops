@@ -55,6 +55,11 @@ type AccessClaims struct {
 	// ImpersonatingUserID is the impersonating_user_id claim, written only
 	// when non-empty, after full_name, as the Python dict holds it.
 	ImpersonatingUserID *string
+	// SessionID is the "sid" claim, written last and only when non-empty.
+	// go-api never sets it; auth-service sets it to the session.v1 session_id
+	// so its /v1/sessions routes know the bearer's session. Readers decode
+	// claims into a map and ignore it.
+	SessionID *string
 }
 
 // RefreshClaims are create_refresh_token's (and

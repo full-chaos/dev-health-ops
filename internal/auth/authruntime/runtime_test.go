@@ -22,6 +22,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // reservePort binds an ephemeral port, records it, and releases it. The
@@ -685,16 +687,46 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestRoutesAreEmpty is the dormancy assertion at the call site. If a later
-// wave mounts a route without updating CHAOS-4881's dormancy claim, this test
-// is what says so.
-func TestRoutesAreEmpty(t *testing.T) {
-	if got := len(Routes()); got != 0 {
-		t.Fatalf(
-			"Routes() returns %d route(s); CHAOS-4881 builds this service dormant, "+
-				"so mounting one is a deliberate change that must update the dormancy claim",
-			got,
-		)
+// TestRoutesAreEmptyWithoutTheSessionSecrets is the dormancy assertion at the
+// call site: without the session secrets the service mounts nothing
+// (CHAOS-4881), and with them exactly the four session routes (CHAOS-10228).
+// A route mounted any other way is a deliberate change this test names.
+func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(context.Background(), "postgres://auth@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	dormant, err := sessionRoutes(authconfig.Config{}, logger, pool, schema)
+	if err != nil || len(dormant) != 0 {
+		t.Fatalf("without the session secrets: %d route(s), err %v; want none", len(dormant), err)
+	}
+
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(sessionEnvironment(map[string]string{
+		authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
+		authconfig.EnvSigningKeyFile: "/nonexistent",
+		authconfig.EnvSigningKeyID:   "routes-test",
+	}))})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	mounted, err := sessionRoutes(cfg, logger, pool, schema)
+	if err != nil {
+		t.Fatalf("sessionRoutes: %v", err)
+	}
+	var got []string
+	for _, route := range mounted {
+		got = append(got, route.Method+" "+route.Pattern)
+	}
+	want := []string{"POST /v1/token/refresh", "GET /v1/sessions/current", "POST /v1/sessions/revoke", "POST /v1/sessions/revoke-all"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("mounted %v, want %v", got, want)
 	}
 }
 

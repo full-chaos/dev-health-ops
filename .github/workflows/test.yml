@@ -69,8 +69,8 @@ jobs:
               # uv.lock -- an ordinary dependency bump -- would get
               # code=false, skip test-matrix entirely, and the required
               # `test` check would go green having run no tests against the
-              # new lock. tests/tooling/test_aggregate_gate_results.py's
-              # test_paths_filter_covers_every_file_the_gated_jobs_install
+              # new lock. internal/cigates/aggregate_gate_results_test.go's
+              # TestPathsFilterCoversEveryFileTheGatedJobsInstall
               # derives this requirement from the `uv sync` invocation itself
               # and fails if it is missing.
               - 'uv.lock'
@@ -80,11 +80,11 @@ jobs:
               # only this file got code=false, skipped both test jobs, and the
               # aggregator -- correctly, by its own rule -- called that a
               # legitimate docs-only skip and reported the required check
-              # green. test_paths_filter_covers_every_file_the_test_jobs_install
+              # green. TestPathsFilterCoversEveryFileTheGatedJobsInstall
               # derives this list from the jobs' own install commands.
               - 'requirements-docs.txt'
               # The guards for these live in this workflow's suite
-              # (tests/tooling/test_aggregate_gate_results.py), so a PR
+              # (internal/cigates/aggregate_gate_results_test.go), so a PR
               # touching only one of them must not skip that suite --
               # otherwise the check that would notice a collapsed lint or
               # typecheck scope is the one that does not run
@@ -203,12 +203,13 @@ jobs:
   # tests/tooling guards the Go CI wiring (workflow shape, path filters, shard
   # inventories, bigboy cut scripts, gate aggregation). Until the Python unit
   # matrix was removed (CHAOS-8352) it ran inside that matrix, which no longer
-  # exists, so it has its own job. UNCONDITIONAL for the same reason as
-  # docs-tests above: a job that never skips cannot pass the required gate by
-  # skipping, and the aggregate reads a skip of it as a failure.
+  # exists, so it has its own job. PATH-FILTERED (CHAOS-10176): the `code` filter
+  # above lists every path the suite reads, and the aggregate fails a skip of it
+  # unless the filter decided `code == 'false'`.
   tooling-tests:
     name: tooling-tests
     needs: [changes]
+    if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || needs.changes.outputs.code == 'true'
     # Same ARC routing as `changes` above.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     permissions:
@@ -282,10 +283,11 @@ jobs:
 
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test". It judges docs-tests and tooling-tests through
-  # ci/aggregate_gate_results.sh; both are `unconditional`, so a skipped,
-  # cancelled or failed job fails the gate (a measurement that did not happen
-  # must fail). The verdict is driven through its result matrix by
-  # tests/tooling/test_aggregate_gate_results.py.
+  # ci/aggregate_gate_results.sh. docs-tests is `unconditional`; tooling-tests is
+  # `path-filtered` (CHAOS-10176): a docs-only skip passes, while a job the `code`
+  # filter selected that skipped, was cancelled or failed fails the gate (a
+  # measurement that did not happen must fail). The verdict is driven through its result matrix by
+  # internal/cigates/aggregate_gate_results_test.go.
   test:
     name: test
     # Must remain `always()`. Under `!cancelled()` (or any condition that lets
@@ -308,7 +310,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           CHANGES_CODE: ${{ needs.changes.outputs.code }}
           GATED_JOB_1: docs-tests|unconditional|${{ needs.docs-tests.result }}
-          GATED_JOB_2: tooling-tests|unconditional|${{ needs.tooling-tests.result }}
+          GATED_JOB_2: tooling-tests|path-filtered|${{ needs.tooling-tests.result }}
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh

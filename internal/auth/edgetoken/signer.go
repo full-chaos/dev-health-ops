@@ -96,6 +96,9 @@ func (s *Signer) Access(claims AccessClaims, now time.Time, jti string) (string,
 	if claims.ImpersonatingUserID != nil && *claims.ImpersonatingUserID != "" {
 		payload.str("impersonating_user_id", *claims.ImpersonatingUserID)
 	}
+	if claims.SessionID != nil && *claims.SessionID != "" {
+		payload.str("sid", *claims.SessionID)
+	}
 	return s.sign(payload.close())
 }
 

@@ -30,11 +30,14 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -71,7 +74,23 @@ const maxInFlightRequests = 64
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 ) ([]httpapi.Route, error) {
-	return nil, nil
+	if !cfg.Session.Enabled {
+		return nil, nil
+	}
+	sessions, err := session.New(session.Config{
+		Pool: pool, Schema: schema, Logger: logger,
+		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
+	})
+	if err != nil {
+		return nil, err
+	}
+	issuer, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
+	if err != nil {
+		return nil, err
+	}
+	return authapi.Routes(authapi.Deps{
+		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+	})
 }
 
 // withRequestIDs gives every route the server-minted request id that audit

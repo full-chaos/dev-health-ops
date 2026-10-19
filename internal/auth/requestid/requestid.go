@@ -31,7 +31,9 @@ type key struct{}
 // and sets its wire form in Header before the handler writes.
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
+		id := uuid.New()
+		w.Header().Set(Header, WireOf(id))
+		next.ServeHTTP(w, r.WithContext(With(r.Context(), id)))
 	})
 }
 
@@ -49,15 +51,24 @@ func From(ctx context.Context) (uuid.UUID, bool) {
 // Audit is the audit form, or nil when no id is bound: an audit row then
 // carries no request id rather than a made-up one.
 func Audit(ctx context.Context) *string {
-	return nil
+	id, ok := From(ctx)
+	if !ok {
+		return nil
+	}
+	text := id.String()
+	return &text
 }
 
 // Wire is the error.v1 form, or "" when no id is bound.
 func Wire(ctx context.Context) string {
-	return ""
+	id, ok := From(ctx)
+	if !ok {
+		return ""
+	}
+	return WireOf(id)
 }
 
 // WireOf renders id in the wire form: "req_" and 26 base32 characters.
 func WireOf(id uuid.UUID) string {
-	return ""
+	return WirePrefix + wireEncoding.EncodeToString(id[:])
 }

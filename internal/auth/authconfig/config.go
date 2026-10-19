@@ -26,6 +26,7 @@
 package authconfig
 
 import (
+	"encoding/base64"
 	"fmt"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
@@ -94,6 +95,8 @@ const (
 	defaultAccessTokenAudience = "dev-health-api"
 	// minAccessTokenSecretLength is edgetoken.MinSecretLength, the Python
 	// signer's floor, counted in characters.
+	minAccessTokenSecretLength = 32
+	sessionSuccessorKeyBytes   = 32
 
 	minShutdownTimeout        = 500 * time.Millisecond
 	maxShutdownTimeout        = 10 * time.Minute
@@ -317,10 +320,39 @@ func Load(spec Spec) (Config, error) {
 // together or not at all: a deployment with one of them meant to serve the
 // session routes, and silently serving none would hide that.
 func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
-	return SessionTokens{
+	out := SessionTokens{
 		AccessIssuer:   stringOr(lookup, EnvAccessTokenIssuer, defaultAccessTokenIssuer),
 		AccessAudience: stringOr(lookup, EnvAccessTokenAudience, defaultAccessTokenAudience),
-	}, nil
+	}
+	access, hasAccess, err := secrets.ResolveSecret(EnvAccessTokenSecret, lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
+	successor, hasSuccessor, err := secrets.ResolveSecret(EnvSessionSuccessorKey, lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
+	if hasAccess != hasSuccessor {
+		return SessionTokens{}, fmt.Errorf(
+			"%s and %s are set together or not at all (the session routes need both)",
+			EnvAccessTokenSecret, EnvSessionSuccessorKey,
+		)
+	}
+	if !hasAccess {
+		return out, nil
+	}
+	if len([]rune(access.Reveal())) < minAccessTokenSecretLength {
+		return SessionTokens{}, fmt.Errorf(
+			"%s must be at least %d characters", EnvAccessTokenSecret, minAccessTokenSecretLength,
+		)
+	}
+	if raw, decodeErr := base64.RawURLEncoding.DecodeString(successor.Reveal()); decodeErr != nil || len(raw) != sessionSuccessorKeyBytes {
+		return SessionTokens{}, fmt.Errorf(
+			"%s must be %d bytes, base64url without padding", EnvSessionSuccessorKey, sessionSuccessorKeyBytes,
+		)
+	}
+	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
+	return out, nil
 }
 
 // signingKey resolves the signing-key custody settings.

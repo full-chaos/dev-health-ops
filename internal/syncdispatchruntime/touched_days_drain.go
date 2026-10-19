@@ -109,13 +109,13 @@ type TouchedDaysDrainRuns interface {
 	OwnedKeysOfRunsWithoutResult(ctx context.Context, organizationID string, notEndedAfter time.Duration, limit int) ([]TouchedRunKeys, bool, error)
 	// MarkingRunsToCheck are the runs whose mark the pass checks: the run
 	// endedRunID when it is a run of a post-sync fan-out or of the drain
-	// (whatever its take time), and the ended runs of those two kinds created in
-	// the last window that have a take time. At most limit, newest first; the
+	// (whatever its take time), and the ended, not yet checked runs of those two
+	// kinds created in the last window that have a take time. At most limit, newest first; the
 	// flag says that more exist.
 	MarkingRunsToCheck(ctx context.Context, organizationID, endedRunID string, window time.Duration, limit int) ([]TouchedRunKeys, bool, error)
-	// UnendedMarkingRunsBeforeCut counts the marking runs that are not ended and
-	// began before the cut of MarkingRunsToCheck: no later pass reads them.
-	UnendedMarkingRunsBeforeCut(ctx context.Context, organizationID string, window time.Duration) (int, error)
+	// MarkRunsChecked records that the pass checked the mark of the runs, so
+	// no later pass reads them again.
+	MarkRunsChecked(ctx context.Context, organizationID string, runIDs []string) error
 	// StampTakeTx records the take time on every run of the pass that has none.
 	// It returns ErrTouchedTakeTimeUnwritten, and writes nothing, when the
 	// database cannot hold it.
@@ -325,15 +325,6 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
 		drain.observe(jobruntime.TouchedDaysDrainStopCheckTruncated, 1)
 	}
-	if skipped, err := drain.runs.UnendedMarkingRunsBeforeCut(ctx, pass.organizationID, touchedDrainInFlightWindow); err != nil {
-		return false, err
-	} else if skipped > 0 {
-		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
-			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("stop_check_skipped_unended")),
-			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID),
-			synclog.Count(synclog.KeyDrainRunsSkippedUnended, skipped))
-		drain.observe(jobruntime.TouchedDaysDrainStopCheckSkippedUnended, 1)
-	}
 	checkable := make([]TouchedRunKeys, 0, len(runs))
 	for _, run := range runs {
 		if run.RunID == endedRunID {
@@ -354,8 +345,15 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 		return false, nil
 	}
 	days, err := drain.store.DaysPendingSinceBeforeTake(ctx, pass.organizationID, checkable)
-	if err != nil || len(days) == 0 {
+	if err != nil {
 		return false, err
+	}
+	if len(days) == 0 {
+		checked := make([]string, 0, len(checkable))
+		for _, run := range checkable {
+			checked = append(checked, run.RunID)
+		}
+		return false, drain.runs.MarkRunsChecked(ctx, pass.organizationID, checked)
 	}
 	drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 		synclog.Text(synclog.KeyPhase, synclog.ParseLabel("chain_stopped_mark_missing")),

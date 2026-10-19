@@ -193,15 +193,6 @@ func resetTracked() {
 
 // ---- the resolver ----------------------------------------------------------------------------------------------
 
-var (
-	// double-quoted and raw (backtick) string literals both name paths
-	quotedLiteral = regexp.MustCompile("\"([^\"\n]+)\"|`([^`\n]+)`")
-	quotedAny     = regexp.MustCompile("\"([^\"\n]*)\"|`([^`\n]*)`")
-	joinCall      = regexp.MustCompile(`filepath\.Join\(([^)]*)\)`)
-	embedLine     = regexp.MustCompile(`//go:embed\s+(.+)`)
-	readDirCall   = regexp.MustCompile("os\\.ReadDir\\((?:\"([^\"\n]*)\"|`([^`\n]*)`)\\)")
-)
-
 func looksLikeAPath(l string) bool {
 	return !(strings.ContainsAny(l, " \t%") || strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://"))
 }
@@ -211,10 +202,23 @@ func looksLikeAPath(l string) bool {
 type fileIndex struct {
 	byBase map[string][]string
 	set    map[string]bool
+	list   []string
+}
+
+// underDir lists the tracked non-Go files at or below the repo-relative directory.
+func (x *fileIndex) underDir(dir string) []string {
+	var out []string
+	prefix := strings.TrimSuffix(dir, "/") + "/"
+	for _, p := range x.list {
+		if strings.HasPrefix(p, prefix) && !strings.HasSuffix(p, ".go") {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func basenameIndex(tracked []string) *fileIndex {
-	idx := &fileIndex{byBase: map[string][]string{}, set: map[string]bool{}}
+	idx := &fileIndex{byBase: map[string][]string{}, set: map[string]bool{}, list: tracked}
 	for _, p := range tracked {
 		idx.byBase[path.Base(p)] = append(idx.byBase[path.Base(p)], p)
 		idx.set[p] = true
@@ -230,148 +234,6 @@ func (x *fileIndex) tracked(anchor, abs string) bool {
 func isFile(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.Mode().IsRegular()
-}
-
-// goCodeOnly blanks Go comments (keeping every line so line numbers hold): prose such as a backticked name in a
-// comment is not a path the code reads. //go:embed directives are read from the raw source, not from here.
-func goCodeOnly(src string) string {
-	lines := strings.Split(src, "\n")
-	for i, l := range lines {
-		var q byte
-		for j := 0; j < len(l); j++ {
-			c := l[j]
-			switch {
-			case q != 0:
-				if c == '\\' && q != '`' {
-					j++
-				} else if c == q {
-					q = 0
-				}
-			case c == '"' || c == '`' || c == '\'':
-				q = c
-			case c == '/' && j+1 < len(l) && l[j+1] == '/':
-				lines[i] = l[:j]
-				j = len(l)
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-// litOf returns the text of a literal match from quotedLiteral/quotedAny (group 1 is "..." and group 2 is `...`).
-func litOf(m []string) string {
-	if m[1] != "" {
-		return m[1]
-	}
-	return m[2]
-}
-
-// resolveNamedFiles resolves every file the Go source names, relative to its own directory and to the repo root.
-func resolveNamedFiles(source, base, anchor string, index *fileIndex) map[string]bool {
-	found := map[string]bool{}
-	add := func(candidate string) {
-		rel, err := filepath.Rel(anchor, filepath.Clean(candidate))
-		if err != nil || strings.HasPrefix(rel, "..") {
-			return
-		}
-		if isFile(candidate) && index.tracked(anchor, candidate) && filepath.Ext(candidate) != ".go" {
-			found[filepath.ToSlash(rel)] = true
-		}
-	}
-	code := goCodeOnly(source)
-	for _, m := range quotedLiteral.FindAllStringSubmatch(code, -1) {
-		lit := litOf(m)
-		if !hasDataSuffix(lit) {
-			continue
-		}
-		before := len(found)
-		add(filepath.Join(base, lit))
-		add(filepath.Join(anchor, lit))
-		if len(found) == before && looksLikeAPath(lit) {
-			if c := index.byBase[path.Base(lit)]; len(c) == 1 {
-				add(filepath.Join(anchor, c[0]))
-			}
-		}
-	}
-	for _, m := range joinCall.FindAllStringSubmatch(code, -1) {
-		var segs []string
-		for _, s := range quotedAny.FindAllStringSubmatch(m[1], -1) {
-			segs = append(segs, litOf(s))
-		}
-		if len(segs) > 0 && hasDataSuffix(segs[len(segs)-1]) {
-			add(filepath.Join(append([]string{base}, segs...)...))
-			add(filepath.Join(append([]string{anchor}, segs...)...))
-		}
-	}
-	for _, m := range embedLine.FindAllStringSubmatch(source, -1) {
-		for _, pattern := range strings.Fields(m[1]) {
-			includeDot := strings.HasPrefix(pattern, "all:")
-			pattern = strings.TrimPrefix(pattern, "all:")
-			matches, _ := filepath.Glob(filepath.Join(base, pattern))
-			for _, match := range matches {
-				st, err := os.Stat(match)
-				if err != nil {
-					continue
-				}
-				if !st.IsDir() {
-					add(match)
-					continue
-				}
-				_ = filepath.WalkDir(match, func(p string, d fs.DirEntry, err error) error {
-					if err != nil || !d.Type().IsRegular() {
-						return nil
-					}
-					rel, _ := filepath.Rel(match, p)
-					if !includeDot {
-						for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
-							if strings.HasPrefix(part, ".") || strings.HasPrefix(part, "_") {
-								return nil
-							}
-						}
-					}
-					add(p)
-					return nil
-				})
-			}
-		}
-	}
-	for _, m := range readDirCall.FindAllStringSubmatch(code, -1) {
-		target := filepath.Join(base, litOf(m))
-		if entries, err := os.ReadDir(target); err == nil {
-			for _, e := range entries {
-				add(filepath.Join(target, e.Name()))
-			}
-		}
-	}
-	return found
-}
-
-type unresolved struct {
-	line       int
-	literal    string
-	candidates []string
-}
-
-// unresolvableInSource reports every data-suffixed literal naming a real file that the resolver could not locate.
-func unresolvableInSource(source, base, root string, index *fileIndex) []unresolved {
-	var out []unresolved
-	for n, line := range strings.Split(goCodeOnly(source), "\n") {
-		for _, m := range quotedLiteral.FindAllStringSubmatch(line, -1) {
-			lit := litOf(m)
-			if !hasDataSuffix(lit) || !looksLikeAPath(lit) {
-				continue
-			}
-			if _, fab := fabricatedPathLiterals[lit]; fab {
-				continue
-			}
-			cands := index.byBase[path.Base(lit)]
-			if len(cands) == 0 || (isFile(filepath.Join(base, lit)) && index.tracked(root, filepath.Join(base, lit))) || (isFile(filepath.Join(root, lit)) && index.tracked(root, filepath.Join(root, lit))) || len(cands) == 1 {
-				continue
-			}
-			out = append(out, unresolved{n + 1, lit, cands})
-		}
-	}
-	return out
 }
 
 func goSources(realRoot, anchor string) ([]string, error) {
@@ -457,12 +319,22 @@ func pathFilterViolations(t *testing.T, root string, excused map[string]string) 
 	fixtureRefs := map[string]bool{}
 	for _, src := range sources {
 		text := readFile(t, filepath.Join(root, src))
-		for p := range resolveNamedFiles(text, filepath.Dir(filepath.Join(root, src)), root, index) {
-			named[p] = true
-		}
-		for _, u := range unresolvableInSource(text, filepath.Dir(filepath.Join(root, src)), root, index) {
-			unres = append(unres, u)
-			unresLoc = append(unresLoc, fmt.Sprintf("%s:%d", src, u.line))
+		if mayNamePaths(text) {
+			pg, err := parseGoSource(text)
+			if err != nil {
+				if !strings.Contains(src, "testdata/") {
+					add("%s does not parse as Go (%v): the resolver would read nothing from it", src, err)
+				}
+			} else {
+				dir := filepath.Dir(filepath.Join(root, src))
+				for p := range resolveParsed(pg, dir, root, index) {
+					named[p] = true
+				}
+				for _, u := range unresolvableParsed(pg, dir, root, index) {
+					unres = append(unres, u)
+					unresLoc = append(unresLoc, fmt.Sprintf("%s:%d", src, u.line))
+				}
+			}
 		}
 		if strings.HasSuffix(src, "_test.go") {
 			for _, m := range fixtureLiteral.FindAllString(text, -1) {
@@ -534,9 +406,13 @@ func pathFilterViolations(t *testing.T, root string, excused map[string]string) 
 	for i, u := range unres {
 		var uncovered []string
 		for _, c := range u.candidates {
-			if !matchesAny(t, c, prPaths) {
+			if _, ex := isExcused(excused, c); !matchesAny(t, c, prPaths) && !(u.call && ex) {
 				uncovered = append(uncovered, c)
 			}
+		}
+		if len(uncovered) > 0 && u.call {
+			add("%s: %s names a directory with tracked files that match no pull_request path filter, so a change limited to one of them skips the Go tests that read the directory: %v", unresLoc[i], u.literal, uncovered)
+			continue
 		}
 		if len(uncovered) > 0 {
 			add("%s: %q names a real file the resolver could not locate, and at least one candidate matches no path filter: %v; teach resolveNamedFiles the shape or add a pattern covering every candidate, never an exception list", unresLoc[i], u.literal, uncovered)
@@ -608,6 +484,8 @@ func TestGoWorkflowPathFiltersPlantedDefects(t *testing.T) {
 		{"a bare push trigger has no path list and matches nothing", nil, strings.Replace(miniGoYml, "  push:\n    paths:\n      - '**/*.go'\n      - 'tests/fixtures/**'\n", "  push:\n", 1), map[string]string{}, []string{"match no push path filter"}},
 		{"a raw-string path to an uncovered file is neither resolved nor dropped silently", map[string]string{"a/data.json": "{}", "b/data.json": "{}", "internal/x/x_test.go": "package x\nvar _ = `data.json`"}, miniGoYml, map[string]string{"a": "x", "b": "x"}, []string{"could not locate", "data.json"}},
 		{"a raw-string path resolved to a real file that matches no filter", map[string]string{"cfg/data.yaml": "a: 1", "internal/y/y_test.go": "package y\nvar _ = `../../cfg/data.yaml`"}, miniGoYml, map[string]string{}, []string{"cfg/data.yaml", "match no"}},
+		{"a Join with a raw-string argument names an uncovered file", map[string]string{"cfg/data.yaml": "a: 1", "internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, `cfg/data.yaml`)"}, miniGoYml, map[string]string{}, []string{"cfg/data.yaml", "match no"}},
+		{"a Join with a computed argument under an uncovered directory is reported, never skipped", map[string]string{"cfg/a.json": "{}", "cfg/b.json": "{}", "internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"cfg\", name)"}, miniGoYml, map[string]string{}, []string{"names a directory with tracked files that match no pull_request path filter", "cfg/a.json"}},
 		{"the fixture filter becomes an enumeration", nil, strings.ReplaceAll(miniGoYml, "'tests/fixtures/**'", "'"+fxDir+"a.json'"), map[string]string{}, []string{"single glob 'tests/fixtures/**'"}},
 		{"a Go test names a fixture that is gone", map[string]string{"internal/x/x_test.go": "package x // \"" + fxDir + "ghost.json\"\nvar _ = \"" + fxDir + "ghost.json\""}, miniGoYml, map[string]string{}, []string{"reference fixture paths that do not exist", fxDir + "ghost.json"}},
 		{"an ambiguous literal naming an uncovered file is neither resolved nor dropped silently", map[string]string{"a/data.json": "{}", "b/data.json": "{}", "internal/x/x_test.go": "package x\nvar _ = fsys.Open(\"data.json\")"}, miniGoYml, map[string]string{"a": "x", "b": "x"}, []string{"could not locate", "data.json"}},
@@ -855,4 +733,10 @@ func TestGoCommentsAreNotPathReferences(t *testing.T) {
 	if got["cfg/prose.json"] || !got["cfg/code.json"] {
 		t.Fatalf("comments must not count and code must: %v", got)
 	}
+}
+
+// A computed Join argument under a directory the filters DO cover is proved covered and is not reported.
+func TestComputedJoinUnderACoveredDirectoryIsNotReported(t *testing.T) {
+	root := miniRepo(t, miniFiles(map[string]string{"internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"tests\", \"fixtures\", name)"}, miniGoYml))
+	expectNoViolations(t, pathFilterViolations(t, root, map[string]string{}))
 }

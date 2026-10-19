@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -135,7 +136,7 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 			return nil, walk.pageError(fmt.Errorf("decode github list page: %w", err))
 		}
 		out = appendNew(out, seenItems, page, key)
-		link, advertised := githubNextLinkPresent(response.Header.Get("Link"))
+		link, advertised := githubNextLinkPresent(linkFieldValue(response.Header))
 		var more bool
 		if next, more, err = walk.advance(link, advertised, len(page)); err != nil {
 			return nil, err
@@ -152,6 +153,11 @@ func githubListAllPages[T any](ctx context.Context, client *providerfoundation.H
 func githubNextLink(header string) string {
 	next, _ := githubNextLinkPresent(header)
 	return next
+}
+
+// linkFieldValue is every Link field of a response joined with ", ", as Python's headers.get("Link") reads a repeated field.
+func linkFieldValue(header http.Header) string {
+	return strings.Join(header.Values("Link"), ", ")
 }
 
 // isNextRelParam reads one Link parameter as Python's _parse_link_header_next does (trim, lower-case, exact rel="next"), plus

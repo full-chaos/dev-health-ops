@@ -330,7 +330,7 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 			return Validated{}, err
 		}
 	}
-	// PagerDuty plans from its own repair datasets, never from a dataset row, so an off row does not stop its run.
+	// PagerDuty's plan re-enables its operational rows first (Python pagerduty_repair._repair_datasets, row.is_enabled = True), so an off row does not stop its run.
 	if len(params.DatasetKeys) > 0 && provider != "pagerduty" {
 		if disabledRows, err = disabledDatasetKeys(ctx, tx, config, provider); err != nil {
 			return Validated{}, err

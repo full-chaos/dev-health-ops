@@ -168,9 +168,11 @@ func TestBackfillRunKeepsTheStoredListOfAPagerDutyConfiguration(t *testing.T) {
 		n      int
 		stored string
 		on     []string
+		off    []string
 	}{
 		{n: 201, stored: `["operational"]`},
 		{n: 202, stored: `["operational", "git"]`, on: []string{"incidents"}},
+		{n: 203, stored: `["operational"]`, off: operational[:1]},
 	} {
 		integration, config := uuidN(0x1a, s.n), uuidN(0xc0, s.n)
 		exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
@@ -184,9 +186,24 @@ VALUES ($1::uuid, $2, $3, 'pagerduty', $4::json, '{}'::json, true, true, $5::uui
 		for _, key := range s.on {
 			exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES (gen_random_uuid(), $1, $2::uuid, $3, true, '{}'::json)`, testOrg, integration, key)
 		}
+		for _, key := range s.off {
+			exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES (gen_random_uuid(), $1, $2::uuid, $3, false, '{}'::json)`, testOrg, integration, key)
+		}
 	}
 
-	run := scenario{name: "pagerduty, no dataset row", id: uuidN(0xc0, 201), args: []string{"--backfill", "1", "--before", "2026-03-10"}}
+	// Python's PagerDuty plan re-enabled every operational row before it
+	// loaded the enabled rows (pagerduty_repair._repair_datasets), so an off
+	// operational row still ran: the verb starts it.
+	run := scenario{name: "pagerduty, an operational key whose row is off", id: uuidN(0xc0, 203), args: []string{"--backfill", "1", "--before", "2026-03-10", "--dataset-keys", operational[0]}}
+	reset(t, uri, run)
+	if code, _, stderr := goRun(t, uri, run); code != cli.ExitOK {
+		t.Fatalf("%s: exit %d, want a started run; stderr:\n%s", run.name, code, stderr)
+	}
+	if named := triggerDatasetKeys(t, uri); len(named) != 1 || fmt.Sprint(named[0]) != fmt.Sprint(operational[:1]) {
+		t.Errorf("%s: the run names %v, want %v", run.name, named, operational[:1])
+	}
+
+	run = scenario{name: "pagerduty, no dataset row", id: uuidN(0xc0, 201), args: []string{"--backfill", "1", "--before", "2026-03-10"}}
 	reset(t, uri, run)
 	code, _, stderr := goRun(t, uri, run)
 	if code != cli.ExitOK {

@@ -277,7 +277,7 @@ func buildGitHubPullRequestSemanticOracleRows(t *testing.T, input map[string]any
 	claim := githubWorkItemOracleClaim()
 	claim.OrgID = input["org_id"].(string)
 	rows, err := normalizeGitHubPullRequestBundle(
-		claim, input["repo_full_name"].(string), uuid.MustParse(input["repo_id"].(string)),
+		claim, sameGitHubRepoNames(input["repo_full_name"].(string)), uuid.MustParse(input["repo_id"].(string)),
 		marshalSemanticOracleValue(t, input["raw_pr"]),
 		marshalSemanticOracleValues(t, input["raw_events"]),
 		marshalSemanticOracleValues(t, input["raw_comments"]),
@@ -294,7 +294,7 @@ func buildGitHubIssueSemanticOracleRows(t *testing.T, input map[string]any) gith
 	claim := githubWorkItemOracleClaim()
 	claim.OrgID = input["org_id"].(string)
 	rows, err := normalizeGitHubIssueBundle(
-		claim, input["repo_full_name"].(string), uuid.MustParse(input["repo_id"].(string)),
+		claim, sameGitHubRepoNames(input["repo_full_name"].(string)), uuid.MustParse(input["repo_id"].(string)),
 		marshalSemanticOracleValue(t, input["raw_issue"]),
 		marshalSemanticOracleValues(t, input["raw_events"]),
 		marshalSemanticOracleValues(t, input["raw_comments"]),

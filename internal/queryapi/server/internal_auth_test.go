@@ -561,3 +561,45 @@ func TestQueryEnvelopeNeverGrantsSuperuserWithoutProofOrUnderImpersonation(t *te
 		})
 	}
 }
+
+func TestJWTHeaderAlgMarkersMatchTheCarrierSplit(t *testing.T) {
+	raw, err := os.ReadFile("../../../contracts/auth/v1/credential-classes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Classes []struct {
+			ClassID string `json:"class_id"`
+			Markers []struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"markers"`
+		} `json:"classes"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"ops_access_token_hs256":       principal.EdgeAlgorithm,
+		"effective_principal_envelope": "EdDSA",
+	}
+	for _, class := range document.Classes {
+		alg, ok := want[class.ClassID]
+		if !ok {
+			continue
+		}
+		delete(want, class.ClassID)
+		found := false
+		for _, marker := range class.Markers {
+			if marker.Kind == "jwt_header_alg" && marker.Name == alg {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("class %s declares no jwt_header_alg/%s marker, the alg authenticateInternalRequest routes on", class.ClassID, alg)
+		}
+	}
+	for id := range want {
+		t.Errorf("class %s is missing from credential-classes.json", id)
+	}
+}

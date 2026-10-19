@@ -124,8 +124,9 @@ type gitHubPullRef struct {
 // zero value. See the pullRequestRow doc comment and
 // deploy/go-workers/provider-sync-porting-recipe.md.
 type GitHubPullRequestRouteHandler struct {
-	Now      func() time.Time
-	MaxPages int
+	RepoIdentity GitLabRepoIdentityReader
+	Now          func() time.Time
+	MaxPages     int
 }
 
 func (handler GitHubPullRequestRouteHandler) now() time.Time {
@@ -185,7 +186,7 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	if err := fetchObjectRoute(ctx, &counted, githubRepoRoute, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := repositoryIdentity(repoPayload.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repoPayload)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

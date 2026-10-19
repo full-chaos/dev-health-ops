@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/pgconfig"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
+	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -744,6 +745,11 @@ func buildSchedulerLoopWithSources(
 	// ticker: the warning must not depend on a metrics scrape.
 	saturation := poolstat.New("scheduler_database_pool_saturation_ratio", domainPool, logger)
 	if err := registry.RegisterMetrics("scheduler_domain_pool", saturation); err != nil {
+		return nil, err
+	}
+	// CHAOS-10104: the webhook and initial-backfill triggers synchandoff.Mint
+	// refuses before any write.
+	if err := registry.RegisterMetrics("sync_manual_trigger_refused", synchandoff.RefusalMetricsSource()); err != nil {
 		return nil, err
 	}
 	repository, err := sources.newRepository(coordinatorPool)

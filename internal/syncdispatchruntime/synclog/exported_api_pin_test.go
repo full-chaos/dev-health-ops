@@ -71,6 +71,7 @@ var exportedAPI = []string{
 	"var synclog.KeyTriggerMode synclog.Key",
 	"var synclog.KeyTriggeredBy synclog.Key",
 	"var synclog.MsgSyncTriggerRefusedUnselectedSource synclog.Msg",
+	"var synclog.MsgSyncTriggerRefusedUnnamedCaller synclog.Msg",
 	"var synclog.KeyClaimDeferredOutsideSnapshot synclog.Key",
 	"var synclog.KeyClaimDeferredUnitIdSample synclog.Key",
 	"var synclog.KeyConfidence synclog.Key",

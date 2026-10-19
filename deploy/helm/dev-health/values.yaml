@@ -133,9 +133,11 @@ authService:
     secretKey: signing-key.pem
     # -- The JWKS `kid` (letters, digits, '-', '_', '.', at most 64).
     keyId: ""
-    # -- A Secret volume is root-owned, so a mode 0400 key is unreadable by uid
-    #    65532, and fsGroup makes it group-readable (0440), which the custody
-    #    check refuses. The Secret is therefore mounted 0440 for an
+    # -- A Secret volume cannot be given to the service directly (each reason is
+    #    executed by ci/check_auth_k8s.sh): every file in it is a SYMLINK into
+    #    ..data and the custody check opens with O_NOFOLLOW; as a regular file
+    #    (subPath) a mode 0400 key is root-owned and unreadable by uid 65532; and
+    #    fsGroup makes it group-readable (0440), which the check refuses. The Secret is therefore mounted 0440 for an
     #    init container (fsGroup lets uid 65532 read it) that installs a copy at
     #    mode 0400, owned by uid 65532, into a memory-backed emptyDir; only that
     #    copy reaches the auth-service container. The init container needs `cp`

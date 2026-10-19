@@ -355,6 +355,7 @@
     },
     {
       "file": "client-rejected-duplicate-reason-code.json",
+      "duplicate_member": true,
       "http_status": 403,
       "why": "CODEX ROUND 2 P1. Two `reason_code` members. Every parser keeps the LAST, so a validator only ever sees `grant_absent` and reports success -- while the WIRE BYTES carry an address in a field whose pattern exists to make addresses unrepresentable. This is a wire contract, so the guarantee is about bytes, and it was false. Both clients now refuse duplicate members BEFORE decoding, because the decode is what destroys the evidence.\n\nWRITTEN AS RAW TEXT ON PURPOSE, like the 2^53 fixtures: `json.dump` cannot emit a duplicate member at all, so regenerating this file through any serialiser silently deletes the defect it carries. Do not normalise it.\n\nThe first value is spelled with `_at_` and `_dot_` rather than as a real address so the fixture secret scanner does not read the corpus as carrying one -- the point is the DUPLICATE, not the specific string."
     },

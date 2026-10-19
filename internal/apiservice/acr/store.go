@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,8 +17,9 @@ import (
 // Python: dev_health_ops.licensing.registry.py, "agent_context_runtime".
 const agentContextRuntimeFeatureKey = "agent_context_runtime"
 
-// acrServiceModelFeatureKey is the second feature this route decides: the org
-// may use the platform LLM for MCP investigations without its own BYO LLM.
+// acrServiceModelFeatureKey is the second feature this route decides: ACR AI
+// features are on for the org. The route serves its effective value (see
+// effectiveServiceModel); it does not grant the platform LLM by itself.
 const acrServiceModelFeatureKey = "acr_service_model"
 
 // platformModelFallbackFeatureKey is the third: a platform-admin grant (an
@@ -51,8 +53,9 @@ type Entitlement struct {
 	// which trivially holds by construction on both planes.
 	OrgID               string
 	AgentContextRuntime bool
-	// ACRServiceModel is false for an org without the grant and for an org
-	// where the feature row does not exist yet (not registered reads closed).
+	// ACRServiceModel is the effective acr_service_model: the org's explicit
+	// override, else true for an org with a saved BYO LLM configuration, else
+	// the plan decision (false for an unregistered feature row).
 	ACRServiceModel bool
 	// PlatformModelFallback reads closed the same way.
 	PlatformModelFallback bool
@@ -110,11 +113,33 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
+	serviceModelOn, err := effectiveServiceModel(ctx, store.Pool, parsedOrgID.String(), serviceModel)
+	if err != nil {
+		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 	fallback, err := decisionStore.Decide(ctx, parsedOrgID.String(), platformModelFallbackFeatureKey)
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModel.Allowed, PlatformModelFallback: fallback.Allowed}, nil
+	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModelOn, PlatformModelFallback: fallback.Allowed}, nil
+}
+
+// effectiveServiceModel is the acr_service_model acr reads: the org's explicit
+// override when one is active (Decide already put it first), OFF when the
+// feature is globally disabled or invalid (Decide checks that before any
+// override), else ON for an org with a saved BYO LLM configuration
+// (auto-enrolment), else the plan or license decision.
+func effectiveServiceModel(ctx context.Context, pool *pgxpool.Pool, orgID string, decision licensing.Decision) (bool, error) {
+	switch decision.Reason {
+	case licensing.ReasonEnabledByOrgOverride, licensing.ReasonOrgOverrideDisabled,
+		licensing.ReasonGlobalDisabled, licensing.ReasonInvalidFeatureState:
+		return decision.Allowed, nil
+	}
+	saved, err := llmorgsettings.HasSavedBYO(ctx, pool, orgID)
+	if err != nil {
+		return false, err
+	}
+	return saved || decision.Allowed, nil
 }
 
 // readyTimeout bounds the health route's ping, so an unreachable store is a

@@ -1,0 +1,4033 @@
+{
+ "description": "The closed enumeration of jwks.v1 narrowings, by PROPERTY. Every row is a document (base key plus ops) with a HUMAN-OWNED literal verdict for the real consumer (dev-health-go authverify Keys()) and for the schema; no expectation is computed from the code it checks. Go drives the real consumer and the schema over every row; Python and ajv drive the schema over every row. consumer/schema are accept|refuse; class is derived by hand from the pair: agreement (same), narrowing (consumer accepts, schema refuses), client_enforced (schema accepts, consumer refuses). Properties: P1 member-name matching; P2 null values; P3 use; P4 kid characters and TrimSpace edges; P5 kid byte bound; P6 kid uniqueness; P7 x; P8 kty/crv/alg and absent members; P9 RFC 7517 registered and unknown members; P10 document shape; P11 pattern anchors (trailing newline) are carried by the P4 trailing-lf and P7 trailing-lf rows. Unicode categories: every two-letter category in Go's unicode.Categories must appear in unicode_categories (Cs excluded: not representable in a JSON string); a category with no entry fails the Go test.",
+ "base_document": {
+  "keys": [
+   {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "alg": "EdDSA",
+    "kid": "example-signing-key",
+    "x": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+   }
+  ]
+ },
+ "ops_note": "ops apply in order to a deep copy of base_document. path [] is the whole document; set replaces or creates the member; delete removes it; rename changes the NAME of the member at path (value kept). A value of the form {\"$repeat\":[unit,count],\"prefix\":p,\"suffix\":s} stands for p + unit*count + s.",
+ "ascii_printable_agree": "every character U+0021..U+007E as a whole kid is accepted by both the consumer and the schema",
+ "unicode_categories_excluded": {
+  "Cs": "surrogates cannot be carried in a JSON string a Go decoder keeps; the byte layer (CHAOS-4956) owns them",
+  "LC": "union of Lu, Ll and Lt, which have their own entries"
+ },
+ "unicode_categories_claim": "for every code point in the category outside U+0021..U+007E, a kid of the form a<rune>b is ACCEPTED by the consumer and REFUSED by the schema",
+ "unicode_categories": [
+  {
+   "category": "Cc",
+   "rune": "U+0001",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Cf",
+   "rune": "U+200D",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Cn",
+   "rune": "U+0378",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Co",
+   "rune": "U+E000",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Ll",
+   "rune": "U+00E9",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Lm",
+   "rune": "U+02B0",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Lo",
+   "rune": "U+4E2D",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Lt",
+   "rune": "U+01C5",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Lu",
+   "rune": "U+00C9",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Mc",
+   "rune": "U+0903",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Me",
+   "rune": "U+20DD",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Mn",
+   "rune": "U+0301",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Nd",
+   "rune": "U+0663",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Nl",
+   "rune": "U+2160",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "No",
+   "rune": "U+00B2",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Pc",
+   "rune": "U+203F",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Pd",
+   "rune": "U+2013",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Pe",
+   "rune": "U+3009",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Pf",
+   "rune": "U+00BB",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Pi",
+   "rune": "U+00AB",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Po",
+   "rune": "U+00A1",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Ps",
+   "rune": "U+3008",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Sc",
+   "rune": "U+20AC",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Sk",
+   "rune": "U+00A8",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Sm",
+   "rune": "U+00D7",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "So",
+   "rune": "U+00A9",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Zl",
+   "rune": "U+2028",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Zp",
+   "rune": "U+2029",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
+   "category": "Zs",
+   "rune": "U+3000",
+   "consumer": "accept",
+   "schema": "refuse"
+  }
+ ],
+ "declared_classes": [
+  {
+   "id": "N1",
+   "summary": "member names match by Unicode simple folding in the consumer, exactly in the schema"
+  },
+  {
+   "id": "N2",
+   "summary": "use: null is the empty use to the consumer"
+  },
+  {
+   "id": "N3",
+   "summary": "use: \"\" is tolerated by the consumer"
+  },
+  {
+   "id": "N4",
+   "summary": "kid characters outside printable non-space ASCII, anywhere in the value, are kept by the consumer; only a kid empty after TrimSpace is refused"
+  },
+  {
+   "id": "N5",
+   "summary": "the consumer applies the 256-byte kid bound AFTER TrimSpace, so padding beyond 256 bytes is accepted"
+  },
+  {
+   "id": "N6",
+   "summary": "the consumer's base64 decoding skips CR and LF inside x"
+  },
+  {
+   "id": "C1",
+   "summary": "a repeated kid: the schema cannot see it, the consumer refuses it"
+  },
+  {
+   "id": "C2",
+   "summary": "a repeated member name inside one JSON object: parsers keep the last value so the schema sees one, the consumer refuses the bytes"
+  }
+ ],
+ "rows": [
+  {
+   "id": "P1-top-upper",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "rename": "KEYS"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-top-title",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "rename": "Keys"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-top-long-s",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "rename": "key\u017f"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-top-kelvin",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "rename": "\u212aeys"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-kty-upper",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "rename": "KTY"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-kty-kelvin",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "rename": "\u212aty"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-crv-title",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "rename": "Crv"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-alg-upper",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "rename": "ALG"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-kid-upper",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "rename": "KID"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-kid-kelvin",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "rename": "\u212aid"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-x-upper",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "rename": "X"
+    }
+   ],
+   "why": "Go matches member names by Unicode simple folding; JSON Schema matches exactly.",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-use-upper",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "k1"
+    },
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": "sig"
+    },
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "rename": "USE"
+    }
+   ],
+   "why": "fold at use",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-use-long-s",
+   "property": "P1",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": "sig"
+    },
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "rename": "u\u017fe"
+    }
+   ],
+   "why": "fold at use via long s",
+   "declared_as": "N1"
+  },
+  {
+   "id": "P1-top-trailing-space",
+   "property": "P1",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "rename": "keys "
+    }
+   ],
+   "why": "a name that does not fold to a declared name is unknown to both"
+  },
+  {
+   "id": "P1-top-underscore",
+   "property": "P1",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "rename": "key_s"
+    }
+   ],
+   "why": "a name that does not fold to a declared name is unknown to both"
+  },
+  {
+   "id": "P1-kid-trailing-nul",
+   "property": "P1",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "rename": "kid\u0000"
+    }
+   ],
+   "why": "a name that does not fold to a declared name is unknown to both"
+  },
+  {
+   "id": "P1-kty-accented",
+   "property": "P1",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "rename": "kt\u00fd"
+    }
+   ],
+   "why": "a name that does not fold to a declared name is unknown to both"
+  },
+  {
+   "id": "P2-null-keys",
+   "property": "P2",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "set": null
+    }
+   ],
+   "why": "null where a value is required"
+  },
+  {
+   "id": "P2-null-key-item",
+   "property": "P2",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0
+     ],
+     "set": null
+    }
+   ],
+   "why": "null where a value is required"
+  },
+  {
+   "id": "P2-null-kty",
+   "property": "P2",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "set": null
+    }
+   ],
+   "why": "null where a value is required"
+  },
+  {
+   "id": "P2-null-crv",
+   "property": "P2",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "set": null
+    }
+   ],
+   "why": "null where a value is required"
+  },
+  {
+   "id": "P2-null-alg",
+   "property": "P2",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "set": null
+    }
+   ],
+   "why": "null where a value is required"
+  },
+  {
+   "id": "P2-null-kid",
+   "property": "P2",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": null
+    }
+   ],
+   "why": "null where a value is required"
+  },
+  {
+   "id": "P2-null-x",
+   "property": "P2",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": null
+    }
+   ],
+   "why": "null where a value is required"
+  },
+  {
+   "id": "P2-null-document",
+   "property": "P2",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [],
+     "set": null
+    }
+   ],
+   "why": "document is null"
+  },
+  {
+   "id": "P2-null-use",
+   "property": "P2",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": null
+    }
+   ],
+   "why": "null decodes to Go's zero string",
+   "declared_as": "N2"
+  },
+  {
+   "id": "P3-use-empty",
+   "property": "P3",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": ""
+    }
+   ],
+   "why": "",
+   "declared_as": "N3"
+  },
+  {
+   "id": "P3-use-sig",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": "sig"
+    }
+   ],
+   "why": "positive control"
+  },
+  {
+   "id": "P3-use-SIG",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": "SIG"
+    }
+   ],
+   "why": "use other than sig"
+  },
+  {
+   "id": "P3-use-Sig",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": "Sig"
+    }
+   ],
+   "why": "use other than sig"
+  },
+  {
+   "id": "P3-use-enc",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": "enc"
+    }
+   ],
+   "why": "use other than sig"
+  },
+  {
+   "id": "P3-use-spsig",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": " sig"
+    }
+   ],
+   "why": "use other than sig"
+  },
+  {
+   "id": "P3-use-sigsp",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": "sig "
+    }
+   ],
+   "why": "use other than sig"
+  },
+  {
+   "id": "P3-use-sigun",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": "sig\n"
+    }
+   ],
+   "why": "use other than sig"
+  },
+  {
+   "id": "P3-use-sign",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": "sign"
+    }
+   ],
+   "why": "use other than sig"
+  },
+  {
+   "id": "P3-use-type-int",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": 1
+    }
+   ],
+   "why": "use of the wrong JSON type"
+  },
+  {
+   "id": "P3-use-type-bool",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": true
+    }
+   ],
+   "why": "use of the wrong JSON type"
+  },
+  {
+   "id": "P3-use-type-list",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": [
+      "sig"
+     ]
+    }
+   ],
+   "why": "use of the wrong JSON type"
+  },
+  {
+   "id": "P3-use-type-dict",
+   "property": "P3",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "use"
+     ],
+     "set": {}
+    }
+   ],
+   "why": "use of the wrong JSON type"
+  },
+  {
+   "id": "P8-kty-okp",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "set": "okp"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-kty-Okp",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "set": "Okp"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-kty-OKPsp",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "set": "OKP "
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-kty-RSA",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "set": "RSA"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-kty-EC",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "set": "EC"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-kty-oct",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "set": "oct"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-crv-ed25519",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "set": "ed25519"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-crv-ED25519",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "set": "ED25519"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-crv-Ed448",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "set": "Ed448"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-crv-X25519",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "set": "X25519"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-crv-P-256",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "set": "P-256"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-crv-Ed25519sp",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "set": "Ed25519 "
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-alg-eddsa",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "set": "eddsa"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-alg-EDDSA",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "set": "EDDSA"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-alg-Ed25519",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "set": "Ed25519"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-alg-ES256",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "set": "ES256"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-alg-RS256",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "set": "RS256"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-alg-HS256",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "set": "HS256"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-alg-none",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "set": "none"
+    }
+   ],
+   "why": "literal member compared byte-for-byte by both"
+  },
+  {
+   "id": "P8-kty-type-number",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "set": 1
+    }
+   ],
+   "why": "wrong JSON type"
+  },
+  {
+   "id": "P8-kty-absent",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty"
+     ],
+     "delete": true
+    }
+   ],
+   "why": "required member absent"
+  },
+  {
+   "id": "P8-crv-type-number",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "set": 1
+    }
+   ],
+   "why": "wrong JSON type"
+  },
+  {
+   "id": "P8-crv-absent",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv"
+     ],
+     "delete": true
+    }
+   ],
+   "why": "required member absent"
+  },
+  {
+   "id": "P8-alg-type-number",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "set": 1
+    }
+   ],
+   "why": "wrong JSON type"
+  },
+  {
+   "id": "P8-alg-absent",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "alg"
+     ],
+     "delete": true
+    }
+   ],
+   "why": "required member absent"
+  },
+  {
+   "id": "P8-kid-absent",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "delete": true
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P8-x-absent",
+   "property": "P8",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "delete": true
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P4-embedded-space",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a b"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-nbsp",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u00a0b"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-nel",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u0085b"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-del",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u007fb"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-c1",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u0080b"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-zwj",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u200db"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-rlm",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u200fb"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-bidi-override",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u202eb"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-line-sep",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u2028b"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-bom",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\ufeffb"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-embedded-replacement-char",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\ufffdb"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-emoji",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\ud83d\ude00"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-emoji-zwj-sequence",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-emoji-flag",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\ud83c\uddfa\ud83c\uddf8"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-emoji-skin-tone",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\ud83d\udc4d\ud83c\udffd"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-nul-alone",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u0000"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-nfd-e-acute",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "e\u0301"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-nfc-e-acute",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u00e9"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-lone-nbsp-inside-ascii",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "kid\u00a0"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-rtl-letters",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u05d0\u05d1"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-fullwidth-a",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\uff21"
+    }
+   ],
+   "why": "kid the consumer keeps and the schema's printable-ASCII class refuses",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-leading-space",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": " a"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-space",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a "
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-leading-tab",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\ta"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-lf",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\n"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-crlf",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\r\n"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-cr",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\r"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-leading-lf",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\na"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-vt",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u000b"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-ff",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\f"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-leading-ideographic",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u3000a"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-ideographic",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u3000"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-leading-nbsp",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u00a0a"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-nel",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u0085"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-leading-ogham-space",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u1680a"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-line-sep",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u2028"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-para-sep",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u2029"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-narrow-nbsp",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u202f"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-en-quad",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u2000"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-hair-space",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u200a"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-trailing-medium-math-space",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a\u205f"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-padded-both",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "  a  "
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P4-many-spaces-then-char",
+   "property": "P4",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "                                                                                                                                                                                                                                                                                                            a"
+    }
+   ],
+   "why": "TrimSpace strips unicode.IsSpace at either end; the consumer accepts the remainder",
+   "declared_as": "N5"
+  },
+  {
+   "id": "P4-space-only",
+   "property": "P4",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": " "
+    }
+   ],
+   "why": "nothing left after TrimSpace"
+  },
+  {
+   "id": "P4-tab-only",
+   "property": "P4",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\t"
+    }
+   ],
+   "why": "nothing left after TrimSpace"
+  },
+  {
+   "id": "P4-ideographic-only",
+   "property": "P4",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u3000"
+    }
+   ],
+   "why": "nothing left after TrimSpace"
+  },
+  {
+   "id": "P4-nbsp-only",
+   "property": "P4",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u00a0"
+    }
+   ],
+   "why": "nothing left after TrimSpace"
+  },
+  {
+   "id": "P4-nel-only",
+   "property": "P4",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u0085"
+    }
+   ],
+   "why": "nothing left after TrimSpace"
+  },
+  {
+   "id": "P4-line-sep-only",
+   "property": "P4",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "\u2028"
+    }
+   ],
+   "why": "nothing left after TrimSpace"
+  },
+  {
+   "id": "P4-mixed-spaces-only",
+   "property": "P4",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": " \t\n\u3000"
+    }
+   ],
+   "why": "nothing left after TrimSpace"
+  },
+  {
+   "id": "P4-empty",
+   "property": "P4",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": ""
+    }
+   ],
+   "why": "nothing left after TrimSpace"
+  },
+  {
+   "id": "P4-ascii-printable",
+   "property": "P4",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "k-1_2.3~!"
+    }
+   ],
+   "why": "printable non-space ASCII"
+  },
+  {
+   "id": "P5-ascii-255",
+   "property": "P5",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "a",
+       255
+      ],
+      "prefix": "",
+      "suffix": ""
+     }
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P5-ascii-256",
+   "property": "P5",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "a",
+       256
+      ],
+      "prefix": "",
+      "suffix": ""
+     }
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P5-ascii-257",
+   "property": "P5",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "a",
+       257
+      ],
+      "prefix": "",
+      "suffix": ""
+     }
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P5-e-acute-x128-256-bytes",
+   "property": "P5",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "\u00e9",
+       128
+      ],
+      "prefix": "",
+      "suffix": ""
+     }
+    }
+   ],
+   "why": "256 bytes of 2-byte chars: consumer accepts",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P5-e-acute-x129-258-bytes",
+   "property": "P5",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "\u00e9",
+       129
+      ],
+      "prefix": "",
+      "suffix": ""
+     }
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P5-e-acute-x127-plus-aa-256-bytes",
+   "property": "P5",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "\u00e9",
+       127
+      ],
+      "prefix": "",
+      "suffix": "aa"
+     }
+    }
+   ],
+   "why": "",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P5-cjk-x85-plus-a-256-bytes",
+   "property": "P5",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "\u4e2d",
+       85
+      ],
+      "prefix": "",
+      "suffix": "a"
+     }
+    }
+   ],
+   "why": "3-byte chars",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P5-cjk-x86-258-bytes",
+   "property": "P5",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "\u4e2d",
+       86
+      ],
+      "prefix": "",
+      "suffix": ""
+     }
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P5-emoji-x64-256-bytes",
+   "property": "P5",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "\ud83d\ude00",
+       64
+      ],
+      "prefix": "",
+      "suffix": ""
+     }
+    }
+   ],
+   "why": "4-byte chars",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P5-emoji-x65-260-bytes",
+   "property": "P5",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "\ud83d\ude00",
+       65
+      ],
+      "prefix": "",
+      "suffix": ""
+     }
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P5-ascii-256-plus-trailing-space",
+   "property": "P5",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "a",
+       256
+      ],
+      "prefix": "",
+      "suffix": "  "
+     }
+    }
+   ],
+   "why": "the 256-byte bound is applied AFTER TrimSpace",
+   "declared_as": "N5"
+  },
+  {
+   "id": "P5-ascii-257-plus-trailing-space",
+   "property": "P5",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "a",
+       257
+      ],
+      "prefix": "",
+      "suffix": "  "
+     }
+    }
+   ],
+   "why": "trimmed length 257"
+  },
+  {
+   "id": "P5-leading-space-plus-ascii-256",
+   "property": "P5",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "a",
+       256
+      ],
+      "prefix": " ",
+      "suffix": ""
+     }
+    }
+   ],
+   "why": "bound applied after trim",
+   "declared_as": "N5"
+  },
+  {
+   "id": "P5-padded-600-bytes",
+   "property": "P5",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       " ",
+       300
+      ],
+      "prefix": "",
+      "suffix": "a"
+     }
+    }
+   ],
+   "why": "600 bytes untrimmed, 1 trimmed",
+   "declared_as": "N5"
+  },
+  {
+   "id": "P5-ideographic-padding-over-256-bytes",
+   "property": "P5",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": {
+      "$repeat": [
+       "\u3000",
+       100
+      ],
+      "prefix": "",
+      "suffix": "a"
+     }
+    }
+   ],
+   "why": "300 bytes of padding",
+   "declared_as": "N5"
+  },
+  {
+   "id": "P6-same-kid-same-x",
+   "property": "P6",
+   "class": "client_enforced",
+   "consumer": "refuse",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "k"
+    },
+    {
+     "path": [
+      "keys",
+      1
+     ],
+     "set": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "kid": "k",
+      "x": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+     }
+    }
+   ],
+   "why": "the schema declares no uniqueItems: identical keys validate, the consumer refuses the repeated kid",
+   "declared_as": "C1"
+  },
+  {
+   "id": "P6-same-kid-different-x",
+   "property": "P6",
+   "class": "client_enforced",
+   "consumer": "refuse",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "k"
+    },
+    {
+     "path": [
+      "keys",
+      1
+     ],
+     "set": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "kid": "k",
+      "x": "ExamplePublicKeyForContractFixturesOnlyBBBB"
+     }
+    }
+   ],
+   "why": "uniqueItems cannot see a repeated kid",
+   "declared_as": "C1"
+  },
+  {
+   "id": "P6-kids-differ-by-case",
+   "property": "P6",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "k"
+    },
+    {
+     "path": [
+      "keys",
+      1
+     ],
+     "set": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "kid": "K",
+      "x": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+     }
+    }
+   ],
+   "why": "kid compare is byte-exact on both sides"
+  },
+  {
+   "id": "P6-kids-differ-by-trailing-space",
+   "property": "P6",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "k"
+    },
+    {
+     "path": [
+      "keys",
+      1
+     ],
+     "set": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "kid": "k ",
+      "x": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+     }
+    }
+   ],
+   "why": "distinct bytes; the consumer keys on the untrimmed value",
+   "declared_as": "N4"
+  },
+  {
+   "id": "P6-three-keys-first-and-third-repeat",
+   "property": "P6",
+   "class": "client_enforced",
+   "consumer": "refuse",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a"
+    },
+    {
+     "path": [
+      "keys",
+      1
+     ],
+     "set": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "kid": "b",
+      "x": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+     }
+    },
+    {
+     "path": [
+      "keys",
+      2
+     ],
+     "set": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "kid": "a",
+      "x": "ExamplePublicKeyForContractFixturesOnlyBBBB"
+     }
+    }
+   ],
+   "why": "non-adjacent repeat",
+   "declared_as": "C1"
+  },
+  {
+   "id": "P6-two-distinct-kids",
+   "property": "P6",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kid"
+     ],
+     "set": "a"
+    },
+    {
+     "path": [
+      "keys",
+      1
+     ],
+     "set": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "kid": "b",
+      "x": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+     }
+    }
+   ],
+   "why": "rotation overlap"
+  },
+  {
+   "id": "P7-valid",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+    }
+   ],
+   "why": "control"
+  },
+  {
+   "id": "P7-trailing-bits-nonzero",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAAB"
+    }
+   ],
+   "why": "Go decodes non-strict; pattern admits"
+  },
+  {
+   "id": "P7-42-chars",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAA"
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-44-chars",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAAAA"
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-padded-44",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAAA="
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-padded-equals-in-place",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAA="
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-plus",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAA+"
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-slash",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAA/"
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-space-inside",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "Examp ePublicKeyForContractFixturesOnlyAAAA"
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-empty",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": ""
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-trailing-lf",
+   "property": "P7",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAAA\n"
+    }
+   ],
+   "why": "Go base64 skips CR/LF",
+   "declared_as": "N6"
+  },
+  {
+   "id": "P7-trailing-cr",
+   "property": "P7",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAAA\r"
+    }
+   ],
+   "why": "Go base64 skips CR/LF",
+   "declared_as": "N6"
+  },
+  {
+   "id": "P7-embedded-lf",
+   "property": "P7",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForC\nontractFixturesOnlyAAAA"
+    }
+   ],
+   "why": "Go base64 skips CR/LF",
+   "declared_as": "N6"
+  },
+  {
+   "id": "P7-embedded-crlf",
+   "property": "P7",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForC\r\nontractFixturesOnlyAAAA"
+    }
+   ],
+   "why": "",
+   "declared_as": "N6"
+  },
+  {
+   "id": "P7-leading-lf",
+   "property": "P7",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "\nExamplePublicKeyForContractFixturesOnlyAAAA"
+    }
+   ],
+   "why": "",
+   "declared_as": "N6"
+  },
+  {
+   "id": "P7-non-ascii-digit",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAA\u0663"
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-fullwidth-letters",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21\uff21"
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-number",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": 12345
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-true",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": true
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-array",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": [
+      "ExamplePublicKeyForContractFixturesOnlyAAAA"
+     ]
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P7-all-minus",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "-------------------------------------------"
+    }
+   ],
+   "why": "alphabet edge"
+  },
+  {
+   "id": "P7-all-underscore",
+   "property": "P7",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x"
+     ],
+     "set": "___________________________________________"
+    }
+   ],
+   "why": "alphabet edge"
+  },
+  {
+   "id": "P9-key-member-key_ops",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "key_ops"
+     ],
+     "set": [
+      "verify"
+     ]
+    }
+   ],
+   "why": "registered or unknown JWK member: RFC 7517 says ignore, consumer and schema refuse"
+  },
+  {
+   "id": "P9-key-member-x5c",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x5c"
+     ],
+     "set": [
+      "MIIB"
+     ]
+    }
+   ],
+   "why": "registered or unknown JWK member: RFC 7517 says ignore, consumer and schema refuse"
+  },
+  {
+   "id": "P9-key-member-x5u",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x5u"
+     ],
+     "set": "https://example.test/c"
+    }
+   ],
+   "why": "registered or unknown JWK member: RFC 7517 says ignore, consumer and schema refuse"
+  },
+  {
+   "id": "P9-key-member-x5t",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x5t"
+     ],
+     "set": "AAAA"
+    }
+   ],
+   "why": "registered or unknown JWK member: RFC 7517 says ignore, consumer and schema refuse"
+  },
+  {
+   "id": "P9-key-member-x5thashS256",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "x5t#S256"
+     ],
+     "set": "AAAA"
+    }
+   ],
+   "why": "registered or unknown JWK member: RFC 7517 says ignore, consumer and schema refuse"
+  },
+  {
+   "id": "P9-key-member-ext",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "ext"
+     ],
+     "set": true
+    }
+   ],
+   "why": "registered or unknown JWK member: RFC 7517 says ignore, consumer and schema refuse"
+  },
+  {
+   "id": "P9-key-member-d",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "d"
+     ],
+     "set": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+    }
+   ],
+   "why": "registered or unknown JWK member: RFC 7517 says ignore, consumer and schema refuse"
+  },
+  {
+   "id": "P9-key-member-kty2",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "kty2"
+     ],
+     "set": "OKP"
+    }
+   ],
+   "why": "registered or unknown JWK member: RFC 7517 says ignore, consumer and schema refuse"
+  },
+  {
+   "id": "P9-key-member-crv_alt",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      0,
+      "crv_alt"
+     ],
+     "set": "Ed25519"
+    }
+   ],
+   "why": "registered or unknown JWK member: RFC 7517 says ignore, consumer and schema refuse"
+  },
+  {
+   "id": "P9-top-member-issuer",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "issuer"
+     ],
+     "set": "https://i.test"
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P9-top-member-schema",
+   "property": "P9",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "$schema"
+     ],
+     "set": "x"
+    }
+   ],
+   "why": ""
+  },
+  {
+   "id": "P10-top-array",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [],
+     "set": []
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-top-string",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [],
+     "set": "keys"
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-top-number",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [],
+     "set": 1
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-top-empty-object",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [],
+     "set": {}
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-keys-object",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "set": {}
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-keys-string",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "set": "k"
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-keys-empty",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "set": []
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-keys-item-null",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "set": [
+      null
+     ]
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-keys-item-number",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "set": [
+      1
+     ]
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-keys-item-array",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "set": [
+      []
+     ]
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-keys-item-empty-object",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "set": [
+      {}
+     ]
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-keys-item-string",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys"
+     ],
+     "set": [
+      "k"
+     ]
+    }
+   ],
+   "why": "wrong shape"
+  },
+  {
+   "id": "P10-valid-key-then-invalid-key",
+   "property": "P10",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "ops": [
+    {
+     "path": [
+      "keys",
+      1
+     ],
+     "set": {
+      "kty": "RSA",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "kid": "b",
+      "x": "ExamplePublicKeyForContractFixturesOnlyAAAA"
+     }
+    }
+   ],
+   "why": "one bad key refuses the whole document"
+  }
+ ],
+ "byte_layer_rows": [
+  {
+   "id": "BL-control-valid",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "why": "a plain valid document",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-whitespace-around",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "why": "JSON whitespace around the document",
+   "raw": " \n\t{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}\r\n "
+  },
+  {
+   "id": "BL-trailing-null",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a second JSON value after the document",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]} null"
+  },
+  {
+   "id": "BL-trailing-second-document",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "two whole documents in one file",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-trailing-garbage",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "bytes after the document",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}x"
+  },
+  {
+   "id": "BL-duplicate-kid-member",
+   "property": "BL",
+   "class": "client_enforced",
+   "consumer": "refuse",
+   "schema": "accept",
+   "why": "a repeated member inside one key: parsers keep the last, the consumer refuses",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"a\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}",
+   "declared_as": "C2"
+  },
+  {
+   "id": "BL-duplicate-keys-member",
+   "property": "BL",
+   "class": "client_enforced",
+   "consumer": "refuse",
+   "schema": "accept",
+   "why": "a repeated top-level member",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"a\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}],\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"b\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}",
+   "declared_as": "C2"
+  },
+  {
+   "id": "BL-duplicate-member-by-fold",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "kid and KID in one key: the consumer folds names; the schema sees KID as undeclared",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"a\",\"KID\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-byte-order-mark",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "UTF-8 BOM before the document",
+   "raw_hex": "efbbbf7b226b657973223a5b7b226b7479223a224f4b50222c22637276223a2245643235353139222c22616c67223a224564445341222c226b6964223a226b222c2278223a224578616d706c655075626c69634b6579466f72436f6e747261637446697874757265734f6e6c7941414141227d5d7d"
+  },
+  {
+   "id": "BL-invalid-utf8-in-kid",
+   "property": "BL",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "why": "a raw 0xFF byte inside the kid string: the consumer's decoder substitutes U+FFFD",
+   "raw_hex": "7b226b657973223a5b7b226b7479223a224f4b50222c22637276223a2245643235353139222c22616c67223a224564445341222c226b6964223a2261ff62222c2278223a224578616d706c655075626c69634b6579466f72436f6e747261637446697874757265734f6e6c7941414141227d5d7d",
+   "declared_as": "N4"
+  },
+  {
+   "id": "BL-escaped-ascii-kid",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "accept",
+   "schema": "accept",
+   "why": "kid spelled with a \\u escape of an ASCII letter: same value after decoding",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"\\u006b\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-lone-surrogate-escape-kid",
+   "property": "BL",
+   "class": "narrowing",
+   "consumer": "accept",
+   "schema": "refuse",
+   "why": "kid holding an unpaired surrogate escape: Go substitutes U+FFFD, others keep the surrogate",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"a\\ud800b\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}",
+   "declared_as": "N4"
+  },
+  {
+   "id": "BL-line-comment",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a // comment after the document",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]} // c"
+  },
+  {
+   "id": "BL-block-comment",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a /* */ comment inside the document",
+   "raw": "{/* c */\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"}]}"
+  },
+  {
+   "id": "BL-trailing-comma",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a trailing comma in the keys array",
+   "raw": "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"alg\":\"EdDSA\",\"kid\":\"k\",\"x\":\"ExamplePublicKeyForContractFixturesOnlyAAAA\"},]}"
+  },
+  {
+   "id": "BL-single-quotes",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "single-quoted names and strings",
+   "raw": "{'keys':[]}"
+  },
+  {
+   "id": "BL-empty-file",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "zero bytes",
+   "raw": ""
+  },
+  {
+   "id": "BL-whitespace-only-file",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "only whitespace",
+   "raw": "  \n"
+  },
+  {
+   "id": "BL-bare-number",
+   "property": "BL",
+   "class": "agreement",
+   "consumer": "refuse",
+   "schema": "refuse",
+   "why": "a JSON number as the document",
+   "raw": "1"
+  }
+ ],
+ "byte_layer_parse_rule": "schema verdict for a byte row: decode the bytes as strict UTF-8 (Go: json.Unmarshal, which substitutes U+FFFD), parse with the language's ordinary JSON parser (last duplicate member wins, trailing content is an error), then validate. A parse failure is refuse. The consumer verdict is Keys() on the file.",
+ "alphabets": {
+  "x_characters": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  "kid_range": [
+   "U+0021",
+   "U+007E"
+  ],
+  "claim": "a 43-character x whose 43rd character is c is accepted by the consumer and by the schema exactly when c is in x_characters; a one-character kid c is accepted by the schema exactly when c is in kid_range. Checked for every code point (schema) and for every ASCII character and every Unicode category sample (consumer)."
+ },
+ "inventory": {
+  "rows": 185,
+  "by_property": {
+   "P1": 17,
+   "P10": 13,
+   "P2": 9,
+   "P3": 13,
+   "P4": 52,
+   "P5": 15,
+   "P6": 6,
+   "P7": 22,
+   "P8": 27,
+   "P9": 11
+  },
+  "unicode_categories": 29,
+  "unicode_categories_excluded": [
+   "Cs",
+   "LC"
+  ],
+  "byte_layer_rows": 19
+ }
+}

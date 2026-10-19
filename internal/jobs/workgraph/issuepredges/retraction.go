@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
@@ -76,7 +77,7 @@ func (service *Service) RetractOutrankedFallbacks(ctx context.Context, orgID str
 	stored, err := issueprlinks.ReadStoredLinks(ctx, service.rawConn, orgID)
 	if err != nil {
 		service.logger.Error("issue-pr fallback retraction: load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return RetractionOutcome{OrganizationID: orgID}, err
 	}
 	native := issueprlinks.NewNativeLinks(stored)
@@ -93,7 +94,7 @@ func (service *Service) RetractOutrankedFallbacks(ctx context.Context, orgID str
 		service.logger.Error("issue-pr fallback retraction: link retraction failed",
 			slog.String("organization_id", orgID),
 			slog.Int("links_outranked", len(outranked)),
-			slog.Any("error", err))
+			workgraph.ErrorAttr(err))
 		return RetractionOutcome{OrganizationID: orgID}, err
 	}
 
@@ -112,7 +113,7 @@ func (service *Service) RetractOutrankedFallbacks(ctx context.Context, orgID str
 		versions, err := edges.ReadPRIssueEdgeVersions(ctx, service.rawConn, orgID, prIDs, issueIDs)
 		if err != nil {
 			service.logger.Error("issue-pr fallback retraction: edge read failed",
-				slog.String("organization_id", orgID), slog.Any("error", err))
+				slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 			return RetractionOutcome{OrganizationID: orgID}, err
 		}
 		tombstones := PlanOutrankedEdgeTombstones(versions, stored, service.now().UTC())
@@ -120,7 +121,7 @@ func (service *Service) RetractOutrankedFallbacks(ctx context.Context, orgID str
 			service.logger.Error("issue-pr fallback retraction: edge tombstone write failed",
 				slog.String("organization_id", orgID),
 				slog.Int("edges_outranked", len(tombstones)),
-				slog.Any("error", err))
+				workgraph.ErrorAttr(err))
 			return RetractionOutcome{OrganizationID: orgID}, fmt.Errorf("retire outranked issue-pr edges: %w", err)
 		}
 	}

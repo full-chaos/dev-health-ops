@@ -37,9 +37,21 @@ type Server struct {
 	accepts  int
 }
 
-func Start(t *testing.T) *Server {
+// EnvListen names the address the sink listens on when a test asks for it; unset, the sink listens on loopback.
+const EnvListen = "DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN"
+
+// DefaultListen is the loopback address with a free port.
+const DefaultListen = "127.0.0.1:0"
+
+// ListenAddr is the address a test's sink listens on: EnvListen when set, loopback otherwise.
+func ListenAddr() string { return "" }
+
+func Start(t *testing.T) *Server { return StartAt(t, DefaultListen) }
+
+// StartAt starts the sink on addr.
+func StartAt(t *testing.T, addr string) *Server {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", DefaultListen)
 	if err != nil {
 		t.Fatal(err)
 	}

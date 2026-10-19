@@ -12,6 +12,7 @@
 cmd/ask-dev-jobs-probe	1
 cmd/auth-migrate	1
 cmd/auth-service	1
+cmd/cigate	1
 cmd/dev-health-migration-matrix	21
 cmd/dev-health-provider-fixture	1
 cmd/dev-health-provider-normalized-fixture	1

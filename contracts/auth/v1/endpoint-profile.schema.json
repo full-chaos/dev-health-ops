@@ -338,6 +338,7 @@
       },
       "required": [
         "id",
+        "accepted_credential_classes",
         "surface_kind",
         "method",
         "route",

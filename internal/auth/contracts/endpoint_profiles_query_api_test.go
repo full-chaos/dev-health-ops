@@ -303,3 +303,26 @@ func TestTheRowSchemaStillAcceptsASingleClassRowWithoutASelector(t *testing.T) {
 	}
 	t.Fatal("no single-class row found")
 }
+
+func TestTheRowSchemaRejectsARowWithoutAcceptedCredentialClasses(t *testing.T) {
+	resolved, _ := resolveEndpointProfileSchema(t)
+	document := loadQueryAPIDocument(t)
+	if err := resolved.Validate(document); err != nil {
+		t.Fatalf("control: the unmutated document must validate: %v", err)
+	}
+	for _, withSelector := range []bool{true, false} {
+		document := loadQueryAPIDocument(t)
+		for _, item := range document["rows"].([]any) {
+			row := item.(map[string]any)
+			if (row["class_disambiguator"] != nil) != withSelector {
+				continue
+			}
+			delete(row, "accepted_credential_classes")
+			delete(row, "class_disambiguator")
+			if err := resolved.Validate(document); err == nil {
+				t.Errorf("the row schema accepted row %v with no accepted_credential_classes (selector row: %v)", row["id"], withSelector)
+			}
+			break
+		}
+	}
+}

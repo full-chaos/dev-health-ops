@@ -286,6 +286,21 @@ WHERE org_id = $1 AND resource_id = 'acr_service_model' ORDER BY created_at DESC
 		}
 	})
 
+	t.Run("turning off needs no eligibility", func(t *testing.T) {
+		for name, org := range map[string]uuid.UUID{"community": orgCommunity, "noacr": orgNoACR} {
+			resp := put(name, false)
+			if resp.status != 200 {
+				t.Fatalf("PUT %s off: status=%d body=%s, want 200", name, resp.status, resp.body)
+			}
+			if got := decodeObject(t, resp); got["eligible"] != false || got["override"] != false {
+				t.Fatalf("PUT %s off body=%s, want eligible=false override=false", name, resp.body)
+			}
+			if _, enabled, _, found := overrideRow(org); !found || enabled {
+				t.Fatalf("%s: found=%t enabled=%t, want an explicit off row", name, found, enabled)
+			}
+		}
+	})
+
 	t.Run("a billing override is never overwritten or erased", func(t *testing.T) {
 		before, _, reasonBefore, _ := overrideRow(orgBilling)
 		resp := doJSONRequest(t, base, http.MethodGet, serviceModelPath, "", auth("billing"))

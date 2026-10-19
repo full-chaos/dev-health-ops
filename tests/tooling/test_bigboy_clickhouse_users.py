@@ -189,6 +189,7 @@ def _check(
     scratch: Path | None = None,
     tmpdir: str | None = None,
     script: Path | None = None,
+    ops_repo: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the check with a bare environment (no inherited variable), PATH holding only shims, and xtrace going
     to a 0600 file (tmp_path/xtrace.log). The scratch dir used is returned in proc.scratch."""
@@ -217,8 +218,11 @@ def _check(
         )
     )
     creds.chmod(0o600)
-    (tmp_path / "authorization.go").write_text(_MANIFEST)
-    env["DHO_API_CH_POSTURE_GO"] = str(tmp_path / "authorization.go")
+    if ops_repo is None:
+        (tmp_path / "authorization.go").write_text(_MANIFEST)
+        env["DHO_API_CH_POSTURE_GO"] = str(tmp_path / "authorization.go")
+    else:
+        env["BIGBOY_OPS_REPO"] = str(ops_repo)
     env["XT"] = str(tmp_path / "xtrace.log")
     args = [str(file), str(creds)] if file is not None else []
     proc = subprocess.run(
@@ -463,6 +467,8 @@ def _cut_with_a_fake_check(
     ops_repo: str | None = None,
     cwd: str | None = None,
     creds_relative: bool = False,
+    extra_env: dict[str, str] | None = None,
+    fake_generator: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the real cut end to end past the carry block with a tools directory whose check is a fake
     returning `check_rc`; the stub docker logs every call so a `compose ... up` is observable."""
@@ -484,6 +490,15 @@ def _cut_with_a_fake_check(
         f"exit {check_rc}\n"
     )
     fake.chmod(0o755)
+    if fake_generator:
+        generator = tools / "generate-plane-split-router.py"
+        generator.unlink()
+        generator.write_text(
+            "#!/usr/bin/env python3\nimport sys\n"
+            f"open({str(tmp_path / 'generator-args.log')!r}, 'w').write('\\n'.join(sys.argv[1:]))\n"
+            "sys.exit(1)\n"
+        )
+        generator.chmod(0o755)
     stub_bin = tmp_path / "stubbin"
     stub_bin.mkdir()
     entry._docker_stub(
@@ -515,6 +530,7 @@ def _cut_with_a_fake_check(
             "DOCKER_STUB_ARGS_LOG": str(args_log),
             "TMPDIR": str(tmp_path),
             **_var_trap(tmp_path),
+            **(extra_env or {}),
         },
     )
     calls = args_log.read_text().splitlines() if args_log.exists() else []
@@ -813,3 +829,43 @@ def test_the_cut_hands_the_check_absolute_paths_for_relative_settings(
     assert len(args) == 1, args
     for path in args[0][len("args=") :].split():
         assert path.startswith("/"), args
+
+
+def test_the_posture_manifest_is_read_from_bigboy_ops_repo(tmp_path: Path) -> None:
+    """CHAOS-10137: with BIGBOY_OPS_REPO set and no DHO_API_CH_POSTURE_GO, the manifest comes from that clone."""
+    repo = tmp_path / "an ops clone"
+    manifest = repo / "internal" / "storage" / "clickhouse" / "authorization.go"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(_MANIFEST)
+    proc = _check(tmp_path, _users_file(tmp_path), ops_repo=repo)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert "ch_api_user_file=ok" in proc.stdout
+
+
+def test_a_clone_without_the_manifest_is_refused_naming_the_clone(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "empty clone"
+    repo.mkdir()
+    proc = _check(tmp_path, _users_file(tmp_path), ops_repo=repo)
+    assert proc.returncode == 1, (proc.stdout, proc.stderr)
+    assert str(repo) in proc.stderr, proc.stderr
+
+
+def test_the_cut_hands_the_plane_split_generator_an_absolute_deploy_repo(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-10137: the cut changes directory to BIGBOY_ROOT, so a relative DEPLOY_REPO named at launch must
+    reach generate-plane-split-router.py as the absolute path."""
+    proc, _ = _cut_with_a_fake_check(
+        tmp_path,
+        0,
+        cwd=str(tmp_path),
+        extra_env={"DEPLOY_REPO": "deploy checkout", "DEPLOY_SHA": "d" * 40},
+        fake_generator=True,
+    )
+    assert "STEP deploy-pin" in proc.stdout, (proc.stdout, proc.stderr)
+    seen = (tmp_path / "generator-args.log").read_text().split("\n")
+    assert seen[seen.index("--deploy-repo") + 1] == str(tmp_path / "deploy checkout"), (
+        seen
+    )

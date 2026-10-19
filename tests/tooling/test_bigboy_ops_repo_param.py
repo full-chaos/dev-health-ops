@@ -225,11 +225,6 @@ def test_without_the_variable_the_default_is_the_tools_own_checkout_never_the_op
     assert "-C " + str(ROOT) in log.read_text()
 
 
-def test_check_dho_api_ch_user_posture_default_follows_the_ops_repo_variable() -> None:
-    text = (BIGBOY / "check-dho-api-ch-user.sh").read_text()
-    assert "BIGBOY_OPS_REPO" in text
-
-
 def test_cut_contents_reads_a_clone_path_with_spaces(tmp_path: Path) -> None:
     repo, old, new = _clone(tmp_path)
     spaced = tmp_path / "a clone with spaces"
@@ -289,6 +284,13 @@ def test_a_manifest_the_parser_does_not_recognise_fails_the_cut_contents_step(
         ),
         POSTURE_V2.replace('{"beta", true, true, false}', '{"beta", true, true}'),
         POSTURE_V1.replace('{"alpha", true, false, false},', ""),
+        POSTURE_V2.replace(
+            '{"beta", true, true, false}', '{TableName: "beta", AllowInsert: true}'
+        ),
+        POSTURE_V2.replace(
+            '{"beta", true, true, false}',
+            '{Table: "beta", Insert: true}, {"gamma", "x", "UPDATE"}',
+        ),
     ):
         bad = _rewrite_manifest(repo, broken)
         done = subprocess.run(

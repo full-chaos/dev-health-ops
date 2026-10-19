@@ -56,6 +56,7 @@ abs_path() { case $1 in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;;
 export DHO_API_CH_USERS_XML; DHO_API_CH_USERS_XML=$(abs_path "$DHO_API_CH_USERS_XML")
 DHO_API_CH_CREDS=$(abs_path "${DHO_API_CH_CREDS:-$R/.go-api-dev/go-api.creds}"); export DHO_API_CH_CREDS
 [ -z "${DHO_API_CH_POSTURE_GO:-}" ] || { DHO_API_CH_POSTURE_GO=$(abs_path "$DHO_API_CH_POSTURE_GO"); export DHO_API_CH_POSTURE_GO; }
+DEPLOY_REPO=$(abs_path "${DEPLOY_REPO:-$R/deploy}"); export DEPLOY_REPO
 [ -z "${TMPDIR:-}" ] || { TMPDIR=$(abs_path "$TMPDIR"); export TMPDIR; }
 export BIGBOY_ROOT=$R BIGBOY_TOOLS_DIR=$HERE
 # shellcheck disable=SC2046  # intentional: unset every COMPOSE_* name
@@ -92,7 +93,6 @@ export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@$BIGBOY_O
 # tree and never "deploy main". generate-plane-split-router.py --deploy-sha REFUSES (rc=3) when that
 # deploy commit's ops vendor pin is not $NEW, the build this cut runs; every values-driven STEP
 # below reads the file it wrote ($REC.values.prod.yaml).
-DEPLOY_REPO=${DEPLOY_REPO:-$R/deploy}
 VALUES=""
 if [ -n "${DEPLOY_SHA:-}" ]; then
   if python3 "$HERE/generate-plane-split-router.py" --deploy-repo "$DEPLOY_REPO" --deploy-sha "$DEPLOY_SHA" \

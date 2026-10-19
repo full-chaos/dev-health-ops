@@ -51,10 +51,12 @@ def load(sha, gofile, func):
         return None
     body = re.sub(r"//[^\n]*", "", body)
     tables = {}
+    tables_seen = []
     for m in re.finditer(
         r'\{\s*"(\w+)"\s*,\s*(true|false)\s*,\s*(true|false)\s*,\s*(true|false)\s*\}',
         body,
     ):
+        tables_seen.append(m.group(1))
         tables[m.group(1)] = {
             "SELECT": True,
             "INSERT": m.group(2) == "true",
@@ -70,19 +72,12 @@ def load(sha, gofile, func):
         columns.setdefault(f"{m.group(1)}.{m.group(2)}", set()).add(m.group(3))
         column_rows += 1
     # A posture function whose rows the patterns do not recognise must fail, never read as "no privileges".
-    table_rows = len(re.findall(r"\{\s*\"\w+\"\s*,\s*(?:true|false)\b", body))
-    openers = len(re.findall(r'\{\s*"\w+"\s*,', body))
-    table_matches = len(
-        re.findall(
-            r'\{\s*"\w+"\s*,\s*(?:true|false)\s*,\s*(?:true|false)\s*,\s*(?:true|false)\s*\}',
-            body,
-        )
-    )
-    if (
-        not tables
-        or table_rows != table_matches
-        or openers != table_matches + column_rows
-    ):
+    # Every `{` of the body after its signature line is a row, except the struct and slice literals that hold
+    # the rows (a `{` that follows an identifier or `]`); each row must be one of the two recognised shapes.
+    rows_text = body.split("\n", 1)[1] if "\n" in body else ""
+    literal_rows = len(re.findall(r"(?<![\w\]])\{", rows_text))
+    table_matches = len(tables_seen)
+    if not tables or literal_rows != table_matches + column_rows:
         return None
     return tables, columns
 

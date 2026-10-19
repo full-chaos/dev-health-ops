@@ -272,6 +272,24 @@
       "expect_instance_location": "/",
       "expect_keyword": "required",
       "why": "`tokens` is for two or more pinned classes; one pinned class still needs its `token`."
+    },
+    {
+      "file": "invalid-tokens-missing-an-accepted-class.json",
+      "expect_instance_location": "/tokens",
+      "expect_keyword": "required",
+      "why": "Every pinned class the route accepts needs its own pins in `tokens`."
+    },
+    {
+      "file": "invalid-tokens-key-for-a-class-not-accepted.json",
+      "expect_instance_location": "/tokens",
+      "expect_keyword": "not",
+      "why": "A pinned class the route does not accept must not appear in `tokens`."
+    },
+    {
+      "file": "invalid-tokens-key-outside-the-vocabulary.json",
+      "expect_instance_location": "/tokens",
+      "expect_keyword": "additionalProperties",
+      "why": "`tokens` is keyed by the pinned class ids only."
     }
   ]
 }

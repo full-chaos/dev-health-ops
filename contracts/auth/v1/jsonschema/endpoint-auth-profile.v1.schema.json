@@ -115,10 +115,28 @@
     },
     "tokens": {
       "type": "object",
-      "additionalProperties": {
-        "$ref": "#/properties/token"
-      },
-      "description": "Per-class token pins, keyed by credential class id, for a route that accepts two or more pinned signed classes (the single `token` block holds one algorithm, so classes with different algorithms need one block each). REQUIRED when two or more pinned classes are accepted, FORBIDDEN otherwise, and never beside `token`: exactly one of the two carries the pins. The key set must equal the pinned classes in accepted_credential_classes; the profile gate (CheckTokenPins) refuses an extra or missing key, which JSON Schema cannot express."
+      "additionalProperties": false,
+      "description": "Per-class token pins, keyed by credential class id, for a route that accepts two or more pinned signed classes (the single `token` block holds one algorithm, so classes with different algorithms need one block each). REQUIRED when two or more pinned classes are accepted, FORBIDDEN otherwise, and never beside `token`: exactly one of the two carries the pins. The key set must equal the pinned classes in accepted_credential_classes: one rule per pinned class (the last allOf rules) requires its key when the class is accepted and refuses it when not; a key outside the pinned classes is refused by additionalProperties.",
+      "properties": {
+        "user_access_token": {
+          "$ref": "#/properties/token"
+        },
+        "workload_token": {
+          "$ref": "#/properties/token"
+        },
+        "ops_access_token_hs256": {
+          "$ref": "#/properties/token"
+        },
+        "ops_refresh_token": {
+          "$ref": "#/properties/token"
+        },
+        "acr_web_assertion": {
+          "$ref": "#/properties/token"
+        },
+        "effective_principal_envelope": {
+          "$ref": "#/properties/token"
+        }
+      }
     },
     "minimum_assurance": {
       "$ref": "principal.v1.schema.json#/properties/authentication/properties/assurance",
@@ -373,6 +391,264 @@
         "properties": {
           "cache_class": {
             "const": "none"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "user_access_token"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "user_access_token"
+            ],
+            "properties": {
+              "user_access_token": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "user_access_token"
+              ],
+              "properties": {
+                "user_access_token": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "workload_token"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "workload_token"
+            ],
+            "properties": {
+              "workload_token": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "workload_token"
+              ],
+              "properties": {
+                "workload_token": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "ops_access_token_hs256"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "ops_access_token_hs256"
+            ],
+            "properties": {
+              "ops_access_token_hs256": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "ops_access_token_hs256"
+              ],
+              "properties": {
+                "ops_access_token_hs256": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "ops_refresh_token"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "ops_refresh_token"
+            ],
+            "properties": {
+              "ops_refresh_token": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "ops_refresh_token"
+              ],
+              "properties": {
+                "ops_refresh_token": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "acr_web_assertion"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "acr_web_assertion"
+            ],
+            "properties": {
+              "acr_web_assertion": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "acr_web_assertion"
+              ],
+              "properties": {
+                "acr_web_assertion": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "effective_principal_envelope"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "effective_principal_envelope"
+            ],
+            "properties": {
+              "effective_principal_envelope": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "effective_principal_envelope"
+              ],
+              "properties": {
+                "effective_principal_envelope": {}
+              }
+            },
+            "type": "object"
           }
         }
       }

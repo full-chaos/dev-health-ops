@@ -307,11 +307,11 @@ func TestSelectorGateSeparatesTheTwoBearerJWTClassesByHeaderAlg(t *testing.T) {
 	}
 }
 
-func TestTokenPinsKeySetEqualsTheAcceptedPinnedClasses(t *testing.T) {
+func TestTokensKeySetEqualsTheAcceptedPinnedClassesInTheSchema(t *testing.T) {
 	root := testRoot(t)
 	valid := loadEndpointAuthProfileFixture(t, "valid-multi-class-envelope-vs-ops-token.json").(map[string]any)
-	if err := ValidateEndpointAuthProfile(root, valid); err != nil {
-		t.Fatalf("ValidateEndpointAuthProfile refused the valid two-algorithm fixture: %v", err)
+	if err := Validate(root, EndpointAuthProfileSurface, valid); err != nil {
+		t.Fatalf("the schema refused the valid two-algorithm fixture: %v", err)
 	}
 	tokens := valid["tokens"].(map[string]any)
 	mutate := func(edit func(map[string]any)) map[string]any {
@@ -328,8 +328,8 @@ func TestTokenPinsKeySetEqualsTheAcceptedPinnedClasses(t *testing.T) {
 		}),
 	}
 	for name, doc := range cases {
-		if err := ValidateEndpointAuthProfile(root, doc); err == nil {
-			t.Errorf("%s: ValidateEndpointAuthProfile accepted a tokens key set that differs from the accepted pinned classes", name)
+		if err := Validate(root, EndpointAuthProfileSurface, doc); err == nil {
+			t.Errorf("%s: the schema accepted a tokens key set that differs from the accepted pinned classes", name)
 		}
 	}
 }

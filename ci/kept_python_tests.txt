@@ -57,3 +57,6 @@ tests/workers/test_helm_worker_disruption_and_drain.py
 tests/workers/test_provider_artifact_skip_alert.py
 tests/workers/test_transitional_inventory_contract.py
 tests/workers/test_unreclaimable_sweep_alerts.py
+tests/authclient/test_authorization_contract_goldens.py
+tests/authclient/test_endpoint_auth_profile_contract_goldens.py
+tests/authclient/test_jwks_property_sweep.py

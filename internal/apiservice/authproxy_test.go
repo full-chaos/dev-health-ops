@@ -194,6 +194,11 @@ func TestAuthProxyRouteMapIsTheD1Map(t *testing.T) {
 // proxyScope authenticates every signed token as an active user.
 func proxyFixtureRoutes(t *testing.T, cfg AuthProxyConfig) []httpapi.Route {
 	t.Helper()
+	return proxyFixtureRoutesLogging(t, cfg, quietLogger())
+}
+
+func proxyFixtureRoutesLogging(t *testing.T, cfg AuthProxyConfig, logger *slog.Logger) []httpapi.Route {
+	t.Helper()
 	verifier, err := edgetoken.New(proxyTestKey, "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +217,7 @@ func proxyFixtureRoutes(t *testing.T, cfg AuthProxyConfig) []httpapi.Route {
 	}
 	t.Cleanup(pool.Close)
 	return Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
-		AuthProxy: cfg, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
+		AuthProxy: cfg, Limits: httpapi.NewMemoryCounters(time.Now)}, logger)
 }
 
 func proxyFixture(t *testing.T, cfg AuthProxyConfig) http.Handler {
@@ -810,6 +815,49 @@ func TestConfigureLogsTheAuthProxyRouting(t *testing.T) {
 			for _, aggregate := range AuthAggregates {
 				if got := record[string(aggregate)]; got != testCase.on[string(aggregate)] {
 					t.Errorf("routing line %s=%v, want %v", aggregate, got, testCase.on[string(aggregate)])
+				}
+			}
+		})
+	}
+}
+
+// The proxy's log lines carry no client-written text: the request id only in
+// a loggable form (a client id can hold a credential), the route pattern, not
+// the raw path, and auth-service's id only in its req_ wire form.
+func TestAuthProxyLogsCarryNoClientWrittenText(t *testing.T) {
+	const credential = "client-written-request-id"
+	const upstreamJunk = "upstream-written-junk"
+	const clientProvider = "client-written-provider"
+	for name, upstreamID := range map[string]string{"wire-form id": "req_AAAAAAAAAAAAAAAAAAAAAAAAAA", "junk id": upstreamJunk} {
+		t.Run(name, func(t *testing.T) {
+			stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("X-Auth-Request-ID", upstreamID)
+				w.WriteHeader(http.StatusOK)
+			})
+			for upstream, wantMsg := range map[string]string{stub.URL: "auth proxy forwarded", "http://" + closedAddress(t): "auth proxy: upstream failed; refused"} {
+				var logs bytes.Buffer
+				server, err := NewServer(config.Config{APIAddress: "127.0.0.1:0", CORSAllowedOrigins: []string{proxyOrigin}}, quietLogger(),
+					proxyFixtureRoutesLogging(t, mustProxyConfig(t, allOn(upstream)), slog.New(slog.NewJSONHandler(&logs, nil))))
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := proxyCall{method: http.MethodPost, target: "/api/v1/auth/oidc/" + clientProvider + "/authorize", body: `{}`}.request(t)
+				request.Header.Set("X-Request-ID", credential)
+				server.Handler().ServeHTTP(httptest.NewRecorder(), request)
+				text := logs.String()
+				if !strings.Contains(text, wantMsg) {
+					t.Fatalf("no %q line:\n%s", wantMsg, text)
+				}
+				for _, leaked := range []string{credential, clientProvider, upstreamJunk} {
+					if strings.Contains(text, leaked) {
+						t.Errorf("%s: the log carries client-written or unchecked text %q:\n%s", wantMsg, leaked, text)
+					}
+				}
+				if !strings.Contains(text, "/api/v1/auth/oidc/{provider_id}/authorize") {
+					t.Errorf("%s: the log does not name the route pattern:\n%s", wantMsg, text)
+				}
+				if upstream == stub.URL && upstreamID != upstreamJunk && !strings.Contains(text, upstreamID) {
+					t.Errorf("the wire-form upstream id is not logged:\n%s", text)
 				}
 			}
 		})

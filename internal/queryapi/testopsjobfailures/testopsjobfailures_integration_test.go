@@ -187,3 +187,114 @@ func TestRealClickHouse_JobFailuresByWorkflowAndJobName(t *testing.T) {
 		t.Fatalf("an org with no rows: %+v", none)
 	}
 }
+
+// countingClient counts the statements Resolve issues. The ClickHouse client
+// refuses a statement that starts with a comment, so the statements cannot be
+// tagged; the test finds them in system.query_log by their table text instead
+// (the container is this test's own, so no other statement reads that table).
+type countingClient struct {
+	inner QueryClient
+	calls int
+}
+
+func (c *countingClient) Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	c.calls++
+	return c.inner.Query(ctx, statement, bindings)
+}
+
+// CHAOS-10056: a result-only check cannot see the CHAOS-8593 bound on the
+// pipeline side of the join (the answer is the same unbounded). The bound is
+// pinned by what ClickHouse reads: with a large pipeline table and one run that
+// has job rows in the window, the statements must read a small share of the
+// table. Without the bound the groups statement reads the whole org's pipeline
+// history (every seeded row).
+func TestRealClickHouse_JobFailuresPipelineSideReadsOnlyTheWindowsRuns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = ch.Close(context.Background()) })
+	chschema.Apply(ctx, t, ch)
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	const (
+		org    = "org-10056"
+		repo   = "10056000-0000-4000-8000-000000000001"
+		seeded = 1_000_000
+	)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := admin.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	exec(fmt.Sprintf(`INSERT INTO ci_pipeline_runs (org_id, repo_id, run_id, pipeline_name, provider, status, started_at, last_synced)
+SELECT '%s', toUUID('%s'), toString(number), 'CI', 'github', 'completed', toDateTime64('2026-08-10 12:00:00', 3, 'UTC'), toDateTime64('2026-08-11 00:00:00', 3, 'UTC')
+FROM numbers(%d)`, org, repo, seeded))
+	inWindow := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	synced := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	for i, status := range []string{"failure", "success", "success"} {
+		exec(`INSERT INTO ci_job_runs (org_id, repo_id, run_id, job_id, job_name, status, started_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			org, repo, "0", fmt.Sprintf("j%d", i), "build", status, inWindow, synced)
+	}
+	var stored uint64
+	if err := admin.QueryRow(ctx, `SELECT count() FROM ci_pipeline_runs WHERE org_id = ?`, org).Scan(&stored); err != nil || stored != seeded {
+		t.Fatalf("seeded pipeline rows = %d (err %v), want %d", stored, err, seeded)
+	}
+
+	tagged := &countingClient{inner: client}
+	since := graphqldate.New(time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	until := graphqldate.New(time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC))
+	got, err := Resolve(ctx, tagged, org, since, until, Scope{}, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Groups) != 1 || got.TotalCount != 1 || got.Groups[0].JobName != "build" || got.Groups[0].Runs != 3 || got.Groups[0].FailedRuns != 1 ||
+		got.Groups[0].WorkflowName == nil || *got.Groups[0].WorkflowName != "CI" {
+		t.Fatalf("the answer is wrong: %+v total %d", got.Groups, got.TotalCount)
+	}
+
+	if err := admin.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+		t.Fatalf("flush logs: %v", err)
+	}
+	rows, err := admin.Query(ctx, `SELECT read_rows FROM system.query_log
+WHERE type = 'QueryFinish' AND query_kind = 'Select' AND position(query, 'FROM ci_pipeline_runs FINAL') > 0 AND position(query, 'system.query_log') = 0`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var reads []uint64
+	for rows.Next() {
+		var n uint64
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		reads = append(reads, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if tagged.calls == 0 || len(reads) != tagged.calls {
+		t.Fatalf("query_log holds %d finished statement(s) for the %d issued; the read was not measured", len(reads), tagged.calls)
+	}
+	for _, n := range reads {
+		if limit := uint64(seeded / 20); n >= limit {
+			t.Errorf("a statement read %d rows of %d seeded pipeline rows (limit %d): the pipeline side is not bounded to the window's runs; reads %v", n, seeded, limit, reads)
+		}
+	}
+}

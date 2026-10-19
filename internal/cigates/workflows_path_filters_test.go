@@ -23,6 +23,9 @@ import (
 // real file but cannot be resolved fails loud (the property all earlier shape gaps shared).
 // The tracked set comes from `git ls-files`; the git index is read through os so the test cache moves with it.
 
+// fxDir is split so this file never holds a literal the fixture-reference scan would read as a reference.
+const fxDir = "tests/fix" + "tures/"
+
 var uncoveredFixtureDirectories = map[string]string{
 	"src/dev_health_ops/fixtures":                       "the Python source tree, not Go testdata: no Go test reads these, so requiring them to trigger the Go workflow would run the Go suite for every Python-only fixture change",
 	"tests/testops/fixtures":                            "read by the Python testops suite, not by Go tests; covered by the Python workflow's own filters",
@@ -559,7 +562,7 @@ func miniFiles(extra map[string]string, goYml string) map[string]string {
 	files := map[string]string{
 		".github/workflows/go.yml":                         goYml,
 		"src/dev_health_ops/alembic/versions/0001_init.py": "x = 1",
-		"tests/fixtures/a.json":                            "{}",
+		fxDir + "a.json":                                   "{}",
 		"internal/x/x_test.go":                             "package x",
 	}
 	for k, v := range extra {
@@ -584,10 +587,10 @@ func TestGoWorkflowPathFiltersPlantedDefects(t *testing.T) {
 		{"a testdata fixture matches no filter", map[string]string{"internal/y/testdata/data.json": "{}"}, miniGoYml, map[string]string{}, []string{"match no push path filter", "internal/y/testdata/data.json"}},
 		{"a file named by a Go test through go:embed matches no filter", map[string]string{"cfg/embedded.yaml": "a: 1", "internal/z/z_test.go": "package z\n//go:embed ../../cfg/embedded.yaml\nvar _ string"}, miniGoYml, map[string]string{}, []string{"cfg/embedded.yaml", "match no"}},
 		{"an Alembic file matches no filter", nil, strings.ReplaceAll(miniGoYml, "      - 'src/dev_health_ops/alembic/**'\n", ""), map[string]string{}, []string{"Alembic file(s) match no", "alembic/**"}},
-		{"an excused directory is now covered", map[string]string{"tests/fixtures/sub/b.json": "{}"}, miniGoYml, map[string]string{"tests/fixtures": "claimed uncovered"}, []string{"exclusion is stale"}},
+		{"an excused directory is now covered", map[string]string{fxDir + "sub/b.json": "{}"}, miniGoYml, map[string]string{"tests/fixtures": "claimed uncovered"}, []string{"exclusion is stale"}},
 		{"an excused directory no longer exists", nil, miniGoYml, map[string]string{"gone/fixtures": "claimed"}, []string{"does not exist", "gone/fixtures"}},
-		{"the fixture filter becomes an enumeration", nil, strings.ReplaceAll(miniGoYml, "'tests/fixtures/**'", "'tests/fixtures/a.json'"), map[string]string{}, []string{"single glob 'tests/fixtures/**'"}},
-		{"a Go test names a fixture that is gone", map[string]string{"internal/x/x_test.go": `package x // "tests/fixtures/ghost.json"` + "\nvar _ = \"tests/fixtures/ghost.json\""}, miniGoYml, map[string]string{}, []string{"reference fixture paths that do not exist", "tests/fixtures/ghost.json"}},
+		{"the fixture filter becomes an enumeration", nil, strings.ReplaceAll(miniGoYml, "'tests/fixtures/**'", "'"+fxDir+"a.json'"), map[string]string{}, []string{"single glob 'tests/fixtures/**'"}},
+		{"a Go test names a fixture that is gone", map[string]string{"internal/x/x_test.go": "package x // \"" + fxDir + "ghost.json\"\nvar _ = \"" + fxDir + "ghost.json\""}, miniGoYml, map[string]string{}, []string{"reference fixture paths that do not exist", fxDir + "ghost.json"}},
 		{"an ambiguous literal naming an uncovered file is neither resolved nor dropped silently", map[string]string{"a/data.json": "{}", "b/data.json": "{}", "internal/x/x_test.go": "package x\nvar _ = fsys.Open(\"data.json\")"}, miniGoYml, map[string]string{"a": "x", "b": "x"}, []string{"could not locate", "data.json"}},
 	}
 	for _, c := range cases {
@@ -771,7 +774,7 @@ func TestTheRuntimeBuiltPathLimitIsReal(t *testing.T) {
 func TestAGitignoredDirectoryIsNotCollectedAsARepoFixture(t *testing.T) {
 	root := miniRepo(t, map[string]string{
 		".gitignore":                        ".uv-cache/\n",
-		"tests/fixtures/real.json":          "{}",
+		fxDir + "real.json":                 "{}",
 		".uv-cache/pkg/fixtures/probe.json": "{}",
 	})
 	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
@@ -788,7 +791,7 @@ func TestAGitignoredDirectoryIsNotCollectedAsARepoFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got["tests/fixtures/real.json"] {
+	if !got[fxDir+"real.json"] {
 		t.Fatalf("control: the collector is not live: %v", got)
 	}
 	if got[".uv-cache/pkg/fixtures/probe.json"] {

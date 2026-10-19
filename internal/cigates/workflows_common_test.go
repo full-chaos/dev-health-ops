@@ -157,4 +157,5 @@ func expectViolation(t *testing.T, got []string, mustContain ...string) {
 	if !containsAll(got, mustContain...) {
 		t.Fatalf("guard fired but its message does not name the defect %v:\n%s", mustContain, strings.Join(got, "\n"))
 	}
+	t.Logf("planted defect caught: %s", got[0])
 }

@@ -1,0 +1,13 @@
+{
+  "amr": [
+    "pwd"
+  ],
+  "auth_time": "2026-10-18T10:00:00Z",
+  "created_at": "2026-10-18T10:00:00Z",
+  "expires_at": "2026-10-25T10:00:00Z",
+  "principal_id": "prn_EXAMPLE0001",
+  "revision": 3,
+  "revoked_at": null,
+  "schema_version": "session.v2",
+  "session_id": "ses_EXAMPLE000000000000000001"
+}

@@ -70,3 +70,10 @@ def test_postgres_password_is_a_secret_reference_not_a_literal() -> None:
         "kubectl describe prints a literal env value into CI logs"
     )
     assert "secretKeyRef" in password.get("valueFrom", {})
+
+
+def test_postgres_runs_as_a_non_root_user() -> None:
+    docs = list(yaml.safe_load_all(POSTGRES.read_text(encoding="utf-8")))
+    container = docs[0]["spec"]["template"]["spec"]["containers"][0]
+    assert container["securityContext"]["runAsNonRoot"] is True
+    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}

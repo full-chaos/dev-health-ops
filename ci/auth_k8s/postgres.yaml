@@ -7,16 +7,18 @@ spec:
   template:
     metadata: {labels: {app: auth-postgres}}
     spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, fsGroup: 70}
+      volumes: [{name: data, emptyDir: {}}]
       containers:
         - name: postgres
           image: ${LOCAL_PG}
           imagePullPolicy: IfNotPresent
           securityContext:
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
             seccompProfile: {type: RuntimeDefault}
-            capabilities:
-              drop: [ALL]
-              add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
+            capabilities: {drop: [ALL]}
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql}]
           env:
             - name: POSTGRES_PASSWORD
               valueFrom: {secretKeyRef: {name: auth-pg-superuser, key: password}}

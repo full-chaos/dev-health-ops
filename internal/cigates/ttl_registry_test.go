@@ -33,11 +33,12 @@ var ttlKnownTables = map[string]int{
 }
 
 var (
-	ttlCreateTable = regexp.MustCompile("(?im)^\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?`?([A-Za-z_]\\w*)`?\\s*\\(")
-	ttlPrecise     = regexp.MustCompile(`(?i)TTL\s+(?:\w+\()?([\w.]+)\)?\s*\+\s*INTERVAL\s+(\d+)\s+DAY`)
-	ttlCoarse      = regexp.MustCompile(`(?is)\bTTL\b.*?\bINTERVAL\b`)
-	ttlAlterModify = regexp.MustCompile("(?im)^\\s*ALTER\\s+TABLE\\s+`?([A-Za-z_]\\w*)`?\\s+MODIFY\\s+TTL\\b")
-	ttlHorizonLine = regexp.MustCompile(`(?i)TTL\s+.*?\+\s*INTERVAL\s+(\d+)\s+DAY\s+DELETE`)
+	ttlCreateTable  = regexp.MustCompile("(?im)^\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:`?[A-Za-z_]\\w*`?\\.)?`?([A-Za-z_]\\w*)`?\\s*\\(")
+	ttlPrecise      = regexp.MustCompile(`(?i)TTL\s+(?:\w+\()?([\w.]+)\)?\s*\+\s*INTERVAL\s+(\d+)\s+DAY`)
+	ttlCoarse       = regexp.MustCompile(`(?is)\bTTL\b.*?\bINTERVAL\b`)
+	ttlAlterModify  = regexp.MustCompile("(?im)^\\s*ALTER\\s+TABLE\\s+(?:`?[A-Za-z_]\\w*`?\\.)?`?([A-Za-z_]\\w*)`?\\s+(?:ON\\s+CLUSTER\\s+\\S+\\s+)?MODIFY\\s+TTL\\b")
+	ttlAlterPrecise = regexp.MustCompile("(?im)^\\s*ALTER\\s+TABLE\\s+(?:`?[A-Za-z_]\\w*`?\\.)?`?([A-Za-z_]\\w*)`?\\s+(?:ON\\s+CLUSTER\\s+\\S+\\s+)?MODIFY\\s+TTL\\s+(?:\\w+\\()?([\\w.]+)\\)?\\s*\\+\\s*INTERVAL\\s+(\\d+)\\s+DAY")
+	ttlHorizonLine  = regexp.MustCompile(`(?i)TTL\s+.*?\+\s*INTERVAL\s+(\d+)\s+DAY\s+DELETE`)
 )
 
 type ttlRetention struct {
@@ -81,9 +82,52 @@ var (
 	ttlPyCommentLine  = regexp.MustCompile(`(?m)^[ \t]*#[^\n]*`)
 )
 
-// ttlStripComments blanks SQL line and block comments and Python comment lines, so a TTL clause that is only commented out
-// does not count as enforced.
-func ttlStripComments(text string) string {
+// ttlStripSQLComments blanks SQL line and block comments outside string literals and quoted identifiers, so a TTL clause that
+// is only commented out does not count as enforced and a `--` inside a string literal does not hide a real clause.
+func ttlStripSQLComments(text string) string {
+	var out strings.Builder
+	n := len(text)
+	for i := 0; i < n; {
+		c := text[i]
+		switch {
+		case c == '\'' || c == '"' || c == '`':
+			j := i + 1
+			for j < n && text[j] != c {
+				if text[j] == '\\' && c != '`' {
+					j++
+				}
+				j++
+			}
+			if j >= n {
+				j = n - 1
+			}
+			out.WriteString(text[i : j+1])
+			i = j + 1
+		case c == '-' && i+1 < n && text[i+1] == '-':
+			for i < n && text[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < n && text[i+1] == '*':
+			end := strings.Index(text[i+2:], "*/")
+			if end < 0 {
+				i = n
+			} else {
+				i += end + 4
+			}
+		default:
+			out.WriteByte(c)
+			i++
+		}
+	}
+	return out.String()
+}
+
+// ttlStripComments applies the SQL stripper to .sql files. A .py migration holds its DDL inside Python strings, so there the
+// line and block comment markers are blanked by pattern and Python comment lines are dropped.
+func ttlStripComments(path, text string) string {
+	if filepath.Ext(path) == ".sql" {
+		return ttlStripSQLComments(text)
+	}
 	text = ttlBlockComment.ReplaceAllString(text, "")
 	text = ttlSQLLineComment.ReplaceAllString(text, "")
 	return ttlPyCommentLine.ReplaceAllString(text, "")
@@ -113,11 +157,15 @@ func ttlScan(t *testing.T, dir string) (precise map[string]ttlRetention, coarse 
 		if err != nil {
 			t.Fatal(err)
 		}
-		text := ttlStripComments(string(raw))
+		text := ttlStripComments(path, string(raw))
 		for _, m := range ttlAlterModify.FindAllStringSubmatch(text, -1) {
 			coarse[m[1]] = true
 		}
 		for _, statement := range strings.Split(text, ";") {
+			for _, m := range ttlAlterPrecise.FindAllStringSubmatch(statement, -1) {
+				days, _ := strconv.Atoi(m[3])
+				precise[m[1]] = ttlRetention{column: m[2], days: days}
+			}
 			tables, groups := ttlAttribute(statement, ttlPrecise)
 			for i, table := range tables {
 				days, _ := strconv.Atoi(groups[i][2])
@@ -222,7 +270,7 @@ func TestTTLCeilingsSurviveTheShelfLife(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, m := range ttlHorizonLine.FindAllStringSubmatch(ttlStripComments(string(raw)), -1) {
+		for _, m := range ttlHorizonLine.FindAllStringSubmatch(ttlStripComments(path, string(raw)), -1) {
 			days, _ := strconv.Atoi(m[1])
 			if cur, ok := horizons[path]; !ok || days < cur {
 				horizons[path] = days
@@ -324,6 +372,31 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 		p, c := ttlScan(t, dir)
 		if len(p) != 0 || len(c) != 0 {
 			t.Fatalf("commented-out TTL counted: precise=%v coarse=%v", p, c)
+		}
+	})
+	t.Run("a database-qualified CREATE TABLE is found", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE IF NOT EXISTS analytics.qualified_ttl (\n x Int8\n) ENGINE=M TTL ts + INTERVAL 21 DAY DELETE;")
+		p, c := ttlScan(t, dir)
+		if p["qualified_ttl"].days != 21 || !c["qualified_ttl"] {
+			t.Fatalf("qualified name missed: %+v %v", p, c)
+		}
+	})
+	t.Run("a -- inside a string literal does not hide a TTL clause", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE string_dashes (\n note String DEFAULT 'a--b'\n) ENGINE=M TTL ts + INTERVAL 33 DAY DELETE;")
+		p, c := ttlScan(t, dir)
+		if p["string_dashes"].days != 33 || !c["string_dashes"] {
+			t.Fatalf("TTL after a string with dashes was dropped: %+v %v", p, c)
+		}
+	})
+	t.Run("ALTER MODIFY TTL updates the retention", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE altered_ttl (\n x Int8\n) ENGINE=M TTL ts + INTERVAL 365 DAY DELETE;")
+		writeFile(t, filepath.Join(dir, "2.sql"), "ALTER TABLE altered_ttl MODIFY TTL ts + INTERVAL 90 DAY;")
+		p, _ := ttlScan(t, dir)
+		if p["altered_ttl"].days != 90 {
+			t.Fatalf("ALTER retention not applied: %+v", p["altered_ttl"])
 		}
 	})
 	t.Run("changing the migration changes the registry", func(t *testing.T) {

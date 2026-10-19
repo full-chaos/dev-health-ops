@@ -176,6 +176,12 @@
    "schema": "refuse"
   },
   {
+   "category": "Zl",
+   "rune": "U+2028",
+   "consumer": "accept",
+   "schema": "refuse"
+  },
+  {
    "category": "Zp",
    "rune": "U+2029",
    "consumer": "accept",
@@ -4017,7 +4023,7 @@
    "P8": 27,
    "P9": 11
   },
-  "unicode_categories": 28,
+  "unicode_categories": 29,
   "unicode_categories_excluded": [
    "Cs",
    "LC"

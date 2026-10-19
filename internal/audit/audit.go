@@ -470,13 +470,17 @@ func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.Valida
 	})
 	q := authschema.Quote(schema)
 	for _, e := range events {
+		// KILL CHECK MUTATION: the next revision is read without the row lock.
 		var revision int64
-		if err := tx.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT revision FROM `+q+`.aggregate_revisions
+			WHERE aggregate_type = $1 AND aggregate_id = $2), 0) + 1`, e.AggregateType, e.AggregateID).Scan(&revision); err != nil {
+			return fmt.Errorf("%w: reading the %s revision: %w", ErrMutationFailed, e.AggregateType, err)
+		}
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO `+q+`.aggregate_revisions AS r (aggregate_type, aggregate_id, revision)
-			VALUES ($1, $2, 1)
+			VALUES ($1, $2, $3)
 			ON CONFLICT (aggregate_type, aggregate_id)
-			DO UPDATE SET revision = r.revision + 1, updated_at = clock_timestamp()
-			RETURNING r.revision`, e.AggregateType, e.AggregateID).Scan(&revision); err != nil {
+			DO UPDATE SET revision = EXCLUDED.revision, updated_at = clock_timestamp()`, e.AggregateType, e.AggregateID, revision); err != nil {
 			return fmt.Errorf("%w: bumping the %s revision: %w", ErrMutationFailed, e.AggregateType, err)
 		}
 		payload := map[string]any{"revision": revision, "change": orEmpty(e.Change)}

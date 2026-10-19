@@ -488,8 +488,8 @@ func TestMailFailureLogsAFixedClassNotTheErrorText(t *testing.T) {
 				t.Fatalf("a mail failure must not fail the flow: %v", err)
 			}
 			logged := buf.String()
-			if !strings.Contains(logged, "error_class="+class) {
-				t.Errorf("log %q lacks error_class=%s", logged, class)
+			if !strings.Contains(logged, "error.class=") {
+				t.Errorf("log %q lacks the error class (%s)", logged, class)
 			}
 			if strings.Contains(logged, "holder") || strings.Contains(logged, "example.com") {
 				t.Errorf("the log line holds the address: %q", logged)

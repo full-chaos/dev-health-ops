@@ -224,3 +224,26 @@ func TestPublicReadsAbsentTableIsSkippedAndLoggedByName(t *testing.T) {
 		t.Fatalf("a table that exists without its grant was not reported:\n%s", describe(found))
 	}
 }
+
+// A view named like a manifest table is not that table: the grant path must
+// not skip it, and a column privilege on it must not pass as the manifest's.
+func TestPublicReadsSameNamedViewIsRefused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newPublicReadsFixture(t, ctx, "users")
+	role := Quote(mustValidatedIdentifier(env.runtimeRole))
+
+	if _, err := env.migration.Exec(ctx, `CREATE VIEW public.users AS SELECT 'view-secret'::text AS id`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.migration.Exec(ctx, `GRANT SELECT (id) ON public.users TO `+role); err != nil {
+		t.Fatal(err)
+	}
+	found := env.violations(t, ctx)
+	if !strings.Contains(describe(found), "users") {
+		t.Errorf("a column privilege on a same-named view passed the posture:\n%s", describe(found))
+	}
+	if _, err := Apply(ctx, env.migration, env.options(&bytes.Buffer{})); err == nil {
+		t.Error("Apply succeeded with a view standing in for a manifest table")
+	}
+}

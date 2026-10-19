@@ -121,6 +121,11 @@ func (f fake) run(sql string) { f.db.Exec(sql) }
 func viaMethodWrapper(f fake, role string) {
 	f.run(fmt.Sprintf("GRANT x TO %s", role))
 }
+func buildStatement(role string) string { return fmt.Sprintf("GRANT x TO %s", role) }
+func viaHelperReturn(admin interface{ Exec(string) }, role string) {
+	statement := buildStatement(role)
+	admin.Exec(statement)
+}
 func viaRangeLiteral(admin interface{ Exec(string) }, role string) {
 	for _, s := range []string{fmt.Sprintf("GRANT x TO %s", role)} {
 		admin.Exec(s)
@@ -137,7 +142,7 @@ func notSQL(role string) {
 		fns = append(fns, v.fn+"/"+v.operand)
 	}
 	sort.Strings(fns)
-	want := []string{"f/role", "viaMethodWrapper/role", "viaRangeLiteral/role", "viaVar/role"}
+	want := []string{"f/role", "viaHelperReturn/role", "viaMethodWrapper/role", "viaRangeLiteral/role", "viaVar/role"}
 	if strings.Join(fns, ",") != strings.Join(want, ",") {
 		t.Fatalf("violations = %v, want %v", fns, want)
 	}

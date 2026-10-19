@@ -89,4 +89,4 @@ index.txt
 worktrees/
 
 /.codex-review-context.md
-/.go-test-json/
+/go-test-json/

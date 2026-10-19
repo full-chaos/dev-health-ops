@@ -3010,7 +3010,7 @@ check_providersync_test_shard() {
   # CHAOS-10290: -timeout sits under the 25 min job cap so a slow shard panics with the running test names instead of a
   # silent cancel. -json goes to a file (per-test Elapsed for re-sharding); jq turns it back into the plain go test log,
   # and pipefail keeps go test's exit code.
-  local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/.go-test-json}"
+  local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}"
   mkdir -p "${json_dir}"
   (
     set -o pipefail

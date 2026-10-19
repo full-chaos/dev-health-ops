@@ -99,6 +99,10 @@ func TestProvidersyncShardJSONIsUploaded(t *testing.T) {
 	}
 	for _, s := range wf.Jobs[providersyncShardJob].Steps {
 		if strings.HasPrefix(s.Uses, "actions/upload-artifact@") && strings.Contains(s.If, "always()") {
+			// upload-artifact skips hidden files and directories unless include-hidden-files is set
+			if path, _ := s.With["path"].(string); strings.HasPrefix(strings.TrimSpace(path), ".") {
+				t.Fatalf("upload path %q is hidden; upload-artifact would find no files", path)
+			}
 			return
 		}
 	}

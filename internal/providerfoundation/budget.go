@@ -298,6 +298,14 @@ type Metrics struct {
 	// raw rows and left every derived table to the daily job, by provider --
 	// see RecordWorkItemDerivedTablesLeftToDailyJob.
 	workItemDerivedLeftToDaily map[string]uint64
+	// githubIssueListStops counts the GitHub work-items issue lists that stopped
+	// reading at the window end, by reason (always window_end).
+	githubIssueListStops map[string]uint64
+	// githubIssueListCaps counts the issue lists that ran out of their request cap (never truncated).
+	githubIssueListCaps map[string]uint64
+	// githubIssueListTies counts the same-second tie groups of more than one page of an issue list, by
+	// reason (always same_second): the paging of such a group is by page number.
+	githubIssueListTies map[string]uint64
 	// preparedRetiredEffectsSkipped counts the effects of a prepared
 	// work-items manifest that a recovering unit did not write because the
 	// daily job now owns their table, by provider -- see
@@ -337,6 +345,9 @@ func NewMetrics() *Metrics {
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
 		workItemDerivedLeftToDaily:     map[string]uint64{},
+		githubIssueListStops:           map[string]uint64{},
+		githubIssueListCaps:            map[string]uint64{},
+		githubIssueListTies:            map[string]uint64{},
 		preparedRetiredEffectsSkipped:  map[string]uint64{},
 	}
 }
@@ -1310,6 +1321,42 @@ func (m *Metrics) RecordWorkItemDerivedTablesLeftToDailyJob(provider string) {
 	m.workItemDerivedLeftToDaily[label]++
 }
 
+// RecordGitHubIssueListStopped counts one GitHub work-items issue list that
+// stopped reading at the first issue updated at or after the window end. The
+// list is ordered by update, oldest first, so every later issue is newer; the
+// stop is the expected case of a bounded window.
+func (m *Metrics) RecordGitHubIssueListStopped() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.githubIssueListStops["window_end"]++
+}
+
+// RecordGitHubIssueListCapExceeded counts one GitHub work-items issue list that
+// ran out of its request cap before the end of the window. The unit fails
+// closed (pagination cap), never with a truncated list.
+func (m *Metrics) RecordGitHubIssueListCapExceeded() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.githubIssueListCaps["page_cap"]++
+}
+
+// RecordGitHubIssueListTiePaged counts one same-second group of more than one page of a GitHub work-items
+// issue list. An expected path: it shows how often an edit during the read could shift an unseen issue.
+func (m *Metrics) RecordGitHubIssueListTiePaged() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.githubIssueListTies["same_second"]++
+}
+
 // RecordPreparedRetiredWorkItemEffectsSkipped counts the effects of one
 // prepared work-items manifest that a recovering unit completed without
 // writing (CHAOS-8811). The manifest was stored by a binary whose sync unit
@@ -1828,6 +1875,27 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_work_item_derived_tables_left_to_daily_job_total",
 		"Work-items sync units that stored raw rows and left every table computed from them (the three work-item metric tables, estimate coverage, team attribution, state durations, issue types, the two investment tables) to the daily job, by provider (CHAOS-8811).",
 		"provider", m.workItemDerivedLeftToDaily,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_work_items_issue_list_stopped_total",
+		"GitHub work-items issue lists that stopped reading at the first issue updated at or after the window end (CHAOS-10112), by reason. The stop is the expected case of a bounded window.",
+		"reason", m.githubIssueListStops,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_work_items_issue_list_cap_exceeded_total",
+		"GitHub work-items issue lists that ran out of their request cap before the end of the window (CHAOS-10112), by reason. The unit fails closed; the list is never truncated.",
+		"reason", m.githubIssueListCaps,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_work_items_issue_list_tie_paged_total",
+		"GitHub work-items issue lists with a same-second tie group of more than one page (CHAOS-10112), by reason. The group is paged by page number; an edit during that read can shift one unseen issue into a page already read.",
+		"reason", m.githubIssueListTies,
 	); err != nil {
 		return err
 	}

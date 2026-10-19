@@ -377,6 +377,15 @@ func (materializer *NativeMaterializer) WritePrometheus(output io.Writer) error 
 			"devhealth_scheduler_materialized_occurrences_total %d\n",
 		materialized,
 	)
+	fmt.Fprintf(&text,
+		"# HELP dev_health_scheduler_explicit_datasets_without_row_total Dataset keys a "+
+			"manual or backfill trigger named that have no integration_datasets row, planned "+
+			"once with no row written (CHAOS-8795 decision C6). The expected path for a one-off "+
+			"run of a dataset the schedule does not carry; it is not a fault.\n"+
+			"# TYPE dev_health_scheduler_explicit_datasets_without_row_total counter\n"+
+			"dev_health_scheduler_explicit_datasets_without_row_total %d\n",
+		explicitDatasetsWithoutRowTotal.Load(),
+	)
 	if _, err := io.WriteString(output, text.String()); err != nil {
 		return err
 	}
@@ -772,6 +781,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 
 	var sources []PlanSource
 	var datasets []PlanDataset
+	var withoutRow []string
 	ensureSecurityDataset := false
 	if pagerDutyCredentialUnavailable {
 		// Match the Python planner: a missing, inactive, wrong-provider, or
@@ -787,7 +797,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		if err != nil {
 			return loadedMaterializationPlan{}, err
 		}
-		datasets, ensureSecurityDataset, err = loadPlanDatasets(ctx, tx, orgID, integrationID, provider, targets, sourceID, explicitDatasetKeys)
+		datasets, ensureSecurityDataset, withoutRow, err = loadPlanDatasets(ctx, tx, orgID, integrationID, provider, targets, sourceID, explicitDatasetKeys)
 		if err != nil {
 			return loadedMaterializationPlan{}, err
 		}
@@ -796,6 +806,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	if err != nil {
 		return loadedMaterializationPlan{}, err
 	}
+	noteExplicitDatasetsWithoutRow(provider, orgID, integrationID, withoutRow, datasets)
 	// CHAOS-8773: when a scheduled planner-managed parent has no enabled
 	// work-item family row, ask once whether this integration ever finished
 	// a work-items unit, so the planner can tell "stopped" from "never opted
@@ -1796,7 +1807,7 @@ func loadWorkItemLastSuccessAt(ctx context.Context, tx pgx.Tx, provider, orgID, 
 // NO auto security-forcing, matching _load_enabled_datasets' plain
 // dataset_key IN (...) filter exactly -- an explicit selector states
 // precisely what it wants, and does not get security silently added.
-func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, targets []string, sourceID *string, explicitDatasetKeys []string) ([]PlanDataset, bool, error) {
+func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, targets []string, sourceID *string, explicitDatasetKeys []string) ([]PlanDataset, bool, []string, error) {
 	var requested map[string]bool
 	securityRequested := false
 	if explicitDatasetKeys != nil {
@@ -1816,7 +1827,7 @@ func loadPlanDatasets(ctx context.Context, tx pgx.Tx, orgID, integrationID, prov
 		if len(requested) == 0 {
 			// Explicit EMPTY selector: plan zero datasets, mirroring Python's
 			// `if not dataset_keys: return []` in _load_enabled_datasets.
-			return nil, false, nil
+			return nil, false, nil, nil
 		}
 	} else {
 		requested = requestedDatasetKeys(provider, targets, sourceID)
@@ -1833,7 +1844,7 @@ FROM public.integration_datasets
 WHERE org_id = $1 AND integration_id = $2::uuid
 ORDER BY dataset_key`, orgID, integrationID)
 	if err != nil {
-		return nil, false, fmt.Errorf("load scheduled sync datasets: %w", err)
+		return nil, false, nil, fmt.Errorf("load scheduled sync datasets: %w", err)
 	}
 	defer rows.Close()
 	var result []PlanDataset
@@ -1844,7 +1855,7 @@ ORDER BY dataset_key`, orgID, integrationID)
 		var enabled bool
 		var raw []byte
 		if err := rows.Scan(&key, &enabled, &raw); err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		present[key] = true
 		if key == "security" {
@@ -1857,7 +1868,7 @@ ORDER BY dataset_key`, orgID, integrationID)
 			InitialSyncDepth int `json:"initial_sync_depth"`
 		}
 		if err := json.Unmarshal(raw, &option); err != nil {
-			return nil, false, fmt.Errorf("decode dataset %s options: %w", key, err)
+			return nil, false, nil, fmt.Errorf("decode dataset %s options: %w", key, err)
 		}
 		var depth *int
 		if option.InitialSyncDepth > 0 {
@@ -1866,12 +1877,12 @@ ORDER BY dataset_key`, orgID, integrationID)
 		result = append(result, PlanDataset{Key: key, InitialDepthDays: depth})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, false, nil, err
 	}
+	var unrowed []string
 	if explicitDatasetKeys != nil {
 		// CHAOS-8819 (decision C6): a one-off request for a dataset that has no
 		// row runs once and writes no row, so the schedule stays as the boxes say.
-		var unrowed []string
 		for key := range requested {
 			if _, ok := datasetSpecification(provider, key); ok && !present[key] {
 				unrowed = append(unrowed, key)
@@ -1881,17 +1892,35 @@ ORDER BY dataset_key`, orgID, integrationID)
 		for _, key := range unrowed {
 			result = append(result, PlanDataset{Key: key})
 		}
-		if len(unrowed) > 0 {
-			slog.Default().Info("sync.materializer.explicit_dataset_without_row",
-				slog.String("provider", provider), slog.String("org_id", orgID),
-				slog.String("integration_id", integrationID), slog.Int("datasets", len(unrowed)))
-		}
 	}
 	ensureSecurity := securityRequested && !securityExists
 	if ensureSecurity {
 		result = append(result, PlanDataset{Key: "security"})
 	}
-	return result, ensureSecurity, nil
+	return result, ensureSecurity, unrowed, nil
+}
+
+// explicitDatasetsWithoutRowTotal counts the dataset keys planned once with no
+// integration_datasets row (CHAOS-8819, CHAOS-10088). loadPlanDatasets is a free
+// function, so the counter is process-wide like globalPlanGateTelemetry.
+var explicitDatasetsWithoutRowTotal atomic.Uint64
+
+// noteExplicitDatasetsWithoutRow counts and logs the no-row keys the plan keeps:
+// a key the canonical-incident gate dropped is not planned, so it is not counted.
+func noteExplicitDatasetsWithoutRow(provider, orgID, integrationID string, withoutRow []string, kept []PlanDataset) {
+	planned := 0
+	for _, dataset := range kept {
+		if slices.Contains(withoutRow, dataset.Key) {
+			planned++
+		}
+	}
+	if planned == 0 {
+		return
+	}
+	explicitDatasetsWithoutRowTotal.Add(uint64(planned))
+	slog.Default().Info("sync.materializer.explicit_dataset_without_row",
+		slog.String("provider", provider), slog.String("org_id", orgID),
+		slog.String("integration_id", integrationID), slog.Int("datasets", planned))
 }
 
 // loadFailureStreaks reads, per source, how many work-items units in a row

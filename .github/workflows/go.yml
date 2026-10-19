@@ -163,6 +163,7 @@ on:
       - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
       - 'ci/ratchets.tsv'
+      - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
@@ -201,6 +202,11 @@ on:
       - '.github/workflows/go-quality.yml'
       # read by internal/testsupport/venuechanged (CHAOS-7653): a Go test reads this workflow file
       - '.github/workflows/venue-oracles-changed.yml'
+      # read and executed by internal/cigates (CHAOS-10176): the test.yml contract, the pip-install manifest the
+      # gated jobs name, and the gate script itself
+      - '.github/workflows/test.yml'
+      - 'requirements-docs.txt'
+      - 'ci/aggregate_gate_results.sh'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence
@@ -368,6 +374,7 @@ on:
       - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
       - 'ci/ratchets.tsv'
+      - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
@@ -406,6 +413,11 @@ on:
       - '.github/workflows/go-quality.yml'
       # read by internal/testsupport/venuechanged (CHAOS-7653): a Go test reads this workflow file
       - '.github/workflows/venue-oracles-changed.yml'
+      # read and executed by internal/cigates (CHAOS-10176): the test.yml contract, the pip-install manifest the
+      # gated jobs name, and the gate script itself
+      - '.github/workflows/test.yml'
+      - 'requirements-docs.txt'
+      - 'ci/aggregate_gate_results.sh'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence

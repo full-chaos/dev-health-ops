@@ -33,11 +33,13 @@ var ttlKnownTables = map[string]int{
 }
 
 var (
-	ttlCreateTable  = regexp.MustCompile("(?im)^\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:`?[A-Za-z_]\\w*`?\\.)?`?([A-Za-z_]\\w*)`?\\s*\\(")
+	ttlCreateTable  = regexp.MustCompile("(?im)^\\s*CREATE\\s+(?:OR\\s+REPLACE\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:`?[A-Za-z_]\\w*`?\\.)?`?([A-Za-z_]\\w*)`?(?:\\s+ON\\s+CLUSTER\\s+\\S+)?\\s*\\(")
 	ttlPrecise      = regexp.MustCompile(`(?i)TTL\s+(?:\w+\()?([\w.]+)\)?\s*\+\s*INTERVAL\s+(\d+)\s+DAY`)
-	ttlCoarse       = regexp.MustCompile(`(?is)\bTTL\b.*?\bINTERVAL\b`)
+	ttlCoarse       = regexp.MustCompile(`(?is)\bTTL\b.*?(?:\bINTERVAL\b|\btoInterval[A-Za-z]+\()`)
 	ttlAlterModify  = regexp.MustCompile("(?im)^\\s*ALTER\\s+TABLE\\s+(?:`?[A-Za-z_]\\w*`?\\.)?`?([A-Za-z_]\\w*)`?\\s+(?:ON\\s+CLUSTER\\s+\\S+\\s+)?MODIFY\\s+TTL\\b")
 	ttlAlterPrecise = regexp.MustCompile("(?im)^\\s*ALTER\\s+TABLE\\s+(?:`?[A-Za-z_]\\w*`?\\.)?`?([A-Za-z_]\\w*)`?\\s+(?:ON\\s+CLUSTER\\s+\\S+\\s+)?MODIFY\\s+TTL\\s+(?:\\w+\\()?([\\w.]+)\\)?\\s*\\+\\s*INTERVAL\\s+(\\d+)\\s+DAY")
+	ttlUnmodelled   = regexp.MustCompile(`(?is)\bTTL\b[^;]*?\b(?:TO\s+(?:DISK|VOLUME)|RECOMPUTE|GROUP\s+BY)\b`)
+	ttlAlterRemove  = regexp.MustCompile("(?im)^\\s*ALTER\\s+TABLE\\s+(?:`?[A-Za-z_]\\w*`?\\.)?`?([A-Za-z_]\\w*)`?\\s+(?:ON\\s+CLUSTER\\s+\\S+\\s+)?REMOVE\\s+TTL\\b")
 	ttlHorizonLine  = regexp.MustCompile(`(?i)TTL\s+.*?\+\s*INTERVAL\s+(\d+)\s+DAY\s+DELETE`)
 )
 
@@ -83,7 +85,8 @@ var (
 )
 
 // ttlStripSQLComments blanks SQL line and block comments outside string literals and quoted identifiers, so a TTL clause that
-// is only commented out does not count as enforced and a `--` inside a string literal does not hide a real clause.
+// is only commented out does not count as enforced and a `--` inside a string literal does not hide a real clause. The inside
+// of a single-quoted string literal is blanked too, so a COMMENT or DEFAULT text that quotes a TTL clause is not a clause.
 func ttlStripSQLComments(text string) string {
 	var out strings.Builder
 	n := len(text)
@@ -101,7 +104,13 @@ func ttlStripSQLComments(text string) string {
 			if j >= n {
 				j = n - 1
 			}
-			out.WriteString(text[i : j+1])
+			if c == '\'' {
+				out.WriteByte(c)
+				out.WriteString(strings.Repeat(" ", j-i-1))
+				out.WriteByte(c)
+			} else {
+				out.WriteString(text[i : j+1])
+			}
 			i = j + 1
 		case c == '-' && i+1 < n && text[i+1] == '-':
 			for i < n && text[i] != '\n' {
@@ -162,6 +171,10 @@ func ttlScan(t *testing.T, dir string) (precise map[string]ttlRetention, coarse 
 			coarse[m[1]] = true
 		}
 		for _, statement := range strings.Split(text, ";") {
+			for _, m := range ttlAlterRemove.FindAllStringSubmatch(statement, -1) {
+				delete(precise, m[1])
+				delete(coarse, m[1])
+			}
 			for _, m := range ttlAlterPrecise.FindAllStringSubmatch(statement, -1) {
 				days, _ := strconv.Atoi(m[3])
 				precise[m[1]] = ttlRetention{column: m[2], days: days}
@@ -174,6 +187,15 @@ func ttlScan(t *testing.T, dir string) (precise map[string]ttlRetention, coarse 
 			tables, _ = ttlAttribute(statement, ttlCoarse)
 			for _, table := range tables {
 				coarse[table] = true
+			}
+			// A TTL with a move, recompute or group-by rule is a form the precise scanner cannot read as a retention: keep
+			// the table in the coarse set only, so the vocabulary check fails loudly instead of trusting the first clause.
+			if ttlUnmodelled.MatchString(statement) {
+				tables, _ = ttlAttribute(statement, ttlCoarse)
+				for _, table := range tables {
+					delete(precise, table)
+					coarse[table] = true
+				}
 			}
 		}
 	}
@@ -397,6 +419,53 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 		p, _ := ttlScan(t, dir)
 		if p["altered_ttl"].days != 90 {
 			t.Fatalf("ALTER retention not applied: %+v", p["altered_ttl"])
+		}
+	})
+	t.Run("CREATE TABLE variants are found", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE clustered_ttl ON CLUSTER main (\n x Int8\n) ENGINE=M TTL ts + INTERVAL 11 DAY DELETE;\nCREATE OR REPLACE TABLE replaced_ttl (\n x Int8\n) ENGINE=M TTL ts + INTERVAL 12 DAY DELETE;")
+		p, c := ttlScan(t, dir)
+		if p["clustered_ttl"].days != 11 || p["replaced_ttl"].days != 12 || !c["clustered_ttl"] || !c["replaced_ttl"] {
+			t.Fatalf("CREATE variants missed: %+v %v", p, c)
+		}
+	})
+	t.Run("toIntervalDay TTL form is seen by the coarse sweep and fails the vocabulary check", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE function_form (\n x Int8\n) ENGINE=M TTL ts + toIntervalDay(30);")
+		p, c := ttlScan(t, dir)
+		if _, ok := p["function_form"]; ok || !c["function_form"] {
+			t.Fatalf("toIntervalDay form: precise=%v coarse=%v", p, c)
+		}
+		if len(ttlVocabularyProblems(p, c)) == 0 {
+			t.Fatal("a TTL table in an unreadable form must fail the vocabulary check")
+		}
+	})
+	t.Run("a TTL quoted inside a string literal is not a clause", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE quoted_text (\n note String COMMENT 'TTL ts + INTERVAL 5 DAY DELETE'\n) ENGINE=M;")
+		p, c := ttlScan(t, dir)
+		if len(p) != 0 || len(c) != 0 {
+			t.Fatalf("quoted TTL text counted: %v %v", p, c)
+		}
+	})
+	t.Run("a TTL with a move rule is not trusted as a retention", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE tiered (\n x Int8\n) ENGINE=M TTL ts + INTERVAL 7 DAY TO DISK 'cold', ts + INTERVAL 90 DAY DELETE;")
+		p, c := ttlScan(t, dir)
+		if _, ok := p["tiered"]; ok || !c["tiered"] || len(ttlVocabularyProblems(p, c)) == 0 {
+			t.Fatalf("tiered TTL trusted: %v %v", p, c)
+		}
+	})
+	t.Run("ALTER REMOVE TTL drops the table", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE feature_flag_event (\n x Int8\n) ENGINE=M TTL ts + INTERVAL 90 DAY DELETE;")
+		writeFile(t, filepath.Join(dir, "2.sql"), "ALTER TABLE feature_flag_event REMOVE TTL;")
+		p, c := ttlScan(t, dir)
+		if _, ok := p["feature_flag_event"]; ok || c["feature_flag_event"] {
+			t.Fatalf("REMOVE TTL not applied: %v %v", p, c)
+		}
+		if len(ttlVocabularyProblems(p, c)) == 0 {
+			t.Fatal("a listed table that lost its TTL by ALTER must fail the vocabulary check")
 		}
 	})
 	t.Run("changing the migration changes the registry", func(t *testing.T) {

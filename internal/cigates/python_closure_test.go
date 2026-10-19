@@ -72,11 +72,21 @@ func readPins(path string) ([]pin, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// pip ends a requirement at ` #` and at an environment marker; extras sit in brackets after the name.
+		if i := strings.Index(line, " #"); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
+		if i := strings.Index(line, ";"); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
 		name, version, ok := strings.Cut(line, "==")
 		if !ok {
 			return nil, fmt.Errorf("%s: requirement must be exactly pinned: %s", filepath.Base(path), line)
 		}
-		pins = append(pins, pin{canonicalName(name), version})
+		if i := strings.Index(name, "["); i >= 0 {
+			name = name[:i]
+		}
+		pins = append(pins, pin{canonicalName(name), strings.TrimSpace(version)})
 	}
 	return pins, nil
 }
@@ -176,6 +186,12 @@ func TestCIClosurePlantedDefects(t *testing.T) {
 		{"loose pin", "starlette>=1.7.0\n", "must be exactly pinned"},
 		{"empty", "# only a comment\n", "pins nothing"},
 		{"name canonicalisation", "SOME.PKG==9\n", "drifts from uv.lock: some-pkg==9"},
+		{"inline comment keeps the pin readable", "starlette==1.7.0  # why\n", ""},
+		{"inline comment does not hide drift", "starlette==1.3.1  # why\n", "drifts from uv.lock: starlette==1.3.1"},
+		{"marker keeps the pin readable", "starlette==1.7.0 ; python_version >= '3.13'\n", ""},
+		{"extras do not hide drift", "starlette[full]==1.3.1\n", "drifts from uv.lock: starlette==1.3.1"},
+		{"arbitrary equality is refused", "starlette===1.7.0\n", "drifts from uv.lock"},
+		{"hash option line is refused", "starlette==1.7.0 \\\n    --hash=sha256:abc\n", "must be exactly pinned"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -294,3 +294,26 @@ func TestNoConfigNotFoundIsMarked(t *testing.T) {
 		t.Fatalf("bad org: status %d header %q", response.StatusCode, response.Header.Get(NoConfigHeader))
 	}
 }
+
+func TestLLMConfigNamesTheClosedGateInTheLog(t *testing.T) {
+	cases := []struct {
+		name   string
+		source *fakeSource
+		want   string
+	}{
+		{"gate closed", &fakeSource{cfg: llmorgsettings.OrgConfig{GateClosed: true}}, `"reason":"byo_llm_gate_closed"`},
+		{"nothing stored", &fakeSource{}, `"reason":"none_configured"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			response, body := call(t, &fakeVerifier{}, tc.source, &logs, testOrg, "Bearer "+testToken)
+			if response.StatusCode != 404 || response.Header.Get(NoConfigHeader) != NoConfigValue {
+				t.Fatalf("status %d marker %q, want the marked 404", response.StatusCode, response.Header.Get(NoConfigHeader))
+			}
+			if !strings.Contains(logs.String(), tc.want) || strings.Contains(body, testKey) {
+				t.Fatalf("log %q lacks %s", logs.String(), tc.want)
+			}
+		})
+	}
+}

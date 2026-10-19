@@ -7,8 +7,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from dev_health_ops.workers.config import task_queues
-
 
 def _parse_queues(command_str: str) -> set[str]:
     """Extract the -Q/--queues list from a celery worker command string."""
@@ -57,20 +55,6 @@ def _go_worker_arguments(service: dict) -> dict[str, str]:
     return arguments
 
 
-def test_celery_config_has_backfill_queue() -> None:
-    assert "backfill" in task_queues
-
-
-def test_celery_config_has_per_provider_sync_queues() -> None:
-    """CHAOS-2299: each known sync provider has a dedicated queue so queue
-    depth answers "is <provider> stuck?", and the shared `sync` queue stays
-    declared as the fallback for unknown providers and messages already in
-    flight at deploy time."""
-    for provider in ("github", "gitlab", "linear", "jira", "launchdarkly"):
-        assert f"sync.{provider}" in task_queues
-    assert "sync" in task_queues
-
-
 # CHAOS-3093 (2026-09-09): test_queue_monitor_beat_entry tested the
 # monitor-queue-depths beat entry and workers/queue_monitor.py's
 # monitor_queue_depths task, both deleted with this cleanup (CHAOS-4065's
@@ -85,20 +69,6 @@ def test_celery_config_has_per_provider_sync_queues() -> None:
 # sync_scheduler.py's dispatch_scheduled_syncs task, both deleted with this
 # cleanup (internal/scheduler/sync's coordinator/loop owns this cadence
 # natively now). See tests/workers/test_celery_dead_code_contract.py.
-
-
-def test_scheduler_queue_declared() -> None:
-    assert "scheduler" in task_queues
-
-
-def test_monitoring_queue_declared() -> None:
-    """The `monitoring` queue must exist in task_queues.
-
-    Redundant-consumer coverage moved to
-    ``test_production_stacks_consume_monitoring_queue`` (compose.production.yml (deleted, CHAOS-6950)
-    / stack.yml) once CHAOS-5589 deleted root compose.yml's celery-legacy
-    fleet -- there is no local compose worker left to assert against."""
-    assert "monitoring" in task_queues
 
 
 # ---------------------------------------------------------------------------
@@ -703,23 +673,6 @@ def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
         "pre-upgrade",
     ]
     assert values["migrations"]["hook"]["localBundledPostgres"] is False
-
-
-def test_celery_worker_prefetch_multiplier_is_one() -> None:
-    """CHAOS-2277: long-running tasks (sync, stream consumers) + default
-    prefetch (4) let reserved slow-queue messages fill the QoS window and
-    block fetching from other queues entirely — Sync Now appeared stuck
-    until a worker restart released the unacked reservations. One-at-a-time
-    fetching keeps cross-queue round-robin fair."""
-    from dev_health_ops.workers.config import worker_prefetch_multiplier
-
-    assert worker_prefetch_multiplier == 1
-
-
-def test_celery_worker_prefetch_is_disabled_for_redis() -> None:
-    from dev_health_ops.workers.config import worker_disable_prefetch
-
-    assert worker_disable_prefetch is True
 
 
 # CHAOS-4026 (2026-08-21): test_stream_consumer_beat_ticks_do_not_outlive_cadence

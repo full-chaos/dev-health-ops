@@ -3151,6 +3151,8 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/httpapi FuzzParseForwardedTrust"
   "./internal/auth/keystore FuzzParseEd25519Key"
   "./internal/auth/authconfig FuzzConfigLoad"
+  "./internal/auth/identity FuzzNormalizeEmail"
+  "./internal/auth/identity FuzzExternalKeyValidate"
 )
 AUTH_FUZZTIME="${AUTH_FUZZTIME:-20s}"
 AUTH_GOVULNCHECK_VERSION="v1.9.0"

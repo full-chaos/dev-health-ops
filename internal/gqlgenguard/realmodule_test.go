@@ -1,3 +1,5 @@
+//go:build !race
+
 package gqlgenguard
 
 import (
@@ -10,6 +12,11 @@ import (
 	"testing"
 )
 
+// CHAOS-10201: the three tests here each run the real generator (about 20 s per CheckDrift, 177 s together under -race on 64
+// cores, 160-340 s on a 4-core hosted runner), and the generator is a child process that is never race-built, so the race
+// detector adds cost and no signal. They are compiled out of the -race leg ONLY. The non-race unit leg runs them, and
+// ci/check_go.sh (check_race_excluded_ran) fails unless each runs by name, uncached and without -race (ci/race_excluded_tests.tsv).
+//
 // The tests here are the executed claim: the real gqlgen configuration, the
 // real generator, the real repository. Everything else in this package is a
 // fixture, and a fixture cannot tell you whether the thing shipped works.
@@ -324,12 +331,4 @@ func TestCheckDriftOnThisRepositoryIgnoresAnInheritedWorkspace(t *testing.T) {
 		t.Fatalf("the report does not say the inherited workspace was switched off:\n%s", report.String())
 	}
 	assertUnchanged(t, before, repoDigests(t, root), "CheckDrift under an inherited GOWORK")
-}
-
-// firstLine is the head of a multi-line report, for a cell's output line.
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
 }

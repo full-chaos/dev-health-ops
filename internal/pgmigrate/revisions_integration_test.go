@@ -123,7 +123,7 @@ func revisionsDatabase(t *testing.T) (uri string, admin func(string)) {
 
 // revisionsPythonBuild is the build whose Python CLI (Alembic) answered the scenarios: a build that still
 // carried the Python CLI.
-const revisionsPythonBuild = "055816fd2325f6c0dda555e46ac3ff2d0a81a796"
+const revisionsPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
 // revisionsPythonProgram is the entry point the producer runs: the real dev-hops CLI.
 const revisionsPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
@@ -141,7 +141,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/revisions.json",
 		PythonBuild: revisionsPythonBuild,
-		SHA256:      "99911d915bcc0481bb43966c4ae784577b4e91a44a82b191c4fd98e6b6c70c5d",
+		SHA256:      "dcfcee953e5c4130bd23e295cdae94d6e58ae9cb5bb706d87d2f8909b5ca210f",
 		Recipe: "git worktree add --detach $DIR " + revisionsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestRevisionsMatchTheFrozenAlembicOutput$' -python-root $DIR",
 	})
@@ -164,7 +164,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 			if scenario.setup != "" {
 				exec(scenario.setup)
 			}
-			results = append(results, revisionResult{Name: scenario.name, Stdout: pythonRevisions(t, producer, uri, scenario.verb)})
+			results = append(results, revisionResult{Name: scenario.name, Stdout: setOrdered(scenario.verb, pythonRevisions(t, producer, uri, scenario.verb))})
 			exec("DROP TABLE IF EXISTS alembic_version")
 			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
 		}
@@ -218,6 +218,17 @@ func sameRevisionText(verb, got, want string) bool {
 		return got == want
 	}
 	return strings.Join(sortedLines(got), "\n") == strings.Join(sortedLines(want), "\n")
+}
+
+// setOrdered fixes the line order of the recorded `current` text. Alembic prints the current heads in the
+// row order of its version table (an unordered SELECT), which differs between two fresh databases with two
+// heads, so the recorder's two-run determinism check failed at random. `current` is a set of heads
+// (sameRevisionText compares it as one), so the golden holds its lines sorted; `heads` is already ordered.
+func setOrdered(verb, text string) string {
+	if verb != "current" || text == "" {
+		return text
+	}
+	return strings.Join(sortedLines(text), "\n") + "\n"
 }
 
 func sortedLines(text string) []string {

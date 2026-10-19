@@ -1,6 +1,7 @@
 package fixturesgen
 
 import (
+	"encoding/json"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -11,22 +12,97 @@ import (
 	"time"
 )
 
-// The generation ceiling is derived from the table's TTL, not transcribed: the migration
-// that creates product_telemetry_events says 180 days, the shelf-life margin is 30 and the
-// strict headroom 1 (ttl_horizon.py). A migration that changes the TTL fails this until the
-// ceiling follows.
-func TestCeilingFollowsTheTableTTL(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "src", "dev_health_ops", "migrations", "clickhouse", "041_product_telemetry_events.sql"))
+var ttlClause = regexp.MustCompile(`(?is)\bTTL\s+[^;]*?\+\s*(?:toIntervalDay\(\s*(\d+)\s*\)|INTERVAL\s+(\d+)\s+DAY)`)
+
+// ttlDays returns the table-level TTL in days. Single-quoted strings (COMMENT, DEFAULT) are
+// blanked first, honouring \' and ” escapes, so a quoted TTL is not a clause.
+func ttlDays(create string) (int, bool) {
+	var out strings.Builder
+	for i := 0; i < len(create); i++ {
+		c := create[i]
+		if c != '\'' {
+			out.WriteByte(c)
+			continue
+		}
+		out.WriteByte(c)
+		for i++; i < len(create); i++ {
+			if create[i] == '\\' {
+				i++
+				continue
+			}
+			if create[i] == '\'' {
+				if i+1 < len(create) && create[i+1] == '\'' {
+					i++
+					continue
+				}
+				break
+			}
+		}
+		out.WriteByte('\'')
+	}
+	m := ttlClause.FindStringSubmatch(create)
+	if m == nil {
+		return 0, false
+	}
+	n, _ := strconv.Atoi(m[1] + m[2])
+	return n, true
+}
+
+func telemetryCreate(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "chmigrate", "baseline", "head.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	match := regexp.MustCompile(`(?i)TTL\s+.*?\+\s*INTERVAL\s+(\d+)\s+DAY\s+DELETE`).FindStringSubmatch(string(raw))
-	if match == nil {
+	var head struct {
+		Objects []struct{ Name, Create string } `json:"objects"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range head.Objects {
+		if o.Name == "product_telemetry_events" {
+			return o.Create
+		}
+	}
+	t.Fatal("product_telemetry_events is not in the baseline head.json")
+	return ""
+}
+
+// The generation ceiling is derived from the table's TTL in the chmigrate baseline snapshot
+// (final state after any ALTER): the shelf-life margin is 30 and the strict headroom 1
+// (ttl_horizon.py). A TTL change fails this until the ceiling follows. No TTL fails closed.
+func TestCeilingFollowsTheTableTTL(t *testing.T) {
+	days, ok := ttlDays(telemetryCreate(t))
+	if !ok {
 		t.Fatal("product_telemetry_events lost its TTL clause: the generation ceiling has no horizon to follow")
 	}
-	days, _ := strconv.Atoi(match[1])
 	if got := days - 30 - 1; got != ProductTelemetryCeilingDays {
 		t.Fatalf("TTL is %d days, so the ceiling is %d, but ProductTelemetryCeilingDays = %d", days, got, ProductTelemetryCeilingDays)
+	}
+}
+
+func TestTTLScanRejectsWhatIsNotATableTTL(t *testing.T) {
+	base := "CREATE TABLE product_telemetry_events (`a` String COMMENT 'x') ENGINE = ReplacingMergeTree ORDER BY a "
+	cases := map[string]string{
+		"quoted comment": "CREATE TABLE t (`a` String COMMENT 'TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"escaped quote":  "CREATE TABLE t (`a` String COMMENT 'it\\'s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"doubled quote":  "CREATE TABLE t (`a` String COMMENT 'it''s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"no ttl":         base + "SETTINGS index_granularity = 8192",
+	}
+	for name, create := range cases {
+		if days, ok := ttlDays(create); ok {
+			t.Errorf("%s: found a TTL of %d days where there is none", name, days)
+		}
+	}
+	for create, want := range map[string]int{
+		base + "TTL toDateTime(occurred_at) + toIntervalDay(90) SETTINGS a = 1":           90,
+		base + "TTL occurred_at + INTERVAL 45 DAY DELETE":                                 45,
+		"CREATE TABLE t (`a` String COMMENT 'it''s') ENGINE = M TTL d + toIntervalDay(7)": 7,
+	} {
+		if days, ok := ttlDays(create); !ok || days != want {
+			t.Errorf("%q: got %d,%v want %d", create, days, ok, want)
+		}
 	}
 }
 

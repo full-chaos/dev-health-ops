@@ -22,7 +22,7 @@ var publicReadOracle = map[string][]string{
 	"memberships": {"user_id", "org_id", "role"},
 	"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
 		"config", "allowed_domains", "encrypted_secrets"},
-	"organizations":          {"id", "slug", "name", "is_active"},
+	"organizations":          {"id", "slug", "name", "is_active", "tier"},
 	"saml_assertion_replays": {"provider_id", "assertion_id", "expires_at"},
 	"org_licenses":           {"org_id", "tier", "features_override"},
 }
@@ -239,8 +239,13 @@ func TestPublicReadsSameNamedViewIsRefused(t *testing.T) {
 	if _, err := env.migration.Exec(ctx, `GRANT SELECT (id) ON public.users TO `+role); err != nil {
 		t.Fatal(err)
 	}
-	found := env.violations(t, ctx)
-	if !strings.Contains(describe(found), "users") {
+	conn, err := env.migration.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	found, err := VerifyRuntimePosture(ctx, conn.Conn(), env.options(&bytes.Buffer{}))
+	if err == nil && !strings.Contains(describe(found), "users") {
 		t.Errorf("a column privilege on a same-named view passed the posture:\n%s", describe(found))
 	}
 	if _, err := Apply(ctx, env.migration, env.options(&bytes.Buffer{})); err == nil {

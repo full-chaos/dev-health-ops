@@ -2,6 +2,7 @@ package authschema
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -39,21 +40,45 @@ func PublicReadColumns() []ColumnGrant {
 			"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
 			"config", "allowed_domains", "encrypted_secrets",
 		}},
-		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active"}},
+		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier"}},
 		{Table: "saml_assertion_replays", Columns: []string{"provider_id", "assertion_id", "expires_at"}},
 		{Table: "org_licenses", Columns: []string{"org_id", "tier", "features_override"}},
 	}
 }
 
-func publicTableExists(ctx context.Context, conn *pgx.Conn, table string) (bool, error) {
-	var exists bool
-	if err := conn.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-		 WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p'))`, publicSchema, table,
-	).Scan(&exists); err != nil {
-		return false, fmt.Errorf("%w: looking for %s.%s", ErrMigrationFailed, publicSchema, table)
+// publicRelationKind reports the relkind of public.<table> ("" when no such
+// relation exists). A view or foreign table of the same name is a different
+// object from the ops table the manifest describes.
+func publicRelationKind(ctx context.Context, conn *pgx.Conn, table string) (string, error) {
+	var kind string
+	err := conn.QueryRow(ctx,
+		`SELECT c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = $1 AND c.relname = $2`, publicSchema, table,
+	).Scan(&kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
 	}
-	return exists, nil
+	if err != nil {
+		return "", fmt.Errorf("%w: looking for %s.%s", ErrMigrationFailed, publicSchema, table)
+	}
+	return kind, nil
+}
+
+// publicTableState classifies public.<table> for the manifest: absent, a table
+// ('r' or 'p'), or something else, which is an error rather than a skip.
+func publicTableState(ctx context.Context, conn *pgx.Conn, table string) (exists bool, err error) {
+	kind, err := publicRelationKind(ctx, conn, table)
+	if err != nil {
+		return false, err
+	}
+	switch kind {
+	case "":
+		return false, nil
+	case "r", "p":
+		return true, nil
+	}
+	return false, fmt.Errorf("%w: %s.%s is not a table (relkind %q) but PublicReadColumns names a table",
+		ErrMigrationFailed, publicSchema, table, kind)
 }
 
 // ApplyPublicReads makes the runtime role's access to the ops schema equal
@@ -77,7 +102,7 @@ func ApplyPublicReads(ctx context.Context, conn *pgx.Conn, options Options) erro
 		logger = slog.New(slog.DiscardHandler)
 	}
 	for _, entry := range PublicReadColumns() {
-		exists, err := publicTableExists(ctx, conn, entry.Table)
+		exists, err := publicTableState(ctx, conn, entry.Table)
 		if err != nil {
 			return err
 		}
@@ -130,7 +155,7 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 
 	var violations []Violation
 	for _, entry := range PublicReadColumns() {
-		exists, err := publicTableExists(ctx, conn, entry.Table)
+		exists, err := publicTableState(ctx, conn, entry.Table)
 		if err != nil {
 			return nil, err
 		}
@@ -155,8 +180,11 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		}
 	}
 
+	// systemSchemaFilter is a package constant, not input; the role and schema
+	// names are bound parameters.
+	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli.pgx-sqli
 	rows, err := conn.Query(ctx, `
-		SELECT n.nspname, c.relname, a.attname, p.priv
+		SELECT n.nspname, c.relname, c.relkind::text, a.attname, p.priv
 		FROM pg_attribute a
 		JOIN pg_class c ON c.oid = a.attrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -174,11 +202,11 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var schema, table, column, privilege string
-		if err := rows.Scan(&schema, &table, &column, &privilege); err != nil {
+		var schema, table, kind, column, privilege string
+		if err := rows.Scan(&schema, &table, &kind, &column, &privilege); err != nil {
 			return nil, fmt.Errorf("%w: reading a column privilege", ErrMigrationFailed)
 		}
-		if schema == publicSchema && privilege == "SELECT" {
+		if schema == publicSchema && privilege == "SELECT" && (kind == "r" || kind == "p") {
 			if _, ok := declared[table][column]; ok {
 				continue
 			}

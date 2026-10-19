@@ -142,7 +142,7 @@ func notSQL(role string) {
 		fns = append(fns, v.fn+"/"+v.operand)
 	}
 	sort.Strings(fns)
-	want := []string{"f/role", "viaHelperReturn/role", "viaMethodWrapper/role", "viaRangeLiteral/role", "viaVar/role"}
+	want := []string{"buildStatement/role", "f/role", "viaMethodWrapper/role", "viaRangeLiteral/role", "viaVar/role"}
 	if strings.Join(fns, ",") != strings.Join(want, ",") {
 		t.Fatalf("violations = %v, want %v", fns, want)
 	}
@@ -229,6 +229,57 @@ func scanSprintf(fset *token.FileSet, files []*ast.File) []sprintfViolation {
 	// A function that returns a Sprintf result reaches a sink when some caller
 	// passes a call to that function into one.
 	sinkArgFuncs := map[string]bool{}
+	// A call whose result is assigned to a variable that a sink call then
+	// receives counts the same as a call placed in the sink's arguments.
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				as, ok := n.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				held := map[string]bool{}
+				for _, lhs := range as.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						held[id.Name] = true
+					}
+				}
+				reachesSink := false
+				ast.Inspect(fd.Body, func(m ast.Node) bool {
+					if call, ok := m.(*ast.CallExpr); ok && isSink(call, sinkFuncs) {
+						for _, arg := range call.Args {
+							if mentionsAny(arg, held) {
+								reachesSink = true
+							}
+						}
+					}
+					return true
+				})
+				if !reachesSink {
+					return true
+				}
+				for _, rhs := range as.Rhs {
+					ast.Inspect(rhs, func(m ast.Node) bool {
+						if call, ok := m.(*ast.CallExpr); ok {
+							switch fun := call.Fun.(type) {
+							case *ast.Ident:
+								sinkArgFuncs[fun.Name] = true
+							case *ast.SelectorExpr:
+								sinkArgFuncs[fun.Sel.Name] = true
+							}
+						}
+						return true
+					})
+				}
+				return true
+			})
+		}
+	}
+
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
 			if call, ok := n.(*ast.CallExpr); ok && isSink(call, sinkFuncs) {

@@ -35,7 +35,7 @@ func TestNormalizeGitHubIssueWorkItemMatchesProductionBoundary(t *testing.T) {
       "html_url": "https://github.com/acme/api/issues/42"
     }`)
 	row, err := normalizeGitHubIssueWorkItem(
-		claim, "acme/api", repoID, body, nil, normalizedAt,
+		claim, sameGitHubRepoNames("acme/api"), repoID, body, nil, normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestNormalizeGitHubIssueWorkItemFallsBackLikePython(t *testing.T) {
 	claim := githubWorkItemOracleClaim()
 	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
 	row, err := normalizeGitHubIssueWorkItem(
-		claim, "acme/api", repoID,
+		claim, sameGitHubRepoNames("acme/api"), repoID,
 		json.RawMessage(`{"number":7,"title":"Closed","state":"closed","closed_at":"2026-08-03T10:00:00Z"}`),
 		nil, now,
 	)
@@ -154,7 +154,7 @@ func TestExtractGitHubClosingIssueReferencesEmitsDedupedCrossRepoEdges(t *testin
 		json.RawMessage(`{"number":0,"repository":{"nameWithOwner":"acme/api"}}`),
 		json.RawMessage(`{"number":7,"repository":{"nameWithOwner":""}}`),
 	}
-	rows, err := extractGitHubClosingIssueReferences(claim, workItemID, raw, normalizedAt)
+	rows, err := extractGitHubClosingIssueReferences(claim, sameGitHubRepoNames("acme/api"), workItemID, raw, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestExtractGitHubClosingIssueReferencesRejectsMalformedNode(t *testing.T) {
 	claim := githubWorkItemOracleClaim()
 	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	_, err := extractGitHubClosingIssueReferences(
-		claim, "ghpr:acme/api#42", []json.RawMessage{json.RawMessage(`not-json`)}, normalizedAt,
+		claim, sameGitHubRepoNames("acme/api"), "ghpr:acme/api#42", []json.RawMessage{json.RawMessage(`not-json`)}, normalizedAt,
 	)
 	if err == nil {
 		t.Fatal("expected a normalization error for a malformed node")

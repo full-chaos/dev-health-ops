@@ -78,35 +78,36 @@ func SelectGitFamilyRoute(provider, dataset string, deps GitFamilyDeps) (route G
 			return GitFamilyRoute{GitLabSecurityRouteHandler{RepoIdentity: identity}, sink, sink}, true
 		}
 	case "github":
+		identity := GitLabRepoIdentityClickHouseReader{Conn: conn, Lease: lease, Provider: "github"}
 		switch dataset {
 		case "repo-metadata":
 			sink := GitHubRepositoryClickHouseEffects{Conn: conn, Lease: lease}
-			return GitFamilyRoute{GitHubRepositoryRouteHandler{}, sink, sink}, true
+			return GitFamilyRoute{GitHubRepositoryRouteHandler{RepoIdentity: identity}, sink, sink}, true
 		case "prs", "pr-reviews", "pr-comments":
 			sink := GitHubPullRequestSocialClickHouseEffects{Conn: conn, Lease: lease}
-			return GitFamilyRoute{GitHubPullRequestSocialRouteHandler{}, sink, sink}, true
+			return GitFamilyRoute{GitHubPullRequestSocialRouteHandler{PullRequests: GitHubPullRequestRouteHandler{RepoIdentity: identity}}, sink, sink}, true
 		case "cicd", "tests":
 			sink := GitHubTestsClickHouseEffects{Conn: conn, Lease: lease}
-			handler := GitHubTestsRouteHandler{MaxArtifactBytes: deps.GitHubTestsMaxArtifactBytes}
+			handler := GitHubTestsRouteHandler{MaxArtifactBytes: deps.GitHubTestsMaxArtifactBytes, RepoIdentity: identity}
 			return GitFamilyRoute{handler, sink, sink}, true
 		case "commits":
 			sink := GitHubCommitsClickHouseEffects{Conn: conn, Lease: lease}
-			return GitFamilyRoute{GitHubCommitsRouteHandler{}, sink, sink}, true
+			return GitFamilyRoute{GitHubCommitsRouteHandler{RepoIdentity: identity}, sink, sink}, true
 		case "deployments":
 			sink := GitHubDeploymentsClickHouseEffects{Conn: conn, Lease: lease}
-			return GitFamilyRoute{GitHubDeploymentsRouteHandler{}, sink, sink}, true
+			return GitFamilyRoute{GitHubDeploymentsRouteHandler{RepoIdentity: identity}, sink, sink}, true
 		case "security":
 			sink := GitHubSecurityClickHouseEffects{Conn: conn, Lease: lease}
-			return GitFamilyRoute{GitHubSecurityRouteHandler{}, sink, sink}, true
+			return GitFamilyRoute{GitHubSecurityRouteHandler{RepoIdentity: identity}, sink, sink}, true
 		case "files":
 			sink := GitHubFilesClickHouseEffects{Conn: conn, Lease: lease}
-			return GitFamilyRoute{GitHubFilesRouteHandler{}, sink, sink}, true
+			return GitFamilyRoute{GitHubFilesRouteHandler{RepoIdentity: identity}, sink, sink}, true
 		case "commit-stats":
 			sink := GitHubCommitStatsClickHouseEffects{Conn: conn, Lease: lease}
-			return GitFamilyRoute{GitHubCommitStatsRouteHandler{}, sink, sink}, true
+			return GitFamilyRoute{GitHubCommitStatsRouteHandler{RepoIdentity: identity}, sink, sink}, true
 		case "blame":
 			sink := GitHubBlameClickHouseEffects{Conn: conn, Lease: lease}
-			handler := GitHubBlameRouteHandler{Coverage: GitHubBlameClickHouseCoverage{Conn: conn, Lease: lease}}
+			handler := GitHubBlameRouteHandler{Coverage: GitHubBlameClickHouseCoverage{Conn: conn, Lease: lease}, RepoIdentity: identity}
 			return GitFamilyRoute{handler, sink, sink}, true
 		}
 	}

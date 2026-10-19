@@ -80,7 +80,7 @@ VALUES ('` + row.org + `', '` + row.run + `', 'x', '` + row.model + `', '` + row
 	if got := summary.runs[0].failures; got == nil || got.Len() != 1 {
 		t.Fatalf("failures of run-org = %v, want its own single class", got)
 	}
-	if len(summary.legacy) != 1 || summary.legacy[0].model != "claude-haiku-5-5" {
-		t.Fatalf("legacy = %+v, want only the org-credential row", summary.legacy)
+	if len(summary.unattributed) != 1 || summary.unattributed[0].model != "claude-haiku-5-5" || summary.unattributed[0].source != "work_unit_explain" {
+		t.Fatalf("unattributed = %+v, want only the org-credential explain row", summary.unattributed)
 	}
 }

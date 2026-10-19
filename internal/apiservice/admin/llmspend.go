@@ -34,17 +34,18 @@ type spendRun struct {
 	failures               *pyjson.Object
 }
 
-// spendLegacy is one LLMTokenSpendLegacyRecord: usage written without a run id.
-type spendLegacy struct {
-	provider, model string
-	calls, in, out  uint64
-	computedAt      time.Time
+// spendUnattributed is usage written with the organization's own credentials
+// and no run id (explanations and reports), by source, provider, model and day.
+type spendUnattributed struct {
+	source, provider, model string
+	calls, in, out          uint64
+	day                     time.Time
 }
 
 // spendSummary is LLMTokenSpendSummaryRecord.
 type spendSummary struct {
-	runs   []spendRun
-	legacy []spendLegacy
+	runs         []spendRun
+	unattributed []spendUnattributed
 }
 
 // spendReader is the ClickHouse side of read_llm_token_spend.
@@ -103,20 +104,19 @@ func (h *handlers) getLLMSpend(w http.ResponseWriter, r *http.Request) {
 			runs = append(runs, item)
 		}
 		out.Set("runs", runs)
-		legacy := []pyjson.Value{}
-		for _, row := range summary.legacy {
+		unattributed := []pyjson.Value{}
+		for _, row := range summary.unattributed {
 			item := pyjson.NewObject()
-			item.Set("run_id", "")
-			item.Set("marker", "legacy_empty_run_id")
+			item.Set("source", row.source)
 			item.Set("provider", row.provider)
 			item.Set("model", row.model)
+			item.Set("day", row.day.UTC().Format("2006-01-02"))
 			item.Set("calls", uintValue(row.calls))
 			item.Set("input_tokens", uintValue(row.in))
 			item.Set("output_tokens", uintValue(row.out))
-			item.Set("computed_at", spendTime(row.computedAt))
-			legacy = append(legacy, item)
+			unattributed = append(unattributed, item)
 		}
-		out.Set("legacy", legacy)
+		out.Set("unattributed", unattributed)
 		policy.WriteModel(w, http.StatusOK, out, nil)
 	}
 	active, err := h.orgLLMActive(ctx, orgID)
@@ -239,15 +239,16 @@ WHERE org_id = {org_id:String}
   AND computed_at >= {since:DateTime}
 GROUP BY run_id, provider, model
 ORDER BY last_computed_at DESC, run_id DESC, model ASC`
-	spendLegacyQuery = `SELECT provider, model, sum(calls) AS calls, sum(input_tokens) AS input_tokens,
-    sum(output_tokens) AS output_tokens, max(computed_at) AS last_computed_at
+	spendUnattributedQuery = `SELECT source, provider, model, toDate(computed_at) AS day, sum(calls) AS calls,
+    sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens
 FROM llm_token_usage
 WHERE org_id = {org_id:String}
   AND credential_source = 'org'
   AND run_id = ''
   AND computed_at >= {since:DateTime}
-GROUP BY provider, model
-ORDER BY last_computed_at DESC, model ASC`
+GROUP BY source, provider, model, day
+ORDER BY day DESC, source ASC, model ASC
+LIMIT 500`
 	spendFailuresQuery = `SELECT categorization_run_id, categorization_status, categorization_errors_json
 FROM work_unit_investments
 WHERE org_id = {org_id:String}
@@ -286,7 +287,7 @@ func (c clickhouseSpend) readSpend(ctx context.Context, orgID string, limit uint
 			return summary, err
 		}
 	}
-	summary.legacy, err = c.legacy(ctx, orgID, sinceText)
+	summary.unattributed, err = c.unattributed(ctx, orgID, sinceText)
 	return summary, err
 }
 
@@ -356,16 +357,16 @@ func (c clickhouseSpend) failures(ctx context.Context, params []any) (map[string
 	return out, rows.Err()
 }
 
-func (c clickhouseSpend) legacy(ctx context.Context, orgID, since string) ([]spendLegacy, error) {
-	rows, err := c.conn.Query(ctx, spendLegacyQuery, clickhouse.Named("org_id", orgID), clickhouse.Named("since", since))
+func (c clickhouseSpend) unattributed(ctx context.Context, orgID, since string) ([]spendUnattributed, error) {
+	rows, err := c.conn.Query(ctx, spendUnattributedQuery, clickhouse.Named("org_id", orgID), clickhouse.Named("since", since))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var out []spendLegacy
+	var out []spendUnattributed
 	for rows.Next() {
-		var row spendLegacy
-		if err := rows.Scan(&row.provider, &row.model, &row.calls, &row.in, &row.out, &row.computedAt); err != nil {
+		var row spendUnattributed
+		if err := rows.Scan(&row.source, &row.provider, &row.model, &row.day, &row.calls, &row.in, &row.out); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

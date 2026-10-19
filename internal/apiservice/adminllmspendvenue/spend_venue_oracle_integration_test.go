@@ -235,6 +235,11 @@ func usageInsert(org, run, at string) string {
 
 var sinceField = regexp.MustCompile(`"since":"[^"]*"`)
 
+// unrunSpend is the closing array of the body: Python's `legacy` rows and Go's
+// `unattributed` rows (organization-credential spend by source and day). The
+// two shapes differ by design, so neither is compared; runs are.
+var unrunSpend = regexp.MustCompile(`(?s),\s*"(legacy|unattributed)":\s*\[.*\]\s*\}\s*$`)
+
 // TestAdminLLMSpendVenueOracle answers GET /api/v1/admin/llm-settings/spend
 // with the real Python api and the real Go api over the same organizations
 // and ClickHouse rows, and requires the same status and response text.
@@ -419,6 +424,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NUL
 		Golden: golden,
 		// A window that starts "30 days ago" is read from each plane's own clock.
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = unrunSpend.ReplaceAllString(body, "}")
 			if strings.Contains(request.Path, "since=") {
 				return body
 			}

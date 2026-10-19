@@ -876,3 +876,33 @@ func TestRevokeLeavesAnEffectivelyExpiredSessionAlone(t *testing.T) {
 		t.Fatalf("%d audit rows for revoking a dead session, want 0", a)
 	}
 }
+
+// The effective expiry is the expiry of the NEWEST credential (the head of the
+// chain), not the latest expiry of any credential the session ever had: a
+// shorter-lived successor ends the session when it expires, even though its
+// consumed parent was issued with a longer lifetime.
+func TestEffectiveExpiryFollowsTheNewestCredential(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	long := e.newStore(t, e.keyText, Config{RefreshTTL: 24 * time.Hour})
+	short := e.newStore(t, e.keyText, Config{RefreshTTL: 100 * time.Millisecond})
+	issued, err := long.Create(ctx, e.principal(t, ctx), nil, []string{"pwd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := e.exchange(t, ctx, short, issued.Credential)
+	if child.Reason != ReasonAccepted {
+		t.Fatalf("rotation: %s", child.Reason)
+	}
+	time.Sleep(250 * time.Millisecond)
+	current, err := long.Current(ctx, issued.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.ExpiresAt.Equal(child.ExpiresAt) {
+		t.Fatalf("Current effective expiry %v, newest credential expires %v", current.ExpiresAt, child.ExpiresAt)
+	}
+	if rev, err := long.BumpRevision(ctx, issued.Session.ID, Actor{}); !errors.Is(err, ErrSessionNotLive) {
+		t.Fatalf("BumpRevision after the newest credential expired = %d, %v; want ErrSessionNotLive", rev, err)
+	}
+}

@@ -309,6 +309,13 @@ func proxySeries(aggregate AuthAggregate, outcome string) string {
 	return `devhealth_api_auth_proxy_requests_total{aggregate="` + string(aggregate) + `",outcome="` + outcome + `"}`
 }
 
+// clientClaimHeaders are client-address and forwarding claims a client can
+// write; none may reach auth-service.
+var clientClaimHeaders = []string{
+	"X-Forwarded-Scheme", "X-Forwarded-Ssl", "X-Forwarded-Prefix", "X-Forwarded-Server", "X-Forwarded-Uri",
+	"X-Original-Forwarded-For", "X-Client-IP", "True-Client-IP", "CF-Connecting-IP", "X-Cluster-Client-IP", "Fastly-Client-IP",
+}
+
 type proxyCall struct {
 	method, target, body string
 	bearer               bool
@@ -376,6 +383,9 @@ func TestAuthProxyForwardsEveryMappedRouteByteForByte(t *testing.T) {
 		request.Header.Set("X-Request-ID", "client-correlation-1")
 		request.Header.Set("X-Forwarded-For", "203.0.113.99")
 		request.Header.Set("X-Real-IP", "203.0.113.98")
+		for _, name := range clientClaimHeaders {
+			request.Header.Set(name, "client-supplied")
+		}
 		request.Header.Set("Forwarded", "for=203.0.113.97")
 		request.Header.Set("Cookie", "dho_sso_nonce=n0")
 		request.Header.Set("Connection", "keep-alive, X-Hop")
@@ -396,7 +406,7 @@ func TestAuthProxyForwardsEveryMappedRouteByteForByte(t *testing.T) {
 		if got := seen.header.Values("X-Forwarded-For"); len(got) != 1 || got[0] != "192.0.2.10" {
 			t.Errorf("%s: X-Forwarded-For = %v, want only the trusted client 192.0.2.10", call.target, got)
 		}
-		for _, name := range []string{"X-Real-IP", "Forwarded", "X-Hop", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		for _, name := range append([]string{"X-Real-IP", "Forwarded", "X-Hop", "X-Forwarded-Host", "X-Forwarded-Proto"}, clientClaimHeaders...) {
 			if got := seen.header.Values(name); len(got) != 0 {
 				t.Errorf("%s: %s reached upstream: %v", call.target, name, got)
 			}
@@ -649,6 +659,29 @@ func TestAuthProxyFailsClosedOnAnIncompleteUpstreamAnswer(t *testing.T) {
 				t.Errorf("%s moved by %v, want 1", series, delta)
 			}
 		})
+	}
+}
+
+// An answer whose body stalls past the deadline is a timeout (504), the same
+// refusal as a stall before the headers.
+func TestAuthProxyBodyStallIsATimeout(t *testing.T) {
+	stub := newStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"access_token":`)
+		w.(http.Flusher).Flush()
+		select {
+		case <-time.After(5 * time.Second):
+		case <-r.Context().Done():
+		}
+	})
+	cfg := mustProxyConfig(t, allOn(stub.URL))
+	cfg.Timeout = 200 * time.Millisecond
+	handler := proxyFixture(t, cfg)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, proxyCalls[2].request(t))
+	if recorder.Code != http.StatusGatewayTimeout || recorder.Body.String() != `{"detail":"Authentication service timed out"}` {
+		t.Fatalf("body stall = %d %q, want 504 and the timeout refusal", recorder.Code, recorder.Body.String())
 	}
 }
 

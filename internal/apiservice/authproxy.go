@@ -127,8 +127,8 @@ var sessionProxyRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/social-login":        AuthSocial,
 }
 
-// routeProxyRoutes are the internal/api/sso login routes, replaced whole:
-// go-api runs no limiter or validator in front of them.
+// routeProxyRoutes are the internal/api/sso sign-in routes, forwarded through
+// sso.Deps.Inner behind go-api's guard and its body checks.
 var routeProxyRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/oidc/{provider_id}/authorize": AuthOIDC,
 	"POST /api/v1/auth/oidc/{provider_id}/callback":  AuthOIDC,
@@ -137,13 +137,15 @@ var routeProxyRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/saml/{provider_id}/acs":       AuthSAML,
 }
 
-// sessionPatternAggregate is sessionProxyRoutes by pattern alone: the
-// session routes have one method per pattern.
-var sessionPatternAggregate = func() map[string]AuthAggregate {
+// patternAggregate is both maps by pattern alone: every mapped pattern has
+// one method.
+var patternAggregate = func() map[string]AuthAggregate {
 	out := map[string]AuthAggregate{}
-	for key, aggregate := range sessionProxyRoutes {
-		_, pattern, _ := strings.Cut(key, " ")
-		out[pattern] = aggregate
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+		for key, aggregate := range routes {
+			_, pattern, _ := strings.Cut(key, " ")
+			out[pattern] = aggregate
+		}
 	}
 	return out
 }()
@@ -220,10 +222,10 @@ type proxyState struct {
 
 type proxyStateKey struct{}
 
-// inner is session.Deps.Inner: the innermost handler of a mapped session
-// route forwards when its aggregate's flag is on.
+// inner is session.Deps.Inner and sso.Deps.Inner: the innermost handler of a
+// mapped route forwards when its aggregate's flag is on.
 func (p *authProxy) inner(pattern string, local http.Handler) http.Handler {
-	aggregate, mapped := sessionPatternAggregate[pattern]
+	aggregate, mapped := patternAggregate[pattern]
 	if !mapped || !p.cfg.Enabled(aggregate) {
 		return local
 	}
@@ -239,15 +241,16 @@ func (p *authProxy) inner(pattern string, local http.Handler) http.Handler {
 	})
 }
 
-// wrap puts the counting and body-keeping wrapper on every mapped route and
-// replaces each mapped SSO route whose flag is on.
+// wrap puts the counting and body-keeping wrapper on every mapped route.
 func (p *authProxy) wrap(routes []httpapi.Route) []httpapi.Route {
 	for index := range routes {
 		key := routes[index].Method + " " + routes[index].Pattern
-		if aggregate, ok := sessionProxyRoutes[key]; ok {
+		aggregate, ok := sessionProxyRoutes[key]
+		if !ok {
+			aggregate, ok = routeProxyRoutes[key]
+		}
+		if ok {
 			routes[index].Handler = p.sessionRoute(aggregate, routes[index].Handler)
-		} else if aggregate, ok := routeProxyRoutes[key]; ok {
-			routes[index].Handler = p.wholeRoute(aggregate, routes[index].Handler)
 		}
 	}
 	return routes
@@ -272,31 +275,6 @@ func (p *authProxy) sessionRoute(aggregate AuthAggregate, local http.Handler) ht
 			outcome = outcomeLocal
 		}
 		count(r.Context(), aggregate, outcome)
-	})
-}
-
-// wholeRoute forwards a mapped SSO route with no go-api handler in front.
-func (p *authProxy) wholeRoute(aggregate AuthAggregate, local http.Handler) http.Handler {
-	if !p.cfg.Enabled(aggregate) {
-		return countLocal(aggregate, local)
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, err := io.ReadAll(r.Body)
-		if err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				policy.WriteDetail(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large", nil)
-				count(r.Context(), aggregate, outcomeLocal)
-				return
-			}
-			p.logger.ErrorContext(r.Context(), "auth proxy: read body", slog.String("aggregate", string(aggregate)), slog.String("error", err.Error()))
-			policy.WriteInternal(w)
-			count(r.Context(), aggregate, outcomeLocal)
-			return
-		}
-		state := &proxyState{body: raw}
-		p.forward(w, r, aggregate, state)
-		count(r.Context(), aggregate, state.outcome)
 	})
 }
 
@@ -361,21 +339,32 @@ func (p *authProxy) forward(w http.ResponseWriter, r *http.Request, aggregate Au
 	}
 	defer response.Body.Close()
 	upstreamID := response.Header.Get(upstreamRequestIDHeader)
+	// The whole answer is read before any byte reaches the client, so an answer
+	// cut short or over the bound is a refusal, never a partial body under the
+	// upstream's status.
+	answer, readErr := io.ReadAll(io.LimitReader(response.Body, maxAuthProxyResponseBytes+1))
+	authProxyDuration.Record(context.WithoutCancel(r.Context()), time.Since(start).Seconds(),
+		metric.WithAttributes(attribute.String("aggregate", string(aggregate))))
+	if readErr == nil && len(answer) > maxAuthProxyResponseBytes {
+		readErr = fmt.Errorf("answer exceeds %d bytes", maxAuthProxyResponseBytes)
+	}
+	if readErr != nil {
+		state.outcome = outcomeUpstreamError
+		p.refuse(w, r, aggregate, http.StatusBadGateway, "Authentication service unavailable", "incomplete_answer", readErr, upstreamID)
+		return
+	}
 	copyResponseHeader(w.Header(), response.Header)
+	if response.StatusCode != http.StatusNoContent && response.StatusCode != http.StatusNotModified {
+		w.Header().Set("Content-Length", strconv.Itoa(len(answer)))
+	}
 	w.WriteHeader(response.StatusCode)
-	_, copyErr := io.Copy(w, response.Body)
+	if _, err := w.Write(answer); err != nil {
+		p.logger.WarnContext(r.Context(), "auth proxy: client went away",
+			slog.String("aggregate", string(aggregate)), slog.String("request_id", requestID), slog.String("error", err.Error()))
+	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		// auth-service wrote the route's model; go-api's writer check reads it so.
 		policy.MarkModelBody(w)
-	}
-	authProxyDuration.Record(context.WithoutCancel(r.Context()), time.Since(start).Seconds(),
-		metric.WithAttributes(attribute.String("aggregate", string(aggregate))))
-	if copyErr != nil {
-		state.outcome = outcomeUpstreamError
-		p.logger.ErrorContext(r.Context(), "auth proxy: upstream body cut short",
-			slog.String("aggregate", string(aggregate)), slog.String("request_id", requestID),
-			slog.String("upstream_request_id", upstreamID), slog.Int("status", response.StatusCode), slog.String("error", copyErr.Error()))
-		return
 	}
 	state.outcome = outcomeForwarded
 	p.logger.InfoContext(r.Context(), "auth proxy forwarded",

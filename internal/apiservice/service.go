@@ -246,7 +246,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// GitHubStateSigner's own APIJWTSecret.Reveal() (HKDF-derives
 			// a distinct key from it, state.go) -- no new secret material
 			// either way.
-			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer,
+			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer, Inner: proxy.inner,
 		})...)
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,

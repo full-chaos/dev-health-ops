@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"net"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -44,14 +45,19 @@ const EnvListen = "DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN"
 const DefaultListen = "127.0.0.1:0"
 
 // ListenAddr is the address a test's sink listens on: EnvListen when set, loopback otherwise.
-func ListenAddr() string { return "" }
+func ListenAddr() string {
+	if addr := os.Getenv(EnvListen); addr != "" {
+		return addr
+	}
+	return DefaultListen
+}
 
 func Start(t *testing.T) *Server { return StartAt(t, DefaultListen) }
 
 // StartAt starts the sink on addr.
 func StartAt(t *testing.T, addr string) *Server {
 	t.Helper()
-	listener, err := net.Listen("tcp", DefaultListen)
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}

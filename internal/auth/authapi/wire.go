@@ -1,10 +1,13 @@
 package authapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -136,16 +139,19 @@ func (rec recorder) refuse(w http.ResponseWriter, r *http.Request, operation str
 }
 
 // writeJSON writes a JSON body that must never be cached: every body here is
-// a token, a session or a refusal about one.
+// a token, a session or a refusal about one. The body is written as
+// policy.writePayload writes one (a sized copy of the serialized bytes).
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	raw, err := json.Marshal(body)
 	if err != nil {
+		slog.Default().Error("auth session route: body could not be serialized", slog.Int("status", status), slog.String("error", err.Error()))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	_, _ = io.Copy(w, bytes.NewReader(raw))
 }

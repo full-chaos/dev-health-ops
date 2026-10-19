@@ -217,3 +217,8 @@ func CheckCredentialTransition(prev, next CredentialBody) error {
 	}
 	return nil
 }
+
+// CheckCredentialRotation reports whether child may be a rotation of parent.
+func CheckCredentialRotation(parent, child CredentialBody) error {
+	return nil
+}

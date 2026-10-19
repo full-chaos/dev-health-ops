@@ -558,3 +558,66 @@ func TestAListLargerThanAnyBoundIsRepresentable(t *testing.T) {
 		t.Fatalf("the client refused a 1000-item list: %v", err)
 	}
 }
+
+func rotationPair(t *testing.T) (CredentialBody, CredentialBody) {
+	t.Helper()
+	root := testRoot(t)
+	var receiptSurface, entrySurface credentialSurface
+	for _, s := range credentialSurfaces {
+		switch s.surface {
+		case CredentialReceiptSurface:
+			receiptSurface = s
+		case CredentialEntrySurface:
+			entrySurface = s
+		}
+	}
+	rc, ec := receiptSurface.corpus(t), entrySurface.corpus(t)
+	receipt, err := ParseCredentialReceipt(root, receiptSurface.read(t, "valid-rotate.json"), clockOf(t, rc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := ParseCredentialEntry(root, entrySurface.read(t, "valid-active.json"), clockOf(t, ec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := active.CredentialBody
+	parent.ID = receipt.Credential.RotationParentID
+	return parent, receipt.Credential
+}
+
+func TestARotationThatPreservesOrNarrowsItsParentIsAccepted(t *testing.T) {
+	parent, child := rotationPair(t)
+	if err := CheckCredentialRotation(parent, child); err != nil {
+		t.Fatalf("a preserving rotation was refused: %v", err)
+	}
+	child.Scopes = []string{"api:read"}
+	if err := CheckCredentialRotation(parent, child); err != nil {
+		t.Fatalf("a narrowing rotation was refused: %v", err)
+	}
+}
+
+func TestARotationThatWidensOrChangesIdentityIsRefused(t *testing.T) {
+	revoked := func(p *CredentialBody, _ *CredentialBody) {
+		now := Timestamp{Time: time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)}
+		p.Status, p.RevokedAt, p.RevokedReason = "revoked", &now, "compromised"
+	}
+	cases := map[string]func(p, c *CredentialBody){
+		"widened scopes":    func(_, c *CredentialBody) { c.Scopes = []string{"api:read", "api:write", "api:admin"} },
+		"widened audiences": func(_, c *CredentialBody) { c.Audiences = []string{"dev-health-api", "another-audience"} },
+		"other principal":   func(_, c *CredentialBody) { c.PrincipalID = "prn_EXAMPLE0000000000000002" },
+		"other class":       func(_, c *CredentialBody) { c.CredentialClass = "api_key" },
+		"other owner":       func(_, c *CredentialBody) { c.DomainOwner = "other-owner" },
+		"other parent id":   func(_, c *CredentialBody) { c.RotationParentID = "crd_EXAMPLE0000000000000009" },
+		"no parent id":      func(_, c *CredentialBody) { c.RotationParentID = "" },
+		"revoked parent":    revoked,
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			parent, child := rotationPair(t)
+			mutate(&parent, &child)
+			if err := CheckCredentialRotation(parent, child); err == nil {
+				t.Fatal("the rotation was accepted")
+			}
+		})
+	}
+}

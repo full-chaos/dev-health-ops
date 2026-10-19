@@ -27,6 +27,7 @@ from dev_health_ops.authclient.credential import (
     CredentialEntry,
     CredentialList,
     CredentialReceipt,
+    check_credential_rotation,
     check_credential_transition,
     parse_credential_entry,
     parse_credential_list,
@@ -353,3 +354,73 @@ def test_a_list_larger_than_any_bound_is_representable() -> None:
         )
         == 1000
     )
+
+
+def _rotation_pair() -> tuple[CredentialBody, CredentialBody]:
+    now = _clock("credential-receipt")
+    child = parse_credential_receipt(
+        _raw("credential-receipt", "valid-rotate.json"), now
+    ).credential
+    active = parse_credential_entry(
+        _raw("credential-entry", "valid-active.json"), now
+    ).body
+    assert child.rotation_parent_id is not None
+    return dataclasses.replace(active, id=child.rotation_parent_id), child
+
+
+def test_a_rotation_that_preserves_or_narrows_its_parent_is_accepted() -> None:
+    parent, child = _rotation_pair()
+    check_credential_rotation(parent, child)
+    check_credential_rotation(parent, dataclasses.replace(child, scopes=("api:read",)))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"scopes": ("api:read", "api:write", "api:admin")},
+        {"audiences": ("dev-health-api", "another-audience")},
+        {"principal_id": "prn_EXAMPLE0000000000000002"},
+        {"credential_class": "api_key"},
+        {"domain_owner": "other-owner"},
+        {"rotation_parent_id": "crd_EXAMPLE0000000000000009"},
+        {"rotation_parent_id": None},
+    ],
+)
+def test_a_rotation_that_widens_or_changes_identity_is_refused(
+    mutation: dict[str, Any],
+) -> None:
+    parent, child = _rotation_pair()
+    with pytest.raises(ContractError):
+        check_credential_rotation(parent, dataclasses.replace(child, **mutation))
+
+
+def test_a_revoked_parent_cannot_be_rotated() -> None:
+    parent, child = _rotation_pair()
+    revoked = parse_credential_entry(
+        _raw("credential-entry", "valid-revoked.json"), _clock("credential-entry")
+    ).body
+    gone = dataclasses.replace(
+        parent,
+        status="revoked",
+        revoked_at=revoked.revoked_at,
+        revoked_reason=revoked.revoked_reason,
+    )
+    with pytest.raises(ContractError):
+        check_credential_rotation(gone, child)
+
+
+def test_a_list_is_checked_against_one_clock_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev_health_ops.authclient import credential
+
+    real = credential._now
+    calls: list[int] = []
+
+    def counting(now: datetime | None) -> datetime:
+        calls.append(1)
+        return real(now)
+
+    monkeypatch.setattr(credential, "_now", counting)
+    parse_credential_list(_raw("credential-list", "valid-two-items.json"), None)
+    assert len(calls) == 1

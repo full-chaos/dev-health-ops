@@ -233,3 +233,8 @@ def check_credential_transition(prev: CredentialBody, nxt: CredentialBody) -> No
             f"{ENTRY_SURFACE}: credential {prev.id} scopes and audiences may "
             "narrow in place, never widen"
         )
+
+
+def check_credential_rotation(parent: CredentialBody, child: CredentialBody) -> None:
+    """Whether *child* may be a rotation of *parent*."""
+    return None

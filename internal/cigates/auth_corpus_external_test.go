@@ -208,3 +208,40 @@ func TestAuthCorpusOverrideReleasesHostGlobalNamesAndPorts(t *testing.T) {
 		}
 	}
 }
+
+// A request from the runner reaches go-api through the project network's gateway, so go-api reads the client IP
+// from X-Forwarded-For (audit rows, rate-limit keys) only when that gateway is a trusted proxy. The gateway must
+// be known before the network exists: the override pins the subnet and names its gateway in TRUSTED_PROXIES.
+func TestAuthCorpusOverrideTrustsTheGatewayOfItsNetwork(t *testing.T) {
+	var override struct {
+		Networks struct {
+			Default struct {
+				IPAM struct {
+					Config []struct {
+						Subnet  string `yaml:"subnet"`
+						Gateway string `yaml:"gateway"`
+					} `yaml:"config"`
+				} `yaml:"ipam"`
+			} `yaml:"default"`
+		} `yaml:"networks"`
+		Services struct {
+			GoAPI struct {
+				Environment []string `yaml:"environment"`
+			} `yaml:"go-api"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.override.yml")), &override); err != nil {
+		t.Fatal(err)
+	}
+	config := override.Networks.Default.IPAM.Config
+	if len(config) != 1 || config[0].Subnet == "" || config[0].Gateway == "" {
+		t.Fatalf("the override does not pin the default network's subnet and gateway: %+v", config)
+	}
+	want := "TRUSTED_PROXIES=" + config[0].Gateway
+	for _, entry := range override.Services.GoAPI.Environment {
+		if entry == want {
+			return
+		}
+	}
+	t.Errorf("go-api's environment lacks %s: %v", want, override.Services.GoAPI.Environment)
+}

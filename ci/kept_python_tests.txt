@@ -30,10 +30,7 @@ tests/test_local_validate_remote_clickhouse.py
 tests/test_rate_limit_policy_doc.py
 tests/test_runtime_dependency_closure_has_the_redis_client.py
 tests/worker_baseline/test_canary_release_proof.py
-tests/workers/test_go_worker_cli_contract.py
-tests/workers/test_go_worker_deployment_contract.py
 tests/workers/test_helm_billing_edge_removed.py
-tests/workers/test_provider_artifact_skip_alert.py
 tests/workers/test_transitional_inventory_contract.py
 tests/authclient/test_authorization_contract_goldens.py
 tests/authclient/test_endpoint_auth_profile_contract_goldens.py

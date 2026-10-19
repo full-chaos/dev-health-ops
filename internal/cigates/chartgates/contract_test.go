@@ -8,8 +8,8 @@ import (
 )
 
 // Ported from tests/workers/test_go_worker_cli_contract.py (CHAOS-4020; the Celery queue comparison test
-// imports Python and stays Python) and tests/workers/test_go_worker_deployment_contract.py (every test except
-// the one that reads pyproject.toml and the Python Dockerfile).
+// only guards Python code and is deleted) and tests/workers/test_go_worker_deployment_contract.py (every test
+// except the one that reads pyproject.toml and the Python Dockerfile, deleted with the Python image).
 
 const (
 	deploymentJSON = "deploy/go-workers/deployment.json"

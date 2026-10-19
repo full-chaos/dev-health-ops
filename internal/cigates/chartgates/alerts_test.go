@@ -11,7 +11,7 @@ import (
 )
 
 // Ported from tests/workers/test_go_worker_alerts.py, test_provider_artifact_skip_alert.py (every test
-// except the tier-floor one, which imports the Python TIER_LIMITS_DEFAULTS and stays Python),
+// except the tier-floor one, which only guards Python code and is deleted),
 // test_unreclaimable_sweep_alerts.py, test_go_worker_dashboard.py, tests/test_deploy_alternates_removed.py,
 // tests/test_unreclaimable_sweep_deploy_default.py and tests/test_worker_otel_deployments.py.
 

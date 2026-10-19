@@ -444,8 +444,7 @@ for (const surface of surfaces) {
         checked += 1;
         if (validate(build(v))) fail(`${surface}: ${JSON.stringify(v)} is not in the ${vocabulary.list} vocabulary but validates`);
       }
-      let node = readJSON(schemaPath);
-      for (const step of vocabulary.schemaPath) node = node?.[step];
+      const node = vocabulary.schemaPath.reduce((at, step) => at?.[step], readJSON(schemaPath));
       if (JSON.stringify([...(node?.enum ?? [])].sort()) !== JSON.stringify([...values].sort())) {
         fail(`${surface}: the schema enum differs from the ${vocabulary.list} vocabulary`);
       }

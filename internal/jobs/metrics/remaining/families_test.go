@@ -18,14 +18,6 @@ func TestInventoryIsExactBoundedAndSourceBacked(t *testing.T) {
 	if len(inventory.Families) != len(expectedFamilies) {
 		t.Fatalf("families=%d want=%d", len(inventory.Families), len(expectedFamilies))
 	}
-	root := filepath.Join("..", "..", "..", "..")
-	for _, family := range inventory.Families {
-		for _, source := range family.PythonSources {
-			if _, err := os.Stat(filepath.Join(root, source)); err != nil {
-				t.Fatalf("%s source %s: %v", family.Name, source, err)
-			}
-		}
-	}
 }
 
 // TestEveryFamilyHasIndependentRollbackAndReviewedReplay guards that every

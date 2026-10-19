@@ -107,6 +107,13 @@ func TestInternalLLMConfigLapsedOrgServesNothing(t *testing.T) {
 	}
 	noConfig := uuid.NewString()
 	pgseed.Org(ctx, t, pool, noConfig, "enterprise")
+	categorizeOnly := uuid.NewString()
+	pgseed.Org(ctx, t, pool, categorizeOnly, "enterprise")
+	pgseed.Setting(ctx, t, pool, categorizeOnly, "llm", "purpose:categorize:provider", "openai", false)
+	pgseed.Setting(ctx, t, pool, categorizeOnly, "llm", "purpose:categorize:model", "categorize-model", false)
+	if code, marker, _ := get(0, categorizeOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_no_investigate_config" {
+		t.Fatalf("acr route, BYO keys for categorize only: answered %d marker %q reason %q, want the marked 404 with reason byo_no_investigate_config", code, marker, reason)
+	}
 	for i, route := range routes {
 		if code, marker, _ := get(i, noConfig); code != http.StatusNotFound || marker != "none" || reason != "" {
 			t.Fatalf("%s route, no config: answered %d marker %q reason %q, want the marked 404 with no reason", route.name, code, marker, reason)

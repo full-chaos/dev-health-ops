@@ -42,6 +42,7 @@ func TestEntitlementRouteServesTheEffectiveServiceModel(t *testing.T) {
 	pgschema.Apply(ctx, t, pool)
 
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	var orgWithProviderKey func(provider, providerKey string, override *bool) string
 	server := newTestServer(PostgresEntitlementStore{Pool: pool, Now: func() time.Time { return now }})
 	defer server.Close()
 
@@ -52,10 +53,13 @@ func TestEntitlementRouteServesTheEffectiveServiceModel(t *testing.T) {
 	pgseed.FeatureFlag(ctx, t, pool, serviceModelID, "acr_service_model", "community", true)
 
 	org := func(provider string, override *bool) string {
+		return orgWithProviderKey(provider, "provider", override)
+	}
+	orgWithProviderKey = func(provider, providerKey string, override *bool) string {
 		id := uuid.NewString()
 		pgseed.Org(ctx, t, pool, id, "team")
 		if provider != "" {
-			pgseed.Setting(ctx, t, pool, id, "llm", "provider", provider, false)
+			pgseed.Setting(ctx, t, pool, id, "llm", providerKey, provider, false)
 			pgseed.Setting(ctx, t, pool, id, "llm", "model", "saved-model", false)
 			pgseed.Setting(ctx, t, pool, id, "llm", "api_key", "sealed-placeholder", true)
 		}
@@ -70,6 +74,8 @@ func TestEntitlementRouteServesTheEffectiveServiceModel(t *testing.T) {
 	savedOverrideOn := org("anthropic", &on)
 	autoProvider := org("auto", nil)
 	nothing := org("", nil)
+	investigateOnly := orgWithProviderKey("anthropic", "purpose:investigate:provider", nil)
+	categorizeOnly := orgWithProviderKey("openai", "purpose:categorize:provider", nil)
 	expiredOff := org("anthropic", &off)
 	if _, err := pool.Exec(ctx, `UPDATE org_feature_overrides SET expires_at = $1 WHERE org_id = $2::uuid AND feature_id = $3::uuid`, now.Add(-time.Hour), expiredOff, serviceModelID); err != nil {
 		t.Fatal(err)
@@ -103,6 +109,8 @@ func TestEntitlementRouteServesTheEffectiveServiceModel(t *testing.T) {
 		{name: "saved BYO config and an org override ON: ON", org: savedOverrideOn, want: true},
 		{name: "provider auto is no BYO config: plan decision OFF", org: autoProvider, want: false},
 		{name: "no BYO config and no override: plan decision OFF", org: nothing, want: false},
+		{name: "investigate purpose key only and no override: auto-enrolled ON", org: investigateOnly, want: true},
+		{name: "categorize purpose key only and no override: auto-enrolled ON", org: categorizeOnly, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := serviceModel(t, tc.org); got != tc.want {

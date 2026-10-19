@@ -117,6 +117,8 @@ KNOWN_TTL_TABLES: frozenset[str] = frozenset(
         "release_impact_daily",
         "product_telemetry_events",
         "provider_request_usage",
+        "work_unit_investment_shadow",
+        "llm_categorization_attempts",
     }
 )
 

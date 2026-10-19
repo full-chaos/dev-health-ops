@@ -363,9 +363,11 @@ func runWorldStep(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 func runWorldSync(ctx context.Context, t *testing.T, conn driver.Conn, world providerWorld, step worldStep, doer *replayDoer, ids *idSequence, mapping *providersync.StatusMapping) {
 	t.Helper()
 	depth := step.DepthDays
-	// One second past the freeze: a window is half-open, so the last one must end after the instant to hold an item updated at it.
+	// The planner runs at the start of the day after the freeze: a window is half-open, so the last one must end after
+	// every item of the frozen day (the demo issues are updated at 15:30 of the as-of day, after the 12:00 freeze).
+	planAt := time.Date(world.FrozenAt.Year(), world.FrozenAt.Month(), world.FrozenAt.Day()+1, 0, 0, 0, 0, time.UTC)
 	input := syncplan.PlannerInput{
-		OrgID: world.OrgID, IntegrationID: ids.id(), Mode: syncplan.SyncModeIncremental, Now: world.FrozenAt.Add(time.Second),
+		OrgID: world.OrgID, IntegrationID: ids.id(), Mode: syncplan.SyncModeIncremental, Now: planAt,
 		IntegrationDepthDays: &depth,
 	}
 	sourceNames := map[string]string{}
@@ -425,7 +427,7 @@ func runWorldSync(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 	for run := 0; run < 100; run++ {
 		var pending []syncplan.PlannedUnit
 		for _, unit := range units {
-			if unit.Dataset == "work-items" && unit.WindowEnd != nil && unit.WindowEnd.Before(world.FrozenAt) {
+			if unit.Dataset == "work-items" && unit.WindowEnd != nil && unit.WindowEnd.Before(planAt) {
 				pending = append(pending, unit)
 			}
 		}

@@ -74,7 +74,8 @@ func ValidateExternalListen(addr string) error {
 	if err := ValidateListen(addr); err != nil {
 		return err
 	}
-	if _, port, _ := net.SplitHostPort(addr); port == "0" {
+	_, port, _ := net.SplitHostPort(addr)
+	if number, _ := strconv.Atoi(port); number == 0 {
 		return fmt.Errorf("listen address %q has port 0: set %s to a fixed port", addr, EnvListen)
 	}
 	return nil

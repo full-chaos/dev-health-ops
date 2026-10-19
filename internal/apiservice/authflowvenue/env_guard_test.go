@@ -5,7 +5,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"sort"
 	"testing"
 )
 
@@ -17,7 +16,32 @@ var envMutators = map[string]bool{"Setenv": true, "Unsetenv": true, "Clearenv": 
 // envMutationsAfterFirstBatch lists the env-mutating selectors (called or merely referenced, so an alias is
 // caught) that stand after the first r.batch call in source.
 func envMutationsAfterFirstBatch(t *testing.T, source string) []string {
-	return nil
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "corpus.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := token.NoPos
+	ast.Inspect(file, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "batch" && (first == token.NoPos || call.Pos() < first) {
+				first = call.Pos()
+			}
+		}
+		return true
+	})
+	if first == token.NoPos {
+		return nil
+	}
+	var found []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && envMutators[sel.Sel.Name] && sel.Pos() > first {
+			found = append(found, fset.Position(sel.Pos()).String()+" "+sel.Sel.Name)
+		}
+		return true
+	})
+	return found
 }
 
 func TestEnvGuardFindsAliasesAndDirectCalls(t *testing.T) {
@@ -50,6 +74,4 @@ func TestCorpusChangesTargetEnvOnlyThroughSetTargetEnv(t *testing.T) {
 	if got := envMutationsAfterFirstBatch(t, string(raw)); len(got) != 0 {
 		t.Errorf("env mutations after the first batch (use venueoracle.SetTargetEnv): %v", got)
 	}
-	_, _ = token.NewFileSet(), parser.ParseComments
-	_, _ = ast.Inspect, sort.Strings
 }

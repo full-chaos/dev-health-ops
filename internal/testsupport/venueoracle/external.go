@@ -199,20 +199,20 @@ func ExternalRequired(baseURL string) (ExternalStores, bool, error) {
 // in-process go-api, through EnvExternalSetEnvCmd for an external target.
 func SetTargetEnv(t *testing.T, external bool, name, value string) {
 	t.Helper()
-	if !external {
-		if value == "" {
-			t.Setenv(name, "")
-			_ = os.Unsetenv(name)
-		} else {
-			t.Setenv(name, value)
+	if external {
+		command := os.Getenv(EnvExternalSetEnvCmd)
+		if command == "" {
+			t.Fatalf("%s is not set", EnvExternalSetEnvCmd)
 		}
+		if output, err := exec.Command(command, name, value).CombinedOutput(); err != nil {
+			t.Fatalf("%s %s: %v\n%s", command, name, err, output)
+		}
+	}
+	// The frozen golden keys each call by this process's environment, so it follows the target's.
+	if value == "" {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
 		return
 	}
-	command := os.Getenv(EnvExternalSetEnvCmd)
-	if command == "" {
-		t.Fatalf("%s is not set", EnvExternalSetEnvCmd)
-	}
-	if output, err := exec.Command(command, name, value).CombinedOutput(); err != nil {
-		t.Fatalf("%s %s: %v\n%s", command, name, err, output)
-	}
+	t.Setenv(name, value)
 }

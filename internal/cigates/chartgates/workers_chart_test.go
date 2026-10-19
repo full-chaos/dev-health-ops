@@ -211,8 +211,8 @@ func labelsQueueSetEncodesEveryQueue(g *guard) {
 		}
 		var queues []string
 		for _, a := range strs(containers(d)[0]["args"]) {
-			if strings.HasPrefix(a, "--queues=") {
-				queues = strings.Split(strings.TrimPrefix(a, "--queues="), ",")
+			if v, ok := strings.CutPrefix(a, "--queues="); ok {
+				queues = strings.Split(v, ",")
 				break
 			}
 		}
@@ -222,9 +222,8 @@ func labelsQueueSetEncodesEveryQueue(g *guard) {
 		}
 		value := label(d, "dev-health.io/queue-set")
 		g.expect(!strings.Contains(value, ","), "%s queue-set label reintroduced a comma: %q", n, value)
-		for _, q := range queues {
-			g.expect(strings.Contains(value, q), "%s queue-set label %q dropped queue %q", n, value, q)
-		}
+		want := strings.Join(queues, "_")
+		g.expect(value == want, "%s queue-set label is %q, want exactly every queue joined with _: %q", n, value, want)
 	}
 }
 
@@ -562,7 +561,10 @@ func TestWorkersChartGuardsPlantedDefects(t *testing.T) {
 			labelsLegalValues, "illegal Kubernetes label value"},
 		{"queue-set-label-drops-queues", chartOnly,
 			mutAll(chartFile(workers), `{{ join "_" . | quote }}`, `{{ first . | quote }}`),
-			labelsQueueSetEncodesEveryQueue, "dropped queue"},
+			labelsQueueSetEncodesEveryQueue, "want exactly every queue"},
+		{"queue-set-label-gains-a-suffix", chartOnly,
+			mutAll(chartFile(workers), `{{ join "_" . | quote }}`, `{{ printf "%s_x" (join "_" .) | quote }}`),
+			labelsQueueSetEncodesEveryQueue, "want exactly every queue"},
 		{"metrics-floor-lowered", chartOnly,
 			mut(chartFile(workers), "{{- if lt (int $group.terminationGracePeriodSeconds) 7260 }}", "{{- if lt (int $group.terminationGracePeriodSeconds) 100 }}"),
 			drainMetricsBelowFloorFails, "must not render"},

@@ -341,7 +341,18 @@ func webBackendURLRequired(g *guard) {
 	}
 	ex := g.tplRaw("t", set("web.env.BACKEND_URL=http://explicit.example:9000")...)
 	g.expect(ex.code == 0, "an explicit web.env.BACKEND_URL must render: %s", firstLines(ex.stderr, 2))
-	g.expect(strings.Contains(ex.stdout, `value: "http://explicit.example:9000"`), "the explicit BACKEND_URL did not reach the web Deployment verbatim")
+	docs, err := parseDocs(ex.stdout)
+	if err != nil {
+		g.failf("output is not YAML: %v", err)
+		return
+	}
+	got := ""
+	for _, d := range ofKind(docs, "Deployment") {
+		if label(d, "app.kubernetes.io/component") == "web" {
+			got = str(envMap(containers(d)[0])["BACKEND_URL"]["value"])
+		}
+	}
+	g.expect(got == "http://explicit.example:9000", "the web Deployment's BACKEND_URL env is %q, want the explicit value verbatim", got)
 }
 
 func TestWiringGuardsRealTree(t *testing.T) {
@@ -434,6 +445,9 @@ func TestWiringGuardsPlantedDefects(t *testing.T) {
 		{"web-volumes-rendered-by-default", chartOnly,
 			mut(chartFile(web), `{{- $webVolumes := .Values.web.extraVolumes | default (list) }}`, `{{- $webVolumes := list (dict "name" "x" "emptyDir" (dict)) }}`),
 			webExtraVolumesAbsentWhenUnset, "default render must carry no"},
+		{"explicit-backend-url-reaches-another-env-var-only", chartOnly,
+			mut(chartFile(web), "            - name: BACKEND_URL\n              value: {{ required", "            - name: BACKEND_URL\n              value: \"http://wrong.example\"\n            - name: UNUSED_BACKEND\n              value: {{ required"),
+			webBackendURLRequired, "BACKEND_URL env is"},
 		{"web-backend-url-gets-a-default", chartOnly,
 			mut(chartFile("values.yaml"), `    BACKEND_URL: ""`, `    BACKEND_URL: "http://dflt:1"`),
 			webBackendURLRequired, "succeeded"},

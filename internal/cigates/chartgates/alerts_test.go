@@ -1,6 +1,7 @@
 package chartgates_test
 
 import (
+	"go/ast"
 	"regexp"
 	"sort"
 	"strconv"
@@ -124,7 +125,11 @@ func workerAlertsCoverSignals(g *guard) {
 	sort.Strings(exp)
 	g.expect(equal(got, exp), "go_workers alert set differs: got %v want %v", got, exp)
 	for a, metric := range want {
-		g.expect(strings.Contains(alerts[a], metric), "alert %s does not read %s", a, metric)
+		if metric == "dev-health-go-" {
+			g.expect(strings.Contains(alerts[a], metric), "alert %s does not select the dev-health-go- jobs", a)
+			continue
+		}
+		g.expect(metricNames(alerts[a])[metric], "alert %s does not read the metric %s (as a whole name)", a, metric)
 	}
 }
 
@@ -175,7 +180,7 @@ func noCeleryAlerts(g *guard) {
 	for _, a := range allAlerts(g) {
 		g.expect(!strings.HasPrefix(str(a["alert"]), "Celery"), "a Celery alert ships: %s", str(a["alert"]))
 	}
-	g.expect(!strings.Contains(g.read(rulesRel), "devhealth_celery_"), "rules.yml still references a devhealth_celery_ metric")
+	g.expect(!strings.Contains(serialized(g.yamlFile(rulesRel)["groups"]), "devhealth_celery_"), "a rule still references a devhealth_celery_ metric")
 }
 
 // --- provider artifact skip alert ---
@@ -186,30 +191,46 @@ const (
 	budgetGo  = "internal/providerfoundation/budget.go"
 )
 
-var (
-	funcStart  = regexp.MustCompile(`(?m)^func \(m \*Metrics\) WritePrometheus\(`)
-	nextFunc   = regexp.MustCompile(`(?m)^func `)
-	counterRef = regexp.MustCompile(`(?s)writeProviderDatasetReasonCounter\(\s*writer,\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*m\.artifactSkipped,`)
-)
+var ()
 
 func skipMetricFromGoSource(g *guard) (metric, label string) {
-	text := g.read(budgetGo)
-	loc := funcStart.FindStringIndex(text)
-	if loc == nil {
-		g.failf("could not find func (m *Metrics) WritePrometheus( in budget.go")
+	f := g.goFile(budgetGo)
+	if f == nil {
 		return "", ""
 	}
-	rest := text[loc[1]:]
-	end := len(text)
-	if n := nextFunc.FindStringIndex(rest); n != nil {
-		end = loc[1] + n[0]
-	}
-	m := counterRef.FindStringSubmatch(text[loc[0]:end])
-	if m == nil {
-		g.failf("could not find the writeProviderDatasetReasonCounter(...) call for m.artifactSkipped inside WritePrometheus's own body in budget.go: has the wiring changed shape or left the live scrape path?")
+	fd := funcDecl(f, "WritePrometheus", "Metrics")
+	if fd == nil {
+		g.failf("could not find func (m *Metrics) WritePrometheus in budget.go")
 		return "", ""
 	}
-	return m[1], m[3]
+	for _, st := range reachableStmts(fd) {
+		var found bool
+		ast.Inspect(st, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || found {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok || id.Name != "writeProviderDatasetReasonCounter" || len(call.Args) != 5 {
+				return true
+			}
+			sel, ok := call.Args[4].(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "artifactSkipped" {
+				return true
+			}
+			m, ok1 := strLit(call.Args[1])
+			l, ok2 := strLit(call.Args[3])
+			if ok1 && ok2 {
+				metric, label, found = m, l, true
+			}
+			return true
+		})
+		if found {
+			return metric, label
+		}
+	}
+	g.failf("could not find the writeProviderDatasetReasonCounter(...) call for m.artifactSkipped in the reachable part of WritePrometheus in budget.go: has the wiring changed shape or left the live scrape path?")
+	return "", ""
 }
 
 func skipAlertDoc(g *guard) doc {
@@ -230,7 +251,7 @@ func skipMetricNamePinned(g *guard) {
 func skipAlertTargetsRealMetric(g *guard) {
 	metric, reason := skipMetricFromGoSource(g)
 	expr := str(skipAlertDoc(g)["expr"])
-	g.expect(metric != "" && strings.Contains(expr, metric), "%s expr does not read the real metric %q: %q", skipAlert, metric, expr)
+	g.expect(metric != "" && metricNames(expr)[metric], "%s expr does not read the real metric %q as a whole name: %q", skipAlert, metric, expr)
 	g.expect(strings.Contains(expr, "by (provider, dataset)"), "%s must group by the metric's bounded labels (provider, dataset): %q", skipAlert, expr)
 	g.expect(reason == "reason", "the metric's third label is %q, want reason", reason)
 }
@@ -309,31 +330,10 @@ const (
 )
 
 var (
-	goLineComment  = regexp.MustCompile(`//[^\n]*`)
-	helpOrType     = regexp.MustCompile(`#\s*(HELP|TYPE)\s+[a-zA-Z_][a-zA-Z0-9_]*`)
-	escapedNewline = regexp.MustCompile(`\\n`)
-	writeProm      = regexp.MustCompile(`(?m)^func \([^)]+\) WritePrometheus\(`)
-	durationLit    = regexp.MustCompile(`\[\s*\d+[smhdwy]\s*\]`)
-	identTok       = regexp.MustCompile(`[a-zA-Z_][a-zA-Z0-9_]*`)
-	promWords      = map[string]bool{"sum": true, "max": true, "min": true, "avg": true, "count": true, "increase": true, "rate": true, "min_over_time": true, "max_over_time": true, "avg_over_time": true, "and": true, "or": true, "unless": true, "by": true, "without": true, "on": true, "ignoring": true, "group_left": true, "group_right": true, "instance": true, "job": true}
+	durationLit = regexp.MustCompile(`\[\s*\d+[smhdwy]\s*\]`)
+	identTok    = regexp.MustCompile(`[a-zA-Z_][a-zA-Z0-9_]*`)
+	promWords   = map[string]bool{"sum": true, "max": true, "min": true, "avg": true, "count": true, "increase": true, "rate": true, "min_over_time": true, "max_over_time": true, "avg_over_time": true, "and": true, "or": true, "unless": true, "by": true, "without": true, "on": true, "ignoring": true, "group_left": true, "group_right": true, "instance": true, "job": true}
 )
-
-func writePrometheusBody(g *guard, rel string) string {
-	text := g.read(rel)
-	loc := writeProm.FindStringIndex(text)
-	if loc == nil {
-		g.failf("no WritePrometheus function in %s", rel)
-		return ""
-	}
-	rest := text[loc[1]:]
-	end := len(text)
-	if n := nextFunc.FindStringIndex(rest); n != nil {
-		end = loc[1] + n[0]
-	}
-	body := goLineComment.ReplaceAllString(text[loc[0]:end], " ")
-	body = escapedNewline.ReplaceAllString(body, " ")
-	return helpOrType.ReplaceAllString(body, " ")
-}
 
 func metricNames(expr string) map[string]bool {
 	out := map[string]bool{}
@@ -346,10 +346,12 @@ func metricNames(expr string) map[string]bool {
 }
 
 func sweepReaderIgnoresComments(g *guard) {
-	body := writePrometheusBody(g, reconcilerLoop)
-	g.expect(strings.Contains(body, "sync_dispatch_unreclaimable_candidates"), "sync_dispatch_unreclaimable_candidates is not written as a sample by WritePrometheus")
-	g.expect(!strings.Contains(body, "//"), "comments survived the strip")
-	g.expect(!strings.Contains(body, "# HELP sync_dispatch_unreclaimable_candidates") && !strings.Contains(body, "# TYPE sync_dispatch_unreclaimable_candidates"), "HELP/TYPE metadata survived the strip")
+	fd := funcDecl(g.goFile(reconcilerLoop), "WritePrometheus", "Loop")
+	if fd == nil {
+		g.failf("no WritePrometheus method on Loop in %s", reconcilerLoop)
+		return
+	}
+	g.expect(emitsMetric(fd, "sync_dispatch_unreclaimable_candidates"), "sync_dispatch_unreclaimable_candidates is not written as a sample by the reachable part of WritePrometheus")
 }
 
 func sweepMetricParserNotVacuous(g *guard) {
@@ -360,12 +362,23 @@ func sweepMetricParserNotVacuous(g *guard) {
 }
 
 func sweepEveryAlertMetricEmitted(g *guard) {
-	emitted := writePrometheusBody(g, reconcilerLoop) + writePrometheusBody(g, outboxLoop)
+	var fds []*ast.FuncDecl
+	for _, c := range []struct{ rel, recv string }{{reconcilerLoop, "Loop"}, {outboxLoop, "ReconcilerLoop"}} {
+		if fd := funcDecl(g.goFile(c.rel), "WritePrometheus", c.recv); fd != nil {
+			fds = append(fds, fd)
+		} else {
+			g.failf("no WritePrometheus method on %s in %s", c.recv, c.rel)
+		}
+	}
 	checked := 0
 	for _, n := range []string{strandAlert, failingAlert, rearmAlert} {
 		for metric := range metricNames(str(alertNamed(g, n)["expr"])) {
 			checked++
-			g.expect(regexp.MustCompile(`\b`+regexp.QuoteMeta(metric)+`\b`).MatchString(emitted), "%s reads %q, which no WritePrometheus emits: an alert on a metric nobody publishes never fires", n, metric)
+			emitted := false
+			for _, fd := range fds {
+				emitted = emitted || emitsMetric(fd, metric)
+			}
+			g.expect(emitted, "%s reads %q, which no WritePrometheus writes as a sample before returning: an alert on a metric nobody publishes never fires", n, metric)
 		}
 	}
 	g.expect(checked == 4, "checked %d metric reads across the three sweep rules, want 4 (a parser that returns nothing must not pass)", checked)
@@ -373,10 +386,11 @@ func sweepEveryAlertMetricEmitted(g *guard) {
 
 func sweepStrandAlertReadsThePair(g *guard) {
 	expr := str(alertNamed(g, strandAlert)["expr"])
-	g.expect(strings.Contains(expr, "sync_dispatch_unreclaimable_candidates"), "the strand alert does not read the candidate gauge")
-	g.expect(strings.Contains(expr, "sync_dispatch_unreclaimable_terminalized_total"), "the strand alert does not read the terminalized counter")
-	g.expect(regexp.MustCompile(`increase\(\s*sync_dispatch_unreclaimable_terminalized_total`).MatchString(expr), "the terminalized half must be an increase()")
-	g.expect(strings.Contains(expr, "== 0"), "the terminalized half must assert NO movement (== 0); without it this alert fires on a sweep that is working")
+	names := metricNames(expr)
+	g.expect(names["sync_dispatch_unreclaimable_candidates"], "the strand alert does not read the candidate gauge")
+	g.expect(names["sync_dispatch_unreclaimable_terminalized_total"], "the strand alert does not read the terminalized counter")
+	g.expect(regexp.MustCompile(`increase\(\s*sync_dispatch_unreclaimable_terminalized_total\[[^\]]*\]\s*\)\s*\)?\s*==\s*0`).MatchString(expr),
+		"the terminalized half must be an increase() compared == 0 (NO movement); without it this alert fires on a sweep that is working: %q", expr)
 }
 
 func sweepFailureAlertIsSeparate(g *guard) {
@@ -444,9 +458,14 @@ func dashboardExprs(g *guard) (panels []any, exprs []string) {
 
 func dashboardCoversRuntimeSignals(g *guard) {
 	panels, exprs := dashboardExprs(g)
-	all := strings.Join(exprs, "\n")
+	read := map[string]bool{}
+	for _, e := range exprs {
+		for m := range metricNames(e) {
+			read[m] = true
+		}
+	}
 	for _, m := range []string{"worker_job_oldest_age_seconds", "worker_jobs_available", "worker_jobs_running", "worker_execution_saturation_ratio", "worker_job_attempts_total", "worker_job_duration_seconds_bucket", "worker_domain_state_mismatch_total", "worker_stream_lag", "worker_stream_pending", "worker_database_pool_saturation_ratio"} {
-		g.expect(strings.Contains(all, m), "the dashboard reads no required metric %s", m)
+		g.expect(read[m], "the dashboard reads no required metric %s (as a whole name in a panel expression)", m)
 	}
 	ids := map[any]bool{}
 	for _, p := range panels {
@@ -551,12 +570,15 @@ func sweepHelmValue(g *guard) {
 }
 
 func sweepEnvExample(g *guard) {
-	want := sweepKey + `="active"`
-	found := false
+	last := ""
 	for _, l := range strings.Split(g.read(".env.example"), "\n") {
-		found = found || l == want
+		if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "#") {
+			if k, v, ok := strings.Cut(t, "="); ok && strings.TrimSpace(k) == sweepKey {
+				last = v
+			}
+		}
 	}
-	g.expect(found, ".env.example must carry the shipped default %s", want)
+	g.expect(last == `"active"`, ".env.example must end with the shipped default %s=\"active\" as its last assignment, got %q", sweepKey, last)
 }
 
 func otelHelmConfig(g *guard) {
@@ -619,7 +641,7 @@ func TestAlertGuardsPlantedDefects(t *testing.T) {
 	const skipExpr = "sum by (provider, dataset) (\n            increase(dev_health_provider_artifact_skipped_total[25h])\n          ) > 0\n        for: 26h\n"
 	runPlanted(t, []planted{
 		{"alert-removed-from-the-go-workers-group", rules, mut(rulesRel, "- alert: GoWorkerStreamLagHigh", "- alert: GoWorkerStreamLagHighX"), workerAlertsCoverSignals, "alert set differs"},
-		{"alert-reads-another-metric", rules, mut(rulesRel, "max by (job, instance) (worker_stream_lag)", "max by (job, instance) (worker_stream_depth)"), workerAlertsCoverSignals, "does not read worker_stream_lag"},
+		{"alert-reads-another-metric", rules, mut(rulesRel, "max by (job, instance) (worker_stream_lag)", "max by (job, instance) (worker_stream_depth)"), workerAlertsCoverSignals, "as a whole name"},
 		{"saturation-aggregated-by-max", rules, mut(rulesRel, "avg by (queue) (worker_execution_saturation_ratio)", "max by (queue) (worker_execution_saturation_ratio)"), workerAlertsUseRuntimeDimensions, "AVERAGE"},
 		{"worker-group-label-added", rules, mut(rulesRel, "max by (queue) (worker_job_oldest_age_seconds)", "max by (queue, worker_group) (worker_job_oldest_age_seconds)"), workerAlertsNoFixedProfileLabel, "worker_group label"},
 		{"job-id-label-added", rules, mut(rulesRel, "max by (queue) (worker_job_oldest_age_seconds)", "max by (queue, job_id) (worker_job_oldest_age_seconds)"), workerAlertsLowCardinality, "job_id"},
@@ -633,12 +655,17 @@ func TestAlertGuardsPlantedDefects(t *testing.T) {
 		{"skip-alert-grows-a-repository-dimension", rules, mut(rulesRel, skipExpr, strings.Replace(skipExpr, "(provider, dataset)", "(provider, dataset, repository)", 1)), skipAlertLabelsBounded, "repository"},
 		{"skip-alert-routed-to-nobody", rules, mut(rulesRel, "          team: platform\n        annotations:\n          summary: \"Provider {{ $labels.provider }}/{{ $labels.dataset }} is sustaining", "          team: nobody\n        annotations:\n          summary: \"Provider {{ $labels.provider }}/{{ $labels.dataset }} is sustaining"), skipAlertLabelsBounded, "team label"},
 		{"skip-alert-name-duplicated", rules, mut(rulesRel, "- alert: GoWorkerStreamLagHigh", "- alert: ProviderArtifactSkipsSustained"), skipAlertNameUniqueInFile, "exactly once"},
-		{"sweep-emission-deleted-comment-survives", sweepSrc, mut(reconcilerLoop, `# TYPE sync_dispatch_unreclaimable_candidates gauge\nsync_dispatch_unreclaimable_candidates %d\n"`, `# TYPE sync_dispatch_unreclaimable_candidates gauge\n"`), sweepEveryAlertMetricEmitted, "which no WritePrometheus emits"},
+		{"sweep-emission-deleted-comment-survives", sweepSrc, mut(reconcilerLoop, `# TYPE sync_dispatch_unreclaimable_candidates gauge\nsync_dispatch_unreclaimable_candidates %d\n"`, `# TYPE sync_dispatch_unreclaimable_candidates gauge\n"`), sweepEveryAlertMetricEmitted, "writes as a sample"},
 		{"sweep-strand-alert-stops-requiring-no-movement", sweepSrc, mut(rulesRel, "sum by (instance) (increase(sync_dispatch_unreclaimable_terminalized_total[15m])) == 0", "sum by (instance) (increase(sync_dispatch_unreclaimable_terminalized_total[15m])) >= 0"), sweepStrandAlertReadsThePair, "NO movement"},
 		{"sweep-failure-folded-into-the-strand-alert", sweepSrc, mut(rulesRel, "sum by (instance) (increase(sync_dispatch_unreclaimable_terminalized_total[15m])) == 0", "sum by (instance) (increase(sync_dispatch_unreclaimable_terminalized_total[15m])) == 0 and on (instance) sum by (instance) (sync_dispatch_unreclaimable_sweep_failures_total) == 0"), sweepFailureAlertIsSeparate, "must stay separate"},
 		{"sweep-strand-for-shortened", sweepSrc, mut(rulesRel, "        for: 15m\n        labels:\n          severity: warning\n          team: platform\n        annotations:\n          summary: \"Unreclaimable sync units are selected", "        for: 5m\n        labels:\n          severity: warning\n          team: platform\n        annotations:\n          summary: \"Unreclaimable sync units are selected"), sweepStrandForOutlastsPass, "below 15m"},
 		{"sweep-rearm-threshold-below-one-unit-budget", sweepSrc, mut(rulesRel, "provider_unit_strands_rearmed_total[1h])) > 20", "provider_unit_strands_rearmed_total[1h])) > 3"), sweepRearmThresholdExceedsOneUnitBudget, "does not exceed"},
 		{"sweep-description-loses-the-evidence-pointer", sweepSrc, mutAll(rulesRel, "unreclaimable_sweep_mode_resolved", "mode"), sweepAlertsCarryRoutingAndEvidence, "must name the log line"},
+		{"alert-reads-a-longer-metric-name", rules, mut(rulesRel, "max by (job, instance) (worker_stream_lag)", "max by (job, instance) (worker_stream_lag_extra)"), workerAlertsCoverSignals, "as a whole name"},
+		{"write-prometheus-returns-before-the-sweep-series", sweepSrc, mut(reconcilerLoop, "func (loop *Loop) WritePrometheus(output io.Writer) error {\n", "func (loop *Loop) WritePrometheus(output io.Writer) error {\n\treturn nil\n"), sweepEveryAlertMetricEmitted, "writes as a sample"},
+		{"skip-counter-unreachable-in-write-prometheus", withGo, mut(budgetGo, "func (m *Metrics) WritePrometheus(writer io.Writer) error {\n", "func (m *Metrics) WritePrometheus(writer io.Writer) error {\n\treturn nil\n"), skipMetricNamePinned, "reachable part"},
+		{"strand-zero-comparison-hidden-in-a-promql-comment", sweepSrc, mut(rulesRel, "sum by (instance) (increase(sync_dispatch_unreclaimable_terminalized_total[15m])) == 0", "sum by (instance) (increase(sync_dispatch_unreclaimable_terminalized_total[15m])) >= 0 # == 0"), sweepStrandAlertReadsThePair, "compared == 0"},
+		{"env-example-overridden-by-a-later-assignment", []string{".env.example"}, appendText(".env.example", "\nSYNC_UNRECLAIMABLE_SWEEP=\"shadow\"\n"), sweepEnvExample, "last assignment"},
 		{"dashboard-drops-a-required-metric", dash, mutAll(dashboardRel, "worker_stream_lag", "worker_stream_x"), dashboardCoversRuntimeSignals, "worker_stream_lag"},
 		{"dashboard-duplicates-a-panel-id", dash, mut(dashboardRel, `"id": 2,`, `"id": 1,`), dashboardCoversRuntimeSignals, "used twice"},
 		{"dashboard-refresh-slowed", dash, mut(dashboardRel, `"refresh": "30s"`, `"refresh": "1m"`), dashboardCoversRuntimeSignals, "refresh"},

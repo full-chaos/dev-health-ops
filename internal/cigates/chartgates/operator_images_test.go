@@ -124,31 +124,30 @@ func pinPgbouncerAcceptsWellFormedDigest(g *guard) {
 	g.expect(r.code == 0, "a well-formed pgbouncer digest must render: %s", firstLines(r.stderr, 2))
 }
 
-func hookContainerBlock(out, container string) string {
-	_, after, ok := strings.Cut(out, "name: "+container+"\n")
-	if !ok {
-		return ""
+func hookContainerPolicy(docs []doc, container string) (string, bool) {
+	for _, d := range ofKind(docs, "Job") {
+		for _, c := range containers(d) {
+			if str(c["name"]) == container {
+				return str(c["imagePullPolicy"]), true
+			}
+		}
 	}
-	block, _, _ := strings.Cut(after, "---")
-	return block
+	return "", false
 }
 
 func pinHookPullPolicyNeverLeaks(g *guard) {
 	for _, s := range hookSites {
-		r := g.tpl("review", join(s.sets, set(s.flag+"="+pinnedDHO, "image.pullPolicy=Never"), []string{"--show-only", riverHooksTpl})...)
-		if r.code != 0 {
-			g.failf("%s: render failed: %s", s.name, firstLines(r.stderr, 2))
-			continue
-		}
-		g.expect(strings.Contains(r.stdout, "name: "+s.name+"\n          image:"), "%s: container block not found", s.name)
-		g.expect(strings.Contains(hookContainerBlock(r.stdout, s.name), "imagePullPolicy: IfNotPresent"), "%s: the hook container must carry IfNotPresent, not the application image's Never", s.name)
+		docs := g.docs("review", join(s.sets, set(s.flag+"="+pinnedDHO, "image.pullPolicy=Never"), []string{"--show-only", riverHooksTpl})...)
+		got, ok := hookContainerPolicy(docs, s.name)
+		g.expect(ok, "%s: the hook container was not rendered", s.name)
+		g.expect(got == "IfNotPresent", "%s: the hook container imagePullPolicy is %q, want IfNotPresent, not the application image's Never", s.name, got)
 	}
 }
 
 func pinHookPullPolicyOverridable(g *guard) {
-	r := g.tpl("review", join(hookSites[0].sets, set("migrations.hook.provisionRoles.image="+pinnedDHO, "migrations.hook.provisionRoles.pullPolicy=Always", "image.pullPolicy=Never"), []string{"--show-only", riverHooksTpl})...)
-	g.expect(r.code == 0, "render failed: %s", firstLines(r.stderr, 2))
-	g.expect(strings.Contains(hookContainerBlock(r.stdout, "provision-roles"), "imagePullPolicy: Always"), "the per-hook pullPolicy override did not take effect")
+	docs := g.docs("review", join(hookSites[0].sets, set("migrations.hook.provisionRoles.image="+pinnedDHO, "migrations.hook.provisionRoles.pullPolicy=Always", "image.pullPolicy=Never"), []string{"--show-only", riverHooksTpl})...)
+	got, _ := hookContainerPolicy(docs, "provision-roles")
+	g.expect(got == "Always", "the per-hook pullPolicy override did not take effect: imagePullPolicy is %q", got)
 }
 
 // --- migration chain ---
@@ -734,6 +733,9 @@ func TestOperatorImageGuardsPlantedDefects(t *testing.T) {
 		{"river-pull-policy-follows-the-application-image", chartOnly,
 			mut(hooks, `{{- $riverPullPolicy := .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}`, `{{- $riverPullPolicy := .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.image.pullPolicy }}`),
 			pinHookPullPolicyNeverLeaks, "IfNotPresent"},
+		{"pull-policy-line-hidden-behind-a-yaml-comment", chartOnly,
+			mut(hooks, "          imagePullPolicy: {{ $rolesPullPolicy }}", "          imagePullPolicy: Never\n          # imagePullPolicy: IfNotPresent"),
+			pinHookPullPolicyNeverLeaks, "imagePullPolicy is"},
 		{"hook-pull-policy-override-ignored", chartOnly,
 			mut(hooks, `{{- $rolesPullPolicy := .Values.migrations.hook.provisionRoles.pullPolicy | default .Values.migrations.hook.riverMigrate.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}`, `{{- $rolesPullPolicy := "IfNotPresent" }}`),
 			pinHookPullPolicyOverridable, "override did not take effect"},

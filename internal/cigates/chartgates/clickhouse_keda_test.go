@@ -226,7 +226,7 @@ func kedaOtherGroupsKeepSingleTrigger(g *guard) {
 	}
 }
 
-var fromJoin = regexp.MustCompile(`(?i)\b(?:FROM|JOIN)\s+([\w.]+)`)
+var fromJoin = regexp.MustCompile(`(?i)\b(?:FROM|JOIN)\s+("?\w+"?(?:\."?\w+"?)*)`)
 
 func kedaPlannedQueryReadsOnlyGrantedTable(g *guard) {
 	tr := syncTriggers(g, scaledByGroup(g, nil))
@@ -234,9 +234,11 @@ func kedaPlannedQueryReadsOnlyGrantedTable(g *guard) {
 		g.failf("the sync scaler has %d triggers, want 2", len(tr))
 		return
 	}
+	q := str(at(tr[1], "metadata", "query"))
+	g.expect(!regexp.MustCompile(`(?i)(from|join)\s*\(`).MatchString(q), "the planned query reads through a subquery, which this guard cannot attribute to a table: %q", q)
 	var tables []string
-	for _, m := range fromJoin.FindAllStringSubmatch(str(at(tr[1], "metadata", "query")), -1) {
-		tables = append(tables, m[1])
+	for _, m := range fromJoin.FindAllStringSubmatch(q, -1) {
+		tables = append(tables, strings.ReplaceAll(m[1], `"`, ""))
 	}
 	g.expect(equal(tables, []string{"public.sync_run_units"}), "the planned query reads %v; the KEDA login holds SELECT on public.sync_run_units and river_job only", tables)
 }
@@ -328,6 +330,12 @@ func TestClickHouseKedaGuardsPlantedDefects(t *testing.T) {
 		{"keda-planned-query-reads-an-ungranted-table", chartOnly,
 			mut(chartFile("values.yaml"), "SELECT count(*) FROM public.sync_run_units\n", "SELECT count(*) FROM public.sync_run_units JOIN public.users ON true\n"),
 			kedaPlannedQueryReadsOnlyGrantedTable, "the planned query reads"},
+		{"keda-planned-query-reads-a-quoted-qualified-table", chartOnly,
+			mut(chartFile("values.yaml"), "SELECT count(*) FROM public.sync_run_units\n", "SELECT count(*) FROM \"public\".\"users\"\n"),
+			kedaPlannedQueryReadsOnlyGrantedTable, "the planned query reads"},
+		{"keda-planned-query-reads-through-a-subquery", chartOnly,
+			mut(chartFile("values.yaml"), "SELECT count(*) FROM public.sync_run_units\n", "SELECT count(*) FROM (SELECT * FROM public.users) u JOIN public.sync_run_units s ON true\n"),
+			kedaPlannedQueryReadsOnlyGrantedTable, "subquery"},
 		{"keda-extra-trigger-uses-another-sslmode", chartOnly,
 			mut(chartFile(keda), "        sslmode: disable\n        query: >-\n          {{ $trigger.query }}", "        sslmode: require\n        query: >-\n          {{ $trigger.query }}"),
 			kedaExtraTriggerConnectsLikeRiver, "sslmode"},

@@ -1,6 +1,8 @@
 package chartgates_test
 
 import (
+	"fmt"
+	"go/ast"
 	"regexp"
 	"sort"
 	"strings"
@@ -27,12 +29,7 @@ var (
 		"SETTINGS_ENCRYPTION_KEY", "SETTINGS_ENCRYPTION_SALT", "PAGER_DUTY_CLIENT_ID", "PAGER_DUTY_SECRET",
 		"JWT_SECRET_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "LICENSE_PRIVATE_KEY",
 	}
-	flagDecl     = regexp.MustCompile(`\bFlag:\s*"([a-z0-9-]+)"`)
-	aliasBlock   = regexp.MustCompile(`Aliases:\s*\[\]string\{([^}]*)\}`)
-	quotedName   = regexp.MustCompile(`"([a-z0-9-]+)"`)
-	secretEnv    = regexp.MustCompile(`\{Env:\s*"([A-Z0-9_]+)",\s*Secret:\s*true`)
 	cmdFlag      = regexp.MustCompile(`^--([a-z][a-z0-9-]*)=`)
-	helmFlag     = regexp.MustCompile(`-\s*(?:\{\{[^"]*)?"--([a-z][a-z0-9-]*)=`)
 	routeSwitch  = regexp.MustCompile(`WORKER_[A-Z0-9_]+_ENABLED`)
 	routeField   = regexp.MustCompile(`\bWorker\w+Enabled\b`)
 	bridgeNames  = []string{"WORKER_OPERATIONAL_BRIDGE_URL", "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE", "WORKER_OPERATIONAL_BRIDGE_TOKEN"}
@@ -41,16 +38,29 @@ var (
 )
 
 func goFlagNames(g *guard) map[string]bool {
-	src := g.read(optionsGo)
 	out := map[string]bool{}
-	for _, m := range flagDecl.FindAllStringSubmatch(src, -1) {
-		out[m[1]] = true
+	f := g.goFile(optionsGo)
+	if f == nil {
+		return out
 	}
-	for _, b := range aliasBlock.FindAllStringSubmatch(src, -1) {
-		for _, m := range quotedName.FindAllStringSubmatch(b[1], -1) {
-			out[m[1]] = true
+	ast.Inspect(f, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
 		}
-	}
+		fields := keyedFields(cl)
+		if name, ok := strLit(fields["Flag"]); ok && fields["Flag"] != nil {
+			out[name] = true
+			if al, ok := fields["Aliases"].(*ast.CompositeLit); ok {
+				for _, e := range al.Elts {
+					if a, ok := strLit(e); ok {
+						out[a] = true
+					}
+				}
+			}
+		}
+		return true
+	})
 	g.expect(len(out) > 0, "no flags parsed from the option registry")
 	return out
 }
@@ -79,8 +89,16 @@ func composeWorkerServices(g *guard) map[string]doc {
 
 func cliRegistryDeclaresCredentials(g *guard) {
 	var got []string
-	for _, m := range secretEnv.FindAllStringSubmatch(g.read(optionsGo), -1) {
-		got = append(got, m[1])
+	if f := g.goFile(optionsGo); f != nil {
+		ast.Inspect(f, func(n ast.Node) bool {
+			if cl, ok := n.(*ast.CompositeLit); ok {
+				fields := keyedFields(cl)
+				if env, ok := strLit(fields["Env"]); ok && fields["Env"] != nil && fields["Secret"] != nil && isTrue(fields["Secret"]) {
+					got = append(got, env)
+				}
+			}
+			return true
+		})
 	}
 	want := append([]string(nil), credentials...)
 	sort.Strings(got)
@@ -104,13 +122,20 @@ func cliComposeFlagsAccepted(g *guard) {
 
 func cliHelmFlagsAccepted(g *guard) {
 	passed := map[string]bool{}
-	for _, m := range helmFlag.FindAllStringSubmatch(g.read(chartFile("templates/go-workers.yaml")), -1) {
-		passed[m[1]] = true
+	for _, d := range ofKind(g.docs("flags-contract"), "Deployment") {
+		if label(d, "app.kubernetes.io/component") != "go-worker" {
+			continue
+		}
+		for _, c := range containers(d) {
+			for f := range commandFlags(c["args"]) {
+				passed[f] = true
+			}
+		}
 	}
-	g.expect(len(passed) > 0, "go-workers.yaml passes no flags at all")
+	g.expect(len(passed) > 0, "the rendered go worker Deployments pass no flags at all")
 	accepted := goFlagNames(g)
 	for f := range passed {
-		g.expect(accepted[f], "go-workers.yaml passes the flag --%s which no Go worker binary declares: add it to internal/platform/config/options.go or fix the spelling", f)
+		g.expect(accepted[f], "a rendered go worker Deployment passes the flag --%s which no Go worker binary declares: add it to internal/platform/config/options.go or fix the spelling", f)
 	}
 }
 
@@ -118,11 +143,11 @@ func cliEveryComposeWorkerStatesDrainBudget(g *guard) {
 	svcs := composeWorkerServices(g)
 	g.expect(len(svcs) > 0, "no compose worker service found")
 	for n, s := range svcs {
-		var parts []string
+		found := false
 		for _, a := range list(s["command"]) {
-			parts = append(parts, str(a))
+			found = found || strings.HasPrefix(str(a), "--shutdown-timeout=")
 		}
-		g.expect(strings.Contains(strings.Join(parts, " "), "--shutdown-timeout="), "compose.yml:%s does not state a drain budget", n)
+		g.expect(found, "compose.yml:%s does not state a drain budget", n)
 	}
 }
 
@@ -152,14 +177,25 @@ func cliEveryComposeQueueIsServed(g *guard) {
 
 func cliProviderRoutesHaveNoEnablementSurface(g *guard) {
 	g.expect(!exists(g.path(routesGo)), "routes.go is back; the provider route switch registry was deleted with the enablement plane and must not return")
-	cfg, opts := g.read(configGo), g.read(optionsGo)
-	g.expect(cfg != "" && opts != "", "config.go or options.go unreadable")
-	for n, src := range map[string]string{"config.go": cfg, "options.go": opts} {
-		g.expect(!routeSwitch.MatchString(src), "%s reintroduced route enablement variable(s) %v: capability is always on in the binary", n, routeSwitch.FindAllString(src, -1))
+	for _, rel := range []string{configGo, optionsGo} {
+		f := g.goFile(rel)
+		if f == nil {
+			continue
+		}
+		for _, lit := range stringLiterals(f) {
+			g.expect(!routeSwitch.MatchString(lit), "%s reintroduced the route enablement variable %q: capability is always on in the binary", rel, lit)
+			g.expect(!strings.Contains(lit, "--routes"), "%s must not introduce a --routes flag; queue topology is the only serving lever", rel)
+			g.expect(!strings.Contains(lit, "GO_PROVIDER_ROUTES"), "%s carries the all-routes preset GO_PROVIDER_ROUTES, deleted with the switches it defaulted on", rel)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if fld, ok := n.(*ast.Field); ok {
+				for _, id := range fld.Names {
+					g.expect(!routeField.MatchString(id.Name), "%s reintroduced the route enablement field %s", rel, id.Name)
+				}
+			}
+			return true
+		})
 	}
-	g.expect(!routeField.MatchString(cfg), "config.go reintroduced route enablement field(s) %v", routeField.FindAllString(cfg, -1))
-	g.expect(!strings.Contains(opts, "--routes"), "options.go must not introduce a --routes flag; queue topology is the only serving lever")
-	g.expect(!strings.Contains(cfg, "GO_PROVIDER_ROUTES"), "the all-routes preset was deleted with the switches it defaulted on")
 }
 
 // --- deployment contract ---
@@ -239,18 +275,18 @@ func depGoDefaultState(g *guard) {
 }
 
 func depImagePackagesWorkItemConfig(g *guard) {
-	df := g.read(goDockerfile)
+	ins := parseDockerfile(g.read(goDockerfile))
 	const file = "status_mapping.yaml"
 	src := "src/dev_health_ops/config/" + file
 	g.expect(exists(g.path(src)), "%s does not exist", src)
-	g.expect(strings.Contains(df, "COPY "+src+" ./"+src), "the Go worker Dockerfile does not COPY %s", src)
+	g.expect(hasInstr(ins, "COPY", src+" ./"+src), "the Go worker Dockerfile has no COPY instruction for %s", src)
 	for _, image := range []string{"dho", "operator"} {
-		g.expect(strings.Contains(df, "/runtime/"+image+"/app/config/"+file), "the %s image does not stage /app/config/%s", image, file)
+		g.expect(hasRunCommand(ins, "cp /src/"+src+" /runtime/"+image+"/app/config/"+file), "the %s image does not stage /app/config/%s (no such cp command in a RUN instruction)", image, file)
 	}
 }
 
 func depImagePackagesLifecycleOperator(g *guard) {
-	g.expect(strings.Contains(g.read(goDockerfile), "cp /out/dho /runtime/dho/usr/local/bin/dho;"), "the dho image no longer carries the dho binary")
+	g.expect(hasRunCommand(parseDockerfile(g.read(goDockerfile)), "cp /out/dho /runtime/dho/usr/local/bin/dho"), "the dho image no longer carries the dho binary (no such cp command in a RUN instruction)")
 }
 
 func depSurfacesAdditiveAndGroupComplete(g *guard) {
@@ -273,11 +309,15 @@ func depSurfacesAdditiveAndGroupComplete(g *guard) {
 	sort.Strings(gn)
 	g.expect(equal(gn, allNineNames), "chart groups %v, want %v", gn, allNineNames)
 	g.expect(equal(groups["sync"]["queues"], any(anyStrs("sync"))), "the sync group queues are %v", groups["sync"]["queues"])
-	tpl := g.read(chartFile("templates/go-workers.yaml"))
+	tpl := tplCode(g.read(chartFile("templates/go-workers.yaml")))
 	g.expect(!strings.Contains(tpl, ".Values.goWorkers.profiles"), "go-workers.yaml reads .Values.goWorkers.profiles")
 	g.expect(!strings.Contains(tpl, "$profile"), "go-workers.yaml still uses $profile")
-	for _, m := range []string{"worker_jobs_available", "worker_job_oldest_age_seconds", "worker_execution_saturation_ratio"} {
-		g.expect(strings.Contains(tpl, m), "go-workers.yaml does not mention %s", m)
+	docs := g.docs("surface-contract")
+	scaled := scaledTargets(docs)
+	for n, grp := range groups {
+		if at(grp, "autoscaling", "enabled") == true {
+			g.expect(scaled["surface-contract-dev-health-go-"+n], "group %s autoscales in values but renders no ScaledObject", n)
+		}
 	}
 }
 
@@ -320,6 +360,7 @@ func depReplicaAndDrainContract(g *guard) {
 	groups := valuesGroupsByName(g)
 	ps := processes(g)
 	g.expect(len(groups) == len(ps), "chart has %d groups, manifest %d processes", len(groups), len(ps))
+	rendered := workersByGroup(g.docs("drain-budget"))
 	for _, p := range ps {
 		n := str(p["name"])
 		grp := groups[n]
@@ -332,29 +373,28 @@ func depReplicaAndDrainContract(g *guard) {
 		if str(p["runtime"]) == "river" {
 			g.expect(at(grp, "autoscaling", "maxReplicas") == p["max_replicas"], "group %s autoscaling.maxReplicas %v != max_replicas %v", n, at(grp, "autoscaling", "maxReplicas"), p["max_replicas"])
 		}
+		d := rendered[n]
+		if d == nil {
+			g.failf("group %s did not render a Deployment", n)
+			continue
+		}
+		want := fmt.Sprintf("--shutdown-timeout=%vs", p["shutdown_grace_seconds"])
+		g.expect(sortedHas(strs(containers(d)[0]["args"]), want), "group %s renders no %s argument (the drain budget must be the manifest's shutdown_grace_seconds)", n, want)
 	}
-	g.expect(strings.Contains(g.read(chartFile("templates/go-workers.yaml")), "--shutdown-timeout="), "go-workers.yaml does not render --shutdown-timeout=")
 }
 
 func depImagesPackageContracts(g *guard) {
-	df := g.read(goDockerfile)
-	for _, c := range []struct{ image, what string }{
-		{"dho", "cp -R /src/contracts/jobs/v1 /runtime/dho/app/contracts/jobs/v1;"},
-		{"dho", "cp -R /src/contracts/sync-dispatch/v1 /runtime/dho/app/contracts/sync-dispatch/v1;"},
-		{"operator", "cp -R /src/contracts/jobs/v1 /runtime/operator/app/contracts/jobs/v1;"},
-		{"operator", "cp -R /src/contracts/sync-dispatch/v1 /runtime/operator/app/contracts/sync-dispatch/v1;"},
-		{"operator", "cp /src/deploy/go-workers/deployment.json /runtime/operator/app/deploy/go-workers/deployment.json;"},
+	ins := parseDockerfile(g.read(goDockerfile))
+	for _, c := range []struct{ image, cmd string }{
+		{"dho", "cp -R /src/contracts/jobs/v1 /runtime/dho/app/contracts/jobs/v1"},
+		{"dho", "cp -R /src/contracts/sync-dispatch/v1 /runtime/dho/app/contracts/sync-dispatch/v1"},
+		{"operator", "cp -R /src/contracts/jobs/v1 /runtime/operator/app/contracts/jobs/v1"},
+		{"operator", "cp -R /src/contracts/sync-dispatch/v1 /runtime/operator/app/contracts/sync-dispatch/v1"},
+		{"operator", "cp /src/deploy/go-workers/deployment.json /runtime/operator/app/deploy/go-workers/deployment.json"},
 	} {
-		g.expect(strings.Contains(df, c.what), "the %s image does not package %q", c.image, c.what)
+		g.expect(hasRunCommand(ins, c.cmd), "the %s image does not package %q (no such command in a RUN instruction)", c.image, c.cmd)
 	}
-	_, after, ok := strings.Cut(df, "FROM runtime AS dho")
-	g.expect(ok, "no `FROM runtime AS dho` stage")
-	dhoStage, _, _ := strings.Cut(after, "FROM runtime AS")
-	hasWorkdir := false
-	for _, l := range strings.Split(dhoStage, "\n") {
-		hasWorkdir = hasWorkdir || strings.TrimSpace(l) == "WORKDIR /app"
-	}
-	g.expect(hasWorkdir, "the dho stage must declare WORKDIR /app (an instruction, not a comment): the scheduler loads contracts/jobs/v1 relative to it")
+	g.expect(hasStageInstr(ins, "dho", "WORKDIR", "/app"), "the dho stage must declare WORKDIR /app as an instruction: the scheduler loads contracts/jobs/v1 relative to it")
 }
 
 func depPgbouncerBudgetMatchesHelm(g *guard) {
@@ -389,9 +429,10 @@ func depMigrationWiring(g *guard) {
 		_, in := shared[k]
 		g.expect(!in, "secrets.data carries %s: the elevated DSN must not live in the shared application Secret", k)
 	}
-	g.expect(strings.Contains(g.read(chartFile("templates/_helpers.tpl")), `define "dev-health.migrationSecretData"`), "_helpers.tpl lost the migrationSecretData helper")
-	g.expect(strings.Contains(g.read(chartFile("templates/_helpers.tpl")), ".Values.migrations.hook.secretData"), "_helpers.tpl no longer reads migrations.hook.secretData")
-	g.expect(strings.Contains(g.read(chartFile("templates/migrate-job.yaml")), ".Values.migrations.hook.externalSecretName"), "migrate-job.yaml no longer reads migrations.hook.externalSecretName")
+	helpers := tplCode(g.read(chartFile("templates/_helpers.tpl")))
+	g.expect(regexp.MustCompile(`\{\{-?\s*define\s+"dev-health\.migrationSecretData"`).MatchString(helpers), "_helpers.tpl lost the migrationSecretData helper")
+	g.expect(strings.Contains(helpers, ".Values.migrations.hook.secretData"), "_helpers.tpl code no longer reads migrations.hook.secretData")
+	g.expect(strings.Contains(tplCode(g.read(chartFile("templates/migrate-job.yaml"))), ".Values.migrations.hook.externalSecretName"), "migrate-job.yaml code no longer reads migrations.hook.externalSecretName")
 	var clauses []string
 	for _, c := range list(at(g.jsonFile(chartFile("values.schema.json")), "properties", "secrets", "properties", "data", "not", "anyOf")) {
 		clauses = append(clauses, str(at(c, "required", 0)))
@@ -505,7 +546,7 @@ func depNoRendererEmitsOperationalBridge(g *guard) {
 	for _, b := range bridgeNames {
 		g.expect(!resolved[b], "helm values.yaml still declares %s", b)
 	}
-	g.expect(!strings.Contains(g.read(chartFile("templates/_helpers.tpl")), "operationalBridgeURL"), "_helpers.tpl still defines the deleted operationalBridgeURL helper")
+	g.expect(!strings.Contains(tplCode(g.read(chartFile("templates/_helpers.tpl"))), "operationalBridgeURL"), "_helpers.tpl still defines the deleted operationalBridgeURL helper")
 	n := 0
 	for _, d := range ofKind(g.docs("phase1"), "Deployment") {
 		for _, c := range containers(d) {
@@ -524,10 +565,34 @@ func depPagerDutyProfileBinding(g *guard) {
 		}
 	}
 	g.expect(len(pd) == 1, "exactly one goWorkers group must run the pagerduty profile, got %d", len(pd))
-	tpl := g.read(chartFile("templates/go-workers.yaml"))
-	g.expect(strings.Contains(tpl, `- {{ printf "--profile=%s" . | quote }}`) && strings.Contains(tpl, "{{- with $group.runtimeProfile }}"), "the chart must render --profile from $group.runtimeProfile")
-	g.expect(strings.Contains(tpl, `dict "configMapRef" (dict "name" (include "dev-health.configMapName" $))`), "go-workers.yaml no longer builds the configMapRef envFrom entry")
-	g.expect(strings.Contains(tpl, `dict "secretRef" (dict "name" (include "dev-health.secretName" $))`), "go-workers.yaml no longer builds the secretRef envFrom entry")
+	rendered := workersByGroup(g.docs("profile-contract"))
+	for n, grp := range valuesGroupsByName(g) {
+		d := rendered[n]
+		if d == nil {
+			g.failf("group %s did not render a Deployment", n)
+			continue
+		}
+		var profiles []string
+		for _, a := range strs(containers(d)[0]["args"]) {
+			if v, ok := strings.CutPrefix(a, "--profile="); ok {
+				profiles = append(profiles, v)
+			}
+		}
+		if want := str(grp["runtimeProfile"]); want != "" {
+			g.expect(equal(profiles, []string{want}), "group %s renders --profile %v, want [%s]: the chart must bind --profile to $group.runtimeProfile", n, profiles, want)
+		} else {
+			g.expect(len(profiles) == 0, "group %s has no runtimeProfile but renders --profile %v", n, profiles)
+		}
+	}
+	for _, d := range rendered {
+		refs := envFromRefs(containers(d)[0])
+		var cm, sec bool
+		for _, r := range refs {
+			cm = cm || r[0] == "configMapRef"
+			sec = sec || r[0] == "secretRef"
+		}
+		g.expect(cm && sec, "%s lost the shared ConfigMap or Secret envFrom source: %v", name(d), refs)
+	}
 }
 
 var helmGoWorkerSets = join(
@@ -622,14 +687,6 @@ func depGroupsRollOnSharedConfigOrSecretChange(g *guard) {
 }
 
 func depNativeClickhouseURI(g *guard) {
-	tpl := g.read(chartFile("templates/go-workers.yaml"))
-	g.expect(strings.Contains(tpl, `include "dev-health.goWorkerClickhouseURI"`), "go-workers.yaml does not take CLICKHOUSE_URI from the native-protocol helper")
-	g.expect(strings.Contains(tpl, "name: CLICKHOUSE_URI"), "go-workers.yaml does not set CLICKHOUSE_URI as an explicit env entry")
-	helpers := g.read(chartFile("templates/_helpers.tpl"))
-	_, native, ok := strings.Cut(helpers, `define "dev-health.clickhouseNativeURI"`)
-	g.expect(ok, "_helpers.tpl lost the clickhouseNativeURI helper")
-	body, _, _ := strings.Cut(native, "{{- end }}")
-	g.expect(strings.Contains(body, "9000"), "the native-protocol helper does not use port 9000")
 	docs := g.docs("phase1")
 	var uri string
 	for _, s := range ofKind(docs, "Secret") {
@@ -638,10 +695,17 @@ func depNativeClickhouseURI(g *guard) {
 		}
 	}
 	g.expect(strings.Contains(uri, ":9000/"), "the rendered CLICKHOUSE_NATIVE_URI %q is not the native port", uri)
-	for grp, d := range workersByGroup(docs) {
+	g.expect(!strings.Contains(uri, ":8123"), "the rendered CLICKHOUSE_NATIVE_URI %q carries the HTTP port", uri)
+	by := workersByGroup(docs)
+	g.expect(len(by) > 0, "no go worker group rendered")
+	for grp, d := range by {
 		ref := at(envMap(containers(d)[0])["CLICKHOUSE_URI"], "valueFrom", "secretKeyRef", "key")
-		g.expect(str(ref) == "CLICKHOUSE_NATIVE_URI", "group %s reads CLICKHOUSE_URI from %v, want the native key", grp, ref)
+		g.expect(str(ref) == "CLICKHOUSE_NATIVE_URI", "group %s reads CLICKHOUSE_URI from %v, want the native key CLICKHOUSE_NATIVE_URI", grp, ref)
 	}
+	_, native, ok := strings.Cut(tplCode(g.read(chartFile("templates/_helpers.tpl"))), `define "dev-health.clickhouseNativeURI"`)
+	g.expect(ok, "_helpers.tpl lost the clickhouseNativeURI helper")
+	body, _, _ := strings.Cut(native, "{{- end }}")
+	g.expect(strings.Contains(body, ":9000/"), "the native-protocol helper code does not use port 9000")
 }
 
 func TestContractGuardsRealTree(t *testing.T) {
@@ -694,10 +758,22 @@ func TestContractGuardsPlantedDefects(t *testing.T) {
 		{"compose-group-loses-its-drain-budget", compose, mut("compose.yml", "      - reconciler\n      - --shutdown-timeout=60s\n", "      - reconciler\n"), cliEveryComposeWorkerStatesDrainBudget, "does not state a drain budget"},
 		{"compose-selects-an-unserved-queue", append([]string{deploymentJSON}, compose...), mut("compose.yml", "- --queues=sync_provider", "- --queues=sync_ghost"), cliEveryComposeQueueIsServed, "does not serve"},
 		{"route-registry-returns", cfgSrc, func(t *testing.T, root string) { writeFile(t, root, routesGo, "package config\n") }, cliProviderRoutesHaveNoEnablementSurface, "routes.go is back"},
-		{"route-enable-switch-returns", cfgSrc, appendText(configGo, "\n// WORKER_GITHUB_ENABLED\n"), cliProviderRoutesHaveNoEnablementSurface, "route enablement variable"},
+		{"route-enable-switch-returns", cfgSrc, appendText(configGo, "\nvar _ = \"WORKER_GITHUB_ENABLED\"\n"), cliProviderRoutesHaveNoEnablementSurface, "route enablement variable"},
 		{"route-enable-field-returns", cfgSrc, appendText(configGo, "\ntype x struct{ WorkerGithubEnabled bool }\n"), cliProviderRoutesHaveNoEnablementSurface, "route enablement field"},
-		{"routes-flag-returns", cfgSrc, appendText(optionsGo, "\n// --routes\n"), cliProviderRoutesHaveNoEnablementSurface, "--routes"},
-		{"all-routes-preset-returns", cfgSrc, appendText(configGo, "\n// GO_PROVIDER_ROUTES\n"), cliProviderRoutesHaveNoEnablementSurface, "all-routes preset"},
+		{"routes-flag-returns", cfgSrc, appendText(optionsGo, "\nvar _ = \"--routes\"\n"), cliProviderRoutesHaveNoEnablementSurface, "--routes"},
+		{"all-routes-preset-returns", cfgSrc, appendText(configGo, "\nvar _ = \"GO_PROVIDER_ROUTES\"\n"), cliProviderRoutesHaveNoEnablementSurface, "all-routes preset"},
+		{"credential-entry-commented-out", cfgSrc, mut(optionsGo, `	{Env: "POSTGRES_URI", Secret: true,`, `	// {Env: "POSTGRES_URI", Secret: true,`), cliRegistryDeclaresCredentials, "differ from the documented credential set"},
+		{"flag-declared-only-in-a-comment", append([]string{optionsGo}, compose...),
+			all(mut("compose.yml", "      - reconciler\n      - --shutdown-timeout=60s\n", "      - reconciler\n      - --decoy-flag=1\n      - --shutdown-timeout=60s\n"), appendText(optionsGo, "\n// Flag: \"decoy-flag\"\n")),
+			cliComposeFlagsAccepted, "--decoy-flag"},
+		{"dho-binary-copy-only-in-a-dockerfile-comment", docker,
+			mut(goDockerfile, "cp /out/dho /runtime/dho/usr/local/bin/dho; \\", "echo \"cp /out/dho /runtime/dho/usr/local/bin/dho\"; \\\n    # cp /out/dho /runtime/dho/usr/local/bin/dho; \\"),
+			depImagePackagesLifecycleOperator, "no longer carries"},
+		{"workdir-only-in-a-dockerfile-comment", docker, mut(goDockerfile, "/runtime/dho/ /\nWORKDIR /app\n", "/runtime/dho/ /\n# WORKDIR /app\n"), depImagesPackageContracts, "as an instruction"},
+		{"migration-secret-name-mentioned-only-in-a-template-comment", chartAndManifest,
+			all(mutAll(chartFile(mjob), ".Values.migrations.hook.externalSecretName", ".Values.migrations.hook.extSecretName"), appendText(chartFile(mjob), "\n{{- /* .Values.migrations.hook.externalSecretName */ -}}\n")),
+			depMigrationWiring, "externalSecretName"},
+		{"drain-flag-renders-another-value", chartAndManifest, mut(chartFile(workers), `printf "--shutdown-timeout=%ds" (int $group.terminationGracePeriodSeconds)`, `printf "--shutdown-timeout=%ds" (int 30)`), depReplicaAndDrainContract, "drain budget"},
 		{"deployment-state-moves", manifest, mut(deploymentJSON, `"deployment_state": "go_default"`, `"deployment_state": "coexistence_disabled"`), depGoDefaultState, "deployment_state"},
 		{"sync-provider-loses-its-replica-floor", manifest, mut(deploymentJSON, `"min_replicas": 1,
       "desired_replicas": 1,
@@ -707,10 +783,10 @@ func TestContractGuardsPlantedDefects(t *testing.T) {
       "max_replicas": 2,
       "shutdown_grace_seconds": 960`), depGoDefaultState, "sync-provider"},
 		{"image-stops-staging-the-work-item-config", docker, mut(goDockerfile, "/runtime/dho/app/config/status_mapping.yaml", "/runtime/dho/app/cfg/status_mapping.yaml"), depImagePackagesWorkItemConfig, "does not stage"},
-		{"image-stops-copying-the-work-item-config", docker, mut(goDockerfile, "COPY src/dev_health_ops/config/status_mapping.yaml ./src/dev_health_ops/config/status_mapping.yaml", "COPY src/dev_health_ops/config/other.yaml ./src/dev_health_ops/config/other.yaml"), depImagePackagesWorkItemConfig, "does not COPY"},
+		{"image-stops-copying-the-work-item-config", docker, mut(goDockerfile, "COPY src/dev_health_ops/config/status_mapping.yaml ./src/dev_health_ops/config/status_mapping.yaml", "COPY src/dev_health_ops/config/other.yaml ./src/dev_health_ops/config/other.yaml"), depImagePackagesWorkItemConfig, "no COPY instruction"},
 		{"dho-image-loses-the-binary", docker, mut(goDockerfile, "cp /out/dho /runtime/dho/usr/local/bin/dho;", "cp /out/dho /runtime/dho/usr/local/bin/dho2;"), depImagePackagesLifecycleOperator, "no longer carries"},
 		{"group-replicas-drift", chartAndManifest, mut(chartFile("values.yaml"), "    - name: sync\n      subcommand: worker\n      queues: [sync]\n      queueConcurrency: {sync: 4}\n      replicas: 1", "    - name: sync\n      subcommand: worker\n      queues: [sync]\n      queueConcurrency: {sync: 4}\n      replicas: 2"), depSurfacesAdditiveAndGroupComplete, "replicas"},
-		{"profiles-block-returns", chartOnly, mut(chartFile(workers), "{{- if .Values.goWorkers.enabled }}", "{{- /* .Values.goWorkers.profiles */ -}}\n{{- if .Values.goWorkers.enabled }}"), depSurfacesAdditiveAndGroupComplete, "goWorkers.profiles"},
+		{"profiles-block-returns", chartOnly, mut(chartFile(workers), "{{- if .Values.goWorkers.enabled }}", "{{- $unused := .Values.goWorkers.profiles }}\n{{- if .Values.goWorkers.enabled }}"), depSurfacesAdditiveAndGroupComplete, "goWorkers.profiles"},
 		{"group-queues-drift-from-the-manifest", chartAndManifest, mut(chartFile("values.yaml"), "    - name: sync\n      subcommand: worker\n      queues: [sync]", "    - name: sync\n      subcommand: worker\n      queues: [sync, extra]"), depRiverRenderersSelectManifestQueues, "queues"},
 		{"stream-group-loses-its-runtime-profile", chartAndManifest, mut(chartFile("values.yaml"), "runtimeProfile: ingest", "runtimeProfile: ingest2"), depRiverRenderersSelectManifestQueues, "runtimeProfile"},
 		{"group-drain-budget-drifts", chartAndManifest, mut(chartFile("values.yaml"), "terminationGracePeriodSeconds: 7260", "terminationGracePeriodSeconds: 7261"), depReplicaAndDrainContract, "terminationGracePeriodSeconds"},
@@ -731,7 +807,7 @@ func TestContractGuardsPlantedDefects(t *testing.T) {
 		{"helm-values-regain-a-bridge-variable", chartAndCompose, mut(chartFile("values.yaml"), `  OTEL_ENABLED: "true"`, `  WORKER_OPERATIONAL_BRIDGE_URL: "http://x"
   OTEL_ENABLED: "true"`), depNoRendererEmitsOperationalBridge, "WORKER_OPERATIONAL_BRIDGE_URL"},
 		{"helm-helper-regains-the-bridge-url", chartAndCompose, appendText(chartFile(helpers), `{{- define "dev-health.operationalBridgeURL" -}}x{{- end }}`), depNoRendererEmitsOperationalBridge, "operationalBridgeURL"},
-		{"pagerduty-profile-unbound", chartOnly, mut(chartFile(workers), "{{- with $group.runtimeProfile }}", "{{- with $group.runtimeProfileX }}"), depPagerDutyProfileBinding, "must render --profile"},
+		{"pagerduty-profile-unbound", chartOnly, mut(chartFile(workers), "{{- with $group.runtimeProfile }}", "{{- with $group.runtimeProfileX }}"), depPagerDutyProfileBinding, "must bind --profile"},
 		{"two-groups-run-the-pagerduty-profile", chartOnly, mut(chartFile("values.yaml"), "runtimeProfile: ingest", "runtimeProfile: pagerduty"), depPagerDutyProfileBinding, "exactly one"},
 		{"group-reports-as-the-python-api", chartOnly, mut(chartFile(workers), `value: {{ printf "dev-health-go-%s" $group.name | quote }}`, `value: "dev-health-ops"`), depEveryGroupNamesItselfForOtel, "OTEL_SERVICE_NAME"},
 		{"another-group-gains-the-metrics-queue", chartAndCompose, mut("compose.yml", "- --queues=sync_provider", "- --queues=sync_provider,metrics"), depComposeHeavyAloneOwnsMetricsQueue, "expected only go-worker-heavy"},

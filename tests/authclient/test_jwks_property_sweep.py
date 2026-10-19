@@ -179,11 +179,23 @@ def test_every_code_point_as_x_and_as_kid_matches_the_literal_alphabets() -> Non
     assert len(alphabet) == 64
     lo, hi = (int(v.removeprefix("U+"), 16) for v in SWEEP["alphabets"]["kid_range"])
     prefix = SWEEP["base_document"]["keys"][0]["x"][:42]
+    astral_probes = {
+        base + offset
+        for base in range(0x10000, 0x110000, 0x10000)
+        for offset in (0, 1, 0xFFFF)
+    }
+    astral_probes |= {
+        int(e["rune"].removeprefix("U+"), 16)
+        for e in SWEEP["unicode_categories"]
+        if int(e["rune"].removeprefix("U+"), 16) > 0xFFFF
+    }
     for code in range(0x110000):
         if 0xD800 <= code <= 0xDFFF:
             continue
         # dense through the first 0x3000, then a stride; Go covers all of the BMP
-        if (code >= 0x3000 and code % 7) or (code > 0xFFFF and code % 61):
+        if code not in astral_probes and (
+            (code >= 0x3000 and code % 7) or (code > 0xFFFF and code % 61)
+        ):
             continue
         char = chr(code)
         doc = copy.deepcopy(SWEEP["base_document"])

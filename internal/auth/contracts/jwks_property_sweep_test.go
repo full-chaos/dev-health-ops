@@ -523,14 +523,24 @@ func TestEveryCodePointAsXAndAsKidMatchesTheLiteralAlphabets(t *testing.T) {
 	lo, hi := parseRune(t, sweep.Alphabets.KidRange[0]), parseRune(t, sweep.Alphabets.KidRange[1])
 	prefix := sweep.Base["keys"].([]any)[0].(map[string]any)["x"].(string)
 	prefix = prefix[:42]
+	astralProbes := map[rune]bool{}
+	for plane := rune(1); plane <= 16; plane++ {
+		first := plane * 0x10000
+		astralProbes[first], astralProbes[first+1], astralProbes[first+0xffff] = true, true, true
+	}
+	for _, c := range sweep.Categories {
+		if r := parseRune(t, c.Rune); r > 0xffff {
+			astralProbes[r] = true
+		}
+	}
 	checked := 0
-	// Every code point of the BMP, then every 61st above it (the astral planes
+	// Every code point of the BMP, then every 61st above it and the plane probes (the astral planes
 	// hold no ASCII, and a stride keeps the race build inside its time).
 	for r := rune(0); r <= unicode.MaxRune; r++ {
 		if r >= 0xd800 && r <= 0xdfff {
 			continue
 		}
-		if r > 0xffff && r%61 != 0 {
+		if r > 0xffff && r%61 != 0 && !astralProbes[r] {
 			continue
 		}
 		wantX := "refuse"

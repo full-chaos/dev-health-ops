@@ -42,6 +42,27 @@ const REQUIRED_GROUPS = {
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
 const REQUIRED_SWEEPS = ["jwks"];
+
+// The Unicode general categories, written out here and not read from a sweep
+// file, so a deleted sweep entry cannot also lower its own count. Cs and LC are
+// the two the sweep excludes; every other category must have an entry.
+const JS_GENERAL_CATEGORIES = [
+  "Cc", "Cf", "Cn", "Co", "Ll", "Lm", "Lo", "Lt", "Lu", "Mc", "Me", "Mn", "Nd", "Nl", "No",
+  "Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps", "Sc", "Sk", "Sm", "So", "Zl", "Zp", "Zs",
+];
+
+// First, second and last code point of every astral plane, so a pattern that
+// admits one astral code point cannot hide between the stride's samples.
+function astralPlaneProbes() {
+  const probes = new Set();
+  for (let plane = 1; plane <= 16; plane += 1) {
+    const first = plane * 0x10000;
+    probes.add(first);
+    probes.add(first + 1);
+    probes.add(first + 0xffff);
+  }
+  return probes;
+}
 const sweepExpand = (v) =>
   v && typeof v === "object" && !Array.isArray(v) && "$repeat" in v
     ? (v.prefix ?? "") + v.$repeat[0].repeat(v.$repeat[1]) + (v.suffix ?? "")
@@ -385,13 +406,36 @@ for (const surface of surfaces) {
       if (JSON.stringify(Object.keys(sweep.unicode_categories_excluded ?? {}).sort()) !== '["Cs","LC"]') {
         fail(`${surface}: excluded Unicode categories must be exactly Cs and LC`);
       }
+      const listedCategories = (sweep.unicode_categories ?? []).map((e) => e.category).sort();
+      if (JSON.stringify(listedCategories) !== JSON.stringify([...JS_GENERAL_CATEGORIES].sort())) {
+        fail(`${surface}: sweep categories ${listedCategories.join(",")} differ from the Unicode general categories`);
+      }
+      const anyCategory = new RegExp(`^(?:${JS_GENERAL_CATEGORIES.map((c) => `\\p{${c}}`).join("|")})$`, "u");
+      for (let code = 0; code <= 0x10ffff; code += 1) {
+        if (code >= 0xd800 && code <= 0xdfff) continue;
+        if (!anyCategory.test(String.fromCodePoint(code))) {
+          fail(`${surface}: U+${code.toString(16)} is in no listed Unicode general category`);
+          break;
+        }
+      }
+      for (const entry of sweep.unicode_categories ?? []) {
+        const ch = String.fromCodePoint(parseInt(entry.rune.slice(2), 16));
+        if (!new RegExp(`^\\p{${entry.category}}$`, "u").test(ch)) {
+          fail(`${surface}/category ${entry.category}: ${entry.rune} is not in that category`);
+        }
+      }
+      const astralProbes = astralPlaneProbes();
+      for (const entry of sweep.unicode_categories ?? []) {
+        const code = parseInt(entry.rune.slice(2), 16);
+        if (code > 0xffff) astralProbes.add(code);
+      }
       const alphabet = new Set(sweep.alphabets.x_characters);
       if (alphabet.size !== 64) fail(`${surface}: the x alphabet must hold 64 characters`);
       const [lo, hi] = sweep.alphabets.kid_range.map((v) => parseInt(v.slice(2), 16));
       const xPrefix = sweep.base_document.keys[0].x.slice(0, 42);
       for (let code = 0; code <= 0x10ffff; code += 1) {
         if (code >= 0xd800 && code <= 0xdfff) continue;
-        if (code > 0xffff && code % 61 !== 0) continue;
+        if (code > 0xffff && code % 61 !== 0 && !astralProbes.has(code)) continue;
         const ch = String.fromCodePoint(code);
         const xDoc = structuredClone(sweep.base_document);
         xDoc.keys[0].x = xPrefix + ch;

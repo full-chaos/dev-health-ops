@@ -44,6 +44,50 @@ const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 // Closed vocabularies (CHAOS-10194): contracts/auth/v1/vocabulary/reason-codes.json
 // is the single source for these three fields. Each entry builds a document
 // from a fixture that carries the field, then sets the field to a value.
+// Approved lists, written by hand on purpose: widening the vocabulary file and
+// the schema enums together must also need a deliberate edit here (CHAOS-10194).
+const APPROVED_REVOKED = [
+  "compromised",
+  "owner_request",
+];
+const APPROVED_AUDIT = [
+  "allowed_by_repository_grant",
+  "grant_absent",
+  "repository_not_granted",
+  "platform_role_absent",
+  "credential_missing",
+  "rate_limited",
+  "current_state_unavailable",
+  "authority_unavailable",
+  "upstream_unavailable",
+  "not_found",
+  "revision_conflict",
+  "internal_error",
+  "compromised",
+  "owner_request",
+  "role_granted",
+  "role_revoked",
+  "membership_added",
+  "membership_removed",
+  "membership_status_changed",
+  "grant_created",
+  "grant_revoked",
+  "credential_issued",
+  "credential_rotated",
+  "credential_revoked",
+  "session_revoked",
+  "organization_created",
+  "organization_updated",
+  "principal_disabled",
+  "principal_enabled",
+  "identity_linked",
+  "identity_unlinked",
+  "policy_revision_activated",
+  "entitlement_snapshot_applied",
+  "denied_no_membership",
+  "denied_no_grant",
+  "denied_policy",
+];
 const NOT_IN_THE_VOCABULARY = [
   "secret_0123456789abcdef0123",
   "key_compromised",
@@ -383,6 +427,10 @@ for (const surface of surfaces) {
     } else {
       const values = readJSON(vocabPath)[vocabulary.list]?.values ?? [];
       if (values.length === 0) fail(`${surface}: the ${vocabulary.list} vocabulary is empty`);
+      const approved = vocabulary.list === "revoked_reason" ? APPROVED_REVOKED : APPROVED_AUDIT;
+      if (JSON.stringify([...values].sort()) !== JSON.stringify([...approved].sort())) {
+        fail(`${surface}: the ${vocabulary.list} vocabulary file differs from the approved list in run.mjs`);
+      }
       const build = (v) => {
         const doc = structuredClone(readJSON(path.join(dir, vocabulary.base)));
         vocabulary.set(doc, v);

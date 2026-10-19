@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 )
 
 // The closed vocabularies of two wire fields (CHAOS-10194):
@@ -162,6 +164,89 @@ func TestSchemaEnumsEqualTheVocabularyFile(t *testing.T) {
 	} {
 		if got := enumAt(c.schema, c.path...); !reflect.DeepEqual(sorted(got), sorted(c.want)) {
 			t.Errorf("%s %v: enum %v, vocabulary %v", c.schema, c.path, got, c.want)
+		}
+	}
+}
+
+// The approved lists are written here by hand, on purpose. The vocabulary file
+// and the three schemas are checked against each other, so widening all four
+// together would otherwise pass unseen; a value enters the vocabulary only by a
+// deliberate edit of this list, of the Python and ajv copies, and of the file.
+// A value enters with the producer that emits it (CHAOS-10194).
+var approvedRevokedReasons = []string{
+	"compromised",
+	"owner_request",
+}
+
+var approvedAuditReasonCodes = []string{
+	"allowed_by_repository_grant",
+	"grant_absent",
+	"repository_not_granted",
+	"platform_role_absent",
+	"credential_missing",
+	"rate_limited",
+	"current_state_unavailable",
+	"authority_unavailable",
+	"upstream_unavailable",
+	"not_found",
+	"revision_conflict",
+	"internal_error",
+	"compromised",
+	"owner_request",
+	"role_granted",
+	"role_revoked",
+	"membership_added",
+	"membership_removed",
+	"membership_status_changed",
+	"grant_created",
+	"grant_revoked",
+	"credential_issued",
+	"credential_rotated",
+	"credential_revoked",
+	"session_revoked",
+	"organization_created",
+	"organization_updated",
+	"principal_disabled",
+	"principal_enabled",
+	"identity_linked",
+	"identity_unlinked",
+	"policy_revision_activated",
+	"entitlement_snapshot_applied",
+	"denied_no_membership",
+	"denied_no_grant",
+	"denied_policy",
+}
+
+func TestTheVocabularyFileIsExactlyTheApprovedLists(t *testing.T) {
+	vocab := loadReasonVocabulary(t)
+	for _, c := range []struct {
+		name      string
+		got, want []string
+	}{
+		{"revoked_reason", vocab.RevokedReason.Values, approvedRevokedReasons},
+		{"audit_reason_code", vocab.AuditReasonCode.Values, approvedAuditReasonCodes},
+	} {
+		got := append([]string(nil), c.got...)
+		want := append([]string(nil), c.want...)
+		sort.Strings(got)
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: vocabulary file %v, approved list %v", c.name, got, want)
+		}
+	}
+}
+
+// The producer owns its reason codes: every value internal/audit accepts in an
+// audit attribute must be a value the audit-event wire form accepts.
+func TestEveryReasonCodeTheAuditProducerAcceptsValidatesOnTheWire(t *testing.T) {
+	producer := audit.AttributeVocabulary()["reason_code"]
+	if len(producer) < 20 {
+		t.Fatalf("the producer vocabulary has %d reason codes; the cross-check would be vacuous", len(producer))
+	}
+	root := testRoot(t)
+	for _, v := range producer {
+		if err := Validate(root, AuditEventSurface, withAuditReasonCode(t, v)); err != nil {
+			t.Errorf("producer reason_code %q is refused by audit-event.v1: %v", v, err)
 		}
 	}
 }

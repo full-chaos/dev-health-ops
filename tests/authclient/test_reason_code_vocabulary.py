@@ -110,3 +110,55 @@ def test_the_schema_enums_equal_the_vocabulary_file() -> None:
     assert sorted(entry.get("enum", [])) == sorted(REVOKED)
     assert sorted(items.get("enum", [])) == sorted(REVOKED)
     assert sorted(audit.get("enum", [])) == sorted(AUDIT)
+
+
+# Approved lists, written by hand on purpose (see the Go test of the same name):
+# widening the vocabulary file and the schema enums together must also need a
+# deliberate edit here.
+APPROVED_REVOKED = [
+    "compromised",
+    "owner_request",
+]
+APPROVED_AUDIT = [
+    "allowed_by_repository_grant",
+    "grant_absent",
+    "repository_not_granted",
+    "platform_role_absent",
+    "credential_missing",
+    "rate_limited",
+    "current_state_unavailable",
+    "authority_unavailable",
+    "upstream_unavailable",
+    "not_found",
+    "revision_conflict",
+    "internal_error",
+    "compromised",
+    "owner_request",
+    "role_granted",
+    "role_revoked",
+    "membership_added",
+    "membership_removed",
+    "membership_status_changed",
+    "grant_created",
+    "grant_revoked",
+    "credential_issued",
+    "credential_rotated",
+    "credential_revoked",
+    "session_revoked",
+    "organization_created",
+    "organization_updated",
+    "principal_disabled",
+    "principal_enabled",
+    "identity_linked",
+    "identity_unlinked",
+    "policy_revision_activated",
+    "entitlement_snapshot_applied",
+    "denied_no_membership",
+    "denied_no_grant",
+    "denied_policy",
+]
+
+
+def test_the_vocabulary_file_is_exactly_the_approved_lists() -> None:
+    assert sorted(REVOKED) == sorted(APPROVED_REVOKED)
+    assert sorted(AUDIT) == sorted(APPROVED_AUDIT)

@@ -58,6 +58,9 @@ func TestAuthComposeProofPostgresHasNoFixedNameOrPublishedPort(t *testing.T) {
 		t.Skip("docker is not installed")
 	}
 	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("docker is installed but its compose plugin is not usable in CI: %v", err)
+		}
 		t.Skip("the docker compose plugin is not installed")
 	}
 	root := authProofRoot(t)
@@ -127,27 +130,52 @@ func TestAuthComposeProofJobRunsBesideADecoyPostgres(t *testing.T) {
 	}
 }
 
-// A reused project name makes compose recreate the earlier project's containers, and the
-// disappearance check then reports the damage after it is done. The proof must refuse first.
-func TestAuthComposeProofRefusesAProjectThatAlreadyHasContainers(t *testing.T) {
+// A reused project name makes compose recreate or remove the earlier project's containers,
+// volumes and networks, and cleanup removes volumes and networks too. The proof must refuse
+// before touching anything when any of them exists, whether found by label or by name.
+func TestAuthComposeProofRefusesAProjectThatAlreadyHasResources(t *testing.T) {
 	root := authProofRoot(t)
-	bin := t.TempDir()
-	log := filepath.Join(bin, "docker.log")
-	stub := "#!/bin/sh\necho \"$@\" >>\"" + log + "\"\ncase \"$*\" in *label=com.docker.compose.project=*) echo deadbeef;; esac\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
+	cases := []struct{ hit, match string }{
+		{"label-container", "ps*label=com.docker.compose.project=*"},
+		{"name-container", "ps*name=*"},
+		{"label-volume", "volume?ls*label=com.docker.compose.project=*"},
+		{"name-volume", "volume?ls*name=*"},
+		{"label-network", "network?ls*label=com.docker.compose.project=*"},
+		{"name-network", "network?ls*name=*"},
+		{"none", ""},
 	}
-	cmd := exec.Command("bash", filepath.Join(root, "ci", "check_auth_compose.sh"))
-	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "AUTH_COMPOSE_PROOF_PROJECT=authproofcollision")
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("the proof ran against a project name that already has containers:\n%s", out)
-	}
-	calls, _ := os.ReadFile(log)
-	for _, line := range strings.Split(string(calls), "\n") {
-		if strings.Contains(line, " up ") || strings.Contains(line, " down ") || strings.Contains(line, " rm ") {
-			t.Errorf("the proof touched the existing project before refusing: %q", line)
-		}
+	for _, c := range cases {
+		t.Run(c.hit, func(t *testing.T) {
+			bin := t.TempDir()
+			log := filepath.Join(bin, "docker.log")
+			stub := "#!/bin/sh\necho \"$@\" >>\"" + log + "\"\n"
+			if c.match != "" {
+				stub += "case \"$*\" in " + c.match + ") echo deadbeef;; esac\n"
+			}
+			stub += "exit 0\n"
+			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", filepath.Join(root, "ci", "check_auth_compose.sh"))
+			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "AUTH_COMPOSE_PROOF_PROJECT=authproofcollision")
+			out, err := cmd.CombinedOutput()
+			calls, _ := os.ReadFile(log)
+			reached := strings.Contains(string(calls), " up ")
+			if c.hit == "none" {
+				if !reached {
+					t.Fatalf("with nothing present the proof never reached compose up (the stub proves nothing):\n%s", out)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("the proof ran although a project %s exists:\n%s", c.hit, out)
+			}
+			for _, line := range strings.Split(string(calls), "\n") {
+				if strings.Contains(line, " up ") || strings.Contains(line, " down ") || strings.Contains(line, " rm ") {
+					t.Errorf("the proof touched the project before refusing: %q", line)
+				}
+			}
+		})
 	}
 }
 

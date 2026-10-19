@@ -38,10 +38,21 @@ die() {
 command -v docker >/dev/null 2>&1 || die "docker is required"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 
-# Refuse before the cleanup trap exists: that trap would remove the project.
-# A project name that already has containers would be recreated by `up` and removed by cleanup.
-existing="$(docker ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT}")"
-[ -z "${existing}" ] || die "the compose project ${PROJECT} already has containers; refusing to recreate or remove them"
+# Refuse before the cleanup trap exists (it would remove the project): compose recreates the
+# containers of a reused project name and cleanup deletes its volumes and networks, so any
+# container, volume or network that carries the project's label or name is a stop.
+refuse_if_present() {
+  local kind="$1" found
+  shift
+  found="$("$@")"
+  [ -z "${found}" ] || die "a ${kind} of the compose project ${PROJECT} exists; refusing to recreate or remove it"
+}
+refuse_if_present container docker ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT}"
+refuse_if_present container docker ps -aq --no-trunc --filter "name=^/${PROJECT}[-_]"
+refuse_if_present volume docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}"
+refuse_if_present volume docker volume ls -q --filter "name=^${PROJECT}_"
+refuse_if_present network docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}"
+refuse_if_present network docker network ls -q --filter "name=^${PROJECT}_"
 
 # compose.yml interpolates this at parse time for a service the proof never
 # starts; any non-empty value satisfies it.

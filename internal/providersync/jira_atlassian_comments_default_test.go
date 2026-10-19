@@ -22,6 +22,7 @@ import (
 
 func jiraCommentsClaim(options map[string]any) Claim {
 	claim := nativeTestClaim("jira", "work-items")
+	claim = jiraFixtureWindow(claim)
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = options
 	return claim

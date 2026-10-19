@@ -494,15 +494,15 @@ Label `error_class` is one of `context_canceled`, `deadline_exceeded`,
 and is not counted. The matching Warn log line carries the same class and the
 root Go type, never the error text.
 
-## Linear project ensure rows
+## Project ensure rows (Linear, Jira)
 
-A Linear work-items unit names every project it saw by an ensure row in `projects`. The row carries an epoch version, so a catalog row always replaces it. The unit writes an ensure row only when it can change the newest stored row. A stored row of a newer version, or of the same version with the same content, is left alone. A missing, older or changed row is written.
+A Linear or Jira work-items unit names every project it saw by an ensure row in `projects`. A Linear row carries an epoch version, so a catalog row always replaces it. A Jira row carries the unit's time, so a unit run again for the same instant, as the windows of one first sync are, leaves the stored row alone. The unit writes an ensure row only when it can change the newest stored row. A stored row of a newer version, or of the same version with the same content, is left alone. A missing, older or changed row is written.
 
-`dev_health_linear_project_catalog_ensure_total{outcome}` counts the rows:
+`dev_health_project_catalog_ensure_total{provider,outcome}` counts the rows:
 
 - `written`: the row was written.
 - `skipped`: the stored row already decides the newest value.
-- `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `linear_project_catalog_ensure_read_failed` was logged. The unit does not fail.
+- `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `project_catalog_ensure_read_failed` was logged. The unit does not fail.
 
 ## Work-item person rows: persons in more than one team
 

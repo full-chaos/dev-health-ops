@@ -241,16 +241,15 @@ func TestRunUnitsBudgetDeferralsIncludeBudgetContentionWaits(t *testing.T) {
 }
 
 // CHAOS-8801: "catching up" follows the planner's window ratchet, which covers
-// the work-items family of GitHub and Linear, while the reported cost_class
-// stays the registry's. GitLab and Jira are not ratcheted yet, so they never
-// read as catching up.
+// the work-items family of every provider, while the reported cost_class
+// stays the registry's.
 func TestRunUnitsCatchingUpFollowsTheWorkItemWindowRatchet(t *testing.T) {
 	unsetForTest(t, "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
 	unsetForTest(t, "SYNC_WATERMARK_OVERLAP")
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	name, full, external := "repo", "org/repo", "org/repo"
 	at := now.Add(-30 * 24 * time.Hour)
-	for provider, wantCatchingUp := range map[string]bool{"github": true, "linear": true, "gitlab": false, "jira": false} {
+	for provider, wantCatchingUp := range map[string]bool{"github": true, "linear": true, "gitlab": true, "jira": true} {
 		unit := runUnit{ID: uuid.New(), SyncRunID: faultRunID, SourceID: uuid.New(), OrgID: "org", Provider: provider,
 			DatasetKey: "work-items", CostClass: "medium", Mode: "incremental", Status: "success",
 			CreatedAt: now, UpdatedAt: now, HasSource: true, SourceName: &name, SourceFullName: &full, SourceExternalID: &external}

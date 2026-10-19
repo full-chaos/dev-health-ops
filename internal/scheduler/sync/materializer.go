@@ -1874,7 +1874,9 @@ ORDER BY dataset_key`, orgID, integrationID)
 		if option.InitialSyncDepth > 0 {
 			depth = &option.InitialSyncDepth
 		}
-		result = append(result, PlanDataset{Key: key, InitialDepthDays: depth})
+		result = append(result, PlanDataset{
+			Key: key, InitialDepthDays: depth, FullQuery: datasetFetchIsUnbounded(provider, key, raw),
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, nil, err
@@ -1984,6 +1986,20 @@ func loadFailureStreaks(
 		}
 	}
 	return streaks
+}
+
+// datasetFetchIsUnbounded reads the options of the canonical work-items dataset row (the options the route
+// reads) for a query the unit window does not bound. Unreadable options read as bounded: the route then
+// gets the capped window it would get with no options.
+func datasetFetchIsUnbounded(provider, key string, raw []byte) bool {
+	if key != canonicalWorkItemsDataset {
+		return false
+	}
+	var options map[string]any
+	if json.Unmarshal(raw, &options) != nil {
+		return false
+	}
+	return providersync.WorkItemsFetchIsUnbounded(strings.ToLower(provider), options)
 }
 
 func loadPlanWatermarks(ctx context.Context, tx pgx.Tx, orgID string, sources []PlanSource, datasets []PlanDataset) (map[WatermarkKey]time.Time, error) {

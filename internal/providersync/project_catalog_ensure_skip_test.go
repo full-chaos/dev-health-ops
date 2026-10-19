@@ -16,25 +16,25 @@ import (
 func TestLinearProjectEnsureChangesRow(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	row := linearEnsureProjectsRow("org", "p1", "Alpha", now)
-	same := linearStoredProject{
+	same := storedEnsureProject{
 		name: "Alpha", isActive: row.IsActive, state: row.State, stateSource: row.StateSource, updatedAt: linearProjectsEpoch,
 	}
 	for name, tc := range map[string]struct {
-		mutate func(*linearStoredProject)
+		mutate func(*storedEnsureProject)
 		want   bool
 	}{
-		"identical content, same version": {func(*linearStoredProject) {}, false},
-		"stored version is newer":         {func(s *linearStoredProject) { s.updatedAt = now; s.name = "Other" }, false},
-		"stored version is older":         {func(s *linearStoredProject) { s.updatedAt = linearProjectsEpoch.Add(-time.Second) }, true},
-		"same version, name changed":      {func(s *linearStoredProject) { s.name = "" }, true},
-		"same version, state changed":     {func(s *linearStoredProject) { s.state = "completed" }, true},
-		"same version, state source":      {func(s *linearStoredProject) { s.stateSource = "x" }, true},
-		"same version, active flag":       {func(s *linearStoredProject) { s.isActive ^= 1 }, true},
-		"same version, project key":       {func(s *linearStoredProject) { s.key = "KEY" }, true},
+		"identical content, same version": {func(*storedEnsureProject) {}, false},
+		"stored version is newer":         {func(s *storedEnsureProject) { s.updatedAt = now; s.name = "Other" }, false},
+		"stored version is older":         {func(s *storedEnsureProject) { s.updatedAt = linearProjectsEpoch.Add(-time.Second) }, true},
+		"same version, name changed":      {func(s *storedEnsureProject) { s.name = "" }, true},
+		"same version, state changed":     {func(s *storedEnsureProject) { s.state = "completed" }, true},
+		"same version, state source":      {func(s *storedEnsureProject) { s.stateSource = "x" }, true},
+		"same version, active flag":       {func(s *storedEnsureProject) { s.isActive ^= 1 }, true},
+		"same version, project key":       {func(s *storedEnsureProject) { s.key = "KEY" }, true},
 	} {
 		stored := same
 		tc.mutate(&stored)
-		if got := linearProjectEnsureChangesRow(row, stored); got != tc.want {
+		if got := projectEnsureChangesRow(row, stored); got != tc.want {
 			t.Errorf("%s: changes = %v, want %v", name, got, tc.want)
 		}
 	}
@@ -55,7 +55,7 @@ func TestLinearProjectEnsureKeepsEveryRowWhenTheStoredRowsAreUnreadable(t *testi
 	rows := []projectmembership.CatalogRow{
 		linearEnsureProjectsRow("org", "p1", "A", now), linearEnsureProjectsRow("org", "p2", "B", now),
 	}
-	keep := linearProjectEnsureKeep(context.Background(), failingEnsureQuerier{}, "org", rows)
+	keep := projectEnsureKeep(context.Background(), failingEnsureQuerier{}, "linear", "org", rows)
 	if len(keep) != 2 || !keep[0] || !keep[1] {
 		t.Fatalf("keep = %v, want both rows kept", keep)
 	}
@@ -66,7 +66,7 @@ func TestLinearProjectEnsureKeepsEveryRowWhenTheStoredRowsAreUnreadable(t *testi
 	var got int64
 	for _, scope := range collected.ScopeMetrics {
 		for _, metric := range scope.Metrics {
-			if metric.Name != linearProjectEnsureName {
+			if metric.Name != projectEnsureName {
 				continue
 			}
 			sum, _ := metric.Data.(metricdata.Sum[int64])

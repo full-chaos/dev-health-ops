@@ -60,7 +60,7 @@ func (doer jiraSearchJQLMigrationDoer) Do(request *http.Request) (*http.Response
 // route calls the retired, 410-returning /rest/api/3/search) and on the fix
 // it passes (the route calls /rest/api/3/search/jql with cursor paging).
 func TestJiraAtlassianRouteMigratedFromRetiredSearchEndpoint(t *testing.T) {
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "SUP"
 	claim.DatasetOptions = map[string]any{"fetch_comments": false}
 	client := jiraWorkItemsTestClient(

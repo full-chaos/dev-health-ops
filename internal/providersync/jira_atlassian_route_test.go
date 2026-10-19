@@ -34,6 +34,8 @@ type jiraAtlassianDoer struct {
 	devStatusBody     string
 	// searchStatus, when set, is the status of every search request (a failing search).
 	searchStatus int
+	// searchBody, when set, replaces the search answer.
+	searchBody string
 }
 
 func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error) {
@@ -48,6 +50,8 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 	case request.URL.Path == "/rest/api/3/search/jql" && doer.searchStatus != 0:
 		status = doer.searchStatus
 		body = `{"errorMessages":["bad request"]}`
+	case request.URL.Path == "/rest/api/3/search/jql" && doer.searchBody != "":
+		body = doer.searchBody
 	case request.URL.Path == "/rest/api/3/search/jql":
 		body = `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":["support"],"priority":{"name":"Highest"},"assignee":{"accountId":"assignee-201","displayName":"Assignee"},"reporter":{"emailAddress":"reporter@example.com","accountId":"reporter-201","displayName":"Reporter"},"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z","customfield_10020":[{"id":9001,"name":"August"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-202"}}]}}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
@@ -82,7 +86,7 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 }
 
 func jiraAtlassianClaim() Claim {
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_worklogs":      true,
@@ -504,7 +508,7 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 			return nil, nil
 		}
 	})
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_dev_status": true, "dev_status_max_requests": 2, "fetch_comments": false,
@@ -569,7 +573,7 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 			return nil, nil
 		}
 	})
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_dev_status": true, "dev_status_max_requests": 3, "fetch_comments": false,
@@ -799,7 +803,7 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 					return nil, nil
 				}
 			})
-			claim := nativeTestClaim("jira", "work-items")
+			claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 			claim.SourceExternalID = "OPS"
 			claim.DatasetOptions = map[string]any{"fetch_dev_status": true, "fetch_comments": false}
 			client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
@@ -861,7 +865,7 @@ func TestJiraAtlassianRouteLogsItsFetchWindowAtInfo(t *testing.T) {
 	}
 	line := logged.String()
 	if !strings.Contains(line, "msg=jira_work_items_window") || !strings.Contains(line, "issues=1") ||
-		!strings.Contains(line, "updated >= '2026-06-30' AND updated < '2026-08-02'") || strings.Contains(line, "statusCategory") {
+		!strings.Contains(line, "updated >= '2026-06-30' AND updated < '2026-09-02'") || strings.Contains(line, "statusCategory") {
 		t.Fatalf("the active Jira route did not log its bounded window: %q", line)
 	}
 }

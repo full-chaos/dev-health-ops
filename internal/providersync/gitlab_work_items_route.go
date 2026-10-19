@@ -327,6 +327,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		return CompleteRouteBatch{}, issueErr
 	}
 	pages += issuePages
+	issuePayloads = dropOutsideWorkItemWindow(ctx, counted.Metrics, claim, issuePayloads, gitLabWorkItemWindowView)
 	for _, raw := range issuePayloads {
 		var payload gitlabIssueWorkItemPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
@@ -448,6 +449,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, mergeRequestErr
 		}
 		pages += mergeRequestPages
+		mergeRequests = dropOutsideWorkItemWindow(ctx, counted.Metrics, claim, mergeRequests, gitLabWorkItemWindowView)
 		for _, raw := range mergeRequests {
 			var payload gitlabMergeRequestWorkItemPayload
 			if err := json.Unmarshal(raw, &payload); err != nil {
@@ -884,6 +886,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 		return outcome, nil
 	}
 	listed = len(payloads)
+	payloads = dropOutsideWorkItemWindow(ctx, client.Metrics, claim, payloads, gitLabWorkItemWindowView)
 	for _, raw := range payloads {
 		var payload gitlabEpicPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {

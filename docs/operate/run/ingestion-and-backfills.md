@@ -52,6 +52,23 @@ planner widens the cap to exceed the overlap and records a warning naming both
 values. Treat that warning as a configuration defect to correct, not as a healthy
 steady state — the widened window is more expensive than the one requested.
 
+The work-item family of every provider (GitHub, GitLab, Jira, Linear) is capped
+the same way, and a work-items unit holds exactly the half-open window
+`[since, before)`. The GitLab `updated_before` bound is inclusive and the Jira
+date bounds are widened for every user time zone (up to 50 hours beyond the
+window on each side), so the fetch can return items that belong to the adjacent
+window; the route drops them, and the adjacent window writes them once. Each
+dropped item counts in `dev_health_work_items_outside_window_dropped_total{provider}`,
+and a call that dropped any logs one Info line
+`providersync.work_items.dropped_outside_window` (provider, window, `dropped`,
+`kept`); the item itself is a Debug line. Dropping is the expected case on every
+sync, so the counter is a rate to read, not an alert. `fetch_all` and a JQL
+override are not windowed and drop nothing; because such a Jira dataset runs the
+same full query in every unit, the planner plans it as ONE window (the whole
+depth) instead of repeating that query per window. It logs
+`sync.plan.work_items_full_query_window` and counts
+`sync_plan_gate_total{outcome="full_query_window"}` for it.
+
 A GitHub work-items unit lists issues in updated order, oldest first
 (`sort=updated&direction=asc` with `since`), and stops at the first issue
 updated at or after the window end, so a bounded window completes however many

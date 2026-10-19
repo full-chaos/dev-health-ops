@@ -1379,6 +1379,18 @@ old and new generation. The write is a compare-and-set on the old generation,
 so a second pass repairs nothing. Audited under the `metrics.finalize_redrive`
 action.
 
+A pass has its own time budget, `--timeout` (default `10m`, at most `1h`),
+not the 30 s deadline of other verbs (CHAOS-10139). When the budget ends
+before the range is done the command exits 0 and prints
+`generation_repair.partial=true`, `resume_from` (the target day of the first
+row not handled) and `remaining`. Rows commit one by one, so rerun the same
+command with `--from <resume_from>`; repeat until `partial` is false. A store
+failure still exits 1. `dho` is a one-shot CLI with no metrics exporter, so its
+telemetry is the log lines: a Warn line (`metric`
+`dev_health_generation_repair_failures_total`, `step`) on a failure and an Info
+line (`metric` `dev_health_generation_repair_partial_total`) on a partial. The
+counters themselves are recorded for a process that has a MeterProvider.
+
 #### `metrics partition-recompute` (CHAOS-4459)
 
 Historical recompute: reset an already-`'succeeded'` daily-metrics run's

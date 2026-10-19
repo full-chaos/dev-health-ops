@@ -17,6 +17,7 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/queuecontrol"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -135,16 +136,14 @@ const (
 	devHealthEnv = "DEV_HEALTH_ENV"
 )
 
-// QueueControlMode describes the endpoint semantics promised by the operator.
-// Direct PostgreSQL and PgBouncer session pooling preserve River's required
-// session semantics. Transaction pooling cannot propagate cancellation to a
-// running River worker.
-type QueueControlMode string
+// QueueControlMode is defined in queuecontrol so that internal/storage/postgres
+// can name it without importing this package (and the ClickHouse driver).
+type QueueControlMode = queuecontrol.Mode
 
 const (
-	QueueControlDirect      QueueControlMode = "direct"
-	QueueControlSession     QueueControlMode = "session"
-	QueueControlTransaction QueueControlMode = "transaction"
+	QueueControlDirect      = queuecontrol.Direct
+	QueueControlSession     = queuecontrol.Session
+	QueueControlTransaction = queuecontrol.Transaction
 )
 
 // Spec describes the immutable configuration surface of one executable.

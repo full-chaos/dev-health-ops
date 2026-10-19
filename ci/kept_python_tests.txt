@@ -8,6 +8,7 @@
 # job contract the Go binaries own, the uv lock. A file that pins only Python
 # source, a Python migration, a Python oracle or a golden recording is NOT
 # listed. New files are NOT picked up: add a path here on purpose.
+tests/authclient/test_credential_contract_goldens.py
 tests/authclient/test_discovery_contract_goldens.py
 tests/authclient/test_error_envelope_contract_goldens.py
 tests/authclient/test_jwks_document_contract_goldens.py
@@ -58,3 +59,6 @@ tests/workers/test_helm_worker_disruption_and_drain.py
 tests/workers/test_provider_artifact_skip_alert.py
 tests/workers/test_transitional_inventory_contract.py
 tests/workers/test_unreclaimable_sweep_alerts.py
+tests/authclient/test_authorization_contract_goldens.py
+tests/authclient/test_endpoint_auth_profile_contract_goldens.py
+tests/authclient/test_jwks_property_sweep.py

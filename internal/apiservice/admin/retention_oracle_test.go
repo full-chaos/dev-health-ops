@@ -383,7 +383,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		},
 	})
 	t.Log(receipt)
-	createdLedger.reset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_retention_policies")
+	createdLedger.verifyThenReset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_retention_policies")
 
 	compare := func(name, query string) {
 		t.Helper()
@@ -417,6 +417,25 @@ FROM org_retention_policies ORDER BY org_id::text, resource_type`))
 		Headers: withUser("tier", "not-a-uuid"), Body: venueoracle.B64(`{"resource_type":"nope"}`)})
 	if malformed.Status != 400 || !strings.Contains(malformed.Body, "Invalid resource type") {
 		t.Errorf("malformed X-User-Id: Go answered %d %s, want the resource-type 400 (the header is not read)", malformed.Status, malformed.Body)
+	}
+	// CHAOS-10163: the two header shapes whose Python answer was consumed
+	// unread (a non-hex 32-char value, a well-formed id naming no user) are
+	// sent to Go too, on the "ovr" org (metrics_daily and sync_logs are free
+	// there): both are ignored and the principal is stored.
+	for _, c := range []struct{ name, header, resourceType string }{
+		{"go-only non-hex X-User-Id", strings.Repeat("z", 32), "metrics_daily"},
+		{"go-only unknown X-User-Id", nextID().String(), "sync_logs"},
+	} {
+		response := venueoracle.Do(t, goBase, venueoracle.Request{Name: c.name, Method: "POST", Path: admin,
+			Headers: withUser("ovr", c.header), Body: venueoracle.B64(`{"resource_type":"` + c.resourceType + `"}`)})
+		if response.Status != 201 {
+			t.Errorf("%s: Go answered %d %s, want 201 (the header is ignored)", c.name, response.Status, response.Body)
+			continue
+		}
+		if got := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
+			`SELECT created_by_id::text FROM org_retention_policies WHERE resource_type = '`+c.resourceType+`' AND org_id = '`+orgOverride.String()+`'`); got != adminOvr.String() {
+			t.Errorf("%s: created_by_id = %q, want the principal %s", c.name, got, adminOvr)
+		}
 	}
 	golden.Finish(t)
 }

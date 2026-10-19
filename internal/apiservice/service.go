@@ -338,6 +338,10 @@ func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	if err := registry.RegisterMetrics("sync_config_dataset_selection", syncadmin.SelectionMetricsSource()); err != nil {
 		return err
 	}
+	// CHAOS-10104: the triggers synchandoff.Mint refuses before any write.
+	if err := registry.RegisterMetrics("sync_manual_trigger_refused", synchandoff.RefusalMetricsSource()); err != nil {
+		return err
+	}
 	// CHAOS-8222: the manual-trigger await outcome counter and latency histogram
 	// (Python's sync_manual_trigger_await_*), counted inside synchandoff.Wait.
 	return registry.RegisterMetrics("sync_manual_trigger_await", synchandoff.AwaitMetricsSource())

@@ -794,6 +794,24 @@ ids no longer follow its current path. Every GitLab route resolves the identity 
 - Not changed yet: `work_items.project_id` and sprint ids keep the current path. Until they move to the catalog id,
   a project at a reused path shares `project_id` with the old project's items, and so its ownership join.
 
+GitHub repository identity (CHAOS-9879): the same rules, keyed by GitHub's numeric repository id. The GitHub
+repository route writes `repos.provider_repo_id` (the numeric id) and `repos.identity_path` (the name the `repo_id`
+was minted from); every other GitHub route and the work-items collector resolve the `repo_id` through the same
+reader (`GitLabRepoIdentityClickHouseReader` with `Provider: "github"`, the one shared resolver
+`resolveRepoIdentity`).
+
+- A repository the store holds keeps its `repo_id` and identity name across a rename or transfer. A repository the
+  store does not hold mints from its current name, so the first run of a repository before its repo-metadata unit
+  has written the anchor can still split on a rename (CHAOS-10130).
+- A new repository at a name another repository's id was minted from mints from `{name}@{id}`.
+- GitHub work-item, pull-request and sprint ids are `gh:{identity_name}#{n}`, `ghpr:{identity_name}#{n}` and
+  `ghms:{identity_name}:{id}`. `work_items.project_id` stays the current name, so name-keyed ownership grants keep
+  joining. A reference to another repository (a closing reference, an `owner/repo#n` in text) and a Projects v2
+  board item are stored under that repository's identity name; a name no stored row knows stays as stated.
+- `issueprlinks`, `issuepredges` and investment explain accept the identity name and the current name, each under
+  its own provider. A repository that holds a name owns it even with no work item: text that names it never links
+  another repository's item that was minted from that name.
+
 Jira before this change: the three team-catalog writers (project-as-team, the legacy
 `jira_project_ops_team_links` carry-forward, Atlassian Teams) built the id from the project KEY
 (`{org_id}:jira:{KEY}`), while the work-items route wrote the native id. One project was two `projects`
@@ -1816,11 +1834,19 @@ write, and on a store write that does not refuse a bare id before its batch.
     newer row is inactive is not carried, so the inactive team does not come back as `custom:<id>`. An admin
     edit of a Jira project-as-team row (the same id) stays (counted as `admin_teams_not_carried`): it is that
     row, not a Jira team, and `RetireJiraProjectAsTeamRows` owns it.
-  - A new id that already has a row (`teams_already_keyed`): that row is not written again, but when the moved
-    row holds manual members the kept row does not, a new version of the kept row takes them
+  - A new id that already has a row (`teams_already_keyed`): the moved row is not written under it, but when the
+    moved row holds manual members the kept row does not, a new version of the kept row takes them
     (`manual_members_folded`), written at the stored version (ReplacingMergeTree keeps the last inserted row
     of an equal version), so a later write of its own writer stamped at or after that version still wins. Manual members are an admin's statement that no other writer restores; the kept row and
-    the moved team are one team.
+    the moved team are one team. The new version is written by `teamprovider.Restate` (CHAOS-10099): ONE
+    `INSERT INTO teams ... SELECT ... FROM teams FINAL` of the kept ids, which takes every column from the stored
+    row in that statement (the members it gains added once, `is_active`, the oldest `created_at`, and the provider
+    identity by the 0.4i rule), so a write of the kept row that commits after the carry's read, even at the same
+    version, is the row it copies and is kept. The carry's read only decides what to write and counts it. A kept
+    row deleted after that read is not written (the statement selects no deleted row): the delete stands, and the
+    carry counts the planned rows the server did not write as `kept_teams_not_restated` (Info
+    `team_id_carry_kept_teams_not_restated`, counter `dev_health_team_id_carry_kept_teams_not_restated_total`).
+    The window left is the one statement (section 0.4i).
     A custom team (an admin's own or a pushed one, stored with provider `""`) carries as the ACTIVE team
     (chris D6023, CHAOS-9003: custom = admin = push API): when the kept row's current version is inactive, the
     same new version of the kept row is written with `is_active = 1` (`keyed_teams_activated`), also when it
@@ -1951,7 +1977,9 @@ the sync saw and is never changed: a rename at the provider changes `native_team
 what tells the sync it is the same team (the rename change builds on it). `is_active` is not touched by `gone_at`: a
 gone team keeps its past reads and attribution (chris ruling, CHAOS-9432: never deactivate a gone team).
 
-- **Carry, inside the write (CHAOS-9999).** Every Go writer of `teams` writes through `internal/teamprovider.Insert`:
+- **Carry, inside the write (CHAOS-9999).** Every Go writer of `teams` writes through `internal/teamprovider.Insert`
+  (or `teamprovider.Restate`, which writes a stored team again from its own stored version: the team id carry's
+  kept rows, CHAOS-10099):
   one `INSERT ... SELECT` that reads the stored values of the three columns in the same statement. `provider_team_id`
   and `provider_name` are the run's own value when it has one, else the newest NON-EMPTY value over every stored
   version (a writer that does not know the provider's id never erases it); `gone_at` is NULL for a catalog write of a

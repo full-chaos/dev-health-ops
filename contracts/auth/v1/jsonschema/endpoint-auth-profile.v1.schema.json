@@ -69,9 +69,10 @@
             "authorization_scheme",
             "credential_prefix",
             "dedicated_header",
+            "jwt_header_alg",
             "signature_header"
           ],
-          "description": "How the class is chosen from the request BEFORE any validator runs: the Authorization scheme, a fixed credential prefix, a dedicated header, or a signature header. Closed on purpose: there is no 'try each validator' value, because validator fan-out is the CHAOS-3271 defect."
+          "description": "How the class is chosen from the request BEFORE any validator runs: the Authorization scheme, a fixed credential prefix, a dedicated header, the `alg` field of the JWT protected header (compared exactly; query-api picks its Bearer verifier this way, so with the edge verifier unconfigured an HS256 token is refused rather than misrouted), or a signature header. Closed on purpose: there is no 'try each validator' value, because validator fan-out is the CHAOS-3271 defect."
         },
         "name": {
           "type": "string",
@@ -111,6 +112,31 @@
         }
       },
       "description": "Issuer, audience, type and algorithm a signed token must carry, all four together or none. Issuer and audience are the exact pinned values (G-13); principal.v1 owns their definition. REQUIRED when any accepted class is a signed token whose pins this schema can express, and FORBIDDEN otherwise, so the two directions agree (the pinned classes are user_access_token, workload_token, ops_access_token_hs256, ops_refresh_token, acr_web_assertion, effective_principal_envelope: EdDSA or HS256 JWTs; the rules are the first two allOf branches); a route accepting one of them with no pins would accept any token of that class from any issuer, audience or algorithm. Omit for opaque and signature classes, which have no issuer or algorithm. A signed class whose algorithm or envelope is outside the `algorithm` enum (auth_js_browser_session is an encrypted JWT, acr_workload_identity_exchange and github_app_installation_token carry RS256 JWTs) cannot be described by this profile yet, so `accepted_credential_classes` REFUSES them rather than accepting them without pins; supporting one means widening `algorithm` and moving the class into the pinned list together, a deliberate amendment."
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-class token pins, keyed by credential class id, for a route that accepts two or more pinned signed classes (the single `token` block holds one algorithm, so classes with different algorithms need one block each). REQUIRED when two or more pinned classes are accepted, FORBIDDEN otherwise, and never beside `token`: exactly one of the two carries the pins. The key set must equal the pinned classes in accepted_credential_classes: one rule per pinned class (the last allOf rules) requires its key when the class is accepted and refuses it when not; a key outside the pinned classes is refused by additionalProperties.",
+      "properties": {
+        "user_access_token": {
+          "$ref": "#/properties/token"
+        },
+        "workload_token": {
+          "$ref": "#/properties/token"
+        },
+        "ops_access_token_hs256": {
+          "$ref": "#/properties/token"
+        },
+        "ops_refresh_token": {
+          "$ref": "#/properties/token"
+        },
+        "acr_web_assertion": {
+          "$ref": "#/properties/token"
+        },
+        "effective_principal_envelope": {
+          "$ref": "#/properties/token"
+        }
+      }
     },
     "minimum_assurance": {
       "$ref": "principal.v1.schema.json#/properties/authentication/properties/assurance",
@@ -235,7 +261,8 @@
                 "acr_web_assertion",
                 "effective_principal_envelope"
               ]
-            }
+            },
+            "maxContains": 1
           }
         },
         "required": [
@@ -276,12 +303,55 @@
       },
       "then": {
         "not": {
-          "required": [
-            "token"
-          ],
-          "properties": {
-            "token": {}
+          "anyOf": [
+            {
+              "required": [
+                "token"
+              ],
+              "properties": {
+                "token": {}
+              }
+            },
+            {
+              "required": [
+                "tokens"
+              ],
+              "properties": {
+                "tokens": {}
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "enum": [
+                "user_access_token",
+                "workload_token",
+                "ops_access_token_hs256",
+                "ops_refresh_token",
+                "acr_web_assertion",
+                "effective_principal_envelope"
+              ]
+            },
+            "minContains": 2
           }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "required": [
+          "tokens"
+        ],
+        "properties": {
+          "tokens": {}
         }
       }
     },
@@ -324,6 +394,274 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "user_access_token"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "user_access_token"
+            ],
+            "properties": {
+              "user_access_token": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "user_access_token"
+              ],
+              "properties": {
+                "user_access_token": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "workload_token"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "workload_token"
+            ],
+            "properties": {
+              "workload_token": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "workload_token"
+              ],
+              "properties": {
+                "workload_token": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "ops_access_token_hs256"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "ops_access_token_hs256"
+            ],
+            "properties": {
+              "ops_access_token_hs256": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "ops_access_token_hs256"
+              ],
+              "properties": {
+                "ops_access_token_hs256": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "ops_refresh_token"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "ops_refresh_token"
+            ],
+            "properties": {
+              "ops_refresh_token": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "ops_refresh_token"
+              ],
+              "properties": {
+                "ops_refresh_token": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "acr_web_assertion"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "acr_web_assertion"
+            ],
+            "properties": {
+              "acr_web_assertion": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "acr_web_assertion"
+              ],
+              "properties": {
+                "acr_web_assertion": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "effective_principal_envelope"
+            }
+          }
+        },
+        "required": [
+          "accepted_credential_classes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "required": [
+              "effective_principal_envelope"
+            ],
+            "properties": {
+              "effective_principal_envelope": {}
+            },
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tokens": {
+            "not": {
+              "required": [
+                "effective_principal_envelope"
+              ],
+              "properties": {
+                "effective_principal_envelope": {}
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
     }
-  ]
+  ],
+  "not": {
+    "required": [
+      "token",
+      "tokens"
+    ],
+    "properties": {
+      "token": {},
+      "tokens": {}
+    }
+  }
 }

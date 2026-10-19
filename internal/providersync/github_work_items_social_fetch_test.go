@@ -393,7 +393,7 @@ func TestGitHubWorkItemPRSocialFetchAdaptsIntoCompletePRSemanticBundle(t *testin
 	claim := gitHubWorkItemPRSocialClaim()
 	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	rows, err := normalizeGitHubPullRequestBundle(
-		claim, "acme/api", githubWorkItemPRSocialRepoID,
+		claim, sameGitHubRepoNames("acme/api"), githubWorkItemPRSocialRepoID,
 		json.RawMessage(`{
 		  "number":42,"title":"Keep social facts","body":"Routine repair",
 		  "state":"open","merged":false,"draft":false,

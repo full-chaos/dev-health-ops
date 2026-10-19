@@ -175,6 +175,7 @@
     },
     {
       "file": "decision-client-duplicate-allowed-member.json",
+      "duplicate_member": true,
       "why": "`allowed` appears twice, false then true. Every parser keeps the last, so the survivor is a well-formed ALLOW that the schema validates; only the raw bytes show the verdict was ambiguous. The client must refuse on the bytes."
     },
     {

@@ -117,7 +117,10 @@ type gitHubRepositoryPayload struct {
 // recorded on the descriptor as an explicit, dated ExecutedProofWaiver until
 // a live unit reports persisted evidence. Capability metadata is not
 // execution evidence (TRD §10.1).
-type GitHubRepositoryRouteHandler struct{ Now func() time.Time }
+type GitHubRepositoryRouteHandler struct {
+	Now          func() time.Time
+	RepoIdentity GitLabRepoIdentityReader
+}
 
 func (handler GitHubRepositoryRouteHandler) now() time.Time {
 	if handler.Now != nil {
@@ -164,7 +167,7 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
-	identity, err := repositoryIdentity(fullName)
+	identity, err := resolveGitHubRepoIdentity(ctx, handler.RepoIdentity, claim, gitHubRepositoryPayload{ID: payload.ID, FullName: fullName})
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -194,7 +197,7 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 	}
 	row := repositoryRow{
-		ID:         identity,
+		ID:         identity.RepoID,
 		OrgID:      claim.OrgID,
 		Repo:       fullName,
 		CreatedAt:  normalizedAt,
@@ -202,6 +205,10 @@ func (handler GitHubRepositoryRouteHandler) Collect(
 		Tags:       string(tags),
 		Provider:   "github",
 		LastSynced: normalizedAt,
+		// provider_repo_id is the repository's numeric id; identity_path is the
+		// name the repo_id was minted from (repo is the current name).
+		ProviderRepoID: strconv.FormatInt(repoID, 10),
+		IdentityPath:   identity.Path,
 	}
 	if err := row.validate(claim); err != nil {
 		return CompleteRouteBatch{}, err

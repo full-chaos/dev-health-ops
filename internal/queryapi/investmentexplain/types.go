@@ -14,6 +14,9 @@ type FindingEvidence struct {
 type Finding struct {
 	Finding  string
 	Evidence FindingEvidence
+
+	// repairedSubject is set when the parser moved the evidence to the subcategory the sentence names.
+	repairedSubject bool
 }
 
 // Confidence ports investment_mix_types.py's Confidence TypedDict.
@@ -106,4 +109,7 @@ type ParseResult struct {
 	ReasonRule    string
 	ReasonPath    string
 	ReasonSnippet string
+
+	// RepairedFindings counts the findings whose evidence the parser moved to the subcategory their sentence names.
+	RepairedFindings int
 }

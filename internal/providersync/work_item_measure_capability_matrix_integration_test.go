@@ -133,7 +133,7 @@ func capabilityGitHubRows(
 				"created_at": capabilityRFC3339(item.createdAt), "updated_at": capabilityRFC3339(item.createdAt),
 				"closed_at": closedAt, "labels": labels,
 			}
-			row, err := normalizeGitHubIssueWorkItem(claim, "acme/api", repoID,
+			row, err := normalizeGitHubIssueWorkItem(claim, sameGitHubRepoNames("acme/api"), repoID,
 				capabilityJSON(t, issue), nil, normalizedAt)
 			if err != nil {
 				t.Fatalf("github issue %d: %v", item.number, err)

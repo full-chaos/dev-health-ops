@@ -64,7 +64,7 @@ func codeLines(text string) []string {
 	return lines
 }
 
-var planesUpLine = regexp.MustCompile(`up -d --no-deps --no-build ([a-z0-9 -]+?) > \$REC/up\.out`)
+var planesUpLine = regexp.MustCompile(`up -d --no-deps --no-build ([a-z0-9 -]+?) > "?\$REC"?/up\.out`)
 
 // goOnlyFindings returns what in the tracked bigboy files still needs the Python api, one finding per defect.
 func goOnlyFindings(files map[string]string) ([]string, error) {

@@ -659,44 +659,20 @@
       }
     },
     {
-      "accepted_credential_classes": [
-        "effective_principal_envelope",
-        "ops_access_token_hs256"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
-      },
-      "classification": "protected",
-      "gaps": [
-        "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
-      ],
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/meta [dev-health-query-api @query,internal]",
       "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 248,
-          "note": "func authenticateRESTRequest",
-          "path": "internal/queryapi/server/rest_error_response.go"
-        },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; every failure answers the same 401."
-      },
-      "public_rationale": null,
+      "public_rationale": "Unauthenticated by design: static limits and endpoint list plus the ClickHouse server version, no tenant data (meta_route.go); Python parity.",
       "route": "/api/v1/meta",
       "service": "dev-health-query-api",
       "source": {
         "file": "internal/queryapi/server/rest_routes.go",
         "line": 440
       },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped",
-      "token_shape": {
-        "algorithm": "EdDSA",
-        "audience": "query-api",
-        "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
-      }
+      "surface_kind": "rest"
     },
     {
       "accepted_credential_classes": [

@@ -18,6 +18,7 @@ func TestNoConfigNotFoundNamesTheClosedGateInAHeader(t *testing.T) {
 		reason string
 	}{
 		{name: "gate closed", source: &fakeSource{cfg: llmorgsettings.OrgConfig{GateClosed: true}}, reason: "byo_llm_gate_closed"},
+		{name: "saved config of another purpose only", source: &fakeSource{cfg: llmorgsettings.OrgConfig{UnresolvedPurpose: llmorgsettings.PurposeInvestigate}}, reason: "byo_no_investigate_config"},
 		{name: "nothing stored", source: &fakeSource{}, reason: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

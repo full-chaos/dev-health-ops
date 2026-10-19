@@ -19,7 +19,8 @@ const agentContextRuntimeFeatureKey = "agent_context_runtime"
 
 // acrServiceModelFeatureKey is the second feature this route decides: ACR AI
 // features are on for the org. The route serves its effective value (see
-// effectiveServiceModel); it does not grant the platform LLM by itself.
+// llmorgsettings.EffectiveServiceModel); it does not grant the platform LLM by
+// itself.
 const acrServiceModelFeatureKey = "acr_service_model"
 
 // platformModelFallbackFeatureKey is the third: a platform-admin grant (an
@@ -113,7 +114,7 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	serviceModelOn, err := effectiveServiceModel(ctx, store.Pool, parsedOrgID.String(), serviceModel)
+	serviceModelOn, err := llmorgsettings.EffectiveServiceModel(ctx, store.Pool, parsedOrgID.String(), serviceModel)
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
@@ -122,24 +123,6 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModelOn, PlatformModelFallback: fallback.Allowed}, nil
-}
-
-// effectiveServiceModel is the acr_service_model acr reads: the org's explicit
-// override when one is active (Decide already put it first), OFF when the
-// feature is globally disabled or invalid (Decide checks that before any
-// override), else ON for an org with a saved BYO LLM configuration
-// (auto-enrolment), else the plan or license decision.
-func effectiveServiceModel(ctx context.Context, pool *pgxpool.Pool, orgID string, decision licensing.Decision) (bool, error) {
-	switch decision.Reason {
-	case licensing.ReasonEnabledByOrgOverride, licensing.ReasonOrgOverrideDisabled,
-		licensing.ReasonGlobalDisabled, licensing.ReasonInvalidFeatureState:
-		return decision.Allowed, nil
-	}
-	saved, err := llmorgsettings.HasSavedBYO(ctx, pool, orgID)
-	if err != nil {
-		return false, err
-	}
-	return saved || decision.Allowed, nil
 }
 
 // readyTimeout bounds the health route's ping, so an unreachable store is a

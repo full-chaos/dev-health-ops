@@ -590,7 +590,7 @@ check_race_weights_rows() {
     || die "ci/go_race_solo.tsv lists a package twice"
   printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort -c 2>/dev/null \
     || die "ci/go_race_solo.tsv is not sorted (LC_ALL=C)"
-  [ -z "$(printf '%s\n' "${solo_rows}" | grep -x 'internal/providersync')" ] \
+  ! printf '%s\n' "${solo_rows}" | grep -qx 'internal/providersync' \
     || die "ci/go_race_solo.tsv lists internal/providersync, which runs as test-name slices in every race leg and cannot be solo"
   printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | grep -vc '^$')"
 }

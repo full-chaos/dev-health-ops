@@ -142,6 +142,16 @@ func ttlStripComments(path, text string) string {
 	return ttlPyCommentLine.ReplaceAllString(text, "")
 }
 
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func ttlMigrationFiles(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -178,6 +188,19 @@ func ttlScan(t *testing.T, dir string) (precise map[string]ttlRetention, coarse 
 			for _, m := range ttlAlterPrecise.FindAllStringSubmatch(statement, -1) {
 				days, _ := strconv.Atoi(m[3])
 				precise[m[1]] = ttlRetention{column: m[2], days: days}
+			} // A MODIFY TTL the precise form cannot read (function-style interval, other unit, move or group-by rule) leaves the
+			// earlier retention stale: fail closed by dropping the table from the precise set while the coarse set keeps it.
+			understood := map[string]bool{}
+			if !ttlUnmodelled.MatchString(statement) {
+				for _, m := range ttlAlterPrecise.FindAllStringSubmatch(statement, -1) {
+					understood[m[1]] = true
+				}
+			}
+			for _, m := range ttlAlterModify.FindAllStringSubmatch(statement, -1) {
+				if !understood[m[1]] {
+					delete(precise, m[1])
+					coarse[m[1]] = true
+				}
 			}
 			tables, groups := ttlAttribute(statement, ttlPrecise)
 			for i, table := range tables {
@@ -454,6 +477,24 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 		p, c := ttlScan(t, dir)
 		if _, ok := p["tiered"]; ok || !c["tiered"] || len(ttlVocabularyProblems(p, c)) == 0 {
 			t.Fatalf("tiered TTL trusted: %v %v", p, c)
+		}
+	})
+	t.Run("an unreadable ALTER MODIFY TTL fails closed instead of keeping the old retention", func(t *testing.T) {
+		for name, alter := range map[string]string{
+			"function interval": "ALTER TABLE feature_flag_event MODIFY TTL ts + toIntervalDay(12);",
+			"other unit":        "ALTER TABLE feature_flag_event MODIFY TTL ts + INTERVAL 2 WEEK;",
+			"move rule":         "ALTER TABLE feature_flag_event MODIFY TTL ts + INTERVAL 7 DAY TO DISK 'cold', ts + INTERVAL 12 DAY DELETE;",
+		} {
+			dir := t.TempDir()
+			writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE feature_flag_event (\n x Int8\n) ENGINE=M TTL ts + INTERVAL 90 DAY DELETE;")
+			writeFile(t, filepath.Join(dir, "2.sql"), alter)
+			p, c := ttlScan(t, dir)
+			if _, ok := p["feature_flag_event"]; ok || !c["feature_flag_event"] {
+				t.Fatalf("%s: stale retention kept: precise=%v coarse=%v", name, p, c)
+			}
+			if len(ttlVocabularyProblems(p, c)) == 0 {
+				t.Fatalf("%s: the vocabulary check passed on an unreadable ALTER", name)
+			}
 		}
 	})
 	t.Run("ALTER REMOVE TTL drops the table", func(t *testing.T) {

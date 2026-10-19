@@ -29,8 +29,30 @@
       "revision_conflict",
       "internal_error",
       "compromised",
-      "owner_request"
+      "owner_request",
+      "role_granted",
+      "role_revoked",
+      "membership_added",
+      "membership_removed",
+      "membership_status_changed",
+      "grant_created",
+      "grant_revoked",
+      "credential_issued",
+      "credential_rotated",
+      "credential_revoked",
+      "session_revoked",
+      "organization_created",
+      "organization_updated",
+      "principal_disabled",
+      "principal_enabled",
+      "identity_linked",
+      "identity_unlinked",
+      "policy_revision_activated",
+      "entitlement_snapshot_applied",
+      "denied_no_membership",
+      "denied_no_grant",
+      "denied_policy"
     ],
-    "note": "The codes already used by valid fixtures in this corpus (authorization decisions and error.v1), plus the revoked_reason values."
+    "note": "The codes used by authorization decisions and error.v1 in valid fixtures of this corpus, the revoked_reason values, and the 22 reason codes the merged audit producer (internal/audit attributeVocabulary) accepts. A Go test checks the producer's list against audit-event.v1."
   }
 }

@@ -121,3 +121,38 @@ func TestSetTargetEnvExternalRunsTheCommand(t *testing.T) {
 		t.Errorf("after the unset the process still holds ORACLE_TEST_NAME=%q", os.Getenv("ORACLE_TEST_NAME"))
 	}
 }
+
+// The frozen golden keys each call by the process environment (callEnvKey). The auth-flow golden was recorded with
+// the auto-create-org setting changed in the process, so an external run must key the call the same way, or the
+// run stops at the first changed batch ("recorded under another extra environment").
+func TestExternalSetTargetEnvKeysTheGoldenCallLikeInProcess(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "set-env.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvExternalSetEnvCmd, script)
+	golden, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := golden.bindPythonEnv(Options{JWTKey: "k"}); err != nil {
+		t.Fatal(err)
+	}
+	keyAfter := func(external bool) (key string) {
+		t.Run(map[bool]string{false: "in-process", true: "external"}[external], func(sub *testing.T) {
+			SetTargetEnv(sub, external, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF ")
+			var err error
+			if key, err = golden.callEnvKey(nil); err != nil {
+				sub.Fatal(err)
+			}
+		})
+		return key
+	}
+	inProcess, external := keyAfter(false), keyAfter(true)
+	if inProcess == "" {
+		t.Fatal("the in-process change is not in the call key: the test measures nothing")
+	}
+	if external != inProcess {
+		t.Errorf("external call key %q differs from the in-process key %q", external, inProcess)
+	}
+}

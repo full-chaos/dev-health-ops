@@ -287,3 +287,84 @@ func TestPublicReadsSameNamedViewIsRefused(t *testing.T) {
 		t.Error("Apply succeeded with a view standing in for a manifest table")
 	}
 }
+
+// MAINTAIN (PostgreSQL 17+) is a table-level privilege like the others: the
+// posture must see it on the ops tables and on the auth schema alike.
+func TestPostureReportsTheMaintainPrivilege(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newPublicReadsFixture(t, ctx)
+	role := Quote(mustValidatedIdentifier(env.runtimeRole))
+
+	for name, statement := range map[string]string{
+		"an ops table":  `GRANT MAINTAIN ON public.users TO ` + role,
+		"an auth table": `GRANT MAINTAIN ON auth.sessions TO ` + role,
+	} {
+		if _, err := env.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		found := env.violations(t, ctx)
+		if !strings.Contains(describe(found), "MAINTAIN") {
+			t.Errorf("MAINTAIN on %s was not reported:\n%s", name, describe(found))
+		}
+		if _, err := env.admin.Exec(ctx, strings.Replace(strings.Replace(statement, "GRANT", "REVOKE", 1), " TO ", " FROM ", 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if found := env.violations(t, ctx); len(found) > 0 {
+		t.Fatalf("posture after revoking is not clean:\n%s", describe(found))
+	}
+}
+
+// A role the runtime can SET ROLE to without inheriting it is invisible to the
+// effective-privilege checks, so reaching one is itself a violation. A
+// membership with neither INHERIT nor SET reaches nothing and is not.
+func TestPostureReportsAnOrdinaryRoleReachableOnlyThroughSetRole(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newPublicReadsFixture(t, ctx)
+	role := Quote(mustValidatedIdentifier(env.runtimeRole))
+	helper, err := containers.RoleName("auth_set_helper", env.instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helperID := Quote(mustValidatedIdentifier(helper))
+	extra := Quote(mustValidatedIdentifier(env.extraColumn(t, ctx, "users")))
+	for _, statement := range []string{
+		`CREATE ROLE ` + helperID + ` NOLOGIN`,
+		`GRANT USAGE ON SCHEMA public TO ` + helperID,
+		`GRANT SELECT (` + extra + `) ON public.users TO ` + helperID,
+	} {
+		if _, err := env.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	t.Cleanup(func() { containers.DropRole(env.admin, helper, t.Logf) })
+
+	if _, err := env.admin.Exec(ctx, `GRANT `+helperID+` TO `+role+` WITH INHERIT FALSE, SET FALSE`); err != nil {
+		t.Fatal(err)
+	}
+	if found := env.violations(t, ctx); len(found) > 0 {
+		t.Fatalf("a membership with neither INHERIT nor SET reaches nothing, yet:\n%s", describe(found))
+	}
+	if _, err := env.admin.Exec(ctx, `REVOKE `+helperID+` FROM `+role); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.admin.Exec(ctx, `GRANT `+helperID+` TO `+role+` WITH INHERIT FALSE, SET TRUE`); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := env.runtime.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SET ROLE `+helperID); err != nil {
+		t.Fatalf("SET ROLE to the helper: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT `+extra+` FROM public.users`); err != nil {
+		t.Fatalf("the helper cannot read the undeclared column the repro relies on: %v", err)
+	}
+	if found := env.violations(t, ctx); !strings.Contains(describe(found), helper) {
+		t.Errorf("a role reachable only through SET ROLE was not reported:\n%s", describe(found))
+	}
+}

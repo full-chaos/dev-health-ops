@@ -1,0 +1,21 @@
+{
+  "schema_version": "credential-entry.v1",
+  "id": "crd_EXAMPLE0000000000000001",
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "credential_class": "workload_token",
+  "display_prefix": "exmpl_ab12",
+  "fingerprint": "0123456789abcdef",
+  "domain_owner": "platform",
+  "audiences": [
+    "dev-health-api"
+  ],
+  "scopes": [
+    "api:read",
+    "api:write"
+  ],
+  "status": "active",
+  "created_at": "2026-09-03T24:00:00Z",
+  "updated_at": "2026-09-03T10:00:00Z",
+  "expires_at": "2027-09-03T10:00:00Z",
+  "created_by": "prn_EXAMPLE0000000000000001"
+}

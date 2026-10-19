@@ -8,9 +8,10 @@ TypeScript types are implementations of them, never the other way round.
 Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 (CHAOS-4884), `error.v1` (CHAOS-4929), `jwks.v1` and `discovery.v1`
 (CHAOS-4930), `provisioning-event.v1` and `audit-event.v1` (CHAOS-4933),
-`endpoint-auth-profile.v1` (CHAOS-4931), `authorization_request.v1`,
-`authorization_decision.v1` and the two batch forms (CHAOS-4932). The remaining
-is CHAOS-4934.
+`credential-entry.v1`, `credential-list.v1` and `credential-receipt.v1`
+(CHAOS-4934), `endpoint-auth-profile.v1` (CHAOS-4931), `authorization_request.v1`,
+`authorization_decision.v1` and the two batch forms (CHAOS-4932). All seven
+planned surfaces have shipped.
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists
@@ -182,6 +183,17 @@ pattern; both clients refuse it at parse. That is a genuine client-enforced
 rule and it has a `reject_by_client` fixture stating so — the alternative is a
 gap that reads as an oversight rather than as a boundary.
 
+For `principal.v1` the schema layer itself disagrees on that day, and the
+disagreement is declared rather than hidden: Go's `Validate` ACCEPTS
+`2026-02-30` and `2026-04-31` (google/jsonschema-go ignores `format`), while
+Python and ajv refuse them by `format`. Those fixtures live in the manifest's
+`go_schema_gap` group, which is neither `reject` (that asserts Go's `Validate`
+refuses) nor `reject_by_client` (that asserts every validator accepts). Every
+typed client refuses the document. `TestGoSchemaValidateAcceptsACalendarImpossibleDay`
+pins the Go acceptance, so a library that starts asserting `format` turns it red
+and the fixtures move to `reject`. Decided in CHAOS-10135: the typed client is
+the floor, as `ParseWireTimestamp` is on the event surfaces.
+
 ### A contract with one real consumer is pinned in BOTH directions
 
 Most surfaces here are validated by two clients this repository owns. `jwks.v1`
@@ -258,6 +270,54 @@ boundary (TRD §9, §13).
   metadata projections owned by the credential surface and are not in this
   stream in v1 (ACP-ADR-08, ACP-ADR-09); mutation request bodies are caller
   hints, never authority, and belong with each route when it is mounted.
+
+### Credential metadata: secrets are returned once (CHAOS-4934)
+
+TRD §12: secret values are returned once. The contract makes that asymmetry
+visible in the file layout, not in a conditionally present field:
+
+* `credential-receipt.v1` (the response of issue and rotate) is the ONLY schema
+  that declares a `secret`. `credential-entry.v1` (registry metadata, also the
+  response of revoke) and `credential-list.v1` are closed objects with no secret,
+  hash or token member, so a secret in an entry or a list item fails
+  (`additionalProperties`). A test walks every declared property name and fails
+  if a secret-bearing name appears anywhere but the receipt.
+* **The entry is derived from its producer, two ways.** Its members are the
+  columns of `credential_registry` (migration 0003 plus 0007's `ADD COLUMN`s)
+  minus `secret_hash` and `hash_algorithm` (secret material), plus one declared
+  derived member, `status`.
+  `TestCredentialEntryMatchesTheRegistryColumnsInBothDirections` parses both
+  migrations (every line at the table's indentation is a column or a constraint,
+  or the test fails) and fails on any difference.
+* **`status` is derived, not stored:** `revoked_at` set means revoked; else
+  `expires_at <= now` means expired; else active. The schema pins status to the
+  timestamps' shape (revoked requires `revoked_at` and a reason code; expired
+  requires `expires_at`; active forbids the revocation members). Comparing with
+  the clock is a client rule (`clock_now` in the manifest).
+* **Revocation is monotonic:** `CheckCredentialTransition` /
+  `check_credential_transition` refuse active-after-revoked, a changed
+  `revoked_at` or reason, a changed identity, lineage, prefix or fingerprint, and
+  widened scopes or audiences. A `reject_by_client` manifest entry with `after`
+  is a transition from that accepted entry. Migration 0007 enforces the same
+  rules in PostgreSQL.
+* **Rotation lineage:** `kind=rotate` requires `credential.rotation_parent_id`;
+  `kind=issue` forbids it. The secret begins with the credential's
+  `display_prefix` (a client rule), and `display_prefix` is the only fragment of
+  a secret that appears anywhere else, pinned at 16 characters by the schema.
+  A receipt names only its parent id, so narrowing is checked by a client that
+  holds the parent entry: `CheckCredentialRotation` / `check_credential_rotation`
+  refuse widened scopes or audiences, a different principal, class or domain
+  owner, a wrong parent id and a revoked parent (migration 0007's rules).
+* `scopes` use `principal.v1`'s shape and are sets; `credential_class` is the
+  same enum as `principal.v1`'s (a test fails on drift); `revoked_reason` is a
+  reason code, never the free text the database column allows.
+* The list items, the receipt's credential and the entry are copies of one body
+  (no cross-file `$ref`: the three runners differ on external refs); tests keep
+  the list items equal to the entry and the receipt's credential a stricter
+  subset. `crd_` is a new id prefix introduced here.
+* ACR and External Push appear only as metadata projections (`domain_owner`,
+  `external_reference`), never as validators (ACP-ADR-08/09). No pagination is
+  specified for the list (TRD §15 names no parameters).
 
 ### JWKS and discovery: one issuer, one key use (CHAOS-4930)
 

@@ -76,6 +76,8 @@ func execute(
 	flags.SetOutput(stderr)
 	check := flags.Bool("check", false,
 		"report whether the auth schema is at the embedded lineage head, without issuing DDL")
+	ackNarrowing := flags.String("ack-grant-narrowing", "",
+		"digest printed by a refused run, acknowledging that exact deliberate narrowing of the runtime role's grants")
 	showVersion := flags.Bool("version", false, "print build metadata as JSON and exit")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -154,6 +156,8 @@ func execute(
 		Schema:      schema,
 		RuntimeRole: runtimeRole,
 		Logger:      logger,
+
+		AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
 	})
 	if err != nil {
 		// authschema's errors are built from its own SQL and validated

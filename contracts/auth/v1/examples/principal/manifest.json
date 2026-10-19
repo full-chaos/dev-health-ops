@@ -273,15 +273,33 @@
     },
     {
       "file": "client-rejected-duplicate-principal-id.json",
+      "duplicate_member": true,
       "why": "Two `principal_id` members. Every parser keeps the LAST, so a validator only sees the survivor while the wire bytes carry another value. RAW TEXT ON PURPOSE: no JSON writer emits a duplicate member, so regenerating this file through a serialiser silently deletes the defect it carries (CHAOS-4916). Do not normalise it."
     },
     {
       "file": "client-rejected-duplicate-credential-audience.json",
+      "duplicate_member": true,
       "why": "A duplicate NESTED one level down, inside `credential`. error.v1 is flat, so nothing in that corpus shows the guard reaches depth; without this fixture the nesting property is inherited, not demonstrated. RAW TEXT, do not normalise."
     },
     {
       "file": "client-rejected-duplicate-actor-chain-reason.json",
+      "duplicate_member": true,
       "why": "A duplicate inside an `actor_chain` entry (inside an array element), the place a delegated principal's smuggled value would live. Exercises the array branch of the walk as well as the object branch. RAW TEXT, do not normalise."
     }
-  ]
+  ],
+  "go_schema_gap": [
+    {
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "format",
+      "file": "go-schema-gap-february-30.json",
+      "why": "`2026-02-30`: lexically valid, no such day. The pattern bounds components, not the calendar, so Go's Validate ACCEPTS it (google/jsonschema-go ignores `format`) while Python and ajv refuse it by `format`. The typed clients (Go PrincipalFromWire, Python Principal.from_wire) refuse it in every language; the typed client is the floor, as with ParseWireTimestamp on the event surfaces. Filed here and not in `reject` because `reject` asserts Go's Validate refuses; and not in `reject_by_client` because that group asserts every validator ACCEPTS. Declared CHAOS-10135."
+    },
+    {
+      "expect_instance_location": "/authentication/authenticated_at",
+      "expect_keyword": "format",
+      "file": "go-schema-gap-april-31.json",
+      "why": "`2026-04-31`: lexically valid, no such day. The pattern bounds components, not the calendar, so Go's Validate ACCEPTS it (google/jsonschema-go ignores `format`) while Python and ajv refuse it by `format`. The typed clients (Go PrincipalFromWire, Python Principal.from_wire) refuse it in every language; the typed client is the floor, as with ParseWireTimestamp on the event surfaces. Filed here and not in `reject` because `reject` asserts Go's Validate refuses; and not in `reject_by_client` because that group asserts every validator ACCEPTS. Declared CHAOS-10135."
+    }
+  ],
+  "go_schema_gap_note": "Documents the one place the three schema validators legitimately disagree: a calendar-impossible day. Python and ajv refuse it by `format`; Go's Validate accepts it, and the test TestGoSchemaValidateAcceptsACalendarImpossibleDay pins that on purpose. If a future google/jsonschema-go asserts `format`, that test goes red and these fixtures move to `reject`. Every typed client refuses the document either way. Decided in CHAOS-10135 (option A)."
 }

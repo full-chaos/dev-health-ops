@@ -288,7 +288,7 @@ next to `filters`:
 | Field | Meaning | Default |
 |---|---|---|
 | `measure` | `ISSUE_SIZE` (the page's measure: each unit weighs its issue size, 1 when unsized), `COUNT` or `THROUGHPUT` (same as `COUNT`); any other name, `CHURN_LOC` included, is refused. The explanation never weighs by a unit's `effort_value` | `ISSUE_SIZE` |
-| `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is `[start_date, end_date)`. It replaces `filters.time`. | `filters.time` (a relative `range_days` ends tomorrow, so it covers today) |
+| `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is `[start_date, end_date)`. It replaces `filters.time`. | `filters.time`: a relative `range_days` is the trailing window `[today-N, today)`, its last day is yesterday (D6083), the same window every ops reader takes from `timewindow.Compute`; an explicit `end_date` in `filters.time` stays inclusive |
 | `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always use the canonical categorization on both surfaces | none |
 
 `filters.scope.level` keeps its lowercase values. Scope `org` and scope `team` with no ids cover the same rows, as on the page.

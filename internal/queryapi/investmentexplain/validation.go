@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -268,13 +269,34 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejecti
 	if subcategory != nil {
 		sharePct = opts.subcategorySharesPct[*subcategory]
 	}
+	// The share appended below is the theme's when the evidence names no subcategory. A sentence whose subject is
+	// one listed subcategory of the theme is repaired to that subcategory, so the share sits beside its own subject;
+	// a sentence that names several keeps no percent, since no single share is its own.
+	repairedSubject, omitShare := false, false
+	if subcategory == nil {
+		switch named := namedSubcategoryKeys(strippedFinding, theme, opts.subcategorySharesPct); len(named) {
+		case 0:
+		case 1:
+			repaired := named[0]
+			subcategory = &repaired
+			sharePct = opts.subcategorySharesPct[repaired]
+			repairedSubject = true
+		default:
+			omitShare = true
+		}
+	}
 
 	noun := opts.shareNoun
 	if noun == "" {
 		noun = "effort"
 	}
+	text := strings.TrimRight(strippedFinding, ".") + " (~" + formatPercentZeroDecimals(sharePct) + "% of " + noun + ")."
+	if omitShare {
+		text = strings.TrimRight(strippedFinding, ".") + "."
+	}
 	return Finding{
-		Finding: strings.TrimRight(strippedFinding, ".") + " (~" + formatPercentZeroDecimals(sharePct) + "% of " + noun + ").",
+		repairedSubject: repairedSubject,
+		Finding:         text,
 		Evidence: FindingEvidence{
 			Theme:               theme,
 			Subcategory:         subcategory,
@@ -284,6 +306,38 @@ func parseFinding(raw any, opts parseFindingOptions) (Finding, validationRejecti
 			EvidenceQualityBand: opts.qualityBand,
 		},
 	}, validationRejection{}, true
+}
+
+// namedSubcategoryKeys returns the subcategories of theme that the finding's sentence names, in key order. The
+// theme's own label is removed first: "Quality / Reliability" holds the word of a subcategory without naming it.
+func namedSubcategoryKeys(finding, theme string, subcategoryShares map[string]float64) []string {
+	text := " " + normalizeKeyForm(finding) + " "
+	owns := []string{normalizeKeyForm(themeLabel(theme)), normalizeKeyForm(theme)}
+	for _, part := range strings.Split(themeLabel(theme), "/") {
+		owns = append(owns, normalizeKeyForm(part))
+	}
+	sort.Slice(owns, func(i, j int) bool { return len(owns[i]) > len(owns[j]) })
+	for _, own := range owns {
+		if own != "" {
+			text = strings.ReplaceAll(text, " "+own+" ", " ")
+		}
+	}
+	keys := make([]string, 0, len(subcategoryShares))
+	for key := range subcategoryShares {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var named []string
+	for _, key := range keys {
+		before, leaf, found := strings.Cut(key, ".")
+		if !found || before != theme {
+			continue
+		}
+		if form := normalizeKeyForm(leaf); form != "" && strings.Contains(text, " "+form+" ") {
+			named = append(named, key)
+		}
+	}
+	return named
 }
 
 // normalizeKeyForm lowercases s and collapses every run of non-alphanumeric

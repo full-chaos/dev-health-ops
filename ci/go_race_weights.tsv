@@ -100,6 +100,7 @@ internal/bigboycompose	1
 internal/billingcli	1
 internal/cacheinvalidation	1
 internal/chmigrate	1
+internal/cigates	4
 internal/cli	2
 internal/clicredentials	11
 internal/contractcheck	1
@@ -213,6 +214,7 @@ internal/platform/logging	22
 internal/platform/otlpmetrics	4
 internal/platform/poolstat	1
 internal/platform/postureguard	1
+internal/platform/queuecontrol	1
 internal/platform/secrets	23
 internal/platform/selfprobe	1
 internal/platform/shell	12
@@ -304,6 +306,7 @@ internal/storage/clickhouse/latestrow	1
 internal/storage/clickhouse/liverow	11
 internal/storage/postgres	29
 internal/storage/postgres/authschema	1
+internal/storage/postgres/pgconfig	1
 internal/storage/river	1
 internal/storage/roleacl	1
 internal/storage/roleprovision	1

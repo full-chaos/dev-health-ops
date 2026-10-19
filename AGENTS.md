@@ -193,9 +193,8 @@ built from the real migration chain -- `scripts/worker/compute_parity_fixtures.p
 was the concrete example (RETIRED, CHAOS-5336, with `job_dora.py`/`job_capacity.py`
 and its two Go callers; see `contracts/compute-parity/v1/README.md` §4 for the
 recipe a future two-sided family should follow with its own producer script).
-Operational health is a SEPARATE claim with disjoint verdicts
-([`scripts/worker/compare_runtime_observations.py`](scripts/worker/compare_runtime_observations.py));
-nothing compares product rows in Python. How-to:
+Operational health is a SEPARATE claim; its Python comparator was retired
+(CHAOS-10180, runtime mode was unused by ruling); nothing compares product rows in Python. How-to:
 [`contracts/compute-parity/v1/README.md`](contracts/compute-parity/v1/README.md).
 
 ## PR and CI conventions

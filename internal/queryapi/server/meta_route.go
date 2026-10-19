@@ -16,13 +16,10 @@
 // auth check here would be adding auth the Python route never had -- see
 // internal/meta's package doc comment for the full citation trail.
 //
-// The route takes no query parameters and returns no typed errors --
-// see internal/meta's package doc comment for what BuildResponse does
-// with a ClickHouse failure (degrades one field, still answers 200) versus
-// the two narrow, declared divergences from Python's own error paths.
+// The route takes no query parameters, reads no store and returns no typed
+// errors. It does not name the ClickHouse server version.
 //
-// Business logic (the static response shape, the version() probe, and the
-// declared divergences from Python's error paths) lives in internal/meta
+// Business logic (the static response shape) lives in internal/meta
 // -- see that package's doc comment for the full parity contract.
 package server
 
@@ -30,8 +27,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-
-	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/meta"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
@@ -71,22 +66,16 @@ func loadMetaRouteConfig(getenv getenvFunc) (clickHouseURI string, ok bool) {
 // cleanup function. ok is false when CLICKHOUSE_URI is not configured --
 // main() only calls mux.HandleFunc when ok is true, same "stay unmounted,
 // don't fail to build/start" contract every other optionally-configured
-// route in this binary follows (see internal/meta's package doc comment,
-// "Declared divergence: missing CLICKHOUSE_URI", for why this differs from
-// Python's per-request 500 in that case).
+// route in this binary follows. The route makes no ClickHouse call; the
+// CLICKHOUSE_URI gate only keeps the mount condition unchanged.
 func buildMetaRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
-	clickHouseURI, cfgOK := loadMetaRouteConfig(getenv)
+	_, cfgOK := loadMetaRouteConfig(getenv)
 	if !cfgOK {
 		return nil, nil, false, nil
 	}
 
-	readClient, err := dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(clickHouseURI))
-	if err != nil {
-		return nil, nil, false, err
-	}
-
 	routeMux := routeswitch.NewMux(metaSwitchFromEnv(getenv))
-	routeMux.Register(metaOperation, newMetaWorkHandler(readClient))
+	routeMux.Register(metaOperation, newMetaWorkHandler())
 
 	// No auth step: this route is public (see package doc comment).
 	// Dispatch runs directly off the method check.
@@ -98,16 +87,14 @@ func buildMetaRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup func()
 		routeMux.Dispatch(metaOperation, w, r)
 	}
 
-	cleanupFn := func() {
-		_ = readClient.Close()
-	}
+	cleanupFn := func() {}
 	return entryHandler, cleanupFn, true, nil
 }
 
 // newMetaWorkHandler is the routeswitch-registered handler.
-func newMetaWorkHandler(client meta.QueryClient) http.HandlerFunc {
+func newMetaWorkHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		resp := meta.BuildResponse(r.Context(), client)
+		resp := meta.BuildResponse()
 
 		// The success body is the route's response_model, written as
 		// pydantic-core dump_json writes it (writeModelResponse).

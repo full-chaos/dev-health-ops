@@ -599,12 +599,20 @@ func TestNativeMaterializerCountsOnlyPlannedDatasetsWithoutARow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			logs := captureIncidentGateSignals(t)
 			before := explicitDatasetsWithoutRowTotal.Load()
 			if _, err := materializeAndCommit(t, config.fixture, materializer, config.occurrence); !errors.Is(err, tc.wantErr) {
 				t.Fatalf("materialize error = %v, want %v", err, tc.wantErr)
 			}
 			if got := explicitDatasetsWithoutRowTotal.Load() - before; got != tc.wantDelta {
 				t.Fatalf("explicit datasets without a row counted %d, want %d", got, tc.wantDelta)
+			}
+			// The dropped key stays observable through the gate's own counter and Warn line.
+			if got := globalPlanGateTelemetry.snapshotForTest("jira", "incidents", planGateOutcomeFeatureDisabled); got != 1 {
+				t.Fatalf("feature_disabled count for incidents = %d, want 1", got)
+			}
+			if lines := skipWarnLines(logs); len(lines) != 1 || !strings.Contains(lines[0], `"skipped_dataset_keys":["incidents"]`) {
+				t.Fatalf("skip WARN lines = %d, want 1 naming incidents:\n%s", len(lines), logs.String())
 			}
 		})
 	}

@@ -16,7 +16,7 @@ func TestExplicitDatasetsWithoutRowCounterIsScraped(t *testing.T) {
 		return out.String()
 	}
 	before := explicitDatasetsWithoutRowTotal.Load()
-	recordExplicitDatasetsWithoutRow(2)
+	noteExplicitDatasetsWithoutRow("jira", "org", "integration", []string{"a", "b", "gone"}, []PlanDataset{{Key: "a"}, {Key: "b"}, {Key: "other"}})
 	want := "dev_health_scheduler_explicit_datasets_without_row_total " + strconv.FormatUint(before+2, 10) + "\n"
 	text := scrape()
 	if !strings.Contains(text, "# TYPE dev_health_scheduler_explicit_datasets_without_row_total counter\n") || !strings.Contains(text, want) {

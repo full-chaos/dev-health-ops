@@ -138,3 +138,38 @@ func TestRejectedCredentialsNeverAppearInParserErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestSecretBearingValuesStayRedactedAsMapKeysAndUnderEveryVerb(t *testing.T) {
+	root := testRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "contracts/auth/v1/examples/refresh-request/valid-minimal.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := ParseRefreshRequest(root, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := req.RefreshCredential.Reveal()
+	keyed := map[SecretString]string{req.RefreshCredential: "present"}
+	var jsonLog, textLog bytes.Buffer
+	slog.New(slog.NewJSONHandler(&jsonLog, nil)).Info("probe", "credentials", keyed)
+	slog.New(slog.NewTextHandler(&textLog, nil)).Info("probe", "credentials", keyed)
+	marshalled, err := json.Marshal(keyed)
+	if err != nil {
+		marshalled = []byte("marshal refused: " + err.Error())
+	}
+	outputs := map[string]string{
+		"json.Marshal map key": string(marshalled),
+		"slog json map key":    jsonLog.String(),
+		"slog text map key":    textLog.String(),
+		"%x":                   fmt.Sprintf("%x", req.RefreshCredential),
+		"%q":                   fmt.Sprintf("%q", req.RefreshCredential),
+		"%v map":               fmt.Sprintf("%v", keyed),
+		"%#v map":              fmt.Sprintf("%#v", keyed),
+	}
+	for name, out := range outputs {
+		if strings.Contains(out, secret) || strings.Contains(out, fmt.Sprintf("%x", secret)) {
+			t.Errorf("%s leaks the credential: %s", name, out)
+		}
+	}
+}

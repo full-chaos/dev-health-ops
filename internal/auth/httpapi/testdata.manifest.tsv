@@ -1,5 +1,6 @@
 # Every file under internal/auth/httpapi/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+a8e26fcdb747a533c4c37309913061277469718c63344d2c40e124eda78f16b1	hand-written	fuzz/FuzzParseForwardedTrust/8f6a485f2dd0236d
 -	header	golden/forwarded-scheme.golden.json
 -	header	golden/parse-limit.golden.json

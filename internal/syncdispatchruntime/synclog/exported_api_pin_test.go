@@ -118,6 +118,7 @@ var exportedAPI = []string{
 	"var synclog.KeyOwnerTies synclog.Key",
 	"var synclog.KeyRepoIDs synclog.Key",
 	"var synclog.KeyReason synclog.Key",
+	"var synclog.KeyStep synclog.Key",
 	"var synclog.KeyDeliveryRouteGeneration synclog.Key",
 	"var synclog.KeyCurrentRouteGeneration synclog.Key",
 	"var synclog.KeyRepoCount synclog.Key",

@@ -25,7 +25,8 @@ const root = path.resolve(rootArg ?? path.join(here, "..", ".."));
 const v1 = path.join(root, "contracts", "auth", "v1");
 
 const MUST_VALIDATE = { accept: true, reject_by_client: true };
-const MUST_REJECT = { reject: true, narrower_than_consumer: true };
+// go_schema_gap: refused here by `format` while Go's Validate accepts it (a calendar-impossible day; CHAOS-10135).
+const MUST_REJECT = { reject: true, narrower_than_consumer: true, go_schema_gap: true };
 
 // Categories every surface's manifest must declare and populate. A surface may
 // add more (jwks.v1 has narrower_than_consumer); a surface listed here may not
@@ -257,13 +258,13 @@ for (const surface of surfaces) {
         fail(`${surface}/${name} [${group}]: validated=${ok}, want ${mustValidate} ${why}`);
         continue;
       }
-      if (group === "reject" && (!entry.expect_instance_location || !entry.expect_keyword)) {
+      if ((group === "reject" || group === "go_schema_gap") && (!entry.expect_instance_location || !entry.expect_keyword)) {
         // Without both, a reject fixture can drift into failing for an
         // unrelated reason and keep passing.
         fail(`${surface}/${name}: reject entry lacks expect_instance_location or expect_keyword`);
         continue;
       }
-      if (group === "reject") {
+      if (group === "reject" || group === "go_schema_gap") {
         // ajv adds an `if` error at the instance root next to the real
         // violation inside a failing `then`; Go and Python report only the
         // violation. It is reporting, not a second rule, so it is not counted.

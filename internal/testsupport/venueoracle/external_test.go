@@ -105,6 +105,9 @@ func TestSetTargetEnvExternalRunsTheCommand(t *testing.T) {
 	t.Setenv(EnvExternalSetEnvCmd, script)
 	t.Setenv("ORACLE_TEST_NAME", "untouched")
 	SetTargetEnv(t, true, "ORACLE_TEST_NAME", " OFF ")
+	if got := os.Getenv("ORACLE_TEST_NAME"); got != " OFF " {
+		t.Errorf("after the set the process holds %q: the golden's environment key would not follow the target", got)
+	}
 	SetTargetEnv(t, true, "ORACLE_TEST_NAME", "")
 	got, err := os.ReadFile(log)
 	if err != nil {
@@ -113,7 +116,8 @@ func TestSetTargetEnvExternalRunsTheCommand(t *testing.T) {
 	if string(got) != "ORACLE_TEST_NAME= OFF \nORACLE_TEST_NAME=\n" {
 		t.Errorf("command calls = %q", got)
 	}
-	if os.Getenv("ORACLE_TEST_NAME") != "untouched" {
-		t.Error("an external run changed the test process environment")
+	// The frozen golden keys its calls by this process's environment, so it follows the target's.
+	if _, set := os.LookupEnv("ORACLE_TEST_NAME"); set {
+		t.Errorf("after the unset the process still holds ORACLE_TEST_NAME=%q", os.Getenv("ORACLE_TEST_NAME"))
 	}
 }

@@ -49,6 +49,24 @@
     }
   },
   "properties": {
+    "goApi": {
+      "type": "object",
+      "properties": {
+        "authProxy": {
+          "description": "CHAOS-10231: the /api/v1/auth/* proxy flags. YAML booleans only: a string such as \"false\" is refused, never read as on.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sessions": { "type": "boolean" },
+            "localLogin": { "type": "boolean" },
+            "credentials": { "type": "boolean" },
+            "social": { "type": "boolean" },
+            "oidc": { "type": "boolean" },
+            "saml": { "type": "boolean" }
+          }
+        }
+      }
+    },
     "migrations": {
       "type": "object",
       "properties": {

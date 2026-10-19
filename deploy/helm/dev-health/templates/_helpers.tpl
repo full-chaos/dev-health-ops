@@ -652,3 +652,12 @@ serve it).
 {{- end -}}
 {{- $value -}}
 {{- end -}}
+
+{{/*
+CHAOS-10231: "true" when go-api is enabled and any goApi.authProxy flag is on
+(go-api then forwards those /api/v1/auth/* routes to auth-service), else "".
+*/}}
+{{- define "dev-health.authProxyOn" -}}
+{{- $p := .Values.goApi.authProxy -}}
+{{- if and .Values.goApi.enabled (or $p.sessions $p.localLogin $p.credentials $p.social $p.oidc $p.saml) -}}true{{- end -}}
+{{- end -}}

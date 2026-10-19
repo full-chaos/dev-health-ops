@@ -77,6 +77,11 @@ def load(sha, gofile, func):
     rows_text = body.split("\n", 1)[1] if "\n" in body else ""
     literal_rows = len(re.findall(r"(?<![\w\]])\{", rows_text))
     table_matches = len(tables_seen)
+    # The read-back covers tables and columns only: any other keyed grant list (RequiredSequences, ...) is a grant it
+    # cannot read back, so it must fail rather than vanish from the delta.
+    keys = set(re.findall(r"\b(\w+)\s*:\s*\[\]", body))
+    if keys - {"RequiredTables", "ColumnScoped"}:
+        return None
     if not tables or literal_rows != table_matches + column_rows:
         return None
     return tables, columns

@@ -495,6 +495,7 @@ def test_pg_grants_check_prod_branch_runs_psql_w_without_a_password(
 
 def test_grants_check_uses_compose_exec_only(tmp_path: Path) -> None:
     script = _c_stage(tmp_path, "bigboy-grants-check.sh")
+    (tmp_path / "host" / "ops" / ".git").mkdir(parents=True, exist_ok=True)
     p, fake = _c_run(
         tmp_path,
         script,

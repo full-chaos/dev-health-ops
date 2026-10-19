@@ -285,6 +285,10 @@ def test_a_manifest_the_parser_does_not_recognise_fails_the_cut_contents_step(
         POSTURE_V2.replace('{"beta", true, true, false}', '{"beta", true, true}'),
         POSTURE_V1.replace('{"alpha", true, false, false},', ""),
         POSTURE_V2.replace(
+            "return []RequiredTable{\n",
+            'return Posture{\n\t\tRequiredSequences: []string{"new_seq"},\n\t\tRequiredTables: []RequiredTable{\n',
+        ),
+        POSTURE_V2.replace(
             '{"beta", true, true, false}', '{TableName: "beta", AllowInsert: true}'
         ),
         POSTURE_V2.replace(
@@ -309,3 +313,35 @@ def test_a_manifest_the_parser_does_not_recognise_fails_the_cut_contents_step(
         )
         assert done.returncode != 0, (broken, done.stdout, done.stderr)
         assert "unparsable" in done.stdout, done.stdout
+
+
+def test_grants_check_refuses_a_non_git_ops_path_before_it_queries_clickhouse(
+    tmp_path: Path,
+) -> None:
+    bindir, _ = _git_logger(tmp_path)
+    root = tmp_path / "root"
+    rec = root / "_records" / "bigboy-test"
+    rec.mkdir(parents=True)
+    (rec / "sha.txt").write_text("a" * 40 + "\n")
+    (root / "ops").mkdir()
+    (root / "ops" / ".env").write_text("")
+    (root / "_records" / "images.env").write_text("")
+    calls = tmp_path / "docker-calls.log"
+    stub = bindir / "docker"
+    stub.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{calls}"\nexit 0\n')
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+    not_a_repo = tmp_path / "not a repo"
+    not_a_repo.mkdir()
+    env = _env(tmp_path, bindir, not_a_repo)
+    env["BIGBOY_ROOT"] = str(root)
+    done = subprocess.run(
+        ["bash", str(BIGBOY / "bigboy-grants-check.sh"), str(rec)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert "GRANTS_CHECK_FAIL" in done.stdout, done.stdout
+    assert not calls.exists(), calls.read_text()

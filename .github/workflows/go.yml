@@ -78,7 +78,7 @@ on:
       # directly as real-repo ComplexityScanner.should_process examples,
       # so a change to either is a genuine Go-test input even though
       # neither lives under any of the subdirectory globs above
-      # (test_go_workflow_path_filters.py's _files_named_by_go_tests
+      # (internal/cigates/workflows_path_filters_test.go's resolveNamedFiles
       # oracle: a file is a Go input because Go code NAMES it).
       - 'src/dev_health_ops/__init__.py'
       # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/cli.py (deleted); the
@@ -95,7 +95,7 @@ on:
       # upgrade; internal/joboperator's tests also read the worker_operator_audits revisions.
       # Revisions 0139 to 0141 were Python-only PRs that this list did not match, so the Go
       # integration shards never ran on them and rev 186's migrate hook failed (CHAOS-6801).
-      # tests/tooling/test_go_workflow_path_filters.py asserts every Alembic file matches.
+      # internal/cigates/workflows_path_filters_test.go asserts every Alembic file matches.
       - 'src/dev_health_ops/alembic/**'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
@@ -209,6 +209,12 @@ on:
       - '.github/workflows/test.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
+      # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
+      # and the auth closure allow-list
+      - '.github/workflows/*.yml'
+      - 'ci/builder_images.sh'
+      - 'ci/builder_images.tsv'
+      - 'ci/auth_closure_allow.tsv'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence
@@ -291,7 +297,7 @@ on:
       # directly as real-repo ComplexityScanner.should_process examples,
       # so a change to either is a genuine Go-test input even though
       # neither lives under any of the subdirectory globs above
-      # (test_go_workflow_path_filters.py's _files_named_by_go_tests
+      # (internal/cigates/workflows_path_filters_test.go's resolveNamedFiles
       # oracle: a file is a Go input because Go code NAMES it).
       - 'src/dev_health_ops/__init__.py'
       # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/cli.py (deleted); the
@@ -308,7 +314,7 @@ on:
       # upgrade; internal/joboperator's tests also read the worker_operator_audits revisions.
       # Revisions 0139 to 0141 were Python-only PRs that this list did not match, so the Go
       # integration shards never ran on them and rev 186's migrate hook failed (CHAOS-6801).
-      # tests/tooling/test_go_workflow_path_filters.py asserts every Alembic file matches.
+      # internal/cigates/workflows_path_filters_test.go asserts every Alembic file matches.
       - 'src/dev_health_ops/alembic/**'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
@@ -422,6 +428,12 @@ on:
       - '.github/workflows/test.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
+      # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
+      # and the auth closure allow-list
+      - '.github/workflows/*.yml'
+      - 'ci/builder_images.sh'
+      - 'ci/builder_images.tsv'
+      - 'ci/auth_closure_allow.tsv'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence

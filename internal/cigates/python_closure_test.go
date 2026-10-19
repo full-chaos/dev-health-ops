@@ -17,8 +17,9 @@ import (
 // as data, so they outlive the Python test runner. Every check takes a root so a planted defect runs in a temp tree.
 
 type uvDep struct {
-	Name  string   `toml:"name"`
-	Extra []string `toml:"extra"`
+	Name   string   `toml:"name"`
+	Extra  []string `toml:"extra"`
+	Marker string   `toml:"marker"`
 }
 
 type uvPackage struct {
@@ -200,8 +201,10 @@ func TestCIClosurePlantedDefects(t *testing.T) {
 }
 
 // runtimeClosure walks uv.lock the way an install without dev extras does: the project's base dependencies, following each
-// dependency's requested extras. The project's own optional-dependencies (dev) are never entered.
-func runtimeClosure(lock uvLock, project string) (map[string]bool, error) {
+// dependency's requested extras. The project's own optional-dependencies (dev) are never entered. An edge that carries an
+// environment marker applies only on some platforms, so unconditionalOnly drops it: a package reached only through marked
+// edges is not guaranteed on every install.
+func runtimeClosure(lock uvLock, project string, unconditionalOnly bool) (map[string]bool, error) {
 	pkgs := map[string]uvPackage{}
 	for _, p := range lock.Package {
 		pkgs[p.Name] = p
@@ -216,6 +219,9 @@ func runtimeClosure(lock uvLock, project string) (map[string]bool, error) {
 	}
 	var stack []item
 	for _, d := range root.Dependencies {
+		if unconditionalOnly && d.Marker != "" {
+			continue
+		}
 		stack = append(stack, item{d.Name, d.Extra})
 	}
 	seen := map[string]bool{}
@@ -240,6 +246,9 @@ func runtimeClosure(lock uvLock, project string) (map[string]bool, error) {
 			edges = append(edges, pkg.Optional[e]...)
 		}
 		for _, d := range edges {
+			if unconditionalOnly && d.Marker != "" {
+				continue
+			}
 			stack = append(stack, item{d.Name, d.Extra})
 		}
 	}
@@ -264,6 +273,9 @@ func pyprojectDeclaresRedis(root string) (bool, error) {
 		return false, err
 	}
 	for _, line := range doc.Project.Dependencies {
+		if strings.Contains(line, ";") {
+			continue
+		}
 		m := requirementHead.FindStringSubmatch(line)
 		if m == nil {
 			continue
@@ -288,7 +300,11 @@ func TestLockedRuntimeClosureIncludesRedis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	closure, err := runtimeClosure(lock, "dev-health-ops")
+	closure, err := runtimeClosure(lock, "dev-health-ops", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anyEdge, err := runtimeClosure(lock, "dev-health-ops", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +312,7 @@ func TestLockedRuntimeClosureIncludesRedis(t *testing.T) {
 		t.Fatal("redis is not in the locked runtime closure of dev-health-ops: the api rate limiter's redis:// storage imports it, so an install without dev extras crashes the API at boot")
 	}
 	// A walk that cannot tell a dev-only package from a runtime one would pass for any lock.
-	if closure["fakeredis"] {
+	if anyEdge["fakeredis"] {
 		t.Fatal("fakeredis (a dev extra) is in the runtime closure: the walk is counting dev extras")
 	}
 	var project uvPackage
@@ -355,19 +371,28 @@ func TestRedisClosurePlantedDefects(t *testing.T) {
 		}
 		return l
 	}
-	good, err := runtimeClosure(parse(redisLockWith), "app")
+	good, err := runtimeClosure(parse(redisLockWith), "app", true)
 	if err != nil || !good["redis"] || good["fakeredis"] {
 		t.Fatalf("extras walk wrong: %v %v", good, err)
 	}
 	// The extra is not requested: redis must vanish even though limits has the extra defined.
 	noExtra := strings.Replace(redisLockWith, `, extra = ["redis"]`, "", 1)
-	if c, _ := runtimeClosure(parse(noExtra), "app"); c["redis"] {
+	if c, _ := runtimeClosure(parse(noExtra), "app", true); c["redis"] {
 		t.Fatal("redis reached without the extra being requested: the walk follows unrequested extras")
 	}
 	// The incident shape: redis pulled only by the dev extra.
 	devOnly := strings.Replace(redisLockWith, `dependencies = [{ name = "limits", extra = ["redis"] }]`, `dependencies = [{ name = "limits" }]`, 1)
-	if c, _ := runtimeClosure(parse(devOnly), "app"); c["redis"] {
+	if c, _ := runtimeClosure(parse(devOnly), "app", true); c["redis"] {
 		t.Fatal("redis reached through the dev extra: the guard cannot see the api-image crash")
+	}
+
+	// A marked edge is not guaranteed on every install: redis only behind a marker must not satisfy the guard.
+	marked := strings.Replace(redisLockWith, `{ name = "limits", extra = ["redis"] }`, `{ name = "limits", extra = ["redis"], marker = "sys_platform == 'win32'" }`, 1)
+	if c, _ := runtimeClosure(parse(marked), "app", true); c["redis"] {
+		t.Fatal("redis reached through a marker-conditional edge: a Linux install could omit it")
+	}
+	if c, _ := runtimeClosure(parse(marked), "app", false); !c["redis"] {
+		t.Fatal("the any-edge walk lost redis behind a marker")
 	}
 
 	cases := []struct {
@@ -380,6 +405,8 @@ func TestRedisClosurePlantedDefects(t *testing.T) {
 		{"limits without the extra", `"limits>=3.0.0"`, false},
 		{"limits async-redis only", `"limits[async-redis]>=3"`, false},
 		{"fakeredis is not redis", `"fakeredis>=2"`, false},
+		{"redis behind an environment marker", `"redis>=5; sys_platform == 'win32'"`, false},
+		{"limits redis extra behind a marker", `"limits[redis]>=3; python_version < '3.10'"`, false},
 	}
 	for _, tc := range cases {
 		root := t.TempDir()

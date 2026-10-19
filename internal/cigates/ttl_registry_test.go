@@ -75,6 +75,20 @@ func ttlAttribute(statement string, re *regexp.Regexp) (tables []string, matches
 	return tables, matches
 }
 
+var (
+	ttlSQLLineComment = regexp.MustCompile(`--[^\n]*`)
+	ttlBlockComment   = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	ttlPyCommentLine  = regexp.MustCompile(`(?m)^[ \t]*#[^\n]*`)
+)
+
+// ttlStripComments blanks SQL line and block comments and Python comment lines, so a TTL clause that is only commented out
+// does not count as enforced.
+func ttlStripComments(text string) string {
+	text = ttlBlockComment.ReplaceAllString(text, "")
+	text = ttlSQLLineComment.ReplaceAllString(text, "")
+	return ttlPyCommentLine.ReplaceAllString(text, "")
+}
+
 func ttlMigrationFiles(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -99,7 +113,7 @@ func ttlScan(t *testing.T, dir string) (precise map[string]ttlRetention, coarse 
 		if err != nil {
 			t.Fatal(err)
 		}
-		text := string(raw)
+		text := ttlStripComments(string(raw))
 		for _, m := range ttlAlterModify.FindAllStringSubmatch(text, -1) {
 			coarse[m[1]] = true
 		}
@@ -208,7 +222,7 @@ func TestTTLCeilingsSurviveTheShelfLife(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, m := range ttlHorizonLine.FindAllStringSubmatch(string(raw), -1) {
+		for _, m := range ttlHorizonLine.FindAllStringSubmatch(ttlStripComments(string(raw)), -1) {
 			days, _ := strconv.Atoi(m[1])
 			if cur, ok := horizons[path]; !ok || days < cur {
 				horizons[path] = days
@@ -300,6 +314,16 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 		_, c := ttlScan(t, dir)
 		if len(c) != 0 {
 			t.Fatalf("prose produced phantom tables: %v", c)
+		}
+	})
+	t.Run("a commented-out TTL is not enforced", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE dropped_ttl (\n x Int8\n) ENGINE=M\n-- TTL ts + INTERVAL 30 DAY DELETE\n;")
+		writeFile(t, filepath.Join(dir, "2.sql"), "CREATE TABLE block_commented (\n x Int8\n) ENGINE=M /* TTL ts + INTERVAL 30 DAY DELETE */;")
+		writeFile(t, filepath.Join(dir, "3.py"), "DDL = \"\"\"CREATE TABLE py_commented (\n x Int8\n) ENGINE=M\n\"\"\"\n# TTL ts + INTERVAL 30 DAY DELETE\n")
+		p, c := ttlScan(t, dir)
+		if len(p) != 0 || len(c) != 0 {
+			t.Fatalf("commented-out TTL counted: precise=%v coarse=%v", p, c)
 		}
 	})
 	t.Run("changing the migration changes the registry", func(t *testing.T) {

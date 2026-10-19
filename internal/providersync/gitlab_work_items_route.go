@@ -886,6 +886,7 @@ func (handler GitLabWorkItemsRouteHandler) collectGitLabGroupEpics(
 		return outcome, nil
 	}
 	listed = len(payloads)
+	payloads = dropOutsideWorkItemWindow(ctx, client.Metrics, claim, payloads, gitLabWorkItemWindowView)
 	for _, raw := range payloads {
 		var payload gitlabEpicPayload
 		if err := json.Unmarshal(raw, &payload); err != nil {

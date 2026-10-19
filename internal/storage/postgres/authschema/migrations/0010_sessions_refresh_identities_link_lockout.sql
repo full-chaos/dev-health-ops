@@ -114,3 +114,75 @@ CREATE TRIGGER refresh_credentials_consumed_at_write_once
     BEFORE UPDATE OF consumed_at ON refresh_credentials
     FOR EACH ROW WHEN (OLD.consumed_at IS NOT NULL AND NEW.consumed_at IS DISTINCT FROM OLD.consumed_at)
     EXECUTE FUNCTION consumed_at_write_once();
+
+-- A live lockout cannot be erased. The runtime role must update these rows
+-- (count up, set the lock, clear it after expiry, delete on a successful
+-- login, sweep idle rows), but while locked_until is in the future the row may
+-- not be retargeted, lose its lock or count, or be deleted. Login is refused
+-- while a lock holds, so no legitimate path needs any of those. An early admin
+-- unlock therefore runs as the owner/migration role.
+CREATE FUNCTION login_attempts_live_lock() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'login_attempts row % is locked until % and cannot be deleted', OLD.id, OLD.locked_until
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF NEW.identifier_hash IS DISTINCT FROM OLD.identifier_hash THEN
+        RAISE EXCEPTION 'login_attempts row % is locked and its identifier cannot change', OLD.id
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF NEW.locked_until IS NULL OR NEW.locked_until < OLD.locked_until OR NEW.attempt_count < OLD.attempt_count THEN
+        RAISE EXCEPTION 'login_attempts row % is locked until % and cannot be relaxed', OLD.id, OLD.locked_until
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER login_attempts_live_lock_update
+    BEFORE UPDATE ON login_attempts
+    FOR EACH ROW WHEN (OLD.locked_until > now())
+    EXECUTE FUNCTION login_attempts_live_lock();
+CREATE TRIGGER login_attempts_live_lock_delete
+    BEFORE DELETE ON login_attempts
+    FOR EACH ROW WHEN (OLD.locked_until > now())
+    EXECUTE FUNCTION login_attempts_live_lock();
+
+-- identifier_hash never changes on any row: a retarget moves one identifier's
+-- failure history onto another.
+CREATE FUNCTION login_attempts_identifier_immutable() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'login_attempts row % identifier cannot change', OLD.id
+        USING ERRCODE = 'integrity_constraint_violation';
+END;
+$$;
+CREATE TRIGGER login_attempts_identifier_immutable
+    BEFORE UPDATE OF identifier_hash ON login_attempts
+    FOR EACH ROW WHEN (NEW.identifier_hash IS DISTINCT FROM OLD.identifier_hash)
+    EXECUTE FUNCTION login_attempts_identifier_immutable();
+
+-- A child credential belongs to its parent's family, so a family-wide revoke
+-- reaches it. On insert a NULL family_id is filled from the parent; a supplied
+-- family_id must match the parent's or the insert is refused (caller bugs
+-- surface, nothing is rewritten silently). Moving a credential to another
+-- family, or to a parent of another family, is refused.
+CREATE FUNCTION refresh_credentials_family_follows_parent() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    parent_family uuid;
+BEGIN
+    SELECT family_id INTO parent_family FROM refresh_credentials WHERE id = NEW.parent_id;
+    IF TG_OP = 'INSERT' AND NEW.family_id IS NULL THEN
+        NEW.family_id := parent_family;
+    ELSIF NEW.family_id IS DISTINCT FROM parent_family THEN
+        RAISE EXCEPTION 'refresh credential family must match the family of its parent %', NEW.parent_id
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER refresh_credentials_family_follows_parent
+    BEFORE INSERT OR UPDATE OF family_id, parent_id ON refresh_credentials
+    FOR EACH ROW WHEN (NEW.parent_id IS NOT NULL)
+    EXECUTE FUNCTION refresh_credentials_family_follows_parent();

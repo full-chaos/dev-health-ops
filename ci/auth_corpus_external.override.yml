@@ -2,6 +2,16 @@
 # project name does not isolate a host-global container_name or a fixed host port, so every service of the go-api
 # stack that has one is released here; each store and the two listeners the corpus needs are published on an
 # ephemeral loopback port that the script reads back from compose.
+# The default network of the project, with a pinned subnet: a request from the runner reaches go-api through this
+# network's gateway, which go-api must trust (TRUSTED_PROXIES below) to read the client IP from X-Forwarded-For, as
+# the frozen golden's audit rows expect. The subnet is outside compose.yml's planes network (10.199.81.0/28).
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.199.90.0/24
+          gateway: 10.199.90.1
+
 services:
   postgres:
     container_name: !reset null
@@ -32,6 +42,7 @@ services:
       - SMTP_HOST=host.docker.internal
       - SMTP_PORT=2525
       - APP_BASE_URL=https://app.example.test/
+      - TRUSTED_PROXIES=10.199.90.1
       # Pass-throughs: set only when ci/auth_corpus_set_env.sh put them in the project state, so an unset
       # variable stays unset (an empty value is not the same as unset for these readers).
       - AUTH_AUTO_CREATE_ORG_ON_REGISTER

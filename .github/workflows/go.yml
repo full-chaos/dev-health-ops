@@ -209,6 +209,12 @@ on:
       - '.github/workflows/test.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
+      # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
+      # run reader and the venue workflow whose step names that reader filters on
+      - 'ci/go_relevant_diff.sh'
+      - 'ci/go_affected_integration.py'
+      - 'ci/last-venue-run.sh'
+      - '.github/workflows/venue-oracles.yml'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence
@@ -422,6 +428,12 @@ on:
       - '.github/workflows/test.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
+      # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
+      # run reader and the venue workflow whose step names that reader filters on
+      - 'ci/go_relevant_diff.sh'
+      - 'ci/go_affected_integration.py'
+      - 'ci/last-venue-run.sh'
+      - '.github/workflows/venue-oracles.yml'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence

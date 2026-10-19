@@ -136,7 +136,7 @@ func (handler PagerDutySchedulesRouteHandler) Collect(
 	counted.Doer = pagerDutySchedulesCountingDoer{delegate: client.Doer, attempts: &requests}
 	pages, err := providerfoundation.CollectPagerDutyOffsetPages(
 		ctx, &counted, providerfoundation.PagerDutyOffsetOptions{
-			Path: "/schedules", DataKey: "schedules", PerPage: perPage, MaxPages: maxPages,
+			Path: "/schedules", Route: "/schedules", DataKey: "schedules", PerPage: perPage, MaxPages: maxPages,
 		},
 	)
 	if err != nil {

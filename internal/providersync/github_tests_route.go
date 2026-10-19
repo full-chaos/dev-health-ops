@@ -891,7 +891,7 @@ func downloadGitHubTestsArtifact(
 	ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string,
 	maxBytes int64,
 ) (archive []byte, used int, notFound bool, err error) {
-	response, err := client.DoRoute(ctx, http.MethodGet, githubRepoRoute+"/actions/artifacts/{artifact}/zip", root+"/actions/artifacts/"+url.PathEscape(artifactID)+"/zip", nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, githubArtifactZipRoute, root+"/actions/artifacts/"+url.PathEscape(artifactID)+"/zip", nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {
@@ -928,9 +928,10 @@ func downloadGitHubTestsArtifact(
 		// artifact store defers the unit with its dimension; every other
 		// failure keeps the class ClassifyHTTPForRequest gives it.
 		if classified := providerfoundation.ClassifyHTTPForRequest("github", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
+			classified.Route = githubArtifactZipRoute
 			return nil, requests, false, classified
 		}
-		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
+		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: githubArtifactZipRoute}
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 	if readErr != nil {

@@ -32,8 +32,12 @@ const (
 
 	graphQLRoute = "/graphql"
 
-	gitlabProjectRoute    = "/projects/{project}"
-	gitlabGroupEpicsRoute = "/groups/{group}/epics"
+	gitlabProjectRoute = "/projects/{project}"
+	// The artifact download routes also name a failure of the redirected
+	// download (the artifact store), whose own path is never printed.
+	githubArtifactZipRoute  = githubRepoRoute + "/actions/artifacts/{artifact}/zip"
+	gitlabJobArtifactsRoute = gitlabProjectRoute + "/jobs/{job}/artifacts"
+	gitlabGroupEpicsRoute   = "/groups/{group}/epics"
 
 	gitlabCommitsRoute       = gitlabProjectRoute + "/repository/commits"
 	gitlabMergeRequestsRoute = gitlabProjectRoute + "/merge_requests"

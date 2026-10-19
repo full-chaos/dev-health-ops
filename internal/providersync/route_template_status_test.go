@@ -48,6 +48,19 @@ func TestRemainingRoutesNameTheTemplateNotThePath(t *testing.T) {
 			_, err := ListGitHubRepositories(ctx, statusClient(t, "github", "https://api.github.com"), GitHubListing{Org: "secret-org", Pattern: "*"})
 			return err
 		}, "/orgs/{org}/repos", "secret-org"},
+		"github files subtree walk": {func() error {
+			_, _, err := gitHubWalkTree(ctx, statusClient(t, "github", "https://api.github.com"), "/repos/secret-org/secret-repo", "abc123", "src")
+			return err
+		}, "/repos/{owner}/{repo}/git/trees/{ref}", "secret"},
+		"pagerduty users walk": {func() error {
+			_, err := providerfoundation.CollectPagerDutyOffsetPages(ctx, statusClient(t, "pagerduty", "https://api.pagerduty.com"),
+				providerfoundation.PagerDutyOffsetOptions{Path: "/users", Route: "/users", DataKey: "users", PerPage: 25, MaxPages: 1})
+			return err
+		}, "/users", "offset="},
+		"github artifact download": {func() error {
+			_, _, _, err := downloadGitHubTestsArtifact(ctx, statusClient(t, "github", "https://api.github.com"), "/repos/secret-org/secret-repo", "77", 1<<20)
+			return err
+		}, "/repos/{owner}/{repo}/actions/artifacts/{artifact}/zip", "secret"},
 		"gitlab group projects": {func() error {
 			_, err := ListGitLabProjects(ctx, statusClient(t, "gitlab", "https://gitlab.example"), GitLabListing{Group: "secret-group", Pattern: "*"})
 			return err

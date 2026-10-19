@@ -826,7 +826,7 @@ func gitLabTestsJSONTruthy(value any) bool {
 }
 
 func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation.HTTPClient, root, jobID string) ([]byte, error) {
-	response, err := client.DoRoute(ctx, http.MethodGet, gitlabProjectRoute+"/jobs/{job}/artifacts", root+"/jobs/"+url.PathEscape(jobID)+"/artifacts", nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, gitlabJobArtifactsRoute, root+"/jobs/"+url.PathEscape(jobID)+"/artifacts", nil)
 	if err != nil {
 		var providerErr *providerfoundation.ProviderError
 		if errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusGone) {
@@ -855,9 +855,10 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 			return nil, logging.TransportFailure(readErr)
 		}
 		if classified := providerfoundation.ClassifyHTTPForRequest("gitlab", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
+			classified.Route = gitlabJobArtifactsRoute
 			return nil, classified
 		}
-		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
+		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: gitlabJobArtifactsRoute}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, gitLabTestsMaxDownload+1))
 	if err != nil {

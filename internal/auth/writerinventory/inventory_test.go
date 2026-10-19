@@ -153,7 +153,7 @@ func Suffix(db interface{ Exec(string, ...any) }, k string) {
 }
 
 func RuntimeSchema(db interface{ Exec(string, ...any) }, s string) {
-	db.Exec("INSERT INTO " + authschema.Quote(s) + ".auth_outbox_events (a) VALUES ($1)")
+	db.Exec("INSERT INTO " + authschema.Quote(s) + ".principals (a) VALUES ($1)")
 }
 
 func ViaAssign(db interface{ Exec(string, ...any) }, s string) {
@@ -238,7 +238,7 @@ func TestPlantedWritersAreRedAndStaleEntriesFail(t *testing.T) {
 		"p/planted.go|QualifiedComment|public.users|UPDATE",
 		"p/planted.go|QuotedCTE|public.users|UPDATE",
 		"p/planted.go|Replace|public.password_reset_tokens|DELETE",
-		"p/planted.go|RuntimeSchema|auth.auth_outbox_events|INSERT",
+		"p/planted.go|RuntimeSchema|auth.principals|INSERT",
 		"p/planted.go|Suffix|public.sso_providers|INSERT",
 		"p/planted.go|Trunc|public.refresh_tokens|TRUNCATE",
 		"p/planted.go|Trunc|public.users|TRUNCATE",

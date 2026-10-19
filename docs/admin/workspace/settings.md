@@ -99,3 +99,18 @@ They remain compatible when no monetary budget is configured. When a budget is
 configured, unknown pricing is rejected before provider execution, and missing
 usage on a completed attempt makes later calls fail closed until the next UTC
 budget window. Budget writes are unavailable while impersonating.
+
+## Service model for MCP investigations
+
+An organization owner or administrator on a team or enterprise plan with Agent
+Context Runtime can turn the service model on or off under **AI Setup > BYO
+LLM**. When it is on, MCP investigations run on the platform LLM when the
+organization has no saved BYO key. A saved BYO key always wins. Platform LLM
+use counts against the organization's plan allowance.
+
+Admin API: `GET /api/v1/admin/llm-settings/service-model` reads the state
+(`enabled`, `eligible`, `control`); `PUT` with `{"enabled": true}` or
+`{"enabled": false}` changes it. The change reaches investigations within about
+a minute. When billing or support set the service model for the organization,
+`control` is `managed` and the toggle answers `409`; contact support to change
+it. Each change writes an audit log entry.

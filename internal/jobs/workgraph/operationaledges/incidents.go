@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -41,7 +42,7 @@ const dateTimeSecondPrecision = "2006-01-02 15:04:05"
 // chaos-4924-pr-a, r3 finding 1).
 func logReadErr(ctx context.Context, op, orgID string, err error, attrs ...any) error {
 	slog.Default().ErrorContext(ctx, "workgraph operationaledges: "+op+" failed",
-		append([]any{"org_id", orgID, "error", err}, attrs...)...)
+		append([]any{"org_id", orgID, workgraph.ErrorAttr(err)}, attrs...)...)
 	return fmt.Errorf("%s: %w", op, err)
 }
 

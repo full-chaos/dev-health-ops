@@ -61,6 +61,10 @@ REJECT_BY_CLIENT = [
     for entry in MANIFEST["reject_by_client"]
     if not entry["file"].startswith(RAW_DUPLICATE_PREFIX)
 ]
+GO_SCHEMA_GAP = [
+    (entry["file"], entry["expect_instance_location"], entry["expect_keyword"])
+    for entry in MANIFEST["go_schema_gap"]
+]
 RAW_DUPLICATES = [
     entry["file"]
     for entry in MANIFEST["reject_by_client"]
@@ -98,6 +102,7 @@ def test_every_fixture_file_on_disk_is_claimed_by_the_manifest() -> None:
         | {name for name, _, _ in REJECT}
         | set(REJECT_BY_CLIENT)
         | set(RAW_DUPLICATES)
+        | {name for name, _, _ in GO_SCHEMA_GAP}
     )
     assert on_disk == claimed, (
         f"unclaimed on disk: {sorted(on_disk - claimed)}; "
@@ -486,3 +491,20 @@ def test_utc_range_fixtures_are_refused_by_the_range_rule(name: str) -> None:
 
 def test_the_exact_utc_lower_limit_is_inclusive() -> None:
     Principal.from_wire(_load("valid-authenticated-at-exact-lower-limit.json"))
+
+
+@pytest.mark.parametrize(("name", "pointer", "keyword"), GO_SCHEMA_GAP)
+def test_calendar_impossible_day_is_refused_at_the_schema_layer_here(
+    name: str, pointer: str, keyword: str
+) -> None:
+    """Python refuses by ``format`` what Go's Validate accepts (CHAOS-10135).
+
+    The Go half is TestGoSchemaValidateAcceptsACalendarImpossibleDay. Both halves
+    are the declared divergence; the typed client refuses the document either way.
+    """
+    found = violations(SURFACE, _load(name))
+    assert {(v.instance_location, v.keyword) for v in found} == {(pointer, keyword)}, (
+        "; ".join(str(v) for v in found) or "no violations"
+    )
+    with pytest.raises(ContractError):
+        Principal.from_wire(_load(name))

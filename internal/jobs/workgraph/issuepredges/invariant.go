@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
 
@@ -52,7 +53,7 @@ func (service *Service) CheckFallbackInvariant(ctx context.Context, orgID string
 	stored, err := issueprlinks.ReadStoredLinks(ctx, service.rawConn, orgID)
 	if err != nil {
 		service.logger.Error("issue-pr fallback invariant: load failed",
-			slog.String("organization_id", orgID), slog.Any("error", err))
+			slog.String("organization_id", orgID), workgraph.ErrorAttr(err))
 		return InvariantOutcome{OrganizationID: orgID}, err
 	}
 	outcome := InvariantOutcome{
@@ -78,7 +79,7 @@ func reportFallbackInvariant(ctx context.Context, logger *slog.Logger, outcome I
 	} {
 		instrument, err := meter.Int64Gauge(gauge.name, metric.WithUnit("{row}"), metric.WithDescription(gauge.description))
 		if err != nil {
-			logger.Error("issue-pr fallback invariant: gauge unavailable", slog.String("gauge", gauge.name), slog.Any("error", err))
+			logger.Error("issue-pr fallback invariant: gauge unavailable", slog.String("gauge", gauge.name), workgraph.ErrorAttr(err))
 			continue
 		}
 		instrument.Record(ctx, int64(gauge.value), metric.WithAttributes(attribute.String("organization_id", outcome.OrganizationID)))

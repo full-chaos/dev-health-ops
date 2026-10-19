@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -129,23 +130,24 @@ func (e *env) exchange(t *testing.T, ctx context.Context, store *Store, credenti
 	return result
 }
 
-// guarded runs a statement as the superuser inside a transaction armed the way
-// audit.Commit arms it, to set up a state the guard triggers would refuse.
+// guarded sets up a state the guard triggers refuse outside audit.Commit
+// (an expired credential or session, a disabled principal) through
+// audit.Commit itself, as the runtime role, with its audit row and event.
 func (e *env) guarded(t *testing.T, ctx context.Context, sql string, args ...any) {
 	t.Helper()
-	tx, err := e.admin.Begin(ctx)
+	err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, sql, args...)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "test.session_setup", Outcome: audit.OutcomeAllowed},
+		Event: audit.OutboxEvent{
+			AggregateType: "test", AggregateID: uuid.NewString(), EventType: "test.session_setup",
+			IdempotencyKey: "test.session_setup:" + uuid.NewString(),
+		},
+	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, sql, args...); err != nil {
 		t.Fatalf("guarded %q: %v", sql, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
 	}
 }
 

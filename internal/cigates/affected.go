@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	affectedFullPrefixes = []string{"ci/", ".github/", "internal/testsupport/"}
+	affectedFullPrefixes = []string{"internal/testsupport/"}
 	affectedFullFiles    = map[string]bool{"go.mod": true, "go.sum": true, "go.work": true, "go.work.sum": true}
 )
 
@@ -24,6 +24,10 @@ type goListEntry struct {
 	Dir             string
 	ForTest         string
 	Deps            []string
+	GoFiles         []string
+	CgoFiles        []string
+	TestGoFiles     []string
+	XTestGoFiles    []string
 	EmbedFiles      []string
 	TestEmbedFiles  []string
 	XTestEmbedFiles []string
@@ -111,7 +115,7 @@ func ownerOfDataFile(p string, packages map[string]goListEntry) (string, bool) {
 	return "", false
 }
 
-func selectAffected(changed []string, golist []goListEntry, keys []string, root string) (string, []string, error) {
+func selectAffected(changed []string, golist []goListEntry, keys []string, root, base string) (string, []string, error) {
 	packages := map[string]goListEntry{}
 	binaries := map[string]map[string]bool{}
 	modulePath := ""
@@ -144,7 +148,12 @@ func selectAffected(changed []string, golist []goListEntry, keys []string, root 
 		return "", nil, errors.New("go list output holds no packages or no module path")
 	}
 
+	rules := &planRules{root: root, base: base, keys: map[string]bool{}, packages: packages, binaries: binaries, modulePath: modulePath}
+	for _, k := range keys {
+		rules.keys[k] = true
+	}
 	changedPackages := map[string]bool{}
+	directKeys := map[string]bool{}
 	for _, raw := range changed {
 		p := path.Clean(raw)
 		if affectedFullFiles[p] {
@@ -154,6 +163,15 @@ func selectAffected(changed []string, golist []goListEntry, keys []string, root 
 			if strings.HasPrefix(p, pre) {
 				return "FULL shared change: " + p, nil, nil
 			}
+		}
+		if full, direct, handled := rules.classifyInput(p); handled {
+			if full != "" {
+				return full, nil, nil
+			}
+			for _, k := range direct {
+				directKeys[k] = true
+			}
+			continue
 		}
 		if strings.HasSuffix(p, ".go") {
 			parts := strings.Split(p, "/")
@@ -174,10 +192,20 @@ func selectAffected(changed []string, golist []goListEntry, keys []string, root 
 			}
 		}
 		owner, ok := ownerOfDataFile(p, packages)
-		if !ok {
+		if ok {
+			changedPackages[owner] = true
+			continue
+		}
+		readers, scanned, err := rules.literalReaders(p)
+		if err != nil {
+			return "FULL could not scan Go string literals: " + err.Error(), nil, nil
+		}
+		if !scanned {
 			return "FULL non-Go file with no owning package input: " + p, nil, nil
 		}
-		changedPackages[owner] = true
+		for _, k := range readers {
+			directKeys[k] = true
+		}
 	}
 
 	var affected []string
@@ -189,6 +217,10 @@ func selectAffected(changed []string, golist []goListEntry, keys []string, root 
 		closure, ok := binaries[importPath]
 		if !ok {
 			return "FULL integration package without a test binary: " + key, nil, nil
+		}
+		if directKeys[key] {
+			affected = append(affected, key)
+			continue
 		}
 		for p := range closure {
 			if changedPackages[p] {
@@ -209,6 +241,7 @@ func AffectedIntegration(args []string, stdout, stderr io.Writer) int {
 	golistP := fs.String("golist", "", "go list -test -json output")
 	keysP := fs.String("keys", "", "integration package keys, one per line")
 	root := fs.String("root", "", "repository root")
+	base := fs.String("base", "", "pull request base sha; go.yml and ci/check_go.sh are compared at its merge base with HEAD")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -237,7 +270,7 @@ func AffectedIntegration(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	verdict, affected, err := selectAffected(changed, golist, keys, *root)
+	verdict, affected, err := selectAffected(changed, golist, keys, *root, *base)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

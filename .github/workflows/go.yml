@@ -693,7 +693,9 @@ jobs:
       # CHAOS-9947: a pull request runs only the integration shards whose test
       # binaries contain a changed package (go list -test, cmd/cigate affected-integration).
       # A shared change, an unplaceable file or any failure here selects the FULL
-      # suite; main, merge_group and manual runs never run this step.
+      # suite; main, merge_group and manual runs never run this step. --base lets it
+      # compare this file and ci/check_go.sh at the merge base: only an edit the
+      # integration jobs or verbs can see selects the FULL suite.
       - name: Select the integration packages the change can affect
         if: github.event_name == 'pull_request'
         env:
@@ -711,7 +713,7 @@ jobs:
             full "go list failed"
           elif ! go run -trimpath -mod=readonly ./cmd/cigate affected-integration --changed "${RUNNER_TEMP}/changed.txt" \
             --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
-            --root "${GITHUB_WORKSPACE}" > "${out}"; then
+            --root "${GITHUB_WORKSPACE}" --base "${BASE_SHA}" > "${out}"; then
             full "selection program failed"
           fi
           cat "${out}"

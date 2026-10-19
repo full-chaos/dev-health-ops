@@ -46,6 +46,7 @@ PROBE = textwrap.dedent(
 
     NOW = datetime(2026, 9, 3, 5, 0, 0, tzinfo=timezone.utc)
 
+    CRED_NOW = datetime(2026, 10, 18, tzinfo=timezone.utc)
     examples = Path(sys.argv[1])
     import dev_health_ops.authclient as client
 
@@ -66,6 +67,12 @@ PROBE = textwrap.dedent(
             raw("authorization_batch_request", "batch-request-valid-two-items.json"),
             raw("authorization_batch_response", "batch-response-valid-items-disagree.json"), now=NOW),
         "parse_rfc3339": lambda: client.parse_rfc3339("2026-09-03T10:00:00Z", "probe.v1", "at"),
+        "parse_credential_entry": lambda: client.parse_credential_entry(
+            raw("credential-entry", "valid-active.json"), CRED_NOW),
+        "parse_credential_list": lambda: client.parse_credential_list(
+            raw("credential-list", "valid-two-items.json"), CRED_NOW),
+        "parse_credential_receipt": lambda: client.parse_credential_receipt(
+            raw("credential-receipt", "valid-issue.json"), CRED_NOW),
     }
     exported = sorted(n for n in client.__all__ if n.startswith("parse_"))
     uncovered = [n for n in exported if n not in calls]

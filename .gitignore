@@ -87,3 +87,5 @@ index.txt
 # `uv sync` runs in different worktrees don't serialize on ~/.cache/uv/.lock.
 .uv-cache/
 worktrees/
+
+/.codex-review-context.md

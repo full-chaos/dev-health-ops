@@ -485,6 +485,15 @@ its marker leaves the day unknown until the next sync, which heals it because
 Postgres still says succeeded. A run that was created but not yet claimed does
 not hide an older `succeeded` (it has not started computing); the claim does.
 
+## Workgraph build permanent cancels
+
+`dev_health_workgraph_build_permanent_cancels_total` counts `workgraph.build`
+requests that the build handler cancelled permanently after a step failure.
+Label `error_class` is one of `context_canceled`, `deadline_exceeded`,
+`dependency_unavailable` or `unclassified`. A transient step failure retries
+and is not counted. The matching Warn log line carries the same class and the
+root Go type, never the error text.
+
 ## Linear project ensure rows
 
 A Linear work-items unit names every project it saw by an ensure row in `projects`. The row carries an epoch version, so a catalog row always replaces it. The unit writes an ensure row only when it can change the newest stored row. A stored row of a newer version, or of the same version with the same content, is left alone. A missing, older or changed row is written.

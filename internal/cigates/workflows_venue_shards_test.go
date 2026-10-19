@@ -26,7 +26,9 @@ const (
 	venueDriftSeconds    = 200
 )
 
-var venueVerbCall = regexp.MustCompile(`check_go\.sh venue-oracles\s+"\$\{\{\s*matrix\.shard\s*\}\}"\s+(\d+)\b`)
+var matrixShardExpr = regexp.MustCompile(`\$\{\{\s*matrix\.shard\s*\}\}`)
+
+var venueVerbCall = regexp.MustCompile(`^bash ci/check_go\.sh venue-oracles\s+"\$\{\{\s*matrix\.shard\s*\}\}"\s+(\d+)\b`)
 
 func matrixShards(job yamlMap) ([]int, bool) {
 	var out []int
@@ -61,23 +63,52 @@ func venueShardsViolations(t *testing.T, root string) []string {
 	if !isOneToN(shards) {
 		out = append(out, fmt.Sprintf("matrix shard list %v is not 1..N: a gap or duplicate leaves part of the registry unrun or run twice", shards))
 	}
-	var commands []string
-	for _, s := range stepsOf(job) {
-		for _, line := range strings.Split(asString(s["run"]), "\n") {
-			if strings.Contains(line, "check_go.sh venue-oracles") {
-				commands = append(commands, strings.TrimSpace(line))
+	if keys := sortedKeys(asMap(asMap(job["strategy"])["matrix"])); len(keys) != 1 || keys[0] != "shard" {
+		out = append(out, fmt.Sprintf("the venue-oracles matrix declares %v, want only shard: an include or exclude can drop or add a leg while the list still reads 1..N", keys))
+	}
+	for _, key := range []string{"if", "continue-on-error"} {
+		if v, has := job[key]; has {
+			out = append(out, fmt.Sprintf("the venue-oracles job declares %s: %v: a skipped or failure-swallowing leg reads as a pass", key, v))
+		}
+	}
+	var verbLines []string
+	var verbStep yamlMap
+	var verbCode []shLine
+	var verbAt int
+	for _, st := range stepsOf(job) {
+		code := shellCode(asString(st["run"]))
+		for i, l := range code {
+			if strings.Contains(l.text, "check_go.sh venue-oracles") {
+				verbLines = append(verbLines, l.text)
+				verbStep, verbCode, verbAt = st, code, i
 			}
 		}
 	}
-	if len(commands) != 1 {
-		out = append(out, fmt.Sprintf("want exactly one check_go.sh venue-oracles command in the job, found %v", commands))
-	} else if m := venueVerbCall.FindStringSubmatch(commands[0]); m == nil {
-		out = append(out, fmt.Sprintf("the verb is not called with the matrix shard and a count: %s", commands[0]))
-	} else if n, _ := strconv.Atoi(m[1]); n != len(shards) {
-		out = append(out, fmt.Sprintf("the workflow passes COUNT=%s but the matrix has %d legs", m[1], len(shards)))
+	if len(verbLines) != 1 {
+		out = append(out, fmt.Sprintf("want exactly one check_go.sh venue-oracles command in the job's code (comments do not count), found %v", verbLines))
+	} else {
+		call := verbCode[verbAt]
+		if m := venueVerbCall.FindStringSubmatch(call.text); call.indent != 0 || m == nil {
+			out = append(out, fmt.Sprintf("the verb is not a top-level statement `bash ci/check_go.sh venue-oracles \"${{ matrix.shard }}\" <count>` (an echo, a comment or a branch is not the call): %q", call.text))
+		} else if n, _ := strconv.Atoi(m[1]); n != len(shards) {
+			out = append(out, fmt.Sprintf("the workflow passes COUNT=%s but the matrix has %d legs", m[1], len(shards)))
+		}
+		pipefail := false
+		for _, l := range verbCode[:verbAt] {
+			pipefail = pipefail || (l.indent == 0 && l.text == "set -euo pipefail")
+		}
+		if !pipefail {
+			out = append(out, "the verb step has no top-level `set -euo pipefail` before the call: a failing verb piped into tee would read as success")
+		}
+		if got := asString(verbStep["if"]); got != "steps.relevance.outputs.relevant == 'true'" {
+			out = append(out, fmt.Sprintf("the verb step's if is %q, want the relevance gate steps.relevance.outputs.relevant == 'true'", got))
+		}
+		if v, has := verbStep["continue-on-error"]; has {
+			out = append(out, fmt.Sprintf("the verb step declares continue-on-error: %v: a red leg must fail the job", v))
+		}
 	}
-	if !strings.Contains(asString(job["name"]), fmt.Sprintf("/%d)", len(shards))) {
-		out = append(out, fmt.Sprintf("the leg name %q states the wrong count (want /%d)", asString(job["name"]), len(shards)))
+	if !regexp.MustCompile(`\$\{\{\s*matrix\.shard\s*\}\}/` + strconv.Itoa(len(shards)) + `\)$`).MatchString(asString(job["name"])) {
+		out = append(out, fmt.Sprintf("the leg name %q states the wrong count (want ...${{ matrix.shard }}/%d))", asString(job["name"]), len(shards)))
 	}
 	timeout, _ := job["timeout-minutes"].(int)
 	if timeout == 0 || timeout > 40 {
@@ -88,13 +119,13 @@ func venueShardsViolations(t *testing.T, root string) []string {
 	}
 	var uploads []yamlMap
 	for _, s := range stepsOf(job) {
-		if strings.Contains(asString(s["uses"]), "upload-artifact") {
+		if strings.HasPrefix(asString(s["uses"]), "actions/upload-artifact@") {
 			uploads = append(uploads, s)
 		}
 	}
 	if len(uploads) != 1 {
 		out = append(out, fmt.Sprintf("want exactly one upload-artifact step, found %d", len(uploads)))
-	} else if !strings.Contains(asString(asMap(uploads[0]["with"])["name"]), "matrix.shard") {
+	} else if !matrixShardExpr.MatchString(asString(asMap(uploads[0]["with"])["name"])) {
 		out = append(out, "the receipt artifact name has no matrix.shard: legs uploading one artifact name collide")
 	}
 	budget, err := strconv.Atoi(fmt.Sprint(asMap(job["env"])["VENUE_LEG_BUDGET_SECONDS"]))
@@ -112,6 +143,9 @@ func venueShardsViolations(t *testing.T, root string) []string {
 	default:
 		if !isOneToN(legs) {
 			out = append(out, fmt.Sprintf("venue-oracles-changed matrix legs %v are not 1..N", legs))
+		}
+		if keys := sortedKeys(asMap(asMap(changed["strategy"])["matrix"])); len(keys) != 1 || keys[0] != "shard" {
+			out = append(out, fmt.Sprintf("the venue-oracles-changed matrix declares %v, want only shard: an include or exclude can drop or add a leg", keys))
 		}
 		env := asMap(changed["env"])
 		if fmt.Sprint(env["VENUE_LEGS"]) != strconv.Itoa(len(legs)) {
@@ -310,10 +344,22 @@ func TestVenueShardsPlantedDefects(t *testing.T) {
 		muts []mutation
 		want []string
 	}{
+		{"matrix excludes a leg", []mutation{{f, "shard: [1, 2, 3, 4, 5, 6, 7, 8]", "shard: [1, 2, 3, 4, 5, 6, 7, 8]\n        exclude:\n          - shard: 8"}}, []string{"declares [exclude shard]"}},
+		{"matrix adds a leg by include", []mutation{{f, "shard: [1, 2, 3, 4, 5, 6, 7, 8]", "shard: [1, 2, 3, 4, 5, 6, 7, 8]\n        include:\n          - shard: 9"}}, []string{"declares [include shard]"}},
+		{"the verb call is only a comment", []mutation{{f, `bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1`, `# bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1`}}, []string{"found []"}},
+		{"the verb call is only echoed", []mutation{{f, `bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1`, `echo bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1`}}, []string{"not a top-level statement"}},
+		{"the verb call sits in a dead branch", []mutation{{f, `bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 8 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"`, "if false; then\n            bash ci/check_go.sh venue-oracles \"${{ matrix.shard }}\" 8 2>&1 | tee \"${RUNNER_TEMP}/venue-oracle-receipt/receipt.log\"\n          fi"}}, []string{"not a top-level statement"}},
+		{"the verb step loses pipefail", []mutation{{f, "          set -euo pipefail\n          mkdir -p \"${RUNNER_TEMP}/venue-oracle-receipt\"\n          bash ci/check_go.sh", "          mkdir -p \"${RUNNER_TEMP}/venue-oracle-receipt\"\n          bash ci/check_go.sh"}}, []string{"no top-level `set -euo pipefail`"}},
+		{"the verb step is gated by something else", []mutation{{f, "relevant == 'true'\n        run: |\n          set -euo pipefail\n          mkdir -p \"${RUNNER_TEMP}/venue-oracle-receipt\"", "relevant == 'false'\n        run: |\n          set -euo pipefail\n          mkdir -p \"${RUNNER_TEMP}/venue-oracle-receipt\""}}, []string{"the verb step's if is"}},
+		{"the verb step may fail silently", []mutation{{f, "      - name: Run this shard's venue differential oracles against the live Python api\n", "      - name: Run this shard's venue differential oracles against the live Python api\n        continue-on-error: true\n"}}, []string{"the verb step declares continue-on-error"}},
+		{"the leg job may fail silently", []mutation{{f, "    timeout-minutes: 40\n", "    timeout-minutes: 40\n    continue-on-error: true\n"}}, []string{"the venue-oracles job declares continue-on-error"}},
+		{"the artifact action is another action", []mutation{{f, "actions/upload-artifact@", "evil/upload-artifact-fake@"}}, []string{"exactly one upload-artifact step"}},
+		{"the artifact name only mentions matrix.shardless", []mutation{{f, "-shard-${{ matrix.shard }}", "-shard-${{ matrix.shardless }}"}}, []string{"collide"}},
+		{"changed-job matrix excludes a leg", []mutation{{c, "shard: [1, 2, 3, 4]", "shard: [1, 2, 3, 4]\n        exclude:\n          - shard: 4"}}, []string{"venue-oracles-changed matrix declares [exclude shard]"}},
 		{"matrix has a gap", []mutation{{f, "shard: [1, 2, 3, 4, 5, 6, 7, 8]", "shard: [1, 2, 3, 4, 5, 6, 7, 9]"}}, []string{"not 1..N"}},
 		{"matrix repeats a leg", []mutation{{f, "shard: [1, 2, 3, 4, 5, 6, 7, 8]", "shard: [1, 2, 3, 4, 5, 6, 7, 7]"}}, []string{"not 1..N"}},
 		{"verb count disagrees with the matrix", []mutation{{f, `venue-oracles "${{ matrix.shard }}" 8 2>&1`, `venue-oracles "${{ matrix.shard }}" 7 2>&1`}}, []string{"COUNT=7", "8 legs"}},
-		{"verb is not given the shard", []mutation{{f, `venue-oracles "${{ matrix.shard }}" 8 2>&1`, `venue-oracles 1 8 2>&1`}}, []string{"not called with the matrix shard"}},
+		{"verb is not given the shard", []mutation{{f, `venue-oracles "${{ matrix.shard }}" 8 2>&1`, `venue-oracles 1 8 2>&1`}}, []string{"not a top-level statement"}},
 		{"a second verb call", []mutation{{f, "          mkdir -p \"${RUNNER_TEMP}/venue-oracle-receipt\"\n          bash ci/check_go.sh venue-oracles", "          bash ci/check_go.sh venue-oracles 1 1\n          mkdir -p \"${RUNNER_TEMP}/venue-oracle-receipt\"\n          bash ci/check_go.sh venue-oracles"}}, []string{"exactly one check_go.sh venue-oracles command"}},
 		{"leg name states the wrong count", []mutation{{f, "(shard ${{ matrix.shard }}/8)", "(shard ${{ matrix.shard }}/7)"}}, []string{"wrong count"}},
 		{"leg timeout is the sequential job's", []mutation{{f, "    timeout-minutes: 40\n", "    timeout-minutes: 75\n"}}, []string{"75 min"}},

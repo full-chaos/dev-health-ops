@@ -3,6 +3,7 @@ package cigates_test
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -16,6 +17,34 @@ const (
 	mainAlertFile = ".github/workflows/venue-oracles-main-alert.yml"
 	mainAlertIf   = "github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push'"
 )
+
+var secretsWord = regexp.MustCompile(`\bsecrets\b`)
+
+// stringLeafMatching returns the first string in a parsed YAML value that matches re (comments are not in the parsed value).
+func stringLeafMatching(v any, re *regexp.Regexp) string {
+	switch x := v.(type) {
+	case string:
+		if re.MatchString(x) {
+			return x
+		}
+	case yamlMap:
+		for _, k := range sortedKeys(x) {
+			if re.MatchString(k) {
+				return k
+			}
+			if got := stringLeafMatching(x[k], re); got != "" {
+				return got
+			}
+		}
+	case []any:
+		for _, e := range x {
+			if got := stringLeafMatching(e, re); got != "" {
+				return got
+			}
+		}
+	}
+	return ""
+}
 
 func venueMainAlertViolations(t *testing.T, root string) []string {
 	t.Helper()
@@ -75,6 +104,14 @@ func venueMainAlertViolations(t *testing.T, root string) []string {
 		if strings.Contains(asString(runSteps[0]["run"]), "${{") {
 			out = append(out, "the alert step's run script holds a ${{ }} expression: event data reaches a shell only through env")
 		}
+		if code := shellCode(asString(runSteps[0]["run"])); len(code) != 1 || code[0].text != "bash ci/venue-main-alert.sh" {
+			out = append(out, fmt.Sprintf("the alert step must run exactly `bash ci/venue-main-alert.sh` and nothing else, got %v: an echo, a comment or a trailing `|| true` sends no alert", code))
+		}
+		for _, key := range []string{"if", "continue-on-error"} {
+			if v, has := runSteps[0][key]; has {
+				out = append(out, fmt.Sprintf("the alert step declares %s: %v: the one step that sends the alert must always run and its failure must fail the job", key, v))
+			}
+		}
 		env := asMap(runSteps[0]["env"])
 		for key, want := range map[string]string{
 			"RUN_ID":         "${{ github.event.workflow_run.id }}",
@@ -86,8 +123,11 @@ func venueMainAlertViolations(t *testing.T, root string) []string {
 			}
 		}
 	}
-	if strings.Contains(readFile(t, root+"/"+mainAlertFile), "secrets.") {
-		out = append(out, "the main-alert workflow reads a secret: it must use the job's own GITHUB_TOKEN only")
+	if v, has := job["continue-on-error"]; has {
+		out = append(out, fmt.Sprintf("the alert job declares continue-on-error: %v: a failed alert must fail the job", v))
+	}
+	if leaf := stringLeafMatching(doc, secretsWord); leaf != "" {
+		out = append(out, fmt.Sprintf("the main-alert workflow reads a secret (%q): it must use the job's own GITHUB_TOKEN only", leaf))
 	}
 	return out
 }
@@ -125,6 +165,15 @@ func TestVenueMainAlertWorkflowPlantedDefects(t *testing.T) {
 		{"a second run step", []mutation{{f, "        run: bash ci/venue-main-alert.sh", "        run: bash ci/venue-main-alert.sh\n      - run: echo hi"}}, []string{"2 run steps"}},
 		{"conclusion read from the wrong field", []mutation{{f, "RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}", "RUN_CONCLUSION: ${{ github.event.workflow_run.head_branch }}"}}, []string{"env RUN_CONCLUSION"}},
 		{"sha read from the wrong field", []mutation{{f, "RUN_SHA: ${{ github.event.workflow_run.head_sha }}", "RUN_SHA: ${{ github.sha }}"}}, []string{"env RUN_SHA"}},
+		{"the alert step only echoes", []mutation{{f, "run: bash ci/venue-main-alert.sh", `run: echo "$RUN_ID"`}}, []string{"must run exactly `bash ci/venue-main-alert.sh`"}},
+		{"the alert script is only in a comment", []mutation{{f, "run: bash ci/venue-main-alert.sh", `run: '# bash ci/venue-main-alert.sh'`}}, []string{"must run exactly `bash ci/venue-main-alert.sh`"}},
+		{"the alert failure is swallowed", []mutation{{f, "run: bash ci/venue-main-alert.sh", "run: bash ci/venue-main-alert.sh || true"}}, []string{"must run exactly `bash ci/venue-main-alert.sh`"}},
+		{"the alert script is skipped by an early exit", []mutation{{f, "run: bash ci/venue-main-alert.sh", "run: |\n          exit 0\n          bash ci/venue-main-alert.sh"}}, []string{"must run exactly `bash ci/venue-main-alert.sh`"}},
+		{"the alert step is never run", []mutation{{f, "      - name: Open, update or close the main venue-oracles issue\n", "      - name: Open, update or close the main venue-oracles issue\n        if: false\n"}}, []string{"the alert step declares if"}},
+		{"the alert step may fail silently", []mutation{{f, "      - name: Open, update or close the main venue-oracles issue\n", "      - name: Open, update or close the main venue-oracles issue\n        continue-on-error: true\n"}}, []string{"the alert step declares continue-on-error"}},
+		{"the alert job may fail silently", []mutation{{f, "    timeout-minutes: 10\n", "    timeout-minutes: 10\n    continue-on-error: true\n"}}, []string{"the alert job declares continue-on-error"}},
+		{"a secret is read through the index form", []mutation{{f, "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n", "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n          LINEAR: ${{ secrets['LINEAR_API_KEY'] }}\n"}}, []string{"reads a secret"}},
+		{"all secrets are passed", []mutation{{f, "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n", "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n          ALL: ${{ toJSON(secrets) }}\n"}}, []string{"reads a secret"}},
 		{"a secret is read", []mutation{{f, "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n", "          RUN_SHA: ${{ github.event.workflow_run.head_sha }}\n          LINEAR: ${{ secrets.LINEAR_API_KEY }}\n"}}, []string{"reads a secret"}},
 	}
 	for _, c := range cases {

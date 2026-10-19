@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -26,34 +27,39 @@ func venueVerbSourceViolations(t *testing.T, root string) []string {
 	if end < 0 {
 		return []string{"the body of check_venue_oracles in ci/check_go.sh has no closing brace line"}
 	}
-	body := stripShellComments(script[start : start+end])
+	code := shellCode(script[start : start+end])
 	var out []string
-	if !strings.Contains(body, "check_venue_oracle_registry") {
-		out = append(out, "check_venue_oracles no longer calls check_venue_oracle_registry: the registry is not validated against the tree before it runs")
+	call, loop := -1, -1
+	for i, l := range code {
+		switch {
+		case call < 0 && l.indent == 2 && registryCall.MatchString(l.text):
+			call = i
+		case loop < 0 && l.indent == 2 && registryLoop.MatchString(l.text):
+			loop = i
+		}
+		if strings.Contains(l.text, "venue_oracle_package_tests") {
+			out = append(out, "check_venue_oracles reads venue_oracle_package_tests: it must run the registry, discovery belongs to the cross-check in check_venue_oracle_registry")
+		}
 	}
-	if !strings.Contains(body, "venue_oracle_registry_rows") {
-		out = append(out, "check_venue_oracles no longer reads venue_oracle_registry_rows: it must run the registry")
+	if call < 0 {
+		out = append(out, "check_venue_oracles never calls check_venue_oracle_registry as a top-level `check_venue_oracle_registry >&2 || die` statement: the registry is not validated against the tree before it runs (a comment, an echo or a call nested in a branch is not that call)")
 	}
-	if strings.Contains(body, "venue_oracle_package_tests") {
-		out = append(out, fmt.Sprintf("check_venue_oracles reads venue_oracle_package_tests: it must run the registry, discovery belongs to the cross-check in check_venue_oracle_registry"))
+	if loop < 0 {
+		out = append(out, "check_venue_oracles has no top-level `done < <(venue_oracle_registry_rows ...)` loop: it must run the registry rows")
+	}
+	for i := 0; call >= 0 && i < call; i++ {
+		if code[i].indent == 2 && earlyExit.MatchString(code[i].text) {
+			out = append(out, fmt.Sprintf("check_venue_oracles leaves unconditionally before the registry cross-check: %q", code[i].text))
+		}
 	}
 	return out
 }
 
-// stripShellComments drops full-line comments and a trailing " # ..." so a name that only a comment mentions is not code.
-func stripShellComments(body string) string {
-	var out []string
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		if i := strings.Index(line, " #"); i >= 0 {
-			line = line[:i]
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
-}
+var (
+	registryCall = regexp.MustCompile(`^check_venue_oracle_registry >&2 \|\| die\b`)
+	registryLoop = regexp.MustCompile(`^done < <\(venue_oracle_registry_rows\b`)
+	earlyExit    = regexp.MustCompile(`^(return|exit|false|:)(\s|$)`)
+)
 
 func TestVenueVerbConsumesTheRegistryNotDiscovery(t *testing.T) {
 	expectNoViolations(t, venueVerbSourceViolations(t, repoRoot(t)))
@@ -68,8 +74,12 @@ func TestVenueVerbSourcePlantedDefects(t *testing.T) {
 		want []string
 	}{
 		{"the verb reads discovery beside the registry", []mutation{{f, `list_rows="$(venue_oracle_registry_rows`, `list_rows="$(venue_oracle_package_tests; venue_oracle_registry_rows`}}, []string{"venue_oracle_package_tests"}},
-		{"the verb stops calling the cross-check", []mutation{{f, `check_venue_oracle_registry >&2 || die "venue-oracles:`, `true >&2 || die "venue-oracles:`}}, []string{"no longer calls check_venue_oracle_registry"}},
-		{"the verb stops reading registry rows", []mutation{{f, "venue_oracle_registry_rows", allMarker + "venue_oracle_registry_rowz"}}, []string{"no longer reads venue_oracle_registry_rows"}},
+		{"the verb stops calling the cross-check", []mutation{{f, `check_venue_oracle_registry >&2 || die "venue-oracles:`, `true >&2 || die "venue-oracles:`}}, []string{"never calls check_venue_oracle_registry"}},
+		{"the verb stops reading registry rows", []mutation{{f, "venue_oracle_registry_rows", allMarker + "venue_oracle_registry_rowz"}}, []string{"no top-level `done < <(venue_oracle_registry_rows"}},
+		{"the cross-check is echoed, not called", []mutation{{f, `check_venue_oracle_registry >&2 || die "venue-oracles:`, `echo check_venue_oracle_registry >&2 || die "venue-oracles:`}}, []string{"never calls check_venue_oracle_registry"}},
+		{"the cross-check sits in a dead branch", []mutation{{f, `check_venue_oracle_registry >&2 || die "venue-oracles: ci/venue_oracle_registry.d/ disagrees with the tree (see above)"`, "if false; then\n    check_venue_oracle_registry >&2 || die \"venue-oracles: ci/venue_oracle_registry.d/ disagrees with the tree (see above)\"\n  fi"}}, []string{"never calls check_venue_oracle_registry"}},
+		{"the verb returns before the cross-check", []mutation{{f, "  check_venue_oracle_registry >&2 || die", "  return 0\n  check_venue_oracle_registry >&2 || die"}}, []string{"leaves unconditionally before the registry cross-check"}},
+		{"the registry loop is fed something else", []mutation{{f, "  done < <(venue_oracle_registry_rows", "  done < <(true; venue_oracle_registry_rows"}}, []string{"no top-level `done < <(venue_oracle_registry_rows"}},
 		{"the verb is renamed", []mutation{{f, "check_venue_oracles() {", "check_venue_oraclez() {"}}, []string{"not found"}},
 	}
 	for _, c := range cases {
@@ -88,11 +98,11 @@ func TestVenueVerbSourcePlantedDefects(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(tree, f), []byte(script), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		expectViolation(t, venueVerbSourceViolations(t, tree), "no longer calls check_venue_oracle_registry", "no longer reads venue_oracle_registry_rows")
+		expectViolation(t, venueVerbSourceViolations(t, tree), "never calls check_venue_oracle_registry", "no top-level `done < <(venue_oracle_registry_rows")
 	})
 	t.Run("a trailing comment does not count as the call", func(t *testing.T) {
 		tree := plantTree(t, root, []string{f}, mutation{f, `check_venue_oracle_registry >&2 || die "venue-oracles:`, `true # check_venue_oracle_registry >&2 || die "venue-oracles:`})
-		expectViolation(t, venueVerbSourceViolations(t, tree), "no longer calls check_venue_oracle_registry")
+		expectViolation(t, venueVerbSourceViolations(t, tree), "never calls check_venue_oracle_registry")
 	})
 	t.Run("a comment that names discovery is not a read of it", func(t *testing.T) {
 		tree := plantTree(t, root, []string{f}, mutation{f, "check_venue_oracles() {\n", "check_venue_oracles() {\n  # discovery (venue_oracle_package_tests) belongs to the cross-check\n"})

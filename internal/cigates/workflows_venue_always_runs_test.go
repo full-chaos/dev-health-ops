@@ -124,21 +124,47 @@ func venueAlwaysRunsViolations(t *testing.T, root string) []string {
 	if got := noSpaces(asString(env["EVENT_NAME"])); got != "${{github.event_name}}" {
 		out = append(out, fmt.Sprintf("the relevance step's EVENT_NAME is %q, not ${{ github.event_name }}", asString(env["EVENT_NAME"])))
 	}
-	script := asString(step["run"])
+	code := shellCode(asString(step["run"]))
 	const guard = `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`
-	at := strings.Index(script, guard)
+	at := -1
+	for i, l := range code {
+		if l.indent == 0 && l.text == guard {
+			at = i
+			break
+		}
+	}
 	if at < 0 {
-		return append(out, "the relevance step does not branch on workflow_dispatch before it reads the diff")
+		return append(out, "the relevance step does not branch on workflow_dispatch before it reads the diff: no top-level `"+guard+"` line (a comment, an echo or a nested line is not that branch)")
 	}
-	end := strings.Index(script[at:], "fi")
-	branch := script[at:]
-	if end >= 0 {
-		branch = script[at : at+end]
+	fi := -1
+	for i := at + 1; i < len(code); i++ {
+		if code[i].indent == 0 && code[i].text == "fi" {
+			fi = i
+			break
+		}
 	}
-	if !strings.Contains(branch, `printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"`) || !strings.Contains(branch, "exit 0") {
-		out = append(out, "the workflow_dispatch branch of the relevance step must write relevant=true and stop, so the full suite runs")
+	printfAt, exitAt := -1, -1
+	for i := at + 1; fi >= 0 && i < fi; i++ {
+		switch {
+		case code[i].indent > 0 && code[i].text == `printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"`:
+			printfAt = i
+		case code[i].indent > 0 && code[i].text == "exit 0":
+			exitAt = i
+		}
 	}
-	if diff := strings.Index(script, "go_relevant_diff.sh"); diff >= 0 && at > diff {
+	if fi < 0 || printfAt < 0 || exitAt < printfAt {
+		out = append(out, "the workflow_dispatch branch of the relevance step must write relevant=true and then exit 0 as its own statements, so the full suite runs")
+	}
+	diff := -1
+	for i, l := range code {
+		if l.indent == 0 && strings.HasPrefix(l.text, "bash ci/go_relevant_diff.sh") {
+			diff = i
+			break
+		}
+	}
+	if diff < 0 {
+		out = append(out, "the relevance step has no top-level `bash ci/go_relevant_diff.sh` statement: the diff is never read")
+	} else if at > diff {
 		out = append(out, "the workflow_dispatch branch must come before the diff is read")
 	}
 	return out
@@ -182,7 +208,12 @@ func TestVenueJobAlwaysRunsPlantedDefects(t *testing.T) {
 		{"BASE_SHA no longer the push before sha", []mutation{{f, "BASE_SHA: ${{ github.event.before }}", "BASE_SHA: ''"}}, []string{"BASE_SHA", "github.event.before"}},
 		{"EVENT_NAME no longer the event", []mutation{{f, "EVENT_NAME: ${{ github.event_name }}", "EVENT_NAME: push"}}, []string{"EVENT_NAME"}},
 		{"dispatch branch lost", []mutation{{f, `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`, `if [ "${EVENT_NAME}" = "workflow_call" ]; then`}}, []string{"does not branch on workflow_dispatch"}},
-		{"dispatch branch no longer writes relevant=true", []mutation{{f, `printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"`, `printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"`}}, []string{"must write relevant=true and stop"}},
+		{"dispatch guard only echoed", []mutation{{f, `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`, `echo 'if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then'; if false; then`}}, []string{"does not branch on workflow_dispatch"}},
+		{"dispatch guard only in a comment", []mutation{{f, `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`, "# if [ \"${EVENT_NAME}\" = \"workflow_dispatch\" ]; then\n          if [ \"${EVENT_NAME}\" = \"workflow_call\" ]; then"}}, []string{"does not branch on workflow_dispatch"}},
+		{"relevant=true only in a comment", []mutation{{f, `printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"`, `# printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"`}}, []string{"must write relevant=true and then exit 0"}},
+		{"exit 0 only echoed", []mutation{{f, "printf 'relevant=true\\n' >> \"${GITHUB_OUTPUT}\"\n            exit 0", "printf 'relevant=true\\n' >> \"${GITHUB_OUTPUT}\"\n            echo exit 0"}}, []string{"must write relevant=true and then exit 0"}},
+		{"the diff is only named in a comment", []mutation{{f, "bash ci/go_relevant_diff.sh > changed.txt || {", "# bash ci/go_relevant_diff.sh\n          bash ci/go_relevant_diffs.sh > changed.txt || {"}}, []string{"the diff is never read"}},
+		{"dispatch branch no longer writes relevant=true", []mutation{{f, `printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"`, `printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"`}}, []string{"must write relevant=true and then exit 0"}},
 		{"diff read before the dispatch branch", []mutation{{f, "set -euo pipefail\n          if [ \"${EVENT_NAME}\"", "set -euo pipefail\n          bash ci/go_relevant_diff.sh >/dev/null\n          if [ \"${EVENT_NAME}\""}}, []string{"must come before the diff is read"}},
 	}
 	for _, c := range cases {

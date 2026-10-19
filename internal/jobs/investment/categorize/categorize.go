@@ -130,6 +130,7 @@ func CategorizeTextBundle(ctx context.Context, bundle units.TextBundle, opts Cat
 	if err != nil {
 		return CategorizationOutcome{}, err
 	}
+	LogCompletion(ctx, completion)
 	return categorizeCompletion(ctx, bundle, completion.Text, opts, completionTally{
 		InputTokens:   tokenCount(completion.InputTokens),
 		OutputTokens:  tokenCount(completion.OutputTokens),
@@ -175,6 +176,7 @@ func categorizeCompletion(
 	if err != nil {
 		return CategorizationOutcome{}, err
 	}
+	LogCompletion(ctx, repaired)
 	tally.InputTokens += tokenCount(repaired.InputTokens)
 	tally.OutputTokens += tokenCount(repaired.OutputTokens)
 	tally.LLMCalls++

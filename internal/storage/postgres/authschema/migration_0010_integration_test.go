@@ -4,9 +4,12 @@ package authschema
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // m10Hash is a well-formed 32-byte digest, hex-prefixed for a bytea parameter.
@@ -40,7 +43,7 @@ func m10Seed(t *testing.T, ctx context.Context, env *authFixture) {
 func TestMigration0010SessionAndRefreshColumns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
 	var revision int
@@ -104,7 +107,7 @@ func TestMigration0010SessionAndRefreshColumns(t *testing.T) {
 func TestMigration0010ParentDeleteKeepsChildrenAndRuntimeCanSweep(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
 	var parent, child string
@@ -135,7 +138,7 @@ func TestMigration0010ParentDeleteKeepsChildrenAndRuntimeCanSweep(t *testing.T) 
 func TestMigration0010ExternalIdentityIsUniquePerIssuer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
 	insert := func(issuer string) error {
@@ -163,7 +166,7 @@ func TestMigration0010ExternalIdentityIsUniquePerIssuer(t *testing.T) {
 func TestMigration0010LinkCredentialsAndLoginAttempts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
 	link := func(purpose, hash string) error {
@@ -290,7 +293,7 @@ func TestMigration0010AppliesOverPopulatedSchema(t *testing.T) {
 func TestMigration0010HashColumnsRefuseNonDigests(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
 	_, err := env.runtime.Exec(ctx, `INSERT INTO auth.login_attempts (identifier_hash) VALUES ('alice@example.com'::bytea)`)
@@ -314,7 +317,7 @@ func TestMigration0010HashColumnsRefuseNonDigests(t *testing.T) {
 func TestMigration0010SecurityColumnsAreGuardedByBehaviour(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
 	var first, second string
@@ -374,7 +377,7 @@ func TestMigration0010SecurityColumnsAreGuardedByBehaviour(t *testing.T) {
 func TestMigration0010ConsumedAtIsWriteOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
 	var linkID, refreshID, otherID string
@@ -448,7 +451,7 @@ func TestMigration0010ConsumedAtIsWriteOnce(t *testing.T) {
 func TestMigration0010LiveLockoutCannotBeErasedByTheRuntime(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 
 	var id string
 	if err := env.runtime.QueryRow(ctx, `INSERT INTO auth.login_attempts (identifier_hash, attempt_count, first_attempt_at, locked_until)
@@ -488,7 +491,7 @@ func TestMigration0010LiveLockoutCannotBeErasedByTheRuntime(t *testing.T) {
 func TestMigration0010RefreshChildInheritsTheParentsFamily(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
 	var parent, parentFamily, other string
@@ -540,7 +543,7 @@ func TestMigration0010RefreshChildInheritsTheParentsFamily(t *testing.T) {
 func TestMigration0010TriggersDoNotDependOnTheCallersSearchPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuthFixture(t, ctx)
+	env := newM10Fixture(t, ctx)
 	m10Seed(t, ctx, env)
 
 	var parent, family string
@@ -564,5 +567,67 @@ func TestMigration0010TriggersDoNotDependOnTheCallersSearchPath(t *testing.T) {
 	}
 	if got != family {
 		t.Errorf("child family %s, want %s", got, family)
+	}
+}
+
+// newM10Fixture is newAuthFixture with the runtime pool's search_path reduced
+// to pg_catalog, the least forgiving setting: every statement the 0010 tests
+// run as the runtime role is schema-qualified, so anything that still needs
+// the migration's search_path (a trigger function, say) fails here the way it
+// would for a service that connects with the role's defaults.
+func newM10Fixture(t *testing.T, ctx context.Context) *authFixture {
+	t.Helper()
+	env := newAuthFixture(t, ctx)
+	dsn, err := url.Parse(fixtureDSN(t, env.instance.URI, env.runtimeRole))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := dsn.Query()
+	query.Set("options", "-c search_path=pg_catalog")
+	dsn.RawQuery = query.Encode()
+	pool, err := pgxpool.New(ctx, dsn.String())
+	if err != nil {
+		t.Fatalf("strict runtime pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	var path string
+	if err := pool.QueryRow(ctx, `SHOW search_path`).Scan(&path); err != nil || path != "pg_catalog" {
+		t.Fatalf("strict runtime search_path = %q, %v; want pg_catalog", path, err)
+	}
+	env.runtime.Close()
+	env.runtime = pool
+	return env
+}
+
+// Every function in the auth schema pins its own search_path, so none depends
+// on the caller's.
+func TestEveryAuthFunctionPinsItsSearchPath(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+
+	rows, err := env.admin.Query(ctx, `
+		SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE n.nspname = $1
+		  AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}')) AS c WHERE c LIKE 'search_path=%')
+		ORDER BY p.proname`, env.schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var unpinned []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		unpinned = append(unpinned, name)
+	}
+	if len(unpinned) > 0 {
+		t.Errorf("functions without a pinned search_path: %v", unpinned)
+	}
+	var total int
+	if err := env.admin.QueryRow(ctx, `SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, env.schema).Scan(&total); err != nil || total == 0 {
+		t.Fatalf("the schema has %d functions (%v); this control proves nothing", total, err)
 	}
 }

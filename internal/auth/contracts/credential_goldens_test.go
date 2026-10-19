@@ -270,8 +270,8 @@ func TestEveryAcceptedEntryTransitionsToItselfAndNarrowingIsAllowed(t *testing.T
 	}
 }
 
-// descend walks properties.<step>; the step "[]" means the array's items schema.
-func descend(node map[string]any, steps ...string) map[string]any {
+// descendCredentialSchema walks properties.<step>; the step "[]" means the array's items schema.
+func descendCredentialSchema(node map[string]any, steps ...string) map[string]any {
 	for _, step := range steps {
 		if step == "[]" {
 			node = node["items"].(map[string]any)
@@ -293,7 +293,7 @@ func memberNames(t *testing.T, surface string, steps ...string) []string {
 		t.Fatal(err)
 	}
 	var names []string
-	for name := range descend(node, steps...)["properties"].(map[string]any) {
+	for name := range descendCredentialSchema(node, steps...)["properties"].(map[string]any) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -350,7 +350,7 @@ func TestListItemsEqualTheEntryAndReceiptCredentialIsAStricterSubset(t *testing.
 		if err := json.Unmarshal(raw, &node); err != nil {
 			t.Fatal(err)
 		}
-		node = descend(node, path...)
+		node = descendCredentialSchema(node, path...)
 		out := map[string]json.RawMessage{}
 		for name, v := range node["properties"].(map[string]any) {
 			b, _ := json.Marshal(v)

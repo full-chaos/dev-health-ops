@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,8 +15,9 @@ import (
 // the TRD columns), never hand-picked, and compared in both directions.
 
 const (
-	credentialTableMigration = "internal/storage/postgres/authschema/migrations/0003_sessions_and_credentials.sql"
-	credentialColumnsAdded   = "internal/storage/postgres/authschema/migrations/0007_credential_registry_trd_columns.sql"
+	credentialTableMigration      = "internal/storage/postgres/authschema/migrations/0003_sessions_and_credentials.sql"
+	credentialColumnsAdded        = "internal/storage/postgres/authschema/migrations/0007_credential_registry_trd_columns.sql"
+	credentialWireShapesMigration = "internal/storage/postgres/authschema/migrations/0008_credential_registry_wire_shapes.sql"
 )
 
 // credentialNotOnTheWire: columns that never cross the boundary, with the reason.
@@ -91,6 +93,70 @@ func TestCredentialEntryMatchesTheRegistryColumnsInBothDirections(t *testing.T) 
 	for d := range credentialDerived {
 		if !members[d] {
 			t.Errorf("derived member %q is declared but absent from the schema", d)
+		}
+	}
+}
+
+// producerChecksForEntryConditionals names, for every conditional the entry
+// schema states over columns, the producer constraint that enforces the same
+// rule (or why none is needed). A conditional added to the schema without a
+// decision here fails the test: a rule the wire states and the table does not
+// is a row nobody can project (codex executed two of them against 0008).
+var producerChecksForEntryConditionals = map[string]struct {
+	constraint string // name that must appear in the migrations; empty = derived
+	reason     string
+}{
+	"domain_owner=platform": {constraint: "credential_registry_external_reference_matches_owner"},
+	"status=revoked":        {constraint: "credential_registry_revoked_pair"},
+	"status=expired":        {reason: "status is derived from expires_at, so the pairing cannot be stored inconsistently"},
+}
+
+func TestEveryEntryConditionalHasAProducerCheck(t *testing.T) {
+	raw, err := os.ReadFile(SchemaPath(testRoot(t), CredentialEntrySurface))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		AllOf []struct {
+			If struct {
+				Properties map[string]struct {
+					Const string `json:"const"`
+				} `json:"properties"`
+			} `json:"if"`
+		} `json:"allOf"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if len(schema.AllOf) == 0 {
+		t.Fatal("the entry schema has no conditionals; the sweep would be vacuous")
+	}
+	var sql strings.Builder
+	for _, rel := range []string{credentialTableMigration, credentialColumnsAdded, credentialWireShapesMigration} {
+		raw, err := os.ReadFile(filepath.Join(testRoot(t), rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sql.Write(raw)
+	}
+	seen := map[string]bool{}
+	for _, c := range schema.AllOf {
+		for property, value := range c.If.Properties {
+			key := property + "=" + value.Const
+			seen[key] = true
+			decision, ok := producerChecksForEntryConditionals[key]
+			if !ok {
+				t.Errorf("entry conditional %q has no producer decision: add a constraint and name it here", key)
+				continue
+			}
+			if decision.constraint != "" && !strings.Contains(sql.String(), decision.constraint) {
+				t.Errorf("entry conditional %q expects the producer constraint %s, which no migration defines", key, decision.constraint)
+			}
+		}
+	}
+	for key := range producerChecksForEntryConditionals {
+		if !seen[key] {
+			t.Errorf("a producer decision names the conditional %q, which the schema no longer has", key)
 		}
 	}
 }

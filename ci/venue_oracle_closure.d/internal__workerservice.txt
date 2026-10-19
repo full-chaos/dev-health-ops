@@ -79,7 +79,6 @@ internal/llmbudget
 internal/llmorgsettings
 internal/mail
 internal/operationalordering
-internal/orgllmconfig
 internal/pgmigrate
 internal/platform/config
 internal/platform/dbphase

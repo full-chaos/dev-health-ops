@@ -476,15 +476,11 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var llmConfig acr.LLMConfigSource
 	var credentials acr.CredentialVerifier
 	var auth acr.CredentialStore
-	var categorizeConfig acr.LLMConfigSource
-	var workerCredentials acr.CredentialVerifier
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
 		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
-		categorizeConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeCategorize)
-		workerCredentials = acr.WorkerCredentialVerifier(deps.Pool)
 	}
 	counters, err := limitStore(deps)
 	if err != nil {
@@ -494,7 +490,6 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	return internalRoutesWith(acr.Deps{
 		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
 		Auth: auth, Limiter: httpapi.NewKeyedLimiter(counters, acr.AuthAttemptLimit),
-		CategorizeLLMConfig: categorizeConfig, WorkerCredentials: workerCredentials,
 	})
 }
 

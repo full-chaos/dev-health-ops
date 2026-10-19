@@ -44,24 +44,15 @@ func (executor *NativeExecutor) SetOrgLLMConfig(client orgConfigFetcher, budget 
 func (executor *NativeExecutor) providerForRun(
 	ctx context.Context, orgID, requested, model string,
 ) (provider categorize.Provider, kind categorize.ProviderKind, stampModel string, err error) {
-	provider, kind, stampModel, _, err = executor.providerForRunSource(ctx, orgID, requested, model)
-	return provider, kind, stampModel, err
-}
-
-// providerForRunSource is providerForRun that also reports whether the org's
-// own config supplied the provider.
-func (executor *NativeExecutor) providerForRunSource(
-	ctx context.Context, orgID, requested, model string,
-) (provider categorize.Provider, kind categorize.ProviderKind, stampModel string, byo bool, err error) {
-	byo, kind, stampModel, provider, err = executor.orgProvider(ctx, orgID, requested, model)
+	byo, kind, stampModel, provider, err := executor.orgProvider(ctx, orgID, requested, model)
 	if err != nil {
-		return nil, "", "", false, err
+		return nil, "", "", err
 	}
 	if byo {
-		return provider, kind, stampModel, true, nil
+		return provider, kind, stampModel, nil
 	}
 	provider, kind, err = executor.newProvider(requested, model)
-	return provider, kind, model, false, err
+	return provider, kind, model, err
 }
 
 func (executor *NativeExecutor) orgProvider(

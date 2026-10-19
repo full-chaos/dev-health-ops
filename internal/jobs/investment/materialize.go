@@ -85,8 +85,6 @@ const partitionOversizedHubs = false
 // which those are.
 type Config struct {
 	OrgID string
-	// OrgCredentials is true when the org's own provider credentials serve the run.
-	OrgCredentials bool
 	// FromTS/ToTS bound which components get NEW investment rows. They do NOT
 	// bound coverage of the membership projection, which is full-coverage by
 	// construction (see runner.py:262-277's CHAOS-2776 note).
@@ -1101,15 +1099,14 @@ func (m *Materializer) flushTokenUsage(ctx context.Context, cfg Config, stats St
 	defer cancel()
 	provider, model := m.usageIdentity(cfg)
 	if _, err := m.writer.WriteTokenUsage(writeCtx, cfg.OrgID, chwrite.TokenUsageRecord{
-		RunID:            cfg.RunID,
-		Provider:         provider,
-		Model:            model,
-		Source:           chwrite.TokenUsageSourceInvestmentMaterialize,
-		InputTokens:      stats.LLMInputTokens,
-		OutputTokens:     stats.LLMOutputTokens,
-		Calls:            stats.LLMCalls,
-		ComputedAt:       cfg.ComputedAt,
-		CredentialSource: credentialSourceOf(cfg),
+		RunID:        cfg.RunID,
+		Provider:     provider,
+		Model:        model,
+		Source:       chwrite.TokenUsageSourceInvestmentMaterialize,
+		InputTokens:  stats.LLMInputTokens,
+		OutputTokens: stats.LLMOutputTokens,
+		Calls:        stats.LLMCalls,
+		ComputedAt:   cfg.ComputedAt,
 	}); err != nil {
 		return fmt.Errorf("write llm_token_usage: %w", err)
 	}
@@ -1367,11 +1364,4 @@ func marshalCategorizationAudit(outcome categorize.CategorizationOutcome) (strin
 // The org-settings branch stays omitted (CHAOS-5006).
 func resolvedModelName(cfg Config) string {
 	return categorize.ResolveModelName(categorize.ProviderKind(cfg.ProviderName), cfg.Model)
-}
-
-func credentialSourceOf(cfg Config) string {
-	if cfg.OrgCredentials {
-		return chwrite.CredentialSourceOrg
-	}
-	return chwrite.CredentialSourcePlatform
 }

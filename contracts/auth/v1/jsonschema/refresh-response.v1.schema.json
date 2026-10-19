@@ -21,8 +21,8 @@
     },
     "access_token": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
-      "description": "Compact JWS (three base64url segments). Format and 60 minute lifetime are unchanged from go-api until Wave 3."
+      "pattern": "^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+      "description": "Compact JWS whose protected header is EXACTLY the HS256 header the ops signer emits ({\"alg\":\"HS256\",\"typ\":\"JWT\"}, internal/auth/edgetoken/signer.go headerSegment). Pinning the header segment refuses RS256, ES256 and alg=none in every reader; the asymmetric access token arrives in Wave 3 as a new surface version. Lifetime is unchanged from go-api (60 minutes)."
     },
     "token_type": {
       "const": "bearer",

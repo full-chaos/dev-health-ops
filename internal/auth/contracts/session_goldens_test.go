@@ -282,12 +282,17 @@ func TestSessionLive(t *testing.T) {
 	}
 }
 
-func TestSecretsAreRedactedWhenFormatted(t *testing.T) {
-	r := RefreshResponse{AccessToken: "AT-SECRET", RefreshCredential: "RC-SECRET", SessionID: "ses_x"}
-	q := RefreshRequest{RefreshCredential: "RC-SECRET"}
-	for _, out := range []string{r.String(), q.String()} {
-		if strings.Contains(out, "SECRET") {
-			t.Errorf("secret leaked: %s", out)
-		}
+func TestSecretStringRevealsOnlyThroughReveal(t *testing.T) {
+	root := testRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "contracts/auth/v1/examples/refresh-request/valid-minimal.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := ParseRefreshRequest(root, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(req.RefreshCredential.Reveal(), "EXAMPLEREFRESH") {
+		t.Fatalf("Reveal lost the wire value: %q", req.RefreshCredential.Reveal())
 	}
 }

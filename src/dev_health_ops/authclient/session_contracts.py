@@ -58,6 +58,13 @@ def _refuse_duplicates_for(surface: str):
 
 
 def _load(surface: str, raw: bytes | str) -> dict[str, Any]:
+    if isinstance(raw, bytes):
+        # json.loads(bytes) auto-detects UTF-16/32 and swallows a UTF-8 BOM;
+        # Go refuses all of them, so the clients agree on plain UTF-8 only.
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ContractError(f"{surface}: document is not UTF-8: {exc}") from exc
     try:
         document = json.loads(raw, object_pairs_hook=_refuse_duplicates_for(surface))
     except json.JSONDecodeError as exc:

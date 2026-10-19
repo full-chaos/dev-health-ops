@@ -3,6 +3,7 @@ package contracts
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -43,31 +44,49 @@ type Session struct {
 	RevokedAt     *Timestamp `json:"revoked_at"`
 }
 
-// RefreshRequest is one refresh-request.v1 document. RefreshCredential is a
-// secret: never log or format this struct.
+// SecretString holds a credential. Every way a Go program prints a value --
+// fmt verbs (%v %+v %#v %s), slog text and JSON handlers, json.Marshal --
+// yields "[redacted]"; only Reveal returns the value. UnmarshalJSON reads the
+// real value, so the parsers below fill it from the wire. The structs that
+// hold SecretStrings are decode targets: a future emitter must write the wire
+// form from Reveal, never by marshalling these structs.
+type SecretString string
+
+const redacted = "[redacted]"
+
+// Reveal returns the credential. Call it only to compare or to send.
+func (s SecretString) Reveal() string { return string(s) }
+
+func (SecretString) String() string               { return redacted }
+func (SecretString) GoString() string             { return redacted }
+func (SecretString) LogValue() slog.Value         { return slog.StringValue(redacted) }
+func (SecretString) MarshalJSON() ([]byte, error) { return []byte(`"` + redacted + `"`), nil }
+
+// UnmarshalJSON reads the wire value.
+func (s *SecretString) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*s = SecretString(raw)
+	return nil
+}
+
+// RefreshRequest is one refresh-request.v1 document.
 type RefreshRequest struct {
-	SchemaVersion     string `json:"schema_version"`
-	RefreshCredential string `json:"refresh_credential"`
+	SchemaVersion     string       `json:"schema_version"`
+	RefreshCredential SecretString `json:"refresh_credential"`
 }
 
-// String hides the credential from %v and %+v.
-func (RefreshRequest) String() string { return "RefreshRequest{refresh_credential:<redacted>}" }
-
-// RefreshResponse is one refresh-response.v1 document. AccessToken and
-// RefreshCredential are secrets: never log or format this struct.
+// RefreshResponse is one refresh-response.v1 document.
 type RefreshResponse struct {
-	SchemaVersion     string `json:"schema_version"`
-	AccessToken       string `json:"access_token"`
-	TokenType         string `json:"token_type"`
-	ExpiresIn         int    `json:"expires_in"`
-	RefreshCredential string `json:"refresh_credential"`
-	RefreshExpiresIn  int    `json:"refresh_expires_in"`
-	SessionID         string `json:"session_id"`
-}
-
-// String hides both credentials from %v and %+v.
-func (r RefreshResponse) String() string {
-	return fmt.Sprintf("RefreshResponse{session_id:%s, tokens:<redacted>}", r.SessionID)
+	SchemaVersion     string       `json:"schema_version"`
+	AccessToken       SecretString `json:"access_token"`
+	TokenType         string       `json:"token_type"`
+	ExpiresIn         int          `json:"expires_in"`
+	RefreshCredential SecretString `json:"refresh_credential"`
+	RefreshExpiresIn  int          `json:"refresh_expires_in"`
+	SessionID         string       `json:"session_id"`
 }
 
 // AuthOutcome is one auth-outcome.v1 document, validated and parsed.

@@ -81,7 +81,7 @@ func TestSecretBearingValuesNeverReachFormattersOrLoggers(t *testing.T) {
 		"%v":           fmt.Sprintf("%v %v", resp, req),
 		"%+v":          fmt.Sprintf("%+v %+v", *resp, *req),
 		"%#v":          fmt.Sprintf("%#v %#v", *resp, *req),
-		"%s":           fmt.Sprintf("%s %s", resp, req),
+		"%v value":     fmt.Sprintf("%v %v", *resp, *req),
 		"slog json":    jsonLog.String(),
 		"slog text":    textLog.String(),
 		"json.Marshal": string(marshalled),

@@ -55,19 +55,7 @@ func Reap(
 	}
 
 	table := authschema.Quote(schema) + ".auth_outbox_events"
-	tag, err := tx.Exec(ctx, `
-		WITH reapable AS (
-		    SELECT e.id
-		    FROM `+table+` AS e
-		    WHERE e.published_at IS NOT NULL
-		      AND e.published_at < $1
-		    ORDER BY e.published_at, e.id
-		    FOR UPDATE SKIP LOCKED
-		    LIMIT $2
-		)
-		DELETE FROM `+table+` AS e
-		USING reapable
-		WHERE e.id = reapable.id`, cutoff.UTC(), limit)
+	tag, err := tx.Exec(ctx, reapStatement(table), cutoff.UTC(), limit)
 	if err != nil {
 		return 0, fmt.Errorf("%w: deleting published events: %w", ErrReapFailed, err)
 	}
@@ -75,4 +63,26 @@ func Reap(
 		return 0, fmt.Errorf("%w: committing the sweep: %w", ErrReapFailed, err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// reapSelection picks the oldest published rows past the cutoff. It is split
+// out so the plan test explains exactly the text Reap runs.
+func reapSelection(table string) string {
+	return `SELECT e.id
+		    FROM ` + table + ` AS e
+		    WHERE e.published_at IS NOT NULL
+		      AND e.published_at < $1
+		    ORDER BY e.published_at, e.id
+		    FOR UPDATE SKIP LOCKED
+		    LIMIT $2`
+}
+
+func reapStatement(table string) string {
+	return `
+		WITH reapable AS (
+		    ` + reapSelection(table) + `
+		)
+		DELETE FROM ` + table + ` AS e
+		USING reapable
+		WHERE e.id = reapable.id`
 }

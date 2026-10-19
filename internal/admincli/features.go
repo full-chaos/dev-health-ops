@@ -15,7 +15,7 @@ type Feature struct {
 // writes them after StandardFeatures. They are kept out of StandardFeatures so
 // that list stays equal, row for row, to the frozen Python registry.
 var AdditionalFeatures = []Feature{
-	{Key: "acr_service_model", Name: "ACR Service Model", Category: "integrations", MinTier: "community", Description: "Use the platform LLM for MCP investigations without a BYO LLM"},
+	{Key: "acr_service_model", Name: "ACR Service Model", Category: "integrations", MinTier: "community", Description: "ACR AI features (MCP investigations) on the org's saved BYO model; on by default once a BYO key is saved; an org admin's off stops them"},
 	{Key: "platform_model_fallback", Name: "Platform Model Fallback", Category: "integrations", MinTier: "community", Description: "Platform admin grant: an org with no saved BYO LLM may draw the platform LLM for ACR AI features"},
 }
 

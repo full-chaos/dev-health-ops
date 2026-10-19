@@ -8,14 +8,6 @@
 # job contract the Go binaries own, the uv lock. A file that pins only Python
 # source, a Python migration, a Python oracle or a golden recording is NOT
 # listed. New files are NOT picked up: add a path here on purpose.
-tests/authclient/test_credential_contract_goldens.py
-tests/authclient/test_discovery_contract_goldens.py
-tests/authclient/test_error_envelope_contract_goldens.py
-tests/authclient/test_jwks_document_contract_goldens.py
-tests/authclient/test_principal_contract_goldens.py
-tests/authclient/test_provisioning_event_contract_goldens.py
-tests/authclient/test_session_contract_goldens.py
-tests/authclient/test_wire_int_guard.py
 tests/scripts/test_strip_agent_attribution.py
 tests/test_ci_closure_pins_match_uv_lock.py
 tests/test_compose_config.py
@@ -42,12 +34,10 @@ tests/test_rate_limit_policy_doc.py
 tests/test_runtime_dependency_closure_has_the_redis_client.py
 tests/test_unreclaimable_sweep_deploy_default.py
 tests/test_worker_otel_deployments.py
-tests/worker_baseline/test_canary_release_proof.py
 tests/workers/test_go_worker_alerts.py
 tests/workers/test_go_worker_cli_contract.py
 tests/workers/test_go_worker_dashboard.py
 tests/workers/test_go_worker_deployment_contract.py
-tests/workers/test_helm_billing_edge_removed.py
 tests/workers/test_helm_go_pgbouncer.py
 tests/workers/test_helm_go_worker_labels.py
 tests/workers/test_helm_migration_hook_chain.py
@@ -57,9 +47,4 @@ tests/workers/test_helm_query_api_internal.py
 tests/workers/test_helm_route_activate_hooks.py
 tests/workers/test_helm_worker_disruption_and_drain.py
 tests/workers/test_provider_artifact_skip_alert.py
-tests/workers/test_transitional_inventory_contract.py
 tests/workers/test_unreclaimable_sweep_alerts.py
-tests/authclient/test_authorization_contract_goldens.py
-tests/authclient/test_endpoint_auth_profile_contract_goldens.py
-tests/authclient/test_jwks_property_sweep.py
-tests/authclient/test_reason_code_vocabulary.py

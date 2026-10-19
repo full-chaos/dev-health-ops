@@ -51,10 +51,11 @@
           "otp",
           "mfa",
           "hwk",
-          "swk"
+          "swk",
+          "fed"
         ]
       },
-      "description": "RFC 8176 authentication methods, same closed set as principal.v1 authentication.methods."
+      "description": "Authentication methods: the RFC 8176 values of principal.v1 authentication.methods, plus \"fed\" (federated or social sign-in through an external identity provider; not an RFC 8176 value). Closed set."
     },
     "created_at": {
       "type": "string",

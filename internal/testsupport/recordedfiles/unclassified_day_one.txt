@@ -727,7 +727,6 @@ internal/queryapi/investmentexplain/testdata/resolve_repo_filter_ids__repo_scope
 internal/queryapi/investmentexplain/testdata/resolve_repo_filter_ids__team_scope.json
 internal/queryapi/investmentexplain/testdata/resolve_repo_filter_ids__team_scope_with_what_repos.json
 internal/queryapi/investmentexplain/testdata/workunit_attribution.json
-internal/queryapi/meta/testdata/meta.json
 internal/queryapi/people/testdata/alias_mapping.json
 internal/queryapi/people/testdata/no_alias_mapping.json
 internal/queryapi/quadrant/testdata/churn_throughput_team_forces_repo.json

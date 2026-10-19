@@ -534,3 +534,35 @@ func TestMigration0010RefreshChildInheritsTheParentsFamily(t *testing.T) {
 		t.Errorf("moving a child to another family: err = %v, want a refusal naming the family", err)
 	}
 }
+
+// The trigger functions must not depend on the caller's search_path: a runtime
+// connection that never sets one still inserts a rotation child.
+func TestMigration0010TriggersDoNotDependOnTheCallersSearchPath(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+	m10Seed(t, ctx, env)
+
+	var parent, family string
+	if err := env.admin.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+		VALUES ($1, $2, '\x71'::bytea, now() + interval '1 day') RETURNING id::text, family_id::text`, m10Session, m10Principal).Scan(&parent, &family); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := env.runtime.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL search_path = pg_catalog`); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := tx.QueryRow(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at, parent_id, family_id)
+		VALUES ($1, $2, '\x72'::bytea, now() + interval '1 day', $3, $4) RETURNING family_id::text`,
+		m10Session, m10Principal, parent, family).Scan(&got); err != nil {
+		t.Fatalf("a rotation child inserted under an empty search_path: %v", err)
+	}
+	if got != family {
+		t.Errorf("child family %s, want %s", got, family)
+	}
+}

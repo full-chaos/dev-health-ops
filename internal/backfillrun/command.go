@@ -41,9 +41,11 @@ at once with --no-wait.
 
 --source-ids and --dataset-keys scope the run to part of the configuration, so that
 a window of many chunks stays under the unit cap. Each takes a comma list and may be
-repeated. Every id must be an enabled source of the configuration's integration and
-every key a dataset the run could already name; a backfill never switches a dataset
-on. Without them the run covers every enabled source and dataset, as before.
+repeated. Every id must be an enabled source of the configuration's integration. Every
+key must be a dataset key of the provider: one the integration has on, or one it has no
+row for (the run plans it once and writes no row, so the schedule does not change). A key
+whose row is off is refused; a backfill never switches a dataset on. Without them the run
+covers every enabled source and dataset, as before.
 
 Only a planner-managed configuration, or one pinned to a single source, can be
 started this way: the scheduler materializes no other.

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/refresh-request.v1.schema.json",
+  "title": "Auth Control Plane refresh exchange request (v1 wire format)",
+  "description": "The body a client posts to exchange a refresh credential. The credential is opaque; the HS256 refresh JWT of today's go-api is NOT accepted (a JWT contains dots, which the pattern excludes). The contract is subtractive: credential values, hashes, passwords, provider tokens, e-mail addresses and network addresses have no field, and additionalProperties:false makes that absence enforceable (TRD section 18, G-16, G-17).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "refresh_credential"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "refresh-request.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies); additive evolution stays in v1 (TRD section 21)."
+    },
+    "refresh_credential": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43,256}$",
+      "description": "Opaque refresh credential: URL-safe base64 characters only, 43-256 long. A dot is not in the alphabet, so a refresh JWT cannot be presented here. A SECRET: it exists on the wire only in the refresh request and the refresh response, never in session.v1 or auth-outcome.v1, never in a log, metric label or audit row."
+    }
+  }
+}

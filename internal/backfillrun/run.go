@@ -100,6 +100,38 @@ func sourceIDsFor(config *Config, selected []string) []string {
 	return nil
 }
 
+// disabledDatasetKeys is the keys of the integration's dataset rows that are
+// off and that the provider's registry holds, in DatasetKey order. A key with
+// no row at all is in neither list.
+func disabledDatasetKeys(ctx context.Context, tx pgx.Tx, config *Config, provider string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+SELECT dataset_key FROM public.integration_datasets
+WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled IS NOT true`, config.OrgID, *config.IntegrationID)
+	if err != nil {
+		return nil, fmt.Errorf("list disabled datasets: %w", err)
+	}
+	off := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		off[key] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	keys := []string{}
+	for _, key := range schedsync.SupportedDatasetKeys(provider) {
+		if off[key] {
+			keys = append(keys, key)
+		}
+	}
+	return keys, nil
+}
+
 // rowsOwnSelection reports whether the integration's dataset rows own which
 // datasets run (providersync.RowsOwnSyncSelection: a whole-integration
 // configuration of any provider but PagerDuty, whose rows the plan itself
@@ -268,7 +300,9 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 		// An empty key list would be written as "no selection", which the
 		// scheduler reads as every enabled dataset and which lets it add its
 		// automatic rows: a run that names nothing is not started.
-		if len(keys) == 0 {
+		// With --dataset-keys the scope decides: a key with no row is
+		// allowed (CHAOS-10088), and scopeDatasets refuses a run it cannot name.
+		if len(keys) == 0 && len(params.DatasetKeys) == 0 {
 			return Validated{}, RefusedError{Message: fmt.Sprintf("backfill run: integration %s of sync configuration %s (%s) has no enabled dataset "+
 				"that provider %s supports, so there is nothing to backfill: nothing was started. Enable a dataset for the integration first "+
 				"(check its box in the sync settings); a backfill does not switch a dataset on.",
@@ -290,13 +324,19 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 	if err != nil {
 		return Validated{}, err
 	}
-	var enabledRows []string
+	var enabledRows, disabledRows []string
 	if len(params.DatasetKeys) > 0 && len(datasetKeys) == 0 {
 		if enabledRows, err = enabledDatasetKeys(ctx, tx, config, provider); err != nil {
 			return Validated{}, err
 		}
 	}
-	datasetKeys, err = scopeDatasets(config, provider, params.DatasetKeys, datasetKeys, enabledRows)
+	// PagerDuty's plan re-enables its operational rows first (Python pagerduty_repair._repair_datasets, row.is_enabled = True), so an off row does not stop its run.
+	if len(params.DatasetKeys) > 0 && provider != "pagerduty" {
+		if disabledRows, err = disabledDatasetKeys(ctx, tx, config, provider); err != nil {
+			return Validated{}, err
+		}
+	}
+	datasetKeys, err = scopeDatasets(config, provider, params.DatasetKeys, datasetKeys, enabledRows, disabledRows)
 	if err != nil {
 		return Validated{}, err
 	}

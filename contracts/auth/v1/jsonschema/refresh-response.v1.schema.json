@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/refresh-response.v1.schema.json",
+  "title": "Auth Control Plane refresh exchange response (v1 wire format)",
+  "description": "A successful refresh: a new access token in today's HS256 ops format (kept until Wave 3) and the ROTATED opaque refresh credential. Rotation is single use with a 30 s concurrent-refresh grace (the grace answer returns the same successor). The old user object is not part of this contract; clients read session.v1.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "access_token",
+    "token_type",
+    "expires_in",
+    "refresh_credential",
+    "refresh_expires_in",
+    "session_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "refresh-response.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies); additive evolution stays in v1 (TRD section 21)."
+    },
+    "access_token": {
+      "type": "string",
+      "pattern": "^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+      "description": "Compact JWS whose protected header is EXACTLY the HS256 header the ops signer emits ({\"alg\":\"HS256\",\"typ\":\"JWT\"}, internal/auth/edgetoken/signer.go headerSegment). Pinning the header segment refuses RS256, ES256 and alg=none in every reader; the asymmetric access token arrives in Wave 3 as a new surface version. Lifetime is unchanged from go-api (60 minutes)."
+    },
+    "token_type": {
+      "const": "bearer",
+      "description": "Lowercase `bearer`, as go-api emits today."
+    },
+    "expires_in": {
+      "const": 3600,
+      "description": "Access token lifetime in seconds: exactly 3600 (60 minutes), go-api's accessExpiresIn, until the asymmetric issuer of Wave 3 changes it. Integer token only; 3600.0 passes the schema (const compares numbers) and both clients refuse it."
+    },
+    "refresh_credential": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43,256}$",
+      "description": "Opaque refresh credential: URL-safe base64 characters only, 43-256 long. A dot is not in the alphabet, so a refresh JWT cannot be presented here. A SECRET: it exists on the wire only in the refresh request and the refresh response, never in session.v1 or auth-outcome.v1, never in a log, metric label or audit row."
+    },
+    "refresh_expires_in": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 604800,
+      "description": "Rotated refresh credential lifetime in seconds; the 7 day ceiling is today's RefreshLifetime."
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^ses_[A-Za-z0-9_-]{22,64}$",
+      "description": "Opaque server-minted session identifier. An identifier, never a secret, and never copied from caller input."
+    }
+  }
+}

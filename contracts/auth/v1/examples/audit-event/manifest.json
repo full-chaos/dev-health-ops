@@ -60,6 +60,12 @@
       "why": "A token field. Secrets are made unrepresentable, not prohibited."
     },
     {
+      "file": "invalid-attributes-credential-secret.json",
+      "expect_instance_location": "/attributes",
+      "expect_keyword": "additionalProperties",
+      "why": "A credential secret value in an audit payload (CHAOS-4934: a secret appears only in the receipt, never in audit metadata)."
+    },
+    {
       "file": "invalid-attributes-authorization-header.json",
       "expect_instance_location": "/attributes",
       "expect_keyword": "additionalProperties",

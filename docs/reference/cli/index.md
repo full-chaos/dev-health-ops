@@ -737,9 +737,9 @@ dho backfill run \
   --before 2024-03-01
 ```
 
-**Which datasets run.** For a configuration that covers a whole integration, the backfill names the datasets that are enabled for that integration (its dataset rows), not the configuration's `sync_targets` list. A dataset that is off, or that has no row, is not backfilled and is not switched on. When the integration has no enabled dataset, the verb refuses the run (exit code 3) and writes nothing; enable a dataset in the connection's synchronization settings first. A configuration pinned to a single source still names the datasets its own `sync_targets` select, and so does a PagerDuty configuration (the platform manages the PagerDuty datasets as one set, so its list must be exactly `operational`).
+**Which datasets run.** For a configuration that covers a whole integration, the backfill names the datasets that are enabled for that integration (its dataset rows), not the configuration's `sync_targets` list. A dataset that is off, or that has no row, is not backfilled and is not switched on, unless `--dataset-keys` names a key with no row (see below). When the integration has no enabled dataset and no `--dataset-keys` is given, the verb refuses the run (exit code 3) and writes nothing; enable a dataset in the connection's synchronization settings first. A configuration pinned to a single source still names the datasets its own `sync_targets` select, and so does a PagerDuty configuration (the platform manages the PagerDuty datasets as one set, so its list must be exactly `operational`).
 
-**Scoping a run under the unit cap.** A run plans units = selected sources x planned datasets x 7-day chunks of the window; a GitHub source plans about ten units per chunk with every dataset on, because the pull-request, test and work-item families fold into one unit each. For example, 33 sources over thirty days (five chunks) plan about 1650 units, while the same sources limited to `--dataset-keys prs,commits` plan about 2 units per source per chunk, and a three-month window (thirteen chunks) fits. A plan over the unit cap (the `max_sync_units` tier limit, else 1000) is quarantined with `invalid_plan`, so a configuration with many sources cannot backfill a long window in one run. `--source-ids` and `--dataset-keys` limit the run to part of the configuration. Each takes a comma list and may be repeated; an empty item is an argument error. Every source id must be an enabled source of the configuration's integration that the configuration selects (an enabled source the configuration does not select is refused: its scheduled runs never plan it). Every dataset key must be one the run could already name (see above): a key the provider does not have is unknown, and a key whose dataset is off is refused, because a backfill never switches a dataset on. A refused value is named in the error, the verb exits with code 3 and nothing is written. The values are written to the same `source_ids` and `dataset_keys` columns of the trigger that the admin Backfill wizard writes, in the enabled-source order and the provider's dataset order. Without the flags the run covers the sources a scheduled run of the configuration plans, the ones selected for it in Sync admin (CHAOS-10064: for one window a backfill covers the hourly run's scope; before, it covered every enabled source of the integration, selected or not), and every enabled dataset. A configuration pinned to a single source accepts only that source, and only while the source is enabled; its dataset keys must name enabled dataset rows of the integration (or keys its own `sync_targets` select).
+**Scoping a run under the unit cap.** A run plans units = selected sources x planned datasets x 7-day chunks of the window; a GitHub source plans about ten units per chunk with every dataset on, because the pull-request, test and work-item families fold into one unit each. For example, 33 sources over thirty days (five chunks) plan about 1650 units, while the same sources limited to `--dataset-keys prs,commits` plan about 2 units per source per chunk, and a three-month window (thirteen chunks) fits. A plan over the unit cap (the `max_sync_units` tier limit, else 1000) is quarantined with `invalid_plan`, so a configuration with many sources cannot backfill a long window in one run. `--source-ids` and `--dataset-keys` limit the run to part of the configuration. Each takes a comma list and may be repeated; an empty item is an argument error. Every source id must be an enabled source of the configuration's integration that the configuration selects (an enabled source the configuration does not select is refused: its scheduled runs never plan it). Every dataset key must be one the run could already name (see above): a key the provider does not have is unknown, a key the integration has no row for runs once and writes no row (the schedule does not change), and a key whose row is off is refused, because a backfill never switches a dataset on (PagerDuty is the exception: its plan re-enables the operational rows first, so an off operational row still runs). A refused value is named in the error, the verb exits with code 3 and nothing is written. The values are written to the same `source_ids` and `dataset_keys` columns of the trigger that the admin Backfill wizard writes, in the enabled-source order and the provider's dataset order. Without the flags the run covers the sources a scheduled run of the configuration plans, the ones selected for it in Sync admin (CHAOS-10064: for one window a backfill covers the hourly run's scope; before, it covered every enabled source of the integration, selected or not), and every enabled dataset. A configuration pinned to a single source accepts only that source, and only while the source is enabled; its dataset keys must be keys its own `sync_targets` select, and a key whose row is off is refused (a key outside its `sync_targets` is refused even when it has no row; a pinned configuration with no `sync_targets` follows the integration's rows, as above).
 
 ```bash
 dho backfill run \
@@ -1379,6 +1379,18 @@ old and new generation. The write is a compare-and-set on the old generation,
 so a second pass repairs nothing. Audited under the `metrics.finalize_redrive`
 action.
 
+A pass has its own time budget, `--timeout` (default `10m`, at most `1h`),
+not the 30 s deadline of other verbs (CHAOS-10139). When the budget ends
+before the range is done the command exits 0 and prints
+`generation_repair.partial=true`, `resume_from` (the target day of the first
+row not handled) and `remaining`. Rows commit one by one, so rerun the same
+command with `--from <resume_from>`; repeat until `partial` is false. A store
+failure still exits 1. `dho` is a one-shot CLI with no metrics exporter, so its
+telemetry is the log lines: a Warn line (`metric`
+`dev_health_generation_repair_failures_total`, `step`) on a failure and an Info
+line (`metric` `dev_health_generation_repair_partial_total`) on a partial. The
+counters themselves are recorded for a process that has a MeterProvider.
+
 #### `metrics partition-recompute` (CHAOS-4459)
 
 Historical recompute: reset an already-`'succeeded'` daily-metrics run's
@@ -1810,7 +1822,8 @@ organization id. It prints counts only, under `carry_team_ids`: `teams`,
 `admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
 `teams_already_keyed`, `manual_members_folded`, `keyed_teams_activated`, `deleted_keyed_teams`, `memberships`, `project_ownership`, `repo_ownership`,
 `link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`, `identity_drift_changes`,
-`identities`, `fallbacks`, `malformed_team_ids`, and `rows_written` (0 with `--dry-run`). A second
+`identities`, `fallbacks`, `malformed_team_ids`, `rows_written` (0 with `--dry-run`), and
+`kept_teams_not_restated` (a kept row the run planned to write again that was deleted after the run read it). A second
 run reports zero.
 
 ```bash

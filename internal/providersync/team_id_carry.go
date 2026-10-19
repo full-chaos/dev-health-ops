@@ -13,6 +13,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/full-chaos/dev-health-ops/internal/teamprovider"
@@ -139,8 +141,10 @@ type TeamIDCarryOutcome struct {
 	// provider's rows move to that provider's id; the rows that name the id
 	// without a provider stay.
 	AmbiguousTeams uint64 `json:"ambiguous_teams"`
-	// TeamsAlreadyKeyed is the new ids that already had a row. That row is
-	// not written again; the old row still goes inactive.
+	// TeamsAlreadyKeyed is the new ids that already had a row. The moved
+	// row is not written under that id; the old row still goes inactive. The
+	// kept row is written again only to take the moved team's manual members
+	// or to go active (the two counts below), from its own stored version.
 	TeamsAlreadyKeyed uint64 `json:"teams_already_keyed"`
 	// ManualMembersFolded is the part of those whose kept row took the
 	// manual members of the old row that it did not hold yet, so an admin's
@@ -173,6 +177,10 @@ type TeamIDCarryOutcome struct {
 	MalformedTeamIDs uint64 `json:"malformed_team_ids"`
 	// RowsWritten is the rows a real run wrote; 0 in a dry run.
 	RowsWritten uint64 `json:"rows_written"`
+	// KeptTeamsNotRestated is the kept rows the run planned to write again
+	// (a fold or an activation) that the write did not write: an admin
+	// deleted the row after the run read it, and the delete stands.
+	KeptTeamsNotRestated uint64 `json:"kept_teams_not_restated"`
 }
 
 // Found says the store holds something to carry.
@@ -300,6 +308,9 @@ type teamIDCarryRun struct {
 
 	// writes run in this order; teams and observations are last.
 	writes []teamIDCarryWrite
+	// restate: the kept rows written again from their stored version, right
+	// after the teams write.
+	restate []teamprovider.Restatement
 }
 
 func (run *teamIDCarryRun) plan() error {
@@ -328,6 +339,11 @@ func (run *teamIDCarryRun) plan() error {
 	}
 	if err := run.dropKeyedTeams(&teamRows); err != nil {
 		return err
+	}
+	for _, kept := range run.restate {
+		if !teamid.HasKey(kept.ID) || teamid.Malformed(kept.ID) {
+			return fmt.Errorf("%w: teams", errTeamIDCarryUnkeyed)
+		}
 	}
 	for _, link := range teamIDCarryLinks {
 		if err := run.planLink(link); err != nil {
@@ -566,9 +582,10 @@ func teamIDCarryJiraProjectAsTeam(row chRow) bool {
 }
 
 // teamIDCarryKeyedQuery is the current version of each new id that already
-// has a row, and whether an admin deleted it. It is the ONE read of the kept
-// rows: the fold writes from it, so a delete that commits after it is a
-// newer version than the fold's and wins.
+// has a row, and whether an admin deleted it. It decides what the carry does
+// with each kept row; the kept row's new version is written from the stored
+// row inside the statement that writes it (teamprovider.Restate), not from
+// this read.
 var teamIDCarryKeyedQuery = `SELECT ` + teamIDCarryTeamsColumns + `, deleted_at IS NOT NULL AS deleted FROM teams FINAL ` +
 	`WHERE org_id = {org_id:String} AND id IN {ids:Array(String)}`
 
@@ -633,13 +650,10 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 		folded[id] = append(folded[id], row.strs("manual_members")...)
 	}
 	*rows = kept
-	return run.foldManualMembers(rows, foldIDs, folded, activate, existing)
+	run.foldManualMembers(foldIDs, folded, activate, existing)
+	return nil
 }
 
-// foldManualMembers writes a new version of each kept row that takes the
-// manual members of the dropped rows of its id that it does not hold yet:
-// the kept row and the moved bare team are one team, and manual members are
-// an admin's statement that no other writer restores.
 // teamIDCarryOldestCreatedQuery is the oldest creation evidence of each team id
 // over every stored version (teamcreated.Query's rule, keyed by id alone).
 const teamIDCarryOldestCreatedQuery = `SELECT id, min(coalesce(created_at, updated_at)) AS created_min FROM teams ` +
@@ -680,50 +694,34 @@ func (run *teamIDCarryRun) withOldestCreatedAt(rows []chRow) ([]chRow, error) {
 	return out, nil
 }
 
-func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, members map[string][]string, activate map[string]bool, held map[string]chRow) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	columns := strings.Split(teamIDCarryTeamsColumns, ", ")
-	current := make([]chRow, 0, len(ids))
+// foldManualMembers plans a new version of each kept row that takes the
+// manual members of the dropped rows of its id that it does not hold yet (the
+// kept row and the moved bare team are one team, and manual members are an
+// admin's statement that no other writer restores), or that goes active. The
+// version is written by teamprovider.Restate from the stored row in the
+// statement that writes it, so a write of the kept row that commits after
+// this read is kept; this read only decides what to write and counts it.
+func (run *teamIDCarryRun) foldManualMembers(ids []string, members map[string][]string, activate map[string]bool, held map[string]chRow) {
 	for _, id := range ids {
-		current = append(current, held[id].only(columns))
-	}
-	var err error
-	if current, err = run.withOldestCreatedAt(current); err != nil {
-		return fmt.Errorf("team id carry: read kept created_at: %w", err)
-	}
-	for _, row := range current {
-		merged := append([]string(nil), row.strs("manual_members")...)
-		held := map[string]bool{}
-		for _, member := range merged {
-			held[member] = true
+		holds := map[string]bool{}
+		for _, member := range held[id].strs("manual_members") {
+			holds[member] = true
 		}
-		for _, member := range members[row.str("id")] {
-			if !held[member] {
-				held[member] = true
-				merged = append(merged, member)
+		var added []string
+		for _, member := range members[id] {
+			if !holds[member] {
+				holds[member] = true
+				added = append(added, member)
 			}
 		}
-		grew := len(merged) > len(row.strs("manual_members"))
-		if !grew && !activate[row.str("id")] {
+		if len(added) == 0 && !activate[id] {
 			continue
 		}
-		if grew {
+		if len(added) > 0 {
 			run.outcome.ManualMembersFolded++
 		}
-		version := row.with("manual_members", merged)
-		if activate[row.str("id")] {
-			version = version.with("is_active", uint8(1))
-		}
-		// At the stored version, not past it and not at the carry's time: the
-		// row keeps its writer's clock, the newer insert wins an equal version
-		// (ReplacingMergeTree keeps the last inserted row), and a later write of
-		// that writer stamped at or after that version (a push stamped by its
-		// source) still wins.
-		*rows = append(*rows, version)
+		run.restate = append(run.restate, teamprovider.Restatement{ID: id, AddMembers: added, Activate: activate[id]})
 	}
-	return nil
 }
 
 // linkTarget is the new id of a row that names a team with its provider.
@@ -1112,6 +1110,9 @@ func (run *teamIDCarryRun) write() error {
 				return fmt.Errorf("team id carry: write teams: %w", err)
 			}
 			run.outcome.RowsWritten += uint64(len(write.rows))
+			if err := run.writeRestatements(ctx); err != nil {
+				return fmt.Errorf("team id carry: write kept teams: %w", err)
+			}
 			continue
 		}
 		batch, err := run.conn.PrepareBatch(ctx, "INSERT INTO "+write.table+" ("+write.columns+")")
@@ -1128,6 +1129,38 @@ func (run *teamIDCarryRun) write() error {
 			return fmt.Errorf("team id carry: write %s: %w", write.table, err)
 		}
 		run.outcome.RowsWritten += uint64(len(write.rows))
+	}
+	return nil
+}
+
+// teamIDCarryKeptNotRestatedName counts the kept rows a carry planned to
+// write again and did not, because an admin deleted the row after the read.
+const teamIDCarryKeptNotRestatedName = "dev_health_team_id_carry_kept_teams_not_restated_total"
+
+// writeRestatements writes the planned kept-row versions in one statement.
+// The server's written-row count says how many it wrote; a planned row it did
+// not write is a kept row deleted after the read (the statement writes no
+// deleted row), which is the expected outcome of that race: Info and a count.
+func (run *teamIDCarryRun) writeRestatements(ctx context.Context) error {
+	if len(run.restate) == 0 {
+		return nil
+	}
+	written, err := teamprovider.Restate(ctx, run.conn, run.orgID, run.restate)
+	if err != nil {
+		return err
+	}
+	run.outcome.RowsWritten += written
+	planned := uint64(len(run.restate))
+	if written >= planned {
+		return nil
+	}
+	run.outcome.KeptTeamsNotRestated = planned - written
+	slog.Default().InfoContext(ctx, "team_id_carry_kept_teams_not_restated",
+		"planned", planned, "written", written, "kept_teams_not_restated", run.outcome.KeptTeamsNotRestated)
+	if counter, err := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/providersync").Int64Counter(
+		teamIDCarryKeptNotRestatedName,
+		metric.WithDescription("Kept team rows a team id carry planned to write again (a fold or an activation) and did not, because the row was deleted after the carry read it.")); err == nil {
+		counter.Add(ctx, int64(run.outcome.KeptTeamsNotRestated))
 	}
 	return nil
 }
@@ -1301,7 +1334,7 @@ func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, w
 			"memberships", outcome.Memberships, "project_ownership", outcome.ProjectOwnership, "repo_ownership", outcome.RepoOwnership,
 			"link_rows_already_keyed", outcome.LinkRowsAlreadyKeyed, "observations", outcome.Observations,
 			"sync_policies", outcome.SyncPolicies, "drift_changes", outcome.DriftChanges, "identity_drift_changes", outcome.IdentityDriftChanges, "identities", outcome.Identities,
-			"fallbacks", outcome.Fallbacks, "rows_written", outcome.RowsWritten)
+			"fallbacks", outcome.Fallbacks, "rows_written", outcome.RowsWritten, "kept_teams_not_restated", outcome.KeptTeamsNotRestated)
 	}
 	return nil
 }

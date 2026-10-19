@@ -163,7 +163,7 @@ func (walk *pageWalk) replay(fingerprint string) error {
 
 // jiraAdvance reads the continuation signal of one Jira search page (nextPageToken, isLast and the page's item count) and decides
 // whether another page is asked for. It is the only check of the Jira walk: a signal that is malformed (an isLast that is not a
-// boolean, a token that is not a non-empty string) or inconsistent (isLast true together with a token) fails the walk, and so does
+// boolean, a token that is not a string; an empty string is no token, as Python's `if next_token:` reads it) or inconsistent (isLast true together with a token) fails the walk, and so does
 // an empty page that advertises another one. An empty page without a continuation, and isLast true, end the list.
 func (walk *pageWalk) jiraAdvance(page *pyjson.Object, startAt, items int) (token string, nextStartAt int, more bool, err error) {
 	rawToken, _ := page.Get("nextPageToken")

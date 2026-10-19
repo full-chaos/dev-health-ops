@@ -163,6 +163,7 @@ on:
       - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
       - 'ci/ratchets.tsv'
+      - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
@@ -174,6 +175,7 @@ on:
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
+      - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
       # contracts, so editing the page or either contract must run the gate
@@ -201,6 +203,11 @@ on:
       - '.github/workflows/go-quality.yml'
       # read by internal/testsupport/venuechanged (CHAOS-7653): a Go test reads this workflow file
       - '.github/workflows/venue-oracles-changed.yml'
+      # read and executed by internal/cigates (CHAOS-10176): the test.yml contract, the pip-install manifest the
+      # gated jobs name, and the gate script itself
+      - '.github/workflows/test.yml'
+      - 'requirements-docs.txt'
+      - 'ci/aggregate_gate_results.sh'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence
@@ -368,6 +375,7 @@ on:
       - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
       - 'ci/ratchets.tsv'
+      - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
@@ -379,6 +387,7 @@ on:
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
+      - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
       # contracts, so editing the page or either contract must run the gate
@@ -406,6 +415,11 @@ on:
       - '.github/workflows/go-quality.yml'
       # read by internal/testsupport/venuechanged (CHAOS-7653): a Go test reads this workflow file
       - '.github/workflows/venue-oracles-changed.yml'
+      # read and executed by internal/cigates (CHAOS-10176): the test.yml contract, the pip-install manifest the
+      # gated jobs name, and the gate script itself
+      - '.github/workflows/test.yml'
+      - 'requirements-docs.txt'
+      - 'ci/aggregate_gate_results.sh'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence
@@ -896,7 +910,7 @@ jobs:
       - name: Warm the syft tool cache (attempt 1)
         id: syft-download-1
         continue-on-error: true
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.42.3
 
@@ -904,7 +918,7 @@ jobs:
         id: syft-download-2
         if: steps.syft-download-1.outcome == 'failure'
         continue-on-error: true
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.42.3
 
@@ -912,12 +926,12 @@ jobs:
         id: syft-download-3
         if: steps.syft-download-2.outcome == 'failure'
         continue-on-error: true
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.42.3
 
       - name: Generate ${{ matrix.target }} SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: dev-health-go-${{ matrix.target }}:security
           format: spdx-json
@@ -1135,7 +1149,7 @@ jobs:
         with:
           package_json_file: dev-health-web-main/package.json
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
           cache: pnpm

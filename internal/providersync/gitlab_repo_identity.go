@@ -215,6 +215,15 @@ func decideGitLabRepoIdentity(projectID int64, currentPath string, rows []GitLab
 func resolveGitLabRepoIdentity(
 	ctx context.Context, reader GitLabRepoIdentityReader, claim Claim, projectID int64, currentPath string,
 ) (GitLabRepoIdentity, error) {
+	return resolveRepoIdentity(ctx, "gitlab", reader, claim, projectID, currentPath)
+}
+
+// resolveRepoIdentity applies decideGitLabRepoIdentity to the stored rows of a
+// provider whose repository carries an immutable numeric id (GitLab project id,
+// GitHub repository id). Neither provider lets a path or name hold '@'.
+func resolveRepoIdentity(
+	ctx context.Context, provider string, reader GitLabRepoIdentityReader, claim Claim, projectID int64, currentPath string,
+) (GitLabRepoIdentity, error) {
 	var rows []GitLabStoredRepoIdentity
 	if reader != nil {
 		stored, err := reader.StoredRepoIdentities(ctx, claim, projectID, currentPath)
@@ -226,15 +235,15 @@ func resolveGitLabRepoIdentity(
 	identity, kind, err := decideGitLabRepoIdentity(projectID, currentPath, rows)
 	if err != nil {
 		errorClass, errorType := logging.ErrorClass(err), logging.ErrorType(err) // never the error text (CHAOS-7933)
-		slog.Default().WarnContext(ctx, "gitlab_repo_identity_unresolved",
+		slog.Default().WarnContext(ctx, provider+"_repo_identity_unresolved",
 			"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset,
-			"gitlab_project_id", projectID, "stored_rows", len(rows),
+			provider+"_project_id", projectID, "stored_rows", len(rows),
 			"error_class", errorClass, "error_type", errorType)
 		return GitLabRepoIdentity{}, err
 	}
-	slog.Default().DebugContext(ctx, "gitlab_repo_identity",
+	slog.Default().DebugContext(ctx, provider+"_repo_identity",
 		"org_id", claim.OrgID, "unit_id", claim.ID, "dataset", claim.Dataset,
-		"gitlab_project_id", projectID, "decision", kind, "repo_id", identity.RepoID,
+		provider+"_project_id", projectID, "decision", kind, "repo_id", identity.RepoID,
 		"renamed", !strings.EqualFold(identity.Path, strings.TrimSpace(currentPath)),
 		"stored_rows", len(rows), "reader", reader != nil)
 	return identity, nil
@@ -303,20 +312,43 @@ func resolveGitLabIdentityPaths(
 	return out, nil
 }
 
-// GitLabRepoIdentityClickHouseReader reads repos FINAL.
+// GitLabRepoIdentityClickHouseReader reads repos FINAL. It serves every
+// provider whose repository carries an immutable numeric id; Provider names the
+// provider ("gitlab" when empty, "github" for GitHub).
 type GitLabRepoIdentityClickHouseReader struct {
-	Conn  driver.Conn
-	Lease providerfoundation.LeaseGuard
+	Conn     driver.Conn
+	Lease    providerfoundation.LeaseGuard
+	Provider string
 }
 
-const gitLabStoredRepoIdentityColumns = `toString(id), repo, identity_path, provider_repo_id,
-  JSONExtractInt(ifNull(settings, ''), 'project_id'), last_synced`
+func (reader GitLabRepoIdentityClickHouseReader) provider() string {
+	if reader.Provider == "" {
+		return "gitlab"
+	}
+	return reader.Provider
+}
+
+// repoIdentityColumns lists the columns the identity rules read. settingsKey is
+// the repos.settings key that held the numeric id before migration 134 wrote
+// provider_repo_id: a closed set of constants, never caller input.
+func repoIdentityColumns(provider string) string {
+	return `toString(id), repo, identity_path, provider_repo_id,
+  JSONExtractInt(ifNull(settings, ''), '` + repoIdentitySettingsKey(provider) + `'), last_synced`
+}
+
+func repoIdentitySettingsKey(provider string) string {
+	if provider == "github" {
+		return "repo_id"
+	}
+	return "project_id"
+}
 
 func (reader GitLabRepoIdentityClickHouseReader) StoredRepoIdentities(
 	ctx context.Context, claim Claim, projectID int64, currentPath string,
 ) ([]GitLabStoredRepoIdentity, error) {
+	provider := reader.provider()
 	if ctx == nil || reader.Conn == nil || reader.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "gitlab" || projectID < 1 {
+		claim.Provider != provider || projectID < 1 {
 		return nil, ErrInvalidConfiguration
 	}
 	minted, err := repositoryIdentity(currentPath)
@@ -325,11 +357,11 @@ func (reader GitLabRepoIdentityClickHouseReader) StoredRepoIdentities(
 	}
 	native := strconv.FormatInt(projectID, 10)
 	return reader.query(ctx, `
-SELECT `+gitLabStoredRepoIdentityColumns+`
+SELECT `+repoIdentityColumns(provider)+`
 FROM repos FINAL
-WHERE org_id = ? AND provider = 'gitlab'
-  AND (provider_repo_id = ? OR (provider_repo_id = '' AND JSONExtractInt(ifNull(settings, ''), 'project_id') = ?) OR id = toUUID(?))`,
-		claim.OrgID, native, projectID, minted)
+WHERE org_id = ? AND provider = ?
+  AND (provider_repo_id = ? OR (provider_repo_id = '' AND JSONExtractInt(ifNull(settings, ''), '`+repoIdentitySettingsKey(provider)+`') = ?) OR id = toUUID(?))`,
+		claim.OrgID, provider, native, projectID, minted)
 }
 
 func (reader GitLabRepoIdentityClickHouseReader) StoredRepoIdentitiesForProjects(
@@ -338,6 +370,7 @@ func (reader GitLabRepoIdentityClickHouseReader) StoredRepoIdentitiesForProjects
 	if ctx == nil || reader.Conn == nil || reader.Lease == nil || orgID == "" {
 		return nil, ErrInvalidConfiguration
 	}
+	provider := reader.provider()
 	natives := make([]string, 0, len(projects))
 	ints := make([]int64, 0, len(projects))
 	minted := make([]string, 0, len(projects))
@@ -354,24 +387,25 @@ func (reader GitLabRepoIdentityClickHouseReader) StoredRepoIdentitiesForProjects
 		return nil, nil
 	}
 	return reader.query(ctx, `
-SELECT `+gitLabStoredRepoIdentityColumns+`
+SELECT `+repoIdentityColumns(provider)+`
 FROM repos FINAL
-WHERE org_id = ? AND provider = 'gitlab'
-  AND (provider_repo_id IN ? OR (provider_repo_id = '' AND JSONExtractInt(ifNull(settings, ''), 'project_id') IN ?) OR id IN (SELECT toUUID(arrayJoin(?))))`,
-		orgID, natives, ints, minted)
+WHERE org_id = ? AND provider = ?
+  AND (provider_repo_id IN ? OR (provider_repo_id = '' AND JSONExtractInt(ifNull(settings, ''), '`+repoIdentitySettingsKey(provider)+`') IN ?) OR id IN (SELECT toUUID(arrayJoin(?))))`,
+		orgID, provider, natives, ints, minted)
 }
 
 func (reader GitLabRepoIdentityClickHouseReader) StoredRepoIdentitiesAtPaths(
 	ctx context.Context, claim Claim, paths []string,
 ) ([]GitLabStoredRepoIdentity, error) {
+	provider := reader.provider()
 	if ctx == nil || reader.Conn == nil || reader.Lease == nil || claim.Validate() != nil ||
-		claim.Provider != "gitlab" {
+		claim.Provider != provider {
 		return nil, ErrInvalidConfiguration
 	}
 	if err := reader.Lease.Assert(ctx); err != nil {
 		return nil, err
 	}
-	return readGitLabStoredRepoIdentitiesAtPaths(ctx, reader.Conn, claim.OrgID, paths)
+	return readStoredRepoIdentitiesAtPaths(ctx, reader.Conn, provider, claim.OrgID, paths)
 }
 
 func (reader GitLabRepoIdentityClickHouseReader) query(ctx context.Context, query string, args ...any) ([]GitLabStoredRepoIdentity, error) {
@@ -381,13 +415,20 @@ func (reader GitLabRepoIdentityClickHouseReader) query(ctx context.Context, quer
 	return queryGitLabStoredRepoIdentities(ctx, reader.Conn, query, args...)
 }
 
-// readGitLabStoredRepoIdentitiesAtPaths reads the org's GitLab repos rows
-// whose current path (repo) or minted path (identity_path) is one of paths,
-// case-insensitive. It is the one read of "which projects has the store seen
-// at a path": the reference rewrite and the ownership carry both use it, and
-// both name a row's project by heldBy.
+// readGitLabStoredRepoIdentitiesAtPaths is readStoredRepoIdentitiesAtPaths for
+// GitLab: the reference rewrite and the ownership carry both use it.
 func readGitLabStoredRepoIdentitiesAtPaths(
 	ctx context.Context, conn driver.Conn, orgID string, paths []string,
+) ([]GitLabStoredRepoIdentity, error) {
+	return readStoredRepoIdentitiesAtPaths(ctx, conn, "gitlab", orgID, paths)
+}
+
+// readStoredRepoIdentitiesAtPaths reads the org's repos rows of one provider
+// whose current path (repo) or minted path (identity_path) is one of paths,
+// case-insensitive. It is the one read of "which repositories has the store
+// seen at a path"; callers name a row's repository by heldBy.
+func readStoredRepoIdentitiesAtPaths(
+	ctx context.Context, conn driver.Conn, provider, orgID string, paths []string,
 ) ([]GitLabStoredRepoIdentity, error) {
 	lower := make([]string, 0, len(paths))
 	for _, path := range paths {
@@ -399,10 +440,10 @@ func readGitLabStoredRepoIdentitiesAtPaths(
 		return nil, nil
 	}
 	return queryGitLabStoredRepoIdentities(ctx, conn, `
-SELECT `+gitLabStoredRepoIdentityColumns+`
+SELECT `+repoIdentityColumns(provider)+`
 FROM repos FINAL
-WHERE org_id = ? AND provider = 'gitlab' AND (lower(repo) IN ? OR lower(identity_path) IN ?)`,
-		orgID, lower, lower)
+WHERE org_id = ? AND provider = ? AND (lower(repo) IN ? OR lower(identity_path) IN ?)`,
+		orgID, provider, lower, lower)
 }
 
 func queryGitLabStoredRepoIdentities(ctx context.Context, conn driver.Conn, query string, args ...any) ([]GitLabStoredRepoIdentity, error) {

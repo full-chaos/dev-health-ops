@@ -1,0 +1,245 @@
+{
+  "accept": [
+    {
+      "file": "valid-live.json",
+      "why": "A live session: revoked_at present and null."
+    },
+    {
+      "file": "valid-revoked.json",
+      "why": "A revoked session."
+    },
+    {
+      "file": "valid-two-methods.json",
+      "why": "Two methods; positive control for uniqueItems and the amr enum."
+    },
+    {
+      "file": "valid-revision-zero.json",
+      "why": "Lower boundary of `minimum: 0`."
+    },
+    {
+      "file": "valid-auth-time-before-created.json",
+      "why": "Authentication earlier than the session record; offset form."
+    }
+  ],
+  "reject": [
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-session-id.json",
+      "why": "`session_id` is required; a dropped field must not read as a default."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-principal-id.json",
+      "why": "`principal_id` is required; a dropped field must not read as a default."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-revision.json",
+      "why": "`revision` is required; a dropped field must not read as a default."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-auth-time.json",
+      "why": "`auth_time` is required; a dropped field must not read as a default."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-amr.json",
+      "why": "`amr` is required; a dropped field must not read as a default."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-created-at.json",
+      "why": "`created_at` is required; a dropped field must not read as a default."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-expires-at.json",
+      "why": "`expires_at` is required; a dropped field must not read as a default."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-revoked-at.json",
+      "why": "`revoked_at` is required; a dropped field must not read as a default."
+    },
+    {
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "file": "invalid-schema-version-wrong.json",
+      "why": "Unknown contract version denies."
+    },
+    {
+      "expect_instance_location": "/session_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-session-id-wrong-prefix.json",
+      "why": "Session ids carry the ses_ prefix."
+    },
+    {
+      "expect_instance_location": "/session_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-session-id-too-short.json",
+      "why": "Fewer than 22 characters after the prefix."
+    },
+    {
+      "expect_instance_location": "/session_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-session-id-trailing-newline.json",
+      "why": "Python `$` matches before a final newline; the client rewrites it to \\Z, so all three languages refuse."
+    },
+    {
+      "expect_instance_location": "/principal_id",
+      "expect_keyword": "pattern",
+      "file": "invalid-principal-id-wrong-prefix.json",
+      "why": "principal.v1 principal_id shape."
+    },
+    {
+      "expect_instance_location": "/revision",
+      "expect_keyword": "minimum",
+      "file": "invalid-revision-negative.json",
+      "why": "Boundary below `minimum: 0`."
+    },
+    {
+      "expect_instance_location": "/revision",
+      "expect_keyword": "type",
+      "file": "invalid-revision-string.json",
+      "why": "A string is not an integer."
+    },
+    {
+      "expect_instance_location": "/amr",
+      "expect_keyword": "minItems",
+      "file": "invalid-amr-empty.json",
+      "why": "A session records at least one method."
+    },
+    {
+      "expect_instance_location": "/amr/0",
+      "expect_keyword": "enum",
+      "file": "invalid-amr-unknown.json",
+      "why": "Closed set; unknown denies."
+    },
+    {
+      "expect_instance_location": "/amr",
+      "expect_keyword": "uniqueItems",
+      "file": "invalid-amr-duplicate.json",
+      "why": "Methods are a set."
+    },
+    {
+      "expect_instance_location": "/expires_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-expires-at-not-rfc3339.json",
+      "why": "A date is not an instant."
+    },
+    {
+      "expect_instance_location": "/revoked_at",
+      "expect_keyword": "pattern",
+      "file": "invalid-revoked-at-not-rfc3339.json",
+      "why": "The pattern applies to the string branch of the nullable field."
+    },
+    {
+      "expect_instance_location": "/auth_time",
+      "expect_keyword": "pattern",
+      "file": "invalid-auth-time-hour-24.json",
+      "why": "Component bounds live in the pattern (Go refuses T24, Python rolls the date)."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-secret-field-refresh-credential.json",
+      "why": "`refresh_credential` has no field in session.v1; absence is enforced by additionalProperties:false."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-secret-field-refresh-token.json",
+      "why": "`refresh_token` has no field in session.v1; absence is enforced by additionalProperties:false."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-secret-field-access-token.json",
+      "why": "`access_token` has no field in session.v1; absence is enforced by additionalProperties:false."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-secret-field-token.json",
+      "why": "`token` has no field in session.v1; absence is enforced by additionalProperties:false."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-secret-field-secret.json",
+      "why": "`secret` has no field in session.v1; absence is enforced by additionalProperties:false."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-secret-field-password.json",
+      "why": "`password` has no field in session.v1; absence is enforced by additionalProperties:false."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-secret-field-refresh-hash.json",
+      "why": "`refresh_hash` has no field in session.v1; absence is enforced by additionalProperties:false."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-secret-field-email.json",
+      "why": "`email` has no field in session.v1; absence is enforced by additionalProperties:false."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-secret-field-ip-address.json",
+      "why": "`ip_address` has no field in session.v1; absence is enforced by additionalProperties:false."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-duplicate-principal-id.json",
+      "why": "Duplicate member: parsers keep the last, so the first value would never be validated.",
+      "duplicate_member": true
+    },
+    {
+      "file": "client-rejected-revision-decimal.json",
+      "why": "Schema `integer` admits 3.0; every client refuses decimal-form tokens."
+    },
+    {
+      "file": "client-rejected-revision-past-int64.json",
+      "why": "Schema has no maximum (ajv cannot hold int64 exactly); Go refuses past int64, so Python must too."
+    },
+    {
+      "file": "client-rejected-expires-before-created.json",
+      "why": "Cross-field rule: expires_at is strictly after created_at."
+    },
+    {
+      "file": "client-rejected-expires-equals-created.json",
+      "why": "Boundary of the same rule: equal is not after."
+    },
+    {
+      "file": "client-rejected-auth-time-after-created.json",
+      "why": "A session cannot be created before its user authenticated."
+    },
+    {
+      "file": "client-rejected-revoked-before-created.json",
+      "why": "Revocation cannot precede creation."
+    },
+    {
+      "file": "client-rejected-created-at-february-30.json",
+      "why": "Lexically valid, names no day; both clients refuse at parse."
+    },
+    {
+      "file": "client-rejected-utc-range-underflow.json",
+      "why": "Offset carries the instant to UTC year 0000."
+    }
+  ]
+}

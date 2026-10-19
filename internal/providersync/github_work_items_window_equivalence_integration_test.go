@@ -204,6 +204,11 @@ func (doer *windowEquivalenceDoer) Do(request *http.Request) (*http.Response, er
 			}
 			listed = append(listed, entry)
 		}
+		// GitHub answers sort=updated&direction=asc: oldest update first. The collector stops at the first
+		// issue updated at or after the window end, so the answer must be in that order.
+		sort.SliceStable(listed, func(i, j int) bool {
+			return listed[i]["updated_at"].(string) < listed[j]["updated_at"].(string)
+		})
 		return reply(http.StatusOK, listed)
 	}
 	if match := windowEquivalenceIssuePath.FindStringSubmatch(path); match != nil {

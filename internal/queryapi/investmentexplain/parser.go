@@ -267,6 +267,7 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 		qualityBand:          opts.FallbackQualityBand,
 	}
 	findings := make([]Finding, 0, len(rawFindings))
+	repairedFindings := 0
 	for i, item := range rawFindings {
 		finding, rejection, ok := parseFinding(item, findingOpts)
 		if !ok {
@@ -277,6 +278,9 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 				ReasonPath:    fmt.Sprintf("top_findings[%d].%s", i, rejection.Path),
 				ReasonSnippet: rejection.Snippet,
 			}
+		}
+		if finding.repairedSubject {
+			repairedFindings++
 		}
 		findings = append(findings, finding)
 	}
@@ -359,7 +363,7 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 		AntiClaims:      antiClaims,
 	}
 
-	return ParseResult{Status: ParseStatusValid, Output: &output}
+	return ParseResult{Status: ParseStatusValid, Output: &output, RepairedFindings: repairedFindings}
 }
 
 // ParseOptions bundles parse_investment_mix_response's keyword-only

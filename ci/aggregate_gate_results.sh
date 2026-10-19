@@ -71,7 +71,7 @@
 #   CHANGES_CODE       needs.changes.outputs.code (selector gates only)
 #   GATED_JOB_1..N     "<job name>|<policy>|<needs.<job>.result>", consecutive
 #
-# tests/tooling/test_aggregate_gate_results.py pins both halves: it drives this
+# internal/cigates/aggregate_gate_results_test.go pins both halves: it drives this
 # script through the result matrix for every gate, and it parses all three
 # workflows to assert their `if:` conditions still say what is modelled here,
 # so the two cannot drift apart silently.

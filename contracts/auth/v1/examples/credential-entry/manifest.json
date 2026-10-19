@@ -1,0 +1,229 @@
+{
+  "description": "Golden corpus for credential-entry.v1; the single inventory read by Go, Python and ajv (G-70). A reject_by_client entry with `after` is a TRANSITION from that accepted entry; without it, it is a single-document client rule. clock_now is the instant status is checked against.",
+  "accept": [
+    {
+      "file": "valid-active.json",
+      "why": "The ordinary live credential."
+    },
+    {
+      "file": "valid-minimal.json",
+      "why": "Only the required members: no fingerprint (a row that predates migration 0007), no expiry, no creator, empty sets."
+    },
+    {
+      "file": "valid-expired.json",
+      "why": "Expired: expires_at is required and lies before the manifest clock."
+    },
+    {
+      "file": "valid-revoked.json",
+      "why": "Revoked: revoked_at and a reason code."
+    },
+    {
+      "file": "valid-projected-acr.json",
+      "why": "A metadata projection of an ACR credential: names its domain record. ACR stays the validator (ACP-ADR-08)."
+    },
+    {
+      "file": "valid-projected-external-push.json",
+      "why": "External Push projection (ACP-ADR-09)."
+    },
+    {
+      "file": "valid-rotated.json",
+      "why": "A rotated credential names its parent and narrows its scopes."
+    },
+    {
+      "file": "valid-used.json",
+      "why": "last_used_at present."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-id-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No id."
+    },
+    {
+      "file": "invalid-status-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "Status is derived but always on the wire: a reader must not recompute it."
+    },
+    {
+      "file": "invalid-status-unknown.json",
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "why": "A status outside the closed vocabulary."
+    },
+    {
+      "file": "invalid-revoked-without-revoked-at.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "Revoked requires revoked_at and a reason (here revoked_at is missing)."
+    },
+    {
+      "file": "invalid-active-with-revoked-at.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "why": "An active credential carrying revoked_at: status and timestamps must agree."
+    },
+    {
+      "file": "invalid-expired-without-expires-at.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "Expired requires expires_at."
+    },
+    {
+      "file": "invalid-secret-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "A secret value in a registry entry: unrepresentable, not merely optional (TRD section 12). THE load-bearing rejection."
+    },
+    {
+      "file": "invalid-secret-hash-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "The stored verifier is not a wire member either."
+    },
+    {
+      "file": "invalid-token-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "A token member."
+    },
+    {
+      "file": "invalid-display-prefix-over-length.json",
+      "expect_instance_location": "/display_prefix",
+      "expect_keyword": "pattern",
+      "why": "17 characters: the prefix length is pinned at 16 by the schema, not left to a producer."
+    },
+    {
+      "file": "invalid-display-prefix-bad-character.json",
+      "expect_instance_location": "/display_prefix",
+      "expect_keyword": "pattern",
+      "why": "A space in the prefix."
+    },
+    {
+      "file": "invalid-scope-bare.json",
+      "expect_instance_location": "/scopes/0",
+      "expect_keyword": "pattern",
+      "why": "Scopes have principal.v1's colon-separated shape."
+    },
+    {
+      "file": "invalid-scopes-duplicate.json",
+      "expect_instance_location": "/scopes",
+      "expect_keyword": "uniqueItems",
+      "why": "Scopes are a set."
+    },
+    {
+      "file": "invalid-scope-over-length.json",
+      "expect_instance_location": "/scopes/0",
+      "expect_keyword": "maxLength",
+      "why": "66 characters: the database caps a scope at 64."
+    },
+    {
+      "file": "invalid-audiences-too-many.json",
+      "expect_instance_location": "/audiences",
+      "expect_keyword": "maxItems",
+      "why": "17 audiences."
+    },
+    {
+      "file": "invalid-class-unknown.json",
+      "expect_instance_location": "/credential_class",
+      "expect_keyword": "enum",
+      "why": "Unknown credential class denies."
+    },
+    {
+      "file": "invalid-fingerprint-not-hex.json",
+      "expect_instance_location": "/fingerprint",
+      "expect_keyword": "pattern",
+      "why": "Fingerprints are 16 lowercase hex characters."
+    },
+    {
+      "file": "invalid-projected-without-reference.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A projected credential names its domain record."
+    },
+    {
+      "file": "invalid-platform-with-reference.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "why": "A platform credential has no domain record to name."
+    },
+    {
+      "file": "invalid-revoked-reason-prose.json",
+      "expect_instance_location": "/revoked_reason",
+      "expect_keyword": "pattern",
+      "why": "The database column is free text; the wire form is a reason code, never prose or an address."
+    },
+    {
+      "file": "invalid-id-wrong-prefix.json",
+      "expect_instance_location": "/id",
+      "expect_keyword": "pattern",
+      "why": "An id with another aggregate's prefix."
+    },
+    {
+      "file": "invalid-timestamp-hour-24.json",
+      "expect_instance_location": "/created_at",
+      "expect_keyword": "pattern",
+      "why": "Hour 24."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-created-at-impossible-date.json",
+      "why": "Lexically valid, no such day: every client refuses it (the shared timestamp rule)."
+    },
+    {
+      "file": "client-rejected-expires-at-below-utc-range.json",
+      "why": "UTC year 0000: the shared timestamp rule refuses it."
+    },
+    {
+      "file": "client-rejected-status-active-after-expiry.json",
+      "why": "Status says active but expires_at is before the manifest clock: the schema pins the shape, only a clock can check it."
+    },
+    {
+      "file": "client-rejected-status-expired-before-expiry.json",
+      "why": "Status says expired but expires_at is in the future."
+    },
+    {
+      "file": "client-rejected-active-after-revoked.json",
+      "why": "THE lifecycle rule (TRD section 12, revocation is monotonic): after valid-revoked.json the same credential is active again. Schema-valid by itself; refused as a transition.",
+      "after": "valid-revoked.json"
+    },
+    {
+      "file": "client-rejected-revoked-at-changed.json",
+      "why": "A revoked credential's revoked_at moved later: revocation is idempotent, the original instant stands.",
+      "after": "valid-revoked.json"
+    },
+    {
+      "file": "client-rejected-revoked-reason-rewritten.json",
+      "why": "The reason of a revocation rewritten.",
+      "after": "valid-revoked.json"
+    },
+    {
+      "file": "client-rejected-scopes-widened.json",
+      "why": "A scope added in place: privilege narrows or stays, it never widens in place.",
+      "after": "valid-active.json"
+    },
+    {
+      "file": "client-rejected-audience-widened.json",
+      "why": "An audience added in place.",
+      "after": "valid-active.json"
+    },
+    {
+      "file": "client-rejected-class-changed.json",
+      "why": "A credential's class changed in place.",
+      "after": "valid-active.json"
+    },
+    {
+      "file": "client-rejected-secret-identity-swapped.json",
+      "why": "The fingerprint replaced under the same id: verifier-adjacent identity is immutable (a new secret is a rotation).",
+      "after": "valid-active.json"
+    },
+    {
+      "file": "client-rejected-self-parent.json",
+      "why": "A credential that is its own rotation parent: schema-valid (two well-formed crd_ ids), impossible lineage; the producer refuses it (CHECK credential_registry_not_its_own_parent), so every client must."
+    }
+  ],
+  "clock_now": "2026-10-18T00:00:00Z"
+}

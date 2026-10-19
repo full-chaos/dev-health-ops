@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: ["**"]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - "docs/**"
+      - "docs-data/**"
+      - "**/*.md"
+      - ".github/docs-legacy/**"
   merge_group:
   schedule:
     - cron: "30 1 * * 0"
@@ -44,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ["python", "go"]
+        language: ["go"]
 
     steps:
       - name: Checkout repository

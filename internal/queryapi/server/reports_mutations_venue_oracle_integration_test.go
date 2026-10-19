@@ -394,6 +394,8 @@ var seededIDs = map[string]bool{
 //     Each plane must use ITS form on every timestamp.
 //   - the order of the top-level "data" and "errors" members of an error
 //     response (Python writes data first, Go errors first).
+const wrongOffsetMarker = "<ts with the wrong offset form: "
+
 func normalizeMutationBody(body, plane string) (string, error) {
 	canonical, err := reports.PythonDumps([]byte(body))
 	if err != nil {
@@ -406,14 +408,14 @@ func normalizeMutationBody(body, plane string) (string, error) {
 	canonical = scrubbedTimestamp.ReplaceAllStringFunc(canonical, func(placeholder string) string {
 		parts := scrubbedTimestamp.FindStringSubmatch(placeholder)
 		if parts[2] != wantSuffix {
-			return "<ts with the wrong offset form: " + parts[2] + ">"
+			return wrongOffsetMarker + parts[2] + ">"
 		}
 		return "<ts:" + parts[1] + ">"
 	})
 	canonical = maskLiveClockShape(canonical)
 	canonical = oracleTime.ReplaceAllStringFunc(canonical, func(stamp string) string {
 		if !strings.HasSuffix(stamp, wantSuffix) {
-			return "<ts with the wrong offset form: " + stamp + ">"
+			return wrongOffsetMarker + stamp + ">"
 		}
 		parsed, err := time.Parse(time.RFC3339Nano, stamp)
 		if err != nil {
@@ -557,6 +559,12 @@ func compareMutationResponse(c oracleCase, python, goResponse venueoracle.Respon
 	goBody, err := normalizeMutationBody(goResponse.Body, "go")
 	if err != nil {
 		return false, "go body does not decode: " + err.Error()
+	}
+	if strings.Contains(pyBody, wrongOffsetMarker) {
+		return false, "python body carries the wrong-offset marker"
+	}
+	if strings.Contains(goBody, wrongOffsetMarker) {
+		return false, "go body carries the wrong-offset marker"
 	}
 	if c.messageDiffers != "" {
 		return errorsPresent(pyBody) && errorsPresent(goBody) && dataOf(pyBody) == dataOf(goBody), "both planes must answer an error with the same data (" + c.messageDiffers + ")"

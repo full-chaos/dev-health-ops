@@ -253,6 +253,24 @@ func diffIsAdditive(before, after schemaShape) []string {
 	return regressions
 }
 
+// additiveExemption names ONE regression a specific migration is allowed to
+// cause, keyed by version and the exact regression text. An exemption that
+// matches nothing fails the test, so a fixed or removed one cannot linger.
+type additiveExemption struct {
+	version    int
+	regression string
+	reason     string
+}
+
+var additiveExemptions = []additiveExemption{
+	{
+		version:    10,
+		regression: "index external_identities_provider_subject_key dropped",
+		reason: "(provider, subject) uniqueness is replaced by (issuer, provider, subject) in the same migration; " +
+			"keeping the old index would make issuer inert (CHAOS-10156, ruled by acp)",
+	},
+}
+
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME
 // against a real database, snapshotting the catalog around each step, and
 // asserts every step only adds.
@@ -271,6 +289,7 @@ func TestEveryMigrationStepIsAdditive(t *testing.T) {
 		t.Fatalf("Migrations: %v", err)
 	}
 
+	exemptionUsed := map[string]bool{}
 	steps := 0
 	for _, migration := range migrations {
 		before, err := snapshotSchema(ctx, env.conn, env.schema)
@@ -284,13 +303,34 @@ func TestEveryMigrationStepIsAdditive(t *testing.T) {
 		if err != nil {
 			t.Fatalf("snapshot after %04d: %v", migration.Version, err)
 		}
-		if regressions := diffIsAdditive(before, after); len(regressions) > 0 {
+		regressions := diffIsAdditive(before, after)
+		for _, exemption := range additiveExemptions {
+			if exemption.version != migration.Version {
+				continue
+			}
+			var kept []string
+			for _, regression := range regressions {
+				if regression == exemption.regression {
+					exemptionUsed[exemption.regression] = true
+					continue
+				}
+				kept = append(kept, regression)
+			}
+			regressions = kept
+		}
+		if len(regressions) > 0 {
 			t.Errorf("migration %04d_%s is not additive:\n  %s",
 				migration.Version, migration.Name, strings.Join(regressions, "\n  "))
 		}
 		steps++
 		t.Logf("%04d_%s: +%d relation(s), +%d column(s)", migration.Version, migration.Name,
 			len(after.relations)-len(before.relations), len(after.columns)-len(before.columns))
+	}
+	for _, exemption := range additiveExemptions {
+		if !exemptionUsed[exemption.regression] {
+			t.Errorf("stale additive exemption, remove it: migration %04d %q (%s)",
+				exemption.version, exemption.regression, exemption.reason)
+		}
 	}
 	if steps != len(migrations) {
 		t.Fatalf("checked %d step(s) of %d", steps, len(migrations))

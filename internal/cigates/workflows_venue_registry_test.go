@@ -2,6 +2,7 @@ package cigates_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func venueVerbSourceViolations(t *testing.T, root string) []string {
 	if end < 0 {
 		return []string{"the body of check_venue_oracles in ci/check_go.sh has no closing brace line"}
 	}
-	body := script[start : start+end]
+	body := stripShellComments(script[start : start+end])
 	var out []string
 	if !strings.Contains(body, "check_venue_oracle_registry") {
 		out = append(out, "check_venue_oracles no longer calls check_venue_oracle_registry: the registry is not validated against the tree before it runs")
@@ -37,6 +38,21 @@ func venueVerbSourceViolations(t *testing.T, root string) []string {
 		out = append(out, fmt.Sprintf("check_venue_oracles reads venue_oracle_package_tests: it must run the registry, discovery belongs to the cross-check in check_venue_oracle_registry"))
 	}
 	return out
+}
+
+// stripShellComments drops full-line comments and a trailing " # ..." so a name that only a comment mentions is not code.
+func stripShellComments(body string) string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if i := strings.Index(line, " #"); i >= 0 {
+			line = line[:i]
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 func TestVenueVerbConsumesTheRegistryNotDiscovery(t *testing.T) {
@@ -62,4 +78,24 @@ func TestVenueVerbSourcePlantedDefects(t *testing.T) {
 			expectViolation(t, venueVerbSourceViolations(t, tree), c.want...)
 		})
 	}
+
+	t.Run("a function that only comments the names does not pass", func(t *testing.T) {
+		tree := t.TempDir()
+		script := "check_venue_oracles() {\n  # check_venue_oracle_registry\n  # venue_oracle_registry_rows\n  return 0\n}\n"
+		if err := os.MkdirAll(filepath.Join(tree, "ci"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tree, f), []byte(script), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		expectViolation(t, venueVerbSourceViolations(t, tree), "no longer calls check_venue_oracle_registry", "no longer reads venue_oracle_registry_rows")
+	})
+	t.Run("a trailing comment does not count as the call", func(t *testing.T) {
+		tree := plantTree(t, root, []string{f}, mutation{f, `check_venue_oracle_registry >&2 || die "venue-oracles:`, `true # check_venue_oracle_registry >&2 || die "venue-oracles:`})
+		expectViolation(t, venueVerbSourceViolations(t, tree), "no longer calls check_venue_oracle_registry")
+	})
+	t.Run("a comment that names discovery is not a read of it", func(t *testing.T) {
+		tree := plantTree(t, root, []string{f}, mutation{f, "check_venue_oracles() {\n", "check_venue_oracles() {\n  # discovery (venue_oracle_package_tests) belongs to the cross-check\n"})
+		expectNoViolations(t, venueVerbSourceViolations(t, tree))
+	})
 }

@@ -22,10 +22,27 @@ const (
 	venueFiltersKeys = "paths paths-ignore branches-ignore tags"
 )
 
+// venueWorkflowNames lists every workflow file GitHub loads: both .yml and .yaml.
+func venueWorkflowNames(t *testing.T, root string) []string {
+	t.Helper()
+	var names []string
+	for _, ext := range []string{"*.yml", "*.yaml"} {
+		paths, err := filepath.Glob(filepath.Join(root, ".github", "workflows", ext))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range paths {
+			names = append(names, filepath.Base(p))
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 func workflowsDeclaringJob(t *testing.T, root, job string) []string {
 	t.Helper()
 	var names []string
-	for _, name := range workflowNames(t, root) {
+	for _, name := range venueWorkflowNames(t, root) {
 		if _, ok := jobsOf(loadWf(t, root, name))[job]; ok {
 			names = append(names, name)
 		}
@@ -134,7 +151,7 @@ func TestVenueJobAlwaysRuns(t *testing.T) {
 func venueAlwaysRunsFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string
-	for _, n := range workflowNames(t, root) {
+	for _, n := range venueWorkflowNames(t, root) {
 		files = append(files, ".github/workflows/"+n)
 	}
 	return files
@@ -182,6 +199,14 @@ func TestVenueJobAlwaysRunsPlantedDefects(t *testing.T) {
 			t.Fatal(err)
 		}
 		expectViolation(t, venueAlwaysRunsViolations(t, tree), "declared in 2 workflows", "second.yml")
+	})
+	t.Run("a second workflow saved as .yaml declares the job", func(t *testing.T) {
+		tree := plantTree(t, root, venueAlwaysRunsFiles(t, root))
+		extra := "on:\n  push:\n    branches: [main]\njobs:\n  venue-oracles:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n"
+		if err := os.WriteFile(filepath.Join(tree, ".github/workflows/duplicate.yaml"), []byte(extra), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		expectViolation(t, venueAlwaysRunsViolations(t, tree), "declared in 2 workflows", "duplicate.yaml")
 	})
 	t.Run("the job moves to another file", func(t *testing.T) {
 		tree := plantTree(t, root, venueAlwaysRunsFiles(t, root))

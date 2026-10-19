@@ -272,7 +272,7 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		requestedProvider = *scope.LLMProvider
 	}
 	orgID := claim.Request.OrganizationID
-	provider, kind, stampModel, err := executor.providerForRun(ctx, orgID, requestedProvider, claim.Request.ModelRef)
+	provider, kind, stampModel, byoCredentials, err := executor.providerForRunSource(ctx, orgID, requestedProvider, claim.Request.ModelRef)
 	if err != nil {
 		var det *workgraph.DeterministicError
 		if errors.As(err, &det) {
@@ -398,6 +398,7 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		// claim.Request rather than materializeScope.
 		LLMConcurrency: claim.Request.LLMConcurrency,
 		ProviderName:   string(kind),
+		OrgCredentials: byoCredentials,
 		// model_ref is the same story: the row's column, not a scope key.
 		Model: stampModel,
 		// work_graph_tasks.py:243 hardcodes persist_evidence_snippets=True on

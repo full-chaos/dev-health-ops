@@ -224,6 +224,7 @@ const (
 	spendLatestRunsQuery = `SELECT run_id, max(computed_at) AS last_at
 FROM llm_token_usage
 WHERE org_id = {org_id:String}
+  AND credential_source = 'org'
   AND run_id != ''
   AND computed_at >= {since:DateTime}
 GROUP BY run_id
@@ -233,6 +234,7 @@ LIMIT {limit:UInt32}`
     sum(output_tokens) AS output_tokens, max(computed_at) AS last_computed_at
 FROM llm_token_usage
 WHERE org_id = {org_id:String}
+  AND credential_source = 'org'
   AND run_id IN {run_ids:Array(String)}
   AND computed_at >= {since:DateTime}
 GROUP BY run_id, provider, model
@@ -241,6 +243,7 @@ ORDER BY last_computed_at DESC, run_id DESC, model ASC`
     sum(output_tokens) AS output_tokens, max(computed_at) AS last_computed_at
 FROM llm_token_usage
 WHERE org_id = {org_id:String}
+  AND credential_source = 'org'
   AND run_id = ''
   AND computed_at >= {since:DateTime}
 GROUP BY provider, model

@@ -23,6 +23,7 @@ tests/test_deploy_alternates_removed.py
 tests/test_e2e_organization_id_contract_conformance.py
 tests/test_executed_proof_ledger_write_path_audit.py
 tests/test_executed_proof_family_coverage.py
+tests/test_fixtures_ttl_horizon.py
 tests/test_go_api_routing_digest_checker.py
 tests/test_go_api_routing_operator_text.py
 tests/test_governance_workflow.py
@@ -41,6 +42,7 @@ tests/test_local_validate_remote_clickhouse.py
 tests/test_rate_limit_policy_doc.py
 tests/test_runtime_dependency_closure_has_the_redis_client.py
 tests/test_unreclaimable_sweep_deploy_default.py
+tests/test_ttl_registry.py
 tests/test_worker_otel_deployments.py
 tests/worker_baseline/test_canary_release_proof.py
 tests/workers/test_go_worker_alerts.py

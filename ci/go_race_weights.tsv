@@ -94,6 +94,7 @@ internal/auth/keystore	1
 internal/auth/passwordhash	11
 internal/auth/passwordpolicy	1
 internal/auth/ratelimitvalkey	1
+internal/auth/session	2
 internal/auth/signedtoken	1
 internal/auth/writerinventory	20
 internal/backfillrun	1

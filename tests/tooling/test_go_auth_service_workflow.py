@@ -101,6 +101,7 @@ def test_every_stage_the_workflow_calls_exists_in_the_verb() -> None:
         "vet",
         "test",
         "race",
+        "race-integration",
         "fuzz",
         "history",
         "vuln",

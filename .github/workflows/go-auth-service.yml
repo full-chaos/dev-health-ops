@@ -112,6 +112,8 @@ jobs:
         run: bash ci/check_go.sh auth test
       - name: go test -race (auth packages)
         run: bash ci/check_go.sh auth race
+      - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207)
+        run: bash ci/check_go.sh auth race-integration
       - name: Dependency closure of the auth binaries (CHAOS-10131)
         run: bash ci/check_go.sh auth closure
       - name: Endpoint-profile source_commit resolves and anchors read the same there (CHAOS-4765)

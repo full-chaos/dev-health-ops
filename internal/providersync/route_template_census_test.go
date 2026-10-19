@@ -133,7 +133,7 @@ func routeCensusFile(t *testing.T, name string, source []byte, optionTypes map[s
 		case *ast.CallExpr:
 			switch fun := value.Fun.(type) {
 			case *ast.Ident:
-				if fun.Name == "fetchObject" && filepath.Base(name) != "native_rest.go" {
+				if fun.Name == "fetchObject" {
 					bad++
 				}
 				if fun.Name == "fetchObjectRoute" && (len(value.Args) < 4 || !staticRouteExpr(value.Args[2])) {
@@ -142,6 +142,8 @@ func routeCensusFile(t *testing.T, name string, source []byte, optionTypes map[s
 			case *ast.SelectorExpr:
 				switch {
 				case fun.Sel.Name == "Do" && len(value.Args) == 4:
+					bad++
+				case fun.Sel.Name == "DoUnauthenticated" && len(value.Args) == 3:
 					bad++
 				case fun.Sel.Name == "DoRoute" && (len(value.Args) < 3 || !staticRouteExpr(value.Args[2])):
 					bad++
@@ -164,6 +166,9 @@ func TestRouteCensusFlagsEveryUnTemplatedRequest(t *testing.T) {
 		`providerfoundation.JiraPageOptions{MaxPages: 1}`:                                      1,
 		`providerfoundation.LaunchDarklyOffsetOptions{Route: root}`:                            1,
 		`providerfoundation.PagerDutyOffsetOptions{Path: "/users"}`:                            1,
+		`client.DoUnauthenticated(ctx, http.MethodGet, location)`:                              1,
+		`client.DoUnauthenticatedRoute(ctx, http.MethodGet, githubArtifactZipRoute, location)`: 0,
+		`fetchObject(ctx, client, root, &out)`:                                                 1,
 		`fetchObjectRoute(ctx, client, root, root, &out)`:                                      1,
 	} {
 		file := "package p\n\nfunc f() {\n\t_ = " + source + "\n}\n"

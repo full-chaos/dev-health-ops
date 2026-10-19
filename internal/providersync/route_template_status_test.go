@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -72,5 +73,66 @@ func TestRemainingRoutesNameTheTemplateNotThePath(t *testing.T) {
 				t.Fatalf("err = %v, want route=%s and no %q", err, tc.route, tc.leak)
 			}
 		})
+	}
+}
+
+// routeArtifactRedirectDoer answers the provider's artifact request with a
+// redirect, and the redirect target as the failure under test.
+type routeArtifactRedirectDoer struct{ failure string }
+
+type routeFailingBody struct{}
+
+func (routeFailingBody) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+func (routeFailingBody) Close() error             { return nil }
+
+func (doer routeArtifactRedirectDoer) Do(request *http.Request) (*http.Response, error) {
+	if request.URL.Host != "blob.example" {
+		header := http.Header{}
+		if doer.failure != "no location" {
+			header.Set("Location", "https://blob.example/secret-org/secret-repo/artifact.zip")
+		}
+		return &http.Response{StatusCode: http.StatusFound, Header: header, Body: http.NoBody, Request: request}, nil
+	}
+	switch doer.failure {
+	case "transport":
+		return nil, errors.New("dial tcp: connection reset")
+	case "status read":
+		return &http.Response{StatusCode: http.StatusInternalServerError, Header: http.Header{}, Body: routeFailingBody{}, Request: request}, nil
+	default:
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: routeFailingBody{}, Request: request}, nil
+	}
+}
+
+// CHAOS-9801: every failure of the redirected artifact download (no target,
+// a transport failure, a body that fails to read) names the artifact route,
+// never the artifact store URL or the repository.
+func TestArtifactRedirectFailuresNameTheRoute(t *testing.T) {
+	ctx := context.Background()
+	for _, failure := range []string{"no location", "transport", "status read", "body read"} {
+		for provider, download := range map[string]struct {
+			route string
+			call  func(*providerfoundation.HTTPClient) error
+		}{
+			"github": {"/repos/{owner}/{repo}/actions/artifacts/{artifact}/zip", func(client *providerfoundation.HTTPClient) error {
+				_, _, _, err := downloadGitHubTestsArtifact(ctx, client, "/repos/secret-org/secret-repo", "77", 1<<20)
+				return err
+			}},
+			"gitlab": {"/projects/{project}/jobs/{job}/artifacts", func(client *providerfoundation.HTTPClient) error {
+				_, err := downloadGitLabTestsArtifact(ctx, client, "/projects/secret-org%2Fsecret-repo", "77")
+				return err
+			}},
+		} {
+			client, err := providerfoundation.NewHTTPClient(provider, "https://"+provider+".example", fakehttp.Client(routeArtifactRedirectDoer{failure: failure}),
+				func(*http.Request) error { return nil },
+				providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+				providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = download.call(client)
+			if err == nil || !strings.Contains(err.Error(), "route="+download.route) || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "blob.example") {
+				t.Errorf("%s %s: err = %v, want route=%s and no repository or store URL", provider, failure, err, download.route)
+			}
+		}
 	}
 }

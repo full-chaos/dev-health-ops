@@ -904,12 +904,12 @@ func downloadGitHubTestsArtifact(
 		location := response.Header.Get("Location")
 		response.Body.Close()
 		if location == "" {
-			return nil, requests, false, fmt.Errorf(
+			return nil, requests, false, withRoute(fmt.Errorf(
 				"%w: redirect status=%d carried no Location header",
 				ErrGitHubTestsArtifactUnavailable, response.StatusCode,
-			)
+			), githubArtifactZipRoute)
 		}
-		response, err = client.DoUnauthenticated(ctx, http.MethodGet, location)
+		response, err = client.DoUnauthenticatedRoute(ctx, http.MethodGet, githubArtifactZipRoute, location)
 		requests++
 		if err != nil {
 			return nil, requests, false, err
@@ -922,7 +922,7 @@ func downloadGitHubTestsArtifact(
 	if response.StatusCode >= 400 {
 		message, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 		if readErr != nil {
-			return nil, requests, false, logging.TransportFailure(readErr)
+			return nil, requests, false, withRoute(logging.TransportFailure(readErr), githubArtifactZipRoute)
 		}
 		// Classified like the GitLab artifact route: a rate limit of the
 		// artifact store defers the unit with its dimension; every other
@@ -935,9 +935,9 @@ func downloadGitHubTestsArtifact(
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 	if readErr != nil {
-		return nil, requests, false, fmt.Errorf(
+		return nil, requests, false, withRoute(fmt.Errorf(
 			"%w: artifact download read failed: %w", ErrGitHubTestsIncomplete, logging.TransportFailure(readErr),
-		)
+		), githubArtifactZipRoute)
 	}
 	if int64(len(body)) > maxBytes {
 		// len(body) is capped at maxBytes+1 by the LimitReader above, so it

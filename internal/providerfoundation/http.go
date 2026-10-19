@@ -308,7 +308,8 @@ type routeKey struct{}
 // DoRoute is Do for a route whose path carries a member login or other
 // personal data: a failure names the route by template (for example
 // /users/{login}) instead of the path. The template must be a static literal,
-// never built from a request value. It applies to this call only.
+// never built from a request value. It applies to this call only. A nil
+// context carries no route: the call is exactly Do with a nil context.
 func (c *HTTPClient) DoRoute(ctx context.Context, method, template, path string, body io.Reader) (*http.Response, error) {
 	if ctx == nil {
 		return c.Do(ctx, method, path, body)
@@ -481,6 +482,16 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		last = &ProviderError{Class: ErrorTransient}
 	}
 	return nil, last
+}
+
+// DoUnauthenticatedRoute is DoUnauthenticated for a redirect target (an
+// artifact store URL): a transport failure names the static route template of
+// the request that redirected, never the target URL.
+func (c *HTTPClient) DoUnauthenticatedRoute(ctx context.Context, method, template, absoluteURL string) (*http.Response, error) {
+	if ctx == nil {
+		return c.DoUnauthenticated(ctx, method, absoluteURL)
+	}
+	return c.DoUnauthenticated(context.WithValue(ctx, routeKey{}, template), method, absoluteURL)
 }
 
 // DoUnauthenticated issues one absolute-URL request without applying provider

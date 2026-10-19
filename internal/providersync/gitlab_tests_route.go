@@ -838,9 +838,9 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 		location := response.Header.Get("Location")
 		_ = response.Body.Close()
 		if location == "" {
-			return nil, ErrGitLabTestsIncomplete
+			return nil, withRoute(ErrGitLabTestsIncomplete, gitlabJobArtifactsRoute)
 		}
-		response, err = client.DoUnauthenticated(ctx, http.MethodGet, location)
+		response, err = client.DoUnauthenticatedRoute(ctx, http.MethodGet, gitlabJobArtifactsRoute, location)
 		if err != nil {
 			return nil, err
 		}
@@ -852,7 +852,7 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 	if response.StatusCode >= 400 {
 		message, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 		if readErr != nil {
-			return nil, logging.TransportFailure(readErr)
+			return nil, withRoute(logging.TransportFailure(readErr), gitlabJobArtifactsRoute)
 		}
 		if classified := providerfoundation.ClassifyHTTPForRequest("gitlab", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
 			classified.Route = gitlabJobArtifactsRoute
@@ -862,7 +862,7 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, gitLabTestsMaxDownload+1))
 	if err != nil {
-		return nil, logging.TransportFailure(err)
+		return nil, withRoute(logging.TransportFailure(err), gitlabJobArtifactsRoute)
 	}
 	if len(body) > gitLabTestsMaxDownload {
 		return nil, ErrGitLabTestsIncomplete

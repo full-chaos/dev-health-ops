@@ -1,7 +1,10 @@
 # Proof-only override for ci/check_auth_compose.sh (CHAOS-10182). compose.yml pins a host-global
 # container_name and host port on postgres for the dev stack; a throwaway project name does not
-# isolate either, so the proof drops both and lets compose name the container <project>-postgres-1.
+# isolate either, so the proof drops both and lets compose name the container <project>-postgres-1. The operator
+# port is published on an ephemeral host port; the script reads it back from compose.
 services:
   postgres:
     container_name: !reset null
     ports: !reset []
+  auth-service:
+    ports: !override ["127.0.0.1::8096"]

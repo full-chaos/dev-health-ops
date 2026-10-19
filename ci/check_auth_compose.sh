@@ -28,7 +28,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 PROJECT="${AUTH_COMPOSE_PROOF_PROJECT:-authproof$$}"
-PORT="${AUTH_SERVICE_OPERATOR_HOST_PORT:-18096}"
 AUTH_SERVICES=(auth-service auth-migrate auth-provision auth-keys-init)
 
 die() {
@@ -39,10 +38,14 @@ die() {
 command -v docker >/dev/null 2>&1 || die "docker is required"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 
+# Refuse before the cleanup trap exists: that trap would remove the project.
+# A project name that already has containers would be recreated by `up` and removed by cleanup.
+existing="$(docker ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT}")"
+[ -z "${existing}" ] || die "the compose project ${PROJECT} already has containers; refusing to recreate or remove them"
+
 # compose.yml interpolates this at parse time for a service the proof never
 # starts; any non-empty value satisfies it.
 export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-auth-compose-proof}"
-export AUTH_SERVICE_OPERATOR_HOST_PORT="${PORT}"
 # Passwords with every URI-reserved character the DSNs must survive: the DSNs
 # are keyword-form, so none of these may break a connection (a URI form failed
 # on a trailing '#').
@@ -66,16 +69,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-printf 'step 1: up --build --wait auth-service\n'
+# Every container this run created (ids absent from the snapshot taken before anything started)
+# must carry the project prefix. Called after each phase that can create one, and again at the end.
+assert_project_prefixed() {
+  local created id name
+  created="$(comm -13 <(printf '%s\n' "${before}") <(docker ps -aq --no-trunc | sort))"
+  for id in ${created}; do
+    name="$(docker inspect --format '{{.Name}}' "${id}")"
+    case "${name}" in "/${PROJECT}"[-_]*) ;; *) die "container ${name} does not carry the ${PROJECT} prefix" ;; esac
+  done
+  printf 'every container created so far carries the %s prefix: %s\n' "${PROJECT}" "$(printf '%s' "${created}" | wc -w | tr -d ' ')"
+}
+
 before="$(docker ps -aq --no-trunc | sort)"
+
+printf 'step 1: up --build --wait auth-service\n'
 compose --profile auth up --build --detach --wait --wait-timeout 600 auth-service
-started="$(comm -13 <(printf '%s\n' "${before}") <(docker ps -aq --no-trunc | sort))"
-[ -n "${started}" ] || die "the proof started no containers"
-for id in ${started}; do
-  name="$(docker inspect --format '{{.Name}}' "${id}")"
-  case "${name}" in "/${PROJECT}"[-_]*) ;; *) die "container ${name} does not carry the ${PROJECT} prefix" ;; esac
-done
-printf 'every container started carries the %s prefix: %s\n' "${PROJECT}" "$(printf '%s' "${started}" | wc -w | tr -d ' ')"
+assert_project_prefixed
+PORT="$(compose --profile auth port auth-service 8096 | sed 's/.*://')"
+[[ "${PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral operator port (${PORT})"
+printf 'operator port (ephemeral): %s\n' "${PORT}"
 
 health="$(docker inspect --format '{{.State.Health.Status}}' "$(compose --profile auth ps -q auth-service)")"
 printf 'auth-service container health: %s\n' "${health}"
@@ -167,10 +180,11 @@ if bad:
 ' || die "a secret reaches a process argument (visible to docker top)"
 
 printf 'step 5: signing key custody\n'
-key_stat="$(docker run --rm --entrypoint stat -v "${PROJECT}_auth_signing_keys:/k:ro" \
+key_stat="$(docker run --rm --name "${PROJECT}-keystat" --entrypoint stat -v "${PROJECT}_auth_signing_keys:/k:ro" \
   postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15 \
   -c '%a %u' /k/private/envelope-private-key.pem)"
 printf 'key mode and uid: %s\n' "${key_stat}"
+assert_project_prefixed
 [ "${key_stat}" = "400 65532" ] || die "signing key is '${key_stat}', want '400 65532'"
 
 printf 'step 6: rollback\n'
@@ -186,6 +200,7 @@ if compose config --services | grep -E '^auth-' >/dev/null; then
 fi
 printf 'default service list names no auth service\n'
 
+assert_project_prefixed
 gone="$(comm -23 <(printf '%s\n' "${before}") <(docker ps -aq --no-trunc | sort))"
 [ -z "${gone}" ] || die "containers outside the proof project disappeared: ${gone}"
 printf 'AUTH COMPOSE PROOF PASSED\n'

@@ -1071,13 +1071,15 @@ jobs:
         run: |
           docker run --detach --name postgres -e POSTGRES_PASSWORD=decoy -p 127.0.0.1:5555:5432 \
             ghcr.io/full-chaos/postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+          docker inspect --format '{{.Id}} {{.State.StartedAt}}' postgres >"${RUNNER_TEMP}/decoy.id"
 
       - name: Compose up the auth profile, probe it, roll it back
         run: bash ci/check_auth_compose.sh
 
-      - name: The decoy postgres is still running
+      - name: The decoy postgres is the same container, running and never restarted
         run: |
           [ "$(docker inspect --format '{{.State.Running}}' postgres)" = true ]
+          [ "$(docker inspect --format '{{.Id}} {{.State.StartedAt}}' postgres)" = "$(cat "${RUNNER_TEMP}/decoy.id")" ]
 
   graphql-wire-parity:
     if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))

@@ -55,7 +55,10 @@ func authProofComposeFiles(t *testing.T, root string) []string {
 // the proof must not depend on either (CHAOS-10182).
 func TestAuthComposeProofPostgresHasNoFixedNameOrPublishedPort(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker compose is not installed")
+		t.Skip("docker is not installed")
+	}
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skip("the docker compose plugin is not installed")
 	}
 	root := authProofRoot(t)
 	args := []string{"compose", "-p", "authproofx"}
@@ -67,16 +70,27 @@ func TestAuthComposeProofPostgresHasNoFixedNameOrPublishedPort(t *testing.T) {
 	cmd.Env = append(os.Environ(), "BUGSINK_SECRET_KEY=x", "POSTGRES_PASSWORD=x", "AUTH_RUNTIME_DATABASE_PASSWORD=x")
 	out, err := cmd.Output()
 	if err != nil {
-		t.Skipf("docker compose config unavailable: %v", err)
+		t.Fatalf("docker compose config failed: %v", err)
 	}
 	var cfg struct {
 		Services map[string]struct {
-			ContainerName string            `json:"container_name"`
-			Ports         []json.RawMessage `json:"ports"`
+			ContainerName string `json:"container_name"`
+			Ports         []struct {
+				Published string `json:"published"`
+			} `json:"ports"`
 		} `json:"services"`
 	}
 	if err := json.Unmarshal(out, &cfg); err != nil {
 		t.Fatal(err)
+	}
+	if svc, ok := cfg.Services["auth-service"]; !ok {
+		t.Fatal("the proof's compose config has no auth-service")
+	} else {
+		for _, p := range svc.Ports {
+			if p.Published != "" {
+				t.Errorf("auth-service publishes the fixed host port %s, which collides with any other listener", p.Published)
+			}
+		}
 	}
 	pg, ok := cfg.Services["postgres"]
 	if !ok {
@@ -107,7 +121,54 @@ func TestAuthComposeProofJobRunsBesideADecoyPostgres(t *testing.T) {
 	if decoy < 0 || proof < 0 || decoy > proof {
 		t.Fatal("the proof job must start a decoy container named postgres before the proof runs")
 	}
-	if !strings.Contains(job[proof:], "docker inspect") {
-		t.Error("the decoy is not checked after the proof")
+	after := job[proof:]
+	if !strings.Contains(after, "docker inspect") || !strings.Contains(after, "StartedAt") {
+		t.Error("the decoy is checked for running only, not for being the same untouched container")
+	}
+}
+
+// A reused project name makes compose recreate the earlier project's containers, and the
+// disappearance check then reports the damage after it is done. The proof must refuse first.
+func TestAuthComposeProofRefusesAProjectThatAlreadyHasContainers(t *testing.T) {
+	root := authProofRoot(t)
+	bin := t.TempDir()
+	log := filepath.Join(bin, "docker.log")
+	stub := "#!/bin/sh\necho \"$@\" >>\"" + log + "\"\ncase \"$*\" in *label=com.docker.compose.project=*) echo deadbeef;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(root, "ci", "check_auth_compose.sh"))
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "AUTH_COMPOSE_PROOF_PROJECT=authproofcollision")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the proof ran against a project name that already has containers:\n%s", out)
+	}
+	calls, _ := os.ReadFile(log)
+	for _, line := range strings.Split(string(calls), "\n") {
+		if strings.Contains(line, " up ") || strings.Contains(line, " down ") || strings.Contains(line, " rm ") {
+			t.Errorf("the proof touched the existing project before refusing: %q", line)
+		}
+	}
+}
+
+// Every container the proof creates must be project-named and checked: an unnamed helper from
+// `docker run --rm` is created and destroyed between the two snapshots and is never seen.
+func TestAuthComposeProofNamesAndChecksEveryContainerItCreates(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(authProofRoot(t), "ci", "check_auth_compose.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if strings.Contains(line, "docker run") && !strings.Contains(line, "--name \"${PROJECT}") {
+			t.Errorf("a docker run without a project-prefixed --name: %q", line)
+		}
+	}
+	end := strings.Index(text, "AUTH COMPOSE PROOF PASSED")
+	if end < 0 || !strings.Contains(text[:end], "assert_project_prefixed") || strings.Count(text[:end], "assert_project_prefixed") < 3 {
+		t.Error("the prefix check is not run again at the end of the proof, after every helper container")
 	}
 }

@@ -389,8 +389,8 @@ func (collector GitHubTeamCatalogRouteHandler) resolveEmail(
 	var payload struct {
 		Email *string `json:"email"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
+	if err := providerfoundation.DecodeResponseJSON(response, body, &payload, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
 	}
 	cache[login] = payload.Email
 	return payload.Email, nil

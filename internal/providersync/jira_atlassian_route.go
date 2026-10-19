@@ -1027,7 +1027,7 @@ func collectJiraGraphQLWorklogs(ctx context.Context, client *providerfoundation.
 		}
 		for _, edge := range payload.Data.Issue.Worklogs.Edges {
 			if edge.Node == nil {
-				return nil, requests, providerfoundation.ErrNormalizationInvalid
+				return nil, requests, providerfoundation.ResponseShape(response, providerfoundation.ErrNormalizationInvalid)
 			}
 			values = append(values, edge.Node)
 		}
@@ -1036,7 +1036,7 @@ func collectJiraGraphQLWorklogs(ctx context.Context, client *providerfoundation.
 			return values, requests, nil
 		}
 		if info.EndCursor == "" {
-			return nil, requests, providerfoundation.ErrNormalizationInvalid
+			return nil, requests, providerfoundation.ResponseShape(response, providerfoundation.ErrNormalizationInvalid)
 		}
 		after = info.EndCursor
 	}

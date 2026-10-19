@@ -1065,8 +1065,8 @@ func discoverJiraLegacyProjects(ctx context.Context, client *providerfoundation.
 		return nil, err
 	}
 	var items []json.RawMessage
-	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
+	if err := providerfoundation.DecodeResponseJSON(response, body, &items, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
 	}
 	return items, nil
 }

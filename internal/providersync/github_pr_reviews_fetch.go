@@ -238,7 +238,7 @@ func (fetcher GitHubPullRequestReviewFetcher) fetchPage(
 	for index, number := range numbers {
 		pull, ok := envelope.Data.Repository["pr"+strconv.Itoa(index)]
 		if !ok || pull.Number != number {
-			return nil, providerfoundation.ErrNormalizationInvalid
+			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrNormalizationInvalid)
 		}
 		connections[number] = pull.Reviews
 	}

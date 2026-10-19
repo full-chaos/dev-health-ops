@@ -501,7 +501,11 @@ func requestPagerDutyIncidentFamilyPage(
 	if len(body) > providerResponseMaxBytes {
 		return nil, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, providerfoundation.ErrPaginationInvalid)
 	}
-	return endpoint.decode(body)
+	items, more, decodeErr := endpoint.decode(body)
+	if decodeErr != nil {
+		return nil, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyDecode, decodeErr)
+	}
+	return items, more, nil
 }
 
 func (handler PagerDutyIncidentFamilyRouteHandler) collectPagerDutyIncidents(

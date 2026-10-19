@@ -385,7 +385,7 @@ func (fetcher GitHubWorkItemPRSocialFetcher) fetchPage(
 	for index, number := range numbers {
 		pull, ok := (*envelope.Data.Repository)["pr"+strconv.Itoa(index)]
 		if !ok || pull == nil || pull.Number != number {
-			return nil, providerfoundation.ErrGraphQLResponse
+			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
 		}
 		pulls[number] = *pull
 	}

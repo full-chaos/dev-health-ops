@@ -400,8 +400,8 @@ func fetchGitLabGraphQLBlobs(
 		} `json:"data"`
 		Errors json.RawMessage `json:"errors"`
 	}
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
+	if err := providerfoundation.DecodeResponseJSON(response, payload, &envelope, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
 	}
 	trimmedErrors := bytes.TrimSpace(envelope.Errors)
 	if len(trimmedErrors) > 0 && !bytes.Equal(trimmedErrors, []byte("null")) && !bytes.Equal(trimmedErrors, []byte("[]")) {
@@ -409,7 +409,7 @@ func fetchGitLabGraphQLBlobs(
 	}
 	if envelope.Data.Project == nil || envelope.Data.Project.Repository == nil ||
 		envelope.Data.Project.Repository.Blobs == nil {
-		return nil, providerfoundation.ErrGraphQLResponse
+		return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
 	}
 	return envelope.Data.Project.Repository.Blobs.Nodes, nil
 }

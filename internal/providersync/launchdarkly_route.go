@@ -309,8 +309,8 @@ func fetchLaunchDarklyCodeReferences(
 		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
 	var object map[string]json.RawMessage
-	if !json.Valid(body) || json.Unmarshal(body, &object) != nil {
-		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
+	if err := providerfoundation.DecodeResponseJSON(response, body, &object, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
 	}
 	return append(json.RawMessage(nil), body...), nil
 }

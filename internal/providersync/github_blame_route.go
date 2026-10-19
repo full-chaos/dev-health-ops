@@ -715,7 +715,10 @@ func fetchGitHubBlame(
 		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
 	var envelope gitHubBlameEnvelope
-	if json.Unmarshal(bodyBytes, &envelope) != nil || closeErr != nil || len(envelope.Errors) > 0 {
+	if err := providerfoundation.DecodeResponseJSON(response, bodyBytes, &envelope, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
+	}
+	if closeErr != nil || len(envelope.Errors) > 0 {
 		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	return envelope.Data.Repository.Object.Blame.Ranges, nil

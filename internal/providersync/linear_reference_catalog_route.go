@@ -724,7 +724,7 @@ func collectLinearReferenceConnection(
 		}
 		connection, ok := linearReferenceConnection(envelope.Data, path)
 		if !ok {
-			return items, pages, false, providerfoundation.ErrPaginationInvalid
+			return items, pages, false, providerfoundation.ResponseShape(response, providerfoundation.ErrPaginationInvalid)
 		}
 		page := connection
 		hasNextPagePresent := page.PageInfo.HasNextPage != nil
@@ -733,7 +733,7 @@ func collectLinearReferenceConnection(
 			hasNextPage = *page.PageInfo.HasNextPage
 		}
 		if page.Nodes == nil || !hasNextPagePresent {
-			return items, pages, false, providerfoundation.ErrPaginationInvalid
+			return items, pages, false, providerfoundation.ResponseShape(response, providerfoundation.ErrPaginationInvalid)
 		}
 		items = append(items, page.Nodes...)
 		pages++
@@ -741,7 +741,7 @@ func collectLinearReferenceConnection(
 			return items, pages, false, nil
 		}
 		if page.PageInfo.EndCursor == nil || strings.TrimSpace(*page.PageInfo.EndCursor) == "" || containsString(seen, *page.PageInfo.EndCursor) || *page.PageInfo.EndCursor == cursor {
-			return items, pages, false, providerfoundation.ErrPaginationInvalid
+			return items, pages, false, providerfoundation.ResponseShape(response, providerfoundation.ErrPaginationInvalid)
 		}
 		seen = append(seen, *page.PageInfo.EndCursor)
 		cursor = *page.PageInfo.EndCursor

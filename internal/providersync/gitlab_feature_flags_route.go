@@ -186,14 +186,9 @@ func fetchGitLabFeatureFlagProjectName(
 	if len(body) > nativeMaxObjectBytes {
 		return "", providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
-	decoder.UseNumber()
 	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return "", providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return "", providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
+	if err := providerfoundation.DecodeResponseJSON(response, body, &value, providerfoundation.DecodeStrict|providerfoundation.DecodeUseNumber); err != nil {
+		return "", err
 	}
 	object, ok := value.(map[string]any)
 	if !ok || object == nil {

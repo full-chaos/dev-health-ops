@@ -624,43 +624,6 @@ func encodeWorld(t *testing.T, world FrozenWorld) []byte {
 }
 
 // sameWorldRows: the same organization, instant, tables and rows (the producer stamp aside).
-// worldTableRepeatedPerWindow is the one table whose rows repeat once per work-items window: the Linear
-// work-items route writes its team and project reference rows in every unit, so a first sync planned as
-// several bounded windows holds the same rows several times where the committed world, frozen from one
-// sync, holds them once. The rows are identical; the readers (ReplacingMergeTree, newest per key) see
-// one. Only this table is compared by its distinct rows, and only by an exact match of the distinct set,
-// so a changed, added or missing row still fails.
-const worldTableRepeatedPerWindow = "projects"
-
-func sameDistinctWorldRows(committed, produced WorldTable) bool {
-	if len(committed.Columns) != len(produced.Columns) {
-		return false
-	}
-	for index := range committed.Columns {
-		if committed.Columns[index] != produced.Columns[index] {
-			return false
-		}
-	}
-	distinct := func(rows [][]any) map[string]struct{} {
-		out := map[string]struct{}{}
-		for _, row := range rows {
-			raw, _ := json.Marshal(row)
-			out[string(raw)] = struct{}{}
-		}
-		return out
-	}
-	left, right := distinct(committed.Rows), distinct(produced.Rows)
-	if len(left) != len(right) {
-		return false
-	}
-	for row := range left {
-		if _, ok := right[row]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
 func sameWorldRows(committed, produced FrozenWorld) bool {
 	if committed.OrgID != produced.OrgID || committed.FrozenAt != produced.FrozenAt || len(committed.Tables) != len(produced.Tables) {
 		return false
@@ -726,9 +689,6 @@ func TestProviderWorldsAreWhatTheProducersWrite(t *testing.T) {
 				}
 				left, _ := json.Marshal(committedTable)
 				right, _ := json.Marshal(table)
-				if name == worldTableRepeatedPerWindow && sameDistinctWorldRows(committedTable, table) {
-					continue
-				}
 				if !bytes.Equal(left, right) {
 					t.Errorf("%s: the producers write other rows than the committed world holds (rerun with -freeze-provider-worlds and review the diff)", name)
 					logWorldTableDifference(t, committedTable, table)
@@ -839,27 +799,4 @@ func logWorldTableDifference(t *testing.T, committed, produced WorldTable) {
 	}
 	report("only committed", left, right)
 	report("only produced", right, left)
-}
-
-func TestSameDistinctWorldRowsAcceptsRepeatsAndNothingElse(t *testing.T) {
-	columns := []FrozenColumn{{Name: "id", Type: "String"}, {Name: "name", Type: "String"}}
-	table := func(rows ...[]any) WorldTable {
-		return WorldTable{FrozenTable: FrozenTable{Name: "projects", Columns: columns, Rows: rows}}
-	}
-	a, b := []any{"1", "alpha"}, []any{"2", "beta"}
-	for name, tc := range map[string]struct {
-		produced WorldTable
-		want     bool
-	}{
-		"identical":       {table(a, b), true},
-		"repeats":         {table(a, a, b, a, b), true},
-		"a row is absent": {table(a, a), false},
-		"a row changed":   {table(a, []any{"2", "gamma"}), false},
-		"a row is added":  {table(a, b, []any{"3", "delta"}), false},
-		"columns differ":  {WorldTable{FrozenTable: FrozenTable{Name: "projects", Columns: columns[:1], Rows: [][]any{{"1"}}}}, false},
-	} {
-		if got := sameDistinctWorldRows(table(a, b), tc.produced); got != tc.want {
-			t.Errorf("%s: sameDistinctWorldRows = %v, want %v", name, got, tc.want)
-		}
-	}
 }

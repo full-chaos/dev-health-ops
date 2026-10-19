@@ -68,6 +68,9 @@ func splitXUserIDRequests(t *testing.T, path string, requests []venueoracle.Requ
 		id := idOf(request)
 		seen[id] = true
 		_, carriesHeader := request.Headers["X-User-Id"]
+		if (xUserIDDivergent[id] || xUserIDParityEqual[id]) && !carriesHeader {
+			t.Errorf("request %q is listed in the X-User-Id exemption but no longer sends X-User-Id (CHAOS-10151)", request.Name)
+		}
 		switch {
 		case xUserIDDivergent[id]:
 			divergentAnswers = append(divergentAnswers, answers[i])
@@ -108,9 +111,11 @@ func blankCreatedBy(body string) string {
 	return createdByJSON.ReplaceAllString(body, `"created_by_id":null`)
 }
 
-// createdByLedger records, per Go create, who the response says created it.
+// createdByLedger records, per Go create, the caller it must carry. Every
+// create is also checked in the database (persisted), not only in the response.
 type createdByLedger struct {
-	ids []uuid.UUID
+	callers map[uuid.UUID]uuid.UUID // created row id -> verified caller
+	reset   []uuid.UUID             // rows set back to NULL before the row comparison
 }
 
 // principalOf names the user id behind a request's bearer token.
@@ -125,7 +130,7 @@ func principalOf(request venueoracle.Request, tokens map[string]string, users ma
 	return uuid.Nil, false
 }
 
-// note records a created row; check reports whether created_by_id is the caller.
+// note records a created row and checks the response names its caller.
 func (l *createdByLedger) note(t *testing.T, request venueoracle.Request, createdID uuid.UUID, gotCreatedBy any, want uuid.UUID, known bool) {
 	t.Helper()
 	if !known {
@@ -135,24 +140,55 @@ func (l *createdByLedger) note(t *testing.T, request venueoracle.Request, create
 	if got, _ := gotCreatedBy.(string); got != want.String() {
 		t.Errorf("%s: created_by_id = %v, want the verified caller %s", request.Name, gotCreatedBy, want)
 	}
+	if l.callers == nil {
+		l.callers = map[uuid.UUID]uuid.UUID{}
+	}
+	l.callers[createdID] = want
 	if !xUserIDParityEqual[idOf(request)] {
-		l.ids = append(l.ids, createdID)
+		l.reset = append(l.reset, createdID)
 	}
 }
 
-// reset sets created_by_id back to NULL on the Go rows the run created, the
-// value the frozen Python rows hold for them.
-func (l *createdByLedger) reset(t *testing.T, ctx context.Context, adminURI, table string) {
+// verifyThenReset reads the PERSISTED created_by_id of every row the run
+// created and requires the caller (the response alone can show the actor while
+// the row stores NULL), then sets the rows to NULL, the value the frozen Python
+// rows hold for them, except the creates whose header named the token's own
+// user (both planes stored that id).
+func (l *createdByLedger) verifyThenReset(t *testing.T, ctx context.Context, adminURI, table string) {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, adminURI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if len(l.ids) == 0 {
+	if len(l.callers) == 0 || len(l.reset) == 0 {
 		t.Fatalf("%s: the run recorded no created rows; the created_by_id check proves nothing", table)
 	}
-	if _, err := pool.Exec(ctx, "UPDATE "+table+" SET created_by_id = NULL WHERE id = ANY($1)", l.ids); err != nil {
+	ids := make([]uuid.UUID, 0, len(l.callers))
+	for id := range l.callers {
+		ids = append(ids, id)
+	}
+	rows, err := pool.Query(ctx, "SELECT id, created_by_id FROM "+table+" WHERE id = ANY($1)", ids)
+	if err != nil {
+		t.Fatalf("%s: reading created_by_id: %v", table, err)
+	}
+	found := 0
+	for rows.Next() {
+		var id uuid.UUID
+		var createdBy *uuid.UUID
+		if err := rows.Scan(&id, &createdBy); err != nil {
+			t.Fatal(err)
+		}
+		found++
+		if createdBy == nil || *createdBy != l.callers[id] {
+			t.Errorf("%s row %s: persisted created_by_id = %v, want the verified caller %s", table, id, createdBy, l.callers[id])
+		}
+	}
+	rows.Close()
+	if found != len(l.callers) {
+		t.Errorf("%s: %d of %d created rows were found in the database", table, found, len(l.callers))
+	}
+	if _, err := pool.Exec(ctx, "UPDATE "+table+" SET created_by_id = NULL WHERE id = ANY($1)", l.reset); err != nil {
 		t.Fatalf("%s: resetting created_by_id: %v", table, err)
 	}
 }

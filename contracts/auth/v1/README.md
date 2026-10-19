@@ -312,7 +312,10 @@ visible in the file layout, not in a conditionally present field:
   owner, a wrong parent id and a revoked parent (migration 0007's rules).
 * `scopes` use `principal.v1`'s shape and are sets; `credential_class` is the
   same enum as `principal.v1`'s (a test fails on drift); `revoked_reason` is a
-  reason code, never the free text the database column allows.
+  value of a closed vocabulary (`vocabulary/reason-codes.json`: `compromised`,
+  `owner_request`), never the free text the database column allows; the audit
+  event's `attributes.reason_code` is a closed list in the same file, and a new
+  value arrives with the producer that emits it and its own migration.
 * The list items, the receipt's credential and the entry are copies of one body
   (no cross-file `$ref`: the three runners differ on external refs); tests keep
   the list items equal to the entry and the receipt's credential a stricter

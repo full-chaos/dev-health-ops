@@ -41,6 +41,84 @@ const REQUIRED_GROUPS = {
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
+// Closed vocabularies (CHAOS-10194): contracts/auth/v1/vocabulary/reason-codes.json
+// is the single source for these three fields. Each entry builds a document
+// from a fixture that carries the field, then sets the field to a value.
+// Approved lists, written by hand on purpose: widening the vocabulary file and
+// the schema enums together must also need a deliberate edit here (CHAOS-10194).
+const APPROVED_REVOKED = [
+  "compromised",
+  "owner_request",
+];
+const APPROVED_AUDIT = [
+  "allowed_by_repository_grant",
+  "grant_absent",
+  "repository_not_granted",
+  "platform_role_absent",
+  "credential_missing",
+  "rate_limited",
+  "current_state_unavailable",
+  "authority_unavailable",
+  "upstream_unavailable",
+  "not_found",
+  "revision_conflict",
+  "internal_error",
+  "compromised",
+  "owner_request",
+  "role_granted",
+  "role_revoked",
+  "membership_added",
+  "membership_removed",
+  "membership_status_changed",
+  "grant_created",
+  "grant_revoked",
+  "credential_issued",
+  "credential_rotated",
+  "credential_revoked",
+  "session_revoked",
+  "organization_created",
+  "organization_updated",
+  "principal_disabled",
+  "principal_enabled",
+  "identity_linked",
+  "identity_unlinked",
+  "policy_revision_activated",
+  "entitlement_snapshot_applied",
+  "denied_no_membership",
+  "denied_no_grant",
+  "denied_policy",
+];
+const NOT_IN_THE_VOCABULARY = [
+  "secret_0123456789abcdef0123",
+  "key_compromised",
+  "Compromised",
+  "compromised ",
+  "compromise",
+  "owner_request_",
+  "",
+  "revoked because bob@example.test leaked it",
+];
+const VOCABULARY_SURFACES = {
+  "credential-entry": {
+    list: "revoked_reason",
+    schemaPath: ["properties", "revoked_reason"],
+    base: "valid-revoked.json",
+    set: (doc, v) => { doc.revoked_reason = v; },
+  },
+  "credential-list": {
+    list: "revoked_reason",
+    schemaPath: ["properties", "items", "items", "properties", "revoked_reason"],
+    base: "valid-two-items.json",
+    set: (doc, v) => { doc.items[1].revoked_reason = v; },
+  },
+  "audit-event": {
+    list: "audit_reason_code",
+    schemaPath: ["properties", "attributes", "properties", "reason_code"],
+    base: "invalid-attributes-reason-code-prose.json",
+    set: (doc, v) => { doc.attributes.reason_code = v; },
+  },
+};
+
 const REQUIRED_SWEEPS = ["jwks"];
 
 // The Unicode general categories, written out here and not read from a sweep
@@ -349,6 +427,37 @@ for (const surface of surfaces) {
   }
   for (const name of claimed) {
     if (!existsSync(path.join(dir, name))) fail(`${surface}/${name} is claimed but absent`);
+  }
+  const vocabulary = VOCABULARY_SURFACES[surface];
+  if (vocabulary) {
+    const vocabPath = path.join(v1, "vocabulary", "reason-codes.json");
+    if (!existsSync(vocabPath)) {
+      fail(`${surface}: vocabulary file ${path.relative(root, vocabPath)} is missing`);
+    } else {
+      const values = readJSON(vocabPath)[vocabulary.list]?.values ?? [];
+      if (values.length === 0) fail(`${surface}: the ${vocabulary.list} vocabulary is empty`);
+      const approved = vocabulary.list === "revoked_reason" ? APPROVED_REVOKED : APPROVED_AUDIT;
+      if (JSON.stringify([...values].sort()) !== JSON.stringify([...approved].sort())) {
+        fail(`${surface}: the ${vocabulary.list} vocabulary file differs from the approved list in run.mjs`);
+      }
+      const build = (v) => {
+        const doc = structuredClone(readJSON(path.join(dir, vocabulary.base)));
+        vocabulary.set(doc, v);
+        return doc;
+      };
+      for (const v of values) {
+        checked += 1;
+        if (!validate(build(v))) fail(`${surface}: listed ${vocabulary.list} value ${JSON.stringify(v)} is refused`);
+      }
+      for (const v of NOT_IN_THE_VOCABULARY) {
+        checked += 1;
+        if (validate(build(v))) fail(`${surface}: ${JSON.stringify(v)} is not in the ${vocabulary.list} vocabulary but validates`);
+      }
+      const node = vocabulary.schemaPath.reduce((at, step) => at?.[step], readJSON(schemaPath));
+      if (JSON.stringify([...(node?.enum ?? [])].sort()) !== JSON.stringify([...values].sort())) {
+        fail(`${surface}: the schema enum differs from the ${vocabulary.list} vocabulary`);
+      }
+    }
   }
   const sweepPath = path.join(v1, "sweeps", `${surface}.property-sweep.json`);
   if (REQUIRED_SWEEPS.includes(surface) && !existsSync(sweepPath)) {

@@ -62,3 +62,4 @@ tests/workers/test_unreclaimable_sweep_alerts.py
 tests/authclient/test_authorization_contract_goldens.py
 tests/authclient/test_endpoint_auth_profile_contract_goldens.py
 tests/authclient/test_jwks_property_sweep.py
+tests/authclient/test_reason_code_vocabulary.py

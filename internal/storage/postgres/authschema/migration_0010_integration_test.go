@@ -4,6 +4,7 @@ package authschema
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,8 +51,11 @@ func TestMigration0010SessionAndRefreshColumns(t *testing.T) {
 	if revision != 1 || len(amr) != 0 || authTime != nil {
 		t.Errorf("session defaults = revision %d, amr %v, auth_time %v; want 1, empty, null", revision, amr, authTime)
 	}
-	_, err := env.admin.Exec(ctx, `UPDATE auth.sessions SET revision = 0 WHERE id = $1`, m10Session)
+	err := guardedExec(ctx, env.admin, `UPDATE auth.sessions SET revision = 0 WHERE id = $1`, m10Session)
 	m10Fail(t, err, "session revision 0")
+	if err == nil || !strings.Contains(err.Error(), "revision") {
+		t.Errorf("revision 0 must be refused by the CHECK on revision, got %v", err)
+	}
 
 	insert := func(token string) error {
 		_, err := env.admin.Exec(ctx, `INSERT INTO auth.refresh_credentials
@@ -82,11 +86,14 @@ func TestMigration0010SessionAndRefreshColumns(t *testing.T) {
 			t.Fatalf("insert %s: %v", token, err)
 		}
 	}
-	if _, err := env.admin.Exec(ctx, `UPDATE auth.refresh_credentials SET legacy_jti_hash = '\xbeef'::bytea WHERE token_hash = '\x03'::bytea`); err != nil {
+	if err := guardedExec(ctx, env.admin, `UPDATE auth.refresh_credentials SET legacy_jti_hash = '\xbeef'::bytea WHERE token_hash = '\x03'::bytea`); err != nil {
 		t.Fatalf("set legacy_jti_hash: %v", err)
 	}
-	_, err = env.admin.Exec(ctx, `UPDATE auth.refresh_credentials SET legacy_jti_hash = '\xbeef'::bytea WHERE token_hash = '\x04'::bytea`)
+	err = guardedExec(ctx, env.admin, `UPDATE auth.refresh_credentials SET legacy_jti_hash = '\xbeef'::bytea WHERE token_hash = '\x04'::bytea`)
 	m10Fail(t, err, "a second credential with the same legacy_jti_hash")
+	if err == nil || !strings.Contains(err.Error(), "legacy_jti_hash") {
+		t.Errorf("duplicate legacy_jti_hash must be refused by its unique index, got %v", err)
+	}
 }
 
 // parent_id is a self-FK with ON DELETE SET NULL: the sweep that deletes an
@@ -129,9 +136,8 @@ func TestMigration0010ExternalIdentityIsUniquePerIssuer(t *testing.T) {
 	m10Seed(t, ctx, env)
 
 	insert := func(issuer string) error {
-		_, err := env.admin.Exec(ctx, `INSERT INTO auth.external_identities (principal_id, provider, subject, issuer)
+		return guardedExec(ctx, env.admin, `INSERT INTO auth.external_identities (principal_id, provider, subject, issuer)
 			VALUES ($1, 'oidc', 'sub-1', $2)`, m10Principal, issuer)
-		return err
 	}
 	if err := insert("https://issuer-a.example"); err != nil {
 		t.Fatalf("first issuer: %v", err)
@@ -220,12 +226,25 @@ func TestMigration0010AppliesOverPopulatedSchema(t *testing.T) {
 		 VALUES ('` + m10Session + `', '` + m10Principal + `', '\x0a'::bytea, now() + interval '1 hour')`,
 		`INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
 		 VALUES ('` + m10Session + `', '` + m10Principal + `', '\x0b'::bytea, now() + interval '1 day')`,
-		`INSERT INTO auth.external_identities (principal_id, provider, subject)
-		 VALUES ('` + m10Principal + `', 'oidc', 'sub-1')`,
 	} {
 		if _, err := env.conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("seed v9 row %q: %v", statement, err)
 		}
+	}
+	// external_identities is a guarded table: seed it the way audit.Commit does.
+	tx, err := env.conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO auth.external_identities (principal_id, provider, subject)
+		VALUES ($1, 'oidc', 'sub-1')`, m10Principal); err != nil {
+		t.Fatalf("seed v9 external identity: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
 	if err := applyOne(ctx, env.conn, env.options, *tenth); err != nil {
 		t.Fatalf("0010 over populated rows: %v", err)

@@ -65,3 +65,19 @@ CREATE TABLE login_attempts (
 );
 CREATE UNIQUE INDEX login_attempts_identifier_hash_key ON login_attempts (identifier_hash);
 CREATE INDEX login_attempts_updated_idx ON login_attempts (updated_at) WHERE locked_until IS NULL;
+
+-- Commit guard (0006): the new SECURITY columns of the unguarded tables get
+-- UPDATE OF triggers, so changing them needs an audit.Commit transaction. New
+-- trigger names keep this step additive. login_attempts is unguarded and all
+-- lifecycle (rate limiting, not authority); link_credentials is unguarded for
+-- insert and sweep but every column that can retarget or consume a token is a
+-- security column.
+CREATE TRIGGER sessions_security_guard_0010
+    BEFORE UPDATE OF revision, auth_time, amr ON sessions
+    FOR EACH ROW EXECUTE FUNCTION audit_commit_guard();
+CREATE TRIGGER refresh_credentials_security_guard_0010
+    BEFORE UPDATE OF family_id, legacy_jti_hash ON refresh_credentials
+    FOR EACH ROW EXECUTE FUNCTION audit_commit_guard();
+CREATE TRIGGER link_credentials_security_guard
+    BEFORE UPDATE OF principal_id, purpose, token_hash, expires_at, consumed_at ON link_credentials
+    FOR EACH ROW EXECUTE FUNCTION audit_commit_guard();

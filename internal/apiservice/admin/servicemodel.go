@@ -220,7 +220,7 @@ func (h *handlers) getServiceModel(w http.ResponseWriter, r *http.Request) {
 		h.internalError(ctx, w, "read acr_service_model state", err)
 		return
 	}
-	policy.WriteModel(w, http.StatusOK, serviceModelObject(state), nil)
+	policy.WriteJSON(w, http.StatusOK, serviceModelObject(state), nil)
 }
 
 // putServiceModel turns the toggle on or off. It only ever writes a row it
@@ -412,5 +412,5 @@ WHERE id = $1`, override.ID, string(config), actor, now); err != nil {
 		outcome = "changed"
 	}
 	logOutcome(outcome, state.enabled)
-	policy.WriteModel(w, http.StatusOK, serviceModelObject(state), nil)
+	policy.WriteJSON(w, http.StatusOK, serviceModelObject(state), nil)
 }

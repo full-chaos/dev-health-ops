@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	acrroute "github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -297,5 +298,8 @@ WHERE org_id = $1 AND resource_id = 'acr_service_model' ORDER BY created_at DESC
 		}
 	})
 
+	if violations := policy.WriterViolations(); violations > 0 {
+		t.Errorf("%d body writes used the wrong writer for their route", violations)
+	}
 	venueoracle.WriteGoOnlyProof(t, "CHAOS-10243 self-service acr_service_model toggle: persisted override, audit row and acr entitlement route readback")
 }

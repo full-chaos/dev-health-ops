@@ -24,6 +24,18 @@
       "AuthorizationRequest": {
         "$ref": "../jsonschema/authorization_request.v1.schema.json"
       },
+      "AuthOutcome": {
+        "$ref": "../jsonschema/auth-outcome.v1.schema.json"
+      },
+      "CredentialEntry": {
+        "$ref": "../jsonschema/credential-entry.v1.schema.json"
+      },
+      "CredentialList": {
+        "$ref": "../jsonschema/credential-list.v1.schema.json"
+      },
+      "CredentialReceipt": {
+        "$ref": "../jsonschema/credential-receipt.v1.schema.json"
+      },
       "Discovery": {
         "$ref": "../jsonschema/discovery.v1.schema.json"
       },
@@ -41,6 +53,15 @@
       },
       "ProvisioningEvent": {
         "$ref": "../jsonschema/provisioning-event.v1.schema.json"
+      },
+      "RefreshRequest": {
+        "$ref": "../jsonschema/refresh-request.v1.schema.json"
+      },
+      "RefreshResponse": {
+        "$ref": "../jsonschema/refresh-response.v1.schema.json"
+      },
+      "Session": {
+        "$ref": "../jsonschema/session.v1.schema.json"
       }
     }
   }

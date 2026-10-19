@@ -1,0 +1,113 @@
+{
+  "accept": [
+    {
+      "file": "valid-minimal.json",
+      "why": "The only shape."
+    },
+    {
+      "file": "valid-min-length.json",
+      "why": "Lower length boundary (43)."
+    },
+    {
+      "file": "valid-max-length.json",
+      "why": "Upper length boundary (256)."
+    },
+    {
+      "file": "valid-url-safe-alphabet.json",
+      "why": "Hyphen and underscore are in the alphabet."
+    }
+  ],
+  "reject": [
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-refresh-credential.json",
+      "why": "Required."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "file": "invalid-missing-schema-version.json",
+      "why": "Required."
+    },
+    {
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "file": "invalid-schema-version-wrong.json",
+      "why": "Unknown denies."
+    },
+    {
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "file": "invalid-credential-too-short.json",
+      "why": "One below the lower boundary."
+    },
+    {
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "file": "invalid-credential-too-long.json",
+      "why": "One above the upper boundary."
+    },
+    {
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "file": "invalid-credential-jwt-shaped.json",
+      "why": "The legacy refresh JWT has dots; the opaque credential does not."
+    },
+    {
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "file": "invalid-credential-whitespace.json",
+      "why": "No whitespace."
+    },
+    {
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "file": "invalid-credential-trailing-newline.json",
+      "why": "Python `$` hazard."
+    },
+    {
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "file": "invalid-credential-empty.json",
+      "why": "Empty."
+    },
+    {
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "type",
+      "file": "invalid-credential-not-string.json",
+      "why": "Type."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-extra-field-refresh-token.json",
+      "why": "`refresh_token` is not part of the request; the credential alone identifies the family."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-extra-field-access-token.json",
+      "why": "`access_token` is not part of the request; the credential alone identifies the family."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-extra-field-password.json",
+      "why": "`password` is not part of the request; the credential alone identifies the family."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "file": "invalid-extra-field-user-id.json",
+      "why": "`user_id` is not part of the request; the credential alone identifies the family."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-duplicate-refresh-credential.json",
+      "why": "Duplicate member: the first value would never be validated.",
+      "duplicate_member": true
+    }
+  ]
+}

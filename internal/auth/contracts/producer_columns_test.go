@@ -47,10 +47,18 @@ func migrationColumns(t *testing.T, table string) []string {
 	if err != nil {
 		t.Fatalf("reading the producer migration: %v", err)
 	}
-	text := string(raw)
+	return tableBodyColumns(t, string(raw), table)
+}
+
+// tableBodyColumns lists the columns of one CREATE TABLE in sql. Every line at
+// the table body's own indentation is a column (any type) or a table constraint;
+// anything else fails rather than being skipped, because a skipped column is a
+// column the oracle never sees.
+func tableBodyColumns(t *testing.T, text, table string) []string {
+	t.Helper()
 	start := strings.Index(text, "CREATE TABLE "+table+" (")
 	if start < 0 {
-		t.Fatalf("table %s not found in %s", table, producerMigration)
+		t.Fatalf("table %s not found", table)
 	}
 	body := text[start:]
 	end := strings.Index(body, "\n);")

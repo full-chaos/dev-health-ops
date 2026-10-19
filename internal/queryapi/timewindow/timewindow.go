@@ -32,14 +32,30 @@ type Window struct {
 	StartDay, EndDay, CompareStart, CompareEnd time.Time
 }
 
-// Compute is time_window: range_days and compare_days are raised to at
+// Compute is the report window of every ops reader. It is ComputeReference with one declared divergence from the
+// Python reference (D6083): a trailing window, one with no end date, ends YESTERDAY: [today-N, today). A window that
+// included today would change as the day's data lands and would invalidate every explanation cached on it all day.
+// The window of no end date is exactly the reference window of an explicit end date of yesterday; an explicit end
+// date keeps the reference's inclusive reading.
+func Compute(rangeDays, compareDays int, startDate, endDate *time.Time, today time.Time) (Window, error) {
+	if endDate == nil {
+		yesterday, err := addDays(midnight(today), -1)
+		if err != nil {
+			return Window{}, err
+		}
+		endDate = &yesterday
+	}
+	return ComputeReference(rangeDays, compareDays, startDate, endDate, today)
+}
+
+// ComputeReference is time_window: range_days and compare_days are raised to at
 // least 1; end_day is the end date (today when nil) plus one day; the
 // start is the start date (moved to end_day - 1 when not before end_day)
 // or end_day - range_days; the comparison window is compare_days before
 // the start. Each step fails where Python's raises. Day counts are Go ints:
 // a caller that saturated a larger Python int past the int range still
 // fails here, since any count past 999999999 does.
-func Compute(rangeDays, compareDays int, startDate, endDate *time.Time, today time.Time) (Window, error) {
+func ComputeReference(rangeDays, compareDays int, startDate, endDate *time.Time, today time.Time) (Window, error) {
 	rangeDays = max(1, rangeDays)
 	compareDays = max(1, compareDays)
 	end := midnight(today)

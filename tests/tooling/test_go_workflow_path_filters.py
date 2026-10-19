@@ -161,10 +161,6 @@ UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
         "given a path filter, because adding a pattern for it would claim a "
         "dependency that does not exist"
     ),
-    "tests/acceptance/corpus": (
-        "acceptance-suite corpus consumed by the acceptance workflow, which has "
-        "its own path filters and does not run under go-quality"
-    ),
 }
 
 

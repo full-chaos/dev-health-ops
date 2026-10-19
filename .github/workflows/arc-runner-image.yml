@@ -283,6 +283,18 @@ jobs:
           go run /tmp/cgo_probe.go
           RUNSH
 
+      # CHAOS-10185: the acr `scripts` job needs shellcheck on this pool. A missing
+      # binary fails the step (`sh: shellcheck: not found`); the version line is
+      # asserted so a different pin cannot pass silently.
+      - name: Check shellcheck inside the built image
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 \
+            ghcr.io/full-chaos/arc-runner:check \
+            shellcheck --version > "${RUNNER_TEMP}/shellcheck-version.txt"
+          cat "${RUNNER_TEMP}/shellcheck-version.txt"
+          grep -qx 'version: 0.11.0' "${RUNNER_TEMP}/shellcheck-version.txt"
+
       - name: Determine whether this build is main's current head
         # CHAOS-5166: this job now routes to the ARC pool (self-hosted leg
         # above), and the `gh` CLI is NOT part of the arc-runner image --

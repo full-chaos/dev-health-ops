@@ -980,12 +980,19 @@ func (handler *Handler) Work(
 				"records":         result.Comparison.NativeRecords,
 				"requests":        result.RequestUsage.Requests,
 			}
+			// A unit finished by a later attempt or chunk made requests this
+			// execution did not count; the comparison says so.
+			earlierWork := session.Claim.Attempt > 1 || result.CommittedRows > int64(result.Effects.Written)
+			budgetRows := providersync.AttachBudgetObservations(
+				payload, session.Claim.Result, result.RequestLedger, earlierWork, handler.now(),
+			)
 			if completeErr := handler.Repository.Complete(
 				context.WithoutCancel(ctx), session.Claim, payload,
 				result.Watermark, startedAt, handler.now(),
 			); completeErr != nil {
 				err = completeErr
 			} else {
+				handler.observeBudgetComparison(ctx, session.Claim, budgetRows, result.RequestLedger.Dropped, earlierWork)
 				handler.observeCicdPartialSuccess(session.Claim, result.Watermark, payload)
 				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "succeeded", nil)
 				return nil

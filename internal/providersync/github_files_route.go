@@ -98,9 +98,9 @@ type gitHubTreeEntry struct {
 // flag for that case, since the cap truncates the body before that field
 // would even be reached. That case is treated exactly like GitHub's own
 // truncated=true and recovers through the same non-recursive walk (CHAOS-6268).
-type GitHubFilesRouteHandler struct{}
+type GitHubFilesRouteHandler struct{ RepoIdentity GitLabRepoIdentityReader }
 
-func (GitHubFilesRouteHandler) Collect(
+func (handler GitHubFilesRouteHandler) Collect(
 	ctx context.Context,
 	claim Claim,
 	_ providerfoundation.Credential,
@@ -126,7 +126,7 @@ func (GitHubFilesRouteHandler) Collect(
 	if err := fetchObject(ctx, client, root, &repoPayload); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	repoID, err := repositoryIdentity(repoPayload.FullName)
+	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repoPayload)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}

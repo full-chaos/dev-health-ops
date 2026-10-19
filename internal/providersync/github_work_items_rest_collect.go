@@ -72,6 +72,10 @@ type GitHubWorkItemsRESTPullRequest struct {
 // to the later GraphQL social layer before the composite can become complete.
 type GitHubWorkItemsRESTResult struct {
 	RepoFullName string
+	// IdentityName is the name RepoID was minted from (CHAOS-9879); the
+	// work-item, sprint and reference ids carry it, RepoFullName stays the
+	// repository's current name.
+	IdentityName string
 	RepoID       uuid.UUID
 	Rows         githubWorkItemRows
 	PullRequests []GitHubWorkItemsRESTPullRequest
@@ -87,6 +91,10 @@ type GitHubWorkItemsRESTResult struct {
 // optional milestone or issue-comment degradation. It is deliberately not a
 // composite-completion signal: every PullRequests entry still awaits the
 // GraphQL social fetch before the GitHub work-item producer can be complete.
+func (result GitHubWorkItemsRESTResult) names() githubRepoNames {
+	return githubRepoNames{Current: result.RepoFullName, Identity: result.IdentityName}
+}
+
 func (result GitHubWorkItemsRESTResult) NoOptionalDegradation() bool {
 	return len(result.Incomplete) == 0
 }
@@ -117,7 +125,8 @@ func (result GitHubWorkItemsRESTResult) NoOptionalDegradation() bool {
 // handler and the derived effects are wired. Kept visible as a correction
 // rather than deleted (CHAOS-4848).
 type GitHubWorkItemsRESTCollector struct {
-	MaxPages int
+	MaxPages     int
+	RepoIdentity GitLabRepoIdentityReader
 }
 
 type githubWorkItemsRESTOptions struct {
@@ -190,11 +199,12 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 		return result, err
 	}
 	result.RepoFullName = strings.TrimSpace(repo.FullName)
-	repoIdentity, identityErr := repositoryIdentity(result.RepoFullName)
+	identity, identityErr := resolveGitHubRepoIdentity(ctx, collector.RepoIdentity, claim, gitHubRepositoryPayload{ID: repo.ID, FullName: result.RepoFullName})
 	if identityErr != nil {
 		return result, identityErr
 	}
-	result.RepoID, err = uuid.Parse(repoIdentity)
+	result.IdentityName = identity.Path
+	result.RepoID, err = uuid.Parse(identity.RepoID)
 	if err != nil {
 		return result, providerfoundation.ErrNormalizationInvalid
 	}
@@ -222,7 +232,7 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 		}
 		for _, raw := range page.Items {
 			row, normalizeErr := normalizeGitHubSprint(
-				claim, result.RepoFullName, raw, normalizedAt,
+				claim, result.IdentityName, raw, normalizedAt,
 			)
 			if normalizeErr != nil {
 				result.addIncomplete("milestones", "", normalizeErr)
@@ -273,7 +283,8 @@ func (collector GitHubWorkItemsRESTCollector) Collect(
 }
 
 type githubWorkItemsRESTRepositoryPayload struct {
-	FullName string `json:"full_name"`
+	ID       json.Number `json:"id"`
+	FullName string      `json:"full_name"`
 }
 
 func (collector GitHubWorkItemsRESTCollector) collectIssues(
@@ -285,23 +296,45 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 	normalizedAt time.Time,
 	result *GitHubWorkItemsRESTResult,
 ) error {
-	query := url.Values{"state": {"all"}, "per_page": {"100"}}
-	if claim.SinceAt != nil {
-		query.Set("since", claim.SinceAt.UTC().Format(time.RFC3339))
+	// The list is ordered by update, oldest first, and `since` is its only server-side bound, so the reader
+	// stops at the first issue updated at or after the window end: every later one is newer and belongs to a
+	// later window. In GitHub's default order (created, newest first) the end could not be found without
+	// paging every issue updated since the window start, which trips the page cap on a large repository
+	// (CHAOS-10112). Python read the default order and skipped; this is a declared request-order divergence.
+	//
+	// An update-ordered list is MUTABLE while it is read: an issue edited meanwhile moves to the end and
+	// shifts every later issue up by one place, so following page numbers would skip the issue that crossed
+	// a page boundary. The reader therefore pages by key, not by number: each request asks for one page
+	// since the update time of the last issue it saw (inclusive, so that issue repeats), and an issue read
+	// twice keeps its latest reading. An issue that moved forward reappears later and is not lost. Only a
+	// tie (a page whose last issue was updated at the very `since` it was asked for, a bulk edit inside one
+	// second) is continued by page number within that `since`.
+	issues, pages, tieGroups, stoppedAtWindowEnd, capReached, err := collector.listIssuesByUpdate(ctx, claim, client, root, result)
+	slog.Default().InfoContext(ctx, "github_work_items_issue_list",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "source_id", claim.SourceID,
+		"window_since", issueListBound(claim.SinceAt), "window_before", issueListBound(claim.BeforeAt),
+		"pages", pages, "stopped_at_window_end", stoppedAtWindowEnd, "tie_groups_over_one_page", tieGroups)
+	for range tieGroups {
+		client.Metrics.RecordGitHubIssueListTiePaged()
 	}
-	page, err := providerfoundation.CollectGitHubLinkPages(
-		ctx, client, providerfoundation.GitHubPageOptions{
-			Path: root + "/issues", Route: githubIssuesRoute, Query: query, MaxPages: collector.maxPages(),
-		},
-	)
-	result.addPageEvidence(page)
+	if stoppedAtWindowEnd {
+		client.Metrics.RecordGitHubIssueListStopped()
+	}
+	if capReached {
+		slog.Default().WarnContext(ctx, "github_work_items_issue_list_cap_exceeded",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "source_id", claim.SourceID,
+			"window_since", issueListBound(claim.SinceAt), "window_before", issueListBound(claim.BeforeAt),
+			"pages", pages, "page_cap", collector.maxPages())
+		client.Metrics.RecordGitHubIssueListCapExceeded()
+	}
 	if err != nil {
 		return err
 	}
-	if page.PageBudgetExhausted {
+	if capReached {
+		result.Evidence.CapReached = true
 		return ErrPaginationCapExceeded
 	}
-	for _, raw := range page.Items {
+	for _, raw := range issues {
 		var listed githubWorkItemsRESTListIssue
 		if json.Unmarshal(raw, &listed) != nil || listed.Number < 1 {
 			return providerfoundation.ErrNormalizationInvalid
@@ -309,7 +342,8 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 		if len(listed.PullRequest) != 0 && string(listed.PullRequest) != "null" {
 			continue
 		}
-		if githubWorkItemsRESTUpdatedAfterBefore(listed.UpdatedAt, claim.BeforeAt) {
+		if githubWorkItemsRESTUpdatedAfterBefore(listed.UpdatedAt, claim.BeforeAt) ||
+			githubWorkItemsRESTUpdatedBeforeSince(listed.UpdatedAt, claim.SinceAt) {
 			continue
 		}
 		events, eventPage, err := collectGitHubWorkItemChildPages(
@@ -355,7 +389,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 			}
 		}
 		rows, normalizeErr := normalizeGitHubIssueBundle(
-			claim, result.RepoFullName, result.RepoID, raw, events, comments,
+			claim, result.names(), result.RepoID, raw, events, comments,
 			nil, normalizedAt,
 		)
 		if normalizeErr != nil && len(comments) > 0 {
@@ -363,7 +397,7 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 			// Preserve the required issue/event facts and expose the degradation.
 			result.addIncomplete("issue_comments", strconv.Itoa(listed.Number), normalizeErr)
 			rows, normalizeErr = normalizeGitHubIssueBundle(
-				claim, result.RepoFullName, result.RepoID, raw, events, nil,
+				claim, result.names(), result.RepoID, raw, events, nil,
 				nil, normalizedAt,
 			)
 		}
@@ -535,7 +569,28 @@ func githubWorkItemsRESTUpdatedAfterBefore(value *string, before *time.Time) boo
 		return false
 	}
 	updatedAt := parseGitHubWorkItemTime(value)
-	return updatedAt != nil && updatedAt.After(before.UTC())
+	// Half-open window [since, before): an issue updated exactly at the end belongs to the next window.
+	return updatedAt != nil && !updatedAt.Before(before.UTC())
+}
+
+// githubWorkItemsRESTUpdatedBeforeSince: the `since` key is sent in whole seconds, so the list can hold an
+// issue updated inside the second before a fractional window start, which the previous window wrote.
+func githubWorkItemsRESTUpdatedBeforeSince(value *string, since *time.Time) bool {
+	if since == nil {
+		return false
+	}
+	updatedAt := parseGitHubWorkItemTime(value)
+	return updatedAt != nil && updatedAt.Before(since.UTC())
+}
+
+// issueListCrossedWindowEnd is the StopAt predicate of the issue list: the first item updated at or after
+// the window end ends the read (the list is ordered by update, oldest first).
+func issueListCrossedWindowEnd(raw json.RawMessage, claim Claim) bool {
+	var listed githubWorkItemsRESTListIssue
+	if json.Unmarshal(raw, &listed) != nil {
+		return false
+	}
+	return githubWorkItemsRESTUpdatedAfterBefore(listed.UpdatedAt, claim.BeforeAt)
 }
 
 func githubWorkItemsRESTOptionalFailure(
@@ -615,4 +670,90 @@ func githubWorkItemCommentLookahead(limit int) int {
 		return limit
 	}
 	return limit + 1
+}
+
+func issueListBound(bound *time.Time) string {
+	if bound == nil {
+		return ""
+	}
+	return bound.UTC().Format(time.RFC3339Nano)
+}
+
+// listIssuesByUpdate reads the issue list described in collectIssues: one request per step, advancing the
+// `since` key to the update time of the last issue read, de-duplicating by issue number (latest reading
+// wins), stopping at the first issue updated at or after the window end or when the provider names no next
+// page. The page cap bounds the number of requests; running out of it is reported, never truncated.
+func (collector GitHubWorkItemsRESTCollector) listIssuesByUpdate(
+	ctx context.Context,
+	claim Claim,
+	client *providerfoundation.HTTPClient,
+	root string,
+	result *GitHubWorkItemsRESTResult,
+) (issues []json.RawMessage, pages, tieGroups int, stoppedAtWindowEnd, capReached bool, err error) {
+	var since *time.Time
+	if claim.SinceAt != nil {
+		value := claim.SinceAt.UTC().Truncate(time.Second)
+		since = &value
+	}
+	index := map[int]int{}
+	page := 1
+	for step := 0; ; step++ {
+		if step >= collector.maxPages() {
+			return issues, pages, tieGroups, stoppedAtWindowEnd, true, nil
+		}
+		query := url.Values{"state": {"all"}, "per_page": {"100"}, "sort": {"updated"}, "direction": {"asc"}}
+		if since != nil {
+			query.Set("since", since.Format(time.RFC3339))
+		}
+		if page > 1 {
+			query.Set("page", strconv.Itoa(page))
+		}
+		collected, collectErr := providerfoundation.CollectGitHubLinkPages(
+			ctx, client, providerfoundation.GitHubPageOptions{
+				Path: root + "/issues", Route: githubIssuesRoute, Query: query, MaxPages: 1,
+				StopAt: func(raw json.RawMessage) bool {
+					if issueListCrossedWindowEnd(raw, claim) {
+						stoppedAtWindowEnd = true
+						return true
+					}
+					return false
+				},
+			},
+		)
+		// MaxPages is 1 on purpose: one request per step. A next page left over (reported as an exhausted
+		// budget) is the expected state: it means the provider named a next page.
+		moreAfterThisPage := collected.PageBudgetExhausted
+		collected.PageBudgetExhausted = false
+		result.addPageEvidence(collected)
+		pages += collected.Pages
+		if collectErr != nil {
+			return issues, pages, tieGroups, stoppedAtWindowEnd, false, collectErr
+		}
+		var lastUpdated *time.Time
+		for _, raw := range collected.Items {
+			var listed githubWorkItemsRESTListIssue
+			if json.Unmarshal(raw, &listed) != nil || listed.Number < 1 {
+				return issues, pages, tieGroups, stoppedAtWindowEnd, false, providerfoundation.ErrNormalizationInvalid
+			}
+			if position, seen := index[listed.Number]; seen {
+				issues[position] = raw
+			} else {
+				index[listed.Number] = len(issues)
+				issues = append(issues, raw)
+			}
+			lastUpdated = parseGitHubWorkItemTime(listed.UpdatedAt)
+		}
+		if stoppedAtWindowEnd || !moreAfterThisPage {
+			return issues, pages, tieGroups, stoppedAtWindowEnd, false, nil
+		}
+		if lastUpdated != nil && (since == nil || lastUpdated.UTC().Truncate(time.Second).After(*since)) {
+			next := lastUpdated.UTC().Truncate(time.Second)
+			since, page = &next, 1
+		} else {
+			if page == 1 {
+				tieGroups++
+			}
+			page++
+		}
+	}
 }

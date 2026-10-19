@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
 )
@@ -264,7 +265,26 @@ func (adapter LinearProjectCatalogClickHouseAdapter) WriteLinearWorkItemEffect(
 			return ErrInvalidConfiguration
 		}
 	}
-	return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, linearRawEffectIdentity(identity), effect)
+	keep := linearProjectEnsureKeep(ctx, adapter.Delegate.Conn, identity.OrgID, rows)
+	keptRaw := make([]json.RawMessage, 0, len(effect.Rows))
+	for index, raw := range effect.Rows {
+		if keep[index] {
+			keptRaw = append(keptRaw, raw)
+		}
+	}
+	if len(keptRaw) == len(effect.Rows) {
+		return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, linearRawEffectIdentity(identity), effect)
+	}
+	if len(keptRaw) == 0 {
+		return nil
+	}
+	narrowed, err := BuildEffectBatch(effect.Destination, effect.Recovery, keptRaw)
+	if err != nil {
+		return err
+	}
+	narrowedIdentity := linearRawEffectIdentity(identity)
+	narrowedIdentity.ContentDigest, narrowedIdentity.RowCount = narrowed.ContentDigest, len(narrowed.Rows)
+	return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, narrowedIdentity, narrowed)
 }
 
 // InspectLinearWorkItemEffect deliberately does NOT delegate to the GitHub

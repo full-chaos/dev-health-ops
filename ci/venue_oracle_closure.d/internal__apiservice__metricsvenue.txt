@@ -72,6 +72,7 @@ internal/platform/health
 internal/platform/lifecycle
 internal/platform/logging
 internal/platform/otlpmetrics
+internal/platform/queuecontrol
 internal/platform/secrets
 internal/platform/shell
 internal/platform/tracing

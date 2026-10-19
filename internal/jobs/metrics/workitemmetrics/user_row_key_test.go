@@ -1,6 +1,7 @@
 package workitemmetrics
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -68,7 +69,7 @@ func TestUserMetricsDailyRowOfAPersonInTwoTeamsSumsAndIsLabelledByTheTeamWithThe
 	items := []Item{
 		personItem(0, "A-1", &person, begin, day.Add(2*time.Hour)),
 		personItem(1, "A-2", &person, begin, day.Add(4*time.Hour)),
-		personItem(2, "A-3", &person, begin, day.Add(6*time.Hour)),
+		personItem(2, "A-3", &person, begin, day.Add(10*time.Hour)),
 	}
 	for _, tc := range []struct {
 		name             string
@@ -92,8 +93,18 @@ func TestUserMetricsDailyRowOfAPersonInTwoTeamsSumsAndIsLabelledByTheTeamWithThe
 			t.Errorf("%s: row = team %q (%q), completed %d, started %d; want team %q (%q), completed 3, started 0",
 				tc.name, row.TeamID, row.TeamName, row.ItemsCompleted, row.ItemsStarted, tc.wantID, tc.wantName)
 		}
-		if row.CycleTimeP50Hours == nil {
-			t.Errorf("%s: no cycle time over the person's three completed items", tc.name)
+		// cycle hours of the three items are 50, 52 and 58: p50 52, p90 56.8, over the
+		// items of both teams, not those of the label team.
+		for _, pin := range []struct {
+			name string
+			got  *float64
+			want float64
+		}{{"p50", row.CycleTimeP50Hours, 52}, {"p90", row.CycleTimeP90Hours, 56.8}} {
+			if pin.got == nil {
+				t.Errorf("%s: cycle %s is nil, want %v over the person's three completed items", tc.name, pin.name, pin.want)
+			} else if math.Abs(*pin.got-pin.want) > 1e-9 {
+				t.Errorf("%s: cycle %s = %v, want %v over the person's three completed items", tc.name, pin.name, *pin.got, pin.want)
+			}
 		}
 	}
 }

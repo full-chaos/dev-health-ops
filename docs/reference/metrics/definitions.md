@@ -485,8 +485,44 @@ its marker leaves the day unknown until the next sync, which heals it because
 Postgres still says succeeded. A run that was created but not yet claimed does
 not hide an older `succeeded` (it has not started computing); the claim does.
 
+## Workgraph build permanent cancels
+
+`dev_health_workgraph_build_permanent_cancels_total` counts `workgraph.build`
+requests that the build handler cancelled permanently after a step failure.
+Label `error_class` is one of `context_canceled`, `deadline_exceeded`,
+`dependency_unavailable` or `unclassified`. A transient step failure retries
+and is not counted. The matching Warn log line carries the same class and the
+root Go type, never the error text.
+
+## Linear project ensure rows
+
+A Linear work-items unit names every project it saw by an ensure row in `projects`. The row carries an epoch version, so a catalog row always replaces it. The unit writes an ensure row only when it can change the newest stored row. A stored row of a newer version, or of the same version with the same content, is left alone. A missing, older or changed row is written.
+
+`dev_health_linear_project_catalog_ensure_total{outcome}` counts the rows:
+
+- `written`: the row was written.
+- `skipped`: the stored row already decides the newest value.
+- `read_error`: the stored rows could not be read. The whole batch was written and a Warn line `linear_project_catalog_ensure_read_failed` was logged. The unit does not fail.
+
 ## Work-item person rows: persons in more than one team
 
 `work_item_user_metrics_daily` keeps one row for each person, work scope and day: its key has no team. A person whose work items of one day belong to more than one team gets one row that sums all the person's items and takes its cycle percentiles over all of them. The team columns of that row name the team with the most of the person's items that day (the lowest team id on a tie).
 
 The counter `dev_health_work_item_user_rows_spanning_teams_total{provider}` counts, for each computed partition, the persons whose row is labelled this way. A rise says that people work across teams in that provider; it is not a fault. The Debug line `work_item_user_metrics_rows` carries the same count with the number of user rows of the partition.
+
+## Refused manual sync triggers
+
+`dev_health_sync_manual_trigger_refused_total{reason}` counts the manual sync
+triggers (Sync now, Backfill, `dho backfill run`, webhook sync requests and the
+initial backfill) that `synchandoff.Mint`, the only writer of
+`sync_manual_triggers`, refused before it wrote anything. Each refusal also
+writes one WARN log entry.
+
+| `reason` | Meaning | Log entry |
+| --- | --- | --- |
+| `unselected_source` | The trigger names an enabled source that the planner-managed sync configuration does not select. | `sync_trigger.refused_unselected_source` (`sync_config_id`, `caller`, `triggered_by`, `mode`, `refused_source_count`, `requested_source_count`) |
+| `unnamed_caller` | The trigger path names no caller. Every production path names one, so a count here is a code defect. | `sync_trigger.refused_unnamed_caller` (`sync_config_id`, `triggered_by`, `mode`) |
+
+The api and the scheduler expose the counter on their `/metrics`. `dho backfill
+run` is a short-lived command with no metrics endpoint: its refusals are in the
+log entry only (and its exit code 3).

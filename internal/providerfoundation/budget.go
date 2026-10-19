@@ -262,6 +262,7 @@ type Metrics struct {
 	requests                       map[string]uint64
 	budgetDenied                   map[string]uint64
 	budgetReleaseErrors            map[string]uint64
+	gatePenalizeErrors             map[string]uint64
 	inventoryPageCap               map[string]uint64
 	perRunTruncation               map[string]uint64
 	artifactSkipped                map[string]uint64
@@ -270,6 +271,7 @@ type Metrics struct {
 	resumeReanchor                 map[string]uint64
 	unitTerminalWithRows           map[string]uint64
 	incidentEntitlementRefused     map[string]uint64
+	budgetUnderestimate            map[string]uint64
 	allArtifactsUnreadable         map[string]uint64
 	workItemTeamAttributionWritten map[string]uint64
 	teamAttributionMembershipLayer map[string]uint64
@@ -296,6 +298,14 @@ type Metrics struct {
 	// raw rows and left every derived table to the daily job, by provider --
 	// see RecordWorkItemDerivedTablesLeftToDailyJob.
 	workItemDerivedLeftToDaily map[string]uint64
+	// githubIssueListStops counts the GitHub work-items issue lists that stopped
+	// reading at the window end, by reason (always window_end).
+	githubIssueListStops map[string]uint64
+	// githubIssueListCaps counts the issue lists that ran out of their request cap (never truncated).
+	githubIssueListCaps map[string]uint64
+	// githubIssueListTies counts the same-second tie groups of more than one page of an issue list, by
+	// reason (always same_second): the paging of such a group is by page number.
+	githubIssueListTies map[string]uint64
 	// preparedRetiredEffectsSkipped counts the effects of a prepared
 	// work-items manifest that a recovering unit did not write because the
 	// daily job now owns their table, by provider -- see
@@ -308,6 +318,7 @@ func NewMetrics() *Metrics {
 		requests:                       map[string]uint64{},
 		budgetDenied:                   map[string]uint64{},
 		budgetReleaseErrors:            map[string]uint64{},
+		gatePenalizeErrors:             map[string]uint64{},
 		inventoryPageCap:               map[string]uint64{},
 		perRunTruncation:               map[string]uint64{},
 		artifactSkipped:                map[string]uint64{},
@@ -316,6 +327,7 @@ func NewMetrics() *Metrics {
 		resumeReanchor:                 map[string]uint64{},
 		unitTerminalWithRows:           map[string]uint64{},
 		incidentEntitlementRefused:     map[string]uint64{},
+		budgetUnderestimate:            map[string]uint64{},
 		allArtifactsUnreadable:         map[string]uint64{},
 		workItemTeamAttributionWritten: map[string]uint64{},
 		teamAttributionMembershipLayer: map[string]uint64{},
@@ -333,6 +345,9 @@ func NewMetrics() *Metrics {
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
 		workItemDerivedLeftToDaily:     map[string]uint64{},
+		githubIssueListStops:           map[string]uint64{},
+		githubIssueListCaps:            map[string]uint64{},
+		githubIssueListTies:            map[string]uint64{},
 		preparedRetiredEffectsSkipped:  map[string]uint64{},
 	}
 }
@@ -400,6 +415,20 @@ func (m *Metrics) RecordBudgetReleaseError(provider string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.budgetReleaseErrors[metricProvider(provider)]++
+}
+
+// RecordGatePenalizeError counts a cooldown gate write that failed after a
+// rate-limited auth step (path "auth") or response (path "response").
+func (m *Metrics) RecordGatePenalizeError(provider, path string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if path != "auth" {
+		path = "response"
+	}
+	m.gatePenalizeErrors[metricProvider(provider)+":"+path]++
 }
 
 // RecordInventoryPageCap counts one inventory phase that stopped at its
@@ -837,6 +866,35 @@ func (m *Metrics) RecordIncidentEntitlementRefused(provider, dataset, seam strin
 		":"+MetricIncidentEntitlementSeamLabel(seam)]++
 }
 
+// metricBudgetDimensionVocabulary is the closed set of budget dimensions a
+// provider request is accounted to.
+var metricBudgetDimensionVocabulary = map[string]struct{}{
+	"rest_core": {}, "graphql_cost": {}, "search": {}, "contents_blob": {}, "secondary_abuse_risk": {},
+}
+
+// MetricBudgetDimensionLabel bounds the budget dimension label.
+func MetricBudgetDimensionLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricBudgetDimensionVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordBudgetUnderestimate counts one finished provider unit whose requests in
+// a request-count dimension exceeded the estimate it was admitted on, by
+// bounded provider, dataset and dimension. A steady count on one dataset says
+// its estimator undercounts and its admission lets too much through.
+func (m *Metrics) RecordBudgetUnderestimate(provider, dataset, dimension string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.budgetUnderestimate[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
+		":"+MetricBudgetDimensionLabel(dimension)]++
+}
+
 func (m *Metrics) RecordUnitTerminalWithRows(provider, dataset string) {
 	if m == nil {
 		return
@@ -1263,6 +1321,42 @@ func (m *Metrics) RecordWorkItemDerivedTablesLeftToDailyJob(provider string) {
 	m.workItemDerivedLeftToDaily[label]++
 }
 
+// RecordGitHubIssueListStopped counts one GitHub work-items issue list that
+// stopped reading at the first issue updated at or after the window end. The
+// list is ordered by update, oldest first, so every later issue is newer; the
+// stop is the expected case of a bounded window.
+func (m *Metrics) RecordGitHubIssueListStopped() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.githubIssueListStops["window_end"]++
+}
+
+// RecordGitHubIssueListCapExceeded counts one GitHub work-items issue list that
+// ran out of its request cap before the end of the window. The unit fails
+// closed (pagination cap), never with a truncated list.
+func (m *Metrics) RecordGitHubIssueListCapExceeded() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.githubIssueListCaps["page_cap"]++
+}
+
+// RecordGitHubIssueListTiePaged counts one same-second group of more than one page of a GitHub work-items
+// issue list. An expected path: it shows how often an edit during the read could shift an unseen issue.
+func (m *Metrics) RecordGitHubIssueListTiePaged() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.githubIssueListTies["same_second"]++
+}
+
 // RecordPreparedRetiredWorkItemEffectsSkipped counts the effects of one
 // prepared work-items manifest that a recovering unit completed without
 // writing (CHAOS-8811). The manifest was stored by a binary whose sync unit
@@ -1573,6 +1667,22 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 			return err
 		}
 	}
+	if _, err := io.WriteString(writer,
+		"# HELP dev_health_gate_penalize_errors_total Cooldown gate writes that failed after a rate-limited provider auth step or response, by bounded provider and path.\n"+
+			"# TYPE dev_health_gate_penalize_errors_total counter\n"); err != nil {
+		return err
+	}
+	gateKeys := make([]string, 0, len(m.gatePenalizeErrors))
+	for key := range m.gatePenalizeErrors {
+		gateKeys = append(gateKeys, key)
+	}
+	sort.Strings(gateKeys)
+	for _, key := range gateKeys {
+		parts := strings.SplitN(key, ":", 2)
+		if _, err := fmt.Fprintf(writer, "dev_health_gate_penalize_errors_total{provider=%q,path=%q} %d\n", parts[0], parts[1], m.gatePenalizeErrors[key]); err != nil {
+			return err
+		}
+	}
 	if err := writeProviderDatasetCounter(
 		writer, "dev_health_provider_inventory_page_cap_total",
 		"Provider inventory phases that stopped at their cumulative page budget, by bounded provider and dataset.",
@@ -1647,6 +1757,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_incident_entitlement_refused_total",
 		"Provider units refused by the execution-time canonical-incident entitlement re-check, by bounded provider, dataset, and seam.",
 		"seam", m.incidentEntitlementRefused,
+	); err != nil {
+		return err
+	}
+	if err := writeProviderDatasetReasonCounter(
+		writer, "dev_health_provider_budget_underestimate_total",
+		"Finished provider units whose requests in a request-count dimension exceeded the estimate they were admitted on, by bounded provider, dataset, and dimension.",
+		"dimension", m.budgetUnderestimate,
 	); err != nil {
 		return err
 	}
@@ -1758,6 +1875,27 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_work_item_derived_tables_left_to_daily_job_total",
 		"Work-items sync units that stored raw rows and left every table computed from them (the three work-item metric tables, estimate coverage, team attribution, state durations, issue types, the two investment tables) to the daily job, by provider (CHAOS-8811).",
 		"provider", m.workItemDerivedLeftToDaily,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_work_items_issue_list_stopped_total",
+		"GitHub work-items issue lists that stopped reading at the first issue updated at or after the window end (CHAOS-10112), by reason. The stop is the expected case of a bounded window.",
+		"reason", m.githubIssueListStops,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_work_items_issue_list_cap_exceeded_total",
+		"GitHub work-items issue lists that ran out of their request cap before the end of the window (CHAOS-10112), by reason. The unit fails closed; the list is never truncated.",
+		"reason", m.githubIssueListCaps,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_work_items_issue_list_tie_paged_total",
+		"GitHub work-items issue lists with a same-second tie group of more than one page (CHAOS-10112), by reason. The group is paged by page number; an edit during that read can shift one unseen issue into a page already read.",
+		"reason", m.githubIssueListTies,
 	); err != nil {
 		return err
 	}

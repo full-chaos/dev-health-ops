@@ -188,7 +188,7 @@ func (store *PostgresStore) RepairLegacyRedriveGenerations(
 		outcome.Partial = true
 		recordGenerationRepairPartial(ctx)
 		slog.InfoContext(ctx, "daily metrics legacy redrive generation repair pass ended at its budget",
-			"org_id", orgID, "resume_from", outcome.ResumeFrom, "remaining", outcome.Remaining,
+			"metric", GenerationRepairPartialCounter, "org_id", orgID, "resume_from", outcome.ResumeFrom, "remaining", outcome.Remaining,
 			"examined", outcome.Examined, "repaired", outcome.Repaired, "dry_run", dryRun)
 		return outcome, nil
 	}
@@ -348,13 +348,16 @@ WHERE run.id = $1::uuid AND run.org_id = $2::uuid AND run.generation = $3
 }
 
 // repairUnavailable keeps the cause of a store failure in the log; the caller
-// only gets ErrUnavailable. A failure after the pass budget ended is not a
-// store failure: it returns errRepairBudget and is neither logged nor counted.
+// only gets ErrUnavailable. A call that stopped because the pass budget ended
+// (the budget is over and the cause is a context error) is not a store
+// failure: it returns errRepairBudget and is neither logged nor counted. A
+// store fault that races the budget stays a failure.
 func repairUnavailable(ctx context.Context, step string, cause error) error {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && (errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded)) {
 		return errRepairBudget
 	}
 	recordGenerationRepairFailure(ctx, step)
-	slog.ErrorContext(ctx, "daily metrics legacy redrive generation repair failed", "step", step, "error", cause)
+	slog.WarnContext(ctx, "daily metrics legacy redrive generation repair failed",
+		"metric", GenerationRepairFailuresCounter, "step", step, "error", cause)
 	return ErrUnavailable
 }

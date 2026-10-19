@@ -1618,6 +1618,10 @@ func dispatchMetricsFinalizeRedrive(
 // rewritten only when its run id proves the original generation; every other
 // row is counted and left alone. Idempotent. Audited under the
 // finalize-redrive action: the damage and its repair are the same family.
+// Telemetry: dho is a one-shot CLI with no exporter (as with the remaining
+// backfill counter above), so the dev_health_generation_repair_* counters are
+// not observed here; the Warn failure line and the Info partial line carry
+// the counter name in their "metric" attribute and are the telemetry.
 func dispatchMetricsGenerationRepair(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {

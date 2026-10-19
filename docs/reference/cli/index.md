@@ -1385,9 +1385,11 @@ before the range is done the command exits 0 and prints
 `generation_repair.partial=true`, `resume_from` (the target day of the first
 row not handled) and `remaining`. Rows commit one by one, so rerun the same
 command with `--from <resume_from>`; repeat until `partial` is false. A store
-failure still exits 1. Counters: `dev_health_generation_repair_partial_total`
-(expected, Info log) and `dev_health_generation_repair_failures_total{step}`
-(Warn/Error log).
+failure still exits 1. `dho` is a one-shot CLI with no metrics exporter, so its
+telemetry is the log lines: a Warn line (`metric`
+`dev_health_generation_repair_failures_total`, `step`) on a failure and an Info
+line (`metric` `dev_health_generation_repair_partial_total`) on a partial. The
+counters themselves are recorded for a process that has a MeterProvider.
 
 #### `metrics partition-recompute` (CHAOS-4459)
 

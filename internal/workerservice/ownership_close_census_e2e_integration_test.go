@@ -185,6 +185,16 @@ VALUES (gen_random_uuid(), $1, 'root', $2, $3, '[]', $4::json, true, true, $5, $
 				}
 				return result
 			}
+			if test.provider == "gitlab" {
+				// The groups were imported by an earlier teams run: a projects-only
+				// run writes ownership only for imported teams (CHAOS-9123).
+				for _, team := range []string{"gl:org", "gl:org/team-a"} {
+					if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, org_id, provider, native_team_key, is_active, updated_at)
+						VALUES (?, generateUUIDv4(), ?, ?, 'gitlab', ?, 1, '2026-01-01 00:00:00.000000')`, team, team, org, team); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 			setListed(true)
 			run(at)
 			seeded := map[string]uint64{"gitlab": 2, "github": 1}[test.provider]

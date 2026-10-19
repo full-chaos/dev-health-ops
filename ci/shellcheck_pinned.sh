@@ -91,8 +91,7 @@ fi
 #
 # EXCLUDED, unclean under this pin (cleaning them is separate work):
 #   ci/check_go_containers.sh, ci/local_validate.sh, ci/run_live_backend_e2e.sh,
-#   ci/run_metrics_executed_proof.sh, and two under scripts/acceptance/
-#   (resolve_acr_parent_compose.sh, run_ask_dev_provider_profile.sh).
+#   ci/run_metrics_executed_proof.sh.
 #
 # ALSO EXCLUDED, and for a different reason worth stating -- these are clean
 # under 0.11.0 but DIRTY under 0.9.0 and 0.10.0, i.e. they pass only because of the
@@ -140,7 +139,6 @@ FILES=(
   "${ROOT}/ci/aggregate_gate_results.sh"
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
-  "${ROOT}/scripts/acceptance/container_source_guard.sh"
   "${ROOT}/scripts/run_py_tool.sh"
   "${ROOT}/tests/compatibility/provider/run.sh"
   "${ROOT}/.github/docs-legacy/examples/customer-push/generic-runner.sh"

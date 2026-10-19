@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/authorization_decision.v1.schema.json",
+  "title": "Auth Control Plane authorization decision (v1 wire format)",
+  "description": "The decision point's answer to one authorization_request.v1 (TRD section 8, section 14).\n\nTHE FAIL-CLOSED RULE (TRD section 8: network, SDK, malformed-policy or PDP errors never return allow). `allowed` is REQUIRED, has NO default, and is a strict JSON boolean: a missing member, null, the string \"true\" or 1 is invalid, so a consumer can never read a malformed document as an allow. A consumer that cannot obtain a valid decision denies. A PDP failure is an error.v1 document (503), a different schema with a different `schema_version`, so \"the decision point failed\" and \"the decision point said no\" are distinguishable on the wire; this schema has no error member and cannot be mistaken for one.\n\nBYTES, NOT OBJECTS. A JSON object may repeat a member and every parser keeps the last: `{\"allowed\":false,\"allowed\":true}` decodes to an allow. The schema validates the survivor and cannot see this. The clients therefore refuse duplicate members on the raw bytes before validating (see the reject_by_client fixtures).\n\n`expires_at` is REQUIRED (lead ruling on Q2, CHAOS-4932: keep). TRD section 14's cache table makes decision expiry the bound on a stale allow, so a decision without one is invalid, deny as well as allow. `policy_revision` is required in every decision and is the ACP-ADR-05 monotonic revision of the active policy set (decision 3): every allow-cache key binds it. `reason_code` is a stable machine token, shape-only by reference to error.v1: user-facing text is caller-owned (TRD section 8), so free text is unrepresentable here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decision_id",
+    "allowed",
+    "reason_code",
+    "principal_id",
+    "organization_id",
+    "policy_revision",
+    "expires_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "authorization_decision.v1",
+      "description": "Identifies this document's contract. Reject an unrecognised value (G-26)."
+    },
+    "decision_id": {
+      "type": "string",
+      "pattern": "^dec_[A-Za-z0-9_-]{26}$",
+      "description": "Server-minted identifier correlating this decision with its audit row (TRD section 19). Never copied from caller input; fixed length as defence in depth, as in error.v1 request_id."
+    },
+    "allowed": {
+      "type": "boolean",
+      "description": "The decision. Required, no default, strict boolean. See the fail-closed rule above."
+    },
+    "reason_code": {
+      "$ref": "error.v1.schema.json#/properties/reason_code",
+      "description": "Stable, safe-for-audit machine token naming why (e.g. allowed_by_repository_grant). Shape from error.v1 by reference; each surface owns and closes its own vocabulary."
+    },
+    "principal_id": {
+      "$ref": "principal.v1.schema.json#/properties/principal_id",
+      "description": "The principal the decision is about, from principal.v1."
+    },
+    "organization_id": {
+      "$ref": "principal.v1.schema.json#/properties/organization_id",
+      "description": "Organization the decision applies in, from principal.v1; null ONLY for a platform or pre-organization decision, never as a default."
+    },
+    "policy_revision": {
+      "$ref": "principal.v1.schema.json#/properties/policy_revision",
+      "description": "ACP-ADR-05 policy revision the decision was made under; allow-cache keys bind it (G-31). Same definition as principal.v1; both clients accept only an integer token (a decimal or exponent form such as 42.0 is refused, CHAOS-4940) because the schema's `integer` admits it and cannot be the place it is caught."
+    },
+    "expires_at": {
+      "$ref": "principal.v1.schema.json#/properties/expires_at",
+      "description": "When this decision stops being usable (TRD section 14). Required for allow AND deny. After this instant the consumer must ask again; it must not reuse the decision."
+    },
+    "obligations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tenant_scope": {
+          "$ref": "principal.v1.schema.json#/properties/organization_id",
+          "type": "string",
+          "description": "The organization every read and write for this decision must stay within. Enforced locally by the resource service (TRD section 8)."
+        },
+        "repository_allowlist": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\\*)$"
+          },
+          "description": "Canonical repository keys the service may touch; `*` means organization-wide. An empty array means NONE, not unrestricted: unrestricted is the absence of the member plus a tenant scope."
+        },
+        "redaction": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "personal_identifiers",
+              "contact_details",
+              "free_text"
+            ]
+          },
+          "description": "Field classes the service must remove from its response. Closed on purpose: an obligation the consumer does not recognise is worse than a deny, so an unknown redaction class makes the whole decision invalid and the consumer denies."
+        },
+        "minimum_assurance": {
+          "$ref": "principal.v1.schema.json#/properties/authentication/properties/assurance",
+          "description": "The authenticator assurance level the principal must hold for this decision to apply; a lower level means the service denies (G-29: ignoring an obligation is ignoring a denial)."
+        },
+        "step_up": {
+          "type": "boolean",
+          "description": "True when the caller must complete step-up authentication before the action proceeds."
+        }
+      },
+      "description": "ENFORCEABLE obligations, not advice (TRD section 8: services enforce them locally). The member set is CLOSED and additionalProperties is false, so a decision carrying an obligation this contract does not define is invalid and fails closed rather than being half-honoured. Present only on an allow."
+    }
+  },
+  "if": {
+    "properties": {
+      "allowed": {
+        "const": false
+      }
+    },
+    "required": [
+      "allowed"
+    ]
+  },
+  "then": {
+    "not": {
+      "required": [
+        "obligations"
+      ],
+      "properties": {
+        "obligations": {}
+      }
+    },
+    "description": "A deny carries no obligations: an obligation on a deny is meaningless and invites a consumer to act on it."
+  }
+}

@@ -98,56 +98,71 @@ func refusal(t *testing.T, err error) string {
 
 func TestScopeSources(t *testing.T) {
 	enabled := []string{sourceA, sourceB, sourceC}
-	t.Run("absent flag keeps the whole enabled list", func(t *testing.T) {
-		got, err := scopeSources(plannerManaged(), nil, enabled)
-		if err != nil || !reflect.DeepEqual(got, enabled) {
+	selected := []string{sourceA, sourceB}
+	t.Run("absent flag names the selected sources, not every enabled one", func(t *testing.T) {
+		got, err := scopeSources(plannerManaged(), nil, enabled, selected)
+		if err != nil || !reflect.DeepEqual(got, selected) {
+			t.Fatalf("got %v, %v; want the selected %v", got, err, selected)
+		}
+	})
+	t.Run("absent flag with no selected source names an empty list", func(t *testing.T) {
+		got, err := scopeSources(plannerManaged(), nil, enabled, []string{})
+		if err != nil || got == nil || len(got) != 0 {
+			t.Fatalf("got %#v, %v; want an empty, non-nil list", got, err)
+		}
+	})
+	t.Run("an enabled source the configuration does not select is left to the trigger write", func(t *testing.T) {
+		// synchandoff.Mint, the one scope guard of every trigger writer, refuses it
+		// (TestBackfillPlansTheScheduledSourceSet).
+		got, err := scopeSources(plannerManaged(), []string{sourceA, sourceC}, enabled, selected)
+		if err != nil || !reflect.DeepEqual(got, []string{sourceA, sourceC}) {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("absent flag on a pinned configuration writes no list", func(t *testing.T) {
-		got, err := scopeSources(pinned(sourceB), nil, enabled)
+		got, err := scopeSources(pinned(sourceB), nil, enabled, nil)
 		if err != nil || got != nil {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("a subset keeps the enabled order, whatever the flag order or spelling", func(t *testing.T) {
-		got, err := scopeSources(plannerManaged(), []string{strings.ToUpper(sourceC), strings.ReplaceAll(sourceA, "-", ""), sourceC}, enabled)
+		got, err := scopeSources(plannerManaged(), []string{strings.ToUpper(sourceC), strings.ReplaceAll(sourceA, "-", ""), sourceC}, enabled, enabled)
 		if err != nil || !reflect.DeepEqual(got, []string{sourceA, sourceC}) {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("an unknown source is named and refused", func(t *testing.T) {
-		_, err := scopeSources(plannerManaged(), []string{sourceA, sourceX}, enabled)
+		_, err := scopeSources(plannerManaged(), []string{sourceA, sourceX}, enabled, enabled)
 		message := refusal(t, err)
 		if !strings.Contains(message, sourceX) || strings.Contains(message, sourceB) || !strings.Contains(message, "nothing was started") {
 			t.Fatalf("message %q", message)
 		}
 	})
 	t.Run("a disabled source is the same as an unknown one", func(t *testing.T) {
-		if _, err := scopeSources(plannerManaged(), []string{sourceC}, []string{sourceA, sourceB}); err == nil {
+		if _, err := scopeSources(plannerManaged(), []string{sourceC}, []string{sourceA, sourceB}, []string{sourceA, sourceB}); err == nil {
 			t.Fatal("a source that is not enabled was accepted")
 		}
 	})
 	t.Run("a text that is not a uuid is named and refused", func(t *testing.T) {
-		_, err := scopeSources(plannerManaged(), []string{"acme/widgets"}, enabled)
+		_, err := scopeSources(plannerManaged(), []string{"acme/widgets"}, enabled, enabled)
 		if message := refusal(t, err); !strings.Contains(message, `"acme/widgets"`) {
 			t.Fatalf("message %q", message)
 		}
 	})
 	t.Run("a pinned configuration accepts its own source and writes no list", func(t *testing.T) {
-		got, err := scopeSources(pinned(sourceB), []string{sourceB}, enabled)
+		got, err := scopeSources(pinned(sourceB), []string{sourceB}, enabled, nil)
 		if err != nil || got != nil {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("a pinned configuration whose source is not enabled is refused", func(t *testing.T) {
-		_, err := scopeSources(pinned(sourceB), []string{sourceB}, []string{sourceA, sourceC})
+		_, err := scopeSources(pinned(sourceB), []string{sourceB}, []string{sourceA, sourceC}, nil)
 		if message := refusal(t, err); !strings.Contains(message, sourceB) || !strings.Contains(message, "not an enabled source") {
 			t.Fatalf("message %q", message)
 		}
 	})
 	t.Run("a pinned configuration refuses another source", func(t *testing.T) {
-		_, err := scopeSources(pinned(sourceB), []string{sourceA}, enabled)
+		_, err := scopeSources(pinned(sourceB), []string{sourceA}, enabled, nil)
 		if message := refusal(t, err); !strings.Contains(message, sourceA) || !strings.Contains(message, sourceB) {
 			t.Fatalf("message %q", message)
 		}
@@ -158,57 +173,76 @@ func TestScopeDatasets(t *testing.T) {
 	// github's keys in DatasetKey order, of which the integration has these on.
 	enabledRows := []string{"repo-metadata", "commits", "files"}
 	t.Run("absent flag keeps what Validate resolved", func(t *testing.T) {
-		got, err := scopeDatasets(plannerManaged(), "github", nil, enabledRows, nil)
+		got, err := scopeDatasets(plannerManaged(), "github", nil, enabledRows, nil, nil)
 		if err != nil || !reflect.DeepEqual(got, enabledRows) {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("a subset of the enabled rows, in provider order", func(t *testing.T) {
-		got, err := scopeDatasets(plannerManaged(), "github", []string{"files", "commits", "files"}, enabledRows, nil)
+		got, err := scopeDatasets(plannerManaged(), "github", []string{"files", "commits", "files"}, enabledRows, nil, nil)
 		if err != nil || !reflect.DeepEqual(got, []string{"commits", "files"}) {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
 	t.Run("a key the provider does not have is unknown", func(t *testing.T) {
-		_, err := scopeDatasets(plannerManaged(), "github", []string{"commits", "no-such-dataset"}, enabledRows, nil)
+		_, err := scopeDatasets(plannerManaged(), "github", []string{"commits", "no-such-dataset"}, enabledRows, nil, nil)
 		message := refusal(t, err)
 		if !strings.Contains(message, `"no-such-dataset"`) || !strings.Contains(message, "known:") {
 			t.Fatalf("message %q", message)
 		}
 	})
 	t.Run("a key is exact: a different case is unknown", func(t *testing.T) {
-		if _, err := scopeDatasets(plannerManaged(), "github", []string{"Commits"}, enabledRows, nil); err == nil {
+		if _, err := scopeDatasets(plannerManaged(), "github", []string{"Commits"}, enabledRows, nil, nil); err == nil {
 			t.Fatal("the planner matches keys exactly, so Commits is not commits")
 		}
 	})
+	t.Run("a known key with no row is allowed: the planner runs it once", func(t *testing.T) {
+		got, err := scopeDatasets(plannerManaged(), "github", []string{"prs", "files"}, enabledRows, nil, nil)
+		if err != nil || !reflect.DeepEqual(got, []string{"files", "prs"}) {
+			t.Fatalf("got %v, %v", got, err)
+		}
+	})
 	t.Run("a known key whose row is off is refused: a backfill does not switch it on", func(t *testing.T) {
-		_, err := scopeDatasets(plannerManaged(), "github", []string{"prs"}, enabledRows, nil)
+		_, err := scopeDatasets(plannerManaged(), "github", []string{"prs"}, enabledRows, nil, []string{"prs"})
 		message := refusal(t, err)
 		if !strings.Contains(message, `"prs"`) || !strings.Contains(message, "does not switch a dataset on") {
 			t.Fatalf("message %q", message)
 		}
+		if _, err := scopeDatasets(plannerManaged(), "github", []string{"files", "prs"}, enabledRows, nil, []string{"prs"}); err == nil {
+			t.Fatal("one off key must refuse the whole run")
+		}
 	})
 	t.Run("a pinned configuration is held to its sync_targets keys", func(t *testing.T) {
 		config := pinned(sourceA)
-		if _, err := scopeDatasets(config, "github", []string{"files"}, []string{"commits"}, nil); err == nil {
+		if _, err := scopeDatasets(config, "github", []string{"files"}, []string{"commits"}, nil, nil); err == nil {
 			t.Fatal("a key the configuration's sync_targets do not select was accepted")
 		}
-		got, err := scopeDatasets(config, "github", []string{"commits"}, []string{"commits", "files"}, nil)
+		got, err := scopeDatasets(config, "github", []string{"commits"}, []string{"commits", "files"}, nil, nil)
 		if err != nil || !reflect.DeepEqual(got, []string{"commits"}) {
 			t.Fatalf("got %v, %v", got, err)
 		}
 	})
+	t.Run("a pinned configuration refuses a key its sync_targets select when the row is off", func(t *testing.T) {
+		_, err := scopeDatasets(pinned(sourceA), "github", []string{"commits"}, []string{"commits", "files"}, nil, []string{"commits"})
+		if message := refusal(t, err); !strings.Contains(message, `"commits"`) || !strings.Contains(message, "does not switch a dataset on") {
+			t.Fatalf("message %q", message)
+		}
+	})
 	t.Run("a pinned configuration with no sync_targets is held to the enabled rows", func(t *testing.T) {
-		got, err := scopeDatasets(pinned(sourceA), "github", []string{"commits"}, nil, []string{"commits", "files"})
+		got, err := scopeDatasets(pinned(sourceA), "github", []string{"commits"}, nil, []string{"commits", "files"}, nil)
 		if err != nil || !reflect.DeepEqual(got, []string{"commits"}) {
 			t.Fatalf("got %v, %v", got, err)
 		}
-		_, err = scopeDatasets(pinned(sourceA), "github", []string{"prs"}, nil, []string{"commits", "files"})
+		_, err = scopeDatasets(pinned(sourceA), "github", []string{"prs"}, nil, []string{"commits", "files"}, []string{"prs"})
 		if message := refusal(t, err); !strings.Contains(message, `"prs"`) || !strings.Contains(message, "does not switch a dataset on") {
 			t.Fatalf("message %q", message)
 		}
-		if _, err := scopeDatasets(pinned(sourceA), "github", []string{"prs"}, nil, nil); err == nil {
-			t.Fatal("a key with no enabled row at all was accepted")
+		got, err = scopeDatasets(pinned(sourceA), "github", []string{"prs"}, nil, []string{"commits", "files"}, nil)
+		if err != nil || !reflect.DeepEqual(got, []string{"prs"}) {
+			t.Fatalf("a key with no row at all: got %v, %v", got, err)
+		}
+		if _, err := scopeDatasets(pinned(sourceA), "github", []string{"prs"}, nil, nil, []string{"prs"}); err == nil {
+			t.Fatal("a key whose only row is off was accepted")
 		}
 	})
 }

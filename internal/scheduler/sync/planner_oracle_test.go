@@ -398,7 +398,7 @@ func TestBuildScheduledPlanMatchesFrozenPythonPlanner(t *testing.T) {
 //
 // The frozen planner capped the incremental window of HEAVY datasets only, so
 // it planned a work-item family first sync or catch-up as one window of the
-// full depth. Go ratchets the family as well for GitHub and Linear
+// full depth. Go ratchets the family as well for GitHub, GitLab, Jira and Linear
 // (WindowRatchetClass). The golden
 // cannot be recorded again -- the planner it was recorded from is deleted --
 // so the expectation for these units is the frozen answer with that one rule
@@ -411,8 +411,13 @@ func TestBuildScheduledPlanMatchesFrozenPythonPlanner(t *testing.T) {
 var workItemFamilyWindowDivergence = []string{
 	"github_incremental_family",
 	"provider_matrix_github",
+	"provider_matrix_gitlab",
+	"provider_matrix_jira",
 	"provider_matrix_linear",
 	"ratchet_light_cold_start_is_uncapped",
+	"routing_child_recognized",
+	"routing_child_unrecognized_fallback",
+	"routing_parent_all_enabled",
 	"work_item_family_canonical_claim_is_planned",
 }
 
@@ -431,7 +436,7 @@ func applyWorkItemFamilyWindowRule(t *testing.T, cases []plannerOracleCase, want
 		caseChanged := false
 		for _, unit := range want[test.ID] {
 			if unit["dataset_key"] != "work-items" || unit["mode"] != SyncModeIncremental ||
-				(unit["provider"] != "github" && unit["provider"] != "linear") {
+				(unit["provider"] != "github" && unit["provider"] != "linear" && unit["provider"] != "gitlab" && unit["provider"] != "jira") {
 				continue
 			}
 			startText, hasStart := unit["window_start"].(string)

@@ -1,0 +1,58 @@
+{
+  "description": "The closed vocabularies for two auth wire fields. A value is added only with the PR of the producer that emits it, together with its own migration; no speculative values (CHAOS-10194). error.v1 and authorization_decision.v1 reason_code stay open per surface and are NOT governed by this file.",
+  "revoked_reason": {
+    "fields": [
+      "credential-entry.v1 revoked_reason",
+      "credential-list.v1 items[].revoked_reason",
+      "database column credential_registry.revoked_reason (CHECK)"
+    ],
+    "values": [
+      "compromised",
+      "owner_request"
+    ]
+  },
+  "audit_reason_code": {
+    "fields": [
+      "audit-event.v1 attributes.reason_code"
+    ],
+    "values": [
+      "allowed_by_repository_grant",
+      "grant_absent",
+      "repository_not_granted",
+      "platform_role_absent",
+      "credential_missing",
+      "rate_limited",
+      "current_state_unavailable",
+      "authority_unavailable",
+      "upstream_unavailable",
+      "not_found",
+      "revision_conflict",
+      "internal_error",
+      "compromised",
+      "owner_request",
+      "role_granted",
+      "role_revoked",
+      "membership_added",
+      "membership_removed",
+      "membership_status_changed",
+      "grant_created",
+      "grant_revoked",
+      "credential_issued",
+      "credential_rotated",
+      "credential_revoked",
+      "session_revoked",
+      "organization_created",
+      "organization_updated",
+      "principal_disabled",
+      "principal_enabled",
+      "identity_linked",
+      "identity_unlinked",
+      "policy_revision_activated",
+      "entitlement_snapshot_applied",
+      "denied_no_membership",
+      "denied_no_grant",
+      "denied_policy"
+    ],
+    "note": "The codes used by authorization decisions and error.v1 in valid fixtures of this corpus, the revoked_reason values, and the 22 reason codes the merged audit producer (internal/audit attributeVocabulary) accepts. A Go test checks the producer's list against audit-event.v1."
+  }
+}

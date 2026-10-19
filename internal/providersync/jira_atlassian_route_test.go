@@ -34,6 +34,8 @@ type jiraAtlassianDoer struct {
 	devStatusBody     string
 	// searchStatus, when set, is the status of every search request (a failing search).
 	searchStatus int
+	// searchBody, when set, replaces the search answer.
+	searchBody string
 }
 
 func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error) {
@@ -48,6 +50,8 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 	case request.URL.Path == "/rest/api/3/search/jql" && doer.searchStatus != 0:
 		status = doer.searchStatus
 		body = `{"errorMessages":["bad request"]}`
+	case request.URL.Path == "/rest/api/3/search/jql" && doer.searchBody != "":
+		body = doer.searchBody
 	case request.URL.Path == "/rest/api/3/search/jql":
 		body = `{"issues":[{"id":"10060","key":"OPS-201","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-201","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Atlassian path","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Task"},"labels":["support"],"priority":{"name":"Highest"},"assignee":{"accountId":"assignee-201","displayName":"Assignee"},"reporter":{"emailAddress":"reporter@example.com","accountId":"reporter-201","displayName":"Reporter"},"created":"2026-08-01T08:00:00Z","updated":"2026-08-02T09:00:00Z","resolutiondate":"2026-08-02T08:30:00Z","customfield_10020":[{"id":9001,"name":"August"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-202"}}]}}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
@@ -82,7 +86,7 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 }
 
 func jiraAtlassianClaim() Claim {
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_worklogs":      true,
@@ -504,7 +508,7 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 			return nil, nil
 		}
 	})
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_dev_status": true, "dev_status_max_requests": 2, "fetch_comments": false,
@@ -569,7 +573,7 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 			return nil, nil
 		}
 	})
-	claim := nativeTestClaim("jira", "work-items")
+	claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
 		"fetch_dev_status": true, "dev_status_max_requests": 3, "fetch_comments": false,
@@ -799,7 +803,7 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 					return nil, nil
 				}
 			})
-			claim := nativeTestClaim("jira", "work-items")
+			claim := jiraFixtureWindow(nativeTestClaim("jira", "work-items"))
 			claim.SourceExternalID = "OPS"
 			claim.DatasetOptions = map[string]any{"fetch_dev_status": true, "fetch_comments": false}
 			client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
@@ -861,7 +865,7 @@ func TestJiraAtlassianRouteLogsItsFetchWindowAtInfo(t *testing.T) {
 	}
 	line := logged.String()
 	if !strings.Contains(line, "msg=jira_work_items_window") || !strings.Contains(line, "issues=1") ||
-		!strings.Contains(line, "updated >= '2026-06-30' AND updated < '2026-08-02'") || strings.Contains(line, "statusCategory") {
+		!strings.Contains(line, "updated >= '2026-06-30' AND updated < '2026-09-02'") || strings.Contains(line, "statusCategory") {
 		t.Fatalf("the active Jira route did not log its bounded window: %q", line)
 	}
 }
@@ -886,5 +890,64 @@ func TestJiraAtlassianRouteLogsItsFetchWindowWhenTheSearchFails(t *testing.T) {
 	line := logged.String()
 	if !strings.Contains(line, "msg=jira_work_items_window") || !strings.Contains(line, "search_failed=true") || !strings.Contains(line, "issues=0") {
 		t.Fatalf("a failed search emitted no window line: %q", line)
+	}
+}
+
+// The Atlassian route accounts its search, changelog, board and sprint reads to
+// jira_jql / jira_issue_enrichment and the worklog reads to jira_worklogs, the
+// families the dispatch estimate names; none is left unlabelled.
+func TestJiraAtlassianRouteLabelsEveryRequestWithTheEstimatesFamilies(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	doer := &jiraAtlassianDoer{t: t}
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(doer), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	client.Ledger = providerfoundation.NewRequestLedger()
+	if _, err := jiraAtlassianCompleteHandler(t).Collect(
+		context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	); err != nil {
+		t.Fatal(err)
+	}
+	assertRouteRequestsAreLabelled(t, "jira", claim.Dataset, client.Ledger, "jira_jql", "jira_issue_enrichment", "jira_worklogs")
+}
+
+// The GraphQL client of the route is a second client; its wire requests are
+// part of the unit and are counted in the unit's ledger with the REST ones.
+func TestJiraAtlassianRouteCountsTheGraphQLClientsRequestsInTheUnitLedger(t *testing.T) {
+	claim := jiraAtlassianClaim()
+	claim.DatasetOptions["atlassian_gql_enabled"] = true
+	rest := &jiraAtlassianDoer{t: t}
+	restHits, graphqlHits := 0, 0
+	restCounting := jiraAtlassianDoerFunc(func(request *http.Request) (*http.Response, error) {
+		restHits++
+		return rest.Do(request)
+	})
+	graphql := jiraAtlassianDoerFunc(func(request *http.Request) (*http.Response, error) {
+		graphqlHits++
+		body := `{"data":{"issue":{"worklogs":{"pageInfo":{"hasNextPage":false,"endCursor":""},"edges":[]}}}}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)), Request: request,
+		}, nil
+	})
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(restCounting), lease)
+	client.Ledger = providerfoundation.NewRequestLedger()
+	handler := jiraAtlassianCompleteHandler(t)
+	handler.CloudID, handler.GraphQLClient = "cloud-301", jiraWorkItemsTestClient(t, fakehttp.Client(graphql), lease)
+	if _, err := handler.Collect(context.Background(), claim, providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if graphqlHits == 0 {
+		t.Fatal("the route sent no GraphQL request, so nothing below tests anything")
+	}
+	entries, dropped := client.Ledger.Snapshot()
+	counted := 0
+	for _, entry := range entries {
+		counted += entry.Requests
+	}
+	if counted != restHits+graphqlHits || dropped != 0 {
+		t.Fatalf("ledger counted %d (dropped %d), want %d REST + %d GraphQL wire requests: %v", counted, dropped, restHits, graphqlHits, entries)
 	}
 }

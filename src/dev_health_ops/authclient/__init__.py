@@ -7,6 +7,12 @@ deliberately ships no decision call yet rather than a stub that would have to
 be believed.
 """
 
+from dev_health_ops.authclient.authorization import (
+    AuthorizationDecision,
+    AuthorizationObligations,
+    parse_batch_response_bytes,
+    parse_decision_bytes,
+)
 from dev_health_ops.authclient.contracts import (
     ContractError,
     Violation,
@@ -16,6 +22,17 @@ from dev_health_ops.authclient.contracts import (
     validate,
     validator_for,
     violations,
+)
+from dev_health_ops.authclient.credential import (
+    CredentialBody,
+    CredentialEntry,
+    CredentialList,
+    CredentialReceipt,
+    check_credential_rotation,
+    check_credential_transition,
+    parse_credential_entry,
+    parse_credential_list,
+    parse_credential_receipt,
 )
 from dev_health_ops.authclient.discovery import Discovery, parse_discovery
 from dev_health_ops.authclient.error_envelope import (
@@ -37,8 +54,39 @@ from dev_health_ops.authclient.provisioning_event import (
     parse_audit_event,
     parse_provisioning_event,
 )
+from dev_health_ops.authclient.session_contracts import (
+    AuthOutcome,
+    RefreshRequest,
+    RefreshResponse,
+    Session,
+    parse_auth_outcome,
+    parse_refresh_request,
+    parse_refresh_response,
+    parse_session,
+)
 
 __all__ = [
+    "AuthorizationDecision",
+    "AuthorizationObligations",
+    "parse_batch_response_bytes",
+    "parse_decision_bytes",
+    "AuthOutcome",
+    "RefreshRequest",
+    "RefreshResponse",
+    "Session",
+    "parse_auth_outcome",
+    "parse_refresh_request",
+    "parse_refresh_response",
+    "parse_session",
+    "CredentialBody",
+    "CredentialEntry",
+    "CredentialList",
+    "CredentialReceipt",
+    "check_credential_rotation",
+    "check_credential_transition",
+    "parse_credential_entry",
+    "parse_credential_list",
+    "parse_credential_receipt",
     "AuditEvent",
     "ConsumerCursor",
     "ProvisioningEvent",

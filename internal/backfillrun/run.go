@@ -32,6 +32,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 )
 
 const (
@@ -77,21 +78,58 @@ func normalizeUUID(text string) (string, error) {
 type Validated struct {
 	DatasetKeys    []string
 	EnabledSources int
+	// SelectedSources is how many sources a scheduled run of the configuration
+	// plans (schedsync.ScheduledSourceIDs); 0 for a configuration pinned to one
+	// source.
+	SelectedSources int
 	// SourceIDs is the explicit source list the trigger carries (nil: none).
 	SourceIDs []string
 }
 
-// sourceIDsFor is the source scope of the trigger. Python's planner took
-// source_ids=None to mean every enabled source of the integration. The scheduler
-// reads a NULL list on a planner-managed configuration as "the sources tagged for
-// this configuration", which can be none: a run over untagged sources would
-// complete with zero units. So the enabled sources are named. A configuration
-// pinned to one source is scoped by that source and carries no list.
-func sourceIDsFor(config *Config, enabled []string) []string {
+// sourceIDsFor is the source scope of a trigger that names no sources: the
+// sources a scheduled run of the configuration plans (selected), named so the
+// written list is the set the hourly run uses for the same window. Python's
+// planner took source_ids=None to mean every enabled source of the integration,
+// which planned sources the configuration does not select (CHAOS-10064, chris
+// 2026-10-17: a backfill plans the hourly run's scope). A configuration pinned
+// to one source is scoped by that source and carries no list.
+func sourceIDsFor(config *Config, selected []string) []string {
 	if config.PlannerManaged && config.SourceID == nil {
-		return enabled
+		return selected
 	}
 	return nil
+}
+
+// disabledDatasetKeys is the keys of the integration's dataset rows that are
+// off and that the provider's registry holds, in DatasetKey order. A key with
+// no row at all is in neither list.
+func disabledDatasetKeys(ctx context.Context, tx pgx.Tx, config *Config, provider string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+SELECT dataset_key FROM public.integration_datasets
+WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled IS NOT true`, config.OrgID, *config.IntegrationID)
+	if err != nil {
+		return nil, fmt.Errorf("list disabled datasets: %w", err)
+	}
+	off := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		off[key] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	keys := []string{}
+	for _, key := range schedsync.SupportedDatasetKeys(provider) {
+		if off[key] {
+			keys = append(keys, key)
+		}
+	}
+	return keys, nil
 }
 
 // rowsOwnSelection reports whether the integration's dataset rows own which
@@ -262,7 +300,9 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 		// An empty key list would be written as "no selection", which the
 		// scheduler reads as every enabled dataset and which lets it add its
 		// automatic rows: a run that names nothing is not started.
-		if len(keys) == 0 {
+		// With --dataset-keys the scope decides: a key with no row is
+		// allowed (CHAOS-10088), and scopeDatasets refuses a run it cannot name.
+		if len(keys) == 0 && len(params.DatasetKeys) == 0 {
 			return Validated{}, RefusedError{Message: fmt.Sprintf("backfill run: integration %s of sync configuration %s (%s) has no enabled dataset "+
 				"that provider %s supports, so there is nothing to backfill: nothing was started. Enable a dataset for the integration first "+
 				"(check its box in the sync settings); a backfill does not switch a dataset on.",
@@ -270,21 +310,37 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 		}
 		datasetKeys = keys
 	}
-	sourceIDs, err := scopeSources(config, params.SourceIDs, enabled)
+	var selected []string
+	switch {
+	case synchandoff.SelectionApplies(config):
+		if selected, err = schedsync.ScheduledSourceIDs(ctx, tx, config.OrgID, *config.IntegrationID, config.ID, nil, true); err != nil {
+			return Validated{}, fmt.Errorf("list the sources the configuration selects: %w", err)
+		}
+	case config.PlannerManaged && config.SourceID == nil:
+		// PagerDuty is account-scoped: its trigger names every enabled source, as before.
+		selected = enabled
+	}
+	sourceIDs, err := scopeSources(config, params.SourceIDs, enabled, selected)
 	if err != nil {
 		return Validated{}, err
 	}
-	var enabledRows []string
+	var enabledRows, disabledRows []string
 	if len(params.DatasetKeys) > 0 && len(datasetKeys) == 0 {
 		if enabledRows, err = enabledDatasetKeys(ctx, tx, config, provider); err != nil {
 			return Validated{}, err
 		}
 	}
-	datasetKeys, err = scopeDatasets(config, provider, params.DatasetKeys, datasetKeys, enabledRows)
+	// PagerDuty's plan re-enables its operational rows first (Python pagerduty_repair._repair_datasets, row.is_enabled = True), so an off row does not stop its run.
+	if len(params.DatasetKeys) > 0 && provider != "pagerduty" {
+		if disabledRows, err = disabledDatasetKeys(ctx, tx, config, provider); err != nil {
+			return Validated{}, err
+		}
+	}
+	datasetKeys, err = scopeDatasets(config, provider, params.DatasetKeys, datasetKeys, enabledRows, disabledRows)
 	if err != nil {
 		return Validated{}, err
 	}
-	return Validated{DatasetKeys: datasetKeys, EnabledSources: len(enabled), SourceIDs: sourceIDs}, nil
+	return Validated{DatasetKeys: datasetKeys, EnabledSources: len(enabled), SelectedSources: len(selected), SourceIDs: sourceIDs}, nil
 }
 
 func pyRepr(text string) string {

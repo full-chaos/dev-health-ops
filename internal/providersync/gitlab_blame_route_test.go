@@ -193,6 +193,9 @@ func TestGitLabBlameRouteAbortsOnRateLimit(t *testing.T) {
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
 		t.Fatalf("rate-limit error=%v", err)
 	}
+	if !strings.Contains(err.Error(), "route=/projects/{project}/repository/files/{file}/blame") {
+		t.Fatalf("rate-limit error=%v, want the blame route", err)
+	}
 }
 
 func TestGitLabBlameRouteNoCommitAtBoundDoesNotInventRows(t *testing.T) {

@@ -222,18 +222,22 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	counted := *client
 	counted.Doer = jiraAtlassianCountingDoer{delegate: client.Doer, attempts: &requests}
 	client = &counted
+	// As in the legacy JQL route: enrichment unless a request says otherwise.
+	ctx = budgetAccount(ctx, "jira_issue_enrichment")
 	if handler.GraphQLClient != nil {
 		countedGraphQL := *handler.GraphQLClient
 		countedGraphQL.Doer = jiraAtlassianCountingDoer{delegate: handler.GraphQLClient.Doer, attempts: &requests}
+		countedGraphQL.Ledger = client.Ledger
 		handler.GraphQLClient = &countedGraphQL
 	}
 
 	jql := jiraWorkItemsJQL(claim, projectKey)
-	issues, searchPages, err := collectJiraAtlassianIssues(ctx, client, jql, maxPages, maxRows, perPage)
+	issues, searchPages, err := collectJiraAtlassianIssues(ctx, client, jql, maxPages, maxRows, perPage, jiraIssueInWindow(claim))
 	logJiraWorkItemsWindow(ctx, claim, projectKey, jql, len(issues), searchPages, err)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	issues = dropJiraIssuesOutsideWindow(ctx, client.Metrics, claim, issues)
 
 	rows := jiraAtlassianRows{jiraWorkItemRows: jiraWorkItemRows{
 		WorkItems:          make([]jiraWorkItemRow, 0, len(issues)),
@@ -525,7 +529,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 					commentCtx, cancelComments = context.WithDeadline(ctx, commentsStopAt)
 				}
 				comments, _, commentErr := collectJiraIssueComments(
-					commentCtx, client, item.WorkItemID, maxPages, perPage, issueLimit,
+					budgetAccount(commentCtx, jiraCommentsFamily(claim)), client, item.WorkItemID, maxPages, perPage, issueLimit,
 				)
 				innerDeadline := commentsHaveDeadline && ctx.Err() == nil &&
 					errors.Is(commentCtx.Err(), context.DeadlineExceeded)
@@ -713,8 +717,8 @@ func cloneJiraSprintRows(rows []jiraSprintRow) []jiraSprintRow {
 // search response would be wasted bytes the caller never reads -- and could
 // trip jiraFetchObject's 2MiB per-object cap on a history-heavy page,
 // failing an otherwise-healthy sync (caught in codex review).
-func collectJiraAtlassianIssues(ctx context.Context, client *providerfoundation.HTTPClient, jql string, maxPages, maxRows, perPage int) ([]map[string]any, int, error) {
-	return collectJiraWorkItemIssues(ctx, client, jql, maxPages, maxRows, perPage, false)
+func collectJiraAtlassianIssues(ctx context.Context, client *providerfoundation.HTTPClient, jql string, maxPages, maxRows, perPage int, inWindow func(map[string]any) bool) ([]map[string]any, int, error) {
+	return collectJiraWorkItemIssues(ctx, client, jql, maxPages, maxRows, perPage, false, inWindow)
 }
 
 func collectJiraAtlassianChangelog(ctx context.Context, client *providerfoundation.HTTPClient, issueKey string, maxPages int) ([]any, int, error) {
@@ -735,7 +739,7 @@ func collectJiraAtlassianChangelog(ctx context.Context, client *providerfoundati
 			Total  *int              `json:"total"`
 			IsLast *bool             `json:"isLast"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/changelog?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/{issue}/changelog", "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/changelog?"+query.Encode(), nil, &page); err != nil {
 			return nil, pages + 1, err
 		}
 		if page.Values == nil {
@@ -842,7 +846,7 @@ func collectJiraBoards(ctx context.Context, client *providerfoundation.HTTPClien
 			} `json:"values"`
 			IsLast *bool `json:"isLast"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board", "/rest/agile/1.0/board?"+query.Encode(), nil, &page); err != nil {
 			return nil, requests + 1, err
 		}
 		requests++
@@ -883,7 +887,7 @@ func collectJiraBoardSprints(ctx context.Context, client *providerfoundation.HTT
 			Values []json.RawMessage `json:"values"`
 			IsLast *bool             `json:"isLast"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board/"+strconv.FormatInt(boardID, 10)+"/sprint?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/board/{board}/sprint", "/rest/agile/1.0/board/"+strconv.FormatInt(boardID, 10)+"/sprint?"+query.Encode(), nil, &page); err != nil {
 			return nil, requests + 1, err
 		}
 		requests++
@@ -912,7 +916,7 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 	graphqlRequests := 0
 	if graphql && strings.TrimSpace(cloudID) != "" {
 		observation.GraphQLAttempted = true
-		if values, requests, err := collectJiraGraphQLWorklogs(ctx, graphqlClient, issueKey, maxPages, cloudID); err == nil {
+		if values, requests, err := collectJiraGraphQLWorklogs(budgetAccount(ctx, "jira_gql_enrichment"), graphqlClient, issueKey, maxPages, cloudID); err == nil {
 			observation.GraphQLRequests = requests
 			observation.GraphQLSucceeded = true
 			return values, requests, observation, nil
@@ -938,7 +942,7 @@ func collectJiraAtlassianWorklogs(ctx context.Context, client, graphqlClient *pr
 			Worklogs []json.RawMessage `json:"worklogs"`
 			Total    *int              `json:"total"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/worklog?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(budgetAccount(ctx, "jira_worklogs"), client, http.MethodGet, "/rest/api/3/issue/{issue}/worklog", "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/worklog?"+query.Encode(), nil, &page); err != nil {
 			observation.RESTRequests = requests + 1
 			return nil, graphqlRequests + requests + 1, observation, err
 		}
@@ -986,7 +990,7 @@ func collectJiraGraphQLWorklogs(ctx context.Context, client *providerfoundation.
 		if err != nil {
 			return nil, requests, err
 		}
-		response, err := client.Do(ctx, http.MethodPost, "/graphql", bytes.NewReader(body))
+		response, err := client.DoRoute(ctx, http.MethodPost, graphQLRoute, "/graphql", bytes.NewReader(body))
 		requests++
 		if err != nil {
 			return nil, requests, err

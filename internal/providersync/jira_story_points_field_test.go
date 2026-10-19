@@ -56,6 +56,7 @@ func jiraStoryPointsOf(t *testing.T, options map[string]any, discovered []string
 		fields[key] = value
 	}
 	claim := nativeTestClaim("jira", "work-items")
+	claim = jiraFixtureWindow(claim)
 	claim.OrgID = input["org_id"].(string)
 	claim.DatasetOptions = options
 	row, _, err := normalizeJiraWorkItem(
@@ -167,6 +168,7 @@ func collectJiraPoints(t *testing.T, live bool, options map[string]any, route *j
 func tryCollectJiraPoints(t *testing.T, live bool, options map[string]any, route *jiraPointsRoute) (CompleteRouteBatch, error) {
 	t.Helper()
 	claim := nativeTestClaim("jira", "work-items")
+	claim = jiraFixtureWindow(claim)
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = options
 	client := jiraWorkItemsTestClient(t, route, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))

@@ -41,9 +41,11 @@ at once with --no-wait.
 
 --source-ids and --dataset-keys scope the run to part of the configuration, so that
 a window of many chunks stays under the unit cap. Each takes a comma list and may be
-repeated. Every id must be an enabled source of the configuration's integration and
-every key a dataset the run could already name; a backfill never switches a dataset
-on. Without them the run covers every enabled source and dataset, as before.
+repeated. Every id must be an enabled source of the configuration's integration. Every
+key must be a dataset key of the provider: one the integration has on, or one it has no
+row for (the run plans it once and writes no row, so the schedule does not change). A key
+whose row is off is refused; a backfill never switches a dataset on. Without them the run
+covers every enabled source and dataset, as before.
 
 Only a planner-managed configuration, or one pinned to a single source, can be
 started this way: the scheduler materializes no other.
@@ -181,7 +183,7 @@ func runVerb(ctx context.Context, env cli.Env) int {
 	logger.Info("backfill queued",
 		"since", window.Since.Format(time.RFC3339Nano), "before", window.Before.Format(time.RFC3339Nano),
 		"provider", trigger.Provider, "sync_targets", trigger.SyncTargets, "dataset_keys", trigger.DatasetKeys,
-		"enabled_sources", trigger.EnabledSources, "requested_source_ids", sourceIDs.values, "requested_dataset_keys", datasetKeys.values, "occurrence_id", trigger.OccurrenceID, "database_source", dsnSource)
+		"enabled_sources", trigger.EnabledSources, "selected_sources", trigger.SelectedSources, "requested_source_ids", sourceIDs.values, "requested_dataset_keys", datasetKeys.values, "occurrence_id", trigger.OccurrenceID, "database_source", dsnSource)
 	if *noWait {
 		fmt.Fprintf(env.Stdout, "Backfill queued: occurrence_id=%s\n", trigger.OccurrenceID)
 		return cli.ExitOK
@@ -233,6 +235,7 @@ func Start(ctx context.Context, pool *pgxpool.Pool, configID string, params Para
 		return Trigger{}, err
 	}
 	trigger.EnabledSources = validated.EnabledSources
+	trigger.SelectedSources = validated.SelectedSources
 	if err := tx.Commit(ctx); err != nil {
 		return Trigger{}, fmt.Errorf("commit: %w", err)
 	}

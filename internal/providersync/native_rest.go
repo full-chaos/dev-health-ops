@@ -668,12 +668,9 @@ func (handler NativeRESTHandler) normalizeChildren(
 	return envelopes, nil
 }
 
-func fetchObject(ctx context.Context, client *providerfoundation.HTTPClient, path string, target any) error {
-	return fetchObjectRoute(ctx, client, "", path, target)
-}
-
-// fetchObjectRoute is fetchObject for a path that carries an org, group or
-// member name: a failure names the static route template instead.
+// fetchObjectRoute fetches one JSON object; a failure names the static route
+// template, never the path (which carries an owner, repository, project, org,
+// group or member name).
 func fetchObjectRoute(ctx context.Context, client *providerfoundation.HTTPClient, route, path string, target any) error {
 	response, err := client.DoRoute(ctx, http.MethodGet, route, path, nil)
 	if err != nil {
@@ -903,3 +900,17 @@ func resultWithEvidence(
 }
 
 var _ DatasetHandler = NativeRESTHandler{}
+
+// routedError names the route template of a failure a route builds itself,
+// outside the HTTP client (a redirect with no target, a body that fails to
+// read). It wraps the cause, so errors.Is and errors.As still see it.
+type routedError struct {
+	err   error
+	route string
+}
+
+func (e routedError) Error() string { return e.err.Error() + " route=" + e.route }
+
+func (e routedError) Unwrap() error { return e.err }
+
+func withRoute(err error, route string) error { return routedError{err: err, route: route} }

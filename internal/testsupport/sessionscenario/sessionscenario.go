@@ -15,6 +15,10 @@
 //     where only the Go route set runs, against Postgres/ClickHouse/Valkey
 //     containers, and every answer and row is compared with that golden.
 //
+// Both runners go through RunTarget (target.go): the corpus reaches the server by base URL and its
+// stores by URI, so go-api in process and an external go-api or auth-service run the same steps. Quirks
+// (quirks_table.go) classes each recorded behaviour that differs from a clean contract.
+//
 // Bodies are compared with every token replaced by its decoded claims
 // (iat, exp, jti and family_id blanked, the lifetime kept), random ids of
 // users the scenario creates blanked, and /me's permission list compared

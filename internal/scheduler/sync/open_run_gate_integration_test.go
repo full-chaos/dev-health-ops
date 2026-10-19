@@ -678,7 +678,7 @@ func TestManualTriggerIsAcceptedWhileAScheduledRunIsOpenAndNeverBlocksTheSchedul
 		if err != nil {
 			return err
 		}
-		trigger, err = synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{Mode: "incremental", TriggeredBy: "manual"}, hour.Add(2*time.Minute))
+		trigger, err = synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{Mode: "incremental", TriggeredBy: "manual", Caller: "open_run_gate_test"}, hour.Add(2*time.Minute))
 		return err
 	}); err != nil {
 		t.Fatalf("manual trigger with a scheduled run open: %v", err)

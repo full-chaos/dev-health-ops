@@ -107,6 +107,7 @@ func Org(id ID) Attr         { return Attr{slog.String("org_id", id.text)} }
 func Integration(id ID) Attr { return Attr{slog.String("integration_id", id.text)} }
 func Source(id ID) Attr      { return Attr{slog.String("source_id", id.text)} }
 func Dispatch(id ID) Attr    { return Attr{slog.String("dispatch_id", id.text)} }
+func SyncConfig(id ID) Attr  { return Attr{slog.String("sync_config_id", id.text)} }
 
 // Provider is a provider name as a label.
 func Provider(value Label) Attr { return Attr{slog.String("provider", value.text)} }

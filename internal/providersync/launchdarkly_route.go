@@ -149,10 +149,10 @@ func (handler LaunchDarklyRouteHandler) Collect(
 	counted := *client
 	counted.Doer = launchDarklyCountingDoer{delegate: client.Doer, attempts: &requests}
 	flagsPage, err := providerfoundation.CollectLaunchDarklyOffsetPages(
-		ctx,
+		budgetAccount(ctx, "flags"),
 		&counted,
 		providerfoundation.LaunchDarklyOffsetOptions{
-			Path: "/api/v2/flags/" + url.PathEscape(projectKey), MaxPages: maxPages,
+			Path: "/api/v2/flags/" + url.PathEscape(projectKey), Route: "/api/v2/flags/{project}", MaxPages: maxPages,
 		},
 	)
 	if err != nil {
@@ -162,7 +162,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrPaginationCapExceeded
 	}
 	auditPage, err := providerfoundation.CollectLaunchDarklyAuditPages(
-		ctx,
+		budgetAccount(ctx, "audit_log"),
 		&counted,
 		providerfoundation.LaunchDarklyAuditOptions{
 			Since: claim.SinceAt, MaxItems: 1_000,
@@ -172,7 +172,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 		return CompleteRouteBatch{}, fmt.Errorf("launchdarkly audit pagination: %w", err)
 	}
 	codeReferencePayload, codeReferenceErr := fetchLaunchDarklyCodeReferences(
-		ctx, &counted, projectKey,
+		budgetAccount(ctx, "code_refs"), &counted, projectKey,
 	)
 	if codeReferenceErr != nil {
 		if ctx.Err() != nil {
@@ -291,9 +291,10 @@ func fetchLaunchDarklyCodeReferences(
 		"withReferencesForDefaultBranch": {"1"},
 		"projKey":                        {projectKey},
 	}
-	response, err := client.Do(
+	response, err := client.DoRoute(
 		ctx,
 		http.MethodGet,
+		"/api/v2/code-refs/repositories",
 		"/api/v2/code-refs/repositories?"+query.Encode(),
 		nil,
 	)

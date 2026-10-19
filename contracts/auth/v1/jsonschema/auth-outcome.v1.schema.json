@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/auth-outcome.v1.schema.json",
+  "title": "Auth Control Plane auth outcome (v1 wire format)",
+  "description": "One authentication outcome for metrics and audit, carried by a CLOSED enum of stable, secret-free reason codes (TRD section 19). Every reason code also satisfies error.v1's reason_code pattern, so one vocabulary serves both. A success carries only a success reason; any other result carries none. The contract is subtractive: credential values, hashes, passwords, provider tokens, e-mail addresses and network addresses have no field, and additionalProperties:false makes that absence enforceable (TRD section 18, G-16, G-17).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "operation",
+    "result",
+    "reason_code",
+    "request_id",
+    "occurred_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "auth-outcome.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies); additive evolution stays in v1 (TRD section 21)."
+    },
+    "operation": {
+      "enum": [
+        "login",
+        "refresh",
+        "logout",
+        "session_current",
+        "session_revoke",
+        "session_revoke_all",
+        "register",
+        "verify_email",
+        "password_reset",
+        "password_change",
+        "social_exchange",
+        "sso_exchange"
+      ],
+      "description": "The auth flow that produced the outcome. Closed."
+    },
+    "result": {
+      "enum": [
+        "success",
+        "denied",
+        "error"
+      ],
+      "description": "denied = the caller was refused; error = the service could not decide."
+    },
+    "reason_code": {
+      "enum": [
+        "accepted",
+        "refresh_grace_replay",
+        "malformed",
+        "bad_signature",
+        "audience",
+        "issuer",
+        "expired",
+        "not_yet_valid",
+        "missing_sub",
+        "missing_type",
+        "type_mismatch",
+        "refresh_unknown",
+        "refresh_expired",
+        "refresh_reused",
+        "session_revoked",
+        "session_expired",
+        "principal_not_found",
+        "principal_deactivated",
+        "revision_stale",
+        "invalid_credentials",
+        "account_locked",
+        "email_unverified",
+        "email_collision",
+        "rate_limited",
+        "store_unavailable",
+        "dependency_unavailable"
+      ],
+      "description": "Closed vocabulary. The first nine denied codes are edgetoken.Reason* verbatim; the rest name refresh, session, principal, lockout and linking outcomes. A new code is a deliberate schema amendment."
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^req_[A-Za-z0-9_-]{26}$",
+      "description": "Server-minted request id, as error.v1."
+    },
+    "occurred_at": {
+      "type": "string",
+      "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+      "description": "When the outcome occurred."
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^ses_[A-Za-z0-9_-]{22,64}$",
+      "description": "Opaque server-minted session identifier. An identifier, never a secret, and never copied from caller input."
+    }
+  },
+  "if": {
+    "properties": {
+      "result": {
+        "const": "success"
+      }
+    },
+    "required": [
+      "result"
+    ]
+  },
+  "then": {
+    "properties": {
+      "reason_code": {
+        "enum": [
+          "accepted",
+          "refresh_grace_replay"
+        ]
+      }
+    }
+  },
+  "else": {
+    "not": {
+      "properties": {
+        "reason_code": {
+          "enum": [
+            "accepted",
+            "refresh_grace_replay"
+          ]
+        }
+      },
+      "required": [
+        "reason_code"
+      ]
+    }
+  }
+}

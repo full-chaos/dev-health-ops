@@ -636,6 +636,7 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 		// "repositories" key instead of a bare array).
 		page, err = providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
 			Path:     "/installation/repositories",
+			Route:    "/installation/repositories",
 			Query:    url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}},
 			DataKey:  "repositories",
 			MaxPages: sourceDiscoveryMaxPages,
@@ -645,7 +646,8 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 		// accessible repos (not org-scoped), filtered client-side below by
 		// namespace (exact owner match) and name pattern.
 		page, err = providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-			Path: "/user/repos",
+			Path:  "/user/repos",
+			Route: "/user/repos",
 			Query: url.Values{
 				"per_page":    {strconv.Itoa(sourceDiscoveryPerPage)},
 				"affiliation": {"owner,collaborator,organization_member"},
@@ -732,13 +734,13 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 func collectGitHubOwnerRepos(ctx context.Context, client *providerfoundation.HTTPClient, owner string) (providerfoundation.PageCollection, error) {
 	query := url.Values{"per_page": {strconv.Itoa(sourceDiscoveryPerPage)}, "type": {"all"}}
 	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-		Path: "/orgs/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
+		Path: "/orgs/" + url.PathEscape(owner) + "/repos", Route: "/orgs/{org}/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
 	})
 	if err == nil {
 		return page, nil
 	}
 	userPage, userErr := providerfoundation.CollectGitHubLinkPages(ctx, client, providerfoundation.GitHubPageOptions{
-		Path: "/users/" + url.PathEscape(owner) + "/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
+		Path: "/users/" + url.PathEscape(owner) + "/repos", Route: "/users/{user}/repos", Query: query, MaxPages: sourceDiscoveryMaxPages,
 	})
 	if userErr != nil {
 		return page, err
@@ -824,7 +826,7 @@ func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context,
 	var page providerfoundation.PageCollection
 	if allRepos {
 		page, err = providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-			Path: "/api/v4/projects", Query: url.Values{"membership": {"true"}},
+			Path: "/api/v4/projects", Route: "/projects", Query: url.Values{"membership": {"true"}},
 			PerPage: sourceDiscoveryPerPage, MaxPages: sourceDiscoveryMaxPages,
 		})
 	} else if groupPath == "" {
@@ -834,7 +836,7 @@ func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context,
 		// Python's non-all_repos branch does NOT pass include_subgroups --
 		// it lists exactly one group's own projects.
 		page, err = providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
-			Path: "/api/v4/groups/" + url.PathEscape(groupPath) + "/projects", Query: url.Values{},
+			Path: "/api/v4/groups/" + url.PathEscape(groupPath) + "/projects", Route: "/groups/{group}/projects", Query: url.Values{},
 			PerPage: sourceDiscoveryPerPage, MaxPages: sourceDiscoveryMaxPages,
 		})
 	}
@@ -921,7 +923,7 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 		return nil, err
 	}
 	page, err := providerfoundation.CollectJiraTokenOffsetPages(ctx, client, providerfoundation.JiraPageOptions{
-		Path: "/rest/api/3/project/search", DataKey: "values",
+		Path: "/rest/api/3/project/search", Route: "/rest/api/3/project/search", DataKey: "values",
 		MaxResults: sourceDiscoveryPerPage, MaxPages: sourceDiscoveryMaxPages,
 	})
 	if err != nil {
@@ -1050,7 +1052,7 @@ func jiraProjectSearchEndpointUnsupported(err error) bool {
 // fallback: a plain JSON array of every project, no query params, no
 // pagination envelope.
 func discoverJiraLegacyProjects(ctx context.Context, client *providerfoundation.HTTPClient) ([]json.RawMessage, error) {
-	response, err := client.Do(ctx, http.MethodGet, "/rest/api/3/project", nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, "/rest/api/3/project", "/rest/api/3/project", nil)
 	if err != nil {
 		return nil, err
 	}

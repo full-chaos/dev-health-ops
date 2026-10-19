@@ -45,11 +45,37 @@
           "type": "array"
         },
         "action": {
-          "description": "Bounded action/permission this route performs, where the code names one explicitly (e.g. an Action/Scope enum). null + gaps note otherwise.",
+          "description": "Bounded action/permission this route performs, where the code names one explicitly (e.g. an Action/Scope enum). ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
           ]
+        },
+        "class_disambiguator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "authorization_scheme",
+                "credential_prefix",
+                "dedicated_header",
+                "jwt_header_alg",
+                "signature_header"
+              ],
+              "description": "How the class is chosen from the request BEFORE any validator runs: the Authorization scheme, a fixed credential prefix, a dedicated header, the `alg` field of the JWT protected header (compared exactly; query-api picks its Bearer verifier this way, so with the edge verifier unconfigured an HS256 token is refused rather than misrouted), or a signature header. Closed on purpose: there is no 'try each validator' value, because validator fan-out is the CHAOS-3271 defect."
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+              "description": "The scheme, prefix or header name the selector reads. A name, never a credential value."
+            }
+          },
+          "description": "How a route that accepts more than one credential class picks the class from the request head BEFORE any validator runs (TRD section 10). The kind vocabulary is owned here; endpoint-auth-profile.v1 references it. The profile registry gate (CheckClassSelector) joins it with the per-class markers in credential-classes.json. Optional in this schema: the Go rows test requires it on every row that accepts two or more classes, because web's own row set cannot carry one yet (CHAOS-10199 flips this to a schema rule)."
         },
         "classification": {
           "enum": [
@@ -58,21 +84,21 @@
           ]
         },
         "current_state_cache_behavior": {
-          "description": "TRD §14 cache class, where applicable (e.g. epoch_scoped, no-cache webhook, stateless). null + gaps note otherwise.",
+          "description": "TRD §14 cache class, where applicable (e.g. epoch_scoped, no-cache webhook, stateless). ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
           ]
         },
         "disclosure_behavior": {
-          "description": "Safe 401/403/404 disclosure behavior (TRD §18), where determinable at the family level.",
+          "description": "Safe 401/403/404 disclosure behavior (TRD §18), where determinable at the family level. ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
           ]
         },
         "entitlement_requirement": {
-          "description": "A licensing/gating.py feature key gating this route, where present. null when none.",
+          "description": "A licensing/gating.py feature key gating this route, where present. ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
@@ -188,7 +214,7 @@
           "type": "array"
         },
         "resource_resolver": {
-          "description": "How the target resource/org is resolved from the request (path param, body field, credential claim). null + gaps note otherwise.",
+          "description": "How the target resource/org is resolved from the request (path param, body field, credential claim). ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [
             "string",
             "null"
@@ -254,7 +280,7 @@
           ]
         },
         "token_shape": {
-          "description": "Issuer/audience/token-type/algorithm, where determinable and applicable (TRD §10). null fields inside the object are fine; the object itself is null when no field applies at all (e.g. a public route, or an HMAC-signature route with no issuer/audience concept).",
+          "description": "Issuer/audience/token-type/algorithm, where determinable and applicable (TRD §10). null fields inside the object are fine; the object itself is ABSENT when no field applies at all (e.g. a public route, or an HMAC-signature route with no issuer/audience concept), and null only when undetermined, paired with a gaps entry naming token_shape, i.e. one that begins with \"token_shape:\" (CHAOS-4744, B10 shape b).",
           "properties": {
             "algorithm": {
               "type": [

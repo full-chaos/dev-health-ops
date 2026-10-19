@@ -31,7 +31,23 @@ type JiraProjectCatalogClickHouseAdapter struct {
 func (adapter JiraProjectCatalogClickHouseAdapter) WriteGitHubWorkItemEffect(
 	ctx context.Context, identity GitHubWorkItemEffectIdentity, effect EffectBatch,
 ) error {
-	return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, identity, effect)
+	rows, err := decodeEffectRows[projectmembership.CatalogRow](effect)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.OrgID != identity.OrgID || row.Provider != "jira" || row.ID == "" {
+			return ErrInvalidConfiguration
+		}
+	}
+	narrowed, empty, err := narrowProjectEnsureEffect(ctx, adapter.Delegate.Conn, "jira", identity.OrgID, effect, rows)
+	if err != nil || empty {
+		return err
+	}
+	if len(narrowed.Rows) != len(effect.Rows) {
+		identity.ContentDigest, identity.RowCount = narrowed.ContentDigest, len(narrowed.Rows)
+	}
+	return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, identity, narrowed)
 }
 
 func (adapter JiraProjectCatalogClickHouseAdapter) InspectGitHubWorkItemEffect(

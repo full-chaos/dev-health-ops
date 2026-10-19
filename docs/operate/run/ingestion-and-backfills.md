@@ -52,6 +52,41 @@ planner widens the cap to exceed the overlap and records a warning naming both
 values. Treat that warning as a configuration defect to correct, not as a healthy
 steady state — the widened window is more expensive than the one requested.
 
+The work-item family of every provider (GitHub, GitLab, Jira, Linear) is capped
+the same way, and a work-items unit holds exactly the half-open window
+`[since, before)`. The GitLab `updated_before` bound is inclusive and the Jira
+date bounds are widened for every user time zone (up to 50 hours beyond the
+window on each side), so the fetch can return items that belong to the adjacent
+window; the route drops them, and the adjacent window writes them once. Each
+dropped item counts in `dev_health_work_items_outside_window_dropped_total{provider}`,
+and a call that dropped any logs one Info line
+`providersync.work_items.dropped_outside_window` (provider, window, `dropped`,
+`kept`); the item itself is a Debug line. Dropping is the expected case on every
+sync, so the counter is a rate to read, not an alert. `fetch_all` and a JQL
+override are not windowed and drop nothing; because such a Jira dataset runs the
+same full query in every unit, the planner plans it as ONE window (the whole
+depth) instead of repeating that query per window. It logs
+`sync.plan.work_items_full_query_window` and counts
+`sync_plan_gate_total{outcome="full_query_window"}` for it.
+
+A GitHub work-items unit lists issues in updated order, oldest first
+(`sort=updated&direction=asc` with `since`), and stops at the first issue
+updated at or after the window end, so a bounded window completes however many
+newer issues the repository holds; an issue updated exactly at the end belongs
+to the next window. This changes the order of the request compared with the
+frozen Python provider, which read GitHub's default order (created, newest first)
+and skipped the newer items without stopping; the issues written per window are
+the same. Because an update-ordered list changes while it is read (an edited
+issue moves to the end and shifts the rest up), the unit pages by key: each
+request asks for one page since the update time of the last issue it read
+(inclusive, repeats are de-duplicated by issue number), and only a tie of more
+than one page inside one second continues by page number; running out of the
+request cap fails the unit closed with a Warn and
+`dev_health_github_work_items_issue_list_cap_exceeded_total`. The stop is the expected case: the unit logs one Info line
+`github_work_items_issue_list` (window, pages, `stopped_at_window_end`) and
+counts `dev_health_github_work_items_issue_list_stopped_total{reason="window_end"}`.
+A same-second tie group of more than one page is paged by page number, so an edit during that read can shift one unseen issue into a page already read and the issue is missed. The Info line carries `tie_groups_over_one_page` and `dev_health_github_work_items_issue_list_tie_paged_total{reason="same_second"}` counts these groups.
+
 Consequences to expect when reading run state:
 
 - A capped run is a healthy partial run, not a failure. Its window end is behind

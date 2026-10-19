@@ -96,12 +96,27 @@ def _docker_stub(stub_bin: Path, *, routing_response: str, routing_rc: int) -> N
     script.append(f'if [[ "$args" == *"{_MIGRATE_MARKER}"* ]]; then')
     script.append("  exit 9")
     script.append("fi")
+
+    # CHAOS-10137: the repin scripts resolve the linux/arm64 child from `--raw` (the index manifest); the
+    # stub's digests are those children. A bare or --format call still answers the descriptor.
+    def _answer(digest: str) -> list[str]:
+        raw = (
+            '{"manifests":[{"digest":"' + digest + '","platform":'
+            '{"os":"linux","architecture":"arm64"}}]}'
+        )
+        return [
+            '  if [[ "$args" == *"--raw"* ]]; then',
+            f"    echo '{raw}'; exit 0",
+            "  fi",
+            f'  echo \'{{"digest":"{digest}"}}\'; exit 0',
+        ]
+
     script.append(f'if [[ "$args" == *"{old_probe}"* ]]; then')
-    script.append(f'  echo \'{{"digest":"{_OLD_DIGEST}"}}\'; exit 0')
+    script.extend(_answer(_OLD_DIGEST))
     script.append("fi")
     for name, digest in digest_map.items():
         script.append(f'if [[ "$args" == *"{name}:sha-"* ]]; then')
-        script.append(f'  echo \'{{"digest":"{digest}"}}\'; exit 0')
+        script.extend(_answer(digest))
         script.append("fi")
     script.append('if [[ "$args" == *"venue-tools"* ]]; then')
     script.append(f"  cat <<'EOF_BODY'\n{routing_response}\nEOF_BODY")
@@ -180,10 +195,12 @@ def test_bigboy_tools_dir_overrides_where_the_tools_come_from(tmp_path: Path) ->
     tools = tmp_path / "tools"
     tools.mkdir()
     (tools / "bigboy-repin.sh").write_text("#!/usr/bin/env bash\n")
+    (tools / "arm64-child-digest.sh").write_text("#!/usr/bin/env bash\n")
     code, out, err = _start_only(
         {
             "PATH": "/usr/bin:/bin",
             "BIGBOY_ROOT": str(root),
+            "BIGBOY_OPS_REPO": str(CUT.parents[2]),
             "BIGBOY_TOOLS_DIR": str(tools),
         }
     )

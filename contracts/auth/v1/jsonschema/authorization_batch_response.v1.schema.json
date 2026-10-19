@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/authorization_batch_response.v1.schema.json",
+  "title": "Auth Control Plane authorization batch response (v1 wire format)",
+  "description": "The answer to one authorization_batch_request.v1. Each item is an independent authorization_decision.v1 bound to its request by `index`, the zero-based position of the request in the batch.\n\nTHE FAILURE THIS PREVENTS: one item's allow read against another item's resource. The binding is explicit (`index`) as well as positional so a proxy that reorders or drops items is detectable. What the SCHEMA cannot say: that the number of decisions equals the number of requests, and that index N answers request N. Those compare TWO documents, so they are client-enforced and pinned by the reject_by_client fixtures (a response with fewer or more decisions than the request, a swapped, duplicated or skipped index). A client MUST refuse such a response entirely and deny every item: it must never use the items that happen to line up.\n\nA failure of the whole batch is an error.v1 document, not a batch response. `index` is bounded to the same 0..99 range as the request's item bound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decisions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "authorization_batch_response.v1"
+    },
+    "decisions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "index",
+          "decision"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99,
+            "description": "Zero-based position of the request this decision answers."
+          },
+          "decision": {
+            "$ref": "authorization_decision.v1.schema.json"
+          }
+        }
+      }
+    }
+  }
+}

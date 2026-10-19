@@ -5,6 +5,9 @@
 # one compose file and the pins env file). No secrets touched.
 set -euo pipefail
 OLD8=${1:?old8}; NEW=${2:?new full sha}; N8=${NEW:0:8}; S7=${NEW:0:7}
+# CHAOS-10137: images.env pins linux/arm64 CHILD digests; arm64_child_digest never returns the index digest.
+# shellcheck source=arm64-child-digest.sh
+. "$(dirname "${BASH_SOURCE[0]}")/arm64-child-digest.sh"
 # CHAOS-7022 D2895/D2886(2): same BIGBOY_ROOT root parameter as bigboy-cut.sh -- default is
 # byte-identical to the hardcoded path this script always used.
 R="${BIGBOY_ROOT:-/home/ubuntu/devhealth}"; OV=$R/_records/images.env
@@ -29,7 +32,7 @@ case "$OLD8" in
 esac
 # Images are tagged sha-<first 7 hex chars of the commit> (S7 below), never with all 8 that name the
 # _records dir, so the registry lookup uses the 7-character form.
-OLD_DIGEST_RESOLVED=$(docker buildx imagetools inspect "ghcr.io/full-chaos/dev-health-go-dho:sha-${OLD8:0:7}" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest || true)
+OLD_DIGEST_RESOLVED=$(arm64_child_digest "ghcr.io/full-chaos/dev-health-go-dho:sha-${OLD8:0:7}" || true)
 [[ ${OLD_DIGEST_RESOLVED:-} == sha256:* ]] || { echo "FAIL: OLD8=$OLD8 does not resolve to a real dev-health-go-dho image in the registry"; exit 4; }
 OLD_DIGEST_PINNED=$(grep -ohE "dev-health-go-dho@sha256:[0-9a-f]{64}" "$OV" | head -1 | cut -d@ -f2)
 [[ -n "$OLD_DIGEST_PINNED" ]] || { echo "FAIL: $OV has no dev-health-go-dho digest pinned to cross-check OLD8 against"; exit 4; }
@@ -37,7 +40,7 @@ if [[ "$OLD_DIGEST_RESOLVED" != "$OLD_DIGEST_PINNED" ]]; then
   echo "FAIL: OLD8=$OLD8 resolves to $OLD_DIGEST_RESOLVED, but $OV currently pins $OLD_DIGEST_PINNED for dev-health-go-dho -- OLD8 does not name the ACTUALLY-running build. Refusing rather than silently no-op'ing the repin (CHAOS-7014/D2801)."
   exit 4
 fi
-dig() { docker buildx imagetools inspect "ghcr.io/full-chaos/$1:sha-$S7" --format '{{json .Manifest}}' | jq -r .digest; }
+dig() { arm64_child_digest "ghcr.io/full-chaos/$1:sha-$S7" || true; }
 declare -A O N
 for i in dev-health-go-dho dev-health-go-api-tools dev-health-go-operator; do
   N[$i]=$(dig "$i"); [[ ${N[$i]} == sha256:* ]] || { echo "no image $i"; exit 3; }

@@ -11,50 +11,67 @@ import (
 	"testing"
 )
 
-// CHAOS-9776 census: every provider page-walk option literal and every
-// repository/project object fetch in this package names a static route
-// template, so a status or transport failure says which route failed without
-// printing a path that holds an owner, repository, project or member name.
-// A file in routeTemplateNotCovered still builds its error without a route
-// (the error then carries no path at all); moving a file out of the list is
-// the way to cover it. A NEW file or a new un-templated call in a covered file
-// fails here, so the gap is visible in review.
-var routeTemplateNotCovered = map[string]string{
-	"github_blame_route.go":             "file-path routes",
-	"github_commit_stats_route.go":      "commit detail routes",
-	"github_files_route.go":             "file-path routes",
-	"github_pr_reviews_fetch.go":        "GraphQL POST, no name in the path",
-	"github_repository_route.go":        "repository metadata",
-	"github_security_route.go":          "security alert routes",
-	"github_work_items_projects_v2.go":  "GraphQL POST, no name in the path",
-	"github_work_items_social_fetch.go": "GraphQL POST, no name in the path",
-	"gitlab_blame_route.go":             "file-path routes",
-	"gitlab_commit_stats_route.go":      "commit detail routes",
-	"gitlab_feature_flags_route.go":     "feature flag routes",
-	"gitlab_files_route.go":             "file-path routes",
-	"gitlab_incidents_route.go":         "incident routes",
-	"gitlab_repository_route.go":        "repository metadata",
-	"gitlab_security_route.go":          "security alert routes",
-	"jira_atlassian_route.go":           "Jira routes",
-	"jira_dev_status.go":                "Jira routes",
-	"jira_incidents_route.go":           "Jira routes",
-	"jira_story_points_field.go":        "Jira routes",
-	"jira_work_items_route.go":          "Jira routes",
-	"launchdarkly_route.go":             "LaunchDarkly routes",
-	"linear_absence.go":                 "Linear GraphQL",
-	"linear_reference_catalog_route.go": "Linear GraphQL",
-	"ownership_absence.go":              "ownership absence provers (error swallowed)",
-	"pagerduty_incidents_route.go":      "PagerDuty routes",
-	"repo_listing.go":                   "repository listing",
+// routeCensusDirs are the packages whose provider requests the census reads,
+// relative to this package: providersync itself and the scheduler's source
+// discovery.
+var routeCensusDirs = []string{".", "../scheduler/sync"}
+
+// CHAOS-9776 / CHAOS-9801 census: every provider page-walk options literal,
+// every object fetch and every client request in routeCensusDirs names a
+// static route template, so a status or transport failure says which route
+// failed without printing a path that holds an owner, repository, project,
+// member or issue name. A new file or a new un-templated call fails here.
+//
+// A page-walk options literal is any providerfoundation type with a Route
+// field (read from that package's source). A client request is any
+// four-argument .Do(ctx, method, path, body) call, whatever its receiver is
+// named. The template must be static: a string literal, a constant or variable
+// named like a route (route, *Route), or a concatenation of those. A value
+// built from anything else (a path, a root, a request value) fails the census.
+func TestEveryPageWalkAndObjectFetchNamesARouteTemplate(t *testing.T) {
+	optionTypes := routeOptionTypes(t)
+	if len(optionTypes) < 4 {
+		t.Fatalf("read %d providerfoundation option types with a Route field; the census must see them", len(optionTypes))
+	}
+	var missing []string
+	files := 0
+	for _, dir := range routeCensusDirs {
+		names, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			if strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			source, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files++
+			if bad := routeCensusFile(t, name, source, optionTypes); bad > 0 {
+				missing = append(missing, filepath.ToSlash(name))
+			}
+		}
+	}
+	if files < 100 {
+		t.Fatalf("read %d files; the census must see providersync and scheduler/sync", files)
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Fatalf("page-walk options, object fetches or client requests without a static route template in %v: use Route / fetchObjectRoute / DoRoute with a constant from route_templates.go (or a literal)", missing)
+	}
 }
 
-func TestEveryPageWalkAndObjectFetchNamesARouteTemplate(t *testing.T) {
-	files, err := filepath.Glob("*.go")
+// routeOptionTypes is every providerfoundation struct type with a Route field.
+func routeOptionTypes(t *testing.T) map[string]bool {
+	t.Helper()
+	names, err := filepath.Glob("../providerfoundation/*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var missing []string
-	for _, name := range files {
+	types := map[string]bool{}
+	for _, name := range names {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
@@ -62,54 +79,161 @@ func TestEveryPageWalkAndObjectFetchNamesARouteTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		untemplated := 0
 		ast.Inspect(file, func(node ast.Node) bool {
-			switch value := node.(type) {
-			case *ast.CompositeLit:
-				selector, ok := value.Type.(*ast.SelectorExpr)
-				if !ok || (selector.Sel.Name != "GitHubPageOptions" && selector.Sel.Name != "GitLabPageOptions") {
-					return true
-				}
-				if len(value.Elts) == 0 {
-					return true
-				}
-				hasRoute := false
-				for _, element := range value.Elts {
-					if pair, ok := element.(*ast.KeyValueExpr); ok {
-						if key, ok := pair.Key.(*ast.Ident); ok && key.Name == "Route" {
-							hasRoute = true
+			spec, ok := node.(*ast.TypeSpec)
+			if !ok {
+				return true
+			}
+			if structType, ok := spec.Type.(*ast.StructType); ok {
+				for _, field := range structType.Fields.List {
+					for _, fieldName := range field.Names {
+						if fieldName.Name == "Route" {
+							types[spec.Name.Name] = true
 						}
 					}
-				}
-				if !hasRoute {
-					untemplated++
-				}
-			case *ast.CallExpr:
-				if selector, ok := value.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Do" && len(value.Args) >= 3 {
-					if receiver, ok := selector.X.(*ast.Ident); ok && receiver.Name == "client" {
-						untemplated++
-					}
-				}
-				if ident, ok := value.Fun.(*ast.Ident); ok && ident.Name == "fetchObject" && name != "native_rest.go" {
-					untemplated++
 				}
 			}
 			return true
 		})
-		if _, listed := routeTemplateNotCovered[name]; listed {
-			continue
+	}
+	return types
+}
+
+// routeCensusFile counts the un-templated provider requests of one source file.
+func routeCensusFile(t *testing.T, name string, source []byte, optionTypes map[string]bool) int {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), name, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := 0
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch value := node.(type) {
+		case *ast.CompositeLit:
+			selector, ok := value.Type.(*ast.SelectorExpr)
+			if !ok || !optionTypes[selector.Sel.Name] {
+				return true
+			}
+			found := false
+			for _, element := range value.Elts {
+				pair, ok := element.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if key, ok := pair.Key.(*ast.Ident); ok && key.Name == "Route" {
+					found = true
+					if !staticRouteExpr(pair.Value) {
+						bad++
+					}
+				}
+			}
+			if !found {
+				bad++
+			}
+		case *ast.CallExpr:
+			switch fun := value.Fun.(type) {
+			case *ast.Ident:
+				if fun.Name == "fetchObject" {
+					bad++
+				}
+				if fun.Name == "fetchObjectRoute" && (len(value.Args) < 4 || !staticRouteExpr(value.Args[2])) {
+					bad++
+				}
+			case *ast.SelectorExpr:
+				switch {
+				case fun.Sel.Name == "Do" && len(value.Args) == 4:
+					bad++
+				case fun.Sel.Name == "DoUnauthenticated" && len(value.Args) == 3:
+					bad++
+				case fun.Sel.Name == "DoRoute" && (len(value.Args) < 3 || !staticRouteExpr(value.Args[2])):
+					bad++
+				}
+			}
 		}
-		if untemplated > 0 {
-			missing = append(missing, name)
+		return true
+	})
+	return bad
+}
+
+func TestRouteCensusFlagsEveryUnTemplatedRequest(t *testing.T) {
+	optionTypes := routeOptionTypes(t)
+	for source, want := range map[string]int{
+		`client.DoRoute(ctx, "GET", githubRepoRoute, root, nil)`:                               0,
+		`providerfoundation.JiraPageOptions{Route: "/rest/api/3/project/search", MaxPages: 1}`: 0,
+		`client2.Do(ctx, "GET", "/orgs/"+owner+"/repos", nil)`:                                 1,
+		`prover.http.Do(ctx, http.MethodGet, path, nil)`:                                       1,
+		`client.DoRoute(ctx, "GET", path, path, nil)`:                                          1,
+		`providerfoundation.JiraPageOptions{MaxPages: 1}`:                                      1,
+		`providerfoundation.LaunchDarklyOffsetOptions{Route: root}`:                            1,
+		`providerfoundation.PagerDutyOffsetOptions{Path: "/users"}`:                            1,
+		`client.DoUnauthenticated(ctx, http.MethodGet, location)`:                              1,
+		`client.DoUnauthenticatedRoute(ctx, http.MethodGet, githubArtifactZipRoute, location)`: 0,
+		`fetchObject(ctx, client, root, &out)`:                                                 1,
+		`fetchObjectRoute(ctx, client, root, root, &out)`:                                      1,
+	} {
+		file := "package p\n\nfunc f() {\n\t_ = " + source + "\n}\n"
+		if got := routeCensusFile(t, "fixture.go", []byte(file), optionTypes); got != want {
+			t.Errorf("%s: census counts %d, want %d", source, got, want)
 		}
 	}
-	sort.Strings(missing)
-	if len(missing) > 0 {
-		t.Fatalf("page-walk options or fetchObject calls without a Route in %v: use Route / fetchObjectRoute with a static template, or list the file in routeTemplateNotCovered with the reason", missing)
+}
+
+func receiverName(expr ast.Expr) string {
+	switch value := expr.(type) {
+	case *ast.Ident:
+		return value.Name
+	case *ast.SelectorExpr:
+		return value.Sel.Name
 	}
-	for name := range routeTemplateNotCovered {
-		if _, err := os.Stat(name); err != nil {
-			t.Errorf("routeTemplateNotCovered lists %s, which does not exist: %v", name, err)
+	return ""
+}
+
+// staticRouteExpr reports whether expr can only be a compile-time or
+// code-chosen route template: a string literal, a route-named identifier or
+// field, an index into a route-named slice, or a concatenation of those.
+func staticRouteExpr(expr ast.Expr) bool {
+	switch value := expr.(type) {
+	case *ast.BasicLit:
+		return value.Kind == token.STRING
+	case *ast.Ident:
+		return routeName(value.Name)
+	case *ast.SelectorExpr:
+		return routeName(value.Sel.Name)
+	case *ast.IndexExpr:
+		return staticRouteExpr(value.X)
+	case *ast.ParenExpr:
+		return staticRouteExpr(value.X)
+	case *ast.BinaryExpr:
+		return value.Op == token.ADD && staticRouteExpr(value.X) && staticRouteExpr(value.Y)
+	}
+	return false
+}
+
+func routeName(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == "route" || lower == "routes" || lower == "routebase" || lower == "suffix" || strings.HasSuffix(name, "Route")
+}
+
+func TestStaticRouteExprRejectsRequestValues(t *testing.T) {
+	for source, want := range map[string]bool{
+		`"/users/{login}"`:                true,
+		`githubRepoRoute`:                 true,
+		`githubRepoRoute + "/pulls"`:      true,
+		`target.route`:                    true,
+		`routes[index]`:                   true,
+		`githubRepoRoute + "/x" + suffix`: true,
+		`root`:                            false,
+		`root + "/pulls"`:                 false,
+		`path`:                            false,
+		`"/repos/" + owner`:               false,
+		`fmt.Sprint(x)`:                   false,
+	} {
+		expr, err := parser.ParseExpr(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := staticRouteExpr(expr); got != want {
+			t.Errorf("staticRouteExpr(%s) = %v, want %v", source, got, want)
 		}
 	}
 }

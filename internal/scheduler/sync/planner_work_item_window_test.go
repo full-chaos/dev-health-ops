@@ -13,21 +13,17 @@ import (
 // oldest first, the next window at the next run. These tests drive the whole
 // planner, for every provider that has the family.
 
-// workItemWindowRatchetedProviders and workItemWindowUnratchetedProviders
-// split workItemFamilyProviders; TestWorkItemWindowProviderSplitIsTotal pins
-// that the split covers every provider with the family.
-var (
-	workItemWindowRatchetedProviders   = []string{"github", "linear"}
-	workItemWindowUnratchetedProviders = []string{"gitlab", "jira"}
-)
+// workItemWindowRatchetedProviders is every provider that has the work-item
+// family: all four routes honour the window end, so all four are ratcheted.
+var workItemWindowRatchetedProviders = []string{"github", "gitlab", "jira", "linear"}
 
-func TestWorkItemWindowProviderSplitIsTotal(t *testing.T) {
-	split := append(slices.Clone(workItemWindowRatchetedProviders), workItemWindowUnratchetedProviders...)
-	slices.Sort(split)
+func TestWorkItemWindowProviderSetIsEveryFamilyProvider(t *testing.T) {
+	got := slices.Clone(workItemWindowRatchetedProviders)
+	slices.Sort(got)
 	want := slices.Clone(workItemFamilyProviders)
 	slices.Sort(want)
-	if !slices.Equal(split, want) {
-		t.Fatalf("provider split = %v, want every work-item family provider %v", split, want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("ratcheted providers = %v, want every work-item family provider %v", got, want)
 	}
 	for _, provider := range workItemWindowRatchetedProviders {
 		if _, bounded := workItemWindowBoundedProviders[provider]; !bounded {
@@ -36,22 +32,6 @@ func TestWorkItemWindowProviderSplitIsTotal(t *testing.T) {
 	}
 	if len(workItemWindowBoundedProviders) != len(workItemWindowRatchetedProviders) {
 		t.Fatalf("workItemWindowBoundedProviders = %v, want exactly %v", workItemWindowBoundedProviders, workItemWindowRatchetedProviders)
-	}
-}
-
-// GitLab and Jira bound only the window START in their fetch, so a capped
-// window would not be a smaller unit. They keep the whole depth in one window
-// until their route honours the window end.
-func TestWorkItemFamilyOfAStartOnlyProviderKeepsTheWholeDepth(t *testing.T) {
-	for _, provider := range workItemWindowUnratchetedProviders {
-		t.Run(provider, func(t *testing.T) {
-			unit := onlyWorkItemsUnit(t, provider,
-				planWorkItemFamily(t, provider, SyncModeIncremental, 90, 0, nil))
-			wantStart := workItemWindowNow.AddDate(0, 0, -90)
-			if !unit.WindowStart.Equal(wantStart) || !unit.WindowEnd.Equal(workItemWindowNow) {
-				t.Fatalf("window = [%s, %s], want the whole depth [%s, %s]", unit.WindowStart, unit.WindowEnd, wantStart, workItemWindowNow)
-			}
-		})
 	}
 }
 
@@ -287,8 +267,46 @@ func TestWorkItemFamilyCatchUpIsReportedFromTheRatchetScope(t *testing.T) {
 	if lag.CatchingUp {
 		t.Fatalf("lag = %+v: a medium dataset outside the family is not ratcheted", lag)
 	}
-	lag = ComputeWatermarkLag(WindowRatchetClass("jira", "work-items", "medium"), &behind, workItemWindowNow, capDays, netAdvance)
-	if lag.CatchingUp {
-		t.Fatalf("lag = %+v: a provider outside the ratchet scope is not catching up window by window", lag)
+	for _, provider := range []string{"gitlab", "jira", "linear"} {
+		lag = ComputeWatermarkLag(WindowRatchetClass(provider, "work-items", "medium"), &behind, workItemWindowNow, capDays, netAdvance)
+		if !lag.CatchingUp {
+			t.Fatalf("%s lag = %+v: the family of every provider is caught up window by window", provider, lag)
+		}
+	}
+}
+
+// A work-items dataset whose own query the window does not bound (Jira fetch_all, a JQL override) runs that
+// full query in every unit; it is planned as ONE window for the whole family, and the decision is counted.
+func TestWorkItemFamilyOfAFullQueryDatasetIsOneWindow(t *testing.T) {
+	plan := func(fullQuery bool) PlannedUnit {
+		datasets := workItemFamilyPlanDatasets()
+		for index := range datasets {
+			if datasets[index].Key == canonicalWorkItemsDataset {
+				datasets[index].FullQuery = fullQuery
+			}
+		}
+		depth := 90
+		units, err := BuildScheduledPlan(PlannerInput{
+			OrgID: "org", IntegrationID: "integration", Mode: SyncModeIncremental, Now: workItemWindowNow,
+			IntegrationDepthDays: &depth,
+			Sources:              []PlanSource{{ID: "source", ExternalID: "external", Provider: "jira"}},
+			Datasets:             datasets,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return onlyWorkItemsUnit(t, "jira", units)
+	}
+	before := globalPlanGateTelemetry.snapshotForTest("jira", canonicalWorkItemsDataset, planGateOutcomeFullQueryWindow)
+	full := plan(true)
+	if want := workItemWindowNow.AddDate(0, 0, -90); !full.WindowStart.Equal(want) || !full.WindowEnd.Equal(workItemWindowNow) {
+		t.Fatalf("full-query window = [%s, %s], want the whole depth [%s, %s]", full.WindowStart, full.WindowEnd, want, workItemWindowNow)
+	}
+	if got := globalPlanGateTelemetry.snapshotForTest("jira", canonicalWorkItemsDataset, planGateOutcomeFullQueryWindow); got != before+1 {
+		t.Fatalf("full_query_window outcome moved %d -> %d, want +1", before, got)
+	}
+	bounded := plan(false)
+	if span := bounded.WindowEnd.Sub(*bounded.WindowStart); span != 7*24*time.Hour {
+		t.Fatalf("bounded window span = %s, want 7 days", span)
 	}
 }

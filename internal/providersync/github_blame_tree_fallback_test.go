@@ -495,7 +495,7 @@ func TestGitHubBlameRecoveryReplaysEveryInFlightPathWithoutTheRunBounds(t *testi
 	batch, err := collectGitHubBlame(
 		context.Background(), claim, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 		staticGitHubBlameCoverage{state: GitHubBlameProgressState{InFlightOutcomes: inflight}},
-		gitHubBlameMaxFiles, false, claim.GenerationKey(), limits,
+		nil, gitHubBlameMaxFiles, false, claim.GenerationKey(), limits,
 	)
 	if err != nil || len(progressPaths(t, batch)) != 3 || len(batch.Effects[1].Rows) != 6 {
 		t.Fatalf("err=%v progress=%d rows=%d, want all 3 in-flight paths replayed", err, len(progressPaths(t, batch)), len(batch.Effects[1].Rows))
@@ -633,7 +633,7 @@ func TestGitHubBlameRecoveryRefusesAnOversizeFileBeforeExpandingIt(t *testing.T)
 			staticGitHubBlameCoverage{state: GitHubBlameProgressState{InFlightOutcomes: map[string]string{
 				path: gitHubBlameOutcomeRows,
 			}}},
-			gitHubBlameMaxFiles, false, claim.GenerationKey(), limits,
+			nil, gitHubBlameMaxFiles, false, claim.GenerationKey(), limits,
 		)
 		if !errors.Is(err, ErrEffectRecoveryUnsafe) || built != 0 {
 			t.Fatalf("%s: err=%v built=%d", variant.name, err, built)
@@ -683,7 +683,7 @@ func TestGitHubBlameRecoveryAcceptsAFileExactlyAtTheWriteBound(t *testing.T) {
 		staticGitHubBlameCoverage{state: GitHubBlameProgressState{InFlightOutcomes: map[string]string{
 			"src/file-000.go": gitHubBlameOutcomeRows,
 		}}},
-		gitHubBlameMaxFiles, false, claim.GenerationKey(), defaultGitHubBlameLimits(),
+		nil, gitHubBlameMaxFiles, false, claim.GenerationKey(), defaultGitHubBlameLimits(),
 	)
 	if err != nil || len(batch.Effects[1].Rows) != maxEffectRows {
 		t.Fatalf("err=%v, want exactly %d rows accepted", err, maxEffectRows)

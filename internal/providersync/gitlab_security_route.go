@@ -106,7 +106,7 @@ func (handler GitLabSecurityRouteHandler) Collect(
 	counted.Doer = gitLabSecurityCountingDoer{delegate: client.Doer, observe: observer}
 	root := providerRelativePath(&counted, "api", "v4", "projects", projectID)
 	var project repositoryPayload
-	if err := fetchObject(ctx, &counted, root, &project); err != nil {
+	if err := fetchObjectRoute(ctx, &counted, gitlabProjectRoute, root, &project); err != nil {
 		// Project resolution is not optional in the Python client: without its
 		// returned numeric id and full name no security row can be scoped.
 		return CompleteRouteBatch{}, err
@@ -123,7 +123,7 @@ func (handler GitLabSecurityRouteHandler) Collect(
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 
 	findings, findingPages, err := fetchGitLabSecurityObjects(
-		ctx, &counted, root+"/vulnerability_findings", observer,
+		ctx, &counted, gitlabFindingsRoute, root+"/vulnerability_findings", observer,
 	)
 	findingsOptional, fatal := gitLabSecurityEndpointDecision(ctx, err, observer)
 	if fatal != nil {
@@ -142,7 +142,7 @@ func (handler GitLabSecurityRouteHandler) Collect(
 	}
 
 	dependencies, dependencyPages, err := fetchGitLabSecurityObjects(
-		ctx, &counted, root+"/dependencies", observer,
+		ctx, &counted, gitlabDependenciesRoute, root+"/dependencies", observer,
 	)
 	dependenciesOptional, fatal := gitLabSecurityEndpointDecision(ctx, err, observer)
 	if fatal != nil {
@@ -193,7 +193,7 @@ type gitLabSecurityObject struct {
 func fetchGitLabSecurityObjects(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	path string,
+	route, path string,
 	observer *gitLabSecurityResponseObserver,
 ) ([]gitLabSecurityObject, int, error) {
 	// GitLabCodeClient calls the security endpoints directly with only
@@ -201,7 +201,7 @@ func fetchGitLabSecurityObjects(
 	// page=1 parameter. Preserve that request shape as well as its deliberate
 	// one-page/no-X-Next-Page traversal boundary.
 	query := url.Values{"per_page": {strconv.Itoa(gitLabSecurityPerPage)}}
-	response, err := client.Do(ctx, http.MethodGet, path+"?"+query.Encode(), nil)
+	response, err := client.DoRoute(ctx, http.MethodGet, route, path+"?"+query.Encode(), nil)
 	if err != nil {
 		return nil, 0, err
 	}

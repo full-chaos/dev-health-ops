@@ -97,6 +97,9 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	counted := *client
 	counted.Doer = jiraWorkItemsCountingDoer{delegate: client.Doer, attempts: &requests}
 	client = &counted
+	// The requests of this route draw on the estimate's jira_issue_enrichment
+	// family unless they say otherwise (the JQL search, the comments).
+	ctx = budgetAccount(ctx, "jira_issue_enrichment")
 
 	jql := jiraWorkItemsJQL(claim, projectKey)
 	fetchAll := jiraOptionBool(claim, "fetch_all", false)
@@ -104,12 +107,13 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	issues, searchPages, err := collectJiraWorkItemIssues(
-		ctx, client, jql, maxPages, maxRows, perPage, true,
+		ctx, client, jql, maxPages, maxRows, perPage, true, jiraIssueInWindow(claim),
 	)
 	logJiraWorkItemsWindow(ctx, claim, projectKey, jql, len(issues), searchPages, err)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	issues = dropJiraIssuesOutsideWindow(ctx, client.Metrics, claim, issues)
 
 	rows := jiraWorkItemRows{
 		WorkItems:          make([]jiraWorkItemRow, 0, len(issues)),
@@ -214,7 +218,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 
 		if fetchComments {
 			comments, _, commentErr := collectJiraIssueComments(
-				ctx, client, item.WorkItemID, maxPages, perPage, commentsLimit,
+				budgetAccount(ctx, jiraCommentsFamily(claim)), client, item.WorkItemID, maxPages, perPage, commentsLimit,
 			)
 			if commentErr != nil {
 				optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
@@ -371,8 +375,10 @@ func collectJiraWorkItemIssues(
 	jql string,
 	maxPages, maxRows, perPage int,
 	expandChangelog bool,
+	inWindow func(map[string]any) bool,
 ) ([]map[string]any, int, error) {
 	issues := make([]map[string]any, 0)
+	windowRows := 0
 	token := ""
 	seenTokens := make(map[string]struct{})
 	for pages := 0; ; pages++ {
@@ -397,7 +403,7 @@ func collectJiraWorkItemIssues(
 			IsLast        *bool             `json:"isLast"`
 			NextPageToken string            `json:"nextPageToken"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(budgetAccount(ctx, "jira_jql"), client, http.MethodGet, "/rest/api/3/search/jql", "/rest/api/3/search/jql?"+query.Encode(), nil, &page); err != nil {
 			client.Metrics.RecordJiraSearchPage("request_failed")
 			return nil, pages + 1, err
 		}
@@ -405,18 +411,26 @@ func collectJiraWorkItemIssues(
 			client.Metrics.RecordJiraSearchPage("invalid_response")
 			return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
 		}
-		if len(issues)+len(page.Issues) > maxRows {
-			client.Metrics.RecordJiraSearchPage("pagination_cap_exceeded")
-			return nil, pages + 1, ErrPaginationCapExceeded
-		}
+		decoded := make([]map[string]any, 0, len(page.Issues))
+		pageRows := 0
 		for _, raw := range page.Issues {
 			var issue map[string]any
 			if err := decodeJiraJSON(raw, &issue); err != nil || issue == nil {
 				client.Metrics.RecordJiraSearchPage("invalid_response")
 				return nil, pages + 1, providerfoundation.ErrNormalizationInvalid
 			}
-			issues = append(issues, issue)
+			decoded = append(decoded, issue)
+			if inWindow == nil || inWindow(issue) {
+				pageRows++
+			}
 		}
+		// The search asks for a superset of the window; the cap holds the rows of the window.
+		if windowRows+pageRows > maxRows {
+			client.Metrics.RecordJiraSearchPage("pagination_cap_exceeded")
+			return nil, pages + 1, ErrPaginationCapExceeded
+		}
+		windowRows += pageRows
+		issues = append(issues, decoded...)
 		if *page.IsLast {
 			client.Metrics.RecordJiraSearchPage("succeeded")
 			return issues, pages + 1, nil
@@ -452,7 +466,7 @@ func collectJiraIssueComments(
 			Comments []json.RawMessage `json:"comments"`
 			IsLast   *bool             `json:"isLast"`
 		}
-		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/comment?"+query.Encode(), nil, &page); err != nil {
+		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/issue/{issue}/comment", "/rest/api/3/issue/"+url.PathEscape(issueKey)+"/comment?"+query.Encode(), nil, &page); err != nil {
 			return nil, pages + 1, err
 		}
 		if page.Comments == nil {
@@ -485,7 +499,7 @@ func fetchJiraSprint(
 	sprintID string,
 ) (map[string]any, error) {
 	var payload map[string]any
-	err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/sprint/"+url.PathEscape(sprintID), nil, &payload)
+	err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/agile/1.0/sprint/{sprint}", "/rest/agile/1.0/sprint/"+url.PathEscape(sprintID), nil, &payload)
 	return payload, err
 }
 
@@ -501,7 +515,7 @@ func fetchJiraProject(
 	projectID string,
 ) (key, name, status string, err error) {
 	var payload map[string]any
-	if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/"+url.PathEscape(projectID), nil, &payload); err != nil {
+	if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/{project}", "/rest/api/3/project/"+url.PathEscape(projectID), nil, &payload); err != nil {
 		return "", "", "", err
 	}
 	// The project GET names the lifecycle as flags: `deleted` (in Jira's
@@ -591,11 +605,11 @@ func resolveJiraProjectCatalog(
 func jiraFetchObject(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	method, path string,
+	method, route, path string,
 	body io.Reader,
 	target any,
 ) error {
-	response, err := client.Do(ctx, method, path, body)
+	response, err := client.DoRoute(ctx, method, route, path, body)
 	if err != nil {
 		return err
 	}
@@ -661,4 +675,14 @@ func jiraOptionInt(claim Claim, key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+// jiraCommentsFamily is the route family a comments request is accounted to:
+// the work-item-comments estimate names jira_comments as its own family; the
+// other work-item datasets carry the comment reads in the enrichment family.
+func jiraCommentsFamily(claim Claim) string {
+	if claim.Dataset == "work-item-comments" {
+		return "jira_comments"
+	}
+	return "jira_issue_enrichment"
 }

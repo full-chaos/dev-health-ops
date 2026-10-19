@@ -35,14 +35,16 @@ func (flag *listFlag) Set(text string) error {
 }
 
 // scopeSources is the source scope the trigger carries. With no --source-ids it
-// is the scope the verb always wrote (sourceIDsFor). With --source-ids each id
-// must be an enabled source of the configuration's integration (a configuration
-// pinned to one source accepts only that source and writes no list, as before).
-// The result keeps the enabled sources' order, so the written list does not
-// depend on how the operator spelled or ordered the flag.
-func scopeSources(config *Config, requested, enabled []string) ([]string, error) {
+// is the configuration's selected sources (sourceIDsFor). With --source-ids each
+// id must be an enabled source of the configuration's integration (a
+// configuration pinned to one source accepts only that source and writes no
+// list, as before); one the configuration does not select is refused when the
+// trigger is written (synchandoff.Mint, the one scope guard). The result keeps the enabled sources'
+// order, so the written list does not depend on how the operator spelled or
+// ordered the flag.
+func scopeSources(config *Config, requested, enabled, selected []string) ([]string, error) {
 	if len(requested) == 0 {
-		return sourceIDsFor(config, enabled), nil
+		return sourceIDsFor(config, selected), nil
 	}
 	wanted := map[string]bool{}
 	for _, text := range requested {
@@ -87,23 +89,29 @@ func scopeSources(config *Config, requested, enabled []string) ([]string, error)
 
 // scopeDatasets is the dataset scope the trigger carries. With no
 // --dataset-keys it is current, the keys Validate resolved. With --dataset-keys
-// each key must be one the run could already name: a key the provider does not
-// have is unknown, and a known key the configuration does not already select is
-// refused, because a backfill never switches a dataset on (CHAOS-8816). The
-// result is in the provider's key order.
+// each key must be a key of the provider. Where the integration's rows own the
+// selection (a whole-integration configuration, or a pinned one with no
+// sync_targets) a key passes when its row is on or when it has no row at all:
+// the planner runs a key with no row once and writes none (CHAOS-8819, decision
+// C6 of CHAOS-8795), so the schedule is unchanged. A pinned configuration with
+// sync_targets is held to the keys they select. Whatever the shape, a key whose
+// row is off is refused, because the planner skips an off row and the run would
+// plan nothing. The result is in the provider's key order.
 //
 // current is the key list Validate resolved. When it is empty (a configuration
-// pinned to one source with no sync_targets) the scheduler would run the
-// integration's enabled rows, so enabledRows, the keys of those rows, is the
-// allowed set: any other key would make the scheduler insert a row.
-func scopeDatasets(config *Config, provider string, requested, current, enabledRows []string) ([]string, error) {
+// pinned to one source with no sync_targets, or an integration with no enabled
+// row) enabledRows, the keys of the enabled rows, is the allowed set.
+// disabledRows is the keys of the rows that exist and are off.
+func scopeDatasets(config *Config, provider string, requested, current, enabledRows, disabledRows []string) ([]string, error) {
 	if len(requested) == 0 {
 		return current, nil
 	}
 	supported := schedsync.SupportedDatasetKeys(provider)
+	rowOwned := rowsOwnSelection(config) || len(current) == 0
 	allowed, why := current, "is not selected by the sync_targets of sync configuration "+config.ID
-	if rowsOwnSelection(config) || len(current) == 0 {
-		why = "is not enabled for integration " + deref(config.IntegrationID)
+	disabledWhy := "is not enabled for integration " + deref(config.IntegrationID)
+	if rowOwned {
+		why = disabledWhy
 	}
 	if len(current) == 0 {
 		allowed = enabledRows
@@ -114,13 +122,16 @@ func scopeDatasets(config *Config, provider string, requested, current, enabledR
 			return nil, RefusedError{Message: fmt.Sprintf("backfill run: --dataset-keys %q is not a dataset key of provider %q (known: %s): nothing was started",
 				key, provider, strings.Join(supported, ", "))}
 		}
-		if !slices.Contains(allowed, key) {
+		if slices.Contains(disabledRows, key) || (!slices.Contains(allowed, key) && !rowOwned) {
+			if slices.Contains(disabledRows, key) {
+				why = disabledWhy
+			}
 			return nil, RefusedError{Message: fmt.Sprintf("backfill run: --dataset-keys %q %s, and a backfill does not switch a dataset on: nothing was started", key, why)}
 		}
 		wanted[key] = true
 	}
 	scoped := []string{}
-	for _, key := range allowed {
+	for _, key := range supported {
 		if wanted[key] {
 			scoped = append(scoped, key)
 		}

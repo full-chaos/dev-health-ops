@@ -167,7 +167,7 @@ func (handler JiraIncidentRouteHandler) Collect(
 	var tenant struct {
 		CloudID string `json:"cloudId"`
 	}
-	if err := jiraIncidentFetchObject(ctx, &counted, http.MethodGet, "/_edge/tenant_info", nil, &tenant); err != nil {
+	if err := jiraIncidentFetchObject(budgetAccount(ctx, "jira_metadata"), &counted, http.MethodGet, "/_edge/tenant_info", "/_edge/tenant_info", nil, &tenant); err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	cloudID := strings.TrimSpace(tenant.CloudID)
@@ -179,13 +179,13 @@ func (handler JiraIncidentRouteHandler) Collect(
 	}
 
 	servicePages, _, err := verifyJiraServiceProject(
-		ctx, &counted, projectKey, maxPages, maxRows, perPage,
+		budgetAccount(ctx, "jira_metadata"), &counted, projectKey, maxPages, maxRows, perPage,
 	)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	issues, searchPages, err := collectJiraIncidentIssues(
-		ctx, &counted, projectKey, *claim.SinceAt, *claim.BeforeAt,
+		budgetAccount(ctx, "jira_jql"), &counted, projectKey, *claim.SinceAt, *claim.BeforeAt,
 		maxPages, maxRows, perPage,
 	)
 	if err != nil {
@@ -197,7 +197,7 @@ func (handler JiraIncidentRouteHandler) Collect(
 	}
 	rows := make([]jiraIncidentRow, 0, len(issues))
 	for _, issue := range issues {
-		admitted, err := admitJiraIncident(ctx, admissionClient, cloudID, issue.ID)
+		admitted, err := admitJiraIncident(budgetAccount(ctx, "jira_jsm_incident_admission"), admissionClient, cloudID, issue.ID)
 		if err != nil {
 			return CompleteRouteBatch{}, err
 		}
@@ -253,7 +253,7 @@ func verifyJiraServiceProject(
 			IsLastPage *bool           `json:"isLastPage"`
 		}
 		path := "/rest/servicedeskapi/servicedesk?limit=" + strconv.Itoa(perPage) + "&start=" + strconv.Itoa(start)
-		if err := jiraIncidentFetchObject(ctx, client, http.MethodGet, path, nil, &page); err != nil {
+		if err := jiraIncidentFetchObject(ctx, client, http.MethodGet, "/rest/servicedeskapi/servicedesk", path, nil, &page); err != nil {
 			return pages, pages + 1, err
 		}
 		pages++
@@ -325,7 +325,7 @@ func collectJiraIncidentIssues(
 			IsLast        *bool           `json:"isLast"`
 			NextPageToken any             `json:"nextPageToken"`
 		}
-		if err := jiraIncidentFetchObject(ctx, client, http.MethodPost, "/rest/api/3/search/jql", bytes.NewReader(encoded), &page); err != nil {
+		if err := jiraIncidentFetchObject(ctx, client, http.MethodPost, "/rest/api/3/search/jql", "/rest/api/3/search/jql", bytes.NewReader(encoded), &page); err != nil {
 			return nil, pages + 1, err
 		}
 		var pageIssues []json.RawMessage
@@ -392,7 +392,7 @@ func admitJiraIncident(
 	}
 	path := "/jsm/incidents/cloudId/" + url.PathEscape(cloudID) + "/v1/incident/" + url.PathEscape(issueID)
 	var responseObject map[string]json.RawMessage
-	err := jiraIncidentFetchObject(ctx, client, http.MethodGet, path, nil, &responseObject)
+	err := jiraIncidentFetchObject(ctx, client, http.MethodGet, "/jsm/incidents/cloudId/{cloudId}/v1/incident/{issue}", path, nil, &responseObject)
 	if err == nil {
 		return responseObject != nil, nil
 	}
@@ -404,10 +404,10 @@ func admitJiraIncident(
 }
 
 func jiraIncidentFetchObject(
-	ctx context.Context, client *providerfoundation.HTTPClient, method, path string,
+	ctx context.Context, client *providerfoundation.HTTPClient, method, route, path string,
 	body io.Reader, target any,
 ) error {
-	response, err := client.Do(ctx, method, path, body)
+	response, err := client.DoRoute(ctx, method, route, path, body)
 	if err != nil {
 		return err
 	}

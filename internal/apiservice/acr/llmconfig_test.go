@@ -15,8 +15,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"go.opentelemetry.io/otel"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -194,28 +192,52 @@ func TestLLMConfigResponseMarshalsTheKey(t *testing.T) {
 }
 
 func TestLLMConfigCountsEachOutcome(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
-	call(t, &fakeVerifier{}, configured(), io.Discard, testOrg, "Bearer "+testToken)
-	call(t, &fakeVerifier{}, configured(), io.Discard, testOrg, "")
-	var collected metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &collected); err != nil {
-		t.Fatal(err)
+	outcomes := func(t *testing.T) map[string]int64 {
+		return counterByAttribute(t, "devhealth_acr_llm_config_requests_total", func(p metricdata.DataPoint[int64]) (string, bool) {
+			value, _ := p.Attributes.Value("outcome")
+			return value.AsString(), true
+		})
 	}
-	counts := map[string]int64{}
-	for _, scope := range collected.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			if m.Name != "devhealth_acr_llm_config_requests_total" {
-				continue
-			}
-			for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
-				value, _ := point.Attributes.Value("outcome")
-				counts[value.AsString()] += point.Value
-			}
-		}
+	bearer := "Bearer " + testToken
+	unreadable := fmt.Errorf("%w: setting %q", llmorgsettings.ErrStoredSettingUnreadable, "api_key")
+	cases := []struct {
+		name     string
+		outcome  string
+		verifier CredentialVerifier
+		source   LLMConfigSource
+		org      string
+		auth     string
+	}{
+		{"served", "served", &fakeVerifier{}, configured(), testOrg, bearer},
+		{"unauthorized_missing", "unauthorized_missing", &fakeVerifier{}, configured(), testOrg, ""},
+		{"unauthorized_invalid", "unauthorized_invalid", &fakeVerifier{err: ErrCredentialInvalid}, configured(), testOrg, bearer},
+		{"forbidden", "forbidden", &fakeVerifier{err: ErrCredentialScope}, configured(), testOrg, bearer},
+		{"credential_unavailable", "credential_unavailable", &fakeVerifier{err: errors.New("db down")}, configured(), testOrg, bearer},
+		{"bad_org", "bad_org", &fakeVerifier{}, configured(), "not-a-uuid", bearer},
+		{"unreadable", "unreadable", &fakeVerifier{}, &fakeSource{err: unreadable}, testOrg, bearer},
+		{"store_unavailable", "store_unavailable", &fakeVerifier{}, &fakeSource{err: errors.New("db down")}, testOrg, bearer},
+		{"not_found", "not_found", &fakeVerifier{}, &fakeSource{}, testOrg, bearer},
+		{"unconfigured", "unconfigured", nil, configured(), testOrg, bearer},
 	}
-	if counts["served"] != 1 || counts["unauthorized_missing"] != 1 {
-		t.Fatalf("counts = %v", counts)
+	acrMetricReader()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := outcomes(t)
+			call(t, tc.verifier, tc.source, io.Discard, tc.org, tc.auth)
+			after := outcomes(t)
+			for label, count := range after {
+				want := int64(0)
+				if label == tc.outcome {
+					want = 1
+				}
+				if got := count - before[label]; got != want {
+					t.Errorf("outcome %q moved by %d, want %d", label, got, want)
+				}
+			}
+			if after[tc.outcome]-before[tc.outcome] != 1 {
+				t.Fatalf("outcome %q not counted: before %v after %v", tc.outcome, before, after)
+			}
+		})
 	}
 }
 

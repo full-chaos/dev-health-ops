@@ -352,7 +352,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			// comment -> row step is ever added, this needs the same
 			// continue-and-record treatment as the issue path.
 			bundle, normalizeErr := normalizeGitHubPullRequestBundle(
-				claim, restResult.RepoFullName, restResult.RepoID, pull.Payload,
+				claim, restResult.names(), restResult.RepoID, pull.Payload,
 				adapted.Events, adapted.Comments, adapted.ClosingIssueRefs,
 				handler.ResolveIdentity, normalizedAt,
 			)
@@ -384,6 +384,12 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			}
 		}
 	}
+
+	canonicalDependencies, err := canonicalGitHubForeignRefs(ctx, handler.REST.RepoIdentity, claim, restResult.names(), rows.Dependencies)
+	if err != nil {
+		return CompleteRouteBatch{}, usage.wrap(err)
+	}
+	rows.Dependencies = canonicalDependencies
 
 	// "disabled" means this claim's integration configured no durable targets —
 	// the only remaining reason Projects v2 contributes nothing. It is NOT the

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -58,6 +59,8 @@ func TokenAuth(header, prefix string, token secrets.Value) Auth {
 }
 
 type HTTPClient struct {
+	// Ledger, when set, counts every wire request per (route family, dimension).
+	Ledger *RequestLedger
 	// GateWaitMax bounds how long, in total, one request sleeps in place at
 	// the shared backoff gate before the try ends with the wait that remains
 	// (CHAOS-8830; Python slept at most 300 s). Zero sleeps not at all, which
@@ -222,6 +225,7 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 			httpguard.StripCredentials(req)
 			req.Header.Set(strippedMarker, "1")
 			slog.Warn("provider redirect without a credential origin in the request context: credential headers stripped")
+			recordRedirectHop(req)
 			return nil
 		}
 		// The hop would be followed: stop it where it leaves the credential origin and say so.
@@ -230,6 +234,7 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 			state.left.Store(true)
 			return http.ErrUseLastResponse
 		}
+		recordRedirectHop(req)
 		return nil
 	}
 	return &guarded
@@ -242,9 +247,9 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 // at the first hop that leaves target's origin (the original policy still
 // decides every same-origin hop) and sets the returned flag. Any other Doer is
 // returned as is (a decorator is rebuilt around its guarded inner doer); responseLeftOrigin still detects a redirect it followed.
-func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) {
+func originGuardedDoer(doer HTTPDoer, target *url.URL, hop func(*http.Request)) (HTTPDoer, *atomic.Bool) {
 	if wrapper, ok := doer.(httpguard.Wrapper); ok { // a decorator cannot hide a following client from the origin guard
-		inner, left := originGuardedDoer(wrapper.Unwrap(), target)
+		inner, left := originGuardedDoer(wrapper.Unwrap(), target, hop)
 		if rebuilt, ok := wrapper.Rewrap(inner).(HTTPDoer); ok {
 			return rebuilt, left
 		}
@@ -270,6 +275,9 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) 
 			httpguard.RecordLeftOrigin(req.Context(), httpguard.ActionRefused, "provider.redirect", target, req.URL)
 			left.Store(true)
 			return http.ErrUseLastResponse
+		}
+		if hop != nil {
+			hop(req)
 		}
 		return nil
 	}
@@ -301,12 +309,19 @@ type routeKey struct{}
 // DoRoute is Do for a route whose path carries a member login or other
 // personal data: a failure names the route by template (for example
 // /users/{login}) instead of the path. The template must be a static literal,
-// never built from a request value. It applies to this call only.
+// never built from a request value. It applies to this call only. A nil
+// context carries no route: the call is exactly Do with a nil context.
 func (c *HTTPClient) DoRoute(ctx context.Context, method, template, path string, body io.Reader) (*http.Response, error) {
+	if ctx == nil {
+		return c.Do(ctx, method, path, body)
+	}
 	return c.Do(context.WithValue(ctx, routeKey{}, template), method, path, body)
 }
 
 func routeTemplate(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
 	template, _ := ctx.Value(routeKey{}).(string)
 	return template
 }
@@ -379,15 +394,19 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			}
 		}
 		callLeft := new(atomic.Bool)
-		request, err := http.NewRequestWithContext(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), method, target.String(), bytes.NewReader(requestBody))
+		// Each followed redirect hop counts as one more wire request: through the context for a guard behind a route's
+		// decorator, and through the per-call guard for a decorator that drops the context (a hop is counted once).
+		recorder := c.newHopRecorder(ctx, target.Path)
+		request, err := http.NewRequestWithContext(withHopRecorder(context.WithValue(ctx, originKey{}, &originState{target: target, left: callLeft}), recorder), method, target.String(), bytes.NewReader(requestBody))
 		if err != nil {
 			return nil, ErrCredentialInvalid
 		}
 		if err := c.Auth(request); err != nil {
-			return nil, err
+			return nil, c.authFailure(ctx, err, attempt)
 		}
 		var requestErr error
-		guarded, leftOrigin := originGuardedDoer(c.Doer, target)
+		guarded, leftOrigin := originGuardedDoer(c.Doer, target, recorder.record)
+		c.recordWireRequest(ctx, target.Path)
 		response, requestErr = guarded.Do(request)
 		if callLeft.Load() || leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target) && !strippedOfCredentials(response.Request)) {
 			// A redirect took the authenticated request off the credential's
@@ -446,6 +465,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 				penalty = RateLimitMaxHonoredDelay
 			}
 			if err := c.Gate.Penalize(ctx, penalty); err != nil {
+				c.gatePenalizeFailed(ctx, "response", penalty, err)
 				_ = response.Body.Close()
 				return nil, err
 			}
@@ -464,6 +484,16 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		last = &ProviderError{Class: ErrorTransient}
 	}
 	return nil, last
+}
+
+// DoUnauthenticatedRoute is DoUnauthenticated for a redirect target (an
+// artifact store URL): a transport failure names the static route template of
+// the request that redirected, never the target URL.
+func (c *HTTPClient) DoUnauthenticatedRoute(ctx context.Context, method, template, absoluteURL string) (*http.Response, error) {
+	if ctx == nil {
+		return c.DoUnauthenticated(ctx, method, absoluteURL)
+	}
+	return c.DoUnauthenticated(context.WithValue(ctx, routeKey{}, template), method, absoluteURL)
 }
 
 // DoUnauthenticated issues one absolute-URL request without applying provider
@@ -522,10 +552,11 @@ func (c *HTTPClient) DoUnauthenticated(
 			err = errors.Join(err, releaseErr)
 		}()
 	}
-	request, requestErr := http.NewRequestWithContext(ctx, method, target.String(), nil)
+	request, requestErr := http.NewRequestWithContext(withHopRecorder(ctx, c.newHopRecorder(ctx, target.Path)), method, target.String(), nil)
 	if requestErr != nil {
 		return nil, ErrCredentialInvalid
 	}
+	c.recordWireRequest(ctx, target.Path)
 	response, err = c.Doer.Do(request)
 	if err != nil {
 		failure := c.transportFailure(ctx, err, 1)
@@ -732,6 +763,41 @@ func (c *HTTPClient) releaseReservation(ctx context.Context, reservation Reserva
 		return ErrBudgetUnavailable
 	}
 	return nil
+}
+
+// authFailure records an auth-step ProviderError (for example a rate-limited
+// GitHub App installation-token exchange) like a response-path failure: the
+// request metric, and the shared cooldown gate for rate_limited. The error is
+// returned unchanged; a gate write failure is returned as the response path
+// does, unwrapped.
+func (c *HTTPClient) authFailure(ctx context.Context, err error, attempt int) error {
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		return err
+	}
+	c.observe(providerErr.Class)
+	if providerErr.Class != ErrorRateLimited || c.Gate == nil {
+		return err
+	}
+	penalty := providerErr.RetryAfter
+	if penalty <= 0 {
+		penalty = c.retryDelay(attempt, 0, ErrorRateLimited)
+	}
+	if penalty > RateLimitMaxHonoredDelay {
+		penalty = RateLimitMaxHonoredDelay
+	}
+	if gateErr := c.Gate.Penalize(ctx, penalty); gateErr != nil {
+		c.gatePenalizeFailed(ctx, "auth", penalty, gateErr)
+		return gateErr
+	}
+	slog.InfoContext(ctx, "provider_auth_rate_limited", "provider", c.Provider, "penalty_ms", penalty.Milliseconds())
+	return err
+}
+
+func (c *HTTPClient) gatePenalizeFailed(ctx context.Context, path string, penalty time.Duration, err error) {
+	c.Metrics.RecordGatePenalizeError(c.Provider, path)
+	args := append([]any{"provider", c.Provider, "path", path, "penalty_ms", penalty.Milliseconds()}, logging.ErrorArgs(err)...)
+	slog.WarnContext(ctx, "provider_gate_penalize_failed", args...)
 }
 
 func (c *HTTPClient) observe(class ErrorClass) {

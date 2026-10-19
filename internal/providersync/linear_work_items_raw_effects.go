@@ -264,7 +264,19 @@ func (adapter LinearProjectCatalogClickHouseAdapter) WriteLinearWorkItemEffect(
 			return ErrInvalidConfiguration
 		}
 	}
-	return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, linearRawEffectIdentity(identity), effect)
+	narrowed, empty, err := narrowProjectEnsureEffect(ctx, adapter.Delegate.Conn, "linear", identity.OrgID, effect, rows)
+	if err != nil {
+		return err
+	}
+	if empty {
+		return nil
+	}
+	narrowedIdentity := linearRawEffectIdentity(identity)
+	if len(narrowed.Rows) != len(effect.Rows) {
+		narrowedIdentity.ContentDigest, narrowedIdentity.RowCount = narrowed.ContentDigest, len(narrowed.Rows)
+		return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, narrowedIdentity, narrowed)
+	}
+	return adapter.Delegate.WriteGitHubWorkItemEffect(ctx, narrowedIdentity, effect)
 }
 
 // InspectLinearWorkItemEffect deliberately does NOT delegate to the GitHub

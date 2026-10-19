@@ -2,11 +2,12 @@ package chartgates_test
 
 import (
 	"fmt"
-	"go/ast"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
 
 // Ported from tests/workers/test_go_worker_cli_contract.py (CHAOS-4020; the Celery queue comparison test
@@ -28,6 +29,7 @@ var (
 		"DEV_HEALTH_PG_API_PASSWORD", "API_CLICKHOUSE_URI", "DEV_HEALTH_CH_API_PASSWORD", "VALKEY_URI",
 		"SETTINGS_ENCRYPTION_KEY", "SETTINGS_ENCRYPTION_SALT", "PAGER_DUTY_CLIENT_ID", "PAGER_DUTY_SECRET",
 		"JWT_SECRET_KEY", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "LICENSE_PRIVATE_KEY",
+		"GO_API_EDGE_JWT_SECRET", "GO_API_REGISTRY_POSTGRES_URI",
 	}
 	cmdFlag      = regexp.MustCompile(`^--([a-z][a-z0-9-]*)=`)
 	routeSwitch  = regexp.MustCompile(`WORKER_[A-Z0-9_]+_ENABLED`)
@@ -38,30 +40,8 @@ var (
 )
 
 func goFlagNames(g *guard) map[string]bool {
-	out := map[string]bool{}
-	f := g.goFile(optionsGo)
-	if f == nil {
-		return out
-	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		cl, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		fields := keyedFields(cl)
-		if name, ok := strLit(fields["Flag"]); ok && fields["Flag"] != nil {
-			out[name] = true
-			if al, ok := fields["Aliases"].(*ast.CompositeLit); ok {
-				for _, e := range al.Elts {
-					if a, ok := strLit(e); ok {
-						out[a] = true
-					}
-				}
-			}
-		}
-		return true
-	})
-	g.expect(len(out) > 0, "no flags parsed from the option registry")
+	out := registryFlagNames()
+	g.expect(len(out) > 0, "no flags in the option registry")
 	return out
 }
 
@@ -88,20 +68,8 @@ func composeWorkerServices(g *guard) map[string]doc {
 }
 
 func cliRegistryDeclaresCredentials(g *guard) {
-	var got []string
-	if f := g.goFile(optionsGo); f != nil {
-		ast.Inspect(f, func(n ast.Node) bool {
-			if cl, ok := n.(*ast.CompositeLit); ok {
-				fields := keyedFields(cl)
-				if env, ok := strLit(fields["Env"]); ok && fields["Env"] != nil && fields["Secret"] != nil && isTrue(fields["Secret"]) {
-					got = append(got, env)
-				}
-			}
-			return true
-		})
-	}
+	got := registrySecretEnv()
 	want := append([]string(nil), credentials...)
-	sort.Strings(got)
 	sort.Strings(want)
 	g.expect(equal(got, want), "the Secret-marked registry entries differ from the documented credential set: got %v, want %v (a credential that loses its marker gains a flag and lands in `ps` output)", got, want)
 }
@@ -177,24 +145,13 @@ func cliEveryComposeQueueIsServed(g *guard) {
 
 func cliProviderRoutesHaveNoEnablementSurface(g *guard) {
 	g.expect(!exists(g.path(routesGo)), "routes.go is back; the provider route switch registry was deleted with the enablement plane and must not return")
-	for _, rel := range []string{configGo, optionsGo} {
-		f := g.goFile(rel)
-		if f == nil {
-			continue
-		}
-		for _, lit := range stringLiterals(f) {
-			g.expect(!routeSwitch.MatchString(lit), "%s reintroduced the route enablement variable %q: capability is always on in the binary", rel, lit)
-			g.expect(!strings.Contains(lit, "--routes"), "%s must not introduce a --routes flag; queue topology is the only serving lever", rel)
-			g.expect(!strings.Contains(lit, "GO_PROVIDER_ROUTES"), "%s carries the all-routes preset GO_PROVIDER_ROUTES, deleted with the switches it defaulted on", rel)
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			if fld, ok := n.(*ast.Field); ok {
-				for _, id := range fld.Names {
-					g.expect(!routeField.MatchString(id.Name), "%s reintroduced the route enablement field %s", rel, id.Name)
-				}
-			}
-			return true
-		})
+	for _, o := range config.Options() {
+		g.expect(!routeSwitch.MatchString(o.Env), "the option registry carries the route enablement variable %q: capability is always on in the binary", o.Env)
+		g.expect(o.Env != "GO_PROVIDER_ROUTES", "the option registry carries the all-routes preset GO_PROVIDER_ROUTES, deleted with the switches it defaulted on")
+		g.expect(o.Flag != "routes", "the option registry offers a --routes flag; queue topology is the only serving lever")
+	}
+	for _, f := range configFieldNames() {
+		g.expect(!routeField.MatchString(f), "config.Config reintroduced the route enablement field %s", f)
 	}
 }
 
@@ -750,22 +707,11 @@ func TestContractGuardsPlantedDefects(t *testing.T) {
 	chartAndCompose := append([]string{"compose.yml"}, chartOnly...)
 	chartAndOptions := append([]string{optionsGo, "compose.yml", deploymentJSON}, chartOnly...)
 	runPlanted(t, []planted{
-		{"credential-loses-its-secret-marker", cfgSrc, mut(optionsGo, `{Env: "POSTGRES_URI", Secret: true,`, `{Env: "POSTGRES_URI", Secret: false,`), cliRegistryDeclaresCredentials, "differ from the documented credential set"},
-		{"non-credential-gains-a-secret-marker", cfgSrc, mut(optionsGo, `{Env: "POSTGRES_URI", Secret: true,`, `{Env: "SOME_NEW_VAR", Secret: true, Group: GroupCredentials, Usage: "x"},
-	{Env: "POSTGRES_URI", Secret: true,`), cliRegistryDeclaresCredentials, "differ from the documented credential set"},
 		{"compose-misspells-a-flag", append([]string{optionsGo}, compose...), mut("compose.yml", "--unreclaimable-sweep=${", "--unreclaimable-swep=${"), cliComposeFlagsAccepted, "which no Go worker binary declares"},
 		{"helm-misspells-a-flag", append([]string{optionsGo}, chartOnly...), mut(chartFile(workers), `"--http-addr=:8080"`, `"--http-adr=:8080"`), cliHelmFlagsAccepted, "which no Go worker binary declares"},
 		{"compose-group-loses-its-drain-budget", compose, mut("compose.yml", "      - reconciler\n      - --shutdown-timeout=60s\n", "      - reconciler\n"), cliEveryComposeWorkerStatesDrainBudget, "does not state a drain budget"},
 		{"compose-selects-an-unserved-queue", append([]string{deploymentJSON}, compose...), mut("compose.yml", "- --queues=sync_provider", "- --queues=sync_ghost"), cliEveryComposeQueueIsServed, "does not serve"},
 		{"route-registry-returns", cfgSrc, func(t *testing.T, root string) { writeFile(t, root, routesGo, "package config\n") }, cliProviderRoutesHaveNoEnablementSurface, "routes.go is back"},
-		{"route-enable-switch-returns", cfgSrc, appendText(configGo, "\nvar _ = \"WORKER_GITHUB_ENABLED\"\n"), cliProviderRoutesHaveNoEnablementSurface, "route enablement variable"},
-		{"route-enable-field-returns", cfgSrc, appendText(configGo, "\ntype x struct{ WorkerGithubEnabled bool }\n"), cliProviderRoutesHaveNoEnablementSurface, "route enablement field"},
-		{"routes-flag-returns", cfgSrc, appendText(optionsGo, "\nvar _ = \"--routes\"\n"), cliProviderRoutesHaveNoEnablementSurface, "--routes"},
-		{"all-routes-preset-returns", cfgSrc, appendText(configGo, "\nvar _ = \"GO_PROVIDER_ROUTES\"\n"), cliProviderRoutesHaveNoEnablementSurface, "all-routes preset"},
-		{"credential-entry-commented-out", cfgSrc, mut(optionsGo, `	{Env: "POSTGRES_URI", Secret: true,`, `	// {Env: "POSTGRES_URI", Secret: true,`), cliRegistryDeclaresCredentials, "differ from the documented credential set"},
-		{"flag-declared-only-in-a-comment", append([]string{optionsGo}, compose...),
-			all(mut("compose.yml", "      - reconciler\n      - --shutdown-timeout=60s\n", "      - reconciler\n      - --decoy-flag=1\n      - --shutdown-timeout=60s\n"), appendText(optionsGo, "\n// Flag: \"decoy-flag\"\n")),
-			cliComposeFlagsAccepted, "--decoy-flag"},
 		{"dho-binary-copy-only-in-a-dockerfile-comment", docker,
 			mut(goDockerfile, "cp /out/dho /runtime/dho/usr/local/bin/dho; \\", "echo \"cp /out/dho /runtime/dho/usr/local/bin/dho\"; \\\n    # cp /out/dho /runtime/dho/usr/local/bin/dho; \\"),
 			depImagePackagesLifecycleOperator, "no longer carries"},

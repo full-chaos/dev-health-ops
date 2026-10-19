@@ -16,7 +16,6 @@ func TestControlGuardsPlantedDefects(t *testing.T) {
 	const schema = chartRel + "/values.schema.json"
 	const ch = chartRel + "/templates/clickhouse.yaml"
 	const web = chartRel + "/templates/web-deployment.yaml"
-	sweepSrc := []string{rulesRel, reconcilerLoop, outboxLoop}
 	const gate = "{{- if and .Values.migrations.hook.provisionRoles.enabled .Values.migrations.hook.riverMigrate.enabled .Values.migrations.hook.routeActivate.enabled }}"
 	runPlanted(t, []planted{
 		{"internal-listener-on-by-default", chartOnly,
@@ -49,9 +48,6 @@ func TestControlGuardsPlantedDefects(t *testing.T) {
 				mut(schema, `"minReplicas": { "type": "integer", "minimum": 1 }`, `"minReplicas": { "type": "integer", "minimum": 0 }`),
 				mut(values, "      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 10,", "      autoscaling: {enabled: true, minReplicas: 0, maxReplicas: 2, queueDepthPerReplica: 10,")),
 			drainDefaultsSatisfyMinReplicasFloor, "below the chart's own floor"},
-		{"sweep-sample-deleted-from-the-write-body", sweepSrc,
-			mut(reconcilerLoop, `# TYPE sync_dispatch_unreclaimable_candidates gauge\nsync_dispatch_unreclaimable_candidates %d\n"`, `# TYPE sync_dispatch_unreclaimable_candidates gauge\n"`),
-			sweepReaderIgnoresComments, "not written as a sample"},
 		{"route-renders-by-default", chartOnly,
 			all(mut(values, "    provisionRoles:\n      enabled: false", "    provisionRoles:\n      enabled: true"),
 				mut(values, "    riverMigrate:\n", "    riverMigrate:\n      enabled: true\n"),

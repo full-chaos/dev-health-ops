@@ -1,134 +1,13 @@
 package chartgates_test
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
 // A guard that matches raw file text passes on a comment, an echo or a quoted string that merely names the
-// thing it looks for. These helpers give the guards a parsed field to read instead: Go source through
-// go/parser (comments are not nodes), Dockerfiles as instruction lists, templates with their comments removed.
-
-func (g *guard) goFile(rel string) *ast.File {
-	f, err := parser.ParseFile(token.NewFileSet(), g.path(rel), nil, 0)
-	if err != nil {
-		g.failf("cannot parse %s: %v", rel, err)
-		return nil
-	}
-	return f
-}
-
-func strLit(e ast.Expr) (string, bool) {
-	bl, ok := e.(*ast.BasicLit)
-	if !ok || bl.Kind != token.STRING {
-		return "", false
-	}
-	s, err := strconv.Unquote(bl.Value)
-	if err != nil {
-		return "", false
-	}
-	return s, true
-}
-
-// keyedFields returns the key: value pairs of a composite literal, keyed by identifier.
-func keyedFields(cl *ast.CompositeLit) map[string]ast.Expr {
-	out := map[string]ast.Expr{}
-	for _, e := range cl.Elts {
-		if kv, ok := e.(*ast.KeyValueExpr); ok {
-			if id, ok := kv.Key.(*ast.Ident); ok {
-				out[id.Name] = kv.Value
-			}
-		}
-	}
-	return out
-}
-
-func isTrue(e ast.Expr) bool {
-	id, ok := e.(*ast.Ident)
-	return ok && id.Name == "true"
-}
-
-// stringLiterals returns every string literal in a file, with its value.
-func stringLiterals(f *ast.File) []string {
-	var out []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		if e, ok := n.(ast.Expr); ok {
-			if s, ok := strLit(e); ok {
-				out = append(out, s)
-			}
-		}
-		return true
-	})
-	return out
-}
-
-// funcDecl finds a method or function by name; recv, when non-empty, must be the receiver's type name.
-func funcDecl(f *ast.File, name, recv string) *ast.FuncDecl {
-	for _, d := range f.Decls {
-		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Name.Name != name || fd.Body == nil {
-			continue
-		}
-		if recv == "" {
-			return fd
-		}
-		if fd.Recv == nil || len(fd.Recv.List) == 0 {
-			continue
-		}
-		t := fd.Recv.List[0].Type
-		if st, ok := t.(*ast.StarExpr); ok {
-			t = st.X
-		}
-		if id, ok := t.(*ast.Ident); ok && id.Name == recv {
-			return fd
-		}
-	}
-	return nil
-}
-
-// reachableStmts are the function body's top-level statements up to the first unconditional return: code
-// after it never runs, so a metric written there is not emitted.
-func reachableStmts(fd *ast.FuncDecl) []ast.Stmt {
-	var out []ast.Stmt
-	for _, s := range fd.Body.List {
-		if _, ret := s.(*ast.ReturnStmt); ret {
-			break
-		}
-		out = append(out, s)
-	}
-	return out
-}
-
-func stmtsLiterals(stmts []ast.Stmt) []string {
-	var out []string
-	for _, s := range stmts {
-		ast.Inspect(s, func(n ast.Node) bool {
-			if e, ok := n.(ast.Expr); ok {
-				if v, ok := strLit(e); ok {
-					out = append(out, v)
-				}
-			}
-			return true
-		})
-	}
-	return out
-}
-
-// emitsMetric reports whether the reachable part of fd writes the metric as a sample line or hands its
-// exact name to a writer helper.
-func emitsMetric(fd *ast.FuncDecl, metric string) bool {
-	sample := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(metric) + `[ {]`)
-	for _, lit := range stmtsLiterals(reachableStmts(fd)) {
-		if lit == metric || sample.MatchString(lit) {
-			return true
-		}
-	}
-	return false
-}
+// thing it looks for. Where a guard can run the code it runs it (exec_test.go); these helpers cover the data
+// files that cannot be run: Dockerfiles as instruction lists, templates with their comments removed.
 
 // --- Dockerfile ---
 

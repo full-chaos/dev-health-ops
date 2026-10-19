@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -27,12 +28,16 @@ func ParseForwardedTrust(value string) ForwardedTrust {
 		trust.all = true
 		return trust
 	}
-	for _, raw := range strings.Split(value, ",") {
+	for index, raw := range strings.Split(value, ",") {
 		host := strings.TrimFunc(raw, pythonparity.IsSpace)
 		if strings.Contains(host, "/") {
 			if prefix, err := netip.ParsePrefix(host); err == nil && prefix.Masked() == prefix {
 				trust.networks = append(trust.networks, prefix)
 				continue
+			}
+			if _, err := netip.ParseAddr(host); err == nil {
+				slog.Warn("forwarded trust entry parses as an address but is kept as a literal and trusts no peer",
+					slog.Int("entry_index", index))
 			}
 			trust.literals[host] = true
 			continue

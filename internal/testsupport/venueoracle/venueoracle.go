@@ -439,6 +439,9 @@ type Options struct {
 	// writes the Go-only proof, WriteGoOnlyProof): its venue is built without
 	// Python, as a frozen golden's is.
 	GoOnly bool
+	// External, when set, is the Go side of the venue: a target that already runs, with its own stores.
+	// It needs a frozen golden or GoOnly (see ExternalStores).
+	External *ExternalStores
 }
 
 // Venue is a built venue.
@@ -518,6 +521,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	if !frozen {
 		bin := activateInterpreter(t, options.Root, "venue")
 		v.Python = filepath.Join(bin, "python3")
+	}
+	if options.External != nil {
+		return startExternal(t, ctx, options, v)
 	}
 	v.hostEnv = inheritedValues(map[string]string{})
 

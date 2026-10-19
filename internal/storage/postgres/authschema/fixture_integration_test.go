@@ -39,6 +39,14 @@ type authFixture struct {
 }
 
 func newAuthFixture(t *testing.T, ctx context.Context) *authFixture {
+	return newAuthFixtureWith(t, ctx, nil)
+}
+
+// newAuthFixtureWith runs prepare, when set, after the roles exist and before
+// the auth schema is applied: a test that needs the ops schema in the same
+// database loads it there, because the ops migrator refuses a database that
+// already holds objects it did not create.
+func newAuthFixtureWith(t *testing.T, ctx context.Context, prepare func(context.Context, *containers.Instance, string)) *authFixture {
 	t.Helper()
 
 	instance, err := containers.StartPostgres(ctx)
@@ -96,6 +104,9 @@ func newAuthFixture(t *testing.T, ctx context.Context) *authFixture {
 	}
 	t.Cleanup(migration.Close)
 
+	if prepare != nil {
+		prepare(ctx, instance, migrationRole)
+	}
 	const schema = "auth"
 	if _, err := Apply(ctx, migration, Options{Schema: schema, RuntimeRole: runtimeRole}); err != nil {
 		t.Fatalf("Apply: %v", err)

@@ -153,12 +153,12 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		// no recover here: a panic (a panic(nil) included, which recover cannot tell from no panic) keeps unwinding to River,
 		// and the failure line and the counter are written on the way
 		if !completed {
-			service.observeFanoutFailure(ctx, args, unavailable(stagePanic, nil), state.observed)
+			service.observeFanoutFailure(ctx, args, unavailable(stagePanic, nil), state.step, state.observed)
 			return
 		}
 		if err != nil {
 			err = stagedFailure(state.step, err)
-			service.observeFanoutFailure(ctx, args, err, state.observed)
+			service.observeFanoutFailure(ctx, args, err, state.step, state.observed)
 		}
 	}()
 	err = service.fanout(ctx, args, state)
@@ -354,17 +354,21 @@ func (service *NativePostSyncService) fanout(ctx context.Context, args PostSyncA
 // Go type and SQLSTATE (never its text). A failure before the plan is loaded is not part of the CHAOS-4263 outcome counter's
 // "did the daily fanout publish" question, so that counter is not fed twice: when the deferred outcome call has not run, the error
 // outcome is counted here, so a fan-out that fails before its plan no longer leaves no trace in the counter either.
-func (service *NativePostSyncService) observeFanoutFailure(ctx context.Context, args PostSyncArgs, err error, outcomeObserved bool) {
+func (service *NativePostSyncService) observeFanoutFailure(ctx context.Context, args PostSyncArgs, err error, step postSyncStage, outcomeObserved bool) {
 	if service == nil {
 		return
 	}
 	stage := postSyncStageOf(err)
-	service.logger.Error(ctx, synclog.MsgPostSyncFanoutFailed,
+	attrs := []synclog.Attr{
 		synclog.Org(synclog.ParseID(args.OrganizationID())),
 		synclog.Run(synclog.ParseID(args.SyncRunID())),
 		synclog.Text(synclog.KeyReason, synclog.ParseLabel(string(stage))),
 		synclog.Failure(err),
-	)
+	}
+	if stage == stagePanic {
+		attrs = append(attrs, synclog.Text(synclog.KeyStep, stepLabel(step)))
+	}
+	service.logger.Error(ctx, synclog.MsgPostSyncFanoutFailed, attrs...)
 	if defect := chainDefect(err); defect != "" {
 		service.logger.Warn(ctx, synclog.MsgPostSyncFanoutChainDefect,
 			synclog.Org(synclog.ParseID(args.OrganizationID())),

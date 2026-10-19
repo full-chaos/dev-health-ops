@@ -34,8 +34,9 @@ bash ci/check_go.sh auth <stage>    # one stage
 | --- | --- |
 | `fmt`, `vet` | `gofmt` and `go vet` over the auth packages (`cmd/auth-service`, `cmd/auth-migrate`, `internal/auth/...`, `internal/audit/...`, `internal/storage/postgres/authschema/...`). |
 | `test`, `race` | `go test` and `go test -race` over the same packages, uncached. |
+| `race-integration` | `go test -race -tags=integration`, one package at a time, over `AUTH_RACE_PACKAGES` in `ci/check_go.sh` (today `internal/auth/session`; a package joins the list in the PR that adds its race tests) against a live PostgreSQL (testcontainers). **Fails unless every `TestRace*` test of each package logged `AUTH_RACE_EXECUTED`**, which a test does only when built with `-race`. Neither `race` (no integration tag) nor the go.yml integration shards (no `-race`) run these. |
 | `middleware` | Runs `TestProductionMiddlewareStackIsMountedAndDriven` and **fails unless it logged `AUTH_PRODUCTION_STACK_EXECUTED`** (guardrail G-69). The test builds the API server from `apiServerOptions`, the function the service itself uses, with a probe route, and drives 404, 405, 413, a recovered panic (no panic text in the body) and the rate limit over real HTTP. A green test name without the marker is not evidence. |
-| `fuzz [Target]` | One fuzz run per registered parser, each in its own invocation. Nine targets: error envelope, revision, timestamp, edge access token, signed token, rate-limit text, forwarded-trust list, signing-key PEM and configuration. The budget `AUTH_FUZZTIME` (default `20s`) must be whole seconds and at least 5 s, and a target prints `auth-fuzz-proof:` only when the engine reported a non-zero execution count and passed, so a baseline-only run cannot pass. |
+| `fuzz [Target]` | One fuzz run per registered parser, each in its own invocation. Eleven targets: error envelope, revision, timestamp, edge access token, signed token, rate-limit text, forwarded-trust list, signing-key PEM, configuration, email normalization and external identity key. The budget `AUTH_FUZZTIME` (default `20s`) must be whole seconds and at least 5 s, and a target prints `auth-fuzz-proof:` only when the engine reported a non-zero execution count and passed, so a baseline-only run cannot pass. |
 | `fuzz-registry` | Fails when a `Fuzz*` function exists in the auth tree without a row in `AUTH_FUZZ_TARGETS`, or a row names a missing function. |
 | `vuln` | `govulncheck` (pinned version) over the auth packages, parsed by `ci/auth_govulncheck.py`. **Any reachable finding fails.** There is no ignore list and no baseline in the gate. A pull request that changes the gate itself (`ci/check_go.sh`, `ci/auth_govulncheck.py`, the workflow) is a reviewed change to files that select the gates, so it cannot do so unreviewed. An empty or config-less scan also fails. |
 | `paths-selftest` | Executes the relevance rules on fixed inside and outside paths. |
@@ -57,7 +58,7 @@ tree still reports its old path.
 | --- | --- | --- |
 | `auth-changes` | always | Computes `relevant`. Non-pull-request events are always relevant. |
 | `auth-go-quality` | when relevant | `paths-selftest`, `scope-selftest`, `fmt`, `vet`, `fuzz-registry`, `vuln`. |
-| `auth-test` | when relevant | `test`, `race`, `middleware`. |
+| `auth-test` | when relevant | `test`, `race`, `race-integration`, `middleware`. |
 | `auth-fuzz (<target>)` | when relevant | One matrix job per fuzz target, so each parser has its own CI-visible name. |
 | `auth-gate` | **always** | Fans in. Succeeds when the change is not relevant or the pull request is a draft without `ci:full`; fails when `auth-changes` failed, or when a relevant change has any gate job that did not succeed (failed, cancelled **or skipped**). |
 

@@ -35,10 +35,13 @@ var datasetStateWrite = regexp.MustCompile(`(?is)\binsert\s+into\s+(public\.)?in
 
 // datasetStateWriterFunctions scans the Go files under roots (no _test.go
 // file) and returns "<package dir>.<function>" for every function that holds
-// a string literal matching datasetStateWrite, and the number of files read.
-func datasetStateWriterFunctions(t *testing.T, repoRoot string, roots ...string) ([]string, int) {
+// a string literal matching datasetStateWrite, the functions with such a
+// literal that does not set both provenance columns (CHAOS-8818), and the
+// number of files read.
+func datasetStateWriterFunctions(t *testing.T, repoRoot string, roots ...string) ([]string, []string, int) {
 	t.Helper()
 	found := map[string]bool{}
+	unstamped := map[string]bool{}
 	files := 0
 	for _, root := range roots {
 		err := filepath.WalkDir(filepath.Join(repoRoot, root), func(path string, entry fs.DirEntry, err error) error {
@@ -69,7 +72,11 @@ func datasetStateWriterFunctions(t *testing.T, repoRoot string, roots ...string)
 					}
 					text, err := strconv.Unquote(literal.Value)
 					if err == nil && datasetStateWrite.MatchString(text) {
-						found[filepath.ToSlash(relative)+"."+name] = true
+						key := filepath.ToSlash(relative) + "." + name
+						found[key] = true
+						if !strings.Contains(text, "state_changed_at") || !strings.Contains(text, "state_changed_by") {
+							unstamped[key] = true
+						}
 					}
 					return true
 				})
@@ -85,7 +92,12 @@ func datasetStateWriterFunctions(t *testing.T, repoRoot string, roots ...string)
 		out = append(out, name)
 	}
 	sort.Strings(out)
-	return out, files
+	missing := make([]string, 0, len(unstamped))
+	for name := range unstamped {
+		missing = append(missing, name)
+	}
+	sort.Strings(missing)
+	return out, missing, files
 }
 
 // TestEveryWriterOfTheDatasetStateIsNamed is the writer census: the
@@ -98,7 +110,7 @@ func TestEveryWriterOfTheDatasetStateIsNamed(t *testing.T) {
 		t.Fatal("no caller file")
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	got, files := datasetStateWriterFunctions(t, repoRoot, "internal", "cmd")
+	got, unstamped, files := datasetStateWriterFunctions(t, repoRoot, "internal", "cmd")
 	if files < 100 || len(got) == 0 {
 		t.Fatalf("the scan read %d files and found %d writers: it measured nothing", files, len(got))
 	}
@@ -113,6 +125,9 @@ func TestEveryWriterOfTheDatasetStateIsNamed(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the functions that can set integration_datasets.is_enabled changed.\n got  %v\n want %v\n"+
 			"A new writer needs a decision: the dataset row has one owner (CHAOS-8816).", got, want)
+	}
+	if len(unstamped) > 0 {
+		t.Fatalf("these writers hold a statement that does not set state_changed_at and state_changed_by (CHAOS-8818): %v", unstamped)
 	}
 }
 

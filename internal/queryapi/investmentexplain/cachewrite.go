@@ -84,6 +84,8 @@ type LLMTokenUsageRecord struct {
 	OutputTokens int
 	Calls        int
 	ComputedAt   time.Time
+	// CredentialSource is "org" or "platform" (llm_token_usage.credential_source).
+	CredentialSource string
 }
 
 // TokenUsageInput bundles the parameters a write_llm_token_usage call site
@@ -92,6 +94,8 @@ type LLMTokenUsageRecord struct {
 // explain_work_unit's own call (api/services/work_unit_explain.py:125-141).
 type TokenUsageInput struct {
 	OrgID string
+	// OrgCredentials is true when the call used the organization's own provider credentials.
+	OrgCredentials bool
 	// Source is write_llm_token_usage's own `source` argument, which has no
 	// default on either plane: each call site names the surface it is
 	// accounting for ("investment_mix_explain", "work_unit_explain"), and
@@ -136,21 +140,26 @@ func BuildLLMTokenUsageRecord(input TokenUsageInput, computedAt time.Time) (reco
 	if input.Model != nil && *input.Model != "" {
 		model = *input.Model
 	}
+	credentialSource := "platform"
+	if input.OrgCredentials {
+		credentialSource = "org"
+	}
 	calls := callCount
 	if calls < 0 {
 		calls = 0
 	}
 	return LLMTokenUsageRecord{
-		OrgID:        input.OrgID,
-		RunID:        "",
-		Provider:     provider,
-		Model:        model,
-		Source:       input.Source,
-		UseCase:      "legacy",
-		InputTokens:  inputCount,
-		OutputTokens: outputCount,
-		Calls:        calls,
-		ComputedAt:   computedAt,
+		OrgID:            input.OrgID,
+		RunID:            "",
+		Provider:         provider,
+		Model:            model,
+		Source:           input.Source,
+		UseCase:          "legacy",
+		InputTokens:      inputCount,
+		OutputTokens:     outputCount,
+		Calls:            calls,
+		ComputedAt:       computedAt,
+		CredentialSource: credentialSource,
 	}, true
 }
 
@@ -172,7 +181,8 @@ func (w *CacheWriter) WriteLLMTokenUsage(ctx context.Context, record LLMTokenUsa
 		return ErrUnavailable
 	}
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO llm_token_usage (
-		org_id, run_id, provider, model, source, use_case, input_tokens, output_tokens, calls, computed_at
+		org_id, run_id, provider, model, source, use_case, input_tokens, output_tokens, calls, computed_at,
+		credential_source
 	)`)
 	if err != nil {
 		return fmt.Errorf("prepare llm_token_usage batch: %w", err)
@@ -181,6 +191,7 @@ func (w *CacheWriter) WriteLLMTokenUsage(ctx context.Context, record LLMTokenUsa
 		record.OrgID, record.RunID, record.Provider, record.Model,
 		record.Source, record.UseCase, uint64(record.InputTokens),
 		uint64(record.OutputTokens), uint64(record.Calls), record.ComputedAt.UTC(),
+		record.CredentialSource,
 	); err != nil {
 		return fmt.Errorf("append llm_token_usage row: %w", err)
 	}

@@ -219,10 +219,19 @@ func writeIn(workDir, rel, body string) error {
 	return os.WriteFile(full, []byte(body), 0o644)
 }
 
+// firstLine is the head of a multi-line report, for a cell's output line.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
 // goAvailable reports whether the go command can be executed, so a test that
 // needs the real generator says why it cannot run rather than failing opaquely.
 func goAvailable(t *testing.T) {
 	t.Helper()
+	trackSlowTest(t)
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Fatalf("the go command is required to run the real generator: %v", err)
 	}

@@ -138,7 +138,7 @@ func edgeQueries(base time.Time) []string {
 func seedStatements(orgs map[string]uuid.UUID, base time.Time) []string {
 	stamp := func(offset time.Duration) string { return base.Add(offset).Format("2006-01-02 15:04:05") }
 	usage := func(org, run, provider, model, source string, in, out, calls uint64, at string) string {
-		return fmt.Sprintf("('%s', '%s', '%s', '%s', '%s', 'legacy', %d, %d, %d, '%s')", org, run, provider, model, source, in, out, calls, at)
+		return fmt.Sprintf("('%s', '%s', '%s', '%s', '%s', 'legacy', %d, %d, %d, '%s', 'org')", org, run, provider, model, source, in, out, calls, at)
 	}
 	rich, other := orgs[richOrg].String(), orgs[otherOrg].String()
 	var usageRows []string
@@ -177,7 +177,7 @@ func seedStatements(orgs map[string]uuid.UUID, base time.Time) []string {
 		usage(rich, "big", "openai", "gpt-5-mini", "x", 9007199254740993, 18446744073709551000, 4611686018427387904, stamp(-1*time.Hour)),
 	)
 	statements := []string{
-		"INSERT INTO llm_token_usage (org_id, run_id, provider, model, source, use_case, input_tokens, output_tokens, calls, computed_at) VALUES\n" +
+		"INSERT INTO llm_token_usage (org_id, run_id, provider, model, source, use_case, input_tokens, output_tokens, calls, computed_at, credential_source) VALUES\n" +
 			strings.Join(usageRows, ",\n"),
 	}
 	outcome := func(org, run, status, errorsJSON string, i int, at string) string {
@@ -230,10 +230,15 @@ func seedStatements(orgs map[string]uuid.UUID, base time.Time) []string {
 }
 
 func usageInsert(org, run, at string) string {
-	return fmt.Sprintf("INSERT INTO llm_token_usage (org_id, run_id, provider, model, source, use_case, input_tokens, output_tokens, calls, computed_at) VALUES ('%s', '%s', 'openai', 'gpt-5-mini', 'x', 'legacy', 1, 1, 1, '%s')", org, run, at)
+	return fmt.Sprintf("INSERT INTO llm_token_usage (org_id, run_id, provider, model, source, use_case, input_tokens, output_tokens, calls, computed_at, credential_source) VALUES ('%s', '%s', 'openai', 'gpt-5-mini', 'x', 'legacy', 1, 1, 1, '%s', 'org')", org, run, at)
 }
 
 var sinceField = regexp.MustCompile(`"since":"[^"]*"`)
+
+// unrunSpend is the closing array of the body: Python's `legacy` rows and Go's
+// `unattributed` rows (organization-credential spend by source and day). The
+// two shapes differ by design, so neither is compared; runs are.
+var unrunSpend = regexp.MustCompile(`(?s),\s*"(legacy|unattributed)":\s*\[.*\]\s*\}\s*$`)
 
 // TestAdminLLMSpendVenueOracle answers GET /api/v1/admin/llm-settings/spend
 // with the real Python api and the real Go api over the same organizations
@@ -419,6 +424,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NUL
 		Golden: golden,
 		// A window that starts "30 days ago" is read from each plane's own clock.
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = unrunSpend.ReplaceAllString(body, "}")
 			if strings.Contains(request.Path, "since=") {
 				return body
 			}

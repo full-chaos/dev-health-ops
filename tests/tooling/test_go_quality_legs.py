@@ -479,7 +479,8 @@ def test_the_matrix_carries_exactly_the_legs_the_script_knows() -> None:
     )
     runs = [s["run"] for s in leg["steps"] if isinstance(s.get("run"), str)]
     assert any("ci-leg ${{ matrix.args }}" in r for r in runs)
-    assert leg["timeout-minutes"] <= 30
+    # CHAOS-10294: the pool race path may run 45 min; the hosted budget stays 30.
+    assert str(leg["timeout-minutes"]).endswith("&& 45 || 30 }}")
 
 
 def test_the_fan_in_keeps_the_required_context_and_fails_on_a_missing_leg() -> None:

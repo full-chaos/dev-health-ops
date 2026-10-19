@@ -110,6 +110,18 @@ _ROUTING_TERNARY = (
 )
 _CACHE_NEGATION = "${{ !(" + ALLOWLIST_CONDITION + ") }}"
 
+# CHAOS-10294: go-quality-leg's three race legs may also take the CI_RACE_RUNNER pool
+# on push to main of this repo; its runs-on, setup-go cache and cache-path step carry
+# that extra term. The allow-list text above stays verbatim inside each value.
+RACE_POOL_CONDITION = (
+    "matrix.heavy && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && "
+    "github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'"
+)
+_GQ_ROUTING_TERNARY = (
+    "${{ (" + RACE_POOL_CONDITION + ") && vars.CI_RACE_RUNNER || " + _ROUTING_TERNARY[len("${{ ") :]
+)
+_GQ_CACHE_NEGATION = "${{ !((" + ALLOWLIST_CONDITION + ") || (" + RACE_POOL_CONDITION + ")) }}"
+
 # codex round 3 F2: every assertion below now checks EXACT equality against
 # the full expected expression, never substring containment -- `in` would
 # still pass if a future edit appended e.g. `|| github.event_name ==
@@ -246,9 +258,10 @@ def test_every_required_context_job_uses_the_allowlist_condition() -> None:
                 "this assertion go stale"
             )
             runs_on = str(jobs[job_name].get("runs-on", ""))
-            assert runs_on == _ROUTING_TERNARY, (
+            want = _GQ_ROUTING_TERNARY if (name, job_name) == ("go-quality.yml", "go-quality-leg") else _ROUTING_TERNARY
+            assert runs_on == want, (
                 f"{name}:{job_name} runs-on does not EXACTLY match the "
-                f"expected routing ternary -- got {runs_on!r}, want {_ROUTING_TERNARY!r}"
+                f"expected routing ternary -- got {runs_on!r}, want {want!r}"
             )
 
 
@@ -281,9 +294,10 @@ def test_self_hosted_go_cache_negation_matches_the_allowlist() -> None:
             f"{name}:{job_name}: no actions/setup-go step with a 'cache' input found -- "
             "update this test's job/step lookup rather than letting this assertion go stale"
         )
-        assert str(cache_value) == _CACHE_NEGATION, (
+        want = _GQ_CACHE_NEGATION if name == "go-quality.yml" else _CACHE_NEGATION
+        assert str(cache_value) == want, (
             f"{name}:{job_name} cache negation does not EXACTLY match the "
-            f"expected negation -- got {cache_value!r}, want {_CACHE_NEGATION!r}"
+            f"expected negation -- got {cache_value!r}, want {want!r}"
         )
 
 
@@ -385,7 +399,7 @@ def test_docker_build_matrix_arm64_legs_use_the_allowlist_condition() -> None:
 # files (go-quality.yml's differs from test.yml's/live-e2e.yml's, which
 # happen to share one).
 _CACHE_PATH_STEP_IF_WITH_RELEVANCE = (
-    "steps.relevance.outputs.relevant == 'true' && " + ALLOWLIST_CONDITION
+    "steps.relevance.outputs.relevant == 'true' && ((" + ALLOWLIST_CONDITION + ") || (" + RACE_POOL_CONDITION + "))"
 )
 _CACHE_PATH_STEP_IF_PLAIN = ALLOWLIST_CONDITION
 

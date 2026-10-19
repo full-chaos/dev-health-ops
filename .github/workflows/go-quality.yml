@@ -95,7 +95,12 @@ jobs:
     # restores the hosted runner with no code change. Fork PRs always stay
     # hosted -- same safety condition as go.yml's dual-leg jobs (a public
     # repo must never hand a fork's untrusted PR code a self-hosted runner).
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    # CHAOS-10294: the three race legs (matrix.heavy) run on the bigboy ARC pool
+    # named by the repo variable CI_RACE_RUNNER, on push to main of THIS repo only
+    # (ops is public: a fork or PR event never reaches the pool through this term).
+    # The variable unset or empty = hosted. SELF_HOSTED_RUNNERS keeps routing
+    # every leg as before.
+    runs-on: ${{ (matrix.heavy && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && vars.CI_RACE_RUNNER || (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # 20m -> 45m (chris/team-lead, first-live-run finding): this job's own
     # PR (#2242) timed out and was cancelled at the 20m cap on ARC -- load1
     # on bigboy was 160+ during that run (shared with codex rounds/
@@ -103,9 +108,13 @@ jobs:
     # VM; it is the wrong budget for a shared self-hosted pool. 45m is a
     # deliberately generous multiple, not a tight refit -- retune down once
     # real completion times on ARC are known.
-    timeout-minutes: 30
+    timeout-minutes: ${{ (matrix.heavy && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || 30 }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+      # The default 600 s per-package go test timeout is too small for the pool.
+      DEV_HEALTH_GO_RACE_TEST_TIMEOUT: ${{ (matrix.heavy && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && '25m' || '10m' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -166,7 +175,7 @@ jobs:
         # SHARED hostPath (unlike a GitHub-hosted runner's ephemeral per-job
         # filesystem), same as go.yml's self-hosted legs. Only set on the
         # self-hosted leg; the hosted leg keeps setup-go's normal cache.
-        if: steps.relevance.outputs.relevant == 'true' && vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
+        if: steps.relevance.outputs.relevant == 'true' && ((vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) || (matrix.heavy && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'))
         run: |
           echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
           echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
@@ -182,7 +191,7 @@ jobs:
           # into the pool's persistent, concurrently-shared hostPath above --
           # a corruption risk against other jobs reading/writing it at the
           # same time (same reasoning as go.yml's self-hosted legs).
-          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
+          cache: ${{ !((vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) || (matrix.heavy && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops')) }}
 
       - name: Prove the migration matrix contract, and prove its freshness gate
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
@@ -334,6 +343,10 @@ jobs:
       - name: Validate River compatibility harness
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash ci/check_river_compat_static.sh
+
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: bash ci/reap_testcontainers_session.sh
 
   go-quality:
     name: go-quality

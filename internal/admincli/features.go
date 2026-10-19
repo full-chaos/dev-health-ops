@@ -16,6 +16,7 @@ type Feature struct {
 // that list stays equal, row for row, to the frozen Python registry.
 var AdditionalFeatures = []Feature{
 	{Key: "acr_service_model", Name: "ACR Service Model", Category: "integrations", MinTier: "community", Description: "Use the platform LLM for MCP investigations without a BYO LLM"},
+	{Key: "platform_model_fallback", Name: "Platform Model Fallback", Category: "integrations", MinTier: "community", Description: "Platform admin grant: an org with no saved BYO LLM may draw the platform LLM for ACR AI features"},
 }
 
 // StandardFeatures is the feature registry `admin features seed` writes, in

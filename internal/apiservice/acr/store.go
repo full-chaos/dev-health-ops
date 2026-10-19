@@ -20,6 +20,11 @@ const agentContextRuntimeFeatureKey = "agent_context_runtime"
 // may use the platform LLM for MCP investigations without its own BYO LLM.
 const acrServiceModelFeatureKey = "acr_service_model"
 
+// platformModelFallbackFeatureKey is the third: a platform-admin grant (an
+// active org override only) that lets an org with no saved BYO LLM draw the
+// platform LLM. acr_service_model alone never does.
+const platformModelFallbackFeatureKey = "platform_model_fallback"
+
 // ErrOrgNotFound means the organization row does not exist. Python:
 // api/internal/acr.py:181-192's 404 ("Not found") on both an unparseable
 // org_id and a missing Organization row.
@@ -49,6 +54,8 @@ type Entitlement struct {
 	// ACRServiceModel is false for an org without the grant and for an org
 	// where the feature row does not exist yet (not registered reads closed).
 	ACRServiceModel bool
+	// PlatformModelFallback reads closed the same way.
+	PlatformModelFallback bool
 }
 
 // EntitlementStore looks up one org's agent_context_runtime entitlement.
@@ -103,7 +110,11 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModel.Allowed}, nil
+	fallback, err := decisionStore.Decide(ctx, parsedOrgID.String(), platformModelFallbackFeatureKey)
+	if err != nil {
+		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModel.Allowed, PlatformModelFallback: fallback.Allowed}, nil
 }
 
 // readyTimeout bounds the health route's ping, so an unreachable store is a

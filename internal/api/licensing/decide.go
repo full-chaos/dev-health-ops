@@ -32,6 +32,7 @@ var explicitPurchaseFeatures = map[string]bool{
 	"ask_dev_contextual_entrypoints": true,
 	"ask_dev_wave_3_1":               true,
 	"acr_service_model":              true,
+	"platform_model_fallback":        true,
 }
 
 // tierBoundOverrideFeatures mirrors feature_policy.py's
@@ -42,13 +43,14 @@ var tierBoundOverrideFeatures = map[string]bool{
 	"customer_push_ingest": true,
 }
 
-// orgOverrideOnlyFeatures mirrors registry.py's ORG_OVERRIDE_ONLY_FEATURES,
-// empty in production today (no feature key is currently org-override-only).
-// Kept as a real set, not deleted, because decide_feature's own logic
-// branches on it unconditionally -- an empty set here is a fact about
-// today's registry content, not a reason to skip the branches that consult
-// it.
-var orgOverrideOnlyFeatures = map[string]bool{}
+// orgOverrideOnlyFeatures mirrors registry.py's ORG_OVERRIDE_ONLY_FEATURES
+// (empty in the frozen Python registry) plus the Go-only
+// platform_model_fallback: a platform-admin grant that only an active org
+// override (the superuser feature-overrides route) opens. A license
+// features_override never opens it, and an expired override closes it.
+var orgOverrideOnlyFeatures = map[string]bool{
+	"platform_model_fallback": true,
+}
 
 // State is the complete policy input for one (org, feature) decision,
 // mirroring Python's FeatureDecisionContext (minus feature_key, which

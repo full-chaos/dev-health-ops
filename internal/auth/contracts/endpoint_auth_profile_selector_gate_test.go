@@ -306,3 +306,30 @@ func TestSelectorGateSeparatesTheTwoBearerJWTClassesByHeaderAlg(t *testing.T) {
 		t.Fatal("gate matched a JWT alg case-insensitively; the header alg is compared exactly")
 	}
 }
+
+func TestTokenPinsKeySetEqualsTheAcceptedPinnedClasses(t *testing.T) {
+	root := testRoot(t)
+	valid := loadEndpointAuthProfileFixture(t, "valid-multi-class-envelope-vs-ops-token.json").(map[string]any)
+	if err := ValidateEndpointAuthProfile(root, valid); err != nil {
+		t.Fatalf("ValidateEndpointAuthProfile refused the valid two-algorithm fixture: %v", err)
+	}
+	tokens := valid["tokens"].(map[string]any)
+	mutate := func(edit func(map[string]any)) map[string]any {
+		doc := loadEndpointAuthProfileFixture(t, "valid-multi-class-envelope-vs-ops-token.json").(map[string]any)
+		edit(doc["tokens"].(map[string]any))
+		return doc
+	}
+	cases := map[string]map[string]any{
+		"missing key": mutate(func(m map[string]any) { delete(m, "ops_access_token_hs256") }),
+		"extra key":   mutate(func(m map[string]any) { m["user_access_token"] = tokens["ops_access_token_hs256"] }),
+		"renamed key": mutate(func(m map[string]any) {
+			m["ops_refresh_token"] = m["ops_access_token_hs256"]
+			delete(m, "ops_access_token_hs256")
+		}),
+	}
+	for name, doc := range cases {
+		if err := ValidateEndpointAuthProfile(root, doc); err == nil {
+			t.Errorf("%s: ValidateEndpointAuthProfile accepted a tokens key set that differs from the accepted pinned classes", name)
+		}
+	}
+}

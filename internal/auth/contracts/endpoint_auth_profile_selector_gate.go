@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -94,6 +95,63 @@ func markerMatches(marker ClassMarker, kind, name string) bool {
 	return strings.EqualFold(marker.Name, name)
 }
 
+// LoadPinnedClasses reads, from the profile schema itself, the credential
+// classes whose token pins a route must state.
+func LoadPinnedClasses(root string) ([]string, error) {
+	raw, err := os.ReadFile(SchemaPath(root, EndpointAuthProfileSurface))
+	if err != nil {
+		return nil, err
+	}
+	var document struct {
+		AllOf []struct {
+			If struct {
+				Properties struct {
+					Classes struct {
+						Contains struct {
+							Enum []string `json:"enum"`
+						} `json:"contains"`
+					} `json:"accepted_credential_classes"`
+				} `json:"properties"`
+			} `json:"if"`
+		} `json:"allOf"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil, fmt.Errorf("parsing profile schema: %w", err)
+	}
+	for _, rule := range document.AllOf {
+		if enum := rule.If.Properties.Classes.Contains.Enum; len(enum) > 0 {
+			return enum, nil
+		}
+	}
+	return nil, fmt.Errorf("profile schema lists no pinned credential classes")
+}
+
+// CheckTokenPins is the half of the `tokens` rule JSON Schema cannot state: the
+// keys of `tokens` must be exactly the pinned classes the route accepts.
+func CheckTokenPins(profile map[string]any, pinned []string) error {
+	tokens, ok := profile["tokens"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	accepted, _ := profile["accepted_credential_classes"].([]any)
+	var want []string
+	for _, entry := range accepted {
+		if id, _ := entry.(string); slices.Contains(pinned, id) && !slices.Contains(want, id) {
+			want = append(want, id)
+		}
+	}
+	var got []string
+	for id := range tokens {
+		got = append(got, id)
+	}
+	sort.Strings(want)
+	sort.Strings(got)
+	if !slices.Equal(want, got) {
+		return fmt.Errorf("tokens keys %v differ from the pinned accepted classes %v", got, want)
+	}
+	return nil
+}
+
 // ValidateEndpointAuthProfile is the one entry for judging a profile: the wire
 // schema first, then the selector gate over the credential-class registry.
 func ValidateEndpointAuthProfile(root string, document any) error {
@@ -108,5 +166,12 @@ func ValidateEndpointAuthProfile(root string, document any) error {
 	if err != nil {
 		return err
 	}
-	return CheckClassSelector(profile, registry)
+	if err := CheckClassSelector(profile, registry); err != nil {
+		return err
+	}
+	pinned, err := LoadPinnedClasses(root)
+	if err != nil {
+		return err
+	}
+	return CheckTokenPins(profile, pinned)
 }

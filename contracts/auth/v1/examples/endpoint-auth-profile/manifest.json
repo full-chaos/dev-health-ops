@@ -32,6 +32,10 @@
     {
       "file": "valid-legacy-hs256-compat.json",
       "why": "The legacy HS256 compatibility profile (TRD section 16) is expressible, so the enum is not accidentally EdDSA-only."
+    },
+    {
+      "file": "valid-multi-class-envelope-vs-ops-token.json",
+      "why": "Two signed classes with different algorithms: `tokens` states each class's pins, keyed by class id (CHAOS-10173). The positive half of the exactly-one-of rule."
     }
   ],
   "reject": [
@@ -250,6 +254,24 @@
       "expect_instance_location": "/entitlement",
       "expect_keyword": "pattern",
       "why": "Entitlement keys are lowercase tokens."
+    },
+    {
+      "file": "invalid-token-and-tokens-both.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "why": "`token` and `tokens` together: exactly one carries the pins."
+    },
+    {
+      "file": "invalid-multi-pinned-classes-single-token.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "Two pinned classes with one `token` cannot state both algorithms; `tokens` is required."
+    },
+    {
+      "file": "invalid-tokens-on-single-class.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "`tokens` is for two or more pinned classes; one pinned class still needs its `token`."
     }
   ]
 }

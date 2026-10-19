@@ -171,3 +171,24 @@ func TestErrorAsIsBoundedAndSurvivesHostileErrors(t *testing.T) {
 	}
 	_ = target{}
 }
+
+func wrapDeep(err error, depth int) error {
+	for range depth {
+		err = fmt.Errorf("w: %w", err)
+	}
+	return err
+}
+
+// The walk reaches as deep as it has nodes (maxChainNodes): a target 40 wrappers down is found; one past the node bound is not.
+func TestErrorAsReachesTheNodeBoundAndNoFurther(t *testing.T) {
+	var found *selfUnwrap
+	if !ErrorAs(wrapDeep(&selfUnwrap{}, 40), &found) || found == nil {
+		t.Fatal("ErrorAs missed a target 40 wrappers deep")
+	}
+	if !ErrorAs(wrapDeep(&selfUnwrap{}, maxChainNodes-1), &found) {
+		t.Fatalf("ErrorAs missed a target %d wrappers deep, the last node inside the bound", maxChainNodes-1)
+	}
+	if ErrorAs(wrapDeep(&selfUnwrap{}, maxChainNodes+6), &found) {
+		t.Fatal("ErrorAs walked past the node bound")
+	}
+}

@@ -18,6 +18,12 @@
 --
 -- sessions.revoked_reason and refresh_credentials.revoked_reason stay free
 -- text: they are not on the credential wire and have no vocabulary.
+-- The lock comes first. The ALTER below needs ACCESS EXCLUSIVE anyway; taking it
+-- before the count means the count and the ALTER see the same rows. Without it a
+-- writer could commit a legacy-valid code between the two, and the migration
+-- would fail on the generic constraint violation instead of the named count.
+LOCK TABLE credential_registry IN ACCESS EXCLUSIVE MODE;
+
 DO $$
 DECLARE
     offending bigint;

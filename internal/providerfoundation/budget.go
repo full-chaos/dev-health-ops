@@ -301,6 +301,9 @@ type Metrics struct {
 	githubIssueListStops map[string]uint64
 	// githubIssueListCaps counts the issue lists that ran out of their request cap (never truncated).
 	githubIssueListCaps map[string]uint64
+	// githubIssueListTies counts the same-second tie groups of more than one page of an issue list, by
+	// reason (always same_second): the paging of such a group is by page number.
+	githubIssueListTies map[string]uint64
 	// preparedRetiredEffectsSkipped counts the effects of a prepared
 	// work-items manifest that a recovering unit did not write because the
 	// daily job now owns their table, by provider -- see
@@ -340,6 +343,7 @@ func NewMetrics() *Metrics {
 		workItemDerivedLeftToDaily:     map[string]uint64{},
 		githubIssueListStops:           map[string]uint64{},
 		githubIssueListCaps:            map[string]uint64{},
+		githubIssueListTies:            map[string]uint64{},
 		preparedRetiredEffectsSkipped:  map[string]uint64{},
 	}
 }
@@ -1295,6 +1299,17 @@ func (m *Metrics) RecordGitHubIssueListCapExceeded() {
 	m.githubIssueListCaps["page_cap"]++
 }
 
+// RecordGitHubIssueListTiePaged counts one same-second group of more than one page of a GitHub work-items
+// issue list. An expected path: it shows how often an edit during the read could shift an unseen issue.
+func (m *Metrics) RecordGitHubIssueListTiePaged() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.githubIssueListTies["same_second"]++
+}
+
 // RecordPreparedRetiredWorkItemEffectsSkipped counts the effects of one
 // prepared work-items manifest that a recovering unit completed without
 // writing (CHAOS-8811). The manifest was stored by a binary whose sync unit
@@ -1804,6 +1819,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_github_work_items_issue_list_cap_exceeded_total",
 		"GitHub work-items issue lists that ran out of their request cap before the end of the window (CHAOS-10112), by reason. The unit fails closed; the list is never truncated.",
 		"reason", m.githubIssueListCaps,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_work_items_issue_list_tie_paged_total",
+		"GitHub work-items issue lists with a same-second tie group of more than one page (CHAOS-10112), by reason. The group is paged by page number; an edit during that read can shift one unseen issue into a page already read.",
+		"reason", m.githubIssueListTies,
 	); err != nil {
 		return err
 	}

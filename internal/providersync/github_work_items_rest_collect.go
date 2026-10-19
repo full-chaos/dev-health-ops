@@ -298,11 +298,14 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 	// twice keeps its latest reading. An issue that moved forward reappears later and is not lost. Only a
 	// tie (a page whose last issue was updated at the very `since` it was asked for, a bulk edit inside one
 	// second) is continued by page number within that `since`.
-	issues, pages, stoppedAtWindowEnd, capReached, err := collector.listIssuesByUpdate(ctx, claim, client, root, result)
+	issues, pages, tieGroups, stoppedAtWindowEnd, capReached, err := collector.listIssuesByUpdate(ctx, claim, client, root, result)
 	slog.Default().InfoContext(ctx, "github_work_items_issue_list",
 		"org_id", claim.OrgID, "unit_id", claim.ID, "source_id", claim.SourceID,
 		"window_since", issueListBound(claim.SinceAt), "window_before", issueListBound(claim.BeforeAt),
-		"pages", pages, "stopped_at_window_end", stoppedAtWindowEnd)
+		"pages", pages, "stopped_at_window_end", stoppedAtWindowEnd, "tie_groups_over_one_page", tieGroups)
+	for range tieGroups {
+		client.Metrics.RecordGitHubIssueListTiePaged()
+	}
 	if stoppedAtWindowEnd {
 		client.Metrics.RecordGitHubIssueListStopped()
 	}
@@ -328,7 +331,8 @@ func (collector GitHubWorkItemsRESTCollector) collectIssues(
 		if len(listed.PullRequest) != 0 && string(listed.PullRequest) != "null" {
 			continue
 		}
-		if githubWorkItemsRESTUpdatedAfterBefore(listed.UpdatedAt, claim.BeforeAt) {
+		if githubWorkItemsRESTUpdatedAfterBefore(listed.UpdatedAt, claim.BeforeAt) ||
+			githubWorkItemsRESTUpdatedBeforeSince(listed.UpdatedAt, claim.SinceAt) {
 			continue
 		}
 		events, eventPage, err := collectGitHubWorkItemChildPages(
@@ -558,6 +562,16 @@ func githubWorkItemsRESTUpdatedAfterBefore(value *string, before *time.Time) boo
 	return updatedAt != nil && !updatedAt.Before(before.UTC())
 }
 
+// githubWorkItemsRESTUpdatedBeforeSince: the `since` key is sent in whole seconds, so the list can hold an
+// issue updated inside the second before a fractional window start, which the previous window wrote.
+func githubWorkItemsRESTUpdatedBeforeSince(value *string, since *time.Time) bool {
+	if since == nil {
+		return false
+	}
+	updatedAt := parseGitHubWorkItemTime(value)
+	return updatedAt != nil && updatedAt.Before(since.UTC())
+}
+
 // issueListCrossedWindowEnd is the StopAt predicate of the issue list: the first item updated at or after
 // the window end ends the read (the list is ordered by update, oldest first).
 func issueListCrossedWindowEnd(raw json.RawMessage, claim Claim) bool {
@@ -664,7 +678,7 @@ func (collector GitHubWorkItemsRESTCollector) listIssuesByUpdate(
 	client *providerfoundation.HTTPClient,
 	root string,
 	result *GitHubWorkItemsRESTResult,
-) (issues []json.RawMessage, pages int, stoppedAtWindowEnd, capReached bool, err error) {
+) (issues []json.RawMessage, pages, tieGroups int, stoppedAtWindowEnd, capReached bool, err error) {
 	var since *time.Time
 	if claim.SinceAt != nil {
 		value := claim.SinceAt.UTC().Truncate(time.Second)
@@ -674,7 +688,7 @@ func (collector GitHubWorkItemsRESTCollector) listIssuesByUpdate(
 	page := 1
 	for step := 0; ; step++ {
 		if step >= collector.maxPages() {
-			return issues, pages, stoppedAtWindowEnd, true, nil
+			return issues, pages, tieGroups, stoppedAtWindowEnd, true, nil
 		}
 		query := url.Values{"state": {"all"}, "per_page": {"100"}, "sort": {"updated"}, "direction": {"asc"}}
 		if since != nil {
@@ -702,13 +716,13 @@ func (collector GitHubWorkItemsRESTCollector) listIssuesByUpdate(
 		result.addPageEvidence(collected)
 		pages += collected.Pages
 		if collectErr != nil {
-			return issues, pages, stoppedAtWindowEnd, false, collectErr
+			return issues, pages, tieGroups, stoppedAtWindowEnd, false, collectErr
 		}
 		var lastUpdated *time.Time
 		for _, raw := range collected.Items {
 			var listed githubWorkItemsRESTListIssue
 			if json.Unmarshal(raw, &listed) != nil || listed.Number < 1 {
-				return issues, pages, stoppedAtWindowEnd, false, providerfoundation.ErrNormalizationInvalid
+				return issues, pages, tieGroups, stoppedAtWindowEnd, false, providerfoundation.ErrNormalizationInvalid
 			}
 			if position, seen := index[listed.Number]; seen {
 				issues[position] = raw
@@ -719,12 +733,15 @@ func (collector GitHubWorkItemsRESTCollector) listIssuesByUpdate(
 			lastUpdated = parseGitHubWorkItemTime(listed.UpdatedAt)
 		}
 		if stoppedAtWindowEnd || !moreAfterThisPage {
-			return issues, pages, stoppedAtWindowEnd, false, nil
+			return issues, pages, tieGroups, stoppedAtWindowEnd, false, nil
 		}
 		if lastUpdated != nil && (since == nil || lastUpdated.UTC().Truncate(time.Second).After(*since)) {
 			next := lastUpdated.UTC().Truncate(time.Second)
 			since, page = &next, 1
 		} else {
+			if page == 1 {
+				tieGroups++
+			}
 			page++
 		}
 	}

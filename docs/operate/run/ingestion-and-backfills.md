@@ -68,6 +68,7 @@ request cap fails the unit closed with a Warn and
 `dev_health_github_work_items_issue_list_cap_exceeded_total`. The stop is the expected case: the unit logs one Info line
 `github_work_items_issue_list` (window, pages, `stopped_at_window_end`) and
 counts `dev_health_github_work_items_issue_list_stopped_total{reason="window_end"}`.
+A same-second tie group of more than one page is paged by page number, so an edit during that read can shift one unseen issue into a page already read and the issue is missed. The Info line carries `tie_groups_over_one_page` and `dev_health_github_work_items_issue_list_tie_paged_total{reason="same_second"}` counts these groups.
 
 Consequences to expect when reading run state:
 

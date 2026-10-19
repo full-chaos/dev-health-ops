@@ -13,7 +13,7 @@ import (
 )
 
 // createTeamsIdentitiesTables is the real teams/identities DDL, transcribed
-// verbatim from src/dev_health_ops/migrations/clickhouse/{002,011,024,025,
+// verbatim from internal/chmigrate/history/{002,011,024,025,
 // 051,065,079,115}_*.sql (teams, without the dropped roster column) and {054,065}_*.sql (identities) -- the exact
 // column set/types/engine/ORDER BY those migrations produce, not a
 // hand-guessed shape. See .remember/lanes/gwc-w1-acr/chaos-6251-pr1-reference.md

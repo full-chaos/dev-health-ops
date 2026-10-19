@@ -13,7 +13,7 @@
 // subcategory_distribution_json, so none of them ever exercised the real
 // clickhouse-go driver's type-conversion path against the real column
 // type -- scanning the real Map(String, Float64) columns
-// (migrations/clickhouse/017_investment_materialize_tables.sql:11-12) into
+// (internal/chmigrate/history/017_investment_materialize_tables.sql:11-12) into
 // *string (this package's first draft) failed outright ("converting
 // Map(String, Float64) to **string is unsupported"). Fixing that and
 // re-running step 7's live differential surfaced a SECOND, unrelated

@@ -721,7 +721,7 @@ Things that are easy to miss and must be checked explicitly for every pair:
   `org_id` from `self.org_id` when the caller's column list omits it
   (`storage/clickhouse.py:309-320`) — the row model / dataclass frequently
   has *no* `org_id` field at all even though the ClickHouse table does.
-  Check `src/dev_health_ops/migrations/clickhouse/027_add_org_id_to_sorting_keys.py`
+  Check the deleted Python migration `027_add_org_id_to_sorting_keys.py`
   for the table's real `ORDER BY`; don't assume `024_add_org_id.sql` covers a
   raw `git_*`/`ci_*`/`deployments` table — migration 027's
   `TABLES_NEEDING_ORG_ID_COLUMN` list is the ones 024 missed.

@@ -227,7 +227,7 @@ type BreakdownRow struct {
 // (api/queries/investment.py:524-562).
 //
 // subcategory_distribution_json is Map(String, Float64) in the schema
-// (migrations/clickhouse/017_investment_materialize_tables.sql:12), but the
+// (internal/chmigrate/history/017_investment_materialize_tables.sql:12), but the
 // query CASTs it to Array(Tuple(String, Float32)) before the ARRAY JOIN --
 // a DELIBERATE, LOSSY Float64->Float32 narrowing in Python's own query text,
 // not a Go-port artifact. Reproduced verbatim (same CAST, same ARRAY JOIN)

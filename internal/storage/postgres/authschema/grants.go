@@ -88,6 +88,8 @@ func RuntimePosture() []TablePrivilege {
 		// Session lifecycle.
 		{Table: "sessions", Select: true, Insert: true, Update: true, Delete: true},
 		{Table: "refresh_credentials", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "link_credentials", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "login_attempts", Select: true, Insert: true, Update: true, Delete: true},
 
 		// Credential material: metadata only, and keys are read-only.
 		{Table: "signing_keys", Select: true},
@@ -218,6 +220,10 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	publicStatements, err := publicReadStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -229,6 +235,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 	if err != nil {
 		return err
 	}
+	beforePublic, err := snapshotDirectGrants(ctx, tx, publicSchema, options.RuntimeRole)
+	if err != nil {
+		return err
+	}
+	statements = append(statements, publicStatements...)
 
 	for _, statement := range statements {
 		if _, err := tx.Exec(ctx, statement); err != nil {
@@ -245,7 +256,20 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 	if err != nil {
 		return err
 	}
-	if lost := narrowedGrants(before, after); len(lost) > 0 {
+	afterPublic, err := snapshotDirectGrants(ctx, tx, publicSchema, options.RuntimeRole)
+	if err != nil {
+		return err
+	}
+	// One acknowledgement covers every narrowing in the run: the digest is over
+	// the auth-schema losses and the ops-schema losses together, the latter
+	// named "public.<object>" so a same-named table cannot collide.
+	lost := narrowedGrants(before, after)
+	for _, g := range narrowedGrants(beforePublic, afterPublic) {
+		g.Object = publicSchema + "." + g.Object
+		lost = append(lost, g)
+	}
+	sort.Slice(lost, func(i, j int) bool { return lost[i].less(lost[j]) })
+	if len(lost) > 0 {
 		digest := narrowingDigest(lost)
 		if options.AcknowledgeNarrowing != digest {
 			logger.ErrorContext(

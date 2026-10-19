@@ -37,6 +37,18 @@ type sqlOperandExemption struct {
 // fails the test, so a fixed or deleted call site cannot leave a silent hole.
 var sqlOperandExemptions = []sqlOperandExemption{
 	{
+		file: "catalog_integration_test.go", fn: "TestPredefinedRoleReachableThroughAnIntermediaryIsDetected", operand: "testCase.grantOptions",
+		reason: "GRANT option keywords (WITH ADMIN OPTION and the like) from the test's own table, not an identifier",
+	},
+	{
+		file: "publicreads.go", fn: "publicReadStatements", operand: `strings.Join(columns, ", ")`,
+		reason: "columns holds only quoteIdentifier results of validated manifest names",
+	},
+	{
+		file: "public_reads_integration_test.go", fn: "TestPublicReadsRuntimeReadsExactlyTheManifestColumns", operand: `strings.Join(quoted, ", ")`,
+		reason: "test query: every entry is a Quote'd manifest column",
+	},
+	{
 		file: "grants.go", fn: "applyRuntimeGrants", operand: `strings.Join(granted, ", ")`,
 		reason: "privilege keywords from the closed RuntimePosture manifest (TablePrivilege.privileges), not an identifier",
 	},
@@ -99,6 +111,30 @@ func viaVar(admin interface{ Exec(string) }, role string) {
 func good(admin interface{ Exec(string) }, id ValidatedIdentifier) {
 	admin.Exec(fmt.Sprintf("CREATE ROLE %s LIMIT %d", quoteIdentifier(id), 3))
 }
+type fake struct{ db interface{ Exec(string) } }
+
+func (f fake) run(sql string) { f.db.Exec(sql) }
+func viaMethodWrapper(f fake, role string) {
+	f.run(fmt.Sprintf("GRANT x TO %s", role))
+}
+func buildStatement(role string) string { return fmt.Sprintf("GRANT x TO %s", role) }
+func viaHelperReturn(admin interface{ Exec(string) }, role string) {
+	statement := buildStatement(role)
+	admin.Exec(statement)
+}
+func buildLocal(role string) string {
+	statement := fmt.Sprintf("GRANT y TO %s", role)
+	return statement
+}
+func viaLocalReturn(admin interface{ Exec(string) }, role string) {
+	statement := buildLocal(role)
+	admin.Exec(statement)
+}
+func viaRangeLiteral(admin interface{ Exec(string) }, role string) {
+	for _, s := range []string{fmt.Sprintf("GRANT x TO %s", role)} {
+		admin.Exec(s)
+	}
+}
 func message(role string) string { return "" }
 func notSQL(role string) {
 	_ = fmt.Sprintf("hello %s", role)
@@ -110,7 +146,7 @@ func notSQL(role string) {
 		fns = append(fns, v.fn+"/"+v.operand)
 	}
 	sort.Strings(fns)
-	want := []string{"f/role", "viaVar/role"}
+	want := []string{"buildLocal/role", "buildStatement/role", "f/role", "viaMethodWrapper/role", "viaRangeLiteral/role", "viaVar/role"}
 	if strings.Join(fns, ",") != strings.Join(want, ",") {
 		t.Fatalf("violations = %v, want %v", fns, want)
 	}
@@ -197,6 +233,82 @@ func scanSprintf(fset *token.FileSet, files []*ast.File) []sprintfViolation {
 	// A function that returns a Sprintf result reaches a sink when some caller
 	// passes a call to that function into one.
 	sinkArgFuncs := map[string]bool{}
+	// A call whose result is assigned to a variable that a sink call then
+	// receives counts the same as a call placed in the sink's arguments.
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				as, ok := n.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				held := map[string]bool{}
+				for _, lhs := range as.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						held[id.Name] = true
+					}
+				}
+				// Follow the held names through later assignments and ranges.
+				for changed := true; changed; {
+					changed = false
+					ast.Inspect(fd.Body, func(m ast.Node) bool {
+						switch node := m.(type) {
+						case *ast.AssignStmt:
+							for i, rhs := range node.Rhs {
+								if mentionsAny(rhs, held) && i < len(node.Lhs) {
+									if id, ok := node.Lhs[i].(*ast.Ident); ok && !held[id.Name] {
+										held[id.Name], changed = true, true
+									}
+								}
+							}
+						case *ast.RangeStmt:
+							if mentionsAny(node.X, held) {
+								for _, v := range []ast.Expr{node.Key, node.Value} {
+									if id, ok := v.(*ast.Ident); ok && !held[id.Name] {
+										held[id.Name], changed = true, true
+									}
+								}
+							}
+						}
+						return true
+					})
+				}
+				reachesSink := false
+				ast.Inspect(fd.Body, func(m ast.Node) bool {
+					if call, ok := m.(*ast.CallExpr); ok && isSink(call, sinkFuncs) {
+						for _, arg := range call.Args {
+							if mentionsAny(arg, held) {
+								reachesSink = true
+							}
+						}
+					}
+					return true
+				})
+				if !reachesSink {
+					return true
+				}
+				for _, rhs := range as.Rhs {
+					ast.Inspect(rhs, func(m ast.Node) bool {
+						if call, ok := m.(*ast.CallExpr); ok {
+							switch fun := call.Fun.(type) {
+							case *ast.Ident:
+								sinkArgFuncs[fun.Name] = true
+							case *ast.SelectorExpr:
+								sinkArgFuncs[fun.Sel.Name] = true
+							}
+						}
+						return true
+					})
+				}
+				return true
+			})
+		}
+	}
+
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
 			if call, ok := n.(*ast.CallExpr); ok && isSink(call, sinkFuncs) {
@@ -235,7 +347,7 @@ func scanSprintf(fset *token.FileSet, files []*ast.File) []sprintfViolation {
 func isSink(call *ast.CallExpr, sinkFuncs map[string]bool) bool {
 	switch fun := call.Fun.(type) {
 	case *ast.SelectorExpr:
-		return sqlSinkMethods[fun.Sel.Name]
+		return sqlSinkMethods[fun.Sel.Name] || sinkFuncs[fun.Sel.Name]
 	case *ast.Ident:
 		return sinkFuncs[fun.Name]
 	}
@@ -398,6 +510,14 @@ func scanFunc(fset *token.FileSet, file string, fd *ast.FuncDecl, consts, sinkFu
 				for _, name := range p.Names {
 					f.holder[name.Name] = true
 				}
+			case *ast.RangeStmt:
+				if cur == p.X {
+					for _, v := range []ast.Expr{p.Key, p.Value} {
+						if id, ok := v.(*ast.Ident); ok {
+							f.holder[id.Name] = true
+						}
+					}
+				}
 			}
 		}
 		sprintfs = append(sprintfs, f)
@@ -444,6 +564,18 @@ func scanFunc(fset *token.FileSet, file string, fd *ast.FuncDecl, consts, sinkFu
 					reaches = true
 				}
 			}
+		}
+		if !reaches && sinkArgFuncs[fd.Name.Name] {
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if ret, ok := n.(*ast.ReturnStmt); ok {
+					for _, result := range ret.Results {
+						if mentionsAny(result, tainted) {
+							reaches = true
+						}
+					}
+				}
+				return true
+			})
 		}
 		if !reaches {
 			continue

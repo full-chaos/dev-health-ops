@@ -125,7 +125,7 @@ func venueAlwaysRunsViolations(t *testing.T, root string) []string {
 	if got := noSpaces(asString(env["EVENT_NAME"])); got != "${{github.event_name}}" {
 		out = append(out, fmt.Sprintf("the relevance step's EVENT_NAME is %q, not ${{ github.event_name }}", asString(env["EVENT_NAME"])))
 	}
-	code := shellCode(asString(step["run"]))
+	code := venueShellCode(asString(step["run"]))
 	const guard = `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`
 	at := -1
 	for i, l := range code {

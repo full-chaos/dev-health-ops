@@ -78,10 +78,10 @@ func venueShardsViolations(t *testing.T, root string) []string {
 	}
 	var verbLines []string
 	var verbStep yamlMap
-	var verbCode []shLine
+	var verbCode []venueShLine
 	var verbAt int
 	for _, st := range stepsOf(job) {
-		code := shellCode(asString(st["run"]))
+		code := venueShellCode(asString(st["run"]))
 		for i, l := range code {
 			if strings.Contains(l.text, "check_go.sh venue-oracles") {
 				verbLines = append(verbLines, l.text)
@@ -171,7 +171,7 @@ func venueChangedVerbViolations(job yamlMap) []string {
 	var lines []string
 	seenList, seenRun := false, false
 	for _, st := range stepsOf(job) {
-		code := shellCode(asString(st["run"]))
+		code := venueShellCode(asString(st["run"]))
 		pipefail := false
 		for _, l := range code {
 			if l.indent == 0 && l.text == "set -euo pipefail" {

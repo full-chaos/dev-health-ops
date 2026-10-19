@@ -90,10 +90,12 @@ internal/auth/authstore	1
 internal/auth/contracts	2
 internal/auth/edgetoken	1
 internal/auth/httpapi	4
+internal/auth/identity	2
 internal/auth/keystore	1
 internal/auth/passwordhash	11
 internal/auth/passwordpolicy	1
 internal/auth/ratelimitvalkey	1
+internal/auth/session	2
 internal/auth/signedtoken	1
 internal/auth/writerinventory	20
 internal/backfillrun	1
@@ -101,7 +103,7 @@ internal/bigboycompose	1
 internal/billingcli	1
 internal/cacheinvalidation	1
 internal/chmigrate	1
-internal/cigates	90
+internal/cigates	164
 internal/cli	2
 internal/clicredentials	11
 internal/contractcheck	1
@@ -119,7 +121,7 @@ internal/goapicli/routing	4
 internal/goapidigest	1
 internal/goapiproof	130
 internal/goapiproof/writeproof	1
-internal/gqlgenguard	414
+internal/gqlgenguard	50
 internal/httpguard	10
 internal/identityalias	1
 internal/ingressplanes	2

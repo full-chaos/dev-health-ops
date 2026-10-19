@@ -20,18 +20,21 @@ var authFiles = []string{".github/workflows/go-auth-service.yml", "ci/check_go.s
 
 var requiredContexts = map[string]bool{"test": true, "lint": true, "go-quality": true, "metrics-executed-proof": true}
 
+// the pair check must be a command that ends in `|| ...`, not text inside an echo or a comment
+var gatePairRe = regexp.MustCompile(`(?m)^\s*\[ "\$\{pair#\*=\}" = "success" \] \|\|`)
+
 var (
 	authFuzzBlock  = regexp.MustCompile(`(?s)AUTH_FUZZ_TARGETS=\((.*?)\n\)`)
 	authFuzzRow    = regexp.MustCompile(`"\S+ (Fuzz\w+)"`)
-	authStageCall  = regexp.MustCompile(`run: bash ci/check_go\.sh auth ([a-z-]+)`)
+	authStageCall  = regexp.MustCompile(`^\s*bash ci/check_go\.sh auth ([a-z-]+)`)
 	authClosureFn  = regexp.MustCompile(`(?s)check_auth_closure\(\) \{(.*?)\n\}`)
-	authStagesWant = []string{"fmt", "vet", "test", "race", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
+	authStagesWant = []string{"fmt", "vet", "test", "race", "race-integration", "fuzz", "history", "vuln", "middleware", "fuzz-registry", "paths-selftest", "scope-selftest"}
 )
 
 func authViolations(t *testing.T, root string) []string {
 	t.Helper()
 	wfText := readFile(t, filepath.Join(root, ".github/workflows/go-auth-service.yml"))
-	checkGo := readFile(t, filepath.Join(root, "ci/check_go.sh"))
+	checkGo := shellCode(readFile(t, filepath.Join(root, "ci/check_go.sh")))
 	doc := parseYAML(t, wfText, "go-auth-service.yml")
 	jobs := jobsOf(doc)
 	var out []string
@@ -91,8 +94,8 @@ func authViolations(t *testing.T, root string) []string {
 		if !reflect.DeepEqual(asList(j["needs"]), []any{"auth-changes"}) {
 			out = append(out, fmt.Sprintf("%s.needs must be [auth-changes], got %v", key, j["needs"]))
 		}
-		if !strings.Contains(asString(j["if"]), "relevant == 'true'") {
-			out = append(out, fmt.Sprintf("%s.if must gate on relevant == 'true', got %q", key, asString(j["if"])))
+		if got := asString(j["if"]); got != "needs.auth-changes.outputs.relevant == 'true'" {
+			out = append(out, fmt.Sprintf("%s.if must be exactly needs.auth-changes.outputs.relevant == 'true', got %q", key, got))
 		}
 	}
 	gate := asMap(jobs["auth-gate"])
@@ -108,7 +111,7 @@ func authViolations(t *testing.T, root string) []string {
 		out = append(out, fmt.Sprintf("auth-gate.needs must fan in auth-changes, auth-go-quality, auth-test, auth-fuzz, got %v", needs))
 	}
 	gateSteps := stepsOf(gate)
-	if len(gateSteps) == 0 || !strings.Contains(asString(gateSteps[0]["run"]), `[ "${pair#*=}" = "success" ]`) {
+	if len(gateSteps) == 0 || !gatePairRe.MatchString(shellCode(asString(gateSteps[0]["run"]))) {
 		out = append(out, "auth-gate must fail a relevant change whose gate job did not succeed (failed, cancelled OR skipped)")
 	}
 
@@ -134,8 +137,12 @@ func authViolations(t *testing.T, root string) []string {
 	}
 
 	stages := map[string]bool{}
-	for _, m := range authStageCall.FindAllStringSubmatch(wfText, -1) {
-		stages[m[1]] = true
+	for _, jn := range sortedKeys(jobs) {
+		for _, st := range stepsOf(jobs[jn]) {
+			for _, m := range authStageCall.FindAllStringSubmatch(str(st["run"]), 1) {
+				stages[m[1]] = true
+			}
+		}
 	}
 	for _, w := range authStagesWant {
 		if !stages[w] {
@@ -175,7 +182,7 @@ func authViolations(t *testing.T, root string) []string {
 		out = append(out, "auth_closure_allow.tsv has no rows")
 	}
 
-	if !strings.Contains(readFile(t, filepath.Join(root, "docker/go-worker.Dockerfile")), "CGO_ENABLED=0") {
+	if !strings.Contains(shellCode(readFile(t, filepath.Join(root, "docker/go-worker.Dockerfile"))), "CGO_ENABLED=0") {
 		out = append(out, "docker/go-worker.Dockerfile no longer builds with CGO_ENABLED=0: the closure check models that configuration")
 	}
 	if body := authClosureFn.FindStringSubmatch(checkGo); body == nil {
@@ -192,7 +199,7 @@ func TestAuthServiceWorkflow(t *testing.T) {
 
 func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 	root := repoRoot(t)
-	const wf, cg, tsv = ".github/workflows/go-auth-service.yml", "ci/check_go.sh", "ci/auth_closure_allow.tsv"
+	const wf, cg, tsv, dockerfile = ".github/workflows/go-auth-service.yml", "ci/check_go.sh", "ci/auth_closure_allow.tsv", "docker/go-worker.Dockerfile"
 	cases := []struct {
 		name string
 		muts []mutation
@@ -203,6 +210,11 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 		{"registry gains a target with no fuzz job", []mutation{{cg, "AUTH_FUZZ_TARGETS=(\n", "AUTH_FUZZ_TARGETS=(\n  \"./internal/auth/x FuzzPlanted\"\n"}}, []string{"differs from the AUTH_FUZZ_TARGETS registry", "FuzzPlanted"}},
 		{"gate stops failing on a skipped job", []mutation{{wf, `[ "${pair#*=}" = "success" ]`, `[ "${pair#*=}" != "failure" ]`}}, []string{"failed, cancelled OR skipped"}},
 		{"gate job drops its always()", []mutation{{wf, "if: always()", "if: success()"}}, []string{"always()"}},
+		{"the auth race step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh auth race\n", "run: 'echo \"run: bash ci/check_go.sh auth race\"'\n"}}, []string{"no longer calls auth stage \"race\""}},
+		{"an auth gate job runs on a condition that is always false", []mutation{{wf, "    if: needs.auth-changes.outputs.relevant == 'true'\n", "    if: false && needs.auth-changes.outputs.relevant == 'true'\n"}}, []string{"if must be exactly"}},
+		{"the gate's success check is only echoed", []mutation{{wf, `[ "${pair#*=}" = "success" ] ||`, `echo '[ "${pair#*=}" = "success" ] ||'; true ||`}}, []string{"failed, cancelled OR skipped"}},
+		{"the closure loop survives only in a comment", []mutation{{cg, "for arch in amd64 arm64", "# for arch in amd64 arm64"}}, []string{"no longer covers cgo"}},
+		{"CGO_ENABLED=0 survives only in a comment", []mutation{{dockerfile, "CGO_ENABLED=0", allMarker + "# CGO_ENABLED=0"}}, []string{"no longer builds with CGO_ENABLED=0"}},
 		{"closure allow row loses its reason", []mutation{{tsv, "github.com/jackc/pgx/v5\tACP-ADR-01 item 5: PostgreSQL driver", "github.com/jackc/pgx/v5\t "}}, []string{"needs <module><TAB><reason>"}},
 		{"closure allow list admits clickhouse", []mutation{{tsv, "github.com/jackc/pgx/v5\t", "github.com/ClickHouse/clickhouse-go/v2\tplanted\ngithub.com/jackc/pgx/v5\t"}}, []string{"ClickHouse must never"}},
 		{"closure check stops covering arm64", []mutation{{cg, "for arch in amd64 arm64", "for arch in amd64"}}, []string{"no longer covers cgo"}},
@@ -213,4 +225,12 @@ func TestAuthServiceWorkflowPlantedDefects(t *testing.T) {
 			expectViolation(t, authViolations(t, tree), c.want...)
 		})
 	}
+}
+
+// A registry row that is commented out is not a registered target: the guard must stay quiet about it.
+func TestAuthFuzzRegistryIgnoresCommentedRows(t *testing.T) {
+	root := repoRoot(t)
+	const cg = "ci/check_go.sh"
+	tree := plantTree(t, root, authFiles, mutation{cg, "AUTH_FUZZ_TARGETS=(\n", "AUTH_FUZZ_TARGETS=(\n  # \"./internal/auth/x FuzzCommentedOut\"\n"})
+	expectNoViolations(t, authViolations(t, tree))
 }

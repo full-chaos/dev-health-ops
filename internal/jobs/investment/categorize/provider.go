@@ -9,6 +9,8 @@ type CompletionResult struct {
 	OutputTokens      *int
 	Model             string
 	CachedInputTokens *int
+	// OrgCredentials is true when the organization's own provider credentials made the call.
+	OrgCredentials bool
 }
 
 // CompletionRequest is a prompt plus everything a provider needs to know

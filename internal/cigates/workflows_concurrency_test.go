@@ -518,3 +518,48 @@ func TestBareTriggersCountAsEveryBranch(t *testing.T) {
 	}
 	expectViolation(t, concurrencyViolations(t, tree), "bare.yml", "race to cancel each other")
 }
+
+// workflowFilePathViolations: every workflow file the guards read (*.yml and *.yaml) must match the go.yml path
+// filters, or a change limited to it skips the Go tests that guard it.
+func workflowFilePathViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	for _, event := range []string{"push", "pull_request"} {
+		paths := goPaths(t, root, event)
+		for _, n := range workflowNames(t, root) {
+			if rel := ".github/workflows/" + n; !matchesAny(t, rel, paths) {
+				out = append(out, fmt.Sprintf("workflow %s matches no %s path filter in go.yml: a change limited to it skips the Go tests that guard it", rel, event))
+			}
+		}
+	}
+	return out
+}
+
+func TestEveryWorkflowFileTriggersTheGoWorkflow(t *testing.T) {
+	expectNoViolations(t, workflowFilePathViolations(t, repoRoot(t)))
+}
+
+// A *.yaml workflow is read by every guard like a *.yml one: concurrency, and the path filters that run the guards.
+func TestYamlSuffixWorkflowsAreGuarded(t *testing.T) {
+	root := repoRoot(t)
+	var files []string
+	for _, n := range workflowNames(t, root) {
+		files = append(files, ".github/workflows/"+n)
+	}
+	files = append(files, ".github/workflows/go.yml")
+	const yamlWorkflow = "on:\n  pull_request:\nconcurrency:\n  group: x\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n"
+	plant := func(t *testing.T, muts ...mutation) string {
+		tree := plantTree(t, root, files, muts...)
+		if err := os.WriteFile(filepath.Join(tree, ".github/workflows/extra.yaml"), []byte(yamlWorkflow), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return tree
+	}
+	t.Run("a .yaml workflow without cancel-in-progress is read by the concurrency guard", func(t *testing.T) {
+		expectViolation(t, concurrencyViolations(t, plant(t)), "extra.yaml", "no cancel-in-progress")
+	})
+	t.Run("a .yaml workflow outside the go.yml path filters is reported", func(t *testing.T) {
+		tree := plant(t, mutation{".github/workflows/go.yml", "      - '.github/workflows/*.yaml'\n", allMarker})
+		expectViolation(t, workflowFilePathViolations(t, tree), ".github/workflows/extra.yaml", "matches no push path filter")
+	})
+}

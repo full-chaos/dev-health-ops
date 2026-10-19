@@ -23,6 +23,8 @@ on:
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'
+      # the image publishing guard (internal/cigates, CHAOS-10177) scans every renderer YAML under deploy/ for the Go images it names
+      - 'deploy/go-api/**'
       # The migrate service's Go pins (internal/rivermigrate/deploy_wiring_test.go) read the
       # compose manifest that runs `dho migrate upgrade`.
       - 'compose.yml'
@@ -212,6 +214,7 @@ on:
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
       # and the auth closure allow-list
       - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
       - 'ci/builder_images.sh'
       - 'ci/builder_images.tsv'
       - 'ci/auth_closure_allow.tsv'
@@ -242,6 +245,8 @@ on:
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'
+      # the image publishing guard (internal/cigates, CHAOS-10177) scans every renderer YAML under deploy/ for the Go images it names
+      - 'deploy/go-api/**'
       # The migrate service's Go pins (internal/rivermigrate/deploy_wiring_test.go) read the
       # compose manifest that runs `dho migrate upgrade`.
       - 'compose.yml'
@@ -431,6 +436,7 @@ on:
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
       # and the auth closure allow-list
       - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
       - 'ci/builder_images.sh'
       - 'ci/builder_images.tsv'
       - 'ci/auth_closure_allow.tsv'

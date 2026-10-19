@@ -107,7 +107,7 @@ func venueMainAlertViolations(t *testing.T, root string) []string {
 		if strings.Contains(asString(runSteps[0]["run"]), "${{") {
 			out = append(out, "the alert step's run script holds a ${{ }} expression: event data reaches a shell only through env")
 		}
-		if code := shellCode(asString(runSteps[0]["run"])); len(code) != 1 || code[0].text != "bash ci/venue-main-alert.sh" {
+		if code := venueShellCode(asString(runSteps[0]["run"])); len(code) != 1 || code[0].text != "bash ci/venue-main-alert.sh" {
 			out = append(out, fmt.Sprintf("the alert step must run exactly `bash ci/venue-main-alert.sh` and nothing else, got %v: an echo, a comment or a trailing `|| true` sends no alert", code))
 		}
 		for _, key := range []string{"if", "continue-on-error"} {

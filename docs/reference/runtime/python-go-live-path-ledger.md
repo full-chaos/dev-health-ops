@@ -31,13 +31,7 @@ The drift gate only guarantees *coverage* (every kind/route/file has a row) -- i
 
 - **state** is the header line's own claim (`native` / `bridge` / `mixed` / `dead-code`), followed by what `contracts/jobs/v1/migration-state.json` itself claims (`state`/`route`). The two can legitimately disagree: `migration-state.json`'s `route: river` only says River is the **dispatch transport** -- it says nothing about where the **compute** happens. A kind can be `go_default`/`river` in the contract and still bridge every byte of its actual work to Python. That gap is exactly what caused the confusion this ticket exists to close.
 - **evidence** is labeled `local` (re-executed against real synced data in org `70d529e0-3c06-4597-8480-794fd02328b6` on the shared dev stack), `fixtures` (generated, contrived), `live` (prod; this lane has no prod access, so no `live` rows below), or `argued` (established by reading code this session, not re-executed -- the tables/writers claim came from `rg`/direct file reads against ops main tip `7ea3cad23` on 2026-08-28, not from running the code path).
-- The three tables below (kinds, routes, worker files) are **generated** -- do not hand-edit the text between a `<!-- BEGIN/END GENERATED ... -->` marker pair. Edit the curated `_LEDGER` dicts in `scripts/gen_python_go_ledger_docs.py` and run:
-
-  ```bash
-  PYTHONPATH=src .venv/bin/python scripts/gen_python_go_ledger_docs.py
-  ```
-
-  then commit the diff in the same PR as whatever code change caused it.
+- The three tables below (kinds, routes, worker files) are **generated** -- do not hand-edit the text between a `<!-- BEGIN/END GENERATED ... -->` marker pair.
 
 ## Sync family
 
@@ -236,14 +230,11 @@ Category key: **LIVE** = reached today from a live caller (the FastAPI bridge ro
 | --- | --- | --- | --- |
 | `__init__.py` | LIBRARY / SHARED | package marker, no logic | n/a |
 | `async_runner.py` | LIBRARY / SHARED | imported by live sync_bootstrap.py, processors/dataset_adapters.py, api/external_ingest/consumer.py, and feature_flag_sync.py (itself LIVE per that file's own row) — 'run coroutine inside Celery task' helper. work_graph_tasks.py, a former importer, was deleted (CHAOS-3093) | n/a |
-| `config.py` | LIBRARY / SHARED | used by queues.py and api/external_ingest/stream_health.py, and read by the queue-contract tests — env/config constants. celery_app.py, its former loader, was deleted (CHAOS-7059). queue_monitor.py, external_ingest_reconciler.py, and sync_reconciler.py, former importers, were deleted (CHAOS-3093) | n/a |
 | `feature_flag_sync.py` | LIVE | LIVE — corrected 2026-08-28 per codex review across 2 rounds: an earlier draft wrongly claimed zero importers, then a follow-up correction wrongly said both helpers are called unconditionally. Actual shape: `_run_feature_flags_dataset` (`dataset_adapters.py:684`, called from the live dataset dispatcher at `:758`) branches per provider (`dataset_adapters.py:694-712`) -- calls `_sync_gitlab_feature_flags` for `provider=='gitlab'`, `_sync_launchdarkly_feature_flags` for `provider=='launchdarkly'`, raises `ValueError` for any other provider | n/a — live |
 | `post_sync_dispatch.py` | LIVE | build_post_sync_dispatch_payload called sync_units.py:2274, inside finalize_sync_run (live via direct callers processors/sync.py and backfill/runner.py -- the /finalize HTTP bridge route is deleted) | n/a |
 | `provider_family_contract.py` | LIVE | imported by provider_unit_route.py & sync_units.py:122, reached from dispatch_sync_run | n/a |
-| `provider_unit_route.py` | LIVE | imported sync_units.py:125, used sync_units.py:999-1000 inside dispatch_sync_run | n/a |
 | `rate_limit_defer.py` | LIVE | plan_rate_limit_deferral imported sync_units.py:130-132, called sync_units.py:1514 inside dispatch_sync_run | n/a |
 | `recommendations_tasks.py` | TEST/FIXTURE ONLY | worker_metrics.py's _run_recommendations bridge handler (its only production caller) is deleted -- verified no live wiring reaches it; _compute_recommendations_for_org is now exercised only by tests/test_recommendations_task.py | n/a |
-| `reference_discovery.py` | LIVE | the /reference-discovery route this file used to serve (`run_sync_reference_discovery`) is deleted -- `HTTPBridge.Discover` never had a live Go caller, and no Celery producer ever called the task either (CHAOS-4435/CHAOS-5713). `await_reference_discovery_terminal`/`ensure_reference_discovery_wakeup`/`reference_discovery_succeeded` remain: imported by sync_units.py and backfill/runner.py to poll/arm the SAME ledger the native Go reference-discovery worker owns | n/a |
 | `sync_bootstrap.py` | LIVE | imported by sync_units.py:134; resolve_run_auth reached from dispatch_sync_run | n/a |
 | `task_utils.py` | LIBRARY / SHARED | imported by sync_units.py — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it, work_graph_tasks.py until CHAOS-3093 deleted it, and reference_discovery.py/team_autoimport.py until CHAOS-4435/CHAOS-5713 deleted their own imports of it | n/a |
 | `team_autoimport_categories.py` | LIVE | imported by post_sync_dispatch.py (live, gates plan.TeamAutoimport) -- the provider populate() modules and their team_autoimport.py executor that used to import it are deleted (CHAOS-4435/CHAOS-5713) | n/a |

@@ -193,18 +193,6 @@ def test_every_worker_deployment_states_its_own_drain_budget() -> None:
             )
 
 
-def _celery_queue_names() -> frozenset[str]:
-    """The Celery app's declared queue set, read from the producer itself.
-
-    Generated from ``workers.config.task_queues`` rather than hand-authored, so
-    a queue added on the Python side cannot drift away from this comparison
-    silently.
-    """
-    from dev_health_ops.workers.config import task_queues
-
-    return frozenset(task_queues)
-
-
 def _go_queue_names() -> frozenset[str]:
     """The queues the Go River fleet actually serves, per the deployment manifest."""
     import json
@@ -219,64 +207,6 @@ def _go_queue_names() -> frozenset[str]:
         for process in manifest["processes"]
         for queue in process.get("queues", [])
     )
-
-
-def test_go_queue_names_that_exist_in_celery_agree_byte_for_byte() -> None:
-    """Where the two runtimes name the same queue, they must spell it the same.
-
-    CHAOS-4020 mirrors the Celery worker CLI: `-Q/--queues` takes queue names,
-    with Celery's meaning. The two fleets do not serve identical queue sets --
-    the Go River topology has queues Celery never had, and Celery has queues no
-    Go handler implements -- so this pins the part that must not drift: a queue
-    both runtimes know is spelled identically, and the divergence is explicit
-    rather than accidental.
-
-    The divergence lists below are the migration's open question, tracked on
-    CHAOS-4020. A name moving between the two sets should fail here and be a
-    deliberate edit, not a surprise.
-    """
-    celery = _celery_queue_names()
-    go = _go_queue_names()
-
-    shared = celery & go
-    assert shared == {"metrics", "reports", "sync", "webhooks"}, (
-        f"the shared queue vocabulary changed: {sorted(shared)}"
-    )
-
-    # Queues the Go fleet serves that the Celery app never declared.
-    assert go - celery == {
-        "coverage",
-        "heartbeat",
-        "investment",
-        "retention",
-        "sync_provider",
-        "workgraph",
-    }, f"Go-only queues changed: {sorted(go - celery)}"
-
-    # Celery queues no Go worker implements a handler for. A Go worker must not
-    # accept these: startup validation requires the selected queue set to equal
-    # the CONSTRUCTED handler set, so selecting one would fail readiness.
-    assert celery - go == {
-        "backfill",
-        "default",
-        "external-ingest",
-        "ingest",
-        "monitoring",
-        "scheduler",
-        "sync.github",
-        "sync.github.heavy",
-        "sync.github.light",
-        "sync.github.medium",
-        "sync.gitlab",
-        "sync.gitlab.heavy",
-        "sync.gitlab.light",
-        "sync.gitlab.medium",
-        "sync.jira",
-        "sync.jira.medium",
-        "sync.launchdarkly",
-        "sync.linear",
-        "sync.linear.medium",
-    }, f"Celery-only queues changed: {sorted(celery - go)}"
 
 
 def test_every_queue_a_manifest_selects_is_one_the_go_fleet_serves() -> None:

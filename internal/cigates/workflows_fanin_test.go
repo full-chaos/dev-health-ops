@@ -3,6 +3,7 @@ package cigates_test
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -11,6 +12,12 @@ import (
 // main-head decision for moving tags is made once, by a fan-in job, as a descendant check on the OCI revision label,
 // serialised by a never-cancelled concurrency group. The behavioural tests of that file (the fan-in script executed
 // against stand-in `docker buildx imagetools` / git) are MOVED-TO-C and stay in Python until PR-C replaces them.
+
+// commandAt reports whether cmd appears in command position (line start, after ; & | ( ! {, or after if/then/while/
+// until/do/else): the same words inside a quoted string, an echo argument or a comment are not the command.
+func commandAt(text, cmd string) bool {
+	return regexp.MustCompile(`(?m)(?:^|[;&|(!{]|\b(?:if|then|while|until|do|else)\b)\s*` + regexp.QuoteMeta(cmd)).MatchString(text)
+}
 
 func fanInJobs(doc yamlMap) map[string]yamlMap {
 	out := map[string]yamlMap{}
@@ -110,20 +117,22 @@ func fanInViolations(t *testing.T, root string) []string {
 		}
 	}
 
-	text := fanInRunText(fan)
-	if !strings.Contains(text, "merge-base") || !strings.Contains(text, "--is-ancestor") {
+	// presence checks read COMMANDS (comments and echo/printf lines removed); absence checks read everything
+	rawText := fanInRunText(fan)
+	text := shellCommands(rawText)
+	if !commandAt(text, "git merge-base --is-ancestor") {
 		add("the fan-in job does not call `git merge-base --is-ancestor`: CHAOS-4947 requires a descendant check, not an equals-head comparison")
 	}
 	if !strings.Contains(text, "org.opencontainers.image.revision") {
 		add("the fan-in job's ancestry base must come from the org.opencontainers.image.revision OCI label, not a sha-<7> tag string")
 	}
-	if strings.Contains(text, "${amd64_rev:-${arm64_rev}}") {
+	if strings.Contains(rawText, "${amd64_rev:-${arm64_rev}}") {
 		add("found `${amd64_rev:-${arm64_rev}}`: this silently takes whichever platform's revision label exists when only one is present; both labels must be present and equal before trusting either")
 	}
 	if !strings.Contains(text, `[ -n "${amd64_rev}" ] && [ -n "${arm64_rev}" ]`) {
 		add("no explicit both-platforms-present guard before the base_sha assignment: a family with one platform labeled must not be treated as agreeing")
 	}
-	if !strings.Contains(text, "git log --first-parent") {
+	if !commandAt(text, "git log --first-parent") {
 		add("the unlabeled-family fallback must walk first-parent history from the built commit, not the label alone")
 	}
 	if !strings.Contains(text, "-n 50") && !strings.Contains(text, "-n50") {
@@ -198,7 +207,7 @@ func fanInViolations(t *testing.T, root string) []string {
 	if !strings.Contains(text, `"${ref}: not found"`) {
 		add("the classifier does not match the live-verified 'not found' stderr substring, the only pattern observed against ghcr.io")
 	}
-	if strings.Contains(text, "manifest unknown") || strings.Contains(text, "name unknown") {
+	if strings.Contains(rawText, "manifest unknown") || strings.Contains(rawText, "name unknown") {
 		add("found an unverified guessed error-text pattern ('manifest unknown' or 'name unknown'): only the live-verified 'not found' may classify CONFIRMED ABSENT")
 	}
 	if !strings.Contains(text, "_inspect_retry_classify") {
@@ -244,6 +253,9 @@ func TestDockerImagesFanInGatePlantedDefects(t *testing.T) {
 		{"digest walk becomes unbounded", []mutation{{wf, pick("git log --first-parent -n 50"), "git log --first-parent"}}, []string{"bounded", "candidate loop"}},
 		{"sanitiser cap moves before the prefix", []mutation{{wf, pick(":0:128"), ":0:256"}}, []string{"128-character length cap"}},
 		{"a guessed error text is trusted", []mutation{{wf, pick(`"${ref}: not found"`), `"${ref}: not found"|*"manifest unknown"*`}}, []string{"unverified guessed error-text"}},
+		{"the ancestry check survives only in a comment", []mutation{{wf, pick("git merge-base --is-ancestor"), allMarker + "# git merge-base --is-ancestor"}}, []string{"merge-base --is-ancestor"}},
+		{"the ancestry check survives only as an echoed string", []mutation{{wf, pick("git merge-base --is-ancestor"), allMarker + `echo "git merge-base --is-ancestor"`}}, []string{"merge-base --is-ancestor"}},
+		{"the bounded walk survives only in a trailing comment", []mutation{{wf, pick("git log --first-parent -n 50"), allMarker + "git log --first-parent # -n 50"}}, []string{"bounded"}},
 		{"fan-in runs may be cancelled", []mutation{{wf, "cancel-in-progress: false", allMarker + "cancel-in-progress: true"}}, []string{"cancel-in-progress must be explicitly false"}},
 	}
 	for _, c := range plant {

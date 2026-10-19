@@ -44,9 +44,13 @@ func loadWf(t *testing.T, root, name string) yamlMap {
 
 func workflowNames(t *testing.T, root string) []string {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
-	if err != nil {
-		t.Fatal(err)
+	var paths []string
+	for _, ext := range []string{"*.yml", "*.yaml"} {
+		m, err := filepath.Glob(filepath.Join(root, ".github", "workflows", ext))
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, m...)
 	}
 	var names []string
 	for _, p := range paths {
@@ -158,4 +162,44 @@ func expectViolation(t *testing.T, got []string, mustContain ...string) {
 		t.Fatalf("guard fired but its message does not name the defect %v:\n%s", mustContain, strings.Join(got, "\n"))
 	}
 	t.Logf("planted defect caught: %s", got[0])
+}
+
+// shellCode returns the code of a shell script or a workflow run value: full-line comments and trailing `# ...`
+// comments (outside quotes) are removed, so a token that only appears in a comment never satisfies a guard.
+func shellCode(text string) string {
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "#") {
+			continue
+		}
+		var q byte
+		for j := 0; j < len(l); j++ {
+			c := l[j]
+			switch {
+			case q != 0:
+				if c == q {
+					q = 0
+				}
+			case c == '\'' || c == '"':
+				q = c
+			case c == '#' && j > 0 && (l[j-1] == ' ' || l[j-1] == '\t'):
+				l = l[:j]
+			}
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
+}
+
+// shellCommands is shellCode without the lines that only print: an echo or printf of a command is not the command.
+func shellCommands(text string) string {
+	var out []string
+	for _, l := range strings.Split(shellCode(text), "\n") {
+		if f := strings.Fields(l); len(f) > 0 && (f[0] == "echo" || f[0] == "printf") {
+			continue
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
 }

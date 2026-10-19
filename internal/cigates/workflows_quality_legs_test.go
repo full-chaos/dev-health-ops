@@ -17,6 +17,9 @@ import (
 // stand-in go, the weights table versus `go list`, the race-excluded test census and the -trimpath derivation are
 // MOVED-TO-C and stay in Python until PR-C replaces them.
 
+// the command must start a line of a step's run: an echo of the same words runs nothing
+var legRunRe = regexp.MustCompile(`(?m)^\s*bash ci/check_go\.sh ci-leg \$\{\{ matrix\.args \}\}\s*$`)
+
 var (
 	ciCaseStep  = regexp.MustCompile(`(?m)^    ((?:check|plan)_\w+)$`)
 	ciLegStage  = regexp.MustCompile(`ci_leg_stage (?:"[^"]*"|\S+) (\w+)`)
@@ -48,7 +51,7 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
 	add := func(f string, a ...any) { out = append(out, fmt.Sprintf(f, a...)) }
-	script := readFile(t, filepath.Join(root, "ci/check_go.sh"))
+	script := shellCode(readFile(t, filepath.Join(root, "ci/check_go.sh")))
 
 	ciBlock, ok1 := caseBlock(script, "\n  ci)\n", "\n  all)\n")
 	legBlock, ok2 := caseBlock(script, "check_ci_leg() {", "\n}\n")
@@ -128,7 +131,7 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	}
 	ran := false
 	for _, s := range stepsOf(leg) {
-		if strings.Contains(str(s["run"]), "ci-leg ${{ matrix.args }}") {
+		if legRunRe.MatchString(str(s["run"])) {
 			ran = true
 		}
 	}
@@ -217,6 +220,9 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 		{"fail-fast comes back on", []mutation{{wf, "fail-fast: false", "fail-fast: true"}}, []string{"fail-fast must be false"}},
 		{"the fan-in can skip", []mutation{{wf, "if: always()", "if: success()"}}, []string{"fan-in must be always()"}},
 		{"the fan-in stops judging the legs unconditional", []mutation{{wf, "go-quality-leg|unconditional|", "go-quality-leg|path-filtered|"}}, []string{"unconditional"}},
+		{"the leg step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh ci-leg ${{ matrix.args }}", `run: echo "ci-leg ${{ matrix.args }}"`}}, []string{"no go-quality-leg step runs"}},
+		{"a leg stage survives only in a comment", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", "      # ci_leg_stage ratchets check_ratchets\n"}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},
+		{"check_test keeps the race-excluded proof only in a comment", []mutation{{cg, "\n  check_race_excluded_ran\n", "\n  # check_race_excluded_ran\n"}}, []string{"no longer runs check_race_excluded_ran"}},
 		{"the GOFLAGS scrub is dropped", []mutation{{cg, "-u GOFLAGS ", ""}}, []string{"GOFLAGS scrub"}},
 	}
 	for _, c := range cases {

@@ -27,7 +27,7 @@ func venueVerbSourceViolations(t *testing.T, root string) []string {
 	if end < 0 {
 		return []string{"the body of check_venue_oracles in ci/check_go.sh has no closing brace line"}
 	}
-	code := shellCode(script[start : start+end])
+	code := venueShellCode(script[start : start+end])
 	var out []string
 	call, loop := -1, -1
 	for i, l := range code {

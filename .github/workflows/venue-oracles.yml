@@ -76,7 +76,7 @@ jobs:
     # package's own go test is bounded at 40 minutes inside the verb; a leg logs
     # its planned and actual test seconds and warns over the budget. When the
     # guard fails: regenerate the weights from a saved run log
-    # (ci/venue_oracle_weights.py) or add a leg here.
+    # by hand or add a leg here.
     name: venue-oracles (shard ${{ matrix.shard }}/8)
     timeout-minutes: 40
     strategy:

@@ -332,12 +332,12 @@ pipeline:validate:
 # governance.yml: the TEST-EVIDENCE / RISK-NOTES gate, on merge requests.
 governance:
   stage: validate
-  image: python:3.14
+  image: $GO_IMAGE
   rules: *mr_rules
   variables:
     PR_BODY: $CI_MERGE_REQUEST_DESCRIPTION
   script:
-    - python3 ci/check_governance_gate.py --base-sha "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --head-sha "$CI_COMMIT_SHA"
+    - go run -mod=readonly ./cmd/cigate governance --base-sha "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --head-sha "$CI_COMMIT_SHA"
 
 # ---------------------------------------------------------------------------
 # test (test.yml: docs-tests, tooling-tests incl. the kept Python tests)

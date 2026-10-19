@@ -451,7 +451,7 @@ def test_the_weights_directory_is_well_formed_and_matches_the_registry() -> None
     missing = sorted(registry - set(keys))
     assert not missing, (
         f"registry run rows with no weight: {missing[:5]}...: regenerate "
-        "ci/venue_oracle_weights.d/ (python3 ci/venue_oracle_weights.py <saved run log>)"
+        "ci/venue_oracle_weights.d/ (edit by hand from a saved run log)"
     )
     stale = sorted(set(keys) - registry)
     assert not stale, f"weights for tests that are not registry run rows: {stale[:5]}"
@@ -475,7 +475,7 @@ def test_the_planned_heaviest_leg_fits_the_budget(tmp_path: Path) -> None:
     assert heaviest <= budget, (
         f"the heaviest of the {count} planned venue legs is {heaviest}s of tests, over the "
         f"{budget}s budget: regenerate ci/venue_oracle_weights.d/ from a recent run log "
-        "(ci/venue_oracle_weights.py) or add a leg to the matrix and the verb's COUNT"
+        "by hand or add a leg to the matrix and the verb's COUNT"
     )
 
 
@@ -552,72 +552,6 @@ def test_a_leg_logs_its_plan_and_warns_over_the_budget(tmp_path: Path) -> None:
     assert "::warning title=venue-oracles leg over its test-time budget" in slow.stdout
 
 
-def test_the_weights_generator_reads_a_run_log(tmp_path: Path) -> None:
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "venue_oracle_weights", ROOT / "ci" / "venue_oracle_weights.py"
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    prefix = "venue-oracles (shard 1/7)\tRun the shard\t2026-09-26T08:02:13.4333960Z "
-    other = "venue-oracles (shard 2/7)\tRun the shard\t2026-09-26T08:02:14.0000000Z "
-    lines = [
-        prefix + "    --- PASS: TestNotTop/sub (9.00s)",  # a subtest: not a row
-        prefix + "--- PASS: TestOne (10.20s)",
-        other + "--- PASS: TestTwo (30.00s)",  # another leg's test, interleaved
-        prefix + "--- PASS: TestThree (5.01s)",
-        prefix + "ok  \tgithub.com/full-chaos/dev-health-ops/internal/a\t15.3s",
-        other + "ok  \tgithub.com/full-chaos/dev-health-ops/internal/b\t31.0s",
-        "--- PASS: TestOne (99.00s)",  # a plain (unprefixed) log line, other leg id ""
-        "FAIL\tgithub.com/full-chaos/dev-health-ops/internal/a\t1.0s",
-    ]
-    seen: dict[tuple[str, str], float] = {}
-    module.parse_log(lines, seen)
-    assert seen == {
-        ("internal/a", "TestOne"): 99.0,  # the largest across the logs
-        ("internal/a", "TestThree"): 5.01,
-        ("internal/b", "TestTwo"): 30.0,
-    }
-    text, unmeasured = module.build(
-        [
-            ("internal/a", "TestOne"),
-            ("internal/a", "TestThree"),
-            ("internal/b", "TestTwo"),
-            ("internal/c", "TestKept"),
-            ("internal/c", "TestNew"),
-            ("internal/d", "TestStill"),
-        ],
-        seen,
-        {
-            ("internal/c", "TestKept"): (77, False),
-            ("internal/d", "TestStill"): (5, True),
-            ("internal/gone", "TestGone"): (5, False),
-        },
-    )
-    body = [line for line in text.splitlines() if line and not line.startswith("#")]
-    assert body == [
-        "internal/a\tTestOne\t99",
-        "internal/a\tTestThree\t6",  # rounded up
-        "internal/b\tTestTwo\t30",
-        "internal/c\tTestKept\t77",  # no log measured it: the existing weight stays
-        "internal/c\tTestNew\t600\tunmeasured",  # a new row: planned pessimistically
-        "internal/d\tTestStill\t5\tunmeasured",  # still unmeasured: flag kept
-    ]
-    assert unmeasured == [("internal/c", "TestNew"), ("internal/d", "TestStill")]
-    # a measurement clears the flag
-    text, unmeasured = module.build(
-        [("internal/d", "TestStill")],
-        {("internal/d", "TestStill"): 41.2},
-        {("internal/d", "TestStill"): (5, True)},
-    )
-    assert "internal/d\tTestStill\t42\n" in text and unmeasured == []
-    assert module.PROVISIONAL_WEIGHT >= 600
-    assert text.startswith("# Measured seconds of one venue-oracles registry `run` row")
-
-
 def test_an_unmeasured_row_is_planned_pessimistically() -> None:
     # CHAOS-6891: the first plan gave two rows nobody had measured a 60 s default;
     # one took 560 s and its leg ran 2109 s of tests against a 2400 s cap. A row in
@@ -631,7 +565,7 @@ def test_an_unmeasured_row_is_planned_pessimistically() -> None:
                 if marker == ["unmeasured"]:
                     assert int(seconds) >= 600, (
                         f"{package} {test} is unmeasured but planned at {seconds}s: "
-                        "regenerate with ci/venue_oracle_weights.py"
+                        "raise it to the provisional weight or measure it"
                     )
                 else:
                     assert marker == [], f"unknown weights column {marker} in {line!r}"
@@ -640,7 +574,7 @@ def test_an_unmeasured_row_is_planned_pessimistically() -> None:
 def test_the_weights_parser_reads_a_generator_written_unmeasured_row(
     tmp_path: Path,
 ) -> None:
-    # CHAOS-6905: ci/venue_oracle_weights.py writes a fourth column, `unmeasured`,
+    # CHAOS-6905: a weights file carries a fourth column, `unmeasured`,
     # for a row no run log has measured; a parser that unpacks exactly three
     # columns failed every PR that regenerated the file with such a row.
     weights = tmp_path / "weights.tsv"

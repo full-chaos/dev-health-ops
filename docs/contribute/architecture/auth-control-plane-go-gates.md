@@ -6,8 +6,8 @@ owner: engineering
 source_of_truth:
   - ci/check_go.sh
   - .github/workflows/go-auth-service.yml
-  - ci/auth_govulncheck.py
-  - ci/auth_scope_candidates.py
+  - internal/cigates/govulncheck.go
+  - internal/cigates/scope.go
   - ci/auth_gate_scope_exempt.txt
   - ci/check_go_containers.sh
   - tests/tooling/test_go_auth_service_workflow.py
@@ -38,7 +38,7 @@ bash ci/check_go.sh auth <stage>    # one stage
 | `middleware` | Runs `TestProductionMiddlewareStackIsMountedAndDriven` and **fails unless it logged `AUTH_PRODUCTION_STACK_EXECUTED`** (guardrail G-69). The test builds the API server from `apiServerOptions`, the function the service itself uses, with a probe route, and drives 404, 405, 413, a recovered panic (no panic text in the body) and the rate limit over real HTTP. A green test name without the marker is not evidence. |
 | `fuzz [Target]` | One fuzz run per registered parser, each in its own invocation. Eleven targets: error envelope, revision, timestamp, edge access token, signed token, rate-limit text, forwarded-trust list, signing-key PEM, configuration, email normalization and external identity key. The budget `AUTH_FUZZTIME` (default `20s`) must be whole seconds and at least 5 s, and a target prints `auth-fuzz-proof:` only when the engine reported a non-zero execution count and passed, so a baseline-only run cannot pass. |
 | `fuzz-registry` | Fails when a `Fuzz*` function exists in the auth tree without a row in `AUTH_FUZZ_TARGETS`, or a row names a missing function. |
-| `vuln` | `govulncheck` (pinned version) over the auth packages, parsed by `ci/auth_govulncheck.py`. **Any reachable finding fails.** There is no ignore list and no baseline in the gate. A pull request that changes the gate itself (`ci/check_go.sh`, `ci/auth_govulncheck.py`, the workflow) is a reviewed change to files that select the gates, so it cannot do so unreviewed. An empty or config-less scan also fails. |
+| `vuln` | `govulncheck` (pinned version) over the auth packages, parsed by `cigate govulncheck` (`internal/cigates/govulncheck.go`). **Any reachable finding fails.** There is no ignore list and no baseline in the gate. A pull request that changes the gate itself (`ci/check_go.sh`, `ci/auth_govulncheck.py`, the workflow) is a reviewed change to files that select the gates, so it cannot do so unreviewed. An empty or config-less scan also fails. |
 | `paths-selftest` | Executes the relevance rules on fixed inside and outside paths. |
 | `scope-selftest` | Fails when a Go package that looks like auth (a path segment starting `auth` or `audit`) or imports the auth schema adapter is neither inside the gate nor named with a reason in `ci/auth_gate_scope_exempt.txt`; a stale or reasonless exemption fails too. Discovery uses `go list -json` for every build tag named in the repo, so a package behind a tag cannot hide. |
 | `relevant BASE HEAD` | Prints `relevant=true|false` for a diff. |
@@ -87,5 +87,5 @@ These live in `go.yml` and `docker-images.yml`, not the auth workflow:
 ## Verified against
 
 - `ci/check_go.sh`: `AUTH_PACKAGES`, `AUTH_FUZZ_TARGETS`, `check_auth*`, `auth_relevant`, `auth_scope_candidates`.
-- `.github/workflows/go-auth-service.yml`; `ci/auth_govulncheck.py`; `ci/auth_scope_candidates.py`.
+- `.github/workflows/go-auth-service.yml`; `internal/cigates/govulncheck.go`; `internal/cigates/scope.go` (run as `go run ./cmd/cigate`).
 - `internal/auth/authruntime/production_stack_test.go`: the marker and the driven statuses.

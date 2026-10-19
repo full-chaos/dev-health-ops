@@ -34,6 +34,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
       - name: Resolve governance context
         id: governance-context
         env:
@@ -77,6 +82,6 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           PR_BODY: ${{ steps.governance-context.outputs.pr_body }}
         run: |
-          python3 ci/check_governance_gate.py \
+          go run -mod=readonly ./cmd/cigate governance \
             --base-sha "$BASE_SHA" \
             --head-sha "$HEAD_SHA"

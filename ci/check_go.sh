@@ -194,7 +194,7 @@ usage() {
          print the complete assignment, and write a GitHub Actions `matrix`
          output (and `legs`, the leg count) when GITHUB_OUTPUT is set. No Docker
          required. With INTEGRATION_AFFECTED_FILE set to the output of
-         ci/go_affected_integration.py (CHAOS-9947), the matrix holds only the legs
+         cmd/cigate affected-integration (CHAOS-9947), the matrix holds only the legs
          that cover an affected package; unset, or a FULL first line, keeps every leg.
   ratchets
          Hold every closed list named in ci/ratchets.tsv to its size on the merge base: a list may
@@ -687,7 +687,7 @@ check_ci_leg() {
 # worst leg finished at 39:59, and three new rows pushed two other legs over. The
 # legs are now cost-balanced (ci/venue_oracle_shard.awk, the longest-processing-time
 # assignment ci/go_race_shard.awk uses) by the measured seconds in
-# ci/venue_oracle_weights.d/ (regenerate: ci/venue_oracle_weights.py). A wrong or
+# ci/venue_oracle_weights.d/ (one tsv per package, edit by hand). A wrong or
 # missing weight costs balance, never coverage: the legs always partition the run
 # rows. tests/tooling/test_venue_oracle_shards.py fails a PR whose registry rows
 # lack a weight or whose heaviest leg would exceed the leg's test-time budget.
@@ -1050,7 +1050,7 @@ check_venue_oracles() {
   elapsed=$(( $(date +%s) - leg_started ))
   printf 'venue-oracles: leg %ss of tests (predicted %ss, budget %ss)\n' "${elapsed}" "${predicted_seconds:-n/a}" "${budget}"
   if [ "${elapsed}" -gt "${budget}" ]; then
-    printf '::warning title=venue-oracles leg over its test-time budget::%ss of tests against a %ss budget: rebalance ci/venue_oracle_weights.d/ (ci/venue_oracle_weights.py) or add a leg before the job cap cancels it\n' "${elapsed}" "${budget}"
+    printf '::warning title=venue-oracles leg over its test-time budget::%ss of tests against a %ss budget: rebalance ci/venue_oracle_weights.d/ or add a leg before the job cap cancels it\n' "${elapsed}" "${budget}"
   fi
   [ "${failed}" -eq 0 ] || return 1
 }
@@ -2618,7 +2618,7 @@ check_remaining_test_shard() {
 }
 
 # load_affected_selection reads INTEGRATION_AFFECTED_FILE, the output of
-# ci/go_affected_integration.py (CHAOS-9947). Unset, empty, or a first line other
+# cmd/cigate affected-integration (CHAOS-9947). Unset, empty, or a first line other
 # than "AFFECTED <n>" means the whole suite. An AFFECTED key that is not a
 # planned package is a failure, never an ignored line.
 load_affected_selection() {
@@ -3303,7 +3303,7 @@ check_auth_vuln() {
     die "govulncheck failed to run"
   fi
   rm -f "${report}.err"
-  python3 "${ROOT}/ci/auth_govulncheck.py" <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
+  auth_go run -mod=readonly ./cmd/cigate govulncheck <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
   rm -f "${report}"
 }
 
@@ -3394,7 +3394,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_scope_candidates.py|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -3464,7 +3464,7 @@ auth_scope_candidates() {
   for tag in ${tags}; do all+="${all:+,}${tag}"; done
   {
     for set in "" "${all}" ${tags}; do
-      auth_go list -mod=readonly -tags="${set}" -e -json ./... | python3 "${ROOT}/ci/auth_scope_candidates.py" "${module}"
+      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -mod=readonly ./cmd/cigate scope-candidates "${module}"
     done
   } | LC_ALL=C sort -u
 }

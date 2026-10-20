@@ -188,6 +188,7 @@ on:
       - 'ci/auth_compose_proof.override.yml'
       - 'ci/check_auth_web_proxy_compose.sh'
       - 'ci/auth_webproof_compose.override.yml'
+      - 'ci/auth_webproof_smtp_sink.mjs'
       # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
       - 'ci/auth_corpus_external.sh'
       - 'ci/auth_corpus_set_env.sh'
@@ -436,6 +437,7 @@ on:
       - 'ci/auth_compose_proof.override.yml'
       - 'ci/check_auth_web_proxy_compose.sh'
       - 'ci/auth_webproof_compose.override.yml'
+      - 'ci/auth_webproof_smtp_sink.mjs'
       # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
       - 'ci/auth_corpus_external.sh'
       - 'ci/auth_corpus_set_env.sh'

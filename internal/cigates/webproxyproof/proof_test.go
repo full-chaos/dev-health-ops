@@ -60,7 +60,7 @@ func TestAuthWebProxyProofStackHasNoHostGlobalName(t *testing.T) {
 	}
 	args = append(args, "--profile", "auth", "config", "--format", "json")
 	cmd := exec.Command("docker", args...)
-	cmd.Env = append(os.Environ(), "BUGSINK_SECRET_KEY=x", "POSTGRES_PASSWORD=x", "AUTH_RUNTIME_DATABASE_PASSWORD=x", "AUTH_SESSION_SUCCESSOR_KEY=x")
+	cmd.Env = append(os.Environ(), "BUGSINK_SECRET_KEY=x", "POSTGRES_PASSWORD=x", "AUTH_RUNTIME_DATABASE_PASSWORD=x", "AUTH_SESSION_SUCCESSOR_KEY=x", "AUTH_PROOF_SMTP_PORT=2525")
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("docker compose config failed: %v", err)

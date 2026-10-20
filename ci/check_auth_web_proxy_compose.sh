@@ -63,8 +63,12 @@ compose() {
   docker compose -p "${PROJECT}" -f "${ROOT}/compose.yml" -f "${SCRIPT_DIR}/auth_compose_proof.override.yml" -f "${SCRIPT_DIR}/auth_webproof_compose.override.yml" "$@"
 }
 
+SINK_PID=""
+SINK_DIR=""
 cleanup() {
   local status=$?
+  [ -z "${SINK_PID}" ] || kill "${SINK_PID}" >/dev/null 2>&1 || true
+  [ -z "${SINK_DIR}" ] || rm -rf "${SINK_DIR}"
   if [ "${status}" -ne 0 ]; then
     printf '\n--- auth services at failure ---\n' >&2
     compose --profile auth ps --all >&2 || true
@@ -98,6 +102,16 @@ psql_one() {
   compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At -c "$1"
 }
 
+command -v node >/dev/null 2>&1 || die "node is required (SMTP sink)"
+SINK_DIR="$(mktemp -d)"
+node "${SCRIPT_DIR}/auth_webproof_smtp_sink.mjs" "${SINK_DIR}/port" "${SINK_DIR}/mail" &
+SINK_PID=$!
+for _ in $(seq 1 50); do [ -s "${SINK_DIR}/port" ] && break; sleep 0.1; done
+AUTH_PROOF_SMTP_PORT="$(cat "${SINK_DIR}/port")"
+[[ "${AUTH_PROOF_SMTP_PORT}" =~ ^[0-9]+$ ]] || die "the SMTP sink did not start"
+export AUTH_PROOF_SMTP_PORT
+printf 'SMTP sink pid %s on port %s\n' "${SINK_PID}" "${AUTH_PROOF_SMTP_PORT}"
+
 printf 'step 1: up --build --wait go-api auth-service\n'
 compose --profile auth up --build --detach --wait --wait-timeout 900 go-api auth-service
 assert_project_prefixed
@@ -119,12 +133,30 @@ status="$(curl --silent --show-error --max-time 20 --output /dev/stderr --write-
 printf '\nPOST /api/v1/auth/register -> %s\n' "${status}"
 [ "${status}" = "200" ] || [ "${status}" = "201" ] || die "register answered ${status}"
 token=""
-for _ in $(seq 1 20); do
-  token="$(compose logs --no-color go-api 2>&1 | grep -aoE 'verify\?token=[A-Za-z0-9._~%-]+' | tail -n 1 | sed 's/^verify?token=//')"
-  [ -z "${token}" ] || break
+for _ in $(seq 1 30); do
+  if [ -s "${SINK_DIR}/mail" ]; then
+    token="$(python3 -I - "${SINK_DIR}/mail" <<'PY' || true
+import email, re, sys
+raw = open(sys.argv[1], encoding="latin-1").read()
+for chunk in raw.split("---MESSAGE-END---"):
+    if not chunk.strip():
+        continue
+    message = email.message_from_string(chunk.lstrip("\n"))
+    for part in message.walk():
+        body = part.get_payload(decode=True)
+        if body is None:
+            continue
+        found = re.search(r"verify\?token=([A-Za-z0-9._~%-]+)", body.decode("utf-8", "replace"))
+        if found:
+            print(found.group(1))
+            sys.exit(0)
+PY
+)"
+    [ -z "${token}" ] || break
+  fi
   sleep 1
 done
-[ -n "${token}" ] || die "the console mail carried no verification token"
+[ -n "${token}" ] || die "the captured mail carried no verification token"
 status="$(curl --silent --show-error --max-time 20 --output /dev/null --write-out '%{http_code}' "${BASE}/api/v1/auth/verify?token=${token}")"
 printf 'GET /api/v1/auth/verify -> %s\n' "${status}"
 [ "${status}" = "200" ] || die "verify answered ${status}"

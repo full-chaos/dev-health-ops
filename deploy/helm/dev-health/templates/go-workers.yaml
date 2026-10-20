@@ -198,8 +198,8 @@ spec:
             never rendered for a reconciler/scheduler/stream-runner group,
             which would reject it as an unrecognized flag. It is appended
             here, after the fixed queue-topology/shutdown-timeout prefix
-            test_helm_river_workers_select_manifest_queues_and_queue_metrics
-            pins, as "the rest of the worker's configuration" that prefix
+            pgRiverWorkersSelectManifestQueues
+            (internal/cigates/chartgates/route_pgbouncer_test.go) pins, as "the rest of the worker's configuration" that prefix
             check deliberately leaves unconstrained. $group.
             preclaimReadinessTimeout overrides goWorkers.
             defaultPreclaimReadinessTimeout per group, same fallback

@@ -661,3 +661,12 @@ CHAOS-10231: "true" when go-api is enabled and any goApi.authProxy flag is on
 {{- $p := .Values.goApi.authProxy -}}
 {{- if and .Values.goApi.enabled (or $p.sessions $p.localLogin $p.credentials $p.social $p.oidc $p.saml) -}}true{{- end -}}
 {{- end -}}
+
+{{/*
+The auth schema's name: ONE source for the auth migrator, the auth service and
+the ops migrator (the ops migrator exempts exactly this schema from its
+foreign-database check, so all three must read the same value).
+*/}}
+{{- define "dev-health.authDatabaseSchema" -}}
+{{- default "auth" .Values.authService.database.schema -}}
+{{- end }}

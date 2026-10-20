@@ -12,6 +12,7 @@
 cmd/ask-dev-jobs-probe	1
 cmd/auth-migrate	1
 cmd/auth-service	1
+cmd/cigate	1
 cmd/dev-health-migration-matrix	21
 cmd/dev-health-provider-fixture	1
 cmd/dev-health-provider-normalized-fixture	1
@@ -105,6 +106,7 @@ internal/bigboycompose	1
 internal/billingcli	1
 internal/cacheinvalidation	1
 internal/chmigrate	1
+internal/cigates	1
 internal/cigates/affected	5
 internal/cigates/affectedmatrix	5
 internal/cigates/affectedmodule	5
@@ -113,6 +115,7 @@ internal/cigates/bigboy	91
 internal/cigates/chartgates	148
 internal/cigates/checkgo	140
 internal/cigates/scripts	18
+internal/cigates/workflowpaths	1
 internal/cigates/workflows	52
 internal/cli	2
 internal/clicredentials	11
@@ -224,6 +227,7 @@ internal/platform/health	1
 internal/platform/lifecycle	1
 internal/platform/logging	22
 internal/platform/otlpmetrics	4
+internal/platform/pgident	1
 internal/platform/poolstat	1
 internal/platform/postureguard	1
 internal/platform/queuecontrol	1

@@ -361,7 +361,9 @@ var pythonFloatWord = map[string]bool{"inf": true, "infinity": true, "nan": true
 
 // pythonFloatSpaces is every character CPython's float() strips (it folds Unicode whitespace to an ASCII space and then
 // skips only ASCII space characters): \t \n \v \f \r, space, and the Unicode spaces above 127. It is NOT str.isspace():
-// U+001C..U+001F are whitespace to that and are REJECTED by float(). Same set as internal/pythonparity's pythonIntSpaces.
+// U+001C..U+001F are whitespace to that and are REJECTED by float(). Pointer: the canonical copy of this set is
+// pythonIntSpaces in internal/pythonparity/pythonint_table.go (unexported, so it is copied here; keep the two equal).
+// pythonparity.IsSpace is the str.strip() set and includes U+001C..U+001F, so it is the wrong predicate here.
 var pythonFloatSpaces = map[rune]bool{
 	0x9: true, 0xa: true, 0xb: true, 0xc: true, 0xd: true, 0x20: true, 0x85: true, 0xa0: true,
 	0x1680: true, 0x2000: true, 0x2001: true, 0x2002: true, 0x2003: true, 0x2004: true, 0x2005: true, 0x2006: true,

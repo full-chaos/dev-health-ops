@@ -1,6 +1,6 @@
 # Recorded Python/Go parity pairs
 
-`parity_test.go` (`TestCLIOutputParityRecordedPair`) replays each case under `parity/` with `docstools.Run` in a temp work directory (the repository root of the run) and compares exit code, stdout, stderr and every written file byte for byte, and fails on any extra file. Case layout: `args` (one per line, verb first), `rc`, `stdout`, `stderr` (or empty `stderr.skip`), `in/`, `out/`; `{WORK}` is the work directory. The Python side was recorded once, locally, with the scripts as at the parent of the porting commit. Parts follow.
+`parity_test.go` (`TestCLIOutputParityRecordedPair`) replays each case under `parity/` with `docstools.Run` in a temp work directory (the repository root of the run) and compares exit code, stdout, stderr and every written file byte for byte, and fails on any extra file. Case layout: `args` (one per line, verb first), `rc`, `stdout`, `stderr`, `in/`, `out/`; `{WORK}` is the work directory. The Python side was recorded once, locally, with the scripts as at the parent of the porting commit. Parts follow.
 
 # Recorded Python/Go parity pairs, queue-map verbs
 
@@ -18,8 +18,18 @@ Recording: for each case a work directory `$W` receives `in/`, the script is cop
 
 
 `$W` is replaced by `{WORK}` in `stdout` and `stderr`. `out/` holds each file the script created or changed.
-A case with `stderr.skip` ended in a Python traceback (`genqm-missing-doc`, `genqm-bad-json`,
-`genqm-job-kind-not-in-registry`); exit code, stdout and files are compared, the traceback is not.
+A case with `stderr.traceback` has no `stderr`: Python stopped on an uncaught exception there and printed a traceback.
+The Go verb prints exactly the one line in `stderr.traceback` instead (the exception line, `Kind: message`; `{WORK}` is
+substituted); the harness compares Go stderr to it exactly and requires exactly one line. Its exit code, stdout and
+written files are compared with the Python run as in every other case. No case skips stderr.
+
+`genqm-crlf-doc` and `driftqm-crlf-doc`: the page has CRLF line ends. Python reads text mode (universal newlines) and
+writes LF: the drift check passes, the generator writes an LF page. `*-invalid-utf8-*` cases: the file is not UTF-8,
+Python raises UnicodeDecodeError (traceback, rc 1, nothing written); Go prints `UnicodeDecodeError: <path>: invalid UTF-8`.
+
+Not a parity pair, by decision: a kind in `registry.json` and `migration-state.json` that no `deployment.json` process
+lists in `job_kinds`. Python iterated only the process kinds and passed (rc 0, the kind absent from the table). Go
+refuses (rc 1, the kind named) because a guard must not pass a kind it leaves out; `queuemap_guard_test.go` covers it.
 
 Deliberate message edits made to the recordings after the run (the Go verb names itself, not the dead script):
 `gen_queue_mapping_docs:` -> `gen-queue-mapping:`, `CELERY_CORRESPONDENCE` -> `qmCorrespondence`,
@@ -54,8 +64,11 @@ subcategory bullet), add JSON examples (nested `investment`, invalid JSON, list 
 
 Substitutions in recorded text: none. No output of these two verbs names the `.py` file or a Python command.
 
-Cases with `stderr.skip` (Python died on a traceback; the Go verb prints a short `Traceback ...` stub and exits 1): `gen-taxonomy-missing-doc`,
-`check-investment-drift-missing-doc`, `check-investment-drift-no-markers`, `check-investment-drift-bad-mapping-line`.
+Cases with `stderr.traceback` (Python died on a traceback; the Go verb prints the one exception line and exits 1):
+`gen-taxonomy-missing-doc`, `check-investment-drift-missing-doc`, `check-investment-drift-no-markers`,
+`check-investment-drift-bad-mapping-line`, `check-investment-drift-invalid-utf8-page`. `check-investment-drift-json-nan-example`
+holds JSON examples with NaN, Infinity and -Infinity (accepted by Python's json.loads, so the keys are checked) and one
+with a constant as a key (rejected, the block is skipped).
 
 Differences on purpose:
 
@@ -65,4 +78,5 @@ Differences on purpose:
 - "THEMES not found / not a set literal / non-string literal / lacks theme prefix" ValueErrors have no Go equivalent.
 - `generated subcategory mapping drift` is not recorded: Python printed the expected dict in set-iteration order (changes with
   `PYTHONHASHSEED`). Go prints it in sorted-key order; `invtaxonomy_guard_test.go` asserts it.
-- `\s` in the JSON-fence regex is ASCII in Go and Unicode in Python; JSON with NaN/Infinity is skipped by Go (Python accepts it).
+- `\s` in the JSON-fence regex is ASCII in Go and Unicode in Python. JSON examples decode as in Python: NaN, Infinity and
+  -Infinity outside strings are accepted (rewritten to null before Go's decoder); other input Python rejects, Go rejects.

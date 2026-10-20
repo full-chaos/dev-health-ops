@@ -1,8 +1,8 @@
 package docstools_test
 
 import (
+	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -18,13 +18,28 @@ const (
 	invTxDoc   = "docs/reference/taxonomies/investment.md"
 )
 
+// startRoot is the repository root, found from the package directory where the test binary starts (not
+// runtime.Caller: under -trimpath that holds no real path).
+var startRoot = func() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			panic("go.mod not found above the test directory")
+		}
+		dir = parent
+	}
+}()
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test file")
-	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "..")
+	return startRoot
 }
 
 // realBlock returns doc[BEGIN : END+len(END)] or fails.

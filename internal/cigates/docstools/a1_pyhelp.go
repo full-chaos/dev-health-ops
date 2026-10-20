@@ -1,24 +1,52 @@
 package docstools
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
-// a1Traceback mimics an uncaught Python exception: the traceback goes to stderr, exit code 1.
+// a1Traceback is where Python died on an uncaught exception: one line "Kind: message" on stderr (the exception
+// line of the traceback, without the stack), exit code 1. The parity cases pin that line (stderr.traceback).
 func a1Traceback(stderr io.Writer, kind, msg string) int {
-	fmt.Fprintf(stderr, "Traceback (most recent call last):\n%s: %s\n", kind, msg)
+	fmt.Fprintf(stderr, "%s: %s\n", kind, msg)
 	return 1
 }
 
-// a1ReadText reads a file the way Path.read_text does (UTF-8, universal newlines).
+// a1Exception is a Python exception of a given kind.
+type a1Exception struct{ kind, msg string }
+
+func (e a1Exception) Error() string { return e.kind + ": " + e.msg }
+
+// a1DecodeError is Python's UnicodeDecodeError: the file is not UTF-8.
+type a1DecodeError struct{ path string }
+
+func (e a1DecodeError) Error() string { return e.path + ": invalid UTF-8" }
+
+// a1ReadFail prints the one stderr line for a failed a1ReadText and returns exit code 1: the UnicodeDecodeError
+// line for a file that is not UTF-8, else "<prefix> <error>".
+func a1ReadFail(stderr io.Writer, prefix string, err error) int {
+	var de a1DecodeError
+	if errors.As(err, &de) {
+		return a1Traceback(stderr, "UnicodeDecodeError", de.Error())
+	}
+	fmt.Fprintln(stderr, prefix, err)
+	return 1
+}
+
+// a1ReadText reads a file the way Path.read_text does (UTF-8, universal newlines). A file that is not valid UTF-8
+// gives an a1DecodeError.
 func a1ReadText(path string) (string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
+	}
+	if !utf8.Valid(raw) {
+		return "", a1DecodeError{path}
 	}
 	s := string(raw)
 	if strings.Contains(s, "\r") {

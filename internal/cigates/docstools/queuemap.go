@@ -2,8 +2,10 @@ package docstools
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -136,12 +138,39 @@ type qmJob struct {
 }
 
 func qmLoadJSON(path string, v any) error {
-	raw, err := os.ReadFile(path)
+	text, err := a1ReadText(path)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(raw, v)
+	return json.Unmarshal([]byte(text), v)
 }
+
+// qmReport prints the one stderr line for a failed verb step and returns exit code 1.
+func qmReport(stderr io.Writer, prefix string, err error) int {
+	if f, ok := err.(qmFail); ok {
+		fmt.Fprintln(stderr, f.msg)
+		return 1
+	}
+	var pe *fs.PathError
+	if errors.As(err, &pe) && errors.Is(err, fs.ErrNotExist) {
+		return a1Traceback(stderr, "FileNotFoundError", "[Errno 2] No such file or directory: "+a1Repr(pe.Path))
+	}
+	var se *json.SyntaxError
+	var te *json.UnmarshalTypeError
+	if errors.As(err, &se) || errors.As(err, &te) {
+		return a1Traceback(stderr, "json.decoder.JSONDecodeError", err.Error())
+	}
+	var ke qmKeyError
+	if errors.As(err, &ke) {
+		return a1Traceback(stderr, "KeyError", a1Repr(ke.key))
+	}
+	return a1ReadFail(stderr, prefix, err)
+}
+
+// qmKeyError is Python's KeyError on a dict lookup.
+type qmKeyError struct{ key string }
+
+func (e qmKeyError) Error() string { return e.key }
 
 func qmKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
@@ -232,6 +261,23 @@ func qmRender(root string) (string, error) {
 			" -- every registered kind must have a migration-state row."}
 	}
 
+	served := map[string]bool{}
+	for _, p := range dep.Processes {
+		for _, k := range p.JobKinds {
+			served[k] = true
+		}
+	}
+	var orphans []string
+	for _, k := range qmKeys(registry) {
+		if !served[k] {
+			orphans = append(orphans, k)
+		}
+	}
+	if len(orphans) > 0 {
+		return "", qmFail{"gen-queue-mapping: " + qmRegistryRel + " kinds " + qmList(orphans) +
+			" are in no process job_kinds of " + qmDeploymentRel + " -- every registered kind must be served by a worker."}
+	}
+
 	lines := []string{
 		qmBegin,
 		"| Go process (binary) | Go queue | Job kind(s) | Timeout(s) | Max attempts | Historical Celery queue(s) | Historical Celery consumer(s) | Plane / route status |",
@@ -254,7 +300,7 @@ func qmRender(root string) (string, error) {
 			for _, k := range process.JobKinds {
 				job, ok := registry[k]
 				if !ok {
-					return "", fmt.Errorf("job kind %q of process %q is not in the registry", k, name)
+					return "", qmKeyError{k}
 				}
 				if job.Queue == goQueue {
 					kinds = append(kinds, k)
@@ -320,20 +366,13 @@ func qmGenVerb(_ []string, _, stderr io.Writer) int {
 	}
 	rendered, err := qmRender(root)
 	if err != nil {
-		if f, ok := err.(qmFail); ok {
-			fmt.Fprintln(stderr, f.msg)
-		} else {
-			fmt.Fprintln(stderr, "gen-queue-mapping:", err)
-		}
-		return 1
+		return qmReport(stderr, "gen-queue-mapping:", err)
 	}
 	docPath := filepath.Join(root, qmDocRel)
-	raw, err := os.ReadFile(docPath)
+	doc, err := a1ReadText(docPath)
 	if err != nil {
-		fmt.Fprintln(stderr, "gen-queue-mapping:", err)
-		return 1
+		return qmReport(stderr, "gen-queue-mapping:", err)
 	}
-	doc := string(raw)
 	start, stop, ok := qmMarkers(doc)
 	if !ok {
 		fmt.Fprintf(stderr, "Generated queue-map markers not found in %s\n", docPath)
@@ -358,16 +397,13 @@ func qmDriftVerb(_ []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "ERROR: generator failed to render (producers out of sync?): %s\n", f.msg)
 			return 1
 		}
-		fmt.Fprintln(stderr, "check-queue-mapping-drift:", err)
-		return 1
+		return qmReport(stderr, "check-queue-mapping-drift:", err)
 	}
 	docPath := filepath.Join(root, qmDocRel)
-	raw, err := os.ReadFile(docPath)
+	doc, err := a1ReadText(docPath)
 	if err != nil {
-		fmt.Fprintln(stderr, "check-queue-mapping-drift:", err)
-		return 1
+		return qmReport(stderr, "check-queue-mapping-drift:", err)
 	}
-	doc := string(raw)
 	start, stop, ok := qmMarkers(doc)
 	if !ok {
 		fmt.Fprintf(stdout, "ERROR: generated queue-map markers missing in %s\n", docPath)

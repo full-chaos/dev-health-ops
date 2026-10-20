@@ -2,6 +2,7 @@ package docstools
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -99,6 +100,10 @@ func invTxGenVerb(_ []string, _, stderr io.Writer) int {
 	docPath := filepath.Join(root, invTxDocRel)
 	doc, err := a1ReadText(docPath)
 	if err != nil {
+		var de a1DecodeError
+		if errors.As(err, &de) {
+			return a1ReadFail(stderr, "gen-taxonomy:", err)
+		}
 		return a1Traceback(stderr, "FileNotFoundError", "[Errno 2] No such file or directory: "+a1Repr(docPath))
 	}
 	start, stop, ok := invTxMarkers(doc)
@@ -194,7 +199,11 @@ func invTxCheckDoc(docPath string) ([]string, error) {
 
 	doc, err := a1ReadText(docPath)
 	if err != nil {
-		return nil, fmt.Errorf("[Errno 2] No such file or directory: %s", a1Repr(docPath))
+		var de a1DecodeError
+		if errors.As(err, &de) {
+			return nil, err
+		}
+		return nil, a1Exception{"FileNotFoundError", "[Errno 2] No such file or directory: " + a1Repr(docPath)}
 	}
 	start, stop, ok := invTxMarkers(doc)
 	if !ok {
@@ -262,13 +271,53 @@ func invTxCheckDoc(docPath string) ([]string, error) {
 	return errs, nil
 }
 
+// invTxPyJSON rewrites the three constants Python's json.loads accepts and Go's decoder does not (NaN, Infinity,
+// -Infinity) to null, outside strings. Where the constant is not a value (a key, glued to another token) the result
+// is invalid for Go as it is for Python. Everything else Go's decoder and Python's json.loads agree on.
+func invTxPyJSON(s string) string {
+	if !strings.Contains(s, "NaN") && !strings.Contains(s, "Infinity") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		switch {
+		case s[i] == '"':
+			j := i + 1
+			for j < len(s) && s[j] != '"' {
+				if s[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j >= len(s) {
+				j = len(s) - 1
+			}
+			b.WriteString(s[i : j+1])
+			i = j + 1
+		case strings.HasPrefix(s[i:], "NaN"):
+			b.WriteString("null")
+			i += 3
+		case strings.HasPrefix(s[i:], "-Infinity"):
+			b.WriteString("null")
+			i += 9
+		case strings.HasPrefix(s[i:], "Infinity"):
+			b.WriteString("null")
+			i += 8
+		default:
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return b.String()
+}
+
 // invTxUnknownExampleKeys is _unknown_taxonomy_example_keys: unknown theme/subcategory keys in JSON examples.
 func invTxUnknownExampleKeys(document, source string) []string {
 	var errs []string
 	canonThemes, canonSubs := invTxSet(invTxThemes()), invTxSet(invTxSubcategories())
 	for i, m := range invTxJSONBlockRe.FindAllStringSubmatch(document, -1) {
 		var payload map[string]json.RawMessage
-		if json.Unmarshal([]byte(m[1]), &payload) != nil || payload == nil {
+		if json.Unmarshal([]byte(invTxPyJSON(m[1])), &payload) != nil || payload == nil {
 			continue
 		}
 		taxonomies := []map[string]json.RawMessage{payload}
@@ -315,6 +364,14 @@ func invTxDriftVerb(_ []string, stdout, stderr io.Writer) int {
 	}
 	errs, err := invTxCheckDoc(filepath.Join(root, invTxDocRel))
 	if err != nil {
+		var de a1DecodeError
+		if errors.As(err, &de) {
+			return a1ReadFail(stderr, "check-investment-drift:", err)
+		}
+		var ex a1Exception
+		if errors.As(err, &ex) {
+			return a1Traceback(stderr, ex.kind, ex.msg)
+		}
 		return a1Traceback(stderr, "ValueError", err.Error())
 	}
 	docsDir := filepath.Join(root, invTxDocsRel)
@@ -330,6 +387,10 @@ func invTxDriftVerb(_ []string, stdout, stderr io.Writer) int {
 	for _, rel := range rels {
 		text, rerr := a1ReadText(filepath.Join(docsDir, filepath.FromSlash(rel)))
 		if rerr != nil {
+			var de a1DecodeError
+			if errors.As(rerr, &de) {
+				return a1ReadFail(stderr, "check-investment-drift:", rerr)
+			}
 			return a1Traceback(stderr, "OSError", rerr.Error())
 		}
 		errs = append(errs, invTxUnknownExampleKeys(text, rel)...)

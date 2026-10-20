@@ -121,3 +121,41 @@ func TestCheckInvestmentDriftRefusals(t *testing.T) {
 		t.Fatalf("no end marker: rc %d stderr %q", code, stderr)
 	}
 }
+
+// Python's json.loads accepts NaN, Infinity and -Infinity; a block it cannot parse is skipped.
+func TestCheckInvestmentDriftJSONExamplesAcceptPythonConstants(t *testing.T) {
+	invTxSeed(t)
+	writeTree(t, "docs/zz/nan.md", "```json\n{\"themes\":{\"bogus\": NaN},\"subcategories\":{\"a.b\": -Infinity,\"c.d\":[Infinity]}}\n```\n"+
+		"```json\n{\"themes\":{\"NaN\": 1}}\n```\n"+ // a string is not a constant: the key NaN is unknown
+		"```json\n{\"themes\":{NaN: 1}}\n```\n"+ // a constant as a key: Python rejects it, the block is skipped
+		"```json\n{\"themes\":{\"x\": NaNNaN}}\n```\n"+
+		"```json\n{\"themes\":{\"y\": -NaN}}\n```\n", 0o644)
+	code, out, _ := runDocs("check-investment-drift")
+	want := "ERROR: zz/nan.md JSON example #1 unknown themes keys: ['bogus']\n" +
+		"ERROR: zz/nan.md JSON example #1 unknown subcategories keys: ['a.b', 'c.d']\n" +
+		"ERROR: zz/nan.md JSON example #2 unknown themes keys: ['NaN']\n"
+	if code != 1 || out != want {
+		t.Fatalf("rc %d out %q, want %q", code, out, want)
+	}
+}
+
+func TestInvestmentVerbsRefuseInvalidUTF8(t *testing.T) {
+	invTxSeed(t)
+	writeTree(t, "docs/bad.md", "x\xff\n", 0o644)
+	code, out, stderr := runDocs("check-investment-drift")
+	if code != 1 || out != "" || !strings.HasPrefix(stderr, "UnicodeDecodeError: ") || !strings.HasSuffix(stderr, "docs/bad.md: invalid UTF-8\n") || strings.Count(stderr, "\n") != 1 {
+		t.Fatalf("page: rc %d out %q stderr %q", code, out, stderr)
+	}
+	invTxSeed(t)
+	writeTree(t, invTxDoc, mustRead(t, invTxDoc)+"\xff", 0o644)
+	before := mustRead(t, invTxDoc)
+	for _, verb := range []string{"gen-taxonomy", "check-investment-drift"} {
+		code, _, stderr := runDocs(verb)
+		if code != 1 || !strings.HasPrefix(stderr, "UnicodeDecodeError: ") || !strings.HasSuffix(stderr, invTxDoc+": invalid UTF-8\n") {
+			t.Fatalf("%s: rc %d stderr %q", verb, code, stderr)
+		}
+	}
+	if mustRead(t, invTxDoc) != before {
+		t.Fatalf("refused run wrote the page")
+	}
+}

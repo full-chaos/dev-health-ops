@@ -87,3 +87,55 @@ func TestQueuemapRefusals(t *testing.T) {
 		})
 	}
 }
+
+// A kind in registry.json and migration-state.json that no deployment.json process serves would be left out of the
+// table without a word; both verbs refuse and name it. (The old Python script passed this input.)
+func TestQueuemapRefusesKindServedByNoWorker(t *testing.T) {
+	queuemapSeed(t)
+	runDocs("gen-queue-mapping")
+	dep := mustRead(t, "deploy/go-workers/deployment.json")
+	if !strings.Contains(dep, "\"reports.run\"") {
+		t.Fatal("seed lacks reports.run")
+	}
+	writeTree(t, "deploy/go-workers/deployment.json", strings.Replace(dep, "\"reports.run\",", "", 1), 0o644)
+	before := mustRead(t, queuemapDoc)
+	code, _, stderr := runDocs("gen-queue-mapping")
+	if code != 1 || !strings.Contains(stderr, "['reports.run']") || !strings.Contains(stderr, "no process job_kinds") {
+		t.Fatalf("gen: rc %d stderr %q", code, stderr)
+	}
+	if mustRead(t, queuemapDoc) != before {
+		t.Fatalf("refused run wrote the page")
+	}
+	code, out, _ := runDocs("check-queue-mapping-drift")
+	if code != 1 || !strings.Contains(out, "ERROR: generator failed to render") || !strings.Contains(out, "['reports.run']") {
+		t.Fatalf("drift: rc %d out %q", code, out)
+	}
+}
+
+// Python read the page in text mode (universal newlines): a CRLF page is the same page, and the generator writes LF.
+func TestQueuemapCRLFPage(t *testing.T) {
+	queuemapSeed(t)
+	runDocs("gen-queue-mapping")
+	lf := mustRead(t, queuemapDoc)
+	for _, nl := range []string{"\r\n", "\r"} {
+		writeTree(t, queuemapDoc, strings.ReplaceAll(lf, "\n", nl), 0o644)
+		if code, out, _ := runDocs("check-queue-mapping-drift"); code != 0 {
+			t.Fatalf("%q page: rc %d out %q", nl, code, out)
+		}
+		if code, _, _ := runDocs("gen-queue-mapping"); code != 0 || mustRead(t, queuemapDoc) != lf {
+			t.Fatalf("%q page: generator did not write the LF page", nl)
+		}
+	}
+}
+
+func TestQueuemapRefusesInvalidUTF8(t *testing.T) {
+	queuemapSeed(t)
+	reg := mustRead(t, "contracts/jobs/v1/registry.json")
+	writeTree(t, "contracts/jobs/v1/registry.json", reg+"\xff", 0o644)
+	for _, verb := range []string{"gen-queue-mapping", "check-queue-mapping-drift"} {
+		code, _, stderr := runDocs(verb)
+		if code != 1 || !strings.HasPrefix(stderr, "UnicodeDecodeError: ") || !strings.HasSuffix(stderr, "registry.json: invalid UTF-8\n") || strings.Count(stderr, "\n") != 1 {
+			t.Fatalf("%s: rc %d stderr %q", verb, code, stderr)
+		}
+	}
+}

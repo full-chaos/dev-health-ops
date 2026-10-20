@@ -102,6 +102,10 @@ func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
+	if err := h.Service.BoundToRoute(r.Context(), p, providerID); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
 	posted, ok := readSAMLResponse(w, r)
 	if !ok {
 		return
@@ -229,6 +233,9 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		writeJSON(w, http.StatusPaymentRequired, notLicensedBody())
 	case errors.Is(err, ErrNotSAML):
 		writeDetail(w, http.StatusBadRequest, "Provider is not SAML")
+	case errors.Is(err, ErrConfig):
+		h.logger().WarnContext(r.Context(), "auth saml: provider configuration refused", "route", r.Pattern)
+		writeDetail(w, http.StatusBadRequest, "SSO provider configuration is invalid")
 	case errors.Is(err, ErrProviderInactive):
 		writeDetail(w, http.StatusBadRequest, "SSO provider is not active")
 	case errors.As(err, &conflict):

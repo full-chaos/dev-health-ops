@@ -121,6 +121,9 @@ func (s *PGStore) Provider(ctx context.Context, id uuid.UUID) (Provider, error) 
 	if p.Config, err = ParseConfig([]byte(config)); err != nil {
 		return Provider{}, err
 	}
+	if err := ValidateACSOverride(p.Config, p.ID); err != nil {
+		return Provider{}, err
+	}
 	if allowedDomains != nil {
 		if p.AllowedDomains, err = ParseAllowedDomains([]byte(*allowedDomains)); err != nil {
 			return Provider{}, err

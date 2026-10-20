@@ -180,7 +180,24 @@ func (s *Service) Consume(ctx context.Context, providerID uuid.UUID, posted stri
 	if err != nil {
 		return SignIn{}, err
 	}
+	if err := s.BoundToRoute(ctx, p, providerID); err != nil {
+		return SignIn{}, err
+	}
 	return s.ConsumeFor(ctx, p, posted, cookie)
+}
+
+// BoundToRoute refuses a response unless the provider row is the one the
+// receiving route names and the path of its ACS URL ends with
+// /saml/{that row id}/acs, so a response addressed to one row never completes
+// a sign-in through another row's route. It reads no state.
+func (s *Service) BoundToRoute(ctx context.Context, p Provider, routeID uuid.UUID) error {
+	if p.ID != routeID {
+		return s.refuse(ctx, p, refused(ReasonAudience, "the route names another provider row"))
+	}
+	if !strings.HasSuffix(ACSPath(p, s.BaseURL()), acsPathSuffix(p.ID)) {
+		return s.refuse(ctx, p, refused(ReasonAudience, "the ACS URL path names another provider row"))
+	}
+	return nil
 }
 
 // ConsumeFor verifies a posted SAMLResponse for a resolved provider and

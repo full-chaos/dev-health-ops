@@ -1025,3 +1025,41 @@ func shardManifestFiles(t *testing.T, root string) []string {
 	sort.Strings(names)
 	return names
 }
+
+// `check_go.sh` must redirect a test image through TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX exactly as testcontainers-go does:
+// the pre-pull warms a ref and testcontainers resolves the image again when a test starts a container, so a disagreement of
+// even one rule warms one image and pulls another. The explicit `docker.io/...` form is REFUSED, not matched.
+func TestMirroredImageMatchesTestcontainersPrefixSemantics(t *testing.T) {
+	root := rootOf(t)
+	src := readText(t, filepath.Join(root, "ci", "check_go.sh"))
+	body := regexp.MustCompile(`(?ms)^mirrored_image\(\) \{.*?^\}`).FindString(src)
+	if body == "" {
+		t.Fatal("mirrored_image not found in check_go.sh")
+	}
+	run := func(image, prefix string) cmdResult {
+		program := "die() { printf \"ERROR: %s\\n\" \"$*\" >&2; exit 2; }\n" + body + "\nmirrored_image \"" + image + "\"\n"
+		return cmdSpec{dir: root, env: inheritedEnv(nil, "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX="+prefix)}.run("bash", "-c", program)
+	}
+	prefix := "ghcr.io/full-chaos"
+	redirected := map[string]string{
+		"postgres:18-alpine@sha256:abc":         prefix + "/postgres:18-alpine@sha256:abc",
+		"clickhouse/clickhouse-server@sha256:d": prefix + "/clickhouse/clickhouse-server@sha256:d",
+		"testcontainers/ryuk:0.14.0":            prefix + "/testcontainers/ryuk:0.14.0",
+	}
+	for image, want := range redirected {
+		if got := run(image, prefix); got.code != 0 || strings.TrimSpace(got.stdout) != want {
+			t.Errorf("%s with a prefix: exit %d, %q, want %q (%s)", image, got.code, got.stdout, want, got.stderr)
+		}
+		if got := run(image, ""); got.code != 0 || strings.TrimSpace(got.stdout) != image {
+			t.Errorf("%s with no prefix must stay as is: exit %d, %q", image, got.code, got.stdout)
+		}
+	}
+	for _, image := range []string{"ghcr.io/x/y:1", "registry.hub.docker.com/library/postgres:1"} {
+		if got := run(image, prefix); got.code != 0 || strings.TrimSpace(got.stdout) != image {
+			t.Errorf("an image naming a real registry is left alone: %s -> exit %d, %q", image, got.code, got.stdout)
+		}
+	}
+	if got := run("docker.io/postgres:1", prefix); got.code == 0 || !strings.Contains(got.stderr, "names docker.io explicitly") {
+		t.Errorf("the incoherent docker.io form must be refused: exit %d: %s%s", got.code, got.stdout, got.stderr)
+	}
+}

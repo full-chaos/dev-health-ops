@@ -525,10 +525,9 @@ const (
 
 // LegacyEntry maps one checked Celery Beat entry to its Go owner.
 type LegacyEntry struct {
-	// Name is the Beat entry key in src/dev_health_ops/workers/config.py.
+	// Name is the retired Celery Beat entry key.
 	Name string
-	// Cadence is the legacy cadence. ScheduleCoverage compares this against
-	// the Python source, so a Beat cadence edit fails the build.
+	// Cadence is the legacy cadence the Go schedule replaced.
 	Cadence Cadence
 	// Optional marks the one environment-gated entry.
 	Optional bool

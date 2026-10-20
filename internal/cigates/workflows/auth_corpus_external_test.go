@@ -1,4 +1,4 @@
-package cigates_test
+package workflows_test
 
 import (
 	"os"

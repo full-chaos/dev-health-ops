@@ -2,6 +2,7 @@
 # each one by name WITHOUT -race, uncached, and fails unless the run prints its own "--- PASS:" line.
 # Key = package path relative to the module root, TAB, test name. Sorted, no duplicates.
 internal/auth/httpapi	TestARequestThatRecordsACauseAllocatesNoMoreThanOneThatDoesNot
+internal/cigates/chartgates	TestExecGuardsPlantedByOverlay
 internal/goapiproof	TestCandidateAccounting_EnumeratedAdmissionImpliesTheInvariant
 internal/goapiproof	TestPersonDrilldownPRs_EnumeratedCursorAdmissionImpliesTheInvariant
 internal/goapiproof	TestWriteSkewInvariant_RealSunburstDeclarations

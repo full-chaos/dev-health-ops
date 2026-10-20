@@ -459,3 +459,28 @@ func TestAssertHomeCoverageFollowsPythonFloat(t *testing.T) {
 		}
 	}
 }
+
+// Python read `constraint = payload.get("constraint", {})` and then called .get on it: a constraint that is present
+// and not an object raised, while a missing one read as {}.
+func TestAssertHomeRefusesAConstraintThatIsNotAnObject(t *testing.T) {
+	noMove := func(constraint any, present bool) m {
+		p := goodHome()
+		p["deltas"] = []any{m{"metric": "x", "value": 1, "has_data": true, "has_prior_data": false, "rate_state": "ok"}}
+		delete(p, "constraint")
+		if present {
+			p["constraint"] = constraint
+		}
+		return p
+	}
+	for name, v := range map[string]any{"null": nil, "false": false, "true": true, "string": "bad", "list": []any{}, "number": 1.5} {
+		if err := livee2e.AssertHome(mustJSON(t, noMove(v, true)), "github"); err == nil {
+			t.Errorf("a %s constraint must fail", name)
+		}
+	}
+	if err := livee2e.AssertHome(mustJSON(t, noMove(nil, false)), "github"); err != nil {
+		t.Errorf("a missing constraint reads as {}: %v", err)
+	}
+	if err := livee2e.AssertHome(mustJSON(t, noMove(m{}, true)), "github"); err != nil {
+		t.Errorf("an empty constraint object is the empty card: %v", err)
+	}
+}

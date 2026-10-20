@@ -149,6 +149,18 @@ func liveE2ENoPythonViolations(t *testing.T, root string) []string {
 			out = append(out, fmt.Sprintf("the live-e2e path filter must list %s", p))
 		}
 	}
+	// Every file a Go package embeds (a go:embed pattern of a non-test file under cmd, internal or contracts) is an
+	// input of the binaries the jobs build: a change to it must run them.
+	if emb, err := embeddedTrackedFiles(repoRoot(t), tracked); err != nil {
+		out = append(out, err.Error())
+	} else {
+		for _, f := range emb {
+			if !strings.HasSuffix(f, ".py") && !covered(f) {
+				out = append(out, fmt.Sprintf("the live-e2e path filter does not cover %s, a file a Go package embeds", f))
+				break
+			}
+		}
+	}
 	return out
 }
 
@@ -194,6 +206,7 @@ func TestLiveE2ENoPythonPlantedDefects(t *testing.T) {
 		{"the path filter lists uv.lock again", []mutation{{wf, "              - 'cmd/**'\n", "              - 'cmd/**'\n              - 'uv.lock'\n"}}, []string{"lists uv.lock"}},
 		{"a broad filter glob matches Python files", []mutation{{wf, "              - 'cmd/**'\n", "              - 'cmd/**'\n              - 'scripts/**'\n"}}, []string{"matches the tracked Python file"}},
 		{"the path filter drops the sync-dispatch contracts", []mutation{{wf, "              - 'contracts/sync-dispatch/v1/**'\n", ""}}, []string{"does not cover contracts/sync-dispatch/v1"}},
+		{"the path filter drops the embedded fixture worlds", []mutation{{wf, "              - 'internal/fixturescli/testdata/**'\n", ""}}, []string{"a file a Go package embeds"}},
 		{"the path filter drops cmd/**", []mutation{{wf, "              - 'cmd/**'\n", ""}}, []string{"must list cmd/**"}},
 	}
 	for _, c := range cases {
@@ -215,4 +228,39 @@ func sortedKeysBool(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+var goEmbedLine = regexp.MustCompile(`(?m)^//go:embed[ \t]+(.+)$`)
+
+// embeddedTrackedFiles resolves every //go:embed pattern of the non-test Go files under cmd, internal and contracts
+// against the tracked files (a pattern names a file, a glob or a directory, whose files all count).
+func embeddedTrackedFiles(root string, tracked []string) ([]string, error) {
+	found := map[string]bool{}
+	for _, src := range tracked {
+		if !strings.HasSuffix(src, ".go") || strings.HasSuffix(src, "_test.go") {
+			continue
+		}
+		if !strings.HasPrefix(src, "cmd/") && !strings.HasPrefix(src, "internal/") && !strings.HasPrefix(src, "contracts/") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(root, src))
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range goEmbedLine.FindAllStringSubmatch(string(raw), -1) {
+			for _, tok := range strings.Fields(m[1]) {
+				tok = strings.TrimPrefix(strings.Trim(tok, `"`+"`"), "all:")
+				full := path.Join(path.Dir(src), tok)
+				for _, f := range tracked {
+					if ok, _ := path.Match(full, f); ok || strings.HasPrefix(f, full+"/") {
+						found[f] = true
+					}
+				}
+			}
+		}
+	}
+	if len(found) == 0 {
+		return nil, fmt.Errorf("no go:embed file resolved: the scan measures nothing")
+	}
+	return sortedKeysBool(found), nil
 }

@@ -82,7 +82,7 @@ K() { kubectl --context "kind-${CLUSTER}" -n "${NS}" "$@"; }
 # here-document in a script can hang bash (tests/tooling/test_local_validate_heredocs.py).
 K_RENDER() {
   # shellcheck disable=SC2016
-  envsubst '${LOCAL_PG} ${LOCAL_SVC} ${name} ${mode} ${fsgroup} ${mount}' <"$1"
+  envsubst '${LOCAL_PG} ${LOCAL_SVC} ${LOCAL_MIG} ${name} ${mode} ${fsgroup} ${mount}' <"$1"
 }
 
 # --- tooling: kind by checksum, not by whatever the runner ships ---------------
@@ -128,7 +128,7 @@ kubectl --context "kind-${CLUSTER}" create namespace "${NS}"
 # --- PostgreSQL and the Secrets the chart only references ------------------------
 printf 'step 2: PostgreSQL, the migration and runtime logins, the Secrets\n'
 PG_PASSWORD="$(openssl rand -hex 12)"
-export LOCAL_PG LOCAL_SVC
+export LOCAL_PG LOCAL_SVC LOCAL_MIG
 RUNTIME_PASSWORD="$(openssl rand -hex 12)#"
 # Credentials travel on stdin only: argv is visible to ps and audit tooling, and a literal env
 # value is printed by `kubectl describe` into the failure log.
@@ -338,5 +338,44 @@ printf 'objects labelled app.kubernetes.io/instance=%s left: [%s]\n' "${RELEASE}
 [ -z "${left}" ] || die "objects of the release remain after uninstall: ${left}"
 K get deploy/auth-postgres >/dev/null || die "uninstall disturbed postgres"
 printf 'postgres untouched by the uninstall\n'
+
+# --- 7. a migration started before its database is routable waits for it -----------------------
+# A pod that is Ready is not yet reachable through its Service: the endpoints and the node's
+# Service rules follow it. The Service is pointed at no pod while the migration starts, and is
+# pointed back only after the migration's first connect attempt has failed.
+printf 'step 10: a migration that starts before its database is routable waits for it\n'
+restore_pg_selector() { K patch svc auth-postgres --type=merge -p '{"spec":{"selector":{"app":"auth-postgres"}}}' >/dev/null; }
+set +e
+(
+  set -e
+  trap restore_pg_selector EXIT
+  K patch svc auth-postgres --type=merge -p '{"spec":{"selector":{"app":"auth-postgres-held"}}}' >/dev/null
+  for _ in $(seq 1 30); do
+    [ -z "$(K get endpoints auth-postgres -o jsonpath='{.subsets}')" ] && break
+    sleep 1
+  done
+  [ -z "$(K get endpoints auth-postgres -o jsonpath='{.subsets}')" ] || die "the held Service still has endpoints"
+  K delete job auth-migrate-wait --ignore-not-found --wait=true >/dev/null
+  K_RENDER "${SCRIPT_DIR}/auth_k8s/migrate-wait-job.yaml" | K apply -f - >/dev/null
+  # The first attempt has failed once the migration logs a wait line, or once its pod ended.
+  for _ in $(seq 1 90); do
+    phase="$(K get pod -l job-name=auth-migrate-wait -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)"
+    case "${phase}" in Succeeded | Failed) break ;; esac
+    K logs job/auth-migrate-wait 2>/dev/null | grep -q '^migration waiting:' && break
+    sleep 1
+  done
+  printf 'first connect attempt over: pod phase %s\n' "${phase:-unknown}"
+)
+held=$?
+set -e
+[ "$(K get svc auth-postgres -o jsonpath='{.spec.selector.app}')" = auth-postgres ] || die "the Service selector was not restored"
+[ "${held}" -eq 0 ] || die "the held-database step failed (${held})"
+if ! K wait --for=condition=complete job/auth-migrate-wait --timeout=120s >/dev/null; then
+  K logs job/auth-migrate-wait >&2 || true
+  die "the migration did not wait for its database: it ended before the Service routed"
+fi
+K logs job/auth-migrate-wait
+K delete job auth-migrate-wait --wait=true >/dev/null
+printf 'the migration waited for its database and completed\n'
 
 printf 'AUTH K8S PROOF PASSED\n'

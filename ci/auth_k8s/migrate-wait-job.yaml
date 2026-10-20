@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: auth-migrate-wait, labels: {role: migrate-wait}}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata: {labels: {role: migrate-wait, app.kubernetes.io/component: auth-migrate}}
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: auth-migrate
+          image: ${LOCAL_MIG}
+          imagePullPolicy: Never
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          env:
+            - name: AUTH_MIGRATION_DATABASE_URI
+              valueFrom: {secretKeyRef: {name: auth-migrate-db, key: AUTH_MIGRATION_DATABASE_URI}}
+            - name: AUTH_DATABASE_SCHEMA
+              value: auth
+            - name: AUTH_RUNTIME_DATABASE_ROLE
+              value: devhealth_auth

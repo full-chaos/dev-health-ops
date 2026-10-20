@@ -1,5 +1,5 @@
 // Package treegate holds the check that reads every golden of the repository for a credential (CHAOS-7890). It scans millions of
-// leaves, so it lives in its own package: the race shard that runs it is weighed on its own (ci/go_race_weights.tsv), as the
+// leaves, so it lives in its own package: the race shard that runs it is weighed on its own (ci/go_race_weights.d), as the
 // token-shape walk of goldenhygiene is.
 package treegate
 

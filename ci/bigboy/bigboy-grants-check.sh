@@ -13,8 +13,9 @@ DC=(docker compose -p dev-health --project-directory "$R" --env-file ops/.env --
 ACT=$(cd "$R" && "${DC[@]}" exec -T clickhouse clickhouse-client -q "SELECT access_type, table FROM system.grants WHERE user_name='dho_api_ch' ORDER BY table, access_type FORMAT TSV" 2>&1) || { echo "GRANTS_CHECK_FAIL query"; exit 1; }
 SRC=$(git -C "$OPS_REPO" show "$SHA":internal/storage/clickhouse/authorization.go 2>/dev/null) || { echo "GRANTS_CHECK_FAIL no authorization.go at $SHA in the ops clone $OPS_REPO (git fetch)"; exit 1; }
 HERE=$(cd "$(dirname "$0")" && pwd)
-# CHAOS-10347: the comparison is Go: cigate is built from the checkout these tools come from (BIGBOY_CIGATE_SRC overrides).
+# CHAOS-10347: the comparison is Go: cigate is built from the checkout these tools come from (BIGBOY_CIGATE: a prebuilt cigate, no build; BIGBOY_CIGATE_SRC overrides the source).
 CG=$(mktemp -d) || { echo "GRANTS_CHECK_FAIL no scratch directory for cigate"; exit 1; }
 trap 'rm -rf "$CG"' EXIT
-go build -C "${BIGBOY_CIGATE_SRC:-$HERE/../..}" -trimpath -mod=readonly -o "$CG/cigate" ./cmd/cigate 2>"$CG/build.err" || { echo "GRANTS_CHECK_FAIL cigate build: $(head -c 300 "$CG/build.err")"; exit 1; }
-"$CG/cigate" bigboy grants-compare "$ACT" "$SRC"
+CGBIN=$CG/cigate
+if [ -x "${BIGBOY_CIGATE:-}" ]; then CGBIN=$BIGBOY_CIGATE; else go build -C "${BIGBOY_CIGATE_SRC:-$HERE/../..}" -buildvcs=false -trimpath -mod=readonly -o "$CGBIN" ./cmd/cigate 2>"$CG/build.err" || { echo "GRANTS_CHECK_FAIL cigate build: $(head -c 300 "$CG/build.err")"; exit 1; }; fi
+"$CGBIN" bigboy grants-compare "$ACT" "$SRC"

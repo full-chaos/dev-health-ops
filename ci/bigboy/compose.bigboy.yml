@@ -57,7 +57,7 @@
 # world-readable (0644): clickhouse-server runs as uid 101 inside the container and EXITS (code 91) when
 # a mounted users.d file it cannot read is 0600 and owned by the host user (executed against the pinned
 # image). ci/bigboy/check-dho-api-ch-user.sh refuses such a file (and any file that is not the canonical render) before anything is recreated, and
-# ci/bigboy/render-dho-api-ch-users.py writes it 0644.
+# `cigate bigboy render-ch-users` writes it 0644.
 #
 # The host path is required, never defaulted here: a bind mount of a path that does not exist makes
 # Docker create a DIRECTORY there, and ClickHouse then fails to start. bigboy-cut.sh exports the default

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 const databaseName = "default"
@@ -20,7 +22,7 @@ func renderCHUsers(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: cigate bigboy render-ch-users <authorization.go> <out-file>")
 		return 2
 	}
-	password := os.Getenv("API_CH_PASSWORD")
+	password := secrets.GetenvSecret("API_CH_PASSWORD")
 	if password == "" {
 		fmt.Fprintln(stderr, "API_CH_PASSWORD is not set in the environment")
 		return 2

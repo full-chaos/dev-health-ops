@@ -68,9 +68,12 @@ trap 'rm -rf "$canon_dir"' EXIT
 # two files is printed: a mismatch is reported by name only.
 PLACEHOLDER=placeholder-not-a-credential
 placeholder_hash=$(printf %s "$PLACEHOLDER" | sha256sum | cut -d' ' -f1)
-# CHAOS-10347: the renderer is Go. cigate is built from the checkout these tools come from (BIGBOY_CIGATE_SRC overrides), into the scratch dir.
+# CHAOS-10347: the renderer is Go. cigate is built from the checkout these tools come from (BIGBOY_CIGATE: a prebuilt cigate, no build; BIGBOY_CIGATE_SRC overrides the source), into the scratch dir.
 CIGATE_SRC=${BIGBOY_CIGATE_SRC:-$HERE/../..}
-if ! go build -C "$CIGATE_SRC" -trimpath -mod=readonly -o "$canon_dir/cigate" ./cmd/cigate 2>"$canon_dir/render.err" || ! API_CH_PASSWORD="$PLACEHOLDER" "$canon_dir/cigate" bigboy render-ch-users "$POSTURE" "$canon_dir/placeholder.xml" >/dev/null 2>>"$canon_dir/render.err"; then
+CGBIN=$canon_dir/cigate
+built=0
+if [ -x "${BIGBOY_CIGATE:-}" ]; then CGBIN=$BIGBOY_CIGATE; built=1; else go build -C "$CIGATE_SRC" -buildvcs=false -trimpath -mod=readonly -o "$CGBIN" ./cmd/cigate 2>"$canon_dir/render.err" && built=1; fi
+if [ "$built" != 1 ] || ! API_CH_PASSWORD="$PLACEHOLDER" "$CGBIN" bigboy render-ch-users "$POSTURE" "$canon_dir/placeholder.xml" >/dev/null 2>>"$canon_dir/render.err"; then
   echo "CH_API_USER_FILE_FAIL: the canonical render could not be computed: $(head -c 300 "$canon_dir/render.err")" >&2; exit 1
 fi
 api_password | sha256sum | cut -d' ' -f1 > "$canon_dir/real.hash"

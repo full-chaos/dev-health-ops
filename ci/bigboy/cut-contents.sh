@@ -34,10 +34,12 @@ item "#3048 migration 0140 (invoices)" "3048"
 rc=0
 CG=$(mktemp -d) || { echo "FAIL: no scratch directory for cigate" >&2; exit 1; }
 trap 'rm -rf "$CG"' EXIT
-# CHAOS-10347: the deltas are Go: cigate is built from the checkout these tools come from (BIGBOY_CIGATE_SRC overrides).
-if go build -C "${BIGBOY_CIGATE_SRC:-$HERE/../..}" -trimpath -mod=readonly -o "$CG/cigate" ./cmd/cigate 2>"$CG/build.err"; then
-  "$CG/cigate" bigboy pg-posture api "$OLD" "$NEW" "$OUTF" || rc=1
-  "$CG/cigate" bigboy pg-posture domain "$OLD" "$NEW" "$OUTF" || rc=1
+# CHAOS-10347: the deltas are Go: BIGBOY_CIGATE (a prebuilt cigate) is used when set, else cigate is built from the checkout these tools come from (BIGBOY_CIGATE_SRC overrides).
+CGBIN=$CG/cigate
+if [ -x "${BIGBOY_CIGATE:-}" ]; then CGBIN=$BIGBOY_CIGATE; else go build -C "${BIGBOY_CIGATE_SRC:-$HERE/../..}" -buildvcs=false -trimpath -mod=readonly -o "$CGBIN" ./cmd/cigate 2>"$CG/build.err"; fi
+if [ -x "$CGBIN" ]; then
+  "$CGBIN" bigboy pg-posture api "$OLD" "$NEW" "$OUTF" || rc=1
+  "$CGBIN" bigboy pg-posture domain "$OLD" "$NEW" "$OUTF" || rc=1
 else
   echo "FAIL: cigate build: $(head -c 300 "$CG/build.err")" >&2; rc=1
 fi

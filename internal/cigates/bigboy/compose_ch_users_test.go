@@ -17,7 +17,6 @@ import (
 
 const (
 	composeCHCheck    = "ci/bigboy/check-dho-api-ch-user.sh"
-	composeCHRenderer = "ci/bigboy/render-dho-api-ch-users.py"
 	composeCHCut      = "ci/bigboy/bigboy-cut.sh"
 	composeCHPassword = "the-api-password"
 	composeCHSentinel = "copper-lantern-value"
@@ -226,7 +225,7 @@ func composeCHRunCheck(g *guard, o composeCHOpts) composeCHRun {
 	composeWrite(g, creds, body, 0o600)
 	check := g.path(composeCHCheck)
 	if o.direct {
-		env := []string{"PATH=" + bin, "TMPDIR=" + scratch, "DHO_API_CH_POSTURE_GO=" + o.posture}
+		env := []string{"PATH=" + bin, "TMPDIR=" + scratch, "DHO_API_CH_POSTURE_GO=" + o.posture, "BIGBOY_CIGATE=" + prebuiltCigate}
 		r, err := composeExec(dir, env, 30*time.Second, "/bin/bash", check, o.file, creds)
 		if err != nil {
 			g.failf("run %s: %v", composeCHCheck, err)
@@ -236,7 +235,7 @@ func composeCHRunCheck(g *guard, o composeCHOpts) composeCHRun {
 	root := filepath.Join(dir, "bigboy-root")
 	composeWrite(g, filepath.Join(root, "_records", "images.env"), "", 0o644)
 	composeWrite(g, filepath.Join(root, "ops", ".env"), "", 0o644)
-	env := append([]string{"PATH=" + bin, "BIGBOY_ROOT=" + root, "XT=" + filepath.Join(dir, "xtrace.log"),
+	env := append([]string{"PATH=" + bin, "BIGBOY_CIGATE=" + prebuiltCigate, "BIGBOY_ROOT=" + root, "XT=" + filepath.Join(dir, "xtrace.log"),
 		"BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@sha256:" + strings.Repeat("a", 64)}, composeVarTrap(g, dir)...)
 	tmpdir := scratch
 	if o.tmpdir != nil {
@@ -584,7 +583,7 @@ var composeCHChecks = []check{
 func TestComposeCHUsersReal(t *testing.T) { runReal(t, composeCHChecks...) }
 
 func TestComposeCHUsersPlanted(t *testing.T) {
-	chk := []string{composeCHCheck, composeCHRenderer}
+	chk := []string{composeCHCheck}
 	cut := []string{"ci/bigboy"}
 	gitDir := func(t *testing.T, r string) {
 		writeFile(t, r, ".git/HEAD", "ref: refs/heads/main\n")

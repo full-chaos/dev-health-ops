@@ -83,7 +83,7 @@ type deployBatchConn interface {
 
 // WriteDeployMetricsDaily ports the write side of write_deploy_metrics
 // (sinks/clickhouse/ci.py:67-83) -- the same table (deploy_metrics_daily,
-// migrations/clickhouse/004_quality_delivery_metrics.sql:35-45) and column
+// internal/chmigrate/history/004_quality_delivery_metrics.sql:35-45) and column
 // order, org_id stamped on every row (CHAOS-4341's org-scoping lesson,
 // already applied to repo_metrics_daily/team_metrics_daily, applies here
 // too: an org_id="" row is invisible to every org-scoped reader).

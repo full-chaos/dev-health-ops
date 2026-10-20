@@ -75,7 +75,7 @@ func TestEntitlementRouteServesTheEffectiveServiceModel(t *testing.T) {
 	autoProvider := org("auto", nil)
 	nothing := org("", nil)
 	investigateOnly := orgWithProviderKey("anthropic", "purpose:investigate:provider", nil)
-	categorizeOnly := orgWithProviderKey("openai", "purpose:categorize:provider", nil)
+	explainOnly := orgWithProviderKey("openai", "purpose:explain:provider", nil)
 	expiredOff := org("anthropic", &off)
 	if _, err := pool.Exec(ctx, `UPDATE org_feature_overrides SET expires_at = $1 WHERE org_id = $2::uuid AND feature_id = $3::uuid`, now.Add(-time.Hour), expiredOff, serviceModelID); err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestEntitlementRouteServesTheEffectiveServiceModel(t *testing.T) {
 		{name: "provider auto is no BYO config: plan decision OFF", org: autoProvider, want: false},
 		{name: "no BYO config and no override: plan decision OFF", org: nothing, want: false},
 		{name: "investigate purpose key only and no override: auto-enrolled ON", org: investigateOnly, want: true},
-		{name: "categorize purpose key only and no override: auto-enrolled ON", org: categorizeOnly, want: true},
+		{name: "explain purpose key only and no override: auto-enrolled ON", org: explainOnly, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := serviceModel(t, tc.org); got != tc.want {

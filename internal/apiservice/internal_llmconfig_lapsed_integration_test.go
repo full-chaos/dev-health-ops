@@ -75,9 +75,8 @@ func TestInternalLLMConfigLapsedOrgServesNothing(t *testing.T) {
 	lapsedOverride := seedOrg("community", &yes)
 	switchedOff := seedOrg("enterprise", &no)
 
-	workerToken := "svc_wllm_" + uuid.NewString()
 	acrToken := "svc_acr_" + uuid.NewString()
-	for _, c := range []struct{ service, token string }{{"worker-llm-config", workerToken}, {"acr", acrToken}} {
+	for _, c := range []struct{ service, token string }{{"acr", acrToken}} {
 		if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials
 			(id, service_name, token_hash, token_prefix, scopes, created_at)
 			VALUES (gen_random_uuid(), $1, $2, $3, '["llm_config:read"]'::json, now())`,
@@ -93,7 +92,6 @@ func TestInternalLLMConfigLapsedOrgServesNothing(t *testing.T) {
 	handler := server.Handler()
 	routes := []struct{ name, path, token string }{
 		{"acr", "/api/v1/internal/acr/orgs/%s/llm-config", acrToken},
-		{"worker", "/api/v1/internal/workers/orgs/%s/llm-config/categorize", workerToken},
 	}
 	var reason string
 	get := func(route int, org string) (int, string, string) {
@@ -107,19 +105,19 @@ func TestInternalLLMConfigLapsedOrgServesNothing(t *testing.T) {
 	}
 	noConfig := uuid.NewString()
 	pgseed.Org(ctx, t, pool, noConfig, "enterprise")
-	categorizeOnly := uuid.NewString()
-	pgseed.Org(ctx, t, pool, categorizeOnly, "enterprise")
-	pgseed.Setting(ctx, t, pool, categorizeOnly, "llm", "purpose:categorize:provider", "openai", false)
-	pgseed.Setting(ctx, t, pool, categorizeOnly, "llm", "purpose:categorize:model", "categorize-model", false)
-	if code, marker, _ := get(0, categorizeOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_no_investigate_config" {
-		t.Fatalf("acr route, BYO keys for categorize only: answered %d marker %q reason %q, want the marked 404 with reason byo_no_investigate_config", code, marker, reason)
+	explainOnly := uuid.NewString()
+	pgseed.Org(ctx, t, pool, explainOnly, "enterprise")
+	pgseed.Setting(ctx, t, pool, explainOnly, "llm", "purpose:explain:provider", "openai", false)
+	pgseed.Setting(ctx, t, pool, explainOnly, "llm", "purpose:explain:model", "explain-model", false)
+	if code, marker, _ := get(0, explainOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_no_investigate_config" {
+		t.Fatalf("acr route, BYO keys for explain only: answered %d marker %q reason %q, want the marked 404 with reason byo_no_investigate_config", code, marker, reason)
 	}
-	lapsedCategorizeOnly := uuid.NewString()
-	pgseed.Org(ctx, t, pool, lapsedCategorizeOnly, "community")
-	pgseed.Setting(ctx, t, pool, lapsedCategorizeOnly, "llm", "purpose:categorize:provider", "openai", false)
-	pgseed.Setting(ctx, t, pool, lapsedCategorizeOnly, "llm", "purpose:categorize:model", "categorize-model", false)
-	if code, marker, _ := get(0, lapsedCategorizeOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_llm_gate_closed" {
-		t.Fatalf("acr route, lapsed tier with BYO keys for categorize only: answered %d marker %q reason %q, want the marked 404 with reason byo_llm_gate_closed", code, marker, reason)
+	lapsedExplainOnly := uuid.NewString()
+	pgseed.Org(ctx, t, pool, lapsedExplainOnly, "community")
+	pgseed.Setting(ctx, t, pool, lapsedExplainOnly, "llm", "purpose:explain:provider", "openai", false)
+	pgseed.Setting(ctx, t, pool, lapsedExplainOnly, "llm", "purpose:explain:model", "explain-model", false)
+	if code, marker, _ := get(0, lapsedExplainOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_llm_gate_closed" {
+		t.Fatalf("acr route, lapsed tier with BYO keys for explain only: answered %d marker %q reason %q, want the marked 404 with reason byo_llm_gate_closed", code, marker, reason)
 	}
 	for i, route := range routes {
 		if code, marker, _ := get(i, noConfig); code != http.StatusNotFound || marker != "none" || reason != "" {

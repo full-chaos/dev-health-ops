@@ -1117,7 +1117,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveW
 		//
 		// They are pinned anyway, for two reasons that survive that. The
 		// column is a bare Map(String, Float64) with no constraint
-		// (migrations/clickhouse/017_investment_materialize_tables.sql:12), so
+		// (internal/chmigrate/history/017_investment_materialize_tables.sql:12), so
 		// the shapes stay REPRESENTABLE whatever the current writers do -- a
 		// backfill, a migration or a future producer is not bound by one
 		// validator on one path. And a reader should not depend on a

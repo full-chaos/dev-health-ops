@@ -8,7 +8,7 @@ the two ways a test makes such a directory:
   (a real ``rmtree``, ``atexit.register`` or finalizer call, found in the syntax tree).
 
 The Go half (a ``_test.go`` file that calls ``os.MkdirTemp`` must also call ``os.RemoveAll`` in code) moved to
-internal/cigates/tmp_dirs_removed_test.go (CHAOS-10178). This Python half stays until the pytest steps go (CHAOS-10180).
+internal/cigates/scripts/tmp_dirs_removed_test.go (CHAOS-10178). This Python half stays until the pytest steps go (CHAOS-10180).
 
 Python programs that a Go test embeds as text (frozen oracles) are outside this check: they run only when a
 golden is recorded.

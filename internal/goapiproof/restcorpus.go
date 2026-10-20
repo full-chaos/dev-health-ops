@@ -2092,7 +2092,7 @@ var flamePRIDBoundParity = Options{
 // planes resolve a team's repositories from different tables. This port
 // reads team_repo_ownership through one shared condition
 // (internal/queryapi/teamscope.RepoCondition), the source
-// migrations/clickhouse/081_team_cognitive_load_daily.sql names as the one
+// internal/chmigrate/history/081_team_cognitive_load_daily.sql names as the one
 // that defines a team's repositories. The reference reads DISTINCT repo_id
 // off user_metrics_daily.team_id (resolve_repo_ids_for_teams,
 // api/queries/scopes.py), which is per-author membership attribution and

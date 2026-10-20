@@ -20,10 +20,9 @@ func TestHasSavedBYOCountsTheDefaultAndEveryPurposeProvider(t *testing.T) {
 	}{
 		{name: "default provider only", rows: map[string]string{"provider": "anthropic"}, want: true},
 		{name: "investigate purpose provider only", rows: map[string]string{PurposeKey(PurposeInvestigate, "provider"): "anthropic"}, want: true},
-		{name: "categorize purpose provider only", rows: map[string]string{PurposeKey(PurposeCategorize, "provider"): "openai"}, want: true},
 		{name: "explain purpose provider only", rows: map[string]string{PurposeKey(PurposeExplain, "provider"): "openai"}, want: true},
 		{name: "default provider auto", rows: map[string]string{"provider": "auto"}, want: false},
-		{name: "purpose provider none", rows: map[string]string{PurposeKey(PurposeCategorize, "provider"): "none"}, want: false},
+		{name: "purpose provider none", rows: map[string]string{PurposeKey(PurposeExplain, "provider"): "none"}, want: false},
 		{name: "a model row only", rows: map[string]string{"model": "some-model"}, want: false},
 		{name: "nothing stored", rows: nil, want: false},
 	} {

@@ -194,7 +194,7 @@ func causeClass(err error, timedOut bool) string {
 		return causeClassBudgetContended
 	}
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) {
+	if errors.As(err, &providerErr) && !providerErr.AfterResponse() {
 		if _, known := providerErrorClasses[providerErr.Class]; known {
 			return causeClassProviderPrefix + string(providerErr.Class)
 		}
@@ -310,7 +310,9 @@ func safeCause(
 	// that makes a 4xx tell apart from a 5xx tell apart from a connection
 	// refused, which on the 115e6246 shape is the entire question.
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) {
+	if errors.As(err, &providerErr) && providerErr.AfterResponse() {
+		cause += fmt.Sprintf(" response_failure=%s", providerErr.Reason)
+	} else if providerErr != nil {
 		cause += fmt.Sprintf(" provider_error_class=%s", providerErr.Class)
 		if providerErr.StatusCode != 0 {
 			cause += fmt.Sprintf(" provider_status=%d", providerErr.StatusCode)

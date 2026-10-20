@@ -366,20 +366,32 @@ func (fetcher GitHubWorkItemPRSocialFetcher) fetchPage(
 	}
 	result.Evidence.Pages++
 	defer response.Body.Close()
-	decoder := json.NewDecoder(response.Body)
-	decoder.UseNumber()
+	graphQLCause := func(error) error { return providerfoundation.ErrGraphQLResponse }
+	raw, readErr := providerfoundation.ReadResponseBodyWith(response, providerResponseMaxBytes, graphQLCause)
+	if readErr != nil {
+		return nil, readErr
+	}
+	if len(raw) > providerResponseMaxBytes {
+		return nil, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, providerfoundation.ErrGraphQLResponse)
+	}
 	var envelope gitHubWorkItemPRSocialGraphQLEnvelope
-	if err := decoder.Decode(&envelope); err != nil {
+	if err := providerfoundation.DecodeResponseJSONWith(response, raw, &envelope, providerfoundation.DecodeUseNumber, graphQLCause); err != nil {
+		return nil, err
+	}
+	if len(envelope.Errors) > 0 {
 		return nil, providerfoundation.ErrGraphQLResponse
 	}
-	if len(envelope.Errors) > 0 || envelope.Data.Repository == nil {
-		return nil, providerfoundation.ErrGraphQLResponse
+	if envelope.Data.Repository == nil {
+		return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
 	}
 	pulls := make(map[int]gitHubWorkItemPRSocialGraphQLPull, len(numbers))
 	for index, number := range numbers {
 		pull, ok := (*envelope.Data.Repository)["pr"+strconv.Itoa(index)]
 		if !ok || pull == nil || pull.Number != number {
-			return nil, providerfoundation.ErrGraphQLResponse
+			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
+		}
+		if (commentsFirst > 0 && pull.Comments == nil) || (eventsFirst > 0 && pull.TimelineItems == nil) {
+			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
 		}
 		pulls[number] = *pull
 	}
@@ -413,7 +425,7 @@ func gitHubWorkItemPRSocialFailureCause(err error) string {
 		return "invalid_pagination"
 	}
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) && providerErr != nil {
+	if errors.As(err, &providerErr) && providerErr != nil && !providerErr.AfterResponse() {
 		return string(providerErr.Class)
 	}
 	return "invalid_response"

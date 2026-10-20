@@ -1,0 +1,19 @@
+{
+  "case": "haiku_confidence_driver_over_120",
+  "note": "CHAOS-10244: shape of the claude-haiku-5-5 answer rejected on prod 2026-10-19 14:42:17Z (reason_rule confidence_driver_invalid, reason_path confidence.drivers[0]); drivers[0] starts with the logged reason_snippet and is over 120 characters. The model confidence is never served, so the answer is accepted.",
+  "subcategory_shares_pct": {
+    "feature_delivery.roadmap": 0.12,
+    "maintenance.refactor": 0.09,
+    "maintenance.upgrade": 0.065,
+    "quality.bugfix": 0.375,
+    "quality.testing": 0.165
+  },
+  "text": "{\"anti_claims\":[\"The data does not indicate a definitive dominance of any single theme across all measures.\",\"The data does not imply a strong, fixed pattern of investment units beyond the reported counts.\",\"The data does not confirm future performance or outcomes from the observed mix.\"],\"confidence\":{\"band_mix\":{\"high\":4,\"low\":4,\"moderate\":29,\"unknown\":0,\"very_low\":163},\"drivers\":[\"Average evidence quality falls in the moderate range but does not reach the high band, and most work units carry low or very low evidence bands.\",\"Few cross links between work units and pull requests\"],\"level\":\"moderate\",\"quality_mean\":0.3676558333512145,\"quality_stddev\":0.1731370828508923},\"summary\":\"The investment mix appears to lean toward Quality / Reliability with a notable emphasis on bugfix activities, accompanied by substantial contributions from Testing and Roadmap-focused work; other themes show smaller, more varied input, suggesting a dispersed yet reliability-weighted pattern.\",\"top_findings\":[{\"evidence\":{\"delta_pct_points\":null,\"evidence_quality_band\":null,\"evidence_quality_mean\":null,\"share_pct\":0.375,\"subcategory\":\"quality.bugfix\",\"theme\":\"quality\"},\"finding\":\"Quality / Reliability · Bugfix contribution is the largest component of the native work unit mix\"},{\"evidence\":{\"delta_pct_points\":null,\"evidence_quality_band\":null,\"evidence_quality_mean\":null,\"share_pct\":0.165,\"subcategory\":\"quality.testing\",\"theme\":\"quality\"},\"finding\":\"Quality / Reliability · Testing is a prominent secondary component\"},{\"evidence\":{\"delta_pct_points\":null,\"evidence_quality_band\":null,\"evidence_quality_mean\":null,\"share_pct\":0.12,\"subcategory\":\"feature_delivery.roadmap\",\"theme\":\"feature_delivery\"},\"finding\":\"Feature Delivery · Roadmap has a meaningful share among activities\"},{\"evidence\":{\"delta_pct_points\":null,\"evidence_quality_band\":null,\"evidence_quality_mean\":null,\"share_pct\":0.09,\"subcategory\":\"maintenance.refactor\",\"theme\":\"maintenance\"},\"finding\":\"Maintenance / Tech Debt · Refactor contributes a notable portion of work units\"},{\"evidence\":{\"delta_pct_points\":null,\"evidence_quality_band\":null,\"evidence_quality_mean\":null,\"share_pct\":0.065,\"subcategory\":\"maintenance.upgrade\",\"theme\":\"maintenance\"},\"finding\":\"Maintenance / Tech Debt · Upgrade is present but smaller than refactor\"}],\"what_to_check_next\":[{\"action\":\"Review theme distributions by subcategory\",\"where\":\"theme_distribution_top and work_unit_count breakdown\",\"why\":\"to understand how subcategory weights align with the overall theme signals\"},{\"action\":\"Inspect dominant subcategory counts\",\"where\":\"work_unit_dominant_subcategory_counts_top\",\"why\":\"to verify which subareas drive the majority of the mix and assess potential concentration risks\"},{\"action\":\"Examine evidence_quality_band counts\",\"where\":\"evidence_quality_band_counts and evidence_quality_mean/stddev\",\"why\":\"to gauge the overall signal strength behind the precomputed mix\"}]}",
+  "theme_shares_pct": {
+    "feature_delivery": 0.12,
+    "maintenance": 0.09,
+    "quality": 0.375
+  },
+  "want": "accepted",
+  "want_rule": ""
+}

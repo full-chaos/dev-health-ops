@@ -433,7 +433,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		classification := ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, "")
 		if classification == nil {
 			c.observe("")
-			return response, nil
+			return withResponseRoute(routeTemplate(ctx), response), nil
 		}
 		message, _ := io.ReadAll(io.LimitReader(response.Body, maxProviderErrorBody))
 		classification = ClassifyHTTPForRequest(c.Provider, target.Path, response.StatusCode, response.Header, string(message))
@@ -568,7 +568,7 @@ func (c *HTTPClient) DoUnauthenticated(
 	} else {
 		c.observe(classification.Class)
 	}
-	return response, nil
+	return withResponseRoute(routeTemplate(ctx), response), nil
 }
 
 // bodyPeekTimeout bounds how long classification waits for a body to start

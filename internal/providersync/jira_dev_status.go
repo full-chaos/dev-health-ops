@@ -3,7 +3,6 @@ package providersync
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -83,14 +82,17 @@ func fetchJiraDevStatusPullRequests(
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return jiraDevStatusPayload{}, false, providerfoundation.ErrNormalizationInvalid
+		return jiraDevStatusPayload{}, false, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonStatus)
 	}
-	limited, readErr := io.ReadAll(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
-	if readErr != nil || len(limited) > nativeMaxObjectBytes {
-		return jiraDevStatusPayload{}, false, providerfoundation.ErrNormalizationInvalid
+	limited, readErr := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
+	if readErr != nil {
+		return jiraDevStatusPayload{}, false, readErr
+	}
+	if len(limited) > nativeMaxObjectBytes {
+		return jiraDevStatusPayload{}, false, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
 	if decodeErr := decodeJiraJSON(limited, &payload); decodeErr != nil {
-		return jiraDevStatusPayload{}, false, decodeErr
+		return jiraDevStatusPayload{}, false, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	return payload, true, nil
 }

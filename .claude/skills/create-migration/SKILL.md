@@ -70,8 +70,8 @@ Conventions:
 
 #### For ClickHouse (raw SQL)
 
-1. List files in `src/dev_health_ops/migrations/clickhouse/` to determine the next number
-2. Create a new file: `src/dev_health_ops/migrations/clickhouse/<NNN>_<description>.sql`
+1. List files in `internal/chmigrate/sql/` to determine the next number
+2. Create a new file: `internal/chmigrate/sql/<NNN>_<description>.sql`
 3. Follow this pattern:
 
 ```sql

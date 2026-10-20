@@ -21,7 +21,7 @@ import (
 )
 
 // This file authors NO DDL. Every table comes from the real migration chain
-// (src/dev_health_ops/migrations/clickhouse), applied by chschema through the
+// (internal/chmigrate/history), applied by chschema through the
 // project's own canonical entrypoint -- the same call `migrate clickhouse
 // upgrade` makes, so the .py migrations 027/042/055/061 that a .sql-only
 // replay would miss are covered too.

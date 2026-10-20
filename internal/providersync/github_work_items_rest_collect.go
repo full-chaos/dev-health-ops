@@ -635,7 +635,7 @@ func (result *GitHubWorkItemsRESTResult) addIncomplete(
 
 func githubWorkItemsRESTFailureCause(err error) string {
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) && providerErr != nil {
+	if errors.As(err, &providerErr) && providerErr != nil && !providerErr.AfterResponse() {
 		return string(providerErr.Class)
 	}
 	return "invalid_response"

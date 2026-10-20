@@ -1,7 +1,11 @@
 package integrationsadmin
 
 import (
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -98,6 +102,32 @@ func TestMarkerMetadataIsGetOfValueOrEmpty(t *testing.T) {
 	for text, wantErr := range map[string]bool{`{"a":1}`: false, `{}`: false, `null`: false, `[]`: false, `[["a", 1]]`: true, `"x"`: true, `5`: true} {
 		if _, err := markerMetadata(text); (err != nil) != wantErr {
 			t.Errorf("%s: error %v, want %v", text, err, wantErr)
+		}
+	}
+}
+
+func TestDatasetObjectCarriesStateChange(t *testing.T) {
+	at := time.Date(2026, time.October, 19, 12, 30, 0, 0, time.UTC)
+	by := "fixtures:seed"
+	for _, tc := range []struct {
+		name string
+		row  dataset
+		want string
+	}{
+		{"stamped", dataset{StateChangedAt: &at, StateChangedBy: &by}, `"state_changed_at":"2026-10-19T12:30:00Z","state_changed_by":"fixtures:seed"}`},
+		{"unstamped", dataset{}, `"state_changed_at":null,"state_changed_by":null}`},
+	} {
+		tc.row.ID, tc.row.IntegrationID, tc.row.Options = uuid.New(), uuid.New(), `{}`
+		object, err := datasetObject(tc.row)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		text, err := pyjson.MarshalModel(object)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := string(text); !strings.HasSuffix(got, ","+tc.want) {
+			t.Errorf("%s: %s lacks the trailing ,%s", tc.name, got, tc.want)
 		}
 	}
 }

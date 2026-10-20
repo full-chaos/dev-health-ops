@@ -705,11 +705,17 @@ func collectLinearReferenceConnection(
 			return items, pages, false, err
 		}
 		var envelope linearReferenceGraphQLEnvelope
-		if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
-			response.Body.Close()
-			return items, pages, false, logging.DecodeFailure(err)
-		}
+		raw, readErr := providerfoundation.ReadResponseBodyWith(response, providerResponseMaxBytes, logging.DecodeFailure)
 		response.Body.Close()
+		if readErr != nil {
+			return items, pages, false, readErr
+		}
+		if len(raw) > providerResponseMaxBytes {
+			return items, pages, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, logging.DecodeFailure(providerfoundation.ErrNormalizationInvalid))
+		}
+		if err := providerfoundation.DecodeResponseJSONWith(response, raw, &envelope, 0, logging.DecodeFailure); err != nil {
+			return items, pages, false, err
+		}
 		if len(envelope.Errors) > 0 {
 			if strings.Contains(strings.ToLower(envelope.Errors[0].Message), "complexity") {
 				return items, pages, false, providerfoundation.ErrGraphQLComplexity
@@ -718,7 +724,7 @@ func collectLinearReferenceConnection(
 		}
 		connection, ok := linearReferenceConnection(envelope.Data, path)
 		if !ok {
-			return items, pages, false, providerfoundation.ErrPaginationInvalid
+			return items, pages, false, providerfoundation.ResponseShape(response, providerfoundation.ErrPaginationInvalid)
 		}
 		page := connection
 		hasNextPagePresent := page.PageInfo.HasNextPage != nil
@@ -727,7 +733,7 @@ func collectLinearReferenceConnection(
 			hasNextPage = *page.PageInfo.HasNextPage
 		}
 		if page.Nodes == nil || !hasNextPagePresent {
-			return items, pages, false, providerfoundation.ErrPaginationInvalid
+			return items, pages, false, providerfoundation.ResponseShape(response, providerfoundation.ErrPaginationInvalid)
 		}
 		items = append(items, page.Nodes...)
 		pages++
@@ -735,7 +741,7 @@ func collectLinearReferenceConnection(
 			return items, pages, false, nil
 		}
 		if page.PageInfo.EndCursor == nil || strings.TrimSpace(*page.PageInfo.EndCursor) == "" || containsString(seen, *page.PageInfo.EndCursor) || *page.PageInfo.EndCursor == cursor {
-			return items, pages, false, providerfoundation.ErrPaginationInvalid
+			return items, pages, false, providerfoundation.ResponseShape(response, providerfoundation.ErrPaginationInvalid)
 		}
 		seen = append(seen, *page.PageInfo.EndCursor)
 		cursor = *page.PageInfo.EndCursor

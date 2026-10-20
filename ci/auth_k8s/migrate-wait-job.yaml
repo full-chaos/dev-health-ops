@@ -17,7 +17,7 @@ spec:
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
           env:
             - name: AUTH_MIGRATION_DATABASE_URI
-              valueFrom: {secretKeyRef: {name: auth-migrate-db, key: AUTH_MIGRATION_DATABASE_URI}}
+              valueFrom: {secretKeyRef: {name: auth-migrate-late-db, key: AUTH_MIGRATION_DATABASE_URI}}
             - name: AUTH_DATABASE_SCHEMA
               value: auth
             - name: AUTH_RUNTIME_DATABASE_ROLE

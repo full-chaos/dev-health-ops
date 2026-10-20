@@ -340,24 +340,26 @@ K get deploy/auth-postgres >/dev/null || die "uninstall disturbed postgres"
 printf 'postgres untouched by the uninstall\n'
 
 # --- 7. a migration started before its database is routable waits for it -----------------------
-# A pod that is Ready is not yet reachable through its Service: the endpoints and the node's
-# Service rules follow it. The Service is pointed at no pod while the migration starts, and is
-# pointed back only after the migration's first connect attempt has failed.
+# On a fresh install the hook can start while PostgreSQL is Ready but its Service does not route
+# yet. Modelled with a Service that has never routed: auth-postgres-late selects no pod while the
+# migration starts, and selects PostgreSQL only after the migration's first connect attempt is
+# over (a wait line, or the pod ended). A Service that once routed is not used: its node rules
+# trail the endpoints, so a held selector can still reach the old pod.
 printf 'step 10: a migration that starts before its database is routable waits for it\n'
-restore_pg_selector() { K patch svc auth-postgres --type=merge -p '{"spec":{"selector":{"app":"auth-postgres"}}}' >/dev/null; }
+route_late_service() {
+  K patch svc auth-postgres-late --type=merge -p '{"spec":{"selector":{"app":"auth-postgres"}}}' >/dev/null
+}
+printf 'host=auth-postgres-late port=5432 user=postgres password=%s dbname=postgres sslmode=disable' "'${PG_PASSWORD}'" \
+  | K create secret generic auth-migrate-late-db --from-file=AUTH_MIGRATION_DATABASE_URI=/dev/stdin
+K create service clusterip auth-postgres-late --tcp=5432:5432 >/dev/null
+K patch svc auth-postgres-late --type=merge -p '{"spec":{"selector":{"app":"auth-postgres-held"}}}' >/dev/null
 set +e
 (
   set -e
-  trap restore_pg_selector EXIT
-  K patch svc auth-postgres --type=merge -p '{"spec":{"selector":{"app":"auth-postgres-held"}}}' >/dev/null
-  for _ in $(seq 1 30); do
-    [ -z "$(K get endpoints auth-postgres -o jsonpath='{.subsets}')" ] && break
-    sleep 1
-  done
-  [ -z "$(K get endpoints auth-postgres -o jsonpath='{.subsets}')" ] || die "the held Service still has endpoints"
-  K delete job auth-migrate-wait --ignore-not-found --wait=true >/dev/null
+  trap route_late_service EXIT
+  [ -z "$(K get endpoints auth-postgres-late -o jsonpath='{.subsets}')" ] || die "the late Service already has endpoints"
   K_RENDER "${SCRIPT_DIR}/auth_k8s/migrate-wait-job.yaml" | K apply -f - >/dev/null
-  # The first attempt has failed once the migration logs a wait line, or once its pod ended.
+  phase=""
   for _ in $(seq 1 90); do
     phase="$(K get pod -l job-name=auth-migrate-wait -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)"
     case "${phase}" in Succeeded | Failed) break ;; esac
@@ -365,17 +367,20 @@ set +e
     sleep 1
   done
   printf 'first connect attempt over: pod phase %s\n' "${phase:-unknown}"
+  [ "${phase}" != Succeeded ] || die "the migration connected through a Service that selected no pod"
 )
 held=$?
 set -e
-[ "$(K get svc auth-postgres -o jsonpath='{.spec.selector.app}')" = auth-postgres ] || die "the Service selector was not restored"
-[ "${held}" -eq 0 ] || die "the held-database step failed (${held})"
+[ "$(K get svc auth-postgres-late -o jsonpath='{.spec.selector.app}')" = auth-postgres ] || die "the late Service was not routed"
+[ "${held}" -eq 0 ] || die "the late-database step failed (${held})"
 if ! K wait --for=condition=complete job/auth-migrate-wait --timeout=120s >/dev/null; then
   K logs job/auth-migrate-wait >&2 || true
   die "the migration did not wait for its database: it ended before the Service routed"
 fi
 K logs job/auth-migrate-wait
 K delete job auth-migrate-wait --wait=true >/dev/null
+K delete svc auth-postgres-late >/dev/null
+K delete secret auth-migrate-late-db >/dev/null
 printf 'the migration waited for its database and completed\n'
 
 printf 'AUTH K8S PROOF PASSED\n'

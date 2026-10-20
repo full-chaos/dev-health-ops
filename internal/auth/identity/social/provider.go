@@ -64,10 +64,8 @@ const maxBody = 1 << 20
 
 // Endpoints are the provider URLs; a test points them at a fake.
 type Endpoints struct {
-	GitHubAPI  string
-	GitLabBase string
-	// GitLabIssuer is the issuer of GitLab identities; "" means GitLabBase.
-	GitLabIssuer    string
+	GitHubAPI       string
+	GitLabBase      string
 	GoogleUserInfo  string
 	GoogleTokenInfo string
 }
@@ -76,7 +74,6 @@ type Endpoints struct {
 var DefaultEndpoints = Endpoints{
 	GitHubAPI:       "https://api.github.com",
 	GitLabBase:      "https://gitlab.com",
-	GitLabIssuer:    "https://gitlab.com",
 	GoogleUserInfo:  "https://www.googleapis.com/oauth2/v2/userinfo",
 	GoogleTokenInfo: "https://www.googleapis.com/oauth2/v2/tokeninfo",
 }
@@ -131,17 +128,10 @@ type ProviderClient struct {
 	Clients   map[Provider]ClientCredentials
 }
 
-// Issuer is the issuer of p's identities at these endpoints. A self-hosted
-// GitLab is its own issuer; GitHub's and Google's are fixed.
-func (c *ProviderClient) Issuer(p Provider) string {
-	if p != GitLab {
-		return SocialIssuer(p)
-	}
-	if c.Endpoints.GitLabIssuer != "" {
-		return c.Endpoints.GitLabIssuer
-	}
-	return strings.TrimRight(c.Endpoints.GitLabBase, "/")
-}
+// Issuer is the issuer of p's identities: the fixed social issuer, whatever
+// the endpoints (go-api's social sign-in talks to the public instances only:
+// internal/api/oauthprovider/oauthprovider.go:58, internal/api/session/session.go:92).
+func (c *ProviderClient) Issuer(p Provider) string { return SocialIssuer(p) }
 
 // Configured reports whether p has client credentials.
 func (c *ProviderClient) Configured(p Provider) bool { return c.Clients[p].configured() }

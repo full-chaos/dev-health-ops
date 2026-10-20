@@ -123,8 +123,10 @@ func writeError(w http.ResponseWriter, provider Provider, err error) {
 			"message":           "An account with this email already exists. Please sign in with " + method + ".",
 			"existing_provider": conflict.ExistingMethod,
 		}})
+	case errors.Is(err, ErrProviderUnavailable):
+		writeInternal(w)
 	case errors.Is(err, ErrProviderNotConfigured):
-		writeDetail(w, http.StatusServiceUnavailable, "Social login not configured for "+string(provider))
+		writeDetail(w, http.StatusServiceUnavailable, "Social login not configured for "+providerLabel(provider))
 	case errors.Is(err, ErrProviderRefused):
 		writeDetail(w, http.StatusUnauthorized, "Invalid or expired provider token")
 	case errors.Is(err, ErrEmailUnverified):
@@ -132,24 +134,32 @@ func writeError(w http.ResponseWriter, provider Provider, err error) {
 	case errors.Is(err, ErrPrincipalDisabled):
 		writeDetail(w, http.StatusForbidden, "Account is disabled")
 	case errors.Is(err, identity.ErrSignupNotAvailable):
-		writeDetail(w, http.StatusForbidden, "Sign-up with "+string(provider)+" is not available")
+		writeDetail(w, http.StatusForbidden, "Sign-up with "+providerLabel(provider)+" is not available")
 	case errors.Is(err, ErrReauthenticationRequired):
 		writeDetail(w, http.StatusForbidden, "Sign in again to change linked accounts")
 	case errors.Is(err, identity.ErrIdentityConflict):
-		writeDetail(w, http.StatusConflict, "This "+string(provider)+" account is linked to another user")
+		writeDetail(w, http.StatusConflict, "This "+providerLabel(provider)+" account is linked to another user")
 	case errors.Is(err, ErrProviderLinked):
-		writeDetail(w, http.StatusConflict, "A "+string(provider)+" account is already linked")
+		writeDetail(w, http.StatusConflict, "A "+providerLabel(provider)+" account is already linked")
 	case errors.Is(err, identity.ErrNotFound):
 		writeDetail(w, http.StatusNotFound, "Identity not found")
 	case errors.Is(err, identity.ErrLastSignInMethod):
 		writeDetail(w, http.StatusConflict, "Cannot remove the last sign-in method")
 	default:
-		writeDetail(w, http.StatusInternalServerError, "Internal server error")
+		writeInternal(w)
 	}
 }
 
+// writeDetail is go-api's refusal body, {"detail": {"message": message}}
+// (internal/api/session/session.go refuse).
 func writeDetail(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"detail": message})
+	writeJSON(w, status, map[string]any{"detail": map[string]string{"message": message}})
+}
+
+// writeInternal is go-api's unhandled-failure answer, 500
+// {"detail": "Internal Server Error"} (internal/api/policy/respond.go WriteInternal).
+func writeInternal(w http.ResponseWriter) {
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "Internal Server Error"})
 }
 
 // writeJSON serializes the body first, then writes it with its length. The
@@ -158,7 +168,7 @@ func writeDetail(w http.ResponseWriter, status int, message string) {
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	payload, err := json.Marshal(body)
 	if err != nil {
-		status, payload = http.StatusInternalServerError, []byte(`{"detail":"Internal server error"}`)
+		status, payload = http.StatusInternalServerError, []byte(`{"detail":"Internal Server Error"}`)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

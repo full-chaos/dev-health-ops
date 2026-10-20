@@ -192,8 +192,7 @@ func (s *Store) projectIdentity(ctx context.Context, key ExternalKey, principal 
 	if err != nil {
 		return s.domainErr(ctx, "project external identity", err)
 	}
-	s.logger.InfoContext(ctx, "identity: legacy external identity projected",
-		"principal_id", subject, "external_identity_id", target, "provider", string(key.Provider))
+	s.logger.InfoContext(ctx, "identity: legacy external identity projected", "provider", providerLabel(key.Provider))
 	return nil
 }
 
@@ -283,8 +282,7 @@ VALUES ($1, $2, $3, $4, $5)`, linkID, principal, req.Key.Issuer, string(req.Key.
 	default:
 		return uuid.Nil, s.storeErr(ctx, "provision federated user", err)
 	}
-	s.logger.InfoContext(ctx, "identity: federated principal provisioned",
-		"principal_id", subject, "external_identity_id", target, "provider", string(req.Key.Provider))
+	s.logger.InfoContext(ctx, "identity: federated principal provisioned", "provider", providerLabel(req.Key.Provider))
 	return principal, nil
 }
 
@@ -332,8 +330,7 @@ func (s *Store) LinkIdentity(ctx context.Context, key ExternalKey, principal uui
 	if err != nil {
 		return uuid.Nil, s.domainErr(ctx, "link external identity", err)
 	}
-	s.logger.InfoContext(ctx, "identity: external identity linked",
-		"principal_id", subject, "external_identity_id", target, "provider", string(key.Provider))
+	s.logger.InfoContext(ctx, "identity: external identity linked", "provider", providerLabel(key.Provider))
 	return linkID, nil
 }
 
@@ -397,8 +394,7 @@ WHERE issuer = $1 AND provider = $2 AND subject = $3`, key.Issuer, string(key.Pr
 	if err != nil {
 		return s.domainErr(ctx, "unlink external identity", err)
 	}
-	s.logger.InfoContext(ctx, "identity: external identity unlinked",
-		"principal_id", subject, "external_identity_id", targetID, "provider", string(key.Provider))
+	s.logger.InfoContext(ctx, "identity: external identity unlinked", "provider", providerLabel(key.Provider))
 	return nil
 }
 
@@ -560,4 +556,18 @@ func (s *Store) domainErr(ctx context.Context, op string, err error) error {
 func isUniqueViolation(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
+}
+
+// providerLabel is the provider attribute of a log line: a social provider's
+// name, or "sso" for an SSO provider row, whose id stays in the audit event.
+func providerLabel(p Provider) string {
+	switch p {
+	case ProviderGitHub:
+		return "github"
+	case ProviderGitLab:
+		return "gitlab"
+	case ProviderGoogle:
+		return "google"
+	}
+	return "sso"
 }

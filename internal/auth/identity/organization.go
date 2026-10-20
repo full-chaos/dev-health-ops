@@ -114,7 +114,7 @@ RETURNING id`, orgID, src.slug, src.name, src.active).Scan(&inserted)
 	})
 	switch {
 	case err == nil:
-		s.logger.InfoContext(ctx, "identity: organization projected", "organization_id", org)
+		s.logger.InfoContext(ctx, "identity: organization projected")
 		return nil
 	case errors.Is(err, errOrganizationProjectedConcurrently):
 		return nil
@@ -151,7 +151,7 @@ WHERE id = $1 AND (slug IS DISTINCT FROM $2 OR name IS DISTINCT FROM $3 OR (disa
 	})
 	switch {
 	case err == nil:
-		s.logger.InfoContext(ctx, "identity: organization projection updated", "organization_id", org)
+		s.logger.InfoContext(ctx, "identity: organization projection updated")
 		return nil
 	case errors.Is(err, audit.ErrNoStateChange):
 		// A concurrent projection applied the same change first.
@@ -181,7 +181,7 @@ func (s *Store) organizationEvent(ctx context.Context, org, verb string, src org
 			change["slug"] = src.slug
 		} else {
 			s.slugOmitted.Add(ctx, 1)
-			s.logger.InfoContext(ctx, "identity: organization slug not carried on the provisioning event", "organization_id", org)
+			s.logger.InfoContext(ctx, "identity: organization slug not carried on the provisioning event")
 		}
 	}
 	return audit.OutboxEvent{AggregateType: "organization", AggregateID: provisioning.WireID("organization", org),

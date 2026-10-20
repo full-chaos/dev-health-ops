@@ -79,7 +79,6 @@ func (f *fakeProviders) client() *ProviderClient {
 		Endpoints: Endpoints{
 			GitHubAPI:       f.server.URL + "/github",
 			GitLabBase:      f.server.URL + "/gitlab",
-			GitLabIssuer:    SocialIssuer(GitLab),
 			GoogleUserInfo:  f.server.URL + "/google/userinfo",
 			GoogleTokenInfo: f.server.URL + "/google/tokeninfo",
 		},

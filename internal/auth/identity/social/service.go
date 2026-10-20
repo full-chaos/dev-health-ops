@@ -24,6 +24,7 @@ const DefaultLinkFreshness = 10 * time.Minute
 // Domain errors. Each maps to one response; none carries provider text.
 var (
 	ErrProviderRefused          = errors.New("social: the provider token was refused")
+	ErrProviderUnavailable      = errors.New("social: the provider could not be reached")
 	ErrEmailUnverified          = errors.New("social: the provider has not verified the email")
 	ErrPrincipalDisabled        = errors.New("social: the principal is disabled")
 	ErrReauthenticationRequired = errors.New("social: a recent sign-in is required")
@@ -388,12 +389,14 @@ func (s *Service) fetch(ctx context.Context, provider Provider, token contracts.
 	var perr *ProviderError
 	switch {
 	case err == nil:
+	case errors.As(err, &perr) && perr.Reason == ReasonDependency:
+		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrProviderUnavailable, perr.Step)
 	case errors.As(err, &perr):
 		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrProviderRefused, perr.Step)
 	case errors.Is(err, ErrProviderNotConfigured):
 		return Profile{}, ReasonDependency, err
 	default:
-		return Profile{}, ReasonDependency, ErrProviderRefused
+		return Profile{}, ReasonDependency, ErrProviderUnavailable
 	}
 	if profile.Issuer != s.providers.Issuer(provider) || profile.Provider != provider || profile.Validate() != nil {
 		return Profile{}, ReasonAudience, fmt.Errorf("%w: profile identity does not match the provider", ErrProviderRefused)

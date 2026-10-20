@@ -201,6 +201,9 @@ const (
 	// StateAheadOfBuild: alembic_version records a revision this build does not
 	// know: a newer build migrated the database (an image was rolled back onto it).
 	StateAheadOfBuild
+	// StateAuthSchemaMismatch: objects but no alembic_version, and the auth
+	// migrator's lineage sits in a schema other than the configured auth schema.
+	StateAuthSchemaMismatch
 )
 
 // Observation is what Decide needs to know about a database.
@@ -213,6 +216,17 @@ type Observation struct {
 	Objects int
 	// PublicTables names the ordinary and partitioned tables in public.
 	PublicTables []string
+	// AuthConfigured is the auth schema name this migrator was given (default auth).
+	AuthConfigured string
+	// AuthSchema is the configured auth schema when it holds the lineage's
+	// bookkeeping table and so is not counted in Objects ("" otherwise);
+	// AuthObjects is how many objects it holds.
+	AuthSchema  string
+	AuthObjects int
+	// AuthLineageElsewhere is a schema other than the configured one that holds
+	// the auth lineage's bookkeeping table under a name the auth migrator could
+	// own ("" when none); set only for a database without alembic_version.
+	AuthLineageElsewhere string
 }
 
 // Plan is the decision Upgrade acts on.
@@ -227,6 +241,8 @@ type Plan struct {
 	// Unknown are the recorded revisions this build does not know
 	// (StateAheadOfBuild), sorted.
 	Unknown []string
+	// AuthSchemaFound is the schema StateAuthSchemaMismatch found.
+	AuthSchemaFound string
 }
 
 // applicationHead is the baseline head the chain continues: the one that is
@@ -252,6 +268,9 @@ func Decide(observation Observation, baseline Baseline, chain []ChainFile, known
 	if !observation.HasVersionTable {
 		if observation.Objects == 0 {
 			return Plan{State: StateEmpty, ApplicationHead: applicationHead(baseline), Pending: chain}
+		}
+		if observation.AuthLineageElsewhere != "" {
+			return Plan{State: StateAuthSchemaMismatch, AuthSchemaFound: observation.AuthLineageElsewhere}
 		}
 		return Plan{State: StateForeign}
 	}

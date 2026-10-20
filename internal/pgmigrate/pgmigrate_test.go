@@ -25,8 +25,9 @@ func TestDecide(t *testing.T) {
 		baseline    Baseline
 		want        Plan
 	}{
-		"empty":   {Observation{}, application, Plan{State: StateEmpty, ApplicationHead: "0138", Pending: chain}},
-		"foreign": {Observation{Objects: 3}, application, Plan{State: StateForeign}},
+		"empty":                                  {Observation{}, application, Plan{State: StateEmpty, ApplicationHead: "0138", Pending: chain}},
+		"foreign":                                {Observation{Objects: 3}, application, Plan{State: StateForeign}},
+		"auth lineage under another schema name": {Observation{Objects: 3, AuthLineageElsewhere: "identity_plane"}, application, Plan{State: StateAuthSchemaMismatch, AuthSchemaFound: "identity_plane"}},
 		"at the head": {Observation{HasVersionTable: true, Versions: []string{"0138"}, Objects: 90, PublicTables: tables}, application,
 			Plan{State: StateAtHead, ApplicationHead: "0138", Pending: chain}},
 		"below the head": {Observation{HasVersionTable: true, Versions: []string{"0137"}}, application,

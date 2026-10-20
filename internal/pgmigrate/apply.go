@@ -92,7 +92,7 @@ func UpgradeWithHistory(ctx context.Context, conn *pgx.Conn, baseline Baseline, 
 func upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool, logger *slog.Logger, settings WalkSettings) (Result, error) {
 	result := Result{Heads: Heads(baseline, chain)}
 	done, err := walkWithRetry(
-		func() (walked, error) { return walkOnce(ctx, conn, baseline, chain, known, settings) },
+		func() (walked, error) { return walkOnce(ctx, conn, baseline, chain, known, settings, logger) },
 		func(revision string) bool { return revisionRecordedSince(ctx, conn, baseline, chain, known, revision) },
 		logger)
 	if err != nil {
@@ -133,7 +133,7 @@ type walked struct {
 
 // walkOnce is one transaction: plan under the lock, apply the baseline of an empty
 // database, apply every pending chain revision in order.
-func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool, settings WalkSettings) (walked, error) {
+func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, known map[string]bool, settings WalkSettings, logger *slog.Logger) (walked, error) {
 	var done walked
 	err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
 		done = walked{}
@@ -145,11 +145,17 @@ func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Ch
 			return err
 		}
 		plan := Decide(observation, baseline, chain, known)
+		if observation.AuthSchema != "" && !observation.HasVersionTable && observation.AuthObjects > 0 {
+			logger.Info("ops migrate: the auth migrator's schema is not counted as foreign objects",
+				"schema", observation.AuthSchema, "objects", observation.AuthObjects)
+		}
 		switch plan.State {
 		case StateAheadOfBuild:
 			return AheadOfBuildError{Recorded: observation.Versions, Unknown: plan.Unknown}
 		case StateForeign:
 			return ForeignDatabaseError{Objects: observation.Objects}
+		case StateAuthSchemaMismatch:
+			return AuthSchemaMismatchError{Found: plan.AuthSchemaFound, Configured: observation.AuthConfigured, Objects: observation.Objects}
 		case StateSchemaMismatch:
 			return SchemaMismatchError{Recorded: observation.Versions, MissingTables: plan.MissingTables}
 		case StateBelowHead:
@@ -264,7 +270,7 @@ func readStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []
 		for _, file := range plan.Pending {
 			status.Pending = append(status.Pending, file.Revision)
 		}
-		status.State = map[State]string{StateEmpty: "empty", StateAtHead: "at_head", StateBelowHead: "below_head", StateForeign: "foreign", StateSchemaMismatch: "schema_mismatch", StateAheadOfBuild: "ahead_of_build"}[plan.State]
+		status.State = map[State]string{StateEmpty: "empty", StateAtHead: "at_head", StateBelowHead: "below_head", StateForeign: "foreign", StateSchemaMismatch: "schema_mismatch", StateAheadOfBuild: "ahead_of_build", StateAuthSchemaMismatch: "auth_schema_mismatch"}[plan.State]
 		return nil
 	})
 	return status, err
@@ -284,43 +290,61 @@ func AuthSchemaUsable(name string) bool {
 	return pgident.Check(name) == pgident.OK && name != "public"
 }
 
-// configuredAuthSchema is the auth migrator's schema as configured, or "" when
-// the configured value is not a plain identifier (then nothing is exempt).
-func configuredAuthSchema() string {
+// configuredAuthName is the auth schema name this migrator was given, whether or
+// not it is usable.
+func configuredAuthName() string {
 	name := strings.TrimSpace(os.Getenv(AuthSchemaEnv))
 	if name == "" {
 		name = defaultAuthSchema
 	}
+	return name
+}
+
+// configuredAuthSchema is the auth migrator's schema as configured, or "" when
+// the configured value is not a name the auth migrator could own (then nothing
+// is exempt).
+func configuredAuthSchema() string {
+	name := configuredAuthName()
 	if !AuthSchemaUsable(name) {
 		return ""
 	}
 	return name
 }
 
+// authBookkeepingShape is true for a relation bk that is the auth lineage's
+// bookkeeping table: schema_migrations(version integer, name text, applied_at
+// timestamptz), exactly.
+const authBookkeepingShape = "bk.relname = 'schema_migrations' AND bk.relkind = 'r' AND " +
+	"(SELECT array_agg(a.attname::text || ':' || format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum) FROM pg_attribute a " +
+	"WHERE a.attrelid = bk.oid AND a.attnum > 0 AND NOT a.attisdropped) = " +
+	"ARRAY['version:integer', 'name:text', 'applied_at:timestamp with time zone']"
+
 // authLineageSchemas selects the OID of the auth migrator's schema: the schema
 // whose NAME is the configured one ($1) AND that holds the lineage's own
-// bookkeeping table, schema_migrations(version integer, name text, applied_at
-// timestamptz), exactly. A fresh install that starts both migrators together
-// can have the auth schema created first; the objects in it are not a database
-// this migrator would collide with, because it creates only public. The name is
-// the key, the table shape is a second condition: a shape alone would let any
-// schema (public included) that carries such a table hide its objects, and a
-// foreign schema called auth (Supabase's GoTrue, with schema_migrations(version
+// bookkeeping table. A fresh install that starts both migrators together can
+// have the auth schema created first; the objects in it are not a database this
+// migrator would collide with, because it creates only public. The name is the
+// key, the table shape is a second condition: a shape alone would let any schema
+// (public included) that carries such a table hide its objects, and a foreign
+// schema called auth (Supabase's GoTrue, with schema_migrations(version
 // varchar)) fails the shape. The auth-first tests keep the shape equal to what
 // the auth migrator creates.
 const authLineageSchemas = "(SELECT bk.relnamespace FROM pg_class bk JOIN pg_namespace bn ON bn.oid = bk.relnamespace " +
-	"WHERE bn.nspname = $1 AND bn.nspname <> 'public' AND bk.relname = 'schema_migrations' AND bk.relkind = 'r' AND " +
-	"(SELECT array_agg(a.attname::text || ':' || format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum) FROM pg_attribute a " +
-	"WHERE a.attrelid = bk.oid AND a.attnum > 0 AND NOT a.attisdropped) = " +
-	"ARRAY['version:integer', 'name:text', 'applied_at:timestamp with time zone'])"
+	"WHERE bn.nspname = $1 AND bn.nspname <> 'public' AND " + authBookkeepingShape + ")"
 
-// userObject is the WHERE clause selecting the rows of catalog (aliased o,
-// its namespace aliased n) that are not in a system schema, not in the auth
-// migrator's schema ($1, see authLineageSchemas) and not owned by an extension.
-func userObject(catalog string) string {
+// systemObject is the WHERE clause selecting the rows of catalog (aliased o,
+// its namespace aliased n) that are not in a system schema and not owned by an
+// extension.
+func systemObject(catalog string) string {
 	return "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_toast%' " +
-		"AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND n.oid NOT IN " + authLineageSchemas + " AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = '" + catalog +
+		"AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = '" + catalog +
 		"'::regclass AND d.objid = o.oid AND d.deptype = 'e')"
+}
+
+// userObject is systemObject outside the auth migrator's schema ($1, see
+// authLineageSchemas).
+func userObject(catalog string) string {
+	return systemObject(catalog) + " AND n.oid NOT IN " + authLineageSchemas
 }
 
 // observe reads the state Decide needs.
@@ -341,6 +365,40 @@ func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 		"(SELECT count(*) FROM pg_type o JOIN pg_namespace n ON n.oid = o.typnamespace "+
 		"WHERE "+userObject("pg_type")+" AND o.typrelid = 0 AND o.typcategory <> 'A')", configuredAuthSchema()).Scan(&observation.Objects); err != nil {
 		return observation, fmt.Errorf("count objects: %w", err)
+	}
+	observation.AuthConfigured = configuredAuthName()
+	if configured := configuredAuthSchema(); configured != "" && !observation.HasVersionTable {
+		// What the exemption hides: the objects of the auth migrator's schema.
+		if err := tx.QueryRow(ctx, "SELECT "+
+			"(SELECT count(*) FROM pg_class o JOIN pg_namespace n ON n.oid = o.relnamespace WHERE "+systemObject("pg_class")+" AND n.oid IN "+authLineageSchemas+") + "+
+			"(SELECT count(*) FROM pg_proc o JOIN pg_namespace n ON n.oid = o.pronamespace WHERE "+systemObject("pg_proc")+" AND n.oid IN "+authLineageSchemas+") + "+
+			"(SELECT count(*) FROM pg_type o JOIN pg_namespace n ON n.oid = o.typnamespace "+
+			"WHERE "+systemObject("pg_type")+" AND n.oid IN "+authLineageSchemas+" AND o.typrelid = 0 AND o.typcategory <> 'A')", configured).Scan(&observation.AuthObjects); err != nil {
+			return observation, fmt.Errorf("count the auth schema's objects: %w", err)
+		}
+		if observation.AuthObjects > 0 {
+			observation.AuthSchema = configured
+		}
+	}
+	if !observation.HasVersionTable && observation.Objects > 0 {
+		// The auth migrator's lineage under another name than the configured one: the
+		// two migrators disagree about the schema, which is a cause of its own.
+		rows, err := tx.Query(ctx, "SELECT bn.nspname FROM pg_class bk JOIN pg_namespace bn ON bn.oid = bk.relnamespace "+
+			"WHERE bn.nspname <> $1 AND bn.nspname <> 'public' AND bn.nspname <> 'information_schema' AND bn.nspname NOT LIKE 'pg\\_%' AND "+
+			authBookkeepingShape+" ORDER BY 1", observation.AuthConfigured)
+		if err != nil {
+			return observation, fmt.Errorf("look for the auth lineage: %w", err)
+		}
+		names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return observation, fmt.Errorf("look for the auth lineage: %w", err)
+		}
+		for _, name := range names {
+			if AuthSchemaUsable(name) {
+				observation.AuthLineageElsewhere = name
+				break
+			}
+		}
 	}
 	tables, err := tx.Query(ctx, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "+
 		"WHERE n.nspname = 'public' AND c.relkind IN ('r','p') ORDER BY c.relname")

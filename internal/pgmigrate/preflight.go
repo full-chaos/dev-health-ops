@@ -143,6 +143,8 @@ func Classify(observation Observation, settings Settings, baseline Baseline, cha
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonAheadOfBuild
 	case StateForeign:
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonForeignDatabase
+	case StateAuthSchemaMismatch:
+		report.Verdict, report.Reason = VerdictNeedsManual, ReasonAuthSchemaMismatch
 	case StateSchemaMismatch:
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonSchemaMismatch
 	}

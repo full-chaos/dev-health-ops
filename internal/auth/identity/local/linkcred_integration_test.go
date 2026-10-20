@@ -164,17 +164,17 @@ func TestDecoyIssueWritesNothing(t *testing.T) {
 	}
 }
 
-func TestRedeemCommitsAuditRowAndOutboxEvent(t *testing.T) {
+func TestRedeemCommitsAnAuditRowAndNoProvisioningEvent(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
 	p := env.principal(t, ctx)
 	cases := []struct {
-		purpose          Purpose
-		eventType, event string
-		reason           string
+		purpose   Purpose
+		eventType string
+		reason    string
 	}{
-		{PurposeEmailVerification, "auth.email.verified", "principal.email_verified", "email_verified"},
-		{PurposePasswordReset, "auth.password.reset", "principal.password_reset", "password_reset"},
+		{PurposeEmailVerification, "auth.email.verified", "email_verified"},
+		{PurposePasswordReset, "auth.password.reset", "password_reset"},
 	}
 	for _, c := range cases {
 		secret := string(c.purpose)
@@ -189,8 +189,8 @@ func TestRedeemCommitsAuditRowAndOutboxEvent(t *testing.T) {
 			AND attributes->>'target_kind' = 'principal'`, c.eventType, p.String(), c.reason); n != 1 {
 			t.Errorf("%s: audit rows = %d, want 1", c.purpose, n)
 		}
-		if n := env.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = $1 AND aggregate_id = $2`, c.event, p.String()); n != 1 {
-			t.Errorf("%s: outbox rows = %d, want 1", c.purpose, n)
+		if n := env.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events`); n != 0 {
+			t.Errorf("%s: outbox rows = %d, want 0 (a link credential's lifecycle is off the provisioning stream)", c.purpose, n)
 		}
 	}
 	if n := env.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE attributes::text LIKE '%' || $1 || '%'`, "reset"+"-secret"); n != 0 {

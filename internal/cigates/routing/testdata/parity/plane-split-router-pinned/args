@@ -1,0 +1,10 @@
+--deploy-repo
+{DEPLOY_REPO}
+--deploy-sha
+66f8e3b6
+--expect-ops-sha
+0123456789AB
+--values-out
+{VALUES_OUT}
+--format
+dynamic

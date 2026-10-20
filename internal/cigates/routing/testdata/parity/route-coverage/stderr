@@ -1,0 +1,3 @@
+DRIFT: go-api has NO handler for routed path /api/v1/auth/me (404) -- values run ahead of the running build
+DRIFT: go-api answered an unexpected status for /ready=500 (want 405)
+DRIFT: query-api has NO handler for routed path /api/v1/home (404) -- values run ahead of the running build

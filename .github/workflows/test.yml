@@ -69,7 +69,7 @@ jobs:
               # uv.lock -- an ordinary dependency bump -- would get
               # code=false, skip test-matrix entirely, and the required
               # `test` check would go green having run no tests against the
-              # new lock. internal/cigates/aggregate_gate_results_test.go's
+              # new lock. internal/cigates/workflows/aggregate_gate_results_test.go's
               # TestPathsFilterCoversEveryFileTheGatedJobsInstall
               # derives this requirement from the `uv sync` invocation itself
               # and fails if it is missing.
@@ -84,7 +84,7 @@ jobs:
               # derives this list from the jobs' own install commands.
               - 'requirements-docs.txt'
               # The guards for these live in this workflow's suite
-              # (internal/cigates/aggregate_gate_results_test.go), so a PR
+              # (internal/cigates/workflows/aggregate_gate_results_test.go), so a PR
               # touching only one of them must not skip that suite --
               # otherwise the check that would notice a collapsed lint or
               # typecheck scope is the one that does not run
@@ -126,7 +126,7 @@ jobs:
               # touches a Python file) polices Go artifacts directly --
               # test_go_integration_sharding.py asserts the live Go package
               # inventory against ci/go_integration_shards.d/,
-              # internal/cigates/workflows_image_publishing_test.go asserts published image names
+              # internal/cigates/workflows/workflows_image_publishing_test.go asserts published image names
               # against deploy/ renderers, test_go_worker_stop_hook_packaging.py
               # asserts the Dockerfile's staged binary path -- and a Go-only
               # PR is exactly the PR that can break what those tests check
@@ -287,7 +287,7 @@ jobs:
   # `path-filtered` (CHAOS-10176): a docs-only skip passes, while a job the `code`
   # filter selected that skipped, was cancelled or failed fails the gate (a
   # measurement that did not happen must fail). The verdict is driven through its result matrix by
-  # internal/cigates/aggregate_gate_results_test.go.
+  # internal/cigates/workflows/aggregate_gate_results_test.go.
   test:
     name: test
     # Must remain `always()`. Under `!cancelled()` (or any condition that lets

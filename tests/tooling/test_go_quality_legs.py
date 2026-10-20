@@ -23,7 +23,7 @@ must never silently drop a stage, so this file pins:
    job-level `if`, and `fail-fast` is off.
 """
 
-# CHAOS-10177: the YAML-shape tests of this file moved to internal/cigates/workflows_quality_legs_test.go; the tests left here execute
+# CHAOS-10177: the YAML-shape tests of this file moved to internal/cigates/workflows/workflows_quality_legs_test.go; the tests left here execute
 # scripts and move in CHAOS-10178 (PR C), which then deletes this file.
 from __future__ import annotations
 

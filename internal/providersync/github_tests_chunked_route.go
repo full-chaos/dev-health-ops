@@ -783,7 +783,7 @@ const (
 // on item identity (CHAOS-4182), which is why the re-anchor counter is a LOWER
 // BOUND on page movement, not a measure of it. Re-walking is safe because every cicd destination is a
 // ReplacingMergeTree keyed on the row's natural identity
-// (migrations/clickhouse/000_raw_tables.sql:97-106 for ci_pipeline_runs,
+// (internal/chmigrate/history/000_raw_tables.sql:97-106 for ci_pipeline_runs,
 // 029_testops_tables.sql:33-102 for the testops tables), so re-processing an
 // item replaces its row instead of duplicating it. Clamping to the end of the
 // page instead would silently drop whatever moved off it -- data loss reported

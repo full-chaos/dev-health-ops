@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "{A}/bump-swap-rewrite-values.py", line 12, in <module>
+    old, new, o7, s7, oo, no, od, nd, arm = sys.argv[1:]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: too many values to unpack (expected 9)

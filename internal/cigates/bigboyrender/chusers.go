@@ -23,7 +23,11 @@ func renderCHUsers(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: cigate bigboy render-ch-users <authorization.go> <out-file>")
 		return 2
 	}
+	// GetenvSecret registers the password for redaction; its short-secret WARN (a stray line on the process stderr that
+	// the Python script never printed) is muted for this one read.
+	previous := secrets.SetWarner(func(string, ...any) {})
 	password := secrets.GetenvSecret("API_CH_PASSWORD")
+	secrets.SetWarner(previous)
 	if password == "" {
 		fmt.Fprintln(stderr, "API_CH_PASSWORD is not set in the environment")
 		return 2
@@ -93,6 +97,11 @@ func RenderUsersXML(grants []string, password string) (string, error) {
 func renderUsersXML(grants []string, password string) (string, error) {
 	if len(grants) == 0 {
 		return "", fmt.Errorf("the posture manifest yielded no grants, nothing written")
+	}
+	if !utf8.Valid([]byte(password)) {
+		// Python decodes the environment with surrogateescape; password.encode() then raised UnicodeEncodeError (rc 1,
+		// nothing written, after the empty-grants check above).
+		return "", fmt.Errorf("UnicodeEncodeError: API_CH_PASSWORD is not valid UTF-8")
 	}
 	sum := sha256.Sum256([]byte(password))
 	var b strings.Builder

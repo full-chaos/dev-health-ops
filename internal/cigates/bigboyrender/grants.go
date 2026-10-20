@@ -57,7 +57,7 @@ func difference(a, b map[string][]string) [][]string {
 		x, y := out[i], out[j]
 		for k := 0; k < len(x) && k < len(y); k++ {
 			if x[k] != y[k] {
-				return x[k] < y[k]
+				return pyLess(x[k], y[k])
 			}
 		}
 		return len(x) < len(y)
@@ -78,19 +78,21 @@ func pyTuples(list [][]string) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-// pyRepr is repr(str) for the strings a TSV line or a table name can hold.
+// pyRepr is repr(str) for the strings a TSV line or a table name can hold. A rune Python's str.isprintable() refuses
+// (the Unicode 15 table of unicode15.go) is escaped as \xhh, \uhhhh or \Uhhhhhhhh; a byte that is not UTF-8 is a lone
+// surrogate in Python's argv and prints as \udcXX.
 func pyRepr(s string) string {
-	quote := byte('\'')
+	quote := '\''
 	if strings.Contains(s, "'") && !strings.Contains(s, `"`) {
 		quote = '"'
 	}
 	var b strings.Builder
-	b.WriteByte(quote)
-	for _, r := range s {
+	b.WriteRune(quote)
+	for _, r := range surrogateEscape(s) {
 		switch {
 		case r == '\\':
 			b.WriteString(`\\`)
-		case r == rune(quote):
+		case r == quote:
 			b.WriteString(`\` + string(r))
 		case r == '\n':
 			b.WriteString(`\n`)
@@ -98,12 +100,27 @@ func pyRepr(s string) string {
 			b.WriteString(`\r`)
 		case r == '\t':
 			b.WriteString(`\t`)
-		case r < 0x20 || r == 0x7f:
-			fmt.Fprintf(&b, `\x%02x`, r)
-		default:
+		case r == ' ' || r > ' ' && r != 0x7f && inRanges(pyPrintRanges, r):
 			b.WriteRune(r)
+		case r <= 0xff:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case r <= 0xffff:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&b, `\U%08x`, r)
 		}
 	}
-	b.WriteByte(quote)
+	b.WriteRune(quote)
 	return b.String()
+}
+
+// pyLess compares two strings by code point as Python does (an invalid byte is the surrogate U+DC00+byte).
+func pyLess(a, b string) bool {
+	x, y := surrogateEscape(a), surrogateEscape(b)
+	for i := 0; i < len(x) && i < len(y); i++ {
+		if x[i] != y[i] {
+			return x[i] < y[i]
+		}
+	}
+	return len(x) < len(y)
 }

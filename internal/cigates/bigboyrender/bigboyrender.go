@@ -12,7 +12,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
-	"unicode"
+	"unicode/utf8"
 )
 
 const usage = "usage: cigate bigboy render-ch-users|grants-compare|pg-posture api|domain|bump-swap-values [args]"
@@ -40,7 +40,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 // pyLines splits like Python's str.splitlines.
 func pyLines(s string) []string {
 	var lines []string
-	runes := []rune(s)
+	runes := surrogateEscape(s)
 	var cur []rune
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
@@ -54,11 +54,11 @@ func pyLines(s string) []string {
 			cur = append(cur, r)
 			continue
 		}
-		lines = append(lines, string(cur))
+		lines = append(lines, fromSurrogateEscape(cur))
 		cur = nil
 	}
 	if len(cur) > 0 {
-		lines = append(lines, string(cur))
+		lines = append(lines, fromSurrogateEscape(cur))
 	}
 	return lines
 }
@@ -81,16 +81,15 @@ func beforeFirst(s, sep string) string {
 	return head
 }
 
-// pyWord and pySpace are Python's str \w and \s as Go regexp classes (Go's own are ASCII). \w is every letter, number
-// and underscore (Python: str.isalnum() or "_"); \s is exactly the code points where str.isspace() is true
+// pyWord (unicode15.go) and pySpace are Python's str \w and \s as Go regexp classes (Go's own are ASCII). \w is the
+// Unicode 15 set of str.isalnum() or "_"; \s is exactly the code points where str.isspace() is true
 // (checked over all of Unicode on Python 3.12: \t \n \v \f \r, \x1c-\x1f, space, \x85, \xa0, \u1680, \u2000-\u200a,
 // \u2028, \u2029, \u202f, \u205f, \u3000).
 const (
-	pyWord  = `\p{L}\p{N}_`
 	pySpace = `\x{9}-\x{d}\x{1c}-\x{20}\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
 )
 
-func isPyWord(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) }
+func isPyWord(r rune) bool { return inRanges(pyWordRanges, r) }
 
 func isPySpace(r rune) bool {
 	switch {
@@ -136,4 +135,31 @@ func chManifest(source string) (grants []chGrant, ok bool) {
 		}
 	}
 	return grants, true
+}
+
+// surrogateEscape decodes like Python's argv: each byte that is not valid UTF-8 becomes the lone surrogate U+DC00+byte.
+func surrogateEscape(s string) []rune {
+	runes := make([]rune, 0, len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			r = 0xdc00 + rune(s[i])
+		}
+		runes = append(runes, r)
+		i += size
+	}
+	return runes
+}
+
+// fromSurrogateEscape is the inverse of surrogateEscape: the lone surrogates go back to their bytes.
+func fromSurrogateEscape(runes []rune) string {
+	var b strings.Builder
+	for _, r := range runes {
+		if r >= 0xdc80 && r <= 0xdcff {
+			b.WriteByte(byte(r - 0xdc00))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

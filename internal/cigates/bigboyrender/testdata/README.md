@@ -14,9 +14,16 @@ Each case directory holds `args` (the Go arguments, one per line), `env` (option
 `stdout`, `stderr` and `out/` (the files the script wrote or changed, relative to the work directory). Placeholders
 in `args`, `env`, `stdout` and `stderr`: `{WORK}` is the case's work directory (the working directory of the run),
 `{REPO}` a git repository built by the test, `{OLD}` and `{NEW}` its two commits, `{FILE:name}` the exact content of
-`in/name` as one argument. A case with `stderr.traceback` has no `stderr`: Python stopped on an uncaught exception there and
-printed a traceback. The Go verb prints exactly the one line in `stderr.traceback` on stderr instead; its exit code,
-stdout and written files are compared with the Python run as in every other case.
+`in/name` as one argument. Every case records Python's stderr: `stderr` (compared exactly) or, where Python printed a traceback, `stderr.python`
+(recorded as is, work and script paths replaced by `{WORK}` and `{A}`) next to `stderr.traceback`, the one line the Go
+verb prints instead. The harness accepts `stderr.traceback` ONLY when `stderr.python` starts with `Traceback (most
+recent call last):`. The one other declared difference is `usageExceptions` in `parity_test.go` (case -> reason): its
+case holds `stderr.usage` (the verb's line) and `stderr.python` (Python's own plain line). Exit code, stdout and written
+files are compared with the Python run as in every other case.
+
+The harness runs the BUILT `cigate` binary (arguments and environment passed as bytes, so a non-UTF-8 argument or
+variable reaches the verb as it reached Python) and compares the PROCESS stderr, so a stray write by a library
+(for example the registry WARN of a short password, `render-short-password`) fails the case.
 
 A posture case (`pg-*`) holds `in/old.go.fixture` and `in/new.go.fixture`: the repository has one commit with each as
 `internal/storage/postgres/{api,domain}_authorization.go`, and `in/expect.out` seeds the out file (`# seed`), so an
@@ -49,6 +56,21 @@ Cases added with the refusal-parity round (same commands as above; Python 3.12.3
   `bump-prod-invalid-utf8` shows nothing written. Go prints `UnicodeDecodeError: <path or sha:path>: invalid UTF-8`.
 - `bump-local-lacks-*`: Python's bare `AssertionError`; Go names the missing text.
 
-Not recorded, because the Go verb differs on purpose: the usage lines (they name the verb, not the `.py` file).
+Not recorded, because the Go verb differs on purpose: the other usage lines (they name the verb, not the `.py` file).
 `guards_test.go` covers those. `grants-no-function` is recorded: Python stopped on an IndexError (traceback on
 stderr, empty stdout, exit 1); Go prints the line in its `stderr.traceback` instead.
+
+Cases added with the review round (same commands; Python 3.12.3, `LC_ALL=C.UTF-8`, Unicode 15.0.0):
+
+- `render-short-password`: a password under the registry minimum; the registry's WARN must not reach stderr.
+- `render-password-invalid-utf8`, `render-password-invalid-utf8-no-grants`: the environment holds the byte `\xff`
+  (surrogateescape in Python); `password.encode()` raised `UnicodeEncodeError` (rc 1, no file) unless the manifest
+  yielded no grants first (Python's own stderr line, `stderr`).
+- `bump-new-sha-invalid-utf8`, `bump-arm-hex-invalid-utf8`: a new-value argument with an invalid byte; Python had
+  already truncated `values.prod.yaml` (`out/values.prod.yaml` is empty) and the write raised `UnicodeEncodeError`.
+  `bump-old-sha-invalid-utf8`: an old-value argument; the `assert` failed first, nothing written.
+- `grants-repr-nonprintable`, `grants-repr-invalid-byte`: repr of table names with U+00A0, U+200B, U+0080, U+00AD, U+088F,
+  U+E0001, U+10FFFF (escaped `\xhh`, `\uhhhh`, `\Uhhhhhhhh`), and an argv byte `\xff` (`\udcff`, sorted as the code
+  point U+DCFF, before U+E000).
+- `render-unicode15-unassigned-table`, `grants-unicode15-unassigned-table`: U+088F is assigned in Unicode 17 (Go) and
+  not in 15 (Python), so Python does not read it as a word character. `unicode15.go` pins the Unicode 15 tables.

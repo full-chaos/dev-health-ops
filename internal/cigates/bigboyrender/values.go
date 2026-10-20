@@ -49,6 +49,9 @@ func bumpSwapValues(args []string, stderr io.Writer) int {
 	armHex := strings.Split(arm, ":")[1]
 	m := matches[0]
 	s = s[:m[0]] + s[m[2]:m[3]] + armHex + s[m[1]:]
+	if !utf8.ValidString(s) {
+		return textEncodeRefusal(prod, stderr)
+	}
 	if err := os.WriteFile(prod, []byte(s), 0o666); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -75,6 +78,9 @@ func bumpSwapValues(args []string, stderr io.Writer) int {
 		return 1
 	}
 	t = strings.ReplaceAll(strings.ReplaceAll(t, o12, n12), od, nd)
+	if !utf8.ValidString(t) {
+		return textEncodeRefusal(local, stderr)
+	}
 	if err := os.WriteFile(local, []byte(t), 0o666); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -88,4 +94,15 @@ func prefixRunes(s string, n int) string {
 		r = r[:n]
 	}
 	return string(r)
+}
+
+// textEncodeRefusal is what Python did on a new value that is not UTF-8 (its argv holds lone surrogates): open(path,
+// "w") had already truncated the file, then the text write raised UnicodeEncodeError (rc 1). The file is left empty.
+func textEncodeRefusal(path string, stderr io.Writer) int {
+	if err := os.WriteFile(path, nil, 0o666); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stderr, "UnicodeEncodeError: a value written to %s is not valid UTF-8\n", path)
+	return 1
 }

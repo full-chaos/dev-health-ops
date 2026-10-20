@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "{A}/cut-contents-pg-api-posture.py", line 18, in <module>
+    delta(
+  File "{A}/pg_posture_expect.py", line 92, in delta
+    old, new, outf = sys.argv[1:4]
+    ^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)

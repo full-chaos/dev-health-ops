@@ -41,7 +41,7 @@ and `/readyz` fails closed, naming the check. See the
 | `--log-level` | `AUTH_SERVICE_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `--shutdown-timeout` | `AUTH_SERVICE_SHUTDOWN_TIMEOUT` | `30s` | 500ms to 10m. Total budget of the ordered shutdown; set it **below** the pod's `terminationGracePeriodSeconds` (Compose default stop grace is 10 s). |
 | `--health-check-timeout` | `AUTH_SERVICE_HEALTH_CHECK_TIMEOUT` | `2s` | 50ms to 30s. Per-check bound for each required readiness check. |
-| `--http-addr` | `AUTH_SERVICE_HTTP_ADDR` | `:8095` | `host:port`. The API listener; mounts no route in Wave 1. |
+| `--http-addr` | `AUTH_SERVICE_HTTP_ADDR` | `:8095` | `host:port`. The API listener. It mounts the session routes only when both session secrets below are set, and no route otherwise. |
 | `--operator-http-addr` | `AUTH_SERVICE_OPERATOR_HTTP_ADDR` | `:8096` | `host:port`. `/healthz`, `/readyz`, `/metrics`. Must differ from the API address. |
 | `--request-timeout` | `AUTH_SERVICE_REQUEST_TIMEOUT` | `10s` | 100ms to 5m. Per-request handler deadline. |
 | `--max-body-bytes` | `AUTH_SERVICE_MAX_BODY_BYTES` | `1048576` | 1024 to 33554432. |
@@ -53,6 +53,10 @@ and `/readyz` fails closed, naming the check. See the
 | `--database-connect-timeout` | `AUTH_DATABASE_CONNECT_TIMEOUT` | `5s` | 100ms to 1m. |
 | `--signing-key-file` | `AUTH_SIGNING_KEY_FILE` | required | Path to the Ed25519 PKCS#8 PEM. |
 | `--signing-key-id` | `AUTH_SIGNING_KEY_ID` | required | The JWKS `kid`: letters, digits, `-`, `_`, `.`, at most 64. |
+| (none, secret) | `AUTH_JWT_SECRET_KEY` or `AUTH_JWT_SECRET_KEY_FILE` | unset | HS256 key of the compatibility access token: the same value as go-api's `JWT_SECRET_KEY`, at least 32 characters. Set together with `AUTH_SESSION_SUCCESSOR_KEY`; with neither, no session route is mounted; with one, startup fails. |
+| (none, secret) | `AUTH_SESSION_SUCCESSOR_KEY` or `AUTH_SESSION_SUCCESSOR_KEY_FILE` | unset | 32 bytes, base64url without padding. Derives the rotated refresh credential that a 30 s grace replay returns again. |
+| `--jwt-issuer` | `AUTH_JWT_ISSUER` | `dev-health-ops` | `iss` of the access token; must equal go-api's `JWT_ISSUER`. |
+| `--jwt-audience` | `AUTH_JWT_AUDIENCE` | `dev-health-api` | `aud` of the access token; must equal go-api's `JWT_AUDIENCE`. |
 | `--version` | | | Prints build metadata as JSON. |
 | `--healthcheck` | | | Probes this deployment's own operator `/readyz` over loopback; exit 0 only on HTTP 200. For container healthchecks. |
 

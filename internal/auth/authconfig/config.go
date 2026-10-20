@@ -26,6 +26,7 @@
 package authconfig
 
 import (
+	"encoding/base64"
 	"fmt"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
@@ -65,6 +66,16 @@ const (
 	// Load rejects it when present rather than ignoring it, because an
 	// operator who set it believes the key is in effect.
 	EnvSigningKeyDirect = "AUTH_SIGNING_KEY"
+	// EnvAccessTokenSecret is the HS256 key of the compatibility access token:
+	// the same value as go-api's JWT_SECRET_KEY, so the tokens auth-service
+	// mints verify where go-api's do. Secret: environment or _FILE only.
+	EnvAccessTokenSecret   = "AUTH_JWT_SECRET_KEY"
+	EnvAccessTokenIssuer   = "AUTH_JWT_ISSUER"
+	EnvAccessTokenAudience = "AUTH_JWT_AUDIENCE"
+	// EnvSessionSuccessorKey is the 32-byte session successor key (base64url,
+	// no padding) that derives a rotated refresh credential (CHAOS-10207
+	// ruling Q-B1-1). Secret: environment or _FILE only.
+	EnvSessionSuccessorKey = "AUTH_SESSION_SUCCESSOR_KEY"
 )
 
 const (
@@ -79,6 +90,13 @@ const (
 	defaultRateLimitBurst         = 40
 	defaultDatabaseMaxConns       = int32(8)
 	defaultDatabaseConnectTimeout = 5 * time.Second
+	// go-api's JWT_ISSUER and JWT_AUDIENCE defaults (internal/platform/config).
+	defaultAccessTokenIssuer   = "dev-health-ops"
+	defaultAccessTokenAudience = "dev-health-api"
+	// minAccessTokenSecretLength is edgetoken.MinSecretLength, the Python
+	// signer's floor, counted in characters.
+	minAccessTokenSecretLength = 32
+	sessionSuccessorKeyBytes   = 32
 
 	minShutdownTimeout        = 500 * time.Millisecond
 	maxShutdownTimeout        = 10 * time.Minute
@@ -122,11 +140,26 @@ type Config struct {
 	SigningKeyPath string
 	SigningKeyID   string
 
+	// Session holds the session routes' token settings. Session.Enabled is
+	// false when neither secret is set: the service then mounts no session
+	// route. Setting one secret without the other is a configuration error.
+	Session SessionTokens
+
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
 	// configured that way is invisible in `docker compose config`, so the
 	// runtime warns once at startup rather than staying silent.
 	EnvOnlySettings []string
+}
+
+// SessionTokens are the session routes' secrets and the access token's iss
+// and aud.
+type SessionTokens struct {
+	Enabled        bool
+	AccessSecret   secrets.Value
+	AccessIssuer   string
+	AccessAudience string
+	SuccessorKey   secrets.Value
 }
 
 // RateLimit is the token-bucket shape applied per route bucket.
@@ -157,6 +190,9 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("database_connect_timeout", c.DatabaseConnectTimeout.String()),
 		slog.Bool("signing_key_configured", c.SigningKeyPath != ""),
 		slog.String("signing_key_id", c.SigningKeyID),
+		slog.Bool("api_routes_enabled", c.Session.Enabled),
+		slog.String("jwt_issuer", c.Session.AccessIssuer),
+		slog.String("jwt_audience", c.Session.AccessAudience),
 	}
 }
 
@@ -274,7 +310,49 @@ func Load(spec Spec) (Config, error) {
 	if cfg.SigningKeyPath, cfg.SigningKeyID, err = signingKey(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.Session, err = sessionTokens(lookup); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// sessionTokens resolves the session routes' settings. The two secrets come
+// together or not at all: a deployment with one of them meant to serve the
+// session routes, and silently serving none would hide that.
+func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
+	out := SessionTokens{
+		AccessIssuer:   stringOr(lookup, EnvAccessTokenIssuer, defaultAccessTokenIssuer),
+		AccessAudience: stringOr(lookup, EnvAccessTokenAudience, defaultAccessTokenAudience),
+	}
+	access, hasAccess, err := secrets.ResolveSecret(EnvAccessTokenSecret, lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
+	successor, hasSuccessor, err := secrets.ResolveSecret(EnvSessionSuccessorKey, lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
+	if hasAccess != hasSuccessor {
+		return SessionTokens{}, fmt.Errorf(
+			"%s and %s are set together or not at all (the session routes need both)",
+			EnvAccessTokenSecret, EnvSessionSuccessorKey,
+		)
+	}
+	if !hasAccess {
+		return out, nil
+	}
+	if len([]rune(access.Reveal())) < minAccessTokenSecretLength {
+		return SessionTokens{}, fmt.Errorf(
+			"%s must be at least %d characters", EnvAccessTokenSecret, minAccessTokenSecretLength,
+		)
+	}
+	if raw, decodeErr := base64.RawURLEncoding.DecodeString(successor.Reveal()); decodeErr != nil || len(raw) != sessionSuccessorKeyBytes {
+		return SessionTokens{}, fmt.Errorf(
+			"%s must be %d bytes, base64url without padding", EnvSessionSuccessorKey, sessionSuccessorKeyBytes,
+		)
+	}
+	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
+	return out, nil
 }
 
 // signingKey resolves the signing-key custody settings.

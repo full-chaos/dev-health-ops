@@ -33,6 +33,22 @@ import (
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
+type ownModelOnlyKey struct{}
+
+// ErrOwnModelUnusable means the org runs on its own model and that model could not be built; the
+// platform model is never drawn in its place (D6107).
+var ErrOwnModelUnusable = errors.New("investmentexplain: the org's own model is unusable and the platform model is not allowed")
+
+// WithOwnModelOnly marks ctx so provider construction never falls back to the platform environment.
+func WithOwnModelOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ownModelOnlyKey{}, true)
+}
+
+func ownModelOnly(ctx context.Context) bool {
+	own, _ := ctx.Value(ownModelOnlyKey{}).(bool)
+	return own
+}
+
 // orgResolverFunc adapts a possibly-nil llmorgsettings.Resolver to a
 // possibly-nil categorize.OrgProviderResolver -- categorize never
 // imports llmorgsettings (stays storage-agnostic; see providerkind.go's
@@ -260,6 +276,9 @@ func newProviderForOrgSource(
 		// scheme/host only -- never the full URL, its path/query, or any
 		// credential value.
 		logOrgBaseURLSSRFFallback(ctx, orgSettings, orgID, string(kind))
+	}
+	if ownModelOnly(ctx) {
+		return nil, false, ErrOwnModelUnusable
 	}
 	provider, err := newProviderFromEnv(kind, model)
 	return provider, false, err

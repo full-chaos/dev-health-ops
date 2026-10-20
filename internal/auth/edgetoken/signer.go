@@ -55,6 +55,11 @@ type AccessClaims struct {
 	// ImpersonatingUserID is the impersonating_user_id claim, written only
 	// when non-empty, after full_name, as the Python dict holds it.
 	ImpersonatingUserID *string
+	// SessionID is the "sid" claim, written last and only when non-empty.
+	// go-api never sets it; auth-service sets it to the session.v1 session_id
+	// so its /v1/sessions routes know the bearer's session. Readers decode
+	// claims into a map and ignore it.
+	SessionID *string
 }
 
 // RefreshClaims are create_refresh_token's (and
@@ -90,6 +95,9 @@ func (s *Signer) Access(claims AccessClaims, now time.Time, jti string) (string,
 	}
 	if claims.ImpersonatingUserID != nil && *claims.ImpersonatingUserID != "" {
 		payload.str("impersonating_user_id", *claims.ImpersonatingUserID)
+	}
+	if claims.SessionID != nil && *claims.SessionID != "" {
+		payload.str("sid", *claims.SessionID)
 	}
 	return s.sign(payload.close())
 }

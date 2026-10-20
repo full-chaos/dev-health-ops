@@ -237,7 +237,7 @@ func teamScopeConsumers() []struct {
 				"/api/v1/work-units/"+workUnitID+"/explain?"+query.Encode(), nil)
 			request.SetPathValue("work_unit_id", workUnitID)
 			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
-			newWorkUnitExplainHandler(reader, nil, nil, nil)(httptest.NewRecorder(), request)
+			newWorkUnitExplainHandler(reader, nil, nil, nil, testPlatformGate{})(httptest.NewRecorder(), request)
 		}},
 		{"GET/POST /api/v1/opportunities", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			filters := home.DefaultFilters()

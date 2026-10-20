@@ -184,6 +184,15 @@ jobs:
           # same time (same reasoning as go.yml's self-hosted legs).
           cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
 
+      - name: Set up Helm
+        # internal/cigates/chartgates renders the chart with `helm template` in the test and race legs; the
+        # oci-arc-runners image ships no helm (same pin as test.yml's tooling-tests job). A missing helm fails
+        # those guards, it never skips them.
+        if: steps.relevance.outputs.relevant == 'true'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: 'v3.21.4'
+
       - name: Prove the migration matrix contract, and prove its freshness gate
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         # The contract half: re-renders the page from the COMMITTED sources

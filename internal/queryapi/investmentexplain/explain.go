@@ -358,7 +358,7 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 		}
 		theme := kv.Key
 		fallbackFindings = append(fallbackFindings, InvestmentMixFinding{
-			Finding: capitalizeFirst(noun) + " appears concentrated in " + theme + " (~" + formatPercentZeroDecimals(pct) + "% of total).",
+			Finding: capitalizeFirst(noun) + " appears concentrated in " + themeLabel(theme) + " (~" + formatPercentZeroDecimals(pct) + "% of total).",
 			Evidence: InvestmentMixFindingEvidence{
 				Theme:               theme,
 				SharePct:            pct,

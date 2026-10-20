@@ -28,7 +28,7 @@
           "subcategory": null,
           "theme": "velocity"
         },
-        "finding": "Effort appears concentrated in velocity (~80% of total)."
+        "finding": "Effort appears concentrated in Velocity (~80% of total)."
       },
       {
         "evidence": {
@@ -39,7 +39,7 @@
           "subcategory": null,
           "theme": "quality"
         },
-        "finding": "Effort appears concentrated in quality (~20% of total)."
+        "finding": "Effort appears concentrated in Quality / Reliability (~20% of total)."
       }
     ],
     "what_to_check_next": [

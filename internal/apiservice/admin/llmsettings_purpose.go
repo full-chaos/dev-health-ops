@@ -21,10 +21,16 @@ func purposeParam(w http.ResponseWriter, raw string, present bool) (purpose llmo
 		return "", false, true
 	}
 	purpose, valid := llmorgsettings.ParsePurpose(raw)
+	if !valid && raw == "categorize" {
+		llmDetail(http.StatusBadRequest, w,
+			"error", "purpose_not_configurable",
+			"message", "categorize runs on the platform provider and takes no organization setting")
+		return "", false, false
+	}
 	if !valid {
 		llmDetail(http.StatusBadRequest, w,
 			"error", "invalid_purpose",
-			"message", "purpose must be one of investigate, explain, categorize")
+			"message", "purpose must be one of investigate, explain")
 		return "", false, false
 	}
 	return purpose, true, true

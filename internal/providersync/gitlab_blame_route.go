@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -374,17 +373,20 @@ func fetchGitLabBlame(
 	if err != nil {
 		return nil, err
 	}
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
+	body, readErr := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
 	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil || len(body) > nativeMaxObjectBytes {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil || len(body) > nativeMaxObjectBytes {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
 	if bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
-		return nil, providerfoundation.ErrNormalizationInvalid
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	var items []json.RawMessage
-	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	if err := providerfoundation.DecodeResponseJSON(response, body, &items, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
 	}
 	return normalizeGitLabBlameItems(items), nil
 }

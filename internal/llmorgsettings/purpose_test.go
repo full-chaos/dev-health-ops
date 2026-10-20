@@ -6,12 +6,12 @@ import (
 )
 
 func TestParsePurposeIsTheFixedList(t *testing.T) {
-	for _, name := range []string{"investigate", "explain", "categorize"} {
+	for _, name := range []string{"investigate", "explain"} {
 		if got, ok := ParsePurpose(name); !ok || string(got) != name {
 			t.Errorf("ParsePurpose(%q) = %q, %v", name, got, ok)
 		}
 	}
-	for _, name := range []string{"", "Explain", "default", "summarize", " explain"} {
+	for _, name := range []string{"", "Explain", "default", "summarize", " explain", "categorize"} {
 		if _, ok := ParsePurpose(name); ok {
 			t.Errorf("ParsePurpose(%q) accepted", name)
 		}
@@ -60,7 +60,7 @@ func TestProjectResolutionOrder(t *testing.T) {
 		t.Run(string(purpose)+"/another purpose's override is ignored", func(t *testing.T) {
 			other := PurposeExplain
 			if purpose == PurposeExplain {
-				other = PurposeCategorize
+				other = PurposeInvestigate
 			}
 			got := project(withOverrides(other, map[string]string{"provider": "openai", "model": "small"}), purpose)
 			if !reflect.DeepEqual(got, withOverrides(other, map[string]string{"provider": "openai", "model": "small"})) || got[keyProvider] != "anthropic" {
@@ -103,7 +103,7 @@ func TestProjectKeyInheritance(t *testing.T) {
 		}
 	})
 	t.Run("another purpose does not inherit through this one", func(t *testing.T) {
-		if got := project(base("anthropic", ""), PurposeCategorize); got[keyModel] != "big" {
+		if got := project(base("anthropic", ""), PurposeInvestigate); got[keyModel] != "big" {
 			t.Fatalf("got %v", got)
 		}
 	})

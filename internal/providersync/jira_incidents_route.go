@@ -413,11 +413,17 @@ func jiraIncidentFetchObject(
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return providerfoundation.ErrNormalizationInvalid
+		return providerfoundation.ResponseInvalid(response, providerfoundation.ReasonStatus)
 	}
-	limited, err := io.ReadAll(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
-	if err != nil || len(limited) > nativeMaxObjectBytes || decodeJiraIncidentJSON(limited, target) != nil {
-		return providerfoundation.ErrNormalizationInvalid
+	limited, err := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
+	if err != nil {
+		return err
+	}
+	if len(limited) > nativeMaxObjectBytes {
+		return providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+	}
+	if decodeJiraIncidentJSON(limited, target) != nil {
+		return providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	return nil
 }

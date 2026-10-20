@@ -17,7 +17,7 @@ tests/tooling files that assert about *shape* because the alternative is
 asserting nothing until the next incident.
 """
 
-# CHAOS-10177: the YAML-shape tests of this file moved to internal/cigates/workflows_fanin_test.go; the tests left here execute
+# CHAOS-10177: the YAML-shape tests of this file moved to internal/cigates/workflows/workflows_fanin_test.go; the tests left here execute
 # scripts and move in CHAOS-10178 (PR C), which then deletes this file.
 from __future__ import annotations
 

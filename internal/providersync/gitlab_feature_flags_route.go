@@ -179,18 +179,16 @@ func fetchGitLabFeatureFlagProjectName(
 		return "", err
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
-	if err != nil || len(body) > nativeMaxObjectBytes {
-		return "", providerfoundation.ErrNormalizationInvalid
+	body, err := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
+	if err != nil {
+		return "", err
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
-	decoder.UseNumber()
+	if len(body) > nativeMaxObjectBytes {
+		return "", providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+	}
 	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return "", providerfoundation.ErrNormalizationInvalid
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return "", providerfoundation.ErrNormalizationInvalid
+	if err := providerfoundation.DecodeResponseJSON(response, body, &value, providerfoundation.DecodeStrict|providerfoundation.DecodeUseNumber); err != nil {
+		return "", err
 	}
 	object, ok := value.(map[string]any)
 	if !ok || object == nil {

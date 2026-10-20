@@ -8,7 +8,7 @@
 # mirror-test-images.yml reads this file, copies each ref verbatim into
 # ghcr.io/<owner>/<repo>:<tag> (same digest), and verifies the digest and that
 # the index holds linux/amd64 and linux/arm64. Workflows use
-# ghcr.io/<owner>/<repo>@sha256:<digest>; internal/cigates/workflows_builder_images_test.go
+# ghcr.io/<owner>/<repo>@sha256:<digest>; internal/cigates/workflows/workflows_builder_images_test.go
 # holds every setup-buildx / setup-qemu step to the digests below.
 #
 # To bump an image: put the new index digest here, update the digest in the

@@ -440,6 +440,9 @@ check_race() {
 # and NOT by count. The slices always partition `go list ./...`: a wrong weight
 # costs balance, never coverage. A slice that selects no package at all fails.
 GO_RACE_WEIGHTS="${GO_RACE_WEIGHTS:-${ROOT}/ci/go_race_weights.tsv}"
+# CHAOS-10289: packages that run alone (ci/go_race_solo.tsv): left out of the weight-balanced split, run in their own
+# `go test -race` invocation after the shard's other packages, so no heavy co-tenant can starve them.
+GO_RACE_SOLO="${GO_RACE_SOLO:-${ROOT}/ci/go_race_solo.tsv}"
 # check_providersync_race_shard SHARD COUNT (CHAOS-8166): internal/providersync is one test binary of ~1,460 sequential tests that took
 # 509 s under -race on an idle host (565 s in CI, 94% of the 600 s go test timeout), so its race run is split BY TEST NAME across the
 # race legs: every leg runs the SHARD-th of COUNT weight-balanced test slices, weights ci/go_providersync_race_weights.tsv, ci/go_providersync_race_shard.awk.
@@ -488,7 +491,7 @@ check_race_shard() {
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
     || die "race shard ${shard} is outside 1..${count}"
   [ -f "${GO_RACE_WEIGHTS}" ] || die "race shards need ${GO_RACE_WEIGHTS}"
-  local -a pkgs
+  local -a pkgs solo_pkgs
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
     if [ "${module_dir}" = "." ]; then
@@ -505,19 +508,36 @@ check_race_shard() {
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
       | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
-      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_shard.awk")
-    printf 'go test -race (shard %s/%s): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -v solo="${GO_RACE_SOLO}" -f "${ROOT}/ci/go_race_shard.awk")
+    solo_pkgs=()
+    while IFS= read -r pkg; do
+      [ -n "${pkg}" ] && solo_pkgs+=("${pkg}")
+    done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
+      | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -v solo="${GO_RACE_SOLO}" -v part=solo -f "${ROOT}/ci/go_race_shard.awk")
+    printf 'go test -race (shard %s/%s): %s: %d package(s), %d solo\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}" "${#solo_pkgs[@]}"
     if [ "${module_dir}" = "." ]; then
       # CHAOS-8166: internal/providersync runs in EVERY race leg, one test-name shard each (it is not in pkgs above).
       selected=$((selected + 1))
       check_providersync_race_shard "${shard}" "${count}"
     fi
-    [ "${#pkgs[@]}" -gt 0 ] || continue
-    selected=$((selected + ${#pkgs[@]}))
-    (
-      cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race "${pkgs[@]}"
-    )
+    if [ "${#pkgs[@]}" -gt 0 ]; then
+      selected=$((selected + ${#pkgs[@]}))
+      (
+        cd "${ROOT}/${module_dir}"
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race "${pkgs[@]}"
+      )
+    fi
+    # CHAOS-10289: the solo packages run last and alone: the shard's packages and its providersync slice have finished, so
+    # nothing else of this leg runs beside them.
+    if [ "${#solo_pkgs[@]}" -gt 0 ]; then
+      selected=$((selected + ${#solo_pkgs[@]}))
+      printf 'go test -race (shard %s/%s): %s: solo, alone: %s\n' "${shard}" "${count}" "${module_dir}" "${solo_pkgs[*]}"
+      (
+        cd "${ROOT}/${module_dir}"
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race "${solo_pkgs[@]}"
+      )
+    fi
   done
   [ "${selected}" -gt 0 ] \
     || die "race shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
@@ -559,7 +579,20 @@ check_race_weights_rows() {
     || die "ci/go_race_weights.tsv is not sorted (LC_ALL=C) or weighs a package twice (CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean)"
   [ -z "$(printf '%s\n' "${rows}" | LC_ALL=C sort | uniq -d)" ] \
     || die "ci/go_race_weights.tsv weighs a package twice (CI-side guard tests/tooling/test_go_quality_legs.py::test_the_race_weights_table_is_clean)"
-  printf 'race-weights-rows: %d row(s) match the package list\n' "$(printf '%s\n' "${rows}" | wc -l)"
+  # CHAOS-10289: the solo rows. A missing file would silently put every solo package back into the shared split.
+  [ -f "${GO_RACE_SOLO}" ] || die "race solo file missing: ${GO_RACE_SOLO}"
+  local solo_rows solo_bad
+  solo_rows="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_SOLO}" | cut -f1)"
+  solo_bad="$(printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort -u | LC_ALL=C comm -23 - <(printf '%s\n' "${rows}" | LC_ALL=C sort) | tr '\n' ' ')"
+  [ -z "${solo_bad}" ] \
+    || die "ci/go_race_solo.tsv names package(s) with no row in ci/go_race_weights.tsv (a solo row needs its measured weight; CI-side guard tests/tooling/test_go_quality_legs.py::test_a_solo_package_is_a_real_weighed_package): ${solo_bad}"
+  [ -z "$(printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort | uniq -d)" ] \
+    || die "ci/go_race_solo.tsv lists a package twice"
+  printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort -c 2>/dev/null \
+    || die "ci/go_race_solo.tsv is not sorted (LC_ALL=C)"
+  ! printf '%s\n' "${solo_rows}" | grep -qx 'internal/providersync' \
+    || die "ci/go_race_solo.tsv lists internal/providersync, which runs as test-name slices in every race leg and cannot be solo"
+  printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | grep -vc '^$')"
 }
 
 ci_leg_stage() {
@@ -3217,6 +3250,7 @@ AUTH_RACE_MARKER="AUTH_RACE_EXECUTED"
 AUTH_RACE_PACKAGES=(
   ./internal/auth/session
   ./internal/auth/identity
+  ./internal/auth/identity/local
 )
 check_auth_race_integration() {
   local pkg output want got total=0

@@ -682,11 +682,6 @@ internal/queryapi/investmentexplain/testdata/parser__action_with_digit.json
 internal/queryapi/investmentexplain/testdata/parser__anti_claim_blank_dropped_causes_length_mismatch.json
 internal/queryapi/investmentexplain/testdata/parser__anti_claim_too_long.json
 internal/queryapi/investmentexplain/testdata/parser__anti_claims_whole_field_is_negative_infinity.json
-internal/queryapi/investmentexplain/testdata/parser__band_mix_value_is_nan.json
-internal/queryapi/investmentexplain/testdata/parser__confidence_band_mix_float_shaped_int.json
-internal/queryapi/investmentexplain/testdata/parser__confidence_band_mix_missing_key.json
-internal/queryapi/investmentexplain/testdata/parser__confidence_band_mix_negative.json
-internal/queryapi/investmentexplain/testdata/parser__confidence_invalid_level.json
 internal/queryapi/investmentexplain/testdata/parser__delta_pct_points_infinity_rejected.json
 internal/queryapi/investmentexplain/testdata/parser__empty_text.json
 internal/queryapi/investmentexplain/testdata/parser__extra_top_level_key.json
@@ -726,7 +721,6 @@ internal/queryapi/investmentexplain/testdata/resolve_repo_filter_ids__repo_scope
 internal/queryapi/investmentexplain/testdata/resolve_repo_filter_ids__team_scope.json
 internal/queryapi/investmentexplain/testdata/resolve_repo_filter_ids__team_scope_with_what_repos.json
 internal/queryapi/investmentexplain/testdata/workunit_attribution.json
-internal/queryapi/meta/testdata/meta.json
 internal/queryapi/people/testdata/alias_mapping.json
 internal/queryapi/people/testdata/no_alias_mapping.json
 internal/queryapi/quadrant/testdata/churn_throughput_team_forces_repo.json
@@ -899,7 +893,6 @@ tests/fixtures/generate_work_unit_label_golden.py
 tests/fixtures/generate_workgraph_components_python_golden.py
 tests/fixtures/generate_workgraph_ids_python_golden.py
 tests/fixtures/jira_shaped_work_items/canonical_work_item.json
-tests/fixtures/migration_087_prefix_frozen.py
 tests/fixtures/operational_entities.py
 tests/fixtures/operational_lifecycles.py
 tests/fixtures/pagerduty/rest_v2_payloads.json

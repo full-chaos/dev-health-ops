@@ -16,3 +16,6 @@ these weights. A wrong weight costs balance, never coverage: the shards always p
 - Merge rule (D6122): a pull request whose only overlap with main is files under `ci/go_race_weights.d/` may merge once
   `git merge-tree` shows 0 conflicts and `bash ci/check_go.sh race-weights-rows` exits 0 on the merged tree; no main
   merge and no full CI rerun is needed for that overlap alone.
+- Merge rule (D6124, extends D6122): an overlap only on files under `ci/go_race_weights.d/`, `.github/workflows/go.yml`,
+  `ci/check_go.sh` and `*.md` merges without a main take when `git merge-tree --write-tree origin/main <head>` exits 0 and
+  the merged tree passes `race-weights-rows`, the path-filter tests, `bash -n ci/check_go.sh`, the go.yml parse and `go vet ./...`.

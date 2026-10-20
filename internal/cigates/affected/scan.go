@@ -247,6 +247,14 @@ func checkReads(root string, t *tables, reads []Read) []string {
 		}
 		declared[r.pkg][r.class] = r.scope
 	}
+	walked := map[string]map[string]string{} // package -> class -> scope, from walks.tsv
+	for _, r := range t.walks {
+		if walked[r.pkg] == nil {
+			walked[r.pkg] = map[string]string{}
+		}
+		walked[r.pkg][r.class] = r.scope
+	}
+	walkers := map[string]bool{}
 	var out []string
 	seen := map[string]bool{}
 	report := func(s string) {
@@ -261,8 +269,12 @@ func checkReads(root string, t *tables, reads []Read) []string {
 			scope = scopeCode
 		}
 		if r.Path == "" {
-			if len(declared[r.Package]) == 0 {
-				report(fmt.Sprintf("%s: undeclared reader: %s; add a reads.tsv row %s\t%s\t<class> for every class the walk reads", r.Package, r, r.Package, scope))
+			walkers[r.Package] = true
+			switch {
+			case len(walked[r.Package]) == 0:
+				report(fmt.Sprintf("%s: undeclared walker: %s; add a walks.tsv row %s\t%s\t<class> for every class the walk reads (%s when it reads only Go package trees)", r.Package, r, r.Package, scope, goTrees))
+			case scope == scopeCode && len(codeOnly(walked[r.Package])) == 0:
+				report(fmt.Sprintf("%s: %s is a walk in non-test code, so its walks.tsv rows must be %s\t%s\t<class> (its importers' tests walk too)", r.Package, r, r.Package, scopeCode))
 			}
 			continue
 		}
@@ -275,6 +287,11 @@ func checkReads(root string, t *tables, reads []Read) []string {
 			report(fmt.Sprintf("%s: undeclared reader: %s; add the reads.tsv row %s\t%s\t%s", r.Package, r, r.Package, scope, class))
 		case scope == scopeCode && !t.covers(r.Path, codeOnly(declared[r.Package])):
 			report(fmt.Sprintf("%s: %s is read by non-test code, so the row must be %s\t%s\t%s (its importers' tests read it too)", r.Package, r, r.Package, scopeCode, class))
+		}
+	}
+	for _, r := range t.walks {
+		if !walkers[r.pkg] {
+			report(fmt.Sprintf("walks.tsv:%d: package %s does not walk from the repository root (no walk call in a package that locates the root)", r.line, r.pkg))
 		}
 	}
 	for _, r := range t.reads {
@@ -338,7 +355,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "plan-reads: %d defect(s) in the declared-read table\n", len(defects))
 		return 1
 	}
-	fmt.Fprintf(stdout, "plan-reads: %d read(s) covered by %d row(s)\n", len(reads), len(t.reads))
+	fmt.Fprintf(stdout, "plan-reads: %d read(s) covered by %d reads row(s) and %d walks row(s)\n", len(reads), len(t.reads), len(t.walks))
 	return 0
 }
 

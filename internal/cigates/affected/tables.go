@@ -17,12 +17,14 @@ import (
 // may hold several globs); a changed path in no class is FULL. reads.tsv says which package reads which class
 // (`package<TAB>scope<TAB>class`): scope test = the package's own tests read it (the package alone is selected), scope
 // code = its non-test code reads it (every test binary that links the package is selected). A class with no reads row
-// is reader-less. A glob that starts with ** (a file kind anywhere, such as **/*.json) only adds readers: a path is known
+// is reader-less. walks.tsv has the same shape and declares what a package that walks from the repository root reads
+// (a literal row never covers a walk: the walk reaches every class its filter lets through). A glob that starts with ** (a file kind anywhere, such as **/*.json) only adds readers: a path is known
 // only through a glob anchored at a first-level entry. The reserved class go-trees declares a walker that reads no class
 // (only Go package trees or FULL paths). `cigate plan-reads` is the guard that keeps reads.tsv complete.
 const (
 	classesFile = "classes.tsv"
 	readsFile   = "reads.tsv"
+	walksFile   = "walks.tsv"
 	scopeTest   = "test"
 	scopeCode   = "code"
 	goTrees     = "go-trees"
@@ -38,6 +40,7 @@ type readRow struct {
 type tables struct {
 	globs []classGlob
 	reads []readRow
+	walks []readRow // walks.tsv: what a package that walks from the repository root reads, one row per class
 }
 
 func readTSV(file string, fields int) ([][]string, []int, error) {
@@ -89,30 +92,41 @@ func loadTables(dir string) (*tables, error) {
 		t.globs = append(t.globs, classGlob{class: r[0], glob: r[1]})
 		known[r[0]] = true
 	}
-	rows, lines, err := readTSV(filepath.Join(dir, readsFile), 3)
+	if t.reads, err = loadRows(dir, readsFile, known); err != nil {
+		return nil, err
+	}
+	if t.walks, err = loadRows(dir, walksFile, known); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func loadRows(dir, file string, known map[string]bool) ([]readRow, error) {
+	rows, lines, err := readTSV(filepath.Join(dir, file), 3)
 	if err != nil {
 		return nil, err
 	}
+	var out []readRow
 	seen := map[string]bool{}
 	for i, r := range rows {
 		row := readRow{pkg: r[0], scope: r[1], class: r[2], line: lines[i]}
 		if row.scope != scopeTest && row.scope != scopeCode {
-			return nil, fmt.Errorf("%s:%d: scope %q is neither %s nor %s", readsFile, row.line, row.scope, scopeTest, scopeCode)
+			return nil, fmt.Errorf("%s:%d: scope %q is neither %s nor %s", file, row.line, row.scope, scopeTest, scopeCode)
 		}
 		if !known[row.class] && row.class != goTrees {
-			return nil, fmt.Errorf("%s:%d: class %q is not in %s", readsFile, row.line, row.class, classesFile)
+			return nil, fmt.Errorf("%s:%d: class %q is not in %s", file, row.line, row.class, classesFile)
 		}
 		if path.Clean(row.pkg) != row.pkg || strings.HasPrefix(row.pkg, "/") || strings.HasPrefix(row.pkg, "../") {
-			return nil, fmt.Errorf("%s:%d: package %q is not a clean repository path", readsFile, row.line, row.pkg)
+			return nil, fmt.Errorf("%s:%d: package %q is not a clean repository path", file, row.line, row.pkg)
 		}
 		k := row.pkg + "\t" + row.class
 		if seen[k] {
-			return nil, fmt.Errorf("%s:%d: package %s already declares class %s", readsFile, row.line, row.pkg, row.class)
+			return nil, fmt.Errorf("%s:%d: package %s already declares class %s", file, row.line, row.pkg, row.class)
 		}
 		seen[k] = true
-		t.reads = append(t.reads, row)
+		out = append(out, row)
 	}
-	return t, nil
+	return out, nil
 }
 
 func checkGlob(g string) error {
@@ -207,7 +221,7 @@ func (t *tables) suggest(p string) string {
 
 func (t *tables) readersOf(classes map[string]bool) []readRow {
 	var out []readRow
-	for _, r := range t.reads {
+	for _, r := range append(append([]readRow{}, t.reads...), t.walks...) {
 		if classes[r.class] {
 			out = append(out, r)
 		}

@@ -162,7 +162,6 @@ var shellPythonPending = map[string]string{
 	"ci/bigboy/check-dho-api-ch-user.sh": "#4565 ports its helper to Go",
 	"ci/bigboy/cut-contents.sh":          "#4565 ports its helpers to Go",
 	"ci/local_validate.sh":               "#4567 and the pytest/uv removal leaves",
-	"ci/run_live_backend_e2e.sh":         "#4564 (live-e2e installs no Python)",
 	"ci/run_tests.sh":                    "CHAOS-10413 (strip its uv/pytest tiers)",
 }
 
@@ -189,6 +188,7 @@ func shellPythonData(t *testing.T) map[string]bool {
 func TestNoShellScriptRunsPython(t *testing.T) {
 	root := repoRoot(t)
 	data := shellPythonData(t)
+	pendingHits := map[string]int{}
 	scanned := 0
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -219,6 +219,7 @@ func TestNoShellScriptRunsPython(t *testing.T) {
 				continue
 			}
 			if owner, ok := shellPythonPending[rel]; ok {
+				pendingHits[rel]++
 				t.Logf("%s:%d still names Python (pending: %s)", rel, number+1, owner)
 				continue
 			}
@@ -240,6 +241,8 @@ func TestNoShellScriptRunsPython(t *testing.T) {
 	for rel := range shellPythonPending {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Errorf("%s is on the pending list but is gone: remove the entry", rel)
+		} else if pendingHits[rel] == 0 {
+			t.Errorf("%s is on the pending list but names no Python any more: remove the entry", rel)
 		}
 	}
 }

@@ -297,11 +297,14 @@ func TestCheckBaseURLRefusesAKeyBeforeAnyResolution(t *testing.T) {
 	}
 }
 
-type resolverSpy struct{ calls int }
+type resolverSpy struct {
+	calls int
+	valid bool
+}
 
 func (s *resolverSpy) validate(context.Context, string) (bool, string, error) {
 	s.calls++
-	return true, "", nil
+	return s.valid, "spy", nil
 }
 
 func newKeyGuardHandlers(spy *resolverSpy, stored string) *handlers {
@@ -357,6 +360,7 @@ func TestModelListRefusesAKeyInTheBaseURLBeforeResolution(t *testing.T) {
 
 	clean := readinessBYOConfig{provider: "openai", apiKey: secrets.NewHidden(key), baseURL: "https://p.example.invalid/v1"}
 	doer.responses = []string{`{"data":[{"id":"gpt-5"}]}`}
+	spy.valid = true
 	out, err = h.modelList(context.Background(), "org", clean)
 	body, _ = out.MarshalJSON()
 	if err != nil || spy.calls != 1 || len(doer.requests) != 1 || !strings.Contains(string(body), `"source":"live"`) {

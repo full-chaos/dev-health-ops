@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -231,138 +230,6 @@ func TestMintTokenIsAnHS256AdminToken(t *testing.T) {
 	}
 }
 
-type call struct {
-	sql  string
-	args []any
-}
-
-type fakeRow struct {
-	vals []any
-	err  error
-}
-
-func (r fakeRow) Scan(dest ...any) error {
-	if r.err != nil {
-		return r.err
-	}
-	for i, d := range dest {
-		switch p := d.(type) {
-		case *string:
-			*p = r.vals[i].(string)
-		case *bool:
-			*p = r.vals[i].(bool)
-		case *int64:
-			*p = r.vals[i].(int64)
-		default:
-			return errors.New("unsupported scan destination")
-		}
-	}
-	return nil
-}
-
-type fakeDB struct {
-	calls   []call
-	execErr error
-	row     fakeRow
-}
-
-func (d *fakeDB) Exec(_ context.Context, sql string, args ...any) error {
-	d.calls = append(d.calls, call{sql, args})
-	return d.execErr
-}
-
-func (d *fakeDB) QueryRow(_ context.Context, sql string, args ...any) livee2e.Row {
-	d.calls = append(d.calls, call{sql, args})
-	return d.row
-}
-
-var now = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
-
-func TestSeedE2EIdentityInsertsOrgUserAndAdminMembershipIdempotently(t *testing.T) {
-	db := &fakeDB{}
-	if err := livee2e.SeedE2EIdentity(context.Background(), db, livee2e.DefaultOrgID, now); err != nil {
-		t.Fatal(err)
-	}
-	if len(db.calls) != 3 {
-		t.Fatalf("%d statements, want 3", len(db.calls))
-	}
-	for i, table := range []string{"organizations", "users", "memberships"} {
-		if !strings.Contains(db.calls[i].sql, "INSERT INTO "+table+" ") || !strings.Contains(db.calls[i].sql, "ON CONFLICT") {
-			t.Errorf("statement %d is not an idempotent insert into %s: %s", i, table, db.calls[i].sql)
-		}
-	}
-	if db.calls[0].args[0] != livee2e.DefaultOrgID || db.calls[0].args[4] != "enterprise" {
-		t.Errorf("organization args %v", db.calls[0].args)
-	}
-	if db.calls[1].args[0] != livee2e.E2EUserID || db.calls[1].args[2] != "local" {
-		t.Errorf("user args %v", db.calls[1].args)
-	}
-	if db.calls[2].args[1] != livee2e.E2EUserID || db.calls[2].args[2] != livee2e.DefaultOrgID || db.calls[2].args[3] != "admin" {
-		t.Errorf("membership args %v", db.calls[2].args)
-	}
-	boom := &fakeDB{execErr: errors.New("boom")}
-	if err := livee2e.SeedE2EIdentity(context.Background(), boom, livee2e.DefaultOrgID, now); err == nil || len(boom.calls) != 1 {
-		t.Errorf("the first failure must stop the seed: %v after %d calls", err, len(boom.calls))
-	}
-}
-
-const principalID = "00000000-0000-4000-8000-00000000e0e1"
-
-func TestPrincipalAssertMigrated(t *testing.T) {
-	good := &fakeDB{row: fakeRow{vals: []any{"service", true, true, false, int64(0), int64(0)}}}
-	if err := livee2e.Principal(context.Background(), good, "assert-migrated", principalID, livee2e.DefaultOrgID, now); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(good.calls[0].sql, "FROM users WHERE id = $1::uuid") || good.calls[0].args[0] != principalID {
-		t.Errorf("query %s args %v", good.calls[0].sql, good.calls[0].args)
-	}
-	for name, vals := range map[string][]any{
-		"not a service":        {"local", true, true, false, int64(0), int64(0)},
-		"has a password":       {"service", false, true, false, int64(0), int64(0)},
-		"inactive":             {"service", true, false, false, int64(0), int64(0)},
-		"superuser":            {"service", true, true, true, int64(0), int64(0)},
-		"bumped token":         {"service", true, true, false, int64(1), int64(0)},
-		"already a membership": {"service", true, true, false, int64(0), int64(1)},
-	} {
-		db := &fakeDB{row: fakeRow{vals: vals}}
-		if err := livee2e.Principal(context.Background(), db, "assert-migrated", principalID, livee2e.DefaultOrgID, now); err == nil {
-			t.Errorf("%s must fail", name)
-		}
-	}
-	missing := &fakeDB{row: fakeRow{err: errors.New("no rows")}}
-	if err := livee2e.Principal(context.Background(), missing, "assert-migrated", principalID, livee2e.DefaultOrgID, now); err == nil || !strings.Contains(err.Error(), "did not create the proof service principal row") {
-		t.Errorf("a missing row must name the migration: %v", err)
-	}
-}
-
-func TestPrincipalMutations(t *testing.T) {
-	for action, wantSQL := range map[string]string{
-		"grant-membership":   "INSERT INTO memberships",
-		"bump-token-version": "UPDATE users SET token_version = token_version + 1",
-		"deactivate":         "UPDATE users SET is_active = false",
-	} {
-		db := &fakeDB{}
-		if err := livee2e.Principal(context.Background(), db, action, principalID, livee2e.DefaultOrgID, now); err != nil {
-			t.Fatalf("%s: %v", action, err)
-		}
-		if len(db.calls) != 1 || !strings.Contains(db.calls[0].sql, wantSQL) {
-			t.Errorf("%s ran %v", action, db.calls)
-		}
-	}
-	grant := &fakeDB{}
-	_ = livee2e.Principal(context.Background(), grant, "grant-membership", principalID, livee2e.DefaultOrgID, now)
-	if grant.calls[0].args[1] != principalID || grant.calls[0].args[2] != livee2e.DefaultOrgID || grant.calls[0].args[3] != "viewer" || !strings.Contains(grant.calls[0].sql, "ON CONFLICT DO NOTHING") {
-		t.Errorf("grant args %v sql %s", grant.calls[0].args, grant.calls[0].sql)
-	}
-	if err := livee2e.Principal(context.Background(), &fakeDB{}, "drop-table", principalID, livee2e.DefaultOrgID, now); err == nil {
-		t.Error("an unknown action must fail")
-	}
-	failing := &fakeDB{execErr: errors.New("boom")}
-	if err := livee2e.Principal(context.Background(), failing, "deactivate", principalID, livee2e.DefaultOrgID, now); err == nil {
-		t.Error("a failed statement must fail")
-	}
-}
-
 // serveRedis answers each command with the next reply in order, then closes.
 func serveRedis(t *testing.T, replies ...string) (url string, received func() []string) {
 	t.Helper()
@@ -428,17 +295,10 @@ func TestValkeyPing(t *testing.T) {
 	}
 }
 
-func run(t *testing.T, db *fakeDB, environ map[string]string, args ...string) (int, string, string) {
+func run(t *testing.T, environ map[string]string, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	connect := func(_ context.Context, uri string) (livee2e.DB, func(), error) {
-		if db == nil {
-			return nil, nil, errors.New("no database in this test")
-		}
-		db.calls = append(db.calls, call{sql: "CONNECT " + uri})
-		return db, func() {}, nil
-	}
-	rc := livee2e.Run(args, func(k string) string { return environ[k] }, connect, &out, &errb)
+	rc := livee2e.Run(args, func(k string) string { return environ[k] }, &out, &errb)
 	return rc, out.String(), errb.String()
 }
 
@@ -467,80 +327,59 @@ func TestRunAssertVerbs(t *testing.T) {
 		{[]string{"assert-health", filepath.Join(t.TempDir(), "missing.json")}, 1},
 		{[]string{"assert-health"}, 2},
 	} {
-		if rc, _, stderr := run(t, nil, nil, c.args...); rc != c.rc || (c.rc != 0 && stderr == "") {
+		if rc, _, stderr := run(t, nil, c.args...); rc != c.rc || (c.rc != 0 && stderr == "") {
 			t.Errorf("%v: rc=%d stderr=%q", c.args, rc, stderr)
 		}
 	}
-	if rc, _, stderr := run(t, nil, map[string]string{"FIXTURE_PROVIDER": "synthetic"}, "assert-home", home); rc != 1 {
+	if rc, _, stderr := run(t, map[string]string{"FIXTURE_PROVIDER": "synthetic"}, "assert-home", home); rc != 1 {
 		t.Errorf("FIXTURE_PROVIDER must reach the home check: rc=%d stderr=%q", rc, stderr)
 	}
 }
 
 func TestRunEdgeRequestJWTSecretAndUsage(t *testing.T) {
 	docs := writeTemp(t, "documents.json", mustJSON(t, []m{{"operation": "featureFlags", "document": "query X { featureFlags }"}}))
-	rc, out, _ := run(t, nil, nil, "edge-request", docs, "featureFlags", "org-9")
+	rc, out, _ := run(t, nil, "edge-request", docs, "featureFlags", "org-9")
 	if rc != 0 || !strings.Contains(out, `"orgId":"org-9"`) {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
-	rc, out, _ = run(t, nil, map[string]string{"ENC_KEY_INPUT": "dev-key-not-for-prod"}, "jwt-secret")
+	rc, out, _ = run(t, map[string]string{"ENC_KEY_INPUT": "dev-key-not-for-prod"}, "jwt-secret")
 	if rc != 0 || out != "96dcb17571b53273398be201758373495565e7dbea74a9540b791ad6d0b42581\n" {
 		t.Fatalf("rc=%d out=%q", rc, out)
 	}
-	if rc, _, _ := run(t, nil, nil, "jwt-secret"); rc != 1 {
+	if rc, _, _ := run(t, nil, "jwt-secret"); rc != 1 {
 		t.Errorf("an empty ENC_KEY_INPUT must fail, rc=%d", rc)
 	}
-	for _, args := range [][]string{nil, {"bogus"}, {"edge-request", "a"}, {"principal", "assert-migrated"}} {
-		if rc, _, stderr := run(t, nil, nil, args...); rc != 2 || !strings.Contains(stderr, "usage: cigate live-e2e") {
+	for _, args := range [][]string{nil, {"bogus"}, {"edge-request", "a"}, {"mint-token", "extra"}} {
+		if rc, _, stderr := run(t, nil, args...); rc != 2 || !strings.Contains(stderr, "usage: cigate live-e2e") {
 			t.Errorf("%v: rc=%d stderr=%q", args, rc, stderr)
 		}
 	}
 	url, _ := serveRedis(t, "+PONG")
-	if rc, _, stderr := run(t, nil, map[string]string{"REDIS_URL": url}, "valkey-ping"); rc != 0 {
+	if rc, _, stderr := run(t, map[string]string{"REDIS_URL": url}, "valkey-ping"); rc != 0 {
 		t.Errorf("valkey-ping rc=%d %q", rc, stderr)
 	}
 }
 
-func TestRunAuthTokenAndPrincipalUseThePostgresURIWithoutTheAsyncDriverSuffix(t *testing.T) {
-	db := &fakeDB{}
-	environ := map[string]string{
-		"POSTGRES_URI":            "postgresql+asyncpg://postgres:postgres@localhost:5432/test_db",
-		"E2E_ORG_ID":              livee2e.DefaultOrgID,
-		"SETTINGS_ENCRYPTION_KEY": "k",
-	}
-	rc, out, stderr := run(t, db, environ, "auth-token")
+func TestRunMintTokenPrintsAnHS256TokenForTheEncryptionKey(t *testing.T) {
+	rc, out, stderr := run(t, map[string]string{"E2E_ORG_ID": "org-7", "SETTINGS_ENCRYPTION_KEY": "k"}, "mint-token")
 	if rc != 0 || stderr != "" {
 		t.Fatalf("rc=%d stderr=%q", rc, stderr)
 	}
-	if db.calls[0].sql != "CONNECT postgresql://postgres:postgres@localhost:5432/test_db" {
-		t.Errorf("connected with %q", db.calls[0].sql)
+	claims := jwt.MapClaims{}
+	if _, err := jwt.ParseWithClaims(strings.TrimSpace(out), claims, func(*jwt.Token) (any, error) { return []byte(livee2e.JWTSecret("k")), nil }, jwt.WithValidMethods([]string{"HS256"})); err != nil {
+		t.Fatalf("printed token does not verify with the secret of the encryption key: %v", err)
 	}
-	token := strings.TrimSpace(out)
-	if _, err := jwt.Parse(token, func(*jwt.Token) (any, error) { return []byte(livee2e.JWTSecret("k")), nil }, jwt.WithValidMethods([]string{"HS256"})); err != nil {
-		t.Errorf("printed token does not verify with the secret of the encryption key: %v", err)
+	if claims["org_id"] != "org-7" || claims["sub"] != livee2e.E2EUserID {
+		t.Errorf("claims %v", claims)
 	}
-	if len(db.calls) != 4 {
-		t.Errorf("want connect + 3 inserts, got %d calls", len(db.calls))
+	rc, out, _ = run(t, nil, "mint-token")
+	if rc != 0 {
+		t.Fatalf("defaults must mint: rc=%d", rc)
 	}
-	pdb := &fakeDB{}
-	if rc, _, stderr := run(t, pdb, environ, "principal", "deactivate", principalID); rc != 0 {
-		t.Fatalf("rc=%d stderr=%q", rc, stderr)
-	}
-	if len(pdb.calls) != 2 || !strings.Contains(pdb.calls[1].sql, "is_active = false") {
-		t.Errorf("calls %v", pdb.calls)
-	}
-	fallback := map[string]string{"DATABASE_URI": "postgresql://u:p@h/d"}
-	fdb := &fakeDB{}
-	if rc, _, _ := run(t, fdb, fallback, "principal", "deactivate", principalID); rc != 0 || fdb.calls[0].sql != "CONNECT postgresql://u:p@h/d" {
-		t.Errorf("DATABASE_URI must be the fallback: %v", fdb.calls)
-	}
-	if rc, _, stderr := run(t, &fakeDB{}, nil, "auth-token"); rc != 1 || !strings.Contains(stderr, "POSTGRES_URI or DATABASE_URI is not set") {
-		t.Errorf("rc=%d stderr=%q", rc, stderr)
-	}
-	if rc, _, _ := run(t, nil, environ, "auth-token"); rc != 1 {
-		t.Errorf("a connect failure must fail, rc=%d", rc)
-	}
-	bdb := &fakeDB{execErr: errors.New("boom")}
-	if rc, out, _ := run(t, bdb, environ, "auth-token"); rc != 1 || out != "" {
-		t.Errorf("a failed seed must print no token: rc=%d out=%q", rc, out)
+	claims = jwt.MapClaims{}
+	if _, err := jwt.ParseWithClaims(strings.TrimSpace(out), claims, func(*jwt.Token) (any, error) {
+		return []byte(livee2e.JWTSecret(livee2e.DefaultEncryptionKey)), nil
+	}, jwt.WithValidMethods([]string{"HS256"})); err != nil || claims["org_id"] != livee2e.DefaultOrgID {
+		t.Errorf("default token: %v %v", err, claims)
 	}
 }

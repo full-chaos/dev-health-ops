@@ -19,7 +19,7 @@
 # Reads: ROOT_DIR, BIN_DIR, TMP_DIR, POSTGRES_URI, CLICKHOUSE_URI_NATIVE,
 # E2E_ORG_ID, JWT_SECRET_KEY, QUERY_API_PORT, READINESS_ATTEMPTS,
 # READINESS_SLEEP_SECS, EXIT_FAILURE. Sets QUERY_API_PID (the caller declares
-# it and stops it with stop_service). Requires the cigate binary in BIN_DIR and
+# it and stops it with stop_service). Requires the cigate binary in BIN_DIR, e2e_psql and
 # wait_for_http_ready to be defined.
 #
 # CHAOS-6241: query_api_e2e_start/query_api_e2e_mint_envelope_token are also
@@ -50,10 +50,38 @@ go_api_prove_e2e_pgx_uri() {
   printf '%s' "${POSTGRES_URI/+asyncpg/}"
 }
 
-# E2E_ORG_ID is a plain shell variable in the caller, not an exported one,
-# so it is handed to the program explicitly.
+# The proof service principal fixture, in SQL against the same throwaway Postgres (e2e_psql of the caller). The users
+# row itself comes from the application schema migration, never from this fixture. E2E_ORG_ID is a fixed uuid.
 go_api_prove_e2e_principal() {
-  E2E_ORG_ID="${E2E_ORG_ID}" "${BIN_DIR}/cigate" live-e2e principal "$1" "${GO_API_PROVE_E2E_PRINCIPAL_ID}"
+  local id="${GO_API_PROVE_E2E_PRINCIPAL_ID}" shape
+  case "$1" in
+    assert-migrated)
+      shape="$(e2e_psql --field-separator=, -c "SELECT auth_provider, password_hash IS NULL, is_active, is_superuser, token_version,
+        (SELECT count(*) FROM memberships WHERE user_id = users.id) FROM users WHERE id = '${id}'")" || return 1
+      if [ -z "${shape}" ]; then
+        echo "the migration did not create the proof service principal row"
+        return 1
+      fi
+      if [ "${shape}" != "service,t,t,f,0,0" ]; then
+        echo "the migrated proof service principal row has an unexpected shape: ${shape}"
+        return 1
+      fi
+      ;;
+    grant-membership)
+      e2e_psql -c "INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)
+        VALUES (gen_random_uuid(), '${id}', '${E2E_ORG_ID}', 'viewer', now(), now()) ON CONFLICT DO NOTHING" >/dev/null
+      ;;
+    bump-token-version)
+      e2e_psql -c "UPDATE users SET token_version = token_version + 1 WHERE id = '${id}'" >/dev/null
+      ;;
+    deactivate)
+      e2e_psql -c "UPDATE users SET is_active = false WHERE id = '${id}'" >/dev/null
+      ;;
+    *)
+      echo "unknown action $1"
+      return 1
+      ;;
+  esac
 }
 
 # go_api_prove_e2e_edge_status TOKEN_FILE -- prints the HTTP status query-api's

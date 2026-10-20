@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 )
 
 type doc = map[string]any
@@ -280,75 +279,6 @@ func MintToken(secret, orgID string, now time.Time, jti string) (string, error) 
 		"jti":          jti,
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
-}
-
-// Row is the one-row result a query returns.
-type Row interface{ Scan(dest ...any) error }
-
-// DB is the part of a Postgres connection the fixture steps use.
-type DB interface {
-	Exec(ctx context.Context, sql string, args ...any) error
-	QueryRow(ctx context.Context, sql string, args ...any) Row
-}
-
-// SeedE2EIdentity inserts the e2e organization, user and admin membership (idempotent).
-func SeedE2EIdentity(ctx context.Context, db DB, orgID string, now time.Time) error {
-	if err := db.Exec(ctx,
-		"INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at)"+
-			" VALUES ($1::uuid, $2, $3, $4, $5, true, $6, $6) ON CONFLICT (id) DO NOTHING",
-		orgID, "e2e-org", "E2E Org", "{}", "enterprise", now); err != nil {
-		return fmt.Errorf("insert organization: %w", err)
-	}
-	if err := db.Exec(ctx,
-		"INSERT INTO users (id, email, is_active, is_verified, is_superuser, auth_provider, created_at, updated_at)"+
-			" VALUES ($1::uuid, $2, true, false, false, $3, $4, $4) ON CONFLICT (id) DO NOTHING",
-		E2EUserID, e2eEmail, "local", now); err != nil {
-		return fmt.Errorf("insert user: %w", err)
-	}
-	if err := db.Exec(ctx,
-		"INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)"+
-			" VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $5) ON CONFLICT DO NOTHING",
-		uuid.NewString(), E2EUserID, orgID, "admin", now); err != nil {
-		return fmt.Errorf("insert membership: %w", err)
-	}
-	return nil
-}
-
-// Principal runs one action of the proof service principal fixture.
-func Principal(ctx context.Context, db DB, action, principalID, orgID string, now time.Time) error {
-	switch action {
-	case "assert-migrated":
-		var (
-			provider      string
-			passwordNull  bool
-			active, super bool
-			tokenVersion  int64
-			memberships   int64
-		)
-		err := db.QueryRow(ctx,
-			"SELECT auth_provider, password_hash IS NULL, is_active, is_superuser, token_version,"+
-				" (SELECT count(*) FROM memberships WHERE user_id = users.id)"+
-				" FROM users WHERE id = $1::uuid", principalID).
-			Scan(&provider, &passwordNull, &active, &super, &tokenVersion, &memberships)
-		if err != nil {
-			return errors.New("the migration did not create the proof service principal row")
-		}
-		if provider != "service" || !passwordNull || !active || super || tokenVersion != 0 || memberships != 0 {
-			return fmt.Errorf("the migrated proof service principal row has an unexpected shape: (%q, %t, %t, %t, %d, %d)",
-				provider, passwordNull, active, super, tokenVersion, memberships)
-		}
-		return nil
-	case "grant-membership":
-		return db.Exec(ctx,
-			"INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)"+
-				" VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $5) ON CONFLICT DO NOTHING",
-			uuid.NewString(), principalID, orgID, "viewer", now)
-	case "bump-token-version":
-		return db.Exec(ctx, "UPDATE users SET token_version = token_version + 1 WHERE id = $1::uuid", principalID)
-	case "deactivate":
-		return db.Exec(ctx, "UPDATE users SET is_active = false WHERE id = $1::uuid", principalID)
-	}
-	return fmt.Errorf("unknown action %s", action)
 }
 
 // ValkeyPing answers whether the Valkey at the redis:// URL replies PONG.

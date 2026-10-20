@@ -26,6 +26,7 @@ require_cmd() {
 }
 
 require_cmd curl
+require_cmd psql
 
 CLICKHOUSE_URI_DEFAULT="clickhouse://ch:ch@127.0.0.1:8123/default"
 POSTGRES_URI_DEFAULT="postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/test_db"
@@ -201,8 +202,28 @@ wait_for_redis() {
   return 1
 }
 
+# psql against the job's throwaway Postgres (superuser, like ci/lib/go_worker_fixture.sh).
+e2e_psql() {
+  PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+    --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
+    --set=ON_ERROR_STOP=1 --quiet --tuples-only --no-align "$@"
+}
+
+# Seeds the e2e organization, user and admin membership (one transaction, idempotent) and prints the access token
+# the api's /health check sends. E2E_ORG_ID is a fixed uuid of this script, so it is safe inside the SQL text.
+E2E_USER_ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 generate_auth_token() {
-  E2E_ORG_ID="${E2E_ORG_ID}" SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY}" "${BIN_DIR}/cigate" live-e2e auth-token
+  e2e_psql -c "
+    INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at)
+      VALUES ('${E2E_ORG_ID}', 'e2e-org', 'E2E Org', '{}', 'enterprise', true, now(), now())
+      ON CONFLICT (id) DO NOTHING;
+    INSERT INTO users (id, email, is_active, is_verified, is_superuser, auth_provider, created_at, updated_at)
+      VALUES ('${E2E_USER_ID}', 'e2e@test.local', true, false, false, 'local', now(), now())
+      ON CONFLICT (id) DO NOTHING;
+    INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)
+      VALUES (gen_random_uuid(), '${E2E_USER_ID}', '${E2E_ORG_ID}', 'admin', now(), now())
+      ON CONFLICT DO NOTHING;" >/dev/null
+  E2E_ORG_ID="${E2E_ORG_ID}" SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY}" "${BIN_DIR}/cigate" live-e2e mint-token
 }
 
 fetch_json() {

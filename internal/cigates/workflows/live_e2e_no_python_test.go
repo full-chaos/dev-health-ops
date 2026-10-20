@@ -128,7 +128,7 @@ func TestLiveE2ENoPythonPlantedDefects(t *testing.T) {
 		{"a run step puts the venv on the path", []mutation{{wf, "          chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh\n", "          echo \"$PWD/.venv/bin\" >> \"$GITHUB_PATH\"\n          chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh\n"}}, []string{"runs Python tooling"}},
 		{"the live runner calls python3", []mutation{{live, `"${BIN_DIR}/cigate" live-e2e assert-health "${HEALTH_FILE}"`, `python3 assert_health.py "${HEALTH_FILE}"`}}, []string{live + " starts or prepares Python"}},
 		{"the live runner sets PYTHONPATH", []mutation{{live, "require_cmd curl\n", "require_cmd curl\nexport PYTHONPATH=src\n"}}, []string{live + " starts or prepares Python"}},
-		{"the prove helper calls run_python", []mutation{{prove, `"${BIN_DIR}/cigate" live-e2e principal "$1"`, `run_python principal.py "$1"`}}, []string{prove + " starts or prepares Python"}},
+		{"the prove helper calls run_python", []mutation{{prove, `"${BIN_DIR}/cigate" live-e2e edge-request "${dir}/documents.json"`, `run_python edge-request.py "${dir}/documents.json"`}}, []string{prove + " starts or prepares Python"}},
 		{"the metrics runner calls python3", []mutation{{"ci/run_metrics_executed_proof.sh", "require_cmd jq\n", "require_cmd jq\npython3 -c 'print(1)'\n"}}, []string{"ci/run_metrics_executed_proof.sh starts or prepares Python"}},
 		{"the live tier function calls python", []mutation{{runTests, `run_step "live backend e2e" bash ./ci/run_live_backend_e2e.sh`, `run_step "live backend e2e" python3 ci/live.py`}}, []string{"live_e2e_tests uses Python"}},
 		{"the path filter lists uv.lock again", []mutation{{wf, "              - 'ci/**'\n", "              - 'ci/**'\n              - 'uv.lock'\n"}}, []string{"lists uv.lock"}},

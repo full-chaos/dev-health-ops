@@ -33,7 +33,7 @@ func run(args []string) int {
 	case "govulncheck":
 		return cigates.AuthGovulncheck(os.Stdin, os.Stdout, os.Stderr)
 	case "live-e2e":
-		return livee2e.Run(args[1:], processEnv, livee2e.ConnectPostgres, os.Stdout, os.Stderr)
+		return livee2e.Run(args[1:], processEnv, os.Stdout, os.Stderr)
 	case "metrics-proof":
 		return metricsproof.Run(args[1:], processEnv, metricsproof.OpenClickHouse, os.Stdout, os.Stderr)
 	case "scope-candidates":

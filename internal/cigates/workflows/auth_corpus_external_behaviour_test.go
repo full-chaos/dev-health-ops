@@ -221,3 +221,84 @@ func TestAuthCorpusSetEnvRecreateIsBounded(t *testing.T) {
 		t.Errorf("the hook reported success although the recreate never finished:\n%s", out)
 	}
 }
+
+// fakeCurl answers the acp leg's two kinds of curl call: OPTIONS to auth-service's API port prints 405 for a path in
+// FAKE_SERVED (comma-separated paths) and 404 for any other; the /metrics read prints FAKE_METRICS.
+func (f fakeDocker) withCurl(t *testing.T) {
+	t.Helper()
+	curl := `#!/bin/bash
+for arg in "$@"; do last="$arg"; done
+if [[ " $* " == *" -X OPTIONS "* ]]; then
+  path="/${last#http://*/}"
+  if [[ ",${FAKE_SERVED}," == *",${path},"* ]]; then printf 405; else printf 404; fi
+  exit 0
+fi
+printf '%s\n' "${FAKE_METRICS:-}"
+`
+	if err := os.WriteFile(filepath.Join(f.dir, "curl"), []byte(curl), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runAcpLeg(t *testing.T, extra ...string) (fakeDocker, string, error) {
+	t.Helper()
+	fake := newFakeDocker(t)
+	fake.withCurl(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "acp")
+	cmd.Env = fake.env(extra...)
+	out, err := cmd.CombinedOutput()
+	return fake, string(out), err
+}
+
+func proxyFlagRecreates(calls string) []string {
+	var out []string
+	for _, line := range strings.Split(calls, "\n") {
+		if strings.Contains(line, " up ") && strings.Contains(line, "--force-recreate") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// Leg acp forwards an aggregate only when the running auth-service serves every route of it, and the sessions
+// aggregate gates the others: a flag on for a route auth-service does not serve would compare auth-service's 404
+// with go-api's answer.
+func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
+	sessions := "/api/v1/auth/refresh,/api/v1/auth/logout"
+	forwarded := func(aggregate string) string {
+		return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
+	}
+	for name, tc := range map[string]struct {
+		served, metrics string
+		wantRecreates   int
+		wantForwards    string
+		wantError       string
+	}{
+		"nothing served":           {wantForwards: "leg acp forwards: none ("},
+		"login without sessions":   {served: "/api/v1/auth/login", wantForwards: "leg acp forwards: none ("},
+		"sessions":                 {served: sessions, metrics: forwarded("sessions"), wantRecreates: 1, wantForwards: "leg acp forwards: sessions\n"},
+		"sessions and login":       {served: sessions + ",/api/v1/auth/login", metrics: forwarded("sessions") + "\n" + forwarded("local_login"), wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
+		"half an aggregate":        {served: "/api/v1/auth/refresh", wantError: "auth-service serves 1 of the 2 routes of aggregate sessions"},
+		"served but not forwarded": {served: sessions, wantRecreates: 1, wantError: "no forwarded request for aggregate sessions"},
+		"forwarded while off":      {metrics: forwarded("saml"), wantError: "go-api forwarded aggregate saml, whose flag is off"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake, out, err := runAcpLeg(t, "FAKE_SERVED="+tc.served, "FAKE_METRICS="+tc.metrics)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(out, tc.wantError) {
+					t.Fatalf("want a failure naming %q, got err=%v:\n%s", tc.wantError, err, out)
+				}
+			} else if err != nil || !strings.Contains(out, "AUTH CORPUS EXTERNAL (acp) PASSED") {
+				t.Fatalf("want a pass, got err=%v:\n%s", err, out)
+			}
+			if tc.wantForwards != "" && !strings.Contains(out, tc.wantForwards) {
+				t.Errorf("want %q in the output:\n%s", tc.wantForwards, out)
+			}
+			if got := proxyFlagRecreates(fake.calls(t)); len(got) != tc.wantRecreates {
+				t.Errorf("go-api recreated %d times for proxy flags, want %d: %q", len(got), tc.wantRecreates, got)
+			}
+		})
+	}
+}

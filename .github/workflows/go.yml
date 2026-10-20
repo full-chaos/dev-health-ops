@@ -216,7 +216,7 @@ on:
       # read and executed by internal/cigates (CHAOS-10176): the test.yml contract, the pip-install manifest the
       # gated jobs name, and the gate script itself
       - '.github/workflows/test.yml'
-      # read by internal/cigates (workflow_path_filters_test.go): the path-filter contract of these four workflows
+      # read by internal/cigates/workflowpaths: the path-filter contract of these four workflows
       - '.github/workflows/codeql-analysis.yml'
       - '.github/workflows/docs-cloudflare.yml'
       - '.github/workflows/docs-guards.yml'
@@ -457,7 +457,7 @@ on:
       # read and executed by internal/cigates (CHAOS-10176): the test.yml contract, the pip-install manifest the
       # gated jobs name, and the gate script itself
       - '.github/workflows/test.yml'
-      # read by internal/cigates (workflow_path_filters_test.go): the path-filter contract of these four workflows
+      # read by internal/cigates/workflowpaths: the path-filter contract of these four workflows
       - '.github/workflows/codeql-analysis.yml'
       - '.github/workflows/docs-cloudflare.yml'
       - '.github/workflows/docs-guards.yml'

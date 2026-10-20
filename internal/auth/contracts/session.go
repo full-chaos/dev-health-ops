@@ -29,6 +29,7 @@ var AuthOutcomeReasonCodes = []string{
 	"principal_deactivated", "revision_stale", "invalid_credentials", "account_locked",
 	"email_unverified", "email_collision", "signup_unavailable", "provider_already_linked",
 	"identity_conflict", "rate_limited",
+	"replayed", "nonce_mismatch", "provisioning_disabled", "domain_not_allowed", "not_entitled",
 	"store_unavailable", "dependency_unavailable",
 }
 

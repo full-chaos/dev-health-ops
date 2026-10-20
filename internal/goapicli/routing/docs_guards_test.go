@@ -41,12 +41,15 @@ func leadingFence(stripped string) (byte, int, string) {
 	return 0, 0, ""
 }
 
-// Python's re treats Unicode whitespace as \s and Unicode letters and digits as \w and \b; Go's classes are ASCII only. uniWS is
+// Python's re treats Unicode whitespace as \s (str.isspace: Zs, Zl, Zp, U+0085, \v and the control separators U+001C to U+001F) and
+// Unicode letters and digits as \w and \b; Go's classes are ASCII only. VERSION DIVERGENCE: Go's unicode tables are newer than
+// the Unicode version CPython 3.12 ships (15), so a letter or digit assigned after Unicode 15 is a word rune here and not to
+// the replaced Python checkers; no document in this repository holds such a character. uniWS is
 // \s as Python reads it, and wordRune/boundary stand in for \w and \b, so a non-breaking space, an accented letter or a
 // non-ASCII digit in a doc or in Go source is read the way the replaced Python checkers read it.
 const (
-	uniWS    = `[\s\p{Z}\x{85}]`
-	uniNotWS = `[^\s\p{Z}\x{85}]`
+	uniWS    = `[\s\p{Z}\x{85}\x0b\x1c-\x1f]`
+	uniNotWS = `[^\s\p{Z}\x{85}\x0b\x1c-\x1f]`
 )
 
 // pyStrip is Python's str.strip(): Unicode whitespace as unicode.IsSpace reads it plus the four control separators
@@ -245,6 +248,7 @@ func TestSchemaDigestGatePlantedDefects(t *testing.T) {
 		{"a header and separator make the row count", sdl, d, hdr + sep + row, ""},
 		{"separator cells padded with U+00A0 make a table", sdl, d, hdr + "|\u00a0---\u00a0|\u00a0---\u00a0|\u00a0---\u00a0|\u00a0---\u00a0|\n" + row, ""},
 		{"a row whose other cells hold only U+00A0 is a stub", sdl, d, hdr + sep + "| " + d + " | \u00a0 | \u00a0 | \u00a0 |\n", "not a row"},
+		{"a cell holding only U+001F is empty as Python strip reads it", sdl, d, hdr + sep + "| " + d + " | \x1f | note | note |\n", "not a row"},
 		{"a cell holding only U+001C is empty as Python strip reads it", sdl, d, hdr + sep + "| " + d + " | \x1c | \x1f | note |\n", "not a row"},
 		{"non-ASCII text in the cells is a real row", sdl, d, hdr + sep + "| " + d + " | café | \u0663 | note |\n", ""},
 		{"single-hyphen separator cells make a real table", sdl, d, hdr + "|-|-|-|-|\n" + row, ""},
@@ -502,6 +506,11 @@ func TestEnableCommandScanPlantedDefects(t *testing.T) {
 	if got := enableCommands("dho goapi routing enable\u00e9 --apply\n"); len(got) != 0 {
 		t.Fatalf("a non-ASCII letter right after the verb is not a word boundary (Python \\b): %q", got)
 	}
+	for _, ws := range []string{"\x1f", "\x1c", "\x0b", "\u2003"} {
+		if got := enableCommands(ws + "dho goapi routing enable --apply\n"); len(got) != 1 {
+			t.Fatalf("%q is whitespace to Python \\s and may lead a command: %q", ws, got)
+		}
+	}
 	if got := pySplitLines("a\u2028b\fc\r\nd\n"); strings.Join(got, "|") != "a|b|c|d" {
 		t.Fatalf("pySplitLines differs from Python str.splitlines: %q", got)
 	}
@@ -520,16 +529,21 @@ func TestEnableCommandScanPlantedDefects(t *testing.T) {
 	}
 }
 
+// The roots and extensions the bare-verb scans read. The go.yml path filter must select every one of them
+// (TestBareVerbScanInputsAreInGoYmlPathFilters in internal/cigates/workflows derives them from these two declarations).
+var bareScanRoots = []string{"cmd", "internal", "src", "docs", "ci"}
+var bareScanExtensions = map[string]bool{".go": true, ".py": true, ".md": true, ".sh": true}
+
 // bareHits returns file:line of every non-test source or doc line where a verb is named without its binary.
 func bareHits(root string, shorthand bool) []string {
 	var hits []string
-	for _, top := range []string{"cmd", "internal", "src", "docs", "ci"} {
+	for _, top := range bareScanRoots {
 		_ = filepath.WalkDir(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil
 			}
 			ext := filepath.Ext(path)
-			if ext != ".go" && ext != ".py" && ext != ".md" && ext != ".sh" {
+			if !bareScanExtensions[ext] {
 				return nil
 			}
 			if strings.HasSuffix(path, "_test.go") || strings.Contains(filepath.ToSlash(path), "/testdata/") {

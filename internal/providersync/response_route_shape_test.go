@@ -75,6 +75,14 @@ func TestShapeWrappedSitesCarryRouteAndKeepTheirSentinel(t *testing.T) {
 			_, err := (GitHubWorkItemPRSocialFetcher{}).fetchPage(ctx, c, "acme-secret", "api", []int{1}, 10, nil, 10, nil, &GitHubWorkItemPRSocialFetchResult{})
 			return err
 		}},
+		"github pr reviews repository null": {"github", `{"data":{"repository":null}}`, providerfoundation.ErrGraphQLResponse, func(c *providerfoundation.HTTPClient) error {
+			_, err := (GitHubPullRequestReviewFetcher{}).fetchPage(ctx, c, "acme-secret", "api", []int{1}, nil, &GitHubPullRequestReviewFetchResult{})
+			return err
+		}},
+		"github work item social repository null": {"github", `{"data":{"repository":null}}`, providerfoundation.ErrGraphQLResponse, func(c *providerfoundation.HTTPClient) error {
+			_, err := (GitHubWorkItemPRSocialFetcher{}).fetchPage(ctx, c, "acme-secret", "api", []int{1}, 10, nil, 10, nil, &GitHubWorkItemPRSocialFetchResult{})
+			return err
+		}},
 		"gitlab files blobs missing": {"gitlab", `{"data":{"project":null}}`, providerfoundation.ErrGraphQLResponse, func(c *providerfoundation.HTTPClient) error {
 			_, err := fetchGitLabGraphQLBlobs(ctx, c, "acme-secret/api", "main", []string{"a.go"}, "rawBlob")
 			return err

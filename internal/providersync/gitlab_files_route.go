@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -382,9 +381,12 @@ func fetchGitLabGraphQLBlobs(
 		return nil, providerfoundation.ErrNormalizationInvalid
 	}
 	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, gitLabGraphQLResponseLimit+1))
-	if err != nil || len(payload) > gitLabGraphQLResponseLimit {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	payload, err := providerfoundation.ReadResponseBody(response, gitLabGraphQLResponseLimit)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > gitLabGraphQLResponseLimit {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
 	var envelope struct {
 		Data struct {
@@ -398,8 +400,8 @@ func fetchGitLabGraphQLBlobs(
 		} `json:"data"`
 		Errors json.RawMessage `json:"errors"`
 	}
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	if err := providerfoundation.DecodeResponseJSON(response, payload, &envelope, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
 	}
 	trimmedErrors := bytes.TrimSpace(envelope.Errors)
 	if len(trimmedErrors) > 0 && !bytes.Equal(trimmedErrors, []byte("null")) && !bytes.Equal(trimmedErrors, []byte("[]")) {
@@ -407,7 +409,7 @@ func fetchGitLabGraphQLBlobs(
 	}
 	if envelope.Data.Project == nil || envelope.Data.Project.Repository == nil ||
 		envelope.Data.Project.Repository.Blobs == nil {
-		return nil, providerfoundation.ErrGraphQLResponse
+		return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
 	}
 	return envelope.Data.Project.Repository.Blobs.Nodes, nil
 }

@@ -168,6 +168,9 @@ func (m *Materializer) categorizeBatch(
 	opts := categorize.CategorizeOptions{Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model}
 	m.forEachPending(ctx, limit, pending, account, func(ctx context.Context, entry preprocessed) (categorize.CategorizationOutcome, error) {
 		result, found := byID[batchCustomID(cfg.RunID, entry.index)]
+		if found && (result.Succeeded() || batchLineBilled(result)) {
+			logBatchLine(ctx, model, result)
+		}
 		switch {
 		case !found:
 			return categorize.CategorizationOutcome{}, categorize.BatchMissingResultError(cfg.ProviderName, model)
@@ -179,6 +182,16 @@ func (m *Materializer) categorizeBatch(
 	})
 	run.log(ctx, batchOutcomeCompleted, state)
 	return true
+}
+
+func batchLineBilled(result categorize.BatchItemResult) bool {
+	return result.InputTokens != nil || result.OutputTokens != nil
+}
+
+// logBatchLine writes the llm.call line of one answered batch line; batch
+// requests always send a strict json_schema.
+func logBatchLine(ctx context.Context, model string, result categorize.BatchItemResult) {
+	categorize.LogCompletion(ctx, categorize.CompletionResult{Model: model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, FormatPath: "schema"})
 }
 
 // lineFailure is the error of a line with no completion; a line that carries
@@ -278,9 +291,10 @@ func (run *batchRun) countBilledLines(ctx context.Context) {
 	}
 	calls, inputTokens, outputTokens := 0, 0, 0
 	for _, result := range results {
-		if result.InputTokens == nil && result.OutputTokens == nil {
+		if !batchLineBilled(result) {
 			continue
 		}
+		logBatchLine(ctx, run.model, result)
 		calls++
 		inputTokens += intValue(result.InputTokens)
 		outputTokens += intValue(result.OutputTokens)

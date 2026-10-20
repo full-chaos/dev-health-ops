@@ -1,6 +1,7 @@
 package fixturescli
 
 import (
+	"crypto/sha256"
 	"reflect"
 	"testing"
 	"time"
@@ -95,7 +96,7 @@ func eachFrozenWorld(t *testing.T, body func(t *testing.T, world FrozenWorld)) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			world, err := decodeWorld(raw)
+			world, err := decodeWorldCached(raw, sha256.Sum256(raw))
 			if err != nil {
 				t.Fatal(err)
 			}

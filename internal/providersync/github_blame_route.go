@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -707,19 +706,23 @@ func fetchGitHubBlame(
 	if err != nil {
 		return nil, err
 	}
-	bodyBytes, decodeErr := io.ReadAll(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
-	var envelope gitHubBlameEnvelope
-	if decodeErr == nil && len(bodyBytes) <= nativeMaxObjectBytes {
-		decodeErr = json.Unmarshal(bodyBytes, &envelope)
-	} else if decodeErr == nil {
-		decodeErr = providerfoundation.ErrNormalizationInvalid
-	}
+	bodyBytes, readErr := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
 	closeErr := response.Body.Close()
-	if decodeErr != nil || closeErr != nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	if readErr != nil {
+		return nil, readErr
+	}
+	if len(bodyBytes) > nativeMaxObjectBytes {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+	}
+	var envelope gitHubBlameEnvelope
+	if err := providerfoundation.DecodeResponseJSON(response, bodyBytes, &envelope, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyRead)
 	}
 	if len(envelope.Errors) > 0 {
-		return nil, providerfoundation.ErrNormalizationInvalid
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	return envelope.Data.Repository.Object.Blame.Ranges, nil
 }

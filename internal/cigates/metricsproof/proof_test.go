@@ -490,29 +490,61 @@ func TestCLICrossOrgOnlyRowsFail(t *testing.T) {
 	}
 }
 
-// Parity pair: the stdout below follows the layout the deleted ci/assert_metrics_executed_proof.py printed (json.dumps indent=2,
-// then the OK line): key order, 2-space indent, empty lists as [] and the blank line before OK.
-func TestCLIOutputParityRecordedPair(t *testing.T) {
-	c := &honestConn{repos: map[string]string{repo: orgA}, tables: map[string][]rec{
-		"cicd_metrics_daily": {{org: orgA, repo: repo, at: late}},
-	}}
-	rc, stdout, stderr := runCLI(t, c, nil, baseArgs("cicd")...)
-	want := `{
-  "cicd": {
-    "table": "cicd_metrics_daily",
-    "org_id": "org-11111111-aaaa",
-    "rows_written": 1,
-    "repos_with_rows": [
-      "11111111-1111-1111-1111-111111111111"
-    ],
-    "repo_ids_outside_org": []
-  }
-}
-
-OK: 1 family(ies) produced rows for org org-11111111-aaaa, all within its 1 live repo id(s).
-`
-	if rc != 0 || stdout != want || stderr != "" {
-		t.Fatalf("rc=%d stderr=%q\n got: %q\nwant: %q", rc, stderr, stdout, want)
+// Recorded parity pair. testdata/python_proof_stdout.txt is the stdout of the deleted
+// ci/assert_metrics_executed_proof.py in the main-branch Live Backend E2E job (run 39413347236, job 118597447628,
+// "final readback assertion"). The fake database below is rebuilt from that recording (table, org, row counts, repos,
+// teams); the Go gate must print the recorded bytes: key order, indent, `[]` for empty lists, the blank line, the OK
+// line.
+func TestCLIOutputReplaysTheRecordedPythonRun(t *testing.T) {
+	recorded, err := os.ReadFile(filepath.Join("testdata", "python_proof_stdout.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonPart, _, ok := strings.Cut(string(recorded), "\n}\n")
+	if !ok {
+		t.Fatal("recording has no JSON object")
+	}
+	type entry struct {
+		Table         string   `json:"table"`
+		OrgID         string   `json:"org_id"`
+		RowsWritten   uint64   `json:"rows_written"`
+		ReposWithRows []string `json:"repos_with_rows"`
+		TeamsWithRows []string `json:"teams_with_rows"`
+	}
+	var parsed map[string]entry
+	if err := json.Unmarshal([]byte(jsonPart+"\n}"), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, m := range regexp.MustCompile(`(?m)^  "([a-z_]+)": \{$`).FindAllStringSubmatch(jsonPart, -1) {
+		order = append(order, m[1])
+	}
+	if len(order) != len(parsed) || len(order) == 0 {
+		t.Fatalf("family order %v does not match %d recorded families", order, len(parsed))
+	}
+	liveRepo := parsed["cicd"].ReposWithRows[0]
+	org := parsed["cicd"].OrgID
+	tables := map[string][]rec{}
+	for _, family := range order {
+		e := parsed[family]
+		for i := uint64(0); i < e.RowsWritten; i++ {
+			r := rec{org: e.OrgID, repo: liveRepo, identity: "ident", at: late}
+			switch family {
+			case "team_wellbeing", "team_cognitive_load":
+				r.team = e.TeamsWithRows[0]
+			case "compounding_risk":
+				r.scope, r.scopeID = "repo", liveRepo
+			case "compounding_risk_team":
+				r.scope, r.scopeID = "team", e.TeamsWithRows[0]
+			}
+			tables[e.Table] = append(tables[e.Table], r)
+		}
+	}
+	c := &honestConn{repos: map[string]string{liveRepo: org}, tables: tables}
+	args := []string{"--clickhouse-uri", "fake://unused", "--org-id", org, "--run-start", runStart.Format(time.RFC3339), "--families"}
+	rc, stdout, stderr := runCLI(t, c, nil, append(args, order...)...)
+	if rc != 0 || stderr != "" || stdout != string(recorded) {
+		t.Fatalf("rc=%d stderr=%q\n got: %s\nwant: %s", rc, stderr, stdout, recorded)
 	}
 }
 

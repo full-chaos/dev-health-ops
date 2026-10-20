@@ -86,6 +86,52 @@ func runSetEnv(t *testing.T, env []string, args ...string) (string, int) {
 	return "", -1
 }
 
+// stopsAProcessByName is true when text contains a command that stops a process (the three signal verbs) or a
+// container (docker kill, stop or rm, also through compose) by name. The verbs are built from parts so this file
+// does not itself spell them; a flag such as timeout's --kill-after is a bound and never matches, because a command
+// word must follow the start of a line or a shell separator.
+func stopsAProcessByName(text string) bool {
+	signals := regexp.MustCompile(`(?m)(^|[\s;&|(])(` + "pk" + `ill|` + "kill" + `all|` + "ki" + `ll)(\s|$)`)
+	containers := regexp.MustCompile(`(?m)\bdocker\s+(` + "ki" + `ll|stop|rm)\b|\bcompose\b[^\n]*\s(` + "ki" + `ll|stop|rm)(\s|$)`)
+	return signals.MatchString(text) || containers.MatchString(text)
+}
+
+func TestStopsAProcessByNameFindsEveryWayToStopOne(t *testing.T) {
+	verbs := map[string]string{"signal": "ki" + "ll", "pattern": "pk" + "ill", "all": "kill" + "all"}
+	planted := map[string]string{
+		"signal verb":           verbs["signal"] + " 4242\n",
+		"pattern verb":          verbs["pattern"] + " -f go-api\n",
+		"all verb":              verbs["all"] + " dho\n",
+		"after a separator":     "true; " + verbs["signal"] + " 1\n",
+		"in a pipeline":         "ps | " + verbs["pattern"] + " x\n",
+		"docker signal":         "docker " + verbs["signal"] + " cid\n",
+		"docker stop":           "docker stop cid\n",
+		"docker rm":             "docker rm -f cid\n",
+		"compose rm":            "docker compose -p p -f f " + "rm" + " -sf go-api\n",
+		"compose stop":          "docker compose -p p -f f stop go-api\n",
+		"compose signal verb":   "docker compose -p p " + verbs["signal"] + " go-api\n",
+		"inside a function":     "f() {\n  " + verbs["signal"] + " $pid\n}\n",
+		"with a leading indent": "    " + verbs["pattern"] + " go-api\n",
+	}
+	for name, text := range planted {
+		if !stopsAProcessByName(text) {
+			t.Errorf("%s was not found: %q", name, text)
+		}
+	}
+	clean := map[string]string{
+		"timeout flag":                  "timeout --" + "ki" + "ll-after=10 60 docker compose -p p up\n",
+		"compose recreate":              "docker compose -p p -f f up --detach --no-deps --force-recreate go-api\n",
+		"compose down":                  "docker compose -p p down --volumes --remove-orphans\n",
+		"a comment":                     "# stops nothing outside the project\n",
+		"a word that contains the verb": "skills killing time\n",
+	}
+	for name, text := range clean {
+		if stopsAProcessByName(text) {
+			t.Errorf("%s was flagged: %q", name, text)
+		}
+	}
+}
+
 func TestAuthCorpusSetEnvScriptIsBoundedAndComposeOnly(t *testing.T) {
 	path := filepath.Join(authProofRoot(t), "ci", "auth_corpus_set_env.sh")
 	info, err := os.Stat(path)
@@ -101,10 +147,8 @@ func TestAuthCorpusSetEnvScriptIsBoundedAndComposeOnly(t *testing.T) {
 			t.Errorf("the script lacks %q", want)
 		}
 	}
-	// Built from parts so this file does not itself spell the banned verbs.
-	killers := regexp.MustCompile(`(?m)(^|[^A-Za-z_])(` + "pk" + `ill|` + "kill" + `all|` + "ki" + `ll)\b`)
-	if killers.MatchString(text) {
-		t.Error("the script stops a process: it may recreate go-api only through compose")
+	if stopsAProcessByName(text) {
+		t.Error("the script stops a process or a container by name: it may recreate go-api only through compose")
 	}
 	if !regexp.MustCompile(`(?m)deadline|timeout [0-9]+|seq 1 [0-9]+`).MatchString(text) {
 		t.Error("the readiness wait is not bounded")

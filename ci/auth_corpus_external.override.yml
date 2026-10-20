@@ -36,12 +36,10 @@ services:
     # chosen once by ci/auth_corpus_external.sh and kept in the project state: ci/auth_corpus_set_env.sh recreates
     # this container, and an ephemeral port would change with it.
     ports: !override ["127.0.0.1:${AUTH_CORPUS_API_PORT}:8000", "127.0.0.1:${AUTH_CORPUS_OPERATOR_PORT}:8080"]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       # The corpus's mail sink listens on the runner (DEVHEALTH_AUTH_ORACLE_SMTP_LISTEN=0.0.0.0:2525); the invite and
-      # verification mail of go-api goes there. The links it mails use this base.
-      - SMTP_HOST=host.docker.internal
+      # verification mail of go-api goes there, through the gateway of its own network (the host as its container sees it). The links it mails use this base.
+      - SMTP_HOST=10.199.90.1
       - SMTP_PORT=2525
       - APP_BASE_URL=https://app.example.test/
       - TRUSTED_PROXIES=10.199.90.1

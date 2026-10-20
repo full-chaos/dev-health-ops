@@ -97,10 +97,10 @@ trap cleanup EXIT
 # compose.yml's migrate service refuses a database that already holds objects but no alembic_version table, and
 # auth-migrate creates the auth schema: leg acp starts go-api (and with it migrate) first and auth-service after it.
 printf 'step 1: up --build --wait go-api (project %s)\n' "${PROJECT}"
-compose up --build --detach --wait --wait-timeout 900 go-api
+timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 go-api
 if [ "${LEG}" = "acp" ]; then
   printf 'step 1b: up --build --wait auth-service\n'
-  compose up --build --detach --wait --wait-timeout 900 auth-service
+  timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --build --detach --wait --wait-timeout 900 auth-service
 fi
 
 hostport() {

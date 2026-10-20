@@ -33,13 +33,16 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 LEG="${AUTH_CORPUS_LEG:-go-api}"
 
+COMPOSE_FILES=(-f "${ROOT}/compose.yml" -f "${SCRIPT_DIR}/auth_corpus_external.override.yml")
+if [ "${LEG}" = "acp" ]; then
+  COMPOSE_FILES+=(-f "${SCRIPT_DIR}/auth_corpus_external.acp.override.yml")
+fi
 compose() {
-  local files=(-f "${ROOT}/compose.yml" -f "${SCRIPT_DIR}/auth_corpus_external.override.yml")
-  if [ "${LEG}" = "acp" ]; then
-    files+=(-f "${SCRIPT_DIR}/auth_corpus_external.acp.override.yml")
-  fi
-  docker compose -p "${PROJECT}" "${files[@]}" --profile auth "$@"
+  docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth "$@"
 }
+
+wait_seconds="${AUTH_CORPUS_WAIT_SECONDS:-120}"
+[[ "${wait_seconds}" =~ ^[0-9]+$ ]] || die "AUTH_CORPUS_WAIT_SECONDS must be a number of seconds (got '${wait_seconds}')"
 
 # Rewrite the state: drop NAME, add it back unless it is being removed. AUTH_PROXY_* lines stay as they are.
 grep -v "^export ${NAME}=" "${STATE}" >"${STATE}.new" || true
@@ -55,10 +58,8 @@ if [ -z "${VALUE}" ]; then
 fi
 
 printf 'auth_corpus_set_env: %s %s; recreating go-api of %s\n' "${NAME}" "$([ -n "${VALUE}" ] && echo set || echo unset)" "${PROJECT}"
-compose up --detach --no-deps --force-recreate --no-build go-api
+timeout --kill-after=2 "${wait_seconds}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth up --detach --no-deps --force-recreate --no-build go-api
 
-wait_seconds="${AUTH_CORPUS_WAIT_SECONDS:-120}"
-[[ "${wait_seconds}" =~ ^[0-9]+$ ]] || die "AUTH_CORPUS_WAIT_SECONDS must be a number of seconds (got '${wait_seconds}')"
 deadline=$((SECONDS + wait_seconds))
 while :; do
   container="$(compose ps -q go-api)"

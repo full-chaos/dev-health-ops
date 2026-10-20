@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,6 +23,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
+// failingBody is a request body whose read fails within the size limit: a
+// transport failure the stack answers before the route.
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
 // undeclaredStatuses names every observed status the declared responses lack.
 func undeclaredStatuses(operation string, observed map[int]bool, declared map[string]any) []string {
 	var problems []string
@@ -36,7 +43,8 @@ func undeclaredStatuses(operation string, observed map[int]bool, declared map[st
 
 // TestEveryStatusTheStackAnswersIsAnOpenAPIResponse drives each OpenAPI
 // operation through the API handler configure builds (database unreachable)
-// with: no or a malformed credential, a body over the limit, a well-formed
+// with: no or a malformed credential, a body over the limit, a body whose read
+// fails, a well-formed
 // credential the store cannot check, and enough requests to exhaust the
 // route's rate bucket. Every status those answers carry must be a response the
 // operation declares.
@@ -48,7 +56,7 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 		authconfig.EnvSigningKeyID:           "openapi-statuses",
 		authconfig.EnvMaxBodyBytes:           "1024",
 		authconfig.EnvRateLimitPerSecond:     "0.01",
-		authconfig.EnvRateLimitBurst:         "3",
+		authconfig.EnvRateLimitBurst:         "4",
 		authconfig.EnvAPIAddress:             "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:        "127.0.0.1:1",
 	}))})
@@ -105,28 +113,34 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 		t.Fatal("the OpenAPI document has no paths")
 	}
 
-	do := func(method, path, body, token string) int {
-		request := httptest.NewRequest(method, path, strings.NewReader(body))
+	do := func(method, path string, body io.Reader, token string) int {
+		request := httptest.NewRequest(method, path, body)
 		if token != "" {
 			request.Header.Set("Authorization", "Bearer "+token)
 		}
 		recorder := httptest.NewRecorder()
 		api.ServeHTTP(recorder, request)
+		if recorder.Code == http.StatusTooManyRequests {
+			if seconds, err := strconv.Atoi(recorder.Header().Get("Retry-After")); err != nil || seconds < 1 {
+				t.Errorf("%s %s: a 429 without Retry-After in whole seconds >= 1 (got %q)", method, path, recorder.Header().Get("Retry-After"))
+			}
+		}
 		return recorder.Code
 	}
 	for path, operations := range document.Paths {
 		for lower, operation := range operations {
 			method := strings.ToUpper(lower)
 			observed := map[int]bool{}
-			observed[do(method, path, "{}", "")] = true
-			observed[do(method, path, strings.Repeat("x", 4096), "")] = true
+			observed[do(method, path, strings.NewReader("{}"), "")] = true
+			observed[do(method, path, strings.NewReader(strings.Repeat("x", 4096)), "")] = true
+			observed[do(method, path, failingBody{}, "")] = true
 			if body, ok := wellFormed[path]; ok {
-				observed[do(method, path, body, "")] = true
+				observed[do(method, path, strings.NewReader(body), "")] = true
 			} else {
-				observed[do(method, path, "", bearer)] = true
+				observed[do(method, path, strings.NewReader(""), bearer)] = true
 			}
 			for i := 0; i < 5; i++ {
-				observed[do(method, path, "{}", "")] = true
+				observed[do(method, path, strings.NewReader("{}"), "")] = true
 			}
 			var statuses []string
 			for status := range observed {

@@ -52,18 +52,10 @@ done
 # The corpus's signing key and mail identity (sessionscenario.Key, authflowvenue fromAddress): the project is
 # started with them, and ci/auth_corpus_set_env.sh sources the same state file on every recreate.
 free_port() {
-  local port i
-  for i in $(seq 1 100); do
-    port=$((20000 + RANDOM % 30000))
-    if [ "${port}" != "${1:-}" ] && ! (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
-      printf '%s\n' "${port}"
-      return 0
-    fi
-  done
-  die "no free local port found"
+  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
 }
 API_PORT="$(free_port)"
-OPERATOR_PORT="$(free_port "${API_PORT}")"
+OPERATOR_PORT="$(free_port)"
 JWT_KEY="$(sed -n 's/^const Key = "\(.*\)"$/\1/p' "${ROOT}/internal/testsupport/sessionscenario/sessionscenario.go")"
 [ -n "${JWT_KEY}" ] || die "could not read sessionscenario.Key"
 {

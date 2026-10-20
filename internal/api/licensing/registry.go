@@ -78,5 +78,5 @@ func DefaultLimits(tier string) (Limits, bool) {
 // customer_push_ingest}).
 func EntitlementDecisionKeys() []string {
 	return []string{"acr_service_model", "agent_context_runtime", "ask_dev", "ask_dev_contextual_entrypoints", "ask_dev_wave_3_1",
-		"canonical_incident_ingestion", "customer_push_ingest"}
+		"canonical_incident_ingestion", "customer_push_ingest", "platform_model_fallback"}
 }

@@ -138,10 +138,8 @@ func stringList(value any) []string {
 	return out
 }
 
-// reasonSnippetHeadRunes caps snippetOf's output -- shorter than
-// llmOutputRejectionLogHeadRunes (explain.go's 300-rune cap on the WHOLE
-// rejected completion) because a rejection detail's snippet targets one
-// single offending field, not the entire response.
+// reasonSnippetHeadRunes caps snippetOf's output: a rejection detail's snippet
+// targets one single offending field, not the entire response.
 const reasonSnippetHeadRunes = 80
 
 // validationRejection is the structured companion to the plain bool

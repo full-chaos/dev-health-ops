@@ -183,7 +183,7 @@ func TestExplainInvestmentMixServesTheAnswerAndLogsTheIgnoredConfidenceRule(t *t
 			t.Fatalf("%s = %v, want %v (line %v)", key, ignored[key], value, ignored)
 		}
 	}
-	if snippet, _ := ignored["reason_snippet"].(string); !strings.HasPrefix(snippet, "Average evidence quality") {
-		t.Fatalf("reason_snippet = %q", snippet)
+	if _, present := ignored["reason_snippet"]; present || strings.Contains(buf.String(), "Average evidence quality") {
+		t.Fatalf("the confidence_ignored line carries completion text: %v", ignored)
 	}
 }

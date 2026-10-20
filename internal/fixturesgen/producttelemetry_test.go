@@ -1,6 +1,7 @@
 package fixturesgen
 
 import (
+	"encoding/json"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -11,22 +12,137 @@ import (
 	"time"
 )
 
-// The generation ceiling is derived from the table's TTL, not transcribed: the migration
-// that creates product_telemetry_events says 180 days, the shelf-life margin is 30 and the
-// strict headroom 1 (ttl_horizon.py). A migration that changes the TTL fails this until the
-// ceiling follows.
-func TestCeilingFollowsTheTableTTL(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "chmigrate", "history", "041_product_telemetry_events.sql"))
+var (
+	ttlKeyword = regexp.MustCompile(`(?i)\bTTL\b`)
+	ttlClause  = regexp.MustCompile(`(?is)^TTL\s+[^;]*?\+\s*(?:toIntervalDay\(\s*(\d+)\s*\)|INTERVAL\s+(\d+)\s+DAY)`)
+)
+
+// ttlDays returns the table-level TTL in days. Quoted strings and quoted identifiers are blanked
+// (honouring backslash and doubled-quote escapes, in backtick identifiers too), and only a TTL outside the column list
+// (paren depth 0) counts, so neither quoted text nor a column TTL is taken for the table TTL.
+func ttlDays(create string) (int, bool) {
+	masked := []byte(create)
+	depth := make([]int, len(create))
+	d := 0
+	for i := 0; i < len(create); i++ {
+		c := create[i]
+		switch {
+		case c == '-' && i+1 < len(create) && create[i+1] == '-':
+			for ; i < len(create) && create[i] != '\n'; i++ {
+				masked[i] = ' '
+			}
+			i--
+		case c == '/' && i+1 < len(create) && create[i+1] == '*':
+			end := strings.Index(create[i+2:], "*/")
+			stop := len(create)
+			if end >= 0 {
+				stop = i + 2 + end + 2
+			}
+			for ; i < stop; i++ {
+				masked[i] = ' '
+			}
+			i--
+		case c == '(':
+			d++
+		case c == ')':
+			d--
+		case c == '\'' || c == '"' || c == '`':
+			for i++; i < len(create); i++ {
+				if create[i] == '\\' && i+1 < len(create) {
+					masked[i], masked[i+1] = ' ', ' '
+					i++
+					continue
+				}
+				if create[i] == c {
+					if i+1 < len(create) && create[i+1] == c {
+						masked[i], masked[i+1] = ' ', ' '
+						i++
+						continue
+					}
+					break
+				}
+				masked[i] = ' '
+			}
+		}
+		if i < len(depth) {
+			depth[i] = d
+		}
+	}
+	text := string(masked)
+	for _, loc := range ttlKeyword.FindAllStringIndex(text, -1) {
+		if depth[loc[0]] != 0 {
+			continue
+		}
+		if m := ttlClause.FindStringSubmatch(text[loc[0]:]); m != nil {
+			n, _ := strconv.Atoi(m[1] + m[2])
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+func telemetryCreate(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "chmigrate", "baseline", "head.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	match := regexp.MustCompile(`(?i)TTL\s+.*?\+\s*INTERVAL\s+(\d+)\s+DAY\s+DELETE`).FindStringSubmatch(string(raw))
-	if match == nil {
+	var head struct {
+		Objects []struct{ Name, Create string } `json:"objects"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range head.Objects {
+		if o.Name == "product_telemetry_events" {
+			return o.Create
+		}
+	}
+	t.Fatal("product_telemetry_events is not in the baseline head.json")
+	return ""
+}
+
+// The generation ceiling is derived from the table's TTL in the chmigrate baseline snapshot
+// (final state after any ALTER): the shelf-life margin is 30 and the strict headroom 1
+// (ttl_horizon.py). A TTL change fails this until the ceiling follows. No TTL fails closed.
+func TestCeilingFollowsTheTableTTL(t *testing.T) {
+	days, ok := ttlDays(telemetryCreate(t))
+	if !ok {
 		t.Fatal("product_telemetry_events lost its TTL clause: the generation ceiling has no horizon to follow")
 	}
-	days, _ := strconv.Atoi(match[1])
 	if got := days - 30 - 1; got != ProductTelemetryCeilingDays {
 		t.Fatalf("TTL is %d days, so the ceiling is %d, but ProductTelemetryCeilingDays = %d", days, got, ProductTelemetryCeilingDays)
+	}
+}
+
+func TestTTLScanRejectsWhatIsNotATableTTL(t *testing.T) {
+	base := "CREATE TABLE product_telemetry_events (`a` String COMMENT 'x') ENGINE = ReplacingMergeTree ORDER BY a "
+	cases := map[string]string{
+		"quoted comment":               "CREATE TABLE t (`a` String COMMENT 'TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"escaped quote":                "CREATE TABLE t (`a` String COMMENT 'it\\'s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"doubled quote":                "CREATE TABLE t (`a` String COMMENT 'it''s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"no ttl":                       base + "SETTINGS index_granularity = 8192",
+		"block comment":                "CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a /* TTL occurred_at + toIntervalDay(180) */",
+		"line comment":                 "CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a -- TTL occurred_at + toIntervalDay(180)\nSETTINGS index_granularity = 8192",
+		"column ttl only":              "CREATE TABLE t (`a` DateTime TTL a + toIntervalDay(180), `b` String) ENGINE = MergeTree ORDER BY a",
+		"escaped backtick identifiers": "CREATE TABLE default.product_telemetry_events (`x\\` TTL d + toIntervalDay(180)` String, `y\\` TTL d + toIntervalDay(90)` String) ENGINE = MergeTree ORDER BY `x\\` TTL d + toIntervalDay(180)`",
+	}
+	for name, create := range cases {
+		if days, ok := ttlDays(create); ok {
+			t.Errorf("%s: found a TTL of %d days where there is none", name, days)
+		}
+	}
+	for create, want := range map[string]int{
+		base + "TTL toDateTime(occurred_at) + toIntervalDay(90) SETTINGS a = 1":                                                       90,
+		base + "TTL occurred_at + INTERVAL 45 DAY DELETE":                                                                             45,
+		"CREATE TABLE t (`a` String COMMENT 'it''s') ENGINE = M TTL d + toIntervalDay(7)":                                             7,
+		"CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a /* TTL a + toIntervalDay(30) */ TTL a + toIntervalDay(90)":         90,
+		"CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a -- TTL a + toIntervalDay(30)\nTTL a + toIntervalDay(90)":           90,
+		"CREATE TABLE t (`a` DateTime TTL a + toIntervalDay(30), `b` String) ENGINE = MergeTree ORDER BY a TTL a + toIntervalDay(90)": 90,
+	} {
+		if days, ok := ttlDays(create); !ok || days != want {
+			t.Errorf("%q: got %d,%v want %d", create, days, ok, want)
+		}
 	}
 }
 

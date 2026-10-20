@@ -42,6 +42,12 @@
               }
             }
           },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope (not error.v1)."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope (not error.v1), with Retry-After."
+          },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",
             "content": {
@@ -85,6 +91,12 @@
               }
             }
           },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope (not error.v1)."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope (not error.v1), with Retry-After."
+          },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",
             "content": {
@@ -121,6 +133,12 @@
               }
             }
           },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope (not error.v1)."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope (not error.v1), with Retry-After."
+          },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",
             "content": {
@@ -156,6 +174,12 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope (not error.v1)."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope (not error.v1), with Retry-After."
           },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",

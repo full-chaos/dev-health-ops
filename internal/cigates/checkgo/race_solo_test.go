@@ -1,4 +1,4 @@
-package cigates_test
+package checkgo_test
 
 import (
 	"bytes"
@@ -368,3 +368,5 @@ func TestSoloOrderGuardFiresOnAMisorderedLeg(t *testing.T) {
 		}
 	}
 }
+
+func contains(l []string, s string) bool { return slices.Contains(l, s) }

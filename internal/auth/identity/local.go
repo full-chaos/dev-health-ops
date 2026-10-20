@@ -54,26 +54,19 @@ func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (
 	subject := principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			// Inserted disabled, enabled last: audit.Commit counts only guarded writes, and an insert has none.
-			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.principals (id, kind, display_name, disabled_at)
-VALUES ($1, 'user', $2, clock_timestamp())`, principal, req.FullName); err != nil {
+			// The 0013 create guard counts these two rows as the state change.
+			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.principals (id, kind, display_name) VALUES ($1, 'user', $2)`,
+				principal, req.FullName); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.users
+			_, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.users
 	(principal_id, email, email_lower, password_hash, password_algorithm, password_updated_at)
 VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_timestamp() END)`,
-				principal, email, req.PasswordHash, algorithm); err != nil {
-				return err
-			}
-			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.principals SET disabled_at = NULL, updated_at = clock_timestamp() WHERE id = $1`, principal)
+				principal, email, req.PasswordHash, algorithm)
 			return err
 		},
-		Audit: localAudit("auth.principal.provisioned", "principal_provisioned", subject, req.Actor),
-		Event: audit.OutboxEvent{
-			AggregateType: "principal", AggregateID: subject, EventType: "principal.provisioned",
-			Payload:        map[string]any{"method": "local"},
-			IdempotencyKey: "principal.provisioned:" + subject,
-		},
+		Audit:  localAudit("auth.principal.provisioned", "principal_provisioned", subject, req.Actor),
+		Events: []audit.OutboxEvent{principalEvent(subject, "principal.created", true), userEvent(subject, "user.created")},
 	})
 	switch {
 	case err == nil:
@@ -95,7 +88,6 @@ func (s *Store) SetEmailVerified(ctx context.Context, principal uuid.UUID, at ti
 		return ErrSignupNotAvailable
 	}
 	subject := principal.String()
-	eventID := uuid.New()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := s.lockUser(ctx, tx, principal); err != nil {
@@ -105,11 +97,8 @@ func (s *Store) SetEmailVerified(ctx context.Context, principal uuid.UUID, at ti
 WHERE principal_id = $1 AND email_verified_at IS DISTINCT FROM $2`, principal, at.UTC())
 			return err
 		},
-		Audit: withChangedFields(localAudit("auth.user.email_verified", "email_verified", subject, actor), "email_verified_at"),
-		Event: audit.OutboxEvent{
-			AggregateType: "user", AggregateID: subject, EventType: "user.email_verified",
-			IdempotencyKey: "user.email_verified:" + subject + ":" + eventID.String(),
-		},
+		Audit:  withChangedFields(localAudit("auth.user.email_verified", "email_verified", subject, actor), "email_verified_at"),
+		Events: []audit.OutboxEvent{userEvent(subject, "user.email_verified")},
 	})
 	return s.localErr(ctx, "set email verified", err)
 }
@@ -126,7 +115,6 @@ func (s *Store) SetPasswordHash(ctx context.Context, principal uuid.UUID, hash s
 		return ErrInvalidPasswordHash
 	}
 	subject := principal.String()
-	eventID := uuid.New()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := s.lockUser(ctx, tx, principal); err != nil {
@@ -137,11 +125,8 @@ SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_tim
 WHERE principal_id = $1`, principal, hash, passwordAlgorithm)
 			return err
 		},
-		Audit: localAudit("auth.user.password_changed", "password_changed", subject, actor),
-		Event: audit.OutboxEvent{
-			AggregateType: "user", AggregateID: subject, EventType: "user.password_changed",
-			IdempotencyKey: "user.password_changed:" + subject + ":" + eventID.String(),
-		},
+		Audit:  localAudit("auth.user.password_changed", "password_changed", subject, actor),
+		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
 	})
 	return s.localErr(ctx, "set password hash", err)
 }

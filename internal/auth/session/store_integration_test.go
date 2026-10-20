@@ -132,7 +132,8 @@ func (e *env) exchange(t *testing.T, ctx context.Context, store *Store, credenti
 
 // guarded sets up a state the guard triggers refuse outside audit.Commit
 // (an expired credential or session, a disabled principal) through
-// audit.Commit itself, as the runtime role, with its audit row and event.
+// audit.Commit itself, as the runtime role, with its audit row (session
+// setup is off the provisioning stream).
 func (e *env) guarded(t *testing.T, ctx context.Context, sql string, args ...any) {
 	t.Helper()
 	err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
@@ -140,11 +141,8 @@ func (e *env) guarded(t *testing.T, ctx context.Context, sql string, args ...any
 			_, err := tx.Exec(ctx, sql, args...)
 			return err
 		},
-		Audit: audit.AuditEvent{EventType: "test.session_setup", Outcome: audit.OutcomeAllowed},
-		Event: audit.OutboxEvent{
-			AggregateType: "test", AggregateID: uuid.NewString(), EventType: "test.session_setup",
-			IdempotencyKey: "test.session_setup:" + uuid.NewString(),
-		},
+		Audit:     audit.AuditEvent{EventType: "test.session_setup", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	if err != nil {
 		t.Fatalf("guarded %q: %v", sql, err)
@@ -208,9 +206,12 @@ func (e *env) auditRows(t *testing.T, ctx context.Context, eventType, target str
 		WHERE event_type = $1 AND attributes->>'target_id' = $2`, eventType, target)
 }
 
-func (e *env) outboxRows(t *testing.T, ctx context.Context, eventType, aggregate string) int {
+// outboxRows counts every outbox row naming the aggregate, raw or as a wire
+// id, of any event type. Session lifecycle is off the provisioning stream
+// (audit.OffStreamSessionLifecycle), so every session commit must leave 0.
+func (e *env) outboxRows(t *testing.T, ctx context.Context, aggregate string) int {
 	return e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events
-		WHERE event_type = $1 AND aggregate_id = $2`, eventType, aggregate)
+		WHERE aggregate_id IN ($1, 'prn_' || $1)`, aggregate)
 }
 
 // parallel starts n calls at once and waits for all of them.
@@ -343,8 +344,8 @@ func TestRaceConcurrentReuseRevokesAndAuditsOnce(t *testing.T) {
 		t.Fatalf("reasons = %v, want 1 refresh_reused and %d session_revoked", reasons, n-1)
 	}
 	id := issued.Session.ID.String()
-	if a, o := e.auditRows(t, ctx, "auth.session.refresh_reuse_revoked", id), e.outboxRows(t, ctx, "session.revoked", id); a != 1 || o != 1 {
-		t.Fatalf("audit rows %d, outbox events %d; want 1 and 1", a, o)
+	if a, o := e.auditRows(t, ctx, "auth.session.refresh_reuse_revoked", id), e.outboxRows(t, ctx, id); a != 1 || o != 0 {
+		t.Fatalf("audit rows %d, outbox events %d; want 1 and 0", a, o)
 	}
 	if live := e.liveCredentials(t, ctx, issued.Session.ID); live != 0 || !e.sessionRevoked(t, ctx, issued.Session.ID) {
 		t.Fatalf("%d live credentials after reuse", live)
@@ -441,8 +442,8 @@ func TestRaceRevokeAllAgainstRotations(t *testing.T) {
 		t.Fatalf("%d live sessions after RevokeAll", n)
 	}
 	if a, o := e.auditRows(t, ctx, "auth.session.revoked_all", principal.String()),
-		e.outboxRows(t, ctx, "principal.sessions_revoked", principal.String()); a != 1 || o != 1 {
-		t.Fatalf("audit rows %d, outbox events %d; want 1 and 1", a, o)
+		e.outboxRows(t, ctx, principal.String()); a != 1 || o != 0 {
+		t.Fatalf("audit rows %d, outbox events %d; want 1 and 0", a, o)
 	}
 	if e.sessionRevoked(t, ctx, other.Session.ID) {
 		t.Fatal("RevokeAll revoked another principal's session")
@@ -475,8 +476,8 @@ func TestRaceConcurrentRevisionBumpsLoseNothing(t *testing.T) {
 	if err != nil || current.Revision != n+1 {
 		t.Fatalf("Current revision = %d, %v; want %d", current.Revision, err, n+1)
 	}
-	if a := e.auditRows(t, ctx, "auth.session.revision_bumped", issued.Session.ID.String()); a != n {
-		t.Fatalf("%d audit rows, want %d", a, n)
+	if a, o := e.auditRows(t, ctx, "auth.session.revision_bumped", issued.Session.ID.String()), e.outboxRows(t, ctx, issued.Session.ID.String()); a != n || o != 0 {
+		t.Fatalf("%d audit rows and %d outbox events, want %d and 0", a, o, n)
 	}
 	markRace(t)
 }
@@ -753,8 +754,8 @@ func TestRevokeIsAuditedOnceAndIdempotent(t *testing.T) {
 		}
 	}
 	id := issued.Session.ID.String()
-	if a, o := e.auditRows(t, ctx, "auth.session.revoked", id), e.outboxRows(t, ctx, "session.revoked", id); a != 1 || o != 1 {
-		t.Fatalf("audit %d, outbox %d; want 1, 1", a, o)
+	if a, o := e.auditRows(t, ctx, "auth.session.revoked", id), e.outboxRows(t, ctx, id); a != 1 || o != 0 {
+		t.Fatalf("audit %d, outbox %d; want 1, 0", a, o)
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE actor_principal_id = $1 AND request_id = $2`, actor.String(), requestID); n != 1 {
 		t.Fatalf("the audit row does not name the actor and request (%d rows)", n)

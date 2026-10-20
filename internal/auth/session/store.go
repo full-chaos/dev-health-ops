@@ -11,8 +11,11 @@
 // Rotation writes only columns migration 0006/0010 leave unguarded (an insert,
 // consumed_at, superseded_by), so it commits in a plain transaction. Every
 // write of a guarded column (revoked_at, revision) goes through audit.Commit,
-// so the revocation, its audit row and its outbox event commit together or not
-// at all. Time is the database clock (clock_timestamp()) throughout.
+// so the revocation and its audit row commit together or not at all. Session
+// lifecycle is not a provisioning event (provisioning-event.v1 has no session
+// aggregate), so these commits are off the outbox stream
+// (audit.OffStreamSessionLifecycle). Time is the database clock
+// (clock_timestamp()) throughout.
 package session
 
 import (
@@ -527,7 +530,7 @@ func (s *Store) rotate(ctx context.Context, tx pgx.Tx, session Record, p present
 var errNotReuse = errors.New("session: the credential is no longer a reuse under the lock")
 
 // revokeForReuse revokes the session and every credential of it, with the
-// audit row and outbox event, in one audit.Commit transaction. It re-reads the
+// audit row, in one audit.Commit transaction. It re-reads the
 // credential under the session lock: the decision is taken on the rows it
 // writes, not on the earlier read.
 func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID string, hash []byte) (Result, error) {
@@ -561,11 +564,7 @@ func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID str
 				"credential_class": "refresh_credential",
 			},
 		},
-		Event: audit.OutboxEvent{
-			AggregateType: "session", AggregateID: sessionID, EventType: "session.revoked",
-			Payload:        map[string]any{"session_id": sessionID, "principal_id": principal, "reason_code": revokedByReuse},
-			IdempotencyKey: "session.revoked:" + sessionID,
-		},
+		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
 	case err == nil:
@@ -628,11 +627,7 @@ func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (b
 			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
 			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "session", "target_id": id},
 		},
-		Event: audit.OutboxEvent{
-			AggregateType: "session", AggregateID: id, EventType: "session.revoked",
-			Payload:        map[string]any{"session_id": id, "principal_id": principal, "reason_code": revokedByCaller},
-			IdempotencyKey: "session.revoked:" + id,
-		},
+		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
 	case err == nil:
@@ -647,15 +642,12 @@ func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (b
 }
 
 // RevokeAll ends every effectively live session of a principal, in one transaction with
-// one audit row and one outbox event. It returns how many it revoked.
+// one audit row. Session lifecycle is not a provisioning event, so it writes no
+// outbox row. It returns how many it revoked.
 func (s *Store) RevokeAll(ctx context.Context, principalID uuid.UUID, actor Actor) (int, error) {
 	principal := principalID.String()
-	eventID, err := uuid.NewRandom()
-	if err != nil {
-		return 0, err
-	}
 	var revoked int
-	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			// Locks in id order, so two revoke-alls of one principal cannot
 			// deadlock; a single-session writer holds one lock and cannot either.
@@ -696,11 +688,7 @@ func (s *Store) RevokeAll(ctx context.Context, principalID uuid.UUID, actor Acto
 			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
 			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "principal", "target_id": principal},
 		},
-		Event: audit.OutboxEvent{
-			AggregateType: "principal", AggregateID: principal, EventType: "principal.sessions_revoked",
-			Payload:        map[string]any{"principal_id": principal, "reason_code": revokedByCaller},
-			IdempotencyKey: "principal.sessions_revoked:" + principal + ":" + eventID.String(),
-		},
+		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
 	case err == nil:
@@ -725,12 +713,8 @@ func (s *Store) BumpRevision(ctx context.Context, sessionID uuid.UUID, actor Act
 		}
 		return 0, fmt.Errorf("%w: reading the session: %w", ErrStore, err)
 	}
-	eventID, err := uuid.NewRandom()
-	if err != nil {
-		return 0, err
-	}
 	var revision int64
-	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			locked, err := s.lockSession(ctx, tx, id)
 			if err != nil {
@@ -748,11 +732,7 @@ func (s *Store) BumpRevision(ctx context.Context, sessionID uuid.UUID, actor Act
 			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
 			Attributes: map[string]any{"target_kind": "session", "target_id": id},
 		},
-		Event: audit.OutboxEvent{
-			AggregateType: "session", AggregateID: id, EventType: "session.revision_changed",
-			Payload:        map[string]any{"session_id": id, "principal_id": principal},
-			IdempotencyKey: "session.revision:" + id + ":" + eventID.String(),
-		},
+		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
 	case err == nil:

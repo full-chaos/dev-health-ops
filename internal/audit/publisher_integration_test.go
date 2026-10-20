@@ -55,22 +55,27 @@ func (c *revisionConsumer) Deliver(_ context.Context, e Event) error {
 	return nil
 }
 
+// commitEvent commits one organization.updated event on the named
+// aggregate (keyedOrg) and returns its idempotency key. Commit assigns the
+// revision; revision is the one the test expects it to assign.
 func commitEvent(t *testing.T, ctx context.Context, env *auditFixture, aggregate string, revision int64) string {
 	t.Helper()
-	key := fmt.Sprintf("%s-r%d", aggregate, revision)
+	key := fmt.Sprintf("organization:%s:%d", keyedOrg(aggregate), revision)
+	slug := fmt.Sprintf("%s-r%d", aggregate, revision)
 	err := Commit(ctx, env.pool, env.schema, Mutation{
 		Apply: func(ctx context.Context, tx TxOps) error {
-			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug) VALUES (gen_random_uuid(), $1, $1)`, key)
+			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug) VALUES (gen_random_uuid(), $1, $1)`, slug)
 			return err
 		},
-		Audit: AuditEvent{EventType: "organization.updated", Outcome: OutcomeAllowed},
-		Event: OutboxEvent{
-			AggregateType: "organization", AggregateID: aggregate, EventType: "organization.updated",
-			Payload: map[string]any{"revision": revision}, IdempotencyKey: key,
-		},
+		Audit:  AuditEvent{EventType: "organization.updated", Outcome: OutcomeAllowed},
+		Events: []OutboxEvent{{AggregateType: "organization", AggregateID: keyedOrg(aggregate), EventType: "organization.updated"}},
 	})
 	if err != nil {
 		t.Fatalf("seed %s: %v", key, err)
+	}
+	var n int
+	if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE idempotency_key = $1`, key).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("seed %s: Commit did not write revision %d (rows %d, %v)", aggregate, revision, n, err)
 	}
 	return key
 }
@@ -217,7 +222,7 @@ func TestPublisherRedeliversWhenTheMarkNeverCommits(t *testing.T) {
 	if consumer.seen[k] != 2 {
 		t.Fatalf("consumer saw the event %d time(s), want 2 (at least once)", consumer.seen[k])
 	}
-	if consumer.state["org-a"] != 1 {
+	if consumer.state[keyedOrg("org-a")] != 1 {
 		t.Errorf("replay changed consumer state: %v", consumer.state)
 	}
 }
@@ -243,14 +248,14 @@ func TestOutOfOrderAndReplayedDeliveryNeverRevertsConsumerState(t *testing.T) {
 	if _, err := p.Step(ctx, now, 10); err != nil {
 		t.Fatal(err)
 	}
-	if got := consumer.state["org-a"]; got != 3 {
+	if got := consumer.state[keyedOrg("org-a")]; got != 3 {
 		t.Fatalf("state after r1,r3 = %d, want 3", got)
 	}
 	if _, err := p.Step(ctx, now.Add(time.Minute), 10); err != nil { // r2 arrives late
 		t.Fatal(err)
 	}
 	t.Logf("delivery order: %v; final state: %v", consumer.received, consumer.state)
-	if got := consumer.state["org-a"]; got != 3 {
+	if got := consumer.state[keyedOrg("org-a")]; got != 3 {
 		t.Fatalf("a delayed r2 reverted the state to %d", got)
 	}
 	order := consumer.received
@@ -263,7 +268,7 @@ func TestOutOfOrderAndReplayedDeliveryNeverRevertsConsumerState(t *testing.T) {
 	if _, err := p.Step(ctx, time.Now().Add(time.Second), 10); err != nil {
 		t.Fatal(err)
 	}
-	if got := consumer.state["org-a"]; got != 3 {
+	if got := consumer.state[keyedOrg("org-a")]; got != 3 {
 		t.Fatalf("a replay changed the state to %d", got)
 	}
 	if consumer.seen[k3] != 2 || consumer.seen[k2] != 2 {
@@ -410,8 +415,8 @@ func TestCommitRefusesASecretAttributeAndWritesNothing(t *testing.T) {
 			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug) VALUES (gen_random_uuid(), 'leak', 'leak')`)
 			return err
 		},
-		Audit: AuditEvent{EventType: "leak.probe", Outcome: OutcomeAllowed, Attributes: map[string]any{"refresh_token": "rt_" + strings.Repeat("ab12", 5)}},
-		Event: OutboxEvent{AggregateType: "a", AggregateID: "leak", EventType: "leak.probe", IdempotencyKey: "leak-1"},
+		Audit:  AuditEvent{EventType: "leak.probe", Outcome: OutcomeAllowed, Attributes: map[string]any{"refresh_token": "rt_" + strings.Repeat("ab12", 5)}},
+		Events: probeEvents(),
 	})
 	if !errors.Is(err, ErrAttributeNotAllowed) {
 		t.Fatalf("Commit = %v, want ErrAttributeNotAllowed", err)

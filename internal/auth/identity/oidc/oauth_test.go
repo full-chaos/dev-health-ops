@@ -64,7 +64,7 @@ func TestOAuthTargetPerProvider(t *testing.T) {
 		pkce   bool
 		issuer string
 	}{
-		"oauth_github": {false, "https://github.com"},
+		"oauth_github": {true, "https://github.com"},
 		"oauth_gitlab": {true, "https://gitlab.com"},
 		"oauth_google": {true, "https://accounts.google.com"},
 	} {
@@ -83,5 +83,26 @@ func TestOAuthTargetPerProvider(t *testing.T) {
 	}
 	if p, ok := oauthProviderOf("oauth_google"); !ok || p != social.Google {
 		t.Fatal("oauth_google")
+	}
+}
+
+func TestOAuthGitHubConfigAcceptsOnlyGitHubCom(t *testing.T) {
+	for raw, ok := range map[string]bool{
+		`{"client_id":"c"}`: true,
+		`{"client_id":"c","base_url":"https://github.com"}`:  true,
+		`{"client_id":"c","base_url":"https://github.com/"}`: true,
+		`{"client_id":"c","base_url":"https://ghe.example"}`: false,
+		`{"client_id":"c","base_url":"http://localhost:80"}`: false,
+	} {
+		cfg, err := decodeOAuthConfig(raw)
+		if err == nil {
+			err = checkOAuthBase("oauth_github", cfg)
+		}
+		if (err == nil) != ok {
+			t.Errorf("%s: err=%v, want accepted=%v", raw, err, ok)
+		}
+	}
+	if err := checkOAuthBase("oauth_gitlab", OAuthConfig{BaseURL: "https://git.example"}); err != nil {
+		t.Fatalf("a self-hosted GitLab base: %v", err)
 	}
 }

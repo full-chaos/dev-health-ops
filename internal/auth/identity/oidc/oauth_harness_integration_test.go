@@ -46,6 +46,9 @@ type fakeOAuth struct {
 	verifier []string // code_verifier values the token endpoints received
 	// tokenClient overrides the client a token is reported as issued to.
 	tokenClient string
+	// rejectVerifier plays a provider that refuses any code_verifier.
+	rejectVerifier bool
+	tokenCalls     int
 }
 
 func newFakeOAuth() *fakeOAuth {
@@ -90,8 +93,13 @@ func (f *fakeOAuth) serveToken(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.hits++
+	f.tokenCalls++
 	verifier := r.PostForm.Get("code_verifier")
 	f.verifier = append(f.verifier, verifier)
+	if f.rejectVerifier && verifier != "" {
+		writeFakeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+		return
+	}
 	g, ok := f.grants[r.PostForm.Get("code")]
 	delete(f.grants, r.PostForm.Get("code"))
 	client := r.PostForm.Get("client_id")

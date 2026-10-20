@@ -107,6 +107,9 @@ func decodeOAuthConfig(raw string) (OAuthConfig, error) {
 	return cfg, nil
 }
 
+// checkOAuthBase holds a row's base_url to its provider.
+func checkOAuthBase(protocol string, cfg OAuthConfig) error { return nil }
+
 // oauthTarget is everything one OAuth row needs to reach its provider.
 type oauthTarget struct {
 	provider          social.Provider

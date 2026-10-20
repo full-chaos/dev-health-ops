@@ -17,8 +17,8 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
-func TestOAuthPKCEIsSentAndCheckedForGitLabAndGoogle(t *testing.T) {
-	for _, protocol := range []string{"oauth_gitlab", "oauth_google"} {
+func TestOAuthPKCEIsSentAndCheckedForEveryProvider(t *testing.T) {
+	for _, protocol := range []string{"oauth_github", "oauth_gitlab", "oauth_google"} {
 		t.Run(protocol, func(t *testing.T) {
 			h := newHarness(t, harnessOpts{signup: true})
 			provider, client := h.seedOAuthProvider(t, h.orgID, protocol, nil)
@@ -38,23 +38,6 @@ func TestOAuthPKCEIsSentAndCheckedForGitLabAndGoogle(t *testing.T) {
 			wantUnchanged(t, h, before)
 		})
 	}
-	t.Run("oauth_github sends none", func(t *testing.T) {
-		h := newHarness(t, harnessOpts{signup: true})
-		provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_github", nil)
-		s := h.startOAuth(t, provider)
-		if s.challenge != "" || s.query.Get("code_challenge_method") != "" {
-			t.Fatalf("GitHub authorize carried a PKCE challenge: %v", s.query)
-		}
-		if _, failure := h.finishOAuth(t, provider, client, s, fakeAccountWith(uniqueEmail("gh"), true), true); failure != nil {
-			t.Fatalf("callback: %v", failure)
-		}
-		h.idp.oauth.mu.Lock()
-		got := h.idp.oauth.verifier[len(h.idp.oauth.verifier)-1]
-		h.idp.oauth.mu.Unlock()
-		if got != "" {
-			t.Fatalf("GitHub token exchange carried a code_verifier %q", got)
-		}
-	})
 }
 
 func TestOAuthInsecureBaseURLIsRefused(t *testing.T) {
@@ -488,6 +471,56 @@ func TestOAuthCodeOfAnotherFlowIsRefused(t *testing.T) {
 			}
 			wantDenied(t, failure, http.StatusBadRequest, ReasonDependency)
 			wantUnchanged(t, h, before)
+		})
+	}
+}
+
+func TestOAuthGitHubBaseIsGitHubComOnly(t *testing.T) {
+	h := newHarness(t, harnessOpts{signup: true})
+	for base, ok := range map[string]bool{"https://ghe.example.com": false, "https://api.github.com": false,
+		"http://localhost:8080": false, "https://github.com": true, "https://github.com/": true} {
+		provider, _ := h.seedOAuthProvider(t, h.orgID, "oauth_github", map[string]any{"base_url": base})
+		_, err := h.svc.AuthorizeOAuth(context.Background(), provider)
+		if ok && err != nil {
+			t.Errorf("base_url %q: %v, want accepted", base, err)
+		}
+		if !ok && !errors.Is(err, ErrProviderConfig) {
+			t.Errorf("base_url %q: %v, want ErrProviderConfig", base, err)
+		}
+	}
+}
+
+func TestOAuthProviderRejectingPKCEIsARefusal(t *testing.T) {
+	for _, protocol := range []string{"oauth_github", "oauth_gitlab", "oauth_google"} {
+		t.Run(protocol, func(t *testing.T) {
+			h := newHarness(t, harnessOpts{signup: true})
+			var logged bytes.Buffer
+			cfg := h.svc.cfg
+			cfg.Logger = slog.New(slog.NewTextHandler(&logged, nil))
+			svc, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.svc = svc
+			provider, client := h.seedOAuthProvider(t, h.orgID, protocol, nil)
+			s := h.startOAuth(t, provider)
+			h.idp.oauth.mu.Lock()
+			h.idp.oauth.rejectVerifier = true
+			calls := h.idp.oauth.tokenCalls
+			h.idp.oauth.mu.Unlock()
+			before := h.snapshot(t)
+			_, failure := h.finishOAuth(t, provider, client, s, fakeAccountWith(uniqueEmail("nopkce"), true), true)
+			wantDenied(t, failure, http.StatusBadRequest, ReasonDependency)
+			wantUnchanged(t, h, before)
+			h.idp.oauth.mu.Lock()
+			exchanges := h.idp.oauth.tokenCalls - calls
+			h.idp.oauth.mu.Unlock()
+			if exchanges != 1 {
+				t.Fatalf("token endpoint calls = %d, want 1: no retry without PKCE", exchanges)
+			}
+			if !strings.Contains(logged.String(), "route=oauth_callback outcome=denied reason=dependency_unavailable") {
+				t.Fatalf("no refusal log line with its reason:\n%s", logged.String())
+			}
 		})
 	}
 }

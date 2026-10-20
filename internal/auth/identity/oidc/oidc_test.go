@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"syscall"
@@ -333,5 +334,40 @@ func TestTheDefaultIdPClientRefusesRedirectsOnItsOwn(t *testing.T) {
 	client := defaultHTTPClient()
 	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
 		t.Fatal("the default IdP client follows redirects")
+	}
+}
+
+func TestJSONDocumentsRefuseTrailingBytes(t *testing.T) {
+	for _, tail := range []string{" garbage", "x", "}", "]", ",", " {}", " 1", " \"s\""} {
+		body := `{"code":"c","state":"s"}` + tail
+		if _, errs := parseCallbackBody([]byte(body)); len(errs) == 0 {
+			t.Errorf("callback body %q accepted", body)
+		}
+		if _, errs := parseAuthorizeBody([]byte(`{"redirect_uri":null}` + tail)); len(errs) == 0 {
+			t.Errorf("authorize body with tail %q accepted", tail)
+		}
+		if err := checkJSONObject([]byte(`{"alg":"RS256"}` + tail)); err == nil {
+			t.Errorf("JSON object with tail %q accepted", tail)
+		}
+	}
+	for _, ok := range []string{`{"code":"c","state":"s"}`, "{\"code\":\"c\",\"state\":\"s\"}\n", " {\"code\":\"c\",\"state\":\"s\"} \t"} {
+		if _, errs := parseCallbackBody([]byte(ok)); len(errs) != 0 {
+			t.Errorf("callback body %q refused: %+v", ok, errs)
+		}
+	}
+}
+
+func TestIdPDocumentsRefuseTrailingBytes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"issuer":"https://idp.example"} garbage`))
+	}))
+	defer server.Close()
+	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := getJSON(server.Client(), req, &doc); err == nil {
+		t.Fatal("an IdP document with trailing bytes was read")
 	}
 }

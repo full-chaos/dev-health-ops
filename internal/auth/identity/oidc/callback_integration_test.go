@@ -177,6 +177,22 @@ func TestLinkedIdentitySignsInWithoutReadingEmail(t *testing.T) {
 	}
 }
 
+func TestLinkedIdentityAnswersWithTheStoredEmail(t *testing.T) {
+	h := newHarness(t, harnessOpts{signup: false})
+	stored := uniqueEmail("stored")
+	owner := h.link(t, ExternalKey{Issuer: h.issuer, Provider: h.providerID.String(), Subject: "sub-stored"}, stored)
+	s := h.start(t)
+	claims := h.claims(s.nonce, "sub-stored", uniqueEmail("asserted"))
+	claims["email_verified"] = false
+	login, failure := h.finish(t, s, h.sign(t, claims))
+	if failure != nil {
+		t.Fatalf("callback: %v", failure)
+	}
+	if login.PrincipalID != owner || login.Email != stored {
+		t.Fatalf("login principal %s email %q, want %s with the stored email %q", login.PrincipalID, login.Email, owner, stored)
+	}
+}
+
 func TestExistingSSOAccountSignsInBySubject(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: false})
 	email := uniqueEmail("legacy")

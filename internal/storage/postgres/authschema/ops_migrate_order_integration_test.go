@@ -1,11 +1,9 @@
 //go:build integration
 
-package pgmigrate_test
+package authschema
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -23,11 +20,22 @@ import (
 // both orders on an empty database, and the refusals that must stay refusals.
 
 type orderFixture struct {
-	ctx      context.Context
-	admin    *pgx.Conn
-	uri      string
-	database string
-	role     string
+	ctx context.Context
+	uri string
+}
+
+// orderRuntimeRole is the runtime login every order test hands to the auth
+// migrator; each test has its own container, so the name never collides.
+const orderRuntimeRole = "auth_order_rt"
+
+func orderConnect(t *testing.T, ctx context.Context, uri string) *pgx.Conn {
+	t.Helper()
+	conn, err := pgx.Connect(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	return conn
 }
 
 func newOrderFixture(t *testing.T) *orderFixture {
@@ -43,18 +51,10 @@ func newOrderFixture(t *testing.T) *orderFixture {
 		defer closeCancel()
 		_ = instance.Close(closeCtx)
 	})
-	admin := connect(t, instance.URI)
-	suffix := make([]byte, 4)
-	if _, err := rand.Read(suffix); err != nil {
+	if _, err := orderConnect(t, ctx, instance.URI).Exec(ctx, `CREATE ROLE auth_order_rt LOGIN`); err != nil {
 		t.Fatal(err)
 	}
-	role := "auth_order_rt_" + hex.EncodeToString(suffix)
-	if _, err := admin.Exec(ctx, "CREATE ROLE "+role+" LOGIN"); err != nil {
-		t.Fatal(err)
-	}
-	database := scratchDatabase(t, admin)
-	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), "DROP ROLE IF EXISTS "+role) })
-	return &orderFixture{ctx: ctx, admin: admin, uri: databaseURI(t, instance.URI, database), database: database, role: role}
+	return &orderFixture{ctx: ctx, uri: instance.URI}
 }
 
 func (f *orderFixture) authMigrate(t *testing.T, schema string) {
@@ -64,7 +64,7 @@ func (f *orderFixture) authMigrate(t *testing.T, schema string) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := authschema.Apply(f.ctx, pool, authschema.Options{Schema: schema, RuntimeRole: f.role}); err != nil {
+	if _, err := Apply(f.ctx, pool, Options{Schema: schema, RuntimeRole: orderRuntimeRole}); err != nil {
 		t.Fatalf("auth migrate (schema %s): %v", schema, err)
 	}
 }
@@ -79,13 +79,13 @@ func (f *orderFixture) dhoMigrate(t *testing.T) (pgmigrate.Result, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn := connect(t, f.uri)
+	conn := orderConnect(t, f.ctx, f.uri)
 	return pgmigrate.Upgrade(f.ctx, conn, baseline, chain)
 }
 
 func (f *orderFixture) count(t *testing.T, query string) int {
 	t.Helper()
-	conn := connect(t, f.uri)
+	conn := orderConnect(t, f.ctx, f.uri)
 	var n int
 	if err := conn.QueryRow(f.ctx, query).Scan(&n); err != nil {
 		t.Fatalf("%s: %v", query, err)
@@ -108,7 +108,7 @@ func TestOpsMigrateSucceedsAfterAuthMigrateOnAnEmptyDatabase(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status, err := pgmigrate.ReadStatus(f.ctx, connect(t, f.uri), baseline, chain); err != nil || status.State != "empty" {
+			if status, err := pgmigrate.ReadStatus(f.ctx, orderConnect(t, f.ctx, f.uri), baseline, chain); err != nil || status.State != "empty" {
 				t.Fatalf("status after auth-migrate = %q, %v; want empty", status.State, err)
 			}
 			result, err := f.dhoMigrate(t)
@@ -156,7 +156,7 @@ func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
 	}
 	t.Run("a Supabase-style auth schema is foreign", func(t *testing.T) {
 		f := newOrderFixture(t)
-		conn := connect(t, f.uri)
+		conn := orderConnect(t, f.ctx, f.uri)
 		for _, statement := range []string{
 			`CREATE SCHEMA auth`,
 			`CREATE TABLE auth.schema_migrations (version varchar(255) PRIMARY KEY)`,
@@ -171,7 +171,7 @@ func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
 	})
 	t.Run("a look-alike with the wrong column type is foreign", func(t *testing.T) {
 		f := newOrderFixture(t)
-		conn := connect(t, f.uri)
+		conn := orderConnect(t, f.ctx, f.uri)
 		for _, statement := range []string{
 			`CREATE SCHEMA auth`,
 			`CREATE TABLE auth.schema_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at timestamp NOT NULL)`,
@@ -186,7 +186,7 @@ func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
 	t.Run("an object in public next to a real auth schema is foreign", func(t *testing.T) {
 		f := newOrderFixture(t)
 		f.authMigrate(t, "auth")
-		conn := connect(t, f.uri)
+		conn := orderConnect(t, f.ctx, f.uri)
 		if _, err := conn.Exec(f.ctx, `CREATE TABLE public.legacy_thing (id int)`); err != nil {
 			t.Fatal(err)
 		}
@@ -196,7 +196,7 @@ func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
 	t.Run("an unrelated schema next to a real auth schema is foreign", func(t *testing.T) {
 		f := newOrderFixture(t)
 		f.authMigrate(t, "auth")
-		conn := connect(t, f.uri)
+		conn := orderConnect(t, f.ctx, f.uri)
 		if _, err := conn.Exec(f.ctx, `CREATE SCHEMA other; CREATE TABLE other.t (id int)`); err != nil {
 			t.Fatal(err)
 		}

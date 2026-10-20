@@ -48,22 +48,6 @@ func other() {
 }
 `
 
-// composeCHRendererStub stands in for python3 (the guards must not need a real one): called as the check calls the renderer,
-// it writes the canonical users file for the fixture manifest with the sha256 of $API_CH_PASSWORD, and refuses a manifest
-// that is absent or declares no APIPosture, as the renderer does.
-func composeCHRendererStub() string {
-	xml := composeCHXML("@HASH@")
-	return fmt.Sprintf(`case "$1" in
-*/render-dho-api-ch-users.py)
-  [ -r "$2" ] && grep -q 'func APIPosture' "$2" || { echo "render: no APIPosture in $2" >&2; exit 1; }
-  h=$(printf %%s "$API_CH_PASSWORD" | sha256sum | cut -d' ' -f1)
-  printf '%%s\n' '%s' | sed "s/@HASH@/$h/" > "$3"
-  exit 0 ;;
-esac
-echo "python3: unexpected call $*" >&2
-exit 127`, strings.TrimSuffix(xml, "\n"))
-}
-
 func composeSHA(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 
 func composeCHXML(hash string) string {
@@ -188,19 +172,13 @@ func composeCHShims(g *guard, dir string, o composeCHOpts) string {
 	argv, envLog := filepath.Join(dir, "child-argv.log"), filepath.Join(dir, "child-env.log")
 	args, stdin := filepath.Join(dir, "docker-args.log"), filepath.Join(dir, "docker-stdin.log")
 	for _, name := range composeCHCommands {
-		run := ""
-		if name == "python3" {
-			run = composeCHRendererStub()
-		} else {
-			real := composeRealBin(name)
-			if real == "" {
-				g.failf("no %s in /usr/bin or /bin", name)
-				continue
-			}
-			run = fmt.Sprintf("exec %s \"$@\"", real)
+		real := composeRealBin(name)
+		if real == "" {
+			g.failf("no %s in /usr/bin or /bin", name)
+			continue
 		}
-		composeWrite(g, filepath.Join(bin, name), fmt.Sprintf("#!/bin/bash\n{ echo \"== %s\"; printf \"%%s\\n\" \"$@\"; } >> \"%s\"\n{ echo \"== %s\"; /usr/bin/env; } >> \"%s\"\n%s\n",
-			name, argv, name, envLog, run), 0o755)
+		composeWrite(g, filepath.Join(bin, name), fmt.Sprintf("#!/bin/bash\n{ echo \"== %s\"; printf \"%%s\\n\" \"$@\"; } >> \"%s\"\n{ echo \"== %s\"; /usr/bin/env; } >> \"%s\"\nexec %s \"$@\"\n",
+			name, argv, name, envLog, real), 0o755)
 	}
 	login := "exit 1"
 	if !o.loginFail {
@@ -594,11 +572,10 @@ func composeCutRunReal(g *guard, o composeCutOpts) composeCutRun {
 	composeWrite(g, filepath.Join(stub, "gh"), "#!/usr/bin/env bash\necho "+strings.Repeat("c", 40)+"\n", 0o755)
 	// The cut waits 45 s for go-api after `up`; nothing asserted here depends on the wait.
 	composeWrite(g, filepath.Join(stub, "sleep"), "#!/usr/bin/env bash\nexit 0\n", 0o755)
-	gen := "exit 0\n"
 	if o.fakeGenerator {
-		gen = fmt.Sprintf("case \"$1\" in */generate-plane-split-router.py) shift; printf '%%s\\n' \"$@\" > %q; exit 1 ;; esac\nexit 0\n", filepath.Join(dir, "generator-args.log"))
+		composeWrite(g, filepath.Join(stub, "python3"), fmt.Sprintf("#!/usr/bin/env bash\ncase \"$1\" in */generate-plane-split-router.py) shift; printf '%%s\\n' \"$@\" > %q; exit 1 ;; esac\nexec /usr/bin/python3 \"$@\"\n",
+			filepath.Join(dir, "generator-args.log")), 0o755)
 	}
-	composeWrite(g, filepath.Join(stub, "python3"), "#!/usr/bin/env bash\n"+gen, 0o755)
 	opsRepo := o.opsRepo
 	if opsRepo == "" {
 		opsRepo = g.root

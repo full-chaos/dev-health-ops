@@ -328,6 +328,8 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvDatabaseConnectTimeout: "3s",
 		EnvSigningKeyFile:         "/tmp/other-key.pem",
 		EnvSigningKeyID:           "other-kid",
+		EnvAccessTokenIssuer:      "other-issuer",
+		EnvAccessTokenAudience:    "other-audience",
 	}
 	read := map[string]func(Config) string{
 		EnvLogLevel:               func(c Config) string { return c.LogLevel.String() },
@@ -344,6 +346,8 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvDatabaseConnectTimeout: func(c Config) string { return c.DatabaseConnectTimeout.String() },
 		EnvSigningKeyFile:         func(c Config) string { return c.SigningKeyPath },
 		EnvSigningKeyID:           func(c Config) string { return c.SigningKeyID },
+		EnvAccessTokenIssuer:      func(c Config) string { return c.Session.AccessIssuer },
+		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
 	}
 
 	baseline, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})

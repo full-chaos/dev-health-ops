@@ -3214,6 +3214,7 @@ AUTH_PACKAGES=(
 # "<package> <FuzzTarget>". check_auth_fuzz_registry fails when a Fuzz function
 # exists in the tree without a row here, or a row names a function that does not.
 AUTH_FUZZ_TARGETS=(
+  "./internal/auth/authapi FuzzParseRefreshRequest"
   "./internal/auth/contracts FuzzParseErrorEnvelope"
   "./internal/auth/contracts FuzzRevisionUnmarshal"
   "./internal/auth/contracts FuzzTimestampUnmarshal"

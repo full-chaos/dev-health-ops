@@ -23,14 +23,25 @@ func TestLinearProjectEnsureChangesRow(t *testing.T) {
 		mutate func(*storedEnsureProject)
 		want   bool
 	}{
-		"identical content, same version": {func(*storedEnsureProject) {}, false},
-		"stored version is newer":         {func(s *storedEnsureProject) { s.updatedAt = now; s.name = "Other" }, false},
-		"stored version is older":         {func(s *storedEnsureProject) { s.updatedAt = linearProjectsEpoch.Add(-time.Second) }, true},
-		"same version, name changed":      {func(s *storedEnsureProject) { s.name = "" }, true},
-		"same version, state changed":     {func(s *storedEnsureProject) { s.state = "completed" }, true},
-		"same version, state source":      {func(s *storedEnsureProject) { s.stateSource = "x" }, true},
-		"same version, active flag":       {func(s *storedEnsureProject) { s.isActive ^= 1 }, true},
-		"same version, project key":       {func(s *storedEnsureProject) { s.key = "KEY" }, true},
+		"identical content, same version":    {func(*storedEnsureProject) {}, false},
+		"stored version is newer":            {func(s *storedEnsureProject) { s.updatedAt = now; s.name = "Other" }, false},
+		"stored version is older, changed":   {func(s *storedEnsureProject) { s.updatedAt = linearProjectsEpoch.Add(-time.Second); s.name = "Other" }, true},
+		"stored version is older, identical": {func(s *storedEnsureProject) { s.updatedAt = linearProjectsEpoch.Add(-time.Second) }, false},
+		"stored version is newer, identical": {func(s *storedEnsureProject) { s.updatedAt = now }, false},
+		"same version, name changed":         {func(s *storedEnsureProject) { s.name = "" }, true},
+		"same version, state changed":        {func(s *storedEnsureProject) { s.state = "completed" }, true},
+		"same version, state source":         {func(s *storedEnsureProject) { s.stateSource = "x" }, true},
+		"same version, active flag":          {func(s *storedEnsureProject) { s.isActive ^= 1 }, true},
+		"stored older, identical, target stated": {func(s *storedEnsureProject) {
+			s.updatedAt = linearProjectsEpoch.Add(-time.Second)
+			s.targetState = "stated"
+		}, true},
+		"stored older, identical, target held": {func(s *storedEnsureProject) {
+			s.updatedAt = linearProjectsEpoch.Add(-time.Second)
+			s.targetState = "held"
+		}, false},
+		"stored newer, identical, target stated": {func(s *storedEnsureProject) { s.updatedAt = now; s.targetState = "stated" }, false},
+		"same version, project key":              {func(s *storedEnsureProject) { s.key = "KEY" }, true},
 	} {
 		stored := same
 		tc.mutate(&stored)

@@ -10,6 +10,7 @@ internal/api/pytime
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
+internal/auth/sessionid
 internal/backfillrun
 internal/cacheinvalidation
 internal/chmigrate

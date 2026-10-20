@@ -11,6 +11,7 @@ internal/atlassianteams
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
+internal/auth/sessionid
 internal/cacheinvalidation
 internal/chmigrate
 internal/cli

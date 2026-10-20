@@ -741,6 +741,30 @@ func takeTimeTouchedDaysDrainStopCheckReadsTheNewestUncheckedRunsAndTruncatesAtT
 	if len(runs) != 201 || runs[0].RunID != newest[0] {
 		t.Fatalf("%d runs checked, want 201 (the trigger run and the newest 200)", len(runs))
 	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(runs))
+	for _, run := range runs {
+		seen[run.RunID] = true
+		ids = append(ids, run.RunID)
+	}
+	if err := rig.productionRuns().store.TouchedMarkRunsChecked(ctx, orgID, ids); err != nil {
+		t.Fatal(err)
+	}
+	next, truncated, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Fatal("second page truncated = true, want false: 254 unchecked runs minus the first 200")
+	}
+	if len(next) != 55 || next[0].RunID != newest[0] {
+		t.Fatalf("second page has %d runs, want 55 (the trigger run and the 54 left)", len(next))
+	}
+	for _, run := range next[1:] {
+		if seen[run.RunID] {
+			t.Fatalf("run %s is on both pages", run.RunID)
+		}
+	}
 }
 
 // The mark of a run of the previous batch is still checked.

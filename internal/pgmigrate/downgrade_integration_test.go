@@ -245,6 +245,46 @@ func shapeDiff(want, got string) string {
 	return strings.Join(out, "\n")
 }
 
+// On a single-head database at the head (0152), -14 reaches the floor revision and gives the same schema as
+// the explicit target 0138, and -15 is refused with the database left alone.
+func TestDowngradeFloorCasesOnARealSingleHeadDatabase(t *testing.T) {
+	d := newDownInstance(t)
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleHead := func() string {
+		uri := d.at(t, len(chain))
+		if _, err := connect(t, uri).Exec(context.Background(), "DELETE FROM alembic_version WHERE version_num = '0066'"); err != nil {
+			t.Fatal(err)
+		}
+		return uri
+	}
+	refused := singleHead()
+	before := schemaShape(t, refused)
+	code, stdout, stderr := goDowngrade(t, refused, "-15")
+	if code != cli.ExitFailure || stdout != "" || !strings.Contains(stderr, `"code":"below_baseline_floor"`) {
+		t.Errorf("downgrade -15: exit %d stdout %q stderr %q, want a below_baseline_floor refusal", code, stdout, stderr)
+	}
+	if got := schemaShape(t, refused); got != before {
+		t.Fatalf("downgrade -15 changed the database:\n%s", shapeDiff(before, got))
+	}
+	relative := singleHead()
+	if code, _, stderr := goDowngrade(t, relative, "-14"); code != cli.ExitOK {
+		t.Fatalf("downgrade -14: exit %d %s", code, stderr)
+	}
+	explicit := singleHead()
+	if code, _, stderr := goDowngrade(t, explicit, "0138"); code != cli.ExitOK {
+		t.Fatalf("downgrade 0138: exit %d %s", code, stderr)
+	}
+	if got := alembicVersions(t, relative); !reflect.DeepEqual(got, []string{"0138"}) {
+		t.Fatalf("downgrade -14 left alembic_version %v, want 0138", got)
+	}
+	if got, want := schemaShape(t, relative), schemaShape(t, explicit); got != want {
+		t.Errorf("downgrade -14 and downgrade 0138 disagree:\n%s", shapeDiff(want, got))
+	}
+}
+
 // A database at the production shape (0066 and the application head both recorded):
 // an explicit target reverts only the application branch and leaves 0066; the refusal
 // cells leave the database byte-for-byte as it was. Enumerated by cell.

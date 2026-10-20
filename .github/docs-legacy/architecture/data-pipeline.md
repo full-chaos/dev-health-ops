@@ -724,12 +724,12 @@ bookkeeping, not team attribution.
 
 *The check.* A pass that the end of a run triggered (trigger letter `e`)
 checks the run whose end triggered it and the runs of a fan-out or of the drain
-of the organization that ended in the last 24 hours and have a take time (the
-newest 200, and the run that ended in addition: it is read apart and never competes with the bound). The run that ended can be a run of a fan-out, of the drain or of
+of the organization that ended in the last 24 hours, have a take time and are not
+yet checked (`daily_metrics_runs.touched_checked_at` is NULL; the newest 200, and the run that ended in addition: it is read apart and never competes with the bound). The run that ended can be a run of a fan-out, of the drain or of
 the nightly schedule. When a pending key of one of those runs was last touched
 before its take time, the pass writes one Error line (phase
 `chain_stopped_mark_missing`, with `drain_days_not_marked`, the number of days
-involved), counts `chain_stopped_mark_missing` and starts nothing. Runs that
+involved), counts `chain_stopped_mark_missing` and starts nothing. A pass that finds no missing mark stamps the runs it read (`touched_checked_at`, the PostgreSQL clock), so the next pass reads the older unchecked runs; a pass that stops leaves them unchecked, and the read and the stamp of one pass run under an advisory lock of the organization, so two passes never overlap on the same runs. A build that runs before migration 0152 cannot stamp: the pass writes one Warn line (phase `checked_column_absent`) and counts `checked_column_absent`. Runs that
 have not ended are not checked: the mark of a fan-out follows its commit by a
 moment. A pass of the nightly trigger makes no check: it is the floor that
 starts the newest days again when the mark works. While the mark keeps failing

@@ -318,6 +318,19 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 	if !ok {
 		return false, nil
 	}
+	// Two passes of one organization check the same unchecked runs. A clean
+	// pass stamps them and a pass that stops must leave them unchecked, so the
+	// read, the decision and the stamp of one pass run under a lock: the
+	// second pass reads after the first one ended.
+	lock, err := drain.pool.Begin(ctx)
+	if err != nil {
+		return false, unavailable(stageDrainCheckBegin, err)
+	}
+	defer func() { _ = lock.Rollback(ctx) }()
+	if _, err := lock.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		touchedCheckLockNamespace, pass.organizationID); err != nil {
+		return false, unavailable(stageDrainCheckLock, err)
+	}
 	runs, truncated, err := drain.runs.MarkingRunsToCheck(
 		ctx, pass.organizationID, endedRunID, touchedDrainInFlightWindow, touchedDrainStopCheckRunLimit)
 	if err != nil {
@@ -500,6 +513,10 @@ func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass)
 // touchedDrainLockNamespace is the first key of the advisory lock of a pass.
 // The second key is a hash of the organization id.
 const touchedDrainLockNamespace = 8846
+
+// touchedCheckLockNamespace is the first key of the advisory lock of a mark
+// check; the second key is a hash of the organization id.
+const touchedCheckLockNamespace = 8847
 
 // start starts the runs of the pass in one transaction.
 //

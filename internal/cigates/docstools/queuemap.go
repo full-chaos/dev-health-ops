@@ -1,6 +1,7 @@
 package docstools
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,61 +122,88 @@ type qmFail struct{ msg string }
 func (e qmFail) Error() string { return e.msg }
 
 type qmProcess struct {
-	Name     string   `json:"name"`
-	Binary   string   `json:"binary"`
-	Queues   []string `json:"queues"`
-	JobKinds []string `json:"job_kinds"`
+	Name     string
+	Binary   string
+	Queues   []string
+	JobKinds []string
 	has      map[string]bool
 }
 
 type qmJob struct {
-	Kind           string `json:"kind"`
-	Queue          string `json:"queue"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	MaxAttempts    int    `json:"max_attempts"`
-	State          string `json:"state"`
-	Route          string `json:"route"`
-	RollbackRoute  string `json:"rollback_route"`
+	Kind           string
+	Queue          string
+	TimeoutSeconds int
+	MaxAttempts    int
+	State          string
+	Route          string
+	RollbackRoute  string
 	has            map[string]bool
+	bad            map[string]bool
 }
 
-// qmPresent is the set of keys an object holds. The Python generator indexes every producer field with [] (never
-// .get()), so an absent key is a KeyError there, not a zero value; a key present with a null value is not absent.
-func qmPresent(b []byte) (map[string]bool, error) {
+// qmRecord decodes one producer record to its keys. A Go struct tag would match "KIND" or U+017F "ſtate" to "kind" or
+// "state" (encoding/json folds case and Unicode); Python's dict lookup is exact, so every key is read by its exact name.
+func qmRecord(b []byte) (map[string]json.RawMessage, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return nil, err
 	}
+	return raw, nil
+}
+
+func qmPresent(raw map[string]json.RawMessage) map[string]bool {
 	has := make(map[string]bool, len(raw))
 	for k := range raw {
 		has[k] = true
 	}
-	return has, nil
+	return has
+}
+
+// qmTyped reads key into dst, a string or an integer. A JSON null, or any other type (a float such as 30.0, a bool,
+// a number-like string, an overflowing integer), gives false: Python rendered most of those (None, 30.0, True, 30),
+// so the refusal is stricter than Python by decision. An absent key gives true (need reports it).
+func qmTyped(raw map[string]json.RawMessage, key string, dst any) bool {
+	v, present := raw[key]
+	if !present {
+		return true
+	}
+	if string(bytes.TrimSpace(v)) == "null" {
+		return false
+	}
+	return json.Unmarshal(v, dst) == nil
 }
 
 func (p *qmProcess) UnmarshalJSON(b []byte) error {
-	type plain qmProcess
-	has, err := qmPresent(b)
+	raw, err := qmRecord(b)
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(b, (*plain)(p)); err != nil {
-		return err
+	for key, dst := range map[string]any{"name": &p.Name, "binary": &p.Binary, "queues": &p.Queues, "job_kinds": &p.JobKinds} {
+		if v, present := raw[key]; present {
+			if err := json.Unmarshal(v, dst); err != nil {
+				return err
+			}
+		}
 	}
-	p.has = has
+	p.has = qmPresent(raw)
 	return nil
 }
 
 func (j *qmJob) UnmarshalJSON(b []byte) error {
-	type plain qmJob
-	has, err := qmPresent(b)
+	raw, err := qmRecord(b)
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(b, (*plain)(j)); err != nil {
-		return err
+	j.bad = map[string]bool{}
+	for key, dst := range map[string]any{
+		"kind": &j.Kind, "queue": &j.Queue, "state": &j.State, "route": &j.Route, "rollback_route": &j.RollbackRoute,
+		"timeout_seconds": &j.TimeoutSeconds, "max_attempts": &j.MaxAttempts,
+	} {
+		if !qmTyped(raw, key, dst) {
+			j.bad[key] = true
+		}
 	}
-	j.has = has
+	j.has = qmPresent(raw)
 	return nil
 }
 
@@ -190,7 +218,27 @@ func qmNeed(has map[string]bool, keys []string) error {
 }
 
 func (p qmProcess) need(keys ...string) error { return qmNeed(p.has, keys) }
-func (j qmJob) need(keys ...string) error     { return qmNeed(j.has, keys) }
+
+// need is Python's d[key] for each key: an absent one is a KeyError; a present one of the wrong type is refused.
+func (j qmJob) need(keys ...string) error {
+	for _, k := range keys {
+		if err := qmNeed(j.has, []string{k}); err != nil {
+			return err
+		}
+		if j.bad[k] {
+			return qmFail{"gen-queue-mapping: " + k + " of a producer job record must be a non-null " + qmTypeName(k) +
+				" (a null, float, bool or number-like string is refused)"}
+		}
+	}
+	return nil
+}
+
+func qmTypeName(key string) string {
+	if key == "timeout_seconds" || key == "max_attempts" {
+		return "integer"
+	}
+	return "string"
+}
 
 // qmLoadList reads a producer file and returns the list under key (Python: data[key]); an absent key is a KeyError.
 func qmLoadList[T any](path, key string) ([]T, error) {

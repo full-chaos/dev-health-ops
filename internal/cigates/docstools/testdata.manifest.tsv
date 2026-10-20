@@ -1,7 +1,7 @@
 # Every file under internal/cigates/docstools/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 3709a8c0681e1dd9c19d662ab7f1a93249acd9cc58d0630c8924f7a4b3047b41 (216 files)
+# python-recorded set: ea54d3033b8afc2cf9a45dedde266ee92e84c8838cc9048686c89a0f734215d1 (224 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-01c059b43adb29ba4b224646a74ebbde7c28c25612f05c53aba2f6813f6275cf	hand-written	README.md
+8ff0554a9d12eb100ecd28d1499da3e49eb89dc44bfcb2eb0455b38e54a123fc	hand-written	README.md
 022b02bc6930d958238306a5bbb82baedc9af3eed3e1189a46a3629fcb570374	hand-written	operational-external.md
 daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	parity/check-investment-drift-all-errors/args
 3a6b37e459a3080b618da454af311d1f1a55249367a82f153b41b2912ff04646	hand-written	parity/check-investment-drift-all-errors/in/docs/reference/taxonomies/investment.md
@@ -432,6 +432,30 @@ fe350efa4c94dbf7068c0f785d93af782518c7317b00e21b3efb6e882d479551	hand-written	pa
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/genqm-job-kind-not-in-registry/rc
 3375f3a57c808274096a634ae3569e418f53d0d46242061d1b9accd1f91c8f30	hand-written	parity/genqm-job-kind-not-in-registry/stderr.traceback
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/genqm-job-kind-not-in-registry/stdout
+614faf5416899351166b5ceee5c8cc55e9fb9cecaf2a1b51cc85e73320f3bc3f	hand-written	parity/genqm-key-case-folded-kind/args
+fe350efa4c94dbf7068c0f785d93af782518c7317b00e21b3efb6e882d479551	hand-written	parity/genqm-key-case-folded-kind/in/contracts/jobs/v1/migration-state.json
+c14fb367946f8705a2b577e747bee227c1d46fa7682fd159391685e3db369039	hand-written	parity/genqm-key-case-folded-kind/in/contracts/jobs/v1/registry.json
+62f0a9908914514eaf36b1fb6102f52fd49bd6ba023dd4618a1f711c7d2b6660	hand-written	parity/genqm-key-case-folded-kind/in/deploy/go-workers/deployment.json
+55a617da97c4d90079e1a4d69297af97b69f8ba2206a4ba8c4b35f9ded71c467	hand-written	parity/genqm-key-case-folded-kind/in/docs/contribute/architecture/go-worker-runtime.md
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/genqm-key-case-folded-kind/rc
+3ac53beeffec8e98e0aa04fc00e013ee57a0ea5c20486d5a3c8cdcee2dd7f909	hand-written	parity/genqm-key-case-folded-kind/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/genqm-key-case-folded-kind/stdout
+614faf5416899351166b5ceee5c8cc55e9fb9cecaf2a1b51cc85e73320f3bc3f	hand-written	parity/genqm-key-case-folded-queue/args
+fe350efa4c94dbf7068c0f785d93af782518c7317b00e21b3efb6e882d479551	hand-written	parity/genqm-key-case-folded-queue/in/contracts/jobs/v1/migration-state.json
+6e36494a4d449073b50f50f43718a23476ec3659cd70f7d587e1e2aff2092f32	hand-written	parity/genqm-key-case-folded-queue/in/contracts/jobs/v1/registry.json
+62f0a9908914514eaf36b1fb6102f52fd49bd6ba023dd4618a1f711c7d2b6660	hand-written	parity/genqm-key-case-folded-queue/in/deploy/go-workers/deployment.json
+55a617da97c4d90079e1a4d69297af97b69f8ba2206a4ba8c4b35f9ded71c467	hand-written	parity/genqm-key-case-folded-queue/in/docs/contribute/architecture/go-worker-runtime.md
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/genqm-key-case-folded-queue/rc
+0852194bc2868e9eef02f1dd318bf6efe340f53d631f99f9670f93ff97f3bb18	hand-written	parity/genqm-key-case-folded-queue/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/genqm-key-case-folded-queue/stdout
+614faf5416899351166b5ceee5c8cc55e9fb9cecaf2a1b51cc85e73320f3bc3f	hand-written	parity/genqm-key-unicode-folded-state/args
+d60ff05f3a726ee299cf774f398acacf6311fdafbae2a59bc2f17b02f9c638d4	hand-written	parity/genqm-key-unicode-folded-state/in/contracts/jobs/v1/migration-state.json
+0a2f603a47b9fefb3c95e5ec035c1ba7a6f7abd263a44542191c688764950372	hand-written	parity/genqm-key-unicode-folded-state/in/contracts/jobs/v1/registry.json
+62f0a9908914514eaf36b1fb6102f52fd49bd6ba023dd4618a1f711c7d2b6660	hand-written	parity/genqm-key-unicode-folded-state/in/deploy/go-workers/deployment.json
+55a617da97c4d90079e1a4d69297af97b69f8ba2206a4ba8c4b35f9ded71c467	hand-written	parity/genqm-key-unicode-folded-state/in/docs/contribute/architecture/go-worker-runtime.md
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/genqm-key-unicode-folded-state/rc
+0cfac5451a1ade36172c9145d672b2f603fcd8900a04c6c5627795cb58a50612	hand-written	parity/genqm-key-unicode-folded-state/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/genqm-key-unicode-folded-state/stdout
 614faf5416899351166b5ceee5c8cc55e9fb9cecaf2a1b51cc85e73320f3bc3f	hand-written	parity/genqm-kinds-mismatch/args
 4792c741e86e4b8142769efe5c86363152e4198300c7907c80178ef27d7db1b9	hand-written	parity/genqm-kinds-mismatch/in/contracts/jobs/v1/migration-state.json
 0a2f603a47b9fefb3c95e5ec035c1ba7a6f7abd263a44542191c688764950372	hand-written	parity/genqm-kinds-mismatch/in/contracts/jobs/v1/registry.json
@@ -567,6 +591,14 @@ ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356	hand-written	pa
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/genqm-missing-registry-top-jobs/rc
 bfb0a8e63e56e358482840a667e1478e4b103c98eb589b0ea7887e7991717bf9	hand-written	parity/genqm-missing-registry-top-jobs/stderr.traceback
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/genqm-missing-registry-top-jobs/stdout
+614faf5416899351166b5ceee5c8cc55e9fb9cecaf2a1b51cc85e73320f3bc3f	hand-written	parity/genqm-missing-state/args
+9d6403979156332a46bf19d9825ae61f35239d64eaaaaac656e0ae6fdabe5bfa	hand-written	parity/genqm-missing-state/in/contracts/jobs/v1/migration-state.json
+0a2f603a47b9fefb3c95e5ec035c1ba7a6f7abd263a44542191c688764950372	hand-written	parity/genqm-missing-state/in/contracts/jobs/v1/registry.json
+62f0a9908914514eaf36b1fb6102f52fd49bd6ba023dd4618a1f711c7d2b6660	hand-written	parity/genqm-missing-state/in/deploy/go-workers/deployment.json
+55a617da97c4d90079e1a4d69297af97b69f8ba2206a4ba8c4b35f9ded71c467	hand-written	parity/genqm-missing-state/in/docs/contribute/architecture/go-worker-runtime.md
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/genqm-missing-state/rc
+0cfac5451a1ade36172c9145d672b2f603fcd8900a04c6c5627795cb58a50612	hand-written	parity/genqm-missing-state/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/genqm-missing-state/stdout
 614faf5416899351166b5ceee5c8cc55e9fb9cecaf2a1b51cc85e73320f3bc3f	hand-written	parity/genqm-no-markers/args
 fe350efa4c94dbf7068c0f785d93af782518c7317b00e21b3efb6e882d479551	hand-written	parity/genqm-no-markers/in/contracts/jobs/v1/migration-state.json
 0a2f603a47b9fefb3c95e5ec035c1ba7a6f7abd263a44542191c688764950372	hand-written	parity/genqm-no-markers/in/contracts/jobs/v1/registry.json

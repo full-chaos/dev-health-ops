@@ -169,3 +169,78 @@ func TestQueuemapRefusesKindQueueMismatch(t *testing.T) {
 		}
 	}
 }
+
+// Hand-written refusals (no recorded pair: Python rendered these, or stopped on a different error; the Go refusal
+// is stricter by decision, see testdata/README.md "Stricter than Python"). Each is on the coverage.c record, which is
+// served and rendered, so every field is read. Python's output for each is in the README table.
+func TestQueuemapRefusesNullAndNonIntegerProducerValues(t *testing.T) {
+	const regBlock = "\"kind\": \"coverage.c\",\n      \"queue\": \"coverage\",\n      \"timeout_seconds\": 60,\n      \"max_attempts\": 1"
+	const migBlock = "\"kind\": \"coverage.c\",\n      \"state\": \"go_default\",\n      \"route\": \"river\",\n      \"rollback_route\": \"none\""
+	reg := func(kind, queue, timeout, attempts string) string {
+		return "\"kind\": " + kind + ",\n      \"queue\": " + queue + ",\n      \"timeout_seconds\": " + timeout + ",\n      \"max_attempts\": " + attempts
+	}
+	mig := func(state, route, rollback string) string {
+		return "\"kind\": \"coverage.c\",\n      \"state\": " + state + ",\n      \"route\": " + route + ",\n      \"rollback_route\": " + rollback
+	}
+	const registry, migration = "contracts/jobs/v1/registry.json", "contracts/jobs/v1/migration-state.json"
+	k, q := `"coverage.c"`, `"coverage"`
+	cases := []struct{ name, file, from, to string }{
+		{"null kind", registry, regBlock, reg("null", q, "60", "1")},
+		{"null queue", registry, regBlock, reg(k, "null", "60", "1")},
+		{"null timeout_seconds", registry, regBlock, reg(k, q, "null", "1")},
+		{"null max_attempts", registry, regBlock, reg(k, q, "60", "null")},
+		{"null state", migration, migBlock, mig("null", `"river"`, `"none"`)},
+		{"null route", migration, migBlock, mig(`"go_default"`, "null", `"none"`)},
+		{"null rollback_route", migration, migBlock, mig(`"go_default"`, `"river"`, "null")},
+		{"float timeout_seconds", registry, regBlock, reg(k, q, "30.0", "1")},
+		{"float max_attempts", registry, regBlock, reg(k, q, "60", "30.0")},
+		{"exponent timeout_seconds", registry, regBlock, reg(k, q, "6e1", "1")},
+		{"true timeout_seconds", registry, regBlock, reg(k, q, "true", "1")},
+		{"true max_attempts", registry, regBlock, reg(k, q, "60", "true")},
+		{"string timeout_seconds", registry, regBlock, reg(k, q, `"30"`, "1")},
+		{"string max_attempts", registry, regBlock, reg(k, q, "60", `"30"`)},
+		{"number state", migration, migBlock, mig("7", `"river"`, `"none"`)},
+		{"NaN timeout_seconds", registry, regBlock, reg(k, q, "NaN", "1")},
+		{"NaN max_attempts", registry, regBlock, reg(k, q, "60", "NaN")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			queuemapSeed(t)
+			text := mustRead(t, c.file)
+			if !strings.Contains(text, c.from) {
+				t.Fatal("seed lacks the coverage.c block")
+			}
+			writeTree(t, c.file, strings.Replace(text, c.from, c.to, 1), 0o644)
+			before := mustRead(t, queuemapDoc)
+			code, out, stderr := runDocs("gen-queue-mapping")
+			if code != 1 || out != "" || stderr == "" {
+				t.Fatalf("generate: rc %d stdout %q stderr %q", code, out, stderr)
+			}
+			if mustRead(t, queuemapDoc) != before {
+				t.Fatalf("refused run wrote the page")
+			}
+			if strings.HasPrefix(c.name, "NaN") {
+				if !strings.HasPrefix(stderr, "json.decoder.JSONDecodeError: ") {
+					t.Fatalf("generate stderr %q", stderr)
+				}
+			} else if !strings.Contains(stderr, "producer job record must be") {
+				t.Fatalf("generate stderr %q", stderr)
+			}
+			if code, _, _ := runDocs("check-queue-mapping-drift"); code != 1 {
+				t.Fatalf("drift: rc %d", code)
+			}
+		})
+	}
+}
+
+// encoding/json matches a struct field to a key without case or Unicode-fold exactness; Python's dict lookup is
+// exact, so "NAME" is a KeyError on deployment.json too (the registry and migration-state keys are recorded pairs).
+func TestQueuemapDeploymentKeysAreExact(t *testing.T) {
+	queuemapSeed(t)
+	dep := mustRead(t, "deploy/go-workers/deployment.json")
+	writeTree(t, "deploy/go-workers/deployment.json", strings.Replace(dep, `"name": "heavy"`, `"NAME": "heavy"`, 1), 0o644)
+	code, _, stderr := runDocs("gen-queue-mapping")
+	if code != 1 || stderr != "KeyError: 'name'\n" {
+		t.Fatalf("rc %d stderr %q", code, stderr)
+	}
+}

@@ -128,3 +128,28 @@ and read (`FileNotFoundError`, rc 1); a directory named `*.md`, real or by link,
 `timeout_seconds`, `max_attempts`; in `migration-state.json` `jobs`, `kind`, `state`, `route`, `rollback_route`. It reads
 none with `.get()`. Each gives `KeyError: '<key>'` (traceback), rc 1, stdout empty, for both verbs (the drift check
 catches only `SystemExit`, so the `KeyError` is not turned into an `ERROR:` line).
+
+## Stricter than Python: producer values (RISK-NOTES)
+
+Recorded with the scripts at 28adf8cd, Python 3.12.3, on the `genqm-ok` inputs with the `coverage.c` record changed.
+Go refuses each of these (rc 1, stdout empty, one stderr line, no page written); Python generated the page (rc 0)
+except where marked. Hand-written rows: `TestQueuemapRefusesNullAndNonIntegerProducerValues`.
+
+| input | Python | Go |
+| --- | --- | --- |
+| `timeout_seconds` 30.0 | rc 0, cell `30.0` | rc 1 |
+| `max_attempts` 30.0 | rc 0, cell `30.0` | rc 1 |
+| `timeout_seconds` / `max_attempts` true | rc 0, cell `True` | rc 1 |
+| `timeout_seconds` / `max_attempts` "30" | rc 0, cell `30` | rc 1 |
+| `timeout_seconds` / `max_attempts` NaN | rc 0, cell `nan` | rc 1 (the JSON parser refuses NaN anywhere in the file) |
+| `timeout_seconds` null | rc 0, cell `None` | rc 1 |
+| `max_attempts` null | rc 0, cell `None` | rc 1 |
+| `state` null | rc 0, `state=`None` ⚠` | rc 1 |
+| `route` null | rc 0, `route=`None`` | rc 1 |
+| `rollback_route` null | rc 0, `rollback_route=`None`` | rc 1 |
+| registry `queue` null | rc 0, the kind left out of its row (cells `—`) | rc 1 |
+| registry `kind` null | rc 1, `TypeError: '<' not supported between instances of 'str' and 'NoneType'` | rc 1, other message |
+
+Same as Python (recorded pairs): an absent key (`genqm-missing-registry-queue`, `genqm-missing-state`), a case-folded
+key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-folded key
+(`genqm-key-unicode-folded-state`, U+017F): `KeyError` naming the key, rc 1.

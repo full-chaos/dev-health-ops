@@ -1,4 +1,4 @@
-package cigates_test
+package scripts_test
 
 import (
 	"crypto/sha256"

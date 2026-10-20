@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -15,7 +14,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -100,46 +98,7 @@ func LoadFrozenSet(orgID, repoName string, days int) (FrozenSet, error) {
 	return set, nil
 }
 
-type decodedSet struct {
-	once sync.Once
-	set  FrozenSet
-	err  error
-}
-
-// decodedSets memoizes the set decode by the sha256 of the exact bytes (CHAOS-10289).
-var decodedSets sync.Map
-
 func decodeFrozenSet(raw []byte) (FrozenSet, error) {
-	entry, _ := decodedSets.LoadOrStore(sha256.Sum256(raw), &decodedSet{})
-	cached := entry.(*decodedSet)
-	cached.once.Do(func() { cached.set, cached.err = decodeFrozenSetUncached(raw) })
-	if cached.err != nil {
-		return FrozenSet{}, cached.err
-	}
-	return cloneSet(cached.set), nil
-}
-
-func cloneSet(s FrozenSet) FrozenSet {
-	out := s
-	out.Targets = make([]FrozenTarget, len(s.Targets))
-	for i, target := range s.Targets {
-		tables := make([]FrozenTable, len(target.Tables))
-		for j, table := range target.Tables {
-			table.Columns = append([]FrozenColumn(nil), table.Columns...)
-			rows := make([][]any, len(table.Rows))
-			for r, row := range table.Rows {
-				rows[r] = cloneValues(row)
-			}
-			table.Rows = rows
-			tables[j] = table
-		}
-		target.Tables = tables
-		out.Targets[i] = target
-	}
-	return out
-}
-
-func decodeFrozenSetUncached(raw []byte) (FrozenSet, error) {
 	reader, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
 		return FrozenSet{}, err

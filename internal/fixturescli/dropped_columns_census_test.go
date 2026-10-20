@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -48,19 +47,7 @@ func droppedColumnsOfTheMigrations(t *testing.T) map[string]map[string]bool {
 
 // frozenTables returns every table (name -> its column names) that the embedded frozen files hold,
 // found by shape, so a new file layout is still seen.
-var (
-	frozenTablesOnce   sync.Once
-	frozenTablesResult map[string]map[string]bool
-)
-
-// frozenTables is read-only for its callers and walks every frozen file, so one walk serves the package.
 func frozenTables(t *testing.T, files ...embed.FS) map[string]map[string]bool {
-	t.Helper()
-	frozenTablesOnce.Do(func() { frozenTablesResult = walkFrozenTables(t, files...) })
-	return frozenTablesResult
-}
-
-func walkFrozenTables(t *testing.T, files ...embed.FS) map[string]map[string]bool {
 	t.Helper()
 	tables := map[string]map[string]bool{}
 	var walk func(node any)

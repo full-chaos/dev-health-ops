@@ -684,15 +684,31 @@ func TestSAMLNewAccountNeedsUsersOwnedByAuth(t *testing.T) {
 	})
 }
 
-func TestSAMLAllowedDomainsAreEnforced(t *testing.T) {
+// TestSAMLAllowedDomainsAreEnforcedOnAMiss: without a linked identity the
+// asserted email must be in an allowed domain; a key hit is covered by
+// TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail.
+func TestSAMLAllowedDomainsAreEnforcedOnAMiss(t *testing.T) {
 	h := newHarness(t, true)
-	h.linkedUser(uniqueEmail("u"), "user-1")
-	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = '["corp.example.test"]'::json WHERE id = $1`, h.provider.ID); err != nil {
+	h.ownUsers()
+	before := h.identityCount()
+	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = '["corp.example.com"]'::json WHERE id = $1`, h.provider.ID); err != nil {
 		t.Fatal(err)
 	}
-	_, err := h.consume(h.respond(resp{nameID: nid("user-1"), email: "u@example.com"}), nil)
-	if !errors.Is(err, saml.ErrDomainNotAllowed) {
-		t.Fatalf("err = %v, want ErrDomainNotAllowed", err)
+	for email, want := range map[string]error{
+		"u-" + uuid.NewString()[:8] + "@example.com": saml.ErrDomainNotAllowed,
+		"no-at-sign": saml.ErrEmailMalformed,
+	} {
+		_, err := h.consume(h.respond(resp{nameID: nid("unlinked-" + uuid.NewString()), email: email}), nil)
+		if !errors.Is(err, want) {
+			t.Fatalf("email %q: err = %v, want %v", email, err, want)
+		}
+	}
+	if h.identityCount() != before {
+		t.Fatal("a refused sign-up wrote an identity")
+	}
+	signIn, err := h.consume(h.respond(resp{nameID: nid("unlinked-" + uuid.NewString()), email: "u-" + uuid.NewString()[:8] + "@corp.example.com"}), nil)
+	if err != nil || !signIn.Created {
+		t.Fatalf("an allowed domain: sign-in %+v err %v, want a new account", signIn, err)
 	}
 }
 

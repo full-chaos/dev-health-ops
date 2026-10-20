@@ -107,6 +107,7 @@ func Routes(deps Deps) []httpapi.Route {
 		pagerDuty:       deps.PagerDuty,
 		httpDoer:        httpDoer,
 		upstreamDoer:    deps.HTTPDoer,
+		modelCache:      newLLMModelListCache(),
 		write:           write,
 		passwordLimiter: httpapi.NewKeyedLimiter(limits, passwordLimit),
 		inviteLimiter:   httpapi.NewKeyedLimiter(limits, inviteLimit),
@@ -151,6 +152,7 @@ type handlers struct {
 	// the reference's timeout and redirect policy, which the defaulted
 	// httpDoer above would bypass.
 	upstreamDoer providerfoundation.HTTPDoer
+	modelCache   *llmModelListCache
 	// write renders this area's own directly-written errors (the keyed
 	// rate limiter's 429) in the same wire shape every other error uses.
 	write httpapi.ErrorWriter

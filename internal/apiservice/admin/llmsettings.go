@@ -47,6 +47,7 @@ func (h *handlers) llmSettingsRoutes() []httpapi.Route {
 		{Method: http.MethodDelete, Pattern: governancePrefix + "/llm-settings", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteLLMSettings))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/status", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSettingsStatus))},
 		{Method: http.MethodPost, Pattern: governancePrefix + "/llm-settings/readiness", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.postLLMSettingsReadiness))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/models", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSettingsModels))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/budget", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMBudget))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/spend", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSpend))},
 	}
@@ -443,6 +444,9 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		}
 		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", reason), nil
 	}
+	if in.apiKey != nil && baseURLCarriesKey(baseURLText, *in.apiKey) {
+		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
+	}
 
 	tx, err := h.store.Pool.Begin(ctx)
 	if err != nil {
@@ -512,6 +516,7 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		return nil, nil, &llmStepError{"commit llm settings", err}
 	}
 	committed = true
+	h.modelCache.invalidateOrg(orgID)
 	return out, nil, nil
 }
 
@@ -539,6 +544,7 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 		h.internalError(ctx, w, "delete llm settings", err)
 		return
 	}
+	h.modelCache.invalidateOrg(orgID)
 	if credentialsDeleted == 0 {
 		policy.WriteDetail(w, http.StatusNotFound, "LLM settings not found", nil)
 		return

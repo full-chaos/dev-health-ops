@@ -87,6 +87,13 @@ at its maximum exposure for the current window. The service does not infer zero
 cost from a client timeout because the remote provider may still complete and
 bill the request.
 
+`GET /api/v1/admin/llm-settings/models` lists the model ids the saved provider
+offers, read with the saved key. The response carries the ids, a `source`
+(`live`, `cache` or `unavailable`) and a safe `reason` code when the list is
+unavailable. The service keeps a list for one hour per organization and
+configuration; saving or deleting the settings drops it, and a service restart
+reads it again. The model field stays free text when no list is available.
+
 Budget values use integer micro-USD. `GET /api/v1/admin/llm-settings/budget`
 returns the used, limit, remaining, UTC reset timestamp, enforcement
 availability, and a safe reason code. Unknown pricing or missing token usage is

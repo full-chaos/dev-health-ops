@@ -1274,7 +1274,7 @@ func TestQueryRouteClickHouseClient_ToleratesRealResultVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start ClickHouse test dependency: %v", err)
 	}
-	defer func() { _ = ch.Container.Terminate(context.Background()) }()
+	defer func() { _ = ch.Close(context.Background()) }()
 
 	countRowsWithOptions := func(t *testing.T, opts clickhouse.Options, rowCount int) (int, error) {
 		t.Helper()

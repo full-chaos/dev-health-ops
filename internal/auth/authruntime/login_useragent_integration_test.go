@@ -27,8 +27,10 @@ func TestLoginAuditRowsCarryTheUserAgent(t *testing.T) {
 	if err := e.admin.QueryRow(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING email`, user, hash).Scan(&email); err != nil {
 		t.Fatal(err)
 	}
-	const agent = "venue-oracle/1 (é)"
-	header := map[string]string{"Content-Type": "application/json", "User-Agent": agent}
+	// The header carries the UTF-8 bytes of "é"; each byte reads as one latin-1
+	// code point, so the stored value is "Ã©".
+	const sent, agent = "venue-oracle/1 (é)", "venue-oracle/1 (Ã©)"
+	header := map[string]string{"Content-Type": "application/json", "User-Agent": sent}
 
 	agentOf := func(t *testing.T, eventType, requestWire string) *string {
 		t.Helper()

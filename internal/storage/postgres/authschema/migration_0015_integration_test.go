@@ -37,16 +37,22 @@ func TestMigration0015AuditUserAgentColumn(t *testing.T) {
 
 	long := strings.Repeat("Mozilla/5.0 ", 4000)
 	for _, agent := range []any{"venue-oracle/1", long, nil, "Agenté latin-1"} {
-		if _, err := env.runtime.Exec(ctx, `INSERT INTO auth.security_audit_events (event_type, outcome, user_agent)
+		if err := guardedExec(ctx, env.runtime, `INSERT INTO auth.security_audit_events (event_type, outcome, user_agent)
 			VALUES ('cap.probe', 'allowed', $1)`, agent); err != nil {
 			t.Fatalf("the runtime role could not insert user_agent %.20v: %v", agent, err)
 		}
 	}
-	var stored int
-	if err := env.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE user_agent = $1`, long).Scan(&stored); err != nil || stored != 1 {
-		t.Fatalf("a %d-byte user agent was not stored whole (%d rows, %v)", len(long), stored, err)
+	for _, agent := range []string{"venue-oracle/1", long, "Agenté latin-1"} {
+		var stored int
+		if err := env.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'cap.probe' AND user_agent = $1`, agent).Scan(&stored); err != nil || stored != 1 {
+			t.Fatalf("a %d-byte user agent was not stored whole (%d rows, %v)", len(agent), stored, err)
+		}
 	}
-	if _, err := env.runtime.Exec(ctx, `UPDATE auth.security_audit_events SET user_agent = 'changed'`); err == nil {
+	var nulls int
+	if err := env.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'cap.probe' AND user_agent IS NULL`).Scan(&nulls); err != nil || nulls != 1 {
+		t.Fatalf("%d probe rows with a NULL user agent (%v), want 1", nulls, err)
+	}
+	if err := guardedExec(ctx, env.runtime, `UPDATE auth.security_audit_events SET user_agent = 'changed'`); err == nil {
 		t.Fatal("the runtime role changed an audit row's user agent")
 	}
 }

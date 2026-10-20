@@ -37,7 +37,8 @@ func requestContext(t *testing.T, ctx context.Context, agents ...string) context
 }
 
 // TestAuditRowsCarryTheRequestUserAgent: Append and Commit write the request's
-// user agent, the first header value, and NULL when the request sent none.
+// user agent, the first header value, "" for a present empty header, and NULL
+// when the request sent none.
 func TestAuditRowsCarryTheRequestUserAgent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -82,6 +83,15 @@ func TestAuditRowsCarryTheRequestUserAgent(t *testing.T) {
 		}
 		if got := agentOf(t, requestID); got != nil {
 			t.Fatalf("user_agent = %q, want NULL", *got)
+		}
+	})
+	t.Run("Append, a present empty User-Agent header", func(t *testing.T) {
+		requestID := uuid.NewString()
+		if err := Append(requestContext(t, ctx, ""), writer, env.schema, failedLogin(requestID)); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		if got := agentOf(t, requestID); got == nil || *got != "" {
+			t.Fatalf("user_agent = %v, want the empty string", got)
 		}
 	})
 	t.Run("Commit", func(t *testing.T) {

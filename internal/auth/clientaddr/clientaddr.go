@@ -143,3 +143,9 @@ func Text(ctx context.Context) *string {
 	text := addr.String()
 	return &text
 }
+
+// UserAgent is not built yet.
+func UserAgent(context.Context) (string, bool) { return "", false }
+
+// WithUserAgent is not built yet.
+func WithUserAgent(ctx context.Context, _ string) context.Context { return ctx }

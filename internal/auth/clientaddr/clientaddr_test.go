@@ -122,3 +122,49 @@ func TestMiddlewareBindsTheAddress(t *testing.T) {
 		t.Fatal("Text of an empty context is not nil")
 	}
 }
+
+func agentOf(t *testing.T, values ...string) (string, bool) {
+	t.Helper()
+	trust, err := ParseTrust("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := request("203.0.113.9:1")
+	for _, value := range values {
+		r.Header.Add("User-Agent", value)
+	}
+	var agent string
+	var ok bool
+	Middleware(trust)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { agent, ok = UserAgent(r.Context()) })).
+		ServeHTTP(httptest.NewRecorder(), r)
+	return agent, ok
+}
+
+func TestTheFirstUserAgentValueIsBoundDecodedAsLatin1(t *testing.T) {
+	if got, ok := agentOf(t, "Mozilla/5.0 (X11)", "second/1.0"); !ok || got != "Mozilla/5.0 (X11)" {
+		t.Fatalf("UserAgent = %q %v, want the first value", got, ok)
+	}
+	// go-api's userAgent decodes each byte as one latin-1 code point.
+	if got, ok := agentOf(t, "agent \xe9\xff"); !ok || got != "agent \u00e9\u00ff" {
+		t.Fatalf("UserAgent = %q %v, want each byte as its latin-1 code point", got, ok)
+	}
+	long := strings.Repeat("a", 64<<10)
+	if got, ok := agentOf(t, long); !ok || got != long {
+		t.Fatal("a long user agent is cut: go-api keeps it whole")
+	}
+	if got, ok := agentOf(t, ""); !ok || got != "" {
+		t.Fatalf("an empty User-Agent = %q %v, want a present empty value as go-api reads it", got, ok)
+	}
+}
+
+func TestNoUserAgentIsAbsent(t *testing.T) {
+	if got, ok := agentOf(t); ok {
+		t.Fatalf("UserAgent = %q without a User-Agent, want absent", got)
+	}
+	if _, ok := UserAgent(context.Background()); ok {
+		t.Fatal("UserAgent of an empty context is present")
+	}
+	if got, ok := UserAgent(WithUserAgent(context.Background(), "x/1")); !ok || got != "x/1" {
+		t.Fatalf("WithUserAgent then UserAgent = %q %v", got, ok)
+	}
+}

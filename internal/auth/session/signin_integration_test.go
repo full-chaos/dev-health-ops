@@ -15,7 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
-	"github.com/full-chaos/dev-health-ops/internal/auth/useragent"
 )
 
 func signInEvent(principal uuid.UUID) audit.AuditEvent {
@@ -35,7 +34,7 @@ func TestCreateAuditedCommitsTheSessionWithItsAuditRow(t *testing.T) {
 	principal := e.principal(t, ctx)
 	id := uuid.New()
 	ctx = clientaddr.With(requestid.With(ctx, id), netip.MustParseAddr("198.51.100.7"))
-	ctx = useragent.With(ctx, "Mozilla/5.0 (sign-in test) \u00e9")
+	ctx = clientaddr.WithUserAgent(ctx, "Mozilla/5.0 (sign-in test) \u00e9")
 	issued, err := e.store.CreateAudited(ctx, principal, nil, []string{"pwd"}, signInEvent(principal))
 	if err != nil {
 		t.Fatalf("CreateAudited: %v", err)

@@ -82,3 +82,206 @@ func TestNoPythonUnderTestsFiresOnPlantedFile(t *testing.T) {
 		t.Fatalf("guard did not name the planted file: %v", stray)
 	}
 }
+
+// pyOwnedEntry is one place a Python file may still live, with the leaf that deletes it. An entry ending in "/" is a
+// directory prefix; any other entry is one file, written without the ".py" suffix (same reason as testsPyAllowed).
+// A new entry needs a new owner leaf; an entry whose last .py is gone must be removed from the list.
+type pyOwnedEntry struct {
+	stem  string
+	owner string
+}
+
+const oracleOwner = "unassigned: oracle and golden-generator scripts under testdata"
+
+var pyOwnedEntries = []pyOwnedEntry{
+	{"src/dev_health_ops/", "CHAOS-10375"},
+	{"scripts/", "CHAOS-10386/10387/10388 (docs tooling leaves)"},
+	{"tests/tooling/", "fcs tooling/docs leaves"},
+	{"tests/docs/", "fcs tooling/docs leaves"},
+	{"ci/bigboy/", "#4565/#4563"},
+	{"ci/check_go_api_routing_digest", "fcs CHAOS-10367"},
+	{"ci/go_relevance", "fcs CHAOS-10367"},
+	{"ci/venue_oracle_weights", "fcs CHAOS-10367"},
+	{"internal/adminops/testdata/", oracleOwner},
+	{"internal/api/externalingest/testdata/", oracleOwner},
+	{"internal/api/externalurl/testdata/", oracleOwner},
+	{"internal/api/teamsidentity/testdata/", oracleOwner},
+	{"internal/apiservice/admin/testdata/llmreadinessoracle/", oracleOwner},
+	{"internal/apiservice/testdata/", oracleOwner},
+	{"internal/cli/testdata/", oracleOwner},
+	{"internal/fixturesgen/testdata/", oracleOwner},
+	{"internal/jobs/metrics/aigovernance/testdata/", oracleOwner},
+	{"internal/jobs/metrics/aiimpact/testdata/", oracleOwner},
+	{"internal/jobs/metrics/complexity/lizardcc/testdata/", oracleOwner},
+	{"internal/jobs/metrics/complexity/pycc/testdata/", oracleOwner},
+	{"internal/jobs/metrics/complexity/testdata/", oracleOwner},
+	{"internal/jobs/metrics/daily/testdata/", oracleOwner},
+	{"internal/jobs/metrics/remaining/testdata/", oracleOwner},
+	{"internal/providersync/testdata/", oracleOwner},
+	{"internal/pythonparity/testdata/", oracleOwner},
+	{"internal/queryapi/investmentexplain/testdata/", oracleOwner},
+	{"internal/queryapi/people/summaryvenue/testdata/", oracleOwner},
+	{"internal/queryapi/quadrant/testdata/", oracleOwner},
+	{"internal/queryapi/recommendations/testdata/", oracleOwner},
+	{"internal/scheduler/fixed/testdata/", oracleOwner},
+	{"internal/scheduler/sync/testdata/", oracleOwner},
+	{"internal/syncbudget/testdata/", oracleOwner},
+	{"internal/synccli/testdata/", oracleOwner},
+	{"internal/synccoverage/testdata/", oracleOwner},
+	{"internal/syncdispatchruntime/testdata/", oracleOwner},
+}
+
+func (e pyOwnedEntry) covers(stem string) bool {
+	if strings.HasSuffix(e.stem, "/") {
+		return strings.HasPrefix(stem, e.stem)
+	}
+	return stem == e.stem
+}
+
+// pyDeadWalk lists every .py file under root (slash paths), skipping VCS and dependency directories.
+func pyDeadWalk(t *testing.T, root string) []string {
+	t.Helper()
+	var found []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "vendor", ".venv":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(p, ".py") {
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				return err
+			}
+			found = append(found, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
+// pyDeadVerdict returns the .py files no entry covers and the entries no .py file is left under.
+func pyDeadVerdict(files []string) (outside []string, emptied []string) {
+	used := map[string]bool{}
+	for _, f := range files {
+		stem := strings.TrimSuffix(f, ".py")
+		covered := false
+		for _, e := range pyOwnedEntries {
+			if e.covers(stem) {
+				used[e.stem] = true
+				covered = true
+			}
+		}
+		if !covered && !(strings.HasPrefix(f, "tests/") && len(testsTreeStray([]string{f})) == 0) {
+			outside = append(outside, f)
+		}
+	}
+	for _, e := range pyOwnedEntries {
+		if !used[e.stem] {
+			emptied = append(emptied, e.stem+" ("+e.owner+")")
+		}
+	}
+	return outside, emptied
+}
+
+func TestNoTrackedPythonOutsideOwnedEntries(t *testing.T) {
+	outside, emptied := pyDeadVerdict(pyDeadWalk(t, testsTreeRoot(t)))
+	if len(outside) > 0 {
+		t.Fatalf("Python is dead; %d .py file(s) outside the owned entries, first: %s", len(outside), outside[0])
+	}
+	if len(emptied) > 0 {
+		t.Fatalf("owned entry has no .py file left; remove it from pyOwnedEntries: %s", emptied[0])
+	}
+}
+
+// pyPlantedTree writes one .py file per owned entry, plus the extra paths, under a temp dir that is not the real tree.
+func pyPlantedTree(t *testing.T, skipStem string, extra ...string) []string {
+	t.Helper()
+	root := t.TempDir()
+	paths := append([]string{}, extra...)
+	for _, e := range pyOwnedEntries {
+		if e.stem == skipStem {
+			continue
+		}
+		if strings.HasSuffix(e.stem, "/") {
+			paths = append(paths, e.stem+"a.py")
+		} else {
+			paths = append(paths, e.stem+".py")
+		}
+	}
+	for _, p := range paths {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// skipped directories must not be walked
+	for _, skip := range []string{".git", "node_modules", "vendor", ".venv"} {
+		if err := os.MkdirAll(filepath.Join(root, skip), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, skip, "skipped.py"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return pyDeadWalk(t, root)
+}
+
+func TestNoTrackedPythonFiresOnPlantedRows(t *testing.T) {
+	if outside, emptied := pyDeadVerdict(pyPlantedTree(t, "")); len(outside) != 0 || len(emptied) != 0 {
+		t.Fatalf("a tree holding exactly the owned entries must pass: outside=%v emptied=%v", outside, emptied)
+	}
+	for _, planted := range []string{"internal/x.py", "brand/new/dir/y.py", "tests/test_planted.py", "ci/new_tool.py", "scripts_x/z.py"} {
+		outside, _ := pyDeadVerdict(pyPlantedTree(t, "", planted))
+		if len(outside) != 1 || outside[0] != planted {
+			t.Fatalf("planted %s: outside = %v", planted, outside)
+		}
+	}
+	for _, e := range pyOwnedEntries {
+		_, emptied := pyDeadVerdict(pyPlantedTree(t, e.stem))
+		if len(emptied) != 1 || !strings.HasPrefix(emptied[0], e.stem+" ") {
+			t.Fatalf("emptied entry %s: emptied = %v", e.stem, emptied)
+		}
+	}
+}
+
+func ciRequirementsFiles(root string) ([]string, error) {
+	return filepath.Glob(filepath.Join(root, "ci", "requirements-*.txt"))
+}
+
+func TestNoCIRequirementsFile(t *testing.T) {
+	found, err := ciRequirementsFiles(testsTreeRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) > 0 {
+		t.Fatalf("Python is dead; no ci/requirements-*.txt may exist, found %s", filepath.Base(found[0]))
+	}
+}
+
+func TestNoCIRequirementsFileFiresOnPlantedFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "ci"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if found, _ := ciRequirementsFiles(root); len(found) != 0 {
+		t.Fatalf("empty ci/ must pass: %v", found)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ci", "requirements-x.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if found, _ := ciRequirementsFiles(root); len(found) != 1 {
+		t.Fatalf("planted ci/requirements-x.txt not found: %v", found)
+	}
+}

@@ -56,7 +56,7 @@ func e2eOrgIDViolations(root string) []string {
 	if err != nil {
 		return []string{err.Error()}
 	}
-	m := regexp.MustCompile("uuidPattern\\s*=\\s*regexp\\.MustCompile\\(`([^`]+)`\\)").FindSubmatch(src)
+	m := uuidPatternDecl.FindSubmatch(src)
 	if m == nil {
 		return []string{"uuidPattern not found in internal/jobcontract/types.go: retarget this guard, do not delete it"}
 	}
@@ -72,7 +72,7 @@ func e2eOrgIDViolations(root string) []string {
 	if err != nil {
 		return append(bad, err.Error())
 	}
-	ids := regexp.MustCompile(`E2E_ORG_ID[",)]?\s*[,=]\s*"([0-9a-fA-F-]{36})"`).FindAllSubmatch(script, -1)
+	ids := e2eOrgIDLiteral.FindAllSubmatch(script, -1)
 	if len(ids) == 0 {
 		return append(bad, "no E2E_ORG_ID literal found in ci/run_live_backend_e2e.sh: the guard checks nothing")
 	}
@@ -105,7 +105,7 @@ func TestE2ESeedOrganizationIDGuardFiresOnPlantedDefects(t *testing.T) {
 				// A single literal replaced leaves the python-heredoc literal; replace all of them.
 				p := filepath.Join(tree, c.rel)
 				b, _ := os.ReadFile(p)
-				s := regexp.MustCompile(`E2E_ORG_ID[",)]?\s*[,=]\s*"[0-9a-fA-F-]{36}"`).ReplaceAllString(string(b), `E2E_ORG_ID="${SEED_ORG}"`)
+				s := e2eOrgIDReplace.ReplaceAllString(string(b), `E2E_ORG_ID="${SEED_ORG}"`)
 				if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
 					t.Fatal(err)
 				}
@@ -175,9 +175,9 @@ func ledgerViolations(root string) []string {
 	if err != nil {
 		return []string{err.Error()}
 	}
-	insert := regexp.MustCompile(`INSERT\s+INTO\s+public\.sync_run_units`)
-	update := regexp.MustCompile(`UPDATE\s+public\.sync_run_units`)
-	success := regexp.MustCompile(`SET\s+status\s*=\s*'success'`)
+	insert := ledgerInsertPattern
+	update := ledgerUpdatePattern
+	success := ledgerSuccessPattern
 	inserting, terminalizing := map[string]bool{}, map[string]bool{}
 	for _, rel := range files {
 		b, err := os.ReadFile(filepath.Join(root, rel))
@@ -305,3 +305,29 @@ func TestProviderLimitsGuardFiresOnPlantedDefects(t *testing.T) {
 		}
 	})
 }
+
+// pySpace is Python's str \s as a Go regexp class body: exactly the code points where str.isspace() is true (Go's
+// own \s is ASCII only). Python's \w would be \p{L}\p{N}_ and \d would be \p{Nd}; no ported regex here uses them.
+const pySpace = `\x{9}-\x{d}\x{1c}-\x{20}\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
+
+func pyIsSpace(r rune) bool {
+	switch {
+	case r >= 0x9 && r <= 0xd, r >= 0x1c && r <= 0x20, r == 0x85, r == 0xa0, r == 0x1680, r >= 0x2000 && r <= 0x200a,
+		r == 0x2028, r == 0x2029, r == 0x202f, r == 0x205f, r == 0x3000:
+		return true
+	}
+	return false
+}
+
+// pyStrip is str.strip(); pyFields is str.split(). Go's strings.TrimSpace and strings.Fields miss \x1c-\x1f.
+func pyStrip(s string) string    { return strings.TrimFunc(s, pyIsSpace) }
+func pyFields(s string) []string { return strings.FieldsFunc(s, pyIsSpace) }
+
+var (
+	uuidPatternDecl      = regexp.MustCompile(`uuidPattern[` + pySpace + `]*=[` + pySpace + `]*regexp\.MustCompile\(` + "`([^`]+)`" + `\)`)
+	e2eOrgIDLiteral      = regexp.MustCompile(`E2E_ORG_ID[",)]?[` + pySpace + `]*[,=][` + pySpace + `]*"([0-9a-fA-F-]{36})"`)
+	e2eOrgIDReplace      = regexp.MustCompile(`E2E_ORG_ID[",)]?[` + pySpace + `]*[,=][` + pySpace + `]*"[0-9a-fA-F-]{36}"`)
+	ledgerInsertPattern  = regexp.MustCompile(`INSERT[` + pySpace + `]+INTO[` + pySpace + `]+public\.sync_run_units`)
+	ledgerUpdatePattern  = regexp.MustCompile(`UPDATE[` + pySpace + `]+public\.sync_run_units`)
+	ledgerSuccessPattern = regexp.MustCompile(`SET[` + pySpace + `]+status[` + pySpace + `]*=[` + pySpace + `]*'success'`)
+)

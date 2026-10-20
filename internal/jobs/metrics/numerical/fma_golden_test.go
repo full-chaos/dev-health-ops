@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// fmaGoldenFixture is the shape of tests/fixtures/fma_golden.json, generated
+// fmaGoldenFixture is the shape of tests/fixtures/fma_golden.json, was generated
 // by generate_fma_golden (generator deleted, golden frozen) by IMPORTING and calling the real
 // production Python functions. CHAOS-4818: Go's spec permits fusing an
 // unguarded `x*y + z` into a single fused-multiply-add on arm64 (one

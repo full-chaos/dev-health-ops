@@ -131,13 +131,13 @@ func lvGateViolations(t *testing.T, script string) []string {
 			continue
 		}
 		if !strings.Contains(line, "redact_uri") {
-			add("line %d displays SCRATCH_URI without redaction: %s", i+1, strings.TrimSpace(line))
+			add("line %d displays SCRATCH_URI without redaction: %s", i+1, pyStrip(line))
 		}
 	}
 
 	// No child receives the DSN as an argument.
 	for _, flag := range []string{"--sink", "--clickhouse-uri", "--db ", "--analytics-db"} {
-		if regexp.MustCompile(regexp.QuoteMeta(flag) + `\s*"?\$\{SCRATCH_URI\}`).MatchString(src) {
+		if lvArgvFlagPattern(flag).MatchString(src) {
 			add("flag %q passes the credential-bearing SCRATCH_URI in argv", flag)
 		}
 	}
@@ -162,7 +162,7 @@ func lvGateViolations(t *testing.T, script string) []string {
 	}
 	if enc, _ := lvCallFunc(src, "uri_encode", "sec/ret"); !strings.Contains(enc, "%2F") {
 		add("uri_encode: '/' must be encoded, got %q", enc)
-	} else if red, _ := lvCallFunc(src, "redact_uri", "clickhouse://ch:"+enc+"@host:8123/db"); strings.TrimSpace(red) != "clickhouse://host:8123/db" {
+	} else if red, _ := lvCallFunc(src, "redact_uri", "clickhouse://ch:"+enc+"@host:8123/db"); pyStrip(red) != "clickhouse://host:8123/db" {
 		add("a slash in the password defeats redaction: %q", red)
 	}
 	if enc, _ := lvCallFunc(src, "uri_encode", "café"); enc != "caf%C3" {
@@ -178,7 +178,7 @@ func lvGateViolations(t *testing.T, script string) []string {
 			if strings.Contains(line, "${DHO}") {
 				n++
 				if !strings.Contains(line, "PROXY_OFF") {
-					add("remote-ClickHouse invocation is not proxy-neutralised: %s", strings.TrimSpace(line))
+					add("remote-ClickHouse invocation is not proxy-neutralised: %s", pyStrip(line))
 				}
 			}
 		}
@@ -195,7 +195,7 @@ func lvGateViolations(t *testing.T, script string) []string {
 	// The lock is scoped to CH_CONTAINER, not the host.
 	scoped := false
 	for _, line := range strings.Split(src, "\n") {
-		l := strings.TrimSpace(line)
+		l := pyStrip(line)
 		if strings.HasPrefix(l, "LOCK_DIR=") && strings.Contains(l, "CH_CONTAINER") {
 			scoped = true
 		}
@@ -218,7 +218,7 @@ func lvGateViolations(t *testing.T, script string) []string {
 	}
 	endpoints := func(argv string) []string {
 		var e []string
-		for _, tok := range strings.Fields(argv) {
+		for _, tok := range pyFields(argv) {
 			if strings.Contains(tok, "://") {
 				e = append(e, tok)
 			}
@@ -354,4 +354,9 @@ func TestLocalValidateClickhouseGuardsFirePerPlantedDefect(t *testing.T) {
 			}
 		})
 	}
+}
+
+// lvArgvFlagPattern ports re.search(rf'{re.escape(flag)}\s*"?\$\{SCRATCH_URI}', source); \s is Python's.
+func lvArgvFlagPattern(flag string) *regexp.Regexp {
+	return regexp.MustCompile(regexp.QuoteMeta(flag) + `[` + pySpace + `]*"?\$\{SCRATCH_URI\}`)
 }

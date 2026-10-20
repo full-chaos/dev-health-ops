@@ -42,19 +42,10 @@ import (
 // reference an immutable build by, and nothing on the REST side plays that
 // role -- see alembic 0134's own module doc comment.
 //
-// The drift check for the four GraphQL-table migrations (0114/0127/0128/
-// 0129) lives in PYTHON rather than here, deliberately: reading the
-// alembic files FROM a Go test made them inputs to the Go workflow, and
-// go.yml's path filters do not cover src/dev_health_ops/alembic/versions
-// -- so a PR changing only a migration would have satisfied go-quality
-// vacuously (caught by tests/tooling/test_go_workflow_path_filters.py).
-// Enforcing it from the Python side keeps the guard and costs no
-// cross-language trigger, because Python's own workflow already runs on
-// those files. That check's own column-pattern scan names its four source
-// migrations explicitly (it does not enumerate the versions directory), so
-// it does not -- and is not meant to -- cover 0134; this table's own Go
-// integration test (internal/goapiproof's restreceipt_integration_test.go)
-// is what proves this mirror against the real migrated schema instead.
+// The 0114/0127/0128/0129 GraphQL-table migrations are proven only by the migration runner (upgrade and
+// downgrade); nothing compares this DDL with a migrated database. This mirror is therefore a hand-kept copy for
+// container-free tests. Table 0134 (go_api_rest_proof_run) is the one exception: its own Go integration test
+// (internal/goapiproof's restreceipt_integration_test.go) proves this mirror against the real migrated schema.
 const DDL = `
 CREATE TABLE go_api_candidate_build (
 	schema_digest TEXT NOT NULL,

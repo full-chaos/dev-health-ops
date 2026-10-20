@@ -132,12 +132,6 @@ func TestParseCommitFromIDMatchesPythonGolden(t *testing.T) {
 	}
 }
 
-// No dedicated rot guard here, deliberately: generate_workgraph_ids_python_golden (generator deleted, golden frozen)
-// declares its output path as `OUTPUT_PATH = Path(__file__).parent / "..."`,
-// which live_python_corpus_guard_test.go's TestEveryDiscoverableCorpusStillMatchesLivePython
-// discovers and re-runs automatically via tests/fixtures/*'s generate_*.py glob.
-// A second, hand-written guard here would re-run the SAME generator under a
-// different name -- the exact CHAOS-4871 duplication class (TestSumGoldenMatchesLivePython
-// running three times for zero added coverage). Confirmed by running the
-// discovery guard locally before and after adding this generator: it appears
-// in the "guarded by discovery" list, not the unguardable one.
+// No rot guard here: generate_workgraph_ids_python_golden (generator deleted, golden frozen) is gone, and so is the
+// live-Python discovery guard (live_python_corpus_guard_test.go) that used to re-run it. The frozen golden and
+// the Go test above are the only regression guard.

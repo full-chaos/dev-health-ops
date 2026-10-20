@@ -2,6 +2,7 @@ package workflows_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,7 +12,7 @@ import (
 
 // The race legs of go-quality-leg may run on the ARC pool named by vars.CI_RACE_RUNNER. ops is a
 // public repo: the pool term must carry the push-to-main and same-repository guards, the variable
-// unset must mean hosted, and a pool job must run with Ryuk off, a per-job session id and a reap.
+// unset must mean hosted, and a pool job must run with Ryuk off and prove at start that its docker daemon holds no testcontainers.
 
 const raceHostedFallback = "'ubuntu-latest' }}"
 
@@ -53,17 +54,11 @@ func TestRaceLegsRouteToThePoolOnlyOnPushToMainOfThisRepo(t *testing.T) {
 	}
 }
 
-func TestRaceLegsOnThePoolRunWithoutRyukAndReapTheirContainers(t *testing.T) {
+func TestRaceLegsOnThePoolRunWithoutRyukAndAssertAnEmptyDaemonAtStart(t *testing.T) {
 	leg := goQualityLeg(t)
 	env, _ := leg["env"].(map[string]any)
 	if env["TESTCONTAINERS_RYUK_DISABLED"] != "true" {
 		t.Fatalf("TESTCONTAINERS_RYUK_DISABLED must be 'true', got %v", env["TESTCONTAINERS_RYUK_DISABLED"])
-	}
-	session, _ := env["TESTCONTAINERS_SESSION_ID"].(string)
-	for _, part := range []string{"github.run_id", "github.run_attempt", "github.job", "strategy.job-index"} {
-		if !strings.Contains(session, part) {
-			t.Fatalf("TESTCONTAINERS_SESSION_ID must be per job and carry %s, got %q", part, session)
-		}
 	}
 	if got, _ := env["DEV_HEALTH_GO_RACE_TEST_TIMEOUT"].(string); !strings.Contains(got, "'25m'") {
 		t.Fatalf("the pool race path needs a per-package go test timeout above the 600 s default, got %q", got)
@@ -72,12 +67,132 @@ func TestRaceLegsOnThePoolRunWithoutRyukAndReapTheirContainers(t *testing.T) {
 	found := false
 	for _, s := range steps {
 		step, _ := s.(map[string]any)
-		if run, _ := step["run"].(string); strings.Contains(run, "ci/reap_testcontainers_session.sh") {
-			found = step["if"] == "always()"
+		if run, _ := step["run"].(string); strings.Contains(run, "ci/assert_no_testcontainers.sh") {
+			found = step["if"] == "matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'"
 		}
 	}
 	if !found {
-		t.Fatal("go-quality-leg needs an always() step that runs ci/reap_testcontainers_session.sh")
+		t.Fatal("go-quality-leg needs a pool-only step that runs ci/assert_no_testcontainers.sh")
+	}
+	for _, s := range steps {
+		step, _ := s.(map[string]any)
+		if run, _ := step["run"].(string); strings.Contains(run, "reap_testcontainers") {
+			t.Fatal("the session reap step is gone: each pool pod has its own docker daemon")
+		}
+	}
+}
+
+func runAssertWithFakeDocker(t *testing.T, fakeDocker string) (string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/usr/bin/env bash\n"+fakeDocker+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(authProofRoot(t), "ci", "assert_no_testcontainers.sh"))
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func TestAssertNoTestcontainersAtJobStart(t *testing.T) {
+	if out, err := runAssertWithFakeDocker(t, "exit 0"); err != nil {
+		t.Fatalf("an empty daemon must pass, got %v: %s", err, out)
+	}
+	out, err := runAssertWithFakeDocker(t, `[ "$1 $2 $3" = "ps -q --filter" ] && [ "$4" = "label=org.testcontainers=true" ] && echo abc123def456`)
+	if err == nil || !strings.Contains(out, "abc123def456") {
+		t.Fatalf("a labelled container must fail the step and name its id, got %v: %s", err, out)
+	}
+	if out, err := runAssertWithFakeDocker(t, "echo daemon down >&2; exit 1"); err == nil {
+		t.Fatalf("a docker failure must exit nonzero, got: %s", out)
+	}
+}
+
+// evalRacePoolTerm evaluates a term made only of `a && b` clauses: `matrix.pool`, `x == 'lit'` and `x != 'lit'`.
+func evalRacePoolTerm(t *testing.T, term string, ctx map[string]string) bool {
+	t.Helper()
+	for _, clause := range strings.Split(term, " && ") {
+		clause = strings.TrimSpace(clause)
+		switch {
+		case clause == "matrix.pool":
+			if ctx[clause] != "true" {
+				return false
+			}
+		case strings.Contains(clause, " == '"), strings.Contains(clause, " != '"):
+			op := " == "
+			if strings.Contains(clause, " != ") {
+				op = " != "
+			}
+			lhs, rhs, _ := strings.Cut(clause, op)
+			lit := strings.Trim(rhs, "'")
+			if (ctx[lhs] == lit) != (op == " == ") {
+				return false
+			}
+		default:
+			t.Fatalf("unsupported clause %q in the pool term", clause)
+		}
+	}
+	return true
+}
+
+func poolContext(over map[string]string) map[string]string {
+	ctx := map[string]string{
+		"matrix.pool":         "true",
+		"vars.CI_RACE_RUNNER": "oci-arc-runners",
+		"github.event_name":   "push",
+		"github.ref":          "refs/heads/main",
+		"github.repository":   "full-chaos/dev-health-ops",
+	}
+	for k, v := range over {
+		ctx[k] = v
+	}
+	return ctx
+}
+
+func TestRacePoolTermRoutesByEvaluation(t *testing.T) {
+	leg := goQualityLeg(t)
+	runsOn, _ := leg["runs-on"].(string)
+	term := strings.TrimPrefix(runsOn, "${{ (")
+	term, _, _ = strings.Cut(term, ") && vars.CI_RACE_RUNNER || ")
+	cases := []struct {
+		name string
+		over map[string]string
+		want bool
+	}{
+		{"eligible push to main", nil, true},
+		{"variable unset", map[string]string{"vars.CI_RACE_RUNNER": ""}, false},
+		{"pull request", map[string]string{"github.event_name": "pull_request", "github.ref": "refs/pull/1/merge"}, false},
+		{"push to another branch", map[string]string{"github.ref": "refs/heads/feature"}, false},
+		{"push to main of another repository", map[string]string{"github.repository": "someone/dev-health-ops"}, false},
+		{"leg without the pool flag", map[string]string{"matrix.pool": ""}, false},
+		{"workflow dispatch", map[string]string{"github.event_name": "workflow_dispatch"}, false},
+	}
+	for _, c := range cases {
+		if got := evalRacePoolTerm(t, term, poolContext(c.over)); got != c.want {
+			t.Errorf("%s: pool = %v, want %v (term %q)", c.name, got, c.want, term)
+		}
+	}
+}
+
+func TestRacePoolTermPlantedDefectsRoute(t *testing.T) {
+	planted := map[string]string{
+		"no repository clause": strings.Replace(racePoolTerm, " && github.repository == 'full-chaos/dev-health-ops'", "", 1),
+		"no push clause":       strings.Replace(racePoolTerm, "github.event_name == 'push' && ", "", 1),
+		"no main clause":       strings.Replace(racePoolTerm, " && github.ref == 'refs/heads/main'", "", 1),
+		"no variable clause":   strings.Replace(racePoolTerm, "vars.CI_RACE_RUNNER != '' && ", "", 1),
+	}
+	bad := map[string]map[string]string{
+		"no repository clause": {"github.repository": "someone/dev-health-ops"},
+		"no push clause":       {"github.event_name": "pull_request"},
+		"no main clause":       {"github.ref": "refs/heads/feature"},
+		"no variable clause":   {"vars.CI_RACE_RUNNER": ""},
+	}
+	for name, term := range planted {
+		if term == racePoolTerm {
+			t.Fatalf("%s: the mutation changed nothing", name)
+		}
+		if !evalRacePoolTerm(t, term, poolContext(bad[name])) {
+			t.Errorf("%s: the planted term did not route a case it must not route, so the evaluation cannot catch it", name)
+		}
 	}
 }
 

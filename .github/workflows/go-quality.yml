@@ -114,7 +114,6 @@ jobs:
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
-      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
       # The default 600 s per-package go test timeout is too small for the pool.
       DEV_HEALTH_GO_RACE_TEST_TIMEOUT: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && '25m' || '10m' }}
     steps:
@@ -123,6 +122,12 @@ jobs:
           # Need the base commit to diff against; the default depth-1 checkout
           # cannot see it. This is a git fetch, not a Docker Hub pull.
           fetch-depth: 0
+
+      # Each ARC pool runner pod has its own dind daemon and runs one job (2026-10-20), so Ryuk off
+      # needs no reap; a daemon that already holds testcontainers fails the job here.
+      - name: Assert no testcontainers at job start
+        if: matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'
+        run: bash ci/assert_no_testcontainers.sh
 
       - name: Check the migration matrix stamps are real commits
         if: matrix.name == 'static'
@@ -354,10 +359,6 @@ jobs:
       - name: Validate River compatibility harness
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash ci/check_river_compat_static.sh
-
-      - name: Remove this job's testcontainers by session id
-        if: always()
-        run: bash ci/reap_testcontainers_session.sh
 
   go-quality:
     name: go-quality

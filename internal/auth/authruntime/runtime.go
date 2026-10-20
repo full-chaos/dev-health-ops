@@ -33,8 +33,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -65,12 +69,14 @@ type IO struct {
 // 1 MiB default body limit that bounds buffering near 64 MiB.
 const maxInFlightRequests = 64
 
-// sessionRoutes is the service's mounted route set: the session routes
-// (CHAOS-10228) when cfg.Session is enabled, and nothing otherwise. Without
-// the session secrets the service stays as CHAOS-4881 built it, dormant: every
-// path receives the 404 envelope and no token is issued. No deployed stack
-// sets those secrets yet; prod enablement is a separate decision (CHAOS-3275
-// D1).
+// sessionRoutes is the service's mounted route set when cfg.Session is
+// enabled, and nothing otherwise: the session routes (CHAOS-10228), go-api's
+// compatibility refresh and logout, social-login, and login when the lockout
+// key is set too. Without the session secrets the service stays as
+// CHAOS-4881 built it, dormant: every path receives the 404 envelope and no
+// token is issued. No deployed stack sets those secrets yet, and go-api routes
+// to these only behind its AUTH_PROXY_* flags, all off; prod enablement is a
+// separate decision (CHAOS-3275 D1).
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 ) ([]httpapi.Route, error) {
@@ -88,9 +94,42 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
-	return authapi.Routes(authapi.Deps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger})
+	if err != nil {
+		return nil, err
+	}
+	clients := make(map[social.Provider]social.ClientCredentials, len(authconfig.SocialProviders))
+	for _, name := range authconfig.SocialProviders {
+		provider, ok := social.ParseProvider(name)
+		if !ok {
+			return nil, fmt.Errorf("authruntime: unknown social provider %q", name)
+		}
+		client := cfg.Social[name]
+		clients[provider] = social.NewClientCredentials(client.ID, client.Secret.Reveal())
+	}
+	socialService, err := social.New(social.Config{
+		Store:     identities,
+		Providers: &social.ProviderClient{HTTP: &http.Client{}, Endpoints: social.DefaultEndpoints, Clients: clients},
+		Logger:    logger,
 	})
+	if err != nil {
+		return nil, err
+	}
+	deps := authapi.Deps{
+		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+		Projector: identities, Social: socialService,
+		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
+			return audit.Append(ctx, pool, schema, event)
+		},
+	}
+	if cfg.Session.LoginEnabled {
+		deps.Login = &authapi.LoginConfig{
+			Users:      local.IdentityUsers{Store: identities},
+			Attempts:   local.NewPGAttempts(pool, schema),
+			LockoutKey: contracts.NewSecretString(cfg.Session.LockoutKey.Reveal()),
+		}
+	}
+	return authapi.Routes(deps)
 }
 
 // Main runs the command and exits with its status.
@@ -499,8 +538,9 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		MaxInFlight:    maxInFlightRequests,
 		// The server-minted request id (internal/auth/requestid) wraps the
 		// whole mux, so the transport's own refusals (404, 405, 413, 429)
-		// carry X-Auth-Request-ID as route answers do.
-		Middleware: []func(http.Handler) http.Handler{requestid.Middleware},
+		// carry X-Auth-Request-ID as route answers do. The client address
+		// (internal/auth/clientaddr) is bound for every audit row and session.
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies)},
 		// The transport id is always minted here, never a client's
 		// X-Request-ID: it reaches every log line and envelope.
 		AcceptRequestID: func(string) bool { return false },

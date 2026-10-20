@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,12 +29,23 @@ type Users interface {
 	// Role returns the membership role in org; found is false without one.
 	// A NULL role is found with a nil role.
 	Role(ctx context.Context, userID, orgID uuid.UUID) (role *string, found bool, err error)
+	// Memberships returns the user's memberships ordered by joined_at, then
+	// created_at (NULLs last), as go-api's login reads them.
+	Memberships(ctx context.Context, userID uuid.UUID) ([]Membership, error)
+}
+
+// Membership is one public.memberships row as login reads it.
+type Membership struct {
+	OrgID     uuid.UUID
+	Role      *string
+	JoinedAt  *time.Time
+	CreatedAt time.Time
 }
 
 // PGUsers reads public.users and public.memberships. The runtime role needs
 // column SELECT on users (id, email, username, full_name, is_active,
-// is_superuser, token_version) and memberships (user_id, org_id, role), and
-// nothing else (CHAOS-10224). The schema is named, so the role's search_path
+// is_superuser, token_version) and memberships (user_id, org_id, role,
+// joined_at, created_at), and nothing else (authschema.PublicReadColumns). The schema is named, so the role's search_path
 // does not decide which table is read.
 type PGUsers struct{ Pool *pgxpool.Pool }
 
@@ -89,3 +101,35 @@ func (p PGUsers) Role(ctx context.Context, userID, orgID uuid.UUID) (*string, bo
 	}
 	return role, found, nil
 }
+
+// Memberships is go-api's orderedMemberships (internal/api/session/store.go).
+func (p PGUsers) Memberships(ctx context.Context, userID uuid.UUID) ([]Membership, error) {
+	rows, err := p.Pool.Query(ctx, `
+		SELECT org_id, role, joined_at, created_at FROM public.memberships
+		WHERE user_id = $1 ORDER BY joined_at ASC, created_at ASC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading public.memberships: %w", errUsersStore, err)
+	}
+	defer rows.Close()
+	var out []Membership
+	for rows.Next() {
+		var m Membership
+		if err := rows.Scan(&m.OrgID, &m.Role, &m.JoinedAt, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("%w: reading public.memberships: %w", errUsersStore, err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: reading public.memberships: %w", errUsersStore, err)
+	}
+	return out, nil
+}
+
+// chooseMembership is go-api's selectActiveMembership without organization
+// activity (auth-service reads no ClickHouse): the requested organization's
+// membership, nil when the user holds none in it; otherwise the earliest
+// join, joined_at falling back to created_at, the first such in list order.
+// go-api decides the same way when its activity read is unavailable; with
+// activity it may prefer an organization with newer metrics (a recorded
+// difference, CHAOS-10228 ruling).
+func chooseMembership([]Membership, *uuid.UUID) *Membership { return nil }

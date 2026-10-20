@@ -132,6 +132,11 @@ var optionRegistry = []Option{
 		Usage: "instantaneous burst allowance per route bucket",
 	},
 	{
+		Flag: "trusted-proxies", Env: EnvTrustedProxies, Kind: KindString, Group: GroupHTTP,
+		Usage: "comma-separated IP addresses and strict CIDR networks of the proxies whose single " +
+			"X-Forwarded-For value names the client (the go-api proxy); \"*\" and hostnames are refused; empty trusts none",
+	},
+	{
 		Env: EnvDatabaseURI, Kind: KindString, Secret: true, Group: GroupDatabase,
 		Usage: "PostgreSQL DSN for the auth-owned schema; " + EnvDatabaseURI +
 			"_FILE reads it from a mounted file instead (the two are mutually exclusive)",
@@ -182,6 +187,35 @@ var optionRegistry = []Option{
 		Flag: "jwt-audience", Env: EnvAccessTokenAudience, Kind: KindString,
 		Default: defaultAccessTokenAudience, Group: GroupSession,
 		Usage: "aud of the compatibility access token (go-api's JWT_AUDIENCE)",
+	},
+	{
+		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "32-byte login lockout key, base64url without padding; " + EnvLoginLockoutKey +
+			"_FILE reads it from a mounted file instead. With the session secrets it mounts POST /api/v1/auth/login",
+	},
+	{
+		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,
+		Usage: "GitHub OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
+	},
+	{
+		Env: "SOCIAL_GITHUB_CLIENT_SECRET", Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "GitHub OAuth client secret; SOCIAL_GITHUB_CLIENT_SECRET_FILE reads it from a mounted file instead",
+	},
+	{
+		Flag: "social-gitlab-client-id", Env: "SOCIAL_GITLAB_CLIENT_ID", Kind: KindString, Group: GroupSession,
+		Usage: "GitLab OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
+	},
+	{
+		Env: "SOCIAL_GITLAB_CLIENT_SECRET", Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "GitLab OAuth client secret; SOCIAL_GITLAB_CLIENT_SECRET_FILE reads it from a mounted file instead",
+	},
+	{
+		Flag: "social-google-client-id", Env: "SOCIAL_GOOGLE_CLIENT_ID", Kind: KindString, Group: GroupSession,
+		Usage: "Google OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
+	},
+	{
+		Env: "SOCIAL_GOOGLE_CLIENT_SECRET", Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "Google OAuth client secret; SOCIAL_GOOGLE_CLIENT_SECRET_FILE reads it from a mounted file instead",
 	},
 }
 

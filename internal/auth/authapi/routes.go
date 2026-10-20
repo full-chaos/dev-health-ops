@@ -11,8 +11,11 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
@@ -30,6 +33,26 @@ type Sessions interface {
 	Current(ctx context.Context, sessionID uuid.UUID) (session.Record, error)
 	Revoke(ctx context.Context, sessionID uuid.UUID, actor session.Actor) (bool, error)
 	RevokeAll(ctx context.Context, principalID uuid.UUID, actor session.Actor) (int, error)
+	RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor session.Actor) (bool, error)
+	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
+}
+
+// Projector makes the auth schema's principal and organization rows agree
+// with go-api's before a session or an audit row names them
+// (*identity.Store).
+type Projector interface {
+	Project(ctx context.Context, userID uuid.UUID) error
+	ProjectOrganization(ctx context.Context, orgID uuid.UUID) error
+}
+
+// LoginConfig mounts the local login route.
+type LoginConfig struct {
+	Users    local.Users
+	Attempts local.Attempts
+	// LockoutKey is AUTH_LOGIN_LOCKOUT_KEY (local.Config.LockoutKey).
+	LockoutKey contracts.SecretString
+	// Compare is the password check; nil means bcrypt. Tests count its calls.
+	Compare func(hash, password string) bool
 }
 
 // Deps are the routes' collaborators.
@@ -40,11 +63,20 @@ type Deps struct {
 	Logger   *slog.Logger
 	// Meter registers the outcome counter; nil uses the process meter.
 	Meter metric.Meter
+	// Projector and AppendAudit are required when Login or Social is set.
+	Projector Projector
+	// AppendAudit writes an append-only audit row (audit.Append).
+	AppendAudit func(ctx context.Context, event audit.AuditEvent) error
+	// Login mounts POST /api/v1/auth/login; nil leaves it unmounted.
+	Login *LoginConfig
+	// Social mounts POST /api/v1/auth/social-login; nil leaves it unmounted.
+	Social *social.Service
 }
 
 type handlers struct {
 	Deps
-	rec recorder
+	rec   recorder
+	login *local.Service
 }
 
 // Routes returns the session routes. Each registration is on a line of its
@@ -64,13 +96,34 @@ func Routes(deps Deps) ([]httpapi.Route, error) {
 	if err != nil {
 		return nil, err
 	}
+	if (deps.Login != nil || deps.Social != nil) && (deps.Projector == nil || deps.AppendAudit == nil) {
+		return nil, errors.New("authapi: login and social-login need a projector and an audit appender")
+	}
 	h := handlers{Deps: deps, rec: rec}
-	return []httpapi.Route{
+	routes := []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternRefresh, Handler: http.HandlerFunc(h.refresh)},
 		{Method: http.MethodGet, Pattern: PatternCurrent, Handler: http.HandlerFunc(h.current)},
 		{Method: http.MethodPost, Pattern: PatternRevoke, Handler: http.HandlerFunc(h.revoke)},
 		{Method: http.MethodPost, Pattern: PatternRevokeAll, Handler: http.HandlerFunc(h.revokeAll)},
-	}, nil
+		{Method: http.MethodPost, Pattern: PatternCompatRefresh, Handler: http.HandlerFunc(h.compatRefresh)},
+		{Method: http.MethodPost, Pattern: PatternCompatLogout, Handler: http.HandlerFunc(h.compatLogout)},
+	}
+	if deps.Login != nil {
+		login, err := local.New(local.Config{
+			Users: deps.Login.Users, Attempts: deps.Login.Attempts, LockoutKey: deps.Login.LockoutKey,
+			Compare: deps.Login.Compare, Sessions: loginSessions{h: h},
+		})
+		if err != nil {
+			return nil, err
+		}
+		h.login = login
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin)})
+	}
+	if deps.Social != nil {
+		exchange := social.Handlers{Service: deps.Social, Sessions: socialSessions{h: h}}.Exchange
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(exchange)})
+	}
+	return routes, nil
 }
 
 // bearerToken is the credential of an "Authorization: Bearer <token>" header.

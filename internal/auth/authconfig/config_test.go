@@ -330,6 +330,10 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSigningKeyID:           "other-kid",
 		EnvAccessTokenIssuer:      "other-issuer",
 		EnvAccessTokenAudience:    "other-audience",
+		EnvTrustedProxies:         "10.0.0.5,192.168.0.0/16",
+		"SOCIAL_GITHUB_CLIENT_ID": "gh-client",
+		"SOCIAL_GITLAB_CLIENT_ID": "gl-client",
+		"SOCIAL_GOOGLE_CLIENT_ID": "google-client",
 	}
 	read := map[string]func(Config) string{
 		EnvLogLevel:               func(c Config) string { return c.LogLevel.String() },
@@ -348,6 +352,10 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSigningKeyID:           func(c Config) string { return c.SigningKeyID },
 		EnvAccessTokenIssuer:      func(c Config) string { return c.Session.AccessIssuer },
 		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
+		EnvTrustedProxies:         func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
+		"SOCIAL_GITHUB_CLIENT_ID": func(c Config) string { return c.Social["github"].ID },
+		"SOCIAL_GITLAB_CLIENT_ID": func(c Config) string { return c.Social["gitlab"].ID },
+		"SOCIAL_GOOGLE_CLIENT_ID": func(c Config) string { return c.Social["google"].ID },
 	}
 
 	baseline, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})

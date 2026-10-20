@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 505,
+            "line": 549,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +45,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 411,
+          "line": 455,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -56,7 +56,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/routes.go",
-        "line": 69
+        "line": 104
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -74,7 +74,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 96,
+          "line": 149,
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
@@ -85,7 +85,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/routes.go",
-        "line": 70
+        "line": 105
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",
@@ -109,7 +109,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 96,
+          "line": 149,
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
@@ -120,7 +120,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/routes.go",
-        "line": 71
+        "line": 106
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",
@@ -144,7 +144,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 96,
+          "line": 149,
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
@@ -155,7 +155,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/routes.go",
-        "line": 72
+        "line": 107
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",
@@ -165,6 +165,211 @@
         "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER)",
         "token_type": "HS256 JWT, type=access, with sid"
       }
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "current_state_cache_behavior": "No cache: the users row, the lockout row and the memberships are read live.",
+      "disclosure_behavior": "An unknown user, a wrong or missing password and a disabled account are the same 401 Invalid credentials after the same calls; a lock is 429 with retry_after_seconds; an unverified local account is a 200 asking for verification; a requested organization the user is not in is 401. go-api's wire (internal/api/session): the go-api proxy forwards this path unchanged when its aggregate flag is on.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/login [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 62,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 35,
+            "note": "func newCredential",
+            "path": "internal/auth/session/credential.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The first opaque credential of a new session (session.Store.CreateAudited), in go-api's refresh_token member."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 113,
+          "note": "func (s *Service) Login",
+          "path": "internal/auth/identity/local/login.go"
+        },
+        "description": "local.Service.Login: bcrypt against the user's hash or a dummy one, the lockout check and one call sequence on every refusal; the session and its auth.login.succeeded row commit together."
+      },
+      "public_rationale": "Sign-in: the caller presents an email and a password, which no credential class models; it is how a session starts.",
+      "route": "/api/v1/auth/login",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 120
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "refresh_credential"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
+      "disclosure_behavior": "Every refusal of a presented credential is a 401 with go-api's text (Invalid or expired refresh token, Refresh token reuse detected, Account is disabled, User not found); a store failure is go-api's 500. go-api's wire (internal/api/session): the go-api proxy forwards this path unchanged when its aggregate flag is on.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/refresh [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 62,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 549,
+            "note": "func (s *Store) rotate",
+            "path": "internal/auth/session/store.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The rotated opaque credential, in go-api's refresh_token member; a grace replay inside 30 s returns the same successor."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 455,
+          "note": "func (s *Store) Exchange",
+          "path": "internal/auth/session/store.go"
+        },
+        "description": "session.Store.Exchange, as for /v1/token/refresh; the credential arrives in go-api's refresh_token member."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/auth/refresh",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 108
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "refresh_credential"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential and its session are read under the session row lock.",
+      "disclosure_behavior": "Always 200 Logout successful once the body is valid, whether or not the credential ended a session, so the answer says nothing about it. go-api's wire (internal/api/session): the go-api proxy forwards this path unchanged when its aggregate flag is on.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/logout [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 706,
+          "note": "func (s *Store) RevokeByCredential",
+          "path": "internal/auth/session/store.go"
+        },
+        "description": "session.Store.RevokeByCredential: only a live (unconsumed, unrevoked, unexpired) credential ends its session, with an auth.session.revoked row."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/auth/logout",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 109
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "social_oauth_exchange"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the provider profile is fetched per request and the identity and users rows are read live.",
+      "disclosure_behavior": "go-api's answers: 401 Invalid or expired provider token, 409 for an email another provider holds, 503 for a provider without client credentials, 403 where sign-up is not available. go-api's wire (internal/api/session): the go-api proxy forwards this path unchanged when its aggregate flag is on.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/social-login [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 62,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 35,
+            "note": "func newCredential",
+            "path": "internal/auth/session/credential.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The first opaque credential of a new session (session.Store.CreateAudited), in go-api's refresh_token member."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (s *Service) Exchange",
+          "path": "internal/auth/identity/social/service.go"
+        },
+        "description": "social.Service.Exchange: the provider's profile for the presented token, bound by issuer and subject; the session and its auth.login.succeeded row commit together."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/auth/social-login",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 124
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [],
@@ -264,5 +469,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "2fe0919e2f82f4a4fc52fefc99bf6c97a5cec59c"
+  "source_commit": "3931ed0b281e1c2398aa3e24b18ecd34c2ab752f"
 }

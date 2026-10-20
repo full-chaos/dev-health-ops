@@ -137,6 +137,7 @@ jobs:
           - FuzzValidSignedToken
           - FuzzParseLimit
           - FuzzParseForwardedTrust
+          - FuzzParseTrust
           - FuzzParseEd25519Key
           - FuzzConfigLoad
           - FuzzNormalizeEmail

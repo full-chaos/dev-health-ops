@@ -724,9 +724,25 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 	for _, route := range mounted {
 		got = append(got, route.Method+" "+route.Pattern)
 	}
-	want := []string{"POST /v1/token/refresh", "GET /v1/sessions/current", "POST /v1/sessions/revoke", "POST /v1/sessions/revoke-all"}
+	want := []string{"POST /v1/token/refresh", "GET /v1/sessions/current", "POST /v1/sessions/revoke", "POST /v1/sessions/revoke-all",
+		"POST /api/v1/auth/refresh", "POST /api/v1/auth/logout", "POST /api/v1/auth/login", "POST /api/v1/auth/social-login"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("mounted %v, want %v", got, want)
+	}
+
+	// Without the lockout key every route but login is mounted.
+	cfg.Session.LoginEnabled = false
+	mounted, err = sessionRoutes(cfg, logger, pool, schema)
+	if err != nil {
+		t.Fatalf("sessionRoutes: %v", err)
+	}
+	for _, route := range mounted {
+		if route.Pattern == "/api/v1/auth/login" {
+			t.Fatal("login mounted without the lockout key")
+		}
+	}
+	if len(mounted) != len(want)-1 {
+		t.Fatalf("%d routes without the lockout key, want %d", len(mounted), len(want)-1)
 	}
 }
 

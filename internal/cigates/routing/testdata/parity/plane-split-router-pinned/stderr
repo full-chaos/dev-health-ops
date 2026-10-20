@@ -1,0 +1,2 @@
+# deploy_sha=66f8e3b6fb34ea33c2b031d319ffa6e60ef1f428 ops_vendor=0123456789abcdef0123456789abcdef01234567
+# 8 goApiPaths, 5 query-api paths (4 queryApiPaths, 1 allow-list entries that name query-api)

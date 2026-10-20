@@ -50,6 +50,8 @@ cd "${ROOT_DIR}" || exit "${EXIT_FAILURE}"
 # telemetry wait, teardown) is shared with ci/run_live_backend_e2e.sh.
 # shellcheck source=ci/lib/go_worker_fixture.sh
 source "${ROOT_DIR}/ci/lib/go_worker_fixture.sh"
+# shellcheck source=ci/lib/e2e_fixture.sh
+source "${ROOT_DIR}/ci/lib/e2e_fixture.sh"
 
 require_cmd() {
   local cmd="$1"
@@ -213,10 +215,7 @@ WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
 RECONCILER_LOG_FILE="${METRICS_PROOF_RECONCILER_LOG_FILE:-${TMP_DIR}/reconciler.log}"
 start_worker_stack "${WORKER_LOG_FILE}" "${RECONCILER_LOG_FILE}"
 
-RUN_START="$(date -u +%Y-%m-%dT%H:%M:%S.%6N+00:00)"
-case "${RUN_START}" in
-  *N*) RUN_START="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" ;;
-esac
+RUN_START="$(run_start_stamp)"
 # Ordering contract (CHAOS-4266): seed ALL FOUR targets' ClickHouse rows
 # BEFORE finalizing ANY of their sync_runs. NativePostSyncService.Fanout
 # dispatches a remaining-metric family (dora needs cicd+deployments+

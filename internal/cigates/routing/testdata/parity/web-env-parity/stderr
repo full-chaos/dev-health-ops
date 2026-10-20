@@ -1,0 +1,13 @@
+DRIFT: prod web env name NEW_WEB_SETTING is not classified -- decide overlay vs base in check-web-env-parity.py and set it on bigboy if it applies
+DRIFT: overlay name TRUSTED_PROXY_HOPS missing from compose.bigboy.yml web.environment
+DRIFT: classified name ACR_WEB_ASSERTION_ISSUER no longer exists in prod web env -- drop it from CLASSIFIED
+DRIFT: classified name ACR_WEB_ASSERTION_AUDIENCE no longer exists in prod web env -- drop it from CLASSIFIED
+DRIFT: classified name ACR_WEB_ASSERTION_KID no longer exists in prod web env -- drop it from CLASSIFIED
+DRIFT: classified name ACR_WEB_ASSERTION_KEY_FILE no longer exists in prod web env -- drop it from CLASSIFIED
+DRIFT: classified name AUTH_GITHUB_SECRET no longer exists in prod web env -- drop it from CLASSIFIED
+DRIFT: classified name AUTH_GOOGLE_ID no longer exists in prod web env -- drop it from CLASSIFIED
+DRIFT: classified name AUTH_GOOGLE_SECRET no longer exists in prod web env -- drop it from CLASSIFIED
+DRIFT: overlay TRUST_PROXY is not the expected public value true
+DRIFT: running web container has no env var named TRUSTED_PROXY_HOPS
+DRIFT: running web container has no env var named AUTH_GITHUB_ID
+DRIFT: running web container has no env var named NEW_WEB_SETTING

@@ -1,0 +1,106 @@
+# Synthetic deploy values for the recorded Python/Go parity pairs (no deployment data).
+ingress:
+  goApiPaths:
+    - path: /api/v1/external-ingest/schemas
+    - path: /api/v1/external-ingest/schemas/{schema_id}
+    - path: /api/v1/billing/plans/{plan_id}/sync-stripe
+    - path: /api/v1/admin/audit-logs/resource/{kind}/{resource_id}
+    - path: /api/v1/admin/orgs/{org_id}/members/{user_id}
+    - path: /health
+    - path: /ready
+    - path: /api/v1/auth/me
+  queryApiPaths:
+    - path: /api/v1/work-units
+      pathType: Exact
+    - path: /api/v1/people/[^/]+/metric
+      pathType: ImplementationSpecific
+    - path: /api/v1/work-units/[^/]+/explain
+      pathType: ImplementationSpecific
+    - path: /api/v1/home
+      pathType: Exact
+ops:
+  ingress:
+    pythonAllowList: &shared
+      - path: /graphql$
+        pathType: ImplementationSpecific
+        service: query-api
+      - path: /ops-status
+        pathType: Prefix
+      - path: /status
+        pathType: Exact
+      - path: /openapi\.json$
+        pathType: ImplementationSpecific
+        service: api
+    hosts:
+      - host: api.example
+        pythonAllowList: true
+        paths:
+          - path: /
+            pathType: Prefix
+            service: go-api
+      - host: www.example
+        paths:
+          - path: /
+            pathType: Prefix
+            service: web
+      - host: in-cluster.example
+        pythonAllowList:
+          - path: /graphql$
+            pathType: ImplementationSpecific
+            service: query-api
+          - path: /metrics$
+            pathType: ImplementationSpecific
+        paths:
+          - path: /
+            pathType: Prefix
+            service: go-api
+  queryApi:
+    extraEnv:
+      - name: QUERY_API_INTERNAL_ADDR
+        value: ":8091"
+      - name: OTEL_ENABLED
+        value: "true"
+      - name: GO_API_WORK_UNITS_ENABLED
+        value: "true"
+      - name: GO_API_HOME_ENABLED
+        value: "true"
+      - name: GO_API_PEOPLE_ENABLED
+        value: "false"
+      - name: GO_API_FLAME_ENABLED
+        value: true
+      - name: GO_API_EXPLAIN_ENABLED
+        value: 'true'
+      - name: GO_API_EDGE_JWT_SECRET
+        valueFrom:
+          secretKeyRef:
+            name: dev-health-secrets
+            key: JWT_SECRET_KEY
+      - name: SETTINGS_ENCRYPTION_KEY
+        valueFrom:
+          secretKeyRef:
+            name: dev-health-secrets
+            key: SETTINGS_ENCRYPTION_KEY
+      - name: LLM_MODEL
+        valueFrom:
+          configMapKeyRef:
+            name: dev-health-config
+            key: LLM_MODEL
+      - name: LOG_LEVEL
+        value: info
+  web:
+    env:
+      BACKEND_URL: http://ingress
+    extraEnv:
+      - name: AUTH_URL
+        value: https://app.example
+      - name: TRUST_PROXY
+        value: "true"
+      - name: TRUSTED_PROXY_HOPS
+        value: "1"
+      - name: ACR_API_ORIGIN
+        value: http://acr
+      - name: AUTH_GITHUB_ID
+        valueFrom:
+          secretKeyRef: {name: web, key: AUTH_GITHUB_ID}
+      - name: NEW_WEB_SETTING
+        value: "x"

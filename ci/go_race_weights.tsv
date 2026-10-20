@@ -205,7 +205,6 @@ internal/mintcli/envelope	1
 internal/mintcli/envelopekeys	2
 internal/operationalbackfill	2
 internal/operationalordering	35
-internal/orgllmconfig	2
 internal/pgmigrate	6
 internal/platform/buildstamp	1
 internal/platform/config	12

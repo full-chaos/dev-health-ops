@@ -22,7 +22,6 @@ ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 # The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
 # resource that already carries the project name, so the name must not be guessable.
 PROJECT="${AUTH_WEB_PROXY_PROOF_PROJECT:-authwebproof$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
-AUTH_SERVICES=(go-api auth-service auth-migrate auth-provision auth-keys-init)
 
 die() {
   printf 'ERROR: %s\n' "$1" >&2
@@ -67,7 +66,7 @@ cleanup() {
   if [ "${status}" -ne 0 ]; then
     printf '\n--- auth services at failure ---\n' >&2
     compose --profile auth ps --all >&2 || true
-    compose --profile auth logs --no-color --tail 60 "${AUTH_SERVICES[@]}" >&2 || true
+    compose --profile auth logs --no-color --tail 80 >&2 || true
   fi
   compose --profile auth down --volumes --remove-orphans >/dev/null 2>&1 || true
   exit "${status}"

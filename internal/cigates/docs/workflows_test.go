@@ -71,6 +71,18 @@ func maskFindings(label string, job map[string]any, steps []map[string]any) []st
 	return out
 }
 
+// conditionFindings refuses an `if` on a guarded step: a condition skips the guard on the runs where it is false. names == nil guards every step.
+func conditionFindings(label string, steps []map[string]any, names map[string]bool) []string {
+	var out []string
+	for _, s := range steps {
+		name := asString(s["name"])
+		if _, has := s["if"]; has && (names == nil || names[name]) {
+			out = append(out, fmt.Sprintf("%s step %q must not carry an if: a condition skips the guard on the runs where it is false", label, name))
+		}
+	}
+	return out
+}
+
 func workflowSteps(wf map[string]any, job string) []map[string]any {
 	var steps []map[string]any
 	for _, s := range asList(asMap(asMap(wf["jobs"])[job])["steps"]) {
@@ -175,6 +187,11 @@ func docsGuardsGuard(d docTree) []string {
 	}
 	steps := workflowSteps(wf, "docs-guards")
 	out = append(out, maskFindings("docs-guards", job, steps)...)
+	checked := map[string]bool{}
+	for _, c := range docsGuardsChecks {
+		checked[c.step] = true
+	}
+	out = append(out, conditionFindings("docs-guards", steps, checked)...)
 	runs := stepRuns(steps)
 	allRuns := strings.ToLower(strings.Join(func() []string {
 		var l []string
@@ -238,6 +255,7 @@ func docsGuardsGuard(d docTree) []string {
 	}
 	csteps := workflowSteps(wf, contentJob)
 	out = append(out, maskFindings(contentJob, content, csteps)...)
+	out = append(out, conditionFindings(contentJob, csteps, nil)...)
 	goTest := false
 	for _, s := range csteps {
 		uses := asString(s["uses"])
@@ -367,6 +385,20 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, pyCmd("check_docs_candidate_facts"), pyCmd("check_docs_candidate_facts")+" || true")
 		}, "masks a failing command status"},
 	)
+	// A condition on a guarded step skips the guard on the runs where it is false: refused on every checker step and on the Go step.
+	guarded := []string{"Run the docs content guards"}
+	for _, c := range docsGuardsChecks {
+		guarded = append(guarded, c.step)
+	}
+	for _, step := range guarded {
+		step := step
+		for _, cond := range []string{"false", "github.event_name == 'push'"} {
+			cond := cond
+			plants = append(plants, plantCase{"the step " + step + " carries if: " + cond, func(t *testing.T, d docTree) docTree {
+				return d.edit(t, docsGuardsPath, "      - name: "+step+"\n", "      - name: "+step+"\n        if: "+cond+"\n")
+			}, fmt.Sprintf("step %q must not carry an if", step)})
+		}
+	}
 	assertGuard(t, docsGuardsGuard, plants)
 }
 
@@ -432,6 +464,7 @@ func cloudflareGuard(d docTree) []string {
 	}
 	prun := asString(preview["run"])
 	out = append(out, maskFindings("the preview build", nil, []map[string]any{preview})...)
+	out = append(out, conditionFindings("the preview build", []map[string]any{preview}, nil)...)
 	mustContain(&out, "the preview build step", prun, "set -o pipefail")
 	if !runsCommand(prun, pyCmd("build_docs_cloudflare"), "--mode preview --full-check") {
 		out = append(out, "the preview build step does not run "+pyCmd("build_docs_cloudflare")+" --mode preview --full-check (an echo of it is refused)")
@@ -465,6 +498,9 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 		{"the preview build step sets continue-on-error", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cloudflarePath, "      - name: Build and prepare validated preview assets\n", "      - name: Build and prepare validated preview assets\n        continue-on-error: true\n")
 		}, "must not set continue-on-error"},
+		{"the preview build step carries if: false", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "      - name: Build and prepare validated preview assets\n", "      - name: Build and prepare validated preview assets\n        if: false\n")
+		}, "must not carry an if"},
 		{"the preview build is replaced by an echo", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cloudflarePath, pyCmd("build_docs_cloudflare")+" --mode preview --full-check", "echo "+pyCmd("build_docs_cloudflare")+" --mode preview --full-check")
 		}, "does not run"},

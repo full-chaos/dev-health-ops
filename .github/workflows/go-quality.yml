@@ -23,7 +23,7 @@
 # a fan-in job that KEEPS the required context name `go-quality`, so no
 # branch-protection edit is needed. The fan-in is `unconditional`: a leg that is
 # skipped, cancelled or missing from the result FAILS the gate (a measurement
-# that did not happen must not read green). tests/tooling/test_go_quality_legs.py
+# that did not happen must not read green). internal/cigates/workflows/workflows_quality_legs_test.go
 # pins that the legs together run exactly the steps of `ci`.
 #
 # The pattern list is NOT restated here. ci/go_relevance.sh reads go.yml's own
@@ -71,8 +71,15 @@ jobs:
           # entries (the tooling test pins it).
           - name: static
             args: static
-          - name: test
-            args: test
+          # CHAOS-10355: three weighted test shards (ci/go_test_weights.tsv). The single test leg took 19.6-28.5 min of the 30 min
+          # cap. test COUNT below MUST equal the number of test entries (internal/cigates/testshard pins it). The legs are
+          # not required status contexts (the ruleset requires the `go-quality` aggregate).
+          - name: test-1-of-3
+            args: test 1 3
+          - name: test-2-of-3
+            args: test 2 3
+          - name: test-3-of-3
+            args: test 3 3
           # CHAOS-8135: three race legs. Two legs held ~5k s of race CPU, two
           # 400-600 s packages per leg, and a leg's packages slow each other
           # (providersync 340-601 s, goapiproof 346-600 s): race-2 crossed the

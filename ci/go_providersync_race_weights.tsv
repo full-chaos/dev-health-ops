@@ -3,7 +3,7 @@
 # Measured on bigboy, one run: `go test -race -count=1 -json ./internal/providersync/` (package 509 s, tests run in sequence),
 # worktree at 9917c10c0f. Only tests of 1 s or more are listed; every other test weighs the awk default (20 ms: the
 # 1,4xx tests under 1 s add up to about 50 s). Test name, TAB, milliseconds. Sorted (LC_ALL=C), no duplicates;
-# tests/tooling/test_go_quality_legs.py checks each row names a test `go test -list` reports.
+# `go test -list` names every row (see check_providersync_race_shard).
 TestDiscardDecisionTableEnumeratesEveryDeclaredState	1970
 TestDriftGuardCoversConstructorDocsAndDeepFields	2090
 TestDriftGuardSeesTheSymbolsItMustCover	1050

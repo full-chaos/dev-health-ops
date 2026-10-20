@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,22 +73,16 @@ func runtimeRolePool(t *testing.T, ctx context.Context, admin *pgxpool.Pool) *pg
 	return pool
 }
 
-var commitSeq atomic.Int64
-
 // commitCredential runs one statement against credential_registry through
 // audit.Commit.
 func commitCredential(ctx context.Context, env *credEnv, sql string, args ...any) error {
-	n := commitSeq.Add(1)
 	return Commit(ctx, env.writer, env.schema, Mutation{
 		Apply: func(ctx context.Context, tx TxOps) error {
 			_, err := tx.Exec(ctx, sql, args...)
 			return err
 		},
-		Audit: AuditEvent{EventType: "credential.test", Outcome: OutcomeAllowed},
-		Event: OutboxEvent{
-			AggregateType: "credential", AggregateID: fmt.Sprintf("c%d", n),
-			EventType: "credential.test", IdempotencyKey: fmt.Sprintf("credential-test-%d", n),
-		},
+		Audit:  AuditEvent{EventType: "credential.test", Outcome: OutcomeAllowed},
+		Events: probeEvents(),
 	})
 }
 

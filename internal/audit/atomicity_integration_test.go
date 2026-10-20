@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -51,12 +52,9 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 
 	mutation := func(key string, apply func(context.Context, TxOps) error) Mutation {
 		return Mutation{
-			Apply: apply,
-			Audit: AuditEvent{EventType: "organization.created", Outcome: OutcomeAllowed},
-			Event: OutboxEvent{
-				AggregateType: "organization", AggregateID: key,
-				EventType: "organization.created", IdempotencyKey: key,
-			},
+			Apply:  apply,
+			Audit:  AuditEvent{EventType: "organization.created", Outcome: OutcomeAllowed},
+			Events: []OutboxEvent{{AggregateType: "organization", AggregateID: keyedOrg(key), EventType: "organization.created"}},
 		}
 	}
 	insertOrg := func(name string) func(context.Context, TxOps) error {
@@ -80,6 +78,10 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 		}
 	})
 
+	// The key revision 1 of this aggregate will carry, already taken: the
+	// outbox insert then fails on the unique index after the state mutation
+	// and the revision bump have run.
+	seedOutboxKey(t, ctx, env, "organization:"+keyedOrg("key-taken")+":1")
 	baseline := observe(t)
 
 	t.Run("state mutation fails: nothing is written", func(t *testing.T) {
@@ -99,7 +101,7 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 		// transaction, after the state mutation has already run. This is the
 		// direction that matters most: if the helper committed the mutation
 		// separately, the organization row would survive its failed event.
-		err := Commit(ctx, env.pool, env.schema, mutation("key-happy", insertOrg("duplicate-key")))
+		err := Commit(ctx, env.pool, env.schema, mutation("key-taken", insertOrg("duplicate-key")))
 		if !errors.Is(err, ErrMutationFailed) {
 			t.Fatalf("Commit err = %v, want ErrMutationFailed", err)
 		}
@@ -133,6 +135,37 @@ func TestCommitIsAllThreeOrNone(t *testing.T) {
 type auditFixture struct {
 	pool   *pgxpool.Pool
 	schema authschema.ValidatedIdentifier
+}
+
+// keyedOrg is a stable organization wire id per test key.
+func keyedOrg(key string) string {
+	return "org_" + uuid.NewSHA1(uuid.NameSpaceURL, []byte(key)).String()
+}
+
+// probeEvents is one contract event on a fresh organization aggregate.
+func probeEvents() []OutboxEvent {
+	return []OutboxEvent{{AggregateType: "organization", AggregateID: "org_" + uuid.NewString(), EventType: "organization.updated"}}
+}
+
+// seedOutboxKey writes one outbox row under the commit guard, as Commit
+// would, so a test can take a key before Commit computes it.
+func seedOutboxKey(t *testing.T, ctx context.Context, env *auditFixture, key string) {
+	t.Helper()
+	tx, err := env.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('`+commitGuardSetting+`', pg_current_xact_id()::text, true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO auth.auth_outbox_events (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
+VALUES ('organization', 'seed', 'organization.updated', '{}', $1)`, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func newAuditFixture(t *testing.T, ctx context.Context) *auditFixture {
@@ -213,11 +246,8 @@ func TestMultiStatementIsRefusedByTheProtocol(t *testing.T) {
 				VALUES (gen_random_uuid(), 'multi', 'multi'); COMMIT;`)
 			return err
 		},
-		Audit: AuditEvent{EventType: "multi.statement", Outcome: OutcomeAllowed},
-		Event: OutboxEvent{
-			AggregateType: "probe", AggregateID: "multi",
-			EventType: "multi.statement", IdempotencyKey: "multi-1",
-		},
+		Audit:  AuditEvent{EventType: "multi.statement", Outcome: OutcomeAllowed},
+		Events: probeEvents(),
 	})
 	if err == nil {
 		t.Fatal("a multi-statement string carrying COMMIT was accepted")
@@ -257,11 +287,8 @@ func TestRetainedTxOpsIsUnusableAfterCommit(t *testing.T) {
 				VALUES (gen_random_uuid(), 'retained-first', 'retained-first')`)
 			return err
 		},
-		Audit: AuditEvent{EventType: "retention.probe", Outcome: OutcomeAllowed},
-		Event: OutboxEvent{
-			AggregateType: "probe", AggregateID: "retain",
-			EventType: "retention.probe", IdempotencyKey: "retain-1",
-		},
+		Audit:  AuditEvent{EventType: "retention.probe", Outcome: OutcomeAllowed},
+		Events: probeEvents(),
 	})
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -334,11 +361,8 @@ func TestCallbackEndingTheTransactionIsRefused(t *testing.T) {
 					_, err := tx.Exec(ctx, verb)
 					return err // nil on success: the callback reports everything is fine
 				},
-				Audit: AuditEvent{EventType: "raw." + strings.ToLower(verb), Outcome: OutcomeAllowed},
-				Event: OutboxEvent{
-					AggregateType: "probe", AggregateID: verb,
-					EventType: "raw." + strings.ToLower(verb), IdempotencyKey: "raw-" + verb,
-				},
+				Audit:  AuditEvent{EventType: "raw." + strings.ToLower(verb), Outcome: OutcomeAllowed},
+				Events: probeEvents(),
 			})
 			if err == nil {
 				t.Fatal("Commit reported SUCCESS after the callback ended the transaction itself")
@@ -373,9 +397,9 @@ func TestCommitRefusesAMutationThatChangedNothing(t *testing.T) {
 	before := [2]int{count("auth_outbox_events"), count("security_audit_events")}
 
 	err := Commit(ctx, env.pool, env.schema, Mutation{
-		Apply: func(ctx context.Context, tx TxOps) error { return nil },
-		Audit: AuditEvent{EventType: "noop.probe", Outcome: OutcomeAllowed},
-		Event: OutboxEvent{AggregateType: "probe", AggregateID: "noop", EventType: "noop.probe", IdempotencyKey: "noop-1"},
+		Apply:  func(ctx context.Context, tx TxOps) error { return nil },
+		Audit:  AuditEvent{EventType: "noop.probe", Outcome: OutcomeAllowed},
+		Events: probeEvents(),
 	})
 	if !errors.Is(err, ErrNoStateChange) {
 		t.Fatalf("Commit err = %v, want ErrNoStateChange", err)
@@ -411,8 +435,8 @@ func TestGuardedTablesRefuseWritesOutsideCommit(t *testing.T) {
 				`INSERT INTO auth.organizations (id, name, slug) VALUES (gen_random_uuid(), 'escape', 'escape')`)
 			return errors.New("force the helper to fail after the escape attempt")
 		},
-		Audit: AuditEvent{EventType: "escape.probe", Outcome: OutcomeAllowed},
-		Event: OutboxEvent{AggregateType: "probe", AggregateID: "escape", EventType: "escape.probe", IdempotencyKey: "escape-1"},
+		Audit:  AuditEvent{EventType: "escape.probe", Outcome: OutcomeAllowed},
+		Events: probeEvents(),
 	})
 	if err == nil {
 		t.Fatal("Commit succeeded")
@@ -446,8 +470,8 @@ func TestStaleChangedCounterIsNotTrustedAsThisTransactionsCount(t *testing.T) {
 				_, err := tx.Exec(ctx, `SELECT set_config('`+changedSetting+`', $1, false)`, stale)
 				return err
 			},
-			Audit: AuditEvent{EventType: "stale.probe", Outcome: OutcomeAllowed},
-			Event: OutboxEvent{AggregateType: "probe", AggregateID: "stale", EventType: "stale.probe", IdempotencyKey: "stale-" + stale},
+			Audit:  AuditEvent{EventType: "stale.probe", Outcome: OutcomeAllowed},
+			Events: probeEvents(),
 		})
 		if !errors.Is(err, ErrNoStateChange) {
 			t.Errorf("stale counter %q: Commit err = %v, want ErrNoStateChange", stale, err)

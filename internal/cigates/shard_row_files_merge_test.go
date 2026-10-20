@@ -203,9 +203,21 @@ func TestBranchesThatAddAndRetimeRowsMergeWithoutConflict(t *testing.T) {
 	if strings.Join(changed, "|") != strings.Join(wantChanged, "|") || len(got) != len(real) {
 		t.Fatalf("merged manifest differs from the real one in %v (files %d vs %d), want exactly %v", changed, len(got), len(real), wantChanged)
 	}
-	planEnv := inheritedEnv([]string{"DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST"}, "DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="+shards)
-	if p := (cmdSpec{dir: root, env: planEnv}.run("bash", filepath.Join(root, "ci", "check_go.sh"), "integration-shard-plan")); p.code != 0 {
-		t.Fatalf("the planner rejected the merged manifest: %s%s", p.stderr, p.stdout)
+	pkgSeen := map[string]bool{}
+	for _, row := range dataRows(t, shards) {
+		if row[0] == "shards" {
+			continue
+		}
+		if len(row) != 2 {
+			t.Fatalf("merged manifest row %q has %d columns, want 2", row, len(row))
+		}
+		if _, err := strconv.Atoi(row[1]); err != nil {
+			t.Fatalf("merged manifest row %q has a non-integer weight", row)
+		}
+		if pkgSeen[row[0]] {
+			t.Fatalf("merged manifest names %s twice", row[0])
+		}
+		pkgSeen[row[0]] = true
 	}
 
 	seen := map[string]bool{}

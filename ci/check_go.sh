@@ -391,7 +391,7 @@ check_vet() {
 # the census (~570 s, 16 rows) and every row runs in exactly one shard (`race-excluded-shard-plan SHARD COUNT` lists a shard's rows).
 # race_excluded_rows [SHARD COUNT]: the rows of ci/race_excluded_tests.tsv (the shard's rows with SHARD COUNT), one per line.
 race_excluded_rows() {
-  local list="${ROOT}/ci/race_excluded_tests.tsv" row shard="${1:-}" shard_count="${2:-}" position=0
+  local list="${GO_RACE_EXCLUDED_TESTS:-${ROOT}/ci/race_excluded_tests.tsv}" row shard="${1:-}" shard_count="${2:-}" position=0
   local -a rows=()
   [ -f "${list}" ] || die "ci/race_excluded_tests.tsv is missing"
   while IFS= read -r row; do rows+=("${row}"); done < <(grep -v '^#' "${list}" | grep -v '^$')
@@ -404,9 +404,10 @@ race_excluded_rows() {
 }
 
 check_race_excluded_ran() {
-  local row package name out count=0
+  local row package name out count=0 listing
   local -a rows=()
-  while IFS= read -r row; do rows+=("${row}"); done < <(race_excluded_rows "$@")
+  listing="$(race_excluded_rows "$@")" || exit 2
+  while IFS= read -r row; do [ -z "${row}" ] || rows+=("${row}"); done <<<"${listing}"
   for row in "${rows[@]}"; do
     name="${row#*$'\t'}"
     package="${row%%$'\t'*}"

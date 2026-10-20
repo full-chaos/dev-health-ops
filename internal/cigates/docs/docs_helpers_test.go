@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
 
 	"golang.org/x/text/cases"
 	"gopkg.in/yaml.v3"
@@ -165,7 +166,9 @@ func asString(v any) string {
 // fold is Python casefold (full Unicode case folding), not ToLower: the pages are matched the way the Python tests matched them.
 func fold(s string) string { return cases.Fold().String(s) }
 
-func normalized(text string) string { return strings.Join(strings.Fields(fold(text)), " ") }
+func normalized(text string) string {
+	return strings.Join(strings.FieldsFunc(fold(text), isPySpace), " ")
+}
 
 // splitLines is Python str.splitlines: \n, \r\n, \r, \v, \f, \x1c-\x1e, \x85, \u2028 and \u2029 all end a line.
 func splitLines(s string) []string {
@@ -279,3 +282,13 @@ var (
 	qaPackage              = glue("docs-qa/package", ".", "json")
 	qaPlaywright           = glue("docs-qa/playwright.config", ".", "ts")
 )
+
+// isPySpace is Python str.isspace: Unicode white space plus U+001C..U+001F. Python str.strip, str.split and re \s all use it;
+// float() and int() strip a narrower set and are not ported here.
+func isPySpace(r rune) bool      { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) }
+func trimLeftPy(s string) string { return strings.TrimLeftFunc(s, isPySpace) }
+func trimPy(s string) string     { return strings.TrimFunc(s, isPySpace) }
+
+// pySpaceClass is the regexp character-class body of Python re `\s` on str: Unicode white space and U+001C..U+001F
+// (Go's `\s` is ASCII and has neither `\v` nor the separators).
+const pySpaceClass = `\t\n\v\f\r \x{1c}-\x{1f}\x{85}\p{Z}`

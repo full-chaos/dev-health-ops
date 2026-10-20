@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"unicode"
 )
 
 // Ports of tests/tooling-free docs content contracts: test_audience_navigation.py (4), test_design_tokens.py (4),
@@ -116,7 +115,7 @@ func TestNavigationContract(t *testing.T) {
 
 var (
 	rawCSSValue  = regexp.MustCompile(`(#[0-9a-fA-F]{3,8})(?:[^\p{L}\p{N}_]|$)`)
-	cssToken     = regexp.MustCompile(`(--[A-Za-z0-9_-]+)[\s\p{Z}\x{0085}]*:[\s\p{Z}\x{0085}]*([^;]+);`)
+	cssToken     = regexp.MustCompile(`(--[A-Za-z0-9_-]+)[` + pySpaceClass + `]*:[` + pySpaceClass + `]*([^;]+);`)
 	requiredPals = [][2]string{
 		{"--fc-void", "#08080A"}, {"--fc-ink", "#15171A"}, {"--fc-graphite", "#23252A"}, {"--fc-silver", "#D1D1D4"}, {"--fc-flame", "#FE7501"},
 		{"--fc-crimson", "#A30A06"}, {"--fc-aqua", "#04B7C4"}, {"--fc-ocean", "#037493"}, {"--fc-glacier", "#6CE0E1"}, {"--fc-gold", "#FFDB4B"},
@@ -127,7 +126,7 @@ var (
 func paletteTokens(css string) map[string]string {
 	tokens := map[string]string{}
 	for _, m := range cssToken.FindAllStringSubmatch(css, -1) {
-		tokens[m[1]] = strings.TrimSpace(m[2])
+		tokens[m[1]] = trimPy(m[2])
 	}
 	return tokens
 }
@@ -141,7 +140,7 @@ func undeclaredRawCSSValue(css string) string {
 		} else if inRoot && line == "}" {
 			inRoot = false
 		}
-		if m := rawCSSValue.FindStringSubmatch(line); m != nil && !(inRoot && strings.HasPrefix(strings.TrimLeftFunc(line, unicode.IsSpace), "--fc-")) {
+		if m := rawCSSValue.FindStringSubmatch(line); m != nil && !(inRoot && strings.HasPrefix(trimLeftPy(line), "--fc-")) {
 			return m[1]
 		}
 	}

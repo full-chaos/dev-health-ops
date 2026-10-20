@@ -2,6 +2,7 @@ package docs_test
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -36,6 +37,39 @@ const (
 	docsGuardsPath = ".github/workflows/docs-guards.yml"
 	contentJob     = "docs-content-guards"
 )
+
+// docsGuardsTriggerPaths is every path both the push and the pull_request trigger of docs-guards.yml must watch: the docs
+// content, the site config, the docs data, the two docs workflows and the checker scripts. A rename of a checker is an edit here.
+var docsGuardsTriggerPaths = []string{
+	"docs/**", "mkdocs.yml", "docs-data/**", glue("requirements-docs", ".", "txt"),
+	".github/workflows/docs-guards.yml", ".github/workflows/docs-cloudflare.yml",
+	"scripts/" + "validate_docs_v2_publication" + "." + "py", "scripts/" + "check_built_site_links" + "." + "py",
+	"scripts/" + "check_docs_candidate_search" + "." + "py", "scripts/" + "check_docs_candidate_accessibility" + "." + "py",
+	"scripts/" + "check_docs_candidate_facts" + "." + "py",
+}
+
+var statusMask = regexp.MustCompile(`\|\|\s*(true|:|exit\s+0)(\s|$|;|&)|;\s*(true|:)(\s|$|;|&)|set\s+\+e\b`)
+
+// maskFindings refuses every way a job or step can hide a failing command: `|| true`, `; true`, `set +e`, `continue-on-error`.
+func maskFindings(label string, job map[string]any, steps []map[string]any) []string {
+	var out []string
+	masked := func(v any) bool { return v != nil && fmt.Sprint(v) != "false" }
+	if masked(job["continue-on-error"]) {
+		out = append(out, label+" must not set continue-on-error: a failing guard would not fail the job")
+	}
+	for _, s := range steps {
+		name := asString(s["name"])
+		if masked(s["continue-on-error"]) {
+			out = append(out, fmt.Sprintf("%s step %q must not set continue-on-error: a failing guard would not fail the job", label, name))
+		}
+		for _, line := range commandLines(asString(s["run"])) {
+			if m := statusMask.FindString(line); m != "" {
+				out = append(out, fmt.Sprintf("%s step %q masks a failing command status (%q)", label, name, strings.TrimSpace(m)))
+			}
+		}
+	}
+	return out
+}
 
 func workflowSteps(wf map[string]any, job string) []map[string]any {
 	var steps []map[string]any
@@ -117,8 +151,14 @@ func docsGuardsGuard(d docTree) []string {
 	if len(perms) != 1 || asString(perms["contents"]) != "read" {
 		out = append(out, fmt.Sprintf("permissions must be exactly contents: read, got %v", perms))
 	}
+	on := asMap(wf["on"])
+	for _, event := range []string{"merge_group", "workflow_dispatch"} {
+		if _, ok := on[event]; !ok {
+			out = append(out, "the workflow lost its "+event+" trigger")
+		}
+	}
 	for _, trigger := range []string{"push", "pull_request"} {
-		paths := asList(asMap(asMap(wf["on"])[trigger])["paths"])
+		paths := asList(asMap(on[trigger])["paths"])
 		has := func(want string) bool {
 			for _, p := range paths {
 				if asString(p) == want {
@@ -127,11 +167,14 @@ func docsGuardsGuard(d docTree) []string {
 			}
 			return false
 		}
-		if !has("docs/**") || !has("mkdocs.yml") {
-			out = append(out, fmt.Sprintf("the %s trigger path filter must watch docs/** and mkdocs.yml", trigger))
+		for _, want := range docsGuardsTriggerPaths {
+			if !has(want) {
+				out = append(out, fmt.Sprintf("the %s trigger path filter must watch %s", trigger, want))
+			}
 		}
 	}
 	steps := workflowSteps(wf, "docs-guards")
+	out = append(out, maskFindings("docs-guards", job, steps)...)
 	runs := stepRuns(steps)
 	allRuns := strings.ToLower(strings.Join(func() []string {
 		var l []string
@@ -194,6 +237,7 @@ func docsGuardsGuard(d docTree) []string {
 		out = append(out, contentJob+" must not depend on another job")
 	}
 	csteps := workflowSteps(wf, contentJob)
+	out = append(out, maskFindings(contentJob, content, csteps)...)
 	goTest := false
 	for _, s := range csteps {
 		uses := asString(s["uses"])
@@ -279,6 +323,50 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, c.command, "echo "+c.command)
 		}, fmt.Sprintf("step %q does not run the command", c.step)})
 	}
+	// One plant per (event, path): the path is dropped from that event's list only.
+	for _, event := range []string{"push", "pull_request"} {
+		for _, path := range docsGuardsTriggerPaths {
+			event, path := event, path
+			plants = append(plants, plantCase{"the " + event + " trigger drops " + path, func(t *testing.T, d docTree) docTree {
+				text, _ := d.read(docsGuardsPath)
+				i := strings.Index(text, "\n  "+event+":")
+				entry := "      - '" + path + "'\n"
+				j := strings.Index(text[i:], entry)
+				if i < 0 || j < 0 {
+					t.Fatalf("no %s entry %s in the %s list", path, entry, event)
+				}
+				return d.added(docsGuardsPath, text[:i+j]+text[i+j+len(entry):])
+			}, fmt.Sprintf("the %s trigger path filter must watch %s", event, path)})
+		}
+	}
+	for _, event := range []string{"merge_group", "workflow_dispatch"} {
+		event := event
+		plants = append(plants, plantCase{"the " + event + " trigger is removed", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "\n  "+event+":", "\n  "+event+"_removed:")
+		}, "lost its " + event + " trigger"})
+	}
+	// Status masks: each way to hide a failing command or step is refused, on the Go job, on a Python checker step.
+	goTest := "run: go test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/..."
+	for _, m := range []struct{ name, repl string }{
+		{"|| true", goTest + " || true"}, {"||true", goTest + " ||true"}, {"|| :", "run: \"go test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/... || :\""}, {"|| exit 0", goTest + " || exit 0"},
+		{"; true", goTest + "; true"}, {"set +e", "run: set +e; go test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/..."},
+	} {
+		m := m
+		plants = append(plants, plantCase{"the Go docs guards status is masked by " + m.name, func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, goTest, m.repl)
+		}, "masks a failing command status"})
+	}
+	plants = append(plants,
+		plantCase{"the Go docs guards step sets continue-on-error", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Run the docs content guards\n", "      - name: Run the docs content guards\n        continue-on-error: true\n")
+		}, "must not set continue-on-error"},
+		plantCase{"the Go docs guards job sets continue-on-error", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "  docs-content-guards:\n    name: docs-content-guards\n", "  docs-content-guards:\n    name: docs-content-guards\n    continue-on-error: true\n")
+		}, "must not set continue-on-error"},
+		plantCase{"a Python checker status is masked by || true", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, pyCmd("check_docs_candidate_facts"), pyCmd("check_docs_candidate_facts")+" || true")
+		}, "masks a failing command status"},
+	)
 	assertGuard(t, docsGuardsGuard, plants)
 }
 
@@ -343,6 +431,7 @@ func cloudflareGuard(d docTree) []string {
 		return append(out, err.Error())
 	}
 	prun := asString(preview["run"])
+	out = append(out, maskFindings("the preview build", nil, []map[string]any{preview})...)
 	mustContain(&out, "the preview build step", prun, "set -o pipefail")
 	if !runsCommand(prun, pyCmd("build_docs_cloudflare"), "--mode preview --full-check") {
 		out = append(out, "the preview build step does not run "+pyCmd("build_docs_cloudflare")+" --mode preview --full-check (an echo of it is refused)")
@@ -370,6 +459,12 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 		{"the rollback version id is not required", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cloudflarePath, "test -n \"$VERSION_ID\"", "test -z \"$VERSION_ID_UNUSED\"")
 		}, "VERSION_ID"},
+		{"the preview build status is masked by || true", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, pyCmd("build_docs_cloudflare")+" --mode preview --full-check", pyCmd("build_docs_cloudflare")+" --mode preview --full-check || true")
+		}, "masks a failing command status"},
+		{"the preview build step sets continue-on-error", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "      - name: Build and prepare validated preview assets\n", "      - name: Build and prepare validated preview assets\n        continue-on-error: true\n")
+		}, "must not set continue-on-error"},
 		{"the preview build is replaced by an echo", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cloudflarePath, pyCmd("build_docs_cloudflare")+" --mode preview --full-check", "echo "+pyCmd("build_docs_cloudflare")+" --mode preview --full-check")
 		}, "does not run"},

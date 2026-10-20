@@ -102,7 +102,7 @@ func (e *mtvEnv) run(t *testing.T, args ...string) cmdResult {
 		t.Fatal(e.repo.err)
 	}
 	env := inheritedEnv(nil, "TMPDIR="+e.tmp, "DEV_HEALTH_GO_CACHE="+e.goCache, "GIT_CONFIG_GLOBAL="+os.DevNull)
-	return cmdSpec{dir: e.repo.dir, env: env}.run("bash", append([]string{filepath.Join(e.repo.dir, "ci", "merge-tree-vet.sh")}, args...)...)
+	return freeSpec{dir: e.repo.dir, env: env}.run("bash", append([]string{filepath.Join(e.repo.dir, "ci", "merge-tree-vet.sh")}, args...)...)
 }
 
 func (e *mtvEnv) leftovers() []string {
@@ -113,6 +113,7 @@ func (e *mtvEnv) leftovers() []string {
 func outAll(r cmdResult) string { return r.stdout + r.stderr }
 
 func TestMergeTreeVetScript(t *testing.T) {
+	t.Parallel()
 	must := func(t *testing.T, cond bool, r cmdResult, what string) {
 		t.Helper()
 		if !cond {
@@ -129,6 +130,7 @@ func TestMergeTreeVetScript(t *testing.T) {
 	}
 
 	t.Run("a clean pr is ok", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		e.makeMainAndPRs()
 		r := e.run(t, "--base", "main1", "--head", "pr-clean")
@@ -138,9 +140,10 @@ func TestMergeTreeVetScript(t *testing.T) {
 		}
 	})
 	t.Run("the incident shape merges clean but fails vet", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		e.makeMainAndPRs()
-		textual := cmdSpec{dir: e.repo.dir, env: gitEnv}.run("git", "merge-tree", "--write-tree", "main1", "pr-stub")
+		textual := freeSpec{dir: e.repo.dir, env: gitEnv}.run("git", "merge-tree", "--write-tree", "main1", "pr-stub")
 		if textual.code != 0 {
 			t.Fatalf("the incident shape must merge textually clean: %s", outAll(textual))
 		}
@@ -153,18 +156,21 @@ func TestMergeTreeVetScript(t *testing.T) {
 		}
 	})
 	t.Run("a break only the integration tag sees fails integration-vet", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		e.makeMainAndPRs()
 		r := e.run(t, "--base", "main1", "--head", "pr-tagged")
 		must(t, r.code == 1 && has(r.stdout, "PASS vet", "PASS registry") && has(r.stderr, "FAIL integration-vet"), r, "tagged break")
 	})
 	t.Run("an unregistered venue test fails the registry stage", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		e.makeMainAndPRs()
 		r := e.run(t, "--base", "main1", "--head", "pr-unregistered")
 		must(t, r.code == 1 && has(r.stdout, "PASS vet") && has(r.stderr, "FAIL registry", "TestVenueOracleTwo"), r, "unregistered venue test")
 	})
 	t.Run("a textual conflict fails at merge", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		e.makeMainAndPRs()
 		r := e.run(t, "--base", "main1", "--head", "pr-conflict")
@@ -174,6 +180,7 @@ func TestMergeTreeVetScript(t *testing.T) {
 		}
 	})
 	t.Run("every stage runs even after one fails", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		e.makeMainAndPRs()
 		e.branch("pr-both", "pr-stub")
@@ -183,6 +190,7 @@ func TestMergeTreeVetScript(t *testing.T) {
 		must(t, r.code == 1 && has(r.stderr, "FAIL vet", "FAIL registry"), r, "a later stage must still run after vet failed")
 	})
 	t.Run("a missing stage script is a failure not a skip", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		e.makeMainAndPRs()
 		e.branch("pr-no-registry-script", "main0")
@@ -193,12 +201,14 @@ func TestMergeTreeVetScript(t *testing.T) {
 	})
 	for i, args := range [][]string{{}, {"--head"}, {"abc"}, {"--head", "nope-not-a-rev", "--base", "main0"}, {"1", "2"}} {
 		t.Run(fmt.Sprintf("usage error %d exits two", i), func(t *testing.T) {
+			t.Parallel()
 			e := newMTV(t)
 			r := e.run(t, args...)
 			must(t, r.code == 2, r, fmt.Sprint(args))
 		})
 	}
 	t.Run("the invoking checkout is left untouched", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		e.makeMainAndPRs()
 		e.repo.git("checkout", "-q", "main0")
@@ -226,7 +236,7 @@ func (e *mtvEnv) probe(t *testing.T, tmpRoot string, probeEnv map[string]string,
 	for k, v := range probeEnv {
 		env = append(env, k+"="+v)
 	}
-	r := cmdSpec{dir: e.repo.dir, env: env}.run("bash", filepath.Join(e.repo.dir, "ci", "merge-tree-vet.sh"), "--base", "main0", "--head", "probe")
+	r := freeSpec{dir: e.repo.dir, env: env}.run("bash", filepath.Join(e.repo.dir, "ci", "merge-tree-vet.sh"), "--base", "main0", "--head", "probe")
 	if r.code != 0 {
 		t.Fatalf("probe run failed (exit %d): %s", r.code, outAll(r))
 	}
@@ -246,7 +256,9 @@ func fakeGoBin(t *testing.T, dir, body string) string {
 }
 
 func TestMergeTreeVetGoCacheAndScratchPlacement(t *testing.T) {
+	t.Parallel()
 	t.Run("the default go cache is the invoker's GOCACHE not /tmp", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		dir := t.TempDir()
 		_, seen := e.probe(t, dir, map[string]string{"TMPDIR": e.tmp, "GOCACHE": filepath.Join(dir, "mine")}, "DEV_HEALTH_GO_CACHE")
@@ -258,6 +270,7 @@ func TestMergeTreeVetGoCacheAndScratchPlacement(t *testing.T) {
 		}
 	})
 	t.Run("the default go cache falls back to go env GOCACHE", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		dir := t.TempDir()
 		path := fakeGoBin(t, dir, "#!/usr/bin/env bash\n[ \"$*\" = \"env GOCACHE\" ] && echo "+filepath.Join(dir, "goenv")+"\n")
@@ -267,6 +280,7 @@ func TestMergeTreeVetGoCacheAndScratchPlacement(t *testing.T) {
 		}
 	})
 	t.Run("an explicit DEV_HEALTH_GO_CACHE beats GOCACHE", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		dir := t.TempDir()
 		_, seen := e.probe(t, dir, map[string]string{"DEV_HEALTH_GO_CACHE": filepath.Join(dir, "explicit"), "GOCACHE": filepath.Join(dir, "mine")})
@@ -275,6 +289,7 @@ func TestMergeTreeVetGoCacheAndScratchPlacement(t *testing.T) {
 		}
 	})
 	t.Run("the scratch root hosts the go cache only when go names none", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		dir := t.TempDir()
 		scratch := filepath.Join(dir, "scratch")
@@ -285,6 +300,7 @@ func TestMergeTreeVetGoCacheAndScratchPlacement(t *testing.T) {
 		}
 	})
 	t.Run("the scratch tree honours DEV_HEALTH_SCRATCH over TMPDIR", func(t *testing.T) {
+		t.Parallel()
 		e := newMTV(t)
 		dir := t.TempDir()
 		scratch := filepath.Join(dir, "lane-scratch", "nested")

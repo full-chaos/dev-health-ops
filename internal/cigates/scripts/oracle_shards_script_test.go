@@ -31,7 +31,9 @@ func stripe(rows [][2]string, start, step int) [][2]string {
 }
 
 func TestOracleShardSlices(t *testing.T) {
+	t.Parallel()
 	t.Run("slices partition the registry run rows", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, oraclePackages)
 		all := o.registryRunRows()
 		if len(all) != 10 {
@@ -56,6 +58,7 @@ func TestOracleShardSlices(t *testing.T) {
 		}
 	})
 	t.Run("no arguments runs every row", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, oraclePackages)
 		r := o.venueOracles(nil)
 		if r.res.code != 0 || !rowsEqual(sortedRows(r.ran), o.registryRunRows()) {
@@ -63,6 +66,7 @@ func TestOracleShardSlices(t *testing.T) {
 		}
 	})
 	t.Run("a single shard of one is the whole registry", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, oraclePackages)
 		r := o.venueOracles(nil, "1", "1")
 		if r.res.code != 0 || !rowsEqual(sortedRows(r.ran), o.registryRunRows()) {
@@ -70,6 +74,7 @@ func TestOracleShardSlices(t *testing.T) {
 		}
 	})
 	t.Run("a slice with zero rows fails loudly", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/a", []string{"TestA1", "TestA2"}}})
 		ok := o.venueOracles(nil, "2", "3")
 		if ok.res.code != 0 || len(ok.ran) != 1 {
@@ -81,6 +86,7 @@ func TestOracleShardSlices(t *testing.T) {
 		}
 	})
 	t.Run("bad arguments fail", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, oraclePackages)
 		for _, c := range []struct {
 			args   []string
@@ -97,6 +103,7 @@ func TestOracleShardSlices(t *testing.T) {
 		}
 	})
 	t.Run("a package with only local-only rows fails in every leg", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/a", []string{"TestA1", "TestA2"}}, {"internal/z", []string{"TestZOnly"}}}, "TestZOnly")
 		for shard := 1; shard <= 2; shard++ {
 			r := o.venueOracles(nil, strconv.Itoa(shard), "2")
@@ -172,7 +179,9 @@ func (o *otree) writeWeights(text string) {
 }
 
 func TestOracleLegPlan(t *testing.T) {
+	t.Parallel()
 	t.Run("the planned heaviest leg fits the budget", func(t *testing.T) {
+		t.Parallel()
 		job := oracleWorkflowJob(t, "venue-oracles.yml", "venue-oracles")
 		budget, _ := strconv.Atoi(fmt.Sprint(nested(job, "env", "VENUE_LEG_BUDGET_SECONDS")))
 		cap := job["timeout-minutes"].(int) * 60
@@ -200,6 +209,7 @@ func TestOracleLegPlan(t *testing.T) {
 		}
 	})
 	t.Run("weights balance the legs and never drop a test", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, oraclePackages)
 		o.writeWeights("# weights\ninternal/a\tTestA1\t500\ninternal/a\tTestA2\t20\ninternal/a\tTestA3\t20\ninternal/b\tTestB1\t300\ninternal/c\tTestC1\t10\ninternal/nowhere\tTestGone\t9999\n")
 		all := o.registryRunRows()
@@ -255,6 +265,7 @@ func TestOracleLegPlan(t *testing.T) {
 		}
 	})
 	t.Run("the 500 second row gets a leg to itself", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/a", []string{"TestA1", "TestA2", "TestA3", "TestA4"}}})
 		o.writeWeights("internal/a\tTestA1\t500\ninternal/a\tTestA2\t100\ninternal/a\tTestA3\t100\ninternal/a\tTestA4\t100\n")
 		rows, legs := oraclePlan(t, o, 2)
@@ -279,6 +290,7 @@ func TestOracleLegPlan(t *testing.T) {
 		}
 	})
 	t.Run("the plan verb rejects a bad count", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, oraclePackages)
 		for _, c := range []string{"0", "x"} {
 			r := o.verb("venue-oracle-plan", nil, c)
@@ -288,6 +300,7 @@ func TestOracleLegPlan(t *testing.T) {
 		}
 	})
 	t.Run("a leg logs its plan and warns over the budget", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/a", []string{"TestA1"}}})
 		ok := o.venueOracles([]string{"VENUE_LEG_BUDGET_SECONDS=1800"}, "1", "1")
 		if ok.res.code != 0 || !strings.Contains(ok.res.stdout, "venue-oracles: leg ") || !strings.Contains(ok.res.stdout, "budget 1800s") || strings.Contains(ok.res.stdout, "::warning") {
@@ -299,6 +312,7 @@ func TestOracleLegPlan(t *testing.T) {
 		}
 	})
 	t.Run("an unmeasured row is planned pessimistically", func(t *testing.T) {
+		t.Parallel()
 		files, _ := filepath.Glob(filepath.Join(rootOf(t), "ci", "venue_oracle_weights.d", "*.tsv"))
 		sort.Strings(files)
 		if len(files) == 0 {
@@ -328,6 +342,7 @@ func TestOracleLegPlan(t *testing.T) {
 // leg is empty, and the first and last legs run exactly their planned rows (every leg runs a `go list` of the whole module,
 // so running them all costs minutes).
 func TestOracleShardsRealRegistry(t *testing.T) {
+	t.Parallel()
 	shards := matrixShards(t)
 	count := shards[len(shards)-1]
 	o := realOTree(t)

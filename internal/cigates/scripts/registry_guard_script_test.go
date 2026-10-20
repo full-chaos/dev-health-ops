@@ -145,7 +145,7 @@ func (v *vtree) run(script string, env []string, verb ...string) cmdResult {
 		v.t.Fatal(err)
 	}
 	e := inheritedEnv(nil, append([]string{"TMPDIR=" + tmp, "DEV_HEALTH_GO_CACHE=" + filepath.Join(tmp, "gocache")}, env...)...)
-	return cmdSpec{dir: v.dir, env: e}.run("bash", append([]string{filepath.Join(v.dir, script)}, verb...)...)
+	return freeSpec{dir: v.dir, env: e}.run("bash", append([]string{filepath.Join(v.dir, script)}, verb...)...)
 }
 
 func (v *vtree) check() cmdResult { return v.run("ci/check_venue_oracle_registry.sh", nil) }
@@ -175,8 +175,9 @@ func venuePasses(t *testing.T, r cmdResult, stdout ...string) {
 }
 
 func TestRegistryGuardRealTree(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
-	r := cmdSpec{dir: root, env: inheritedEnv(nil)}.run("bash", "ci/check_venue_oracle_registry.sh")
+	r := freeSpec{dir: root, env: inheritedEnv(nil)}.run("bash", "ci/check_venue_oracle_registry.sh")
 	if r.code != 0 {
 		t.Fatalf("exit %d:\n%s%s", r.code, r.stderr, r.stdout)
 	}
@@ -191,35 +192,43 @@ func TestRegistryGuardRealTree(t *testing.T) {
 }
 
 func TestRegistryGuardPlantedDefects(t *testing.T) {
+	t.Parallel()
 	t.Run("the scratch baseline passes", func(t *testing.T) {
+		t.Parallel()
 		venuePasses(t, newVTree(t).check(), "5 registered test(s)")
 	})
 	t.Run("a structure found test left out of the registry fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("internal/a/extra_test.go", vgo{pkg: "a", funcs: []string{"TestZeta"}, harness: true}.src())
 		venueFails(t, v.check(), "internal/a TestZeta", "NOT in ci/venue_oracle_registry.d/", "internal__a.tsv")
 	})
 	t.Run("a name found test in a non harness package left out fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("internal/d/d_test.go", vgo{pkg: "d", funcs: []string{"TestVenueOracleOmega"}}.src())
 		venueFails(t, v.check(), "internal/d TestVenueOracleOmega")
 	})
 	t.Run("a registry row with no test fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.registry(append(v.rows(), "internal/a\tTestGhost\trun"), true)
 		venueFails(t, v.check(), "internal/a TestGhost", "found 0")
 	})
 	t.Run("a registry row with no package fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.registry(append(v.rows(), "internal/zzz\tTestNowhere\trun"), true)
 		venueFails(t, v.check(), "package dir internal/zzz does not exist")
 	})
 	t.Run("a test declared twice in one package fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("internal/a/a_x_test.go", vgo{pkg: "a_test", funcs: []string{"TestAlpha"}, harness: true}.src())
 		venueFails(t, v.check(), "internal/a TestAlpha", "found 2")
 	})
 	t.Run("a mode contradicting the local only marker fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		var rows []string
 		for _, r := range v.rows() {
@@ -234,12 +243,14 @@ func TestRegistryGuardPlantedDefects(t *testing.T) {
 		{"unknown mode", "internal/a\tTestAlpha\tmaybe\n", "is not <package>"},
 	} {
 		t.Run("a malformed registry fails: "+c.name, func(t *testing.T) {
+			t.Parallel()
 			v := newVTree(t)
 			v.registry(strings.Split(strings.TrimRight(c.raw, "\n"), "\n"), true)
 			venueFails(t, v.check(), c.needle)
 		})
 	}
 	t.Run("an unsorted registry fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		rows := v.rows()
 		for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
@@ -249,6 +260,7 @@ func TestRegistryGuardPlantedDefects(t *testing.T) {
 		venueFails(t, v.check(), "must be sorted and unique within a file")
 	})
 	t.Run("a duplicate registry row fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		rows := v.rows()
 		rows = append([]string{rows[0], rows[0]}, rows[1:]...)
@@ -256,6 +268,7 @@ func TestRegistryGuardPlantedDefects(t *testing.T) {
 		venueFails(t, v.check(), "must be sorted and unique within a file")
 	})
 	t.Run("a missing registry directory fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		if err := os.RemoveAll(filepath.Join(v.dir, "ci", "venue_oracle_registry.d")); err != nil {
 			t.Fatal(err)
@@ -263,6 +276,7 @@ func TestRegistryGuardPlantedDefects(t *testing.T) {
 		venueFails(t, v.check(), "does not exist")
 	})
 	t.Run("a row left in the retired single file fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("ci/venue_oracle_registry.tsv", "internal/a\tTestLegacyRow\trun\n")
 		r := v.check()
@@ -272,21 +286,25 @@ func TestRegistryGuardPlantedDefects(t *testing.T) {
 		}
 	})
 	t.Run("a row in the wrong package's file fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("ci/venue_oracle_registry.d/internal__b.tsv", v.read("ci/venue_oracle_registry.d/internal__b.tsv")+"internal/a\tTestStrayRow\trun\n")
 		venueFails(t, v.check(), "package internal/a belongs in internal__a.tsv")
 	})
 	t.Run("a stray file in the registry directory fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("ci/venue_oracle_registry.d/internal__a.tsv.orig", "internal/a\tTestAlpha\trun\n")
 		venueFails(t, v.check(), "stray entry internal__a.tsv.orig")
 	})
 	t.Run("an empty package file fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("ci/venue_oracle_registry.d/internal__e.tsv", "# nothing\n")
 		venueFails(t, v.check(), "internal__e.tsv holds no rows")
 	})
 	t.Run("two prs adding tests in different packages touch different files", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("internal/f/f_test.go", vgo{pkg: "f", funcs: []string{"TestVenueOracleF"}, harness: true}.src())
 		v.write("ci/venue_oracle_registry.d/internal__f.tsv", "internal/f\tTestVenueOracleF\trun\n")
@@ -342,7 +360,9 @@ func (v *vtree) verb(skipProof string) (cmdResult, []string) {
 }
 
 func TestRegistryVerbRunsTheRegistry(t *testing.T) {
+	t.Parallel()
 	t.Run("the verb runs exactly the registry", func(t *testing.T) {
+		t.Parallel()
 		r, calls := newVTree(t).verb("")
 		venuePasses(t, r, "4 registered test(s) across 3 package(s)", "local-only: TestEpsilonVenueOracle")
 		want := []string{"./internal/a ^(TestAlpha|TestBeta)$", "./internal/b ^(TestVenueOracleGamma)$", "./internal/c ^(TestDelta)$"}
@@ -354,6 +374,7 @@ func TestRegistryVerbRunsTheRegistry(t *testing.T) {
 		}
 	})
 	t.Run("the verb runs a registry only test discovery cannot reach", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("internal/e/e_test.go", vgo{pkg: "e", funcs: []string{"TestReachesHarnessSomeOtherWay"}}.src())
 		v.registry(append(v.rows(), "internal/e\tTestReachesHarnessSomeOtherWay\trun"), true)
@@ -364,6 +385,7 @@ func TestRegistryVerbRunsTheRegistry(t *testing.T) {
 		}
 	})
 	t.Run("the verb fails before running anything on an unregistered test", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("internal/d/d_test.go", vgo{pkg: "d", funcs: []string{"TestVenueOracleOmega"}}.src())
 		r, calls := v.verb("")
@@ -373,10 +395,12 @@ func TestRegistryVerbRunsTheRegistry(t *testing.T) {
 		}
 	})
 	t.Run("the verb fails when a registered test writes no proof", func(t *testing.T) {
+		t.Parallel()
 		r, _ := newVTree(t).verb("TestBeta")
 		venueFails(t, r, "venue oracle TestBeta did not run a real comparison")
 	})
 	t.Run("a package registered only local only fails", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		v.write("internal/f/f_test.go", vgo{pkg: "f", funcs: []string{"TestOnlyVenueOracle"}, harness: true, marker: "TestOnlyVenueOracle"}.src())
 		v.registry(append(v.rows(), "internal/f\tTestOnlyVenueOracle\tlocal"), true)
@@ -395,10 +419,12 @@ func contains(l []string, s string) bool {
 }
 
 func TestRegistryRunRowsCanLeaveAProof(t *testing.T) {
+	t.Parallel()
 	proofless := func(v *vtree, name, proof string) {
 		v.write("internal/a/a_test.go", vgo{pkg: "a", funcs: []string{"TestAlpha"}, harness: true}.src()+vgo{pkg: "a", funcs: []string{name}, harness: true, proof: proof, noProof: proof == ""}.src())
 	}
 	t.Run("a run row that cannot write a proof fails at pr time", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		venuePasses(t, v.check())
 		proofless(v, "TestBeta", "")
@@ -409,6 +435,7 @@ func TestRegistryRunRowsCanLeaveAProof(t *testing.T) {
 		}
 	})
 	t.Run("the go only proof and the exported proof both count", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		proofless(v, "TestBeta", "\tvenueoracle.WriteGoOnlyProof(t, \"checks the log lines\")\n")
 		venuePasses(t, v.check())
@@ -416,6 +443,7 @@ func TestRegistryRunRowsCanLeaveAProof(t *testing.T) {
 		venuePasses(t, v.check())
 	})
 	t.Run("a proof written by a helper the test calls counts", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		proofless(v, "TestBeta", "\thelper(t)\n")
 		helper := "package a\n\nfunc helper(t *testing.T) {\n\tinner(t)\n}\n\nfunc inner(t *testing.T) {\n\tvenueoracle.Diff(t)\n}\n"
@@ -425,17 +453,20 @@ func TestRegistryRunRowsCanLeaveAProof(t *testing.T) {
 		venueFails(t, v.check(), "internal/a TestBeta is a run row")
 	})
 	t.Run("a proof call named only in a comment does not count", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		proofless(v, "TestBeta", "\t// venueoracle.Diff(t) is called by the harness\n")
 		venueFails(t, v.check(), "internal/a TestBeta is a run row")
 	})
 	t.Run("a proof through a harness import alias counts", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		text := vgo{pkg: "a", funcs: []string{"TestAlpha"}, harness: true, proof: "\tvo.Diff(t)\n"}.src() + "func TestBeta(t *testing.T) {\n\tvo.WriteProof(t)\n}\n"
 		v.write("internal/a/a_test.go", strings.Replace(text, venueHarness, "vo "+venueHarness, 1))
 		venuePasses(t, v.check())
 	})
 	t.Run("a local only row needs no proof", func(t *testing.T) {
+		t.Parallel()
 		v := newVTree(t)
 		text := vgo{pkg: "c", funcs: []string{"TestDelta", "TestEpsilonVenueOracle"}, harness: true, marker: "TestEpsilonVenueOracle", noProof: true}.src()
 		v.write("internal/c/c_test.go", strings.Replace(text, "func TestDelta(t *testing.T) {\n}", "func TestDelta(t *testing.T) {\n\tvenueoracle.Diff(t)\n}", 1))

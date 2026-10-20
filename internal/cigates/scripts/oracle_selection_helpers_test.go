@@ -154,7 +154,7 @@ func (o *otree) verb(verb string, env []string, args ...string) oracleRun {
 		"PATH=" + filepath.Join(o.dir, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_GO_LOG=" + log,
 		"TMPDIR=" + filepath.Join(o.dir, "tmp"), "DEV_HEALTH_GO_CACHE=" + filepath.Join(o.dir, "tmp", "gocache"),
 	}, env...)...)
-	res := cmdSpec{dir: o.dir, env: e}.run("bash", append([]string{filepath.Join(o.dir, "ci", "check_go.sh"), verb}, args...)...)
+	res := freeSpec{dir: o.dir, env: e}.run("bash", append([]string{filepath.Join(o.dir, "ci", "check_go.sh"), verb}, args...)...)
 	var ran [][2]string
 	for _, l := range strings.Split(readText(o.t, log), "\n") {
 		if l == "" {

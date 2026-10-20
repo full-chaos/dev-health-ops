@@ -67,7 +67,7 @@ func runCheckGoSharding(t *testing.T, e shardEnv, args ...string) cmdResult {
 	if e.githubOutput != "" {
 		env = append(env, "GITHUB_OUTPUT="+e.githubOutput)
 	}
-	return cmdSpec{dir: root, env: env}.run("bash", append([]string{"ci/check_go.sh"}, args...)...)
+	return freeSpec{dir: root, env: env}.run("bash", append([]string{"ci/check_go.sh"}, args...)...)
 }
 
 var (
@@ -78,7 +78,7 @@ var (
 func expectedPackages(t *testing.T) map[string]bool {
 	t.Helper()
 	discoveredOnce.Do(func() {
-		res := cmdSpec{dir: rootOf(t), env: inheritedEnv(nil)}.run("bash", "ci/check_go.sh", "integration-coverage")
+		res := freeSpec{dir: rootOf(t), env: inheritedEnv(nil)}.run("bash", "ci/check_go.sh", "integration-coverage")
 		if res.code != 0 {
 			return
 		}
@@ -386,7 +386,7 @@ func providerTests(t *testing.T) (map[string]bool, map[string]bool) {
 	t.Helper()
 	providerTestsOnce.Do(func() {
 		root := rootOf(t)
-		res := cmdSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN=go1.27.2", "GOWORK=off")}.run("go", "list", "-mod=readonly", "-tags=integration",
+		res := freeSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN=go1.27.2", "GOWORK=off")}.run("go", "list", "-mod=readonly", "-tags=integration",
 			"-f={{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}", "./"+providerPackage)
 		if res.code != 0 {
 			return
@@ -443,8 +443,10 @@ func sameSet(a, b map[string]bool) bool {
 }
 
 func TestIntegrationShardScriptShape(t *testing.T) {
+	t.Parallel()
 	src := readText(t, filepath.Join(rootOf(t), "ci", "check_go.sh"))
 	t.Run("provider shard discovery does not compile the test binary", func(t *testing.T) {
+		t.Parallel()
 		m := regexp.MustCompile(`(?ms)^discover_providersync_tests\(\) \{\n(.*?)^\}`).FindStringSubmatch(src)
 		if m == nil {
 			t.Fatal("discover_providersync_tests moved")
@@ -456,6 +458,7 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 		}
 	})
 	t.Run("package discovery does not spawn grep for every tracked test", func(t *testing.T) {
+		t.Parallel()
 		m := regexp.MustCompile(`(?ms)^discover_integration_packages\(\) \{\n(.*?)^\}`).FindStringSubmatch(src)
 		if m == nil {
 			t.Fatal("discover_integration_packages moved")
@@ -466,6 +469,7 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 		}
 	})
 	t.Run("the shard arity guard uses an explicit conditional", func(t *testing.T) {
+		t.Parallel()
 		m := regexp.MustCompile(`(?ms)^  integration-shard\)\n(.*?^    ;;)$`).FindStringSubmatch(src)
 		if m == nil {
 			t.Fatal("the integration-shard case moved")
@@ -484,6 +488,7 @@ func TestIntegrationShardScriptShape(t *testing.T) {
 }
 
 func TestIntegrationShardPlanIsExhaustiveNonemptyAndMachineReadable(t *testing.T) {
+	t.Parallel()
 	stdout, gho := realPlan(t)
 	facts := realPlanFacts(t)
 	total := len(facts.expected)
@@ -572,6 +577,7 @@ func TestIntegrationShardPlanIsExhaustiveNonemptyAndMachineReadable(t *testing.T
 }
 
 func TestIntegrationShardPlanCheckerFailsEachPlantedDefect(t *testing.T) {
+	t.Parallel()
 	stdout, gho := realPlan(t)
 	facts := realPlanFacts(t)
 	if _, err := checkShardPlan(stdout, gho, facts); err != nil {
@@ -745,79 +751,6 @@ func TestIntegrationShardPlanCheckerFailsEachPlantedDefect(t *testing.T) {
 	plant("a matrix entry for a shard that holds nothing", stdout, "matrix="+string(raw))
 }
 
-func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.T) {
-	stdout, gho := realPlan(t)
-	facts := realPlanFacts(t)
-	assignments, err := checkShardPlan(stdout, gho, facts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var selected []string
-	ran := 0
-	shards := make([]int, 0, len(assignments))
-	for s := range assignments {
-		shards = append(shards, s)
-	}
-	sort.Ints(shards)
-	for _, shard := range shards {
-		want := map[string]bool{}
-		for p := range assignments[shard] {
-			if !splitPackages[p] {
-				want[p] = true
-			}
-		}
-		if len(want) == 0 {
-			continue
-		}
-		r := runCheckGoSharding(t, shardEnv{}, "integration-shard", "packages", strconv.Itoa(shard), "--dry-run")
-		if r.code != 0 || !strings.Contains(r.stdout, fmt.Sprintf("integration package shard %d: DRY RUN", shard)) {
-			t.Fatalf("shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
-		}
-		chosen := lineValues(r.stdout, "  SHARD-RUN ")
-		got := map[string]bool{}
-		for _, c := range chosen {
-			got[c] = true
-		}
-		if !sameSet(got, want) || len(chosen) != len(want) {
-			t.Errorf("shard %d would run %v, the plan assigned %v", shard, sortedKeys(got), sortedKeys(want))
-		}
-		selected = append(selected, chosen...)
-		ran++
-	}
-	if ran < 2 {
-		t.Fatal("fewer than two packages shards ran: the loop measured nothing")
-	}
-	got := map[string]bool{}
-	for _, s := range selected {
-		got[s] = true
-	}
-	want := map[string]bool{}
-	for p := range facts.expected {
-		if !splitPackages[p] {
-			want[p] = true
-		}
-	}
-	if len(selected) != len(got) || !sameSet(got, want) {
-		t.Errorf("the packages shards run %d packages (%d distinct), want %d", len(selected), len(got), len(want))
-	}
-	var tests []string
-	for shard := 1; shard <= facts.providerShards; shard++ {
-		r := runCheckGoSharding(t, shardEnv{}, "integration-shard", "providersync", strconv.Itoa(shard), "--dry-run")
-		if r.code != 0 || !strings.Contains(r.stdout, fmt.Sprintf("providersync test shard %d: DRY RUN", shard)) {
-			t.Fatalf("providersync shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
-		}
-		tests = append(tests, lineValues(r.stdout, "  PROVIDER-TEST-RUN ")...)
-	}
-	all, _ := providerTests(t)
-	gotT := map[string]bool{}
-	for _, s := range tests {
-		gotT[s] = true
-	}
-	if len(tests) != len(gotT) || !sameSet(gotT, all) {
-		t.Errorf("the providersync shards run %d tests (%d distinct), want %d", len(tests), len(gotT), len(all))
-	}
-}
-
 func lineValues(stdout, prefix string) []string {
 	var out []string
 	for _, l := range strings.Split(stdout, "\n") {
@@ -829,6 +762,7 @@ func lineValues(stdout, prefix string) []string {
 }
 
 func TestIntegrationManifestDriftAndDuplicatePackagesFailLoudly(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	original := manifestText(t, root)
 	dir := t.TempDir()
@@ -860,6 +794,7 @@ func TestIntegrationManifestDriftAndDuplicatePackagesFailLoudly(t *testing.T) {
 }
 
 func TestAnIsolatedPackageKeyMatchingNothingFailsLoudlyAndWorkerserviceIsASingleton(t *testing.T) {
+	t.Parallel()
 	r := runCheckGoSharding(t, shardEnv{extra: []string{"DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS=internal/workerservice internal/queryapi/server internal/nosuchpackage"}}, "integration-shard-plan")
 	if r.code == 0 || !strings.Contains(r.stderr, "isolated integration package 'internal/nosuchpackage' matches no discovered package") {
 		t.Fatalf("an unmatched isolated key: exit %d: %s", r.code, r.stderr)
@@ -940,7 +875,7 @@ func runPrepull(t *testing.T, dir, succeedOn string, args ...string) cmdResult {
 		"PATH="+filepath.Join(dir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"DOCKER_ATTEMPTS_FILE="+filepath.Join(dir, "attempts"), "DOCKER_ARGS_FILE="+filepath.Join(dir, "docker-args"),
 		"DOCKER_SUCCEED_ON="+succeedOn, "SLEEP_ARGS_FILE="+filepath.Join(dir, "sleep-args"))
-	return cmdSpec{dir: rootOf(t), env: env}.run("bash", append([]string{"ci/check_go.sh", "integration-prepull"}, args...)...)
+	return freeSpec{dir: rootOf(t), env: env}.run("bash", append([]string{"ci/check_go.sh", "integration-prepull"}, args...)...)
 }
 
 func fileLines(dir, name string) []string {
@@ -952,8 +887,10 @@ func fileLines(dir, name string) []string {
 }
 
 func TestIntegrationPrepull(t *testing.T) {
+	t.Parallel()
 	prefix := os.Getenv("TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX")
 	t.Run("retries the exact source declared image", func(t *testing.T) {
+		t.Parallel()
 		dir := prepullStubs(t)
 		postgres := mirroredImage(t, declaredImage(t, "PostgresImage"), prefix)
 		r := runPrepull(t, dir, "3")
@@ -987,6 +924,7 @@ func TestIntegrationPrepull(t *testing.T) {
 		}
 	})
 	t.Run("warms every declared image", func(t *testing.T) {
+		t.Parallel()
 		dir := prepullStubs(t)
 		r := runPrepull(t, dir, "1")
 		if r.code != 0 {
@@ -999,6 +937,7 @@ func TestIntegrationPrepull(t *testing.T) {
 		}
 	})
 	t.Run("refuses a per job subset", func(t *testing.T) {
+		t.Parallel()
 		dir := prepullStubs(t)
 		r := runPrepull(t, dir, "1", "postgres")
 		if r.code != 2 || !strings.Contains(r.stderr, "integration-prepull accepts no arguments") {
@@ -1030,6 +969,7 @@ func shardManifestFiles(t *testing.T, root string) []string {
 // the pre-pull warms a ref and testcontainers resolves the image again when a test starts a container, so a disagreement of
 // even one rule warms one image and pulls another. The explicit `docker.io/...` form is REFUSED, not matched.
 func TestMirroredImageMatchesTestcontainersPrefixSemantics(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	src := readText(t, filepath.Join(root, "ci", "check_go.sh"))
 	body := regexp.MustCompile(`(?ms)^mirrored_image\(\) \{.*?^\}`).FindString(src)
@@ -1038,7 +978,7 @@ func TestMirroredImageMatchesTestcontainersPrefixSemantics(t *testing.T) {
 	}
 	run := func(image, prefix string) cmdResult {
 		program := "die() { printf \"ERROR: %s\\n\" \"$*\" >&2; exit 2; }\n" + body + "\nmirrored_image \"" + image + "\"\n"
-		return cmdSpec{dir: root, env: inheritedEnv(nil, "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX="+prefix)}.run("bash", "-c", program)
+		return freeSpec{dir: root, env: inheritedEnv(nil, "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX="+prefix)}.run("bash", "-c", program)
 	}
 	prefix := "ghcr.io/full-chaos"
 	redirected := map[string]string{
@@ -1061,5 +1001,109 @@ func TestMirroredImageMatchesTestcontainersPrefixSemantics(t *testing.T) {
 	}
 	if got := run("docker.io/postgres:1", prefix); got.code == 0 || !strings.Contains(got.stderr, "names docker.io explicitly") {
 		t.Errorf("the incoherent docker.io form must be refused: exit %d: %s%s", got.code, got.stdout, got.stderr)
+	}
+}
+
+// dryRuns runs `integration-shard TARGET SHARD --dry-run` for every shard at once (the cap in freeSpec bounds the
+// concurrency) and returns the results by shard.
+func dryRuns(t *testing.T, target string, shards []int) map[int]cmdResult {
+	t.Helper()
+	results := make([]cmdResult, len(shards))
+	var wg sync.WaitGroup
+	for i, shard := range shards {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = runCheckGoSharding(t, shardEnv{}, "integration-shard", target, strconv.Itoa(shard), "--dry-run")
+		}()
+	}
+	wg.Wait()
+	out := map[int]cmdResult{}
+	for i, shard := range shards {
+		out[shard] = results[i]
+	}
+	return out
+}
+
+func TestEachIntegrationShardDryRunExecutesOnlyItsManifestAssignment(t *testing.T) {
+	t.Parallel()
+	stdout, gho := realPlan(t)
+	facts := realPlanFacts(t)
+	assignments, err := checkShardPlan(stdout, gho, facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shards, provider []int
+	wants := map[int]map[string]bool{}
+	for s, rows := range assignments {
+		want := map[string]bool{}
+		for p := range rows {
+			if !splitPackages[p] {
+				want[p] = true
+			}
+		}
+		if len(want) > 0 {
+			shards = append(shards, s)
+			wants[s] = want
+		}
+	}
+	sort.Ints(shards)
+	for s := 1; s <= facts.providerShards; s++ {
+		provider = append(provider, s)
+	}
+	var pkgResults, providerResults map[int]cmdResult
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); pkgResults = dryRuns(t, "packages", shards) }()
+	go func() { defer wg.Done(); providerResults = dryRuns(t, "providersync", provider) }()
+	wg.Wait()
+
+	var selected []string
+	for _, shard := range shards {
+		r := pkgResults[shard]
+		if r.code != 0 || !strings.Contains(r.stdout, fmt.Sprintf("integration package shard %d: DRY RUN", shard)) {
+			t.Fatalf("shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+		}
+		chosen := lineValues(r.stdout, "  SHARD-RUN ")
+		got := map[string]bool{}
+		for _, c := range chosen {
+			got[c] = true
+		}
+		if !sameSet(got, wants[shard]) || len(chosen) != len(wants[shard]) {
+			t.Errorf("shard %d would run %v, the plan assigned %v", shard, sortedKeys(got), sortedKeys(wants[shard]))
+		}
+		selected = append(selected, chosen...)
+	}
+	if len(shards) < 2 {
+		t.Fatal("fewer than two packages shards ran: the loop measured nothing")
+	}
+	got := map[string]bool{}
+	for _, s := range selected {
+		got[s] = true
+	}
+	want := map[string]bool{}
+	for p := range facts.expected {
+		if !splitPackages[p] {
+			want[p] = true
+		}
+	}
+	if len(selected) != len(got) || !sameSet(got, want) {
+		t.Errorf("the packages shards run %d packages (%d distinct), want %d", len(selected), len(got), len(want))
+	}
+	var tests []string
+	for _, shard := range provider {
+		r := providerResults[shard]
+		if r.code != 0 || !strings.Contains(r.stdout, fmt.Sprintf("providersync test shard %d: DRY RUN", shard)) {
+			t.Fatalf("providersync shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
+		}
+		tests = append(tests, lineValues(r.stdout, "  PROVIDER-TEST-RUN ")...)
+	}
+	all, _ := providerTests(t)
+	gotT := map[string]bool{}
+	for _, s := range tests {
+		gotT[s] = true
+	}
+	if len(tests) != len(gotT) || !sameSet(gotT, all) {
+		t.Errorf("the providersync shards run %d tests (%d distinct), want %d", len(tests), len(gotT), len(all))
 	}
 }

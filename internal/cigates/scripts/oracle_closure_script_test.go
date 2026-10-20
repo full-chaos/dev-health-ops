@@ -36,7 +36,9 @@ func wantFail(t *testing.T, r cmdResult, needle string, ctx ...any) {
 }
 
 func TestOracleClosureFiles(t *testing.T) {
+	t.Parallel()
 	t.Run("a missing closure directory fails loudly in the real layout", func(t *testing.T) {
+		t.Parallel()
 		o := closureTree(t)
 		o.write("changed.txt", "internal/auth/signedtoken/x.go\n")
 		list := func() cmdResult {
@@ -51,6 +53,7 @@ func TestOracleClosureFiles(t *testing.T) {
 		wantFail(t, list(), "internal__apiservice.txt is missing")
 	})
 	t.Run("the selection never reads an unreadable or empty registry as nothing to run", func(t *testing.T) {
+		t.Parallel()
 		o := closureTree(t)
 		if err := os.RemoveAll(filepath.Join(o.dir, "ci", "venue_oracle_registry.d")); err != nil {
 			t.Fatal(err)
@@ -60,6 +63,7 @@ func TestOracleClosureFiles(t *testing.T) {
 		wantFail(t, l.listRC("internal/auth/signedtoken/x.go"), "holds no run row")
 	})
 	t.Run("a closure file that is empty or malformed is refused", func(t *testing.T) {
+		t.Parallel()
 		o := closureTree(t)
 		o.mkdir("ci/venue_oracle_closure.d")
 		for _, c := range []struct{ body, msg string }{
@@ -76,6 +80,7 @@ func TestOracleClosureFiles(t *testing.T) {
 		}
 	})
 	t.Run("a closure line with a space or a comma selects", func(t *testing.T) {
+		t.Parallel()
 		o := closureTree(t)
 		o.write("ci/venue_oracle_closure.d/internal__apiservice.txt", "internal/dep_test\n~internal/dep_test/a,b\n~internal/dep_test/assets/a b\n")
 		want := []selectedRow{{"internal/apiservice", "TestVenueOracleX"}}
@@ -89,11 +94,13 @@ func TestOracleClosureFiles(t *testing.T) {
 		}
 	})
 	t.Run("a closure path that is a directory is refused", func(t *testing.T) {
+		t.Parallel()
 		o := closureTree(t)
 		o.mkdir("ci/venue_oracle_closure.d/internal__apiservice.txt")
 		wantFail(t, o.listRC("internal/auth/signedtoken/x.go"), "not a readable regular file")
 	})
 	t.Run("a change inside the venue package still validates its closure file", func(t *testing.T) {
+		t.Parallel()
 		o := closureTree(t)
 		o.mkdir("ci/venue_oracle_closure.d")
 		wantFail(t, o.listRC("internal/apiservice/x.go"), "internal__apiservice.txt is missing")
@@ -104,6 +111,7 @@ func TestOracleClosureFiles(t *testing.T) {
 		}
 	})
 	t.Run("a closure line that can never match is refused", func(t *testing.T) {
+		t.Parallel()
 		o := closureTree(t)
 		o.mkdir("ci/venue_oracle_closure.d")
 		for _, body := range []string{"~internal/dep/data/\n", "internal/dep/\n", "~/abs\n", "internal//dep\n", "~internal/./dep\n", "../up\n"} {
@@ -129,7 +137,9 @@ func (o *otree) legRows(shard, count int) []string {
 }
 
 func TestOracleChangedLegs(t *testing.T) {
+	t.Parallel()
 	t.Run("the legs of a change set partition its selection", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{
 			{"internal/a", []string{"TestVenueOracleA1", "TestVenueOracleA2"}}, {"internal/b", []string{"TestVenueOracleB"}},
 			{"internal/c", []string{"TestVenueOracleC"}}, {"internal/d", []string{"TestVenueOracleD"}},
@@ -163,6 +173,7 @@ func TestOracleChangedLegs(t *testing.T) {
 		}
 	})
 	t.Run("a leg with an empty slice is a green no-op", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/a", []string{"TestVenueOracleA"}}})
 		o.write("changed.txt", "internal/a/x.go\n")
 		empty := 0
@@ -181,6 +192,7 @@ func TestOracleChangedLegs(t *testing.T) {
 		}
 	})
 	t.Run("a leg outside one to count is refused with a change set", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/a", []string{"TestVenueOracleA"}}})
 		o.write("changed.txt", "internal/a/x.go\n")
 		for _, args := range [][]string{{"0", "3"}, {"4", "3"}, {"x", "3"}} {
@@ -191,6 +203,7 @@ func TestOracleChangedLegs(t *testing.T) {
 		}
 	})
 	t.Run("the run of a leg runs only its slice", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/a", []string{"TestVenueOracleA"}}, {"internal/b", []string{"TestVenueOracleB"}}})
 		o.write("changed.txt", "internal/a/x.go\ninternal/b/x.go\n")
 		var ran [2][]string
@@ -210,6 +223,7 @@ func TestOracleChangedLegs(t *testing.T) {
 		}
 	})
 	t.Run("the changed job matrix holds the whole registry within its timeout", func(t *testing.T) {
+		t.Parallel()
 		job := oracleWorkflowJob(t, "venue-oracles-changed.yml", "venue-oracles-changed")
 		shards, _ := nested(job, "strategy", "matrix", "shard").([]any)
 		for i, s := range shards {
@@ -233,6 +247,7 @@ func TestOracleChangedLegs(t *testing.T) {
 		}
 	})
 	t.Run("the leg receipt counts the selected rows not the registry", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/a", []string{"TestVenueOracleA"}}, {"internal/b", []string{"TestVenueOracleB"}}})
 		o.write("changed.txt", "internal/a/x.go\n")
 		r := o.venueOracles(nil, "--changed", filepath.Join(o.dir, "changed.txt"), "--list", "1", "1")

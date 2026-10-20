@@ -56,7 +56,7 @@ func (o *otree) triggers(pkg string, rows ...[2]string) string {
 }
 
 func (o *otree) staticCheck() cmdResult {
-	return cmdSpec{dir: o.dir, env: inheritedEnv(nil)}.run("bash", filepath.Join(o.dir, "ci", "check_venue_oracle_registry.sh"))
+	return freeSpec{dir: o.dir, env: inheritedEnv(nil)}.run("bash", filepath.Join(o.dir, "ci", "check_venue_oracle_registry.sh"))
 }
 
 func triggerTree(t *testing.T) *otree {
@@ -77,12 +77,13 @@ func selectedOf(t *testing.T, o *otree, changed ...string) []selectedRow {
 }
 
 func TestOracleTriggersRealTree(t *testing.T) {
+	t.Parallel()
 	selected := func(changed string) []selectedRow {
 		listing := filepath.Join(t.TempDir(), "changed.txt")
 		if err := os.WriteFile(listing, []byte(changed+"\x00"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		r := cmdSpec{dir: rootOf(t), env: inheritedEnv(nil)}.run("bash", "ci/check_go.sh", "venue-oracles", "--changed", listing, "--list")
+		r := freeSpec{dir: rootOf(t), env: inheritedEnv(nil)}.run("bash", "ci/check_go.sh", "venue-oracles", "--changed", listing, "--list")
 		if r.code != 0 {
 			t.Fatalf("--list %s: %s", changed, r.stderr)
 		}
@@ -105,7 +106,7 @@ func TestOracleTriggersRealTree(t *testing.T) {
 			t.Errorf("a change to %s selects %v, want nothing", far, got)
 		}
 	}
-	r := cmdSpec{dir: rootOf(t), env: inheritedEnv(nil)}.run("bash", "ci/check_venue_oracle_registry.sh")
+	r := freeSpec{dir: rootOf(t), env: inheritedEnv(nil)}.run("bash", "ci/check_venue_oracle_registry.sh")
 	if r.code != 0 {
 		t.Fatalf("the static check rejects the real trigger rows: %s", r.stderr)
 	}
@@ -124,6 +125,7 @@ func TestOracleTriggersRealTree(t *testing.T) {
 }
 
 func TestOracleTriggerSelectionRule(t *testing.T) {
+	t.Parallel()
 	routes := selectedRow{"internal/api", "TestVenueOracleRoutes"}
 	settings := selectedRow{"internal/api", "TestVenueOracleSettings"}
 	jobs := selectedRow{"internal/jobs", "TestVenueOracleJobs"}
@@ -134,10 +136,12 @@ func TestOracleTriggerSelectionRule(t *testing.T) {
 		}
 	}
 	t.Run("without a trigger a dependency change selects nothing", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		check(t, selectedOf(t, o, "internal/store/store.go"))
 	})
 	t.Run("a declared directory selects exactly its test", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store"})
 		check(t, selectedOf(t, o, "internal/store/store.go"), routes)
@@ -145,6 +149,7 @@ func TestOracleTriggerSelectionRule(t *testing.T) {
 		check(t, o.selected(true, "internal/store/store.go"), routes)
 	})
 	t.Run("a declared file selects only for that file", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store/store.go"})
 		check(t, selectedOf(t, o, "internal/store/store.go"), routes)
@@ -152,30 +157,35 @@ func TestOracleTriggerSelectionRule(t *testing.T) {
 		check(t, selectedOf(t, o, "internal/store/store.go.orig"))
 	})
 	t.Run("a declared path matches whole segments only", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store"})
 		check(t, selectedOf(t, o, "internal/storefront/x.go"))
 		check(t, selectedOf(t, o, "x/internal/store/store.go"))
 	})
 	t.Run("the package rule is unchanged beside a trigger", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store"})
 		check(t, selectedOf(t, o, "internal/api/x_test.go"), routes, settings)
 		check(t, selectedOf(t, o, "internal/jobs/x_test.go"), jobs)
 	})
 	t.Run("two tests can declare the same path", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store"})
 		o.triggers("internal/jobs", [2]string{"TestVenueOracleJobs", "internal/store"})
 		check(t, selectedOf(t, o, "internal/store/store.go"), routes, jobs)
 	})
 	t.Run("a trigger selects the test of its own package only", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/api", []string{"TestVenueOracleSame"}}, {"internal/jobs", []string{"TestVenueOracleSame"}}})
 		o.mkdir("internal/store")
 		o.triggers("internal/jobs", [2]string{"TestVenueOracleSame", "internal/store"})
 		check(t, selectedOf(t, o, "internal/store/store.go"), selectedRow{"internal/jobs", "TestVenueOracleSame"})
 	})
 	t.Run("the run runs the test a declared path selects", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store"})
 		o.write("changed.txt", "internal/store/store.go\n")
@@ -185,6 +195,7 @@ func TestOracleTriggerSelectionRule(t *testing.T) {
 		}
 	})
 	t.Run("the run without a trigger is the loud no-op", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.write("changed.txt", "internal/store/store.go\n")
 		r := o.venueOracles(nil, "--changed", filepath.Join(o.dir, "changed.txt"))
@@ -195,6 +206,7 @@ func TestOracleTriggerSelectionRule(t *testing.T) {
 }
 
 func TestOracleTriggerStaticCheck(t *testing.T) {
+	t.Parallel()
 	failsWith := func(t *testing.T, r cmdResult, needle string) {
 		t.Helper()
 		if r.code == 0 || !strings.Contains(r.stderr, needle) {
@@ -202,6 +214,7 @@ func TestOracleTriggerStaticCheck(t *testing.T) {
 		}
 	}
 	t.Run("a good trigger row passes", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store"})
 		r := o.staticCheck()
@@ -218,18 +231,21 @@ func TestOracleTriggerStaticCheck(t *testing.T) {
 		{"a dot dot segment", "TestVenueOracleRoutes", "internal/../internal/store", "is not <package>"},
 	} {
 		t.Run("a trigger row that selects nothing fails: "+c.name, func(t *testing.T) {
+			t.Parallel()
 			o := triggerTree(t)
 			o.triggers("internal/api", [2]string{c.test, c.target})
 			failsWith(t, o.staticCheck(), c.needle)
 		})
 	}
 	t.Run("a trigger for a local only test fails", func(t *testing.T) {
+		t.Parallel()
 		o := scratchOTree(t, []pkgTests{{"internal/api", []string{"TestVenueOracleLocal", "TestVenueOracleRoutes"}}}, "TestVenueOracleLocal")
 		o.mkdir("internal/store")
 		o.triggers("internal/api", [2]string{"TestVenueOracleLocal", "internal/store"})
 		failsWith(t, o.staticCheck(), "is not a run row")
 	})
 	t.Run("unsorted or duplicate trigger rows fail", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.mkdir("internal/alpha")
 		o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store"}, [2]string{"TestVenueOracleRoutes", "internal/alpha"})
@@ -238,6 +254,7 @@ func TestOracleTriggerStaticCheck(t *testing.T) {
 		failsWith(t, o.staticCheck(), "must be sorted")
 	})
 	t.Run("a row in the wrong package's file fails", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		rel := o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store"})
 		if err := os.Rename(filepath.Join(o.dir, rel), filepath.Join(o.dir, "ci", "venue_oracle_triggers.d", "internal__jobs.tsv")); err != nil {
@@ -246,6 +263,7 @@ func TestOracleTriggerStaticCheck(t *testing.T) {
 		failsWith(t, o.staticCheck(), "belongs in internal__api.tsv")
 	})
 	t.Run("a stray or empty trigger file fails", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.write("ci/venue_oracle_triggers.d/notes.txt", "x\n")
 		failsWith(t, o.staticCheck(), "stray entry notes.txt")
@@ -256,6 +274,7 @@ func TestOracleTriggerStaticCheck(t *testing.T) {
 		failsWith(t, o.staticCheck(), "holds no rows")
 	})
 	t.Run("a broken trigger file stops the selection", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.write("ci/venue_oracle_triggers.d/internal__api.tsv", "internal/api\tonly-two\n")
 		o.write("changed.txt", "internal/store/store.go\n")
@@ -285,7 +304,7 @@ func runSelectStep(t *testing.T, o *otree) (cmdResult, string) {
 		t.Fatalf("expected exactly one select step, found %d", n)
 	}
 	gitDo := func(args ...string) string {
-		res := cmdSpec{dir: o.dir, env: gitEnv}.run("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+		res := freeSpec{dir: o.dir, env: gitEnv}.run("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
 		if res.code != 0 {
 			t.Fatalf("git %v: %s%s", args, res.stderr, res.stdout)
 		}
@@ -316,7 +335,9 @@ func runSelectStep(t *testing.T, o *otree) (cmdResult, string) {
 }
 
 func TestOracleChangedJobSelectStep(t *testing.T) {
+	t.Parallel()
 	t.Run("the job step runs the tests of a declared path", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.triggers("internal/api", [2]string{"TestVenueOracleRoutes", "internal/store"})
 		r, out := runSelectStep(t, o)
@@ -325,6 +346,7 @@ func TestOracleChangedJobSelectStep(t *testing.T) {
 		}
 	})
 	t.Run("the job step says not run when nothing is selected", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		r, out := runSelectStep(t, o)
 		if r.code != 0 || out != "run=false\n" || !strings.Contains(r.stdout, "VENUE ORACLES NOT RUN") {
@@ -332,6 +354,7 @@ func TestOracleChangedJobSelectStep(t *testing.T) {
 		}
 	})
 	t.Run("the job step fails on a trigger file it cannot read", func(t *testing.T) {
+		t.Parallel()
 		o := triggerTree(t)
 		o.write("ci/venue_oracle_triggers.d/internal__api.tsv", "internal/api\tonly-two\n")
 		r, out := runSelectStep(t, o)

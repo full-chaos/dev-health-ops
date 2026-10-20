@@ -124,7 +124,7 @@ func runAlert(t *testing.T, runs []alertRun, runID int, issues []alertIssue, ext
 	env := inheritedEnv(nil, "VENUE_ALERT_GH="+gh, "LAST_VENUE_RUN_GH="+gh, "FAKE_FIXTURE="+fixture, "FAKE_CALLS="+calls,
 		"GITHUB_REPOSITORY=o/r", fmt.Sprintf("RUN_ID=%d", runID), "RUN_CONCLUSION="+conclusion, fmt.Sprintf("RUN_SHA=%040x", runID))
 	env = append(env, extra...)
-	res := cmdSpec{dir: rootOf(t), env: env}.run("bash", "ci/venue-main-alert.sh")
+	res := freeSpec{dir: rootOf(t), env: env}.run("bash", "ci/venue-main-alert.sh")
 	var out alertResult
 	out.res = res
 	for _, l := range strings.Split(readText(t, calls), "\n") {
@@ -141,6 +141,7 @@ func runAlert(t *testing.T, runs []alertRun, runID int, issues []alertIssue, ext
 }
 
 func TestVenueMainAlertScript(t *testing.T) {
+	t.Parallel()
 	ok := func(t *testing.T, r alertResult) {
 		t.Helper()
 		if r.res.code != 0 {
@@ -156,6 +157,7 @@ func TestVenueMainAlertScript(t *testing.T) {
 	}
 
 	t.Run("a failed run opens one labelled issue", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "failure", alertRed}, {200, "success", alertGreen}}, 300, nil)
 		ok(t, r)
 		if len(r.writes) != 2 || prefix(r.writes[0]) != "label create "+alertLabel || prefix(r.writes[1]) != "issue create" {
@@ -168,6 +170,7 @@ func TestVenueMainAlertScript(t *testing.T) {
 		}
 	})
 	t.Run("the conclusion alone decides red", func(t *testing.T) {
+		t.Parallel()
 		for _, c := range []struct {
 			conclusion string
 			jobs       []map[string]any
@@ -180,6 +183,7 @@ func TestVenueMainAlertScript(t *testing.T) {
 		}
 	})
 	t.Run("a red run behind many skipped runs still opens the issue", func(t *testing.T) {
+		t.Parallel()
 		runs := []alertRun{{1100, "failure", alertRed}}
 		for i := 0; i < 40; i++ {
 			runs = append(runs, alertRun{1000 + i, "success", alertSkipped})
@@ -191,6 +195,7 @@ func TestVenueMainAlertScript(t *testing.T) {
 		}
 	})
 	t.Run("a failed run with an open issue comments instead of a second issue", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "failure", alertRed}}, 300, []alertIssue{{41, "Run https://github.com/o/r/actions/runs/200 at x", nil}})
 		ok(t, r)
 		onWrite(t, r, 1, "issue comment 41 ")
@@ -199,21 +204,25 @@ func TestVenueMainAlertScript(t *testing.T) {
 		}
 	})
 	t.Run("a run already on the issue is not commented twice", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "failure", alertRed}}, 300, []alertIssue{{41, "", []string{"Still red. Run https://github.com/o/r/actions/runs/300 at x"}}})
 		ok(t, r)
 		onWrite(t, r, 0, "")
 	})
 	t.Run("a run id that is a prefix of a reported id is still reported", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{30, "failure", alertRed}}, 30, []alertIssue{{41, "Run https://github.com/o/r/actions/runs/300 at x", nil}})
 		ok(t, r)
 		onWrite(t, r, 1, "issue comment 41 ")
 	})
 	t.Run("the lowest numbered open issue is the one", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "failure", alertRed}}, 300, []alertIssue{{50, "", nil}, {41, "", nil}})
 		ok(t, r)
 		onWrite(t, r, 1, "issue comment 41 ")
 	})
 	t.Run("a proven executed green run closes the open issue", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "success", alertGreen}, {200, "failure", alertRed}}, 300, []alertIssue{{41, "", nil}})
 		ok(t, r)
 		onWrite(t, r, 1, "issue close 41 ")
@@ -222,6 +231,7 @@ func TestVenueMainAlertScript(t *testing.T) {
 		}
 	})
 	t.Run("a skipped success never closes the issue", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "success", alertSkipped}, {200, "failure", alertRed}}, 300, []alertIssue{{41, "", nil}})
 		ok(t, r)
 		onWrite(t, r, 0, "")
@@ -230,11 +240,13 @@ func TestVenueMainAlertScript(t *testing.T) {
 		}
 	})
 	t.Run("a success that is not the newest executed run closes nothing", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{400, "success", alertGreen}, {300, "success", alertGreen}}, 300, []alertIssue{{41, "", nil}})
 		ok(t, r)
 		onWrite(t, r, 0, "")
 	})
 	t.Run("a success with no open issue reads nothing", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "success", alertGreen}}, 300, nil)
 		ok(t, r)
 		if len(r.writes) != 0 || len(r.api) != 0 {
@@ -242,6 +254,7 @@ func TestVenueMainAlertScript(t *testing.T) {
 		}
 	})
 	t.Run("other conclusions do nothing", func(t *testing.T) {
+		t.Parallel()
 		for _, c := range []string{"skipped", "neutral", "action_required", "stale"} {
 			r := runAlert(t, []alertRun{{300, c, alertGreen}}, 300, []alertIssue{{41, "", nil}})
 			ok(t, r)
@@ -249,18 +262,21 @@ func TestVenueMainAlertScript(t *testing.T) {
 		}
 	})
 	t.Run("a failed issue read fails the job", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "failure", alertRed}}, 300, nil, "FAKE_GH_FAIL_ISSUE_LIST=1")
 		if r.res.code == 0 || len(r.writes) != 0 {
 			t.Fatalf("exit %d writes %v", r.res.code, r.writes)
 		}
 	})
 	t.Run("a failed state read fails the job and closes nothing", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "success", alertGreen}}, 300, []alertIssue{{41, "", nil}}, "VENUE_ALERT_LAST_RUN=/nonexistent/last-run.sh")
 		if r.res.code == 0 || len(r.writes) != 0 {
 			t.Fatalf("exit %d writes %v", r.res.code, r.writes)
 		}
 	})
 	t.Run("a dry run prints the write and does not make it", func(t *testing.T) {
+		t.Parallel()
 		r := runAlert(t, []alertRun{{300, "failure", alertRed}}, 300, nil, "DRY_RUN=1")
 		ok(t, r)
 		if len(r.writes) != 0 || !strings.Contains(r.res.stdout, "DRY-RUN: gh issue create") {
@@ -268,6 +284,7 @@ func TestVenueMainAlertScript(t *testing.T) {
 		}
 	})
 	t.Run("inputs are validated", func(t *testing.T) {
+		t.Parallel()
 		for _, name := range []string{"RUN_ID", "RUN_CONCLUSION", "RUN_SHA"} {
 			r := runAlert(t, []alertRun{{300, "failure", alertRed}}, 300, nil, name+"=x;rm")
 			if r.res.code != 2 || len(r.writes) != 0 {

@@ -32,12 +32,12 @@ func shardsOf(t *testing.T, manifest string) int {
 
 func dryRun(t *testing.T, root, target string, shard int) cmdResult {
 	t.Helper()
-	return cmdSpec{dir: root, env: inheritedEnv(nil)}.run("bash", "ci/check_go.sh", "integration-shard", target, strconv.Itoa(shard), "--dry-run")
+	return freeSpec{dir: root, env: inheritedEnv(nil)}.run("bash", "ci/check_go.sh", "integration-shard", target, strconv.Itoa(shard), "--dry-run")
 }
 
 func goTestList(t *testing.T, root, pkg string) map[string]bool {
 	t.Helper()
-	res := cmdSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN=go1.27.2", "GOWORK=off")}.run("go", "test", "-mod=readonly", "-tags=integration", "-list", ".*", "./"+pkg)
+	res := freeSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN=go1.27.2", "GOWORK=off")}.run("go", "test", "-mod=readonly", "-tags=integration", "-list", ".*", "./"+pkg)
 	if res.code != 0 {
 		t.Fatalf("go test -list %s: %s%s", pkg, res.stdout, res.stderr)
 	}
@@ -61,6 +61,7 @@ func runLines(stdout, prefix string) []string {
 }
 
 func TestEveryTestRunsInExactlyOneSplitPackageShard(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	for _, c := range []struct{ name, manifest, prefix, pkg string }{
 		{"daily", "ci/go_daily_test_shards.tsv", "  DAILY-TEST-RUN ", "internal/jobs/metrics/daily"},
@@ -69,6 +70,7 @@ func TestEveryTestRunsInExactlyOneSplitPackageShard(t *testing.T) {
 		{"remaining", "ci/go_remaining_test_shards.tsv", "  REMAINING-TEST-RUN ", "internal/jobs/metrics/remaining"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			var selected []string
 			for shard := 1; shard <= shardsOf(t, filepath.Join(root, c.manifest)); shard++ {
 				r := dryRun(t, root, c.name, shard)

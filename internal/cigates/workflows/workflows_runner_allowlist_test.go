@@ -37,6 +37,7 @@ var draftGatedJobs = [][2]string{
 	{"go-auth-service.yml", "auth-changes"},
 	{"go.yml", "dind-smoke-test"},
 	{"go.yml", "go-auth-compose-proof"},
+	{"go.yml", "go-auth-web-proxy-proof"},
 	{"go.yml", "go-arm64-numeric-parity"},
 	{"go.yml", "go-container-reproducibility"},
 	{"go.yml", "go-container-reproducibility-self-hosted"},

@@ -231,9 +231,6 @@ func (f *Flows) Verify(ctx context.Context, secret string) (FlowOutcome, error) 
 		return FlowOutcome{}, err
 	}
 	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposeEmailVerification, TokenHash: sha256.Sum256([]byte(secret))})
-	if errors.Is(err, ErrLinkSuperseded) {
-		return FlowOutcome{Kind: FlowInvalidToken}, nil
-	}
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: redeeming a verification link: %w", err)
 	}
@@ -288,9 +285,6 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
 	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: sha256.Sum256([]byte(secret))})
-	if errors.Is(err, ErrLinkSuperseded) {
-		return FlowOutcome{Kind: FlowInvalidToken}, nil
-	}
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: redeeming a reset link: %w", err)
 	}

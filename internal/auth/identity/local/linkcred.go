@@ -34,10 +34,12 @@ func lockKey(scope string, principal string) string { return scope + ":" + princ
 
 // Issue stores one credential. Issuers of one principal and purpose run one at
 // a time (a transaction advisory lock). Every call, decoy included, runs the
-// same statements in the same order: begin, lock, insert, commit. A decoy
-// (zero PrincipalID) inserts no row. Statement-shape parity is the invariant;
-// timing parity is not claimed. Only the newest credential of a principal and
-// purpose redeems (see Redeem), so nothing is updated or deleted here.
+// same statements in the same order: begin, lock, delete, insert, commit. The
+// delete removes the prior unconsumed credentials of the principal and
+// purpose, so a reissue leaves exactly one unconsumed row and a replaced link
+// is simply unknown; consumed rows stay. A decoy (zero PrincipalID) runs the
+// same statements with the delete and the insert matching no row.
+// Statement-shape parity is the invariant; timing parity is not claimed.
 func (l *PGLinks) Issue(ctx context.Context, req IssueRequest) error {
 	real := req.PrincipalID != uuid.Nil
 	principal := req.PrincipalID
@@ -52,8 +54,11 @@ func (l *PGLinks) Issue(ctx context.Context, req IssueRequest) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey("link:"+string(req.Purpose), principal.String())); err != nil {
 		return fmt.Errorf("local: locking the issue: %w", err)
 	}
-	// $5 false is a decoy: the same statement text, no row. created_at is the
-	// database clock read after the lock, so "newest" follows the lock order.
+	if _, err := tx.Exec(ctx, `DELETE FROM `+l.q+`.link_credentials
+WHERE principal_id = $1::uuid AND purpose = $2 AND consumed_at IS NULL AND $3::boolean`, principal.String(), string(req.Purpose), real); err != nil {
+		return fmt.Errorf("local: replacing link credentials: %w", err)
+	}
+	// $5 false is a decoy: the same statement text, no row.
 	if _, err := tx.Exec(ctx, `INSERT INTO `+l.q+`.link_credentials (principal_id, purpose, token_hash, expires_at, created_at)
 SELECT $1::uuid, $2, $3, now() + make_interval(secs => $4::double precision), clock_timestamp() WHERE $5::boolean`, principal.String(), string(req.Purpose), req.TokenHash[:], req.TTL.Seconds(), real); err != nil {
 		return fmt.Errorf("local: storing a link credential: %w", err)
@@ -93,19 +98,10 @@ var redeemEvents = map[Purpose]struct{ auditEvent, reason string }{
 	PurposePasswordReset:     {"auth.password.reset", "password_reset"},
 }
 
-// newestCredential is the SQL of the id of the newest credential of the
-// principal and purpose of the row aliased l, consumed ones included.
-func (l *PGLinks) newestCredential() string {
-	return `(SELECT n.id FROM ` + l.q + `.link_credentials n
- WHERE n.principal_id = l.principal_id AND n.purpose = l.purpose ORDER BY n.created_at DESC, n.id DESC LIMIT 1)`
-}
-
 // Redeem consumes the credential: UPDATE .. WHERE consumed_at IS NULL AND
-// expires_at > now() AND it is the newest of its principal and purpose,
-// exactly one row, on the database clock. A replay, an expired or an unknown
-// credential is (zero, false, nil). A live credential that a newer one
-// replaced is refused with ErrLinkSuperseded; the refusal burns it and writes
-// a denied audit row.
+// expires_at > now(), exactly one row, on the database clock. A replay, an
+// expired, a replaced or an unknown credential is (zero, false, nil): the
+// same refusal for all of them.
 func (l *PGLinks) Redeem(ctx context.Context, req RedeemRequest) (uuid.UUID, bool, error) {
 	events, known := redeemEvents[req.Purpose]
 	if !known {
@@ -113,25 +109,19 @@ func (l *PGLinks) Redeem(ctx context.Context, req RedeemRequest) (uuid.UUID, boo
 	}
 	hash := req.TokenHash[:]
 	var principal string
-	var newest bool
 	// Cheap read first: a garbage secret never opens a Commit (which logs its failures).
-	err := l.pool.QueryRow(ctx, `SELECT l.principal_id::text, l.id = `+l.newestCredential()+`
-FROM `+l.q+`.link_credentials l
-WHERE l.token_hash = $1 AND l.purpose = $2 AND l.consumed_at IS NULL AND l.expires_at > now()`, hash, string(req.Purpose)).Scan(&principal, &newest)
+	err := l.pool.QueryRow(ctx, `SELECT principal_id::text FROM `+l.q+`.link_credentials
+WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > now()`, hash, string(req.Purpose)).Scan(&principal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, nil
 	}
 	if err != nil {
 		return uuid.Nil, false, fmt.Errorf("local: reading a link credential: %w", err)
 	}
-	if !newest {
-		return uuid.Nil, false, l.burnSuperseded(ctx, hash, req.Purpose, principal)
-	}
 	err = audit.Commit(ctx, l.pool, l.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			tag, err := tx.Exec(ctx, `UPDATE `+l.q+`.link_credentials l SET consumed_at = now()
-WHERE l.token_hash = $1 AND l.purpose = $2 AND l.consumed_at IS NULL AND l.expires_at > now()
-AND l.id = `+l.newestCredential(), hash, string(req.Purpose))
+			tag, err := tx.Exec(ctx, `UPDATE `+l.q+`.link_credentials SET consumed_at = now()
+WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > now()`, hash, string(req.Purpose))
 			if err != nil {
 				return err
 			}
@@ -155,37 +145,5 @@ AND l.id = `+l.newestCredential(), hash, string(req.Purpose))
 		return uuid.Nil, false, nil
 	default:
 		return uuid.Nil, false, fmt.Errorf("local: consuming a link credential: %w", err)
-	}
-}
-
-// burnSuperseded marks a replaced credential consumed with a denied audit row
-// and reports it as superseded.
-func (l *PGLinks) burnSuperseded(ctx context.Context, hash []byte, purpose Purpose, principal string) error {
-	err := audit.Commit(ctx, l.pool, l.schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			tag, err := tx.Exec(ctx, `UPDATE `+l.q+`.link_credentials SET consumed_at = now()
-WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL`, hash, string(purpose))
-			if err != nil {
-				return err
-			}
-			if tag.RowsAffected() != 1 {
-				return errNotRedeemable
-			}
-			return nil
-		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.link_credential.superseded", Outcome: audit.OutcomeDenied,
-			SubjectPrincipalID: &principal,
-			Attributes:         map[string]any{"reason_code": "credential_revoked", "target_kind": "principal", "target_id": principal},
-		},
-		OffStream: audit.OffStreamLinkCredentialLifecycle,
-	})
-	switch {
-	case err == nil:
-		return ErrLinkSuperseded
-	case errors.Is(err, errNotRedeemable):
-		return nil
-	default:
-		return fmt.Errorf("local: refusing a superseded link credential: %w", err)
 	}
 }

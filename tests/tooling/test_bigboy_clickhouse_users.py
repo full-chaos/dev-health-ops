@@ -13,6 +13,7 @@ import importlib
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -490,17 +491,19 @@ def _cut_with_a_fake_check(
         f"exit {check_rc}\n"
     )
     fake.chmod(0o755)
-    if fake_generator:
-        generator = tools / "generate-plane-split-router.py"
-        generator.unlink()
-        generator.write_text(
-            "#!/usr/bin/env python3\nimport sys\n"
-            f"open({str(tmp_path / 'generator-args.log')!r}, 'w').write('\\n'.join(sys.argv[1:]))\n"
-            "sys.exit(1)\n"
-        )
-        generator.chmod(0o755)
     stub_bin = tmp_path / "stubbin"
     stub_bin.mkdir()
+    if fake_generator:
+        # The cut builds cigate (CHAOS-10346); this go writes a cigate that logs its arguments and fails.
+        go = stub_bin / "go"
+        go.write_text(
+            "#!/usr/bin/env bash\n"
+            'while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\n'
+            "printf '#!/usr/bin/env bash\\nprintf \"%%s\\\\n\" \"$@\" > %s\\nexit 1\\n' "
+            f"{shlex.quote(str(tmp_path / 'generator-args.log'))} > \"$out\"\n"
+            'chmod +x "$out"\n'
+        )
+        go.chmod(0o755)
     entry._docker_stub(
         stub_bin, routing_response=entry._routing_json("digest_unchanged"), routing_rc=0
     )
@@ -856,7 +859,7 @@ def test_the_cut_hands_the_plane_split_generator_an_absolute_deploy_repo(
     tmp_path: Path,
 ) -> None:
     """CHAOS-10137: the cut changes directory to BIGBOY_ROOT, so a relative DEPLOY_REPO named at launch must
-    reach generate-plane-split-router.py as the absolute path."""
+    reach the plane-split generator (cigate plane-split-router) as the absolute path."""
     proc, _ = _cut_with_a_fake_check(
         tmp_path,
         0,

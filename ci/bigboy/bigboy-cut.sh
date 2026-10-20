@@ -90,12 +90,17 @@ export BIGBOY_OPERATOR_IMAGE=ghcr.io/full-chaos/dev-health-go-operator@$BIGBOY_O
 # ops/.env is mandatory on every invocation below and this STEP asserts it actually took effect).
 # R467: the deploy values are a PINNED input per cut -- DEPLOY_SHA (recorded in round.env and in
 # $REC.deploy-sha.txt), read from DEPLOY_REPO (default $R/deploy) with `git show`, never a working
-# tree and never "deploy main". generate-plane-split-router.py --deploy-sha REFUSES (rc=3) when that
+# tree and never "deploy main". `cigate plane-split-router --deploy-sha` REFUSES (rc=3) when that
 # deploy commit's ops vendor pin is not $NEW, the build this cut runs; every values-driven STEP
 # below reads the file it wrote ($REC.values.prod.yaml).
+# CHAOS-10346: the routing generators and checks are Go (cigate, internal/cigates/routing), built once here from
+# the ops clone ($OPS_REPO); a failed build is a failed deploy-pin, so the values-driven STEPs report SKIPPED.
 VALUES=""
 if [ -n "${DEPLOY_SHA:-}" ]; then
-  if python3 "$HERE/generate-plane-split-router.py" --deploy-repo "$DEPLOY_REPO" --deploy-sha "$DEPLOY_SHA" \
+  BIN_DIR="$REC.bin"; CIGATE="$BIN_DIR/cigate"
+  if ! (mkdir -p "$BIN_DIR" && cd "$OPS_REPO" && go build -trimpath -o "$CIGATE" ./cmd/cigate) > "$REC.cigate-build.err" 2>&1; then
+    st deploy-pin 1; echo "FAIL: go build ./cmd/cigate failed in $OPS_REPO (see $REC.cigate-build.err)" >&2
+  elif "$CIGATE" plane-split-router --deploy-repo "$DEPLOY_REPO" --deploy-sha "$DEPLOY_SHA" \
        --expect-ops-sha "$NEW" --values-out "$REC.values.prod.yaml" --format dynamic > "$REC.planes.generated" 2>"$REC.deploy-pin.err"; then
     VALUES="$REC.values.prod.yaml"; st deploy-pin 0; grep '^# deploy_sha=' "$REC.deploy-pin.err" | tee "$REC.deploy-sha.txt"
   else
@@ -105,7 +110,7 @@ else
   st deploy-pin 2; echo "SKIPPED (not checked): set DEPLOY_SHA=<deploy commit whose vendor pin is $NEW> (R467)" >&2
 fi
 if [ -n "$VALUES" ]; then
-  python3 "$HERE/generate-query-api-enabled-flags.py" "$VALUES" --out "$REC.query-api-enabled-flags.generated" 2>"$REC.query-api-enabled-flags.err"
+  "$CIGATE" query-api-flags "$VALUES" --out "$REC.query-api-enabled-flags.generated" 2>"$REC.query-api-enabled-flags.err"
   GEN_NAMES=$(awk -F: '{print $1}' "$REC.query-api-enabled-flags.generated" | tr -d ' ' | sort)
   LIVE_NAMES=$(awk '/^  query-api:$/{f=1;e=0;next} /^  [A-Za-z0-9_.-]+:$/{f=0;e=0} f&&/^    [a-z_]+:/{e=($0 ~ /^    environment:/)} e&&/^      [A-Za-z_]+:/{n=$1; sub(/:.*/,"",n); print n} e&&/^    - [A-Za-z_][A-Za-z0-9_]*=/{n=$2; sub(/=.*/,"",n); print n}' "$HERE/compose.bigboy.yml" | sort -u)   # the query-api environment, as a mapping or as a KEY=VALUE list
   MISSING=$(comm -23 <(echo "$GEN_NAMES") <(echo "$LIVE_NAMES"))
@@ -113,7 +118,7 @@ if [ -n "$VALUES" ]; then
     st query-api-enabled-flags-current 0
   else
     st query-api-enabled-flags-current 1
-    echo "DRIFT: compose.bigboy.yml's query-api block is missing name(s) values.prod.yaml's ops.queryApi.extraEnv now has -- regenerate it (see $HERE/generate-query-api-enabled-flags.py) before trusting this cut: $MISSING" >&2
+    echo "DRIFT: compose.bigboy.yml's query-api block is missing name(s) values.prod.yaml's ops.queryApi.extraEnv now has -- regenerate it (see cigate query-api-flags) before trusting this cut: $MISSING" >&2
   fi
   # Fail loud on any blank substitution (D2728 class): every secret-ref name from the generated
   # list must resolve to a non-empty value in the LIVE, --env-file-substituted config.
@@ -141,12 +146,12 @@ if [ -n "$VALUES" ]; then
     st router-current 0
   else
     st router-current 1
-    echo "DRIFT: .traefik-dynamic/planes.yml differs from generate-plane-split-router.py output for DEPLOY_SHA=$DEPLOY_SHA -- regenerate it from THAT sha (traefik hot-reloads the file) before trusting this cut" >&2
+    echo "DRIFT: .traefik-dynamic/planes.yml differs from cigate plane-split-router output for DEPLOY_SHA=$DEPLOY_SHA -- regenerate it from THAT sha (traefik hot-reloads the file) before trusting this cut" >&2
   fi
   # CHAOS-6987 (D2736): web env-name parity with prod, NAMES only -- the running web container's
   # names come from container-env-names.sh (the only sanctioned container env reader, R462).
   "$HERE/container-env-names.sh" dev-health-web-1 > "$REC.web-env-names" 2>/dev/null
-  python3 "$HERE/check-web-env-parity.py" "$VALUES" "$HERE/compose.bigboy.yml" --live-names "$REC.web-env-names"; st web-env-parity $?
+  "$CIGATE" web-env-parity "$VALUES" "$HERE/compose.bigboy.yml" --live-names "$REC.web-env-names"; st web-env-parity $?
 else
   st query-api-enabled-flags-current 2  # SKIPPED, not a pass: no pinned values (DEPLOY_SHA) -- this STEP did not run, it did not pass
   echo "SKIPPED (not checked): the values-driven STEPs need DEPLOY_SHA (see deploy-pin above)." >&2
@@ -196,7 +201,7 @@ docker pull -q "$BIGBOY_OPERATOR_IMAGE" > /dev/null 2>&1; st operator-pull $?   
 sleep 45; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8093/ready | grep -q 200; st go-api-ready $?
 # R467: every path the router sends to a Go plane has a handler in the build just started (405/401 to a
 # ROUTEPROBE request; 404 = values ahead of the build). Runs only with pinned values.
-if [ -n "$VALUES" ]; then python3 "$HERE/check-route-coverage.py" "$VALUES"; st route-coverage $?; else st route-coverage 2; fi
+if [ -n "$VALUES" ]; then "$CIGATE" route-coverage "$VALUES"; st route-coverage $?; else st route-coverage 2; fi
 # CHAOS-8543: the routing-ledger parity STEPs with prod (routing-enable, routing-parity; CHAOS-6987
 # gap 5) are gone from the cut. They enabled every operation of ci/bigboy/routing-ops.txt that had no
 # reachable routing ROW, then required a reachable row for each. Since the catalog rule query-api

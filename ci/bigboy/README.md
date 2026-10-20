@@ -156,7 +156,8 @@ directly -- every request went through the Python `api` service, which 500s unco
 route whose Python body has been deleted (CHAOS-6241 class). This surfaced as a real P1: chris's
 real-org dashboard showing "no data" through the `commanderkeen.dev` Cloudflare tunnel into bigboy.
 
-Fix: `generate-plane-split-router.py` derives a traefik file-provider dynamic config (routers +
+Fix: `cigate plane-split-router` (Go, `internal/cigates/routing`; it was `generate-plane-split-router.py`
+until CHAOS-10346, and its output is byte-identical) derives a traefik file-provider dynamic config (routers +
 services, one per plane) straight from `ingress.goApiPaths`/`ingress.queryApiPaths` -- never
 hand-maintained. `compose.bigboy.yml` adds traefik's `--providers.file.directory` flag +
 volume mount for that generated file, and points `web`'s `BACKEND_URL` at the router
@@ -166,7 +167,7 @@ volume mount for that generated file, and points `web`'s `BACKEND_URL` at the ro
 Regenerate after every `ingress.goApiPaths`/`ingress.queryApiPaths` change:
 
 ```
-python3 ci/bigboy/generate-plane-split-router.py <deploy-repo>/values.prod.yaml --format dynamic \
+go run ./cmd/cigate plane-split-router <deploy-repo>/values.prod.yaml --format dynamic \
   > .traefik-dynamic/planes.yml
 ```
 
@@ -248,7 +249,7 @@ sent directly with `Host: traefik` still reaches `plane=go` correctly.
 
 ## query-api env: flags + secret refs (CHAOS-6967(b), CHAOS-6987/D2728)
 
-`generate-query-api-enabled-flags.py` derives BOTH classes of env var query-api needs from
+`cigate query-api-flags` (was `generate-query-api-enabled-flags.py`) derives BOTH classes of env var query-api needs from
 `ops.queryApi.extraEnv` in deploy's `values.prod.yaml`:
 - `GO_API_*_ENABLED` literal flags (unchanged since CHAOS-6967(b)).
 - `valueFrom.secretKeyRef`-backed names (`GO_API_EDGE_JWT_SECRET`, `LLM_PROVIDER`, `OPENAI_API_KEY`,
@@ -343,14 +344,14 @@ Every check below fails loud with a named finding; none can pass on an empty or 
 - **Names-only container env reader** (`container-env-names.sh`, R462/R463): the only sanctioned way
   to read a container's environment on bigboy. The name is cut inside docker's own Go template, so a
   value never leaves the docker CLI; any line that is not an env-var name is withheld and exits 3.
-- **Router host scope** (`tests/tooling/test_bigboy_plane_split_router.py`): every rule the generator
+- **Router host scope** (`internal/cigates/routing/planes_test.go`): every rule the generator
   can emit (file-provider and label form) and the checked-in example must be exactly
   `Host(`traefik`)` or `Host(`traefik`) && PathRegexp(...)`. A public hostname, a second Host
   matcher, or an `||` that lets a rule match without the Host clause fails (the D2735 shape).
 - **Live router current** (`bigboy-cut.sh` STEP `router-current`, needs `DEPLOY_SHA`): the live
   `.traefik-dynamic/planes.yml` must be byte-identical to the generator's output for the pinned
   deploy sha (see "Pinned deploy values" below).
-- **Web env parity** (`check-web-env-parity.py`, STEP `web-env-parity`): every prod `ops.web.env` /
+- **Web env parity** (`cigate web-env-parity`, STEP `web-env-parity`): every prod `ops.web.env` /
   `ops.web.extraEnv` NAME must be classified (overlay vs venue-local base) -- a new prod name fails,
   named; overlay names (`BACKEND_URL`, `AUTH_URL`) must be in `compose.bigboy.yml` with the
   expected public values; the running web container (names via `container-env-names.sh`) must carry
@@ -416,11 +417,14 @@ SSO paths while bigboy still ran 4f014a9d). So the values source is an explicit 
 - `DEPLOY_SHA` (in the round's `round.env` and recorded in `_records/bigboy-<sha8>.deploy-sha.txt`),
   read from `DEPLOY_REPO` (default the devhealth-root `deploy` checkout) with `git show` -- never a
   working tree, never "deploy main".
-- STEP `deploy-pin`: `generate-plane-split-router.py --deploy-repo --deploy-sha --expect-ops-sha $NEW
+- STEP `deploy-pin`: `cigate plane-split-router --deploy-repo --deploy-sha --expect-ops-sha $NEW
   --values-out ...` REFUSES (rc=3) when that deploy commit's `vendor/dev-health-ops` pin is not the
   build the cut runs. Every values-driven STEP (router-current, query-api flags, web-env parity,
   route-coverage) reads the file it wrote. Without `DEPLOY_SHA` those STEPs report rc=2 SKIPPED.
-- STEP `route-coverage` (`check-route-coverage.py`): one `ROUTEPROBE` request per routed path to each
+  The cut builds `cigate` once for these STEPs (`go build -trimpath -o _records/bigboy-<sha8>.bin/cigate
+  ./cmd/cigate` in `BIGBOY_OPS_REPO`, so `go` must be on `PATH`); a failed build is `deploy-pin rc=1`
+  with the build log in `_records/bigboy-<sha8>.cigate-build.err`.
+- STEP `route-coverage` (`cigate route-coverage`): one `ROUTEPROBE` request per routed path to each
   Go plane; net/http's method-aware mux answers 405 (or 401 behind auth) for a registered path and
   404 for none, before any handler runs. A 404 fails the STEP by name.
 
@@ -431,7 +435,7 @@ because a placeholder is registered). The control for R467 is choosing `DEPLOY_S
 commit that was rolled (or proven) with this build -- today **8028ff17** for ops 4f014a9d.
 
 Regenerate the live router from a pinned sha:
-`generate-plane-split-router.py --deploy-repo /home/ubuntu/devhealth/deploy --deploy-sha 8028ff17
+`go run ./cmd/cigate plane-split-router --deploy-repo /home/ubuntu/devhealth/deploy --deploy-sha 8028ff17
 --expect-ops-sha 4f014a9d9babfff17b6ca71a33778f2f69d30737 --format dynamic > .traefik-dynamic/planes.yml`
 (write to a temp file and rename; traefik hot-reloads).
 

@@ -1,7 +1,9 @@
 package checkgo_test
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -151,4 +153,96 @@ func mergedWeights(t *testing.T, root string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+const weightsListStandInGo = `#!/usr/bin/env bash
+if [ "$1" = "list" ] && [ "$2" = "-m" ]; then printf '%%s\n' "github.com/full-chaos/dev-health-ops"; exit 0; fi
+if [ "$1" = "list" ]; then
+  printf '%%s' "${FAKE_GO_PACKAGES}"
+  exit 0
+fi
+exec "%s" "$@"
+`
+
+// runWeightsCheckForPackages runs race-weights-rows against a directory holding exactly the given files, with a stand-in
+// `go list` that reports exactly the given packages (import paths relative to the module root; "." is the root package).
+func runWeightsCheckForPackages(t *testing.T, packages []string, files map[string]string) cmdResult {
+	t.Helper()
+	root := rootOf(t)
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fmt.Sprintf(weightsListStandInGo, realGo)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	solo := filepath.Join(t.TempDir(), "solo.tsv")
+	if err := os.WriteFile(solo, []byte("# no solo packages\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var listed strings.Builder
+	for _, p := range packages {
+		if p == "." {
+			listed.WriteString("github.com/full-chaos/dev-health-ops\n")
+		} else {
+			listed.WriteString("github.com/full-chaos/dev-health-ops/" + p + "\n")
+		}
+	}
+	env := inheritedEnv(nil, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GO_PACKAGES="+listed.String(), "GO_RACE_WEIGHTS_DIR="+dir, "GO_RACE_SOLO="+solo)
+	return cmdSpec{dir: root, env: env}.run("bash", "ci/check_go.sh", "race-weights-rows")
+}
+
+// TestRaceWeightsFileNamesAreOneToOne: the file name of a package is injective, so two packages whose paths differ
+// only in `_` versus `/` (zzreview__collision, zzreview/collision) each have their own file, and the root package has one
+// that a `*.tsv` glob sees.
+func TestRaceWeightsFileNamesAreOneToOne(t *testing.T) {
+	cases := []struct {
+		name     string
+		packages []string
+		files    map[string]string
+		fail     bool
+		want     string
+	}{
+		{"two paths that differ only in _ versus /", []string{"zzreview__collision", "zzreview/collision"},
+			map[string]string{"zzreview_u_ucollision.tsv": "zzreview__collision\t1\n", "zzreview__collision.tsv": "zzreview/collision\t2\n"}, false, "2 row(s) match"},
+		{"the root package", []string{"."}, map[string]string{"_root.tsv": ".\t1\n"}, false, "1 row(s) match"},
+		{"the root package under a name a glob skips", []string{"."}, map[string]string{".tsv": ".\t1\n"}, true, "_root.tsv"},
+		{"a package under the name of another encoding", []string{"zzreview/collision"}, map[string]string{"zzreview_collision.tsv": "zzreview/collision\t2\n"}, true, "zzreview__collision.tsv"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := runWeightsCheckForPackages(t, c.packages, c.files)
+			out := got.stdout + got.stderr
+			if c.fail && got.code == 0 {
+				t.Fatalf("accepted:\n%s", out)
+			}
+			if !c.fail && got.code != 0 {
+				t.Fatalf("rejected (exit %d):\n%s", got.code, out)
+			}
+			if !strings.Contains(out, c.want) {
+				t.Errorf("output lacks %q:\n%s", c.want, out)
+			}
+		})
+	}
+}
+
+// TestRaceWeightsRowHasExactlyTwoColumns: package<TAB>seconds, nothing after the weight.
+func TestRaceWeightsRowHasExactlyTwoColumns(t *testing.T) {
+	for _, body := range []string{"internal/zzcols\t3\textra\n", "internal/zzcols\t3\t\n"} {
+		got := runWeightsCheckForPackages(t, []string{"internal/zzcols"}, map[string]string{"internal__zzcols.tsv": body})
+		out := got.stdout + got.stderr
+		if got.code == 0 {
+			t.Fatalf("row %q accepted:\n%s", body, out)
+		}
+		if !strings.Contains(out, "exactly two") {
+			t.Errorf("row %q: output lacks the two-column message:\n%s", body, out)
+		}
+	}
 }

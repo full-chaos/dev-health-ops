@@ -15,7 +15,7 @@
 // Data-layer note, ReplacingMergeTree reads (migrations 002/011 teams;
 // 000 repos; 055 work_item_user_metrics_daily; 096 user_metrics_daily and
 // work_item_state_durations_daily -- all confirmed against
-// src/dev_health_ops/migrations/clickhouse/*): the reference's own
+// internal/chmigrate/history/*): the reference's own
 // dedup_from()/teams-FINAL convention (clickhouse_dedup.py) already
 // applies FINAL to two of the three "teams" UNION branches (the teams
 // catalog itself and work_item_user_metrics_daily, both registered in

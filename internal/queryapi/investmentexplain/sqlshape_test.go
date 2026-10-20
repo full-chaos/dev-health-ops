@@ -20,7 +20,7 @@ var teamScopeAsOf = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 // TestOrgIDScopesEveryFixedReadAtTheSameNestingDepthAsFinal pins the
 // class ruling for the readers this package's sweep fixed:
 // repos and user_metrics_daily are both ReplacingMergeTree (repos since
-// migrations/clickhouse/000_raw_tables.sql + org_id via 024, sorting key
+// internal/chmigrate/history/000_raw_tables.sql + org_id via 024, sorting key
 // (org_id, id) since 027; user_metrics_daily's team_id column is not part
 // of its own sorting key since 096, so a raw read can surface a
 // re-attributed row's stale team_id until the next merge). Every read

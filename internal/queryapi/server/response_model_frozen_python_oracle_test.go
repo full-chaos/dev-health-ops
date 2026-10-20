@@ -142,6 +142,38 @@ func TestFilterOptionsResponseIsThePythonResponsePlusTeamNames(t *testing.T) {
 	}
 }
 
+// metaPythonResponse is the shape the frozen FastAPI model of /api/v1/meta has.
+// meta.Response has no version field: the route no longer serves the ClickHouse
+// server version, which the Python model did. The frozen program is not recorded
+// again, so the oracle still checks THAT shape.
+type metaPythonResponse struct {
+	Backend            string         `json:"backend"`
+	Version            string         `json:"version"`
+	LastIngestAt       *string        `json:"last_ingest_at"`
+	Coverage           map[string]any `json:"coverage"`
+	Limits             map[string]int `json:"limits"`
+	SupportedEndpoints []string       `json:"supported_endpoints"`
+}
+
+func TestMetaResponseIsThePythonResponseWithoutVersion(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type, skip string) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			if f.Name == skip {
+				continue
+			}
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := fieldsOf(reflect.TypeOf(metaPythonResponse{}), "Version")
+	if got := fieldsOf(reflect.TypeOf(meta.Response{}), ""); !reflect.DeepEqual(got, want) {
+		t.Errorf("meta.Response fields =\n %v\nwant the Python fields without version:\n %v", got, want)
+	}
+}
+
 // investmentPythonResponse is the shape the frozen FastAPI model of /api/v1/investment has.
 // investment.Response has two more fields since CHAOS-9622 (measure, denominator), which the Python model
 // never had; the frozen program is not recorded again, so the oracle still checks THAT shape, written by
@@ -839,7 +871,7 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	plain := func(response any) responseModelOracleRoute { return responseModelOracleRoute{response: response} }
 	sankeyRoute := plain((*sankey.Response)(nil))
 	return map[string]responseModelOracleRoute{
-		"GET /api/v1/meta":                                plain(meta.Response{}),
+		"GET /api/v1/meta":                                plain(metaPythonResponse{}),
 		"GET /api/v1/home":                                plain(homePythonResponse{}),
 		"POST /api/v1/home":                               plain(homePythonResponse{}),
 		"GET /api/v1/explain":                             plain((*explainPythonResponse)(nil)),

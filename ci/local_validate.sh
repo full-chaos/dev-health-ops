@@ -1642,7 +1642,7 @@ lock_probe_time() {
 }
 
 # Test-only harness hook (CHAOS-3403), same idea as ci/check_go.sh's narrow
-# "integration-coverage" verb (see internal/cigates/check_go_script_test.go):
+# "integration-coverage" verb (see internal/cigates/checkgo/check_go_script_test.go):
 # exercises the REAL acquire_lock/release_lock/reclaim_stale_lock functions above —
 # not a reimplementation — without paying for preflight, lint, mypy, ClickHouse, or
 # the unit suite, so a regression test can race the actual lock acquisition path

@@ -148,7 +148,10 @@ func TestNoPythonFilesUnderInternal(t *testing.T) {
 	}
 }
 
-var scriptPython = regexp.MustCompile(`(^|[^A-Za-z0-9_./-])(python3?|uv|pytest)([^A-Za-z0-9_.-]|$)`)
+// scriptPython finds a Python command word: python, python3, a versioned python3.12, uv or pytest, bare or behind a
+// path (/usr/bin/python3, .venv/bin/python, ./venv/bin/pytest) or `env`. Word boundaries are Unicode letters, numbers,
+// "_", "." and "-", so names like pythonista, épython3 or foo-pytest are not commands.
+var scriptPython = regexp.MustCompile(`(^|[^\p{L}\p{N}_.-])(?:[^\s'"\x60;|&<>()=]*/)?(python(?:3(?:\.[0-9]+)?)?|uv|pytest)([^\p{L}\p{N}_.-]|$)`)
 
 // shellPythonPending is the closed list of tracked shell scripts that still name Python, each owned by an open
 // change that removes it. An entry goes when its owner merges; a new entry needs a ruling.
@@ -160,7 +163,7 @@ var shellPythonPending = map[string]string{
 	"ci/bigboy/cut-contents.sh":          "#4565 ports its helpers to Go",
 	"ci/local_validate.sh":               "#4567 and the pytest/uv removal leaves",
 	"ci/run_live_backend_e2e.sh":         "#4564 (live-e2e installs no Python)",
-	"ci/run_tests.sh":                    "#4564 (live-e2e installs no Python)",
+	"ci/run_tests.sh":                    "CHAOS-10413 (strip its uv/pytest tiers)",
 }
 
 // shellPythonData reads testdata/shell_python_data_lines.tsv: lines that name Python as data and run none.
@@ -237,6 +240,33 @@ func TestNoShellScriptRunsPython(t *testing.T) {
 	for rel := range shellPythonPending {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Errorf("%s is on the pending list but is gone: remove the entry", rel)
+		}
+	}
+}
+
+func TestShellPythonPatternFindsInterpreterPaths(t *testing.T) {
+	for line, want := range map[string]bool{
+		"/usr/bin/python3 -c 'print(1)'": true,
+		".venv/bin/python x.py":          true,
+		"./venv/bin/pytest -q tests":     true,
+		"env python3 x.py":               true,
+		"/usr/bin/env python3 x.py":      true,
+		"python3.12 -m venv .v":          true,
+		"exec python \"$@\"":             true,
+		"uv run x":                       true,
+		"X=1 pytest -q":                  true,
+		"$(command -v python3) -V":       true,
+		"\u00a0python3 -V":               true,
+		"pythonista --version":           false,
+		"épython3 -V":                    false,
+		"foo-pytest":                     false,
+		"cp a.python b":                  false,
+		"echo uvx":                       false,
+		"python3x":                       false,
+		"run_python_like_tool":           false,
+	} {
+		if got := scriptPython.MatchString(line); got != want {
+			t.Errorf("scriptPython.MatchString(%q) = %v, want %v", line, got, want)
 		}
 	}
 }

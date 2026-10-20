@@ -140,8 +140,6 @@ FILES=(
   "${ROOT}/ci/auth_corpus_set_env.sh"
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
-  "${ROOT}/scripts/run_py_tool.sh"
-  "${ROOT}/tests/compatibility/provider/run.sh"
   "${ROOT}/.github/docs-legacy/examples/customer-push/generic-runner.sh"
 )
 

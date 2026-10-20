@@ -19,7 +19,7 @@
 # Reads: ROOT_DIR, BIN_DIR, TMP_DIR, POSTGRES_URI, CLICKHOUSE_URI_NATIVE,
 # E2E_ORG_ID, JWT_SECRET_KEY, QUERY_API_PORT, READINESS_ATTEMPTS,
 # READINESS_SLEEP_SECS, EXIT_FAILURE. Sets QUERY_API_PID (the caller declares
-# it and stops it with stop_service). Requires run_python and
+# it and stops it with stop_service). Requires the cigate binary in BIN_DIR and
 # wait_for_http_ready to be defined.
 #
 # CHAOS-6241: query_api_e2e_start/query_api_e2e_mint_envelope_token are also
@@ -39,42 +39,6 @@ GO_API_PROVE_E2E_DIR=""
 GO_API_PROVE_E2E_ENVELOPE_PEM=""
 GO_API_PROVE_E2E_JWKS=""
 
-# The fixture program that checks the migrated proof service principal row,
-# grants it an org membership, and then mutates it. The users row itself comes
-# from the application schema migration, never from this fixture. A shell string written to a file, not a here-document, for
-# the pipe-buffer reason run_live_backend_e2e.sh documents.
-GO_API_PROVE_E2E_PRINCIPAL_PROGRAM='import os, sys, uuid
-from datetime import datetime, timezone
-from sqlalchemy import create_engine, text
-
-action, principal_id = sys.argv[1], sys.argv[2]
-engine = create_engine(os.environ["POSTGRES_URI"].replace("+asyncpg", "", 1))
-now = datetime.now(timezone.utc)
-with engine.begin() as conn:
-    if action == "assert-migrated":
-        row = conn.execute(text(
-            "SELECT auth_provider, password_hash IS NULL, is_active, is_superuser, token_version,"
-            " (SELECT count(*) FROM memberships WHERE user_id = users.id)"
-            " FROM users WHERE id = :id"
-        ), {"id": principal_id}).one_or_none()
-        if row is None:
-            sys.exit("the migration did not create the proof service principal row")
-        if tuple(row) != ("service", True, True, False, 0, 0):
-            sys.exit("the migrated proof service principal row has an unexpected shape: " + repr(tuple(row)))
-    elif action == "grant-membership":
-        conn.execute(text(
-            "INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)"
-            " VALUES (:mid, :uid, :oid, :role, :now, :now) ON CONFLICT DO NOTHING"
-        ), {"mid": str(uuid.uuid4()), "uid": principal_id, "oid": os.environ["E2E_ORG_ID"], "role": "viewer", "now": now})
-    elif action == "bump-token-version":
-        conn.execute(text("UPDATE users SET token_version = token_version + 1 WHERE id = :id"), {"id": principal_id})
-    elif action == "deactivate":
-        conn.execute(text("UPDATE users SET is_active = false WHERE id = :id"), {"id": principal_id})
-    else:
-        sys.exit("unknown action " + action)
-engine.dispose()
-'
-
 go_api_prove_e2e_fail() {
   echo "ERROR: go-api-prove e2e: $1"
   exit "${EXIT_FAILURE}"
@@ -89,25 +53,8 @@ go_api_prove_e2e_pgx_uri() {
 # E2E_ORG_ID is a plain shell variable in the caller, not an exported one,
 # so it is handed to the program explicitly.
 go_api_prove_e2e_principal() {
-  E2E_ORG_ID="${E2E_ORG_ID}" run_python "${GO_API_PROVE_E2E_DIR}/principal.py" "$1" "${GO_API_PROVE_E2E_PRINCIPAL_ID}"
+  E2E_ORG_ID="${E2E_ORG_ID}" "${BIN_DIR}/cigate" live-e2e principal "$1" "${GO_API_PROVE_E2E_PRINCIPAL_ID}"
 }
-
-# The request the edge checks send: the measured operation's REGISTERED
-# document, from the same documents.json the prover reads, with the variables
-# its proof request carries (internal/goapiproof/operations.go). query-api's
-# /graphql serves registered documents only, so any other text (the old
-# `{ __typename }` probe) is a 404 whatever the token is.
-GO_API_PROVE_E2E_EDGE_REQUEST_PROGRAM='import json, sys
-
-documents, operation, org = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
-texts = [entry["document"] for entry in documents if entry["operation"] == operation]
-if len(texts) != 1:
-    sys.exit("documents.json does not carry exactly one document for " + operation)
-variables = {"featureFlags": {"orgId": org, "provider": None, "project": None, "includeArchived": False, "limit": 100}}
-if operation not in variables:
-    sys.exit("no request variables for " + operation)
-json.dump({"query": texts[0], "variables": variables[operation]}, sys.stdout)
-'
 
 # go_api_prove_e2e_edge_status TOKEN_FILE -- prints the HTTP status query-api's
 # /graphql answers the registered document with, and leaves the response body
@@ -260,15 +207,13 @@ go_api_prove_e2e_assert_run() {
 run_go_api_prove_e2e() {
   local dir commit prove_log rc status
   dir="${GO_API_PROVE_E2E_DIR}"
-  printf '%s' "${GO_API_PROVE_E2E_PRINCIPAL_PROGRAM}" > "${dir}/principal.py"
-  printf '%s' "${GO_API_PROVE_E2E_EDGE_REQUEST_PROGRAM}" > "${dir}/edge-request.py"
 
   # dho (goapi prove, mint edge-token) is already built, by
   # query_api_e2e_start -- nothing to build here.
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
   go run -trimpath ./cmd/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
 
-  run_python "${dir}/edge-request.py" "${dir}/documents.json" "${GO_API_PROVE_E2E_OPERATION}" "${E2E_ORG_ID}" > "${dir}/edge-request.json" \
+  "${BIN_DIR}/cigate" live-e2e edge-request "${dir}/documents.json" "${GO_API_PROVE_E2E_OPERATION}" "${E2E_ORG_ID}" > "${dir}/edge-request.json" \
     || go_api_prove_e2e_fail "could not build the registered ${GO_API_PROVE_E2E_OPERATION} request"
 
   echo "==> [go-api-prove e2e] the migration created the proof service principal, with no membership"

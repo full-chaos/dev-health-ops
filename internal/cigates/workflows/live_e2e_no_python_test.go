@@ -14,9 +14,9 @@ import (
 // trigger on Python-only files.
 
 var (
-	pythonUseRe       = regexp.MustCompile(`\bpython3?\b|\brun_python\b|PY_PROG|py_program|\.py\b|\buv\b|\bpipx?3?\b|\.venv|PYTHONPATH|UV_`)
-	pythonOnlyFilters = []string{"pyproject.toml", "requirements.txt", "uv.lock", "pytest.ini", "alembic.ini", "Makefile"}
-	liveE2EScripts    = []string{
+	pythonUseRe      = regexp.MustCompile(`\bpython3?\b|\brun_python\b|PY_PROG|py_program|\.py\b|\buv\b|\bpipx?3?\b|\.venv|PYTHONPATH|UV_`)
+	pythonOnlyFilter = regexp.MustCompile(`^(pyproject\.toml|requirements.*\.txt|uv\.lock|pytest\.ini|alembic\.ini|Makefile|tests/.*)$`)
+	liveE2EScripts   = []string{
 		"ci/run_live_backend_e2e.sh",
 		"ci/run_metrics_executed_proof.sh",
 		"ci/lib/go_worker_fixture.sh",
@@ -79,8 +79,8 @@ func liveE2ENoPythonViolations(t *testing.T, root string) []string {
 			}
 		}
 	}
-	for _, p := range pythonOnlyFilters {
-		if listed[p] {
+	for p := range listed {
+		if pythonOnlyFilter.MatchString(p) {
 			out = append(out, fmt.Sprintf("the live-e2e path filter lists %s, a Python-only file nothing in the jobs reads", p))
 		}
 	}
@@ -108,4 +108,40 @@ func functionBody(script, name string) string {
 
 func TestLiveE2EInstallsNoPython(t *testing.T) {
 	expectNoViolations(t, liveE2ENoPythonViolations(t, repoRoot(t)))
+}
+
+func TestLiveE2ENoPythonPlantedDefects(t *testing.T) {
+	root := repoRoot(t)
+	const wf = ".github/workflows/live-e2e.yml"
+	const live = "ci/run_live_backend_e2e.sh"
+	const prove = "ci/lib/go_api_prove_e2e.sh"
+	const runTests = "ci/run_tests.sh"
+	files := append([]string{wf, runTests}, liveE2EScripts...)
+	cases := []struct {
+		name string
+		muts []mutation
+		want []string
+	}{
+		{"a setup-uv step returns", []mutation{{wf, "      - name: Run live-e2e tier\n", "      - name: Install uv\n        uses: astral-sh/setup-uv@v1\n\n      - name: Run live-e2e tier\n"}}, []string{"sets up a Python toolchain"}},
+		{"a setup-python step returns", []mutation{{wf, "      - name: Run live-e2e tier\n", "      - name: Python\n        uses: actions/setup-python@v6\n\n      - name: Run live-e2e tier\n"}}, []string{"sets up a Python toolchain"}},
+		{"a run step syncs the venv", []mutation{{wf, "          chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh\n", "          uv sync --frozen\n          chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh\n"}}, []string{"runs Python tooling"}},
+		{"a run step puts the venv on the path", []mutation{{wf, "          chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh\n", "          echo \"$PWD/.venv/bin\" >> \"$GITHUB_PATH\"\n          chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh\n"}}, []string{"runs Python tooling"}},
+		{"the live runner calls python3", []mutation{{live, `"${BIN_DIR}/cigate" live-e2e assert-health "${HEALTH_FILE}"`, `python3 assert_health.py "${HEALTH_FILE}"`}}, []string{live + " starts or prepares Python"}},
+		{"the live runner sets PYTHONPATH", []mutation{{live, "require_cmd curl\n", "require_cmd curl\nexport PYTHONPATH=src\n"}}, []string{live + " starts or prepares Python"}},
+		{"the prove helper calls run_python", []mutation{{prove, `"${BIN_DIR}/cigate" live-e2e principal "$1"`, `run_python principal.py "$1"`}}, []string{prove + " starts or prepares Python"}},
+		{"the metrics runner calls python3", []mutation{{"ci/run_metrics_executed_proof.sh", "require_cmd jq\n", "require_cmd jq\npython3 -c 'print(1)'\n"}}, []string{"ci/run_metrics_executed_proof.sh starts or prepares Python"}},
+		{"the live tier function calls python", []mutation{{runTests, `run_step "live backend e2e" bash ./ci/run_live_backend_e2e.sh`, `run_step "live backend e2e" python3 ci/live.py`}}, []string{"live_e2e_tests uses Python"}},
+		{"the path filter lists uv.lock again", []mutation{{wf, "              - 'ci/**'\n", "              - 'ci/**'\n              - 'uv.lock'\n"}}, []string{"lists uv.lock"}},
+		{"the path filter drops cmd/**", []mutation{{wf, "              - 'cmd/**'\n", ""}}, []string{"must list cmd/**"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tree := plantTree(t, root, files, c.muts...)
+			expectViolation(t, liveE2ENoPythonViolations(t, tree), c.want...)
+		})
+	}
+	t.Run("a comment that names uv is not a violation", func(t *testing.T) {
+		tree := plantTree(t, root, files, mutation{live, "require_cmd curl\n", "require_cmd curl\n# no python3 and no uv here\n"})
+		expectNoViolations(t, liveE2ENoPythonViolations(t, tree))
+	})
 }

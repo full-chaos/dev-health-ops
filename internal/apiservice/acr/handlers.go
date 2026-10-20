@@ -51,11 +51,6 @@ type Deps struct {
 	// rate limit.
 	Auth    CredentialStore
 	Limiter *httpapi.KeyedLimiter
-	// CategorizeLLMConfig and WorkerCredentials serve the worker llm-config
-	// route: the org's resolved categorize config for the heavy worker, which
-	// does not hold the settings encryption key. Either nil makes it answer 503.
-	CategorizeLLMConfig LLMConfigSource
-	WorkerCredentials   CredentialVerifier
 }
 
 // Routes is the acr area's route set. Every path is internal and checks its
@@ -81,10 +76,6 @@ func Routes(deps Deps) []httpapi.Route {
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/orgs/{org_id}/llm-config",
 			Handler: llmConfigHandler(deps.Credentials, deps.LLMConfig, logger),
-		},
-		{
-			Method: http.MethodGet, Pattern: "/api/v1/internal/workers/orgs/{org_id}/llm-config/categorize",
-			Handler: llmConfigHandler(deps.WorkerCredentials, deps.CategorizeLLMConfig, logger),
 		},
 	}
 }

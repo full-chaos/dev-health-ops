@@ -45,7 +45,7 @@ func TestVariantCSurvivesOnlyWhenThisWriterGoesLast(t *testing.T) {
 	defer conn.Close()
 
 	// The REAL migration chain, not a transcription. `chschema.Apply` shells out
-	// to the repo's Python and runs `migrations/clickhouse/` in order, so the
+	// to the repo's Python and runs `internal/chmigrate/history/` in order, so the
 	// table under test is the production table -- including every ALTER that
 	// followed 014_work_graph.sql.
 	//

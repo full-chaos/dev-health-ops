@@ -52,7 +52,7 @@ import (
 //
 // Hand-written DDL is a second copy of the schema, and a second copy is exactly
 // what this file exists to disprove the existence of: if the DDL here drifted
-// from migrations/clickhouse/, the test would keep passing against a schema
+// from internal/chmigrate/history/, the test would keep passing against a schema
 // production does not have.
 func migratedClickHouse(ctx context.Context, t *testing.T) (*containers.Instance, *dhclickhouse.Client, stdclickhouse.Conn) {
 	t.Helper()

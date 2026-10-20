@@ -134,13 +134,17 @@ func TestValidConfidenceAcceptsArbitraryPrecisionBandMixIntegers(t *testing.T) {
 		t.Fatalf("status = %s, want %s (a 1000-digit non-negative band_mix count is valid Python input)", result.Status, ParseStatusValid)
 	}
 
-	// The discriminating half: a NEGATIVE huge integer must still be
-	// rejected -- proves the fix checks the sign, not just "parses as an
-	// integer."
+	if result.ConfidenceIgnored.Rule != "" {
+		t.Fatalf("ConfidenceIgnored = %+v, want none for a valid count", result.ConfidenceIgnored)
+	}
+
+	// The discriminating half: a NEGATIVE huge integer must still break the
+	// rule -- proves the check reads the sign, not just "parses as an
+	// integer." The answer is kept (the model confidence is not served).
 	negativeText := `{"summary": "A minimal valid summary.", "top_findings": [], "confidence": {"level": "moderate", "quality_mean": null, "quality_stddev": null, "band_mix": {"high": -` +
 		huge + `, "moderate": 0, "low": 0, "very_low": 0, "unknown": 0}, "drivers": []}, "what_to_check_next": [], "anti_claims": []}`
 	negativeResult := ParseInvestmentMixResponse(negativeText, ParseOptions{FallbackLevel: "moderate"})
-	if negativeResult.Status != ParseStatusInvalidLLMOutput {
-		t.Fatalf("negative status = %s, want %s", negativeResult.Status, ParseStatusInvalidLLMOutput)
+	if negativeResult.Status != ParseStatusValid || negativeResult.ConfidenceIgnored.Rule != "confidence_band_mix_value_invalid" || negativeResult.ConfidenceIgnored.Path != "confidence.band_mix.high" {
+		t.Fatalf("negative status = %s ConfidenceIgnored = %+v, want valid with confidence_band_mix_value_invalid at confidence.band_mix.high", negativeResult.Status, negativeResult.ConfidenceIgnored)
 	}
 }

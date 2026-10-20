@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -302,7 +303,8 @@ func RateLimit(limiter *Bucket) func(http.Handler) http.Handler {
 func RateLimitWith(limiter *Bucket, write ErrorWriter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if limiter != nil && !limiter.Allow() {
+			if ok, wait := limiter.take(); !ok {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(wait)))
 				write(w, r, CodeRateLimited)
 				return
 			}
@@ -358,8 +360,15 @@ func NewBucket(perSecond float64, burst int, now func() time.Time) *Bucket {
 // values carry one, so this is a guard against the cases where it cannot,
 // not a claim that wall-clock jumps are the normal path.
 func (b *Bucket) Allow() bool {
+	ok, _ := b.take()
+	return ok
+}
+
+// take spends a token when one is there; otherwise it reports how long until
+// the next one is.
+func (b *Bucket) take() (bool, time.Duration) {
 	if b == nil {
-		return true
+		return true, 0
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -373,10 +382,20 @@ func (b *Bucket) Allow() bool {
 		b.last = now
 	}
 	if b.tokens < 1 {
-		return false
+		return false, time.Duration((1 - b.tokens) / b.perSecond * float64(time.Second))
 	}
 	b.tokens--
-	return true
+	return true, 0
+}
+
+// retryAfterSeconds is a Retry-After value for wait: whole seconds, rounded
+// up, at least 1.
+func retryAfterSeconds(wait time.Duration) int {
+	seconds := int(math.Ceil(wait.Seconds()))
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }
 
 // statusRecorder tracks whether a status line has been committed, so Recover

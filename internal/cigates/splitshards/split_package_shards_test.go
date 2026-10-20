@@ -63,14 +63,14 @@ func runLines(stdout, prefix string) []string {
 func TestEveryTestRunsInExactlyOneSplitPackageShard(t *testing.T) {
 	root := rootOf(t)
 	for _, c := range []struct{ name, manifest, prefix, pkg string }{
-		{"daily", "go_daily_test_shards.tsv", "  DAILY-TEST-RUN ", "internal/jobs/metrics/daily"},
-		{"workerservice", "go_workerservice_test_shards.tsv", "  WORKERSERVICE-TEST-RUN ", "internal/workerservice"},
-		{"queryapiserver", "go_queryapi_server_test_shards.tsv", "  QAPISERVER-TEST-RUN ", "internal/queryapi/server"},
-		{"remaining", "go_remaining_test_shards.tsv", "  REMAINING-TEST-RUN ", "internal/jobs/metrics/remaining"},
+		{"daily", "ci/go_daily_test_shards.tsv", "  DAILY-TEST-RUN ", "internal/jobs/metrics/daily"},
+		{"workerservice", "ci/go_workerservice_test_shards.tsv", "  WORKERSERVICE-TEST-RUN ", "internal/workerservice"},
+		{"queryapiserver", "ci/go_queryapi_server_test_shards.tsv", "  QAPISERVER-TEST-RUN ", "internal/queryapi/server"},
+		{"remaining", "ci/go_remaining_test_shards.tsv", "  REMAINING-TEST-RUN ", "internal/jobs/metrics/remaining"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var selected []string
-			for shard := 1; shard <= shardsOf(t, filepath.Join(root, "ci", c.manifest)); shard++ {
+			for shard := 1; shard <= shardsOf(t, filepath.Join(root, c.manifest)); shard++ {
 				r := dryRun(t, root, c.name, shard)
 				if r.code != 0 || !strings.Contains(r.stdout, fmt.Sprintf("%s test shard %d: DRY RUN", c.name, shard)) {
 					t.Fatalf("shard %d: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)

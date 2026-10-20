@@ -145,10 +145,10 @@ func (v *vtree) run(script string, env []string, verb ...string) cmdResult {
 		v.t.Fatal(err)
 	}
 	e := inheritedEnv(nil, append([]string{"TMPDIR=" + tmp, "DEV_HEALTH_GO_CACHE=" + filepath.Join(tmp, "gocache")}, env...)...)
-	return cmdSpec{dir: v.dir, env: e}.run("bash", append([]string{filepath.Join(v.dir, "ci", script)}, verb...)...)
+	return cmdSpec{dir: v.dir, env: e}.run("bash", append([]string{filepath.Join(v.dir, script)}, verb...)...)
 }
 
-func (v *vtree) check() cmdResult { return v.run("check_venue_oracle_registry.sh", nil) }
+func (v *vtree) check() cmdResult { return v.run("ci/check_venue_oracle_registry.sh", nil) }
 
 func venueFails(t *testing.T, r cmdResult, needles ...string) {
 	t.Helper()
@@ -330,7 +330,7 @@ func (v *vtree) verb(skipProof string) (cmdResult, []string) {
 			v.t.Fatal(err)
 		}
 	}
-	r := v.run("check_go.sh", []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_GO_LOG=" + log, "FAKE_GOROOT=" + goroot, "FAKE_GO_SKIP_PROOF=" + skipProof}, "venue-oracles")
+	r := v.run("ci/check_go.sh", []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_GO_LOG=" + log, "FAKE_GOROOT=" + goroot, "FAKE_GO_SKIP_PROOF=" + skipProof}, "venue-oracles")
 	var calls []string
 	for _, l := range strings.Split(strings.TrimRight(readText(v.t, log), "\n"), "\n") {
 		if l != "" {

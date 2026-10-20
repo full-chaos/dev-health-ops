@@ -60,6 +60,9 @@ type Deps struct {
 	Now           func() time.Time
 	NewUUID       func() uuid.UUID
 	Logger        *slog.Logger
+	// Inner, when set, replaces each route's innermost handler; the guard,
+	// validator and rate limiter in front of it stay. nil serves local.
+	Inner func(pattern string, local http.Handler) http.Handler
 }
 
 type handlers struct {
@@ -119,33 +122,39 @@ func Routes(deps Deps) []httpapi.Route {
 		changePasswordLimiter: httpapi.NewKeyedLimiter(defaults.Limits, changePasswordLimit),
 	}
 	guard := h.Guard
+	inner := func(pattern string, local http.HandlerFunc) http.Handler {
+		if defaults.Inner == nil {
+			return local
+		}
+		return defaults.Inner(pattern, local)
+	}
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/login", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateLogin, h.loginLimiter, forwardedIPKey, h.Write)(http.HandlerFunc(h.login)))},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/social-login", Handler: guard.BodyFirst(policy.Public, http.HandlerFunc(h.socialLogin))},
+			httpapi.ValidateThenLimit(validateLogin, h.loginLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/login", h.login)))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/social-login", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/social-login", h.socialLogin))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/refresh", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(http.HandlerFunc(h.refresh)))},
-		{Method: http.MethodGet, Pattern: "/api/v1/auth/me", Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.me))},
-		{Method: http.MethodGet, Pattern: "/api/v1/auth/me/organizations", Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.myOrganizations))},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/switch-org", Handler: guard.BodyFirst(policy.Authenticated, http.HandlerFunc(h.switchOrg))},
+			httpapi.ValidateThenLimit(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/refresh", h.refresh)))},
+		{Method: http.MethodGet, Pattern: "/api/v1/auth/me", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me", h.me))},
+		{Method: http.MethodGet, Pattern: "/api/v1/auth/me/organizations", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me/organizations", h.myOrganizations))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/switch-org", Handler: guard.BodyFirst(policy.Authenticated, inner("/api/v1/auth/switch-org", h.switchOrg))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/validate", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(h.validateTokenBody, h.validateLimiter, validateLimitKey, h.Write)(http.HandlerFunc(h.validate)))},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/logout", Handler: guard.BodyFirst(policy.Public, http.HandlerFunc(h.logout))},
+			httpapi.ValidateThenLimit(h.validateTokenBody, h.validateLimiter, validateLimitKey, h.Write)(inner("/api/v1/auth/validate", h.validate)))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/logout", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/logout", h.logout))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/register", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateRegister, h.registerLimiter, forwardedIPKey, h.Write)(http.HandlerFunc(h.register)))},
+			httpapi.ValidateThenLimit(validateRegister, h.registerLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/register", h.register)))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/verify", Handler: guard.Wrap(policy.Public,
-			httpapi.ValidateThenLimit(validateVerify, h.verifyLimiter, queryAuthKey, h.Write)(http.HandlerFunc(h.verify)))},
+			httpapi.ValidateThenLimit(validateVerify, h.verifyLimiter, queryAuthKey, h.Write)(inner("/api/v1/auth/verify", h.verify)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/resend-verification", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateEmailBody, h.resendLimiter, bodyAuthKey, h.Write)(http.HandlerFunc(h.resendVerification)))},
+			httpapi.ValidateThenLimit(validateEmailBody, h.resendLimiter, bodyAuthKey, h.Write)(inner("/api/v1/auth/resend-verification", h.resendVerification)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/forgot-password", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateEmailBody, h.forgotLimiter, bodyAuthKey, h.Write)(http.HandlerFunc(h.forgotPassword)))},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/reset-password", Handler: guard.BodyFirst(policy.Public, http.HandlerFunc(h.resetPassword))},
+			httpapi.ValidateThenLimit(validateEmailBody, h.forgotLimiter, bodyAuthKey, h.Write)(inner("/api/v1/auth/forgot-password", h.forgotPassword)))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/reset-password", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/reset-password", h.resetPassword))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/change-password", Handler: guard.BodyFirst(policy.Authenticated,
-			httpapi.ValidateThenLimit(validateChangePassword, h.changePasswordLimiter, changePasswordKey, h.Write)(http.HandlerFunc(h.changePassword)))},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/accept-invite", Handler: guard.BodyFirst(policy.Authenticated, http.HandlerFunc(h.acceptInviteRoute))},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/onboard", Handler: guard.BodyFirst(policy.Authenticated, http.HandlerFunc(h.onboard))},
-		{Method: http.MethodGet, Pattern: "/api/v1/auth/onboarding/state", Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.onboardingStateRoute))},
-		{Method: http.MethodPost, Pattern: "/api/v1/auth/onboarding/skip-integration", Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.skipIntegration))},
+			httpapi.ValidateThenLimit(validateChangePassword, h.changePasswordLimiter, changePasswordKey, h.Write)(inner("/api/v1/auth/change-password", h.changePassword)))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/accept-invite", Handler: guard.BodyFirst(policy.Authenticated, inner("/api/v1/auth/accept-invite", h.acceptInviteRoute))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/onboard", Handler: guard.BodyFirst(policy.Authenticated, inner("/api/v1/auth/onboard", h.onboard))},
+		{Method: http.MethodGet, Pattern: "/api/v1/auth/onboarding/state", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/onboarding/state", h.onboardingStateRoute))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/onboarding/skip-integration", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/onboarding/skip-integration", h.skipIntegration))},
 	}
 }
 

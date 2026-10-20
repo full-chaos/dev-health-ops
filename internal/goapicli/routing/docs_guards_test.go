@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Go port of ci/check_go_api_routing_digest.py, tests/test_go_api_routing_digest_checker.py and
@@ -39,7 +41,61 @@ func leadingFence(stripped string) (byte, int, string) {
 	return 0, 0, ""
 }
 
-var tableSeparator = regexp.MustCompile(`^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$`)
+// Python's re treats Unicode whitespace as \s and Unicode letters and digits as \w and \b; Go's classes are ASCII only. uniWS is
+// \s as Python reads it, and wordRune/boundary stand in for \w and \b, so a non-breaking space, an accented letter or a
+// non-ASCII digit in a doc or in Go source is read the way the replaced Python checkers read it.
+const (
+	uniWS    = `[\s\p{Z}\x{85}]`
+	uniNotWS = `[^\s\p{Z}\x{85}]`
+)
+
+// pyStrip is Python's str.strip(): Unicode whitespace as unicode.IsSpace reads it plus the four control separators
+// U+001C to U+001F, which str.isspace counts and Go's unicode.IsSpace does not.
+func pyStrip(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) })
+}
+
+func pyRStrip(s string) string {
+	return strings.TrimRightFunc(s, func(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) })
+}
+
+// pySplitLines is Python's str.splitlines(): it also breaks at \r, \v, \f, U+001C to U+001E, U+0085, U+2028 and U+2029, and
+// drops the final empty piece after a trailing break.
+func pySplitLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch r {
+		case '\n', '\r', '\v', '\f', 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029:
+			out = append(out, s[start:i])
+			if r == '\r' && i+1 < len(s) && s[i+1] == '\n' {
+				size++
+			}
+			start = i + size
+		}
+		i += size
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
+func wordRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) }
+
+// wordBefore and wordAfter report whether the rune just before or after a byte offset is a word rune.
+func wordBefore(s string, i int) bool {
+	r, _ := utf8.DecodeLastRuneInString(s[:i])
+	return i > 0 && wordRune(r)
+}
+
+func wordAfter(s string, i int) bool {
+	r, _ := utf8.DecodeRuneInString(s[i:])
+	return i < len(s) && wordRune(r)
+}
+
+var tableSeparator = regexp.MustCompile(`^\|?` + uniWS + `*:?-+:?` + uniWS + `*(?:\|` + uniWS + `*:?-+:?` + uniWS + `*)*\|?$`)
 
 // digestInHistoryRow is true iff the digest appears in a four-cell table row of THIS section: not in a fenced block (tracked
 // by character and run length so nested fences cannot smuggle an example row), not after the next heading, not a stub row.
@@ -48,9 +104,9 @@ func digestInHistoryRow(section, digest string) bool {
 	fenceLen := 0
 	tableActive := false
 	prevPipeLine := false
-	for _, line := range strings.Split(section, "\n") {
-		stripped := strings.TrimSpace(line)
-		if c, n, rest := leadingFence(stripped); c != 0 && (fenceChar == 0 || (c == fenceChar && n >= fenceLen && strings.TrimSpace(rest) == "")) {
+	for _, line := range pySplitLines(section) {
+		stripped := pyStrip(line)
+		if c, n, rest := leadingFence(stripped); c != 0 && (fenceChar == 0 || (c == fenceChar && n >= fenceLen && pyStrip(rest) == "")) {
 			if fenceChar == 0 {
 				fenceChar, fenceLen = c, n
 			} else {
@@ -76,7 +132,7 @@ func digestInHistoryRow(section, digest string) bool {
 			if len(cells) >= 4 {
 				filled := true
 				for _, cell := range cells[:4] {
-					if strings.TrimSpace(cell) == "" {
+					if pyStrip(cell) == "" {
 						filled = false
 					}
 				}
@@ -187,6 +243,10 @@ func TestSchemaDigestGatePlantedDefects(t *testing.T) {
 		{"a lone pipe row without a header and separator does not count", sdl, d, row, "not a row"},
 		{"a fence line followed by text does not close the block", sdl, d, "~~~\nexample\n~~~this is content\n" + hdr + sep + row, "not a row"},
 		{"a header and separator make the row count", sdl, d, hdr + sep + row, ""},
+		{"separator cells padded with U+00A0 make a table", sdl, d, hdr + "|\u00a0---\u00a0|\u00a0---\u00a0|\u00a0---\u00a0|\u00a0---\u00a0|\n" + row, ""},
+		{"a row whose other cells hold only U+00A0 is a stub", sdl, d, hdr + sep + "| " + d + " | \u00a0 | \u00a0 | \u00a0 |\n", "not a row"},
+		{"a cell holding only U+001C is empty as Python strip reads it", sdl, d, hdr + sep + "| " + d + " | \x1c | \x1f | note |\n", "not a row"},
+		{"non-ASCII text in the cells is a real row", sdl, d, hdr + sep + "| " + d + " | café | \u0663 | note |\n", ""},
 		{"single-hyphen separator cells make a real table", sdl, d, hdr + "|-|-|-|-|\n" + row, ""},
 		{"a whole table inside a fence does not count", sdl, d, "```\n" + hdr + sep + row + "```\n", "not a row"},
 		{"row after the next heading does not count", sdl, d, "## Later\n" + hdr + sep + row, "not a row"},
@@ -211,12 +271,21 @@ func TestSchemaDigestGatePlantedDefects(t *testing.T) {
 }
 
 var (
-	enableFlagDefinition = regexp.MustCompile(`\.(?:String|Bool|Int|Duration)Var\(&[\w.]+,\s*"([a-z][a-z-]*)"`)
-	enableCommand        = regexp.MustCompile(`^\s*["']?\s*(?:\$\s+)?(?:[A-Z_]+=\S+\s+)*(?:SDL:\s+)?(dho goapi routing enable\b)`)
+	enableFlagDefinition = regexp.MustCompile(`\.(?:String|Bool|Int|Duration)Var\(&[\p{L}\p{N}_.]+,` + uniWS + `*"([a-z][a-z-]*)"`)
+	enableCommand        = regexp.MustCompile(`^` + uniWS + `*["']?` + uniWS + `*(?:\$` + uniWS + `+)?(?:[A-Z_]+=` + uniNotWS + `+` + uniWS + `+)*(?:SDL:` + uniWS + `+)?(dho goapi routing enable)`)
 	booleanFlags         = map[string]bool{"dry-run": true}
-	shorthandVerb        = regexp.MustCompile("(?i)(?:`|\\b(?:run|use|call|execute|invoke|type|try)\\s+)routing (?:enable|disable|repoint|carry|status)\\b")
-	staleFullName        = regexp.MustCompile(`go-api-routing (?:enable|disable|repoint|carry|status)\b`)
+	shorthandVerb        = regexp.MustCompile(`routing (?:enable|disable|repoint|carry|status)`)
+	staleFullName        = regexp.MustCompile(`go-api-routing (?:enable|disable|repoint|carry|status)`)
+	imperativeWords      = map[string]bool{"run": true, "use": true, "call": true, "execute": true, "invoke": true, "type": true, "try": true}
 )
+
+func flagNames(source string) []string {
+	var out []string
+	for _, m := range enableFlagDefinition.FindAllStringSubmatch(source, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
 
 func definedFlags(root string) (map[string]bool, error) {
 	flags := map[string]bool{}
@@ -225,8 +294,8 @@ func definedFlags(root string) (map[string]bool, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, m := range enableFlagDefinition.FindAllStringSubmatch(string(raw), -1) {
-			flags[m[1]] = true
+		for _, name := range flagNames(string(raw)) {
+			flags[name] = true
 		}
 	}
 	return flags, nil
@@ -234,68 +303,105 @@ func definedFlags(root string) (map[string]bool, error) {
 
 // enableCommands returns each `dho goapi routing enable` invocation with its continuation lines joined.
 func enableCommands(text string) []string {
-	lines := strings.Split(text, "\n")
+	lines := pySplitLines(text)
 	var found []string
 	for i, line := range lines {
 		loc := enableCommand.FindStringSubmatchIndex(line)
-		if loc == nil {
+		if loc == nil || wordAfter(line, loc[3]) {
 			continue
 		}
 		command := line[loc[2]:]
 		cursor := i
-		for strings.HasSuffix(strings.TrimRight(command, " \t"), "\\") && cursor+1 < len(lines) {
+		for strings.HasSuffix(pyRStrip(command), "\\") && cursor+1 < len(lines) {
 			cursor++
-			command = strings.TrimSuffix(strings.TrimRight(command, " \t"), "\\") + " " + strings.TrimSpace(lines[cursor])
+			command = strings.TrimSuffix(pyRStrip(command), "\\") + " " + pyStrip(lines[cursor])
 		}
 		found = append(found, command)
 	}
 	return found
 }
 
-// shellSplit splits on unquoted whitespace and removes single and double quotes: enough for the commands in the docs.
-func shellSplit(s string) []string {
+// shellSplit is Python's shlex.split in POSIX mode: whitespace is space, tab, CR and LF only; a backslash outside quotes escapes
+// the next character; single quotes are literal; inside double quotes a backslash escapes only a double quote or a backslash;
+// an unterminated quote or a trailing backslash is an error (shlex raises ValueError).
+func shellSplit(s string) ([]string, error) {
 	var out []string
 	var cur strings.Builder
-	var quote byte
 	started := false
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		switch {
-		case quote != 0:
-			if c == quote {
-				quote = 0
-			} else {
-				cur.WriteByte(c)
-			}
-		case c == '\'' || c == '"':
-			quote, started = c, true
-		case c == ' ' || c == '\t' || c == '\n':
-			if started || cur.Len() > 0 {
+		switch c {
+		case ' ', '\t', '\r', '\n':
+			if started {
 				out = append(out, cur.String())
 				cur.Reset()
 				started = false
+			}
+		case '\\':
+			if i+1 >= len(s) {
+				return nil, fmt.Errorf("no escaped character")
+			}
+			i++
+			cur.WriteByte(s[i])
+			started = true
+		case '\'':
+			end := strings.IndexByte(s[i+1:], '\'')
+			if end < 0 {
+				return nil, fmt.Errorf("no closing quotation")
+			}
+			cur.WriteString(s[i+1 : i+1+end])
+			i += end + 1
+			started = true
+		case '"':
+			started = true
+			i++
+			closed := false
+			for ; i < len(s); i++ {
+				if s[i] == '"' {
+					closed = true
+					break
+				}
+				if s[i] == '\\' && i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\\') {
+					i++
+				}
+				cur.WriteByte(s[i])
+			}
+			if !closed {
+				return nil, fmt.Errorf("no closing quotation")
 			}
 		default:
 			cur.WriteByte(c)
 			started = true
 		}
 	}
-	if started || cur.Len() > 0 {
+	if started {
 		out = append(out, cur.String())
 	}
-	return out
+	return out, nil
 }
 
 // commandProblems returns the undefined flags and stray words of one enable command. `enable` takes no positional operand:
 // operations are ONE comma-separated -operations value and Go's flag parser stops at the first stray word.
 func commandProblems(command string, defined map[string]bool) []string {
 	text := strings.ReplaceAll(strings.ReplaceAll(command, "\\n\"", " "), "\"\n", " ")
-	tokens := shellSplit(text)
+	tokens, err := shellSplit(text)
+	if err != nil {
+		return []string{"unparseable command: " + err.Error()}
+	}
 	if len(tokens) < 4 {
 		return nil
 	}
 	tokens = tokens[4:]
 	var problems []string
+	// Every token that starts with a dash must name a defined flag, wherever it sits (the Python checker read them all).
+	for _, token := range tokens {
+		if strings.HasPrefix(token, "-") {
+			name, _, _ := strings.Cut(strings.TrimLeft(token, "-"), "=")
+			if !defined[name] {
+				problems = append(problems, "undefined flag "+name)
+			}
+		}
+	}
 	for i := 0; i < len(tokens); {
 		token := tokens[i]
 		if !strings.HasPrefix(token, "-") {
@@ -304,9 +410,6 @@ func commandProblems(command string, defined map[string]bool) []string {
 			continue
 		}
 		name, _, hasValue := strings.Cut(strings.TrimLeft(token, "-"), "=")
-		if !defined[name] {
-			problems = append(problems, "undefined flag "+name)
-		}
 		if hasValue || booleanFlags[name] {
 			i++
 		} else {
@@ -368,7 +471,7 @@ func TestEveryEnableCommandUsesOnlyFlagsTheVerbDefines(t *testing.T) {
 }
 
 func TestEnableCommandScanPlantedDefects(t *testing.T) {
-	defined := map[string]bool{"operations": true, "mode": true, "dry-run": true}
+	defined := map[string]bool{"operations": true, "mode": true, "dry-run": true, "recorded-by": true}
 	cases := []struct {
 		name, command string
 		want          int
@@ -377,6 +480,10 @@ func TestEnableCommandScanPlantedDefects(t *testing.T) {
 		{"undefined flag", "dho goapi routing enable --apply", 1},
 		{"stray operand", "dho goapi routing enable -operations a b", 1},
 		{"equals form is one token", "dho goapi routing enable --mode=on", 0},
+		{"an undefined flag in a value position is still undefined", "dho goapi routing enable -operations --apply", 1},
+		{"a backslash-escaped space is one argument", "dho goapi routing enable -operations a -mode on -recorded-by Jane\\ Doe", 0},
+		{"a quoted argument is one argument", "dho goapi routing enable -operations 'a b' --mode \"on now\"", 0},
+		{"an unterminated quote is refused", "dho goapi routing enable -operations 'a", 1},
 	}
 	for _, tc := range cases {
 		if got := commandProblems(tc.command, defined); len(got) != tc.want {
@@ -388,6 +495,24 @@ func TestEnableCommandScanPlantedDefects(t *testing.T) {
 	}
 	if got := enableCommands("  $ SDL=x dho goapi routing enable -operations a\n"); len(got) != 1 {
 		t.Fatalf("a shell-prompted command with an env prefix was not extracted: %q", got)
+	}
+	if got := enableCommands("dho goapi routing enable\u0663 --apply\n"); len(got) != 0 {
+		t.Fatalf("a non-ASCII digit right after the verb is not a word boundary (Python \\b): %q", got)
+	}
+	if got := enableCommands("dho goapi routing enable\u00e9 --apply\n"); len(got) != 0 {
+		t.Fatalf("a non-ASCII letter right after the verb is not a word boundary (Python \\b): %q", got)
+	}
+	if got := pySplitLines("a\u2028b\fc\r\nd\n"); strings.Join(got, "|") != "a|b|c|d" {
+		t.Fatalf("pySplitLines differs from Python str.splitlines: %q", got)
+	}
+	if got := enableCommands("dho goapi routing enable --apply\u2028dho goapi routing enable --mode on\n"); len(got) != 2 {
+		t.Fatalf("a U+2028 line break splits two commands (Python splitlines): %q", got)
+	}
+	if got := enableCommands("$\u00a0dho goapi routing enable --apply\n"); len(got) != 1 {
+		t.Fatalf("U+00A0 is whitespace to Python \\s and must separate the prompt from the command: %q", got)
+	}
+	if got := flagNames("fs.StringVar(&caf\u00e9, \"mode\", \"\", \"x\")\nfs.BoolVar(&o.dry\u0663, \"dry-run\", false, \"\")"); len(got) != 2 {
+		t.Fatalf("flag definitions with non-ASCII identifiers were missed: %v", got)
 	}
 	joined := enableCommands("run:\n  dho goapi routing enable \\\n    -operations a \\\n    --mode on\n")
 	if len(joined) != 1 || !strings.Contains(joined[0], "--mode on") {
@@ -414,7 +539,7 @@ func bareHits(root string, shorthand bool) []string {
 			if err != nil {
 				return nil
 			}
-			for n, line := range strings.Split(string(raw), "\n") {
+			for n, line := range pySplitLines(string(raw)) {
 				stripped := strings.TrimLeft(line, " \t")
 				if (ext == ".go" || ext == ".py") && (strings.HasPrefix(stripped, "//") || strings.HasPrefix(stripped, "#")) {
 					continue
@@ -439,17 +564,43 @@ func lineNamesBareVerb(line string, shorthand bool) bool {
 		re = shorthandVerb
 	}
 	for _, loc := range re.FindAllStringIndex(line, -1) {
-		before := line[:loc[0]]
-		if before != "" {
-			last := before[len(before)-1]
-			if last == '-' || last == '_' || (last >= '0' && last <= '9') || (last >= 'a' && last <= 'z') || (last >= 'A' && last <= 'Z') {
-				continue
-			}
-		}
-		if shorthand && (strings.HasSuffix(before, "goapi-") || strings.HasSuffix(before, "goapi ") || strings.HasSuffix(before, "go-api ") || strings.HasSuffix(before, "go-api-")) {
+		if wordAfter(line, loc[1]) {
 			continue
 		}
-		return true
+		before := line[:loc[0]]
+		if !shorthand {
+			if before != "" && (before[len(before)-1] == '-' || wordBefore(before, len(before))) {
+				continue
+			}
+			return true
+		}
+		if strings.HasSuffix(before, "`") {
+			ctx := before[:len(before)-1]
+			if ctx != "" && (ctx[len(ctx)-1] == '-' || wordBefore(ctx, len(ctx))) {
+				continue
+			}
+			if strings.HasSuffix(ctx, "goapi-") || strings.HasSuffix(ctx, "goapi ") || strings.HasSuffix(ctx, "go-api ") || strings.HasSuffix(ctx, "go-api-") {
+				continue
+			}
+			return true
+		}
+		trimmed := strings.TrimRightFunc(before, unicode.IsSpace)
+		if len(trimmed) == len(before) {
+			continue
+		}
+		word := trimmed
+		start := len(trimmed)
+		for start > 0 {
+			r, size := utf8.DecodeLastRuneInString(trimmed[:start])
+			if !wordRune(r) {
+				break
+			}
+			start -= size
+		}
+		word = strings.ToLower(trimmed[start:])
+		if imperativeWords[word] {
+			return true
+		}
 	}
 	return false
 }
@@ -483,6 +634,13 @@ func TestBareVerbPatternsPlantedDefects(t *testing.T) {
 		{"use dho goapi routing status", true, false},
 		{"use dev-hops go-api routing status", true, false},
 		{"the Go routing status verb", true, false},
+		{"caf\u00e9`routing enable`", true, false},
+		{"`routing enable\u0663`", true, false},
+		{"run\u00a0routing enable now", true, true},
+		{"Run \u00a0routing status", true, true},
+		{"caf\u00e9go-api-routing enable", false, false},
+		{"go-api-routing enable\u0663", false, false},
+		{"see caf\u00e9 go-api-routing enable", false, true},
 		{"First-time routing enable (canary set only)", true, false},
 		{"use routing disable to turn it off", true, true},
 	}

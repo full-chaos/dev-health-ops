@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -182,7 +181,7 @@ func (handler LaunchDarklyRouteHandler) Collect(
 			return CompleteRouteBatch{}, leaseErr
 		}
 		var providerErr *providerfoundation.ProviderError
-		if !errors.As(codeReferenceErr, &providerErr) {
+		if !errors.As(codeReferenceErr, &providerErr) || providerErr.AfterResponse() {
 			return CompleteRouteBatch{}, codeReferenceErr
 		}
 		codeReferencePayload = json.RawMessage(`{"items":[]}`)
@@ -302,13 +301,16 @@ func fetchLaunchDarklyCodeReferences(
 		return nil, err
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
-	if err != nil || len(body) > nativeMaxObjectBytes || !json.Valid(body) {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	body, err := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > nativeMaxObjectBytes {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
 	var object map[string]json.RawMessage
-	if json.Unmarshal(body, &object) != nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	if err := providerfoundation.DecodeResponseJSON(response, body, &object, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
 	}
 	return append(json.RawMessage(nil), body...), nil
 }

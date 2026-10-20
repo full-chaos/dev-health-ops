@@ -101,7 +101,7 @@ func linearWorkItemsFailure(stage LinearWorkItemsFailureStage, err error) Linear
 		Stage: stage, Code: "provider_error", Cause: err.Error(),
 	}
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) {
+	if errors.As(err, &providerErr) && !providerErr.AfterResponse() {
 		failure.Code = string(providerErr.Class)
 		failure.Retryable = providerErr.Retryable()
 	}

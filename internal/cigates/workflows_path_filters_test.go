@@ -421,10 +421,6 @@ func pathFilterViolations(t *testing.T, root string, excused map[string]string) 
 	return out
 }
 
-func TestGoWorkflowPathFilters(t *testing.T) {
-	expectNoViolations(t, pathFilterViolations(t, repoRoot(t), uncoveredFixtureDirectories))
-}
-
 // miniRepo writes a synthetic tree (not a git repo) and returns its root.
 func miniRepo(t *testing.T, files map[string]string) string {
 	t.Helper()

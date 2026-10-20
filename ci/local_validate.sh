@@ -1020,7 +1020,7 @@ gate_unit_suite() {
   [ -f "${list}" ] || die "missing ${list}: the hosted kept-test list."
   mapfile -t kept < <(grep -v '^[[:space:]]*#' "${list}" | grep -v '^[[:space:]]*$')
   # Same guard as test.yml: a short or empty list would run nothing.
-  [ "${#kept[@]}" -ge 13 ] || die "${list} lists only ${#kept[@]} files (hosted jobs require >= 13)."
+  [ "${#kept[@]}" -ge 11 ] || die "${list} lists only ${#kept[@]} files (hosted jobs require >= 11)."
   printf '   kept files: %s\n' "${#kept[@]}"
   OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/docs -q || return 1

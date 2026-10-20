@@ -383,3 +383,55 @@ func TestRunMintTokenPrintsAnHS256TokenForTheEncryptionKey(t *testing.T) {
 		t.Errorf("default token: %v %v", err, claims)
 	}
 }
+
+func TestValkeyPingSelectsTheConfiguredDatabase(t *testing.T) {
+	url, received := serveRedis(t, "+OK", "+PONG")
+	if err := livee2e.ValkeyPing(context.Background(), url); err != nil {
+		t.Fatalf("database 1 selected and answered: %v", err)
+	}
+	cmds := received()
+	if len(cmds) != 2 || !strings.Contains(cmds[0], "SELECT") || !strings.Contains(cmds[0], "$1\r\n1\r\n") || !strings.Contains(cmds[1], "PING") {
+		t.Errorf("want SELECT 1 then PING, got %q", cmds)
+	}
+	outOfRange, _ := serveRedis(t, "-ERR DB index is out of range")
+	if err := livee2e.ValkeyPing(context.Background(), outOfRange); err == nil {
+		t.Error("a server without the configured database must fail the readiness check")
+	}
+	zero, zeroReceived := serveRedis(t, "+PONG")
+	zero = strings.TrimSuffix(zero, "/1") + "/0"
+	if err := livee2e.ValkeyPing(context.Background(), zero); err != nil {
+		t.Fatal(err)
+	}
+	if cmds := zeroReceived(); len(cmds) != 1 || strings.Contains(cmds[0], "SELECT") {
+		t.Errorf("database 0 needs no SELECT: %q", cmds)
+	}
+	both, bothReceived := serveRedis(t, "+OK", "+OK", "+PONG")
+	both = strings.Replace(both, "redis://", "redis://:pw@", 1)
+	if err := livee2e.ValkeyPing(context.Background(), both); err != nil {
+		t.Fatal(err)
+	}
+	if cmds := bothReceived(); len(cmds) != 3 || !strings.Contains(cmds[0], "AUTH") || !strings.Contains(cmds[1], "SELECT") || !strings.Contains(cmds[2], "PING") {
+		t.Errorf("want AUTH, SELECT, PING, got %q", cmds)
+	}
+	bad := strings.TrimSuffix(url, "/1") + "/notanumber"
+	if err := livee2e.ValkeyPing(context.Background(), bad); err == nil {
+		t.Error("a database path that is not a number must be refused")
+	}
+}
+
+func TestAssertHomeRefusesANonPositiveOrNaNCoverage(t *testing.T) {
+	for name, value := range map[string]any{
+		"NaN string": "NaN", "nan string": "nan", "zero": 0, "negative": -1.5, "zero string": "0", "empty string": "", "text": "most",
+	} {
+		p := goodHome()
+		p["freshness"].(m)["coverage"] = m{"repos_covered_pct": value}
+		if err := livee2e.AssertHome(mustJSON(t, p), "github"); err == nil {
+			t.Errorf("%s coverage must fail", name)
+		}
+	}
+	p := goodHome()
+	p["freshness"].(m)["coverage"] = m{"repos_covered_pct": "12.5"}
+	if err := livee2e.AssertHome(mustJSON(t, p), "github"); err != nil {
+		t.Errorf("a numeric string above zero is what float() accepted: %v", err)
+	}
+}

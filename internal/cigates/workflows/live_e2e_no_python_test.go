@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,7 @@ var (
 		"ci/run_metrics_executed_proof.sh",
 		"ci/lib/go_worker_fixture.sh",
 		"ci/lib/go_api_prove_e2e.sh",
+		"ci/lib/e2e_fixture.sh",
 	}
 )
 
@@ -84,7 +86,26 @@ func liveE2ENoPythonViolations(t *testing.T, root string) []string {
 			out = append(out, fmt.Sprintf("the live-e2e path filter lists %s, a Python-only file nothing in the jobs reads", p))
 		}
 	}
-	for _, p := range []string{"ci/**", "cmd/**", "internal/**", "go.mod", "go.sum", ".github/workflows/live-e2e.yml"} {
+	var tracked []string
+	if tp, err := trackedPaths(repoRoot(t), repoRoot(t)); err != nil {
+		out = append(out, "cannot list tracked files: "+err.Error())
+	} else {
+		tracked = tp
+	}
+	for _, p := range sortedKeysBool(listed) {
+		re, err := githubGlobToRegexp(p)
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		for _, f := range tracked {
+			if (strings.HasSuffix(f, ".py") || strings.HasSuffix(f, ".pyi")) && re.MatchString(f) {
+				out = append(out, fmt.Sprintf("the live-e2e path filter entry %s matches the tracked Python file %s: a Python-only change must not run the jobs", p, f))
+				break
+			}
+		}
+	}
+	for _, p := range []string{"cmd/**", "internal/**/*.go", "ci/run_*.sh", "ci/lib/**", "scripts/worker/**", "src/dev_health_ops/config/**", "go.mod", "go.sum", ".github/workflows/live-e2e.yml"} {
 		if !listed[p] {
 			out = append(out, fmt.Sprintf("the live-e2e path filter must list %s", p))
 		}
@@ -131,7 +152,8 @@ func TestLiveE2ENoPythonPlantedDefects(t *testing.T) {
 		{"the prove helper calls run_python", []mutation{{prove, `"${BIN_DIR}/cigate" live-e2e edge-request "${dir}/documents.json"`, `run_python edge-request.py "${dir}/documents.json"`}}, []string{prove + " starts or prepares Python"}},
 		{"the metrics runner calls python3", []mutation{{"ci/run_metrics_executed_proof.sh", "require_cmd jq\n", "require_cmd jq\npython3 -c 'print(1)'\n"}}, []string{"ci/run_metrics_executed_proof.sh starts or prepares Python"}},
 		{"the live tier function calls python", []mutation{{runTests, `run_step "live backend e2e" bash ./ci/run_live_backend_e2e.sh`, `run_step "live backend e2e" python3 ci/live.py`}}, []string{"live_e2e_tests uses Python"}},
-		{"the path filter lists uv.lock again", []mutation{{wf, "              - 'ci/**'\n", "              - 'ci/**'\n              - 'uv.lock'\n"}}, []string{"lists uv.lock"}},
+		{"the path filter lists uv.lock again", []mutation{{wf, "              - 'cmd/**'\n", "              - 'cmd/**'\n              - 'uv.lock'\n"}}, []string{"lists uv.lock"}},
+		{"a broad filter glob matches Python files", []mutation{{wf, "              - 'cmd/**'\n", "              - 'cmd/**'\n              - 'scripts/**'\n"}}, []string{"matches the tracked Python file"}},
 		{"the path filter drops cmd/**", []mutation{{wf, "              - 'cmd/**'\n", ""}}, []string{"must list cmd/**"}},
 	}
 	for _, c := range cases {
@@ -144,4 +166,13 @@ func TestLiveE2ENoPythonPlantedDefects(t *testing.T) {
 		tree := plantTree(t, root, files, mutation{live, "require_cmd curl\n", "require_cmd curl\n# no python3 and no uv here\n"})
 		expectNoViolations(t, liveE2ENoPythonViolations(t, tree))
 	})
+}
+
+func sortedKeysBool(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

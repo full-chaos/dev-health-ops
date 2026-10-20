@@ -19,7 +19,7 @@
 # Reads: ROOT_DIR, BIN_DIR, TMP_DIR, POSTGRES_URI, CLICKHOUSE_URI_NATIVE,
 # E2E_ORG_ID, JWT_SECRET_KEY, QUERY_API_PORT, READINESS_ATTEMPTS,
 # READINESS_SLEEP_SECS, EXIT_FAILURE. Sets QUERY_API_PID (the caller declares
-# it and stops it with stop_service). Requires the cigate and dho binaries in BIN_DIR, e2e_psql, e2e_dho_admin and
+# it and stops it with stop_service). Requires the cigate and dho binaries in BIN_DIR, e2e_psql and e2e_dho_admin (ci/lib/e2e_fixture.sh) and
 # wait_for_http_ready to be defined.
 #
 # CHAOS-6241: query_api_e2e_start/query_api_e2e_mint_envelope_token are also

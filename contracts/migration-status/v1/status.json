@@ -548,7 +548,7 @@
         "status": "verified",
         "ticket": "CHAOS-5800",
         "sha": "84e5d60d76a3ffd77027c42d03ea10a287fcac0e",
-        "evidence": "internal/jobs/metrics/remaining/membership_golden_test.go TestComputeOrgMatchesLivePythonBackfillMemberships (CHAOS-4282 byte-parity oracle: ComputeOrg run against tests/fixtures/membership_backfill_golden.json, a golden captured from the real Python backfill_memberships via tests/fixtures/generate_membership_backfill_golden.py; compares full stats, every work_unit_membership row field-for-field, and the work_unit_membership_runs run record); PASS re-run at this sha"
+        "evidence": "internal/jobs/metrics/remaining/membership_golden_test.go TestComputeOrgMatchesLivePythonBackfillMemberships (CHAOS-4282 byte-parity oracle: ComputeOrg run against tests/fixtures/membership_backfill_golden.json, a golden captured from the real Python backfill_memberships via generate_membership_backfill_golden (generator deleted, golden frozen); compares full stats, every work_unit_membership row field-for-field, and the work_unit_membership_runs run record); PASS re-run at this sha"
       },
       "deployed": {
         "revision": "unknown",

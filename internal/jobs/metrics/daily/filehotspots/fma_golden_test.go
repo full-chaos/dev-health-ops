@@ -30,7 +30,7 @@ import (
 // was deleted (file_hotspots is fully native now, no straddle), so this case
 // was split out into its own frozen file -- byte-identical payload, extracted
 // verbatim, nothing recomputed -- rather than either (a) leaving a dead key in
-// fma_golden.json that generate_fma_golden.py can no longer reproduce (which
+// fma_golden.json that generate_fma_golden (generator deleted, golden frozen) can no longer reproduce (which
 // broke internal/jobs/workgraph/units's generic
 // TestEveryDiscoverableCorpusStillMatchesLivePython, a whole-document
 // byte-for-byte auto-discovery guard with no per-key exception mechanism), or
@@ -98,7 +98,7 @@ func TestComputeFileHotspotsScoreMatchesLivePythonBitExact(t *testing.T) {
 	_ = computedAt
 }
 
-// syntheticWindowStats mirrors generate_fma_golden.py's
+// syntheticWindowStats mirrors generate_fma_golden (generator deleted, golden frozen)'s
 // _synthetic_window_stats: one file, exactly `contributors` distinct authors
 // and `commitsCount` distinct commits, with the full churn attributed to the
 // first row (additions only) -- so ComputeFileHotspots's own aggregation

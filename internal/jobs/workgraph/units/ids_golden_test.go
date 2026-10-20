@@ -132,7 +132,7 @@ func TestParseCommitFromIDMatchesPythonGolden(t *testing.T) {
 	}
 }
 
-// No dedicated rot guard here, deliberately: generate_workgraph_ids_python_golden.py
+// No dedicated rot guard here, deliberately: generate_workgraph_ids_python_golden (generator deleted, golden frozen)
 // declares its output path as `OUTPUT_PATH = Path(__file__).parent / "..."`,
 // which live_python_corpus_guard_test.go's TestEveryDiscoverableCorpusStillMatchesLivePython
 // discovers and re-runs automatically via tests/fixtures/*'s generate_*.py glob.

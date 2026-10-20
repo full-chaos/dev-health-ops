@@ -4,9 +4,8 @@
 //
 // ONE copy, for the reason providersyncschema exists: the alternative was
 // a second hand-kept DDL in the cmd package, drifting from this one with
-// nothing to notice. The DDL below is pinned to the alembic migrations by
-// tests/test_0128_go_api_proof_run_measurement_provenance_migration.py::
-// test_registry_ddl_mirror_covers_every_migrated_column.
+// nothing to notice. The DDL below mirrors
+// alembic migration 0128 (the Python test that pinned it was deleted with the Python tree).
 package registryschema
 
 import (

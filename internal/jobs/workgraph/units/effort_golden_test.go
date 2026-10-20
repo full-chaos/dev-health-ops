@@ -27,8 +27,7 @@ func loadEffortCases(t *testing.T) []effortCase {
 	)
 	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		t.Fatalf("read effort golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_effort_golden.py)", err)
+		t.Fatalf("read effort golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden struct {
 		Cases []effortCase `json:"cases"`

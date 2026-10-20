@@ -10,7 +10,7 @@ import (
 )
 
 // The golden vectors are captured FROM the live CPython random module by
-// tests/fixtures/generate_cpython_random_golden.py. They are compared here
+// generate_cpython_random_golden (generator deleted, golden frozen). They are compared here
 // without an interpreter so this runs in the ordinary unit suite; the live-
 // oracle lane separately re-derives them from CPython and fails if the
 // recording has gone stale, which is the pairing the frozen numerical golden

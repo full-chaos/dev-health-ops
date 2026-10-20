@@ -28,7 +28,7 @@ case "$*" in
   *" down "*)
     if [ -n "$FAKE_BLOCK_DOWN" ]; then exec sleep "$FAKE_BLOCK_DOWN"; fi ;;
   *" up "*)
-    if [ -n "$FAKE_BLOCK_UP" ]; then sleep "$FAKE_BLOCK_UP"; fi
+    if [ -n "$FAKE_BLOCK_UP" ]; then exec sleep "$FAKE_BLOCK_UP"; fi
     if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
   *" ps -q go-api"*) echo cid-go-api ;;
@@ -182,5 +182,42 @@ func TestAuthCorpusExternalAcpLegStartsAuthServiceAfterGoAPI(t *testing.T) {
 	}
 	if !strings.HasSuffix(ups[1], " auth-service") || strings.Contains(ups[1], "go-api") {
 		t.Errorf("the second up must start auth-service alone: %q", ups[1])
+	}
+}
+
+// `compose up --wait-timeout` bounds the wait for health, not a build or a hung compose command: every up carries
+// its own bound.
+func TestAuthCorpusExternalUpIsBounded(t *testing.T) {
+	fake := newFakeDocker(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+	cmd.Env = fake.env("FAKE_BLOCK_UP=60", "AUTH_CORPUS_UP_SECONDS=2", "AUTH_CORPUS_DOWN_SECONDS=2")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("a hung `compose up` was not bounded by AUTH_CORPUS_UP_SECONDS (still running after 12 s); output:\n%s", out)
+	}
+	if err == nil {
+		t.Errorf("the script reported success although compose up never finished:\n%s", out)
+	}
+}
+
+func TestAuthCorpusSetEnvRecreateIsBounded(t *testing.T) {
+	fake := newFakeDocker(t)
+	_, env := setEnvFixture(t, fake)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_set_env.sh"), "X_NAME", "v")
+	cmd.Env = append(env, "FAKE_BLOCK_UP=60", "AUTH_CORPUS_WAIT_SECONDS=2")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("a hung recreate was not bounded (still running after 12 s); output:\n%s", out)
+	}
+	if err == nil {
+		t.Errorf("the hook reported success although the recreate never finished:\n%s", out)
 	}
 }

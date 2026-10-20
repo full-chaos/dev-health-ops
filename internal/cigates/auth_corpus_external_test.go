@@ -316,3 +316,46 @@ func TestAuthCorpusAcpOverrideTrustsEveryGatewayItJoins(t *testing.T) {
 	}
 	t.Errorf("the acp override's go-api environment lacks %q: %v", want, acp.Services.GoAPI.Environment)
 }
+
+// go-api mails to the runner's sink through the pinned gateway of its own network: that address is the host as the
+// container sees it. host.docker.internal (host-gateway) is docker0's address, which a container on another bridge
+// reaches only when the host routes between bridges.
+func TestAuthCorpusOverrideMailsToTheGatewayOfItsNetwork(t *testing.T) {
+	var override struct {
+		Networks struct {
+			Default struct {
+				IPAM struct {
+					Config []struct {
+						Gateway string `yaml:"gateway"`
+					} `yaml:"config"`
+				} `yaml:"ipam"`
+			} `yaml:"default"`
+		} `yaml:"networks"`
+		Services struct {
+			GoAPI struct {
+				Environment []string `yaml:"environment"`
+				ExtraHosts  []string `yaml:"extra_hosts"`
+			} `yaml:"go-api"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, "ci", "auth_corpus_external.override.yml")), &override); err != nil {
+		t.Fatal(err)
+	}
+	config := override.Networks.Default.IPAM.Config
+	if len(config) != 1 {
+		t.Fatalf("the override does not pin the default network: %+v", config)
+	}
+	want := "SMTP_HOST=" + config[0].Gateway
+	found := false
+	for _, entry := range override.Services.GoAPI.Environment {
+		if entry == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("go-api's environment lacks %s: %v", want, override.Services.GoAPI.Environment)
+	}
+	if len(override.Services.GoAPI.ExtraHosts) != 0 {
+		t.Errorf("go-api keeps extra_hosts %v: the host is its network's gateway", override.Services.GoAPI.ExtraHosts)
+	}
+}

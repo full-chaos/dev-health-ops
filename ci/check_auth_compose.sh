@@ -159,37 +159,26 @@ expected="$(compose --profile auth ps -q auth-service postgres | xargs docker in
 [ "${members}" = "${expected}" ] || die "auth_plane has members other than auth-service and postgres: ${members} (want ${expected})"
 
 printf 'step 4d: no auth service is on the default network\n'
-compose --profile auth config --format json | python3 -c '
-import json, sys
-services = json.load(sys.stdin)["services"]
-bad = []
-for name in ("auth-keys-init", "auth-provision", "auth-migrate", "auth-service"):
-    service = services[name]
-    nets = sorted((service.get("networks") or {}).keys())
-    mode = service.get("network_mode")
-    print(f"{name}: networks={nets} network_mode={mode}")
-    if mode != "none" and nets != ["auth_plane"]:
-        bad.append(name)
-if bad:
-    sys.exit("auth services outside auth_plane (or network_mode none): " + ", ".join(bad))
-' || die "an auth service is attached to a network other than auth_plane"
+auth_config="$(compose --profile auth config --format json)"
+printf '%s' "${auth_config}" | jq -r '
+  ["auth-keys-init", "auth-provision", "auth-migrate", "auth-service"][] as $name
+  | .services[$name] | "\($name): networks=\((.networks // {}) | keys | sort) network_mode=\(.network_mode)"'
+bad_networks="$(printf '%s' "${auth_config}" | jq -r '
+  [["auth-keys-init", "auth-provision", "auth-migrate", "auth-service"][] as $name
+   | select(.services[$name] | (.network_mode != "none") and (((.networks // {}) | keys | sort) != ["auth_plane"]))
+   | $name] | join(", ")')"
+[ -z "${bad_networks}" ] || die "an auth service is attached to a network other than auth_plane (or network_mode none): ${bad_networks}"
 
 printf 'step 4e: no secret reaches a process argument\n'
-compose --profile auth config --format json | python3 -c '
-import json, re, sys
-services = json.load(sys.stdin)["services"]
-bad = []
-for name in ("auth-keys-init", "auth-provision", "auth-migrate", "auth-service"):
-    service = services[name]
-    argv = list(service.get("entrypoint") or []) + list(service.get("command") or [])
-    text = " ".join(argv)
-    hit = re.search(r"\$\{?[A-Za-z_]*(PASSWORD|SECRET|TOKEN|KEY)(?!_ID|_FILE)", text)
-    print(f"{name}: argv expands a secret variable: {bool(hit)}")
-    if hit:
-        bad.append(name)
-if bad:
-    sys.exit("secret variable expanded into a process argument: " + ", ".join(bad))
-' || die "a secret reaches a process argument (visible to docker top)"
+secret_re='\$\{?[A-Za-z_]*(PASSWORD|SECRET|TOKEN|KEY)(?!_ID|_FILE)'
+printf '%s' "${auth_config}" | jq -r --arg re "${secret_re}" '
+  ["auth-keys-init", "auth-provision", "auth-migrate", "auth-service"][] as $name
+  | .services[$name] | "\($name): argv expands a secret variable: \(((.entrypoint // []) + (.command // [])) | join(" ") | test($re))"'
+leaking="$(printf '%s' "${auth_config}" | jq -r --arg re "${secret_re}" '
+  [["auth-keys-init", "auth-provision", "auth-migrate", "auth-service"][] as $name
+   | select(.services[$name] | ((.entrypoint // []) + (.command // [])) | join(" ") | test($re))
+   | $name] | join(", ")')"
+[ -z "${leaking}" ] || die "a secret reaches a process argument (visible to docker top): ${leaking}"
 
 printf 'step 5: signing key custody\n'
 key_stat="$(docker run --rm --name "${PROJECT}-keystat" --entrypoint stat -v "${PROJECT}_auth_signing_keys:/k:ro" \

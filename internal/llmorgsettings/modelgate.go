@@ -123,8 +123,13 @@ func (g Gate) Decide(ctx context.Context, orgID string) Decision {
 		return Decision{Kind: Refuse, Code: CodeUnavailable, Status: http.StatusServiceUnavailable}
 	}
 	d := Decide(in)
-	if d.Kind == Refuse {
+	switch d.Kind {
+	case Refuse:
 		logger.InfoContext(ctx, "llm model gate: refused", slog.String("org_id", orgID), slog.String("code", d.Code), slog.Int("status", d.Status))
+	case Own:
+		logger.InfoContext(ctx, "llm model gate: admitted", slog.String("org_id", orgID), slog.String("decision", "own"), slog.String("model_source", "org_byo"))
+	case Platform:
+		logger.InfoContext(ctx, "llm model gate: admitted", slog.String("org_id", orgID), slog.String("decision", "platform"), slog.String("model_source", "platform"))
 	}
 	return d
 }
@@ -164,9 +169,13 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 	if err != nil {
 		return Inputs{}, fmt.Errorf("llmorgsettings: effective %s: %w", ACRServiceModelFeatureKey, err)
 	}
-	fallback, err := s.Licensing.Decide(ctx, orgID, PlatformModelFallbackFeatureKey)
-	if err != nil {
-		return Inputs{}, fmt.Errorf("llmmodelgate: %s: %w", PlatformModelFallbackFeatureKey, err)
+	// platform_model_fallback decides only an org with no saved config and acr_service_model on; every other
+	// path is settled without it, so a failed lookup there must not refuse an org that does not need it.
+	fallback := licensing.Decision{}
+	if !saved && serviceModelOn {
+		if fallback, err = s.Licensing.Decide(ctx, orgID, PlatformModelFallbackFeatureKey); err != nil {
+			return Inputs{}, fmt.Errorf("llmmodelgate: %s: %w", PlatformModelFallbackFeatureKey, err)
+		}
 	}
 	usable := false
 	if found && serviceModelOn && !cfg.GateClosed {

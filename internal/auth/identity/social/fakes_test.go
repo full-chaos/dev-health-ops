@@ -184,7 +184,7 @@ func (f *fakeProviders) googleInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "{}", http.StatusBadRequest)
 		return
 	}
-	reply(w, map[string]any{"aud": a.clientID, "azp": a.clientID, "sub": a.googleID})
+	reply(w, map[string]any{"issued_to": a.clientID, "audience": a.clientID, "user_id": a.googleID})
 }
 
 func (f *fakeProviders) googleUser(w http.ResponseWriter, r *http.Request) {

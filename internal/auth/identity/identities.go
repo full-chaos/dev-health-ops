@@ -27,6 +27,10 @@ var (
 	// ErrLastSignInMethod reports an unlink that would leave the principal
 	// with no external identity and no password.
 	ErrLastSignInMethod = errors.New("identity: the external identity is the last sign-in method")
+	// ErrProviderAlreadyLinked reports a link of a key whose issuer and
+	// provider the principal already holds with another subject: one identity
+	// per provider per principal.
+	ErrProviderAlreadyLinked = errors.New("identity: the principal already has an identity at this provider")
 	// ErrPrincipalUnavailable reports a link to a principal that does not
 	// exist or is disabled.
 	ErrPrincipalUnavailable = errors.New("identity: principal missing or disabled")
@@ -300,7 +304,10 @@ func SelfSignUp(requestID *string) Actor { return Actor{RequestID: requestID, se
 
 // LinkIdentity links key to principal, with its audit row and outbox event in
 // one transaction. A key another principal holds is ErrIdentityConflict and is
-// never re-pointed; a key the principal already holds is ErrAlreadyLinked. It
+// never re-pointed; a key the principal already holds is ErrAlreadyLinked; a
+// key whose issuer and provider the principal holds with another subject is
+// ErrProviderAlreadyLinked. The principal row is locked for the transaction,
+// so concurrent links of one principal are checked one after the other. It
 // returns the new external identity id.
 func (s *Store) LinkIdentity(ctx context.Context, key ExternalKey, principal uuid.UUID, actor Actor) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "link", err) }()
@@ -312,6 +319,9 @@ func (s *Store) LinkIdentity(ctx context.Context, key ExternalKey, principal uui
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := s.requireLivePrincipal(ctx, tx, principal); err != nil {
+				return err
+			}
+			if err := s.oneIdentityPerProvider(ctx, tx, key, principal); err != nil {
 				return err
 			}
 			return s.insertIdentity(ctx, tx, linkID, key, principal, ErrAlreadyLinked)
@@ -439,6 +449,28 @@ func (s *Store) hasPassword(ctx context.Context, queryRow func(context.Context, 
 	return has, err
 }
 
+// oneIdentityPerProvider locks the principal row and refuses a second subject
+// at the key's issuer and provider.
+func (s *Store) oneIdentityPerProvider(ctx context.Context, tx audit.TxOps, key ExternalKey, principal uuid.UUID) error {
+	var locked uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, principal).Scan(&locked); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrPrincipalUnavailable
+		}
+		return err
+	}
+	var others int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+s.q+`.external_identities
+WHERE principal_id = $1 AND issuer = $2 AND provider = $3 AND subject <> $4`,
+		principal, key.Issuer, string(key.Provider), key.Subject).Scan(&others); err != nil {
+		return err
+	}
+	if others > 0 {
+		return ErrProviderAlreadyLinked
+	}
+	return nil
+}
+
 func (s *Store) requireLivePrincipal(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error {
 	var disabled bool
 	err := tx.QueryRow(ctx, `SELECT disabled_at IS NOT NULL FROM `+s.q+`.principals WHERE id = $1 FOR SHARE`, principal).Scan(&disabled)
@@ -494,6 +526,8 @@ func (s *Store) countLink(ctx context.Context, action string, err error) {
 		outcome = "conflict"
 	case errors.Is(err, ErrAlreadyLinked):
 		outcome = "already_linked"
+	case errors.Is(err, ErrProviderAlreadyLinked):
+		outcome = "provider_already_linked"
 	case errors.Is(err, ErrNotFound):
 		outcome = "not_found"
 	case errors.Is(err, ErrNotOwner):
@@ -521,8 +555,8 @@ func (s *Store) countLink(ctx context.Context, action string, err error) {
 // domainErr keeps the domain refusals Apply returned (audit.Commit wraps them
 // with %w) and wraps everything else as ErrStore.
 func (s *Store) domainErr(ctx context.Context, op string, err error) error {
-	for _, domain := range []error{ErrIdentityConflict, ErrAlreadyLinked, ErrPrincipalUnavailable, ErrNotFound,
-		ErrNotOwner, ErrLastSignInMethod} {
+	for _, domain := range []error{ErrIdentityConflict, ErrAlreadyLinked, ErrProviderAlreadyLinked, ErrPrincipalUnavailable,
+		ErrNotFound, ErrNotOwner, ErrLastSignInMethod} {
 		if errors.Is(err, domain) {
 			return domain
 		}

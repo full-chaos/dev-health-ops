@@ -290,6 +290,16 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 	switch {
 	case err == nil:
 		return identity.Identity{ID: id, Issuer: key.Issuer, Provider: key.Provider, Subject: key.Subject}, nil
+	case errors.Is(err, identity.ErrAlreadyLinked):
+		// A concurrent link of the same identity wrote it first: answer as a
+		// repeated link does.
+		if linked, err = s.existing(ctx, who.PrincipalID, key); err != nil {
+			reason = ReasonStoreUnavailable
+		}
+		return linked, err
+	case errors.Is(err, identity.ErrProviderAlreadyLinked):
+		reason = ReasonEmailCollision
+		return identity.Identity{}, ErrProviderLinked
 	case errors.Is(err, identity.ErrIdentityConflict):
 		reason = ReasonEmailCollision
 		return identity.Identity{}, err
@@ -300,6 +310,20 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 		reason = ReasonStoreUnavailable
 		return identity.Identity{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
+}
+
+// existing is the principal's identity with key.
+func (s *Service) existing(ctx context.Context, principal uuid.UUID, key identity.ExternalKey) (identity.Identity, error) {
+	all, err := s.store.ListIdentities(ctx, principal)
+	if err != nil {
+		return identity.Identity{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	for _, have := range all {
+		if have.Issuer == key.Issuer && have.Provider == key.Provider && have.Subject == key.Subject {
+			return have, nil
+		}
+	}
+	return identity.Identity{}, fmt.Errorf("%w: the linked identity is not listed", ErrUnavailable)
 }
 
 // Unlink removes one of the signed-in principal's identities by its id. An id
@@ -378,15 +402,13 @@ func (s *Service) fetch(ctx context.Context, provider Provider, token contracts.
 }
 
 func (s *Service) record(ctx context.Context, op Operation, provider Provider, reason Reason, err error) {
-	if provider != "" && !provider.IsSocial() {
-		provider = "invalid"
-	}
+	label := providerLabel(provider)
 	s.outcomes.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("operation", string(op)),
-		attribute.String("provider", string(provider)),
+		attribute.String("provider", label),
 		attribute.String("reason_code", string(reason)),
 	))
-	attrs := []any{"operation", string(op), "provider", string(provider), "reason_code", string(reason)}
+	attrs := []any{"operation", string(op), "provider", label, "reason_code", string(reason)}
 	switch {
 	case err == nil:
 		s.logger.InfoContext(ctx, "social outcome", attrs...)
@@ -395,4 +417,20 @@ func (s *Service) record(ctx context.Context, op Operation, provider Provider, r
 	default:
 		s.logger.InfoContext(ctx, "social outcome refused", attrs...)
 	}
+}
+
+// providerLabel is a fixed string for a provider name, so a value from a
+// request never reaches a log line or a metric label.
+func providerLabel(p Provider) string {
+	switch p {
+	case GitHub:
+		return "github"
+	case GitLab:
+		return "gitlab"
+	case Google:
+		return "google"
+	case "":
+		return ""
+	}
+	return "invalid"
 }

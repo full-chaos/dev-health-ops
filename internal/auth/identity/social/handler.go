@@ -45,7 +45,7 @@ type tokenRequest struct {
 func readTokenRequest(w http.ResponseWriter, r *http.Request) (Provider, contracts.SecretString, bool) {
 	var body tokenRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
-	if err := dec.Decode(&body); err != nil || body.ProviderAccessToken.Reveal() == "" {
+	if err := decodeOne(dec, &body); err != nil || body.ProviderAccessToken.Reveal() == "" {
 		writeDetail(w, http.StatusUnprocessableEntity, "provider and provider_access_token are required")
 		return "", contracts.SecretString{}, false
 	}

@@ -149,3 +149,45 @@ func TestUnlinkHandlerAnswersInGoAPIShape(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONParsersRefuseTrailingData(t *testing.T) {
+	t.Run("provider response", func(t *testing.T) {
+		for _, body := range []string{`{"a":1} garbage`, `{"a":1}{"a":2}`, `{"a":1} 1`} {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			c := &ProviderClient{HTTP: server.Client()}
+			var out map[string]any
+			err := c.do(context.Background(), request{method: http.MethodGet, url: server.URL, step: "probe"}, &out)
+			server.Close()
+			var perr *ProviderError
+			if !errors.As(err, &perr) || perr.Reason != ReasonInvalidCredentials {
+				t.Errorf("%q: err = %v, want a refusal", body, err)
+			}
+		}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("{\"a\":1}\n \t"))
+		}))
+		defer server.Close()
+		var out map[string]any
+		if err := (&ProviderClient{HTTP: server.Client()}).do(context.Background(), request{method: http.MethodGet, url: server.URL, step: "probe"}, &out); err != nil {
+			t.Errorf("trailing white space refused: %v", err)
+		}
+	})
+	t.Run("exchange request body", func(t *testing.T) {
+		f := newFakeProviders(t)
+		svc, err := New(Config{Store: stubStore{}, Providers: f.client()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := Handlers{Service: svc}
+		for _, body := range []string{`{"provider":"github","provider_access_token":"x"} garbage`, `{"provider":"github","provider_access_token":"x"}{}`} {
+			rec := httptest.NewRecorder()
+			h.Exchange(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Errorf("%q: status %d, want 422", body, rec.Code)
+			}
+		}
+	})
+}

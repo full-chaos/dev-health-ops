@@ -78,7 +78,7 @@ var DefaultEndpoints = Endpoints{
 	GitLabBase:      "https://gitlab.com",
 	GitLabIssuer:    "https://gitlab.com",
 	GoogleUserInfo:  "https://www.googleapis.com/oauth2/v2/userinfo",
-	GoogleTokenInfo: "https://oauth2.googleapis.com/tokeninfo",
+	GoogleTokenInfo: "https://www.googleapis.com/oauth2/v2/tokeninfo",
 }
 
 // ClientCredentials are this service's OAuth client at one provider.
@@ -212,11 +212,25 @@ func (c *ProviderClient) do(ctx context.Context, r request, out any) error {
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
-	if err := dec.Decode(out); err != nil {
+	if err := decodeOne(dec, out); err != nil {
 		return &ProviderError{Reason: ReasonInvalidCredentials, Step: r.step}
 	}
 	return nil
 }
+
+// decodeOne decodes exactly one JSON value: anything after it but white space
+// (a second value, a stray token, garbage) is refused.
+func decodeOne(dec *json.Decoder, out any) error {
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return errTrailingData
+	}
+	return nil
+}
+
+var errTrailingData = errors.New("social: data after the JSON value")
 
 func bearer(token contracts.SecretString) string { return "Bearer " + token.Reveal() }
 
@@ -384,9 +398,12 @@ func (c *ProviderClient) gitlab(ctx context.Context, creds ClientCredentials, to
 }
 
 func (c *ProviderClient) google(ctx context.Context, creds ClientCredentials, token contracts.SecretString) (Profile, error) {
+	// The token sent is an access token, so the response carries the
+	// access-token fields: issued_to and audience (the OAuth client), user_id.
 	var info struct {
-		Aud string `json:"aud"`
-		Sub string `json:"sub"`
+		IssuedTo string `json:"issued_to"`
+		Audience string `json:"audience"`
+		UserID   string `json:"user_id"`
 	}
 	form := url.Values{"access_token": {token.Reveal()}}.Encode()
 	if err := c.do(ctx, request{
@@ -396,7 +413,7 @@ func (c *ProviderClient) google(ctx context.Context, creds ClientCredentials, to
 	}, &info); err != nil {
 		return Profile{}, err
 	}
-	if info.Aud != creds.ID || info.Sub == "" {
+	if info.Audience != creds.ID || (info.IssuedTo != "" && info.IssuedTo != creds.ID) || info.UserID == "" {
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "google token info"}
 	}
 	var user struct {
@@ -413,7 +430,7 @@ func (c *ProviderClient) google(ctx context.Context, creds ClientCredentials, to
 	if subject == "" {
 		return Profile{}, &ProviderError{Reason: ReasonInvalidCredentials, Step: "google user"}
 	}
-	if subject != info.Sub {
+	if subject != info.UserID {
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "google user"}
 	}
 	verified, _ := user.VerifiedEmail.(bool)

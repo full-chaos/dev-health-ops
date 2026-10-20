@@ -13,7 +13,7 @@ import (
 )
 
 // workItemStateWorkItem is the narrow subset of the `work_items` ClickHouse
-// table (src/dev_health_ops/migrations/clickhouse/009_raw_work_items.sql +
+// table (internal/chmigrate/history/009_raw_work_items.sql +
 // 050_work_items_native_team_key_project_name.sql) that
 // compute_work_item_state_durations_daily reads. Field names mirror
 // WorkItem (src/dev_health_ops/models/work_items.py) so callers porting the

@@ -37,7 +37,7 @@ import (
 // workUnitEvidenceRepoSource ports WORK_UNIT_EVIDENCE_REPO_SOURCE
 // (investment.py:342-352). No CHAOS-4547 tuple-wrap needed: repos.repo
 // is non-nullable String and repos.provider is non-nullable String
-// DEFAULT 'unknown' (migrations/clickhouse/000_raw_tables.sql:2,
+// DEFAULT 'unknown' (internal/chmigrate/history/000_raw_tables.sql:2,
 // 028_repos_provider.sql:4) -- matching investment.py's own comment that
 // provider is "never legitimately empty here".
 func workUnitEvidenceRepoSource() string {
@@ -91,9 +91,9 @@ const resolvedEvidenceWorkItemIDExpr = `multiIf(
 // 08-29): four of this CTE's sixteen argMax'd columns are Nullable per
 // DDL and Python does not tuple-wrap them:
 //   - work_unit_type, work_unit_name: Nullable(String)
-//     (migrations/clickhouse/019_work_unit_investment_labels.sql:3,6)
+//     (internal/chmigrate/history/019_work_unit_investment_labels.sql:3,6)
 //   - repo_id: Nullable(UUID), provider: Nullable(String)
-//     (migrations/clickhouse/017_investment_materialize_tables.sql --
+//     (internal/chmigrate/history/017_investment_materialize_tables.sql --
 //     CHAOS-4547's already-known pair)
 //
 // argMax(col, ver) SKIPS rows where col is NULL when picking the row
@@ -199,7 +199,7 @@ func LatestWorkUnitInvestmentsSource() string {
 // selected three columns): the three ORIGINAL argMax'd columns
 // (effort_metric, effort_value -> repo_effort_value, allocation_source)
 // are non-nullable String/Float64/String per work_unit_repo_effort's DDL
-// (migrations/clickhouse/064_work_unit_repo_effort.sql), and repo_id is a
+// (internal/chmigrate/history/064_work_unit_repo_effort.sql), and repo_id is a
 // GROUP BY key in the inner subquery, never argMax'd, so its own
 // Nullable(UUID) declaration there carries no null-skip risk.
 //
@@ -210,7 +210,7 @@ func LatestWorkUnitInvestmentsSource() string {
 // (repoAllocationInvestmentSource below, compileSankeyCoverage) names its
 // columns explicitly, so nothing that ignores repo_source changes shape.
 //
-// repo_source IS Nullable(String) (migrations/clickhouse/089_repo_source_
+// repo_source IS Nullable(String) (internal/chmigrate/history/089_repo_source_
 // provenance.sql), which is exactly the CHAOS-4547 hazard: a bare
 // argMax(repo_source, computed_at) SKIPS rows whose value is NULL and
 // would return an OLDER non-null provenance for a repo whose newest
@@ -372,7 +372,7 @@ func (c investmentContext) sizedFor(m Measure) (investmentContext, error) {
 // CHAOS-4547 FIX, site 2 of 3 this lane found (Go plane only): both
 // UNION ALL branches' `argMax(author_email, last_synced)` project a
 // Nullable(String) column -- git_commits.author_email
-// (migrations/clickhouse/000_raw_tables.sql:26) and
+// (internal/chmigrate/history/000_raw_tables.sql:26) and
 // git_pull_requests.author_email (000_raw_tables.sql:68), confirmed
 // against the EXACT tables this CTE reads (git_blame also declares a
 // Nullable author_email at :52 but this CTE never reads git_blame).

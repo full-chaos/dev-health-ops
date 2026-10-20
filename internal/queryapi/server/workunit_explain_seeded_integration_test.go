@@ -112,7 +112,7 @@ func TestWorkUnitExplainSeededRealClickHouse_TeamScopeRefusesAUnitOutsideTheTeam
 	// explicitly rather than relying on the endpoint's own range_days
 	// default.
 	window := "start_date=2024-01-15&end_date=2024-01-21&llm_provider=mock"
-	handler := newWorkUnitExplainHandler(reader, nil, nil, nil)
+	handler := newWorkUnitExplainHandler(reader, nil, nil, nil, testPlatformGate{})
 
 	cases := []struct {
 		name       string

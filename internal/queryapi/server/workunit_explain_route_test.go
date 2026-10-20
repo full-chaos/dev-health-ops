@@ -29,7 +29,7 @@ import (
 // as "this org configured no BYO provider".
 func newTestWorkUnitExplainHandler(t *testing.T) http.HandlerFunc {
 	t.Helper()
-	return newWorkUnitExplainHandler(newTestWorkUnitsReader(t), nil, nil, nil)
+	return newWorkUnitExplainHandler(newTestWorkUnitsReader(t), nil, nil, nil, testPlatformGate{})
 }
 
 func newWorkUnitExplainRequest(t *testing.T, workUnitID, query string) *http.Request {
@@ -493,7 +493,7 @@ func newCapturingWorkUnitExplainHandler(t *testing.T) (http.HandlerFunc, *captur
 	if err != nil {
 		t.Fatalf("investmentexplain.NewReader: %v", err)
 	}
-	return newWorkUnitExplainHandler(reader, nil, nil, nil), client
+	return newWorkUnitExplainHandler(reader, nil, nil, nil, testPlatformGate{}), client
 }
 
 // TestWorkUnitExplainTeamScopePushesConditionIntoTheWorkUnitQuery is the
@@ -690,7 +690,7 @@ func TestWorkUnitExplainOllamaExplicitProviderSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("investmentexplain.NewReader: %v", err)
 	}
-	handler := newWorkUnitExplainHandler(reader, nil, nil, nil)
+	handler := newWorkUnitExplainHandler(reader, nil, nil, nil, testPlatformGate{})
 
 	rec := httptest.NewRecorder()
 	handler(rec, newWorkUnitExplainRequest(t, "wu-ABC-123", "llm_provider=ollama"))

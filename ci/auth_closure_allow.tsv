@@ -43,3 +43,5 @@ github.com/beorn7/perks	Prometheus client
 github.com/cespare/xxhash/v2	Prometheus client
 github.com/munnerz/goautoneg	Prometheus client
 go.yaml.in/yaml/v2	Prometheus common
+github.com/golang-jwt/jwt/v5	internal/auth/edgetoken: the one Go copy of the HS256 ops access-token decision (go-api parity; HS256 stays until Wave 3), used by the session routes (CHAOS-10228)
+github.com/google/jsonschema-go	internal/auth/contracts (wire types and schema validation), linked once the session domain is mounted (CHAOS-10228)

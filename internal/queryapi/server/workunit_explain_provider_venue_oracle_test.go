@@ -148,7 +148,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	handler := newWorkUnitExplainHandler(newTestWorkUnitsReader(t), nil, llmorgsettings.Store{Pool: pool}, nil)
+	handler := newWorkUnitExplainHandler(newTestWorkUnitsReader(t), nil, llmorgsettings.Store{Pool: pool}, nil, testPlatformGate{})
 
 	type providerCase struct {
 		Name        string `json:"name"`

@@ -78,7 +78,7 @@ spec:
             - {{ printf "--http-addr=:%v" $a.port | quote }}
             - {{ printf "--operator-http-addr=:%v" $a.operatorPort | quote }}
             - {{ printf "--shutdown-timeout=%s" $a.shutdownTimeout | quote }}
-            - {{ printf "--database-schema=%s" $a.database.schema | quote }}
+            - {{ printf "--database-schema=%s" (include "dev-health.authDatabaseSchema" .) | quote }}
             - "--signing-key-file=/run/auth/signing/signing-key.pem"
             - {{ printf "--signing-key-id=%s" $a.signingKey.keyId | quote }}
             {{- range $a.extraArgs }}

@@ -52,6 +52,9 @@ const (
 	ReasonCutoverMissing  = "cutover_missing"
 	ReasonForeignDatabase = "foreign_database"
 	ReasonSchemaMismatch  = "schema_mismatch"
+	// ReasonAuthSchemaMismatch: the auth migrator's lineage sits in a schema other than
+	// the configured auth schema.
+	ReasonAuthSchemaMismatch = "auth_schema_mismatch"
 	// ReasonSettingsMismatch: the environment the hook would run in differs from
 	// the baseline's settings, and the hook refuses before it touches the database.
 	ReasonSettingsMismatch = "settings_mismatch"
@@ -140,6 +143,8 @@ func Classify(observation Observation, settings Settings, baseline Baseline, cha
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonAheadOfBuild
 	case StateForeign:
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonForeignDatabase
+	case StateAuthSchemaMismatch:
+		report.Verdict, report.Reason = VerdictNeedsManual, ReasonAuthSchemaMismatch
 	case StateSchemaMismatch:
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonSchemaMismatch
 	}

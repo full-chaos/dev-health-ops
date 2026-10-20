@@ -99,11 +99,11 @@ func (h *handlers) evaluateOrgLLMStatus(ctx context.Context, orgID string) (orgL
 	if err != nil {
 		return orgLLMStatusEvaluation{}, err
 	}
-	providerName := llmorgsettings.NormalizeProvider(strOrEmpty(providerValue))
-	if providerName == "" || providerName == "auto" || providerName == "mock" || providerName == "none" {
+	providerName, providerReason := llmorgsettings.CheckProvider(strOrEmpty(providerValue))
+	switch providerReason {
+	case llmorgsettings.ConfigNotConfigured:
 		return orgLLMStatusEvaluation{ReasonCode: llmStatusReasonNotConfigured}, nil
-	}
-	if !llmorgsettings.IsKnownProvider(providerName) {
+	case llmorgsettings.ConfigUnknownProvider:
 		return orgLLMStatusEvaluation{Configured: true, ReasonCode: llmStatusReasonUnknownProvider, ProviderName: providerName}, nil
 	}
 
@@ -127,17 +127,14 @@ func (h *handlers) evaluateOrgLLMStatus(ctx context.Context, orgID string) (orgL
 	baseURL := strOrEmpty(baseURLValue)
 	hash := baseURLHash(baseURL)
 
-	if apiKey == "" && baseURL == "" {
+	credentialsReason, err := llmorgsettings.CheckCredentials(ctx, providerName, apiKey, baseURL)
+	if err != nil {
+		return orgLLMStatusEvaluation{}, err
+	}
+	switch credentialsReason {
+	case llmorgsettings.ConfigMissingCredentials:
 		return orgLLMStatusEvaluation{Configured: true, ReasonCode: llmStatusReasonMissingCreds, ProviderName: providerName, BaseURLHash: hash}, nil
-	}
-	if !llmorgsettings.CredentialsComplete(providerName, apiKey) {
-		return orgLLMStatusEvaluation{Configured: true, ReasonCode: llmStatusReasonMissingCreds, ProviderName: providerName, BaseURLHash: hash}, nil
-	}
-	ok, _, verr := llmorgsettings.ValidateBaseURLChecked(ctx, baseURL)
-	if verr != nil {
-		return orgLLMStatusEvaluation{}, verr
-	}
-	if !ok {
+	case llmorgsettings.ConfigInvalidBaseURL:
 		return orgLLMStatusEvaluation{Configured: true, ReasonCode: llmStatusReasonInvalidBaseURL, ProviderName: providerName, BaseURLHash: hash}, nil
 	}
 	return orgLLMStatusEvaluation{Configured: true, Active: true, ReasonCode: llmStatusReasonActive, ProviderName: providerName, BaseURLHash: hash}, nil

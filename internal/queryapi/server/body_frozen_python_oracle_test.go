@@ -106,7 +106,7 @@ func bodyOracleModels() []bodyOracleModel {
 		if err != nil {
 			t.Fatalf("NewReader: %v", err)
 		}
-		return newInvestmentExplainWorkHandler(reader, nil, nil, nil)
+		return newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 	}
 	filters := `{"time": {"range_days": 7}, "scope": {"level": "org", "ids": []}}`
 	return []bodyOracleModel{

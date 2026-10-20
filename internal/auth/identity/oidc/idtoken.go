@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"time"
@@ -116,8 +117,8 @@ func checkJSONObject(data []byte) error {
 	if err := walkObject(dec, 1); err != nil {
 		return err
 	}
-	if _, err := dec.Token(); err == nil {
-		return errors.New("trailing data after the JSON object")
+	if _, err := dec.Token(); err != io.EOF {
+		return errors.New("data after the JSON object")
 	}
 	return nil
 }

@@ -87,7 +87,13 @@ func getJSON(client *http.Client, req *http.Request, out any) error {
 	}
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
-	return dec.Decode(out)
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return errors.New("data after the JSON document")
+	}
+	return nil
 }
 
 // exchangeCode calls the token endpoint. The client secret and the code ride

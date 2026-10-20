@@ -4,11 +4,28 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-// StoreIdentities is the IdentityStore over the shared identity store.
-type StoreIdentities struct{ Store *identity.Store }
+// StoreIdentities is the IdentityStore over the shared identity store. Pool
+// and Schema read the email stored for a resolved account (auth.users).
+type StoreIdentities struct {
+	Store  *identity.Store
+	Pool   *pgxpool.Pool
+	Schema authschema.ValidatedIdentifier
+}
+
+// storedEmail is the email auth.users holds for the account: every account
+// this flow resolves has that row (projected or provisioned).
+func (a StoreIdentities) storedEmail(ctx context.Context, id uuid.UUID) (string, error) {
+	var email string
+	err := a.Pool.QueryRow(ctx, `SELECT email FROM `+authschema.Quote(a.Schema)+`.users WHERE principal_id = $1`, id).Scan(&email)
+	return email, err
+}
 
 // IdentityBySubject looks up (issuer, provider row, subject), then the go-api
 // fallback bound to the provider row's organization. More than one legacy
@@ -25,7 +42,11 @@ func (a StoreIdentities) IdentityBySubject(ctx context.Context, key ExternalKey,
 	case !found:
 		return Principal{}, ErrIdentityNotFound
 	}
-	return Principal{ID: p.ID, Active: p.IsActive && p.DisabledAt == nil}, nil
+	email, err := a.storedEmail(ctx, p.ID)
+	if err != nil {
+		return Principal{}, err
+	}
+	return Principal{ID: p.ID, Email: email, Active: p.IsActive && p.DisabledAt == nil}, nil
 }
 
 // EmailInUse reports whether any account holds the normalized address. It
@@ -58,5 +79,9 @@ func (a StoreIdentities) ProvisionFederated(ctx context.Context, account Federat
 	case err != nil:
 		return Principal{}, err
 	}
-	return Principal{ID: id, Active: true}, nil
+	email, err := a.storedEmail(ctx, id)
+	if err != nil {
+		return Principal{}, err
+	}
+	return Principal{ID: id, Email: email, Active: true}, nil
 }

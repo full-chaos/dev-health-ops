@@ -37,9 +37,11 @@ type ExternalKey struct {
 	Subject  string
 }
 
-// Principal is the account an identity resolves to.
+// Principal is the account an identity resolves to. Email is the address
+// stored for the account, never an IdP claim.
 type Principal struct {
 	ID     uuid.UUID
+	Email  string
 	Active bool
 }
 
@@ -277,8 +279,8 @@ type CallbackInput struct {
 	Cookie func(name string) (string, bool)
 }
 
-// Login is a successful callback. Email is the IdP's claim, for the response
-// body only; it never selected the account.
+// Login is a successful callback. Every field comes from stored state: the
+// account, its stored email and its membership.
 type Login struct {
 	PrincipalID uuid.UUID
 	Email       string
@@ -442,7 +444,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 		}
 		found = true
 	}
-	login := Login{PrincipalID: principal.ID, Email: v.profile.Email, Role: "member"}
+	login := Login{PrincipalID: principal.ID, Email: principal.Email, Role: "member"}
 	if found {
 		org := row.OrgID
 		login.OrgID = &org

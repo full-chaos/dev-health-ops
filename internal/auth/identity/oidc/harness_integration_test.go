@@ -318,7 +318,8 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 		stores[i] = store
 	}
 	h.store = stores[0]
-	h.ids = &switchIdentities{off: StoreIdentities{Store: stores[0]}, on: StoreIdentities{Store: stores[1]}, signup: opts.signup}
+	h.ids = &switchIdentities{off: StoreIdentities{Store: stores[0], Pool: env.runtime, Schema: env.schema},
+		on: StoreIdentities{Store: stores[1], Pool: env.runtime, Schema: env.schema}, signup: opts.signup}
 	h.orgID = h.seedOrg(t)
 	cfg := map[string]any{"client_id": h.clientID, "issuer": h.issuer}
 	if !opts.discovery {

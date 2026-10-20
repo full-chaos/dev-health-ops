@@ -113,6 +113,30 @@
       "why": "Closed vocabulary member `email_collision`."
     },
     {
+      "file": "valid-reason-replayed.json",
+      "why": "Closed vocabulary member `replayed`."
+    },
+    {
+      "file": "valid-reason-nonce-mismatch.json",
+      "why": "Closed vocabulary member `nonce_mismatch`."
+    },
+    {
+      "file": "valid-reason-signup-unavailable.json",
+      "why": "Closed vocabulary member `signup_unavailable`."
+    },
+    {
+      "file": "valid-reason-provisioning-disabled.json",
+      "why": "Closed vocabulary member `provisioning_disabled`."
+    },
+    {
+      "file": "valid-reason-domain-not-allowed.json",
+      "why": "Closed vocabulary member `domain_not_allowed`."
+    },
+    {
+      "file": "valid-reason-not-entitled.json",
+      "why": "Closed vocabulary member `not_entitled`."
+    },
+    {
       "file": "valid-reason-rate-limited.json",
       "why": "Closed vocabulary member `rate_limited`."
     },

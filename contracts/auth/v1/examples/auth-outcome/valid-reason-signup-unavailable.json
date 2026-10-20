@@ -1,0 +1,8 @@
+{
+  "occurred_at": "2026-10-18T10:00:00Z",
+  "operation": "sso_exchange",
+  "reason_code": "signup_unavailable",
+  "request_id": "req_EXAMPLE0000000000000000001",
+  "result": "denied",
+  "schema_version": "auth-outcome.v1"
+}

@@ -52,9 +52,13 @@ func replayCase(t *testing.T, dir string) {
 			rel = strings.ReplaceAll(strings.TrimSuffix(rel, ".fixture"), "{E9}", "é")
 			expected[rel] = true
 			writeTree(t, filepath.Join(work, rel), mustRead(t, path), info.Mode().Perm())
+		} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			rel, _ := filepath.Rel(in, path)
+			copySymlink(t, path, filepath.Join(work, rel))
 		}
 		return nil
 	})
+	seedSymlinks(t, filepath.Join(dir, "symlinks"), work)
 	sub := map[string]string{"{WORK}": work}
 	t.Chdir(work)
 	for _, setup := range caseSetups {
@@ -138,5 +142,42 @@ func writeTree(t *testing.T, path, content string, mode os.FileMode) {
 	}
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// copySymlink makes dst a symlink with the same target as src (a dangling target stays dangling).
+func copySymlink(t *testing.T, src, dst string) {
+	t.Helper()
+	target, err := os.Readlink(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, dst); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedSymlinks creates the symlinks a case lists in its "symlinks" file, one "<link> -> <target>" per line (git
+// keeps no dangling or looping link well, so the case records them as text). No file, no links.
+func seedSymlinks(t *testing.T, list, work string) {
+	t.Helper()
+	raw, err := os.ReadFile(list)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		link, target, ok := strings.Cut(line, " -> ")
+		if !ok {
+			t.Fatalf("%s: bad line %q", list, line)
+		}
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(work, link)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(work, link)); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

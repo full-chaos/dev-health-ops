@@ -19,6 +19,9 @@ func queuemapSeed(t *testing.T) string {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(in, path)
 			writeTree(t, filepath.Join(work, rel), mustRead(t, path), 0o644)
+		} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			rel, _ := filepath.Rel(in, path)
+			copySymlink(t, path, filepath.Join(work, rel))
 		}
 		return nil
 	})

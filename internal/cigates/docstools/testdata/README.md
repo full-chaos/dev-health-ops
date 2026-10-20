@@ -107,3 +107,24 @@ Differences on purpose:
   package, the key regex, has only `[a-z_.]` classes (ASCII in Python too); no `\w`, `\d` or `\b` is ported.
 - JSON examples decode as in Python: NaN, Infinity and
   -Infinity outside strings are accepted (rewritten to null before Go's decoder); other input Python rejects, Go rejects.
+
+# Part r3: symlinked pages and producer records with a missing field
+
+Recorded with Python 3.12.3 (`python3 -I -B`) from the scripts at ops `28adf8cd` (`check_investment_docs_drift.py`,
+`gen_queue_mapping_docs.py`, `check_queue_mapping_docs_drift.py`), same work-directory recipe as the parts above.
+
+`check-investment-drift-symlink-*`, `-dir-named-md`: Python walks `docs` with `Path.rglob("*.md")`, then `read_text()`.
+A case with a `symlinks` file (lines `<link> -> <target>`, relative to the link's directory) gets those links made in the
+work directory before the run (git keeps a dangling or looping link badly, so they are text). Python 3.12 results:
+a symlink to a page is read (`symlink-page-unknown-key`: rc 1, the unknown key reported under the link's name); a symlink
+to a directory is not descended (`symlink-dir`: rc 0, the page inside is never read); a dangling `*.md` link is listed
+and read (`FileNotFoundError`, rc 1); a directory named `*.md`, real or by link, is listed and read
+(`IsADirectoryError`, rc 1, `dir-named-md`, `symlink-to-dir-named-md`); a link loop named `*.md` gives
+`OSError: [Errno 40]` (rc 1, `symlink-loop`). The tracebacks are pinned as one line each (`stderr.traceback`).
+
+`genqm-missing-*`, `driftqm-missing-*`: one producer key removed from the first record of the list (or the list itself,
+`*-top-*`) in `genqm-ok` / `driftqm-ok` inputs. The Python generator indexes every one of these with `[]`: in
+`deployment.json` `processes`, `name`, `queues`, `job_kinds`, `binary`; in `registry.json` `jobs`, `kind`, `queue`,
+`timeout_seconds`, `max_attempts`; in `migration-state.json` `jobs`, `kind`, `state`, `route`, `rollback_route`. It reads
+none with `.get()`. Each gives `KeyError: '<key>'` (traceback), rc 1, stdout empty, for both verbs (the drift check
+catches only `SystemExit`, so the `KeyError` is not turned into an `ERROR:` line).

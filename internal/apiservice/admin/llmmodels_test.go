@@ -259,3 +259,38 @@ func TestBaseURLCarriesKeyAtWriteTime(t *testing.T) {
 		t.Fatal("a clean base url must pass")
 	}
 }
+
+func TestListProviderModelsRefusesAResponseWithoutTheListField(t *testing.T) {
+	for _, provider := range []string{"openai", "anthropic", "gemini"} {
+		for _, body := range []string{`{}`, `{"object":"list"}`, `{"data":[]}`, `{"models":[]}`} {
+			doer := &scriptedModelDoer{responses: []string{body}}
+			ids, reason := listProviderModels(context.Background(), doer, provider, "", "a-key-of-some-length")
+			if ids != nil || reason != llmModelsReasonInvalidResponse {
+				t.Fatalf("%s %s: ids=%v reason=%q", provider, body, ids, reason)
+			}
+		}
+	}
+}
+
+func TestCheckBaseURLRefusesAKeyBeforeAnyResolution(t *testing.T) {
+	calls := 0
+	spy := func(context.Context, string) (bool, string, error) { calls++; return true, "", nil }
+	stored, fresh := "sk-stored-"+"0123456789", "sk-fresh-"+"0123456789"
+	for name, tc := range map[string]struct {
+		url  string
+		keys []string
+	}{
+		"new key in host":    {"https://" + fresh + ".example.invalid/v1", []string{fresh, stored}},
+		"stored key in host": {"https://" + stored + ".example.invalid/v1", []string{"", stored}},
+		"stored key in path": {"https://p.example.invalid/" + stored, []string{stored}},
+	} {
+		valid, _, keyHit, err := checkBaseURL(context.Background(), tc.url, tc.keys, spy)
+		if err != nil || valid || !keyHit || calls != 0 {
+			t.Fatalf("%s: valid=%v keyHit=%v err=%v resolver calls=%d", name, valid, keyHit, err, calls)
+		}
+	}
+	valid, _, keyHit, err := checkBaseURL(context.Background(), "https://p.example.invalid/v1", []string{stored}, spy)
+	if err != nil || !valid || keyHit || calls != 1 {
+		t.Fatalf("clean url: valid=%v keyHit=%v err=%v calls=%d", valid, keyHit, err, calls)
+	}
+}

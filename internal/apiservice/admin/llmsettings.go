@@ -433,7 +433,21 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 	if in.baseURL != nil {
 		baseURLText = *in.baseURL
 	}
-	valid, reason, splitErr := llmorgsettings.ValidateBaseURLChecked(ctx, baseURLText)
+	var keys []string
+	if in.apiKey != nil {
+		keys = append(keys, *in.apiKey)
+	}
+	if baseURLText != "" {
+		stored, err := h.loadReadinessBYOConfig(ctx, orgID)
+		if err != nil {
+			return nil, nil, &llmStepError{"read stored llm key", err}
+		}
+		keys = append(keys, stored.apiKey.Reveal())
+	}
+	valid, reason, keyHit, splitErr := checkBaseURL(ctx, baseURLText, keys, llmorgsettings.ValidateBaseURLChecked)
+	if keyHit {
+		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
+	}
 	if splitErr != nil {
 		// urlsplit's ValueError escapes validate_llm_base_url: an unhandled 500.
 		return nil, nil, &llmStepError{"validate base url", splitErr}
@@ -443,9 +457,6 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 			reason = "Invalid LLM base_url"
 		}
 		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", reason), nil
-	}
-	if in.apiKey != nil && baseURLCarriesKey(baseURLText, *in.apiKey) {
-		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
 	}
 
 	tx, err := h.store.Pool.Begin(ctx)

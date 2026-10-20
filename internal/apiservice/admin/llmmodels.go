@@ -59,6 +59,18 @@ func baseURLCarriesKey(baseURL, apiKey string) bool {
 	return carriesKey(keyLeakForms(apiKey), baseURL)
 }
 
+// checkBaseURL refuses a base url that carries any of the keys BEFORE the
+// validator can resolve its host, so a key in a hostname never reaches DNS.
+func checkBaseURL(ctx context.Context, baseURL string, keys []string, validate func(context.Context, string) (bool, string, error)) (valid bool, reason string, keyHit bool, err error) {
+	for _, key := range keys {
+		if baseURLCarriesKey(baseURL, key) {
+			return false, "Invalid LLM base_url", true, nil
+		}
+	}
+	valid, reason, err = validate(ctx, baseURL)
+	return valid, reason, false, err
+}
+
 // keyLeakForms are the lower-cased forms in which the saved key could be
 // echoed back by a provider: raw, percent-escaped, hex, and base64 at each of
 // the three byte alignments (std and url alphabets, no padding).
@@ -222,16 +234,16 @@ func parseLLMModelPage(provider string, body []byte) (llmModelPage, bool) {
 	switch provider {
 	case "gemini":
 		var parsed struct {
-			Models []struct {
+			Models *[]struct {
 				Name    string   `json:"name"`
 				Methods []string `json:"supportedGenerationMethods"`
 			} `json:"models"`
 			NextPageToken string `json:"nextPageToken"`
 		}
-		if json.Unmarshal(body, &parsed) != nil {
+		if json.Unmarshal(body, &parsed) != nil || parsed.Models == nil {
 			return page, false
 		}
-		for _, m := range parsed.Models {
+		for _, m := range *parsed.Models {
 			generates := false
 			for _, method := range m.Methods {
 				generates = generates || method == "generateContent"
@@ -243,16 +255,16 @@ func parseLLMModelPage(provider string, body []byte) (llmModelPage, bool) {
 		page.next = parsed.NextPageToken
 	case "anthropic":
 		var parsed struct {
-			Data []struct {
+			Data *[]struct {
 				ID string `json:"id"`
 			} `json:"data"`
 			HasMore bool   `json:"has_more"`
 			LastID  string `json:"last_id"`
 		}
-		if json.Unmarshal(body, &parsed) != nil {
+		if json.Unmarshal(body, &parsed) != nil || parsed.Data == nil {
 			return page, false
 		}
-		for _, m := range parsed.Data {
+		for _, m := range *parsed.Data {
 			if m.ID != "" {
 				page.ids = append(page.ids, m.ID)
 			}
@@ -262,14 +274,14 @@ func parseLLMModelPage(provider string, body []byte) (llmModelPage, bool) {
 		}
 	default:
 		var parsed struct {
-			Data []struct {
+			Data *[]struct {
 				ID string `json:"id"`
 			} `json:"data"`
 		}
-		if json.Unmarshal(body, &parsed) != nil {
+		if json.Unmarshal(body, &parsed) != nil || parsed.Data == nil {
 			return page, false
 		}
-		for _, m := range parsed.Data {
+		for _, m := range *parsed.Data {
 			if m.ID != "" {
 				page.ids = append(page.ids, m.ID)
 			}
@@ -355,6 +367,9 @@ func listProviderModels(ctx context.Context, client providerfoundation.HTTPDoer,
 			target = llmModelListNextURL(provider, first.url, page.next)
 		}
 	}
+	if len(ids) == 0 {
+		return nil, llmModelsReasonInvalidResponse
+	}
 	if provider != "anthropic" {
 		sort.Strings(ids)
 	}
@@ -416,7 +431,7 @@ func (h *handlers) getLLMSettingsModels(w http.ResponseWriter, r *http.Request) 
 		unavailable(llmModelsReasonAPIKeyRequired)
 		return
 	}
-	valid, _, err := llmorgsettings.ValidateBaseURLChecked(ctx, cfg.baseURL)
+	valid, _, _, err := checkBaseURL(ctx, cfg.baseURL, []string{apiKey}, llmorgsettings.ValidateBaseURLChecked)
 	if err != nil {
 		h.internalError(ctx, w, "validate byo base url", err)
 		return

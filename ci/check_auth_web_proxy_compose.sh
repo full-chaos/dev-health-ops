@@ -53,7 +53,9 @@ export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-auth-compose-proof}"
 # Passwords with every URI-reserved character the DSNs must survive: the DSNs
 # are keyword-form, so none of these may break a connection (a URI form failed
 # on a trailing '#').
-export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-su#per@pw/1:2?3%4&5=6}"
+# go-api's chain builds a URL from this password (POSTGRES_URI), so here it is URI-safe; the auth
+# runtime password below keeps every reserved character (keyword-form DSN).
+export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')}"
 export AUTH_RUNTIME_DATABASE_PASSWORD="${AUTH_RUNTIME_DATABASE_PASSWORD:-au#th@pw/1:2?3%4&5=6 x}"
 export COMMIT="${COMMIT:-0000000000000000000000000000000000000000}"
 

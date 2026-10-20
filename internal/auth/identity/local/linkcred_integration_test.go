@@ -781,17 +781,34 @@ func TestIssueRunsOneStatementSequenceForEveryCase(t *testing.T) {
 	if len(decoy) == 0 {
 		t.Fatal("no statements were traced")
 	}
-	if !reflect.DeepEqual(decoy, first) || !reflect.DeepEqual(first, again) {
-		t.Errorf("statement sequences differ:\ndecoy  %q\nfirst  %q\nreissue %q", decoy, first, again)
+	if !reflect.DeepEqual(decoy, first) {
+		t.Errorf("statement sequences differ:\ndecoy %q\nfirst %q", decoy, first)
+	}
+	// Both look for an unconsumed credential of the principal and purpose
+	// before they insert; a reissue then consumes what that finds.
+	priorCheck := func(seq []string) bool {
+		for _, sql := range seq {
+			if strings.Contains(sql, "consumed_at IS NULL") && strings.HasPrefix(sql, "SELECT EXISTS") {
+				return true
+			}
+		}
+		return false
+	}
+	if !priorCheck(decoy) || !priorCheck(first) || !priorCheck(again) {
+		t.Errorf("an issue path skips the unconsumed-credential check:\ndecoy %q\nfirst %q\nreissue %q", decoy, first, again)
+	}
+	if !strings.Contains(strings.Join(again, "\n"), "SET consumed_at") {
+		t.Errorf("a reissue does not consume the prior credential: %q", again)
 	}
 	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials`); n != 2 {
 		t.Errorf("rows = %d, want 2: the decoy wrote none", n)
 	}
 }
 
-// A replaced credential is refused as superseded; the refusal burns it and
-// writes a denied audit row. The newest one redeems.
-func TestOlderCredentialIsRefusedAsSupersededAndAudited(t *testing.T) {
+// A reissue consumes every prior unconsumed credential of the principal and
+// purpose in the issue transaction, with an audit row; the state matches the
+// contract at once, for any later reader of consumed_at.
+func TestReissueConsumesPriorCredentialsAtOnce(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
 	p := env.principal(t, ctx)
@@ -800,24 +817,51 @@ func TestOlderCredentialIsRefusedAsSupersededAndAudited(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("older")})
-	if ok || !errors.Is(err, ErrLinkSuperseded) {
-		t.Fatalf("older Redeem = ok %v, err %v; want ok=false, ErrLinkSuperseded", ok, err)
+	old, fresh := linkHash("older"), linkHash("newer")
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE token_hash = $1 AND consumed_at IS NOT NULL`, old[:]); n != 1 {
+		t.Errorf("the older credential is not consumed after the reissue")
+	}
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE token_hash = $1 AND consumed_at IS NULL`, fresh[:]); n != 1 {
+		t.Errorf("the newest credential is not unconsumed")
 	}
 	if n := env.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events
-		WHERE event_type = 'auth.link_credential.superseded' AND outcome = 'denied' AND subject_principal_id = $1`, p.String()); n != 1 {
-		t.Errorf("superseded audit rows = %d, want 1", n)
+		WHERE event_type = 'auth.link_credential.superseded' AND outcome = 'allowed' AND subject_principal_id = $1`, p.String()); n != 1 {
+		t.Errorf("supersede audit rows = %d, want 1", n)
 	}
-	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE principal_id = $1 AND consumed_at IS NOT NULL`, p.String()); n != 1 {
-		t.Errorf("consumed rows = %d, want 1 (the stale credential is burned)", n)
+	other := IssueRequest{PrincipalID: p, Purpose: PurposeEmailVerification, TokenHash: linkHash("other-purpose"), TTL: VerificationTTL}
+	if err := links.Issue(ctx, other); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("older")}); ok || errors.Is(err, ErrLinkSuperseded) {
-		t.Errorf("a second presentation of the stale credential = ok %v, err %v; want a plain refusal", ok, err)
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE principal_id = $1 AND consumed_at IS NULL`, p.String()); n != 2 {
+		t.Errorf("unconsumed rows = %d, want 2 (one per purpose)", n)
+	}
+}
+
+// A replaced credential presented later is refused as superseded and is never
+// redeemed; the newest one redeems once.
+func TestOlderCredentialIsRefusedAsSuperseded(t *testing.T) {
+	ctx := context.Background()
+	env, links := linkEnv(t, ctx)
+	p := env.principal(t, ctx)
+	for _, s := range []string{"older", "newer"} {
+		if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash(s), TTL: ResetTTL}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	older := RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("older")}
+	if _, ok, err := links.Redeem(ctx, older); ok || !errors.Is(err, ErrLinkSuperseded) {
+		t.Fatalf("older Redeem = ok %v, err %v; want ok=false, ErrLinkSuperseded", ok, err)
 	}
 	if _, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("newer")}); err != nil || !ok {
 		t.Errorf("newest Redeem = ok %v, err %v", ok, err)
 	}
+	if _, ok, err := links.Redeem(ctx, older); ok || !errors.Is(err, ErrLinkSuperseded) {
+		t.Errorf("older Redeem after the newest was used = ok %v, err %v; want ErrLinkSuperseded", ok, err)
+	}
 	if _, ok, _ := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("newer")}); ok {
 		t.Error("the newest credential redeemed twice")
+	}
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.password.reset' AND subject_principal_id = $1`, p.String()); n != 1 {
+		t.Errorf("reset audit rows = %d, want 1 (only the newest consumed)", n)
 	}
 }

@@ -14,8 +14,8 @@ import (
 // go-quality runs as parallel legs whose union is exactly `check_go.sh ci` (race in its sharded form), the matrix
 // carries exactly the legs the script knows, the fan-in keeps the required context `go-quality` and judges the legs
 // `unconditional`, and the static-only steps run only on the static leg. The tests that EXECUTE check_go.sh against a
-// stand-in go, the weights table versus `go list`, the race-excluded test census and the -trimpath derivation are
-// MOVED-TO-C and stay in Python until PR-C replaces them.
+// stand-in go, the weights table versus `go list`, the race-excluded test census and the -trimpath derivation live in
+// internal/cigates/testshard.
 
 // the command must start a line of a step's run: an echo of the same words runs nothing
 var legRunRe = regexp.MustCompile(`(?m)^\s*bash ci/check_go\.sh ci-leg \$\{\{ matrix\.args \}\}\s*$`)

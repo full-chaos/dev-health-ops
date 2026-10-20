@@ -385,6 +385,18 @@ VALUES ($1, $2, $6, 'oidc', 'active', $3, $4::json, $5::json, json_build_object(
 	return id
 }
 
+// seedRawProvider seeds a provider row whose stored config is raw JSON text.
+func (h *harness) seedRawProvider(t *testing.T, orgID uuid.UUID, rawConfig string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := h.env.admin.Exec(context.Background(), `INSERT INTO public.sso_providers
+	(id, org_id, name, protocol, status, auto_provision_users, config)
+VALUES ($1, $2, $3, 'oidc', 'active', true, $4::json)`, id, orgID, "test idp "+id.String(), rawConfig); err != nil {
+		t.Fatalf("seed provider: %v", err)
+	}
+	return id
+}
+
 func (h *harness) seedPublicUser(t *testing.T, email, authProvider, authProviderID string) uuid.UUID {
 	t.Helper()
 	id := uuid.New()

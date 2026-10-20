@@ -669,3 +669,51 @@ func TestRefusedLogLineCarriesNoURLQuery(t *testing.T) {
 		t.Fatalf("the log line holds the token URL: %q", logged.String())
 	}
 }
+
+func TestEntitlementIsCheckedBeforeAnyDecode(t *testing.T) {
+	ctx := context.Background()
+	for name, raw := range map[string]string{"array": `[]`, "scopes not a list": `{"client_id":"c","scopes":"openid"}`,
+		"claim mapping not an object": `{"client_id":"c","claim_mapping":[1]}`} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, harnessOpts{signup: true})
+			unlicensed := h.seedRawProvider(t, h.seedOrgTier(t, "community"), raw)
+			licensed := h.seedRawProvider(t, h.orgID, raw)
+			var failure *Error
+
+			_, err := h.svc.Authorize(ctx, unlicensed, "")
+			if !errors.As(err, &failure) || failure.Status != http.StatusPaymentRequired || failure.Reason != ReasonNotEntitled {
+				t.Fatalf("authorize, non-entitled org with a malformed stored config = %v, want 402 not_entitled", err)
+			}
+			_, _, err = h.svc.Callback(ctx, unlicensed, CallbackInput{Code: "c", State: "s"})
+			if !errors.As(err, &failure) || failure.Status != http.StatusPaymentRequired {
+				t.Fatalf("callback, non-entitled org with a malformed stored config = %v, want 402", err)
+			}
+			_, err = h.svc.Authorize(ctx, licensed, "")
+			if !errors.Is(err, ErrProviderConfig) {
+				t.Fatalf("authorize, entitled org with a malformed stored config = %v, want ErrProviderConfig", err)
+			}
+		})
+	}
+}
+
+func TestEntitlementIsCheckedBeforeTheRequestBody(t *testing.T) {
+	h := newHarness(t, harnessOpts{signup: true})
+	unlicensed := h.seedProvider(t, h.seedOrgTier(t, "community"), map[string]any{"client_id": h.clientID, "issuer": h.issuer,
+		"token_endpoint": h.idp.server.URL + "/token", "jwks_uri": h.idp.server.URL + "/jwks"}, true, nil)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/auth/oidc/{provider_id}/authorize", h.svc.AuthorizeHandler())
+	mux.Handle("POST /api/v1/auth/oidc/{provider_id}/callback", h.svc.CallbackHandler())
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	for _, route := range []string{"authorize", "callback"} {
+		resp, err := http.Post(server.URL+"/api/v1/auth/oidc/"+unlicensed.String()+"/"+route, "application/json",
+			strings.NewReader(`{"code":1,"state":`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusPaymentRequired {
+			t.Fatalf("%s with a malformed body for a non-entitled org = %d, want 402", route, resp.StatusCode)
+		}
+	}
+}

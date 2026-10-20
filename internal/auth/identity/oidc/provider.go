@@ -44,6 +44,9 @@ type ProviderSource interface {
 // ErrProviderNotFound reports an unknown provider id.
 var ErrProviderNotFound = errors.New("oidc: provider not found")
 
+// ErrProviderConfig reports a stored provider row this flow cannot read.
+var ErrProviderConfig = errors.New("oidc: stored provider configuration is malformed")
+
 // PGProviders reads public.sso_providers. The runtime role needs column SELECT
 // on the columns below and nothing else.
 type PGProviders struct{ Pool *pgxpool.Pool }

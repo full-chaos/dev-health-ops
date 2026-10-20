@@ -306,9 +306,9 @@ func SelfSignUp(requestID *string) Actor { return Actor{RequestID: requestID, se
 // one transaction. A key another principal holds is ErrIdentityConflict and is
 // never re-pointed; a key the principal already holds is ErrAlreadyLinked; a
 // key whose issuer and provider the principal holds with another subject is
-// ErrProviderAlreadyLinked. The principal row is locked for the transaction,
-// so concurrent links of one principal are checked one after the other. It
-// returns the new external identity id.
+// ErrProviderAlreadyLinked. The principal row is locked FOR UPDATE first, as
+// UnlinkIdentity locks it, so links and unlinks of one principal run one after
+// the other in one lock order. It returns the new external identity id.
 func (s *Store) LinkIdentity(ctx context.Context, key ExternalKey, principal uuid.UUID, actor Actor) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "link", err) }()
 	if err := key.Validate(); err != nil {
@@ -449,16 +449,9 @@ func (s *Store) hasPassword(ctx context.Context, queryRow func(context.Context, 
 	return has, err
 }
 
-// oneIdentityPerProvider locks the principal row and refuses a second subject
-// at the key's issuer and provider.
+// oneIdentityPerProvider refuses a second subject at the key's issuer and
+// provider. The caller holds the principal row lock (requireLivePrincipal).
 func (s *Store) oneIdentityPerProvider(ctx context.Context, tx audit.TxOps, key ExternalKey, principal uuid.UUID) error {
-	var locked uuid.UUID
-	if err := tx.QueryRow(ctx, `SELECT id FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, principal).Scan(&locked); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrPrincipalUnavailable
-		}
-		return err
-	}
 	var others int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+s.q+`.external_identities
 WHERE principal_id = $1 AND issuer = $2 AND provider = $3 AND subject <> $4`,
@@ -473,7 +466,7 @@ WHERE principal_id = $1 AND issuer = $2 AND provider = $3 AND subject <> $4`,
 
 func (s *Store) requireLivePrincipal(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error {
 	var disabled bool
-	err := tx.QueryRow(ctx, `SELECT disabled_at IS NOT NULL FROM `+s.q+`.principals WHERE id = $1 FOR SHARE`, principal).Scan(&disabled)
+	err := tx.QueryRow(ctx, `SELECT disabled_at IS NOT NULL FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, principal).Scan(&disabled)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && disabled) {
 		return ErrPrincipalUnavailable
 	}

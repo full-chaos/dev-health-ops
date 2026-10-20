@@ -16,7 +16,7 @@ import (
 )
 
 // CHAOS-10177: Go port of tests/tooling/test_go_workflow_path_filters.py (CHAOS-4834, 6801). `go.yml`'s `paths` is the
-// list ci/go_relevance.py reads, so a fixture or Go input missing from it means a fixture-only change is judged
+// list ci/go_relevance.sh reads, so a fixture or Go input missing from it means a fixture-only change is judged
 // irrelevant and a required gate is skipped. The oracle is the tree, never a pattern: every non-Go file under a
 // testdata/ or fixtures/ directory, every file Go source NAMES (string literal, filepath.Join, //go:embed,
 // os.ReadDir) must match the filter or be excused with a reason. A literal that names a
@@ -51,7 +51,7 @@ func hasDataSuffix(s string) bool {
 	return false
 }
 
-// githubGlobToRegexp mirrors ci/go_relevance.py's github_glob_to_regex: `**/` is zero or more directories at any
+// githubGlobToRegexp mirrors ci/go_relevance.sh's glob translation: `**/` is zero or more directories at any
 // position, `**` spans separators, `*` does not, and `?[]!` are refused rather than read as literal text.
 func githubGlobToRegexp(pattern string) (*regexp.Regexp, error) {
 	if i := strings.IndexAny(pattern, "?[]!"); i >= 0 {

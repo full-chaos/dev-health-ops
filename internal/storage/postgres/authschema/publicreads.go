@@ -46,6 +46,12 @@ func PublicReadColumns() []ColumnGrant {
 	}
 }
 
+// SessionReaderColumns is what a session reader role may SELECT in the auth
+// schema: column-level, on the sessions table only.
+func SessionReaderColumns() ColumnGrant {
+	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
+}
+
 // rowQuerier1 is the slice of a connection the relation lookup needs.
 type rowQuerier1 interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row

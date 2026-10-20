@@ -22,7 +22,7 @@ WHAT THIS PINS
    back makes it a PR check again; a lost `push` trigger means main is never
    checked, silently.
 3. The `push` trigger has no path filter: a filter skips the run on main
-   with no record. Relevance is decided INSIDE the job (ci/go_relevance.py),
+   with no record. Relevance is decided INSIDE the job (ci/go_relevance.sh),
    which reports its skip.
 4. The job has no job-level `if:` (GitHub reports a skipped job as Success).
 5. The relevance step takes the push range from `github.event.before`, and
@@ -75,7 +75,7 @@ def _run_relevance_step(
 ) -> tuple[str, str]:
     """Execute the workflow's own relevance step in a scratch repo.
 
-    The repo holds the real ci/go_relevant_diff.sh, ci/go_relevance.py and
+    The repo holds the real ci/go_relevant_diff.sh, ci/go_relevance.sh and
     go.yml (the decider reads its pattern list from there), one base commit,
     and one pushed commit that changes `changed_file`. Returns the step's
     GITHUB_OUTPUT and stdout.
@@ -83,7 +83,7 @@ def _run_relevance_step(
     repo = tmp_path / "repo"
     for relative in (
         "ci/go_relevant_diff.sh",
-        "ci/go_relevance.py",
+        "ci/go_relevance.sh",
         ".github/workflows/go.yml",
     ):
         target = repo / relative

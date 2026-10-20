@@ -220,6 +220,12 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		))
 	}
 
+	readerStatements, err := sessionReaderStatements(ctx, conn, options, schemaID)
+	if err != nil {
+		return err
+	}
+	statements = append(statements, readerStatements...)
+
 	logger := options.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)

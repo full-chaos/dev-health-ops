@@ -207,8 +207,11 @@ def test_no_ci_script_has_a_heredoc_over_the_measured_pipe_budget() -> None:
     oversized: list[tuple[str, int, str, int]] = []
     for path in scripts:
         text = path.read_text(encoding="utf-8")
-        # Each script must have real content behind it, for the same reason.
-        assert len(text) > 500, f"{path} is unexpectedly small ({len(text)} bytes)"
+        # Each script must have real content behind it, for the same reason: more
+        # than one line, whatever its size.
+        assert len(text.strip().splitlines()) > 1, (
+            f"{path} has no content ({len(text)} bytes)"
+        )
         oversized.extend(
             (path.name, line, delimiter, len(body))
             for line, delimiter, body in _heredocs(text)

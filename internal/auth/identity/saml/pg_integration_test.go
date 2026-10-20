@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -270,6 +271,15 @@ func nid(v string) saml.NameID { return saml.NameID{Format: persistent, Value: v
 
 func uniqueEmail(prefix string) string { return prefix + "-" + uuid.NewString()[:8] + "@example.com" }
 
+func (h *harness) count(query string, args ...any) int {
+	h.t.Helper()
+	var n int
+	if err := h.db.admin.QueryRow(context.Background(), query, args...).Scan(&n); err != nil {
+		h.t.Fatal(err)
+	}
+	return n
+}
+
 func (h *harness) identityCount() int {
 	h.t.Helper()
 	var n int
@@ -468,13 +478,22 @@ func TestSAMLEmailCollisionIsAConflict(t *testing.T) {
 				h.ownUsers()
 			}
 			before := h.identityCount()
-			_, err := h.consume(h.respond(resp{nameID: nid("other-subject"), email: strings.ToUpper(existingEmail)}), nil)
+			principals, sessions := h.count(`SELECT count(*) FROM auth.principals`), h.count(`SELECT count(*) FROM auth.sessions`)
+			assertionID := "_a" + randomHex(t)
+			_, err := h.consume(h.respond(resp{assertionID: assertionID, nameID: nid("other-subject"), email: strings.ToUpper(existingEmail)}), nil)
 			var conflict *saml.EmailConflictError
 			if !errors.As(err, &conflict) || (!owned && conflict.Method != "local") {
 				t.Fatalf("err = %v, want EmailConflictError naming the local method", err)
 			}
+			// No account, identity or session is written; the assertion is consumed.
 			if h.identityCount() != before {
 				t.Fatal("a conflict wrote an identity")
+			}
+			if h.count(`SELECT count(*) FROM auth.principals`) != principals || h.count(`SELECT count(*) FROM auth.sessions`) != sessions {
+				t.Fatal("a conflict wrote a principal or a session")
+			}
+			if n := h.count(`SELECT count(*) FROM auth.saml_assertion_uses WHERE issuer = $1 AND assertion_id_hash = sha256($2::bytea)`, h.idp.entityID, []byte(assertionID)); n != 1 {
+				t.Fatalf("assertion-use rows for the conflicting assertion = %d, want 1", n)
 			}
 			var provider, providerID *string
 			if err := h.db.admin.QueryRow(ctx, `SELECT auth_provider, auth_provider_id FROM public.users WHERE id = $1`, existing).Scan(&provider, &providerID); err != nil {
@@ -638,6 +657,54 @@ func TestSAMLAllowedDomainsCompareWithoutCase(t *testing.T) {
 	signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: "new-" + uuid.NewString()[:8] + "@EXAMPLE.com"}), nil)
 	if err != nil || !signIn.Created {
 		t.Fatalf("sign-up %+v err %v, want an account", signIn, err)
+	}
+}
+
+// TestSAMLResponseIsBoundToTheRowOfItsRoute: a provider row whose ACS override
+// names another row is refused at load, so a response addressed to that other
+// row never completes a sign-in through this row's route.
+func TestSAMLResponseIsBoundToTheRowOfItsRoute(t *testing.T) {
+	idp := newTestIdP(t)
+	a := newHarnessWithIdP(t, idp, true)
+	a.linkedUser(uniqueEmail("a"), "user-1")
+	b := newHarnessWithIdP(t, idp, true)
+	user := b.linkedUser(uniqueEmail("b"), "user-1")
+	b.member(user)
+	config := fmt.Sprintf(`{"entity_id": %q, "sso_url": "https://idp.example.test/sso", "certificate": %q, "sp_acs_url": %q, "sp_entity_id": %q}`,
+		idp.entityID, encodeCert(idp), a.provider.ACSURL(baseURL), a.provider.SPEntityID(baseURL))
+	if _, err := b.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET config = $2::json WHERE id = $1`, b.provider.ID, config); err != nil {
+		t.Fatal(err)
+	}
+	issuer := &recordingIssuer{}
+	mux := b.mux(issuer)
+	posted := a.respond(resp{nameID: nid("user-1"), email: "a@example.com"})
+	rec := serve(mux, http.MethodPost, "/api/v1/auth/saml/"+b.provider.ID.String()+"/acs", map[string]string{"SAMLResponse": posted}, nil)
+	if rec.Code == http.StatusOK || len(issuer.got) != 0 {
+		t.Fatalf("a response addressed to row A signed in through row B's route: %d %s %+v", rec.Code, rec.Body, issuer.got)
+	}
+	if _, err := b.svc.Consume(context.Background(), b.provider.ID, posted, nil); !errors.Is(err, saml.ErrConfig) {
+		t.Fatalf("row B with an override naming row A: err = %v, want ErrConfig", err)
+	}
+	if _, err := a.consume(a.respond(resp{nameID: nid("user-1"), email: "a@example.com"}), nil); err != nil {
+		t.Fatalf("row A is unaffected by row B's config: %v", err)
+	}
+}
+
+// TestSAMLPrefixedACSOverrideSignsIn: an override that puts a proxy prefix in
+// front of /saml/{row id}/acs is this row's ACS URL and signs in.
+func TestSAMLPrefixedACSOverrideSignsIn(t *testing.T) {
+	h := newHarness(t, true)
+	user := h.linkedUser(uniqueEmail("u"), "user-1")
+	acs := "https://proxy.example.com/edge/api/v1/auth/saml/" + h.provider.ID.String() + "/acs"
+	config := fmt.Sprintf(`{"entity_id": %q, "sso_url": "https://idp.example.test/sso", "certificate": %q, "sp_acs_url": %q}`, h.idp.entityID, encodeCert(h.idp), acs)
+	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET config = $2::json WHERE id = $1`, h.provider.ID, config); err != nil {
+		t.Fatal(err)
+	}
+	posted := b64(h.idp.response(t, resp{nameID: nid("user-1"), email: "a@example.com", destination: strp(acs), recipient: strp(acs),
+		audiences: [][]string{{h.provider.SPEntityID(baseURL)}}}))
+	signIn, err := h.svc.Consume(context.Background(), h.provider.ID, posted, nil)
+	if err != nil || signIn.PrincipalID != user {
+		t.Fatalf("prefixed override: sign-in %+v err %v", signIn, err)
 	}
 }
 

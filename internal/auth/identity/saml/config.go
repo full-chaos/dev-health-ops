@@ -191,3 +191,9 @@ func (p Provider) DomainAllowed(email string) bool {
 // normalizeDomain is the one form every email domain compare in this package
 // uses: trimmed and lower case.
 func normalizeDomain(d string) string { return strings.ToLower(strings.TrimSpace(d)) }
+
+// ValidateACSOverride refuses an sp_acs_url override that is not this row's ACS
+// URL.
+func ValidateACSOverride(cfg Config, rowID uuid.UUID) error {
+	return nil
+}

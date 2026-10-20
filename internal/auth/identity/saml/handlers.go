@@ -55,10 +55,17 @@ func (h Handlers) Metadata(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"metadata_xml": md.XML, "entity_id": md.EntityID, "acs_url": md.ACSURL})
 }
 
-// Initiate is POST /saml/{provider_id}/initiate with {"relay_state": ...}.
+// Initiate is POST /saml/{provider_id}/initiate with {"relay_state": ...}. The
+// provider and its organization's entitlement are resolved before the body is
+// read.
 func (h Handlers) Initiate(w http.ResponseWriter, r *http.Request) {
 	providerID, ok := h.providerID(w, r)
 	if !ok {
+		return
+	}
+	p, err := h.Service.Resolve(r.Context(), providerID, true)
+	if err != nil {
+		h.writeError(w, r, err)
 		return
 	}
 	var body struct {
@@ -71,7 +78,7 @@ func (h Handlers) Initiate(w http.ResponseWriter, r *http.Request) {
 	if body.RelayState != nil {
 		relayState = *body.RelayState
 	}
-	init, err := h.Service.Initiate(r.Context(), providerID, relayState)
+	init, err := h.Service.InitiateFor(r.Context(), p, relayState)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -83,24 +90,32 @@ func (h Handlers) Initiate(w http.ResponseWriter, r *http.Request) {
 // ACS is POST /saml/{provider_id}/acs. It takes the SAML HTTP-POST binding the
 // metadata advertises (a form with SAMLResponse and RelayState) and the go-api
 // JSON body ({"SAMLResponse"|"saml_response", "RelayState"|"relay_state"}).
+// The provider and its organization's entitlement are resolved before the
+// body is read.
 func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
 	providerID, ok := h.providerID(w, r)
 	if !ok {
+		return
+	}
+	p, err := h.Service.Resolve(r.Context(), providerID, true)
+	if err != nil {
+		h.writeError(w, r, err)
 		return
 	}
 	posted, ok := readSAMLResponse(w, r)
 	if !ok {
 		return
 	}
+	cookiePath := ACSPath(p, h.Service.BaseURL())
 	cookie := func(name string) string {
 		c, err := r.Cookie(name)
 		if err != nil {
 			return ""
 		}
-		http.SetCookie(w, bindingCookie(name, "", ACSPath(Provider{ID: providerID}), -1))
+		http.SetCookie(w, bindingCookie(name, "", cookiePath, -1))
 		return c.Value
 	}
-	signIn, err := h.Service.Consume(r.Context(), providerID, posted, cookie)
+	signIn, err := h.Service.ConsumeFor(r.Context(), p, posted, cookie)
 	if err != nil {
 		h.writeError(w, r, err)
 		return

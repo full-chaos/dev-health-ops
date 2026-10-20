@@ -170,7 +170,7 @@ func (p Provider) ACSURL(base string) string {
 }
 
 // DomainAllowed reports whether email's domain is in the provider's allowed
-// list. An empty list allows every domain.
+// list, compared through normalizeDomain. An empty list allows every domain.
 func (p Provider) DomainAllowed(email string) bool {
 	if len(p.AllowedDomains) == 0 {
 		return true
@@ -179,11 +179,15 @@ func (p Provider) DomainAllowed(email string) bool {
 	if at < 0 {
 		return false
 	}
-	domain := email[at+1:]
+	domain := normalizeDomain(email[at+1:])
 	for _, allowed := range p.AllowedDomains {
-		if allowed == domain {
+		if normalizeDomain(allowed) == domain {
 			return true
 		}
 	}
 	return false
 }
+
+// normalizeDomain is the one form every email domain compare in this package
+// uses: trimmed and lower case.
+func normalizeDomain(d string) string { return strings.ToLower(strings.TrimSpace(d)) }

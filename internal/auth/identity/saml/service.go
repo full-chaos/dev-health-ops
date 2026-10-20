@@ -66,9 +66,10 @@ func (s *Service) logger() *slog.Logger {
 	return slog.Default()
 }
 
-// provider loads a SAML provider and applies the entitlement gate. active
-// additionally requires status "active".
-func (s *Service) provider(ctx context.Context, id uuid.UUID, active bool) (Provider, error) {
+// Resolve loads the provider, then its organization's entitlement gate, then
+// the protocol and (with active) status checks. Every route runs it before it
+// reads a request body.
+func (s *Service) Resolve(ctx context.Context, id uuid.UUID, active bool) (Provider, error) {
 	p, err := s.Providers.Provider(ctx, id)
 	if err != nil {
 		return Provider{}, err
@@ -98,7 +99,7 @@ type Metadata struct {
 
 // Metadata returns the SP metadata document.
 func (s *Service) Metadata(ctx context.Context, providerID uuid.UUID) (Metadata, error) {
-	p, err := s.provider(ctx, providerID, false)
+	p, err := s.Resolve(ctx, providerID, false)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -120,12 +121,18 @@ type Initiation struct {
 	MaxAge      time.Duration
 }
 
-// Initiate stores a new request and builds the AuthnRequest redirect.
+// Initiate resolves the provider and starts a sign-in.
 func (s *Service) Initiate(ctx context.Context, providerID uuid.UUID, relayState string) (Initiation, error) {
-	p, err := s.provider(ctx, providerID, true)
+	p, err := s.Resolve(ctx, providerID, true)
 	if err != nil {
 		return Initiation{}, err
 	}
+	return s.InitiateFor(ctx, p, relayState)
+}
+
+// InitiateFor stores a new request for a resolved provider and builds the
+// AuthnRequest redirect.
+func (s *Service) InitiateFor(ctx context.Context, p Provider, relayState string) (Initiation, error) {
 	base := s.BaseURL()
 	requestID, err := newRequestID()
 	if err != nil {
@@ -153,7 +160,7 @@ func (s *Service) Initiate(ctx context.Context, providerID uuid.UUID, relayState
 	s.logger().InfoContext(ctx, "auth saml: sign-in request stored", "provider_id", p.ID)
 	return Initiation{
 		RedirectURL: redirect, CookieName: BindingCookieName(requestID), CookieValue: nonce,
-		CookiePath: ACSPath(p), MaxAge: FlowTTL,
+		CookiePath: ACSPath(p, base), MaxAge: FlowTTL,
 	}, nil
 }
 
@@ -167,13 +174,20 @@ type SignIn struct {
 	Created        bool
 }
 
-// Consume verifies a posted SAMLResponse and resolves the account. cookie
-// returns a request cookie value by name ("" when absent).
+// Consume resolves the provider and completes a sign-in.
 func (s *Service) Consume(ctx context.Context, providerID uuid.UUID, posted string, cookie func(string) string) (SignIn, error) {
-	p, err := s.provider(ctx, providerID, true)
+	p, err := s.Resolve(ctx, providerID, true)
 	if err != nil {
 		return SignIn{}, err
 	}
+	return s.ConsumeFor(ctx, p, posted, cookie)
+}
+
+// ConsumeFor verifies a posted SAMLResponse for a resolved provider and
+// resolves the account. cookie returns a request cookie value by name (""
+// when absent). On an identity key hit the account signs in from its stored
+// state and the assertion's email is not read; only a miss needs the email.
+func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, cookie func(string) string) (SignIn, error) {
 	raw, err := DecodeResponse(posted)
 	if err != nil {
 		return SignIn{}, s.refuse(ctx, p, err)
@@ -199,17 +213,6 @@ func (s *Service) Consume(ctx context.Context, providerID uuid.UUID, posted stri
 		return SignIn{}, s.refuse(ctx, p, err)
 	}
 
-	email := s.email(p, v)
-	if email == "" {
-		return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
-	}
-	if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
-		return SignIn{}, s.refuse(ctx, p, ErrEmailMalformed)
-	}
-	if !p.DomainAllowed(email) {
-		return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
-	}
-
 	subject, err := Subject(v.NameID)
 	if err != nil {
 		return SignIn{}, s.refuse(ctx, p, refused(ReasonNameID, "NameID cannot key an identity"))
@@ -226,6 +229,16 @@ func (s *Service) Consume(ctx context.Context, providerID uuid.UUID, posted stri
 			return SignIn{}, s.refuse(ctx, p, ErrAccountDisabled)
 		}
 	} else {
+		email := s.email(p, v)
+		if email == "" {
+			return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
+		}
+		if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
+			return SignIn{}, s.refuse(ctx, p, ErrEmailMalformed)
+		}
+		if !p.DomainAllowed(email) {
+			return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
+		}
 		principal.ID, err = s.provision(ctx, p, id, email, s.displayName(p, v))
 		if err != nil {
 			return SignIn{}, s.refuse(ctx, p, err)

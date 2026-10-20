@@ -70,7 +70,7 @@ func TestSAMLRoutesEndToEnd(t *testing.T) {
 		t.Fatalf("initiate %d %s", init.Code, init.Body)
 	}
 	cookies := init.Result().Cookies()
-	if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].Path != saml.ACSPath(h.provider) {
+	if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].Path != saml.ACSPath(h.provider, baseURL) {
 		t.Fatalf("binding cookie %+v", cookies)
 	}
 	requestID := requestIDFromRedirect(t, initBody["redirect_url"])
@@ -261,7 +261,7 @@ func TestSAMLACSAcceptsTheAdvertisedHTTPPostBinding(t *testing.T) {
 	}
 	cookies := init.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].SameSite != http.SameSiteNoneMode || !cookies[0].Secure || !cookies[0].HttpOnly ||
-		cookies[0].Path != saml.ACSPath(h.provider) || cookies[0].MaxAge != int(saml.FlowTTL.Seconds()) {
+		cookies[0].Path != saml.ACSPath(h.provider, baseURL) || cookies[0].MaxAge != int(saml.FlowTTL.Seconds()) {
 		t.Fatalf("binding cookie must be SameSite=None; Secure; HttpOnly; Path=ACS; Max-Age=flow TTL: %+v", cookies)
 	}
 	requestID := requestIDFromRedirect(t, initBody["redirect_url"])

@@ -96,7 +96,14 @@ func BindingCookieName(requestID string) string {
 	return "dho_saml_login_nonce_" + base64.RawURLEncoding.EncodeToString(sum[:16])
 }
 
-// ACSPath is the path the binding cookie is scoped to.
-func ACSPath(p Provider) string { return "/api/v1/auth/saml/" + p.ID.String() + "/acs" }
+// ACSPath is the path of the advertised ACS URL, the one the binding cookie is
+// scoped to. It is derived from ACSURL, the single source of the ACS location.
+func ACSPath(p Provider, base string) string {
+	u, err := url.Parse(p.ACSURL(base))
+	if err != nil || u.Path == "" {
+		return "/"
+	}
+	return u.Path
+}
 
 func bindingHash(nonce string) [32]byte { return sha256.Sum256([]byte(nonce)) }

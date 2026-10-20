@@ -144,7 +144,7 @@ type harness struct {
 	svc      *saml.Service
 }
 
-const baseURL = "https://sp.example.test"
+const baseURL = "https://sp.example.test/api/v1/auth"
 
 func newHarness(t *testing.T, allowIdPInitiated bool) *harness {
 	t.Helper()
@@ -210,7 +210,7 @@ func (h *harness) initiate() (requestID string, cookies map[string]string) {
 		h.t.Fatal(err)
 	}
 	requestID = requestIDFromRedirect(h.t, init.RedirectURL)
-	if init.CookieName != saml.BindingCookieName(requestID) || init.CookiePath != saml.ACSPath(h.provider) {
+	if init.CookieName != saml.BindingCookieName(requestID) || init.CookiePath != saml.ACSPath(h.provider, baseURL) {
 		h.t.Fatalf("binding cookie %q path %q does not match request %q", init.CookieName, init.CookiePath, requestID)
 	}
 	return requestID, map[string]string{init.CookieName: init.CookieValue}

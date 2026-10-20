@@ -27,29 +27,36 @@ const (
 
 func guardsRoot() string { return filepath.Join("..", "..", "..") }
 
-// leadingFence returns the fence character and run length of a line that opens or closes a ``` or ~~~ fence.
-func leadingFence(stripped string) (byte, int) {
+// leadingFence returns the fence character, run length and the text after the run of a line that opens or closes a ``` or ~~~
+// fence. A closing fence carries nothing after the run (CommonMark), so `~~~text` inside a block is content.
+func leadingFence(stripped string) (byte, int, string) {
 	for _, c := range []byte{'`', '~'} {
 		if strings.HasPrefix(stripped, strings.Repeat(string(c), 3)) {
-			return c, len(stripped) - len(strings.TrimLeft(stripped, string(c)))
+			rest := strings.TrimLeft(stripped, string(c))
+			return c, len(stripped) - len(rest), rest
 		}
 	}
-	return 0, 0
+	return 0, 0, ""
 }
+
+var tableSeparator = regexp.MustCompile(`^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?$`)
 
 // digestInHistoryRow is true iff the digest appears in a four-cell table row of THIS section: not in a fenced block (tracked
 // by character and run length so nested fences cannot smuggle an example row), not after the next heading, not a stub row.
 func digestInHistoryRow(section, digest string) bool {
 	var fenceChar byte
 	fenceLen := 0
+	tableActive := false
+	prevPipeLine := false
 	for _, line := range strings.Split(section, "\n") {
 		stripped := strings.TrimSpace(line)
-		if c, n := leadingFence(stripped); c != 0 {
+		if c, n, rest := leadingFence(stripped); c != 0 && (fenceChar == 0 || (c == fenceChar && n >= fenceLen && strings.TrimSpace(rest) == "")) {
 			if fenceChar == 0 {
 				fenceChar, fenceLen = c, n
-			} else if c == fenceChar && n >= fenceLen {
+			} else {
 				fenceChar, fenceLen = 0, 0
 			}
+			tableActive, prevPipeLine = false, false
 			continue
 		}
 		if fenceChar != 0 {
@@ -58,21 +65,27 @@ func digestInHistoryRow(section, digest string) bool {
 		if strings.HasPrefix(stripped, "#") {
 			return false
 		}
-		if !strings.HasPrefix(stripped, "|") || !strings.Contains(stripped, digest) {
-			continue
-		}
-		cells := strings.Split(strings.Trim(stripped, "|"), "|")
-		if len(cells) >= 4 {
-			filled := true
-			for _, cell := range cells[:4] {
-				if strings.TrimSpace(cell) == "" {
-					filled = false
+		isPipe := strings.HasPrefix(stripped, "|")
+		switch {
+		case isPipe && prevPipeLine && !tableActive && tableSeparator.MatchString(stripped):
+			tableActive = true
+		case !isPipe:
+			tableActive = false
+		case tableActive && strings.Contains(stripped, digest):
+			cells := strings.Split(strings.Trim(stripped, "|"), "|")
+			if len(cells) >= 4 {
+				filled := true
+				for _, cell := range cells[:4] {
+					if strings.TrimSpace(cell) == "" {
+						filled = false
+					}
+				}
+				if filled {
+					return true
 				}
 			}
-			if filled {
-				return true
-			}
 		}
+		prevPipeLine = isPipe
 	}
 	return false
 }
@@ -156,19 +169,24 @@ func digestOf(sdl string) string {
 func TestSchemaDigestGatePlantedDefects(t *testing.T) {
 	const sdl = "type Query { a: Int }\n"
 	d := digestOf(sdl)
+	hdr := "| Digest | In force from | Moved by | Notes |\n"
+	sep := "|---|---|---|---|\n"
 	row := "| " + d + " | 2026-10-19 | CHAOS-1 | note |\n"
 	cases := []struct {
 		name, sdl, pinned, history string
 		want                       string
 	}{
-		{"documented and pinned passes", sdl, d, row, ""},
+		{"documented and pinned passes", sdl, d, hdr + sep + row, ""},
 		{"SDL moved without the pin", sdl + "type X { b: Int }\n", d, row, "MOVED"},
 		{"pin bumped without a history row", sdl, d, "| other | a | b | c |\n", "not a row"},
 		{"prose mention does not count", sdl, d, "The digest " + d + " was recorded here.\n", "not a row"},
 		{"stub row with empty cells does not count", sdl, d, "| " + d + " | | | |\n", "not a row"},
 		{"fenced row does not count", sdl, d, "```\n" + row + "```\n", "not a row"},
 		{"nested fences cannot smuggle a row", sdl, d, "````\n```\n```\n" + row + "````\n", "not a row"},
-		{"a longer closing fence still closes the block", sdl, d, "```\nexample\n````\n" + row, ""},
+		{"a longer closing fence still closes the block", sdl, d, "```\nexample\n````\n" + hdr + sep + row, ""},
+		{"a lone pipe row without a header and separator does not count", sdl, d, row, "not a row"},
+		{"a fence line followed by text does not close the block", sdl, d, "~~~\nexample\n~~~this is content\n" + hdr + sep + row, "not a row"},
+		{"a header and separator make the row count", sdl, d, hdr + sep + row, ""},
 		{"row after the next heading does not count", sdl, d, "## Later\n" + row, "not a row"},
 		{"row of a later table under no heading counts only inside the section", sdl, d, "text\n\n## Other table\n\n" + row, "not a row"},
 	}
@@ -192,9 +210,9 @@ func TestSchemaDigestGatePlantedDefects(t *testing.T) {
 
 var (
 	enableFlagDefinition = regexp.MustCompile(`\.(?:String|Bool|Int|Duration)Var\(&[\w.]+,\s*"([a-z][a-z-]*)"`)
-	enableCommand        = regexp.MustCompile(`^\s*["']?\s*(?:[A-Z_]+=\S+\s+)*(?:SDL:\s+)?(dho goapi routing enable\b)`)
+	enableCommand        = regexp.MustCompile(`^\s*["']?\s*(?:\$\s+)?(?:[A-Z_]+=\S+\s+)*(?:SDL:\s+)?(dho goapi routing enable\b)`)
 	booleanFlags         = map[string]bool{"dry-run": true}
-	shorthandVerb        = regexp.MustCompile("`routing (?:enable|disable|repoint|carry|status)\\b")
+	shorthandVerb        = regexp.MustCompile("(?i)(?:`|\\b(?:run|use|call|execute|invoke|type|try)\\s+)routing (?:enable|disable|repoint|carry|status)\\b")
 	staleFullName        = regexp.MustCompile(`go-api-routing (?:enable|disable|repoint|carry|status)\b`)
 )
 
@@ -363,6 +381,12 @@ func TestEnableCommandScanPlantedDefects(t *testing.T) {
 			t.Errorf("%s: %v, want %d problem(s)", tc.name, got, tc.want)
 		}
 	}
+	if got := enableCommands("$ dho goapi routing enable --apply\n"); len(got) != 1 {
+		t.Fatalf("a shell-prompted command was not extracted: %q", got)
+	}
+	if got := enableCommands("  $ SDL=x dho goapi routing enable -operations a\n"); len(got) != 1 {
+		t.Fatalf("a shell-prompted command with an env prefix was not extracted: %q", got)
+	}
 	joined := enableCommands("run:\n  dho goapi routing enable \\\n    -operations a \\\n    --mode on\n")
 	if len(joined) != 1 || !strings.Contains(joined[0], "--mode on") {
 		t.Fatalf("continuation lines were not joined: %q", joined)
@@ -404,8 +428,9 @@ func bareHits(root string, shorthand bool) []string {
 	return hits
 }
 
-// lineNamesBareVerb emulates the two Python lookbehind patterns: the shorthand `routing <verb> must not follow `goapi-`,
-// `goapi ` or a word character or dash; the stale binary go-api-routing <verb> must not follow a word character or dash.
+// lineNamesBareVerb finds a verb named without its binary: the shorthand `routing <verb>` (backticked, or after an imperative
+// such as run, use or call) must
+// not follow `goapi `, `goapi-`, `go-api ` or `go-api-` (the binary's own words); the stale binary go-api-routing <verb> must not follow a word character or dash.
 func lineNamesBareVerb(line string, shorthand bool) bool {
 	re := staleFullName
 	if shorthand {
@@ -419,7 +444,7 @@ func lineNamesBareVerb(line string, shorthand bool) bool {
 				continue
 			}
 		}
-		if shorthand && (strings.HasSuffix(before, "goapi-") || strings.HasSuffix(before, "goapi ")) {
+		if shorthand && (strings.HasSuffix(before, "goapi-") || strings.HasSuffix(before, "goapi ") || strings.HasSuffix(before, "go-api ") || strings.HasSuffix(before, "go-api-")) {
 			continue
 		}
 		return true
@@ -451,6 +476,13 @@ func TestBareVerbPatternsPlantedDefects(t *testing.T) {
 		{"see go-api-routing enable", false, true},
 		{"the dev-health-go-api-routing enable path", false, false},
 		{"use dho goapi routing enable", false, false},
+		{"Run routing enable with the operation name", true, true},
+		{"Run routing status on the host", true, true},
+		{"use dho goapi routing status", true, false},
+		{"use dev-hops go-api routing status", true, false},
+		{"the Go routing status verb", true, false},
+		{"First-time routing enable (canary set only)", true, false},
+		{"use routing disable to turn it off", true, true},
 	}
 	for _, tc := range cases {
 		if got := lineNamesBareVerb(tc.line, tc.shorthand); got != tc.want {

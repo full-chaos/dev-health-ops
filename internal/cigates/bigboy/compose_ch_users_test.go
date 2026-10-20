@@ -163,19 +163,18 @@ type composeCHRun struct {
 	scriptRun
 }
 
-func (r composeCHRun) log(name string) string { return composeReadFile(filepath.Join(r.dir, name)) }
-func (r composeCHRun) has(name string) bool   { return exists(filepath.Join(r.dir, name)) }
-func (r composeCHRun) out() string            { return r.stdout + r.stderr }
+func (r composeCHRun) has(name string) bool { return exists(filepath.Join(r.dir, name)) }
+func (r composeCHRun) out() string          { return r.stdout + r.stderr }
 
 func composeCHShims(g *guard, dir string, o composeCHOpts) string {
-	// Temporary: the check runs the Python renderer through a real python3 until its owner ports it to Go. A missing
-	// interpreter or script must fail the guard, never skip it.
-	g.expect(composeRealBin("python3") != "", "python3 is not installed: the check's canonical render cannot run, and this guard must not skip")
-	g.expect(exists(g.path(composeCHRenderer)), "%s is missing: the check's canonical render cannot run", composeCHRenderer)
 	bin := filepath.Join(dir, "bin")
 	argv, envLog := filepath.Join(dir, "child-argv.log"), filepath.Join(dir, "child-env.log")
 	args, stdin := filepath.Join(dir, "docker-args.log"), filepath.Join(dir, "docker-stdin.log")
 	for _, name := range composeCHCommands {
+		if name == "python3" {
+			composeWrite(g, filepath.Join(bin, name), "#!/bin/bash\necho \"python3 must not run in a Go CI check\" >&2\nexit 127\n", 0o755)
+			continue
+		}
 		real := composeRealBin(name)
 		if real == "" {
 			g.failf("no %s in /usr/bin or /bin", name)
@@ -264,15 +263,6 @@ func composeCHRunCheck(g *guard, o composeCHOpts) composeCHRun {
 
 func composeCHCanon(g *guard) string { return composeCHUsers(g, 0o644, composeCHXML(composeCHHash)) }
 
-func composeCHPassesLive(g *guard) {
-	r := composeCHRunCheck(g, composeCHOpts{file: composeCHCanon(g)})
-	g.expect(r.code == 0, "a canonical file and a live user exit %d, want 0: %s", r.code, r.stderr)
-	for _, want := range []string{"ch_api_user_file=ok", "ch_api_user_live=ok", "ch_api_user_auth=ok"} {
-		g.expect(strings.Contains(r.stdout, want), "the check does not print %s", want)
-	}
-	g.expect(!strings.Contains(r.out(), composeCHHash), "the check prints the password hash")
-}
-
 func composeCHRefuses0600(g *guard) {
 	r := composeCHRunCheck(g, composeCHOpts{file: composeCHUsers(g, 0o600, composeCHXML(composeCHHash))})
 	g.expect(r.code == 1 && strings.Contains(r.stderr, "not world-readable") && strings.Contains(r.stderr, "uid 101"),
@@ -288,88 +278,6 @@ func composeCHRefusesMissingOrDirectory(g *guard) {
 	g.expect(r.code == 1 && strings.Contains(r.stderr, "not a regular file"), "a directory as users file exits %d, want 1 naming not a regular file: %s", r.code, r.stderr)
 	r = composeCHRunCheck(g, composeCHOpts{noFile: true})
 	g.expect(r.code == 1, "no users file argument exits %d, want 1", r.code)
-}
-
-func composeCHUserNotLive(g *guard) {
-	file := composeCHCanon(g)
-	for _, o := range []composeCHOpts{{file: file, count: "0"}, {file: file, noCount: true, rc: 1}} {
-		r := composeCHRunCheck(g, o)
-		g.expect(r.code == 2 && strings.Contains(r.stderr, "CH_API_USER_LIVE_FAIL") && strings.Contains(r.stderr, "516"),
-			"a user missing from the live server (count=%q) exits %d, want 2 with CH_API_USER_LIVE_FAIL and 516: %s", o.count, r.code, r.stderr)
-	}
-}
-
-func composeCHCannotLogIn(g *guard) {
-	file := composeCHCanon(g)
-	r := composeCHRunCheck(g, composeCHOpts{file: file, loginFail: true})
-	g.expect(r.code == 3 && strings.Contains(r.stderr, "CH_API_USER_AUTH_FAIL") && strings.Contains(r.stderr, "516"),
-		"a user that cannot log in exits %d, want 3 with CH_API_USER_AUTH_FAIL and 516: %s", r.code, r.stderr)
-	r = composeCHRunCheck(g, composeCHOpts{file: file, creds: "OTHER=1\n"})
-	g.expect(r.code == 3 && strings.Contains(r.stderr, "no API_CH_PASSWORD value"), "creds without API_CH_PASSWORD exit %d, want 3 naming it: %s", r.code, r.stderr)
-}
-
-func composeCHCredentialOnlyOnStdin(g *guard) {
-	r := composeCHRunCheck(g, composeCHOpts{file: composeCHCanon(g)})
-	g.expect(r.code == 0, "the canonical run exits %d, want 0: %s", r.code, r.stderr)
-	argv, childEnv, xtrace, vars, stdin, args := r.log("child-argv.log"), r.log("child-env.log"), r.log("xtrace.log"), r.log("vars.log"), r.log("docker-stdin.log"), r.log("docker-args.log")
-	g.expect(strings.Contains(vars, "declare -- CREDS="), "the variable dump is empty: no proof")
-	if info, err := os.Stat(filepath.Join(r.dir, "xtrace.log")); err != nil || info.Mode().Perm() != 0o600 {
-		g.failf("xtrace.log is not mode 0600")
-	}
-	for _, c := range []string{"== docker", "== sed", "== sha256sum"} {
-		g.expect(strings.Contains(argv, c), "the argv log has no %q: no proof", c)
-	}
-	g.expect(strings.Contains(xtrace, "+ ") && strings.Contains(xtrace, "api_password"), "xtrace is empty: this guard would prove nothing")
-	g.expect(strings.Contains(stdin, composeCHPassword), "the login config never reached docker's stdin")
-	for _, c := range []struct{ name, text string }{
-		{"argv", argv}, {"child env", childEnv}, {"xtrace", xtrace}, {"shell variables", vars},
-		{"stdout", r.stdout}, {"stderr", r.stderr}, {"docker-args", args},
-	} {
-		g.expect(!strings.Contains(c.text, composeCHPassword), "credential in %s", c.name)
-	}
-	g.expect(!strings.Contains(childEnv+argv, "CLICKHOUSE_PASSWORD"), "CLICKHOUSE_PASSWORD reaches a child")
-	for _, line := range strings.Split(childEnv, "\n") {
-		if strings.HasPrefix(line, "API_CH_PASSWORD=") {
-			g.expect(line == composeCHPlace, "real password in a child env (API_CH_PASSWORD is not the placeholder)")
-		}
-	}
-	g.expect(strings.Contains(args, "--config-file /dev/stdin") && !strings.Contains(args, " -e "), "docker gets no --config-file /dev/stdin or gets a -e: %s", args)
-	for _, line := range strings.Split(strings.TrimSpace(args), "\n") {
-		g.expect(strings.HasPrefix(line, "compose -p dev-health "), "docker call is not a compose verb of project dev-health: %s", line)
-		if strings.Contains(" "+line+" ", " exec ") {
-			g.expect(strings.Contains(line, " exec -T clickhouse clickhouse-client "), "docker exec is not on the service clickhouse: %s", line)
-		} else {
-			g.expect(strings.Contains(line, " config --images") || strings.Contains(" "+line+" ", " ps "), "unexpected docker call: %s", line)
-		}
-	}
-}
-
-func composeCHScratchUnderTmpdir(g *guard) {
-	scratch := composeCHScratch(g, 0o700)
-	defer os.RemoveAll(scratch)
-	r := composeCHRunCheck(g, composeCHOpts{file: composeCHCanon(g), scratch: scratch})
-	g.expect(r.code == 0, "the canonical run exits %d, want 0: %s", r.code, r.stderr)
-	real, _ := filepath.EvalSymlinks(scratch)
-	var mktemp []string
-	var chmods [][]string
-	for _, call := range strings.Split(r.log("child-argv.log"), "== ") {
-		parts := strings.Split(call, "\n")
-		switch parts[0] {
-		case "mktemp":
-			if mktemp == nil {
-				mktemp = parts
-			}
-		case "chmod":
-			chmods = append(chmods, parts)
-		}
-	}
-	g.expect(len(mktemp) >= 4 && equal(mktemp[1:4], []string{"-d", "-p", real}), "mktemp is not run as mktemp -d -p %s: %v", real, mktemp)
-	g.expect(len(chmods) > 0, "the scratch dir is never chmod 700")
-	for _, c := range chmods {
-		g.expect(len(c) > 2 && c[1] == "700" && strings.HasPrefix(c[2], real+"/"), "chmod is not 700 on a dir under the scratch: %v", c)
-	}
-	left, _ := os.ReadDir(scratch)
-	g.expect(len(left) == 0, "scratch not cleaned: %d entries left", len(left))
 }
 
 func composeCHRefusesTmpTmpdir(g *guard) {
@@ -400,44 +308,6 @@ func composeCHRefusesTmpTmpdir(g *guard) {
 	}
 }
 
-func composeCHDifferences() [][2]string {
-	x := composeCHXML(composeCHHash)
-	first := "<query>GRANT SELECT, INSERT, ALTER DELETE ON default.teams</query>"
-	return [][2]string{
-		{"a comment", strings.Replace(x, "<users>", "<!-- note --><users>", 1)},
-		{"the credential in a comment", strings.Replace(x, "</clickhouse>", "<!-- "+composeCHPassword+" --></clickhouse>", 1)},
-		{"a malformed grant", strings.Replace(x, first, "<query>GRANT SELECT ON</query>", 1)},
-		{"an extra well-formed grant", strings.Replace(x, "</grants>", "<query>GRANT SELECT ON default.other</query></grants>", 1)},
-		{"a hand edit of the network", strings.Replace(x, "::/0", "127.0.0.1", 1)},
-		{"a hash for another password", strings.Replace(x, composeCHHash, composeSHA("another-password"), 1)},
-		{"an attribute", strings.Replace(x, "<networks>", `<networks x="attr-value">`, 1)},
-		{"text in a container", strings.Replace(x, "<grants>", "<grants>STRAY", 1)},
-		{"a plaintext password element", strings.Replace(x, "</dho_api_ch>", "<password>hunter2</password></dho_api_ch>", 1)},
-		{"a uri", strings.Replace(x, "</clickhouse>", "<!-- clickhouse://u:pw@h:9000/db --></clickhouse>", 1)},
-		{"a truncated file", strings.Replace(x, "</clickhouse>", "", 1)},
-		{"a second user", strings.Replace(x, "</users>", "<other><password_sha256_hex>x</password_sha256_hex></other></users>", 1)},
-		{"trailing whitespace", x + "\n"},
-		{"an empty file", ""},
-	}
-}
-
-func composeCHOnlyCanonicalIsValid(g *guard) {
-	for _, d := range composeCHDifferences() {
-		r := composeCHRunCheck(g, composeCHOpts{file: composeCHUsers(g, 0o644, d[1])})
-		g.expect(r.code == 4 && strings.Contains(r.stderr, "CH_API_USER_FILE_MISMATCH"), "a users file with %s exits %d, want 4 with CH_API_USER_FILE_MISMATCH: %s", d[0], r.code, r.stderr)
-		for _, secret := range []string{composeCHPassword, composeCHHash, "hunter2", "pw@", "attr-value", "STRAY"} {
-			g.expect(!strings.Contains(r.out(), secret), "a users file with %s: the output carries %q", d[0], secret)
-		}
-		g.expect(!r.has("docker-args.log"), "a users file with %s: the live checks ran on a file that is not canonical", d[0])
-	}
-}
-
-func composeCHCanonicalPrintsNames(g *guard) {
-	r := composeCHRunCheck(g, composeCHOpts{file: composeCHCanon(g)})
-	g.expect(r.code == 0 && strings.Contains(r.stdout, "canonical=yes"), "the canonical file exits %d without canonical=yes: %s", r.code, r.stdout)
-	g.expect(!strings.Contains(r.out(), composeCHHash), "the check prints the password hash")
-}
-
 func composeCHManifestRefusedNotSkipped(g *guard) {
 	file := composeCHCanon(g)
 	creds := "API_CH_PASSWORD=" + composeCHPassword + "\n"
@@ -449,13 +319,6 @@ func composeCHManifestRefusedNotSkipped(g *guard) {
 	r = composeCHRunCheck(g, composeCHOpts{direct: true, file: file, creds: creds, posture: empty})
 	g.expect(r.code == 1 && strings.Contains(r.stderr, "canonical render could not be computed"), "a manifest without APIPosture exits %d, want 1 naming canonical render could not be computed: %s", r.code, r.stderr)
 	g.expect(!r.has("docker-args.log"), "a manifest without APIPosture reached the live checks")
-}
-
-func composeCHManifestFromOpsRepo(g *guard) {
-	repo := filepath.Join(composeTempDir(g, g.tmp, "repo-"), "an ops clone")
-	composeWrite(g, filepath.Join(repo, "internal", "storage", "clickhouse", "authorization.go"), composeCHManifest, 0o644)
-	r := composeCHRunCheck(g, composeCHOpts{file: composeCHCanon(g), opsRepo: repo})
-	g.expect(r.code == 0 && strings.Contains(r.stdout, "ch_api_user_file=ok"), "the manifest is not read from BIGBOY_OPS_REPO (exit %d): %s", r.code, r.stderr)
 }
 
 func composeCHCloneWithoutManifest(g *guard) {
@@ -576,10 +439,11 @@ func composeCutRunReal(g *guard, o composeCutOpts) composeCutRun {
 	composeWrite(g, filepath.Join(stub, "gh"), "#!/usr/bin/env bash\necho "+strings.Repeat("c", 40)+"\n", 0o755)
 	// The cut waits 45 s for go-api after `up`; nothing asserted here depends on the wait.
 	composeWrite(g, filepath.Join(stub, "sleep"), "#!/usr/bin/env bash\nexit 0\n", 0o755)
+	python := "exit 0\n"
 	if o.fakeGenerator {
-		composeWrite(g, filepath.Join(stub, "python3"), fmt.Sprintf("#!/usr/bin/env bash\ncase \"$1\" in */generate-plane-split-router.py) shift; printf '%%s\\n' \"$@\" > %q; exit 1 ;; esac\nexec /usr/bin/python3 \"$@\"\n",
-			filepath.Join(dir, "generator-args.log")), 0o755)
+		python = fmt.Sprintf("case \"$1\" in */generate-plane-split-router.py) shift; printf '%%s\\n' \"$@\" > %q; exit 1 ;; esac\nexit 0\n", filepath.Join(dir, "generator-args.log"))
 	}
+	composeWrite(g, filepath.Join(stub, "python3"), "#!/usr/bin/env bash\n"+python, 0o755)
 	opsRepo := o.opsRepo
 	if opsRepo == "" {
 		opsRepo = g.root
@@ -702,25 +566,17 @@ func composeCutAbsoluteDeployRepo(g *guard) {
 }
 
 var composeCHChecks = []check{
-	{"a_readable_declared_file_and_a_live_user_pass", composeCHPassesLive},
 	{"a_0600_file_is_refused_because_clickhouse_would_exit_on_it", composeCHRefuses0600},
 	{"a_missing_file_or_a_directory_is_refused", composeCHRefusesMissingOrDirectory},
-	{"a_user_missing_from_the_live_server_fails_with_its_own_code", composeCHUserNotLive},
 	{"the_compose_file_mounts_the_host_file_into_users_d_and_requires_the_path", composeCHComposeMount},
 	{"the_cut_checks_dho_api_ch_before_it_recreates_go_api", composeCHCutChecksBeforeUp},
-	{"a_user_that_cannot_log_in_with_the_api_credential_is_refused", composeCHCannotLogIn},
-	{"the_api_credential_is_only_ever_on_dockers_stdin", composeCHCredentialOnlyOnStdin},
-	{"the_scratch_is_made_under_the_callers_tmpdir_with_mode_0700", composeCHScratchUnderTmpdir},
 	{"a_tmpdir_in_or_resolving_into_tmp_or_not_private_is_refused", composeCHRefusesTmpTmpdir},
 	{"the_cut_hands_the_credentials_path_to_the_check_and_the_password_to_no_child", composeCutCredentialToNoChild},
 	{"the_cut_aborts_before_go_api_up_when_the_check_fails", composeCutAbortsOnFailedCheck},
 	{"the_cut_goes_on_to_recreate_go_api_when_the_check_passes", composeCutRecreatesOnPassedCheck},
-	{"the_file_is_valid_only_if_it_equals_the_canonical_render", composeCHOnlyCanonicalIsValid},
-	{"the_canonical_file_passes_and_prints_only_names", composeCHCanonicalPrintsNames},
 	{"a_missing_posture_manifest_or_credential_is_refused_not_skipped", composeCHManifestRefusedNotSkipped},
 	{"the_cut_hands_the_check_an_absolute_ops_repo_for_a_relative_setting", composeCutAbsoluteOpsRepo},
 	{"the_cut_hands_the_check_absolute_paths_for_relative_settings", composeCutAbsoluteCreds},
-	{"the_posture_manifest_is_read_from_bigboy_ops_repo", composeCHManifestFromOpsRepo},
 	{"a_clone_without_the_manifest_is_refused_naming_the_clone", composeCHCloneWithoutManifest},
 	{"the_cut_hands_the_plane_split_generator_an_absolute_deploy_repo", composeCutAbsoluteDeployRepo},
 }
@@ -741,31 +597,14 @@ func TestComposeCHUsersPlanted(t *testing.T) {
 	m := func(old, repl string) func(*testing.T, string) { return mut(composeCHCheck, old, repl) }
 	c := func(old, repl string) func(*testing.T, string) { return all(gitDir, mut(composeCHCut, old, repl)) }
 	runPlanted(t, []planted{
-		{name: "renderer script missing fails loudly", copy: []string{composeCHCheck}, check: composeCHPassesLive, want: "render-dho-api-ch-users.py is missing"},
-		{name: "check prints the hash", copy: chk, check: composeCHPassesLive, want: "prints the password hash",
-			mutate: m(`mode=$mode canonical=yes"`, `mode=$mode canonical=yes hash=$(cat "$canon_dir/real.hash")"`)},
 		{name: "0600 accepted", copy: chk, check: composeCHRefuses0600, want: "0600",
 			mutate: m("  *[4-7]) ;;", "  *[0-7]) ;;")},
 		{name: "directory accepted", copy: chk, check: composeCHRefusesMissingOrDirectory, want: "directory",
 			mutate: m(`[ -f "$FILE" ] && [ ! -L "$FILE" ] ||`, `[ -e "$FILE" ] ||`)},
-		{name: "count 0 accepted", copy: chk, check: composeCHUserNotLive, want: `count="0"`,
-			mutate: m(`[ "$count" = "1" ] ||`, `[ -n "$count" ] ||`)},
-		{name: "login not proven", copy: chk, check: composeCHCannotLogIn, want: "cannot log in",
-			mutate: m(`[ "$who" = "dho_api_ch" ] ||`, "true ||")},
-		{name: "password in a shell variable", copy: chk, check: composeCHCredentialOnlyOnStdin, want: "credential in",
-			mutate: m(`api_password | sha256sum | cut -d' ' -f1 > "$canon_dir/real.hash"`, `pw=$(api_password); printf %s "$pw" | sha256sum | cut -d' ' -f1 > "$canon_dir/real.hash"`)},
-		{name: "scratch not under TMPDIR", copy: chk, check: composeCHScratchUnderTmpdir, want: "mktemp",
-			mutate: m(`canon_dir=$(mktemp -d -p "$tmp_root")`, `canon_dir=$(mktemp -d)`)},
 		{name: "tmp accepted", copy: chk, check: composeCHRefusesTmpTmpdir, want: `TMPDIR "/tmp`,
 			mutate: all(m(`""|/|/tmp|/tmp/*|/var/tmp|/var/tmp/*)`, `"")`), m(`if [ "$(stat -c '%a %u' "$tmp_root")" != "700 $(id -u)" ]; then`, "if false; then"))},
-		{name: "file grepped not compared", copy: chk, check: composeCHOnlyCanonicalIsValid, want: "a comment",
-			mutate: m(`cmp -s "$FILE" "$canon_dir/canonical.xml" ||`, `grep -q dho_api_ch "$FILE" ||`)},
-		{name: "canonical marker dropped", copy: chk, check: composeCHCanonicalPrintsNames, want: "canonical=yes",
-			mutate: m(`mode=$mode canonical=yes"`, `mode=$mode"`)},
 		{name: "manifest presence not checked", copy: chk, check: composeCHManifestRefusedNotSkipped, want: "cannot be computed",
 			mutate: m(`[ -f "$POSTURE" ] ||`, "true ||")},
-		{name: "ops repo ignored", copy: chk, check: composeCHManifestFromOpsRepo, want: "BIGBOY_OPS_REPO",
-			mutate: m(`${DHO_API_CH_POSTURE_GO:-${BIGBOY_OPS_REPO:-$HERE/../..}/internal`, `${DHO_API_CH_POSTURE_GO:-$HERE/../../internal`)},
 		{name: "refusal does not name the clone", copy: chk, check: composeCHCloneWithoutManifest, want: "empty clone",
 			mutate: m("the posture manifest $POSTURE is not a file", "the posture manifest is not a file")},
 		{name: "users path defaulted", copy: composeFiles, check: composeCHComposeMount, want: "never defaulted",

@@ -32,6 +32,8 @@ const (
 	ReasonDomainNotAllowed     Reason = "domain_not_allowed"
 	ReasonNotEntitled          Reason = "not_entitled"
 	ReasonInvalidCredentials   Reason = "invalid_credentials"
+	ReasonIdentityConflict     Reason = "identity_conflict"
+	ReasonMembershipRequired   Reason = "membership_required"
 )
 
 var allReasons = []Reason{
@@ -39,6 +41,7 @@ var allReasons = []Reason{
 	ReasonNotYetValid, ReasonMissingSub, ReasonEmailUnverified, ReasonEmailCollision, ReasonPrincipalDeactivated,
 	ReasonStoreUnavailable, ReasonDependency, ReasonReplayed, ReasonNonceMismatch, ReasonSignupUnavailable,
 	ReasonProvisioningDisabled, ReasonDomainNotAllowed, ReasonNotEntitled, ReasonInvalidCredentials,
+	ReasonIdentityConflict, ReasonMembershipRequired,
 }
 
 // Errors of the IdentityStore seam. StoreIdentities maps the identity store's

@@ -45,6 +45,9 @@ var (
 	// ErrInvalidLegacyMatch reports a LegacyMatch that does not fit the key's
 	// provider.
 	ErrInvalidLegacyMatch = errors.New("identity: legacy match does not fit the provider")
+	// ErrLegacyNotMember reports that the one legacy account of an SSO
+	// subject is not a member of the provider row's organization.
+	ErrLegacyNotMember = errors.New("identity: the legacy account is not a member of the provider organization")
 )
 
 const externalIdentityKeyIndex = "external_identities_issuer_provider_subject_key"

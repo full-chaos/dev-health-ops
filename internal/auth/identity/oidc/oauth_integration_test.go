@@ -238,7 +238,21 @@ func TestOAuthExistingAccountNeedsProviderOrgMembership(t *testing.T) {
 	h.seedMembership(t, user, h.seedOrg(t), "owner")
 	before := h.snapshot(t)
 	_, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), account, true)
-	wantDenied(t, failure, http.StatusForbidden, ReasonSignupUnavailable)
+	wantDenied(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+	wantUnchanged(t, h, before)
+}
+
+func TestOAuthSubjectInTwoOrganizationsIsAConflict(t *testing.T) {
+	h := newHarness(t, harnessOpts{signup: false})
+	provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", nil)
+	account := fakeAccountWith(uniqueEmail("two-orgs"), true)
+	inOrg := h.seedPublicUser(t, account.Email, "gitlab", account.ID)
+	h.seedMembership(t, inOrg, h.orgID, "admin")
+	elsewhere := h.seedPublicUser(t, uniqueEmail("other-org"), "gitlab", account.ID)
+	h.seedMembership(t, elsewhere, h.seedOrg(t), "member")
+	before := h.snapshot(t)
+	_, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), account, true)
+	wantDenied(t, failure, http.StatusConflict, ReasonIdentityConflict)
 	wantUnchanged(t, h, before)
 }
 

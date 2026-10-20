@@ -91,6 +91,11 @@ type Deps struct {
 	// already uses for admin-configured URLs -- an OIDC issuer is exactly
 	// that kind of URL).
 	HTTPClient *http.Client
+	// Inner, when set, replaces the innermost handler of the five sign-in
+	// routes (OIDC authorize/callback, SAML metadata/initiate/acs); the guard
+	// and its body checks in front stay. It gets the full route pattern; nil
+	// serves local.
+	Inner func(pattern string, local http.Handler) http.Handler
 }
 
 type handlers struct{ Deps }
@@ -137,6 +142,12 @@ func Routes(deps Deps) []httpapi.Route {
 		samlInitiate = http.HandlerFunc(h.initiateSAMLAuth)
 		samlACS = http.HandlerFunc(h.samlACSCallback)
 	}
+	inner := func(path string, local http.Handler) http.Handler {
+		if deps.Inner == nil {
+			return local
+		}
+		return deps.Inner(prefix+path, local)
+	}
 	routes := []httpapi.Route{
 		route(http.MethodGet, "/sso/providers", g.Wrap(policy.Authenticated, h.gated(listQuery))),
 		route(http.MethodPost, "/sso/providers", g.BodyFirst(policy.Authenticated, h.gated(body(ssoProviderCreate)))),
@@ -145,11 +156,11 @@ func Routes(deps Deps) []httpapi.Route {
 		route(http.MethodDelete, "/sso/providers/{provider_id}", g.Wrap(policy.Authenticated, h.gated(noInput))),
 		route(http.MethodPost, "/sso/providers/{provider_id}/activate", g.Wrap(policy.Authenticated, h.setStatus("active"))),
 		route(http.MethodPost, "/sso/providers/{provider_id}/deactivate", g.Wrap(policy.Authenticated, h.setStatus("inactive"))),
-		route(http.MethodGet, "/saml/{provider_id}/metadata", g.Wrap(policy.Public, samlMetadataHandler)),
-		route(http.MethodPost, "/saml/{provider_id}/initiate", g.BodyFirst(policy.Public, samlInitiate)),
-		route(http.MethodPost, "/saml/{provider_id}/acs", g.BodyFirst(policy.Public, samlACS)),
-		route(http.MethodPost, "/oidc/{provider_id}/authorize", g.BodyFirst(policy.Public, oidcAuthorize)),
-		route(http.MethodPost, "/oidc/{provider_id}/callback", g.BodyFirst(policy.Public, oidcCallbackHandler)),
+		route(http.MethodGet, "/saml/{provider_id}/metadata", g.Wrap(policy.Public, inner("/saml/{provider_id}/metadata", samlMetadataHandler))),
+		route(http.MethodPost, "/saml/{provider_id}/initiate", g.BodyFirst(policy.Public, inner("/saml/{provider_id}/initiate", samlInitiate))),
+		route(http.MethodPost, "/saml/{provider_id}/acs", g.BodyFirst(policy.Public, inner("/saml/{provider_id}/acs", samlACS))),
+		route(http.MethodPost, "/oidc/{provider_id}/authorize", g.BodyFirst(policy.Public, inner("/oidc/{provider_id}/authorize", oidcAuthorize))),
+		route(http.MethodPost, "/oidc/{provider_id}/callback", g.BodyFirst(policy.Public, inner("/oidc/{provider_id}/callback", oidcCallbackHandler))),
 		route(http.MethodPost, "/oauth/providers", g.BodyFirst(policy.Authenticated, h.gated(body(oauthProviderCreate)))),
 		// PATCH /oauth/providers/{provider_id}, POST /oauth/{provider_id}/authorize,
 		// POST /oauth/{provider_id}/callback and GET /oauth/{provider_type}/authorize

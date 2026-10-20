@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -704,4 +706,85 @@ func TestConcurrentDuplicateLinkAnswersLikeASequentialOne(t *testing.T) {
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1`, owner); n != 1 {
 		t.Fatalf("identities = %d, want 1", n)
 	}
+}
+
+// Info lines carry outcome, provider label and reason code, never a raw id: a
+// principal or identity id belongs to the audit event.
+func TestInfoLogsCarryNoIds(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, ctx)
+	var logs syncBuffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	stores := map[bool]*identity.Store{}
+	services := map[bool]*Service{}
+	for _, owns := range []bool{false, true} {
+		store, err := identity.New(identity.Config{Pool: e.runtime, Schema: e.schema, UsersOwnedByAuth: owns, Logger: logger})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stores[owns] = store
+		svc, err := New(Config{Store: store, Providers: e.providers.client(), Now: func() time.Time { return e.now }, Logger: logger})
+		if err != nil {
+			t.Fatal(err)
+		}
+		services[owns] = svc
+	}
+
+	legacy := e.goAPIUser(t, ctx, "logs-legacy@example.com", GitHub, "8100", true)
+	if res, err := services[false].Exchange(ctx, GitHub, e.providers.token("logs-legacy",
+		account{provider: GitHub, id: 8100, email: "logs-legacy@example.com", verified: true, public: true}), nil); err != nil || res.PrincipalID != legacy {
+		t.Fatalf("legacy Exchange = %+v, %v", res, err)
+	}
+	local := e.goAPIUser(t, ctx, "logs-local@example.com", "", "", true)
+	if err := stores[false].Project(ctx, local); err != nil {
+		t.Fatal(err)
+	}
+	e.exec(t, ctx, `UPDATE public.users SET email = 'logs-local-2@example.com' WHERE id = $1`, local)
+	if err := stores[false].Project(ctx, local); err != nil {
+		t.Fatal(err)
+	}
+	linked, err := services[false].Link(ctx, e.signedIn(local, time.Minute), GitLab, e.providers.token("logs-link",
+		account{provider: GitLab, id: 8101, email: "logs-link@example.com", verified: true}))
+	if err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+	if err := services[false].Unlink(ctx, e.signedIn(local, time.Minute), linked.ID); err != nil {
+		t.Fatalf("Unlink: %v", err)
+	}
+	if res, err := services[true].Exchange(ctx, Google, e.providers.token("logs-new",
+		account{provider: Google, googleID: "g-8102", email: "logs-new@example.com", verified: true}), nil); err != nil || !res.Created {
+		t.Fatalf("provisioning Exchange = %+v, %v", res, err)
+	}
+
+	uuidPattern := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	infos := 0
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if !strings.Contains(line, "level=INFO") {
+			continue
+		}
+		infos++
+		if uuidPattern.MatchString(line) {
+			t.Errorf("an Info line carries an id: %s", line)
+		}
+	}
+	if infos < 6 {
+		t.Fatalf("Info lines seen = %d, want the projection, link, unlink and provisioning lines:\n%s", infos, logs.String())
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

@@ -212,15 +212,14 @@ func TestFreshnessBound(t *testing.T) {
 	}
 }
 
-func TestGitLabIssuerFollowsTheInstance(t *testing.T) {
-	if got := (&ProviderClient{Endpoints: DefaultEndpoints}).Issuer(GitLab); got != "https://gitlab.com" {
-		t.Errorf("default GitLab issuer = %q", got)
+func TestGitLabIssuerIsTheFixedSocialIssuer(t *testing.T) {
+	for _, base := range []string{DefaultEndpoints.GitLabBase, "https://git.example.com/"} {
+		c := &ProviderClient{Endpoints: Endpoints{GitLabBase: base}}
+		if got := c.Issuer(GitLab); got != "https://gitlab.com" {
+			t.Errorf("GitLab issuer at %q = %q, want https://gitlab.com", base, got)
+		}
 	}
-	selfHosted := &ProviderClient{Endpoints: Endpoints{GitLabBase: "https://git.example.com/"}}
-	if got := selfHosted.Issuer(GitLab); got != "https://git.example.com" {
-		t.Errorf("self-hosted GitLab issuer = %q", got)
-	}
-	if got := selfHosted.Issuer(GitHub); got != "https://github.com" {
+	if got := (&ProviderClient{}).Issuer(GitHub); got != "https://github.com" {
 		t.Errorf("GitHub issuer = %q", got)
 	}
 }

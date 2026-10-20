@@ -117,12 +117,12 @@ func TestUnlinkHandlerAnswersInGoAPIShape(t *testing.T) {
 		body      string
 	}{
 		{"owner", fresh, held.ID.String(), nil, http.StatusNoContent, ""},
-		{"no session", nil, held.ID.String(), nil, http.StatusUnauthorized, `{"detail":"Not authenticated"}`},
-		{"stale sign-in", stale, held.ID.String(), nil, http.StatusForbidden, `{"detail":"Sign in again to change linked accounts"}`},
-		{"another principal", other, held.ID.String(), nil, http.StatusNotFound, `{"detail":"Identity not found"}`},
-		{"not an id", fresh, "not-a-uuid", nil, http.StatusNotFound, `{"detail":"Identity not found"}`},
-		{"last sign-in method", fresh, held.ID.String(), identity.ErrLastSignInMethod, http.StatusConflict, `{"detail":"Cannot remove the last sign-in method"}`},
-		{"held by another principal at unlink", fresh, held.ID.String(), identity.ErrNotOwner, http.StatusNotFound, `{"detail":"Identity not found"}`},
+		{"no session", nil, held.ID.String(), nil, http.StatusUnauthorized, `{"detail":{"message":"Not authenticated"}}`},
+		{"stale sign-in", stale, held.ID.String(), nil, http.StatusForbidden, `{"detail":{"message":"Sign in again to change linked accounts"}}`},
+		{"another principal", other, held.ID.String(), nil, http.StatusNotFound, `{"detail":{"message":"Identity not found"}}`},
+		{"not an id", fresh, "not-a-uuid", nil, http.StatusNotFound, `{"detail":{"message":"Identity not found"}}`},
+		{"last sign-in method", fresh, held.ID.String(), identity.ErrLastSignInMethod, http.StatusConflict, `{"detail":{"message":"Cannot remove the last sign-in method"}}`},
+		{"held by another principal at unlink", fresh, held.ID.String(), identity.ErrNotOwner, http.StatusNotFound, `{"detail":{"message":"Identity not found"}}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -141,7 +141,7 @@ func TestUnlinkHandlerAnswersInGoAPIShape(t *testing.T) {
 				t.Fatalf("got %d %q, want %d %q", rec.Code, rec.Body.String(), c.status, c.body)
 			}
 			if c.body != "" {
-				var detail map[string]string
+				var detail map[string]map[string]string
 				if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil || rec.Header().Get("Content-Type") != "application/json" {
 					t.Fatalf("body %q, content type %q", rec.Body.String(), rec.Header().Get("Content-Type"))
 				}

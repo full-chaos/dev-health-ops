@@ -436,6 +436,12 @@ func floatValue(s string) (float64, error) {
 type loader struct {
 	// composeTags accepts local tags (`!reset`, `!override`) as plain nodes, as check-web-env-parity's loader did.
 	composeTags bool
+	// built is every node already constructed: a shared anchor is built once, however many aliases name it.
+	built map[*yaml.Node]any
+	// building is the collections being constructed. An alias to one of them is a recursive alias, which is refused:
+	// PyYAML builds a cyclic value there, but these tools read the repository's own values files, where a recursive
+	// alias is a defect, not an input to route.
+	building map[*yaml.Node]bool
 }
 
 // loadYAML is yaml.safe_load: one document or none (nil).
@@ -454,7 +460,7 @@ func loadYAML(text []byte, composeTags bool) (any, error) {
 	} else if !errors.Is(err, io.EOF) {
 		return nil, err
 	}
-	l := loader{composeTags: composeTags}
+	l := &loader{composeTags: composeTags, built: map[*yaml.Node]any{}, building: map[*yaml.Node]bool{}}
 	if doc.Kind == yaml.DocumentNode {
 		if len(doc.Content) == 0 {
 			return nil, nil
@@ -464,21 +470,39 @@ func loadYAML(text []byte, composeTags bool) (any, error) {
 	return l.node(&doc)
 }
 
-func (l loader) explicitTag(n *yaml.Node) (string, bool) {
+func (l *loader) explicitTag(n *yaml.Node) (string, bool) {
 	if n.Style&yaml.TaggedStyle == 0 {
 		return "", false
 	}
 	return n.Tag, true
 }
 
-func (l loader) node(n *yaml.Node) (any, error) {
+// target is the node an alias names; an alias to a collection still being built is refused.
+func (l *loader) target(n *yaml.Node) (*yaml.Node, error) {
+	if n.Kind != yaml.AliasNode {
+		return n, nil
+	}
+	if l.building[n.Alias] {
+		return nil, fmt.Errorf("recursive alias *%s (line %d) inside its own anchor &%s (line %d) is refused", n.Value, n.Line, n.Alias.Anchor, n.Alias.Line)
+	}
+	return n.Alias, nil
+}
+
+func (l *loader) node(n *yaml.Node) (any, error) {
+	n, err := l.target(n)
+	if err != nil {
+		return nil, err
+	}
+	if v, ok := l.built[n]; ok {
+		return v, nil
+	}
 	switch n.Kind {
-	case yaml.AliasNode:
-		return l.node(n.Alias)
 	case yaml.SequenceNode:
 		if tag, ok := l.explicitTag(n); ok && tag != "!!seq" && !l.local(tag) {
 			return nil, l.noConstructor(n, tag)
 		}
+		l.building[n] = true
+		defer delete(l.building, n)
 		out := make([]any, 0, len(n.Content))
 		for _, c := range n.Content {
 			v, err := l.node(c)
@@ -487,6 +511,7 @@ func (l loader) node(n *yaml.Node) (any, error) {
 			}
 			out = append(out, v)
 		}
+		l.built[n] = out
 		return out, nil
 	case yaml.MappingNode:
 		if tag, ok := l.explicitTag(n); ok && tag != "!!map" && !l.local(tag) {
@@ -494,22 +519,31 @@ func (l loader) node(n *yaml.Node) (any, error) {
 		}
 		return l.mapping(n)
 	case yaml.ScalarNode:
-		return l.scalar(n)
+		v, err := l.scalar(n)
+		if err == nil {
+			l.built[n] = v
+		}
+		return v, err
 	}
 	return nil, fmt.Errorf("line %d: unsupported YAML node", n.Line)
 }
 
-func (l loader) local(tag string) bool {
+func (l *loader) local(tag string) bool {
 	return l.composeTags && strings.HasPrefix(tag, "!") && !strings.HasPrefix(tag, "!!")
 }
 
-func (l loader) noConstructor(n *yaml.Node, tag string) error {
+func (l *loader) noConstructor(n *yaml.Node, tag string) error {
 	return fmt.Errorf("could not determine a constructor for the tag %s (line %d)", pyRepr(tag), n.Line)
 }
 
 // mapping is construct_mapping after flatten_mapping: merged (`<<`) pairs first, then the node's own pairs, assigned in
 // order so a later key keeps the first key's position and takes the later value.
-func (l loader) mapping(n *yaml.Node) (*pyMap, error) {
+func (l *loader) mapping(n *yaml.Node) (*pyMap, error) {
+	if v, ok := l.built[n]; ok {
+		return v.(*pyMap), nil
+	}
+	l.building[n] = true
+	defer delete(l.building, n)
 	var merged []*pyMap
 	out := &pyMap{}
 	type pair struct{ k, v *yaml.Node }
@@ -520,9 +554,9 @@ func (l loader) mapping(n *yaml.Node) (*pyMap, error) {
 			own = append(own, pair{k, v})
 			continue
 		}
-		src := v
-		if src.Kind == yaml.AliasNode {
-			src = src.Alias
+		src, err := l.target(v)
+		if err != nil {
+			return nil, err
 		}
 		switch src.Kind {
 		case yaml.MappingNode:
@@ -533,9 +567,9 @@ func (l loader) mapping(n *yaml.Node) (*pyMap, error) {
 			merged = append(merged, m)
 		case yaml.SequenceNode:
 			for j := len(src.Content) - 1; j >= 0; j-- {
-				sub := src.Content[j]
-				if sub.Kind == yaml.AliasNode {
-					sub = sub.Alias
+				sub, err := l.target(src.Content[j])
+				if err != nil {
+					return nil, err
 				}
 				if sub.Kind != yaml.MappingNode {
 					return nil, fmt.Errorf("line %d: expected a mapping for merging", sub.Line)
@@ -570,10 +604,11 @@ func (l loader) mapping(n *yaml.Node) (*pyMap, error) {
 		}
 		out.set(key, val)
 	}
+	l.built[n] = out
 	return out, nil
 }
 
-func (l loader) scalar(n *yaml.Node) (any, error) {
+func (l *loader) scalar(n *yaml.Node) (any, error) {
 	tag, explicit := l.explicitTag(n)
 	if explicit {
 		if l.local(tag) {

@@ -87,6 +87,7 @@ Design docs (read the guardrails at minimum):
 | `license_key` | active | infrastructure | |
 | `infrastructure_deployment_credentials` | active | infrastructure | |
 | `effective_principal_envelope` | active | human | |
+| `refresh_credential` | active | human | |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -102,6 +103,15 @@ and query-api's three surfaces have rows in
 `contracts/auth/v1/endpoint-profiles.query-api.json`. G-61 position: the class
 has exactly one issuer, the edge (`internal/envelopemint`); query-api only
 verifies, so no exception to one active issuer per token class is needed.
+
+**`refresh_credential` (CHAOS-10228).** The opaque refresh credential of the
+auth-service session domain (TRD section 11): `dhr1_` plus 32 random bytes,
+stored as its SHA-256 only, single use with a 30 s grace and family reuse
+revocation. It is class 32. auth-service is its only issuer and its only
+validator (`POST /v1/token/refresh`); its four API routes and three operator
+routes have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`.
+It does not replace `ops_refresh_token` yet: go-api still mints that one until
+the session cutover.
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 

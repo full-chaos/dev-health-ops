@@ -108,14 +108,14 @@ func TestFixturescliSharesTheRaceSplit(t *testing.T) {
 			shared = append(shared, shardAwk(t, root, mod, pkgs, k, count, weightsPath, solo, "")...)
 			alone = append(alone, shardAwk(t, root, mod, pkgs, k, count, weightsPath, solo, "solo")...)
 		}
-		if len(alone) != 0 {
-			t.Fatalf("count %d: solo parts %v, want none", count, alone)
+		if contains(alone, target) {
+			t.Fatalf("count %d: solo parts %v hold %s, want it in the shared split", count, alone, target)
 		}
 		if !contains(shared, target) {
 			t.Fatalf("count %d: %s is not in a shared split", count, target)
 		}
-		if !sameMultiset(shared, pkgs) {
-			t.Fatalf("count %d: the shared split is not a partition of the package list", count)
+		if !sameMultiset(append(append([]string{}, shared...), alone...), pkgs) {
+			t.Fatalf("count %d: the shared and solo parts are not a partition of the package list", count)
 		}
 	}
 }

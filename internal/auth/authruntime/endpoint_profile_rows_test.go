@@ -8,6 +8,8 @@ import (
 	"go/token"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,26 +21,66 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 const authServiceRows = "../../../contracts/auth/v1/endpoint-profiles.auth-service.json"
 
-// servedAuthRoutes returns every "METHOD path@listener" auth-service serves:
-// the API routes configure mounts with the session secrets set (read from the
-// route table sessionRoutes builds, not from a list) and the operator routes
-// the shared health server registers (read from its HandleFunc calls).
+// probeMethods are the methods each registered path is probed with.
+var probeMethods = []string{
+	http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+	http.MethodPatch, http.MethodDelete, http.MethodOptions,
+}
+
+// servedAuthRoutes returns every "METHOD path@listener" auth-service SERVES:
+// each path registered on the API route table (sessionRoutes, with the session
+// secrets set) and on the operator mux (internal/platform/health) is probed
+// with every method in probeMethods through the handlers configure builds, and
+// every answer other than 404 or 405 is a served route. The database is
+// unreachable, so no probe reaches a store.
 func servedAuthRoutes(t *testing.T) map[string]bool {
 	t.Helper()
-	served := map[string]bool{}
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(sessionEnvironment(map[string]string{
-		authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
-		authconfig.EnvSigningKeyFile: "/nonexistent",
-		authconfig.EnvSigningKeyID:   "rows-test",
+		authconfig.EnvDatabaseURI:        "postgres://auth@127.0.0.1:1/devhealth",
+		authconfig.EnvSigningKeyFile:     "/nonexistent",
+		authconfig.EnvSigningKeyID:       "rows-test",
+		authconfig.EnvRateLimitPerSecond: "100000",
+		authconfig.EnvRateLimitBurst:     "100000",
+		authconfig.EnvAPIAddress:         "127.0.0.1:0",
+		authconfig.EnvOperatorAddress:    "127.0.0.1:1",
 	}))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
+	components, err := configure(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, component := range components {
+			_ = component.Shutdown(context.Background())
+		}
+	})
+	handlers := map[string]http.Handler{}
+	for _, component := range components {
+		announced, ok := component.(announcedListener)
+		if !ok {
+			continue
+		}
+		switch server := announced.listener.(type) {
+		case *httpapi.Server:
+			handlers["api"] = server.Handler()
+		case *health.Server:
+			handlers["operator"] = server.Handler()
+		}
+	}
+	if handlers["api"] == nil || handlers["operator"] == nil {
+		t.Fatalf("configure built listeners %v; want api and operator", handlers)
+	}
+
+	registered := map[string][]string{}
 	pool, err := pgxpool.New(context.Background(), "postgres://auth@127.0.0.1:1/devhealth")
 	if err != nil {
 		t.Fatal(err)
@@ -53,9 +95,8 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
 	for _, route := range routes {
-		served[route.Method+" "+route.Pattern+"@api"] = true
+		registered["api"] = append(registered["api"], route.Pattern)
 	}
-
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "../../platform/health/server.go", nil, 0)
 	if err != nil {
@@ -67,18 +108,38 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 			return true
 		}
 		selector, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || selector.Sel.Name != "HandleFunc" {
+		if !ok || (selector.Sel.Name != "HandleFunc" && selector.Sel.Name != "Handle") {
 			return true
 		}
 		if receiver, ok := selector.X.(*ast.Ident); !ok || receiver.Name != "mux" {
 			return true
 		}
 		if literal, ok := call.Args[0].(*ast.BasicLit); ok && literal.Kind == token.STRING {
-			path, _ := strconv.Unquote(literal.Value)
-			served["GET "+path+"@operator"] = true
+			pattern, _ := strconv.Unquote(literal.Value)
+			if _, path, found := strings.Cut(pattern, " "); found {
+				pattern = path
+			}
+			registered["operator"] = append(registered["operator"], pattern)
 		}
 		return true
 	})
+
+	served := map[string]bool{}
+	for listener, paths := range registered {
+		for _, path := range paths {
+			for _, method := range probeMethods {
+				recorder := httptest.NewRecorder()
+				handlers[listener].ServeHTTP(recorder, httptest.NewRequest(method, path, strings.NewReader("{}")))
+				switch recorder.Code {
+				case http.StatusNotFound, http.StatusMethodNotAllowed:
+				case http.StatusTooManyRequests:
+					t.Fatalf("%s %s@%s answered 429: the probe hit the rate limit and measured nothing", method, path, listener)
+				default:
+					served[method+" "+path+"@"+listener] = true
+				}
+			}
+		}
+	}
 	return served
 }
 
@@ -138,7 +199,7 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 		t.Errorf("endpoint-profile rows for routes nothing serves: %v", stale)
 	}
 	if len(served) < 7 {
-		t.Fatalf("only %d served routes found: the route table or the operator scan stopped seeing them", len(served))
+		t.Fatalf("only %d served routes found: the probe stopped seeing the route table or the operator mux", len(served))
 	}
 }
 

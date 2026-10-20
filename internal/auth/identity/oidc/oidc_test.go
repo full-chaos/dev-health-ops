@@ -328,3 +328,10 @@ func TestLoggedCausesCarryAClassNotTheirText(t *testing.T) {
 		t.Errorf("Error() holds the cause text: %q", got)
 	}
 }
+
+func TestTheDefaultIdPClientRefusesRedirectsOnItsOwn(t *testing.T) {
+	client := defaultHTTPClient()
+	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("the default IdP client follows redirects")
+	}
+}

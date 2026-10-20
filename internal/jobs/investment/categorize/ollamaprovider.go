@@ -209,12 +209,20 @@ func (p *OllamaProvider) Complete(ctx context.Context, request CompletionRequest
 		if request.JSONSchema != nil {
 			text = validateJSONOrEmpty(content)
 		}
-		return CompletionResult{
+		completion := CompletionResult{
 			Text:         text,
 			Model:        p.cfg.Model,
 			InputTokens:  promptEvalCount,
 			OutputTokens: evalCount,
-		}, nil
+		}
+		switch {
+		case format != nil:
+			completion.FormatPath = "schema"
+		case request.JSONSchema != nil:
+			completion.FormatReason = "schema_rejected"
+		}
+		LogCompletion(ctx, completion)
+		return completion, nil
 	}
 
 	return CompletionResult{Model: p.cfg.Model}, nil

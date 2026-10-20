@@ -79,7 +79,7 @@ func (p *SharedProvider) Complete(ctx context.Context, request CompletionRequest
 	if err != nil {
 		return CompletionResult{}, err
 	}
-	return CompletionResult{
+	completion := CompletionResult{
 		Text:              result.Text,
 		InputTokens:       result.Usage.InputTokens,
 		OutputTokens:      result.Usage.OutputTokens,
@@ -87,7 +87,9 @@ func (p *SharedProvider) Complete(ctx context.Context, request CompletionRequest
 		CachedInputTokens: result.Usage.CachedInputTokens,
 		FormatPath:        result.FormatPath,
 		FormatReason:      result.FormatReason,
-	}, nil
+	}
+	LogCompletion(ctx, completion)
+	return completion, nil
 }
 
 func sharedRequest(request CompletionRequest) llm.Request {

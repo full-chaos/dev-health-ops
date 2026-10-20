@@ -377,7 +377,6 @@ func CompleteInvestmentMixExplanationForOrg(
 	if err != nil {
 		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, err
 	}
-	categorize.LogCompletion(ctx, result)
 	result.OrgCredentials = orgCredentials
 	return result, resolvedProvider, resolvedModel, nil
 }
@@ -431,7 +430,6 @@ func CompleteWorkUnitExplanationForOrg(
 	if err != nil {
 		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, err
 	}
-	categorize.LogCompletion(ctx, result)
 	result.OrgCredentials = orgCredentials
 	return result, resolvedProvider, resolvedModel, nil
 }

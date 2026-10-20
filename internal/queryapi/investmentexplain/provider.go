@@ -268,6 +268,5 @@ func CompleteInvestmentMixExplanation(ctx context.Context, requestedProvider, re
 	if err != nil {
 		return categorize.CompletionResult{}, resolvedProvider, resolvedModel, err
 	}
-	categorize.LogCompletion(ctx, result)
 	return result, resolvedProvider, resolvedModel, nil
 }

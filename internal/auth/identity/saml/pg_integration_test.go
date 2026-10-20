@@ -363,6 +363,35 @@ func TestSAMLUnsolicitedResponseIsRefused(t *testing.T) {
 	}
 }
 
+// TestSAMLSolicitedResponseNeedsItsBrowserWhenIdPInitiatedIsAllowed: a response
+// that names a request is bound to that request and its browser, whatever the
+// provider allows for responses that name none.
+func TestSAMLSolicitedResponseNeedsItsBrowserWhenIdPInitiatedIsAllowed(t *testing.T) {
+	h := newHarness(t, true)
+	h.linkedUser(uniqueEmail("u"), "user-1")
+	requestID, cookies := h.initiate()
+	for name, jar := range map[string]map[string]string{
+		"no cookie":    nil,
+		"wrong cookie": {saml.BindingCookieName(requestID): "not-the-nonce"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := h.consume(h.respond(resp{inResponseTo: requestID, nameID: nid("user-1"), email: "a@example.com"}), jar)
+			if !errors.Is(err, saml.ErrFlowNotFound) {
+				t.Fatalf("err = %v, want ErrFlowNotFound", err)
+			}
+		})
+	}
+	t.Run("a request id never issued", func(t *testing.T) {
+		_, err := h.consume(h.respond(resp{inResponseTo: "_id-never-issued", nameID: nid("user-1"), email: "a@example.com"}), nil)
+		if !errors.Is(err, saml.ErrFlowNotFound) {
+			t.Fatalf("err = %v, want ErrFlowNotFound", err)
+		}
+	})
+	if _, err := h.consume(h.respond(resp{inResponseTo: requestID, nameID: nid("user-1"), email: "a@example.com"}), cookies); err != nil {
+		t.Fatalf("the binding browser was refused: %v", err)
+	}
+}
+
 func TestSAMLUnsolicitedResponseNeedsTheProviderFlag(t *testing.T) {
 	h := newHarness(t, true)
 	user := h.linkedUser(uniqueEmail("u"), "user-1")

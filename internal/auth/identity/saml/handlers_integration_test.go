@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -228,5 +229,55 @@ func TestSAMLEntitlementRefusesANonEntitledOrg(t *testing.T) {
 	}
 	if rec := serve(mux, http.MethodPost, base+"/acs", map[string]string{"SAMLResponse": posted}, nil); rec.Code != http.StatusOK || len(issuer.got) != 1 {
 		t.Fatalf("enterprise license: acs %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestSAMLACSAcceptsTheAdvertisedHTTPPostBinding: the metadata advertises the
+// HTTP-POST binding at the ACS URL, so a browser that the IdP auto-posts there
+// as a form completes the sign-in, carrying the cross-site binding cookie.
+func TestSAMLACSAcceptsTheAdvertisedHTTPPostBinding(t *testing.T) {
+	h := newHarness(t, false)
+	user := h.linkedUser(uniqueEmail("u"), "user-1")
+	issuer := &recordingIssuer{}
+	mux := h.mux(issuer)
+	base := "/api/v1/auth/saml/" + h.provider.ID.String()
+
+	md := serve(mux, http.MethodGet, base+"/metadata", nil, nil)
+	var mdBody map[string]string
+	if md.Code != http.StatusOK || json.Unmarshal(md.Body.Bytes(), &mdBody) != nil {
+		t.Fatalf("metadata %d %s", md.Code, md.Body)
+	}
+	advertised := `Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"`
+	if !strings.Contains(mdBody["metadata_xml"], advertised) || !strings.Contains(mdBody["metadata_xml"], `Location="`+mdBody["acs_url"]+`"`) {
+		t.Fatalf("metadata does not advertise HTTP-POST at the ACS URL: %s", mdBody["metadata_xml"])
+	}
+
+	init := serve(mux, http.MethodPost, base+"/initiate", map[string]string{}, nil)
+	var initBody map[string]string
+	if init.Code != http.StatusOK || json.Unmarshal(init.Body.Bytes(), &initBody) != nil {
+		t.Fatalf("initiate %d %s", init.Code, init.Body)
+	}
+	cookies := init.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].SameSite != http.SameSiteNoneMode || !cookies[0].Secure {
+		t.Fatalf("the binding cookie must reach a cross-site form post (SameSite=None; Secure): %+v", cookies)
+	}
+	requestID := requestIDFromRedirect(t, initBody["redirect_url"])
+
+	form := url.Values{"SAMLResponse": {h.respond(resp{inResponseTo: requestID, nameID: nid("user-1"), email: "a@example.com"})}, "RelayState": {"/after"}}
+	req := httptest.NewRequest(http.MethodPost, base+"/acs", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookies[0])
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || len(issuer.got) != 1 || issuer.got[0].PrincipalID != user {
+		t.Fatalf("HTTP-POST binding at the ACS: %d %s sessions %+v", rec.Code, rec.Body, issuer.got)
+	}
+
+	missing := httptest.NewRequest(http.MethodPost, base+"/acs", strings.NewReader("RelayState=x"))
+	missing.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, missing)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("form without SAMLResponse: %d %s", rec.Code, rec.Body)
 	}
 }

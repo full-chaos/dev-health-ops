@@ -56,13 +56,13 @@ echo "diff range: ${range}" >&2
 # disables ALL of git's path quoting unconditionally (git's own documented
 # behavior for `-z`) -- so the output is the literal byte sequence of each
 # path, whatever it contains (a non-ASCII byte, a control character), with no
-# quoting logic to have a gap in. ci/go_relevance.py's stdin reading detects
+# quoting logic to have a gap in. ci/go_relevance.sh's stdin reading detects
 # and matches this format (NUL-split when a NUL byte is present); the two
 # must move together.
 # `--no-renames`: git's default rename detection collapses a rename into
 # ONLY the post-rename path -- a file renamed from a RELEVANT path to an
 # unrelated one (e.g. `internal/a.go` -> `docs/a.md`) reports just
-# `docs/a.md`, which matches nothing in ci/go_relevance.py's patterns, so a
+# `docs/a.md`, which matches nothing in ci/go_relevance.sh's patterns, so a
 # change that effectively REMOVED a Go-relevant file from the tree reads as
 # irrelevant. `--no-renames` reports the rename as a plain delete+add pair
 # instead -- both the old and new path appear as separate entries, so either

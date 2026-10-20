@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Decide whether a change set is Go-relevant, for the always-run go-quality job (CHAOS-4834).
 #
-# This replaces ci/go_relevance.py (CHAOS-7522 S9) so that the job needs no Python and no PyYAML before it
+# This replaced the Python decider ci/go_relevance.py (CHAOS-7522 S9, deleted in CHAOS-10174 E3a) so that the job needs no Python and no PyYAML before it
 # can decide whether to run: bash, awk and the diff producer (ci/go_relevant_diff.sh) are all it uses.
 # The decision, the output lines and the failure modes are the old decider's, and a test pins them (internal/relevancedecider:
 # the old decider's answers over a fixed set of changed-file lists, recorded once from the Python).

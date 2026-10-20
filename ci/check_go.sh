@@ -892,7 +892,7 @@ check_ci_leg() {
 # worst leg finished at 39:59, and three new rows pushed two other legs over. The
 # legs are now cost-balanced (ci/venue_oracle_shard.awk, the longest-processing-time
 # assignment ci/go_race_shard.awk uses) by the measured seconds in
-# ci/venue_oracle_weights.d/ (regenerate: ci/venue_oracle_weights.py). A wrong or
+# ci/venue_oracle_weights.d/ (edit a row by hand from a run log). A wrong or
 # missing weight costs balance, never coverage: the legs always partition the run
 # rows. tests/tooling/test_venue_oracle_shards.py fails a PR whose registry rows
 # lack a weight or whose heaviest leg would exceed the leg's test-time budget.
@@ -1255,7 +1255,7 @@ check_venue_oracles() {
   elapsed=$(( $(date +%s) - leg_started ))
   printf 'venue-oracles: leg %ss of tests (predicted %ss, budget %ss)\n' "${elapsed}" "${predicted_seconds:-n/a}" "${budget}"
   if [ "${elapsed}" -gt "${budget}" ]; then
-    printf '::warning title=venue-oracles leg over its test-time budget::%ss of tests against a %ss budget: rebalance ci/venue_oracle_weights.d/ (ci/venue_oracle_weights.py) or add a leg before the job cap cancels it\n' "${elapsed}" "${budget}"
+    printf '::warning title=venue-oracles leg over its test-time budget::%ss of tests against a %ss budget: rebalance ci/venue_oracle_weights.d/ or add a leg before the job cap cancels it\n' "${elapsed}" "${budget}"
   fi
   [ "${failed}" -eq 0 ] || return 1
 }

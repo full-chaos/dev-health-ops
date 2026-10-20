@@ -518,7 +518,7 @@ operation any more: nothing is keyed by the schema digest that serves. What rema
 
 | Signal | Where | Fires when |
 |---|---|---|
-| `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and the table below |
+| `TestSchemaDigestPinMatchesTheSDLAndIsInTheHistoryTable` (`internal/goapicli/routing`) | CI | The SDL moved without updating the pin and the table below |
 | `dho goapi routing status` | operator | A catalog operation is `MISMATCH` or `UNREGISTERED` against the deployed registry, or a class root reads `MISSING` (dark) |
 
 None of the above shortcuts the recovery procedure: a schema digest that happens to match a previously-proven build is NOT
@@ -528,7 +528,7 @@ grounds to carry a proof onto a new image without a fresh `go-api-prove` run: a 
 ### Schema-digest history
 
 Update this table in the SAME change that moves the SDL.
-`ci/check_go_api_routing_digest.py` fails if
+`TestSchemaDigestPinMatchesTheSDLAndIsInTheHistoryTable` fails if
 `contracts/graphql/v1/schema-digest.json` names a digest that does not
 appear here.
 

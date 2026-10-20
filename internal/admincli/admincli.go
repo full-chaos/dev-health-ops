@@ -143,3 +143,4 @@ func writeError(stderr io.Writer, code, detail string) int {
 	_ = json.NewEncoder(stderr).Encode(map[string]any{"error": map[string]string{"code": code, "detail": detail}})
 	return cli.ExitFailure
 }
+// throwaway proof 2

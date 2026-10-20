@@ -210,6 +210,11 @@ on:
       # read and executed by internal/cigates (CHAOS-10176): the test.yml contract, the pip-install manifest the
       # gated jobs name, and the gate script itself
       - '.github/workflows/test.yml'
+      # read by internal/cigates/workflowpaths: the path-filter contract of these four workflows
+      - '.github/workflows/codeql-analysis.yml'
+      - '.github/workflows/docs-cloudflare.yml'
+      - '.github/workflows/docs-guards.yml'
+      - '.github/workflows/security-scan.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
@@ -436,6 +441,11 @@ on:
       # read and executed by internal/cigates (CHAOS-10176): the test.yml contract, the pip-install manifest the
       # gated jobs name, and the gate script itself
       - '.github/workflows/test.yml'
+      # read by internal/cigates/workflowpaths: the path-filter contract of these four workflows
+      - '.github/workflows/codeql-analysis.yml'
+      - '.github/workflows/docs-cloudflare.yml'
+      - '.github/workflows/docs-guards.yml'
+      - '.github/workflows/security-scan.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue

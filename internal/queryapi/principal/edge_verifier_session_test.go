@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
 // fakeSessionUsers is fakeUsers plus the auth-service sessions.
@@ -30,7 +30,7 @@ func (f *fakeSessionUsers) SessionState(context.Context, uuid.UUID) (policy.Sess
 // read is its own unavailable refusal, never a pass.
 func TestEdgeVerifier_ChecksTheSessionOfASidToken(t *testing.T) {
 	subject := uuid.MustParse(edgeTestSubject)
-	sid := session.WireSessionID(uuid.MustParse("77777777-7777-4777-8777-777777777777"))
+	sid := sessionid.Wire(uuid.MustParse("77777777-7777-4777-8777-777777777777"))
 	withSID := func(claims map[string]any) { claims["sid"] = sid }
 	for _, test := range []struct {
 		name  string

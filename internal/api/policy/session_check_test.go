@@ -8,7 +8,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
 // sessionStore is fakeStore plus the auth-service sessions.
@@ -33,7 +33,7 @@ func (s *sessionStore) SessionState(_ context.Context, id uuid.UUID) (SessionRow
 var liveSessionID = uuid.MustParse("77777777-7777-4777-8777-777777777777")
 
 func withSID(id uuid.UUID) func(jwt.MapClaims) {
-	return func(c jwt.MapClaims) { c["sid"] = session.WireSessionID(id) }
+	return func(c jwt.MapClaims) { c["sid"] = sessionid.Wire(id) }
 }
 
 func newSessionStore() *sessionStore {

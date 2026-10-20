@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/session"
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/platform/pgident"
 )
 
 // SessionRow is the auth-service session an access token's sid names.
@@ -41,7 +41,7 @@ func AuthSchemaFromEnv(getenv func(string) string) (string, error) {
 	if name == "" {
 		return defaultAuthSchema, nil
 	}
-	if err := authschema.ValidateIdentifier(name); err != nil {
+	if err := checkSchemaName(name); err != nil {
 		return "", fmt.Errorf("%s: %w", EnvAuthSchema, err)
 	}
 	return name, nil
@@ -56,7 +56,7 @@ func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any,
 		return nil
 	}
 	text, _ := raw.(string)
-	id, err := session.ParseWireSessionID(text)
+	id, err := sessionid.Parse(text)
 	if err != nil {
 		a.logger.WarnContext(ctx, "api access denied: unusable session claim", slog.String("user_id", subject.String()))
 		return errRejected
@@ -97,14 +97,13 @@ func (s PGStore) SessionState(ctx context.Context, id uuid.UUID) (SessionRow, bo
 	if name == "" {
 		name = defaultAuthSchema
 	}
-	schema, err := authschema.NewValidatedIdentifier(name)
-	if err != nil {
+	if err := checkSchemaName(name); err != nil {
 		return SessionRow{}, false, fmt.Errorf("policy: auth schema: %w", err)
 	}
 	var principal uuid.UUID
 	var revoked bool
-	query := strings.ReplaceAll(sessionStateQuery, "{auth_schema}", authschema.Quote(schema))
-	err = s.Pool.QueryRow(ctx, query, id).Scan(&principal, &revoked)
+	query := strings.ReplaceAll(sessionStateQuery, "{auth_schema}", pgx.Identifier{name}.Sanitize())
+	err := s.Pool.QueryRow(ctx, query, id).Scan(&principal, &revoked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SessionRow{}, false, nil
 	}
@@ -112,4 +111,16 @@ func (s PGStore) SessionState(ctx context.Context, id uuid.UUID) (SessionRow, bo
 		return SessionRow{}, false, storeError(err, "SELECT on <auth schema>.sessions (id, principal_id, revoked_at)")
 	}
 	return SessionRow{PrincipalID: principal, Revoked: revoked}, true, nil
+}
+
+// errSchemaName is a schema name that cannot be a bare PostgreSQL identifier.
+var errSchemaName = errors.New("policy: not a usable schema name")
+
+// checkSchemaName is pgident's rule, the one auth-migrate and auth-service
+// apply to the same AUTH_DATABASE_SCHEMA.
+func checkSchemaName(name string) error {
+	if pgident.Check(name) != pgident.OK {
+		return fmt.Errorf("%w: %q", errSchemaName, name)
+	}
+	return nil
 }

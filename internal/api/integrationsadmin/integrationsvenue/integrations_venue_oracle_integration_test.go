@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -35,7 +33,7 @@ import (
 // run in one order on each plane, so a write is visible to the reads after
 // it.
 func TestIntegrationsAdminVenueOracle(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("integrations-admin-venue-oracle", t.Name(), "f78cc04ce9baab309eb756c66e2f4aa541522822b8c9cada52cae52eedc834de"))
+	golden := venueoracle.OpenGolden(t, venueGolden("integrations-admin-venue-oracle", t.Name(), "f210e0bef2a8def518cc39f55c2cc9fcb3cf35c06fc52e4175f59b66ef67fecb"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-integrations-32b!"
@@ -58,7 +56,7 @@ func TestIntegrationsAdminVenueOracle(t *testing.T) {
 			}
 		},
 	})
-	base := startGoServer(t, ctx, venue, jwtKey, withoutStateChange)
+	base := startGoServer(t, ctx, venue, jwtKey)
 
 	requests := integrationRequests(venue, v)
 	python := golden.Python(t, venue, requests)
@@ -92,11 +90,6 @@ FROM integration_datasets ORDER BY integration_id, dataset_key`},
 var (
 	anyUUID     = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	createdTime = regexp.MustCompile(`"(created_at|updated_at)":"[^"]*"`)
-	// stateChange is the pair the dataset rows carry since CHAOS-10242. The frozen
-	// Python answers predate it and a stamped time would be a leaf the golden never
-	// recorded as blanked, so the oracle's Go server cuts it from every answer; the
-	// Go-only test TestDatasetStateChangeVenueOracle owns the pair.
-	stateChange = regexp.MustCompile(`,"state_changed_at":(null|"[^"]*"),"state_changed_by":(null|"[^"]*")`)
 )
 
 // normalize blanks what differs by construction in a "clock: " request: the
@@ -118,7 +111,7 @@ func normalize(request venueoracle.Request, body string) string {
 	return createdTime.ReplaceAllString(body, `"$1":"<time>"`)
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, wrap func(http.Handler) http.Handler) string {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
@@ -144,11 +137,7 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
-	handler := server.Handler()
-	if wrap != nil {
-		handler = wrap(handler)
-	}
-	ts := httptest.NewServer(handler)
+	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(ts.Close)
 	return ts.URL
 }
@@ -175,21 +164,3 @@ func repoRoot(t *testing.T) string {
 
 var _ = fmt.Sprint
 var _ = uuid.Nil
-
-// withoutStateChange serves next with the dataset rows' state_changed_at and
-// state_changed_by cut from every JSON answer.
-func withoutStateChange(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		recorder := httptest.NewRecorder()
-		next.ServeHTTP(recorder, r)
-		body := stateChange.ReplaceAll(recorder.Body.Bytes(), nil)
-		for key, values := range recorder.Header() {
-			w.Header()[key] = values
-		}
-		if w.Header().Get("Content-Length") != "" {
-			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-		}
-		w.WriteHeader(recorder.Code)
-		_, _ = w.Write(body)
-	})
-}

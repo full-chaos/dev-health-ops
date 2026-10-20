@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -145,6 +147,7 @@ type FrozenWorld struct {
 }
 
 func decodeWorld(raw []byte) (FrozenWorld, error) {
+	worldDecodes.Add(1)
 	reader, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
 		return FrozenWorld{}, err
@@ -159,6 +162,81 @@ func decodeWorld(raw []byte) (FrozenWorld, error) {
 	return world, nil
 }
 
+// worldDecodes counts real decodes; a test holds the success path of a load to decoding only the world it asked for.
+var worldDecodes atomic.Int64
+
+type decodedWorld struct {
+	once  sync.Once
+	world FrozenWorld
+	err   error
+}
+
+// decodedWorlds memoizes decodeWorld by the sha256 of the exact bytes, so a planted file or a changed
+// digest never sees another file's decode. The gzip+JSON decode dominates the package's -race time.
+var decodedWorlds sync.Map
+
+func decodeWorldCached(raw []byte, sum [sha256.Size]byte) (FrozenWorld, error) {
+	entry, _ := decodedWorlds.LoadOrStore(sum, &decodedWorld{})
+	cached := entry.(*decodedWorld)
+	cached.once.Do(func() { cached.world, cached.err = decodeWorld(raw) })
+	if cached.err != nil {
+		return FrozenWorld{}, cached.err
+	}
+	return cloneWorld(cached.world), nil
+}
+
+func cloneWorld(w FrozenWorld) FrozenWorld {
+	out := w
+	if w.Tables != nil {
+		out.Tables = make([]WorldTable, len(w.Tables))
+		for i, table := range w.Tables {
+			table.FrozenTable = cloneTable(table.FrozenTable)
+			out.Tables[i] = table
+		}
+	}
+	return out
+}
+
+func cloneTable(table FrozenTable) FrozenTable {
+	if table.Columns != nil {
+		table.Columns = append(make([]FrozenColumn, 0, len(table.Columns)), table.Columns...)
+	}
+	if table.Rows != nil {
+		rows := make([][]any, len(table.Rows))
+		for r, row := range table.Rows {
+			rows[r] = cloneValues(row)
+		}
+		table.Rows = rows
+	}
+	return table
+}
+
+func cloneValues(values []any) []any {
+	if values == nil {
+		return nil
+	}
+	out := make([]any, len(values))
+	for i, value := range values {
+		switch v := value.(type) {
+		case []any:
+			out[i] = cloneValues(v)
+		case map[string]any:
+			if v == nil {
+				out[i] = v
+				continue
+			}
+			m := make(map[string]any, len(v))
+			for k, item := range v {
+				m[k] = cloneValues([]any{item})[0]
+			}
+			out[i] = m
+		default:
+			out[i] = value
+		}
+	}
+	return out
+}
+
 // WorldNames lists the embedded worlds as the flags that select them.
 func WorldNames() []string {
 	entries, err := worldFiles.ReadDir("testdata/generate")
@@ -171,7 +249,7 @@ func WorldNames() []string {
 		if err != nil {
 			continue
 		}
-		if world, err := decodeWorld(raw); err == nil {
+		if world, err := decodeWorldCached(raw, sha256.Sum256(raw)); err == nil {
 			names = append(names, world.Params.String())
 		}
 	}
@@ -181,23 +259,25 @@ func WorldNames() []string {
 
 // LoadFrozenWorld reads the frozen world for the parameters, or names the worlds that exist.
 func LoadFrozenWorld(p GenerateParams) (FrozenWorld, error) {
-	refuse := fmt.Errorf("no frozen world for %s; the frozen worlds are:\n  %s", p, strings.Join(WorldNames(), "\n  "))
+	refuse := func() error {
+		return fmt.Errorf("no frozen world for %s; the frozen worlds are:\n  %s", p, strings.Join(WorldNames(), "\n  "))
+	}
 	file := WorldFile(p)
 	raw, err := worldFiles.ReadFile(file)
 	if err != nil {
-		return FrozenWorld{}, refuse
+		return FrozenWorld{}, refuse()
 	}
 	sum := sha256.Sum256(raw)
 	if digest, pinned := frozenWorldDigests[file]; !pinned || hex.EncodeToString(sum[:]) != digest {
 		return FrozenWorld{}, fmt.Errorf("%s does not match its pinned digest: the frozen world is not the one it was proved against", file)
 	}
-	world, err := decodeWorld(raw)
+	world, err := decodeWorldCached(raw, sum)
 	if err != nil {
 		return FrozenWorld{}, err
 	}
 	// The file name only found the world: what was read must be what was asked for.
 	if world.Params != p {
-		return FrozenWorld{}, refuse
+		return FrozenWorld{}, refuse()
 	}
 	// A table the schema no longer has (retiredTables) is not part of the world a load reproduces: the
 	// file stays as recorded and pinned, and the table is left out here, named in the log.

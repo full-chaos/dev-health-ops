@@ -60,6 +60,20 @@ func TestDownChainCoversEveryChainRevision(t *testing.T) {
 	}
 }
 
+func TestDownRevision0152DropsTheCheckedAtColumn(t *testing.T) {
+	_, chain, down, _, _ := downgradeFixture(t)
+	for index, file := range chain {
+		if file.Revision != "0152" {
+			continue
+		}
+		if !regexp.MustCompile(`(?i)ALTER TABLE daily_metrics_runs DROP COLUMN touched_checked_at;`).MatchString(down[index].SQL) {
+			t.Fatalf("sql/down/%s does not drop daily_metrics_runs.touched_checked_at:\n%s", down[index].Name, down[index].SQL)
+		}
+		return
+	}
+	t.Fatal("the chain holds no revision 0152")
+}
+
 // PlanDowngrade and ParseDowngradeTarget enumerate every cell: each refusal code and
 // each accepted shape is pinned with its exact steps.
 func TestPlanDowngradeCells(t *testing.T) {
@@ -94,10 +108,11 @@ func TestPlanDowngradeCells(t *testing.T) {
 		{"explicit to the floor", []string{"0066", top}, "0138", steps(top, "0138"), ""},
 		{"explicit equal to current", []string{"0066", top}, top, nil, ""},
 		{"explicit, single head", []string{"0141"}, "0139", steps("0141", "0139"), ""},
-		{"-1, single head", []string{top}, "-1", steps(top, "0150"), ""},
-		{"-3, single head", []string{top}, "-3", steps(top, "0148"), ""},
-		{"-13 reaches exactly the floor", []string{top}, "-13", steps(top, "0138"), ""},
-		{"-14 needs the floor revision itself", []string{top}, "-14", nil, "below_baseline_floor"},
+		{"-1, single head", []string{top}, "-1", steps(top, "0151"), ""},
+		{"-3, single head", []string{top}, "-3", steps(top, "0149"), ""},
+		{"-14 reaches exactly the floor", []string{top}, "-14", steps(top, "0138"), ""},
+		{"-15 needs the floor revision itself", []string{top}, "-15", nil, "below_baseline_floor"},
+		{"0152 reverts to 0151", []string{"0152"}, "0151", []DownStep{{Revision: "0152", Previous: "0151"}}, ""},
 		{"-1 with 0066 recorded: Python reverts 0066 first", []string{"0066", top}, "-1", nil, "below_baseline_floor"},
 		{"-2 with 0066 recorded", []string{"0066", top}, "-2", nil, "below_baseline_floor"},
 		{"-1 at the floor", []string{"0066", "0138"}, "-1", nil, "below_baseline_floor"},

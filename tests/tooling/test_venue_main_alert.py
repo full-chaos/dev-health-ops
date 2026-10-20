@@ -1,5 +1,5 @@
 """`ci/venue-main-alert.sh` (CHAOS-9597). The workflow-shape tests of venue-oracles-main-alert.yml are in
-internal/cigates/workflows_venue_main_alert_test.go (CHAOS-10177).
+internal/cigates/workflows/workflows_venue_main_alert_test.go (CHAOS-10177).
 
 A red main-push `Venue oracles` run opens or updates ONE GitHub issue; a green
 executed run closes it; a skipped or stale run changes nothing. The script reads

@@ -1,0 +1,7 @@
+# Packages that run ALONE in a race leg (CHAOS-10289): ci/go_race_shard.awk leaves them out of the weight-balanced split,
+# hands each to the then-lightest shard, and check_go.sh runs them in their own `go test -race` invocation after the
+# shard's other packages and its providersync slice have finished. Format: package<TAB>reason. Key = import path relative
+# to the module root. Sorted (LC_ALL=C), no duplicates; every row names a real package that has a row in
+# ci/go_race_weights.tsv (check_go.sh race-weights-rows). A package leaves this file when its race time no longer depends
+# on its co-tenants, and its weight stays the measured one either way.
+internal/fixturescli	race time depends on the leg's co-tenants: 10.7 s beside idle packages, 430 s on main, a 600 s timeout beside heavy ones (#4492 at 75fdaed7, job 118269611814)

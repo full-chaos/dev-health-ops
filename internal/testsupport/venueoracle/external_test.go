@@ -3,6 +3,7 @@ package venueoracle
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -169,5 +170,21 @@ func TestExternalSetTargetEnvKeysTheGoldenCallLikeInProcess(t *testing.T) {
 	}
 	if external != inProcess {
 		t.Errorf("external call key %q differs from the in-process key %q", external, inProcess)
+	}
+}
+
+func TestWithoutProvenanceHeadersDropsOnlyThePlaneAndBuildStamp(t *testing.T) {
+	response := Response{Status: 200, Body: "{}", Headers: map[string]string{
+		"content-type": "application/json", "X-Dev-Health-Build": "abc", "x-dev-health-plane": "api", "x-request-id": "r1"}}
+	got := WithoutProvenanceHeaders(response)
+	want := map[string]string{"content-type": "application/json", "x-request-id": "r1"}
+	if !reflect.DeepEqual(got.Headers, want) {
+		t.Errorf("headers = %v, want %v", got.Headers, want)
+	}
+	if got.Status != 200 || got.Body != "{}" {
+		t.Errorf("status or body changed: %+v", got)
+	}
+	if len(response.Headers) != 4 {
+		t.Errorf("the input response was changed: %v", response.Headers)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -132,7 +131,7 @@ func (prover LinearAbsenceProver) post(ctx context.Context, query []byte) (int, 
 		return 0, nil, false
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxLinearAbsenceBody+1))
+	body, err := providerfoundation.ReadResponseBody(response, maxLinearAbsenceBody)
 	if err != nil || len(body) > maxLinearAbsenceBody {
 		return 0, nil, false
 	}

@@ -45,7 +45,7 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 		} else if got != want {
 			t.Fatalf("%s digest = %s, want %s: the frozen rows changed without their digest. They are not rewritten: the Python producer that froze them cannot run again (CHAOS-7793)", path, got, want)
 		}
-		world, err := decodeWorld(raw)
+		world, err := decodeWorldCached(raw, sha256.Sum256(raw))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -434,7 +434,7 @@ type unpinnedColumn struct{ class, source string }
 // rows that carry it must agree, and the ids must agree up to a consistent renaming (worldContent).
 var unpinnedColumns = map[string]map[string]unpinnedColumn{
 	"git_blame_dirty_paths": {
-		"marked_at": {serverStamp, "the materialized view writes now64(3, 'UTC'): migrations/clickhouse/095_git_blame_file_ownership.sql:44"},
+		"marked_at": {serverStamp, "the materialized view writes now64(3, 'UTC'): internal/chmigrate/history/095_git_blame_file_ownership.sql:44"},
 	},
 	"ai_attribution": {
 		"computed_at": {pythonStamp, "metrics/sinks/clickhouse/ai_attribution.py:76-79: datetime imported inside the function, then datetime.now()"},

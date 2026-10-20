@@ -42,7 +42,7 @@ on:
       - 'src/dev_health_ops/llm/**'
       - 'src/dev_health_ops/metrics/**'
       - 'src/dev_health_ops/metrics/testops*.py'
-      - 'src/dev_health_ops/migrations/clickhouse/**'
+      - 'internal/chmigrate/history/**'
       # The auth lineage's SQL is //go:embed-ed into
       # internal/storage/postgres/authschema, so a change to it changes the
       # compiled binary and is covered by that package's tests -- but it is
@@ -87,7 +87,7 @@ on:
       # directly as real-repo ComplexityScanner.should_process examples,
       # so a change to either is a genuine Go-test input even though
       # neither lives under any of the subdirectory globs above
-      # (internal/cigates/workflows_path_filters_test.go's resolveNamedFiles
+      # (internal/cigates/workflows/workflows_path_filters_test.go's resolveNamedFiles
       # oracle: a file is a Go input because Go code NAMES it).
       - 'src/dev_health_ops/__init__.py'
       # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/cli.py (deleted); the
@@ -104,7 +104,7 @@ on:
       # upgrade; internal/joboperator's tests also read the worker_operator_audits revisions.
       # Revisions 0139 to 0141 were Python-only PRs that this list did not match, so the Go
       # integration shards never ran on them and rev 186's migrate hook failed (CHAOS-6801).
-      # internal/cigates/workflows_path_filters_test.go asserts every Alembic file matches.
+      # internal/cigates/workflows/workflows_path_filters_test.go asserts every Alembic file matches.
       - 'src/dev_health_ops/alembic/**'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
@@ -171,6 +171,7 @@ on:
       - 'ci/go_providersync_race_weights.tsv'
       - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
+      - 'ci/go_race_solo.tsv'
       - 'ci/ratchets.tsv'
       - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
@@ -185,6 +186,12 @@ on:
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'
+      # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
+      - 'ci/auth_corpus_external.sh'
+      - 'ci/auth_corpus_set_env.sh'
+      - 'ci/auth_corpus_external.override.yml'
+      - 'ci/auth_corpus_external.acp.override.yml'
+      - '.github/workflows/venue-oracles.yml'
       - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
@@ -277,7 +284,7 @@ on:
       - 'src/dev_health_ops/llm/**'
       - 'src/dev_health_ops/metrics/**'
       - 'src/dev_health_ops/metrics/testops*.py'
-      - 'src/dev_health_ops/migrations/clickhouse/**'
+      - 'internal/chmigrate/history/**'
       # The auth lineage's SQL is //go:embed-ed into
       # internal/storage/postgres/authschema, so a change to it changes the
       # compiled binary and is covered by that package's tests -- but it is
@@ -322,7 +329,7 @@ on:
       # directly as real-repo ComplexityScanner.should_process examples,
       # so a change to either is a genuine Go-test input even though
       # neither lives under any of the subdirectory globs above
-      # (internal/cigates/workflows_path_filters_test.go's resolveNamedFiles
+      # (internal/cigates/workflows/workflows_path_filters_test.go's resolveNamedFiles
       # oracle: a file is a Go input because Go code NAMES it).
       - 'src/dev_health_ops/__init__.py'
       # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/cli.py (deleted); the
@@ -339,7 +346,7 @@ on:
       # upgrade; internal/joboperator's tests also read the worker_operator_audits revisions.
       # Revisions 0139 to 0141 were Python-only PRs that this list did not match, so the Go
       # integration shards never ran on them and rev 186's migrate hook failed (CHAOS-6801).
-      # internal/cigates/workflows_path_filters_test.go asserts every Alembic file matches.
+      # internal/cigates/workflows/workflows_path_filters_test.go asserts every Alembic file matches.
       - 'src/dev_health_ops/alembic/**'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
@@ -406,6 +413,7 @@ on:
       - 'ci/go_providersync_race_weights.tsv'
       - 'ci/race_excluded_tests.tsv'
       - 'ci/go_race_weights.tsv'
+      - 'ci/go_race_solo.tsv'
       - 'ci/ratchets.tsv'
       - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
@@ -420,6 +428,12 @@ on:
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'
+      # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
+      - 'ci/auth_corpus_external.sh'
+      - 'ci/auth_corpus_set_env.sh'
+      - 'ci/auth_corpus_external.override.yml'
+      - 'ci/auth_corpus_external.acp.override.yml'
+      - '.github/workflows/venue-oracles.yml'
       - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed

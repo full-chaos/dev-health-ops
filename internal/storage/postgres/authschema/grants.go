@@ -108,6 +108,8 @@ func RuntimePosture() []TablePrivilege {
 		// Audit and outbox.
 		{Table: "security_audit_events", Select: true, Insert: true},
 		{Table: "auth_outbox_events", Select: true, Insert: true, Update: true, Delete: true},
+		// Per-aggregate revision counter (0013): bumped, never deleted.
+		{Table: "aggregate_revisions", Select: true, Insert: true, Update: true},
 	}
 }
 

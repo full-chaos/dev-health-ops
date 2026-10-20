@@ -38,8 +38,8 @@ func TestCommitFailureLogsNoDatabaseText(t *testing.T) {
 			_, err := tx.Exec(ctx, `SELECT $1::text::uuid`, piiEmail)
 			return err
 		},
-		Audit: AuditEvent{EventType: "auth.probe.failed", Outcome: OutcomeError},
-		Event: OutboxEvent{AggregateType: "principal", AggregateID: "p", EventType: "principal.probe", IdempotencyKey: "probe:1"},
+		Audit:  AuditEvent{EventType: "auth.probe.failed", Outcome: OutcomeError},
+		Events: probeEvents(),
 	})
 	if err == nil {
 		t.Fatal("the probe mutation succeeded")

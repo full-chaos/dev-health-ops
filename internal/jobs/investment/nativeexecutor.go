@@ -28,8 +28,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
-	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
-	"github.com/full-chaos/dev-health-ops/internal/orgllmconfig"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -56,10 +54,6 @@ type NativeExecutor struct {
 	// model_ref must reach the PROVIDER, not merely the model-version string
 	// (codex r1 P1-b).
 	newProvider func(requested, model string) (categorize.Provider, categorize.ProviderKind, error)
-	// orgConfig and orgBudget make the provider org-aware (CHAOS-10041); nil
-	// keeps the platform environment as the only source.
-	orgConfig orgConfigFetcher
-	orgBudget llmbudget.Store
 	// observer receives CHAOS-5458's per-run repo-attribution partition. Nil
 	// is tolerated everywhere it is read, same discipline as
 	// remaining.MembershipExecutor.SetObserver.
@@ -272,13 +266,13 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		requestedProvider = *scope.LLMProvider
 	}
 	orgID := claim.Request.OrganizationID
-	provider, kind, stampModel, err := executor.providerForRun(ctx, orgID, requestedProvider, claim.Request.ModelRef)
+	// Categorization is served by the platform provider only: an organization's
+	// own provider configuration never applies to it.
+	provider, kind, err := executor.newProvider(requestedProvider, claim.Request.ModelRef)
+	stampModel := claim.Request.ModelRef
 	if err != nil {
 		var det *workgraph.DeterministicError
 		if errors.As(err, &det) {
-			return nil, err
-		}
-		if errors.Is(err, orgllmconfig.ErrUnavailable) {
 			return nil, err
 		}
 		return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
@@ -453,16 +447,20 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 // map, so it does unless the failure vocabulary grows unboundedly -- which it
 // cannot, FailureClass returns from a closed set.
 func (executor *NativeExecutor) buildEvidence(claim workgraph.Claim, stats Stats) ([]byte, error) {
+	status := "success"
+	outcome := map[string]any{"stats": stats}
+	if stats.LLMAllFailed {
+		status = "degraded"
+		outcome["reason"] = "all_llm_calls_failed"
+	}
+	outcome["status"] = status
 	evidence := map[string]any{
 		"kind":                   string(claim.Request.Kind),
 		"model_ref":              claim.Request.ModelRef,
 		"prompt_ref":             claim.Request.PromptRef,
 		"llm_concurrency":        claim.Request.LLMConcurrency,
 		"spend_limit_microunits": claim.Request.SpendLimitMicrounits,
-		"outcome": map[string]any{
-			"status": "success",
-			"stats":  stats,
-		},
+		"outcome":                outcome,
 	}
 	encoded, err := json.Marshal(evidence)
 	if err != nil {

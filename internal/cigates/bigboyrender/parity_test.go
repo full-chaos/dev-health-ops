@@ -93,10 +93,13 @@ func replay(t *testing.T, dir string) {
 	if want := subst(readFile(t, filepath.Join(dir, "stdout"))); stdout != want {
 		t.Errorf("stdout differs from the recording\ngot:\n%q\nrecorded:\n%q", stdout, want)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "stderr.skip")); err != nil {
-		if want := subst(readFile(t, filepath.Join(dir, "stderr"))); stderr != want {
-			t.Errorf("stderr differs from the recording\ngot:\n%q\nrecorded:\n%q", stderr, want)
+	if line, err := os.ReadFile(filepath.Join(dir, "stderr.traceback")); err == nil {
+		// Python stopped on an uncaught exception: the verb prints exactly this one line on stderr instead.
+		if stderr != string(line) || strings.Count(stderr, "\n") != 1 {
+			t.Errorf("stderr is not the one error line that replaces the Python traceback\ngot:\n%q\nwant:\n%q", stderr, string(line))
 		}
+	} else if want := subst(readFile(t, filepath.Join(dir, "stderr"))); stderr != want {
+		t.Errorf("stderr differs from the recording\ngot:\n%q\nrecorded:\n%q", stderr, want)
 	}
 	expected := map[string]bool{}
 	for name := range inputs {

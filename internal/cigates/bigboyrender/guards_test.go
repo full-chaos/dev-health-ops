@@ -277,11 +277,11 @@ func TestGrantsCompareMatchesTheRealManifestAndFiresOnAPlantedDefect(t *testing.
 }
 
 func TestGrantsCompareFailsLoudlyWhenTheManifestCannotBeParsed(t *testing.T) {
-	for name, source := range map[string]string{"no rows": "func APIPosture(d string) {\n}\n", "no function": "package clickhouse\n"} {
-		code, out, _ := run("grants-compare", "SELECT\tteams\n", source)
-		if code != 1 || out != "GRANTS_CHECK_FAIL manifest not parsed\n" {
-			t.Errorf("%s: exit %d: %q", name, code, out)
-		}
+	if code, out, _ := run("grants-compare", "SELECT\tteams\n", "func APIPosture(d string) {\n}\n"); code != 1 || out != "GRANTS_CHECK_FAIL manifest not parsed\n" {
+		t.Errorf("no rows: exit %d: %q", code, out)
+	}
+	if code, out, stderr := run("grants-compare", "SELECT\tteams\n", "package clickhouse\n"); code != 1 || out != "" || stderr != "GRANTS_CHECK_FAIL manifest not parsed: no func APIPosture\n" {
+		t.Errorf("no function: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
 	if code, _, stderr := run("grants-compare", "only one"); code != 2 || !strings.Contains(stderr, "usage:") {
 		t.Errorf("usage: exit %d, %q", code, stderr)

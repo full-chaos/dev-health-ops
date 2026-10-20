@@ -16,7 +16,8 @@ func grantsCompare(args []string, stdout, stderr io.Writer) int {
 	}
 	pairs, ok := chManifest(args[1])
 	if !ok {
-		fmt.Fprintln(stdout, "GRANTS_CHECK_FAIL manifest not parsed")
+		// Python stopped here on an IndexError (no func APIPosture): nothing on stdout, the error on stderr, exit 1.
+		fmt.Fprintln(stderr, "GRANTS_CHECK_FAIL manifest not parsed: no func APIPosture")
 		return 1
 	}
 	expected := map[string][]string{}

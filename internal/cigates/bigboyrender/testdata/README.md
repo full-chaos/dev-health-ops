@@ -14,8 +14,9 @@ Each case directory holds `args` (the Go arguments, one per line), `env` (option
 `stdout`, `stderr` and `out/` (the files the script wrote or changed, relative to the work directory). Placeholders
 in `args`, `env`, `stdout` and `stderr`: `{WORK}` is the case's work directory (the working directory of the run),
 `{REPO}` a git repository built by the test, `{OLD}` and `{NEW}` its two commits, `{FILE:name}` the exact content of
-`in/name` as one argument. A case with `stderr.skip` has no `stderr`: Python stopped on an uncaught exception there, a
-traceback the Go verb does not copy; its exit code, stdout and written files are still compared.
+`in/name` as one argument. A case with `stderr.traceback` has no `stderr`: Python stopped on an uncaught exception there and
+printed a traceback. The Go verb prints exactly the one line in `stderr.traceback` on stderr instead; its exit code,
+stdout and written files are compared with the Python run as in every other case.
 
 A posture case (`pg-*`) holds `in/old.go.fixture` and `in/new.go.fixture`: the repository has one commit with each as
 `internal/storage/postgres/{api,domain}_authorization.go`, and `in/expect.out` seeds the out file (`# seed`), so an
@@ -35,6 +36,6 @@ repository `$R` with the two commits instead of the files `old.go`/`new.go`); `$
 `$R` is built with `git init`, then for each of the two texts: write the posture file, `git add -A`, `git commit
 --allow-empty` (author and committer `t <t@t>`, dates 2026-01-01).
 
-Not recorded, because the Go verb differs on purpose: the usage lines (they name the verb, not the `.py` file), and
-`grants-compare` with a source that has no `func APIPosture(` (Python stopped on an IndexError; Go prints
-`GRANTS_CHECK_FAIL manifest not parsed` and exits 1). `guards_test.go` covers those.
+Not recorded, because the Go verb differs on purpose: the usage lines (they name the verb, not the `.py` file).
+`guards_test.go` covers those. `grants-no-function` is recorded: Python stopped on an IndexError (traceback on
+stderr, empty stdout, exit 1); Go prints the line in its `stderr.traceback` instead.

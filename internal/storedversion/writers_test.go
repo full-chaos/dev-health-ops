@@ -99,6 +99,7 @@ var unresolvedWriters = map[string]string{
 	"internal/audit/audit.go":                                "PostgreSQL auth-schema append-only audit and outbox inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/identities.go":                   "PostgreSQL auth-schema identity inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/attempts_pg.go":            "PostgreSQL auth-schema login_attempts insert (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/local/linkcred.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local.go":                        "PostgreSQL auth-schema principal and user inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/organization.go":                 "PostgreSQL auth-schema organization projection inserts (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/store.go":                        "PostgreSQL auth-schema principal projection inserts (schema name interpolated); no in-scope ClickHouse table",

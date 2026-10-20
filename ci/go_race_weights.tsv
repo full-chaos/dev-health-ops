@@ -116,7 +116,7 @@ internal/cigates/affectedreject	5
 internal/cigates/chartgates	148
 internal/cigates/checkgo	140
 internal/cigates/scripts	18
-internal/cigates/testshard	15
+internal/cigates/testshard	150
 internal/cigates/workflowpaths	1
 internal/cigates/workflows	52
 internal/cli	2
@@ -137,6 +137,7 @@ internal/goapidigest	1
 internal/goapiproof	130
 internal/goapiproof/writeproof	1
 internal/gqlgenguard	50
+internal/httpguard	10
 internal/identityalias	1
 internal/ingressplanes	2
 internal/ingressplanes/cmd/routerconf	1

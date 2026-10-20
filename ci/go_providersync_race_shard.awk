@@ -45,5 +45,5 @@ END {
     load[best] += weight[k]
     owner[k] = best
   }
-  for (i = 1; i <= n; i++) if (owner[i] == shard && i != 5) print name[i]
+  for (i = 1; i <= n; i++) if (owner[i] == shard) print name[i]
 }

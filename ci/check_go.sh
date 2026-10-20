@@ -378,7 +378,7 @@ run_in_modules() {
 }
 
 check_vet() {
-  run_in_modules "go vet" go vet -mod=readonly ./...
+  run_in_modules "go vet" go vet -mod=readonly -trimpath ./...
 }
 
 # check_race_excluded_ran (CHAOS-8135, CHAOS-8118): a test compiled out of the -race leg by a `!race` build tag must

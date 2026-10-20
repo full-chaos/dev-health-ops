@@ -19,7 +19,7 @@ const providersyncAwkName = "go_providersync_race_shard.awk"
 func providersyncPaths(t *testing.T) (weights, awk string) {
 	t.Helper()
 	root := repoRoot(t)
-	return filepath.Join(root, "ci", "go_providersync_race_weights.tsv"), filepath.Join(root, "ci", providersyncAwkName)
+	return filepath.Join(root, "ci", "go_providersync_race_weights.tsv"), filepath.Join(root, "ci", "go_providersync_race_shard.awk")
 }
 
 func providersyncWrite(t *testing.T, name, text string) string {

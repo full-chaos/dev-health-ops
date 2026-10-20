@@ -216,7 +216,19 @@ func validAMR(amr []string) bool {
 // refresh lifetime, which is when its last credential expired.
 func (s *Store) sessionColumns() string {
 	return `s.id::text, s.principal_id::text, s.organization_id::text, s.revision,
-	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, s.revoked_at`
+	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt()
+}
+
+// effectiveRevokedAt is the expression for alias s's revoked_at as the record
+// reports it: the explicit revoke, else the principal's password stamp
+// (users.password_updated_at) when that is strictly after the session was
+// created. A password change thus ends every older session in the same
+// transaction that wrote the new hash, whether or not RevokeAll ran. Both
+// times are database-clock values; a principal with no stamp voids nothing.
+func (s *Store) effectiveRevokedAt() string {
+	return fmt.Sprintf(`COALESCE(s.revoked_at,
+		(SELECT u.password_updated_at FROM %s.users u
+		 WHERE u.principal_id = s.principal_id AND u.password_updated_at > s.created_at))`, s.q)
 }
 
 // effectiveExpiry is the expression for alias s's effective expiry.

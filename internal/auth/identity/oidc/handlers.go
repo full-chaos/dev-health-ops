@@ -160,6 +160,10 @@ func (s *Service) AuthorizeHandler() http.Handler {
 		if !ok {
 			return
 		}
+		if _, failure := s.gate(r.Context(), providerID); failure != nil {
+			s.writeError(w, failure)
+			return
+		}
 		data, ok := readBody(w, r)
 		if !ok {
 			return
@@ -184,6 +188,10 @@ func (s *Service) CallbackHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerID, ok := providerIDFrom(w, r)
 		if !ok {
+			return
+		}
+		if _, failure := s.gate(r.Context(), providerID); failure != nil {
+			s.writeError(w, failure)
 			return
 		}
 		data, ok := readBody(w, r)

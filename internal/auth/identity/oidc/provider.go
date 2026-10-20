@@ -37,7 +37,12 @@ var defaultScopes = []string{"openid", "profile", "email"}
 var errProviderShape = errors.New("oidc: stored provider column has the wrong JSON shape")
 
 // ProviderSource loads a provider by id. A missing row is ErrProviderNotFound.
+//
+// ProviderOrg reads only the row's organization, so the entitlement gate runs
+// before anything stored is decoded. Provider reads and decodes the whole
+// row; a stored column it cannot read is ErrProviderConfig.
 type ProviderSource interface {
+	ProviderOrg(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	Provider(ctx context.Context, id uuid.UUID) (Provider, error)
 }
 
@@ -50,6 +55,15 @@ var ErrProviderConfig = errors.New("oidc: stored provider configuration is malfo
 // PGProviders reads public.sso_providers. The runtime role needs column SELECT
 // on the columns below and nothing else.
 type PGProviders struct{ Pool *pgxpool.Pool }
+
+func (p PGProviders) ProviderOrg(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	var org uuid.UUID
+	err := p.Pool.QueryRow(ctx, `SELECT org_id FROM public.sso_providers WHERE id = $1`, id).Scan(&org)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.UUID{}, ErrProviderNotFound
+	}
+	return org, err
+}
 
 func (p PGProviders) Provider(ctx context.Context, id uuid.UUID) (Provider, error) {
 	var (
@@ -68,11 +82,11 @@ FROM public.sso_providers WHERE id = $1`, id).Scan(&row.ID, &row.OrgID, &row.Pro
 		return Provider{}, err
 	}
 	if row.Config, err = decodeProviderConfig(config); err != nil {
-		return Provider{}, err
+		return Provider{}, fmt.Errorf("%w: config: %w", ErrProviderConfig, err)
 	}
 	if allowedDomains != nil {
 		if row.AllowedDomains, err = decodeAllowedDomains(*allowedDomains); err != nil {
-			return Provider{}, err
+			return Provider{}, fmt.Errorf("%w: allowed_domains: %w", ErrProviderConfig, err)
 		}
 	}
 	if secrets != nil {

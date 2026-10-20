@@ -190,21 +190,45 @@ func loginNonceCookieName(flowID string) string { return "dho_oidc_login_nonce_"
 
 // loadProvider runs the checks go-api runs before any flow work, in its order:
 // 404, entitlement, protocol, status.
-func (s *Service) loadProvider(ctx context.Context, providerID uuid.UUID) (Provider, *Error) {
-	row, err := s.cfg.Providers.Provider(ctx, providerID)
+// gate resolves the provider row to its organization and runs the SSO
+// entitlement check: 404, then 402. It runs before the stored config or any
+// request body is decoded.
+func (s *Service) gate(ctx context.Context, providerID uuid.UUID) (uuid.UUID, *Error) {
+	org, err := s.cfg.Providers.ProviderOrg(ctx, providerID)
 	if errors.Is(err, ErrProviderNotFound) {
-		return Provider{}, deny(http.StatusNotFound, ReasonMalformed, detailProviderAbsent)
+		return uuid.UUID{}, deny(http.StatusNotFound, ReasonMalformed, detailProviderAbsent)
 	}
 	if err != nil {
-		return Provider{}, internal(ReasonStoreUnavailable, err)
+		return uuid.UUID{}, internal(ReasonStoreUnavailable, err)
 	}
-	allowed, err := s.cfg.Entitlements.SSOAllowed(ctx, row.OrgID)
+	allowed, err := s.cfg.Entitlements.SSOAllowed(ctx, org)
 	if err != nil {
-		s.cfg.Logger.ErrorContext(ctx, "auth oidc: entitlement check failed; denying", "org_id", row.OrgID.String(),
+		s.cfg.Logger.ErrorContext(ctx, "auth oidc: entitlement check failed; denying", "org_id", org.String(),
 			logging.ErrorAttr(err))
 	}
 	if !allowed {
-		return Provider{}, deny(http.StatusPaymentRequired, ReasonNotEntitled, s.cfg.Entitlements.DeniedDetail())
+		return uuid.UUID{}, deny(http.StatusPaymentRequired, ReasonNotEntitled, s.cfg.Entitlements.DeniedDetail())
+	}
+	return org, nil
+}
+
+func (s *Service) loadProvider(ctx context.Context, providerID uuid.UUID) (Provider, *Error) {
+	org, failure := s.gate(ctx, providerID)
+	if failure != nil {
+		return Provider{}, failure
+	}
+	row, err := s.cfg.Providers.Provider(ctx, providerID)
+	switch {
+	case errors.Is(err, ErrProviderNotFound):
+		return Provider{}, deny(http.StatusNotFound, ReasonMalformed, detailProviderAbsent)
+	case errors.Is(err, ErrProviderConfig):
+		return Provider{}, internal(ReasonDependency, err)
+	case err != nil:
+		return Provider{}, internal(ReasonStoreUnavailable, err)
+	case row.OrgID != org:
+		// The row moved to another organization between the two reads: the
+		// gate decided for the old one.
+		return Provider{}, internal(ReasonStoreUnavailable, errors.New("provider organization changed during the request"))
 	}
 	if row.Protocol != protocolOIDC {
 		return Provider{}, deny(http.StatusBadRequest, ReasonMalformed, "Provider is not OIDC")

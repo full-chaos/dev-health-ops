@@ -213,6 +213,54 @@
         "line": 119
       },
       "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /healthz [dev-health-auth-service @operator]",
+      "method": "HEAD",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/healthz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 117
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /readyz [dev-health-auth-service @operator]",
+      "method": "HEAD",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/readyz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 118
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /metrics [dev-health-auth-service @operator]",
+      "method": "HEAD",
+      "public_rationale": "Scrape endpoint on the operator listener only (never the API one); process metrics, no tenant data.",
+      "route": "/metrics",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 119
+      },
+      "surface_kind": "rest"
     }
   ],
   "schema_version": "endpoint-profile.v1",

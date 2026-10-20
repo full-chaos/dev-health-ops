@@ -82,3 +82,21 @@ func TestBucketWaitIsTheTimeToTheNextToken(t *testing.T) {
 		t.Fatal("a token was due after 500ms")
 	}
 }
+
+// A wait under one second, none at all, or a negative one is still a
+// Retry-After of 1: a 429 never tells a client to retry at once.
+func TestRetryAfterSecondsRoundsUpAndIsAtLeastOne(t *testing.T) {
+	for wait, want := range map[time.Duration]int{
+		-time.Second:            1,
+		0:                       1,
+		time.Nanosecond:         1,
+		999 * time.Millisecond:  1,
+		time.Second:             1,
+		time.Second + 1:         2,
+		7500 * time.Millisecond: 8,
+	} {
+		if got := retryAfterSeconds(wait); got != want {
+			t.Errorf("retryAfterSeconds(%v) = %d, want %d", wait, got, want)
+		}
+	}
+}

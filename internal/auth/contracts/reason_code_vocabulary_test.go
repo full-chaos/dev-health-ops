@@ -221,6 +221,11 @@ var approvedAuditReasonCodes = []string{
 	"denied_no_membership",
 	"denied_no_grant",
 	"denied_policy",
+	"accepted",
+	"invalid_credentials",
+	"account_locked",
+	"principal_deactivated",
+	"email_unverified",
 }
 
 func TestTheVocabularyFileIsExactlyTheApprovedLists(t *testing.T) {

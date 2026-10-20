@@ -3364,6 +3364,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/signedtoken FuzzValidSignedToken"
   "./internal/auth/httpapi FuzzParseLimit"
   "./internal/auth/httpapi FuzzParseForwardedTrust"
+  "./internal/auth/clientaddr FuzzParseTrust"
   "./internal/auth/keystore FuzzParseEd25519Key"
   "./internal/auth/authconfig FuzzConfigLoad"
   "./internal/auth/identity FuzzNormalizeEmail"

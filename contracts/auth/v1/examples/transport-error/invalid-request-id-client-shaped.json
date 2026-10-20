@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "rate_limited",
+    "message": "too many requests for this route",
+    "request_id": "client-chosen-id-123"
+  }
+}

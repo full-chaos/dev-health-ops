@@ -1,7 +1,7 @@
 # ci/bigboy/compose.bigboy.yml (CHAOS-9962): the ONE compose file of the bigboy stack, with profiles for the optional services.
 # It is the compose merge of the twelve files stack.sh used to chain (base, go-workers, sweep, images, workers, clickhouse-users,
 # billing-edge, router and the one-off overlays smoke, prove, hook-check, river-apply); `docker compose config` of the old live chain
-# and of this file was byte-identical when this file was made (PR of CHAOS-9962; tests/tooling/test_bigboy_one_compose_file.py keeps the service list of each old set). Start it with plain docker compose:
+# and of this file was byte-identical when this file was made (PR of CHAOS-9962; internal/cigates/bigboy/compose_one_file_test.go keeps the service list of each old set). Start it with plain docker compose:
 #   docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env -f ops/ci/bigboy/compose.bigboy.yml up -d --no-deps --no-build <service>
 # Restarts (CHAOS-10181): every long-running service has `restart: unless-stopped`, a one-shot none (internal/bigboycompose
 # restart_policy_test.go). A docker daemon restart (an apt upgrade of docker-ce or containerd) stops every container; after

@@ -499,8 +499,8 @@ def _cut_with_a_fake_check(
         go.write_text(
             "#!/usr/bin/env bash\n"
             'while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\n'
-            "printf '#!/usr/bin/env bash\\nprintf \"%%s\\\\n\" \"$@\" > %s\\nexit 1\\n' "
-            f"{shlex.quote(str(tmp_path / 'generator-args.log'))} > \"$out\"\n"
+            'printf \'#!/usr/bin/env bash\\nprintf "%%s\\\\n" "$@" > %s\\nexit 1\\n\' '
+            f'{shlex.quote(str(tmp_path / "generator-args.log"))} > "$out"\n'
             'chmod +x "$out"\n'
         )
         go.chmod(0o755)

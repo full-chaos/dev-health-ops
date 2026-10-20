@@ -124,6 +124,11 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: API_DATABASE_URI}}
             - name: JWT_SECRET_KEY
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: JWT_SECRET_KEY}}
+            {{- if .Values.authService.enabled }}
+            {{- /* The auth schema the sid check reads auth-service sessions in. */}}
+            - name: AUTH_DATABASE_SCHEMA
+              value: {{ include "dev-health.authDatabaseSchema" . | quote }}
+            {{- end }}
             {{- /*
             A route-behaviour setting the Python api reads from the platform
             ConfigMap it envFroms: dho api reads the SAME key of the SAME

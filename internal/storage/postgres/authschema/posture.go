@@ -174,6 +174,9 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err := collect(publicReadViolations(ctx, conn, options)); err != nil {
 		return nil, err
 	}
+	if err := collect(sessionReaderViolations(ctx, conn, options)); err != nil {
+		return nil, err
+	}
 	if err := collect(defaultACLViolations(ctx, conn, options)); err != nil {
 		return nil, err
 	}

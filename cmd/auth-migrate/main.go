@@ -50,6 +50,9 @@ const (
 	envMigrationURI = "AUTH_MIGRATION_DATABASE_URI"
 	envSchema       = "AUTH_DATABASE_SCHEMA"
 	envRuntimeRole  = "AUTH_RUNTIME_DATABASE_ROLE"
+	// envSessionReaders names the roles (comma-separated) of the services that
+	// end an access token when its session is revoked: go-api and query-api.
+	envSessionReaders = "AUTH_SESSION_READER_ROLES"
 )
 
 const (
@@ -151,11 +154,18 @@ func execute(
 		return 1
 	}
 
+	readers, err := sessionReaderRoles(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
 	logger := logging.NewJSON(stderr, slog.LevelInfo)
 	result, err := authschema.Apply(ctx, pool, authschema.Options{
-		Schema:      schema,
-		RuntimeRole: runtimeRole,
-		Logger:      logger,
+		Schema:             schema,
+		RuntimeRole:        runtimeRole,
+		SessionReaderRoles: readers,
+		Logger:             logger,
 
 		AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
 	})
@@ -169,9 +179,27 @@ func execute(
 	}
 
 	fmt.Fprintf(stdout,
-		"auth schema current at version %d (%d applied), runtime grants applied to %q\n",
-		result.CurrentVersion, len(result.AppliedVersions), runtimeRole)
+		"auth schema current at version %d (%d applied), runtime grants applied to %q, session read grants applied to %d roles\n",
+		result.CurrentVersion, len(result.AppliedVersions), runtimeRole, len(readers))
 	return 0
+}
+
+// sessionReaderRoles reads AUTH_SESSION_READER_ROLES: role names separated by
+// commas, blanks ignored. Unset or empty means none.
+func sessionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
+	raw, _ := lookup(envSessionReaders)
+	var roles []string
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if err := authschema.ValidateIdentifier(entry); err != nil {
+			return nil, fmt.Errorf("%s holds an unusable role name", envSessionReaders)
+		}
+		roles = append(roles, entry)
+	}
+	return roles, nil
 }
 
 func valueOr(lookup secrets.LookupEnv, key, fallback string) string {

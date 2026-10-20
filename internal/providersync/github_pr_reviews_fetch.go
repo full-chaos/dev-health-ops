@@ -220,20 +220,31 @@ func (fetcher GitHubPullRequestReviewFetcher) fetchPage(
 	}
 	result.Evidence.Pages++
 	defer response.Body.Close()
-	decoder := json.NewDecoder(response.Body)
-	decoder.UseNumber()
-	var envelope gitHubPullRequestReviewGraphQLEnvelope
-	if err := decoder.Decode(&envelope); err != nil {
-		return nil, providerfoundation.ErrPaginationInvalid
+	raw, readErr := providerfoundation.ReadResponseBodyWith(response, providerResponseMaxBytes, func(error) error { return providerfoundation.ErrPaginationInvalid })
+	if readErr != nil {
+		return nil, readErr
 	}
-	if len(envelope.Errors) > 0 || envelope.Data.Repository == nil {
+	if len(raw) > providerResponseMaxBytes {
+		return nil, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, providerfoundation.ErrPaginationInvalid)
+	}
+	var envelope gitHubPullRequestReviewGraphQLEnvelope
+	if err := providerfoundation.DecodeResponseJSONWith(response, raw, &envelope, providerfoundation.DecodeUseNumber, func(error) error { return providerfoundation.ErrPaginationInvalid }); err != nil {
+		return nil, err
+	}
+	if len(envelope.Errors) > 0 {
 		return nil, providerfoundation.ErrGraphQLResponse
+	}
+	if envelope.Data.Repository == nil {
+		return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
 	}
 	connections := make(map[int]gitHubPullRequestReviewConnection, len(numbers))
 	for index, number := range numbers {
 		pull, ok := envelope.Data.Repository["pr"+strconv.Itoa(index)]
 		if !ok || pull.Number != number {
-			return nil, providerfoundation.ErrNormalizationInvalid
+			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrNormalizationInvalid)
+		}
+		if pull.Reviews.PageInfo.HasNextPage && (pull.Reviews.PageInfo.EndCursor == "" || pull.Reviews.PageInfo.EndCursor == after[number]) {
+			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrPaginationInvalid)
 		}
 		connections[number] = pull.Reviews
 	}
@@ -258,7 +269,7 @@ func gitHubPullRequestReviewFailureCause(err error) string {
 		return "pagination_cap"
 	}
 	var providerErr *providerfoundation.ProviderError
-	if errors.As(err, &providerErr) && providerErr != nil {
+	if errors.As(err, &providerErr) && providerErr != nil && !providerErr.AfterResponse() {
 		return string(providerErr.Class)
 	}
 	return "invalid_response"

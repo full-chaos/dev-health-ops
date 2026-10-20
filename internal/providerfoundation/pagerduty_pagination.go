@@ -60,19 +60,19 @@ func CollectPagerDutyOffsetPages(
 		}
 		rawItems, ok := payload[options.DataKey]
 		if !ok || string(rawItems) == "null" {
-			return result, ErrPaginationInvalid
+			return result, paginationInvalid(response, ReasonBodyShape)
 		}
 		var items []json.RawMessage
 		if err := json.Unmarshal(rawItems, &items); err != nil {
-			return result, ErrPaginationInvalid
+			return result, paginationInvalid(response, ReasonBodyDecode)
 		}
 		rawMore, ok := payload["more"]
 		if !ok || string(rawMore) == "null" {
-			return result, ErrPaginationInvalid
+			return result, paginationInvalid(response, ReasonBodyShape)
 		}
 		var more bool
 		if err := json.Unmarshal(rawMore, &more); err != nil {
-			return result, ErrPaginationInvalid
+			return result, paginationInvalid(response, ReasonBodyDecode)
 		}
 		result.Pages++
 		result.Items = append(result.Items, items...)
@@ -80,7 +80,7 @@ func CollectPagerDutyOffsetPages(
 			return result, nil
 		}
 		if len(items) == 0 {
-			return result, ErrPaginationInvalid
+			return result, paginationInvalid(response, ReasonBodyShape)
 		}
 		offset += len(items)
 	}

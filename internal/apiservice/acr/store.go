@@ -21,12 +21,12 @@ const agentContextRuntimeFeatureKey = "agent_context_runtime"
 // features are on for the org. The route serves its effective value (see
 // llmorgsettings.EffectiveServiceModel); it does not grant the platform LLM by
 // itself.
-const acrServiceModelFeatureKey = llmorgsettings.ACRServiceModelFeatureKey
+const acrServiceModelFeatureKey = "acr_service_model"
 
 // platformModelFallbackFeatureKey is the third: a platform-admin grant (an
 // active org override only) that lets an org with no saved BYO LLM draw the
 // platform LLM. acr_service_model alone never does.
-const platformModelFallbackFeatureKey = llmorgsettings.PlatformModelFallbackFeatureKey
+const platformModelFallbackFeatureKey = "platform_model_fallback"
 
 // ErrOrgNotFound means the organization row does not exist. Python:
 // api/internal/acr.py:181-192's 404 ("Not found") on both an unparseable

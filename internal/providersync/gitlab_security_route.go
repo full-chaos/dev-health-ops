@@ -1,11 +1,9 @@
 package providersync
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -54,6 +52,8 @@ type GitLabSecurityRouteHandler struct {
 	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
 	RepoIdentity GitLabRepoIdentityReader
 }
+
+const gitLabSecurityMaxBodyBytes = 2 << 20
 
 type gitLabSecurityResponseObserver struct {
 	attempts    *int
@@ -209,13 +209,16 @@ func fetchGitLabSecurityObjects(
 		return nil, 0, providerfoundation.ErrNormalizationInvalid
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	body, err := providerfoundation.ReadResponseBodyTransport(response, gitLabSecurityMaxBodyBytes)
 	if err != nil {
-		return nil, 0, logging.TransportFailure(err)
+		return nil, 0, err
+	}
+	if len(body) > gitLabSecurityMaxBodyBytes {
+		return nil, 0, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
 	var rawItems []json.RawMessage
-	if err := json.Unmarshal(body, &rawItems); err != nil {
-		return nil, 0, providerfoundation.ErrNormalizationInvalid
+	if err := providerfoundation.DecodeResponseJSON(response, body, &rawItems, providerfoundation.DecodeStrict); err != nil {
+		return nil, 0, err
 	}
 	objects := make([]gitLabSecurityObject, 0, len(rawItems))
 	source := "gitlab_vulnerability"
@@ -223,17 +226,18 @@ func fetchGitLabSecurityObjects(
 		source = "gitlab_dependency"
 	}
 	for _, raw := range rawItems {
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
 		var payload map[string]any
-		if err := decoder.Decode(&payload); err != nil || payload == nil {
-			return nil, 1, providerfoundation.ErrNormalizationInvalid
+		if err := providerfoundation.DecodeResponseJSON(response, raw, &payload, providerfoundation.DecodeUseNumber); err != nil {
+			return nil, 1, err
+		}
+		if payload == nil {
+			return nil, 1, providerfoundation.ResponseShape(response, providerfoundation.ErrNormalizationInvalid)
 		}
 		if source == "gitlab_dependency" {
 			for _, rawVulnerability := range gitLabSecurityList(payload["vulnerabilities"]) {
 				vulnerability, ok := rawVulnerability.(map[string]any)
 				if !ok {
-					return nil, 1, providerfoundation.ErrNormalizationInvalid
+					return nil, 1, providerfoundation.ResponseShape(response, providerfoundation.ErrNormalizationInvalid)
 				}
 				// _map_dependency_alert receives both the dependency package
 				// and its vulnerability. Flatten only at the Go normalization

@@ -724,10 +724,19 @@ func fetchGitHubProjectV2GraphQL(
 	}
 	evidence.Pages++
 	defer response.Body.Close()
-	decoder := json.NewDecoder(response.Body)
-	decoder.UseNumber()
-	if err := decoder.Decode(destination); err != nil {
-		return providerfoundation.ErrPaginationInvalid
+	paginationCause := func(error) error { return providerfoundation.ErrPaginationInvalid }
+	raw, readErr := providerfoundation.ReadResponseBodyWith(response, providerResponseMaxBytes, paginationCause)
+	if readErr != nil {
+		return readErr
+	}
+	if len(raw) > providerResponseMaxBytes {
+		return providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, providerfoundation.ErrPaginationInvalid)
+	}
+	if err := providerfoundation.DecodeResponseJSONWith(response, raw, destination, providerfoundation.DecodeUseNumber, paginationCause); err != nil {
+		return err
+	}
+	if checker, ok := destination.(interface{ responseShapeInvalid() bool }); ok && checker.responseShapeInvalid() {
+		return providerfoundation.ResponseShape(response, providerfoundation.ErrPaginationInvalid)
 	}
 	var errorsHolder interface{ graphQLErrors() []json.RawMessage }
 	if typed, ok := destination.(interface{ graphQLErrors() []json.RawMessage }); ok {
@@ -774,6 +783,10 @@ type gitHubProjectV2ChangesEnvelope struct {
 	Errors []json.RawMessage `json:"errors"`
 }
 
+func (envelope *gitHubProjectV2ChangesEnvelope) responseShapeInvalid() bool {
+	return len(envelope.Errors) == 0 && envelope.Data.Node == nil
+}
+
 func (envelope *gitHubProjectV2ChangesEnvelope) graphQLErrors() []json.RawMessage {
 	return envelope.Errors
 }
@@ -785,6 +798,17 @@ type gitHubProjectV2FieldValuesEnvelope struct {
 		} `json:"node"`
 	} `json:"data"`
 	Errors []json.RawMessage `json:"errors"`
+}
+
+func (envelope *gitHubProjectV2FieldValuesEnvelope) responseShapeInvalid() bool {
+	if len(envelope.Errors) > 0 {
+		return false
+	}
+	if envelope.Data.Node == nil {
+		return true
+	}
+	more := envelope.Data.Node.FieldValues
+	return more.PageInfo == nil || more.PageInfo.HasNextPage == nil || more.Nodes == nil
 }
 
 func (envelope *gitHubProjectV2FieldValuesEnvelope) graphQLErrors() []json.RawMessage {

@@ -31,6 +31,10 @@ type OrgConfig struct {
 	// GateClosed is set only with found=false: BYO settings are stored but the
 	// byo_llm gate is closed, so the org runs on the platform default.
 	GateClosed bool
+	// UnresolvedPurpose is set only with found=false and GateClosed=false, by a
+	// purpose-scoped Store: the org has a saved BYO config of another purpose
+	// (HasSavedBYO), but nothing resolves for this one. The org is a BYO org.
+	UnresolvedPurpose Purpose
 }
 
 // ErrStoredSettingUnreadable means a stored llm setting exists but could not
@@ -145,14 +149,17 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 		return OrgConfig{}, false, err
 	}
 	if len(settings) == 0 {
-		return OrgConfig{GateClosed: len(byo) > 0}, false, nil
+		if len(byo) > 0 {
+			return OrgConfig{GateClosed: true}, false, nil
+		}
+		return s.notResolved(ctx, orgID)
 	}
 	settings = project(settings, s.purpose)
 	// The provider the writer stores is already stripped and lower-cased; an
 	// empty, "auto", "mock" or "none" provider is "no BYO": the platform default.
 	provider := normalizeProvider(settings[keyProvider])
 	if provider == "auto" || provider == "mock" || provider == "none" {
-		return OrgConfig{}, false, nil
+		return s.notResolved(ctx, orgID)
 	}
 	version := hex.EncodeToString(digest.Sum(nil))
 	return OrgConfig{
@@ -162,6 +169,30 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 		APIKey:   secrets.NewHidden(settings[keyAPIKey]),
 		Version:  version,
 	}, true, nil
+}
+
+// notResolved is OrgConfig's "nothing resolves for this purpose" answer. A
+// purpose-scoped Store marks it UnresolvedPurpose when the org still has a saved
+// BYO config of another purpose: a BYO org, which must not read as "no BYO".
+func (s Store) notResolved(ctx context.Context, orgID string) (OrgConfig, bool, error) {
+	if s.purpose == "" {
+		return OrgConfig{}, false, nil
+	}
+	saved, err := HasSavedBYO(ctx, s.Pool, orgID)
+	if err != nil {
+		return OrgConfig{}, false, err
+	}
+	if saved {
+		closed, err := s.byoGateClosed(ctx, orgID)
+		if err != nil {
+			return OrgConfig{}, false, err
+		}
+		if closed {
+			return OrgConfig{GateClosed: true}, false, nil
+		}
+		return OrgConfig{UnresolvedPurpose: s.purpose}, false, nil
+	}
+	return OrgConfig{}, false, nil
 }
 
 // afterRowsRead runs between the snapshot's row read and its version read; a

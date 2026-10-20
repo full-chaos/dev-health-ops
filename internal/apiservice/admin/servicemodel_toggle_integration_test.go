@@ -69,6 +69,7 @@ func TestServiceModelSelfServiceToggle(t *testing.T) {
 	const jwtKey = "venue-oracle-test-secret-key-for-svc-model-32-bytes!"
 
 	orgTeam, orgEnterprise, orgCommunity, orgNoACR, orgBilling, orgFresh := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	orgSavedBYO := uuid.New()
 	adminID, memberID, superID := uuid.New(), uuid.New(), uuid.New()
 	serviceModelFlag := uuid.New()
 
@@ -90,6 +91,7 @@ func TestServiceModelSelfServiceToggle(t *testing.T) {
 			}{
 				"team": {orgTeam, "team"}, "enterprise": {orgEnterprise, "enterprise"}, "community": {orgCommunity, "community"},
 				"noacr": {orgNoACR, "team"}, "billing": {orgBilling, "team"}, "fresh": {orgFresh, "team"},
+				"savedbyo": {orgSavedBYO, "team"},
 			} {
 				exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, $3, 'stripe', true, now(), now())`, org.id, "svcmodel-"+slug, org.tier)
@@ -111,9 +113,11 @@ SELECT $1, $2, id, $3, '{}'::json, $5, now(), now() FROM feature_flags WHERE key
 					t.Fatalf("seed override %s for %s: rows=%d err=%v", key, org, tag.RowsAffected(), err)
 				}
 			}
-			for _, org := range []uuid.UUID{orgTeam, orgEnterprise, orgCommunity, orgBilling, orgFresh} {
+			for _, org := range []uuid.UUID{orgTeam, orgEnterprise, orgCommunity, orgBilling, orgFresh, orgSavedBYO} {
 				override(org, "agent_context_runtime", true, nil)
 			}
+			exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, 'llm', 'provider', 'anthropic', false, now(), now())`, orgSavedBYO.String())
 			promo := "billing: annual contract"
 			override(orgBilling, "acr_service_model", true, &promo)
 
@@ -121,7 +125,7 @@ SELECT $1, $2, id, $3, '{}'::json, $5, now(), now() FROM feature_flags WHERE key
 				"member": {"user_id": memberID.String(), "email": "svcmodel-member@example.com", "org_id": orgTeam.String(), "role": "member"},
 				"super":  {"user_id": superID.String(), "email": "svcmodel-super@example.com", "is_superuser": true},
 			}
-			for slug, org := range map[string]uuid.UUID{"team": orgTeam, "enterprise": orgEnterprise, "community": orgCommunity, "noacr": orgNoACR, "billing": orgBilling, "fresh": orgFresh} {
+			for slug, org := range map[string]uuid.UUID{"team": orgTeam, "enterprise": orgEnterprise, "community": orgCommunity, "noacr": orgNoACR, "billing": orgBilling, "fresh": orgFresh, "savedbyo": orgSavedBYO} {
 				tokens[slug] = map[string]any{"user_id": adminID.String(), "email": "svcmodel-admin@example.com", "org_id": org.String(), "role": "admin"}
 			}
 			return tokens
@@ -155,6 +159,20 @@ WHERE o.org_id = $1 AND f.key = 'acr_service_model'`, org).Scan(&id, &enabled, &
 		}
 		return doJSONRequest(t, base, http.MethodPut, serviceModelPath, body, auth(name))
 	}
+
+	t.Run("org with a saved BYO config and no override reads enabled (auto-enrolled), as the acr route serves", func(t *testing.T) {
+		resp := doJSONRequest(t, base, http.MethodGet, serviceModelPath, "", auth("savedbyo"))
+		if resp.status != 200 {
+			t.Fatalf("GET: status=%d body=%s", resp.status, resp.body)
+		}
+		got := decodeObject(t, resp)
+		if got["enabled"] != true || got["control"] != "none" {
+			t.Fatalf("GET body=%s, want enabled=true control=none", resp.body)
+		}
+		if !served(orgSavedBYO) {
+			t.Fatal("acr route serves acr_service_model=false for a saved BYO config with no override")
+		}
+	})
 
 	t.Run("eligible org reads off and self-service", func(t *testing.T) {
 		resp := doJSONRequest(t, base, http.MethodGet, serviceModelPath, "", auth("team"))

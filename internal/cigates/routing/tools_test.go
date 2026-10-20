@@ -363,3 +363,20 @@ func TestTheProberNeverFollowsARedirect(t *testing.T) {
 		t.Fatalf("status %d, redirect target hit %d times: the prober followed the redirect (its client's CheckRedirect must return http.ErrUseLastResponse)", status, hits)
 	}
 }
+
+// A plain timestamp secret key is written as Python's str() of the datetime (recorded: python3 + PyYAML 6.0.1,
+// generate-query-api-enabled-flags.py at e557a21dc4).
+func TestQueryAPIFlagsWriteATimestampKeyAsPythonDid(t *testing.T) {
+	dir := t.TempDir()
+	values := "ops:\n  queryApi:\n    extraEnv:\n      - {name: GO_API_A_ENABLED, value: \"true\"}\n" +
+		"      - {name: T, valueFrom: {secretKeyRef: {key: 2002-1-1}}}\n" +
+		"      - {name: U, valueFrom: {secretKeyRef: {key: 2001-12-14t21:59:43.10-05:00}}}\n"
+	out := filepath.Join(dir, "o")
+	r := run(flagsTool, writeFile(t, dir, "v.yaml", []byte(values)), "--out", out)
+	wantCode(t, r, 0)
+	text, _ := os.ReadFile(out)
+	// 2002-1-1 has no time part, so PyYAML's resolver leaves it a string; the full timestamp is a datetime.
+	if want := "      GO_API_A_ENABLED: \"true\"\n      T: ${2002-1-1}\n      U: ${2001-12-14 21:59:43.100000-05:00}\n"; string(text) != want {
+		t.Fatalf("rendered:\n%s\nwant:\n%s", text, want)
+	}
+}

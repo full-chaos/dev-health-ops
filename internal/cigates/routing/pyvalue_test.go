@@ -70,7 +70,7 @@ func TestMergeKeysAndDuplicateKeysLoadAsPyYAMLDoes(t *testing.T) {
 
 func TestLocalTagsAreRefusedBySafeLoadAndReadByTheComposeLoader(t *testing.T) {
 	text := "services:\n  web:\n    build: !reset null\n    ports: !override\n      - \"1:2\"\n"
-	if _, err := routing.LoadYAML([]byte(text), false); err == nil || !strings.Contains(err.Error(), "could not determine a constructor for the tag '!reset'") {
+	if _, err := routing.LoadYAML([]byte(text), false); err == nil || !strings.Contains(err.Error(), "tag !reset (line 3) is refused") {
 		t.Fatalf("safe load: %v", err)
 	}
 	doc, err := routing.LoadYAML([]byte(text), true)
@@ -98,5 +98,38 @@ func TestPyEscapeIsPythonsReEscape(t *testing.T) {
 	// python3 -c 'import re; print(re.escape("a-b.c/d_e{f}[g]h+i*j?k|l^m$n&o~p#q r"))'
 	if got := routing.PyEscape("a-b.c/d_e{f}[g]h+i*j?k|l^m$n&o~p#q r"); got != `a\-b\.c/d_e\{f\}\[g\]h\+i\*j\?k\|l\^m\$n\&o\~p\#q\ r` {
 		t.Fatalf("re.escape %s", got)
+	}
+}
+
+// A plain timestamp scalar loads as PyYAML's datetime.date / datetime.datetime; each row is str() and repr() as
+// Python 3.12.3 + PyYAML 6.0.1 print them (python3 -c, yaml.safe_load(text)["v"]).
+func TestPlainTimestampsLoadAsPyYAMLBuildsThem(t *testing.T) {
+	for _, c := range []struct{ text, str, repr string }{
+		{"v: 2002-12-14", "2002-12-14", "datetime.date(2002, 12, 14)"},
+		{"v: 2002-1-1 1:02:03", "2002-01-01 01:02:03", "datetime.datetime(2002, 1, 1, 1, 2, 3)"},
+		{"v: 2001-12-14t21:59:43.10-05:00", "2001-12-14 21:59:43.100000-05:00", "datetime.datetime(2001, 12, 14, 21, 59, 43, 100000, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=68400)))"},
+		{"v: 2001-12-14 21:59:43.10 -5", "2001-12-14 21:59:43.100000-05:00", "datetime.datetime(2001, 12, 14, 21, 59, 43, 100000, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=68400)))"},
+		{"v: 2001-12-15T02:59:43.1Z", "2001-12-15 02:59:43.100000+00:00", "datetime.datetime(2001, 12, 15, 2, 59, 43, 100000, tzinfo=datetime.timezone.utc)"},
+		{"v: 2001-12-14 21:59:43.1234567", "2001-12-14 21:59:43.123456", "datetime.datetime(2001, 12, 14, 21, 59, 43, 123456)"},
+		{"v: 2001-12-14 21:59:00", "2001-12-14 21:59:00", "datetime.datetime(2001, 12, 14, 21, 59)"},
+		{"v: 2001-12-14 21:59:00+00:00", "2001-12-14 21:59:00+00:00", "datetime.datetime(2001, 12, 14, 21, 59, tzinfo=datetime.timezone.utc)"},
+		{"v: 2001-12-14 21:59:43+05:30", "2001-12-14 21:59:43+05:30", "datetime.datetime(2001, 12, 14, 21, 59, 43, tzinfo=datetime.timezone(datetime.timedelta(seconds=19800)))"},
+		{"v: '2002-12-14'", "2002-12-14", "'2002-12-14'"},
+		{"v: 2002-12-14x", "2002-12-14x", "'2002-12-14x'"},
+		{"v: [2002-12-14, a]", "[datetime.date(2002, 12, 14), 'a']", "[datetime.date(2002, 12, 14), 'a']"},
+		{"v: {2002-12-14: a}", "{datetime.date(2002, 12, 14): 'a'}", "{datetime.date(2002, 12, 14): 'a'}"},
+	} {
+		doc, err := routing.LoadYAML([]byte(c.text), false)
+		if err != nil {
+			t.Errorf("%q: %v", c.text, err)
+			continue
+		}
+		v := routing.Lookup(doc, "v")
+		if got := routing.PyStr(v); got != c.str {
+			t.Errorf("%q: str() is %q, want %q", c.text, got, c.str)
+		}
+		if got := routing.PyRepr(v); got != c.repr {
+			t.Errorf("%q: repr() is %q, want %q", c.text, got, c.repr)
+		}
 	}
 }

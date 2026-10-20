@@ -87,7 +87,7 @@ func guarded(stderr io.Writer, body func() int) (code int) {
 }
 
 func pyTypeName(v any) string {
-	switch v.(type) {
+	switch x := v.(type) {
 	case nil:
 		return "NoneType"
 	case bool:
@@ -102,6 +102,8 @@ func pyTypeName(v any) string {
 		return "list"
 	case *pyMap:
 		return "dict"
+	case pyTime:
+		return x.typ
 	}
 	return fmt.Sprintf("%T", v)
 }
@@ -223,6 +225,8 @@ func str(v any, what string) string {
 // pyStr is Python's str(v), which an f-string field also gives for these types.
 func pyStr(v any) string {
 	switch x := v.(type) {
+	case pyTime:
+		return x.str
 	case nil:
 		return "None"
 	case bool:
@@ -260,6 +264,9 @@ func pyStrip(s string) string { return strings.TrimFunc(s, pyIsSpace) }
 
 // pyRepr is Python's repr(v).
 func pyRepr(v any) string {
+	if t, ok := v.(pyTime); ok {
+		return t.repr
+	}
 	s, ok := v.(string)
 	if !ok {
 		return pyStr(v)
@@ -532,8 +539,11 @@ func (l *loader) local(tag string) bool {
 	return l.composeTags && strings.HasPrefix(tag, "!") && !strings.HasPrefix(tag, "!!")
 }
 
+// noConstructor refuses a tag the loader does not read: everything but the core str, int, float, bool, null, seq and map
+// tags (and, in a compose file, a local tag such as !reset). PyYAML's safe_load also built sets, ordered maps, pairs,
+// bytes and datetimes from explicit tags; these tools read the repository's own files, which use none of them.
 func (l *loader) noConstructor(n *yaml.Node, tag string) error {
-	return fmt.Errorf("could not determine a constructor for the tag %s (line %d)", pyRepr(tag), n.Line)
+	return fmt.Errorf("tag %s (line %d) is refused: only the core str, int, float, bool, null, seq and map tags are read", tag, n.Line)
 }
 
 // mapping is construct_mapping after flatten_mapping: merged (`<<`) pairs first, then the node's own pairs, assigned in
@@ -620,13 +630,14 @@ func (l *loader) scalar(n *yaml.Node) (any, error) {
 		case "!!null":
 			return nil, nil
 		case "!!bool":
+			if !reBool.MatchString(n.Value) {
+				return nil, fmt.Errorf("KeyError: %s (line %d)", pyRepr(strings.ToLower(n.Value)), n.Line)
+			}
 			return boolValue(n.Value), nil
 		case "!!int":
 			return intValue(n.Value)
 		case "!!float":
 			return floatValue(n.Value)
-		case "!!timestamp", "!!binary":
-			return n.Value, nil
 		}
 		return nil, l.noConstructor(n, tag)
 	}
@@ -643,6 +654,8 @@ func (l *loader) scalar(n *yaml.Node) (any, error) {
 		return intValue(s)
 	case reFloat.MatchString(s):
 		return floatValue(s)
+	case reTimestamp.MatchString(s):
+		return timestampValue(s)
 	}
 	return s, nil
 }

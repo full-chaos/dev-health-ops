@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -266,24 +269,48 @@ func readStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []
 	return status, err
 }
 
-// authLineageSchemas selects the OIDs of the schemas the auth migrator owns. A
-// schema is the auth lineage's only if it holds the lineage's own bookkeeping
-// table: schema_migrations(version integer, name text, applied_at timestamptz),
-// exactly. The auth migrator creates the schema first on a fresh install that
-// starts both migrators together; the objects in it are not a database this
-// migrator would collide with, because it creates only public. Matching the
-// table's exact shape, not a schema name, keeps a foreign schema that happens to
-// be called auth (Supabase's GoTrue has one, with schema_migrations(version
-// varchar)) a foreign database. A test in internal/storage/postgres/authschema
-// keeps this shape equal to what the auth migrator creates.
-const authLineageSchemas = "(SELECT bk.relnamespace FROM pg_class bk WHERE bk.relname = 'schema_migrations' AND bk.relkind = 'r' AND " +
+// AuthSchemaEnv names the variable that tells the auth migrator which schema it
+// owns (default "auth"). dho migrate reads the same variable: the one schema it
+// does not count as foreign objects is the one named here.
+const AuthSchemaEnv = "AUTH_DATABASE_SCHEMA"
+
+const defaultAuthSchema = "auth"
+
+var authSchemaName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+
+// configuredAuthSchema is the auth migrator's schema as configured, or "" when
+// the configured value is not a plain identifier (then nothing is exempt).
+func configuredAuthSchema() string {
+	name := strings.TrimSpace(os.Getenv(AuthSchemaEnv))
+	if name == "" {
+		name = defaultAuthSchema
+	}
+	if !authSchemaName.MatchString(name) || name == "public" {
+		return ""
+	}
+	return name
+}
+
+// authLineageSchemas selects the OID of the auth migrator's schema: the schema
+// whose NAME is the configured one ($1) AND that holds the lineage's own
+// bookkeeping table, schema_migrations(version integer, name text, applied_at
+// timestamptz), exactly. A fresh install that starts both migrators together
+// can have the auth schema created first; the objects in it are not a database
+// this migrator would collide with, because it creates only public. The name is
+// the key, the table shape is a second condition: a shape alone would let any
+// schema (public included) that carries such a table hide its objects, and a
+// foreign schema called auth (Supabase's GoTrue, with schema_migrations(version
+// varchar)) fails the shape. The auth-first tests keep the shape equal to what
+// the auth migrator creates.
+const authLineageSchemas = "(SELECT bk.relnamespace FROM pg_class bk JOIN pg_namespace bn ON bn.oid = bk.relnamespace " +
+	"WHERE bn.nspname = $1 AND bn.nspname <> 'public' AND bk.relname = 'schema_migrations' AND bk.relkind = 'r' AND " +
 	"(SELECT array_agg(a.attname::text || ':' || format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum) FROM pg_attribute a " +
 	"WHERE a.attrelid = bk.oid AND a.attnum > 0 AND NOT a.attisdropped) = " +
 	"ARRAY['version:integer', 'name:text', 'applied_at:timestamp with time zone'])"
 
 // userObject is the WHERE clause selecting the rows of catalog (aliased o,
 // its namespace aliased n) that are not in a system schema, not in the auth
-// lineage's schema and not owned by an extension.
+// migrator's schema ($1, see authLineageSchemas) and not owned by an extension.
 func userObject(catalog string) string {
 	return "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_toast%' " +
 		"AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND n.oid NOT IN " + authLineageSchemas + " AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = '" + catalog +
@@ -306,7 +333,7 @@ func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 		"(SELECT count(*) FROM pg_class o JOIN pg_namespace n ON n.oid = o.relnamespace WHERE "+userObject("pg_class")+") + "+
 		"(SELECT count(*) FROM pg_proc o JOIN pg_namespace n ON n.oid = o.pronamespace WHERE "+userObject("pg_proc")+") + "+
 		"(SELECT count(*) FROM pg_type o JOIN pg_namespace n ON n.oid = o.typnamespace "+
-		"WHERE "+userObject("pg_type")+" AND o.typrelid = 0 AND o.typcategory <> 'A')").Scan(&observation.Objects); err != nil {
+		"WHERE "+userObject("pg_type")+" AND o.typrelid = 0 AND o.typcategory <> 'A')", configuredAuthSchema()).Scan(&observation.Objects); err != nil {
 		return observation, fmt.Errorf("count objects: %w", err)
 	}
 	tables, err := tx.Query(ctx, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "+

@@ -5,6 +5,7 @@ package authschema
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -20,13 +21,10 @@ import (
 // both orders on an empty database, and the refusals that must stay refusals.
 
 type orderFixture struct {
-	ctx context.Context
-	uri string
+	ctx  context.Context
+	uri  string
+	role string
 }
-
-// orderRuntimeRole is the runtime login every order test hands to the auth
-// migrator; each test has its own container, so the name never collides.
-const orderRuntimeRole = "auth_order_rt"
 
 func orderConnect(t *testing.T, ctx context.Context, uri string) *pgx.Conn {
 	t.Helper()
@@ -51,10 +49,19 @@ func newOrderFixture(t *testing.T) *orderFixture {
 		defer closeCancel()
 		_ = instance.Close(closeCtx)
 	})
-	if _, err := orderConnect(t, ctx, instance.URI).Exec(ctx, `CREATE ROLE auth_order_rt LOGIN`); err != nil {
+	admin := orderConnect(t, ctx, instance.URI)
+	// The role is cluster-global: derive it from this instance's scratch database
+	// and drop it afterwards, so a shared cluster (DEV_HEALTH_TEST_POSTGRES_DSN)
+	// never sees two tests claim one name.
+	role, err := containers.RoleName("auth_order_rt", instance)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return &orderFixture{ctx: ctx, uri: instance.URI}
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %s LOGIN`, Quote(mustValidatedIdentifier(role)))); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+	return &orderFixture{ctx: ctx, uri: instance.URI, role: role}
 }
 
 func (f *orderFixture) authMigrate(t *testing.T, schema string) {
@@ -64,7 +71,7 @@ func (f *orderFixture) authMigrate(t *testing.T, schema string) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := Apply(f.ctx, pool, Options{Schema: schema, RuntimeRole: orderRuntimeRole}); err != nil {
+	if _, err := Apply(f.ctx, pool, Options{Schema: schema, RuntimeRole: f.role}); err != nil {
 		t.Fatalf("auth migrate (schema %s): %v", schema, err)
 	}
 }
@@ -96,6 +103,9 @@ func (f *orderFixture) count(t *testing.T, query string) int {
 func TestOpsMigrateSucceedsAfterAuthMigrateOnAnEmptyDatabase(t *testing.T) {
 	for _, schema := range []string{"auth", "identity_plane"} {
 		t.Run(schema, func(t *testing.T) {
+			// dho migrate learns the auth schema's name from the same variable
+			// auth-migrate reads.
+			t.Setenv("AUTH_DATABASE_SCHEMA", schema)
 			f := newOrderFixture(t)
 			f.authMigrate(t, schema)
 			// The marker matches what the auth migrator really creates: the
@@ -190,6 +200,43 @@ func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
 		if _, err := conn.Exec(f.ctx, `CREATE TABLE public.legacy_thing (id int)`); err != nil {
 			t.Fatal(err)
 		}
+		_, err := f.dhoMigrate(t)
+		foreign(t, err)
+	})
+	t.Run("an exact-shape bookkeeping table in public does not exempt public", func(t *testing.T) {
+		f := newOrderFixture(t)
+		conn := orderConnect(t, f.ctx, f.uri)
+		for _, statement := range []string{
+			`CREATE TABLE public.schema_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL)`,
+			`CREATE TABLE public.foreign_thing (id integer)`,
+		} {
+			if _, err := conn.Exec(f.ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, err := f.dhoMigrate(t)
+		foreign(t, err)
+	})
+	t.Run("an exact-shape bookkeeping table in a schema that is not the configured one is foreign", func(t *testing.T) {
+		t.Setenv("AUTH_DATABASE_SCHEMA", "auth")
+		f := newOrderFixture(t)
+		conn := orderConnect(t, f.ctx, f.uri)
+		for _, statement := range []string{
+			`CREATE SCHEMA lookalike`,
+			`CREATE TABLE lookalike.schema_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL)`,
+			`CREATE TABLE lookalike.things (id integer)`,
+		} {
+			if _, err := conn.Exec(f.ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, err := f.dhoMigrate(t)
+		foreign(t, err)
+	})
+	t.Run("the configured auth schema is exempt only under its configured name", func(t *testing.T) {
+		t.Setenv("AUTH_DATABASE_SCHEMA", "identity_plane")
+		f := newOrderFixture(t)
+		f.authMigrate(t, "auth")
 		_, err := f.dhoMigrate(t)
 		foreign(t, err)
 	})

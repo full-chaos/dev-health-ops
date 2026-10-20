@@ -1,7 +1,6 @@
 package gqlgenguard
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,15 +92,46 @@ func TestTheDriftCheckIsWiredIntoGoQualityAndIsActive(t *testing.T) {
 	}
 }
 
-func TestTheGuardsInputsAreClassifiedRelevantByTheRelevanceScript(t *testing.T) {
-	// A path list is only as good as the script that reads it. This asserts the
-	// classifier itself, over the real files, rather than the YAML text.
-	script := filepath.Join(repoRoot(t), "ci", "go_relevance.sh")
-	if _, err := os.Stat(script); err != nil {
-		// A missing classifier is a failure, never a skip: a skip reads as coverage
-		// for a measurement that did not happen (CHAOS-7387).
-		t.Fatalf("ci/go_relevance.sh is not present: %v", err)
+func TestTheGuardsInputsAreSelectedByThePlanVerdict(t *testing.T) {
+	// A path list is only as good as the program that reads it. This asks the plan verdict go-quality runs
+	// (`cigate plan-verdict --go-files-full`), over the real module, rather than the YAML text: a change to any input of
+	// the guard must run the whole gate (FULL) or select this package's tests.
+	root := repoRoot(t)
+	work := t.TempDir()
+	run := func(name string, args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GOFLAGS=")
+		out, err := cmd.Output()
+		if err != nil {
+			var stderr []byte
+			if ee, ok := err.(*exec.ExitError); ok {
+				stderr = ee.Stderr
+			}
+			t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, stderr)
+		}
+		return out
 	}
+	golist := filepath.Join(work, "golist.json")
+	keys := filepath.Join(work, "keys.txt")
+	if err := os.WriteFile(golist, run("go", "list", "-mod=readonly", "-test", "-json", "./..."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	module := strings.TrimSpace(string(run("go", "list", "-m")))
+	var rel []string
+	for _, imp := range strings.Fields(string(run("go", "list", "-mod=readonly", "./..."))) {
+		if imp == module {
+			rel = append(rel, ".")
+		} else {
+			rel = append(rel, strings.TrimPrefix(imp, module+"/"))
+		}
+	}
+	if err := os.WriteFile(keys, []byte(strings.Join(rel, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cigate := filepath.Join(work, "cigate")
+	run("go", "build", "-mod=readonly", "-o", cigate, "./cmd/cigate")
 
 	for _, changed := range []string{
 		"internal/queryapi/gqlgen.yml",
@@ -109,17 +139,25 @@ func TestTheGuardsInputsAreClassifiedRelevantByTheRelevanceScript(t *testing.T) 
 		"internal/gqlgenguard/guard.go",
 		"contracts/gqlgen/v1/expected-drift.record",
 		".github/workflows/go-quality.yml",
-		"ci/go_relevance.sh",
+		"internal/cigates/affected/plan.go",
 	} {
 		t.Run(changed, func(t *testing.T) {
-			out, err := runRelevance(t, script, changed)
-			if err != nil {
-				t.Fatalf("run the relevance classifier: %v", err)
+			list := filepath.Join(t.TempDir(), "changed.txt")
+			if err := os.WriteFile(list, []byte(changed+"\n"), 0o644); err != nil {
+				t.Fatal(err)
 			}
-			if !strings.Contains(out, "relevant=true") {
-				t.Fatalf("a change to %s is classified NOT Go-relevant, so go-quality -- and the drift check with it -- would be skipped:\n%s",
-					changed, out)
+			out := string(run(cigate, "plan-verdict", "--event", "pull_request", "--go-files-full", "--changed", list,
+				"--golist", golist, "--keys", keys, "--root", root))
+			lines := strings.Split(strings.TrimSpace(out), "\n")
+			if strings.HasPrefix(lines[0], "FULL ") {
+				return
 			}
+			for _, k := range lines[1:] {
+				if k == "internal/gqlgenguard" {
+					return
+				}
+			}
+			t.Fatalf("a change to %s neither runs the whole gate nor selects internal/gqlgenguard, so its tests would be skipped:\n%s", changed, out)
 		})
 	}
 }
@@ -136,47 +174,5 @@ func TestTheDriftRecordIsCommittedAndReadable(t *testing.T) {
 	}
 	if !strings.Contains(record, "digest ") {
 		t.Fatalf("%s carries no digest table", DefaultDriftPath)
-	}
-}
-
-// runRelevance feeds one changed path to ci/go_relevance.sh, which is the
-// script go-quality actually uses. Asking the real classifier is the point: a
-// second copy of its matching rules here could agree with the YAML and still
-// disagree with what CI does.
-func runRelevance(t *testing.T, script, changed string) (string, error) {
-	t.Helper()
-	shell, err := relevanceShell(exec.LookPath)
-	if err != nil {
-		// Not a skip (CHAOS-7387): an environment without bash must FAIL this test,
-		// loudly, rather than pass it without ever asking the classifier.
-		t.Fatalf("the relevance classifier cannot be asked: %v", err)
-	}
-	cmd := exec.Command(shell, script)
-	cmd.Dir = repoRoot(t)
-	cmd.Stdin = strings.NewReader(changed + "\n")
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
-// relevanceShell picks the shell that runs ci/go_relevance.sh, or says that there is none. lookPath is exec.LookPath
-// in production; the test of the missing-shell case passes a lookup that finds nothing.
-func relevanceShell(lookPath func(string) (string, error)) (string, error) {
-	if _, err := lookPath("bash"); err == nil {
-		return "bash", nil
-	}
-	return "", errors.New("bash is not on PATH")
-}
-
-// TestAMissingShellIsAFailureNotASkip plants the defect CHAOS-7387 is about: an environment that cannot run the
-// classifier. The lookup must report it as an error (the callers fail the test on it); before that change the test
-// skipped, so a job without the interpreter passed without ever asking the classifier.
-func TestAMissingShellIsAFailureNotASkip(t *testing.T) {
-	if _, err := relevanceShell(func(string) (string, error) { return "", exec.ErrNotFound }); err == nil {
-		t.Fatal("a lookup that finds no shell must be an error")
-	}
-	// The real lookup over an empty PATH: the same answer through exec.LookPath.
-	t.Setenv("PATH", t.TempDir())
-	if _, err := relevanceShell(exec.LookPath); err == nil {
-		t.Fatal("with an empty PATH the real lookup must find no shell")
 	}
 }

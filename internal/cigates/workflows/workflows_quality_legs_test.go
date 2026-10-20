@@ -155,8 +155,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	if strings.ReplaceAll(str(fan["if"]), " ", "") != "always()" {
 		add("the fan-in must be always(): under any condition that lets it skip, a cancelled run leaves the REQUIRED check skipped (got %q)", str(fan["if"]))
 	}
-	if !reflect.DeepEqual(needsList(fan), []string{"go-quality-leg"}) {
-		add("the fan-in must need exactly go-quality-leg, got %v", needsList(fan))
+	if !reflect.DeepEqual(needsList(fan), []string{"go-quality-plan", "go-quality-leg"}) {
+		add("the fan-in must need exactly go-quality-plan and go-quality-leg, got %v", needsList(fan))
 	}
 	var env yamlMap
 	for _, s := range stepsOf(fan) {
@@ -177,8 +177,11 @@ func qualityLegViolations(t *testing.T, root string) []string {
 		if got := str(env["GATED_JOB_1"]); got != "go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}" {
 			add("the fan-in must judge the legs `unconditional` so a skipped, cancelled or missing leg fails the gate; got %q", got)
 		}
-		if _, has := env["GATED_JOB_2"]; has {
-			add("the fan-in must not carry a GATED_JOB_2")
+		if got := str(env["GATED_JOB_2"]); got != "go-quality-plan|unconditional|${{ needs.go-quality-plan.result }}" {
+			add("the fan-in must judge the plan job `unconditional`: a skipped or failed plan skips every leg; got %q", got)
+		}
+		if _, has := env["GATED_JOB_3"]; has {
+			add("the fan-in must not carry a GATED_JOB_3")
 		}
 	}
 
@@ -227,6 +230,8 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 		{"the fan-in can skip", []mutation{{wf, "\n    if: always()\n", "\n    if: success()\n"}}, []string{"fan-in must be always()"}},
 		{"the pool timeout grows past 45", []mutation{{wf, "&& 45 || 30 }}", "&& 90 || 30 }}"}}, []string{"timeout-minutes must be <= 30"}},
 		{"the fan-in stops judging the legs unconditional", []mutation{{wf, "go-quality-leg|unconditional|", "go-quality-leg|path-filtered|"}}, []string{"unconditional"}},
+		{"the fan-in stops judging the plan job unconditional", []mutation{{wf, "go-quality-plan|unconditional|", "go-quality-plan|path-filtered|"}}, []string{"judge the plan job"}},
+		{"the fan-in stops needing the plan job", []mutation{{wf, "needs: [go-quality-plan, go-quality-leg]", "needs: [go-quality-leg]"}}, []string{"must need exactly go-quality-plan and go-quality-leg"}},
 		{"the leg step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh ci-leg ${{ matrix.args }}", `run: echo "ci-leg ${{ matrix.args }}"`}}, []string{"no go-quality-leg step runs"}},
 		{"a leg stage survives only in a comment", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", "      # ci_leg_stage ratchets check_ratchets\n"}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},
 		{"check_test_shard keeps the race-excluded proof only in a comment", []mutation{{cg, "\n  check_race_excluded_ran \"${shard}\" \"${count}\"\n", "\n  # check_race_excluded_ran \"${shard}\" \"${count}\"\n"}}, []string{"no longer runs check_race_excluded_ran"}},

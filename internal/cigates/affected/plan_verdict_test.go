@@ -18,9 +18,18 @@ import (
 
 var (
 	cigateOnce sync.Once
+	cigateDir  string
 	cigateBin  string
 	cigateErr  error
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if cigateDir != "" {
+		_ = os.RemoveAll(cigateDir)
+	}
+	os.Exit(code)
+}
 
 func cigate(t *testing.T) string {
 	t.Helper()
@@ -30,6 +39,7 @@ func cigate(t *testing.T) string {
 			cigateErr = err
 			return
 		}
+		cigateDir = dir
 		cigateBin = filepath.Join(dir, "cigate")
 		env := inheritedEnv([]string{"GOFLAGS"}, "GOFLAGS=")
 		res := cmdSpec{dir: repoRoot(t), env: env}.run("go", "build", "-mod=readonly", "-o", cigateBin, "./cmd/cigate")
@@ -243,7 +253,7 @@ func (row verdictRow) check(t *testing.T) error {
 	} else if first != row.want {
 		return fmt.Errorf("verdict %q, want %q", first, row.want)
 	}
-	if len(keys) == 1 && keys[0] == "" {
+	if len(keys) == 0 || (len(keys) == 1 && keys[0] == "") {
 		keys = nil
 	}
 	if !reflect.DeepEqual(keys, row.keys) {
@@ -258,17 +268,17 @@ func checkGoWith(old, repl string) string { return strings.Replace(fixtureCheckG
 
 func planVerdictRows() []verdictRow {
 	return []verdictRow{
-		{name: "reader_less_paths_are_none", changed: []string{".claude/settings.json", ".codex-review/r1.md", ".codex-review-notes.md", "AGENTS.md"}, want: "NONE"},
+		{name: "reader_less_paths_are_none", changed: []string{".claude/x.json", ".codex-review/r1.md", ".codex-review-notes.md", "AGENTS.md"}, want: "NONE"},
 		{name: "test_reader_selects_only_itself", changed: []string{"docs/a.md"}, want: "AFFECTED 1", keys: []string{"a"}},
 		{name: "code_reader_selects_its_reverse_deps", changed: []string{"contracts/auth/v1/x.json"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 		{name: "undeclared_path_is_full", changed: []string{"zz/new.txt"}, want: "FULL non-Go file*"},
 		{name: "go_mod_is_full", changed: []string{".claude/x", "go.mod"}, want: "FULL shared change*"},
 		{name: "testsupport_is_full", changed: []string{"internal/testsupport/h/h.go"}, want: "FULL shared change*"},
-		{name: "push_is_full", event: "push", changed: []string{".claude/settings.json"}, want: "FULL event push*"},
-		{name: "merge_group_is_full", event: "merge_group", changed: []string{".claude/settings.json"}, want: "FULL event merge_group*"},
-		{name: "schedule_is_full", event: "schedule", changed: []string{".claude/settings.json"}, want: "FULL event schedule*"},
-		{name: "workflow_dispatch_is_full", event: "workflow_dispatch", changed: []string{".claude/settings.json"}, want: "FULL event workflow_dispatch*"},
-		{name: "range_judges_the_change_set", event: "range", changed: []string{".claude/settings.json"}, want: "NONE"},
+		{name: "push_is_full", event: "push", changed: []string{".claude/x.json"}, want: "FULL event push*"},
+		{name: "merge_group_is_full", event: "merge_group", changed: []string{".claude/x.json"}, want: "FULL event merge_group*"},
+		{name: "schedule_is_full", event: "schedule", changed: []string{".claude/x.json"}, want: "FULL event schedule*"},
+		{name: "workflow_dispatch_is_full", event: "workflow_dispatch", changed: []string{".claude/x.json"}, want: "FULL event workflow_dispatch*"},
+		{name: "range_judges_the_change_set", event: "range", changed: []string{".claude/x.json"}, want: "NONE"},
 		{name: "reader_less_beside_go_is_the_go_closure", changed: []string{".claude/x.json", "x/x.go"}, want: "AFFECTED 1", keys: []string{"x"}},
 		{name: "go_files_full_with_go_source", extra: []string{"--go-files-full"}, changed: []string{"docs/a.md", "x/x.go"}, want: "FULL Go source*"},
 		{name: "go_files_full_without_go_source_is_a_subset", extra: []string{"--go-files-full"}, changed: []string{"docs/a.md"}, want: "AFFECTED 1", keys: []string{"a"}},
@@ -285,7 +295,8 @@ func planVerdictRows() []verdictRow {
 		{name: "go_yml_integration_job_edit_is_full",
 			head:    map[string]string{".github/workflows/go.yml": goYMLWith("integration-shard 1", "integration-shard 2")},
 			changed: []string{".github/workflows/go.yml"}, want: "FULL shared change: .github/workflows/go.yml*"},
-		{name: "go_quality_workflow_is_full", changed: []string{".github/workflows/go-quality.yml"}, want: "FULL shared change*"},
+		{name: "go_quality_workflow_is_full_for_the_quality_legs", extra: []string{"--go-files-full"}, changed: []string{".github/workflows/go-quality.yml"}, want: "FULL shared change*"},
+		{name: "go_quality_workflow_selects_github_readers_for_integration", changed: []string{".github/workflows/go-quality.yml"}, want: "AFFECTED 1", keys: []string{"x"}},
 		{name: "check_go_function_no_verb_reaches_selects_its_readers",
 			head:    map[string]string{"ci/check_go.sh": checkGoWith(`echo "${AUTH_PACKAGES}"`, `echo "${AUTH_PACKAGES}" x`)},
 			changed: []string{"ci/check_go.sh"}, want: "AFFECTED 1", keys: []string{"x"}},
@@ -297,8 +308,10 @@ func planVerdictRows() []verdictRow {
 			changed: []string{"ci/check_go.sh"}, want: "FULL shared change: ci/check_go.sh*"},
 		{name: "shard_manifest_row_selects_its_key", changed: []string{"ci/go_integration_shards.d/a.tsv"}, want: "AFFECTED 2", keys: []string{"a", "x"}},
 		{name: "shard_count_is_full", changed: []string{"ci/go_integration_shards.d/_shards.tsv"}, want: "FULL shared change*"},
-		{name: "quality_leg_partition_input_is_full", changed: []string{"ci/go_test_weights.tsv"}, want: "FULL shared change*"},
-		{name: "race_weights_row_is_full", changed: []string{"ci/go_race_weights.d/a.tsv"}, want: "FULL shared change*"},
+		{name: "quality_leg_partition_input_is_full_for_the_quality_legs", extra: []string{"--go-files-full"}, changed: []string{"ci/go_test_weights.tsv"}, want: "FULL shared change*"},
+		{name: "quality_leg_partition_input_selects_ci_readers_for_integration", changed: []string{"ci/go_test_weights.tsv"}, want: "AFFECTED 1", keys: []string{"x"}},
+		{name: "race_weights_row_is_full_for_the_quality_legs", extra: []string{"--go-files-full"}, changed: []string{"ci/go_race_weights.d/a.tsv"}, want: "FULL shared change*"},
+		{name: "race_weights_row_selects_ci_readers_for_integration", changed: []string{"ci/go_race_weights.d/a.tsv"}, want: "AFFECTED 1", keys: []string{"x"}},
 		{name: "diff_producer_is_full", changed: []string{"ci/go_relevant_diff.sh"}, want: "FULL shared change*"},
 		{name: "reads_row_for_an_unknown_class_is_an_error",
 			head:    map[string]string{"internal/cigates/affected/reads.tsv": fixtureReads + "a\ttest\tnope\n"},
@@ -402,5 +415,45 @@ func TestPlanReadsRealRepository(t *testing.T) {
 	root := repoRoot(t)
 	if res := planReads(t, root); res.code != 0 {
 		t.Fatalf("the declared-read table does not cover the repository (plan-reads exited %d):\n%s%s", res.code, res.stdout, res.stderr)
+	}
+}
+
+// The changed list as ci/go_relevant_diff.sh writes it (`git diff -z --no-renames`): NUL-terminated entries; a list with no
+// NUL is read one path per line.
+func TestPlanVerdictChangedListFormats(t *testing.T) {
+	cases := []struct {
+		name, raw, want string
+		keys            []string
+	}{
+		{"a_rename_out_of_a_go_package_keeps_the_package", "docs/a.md\x00x/x.go\x00", "AFFECTED 2", []string{"a", "x"}},
+		{"newline_delimited_entries_are_separate", "AGENTS.md\ngo.mod\n", "FULL shared change: go.mod", nil},
+		{"nul_delimited_entries_are_separate", "AGENTS.md\x00go.mod\x00", "FULL shared change: go.mod", nil},
+		{"a_single_nul_terminated_entry_is_one_path", "AGENTS.md\x00", "NONE", nil},
+		{"a_yaml_workflow_selects_its_readers", ".github/workflows/only-changed.yaml\x00", "AFFECTED 1", []string{"x"}},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			work := t.TempDir()
+			f, err := newVerdictFixture(work, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			list := filepath.Join(work, "changed.txt")
+			if err := os.WriteFile(list, []byte(c.raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			res := cmdSpec{dir: f.root, env: gitEnv}.run(cigate(t), "plan-verdict", "--event", "pull_request", "--changed", list,
+				"--golist", f.golist, "--keys", f.keys, "--root", f.root, "--base", f.base)
+			lines := strings.Split(strings.TrimRight(res.stdout, "\n"), "\n")
+			var keys []string
+			if len(lines) > 1 {
+				keys = lines[1:]
+			}
+			if res.code != 0 || lines[0] != c.want || !reflect.DeepEqual(keys, c.keys) {
+				t.Fatalf("plan-verdict over %q: exit %d, %q, want %q %q (%s)", c.raw, res.code, lines, c.want, c.keys, res.stderr)
+			}
+		})
 	}
 }

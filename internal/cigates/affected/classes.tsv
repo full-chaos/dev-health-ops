@@ -1,0 +1,51 @@
+# Path classes of the plan verdict (cigate plan-verdict): class<TAB>glob, `**` = any number of path segments.
+# A changed path in no class (and outside every Go package's testdata or embed files) makes the plan FULL; so do go.mod,
+# go.sum, go.work*, internal/testsupport/ and the runner inputs named in runner.go. Go package trees (cmd/, internal/,
+# tools/, third_party/) and the trees still read through data-built paths (src/, tests/, scripts/) are not classes.
+# A class no reads.tsv row names is reader-less: a change only there plans NONE. `cigate plan-reads` keeps reads.tsv complete.
+.beads	.beads/**
+.claude	.claude/**
+.codex-review	.codex-review*
+.codex-review	.codex-review*/**
+.dockerignore	.dockerignore
+.env.example	.env.example
+.geminiignore	.geminiignore
+.gitattributes	.gitattributes
+.github	.github/**
+.gitignore	.gitignore
+.gitlab	.gitlab/**
+.gitlab-ci.yml	.gitlab-ci.yml
+.gitleaksignore	.gitleaksignore
+.p3-logs	.p3-logs/**
+.pip-audit-ignore	.pip-audit-ignore
+.planning	.planning/**
+AGENTS.md	AGENTS.md
+CLAUDE.md	CLAUDE.md
+DESIGN.md	DESIGN.md
+GEMINI.md	GEMINI.md
+GETTING-STARTED.md	GETTING-STARTED.md
+LICENSE.md	LICENSE.md
+Makefile	Makefile
+README.md	README.md
+alerts	alerts/**
+biome.json	biome.json
+ci	ci/**
+compose.yml	compose.yml
+contracts	contracts/**
+deploy	deploy/**
+docker	docker/**
+docs	docs/**
+docs-data	docs-data/**
+lefthook.yml	lefthook.yml
+mkdocs.yml	mkdocs.yml
+pyproject.toml	pyproject.toml
+pytest.ini	pytest.ini
+query.json	query.json
+requirements-docs.txt	requirements-docs.txt
+requirements.txt	requirements.txt
+uv.lock	uv.lock
+wrangler.jsonc	wrangler.jsonc
+json	**/*.json
+json	**/*.json.gz
+testdata	**/testdata/**
+testdata	**/testdata.manifest.tsv

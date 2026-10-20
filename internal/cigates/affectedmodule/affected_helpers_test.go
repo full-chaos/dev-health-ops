@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/cigates"
+	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 )
 
 // CHAOS-10174 PR C: Go port of tests/tooling/test_go_affected_integration.py (CHAOS-9947). Pull requests run only the
-// integration shards a change can reach. The selector (cigates.AffectedIntegration) is called on a
+// integration shards a change can reach. The selector (affected.PlanVerdict) is called on a
 // synthetic `go list` document and on the real module; the planner (`check_go.sh integration-shard-plan`) is executed
 // with each selection file.
 
@@ -81,7 +81,7 @@ func affSelect(script, work string, golist []map[string]any, keys []string, root
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	if code := cigates.AffectedIntegration([]string{"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
+	if code := affected.PlanVerdict([]string{"--event", "pull_request", "--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
 		"--keys", filepath.Join(work, "keys.txt"), "--root", root}, &stdout, &stderr); code != 0 {
 		return selection{}, fmt.Errorf("selector exited %d: %s", code, stderr.String())
 	}
@@ -227,7 +227,7 @@ func realSelection(t *testing.T, root string, changed []byte) (lines []string, t
 		}
 	}
 	var selOut, selErr bytes.Buffer
-	if code := cigates.AffectedIntegration([]string{"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
+	if code := affected.PlanVerdict([]string{"--event", "pull_request", "--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
 		"--keys", filepath.Join(work, "keys.txt"), "--root", root}, &selOut, &selErr); code != 0 {
 		t.Fatalf("selector: %s", selErr.String())
 	}

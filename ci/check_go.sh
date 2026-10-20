@@ -105,7 +105,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -162,7 +162,9 @@ usage() {
          and weight, then one "#leg" line per leg (rows, predicted seconds).
          Needs no Go, containers or Python.
   ci-leg LEG [SHARD COUNT]
-         One parallel slice of `ci` for the go-quality workflow (CHAOS-6690):
+         One parallel slice of `ci` for the go-quality workflow (CHAOS-6690).
+         GO_QUALITY_SELECTION_FILE (the go-quality-plan verdict) narrows the test
+         and race legs to an AFFECTED package subset:
          static (format, vet, build, contract, integration-vet, shard plans),
          test SHARD COUNT (go test, the SHARD-th of COUNT weight-balanced
          package slices, ci/go_test_weights.tsv; shard 1 also runs the
@@ -174,7 +176,12 @@ usage() {
   test-shard-plan SHARD COUNT
          Print the packages (module, import path, weights key) of the SHARD-th of
          COUNT weight-balanced slices of the unit tests (ci/go_test_weights.tsv,
-         a package with no row weighs 1). Fails when the slice is empty.
+         a package with no row weighs 1). Fails when the slice is empty, unless
+         GO_QUALITY_SELECTION_FILE selects a package subset.
+  race-shard-plan SHARD COUNT
+         Print the packages (module, import path, weights key) the SHARD-th of
+         COUNT race legs runs: its weight-balanced slice, its solo packages and
+         internal/providersync (a test-name slice in every race leg).
   race-excluded-shard-plan SHARD COUNT
          Print the rows of ci/race_excluded_tests.tsv that the SHARD-th of COUNT
          test legs runs without -race (every row runs in exactly one leg).
@@ -207,8 +214,9 @@ usage() {
          print the complete assignment, and write a GitHub Actions `matrix`
          output (and `legs`, the leg count) when GITHUB_OUTPUT is set. No Docker
          required. With INTEGRATION_AFFECTED_FILE set to the output of
-         cmd/cigate affected-integration (CHAOS-9947), the matrix holds only the legs
-         that cover an affected package; unset, or a FULL first line, keeps every leg.
+         cmd/cigate plan-verdict (CHAOS-9947), the matrix holds only the legs
+         that cover an affected package; NONE plans no leg; unset, or a FULL
+         first line, keeps every leg.
   ratchets
          Hold every closed list named in ci/ratchets.tsv to its size on the merge base: a list may
          shrink and never grow, and no pull request edits a shared number to say so (CHAOS-7904).
@@ -406,11 +414,13 @@ race_excluded_rows() {
 check_race_excluded_ran() {
   local row package name out count=0
   local -a rows=()
+  load_quality_selection
   while IFS= read -r row; do rows+=("${row}"); done < <(race_excluded_rows "$@")
   for row in "${rows[@]}"; do
     name="${row#*$'\t'}"
     package="${row%%$'\t'*}"
     [ -n "${name}" ] && [ -n "${package}" ] && [ "${name}" != "${package}" ] || die "race_excluded_tests.tsv row is not <package><TAB><test>"
+    quality_selected . "${package}" || continue
     [ -d "${ROOT}/${package}" ] || die "race-excluded package ${package} does not exist"
     out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -v -run "^${name}\$" "./${package}" 2>&1)" \
       || { printf '%s\n' "${out}" | tail -n 40 >&2; die "race-excluded test ${package} ${name} failed in the non-race leg"; }
@@ -427,6 +437,53 @@ check_race_excluded_ran() {
 # leg and ~213 s alone, with the default 600 s go test timeout as the only margin, so one slow runner timed it out
 # (run 38786639144). It now runs alone, after the rest, so its time no longer depends on what else is scheduled.
 SERIAL_HEAVY_TEST_PACKAGE="github.com/full-chaos/dev-health-ops/internal/gqlgenguard"
+
+# GO_QUALITY_SELECTION_FILE: the verdict of `cmd/cigate plan-verdict --go-files-full` (the go-quality-plan job). Unset,
+# empty or a FULL first line runs every package. `AFFECTED <n>` and n root-module keys run only those packages: the test and
+# race slices are cut from them, a slice may then be empty, and the other modules run none. NONE never reaches a leg (the
+# workflow skips the test and race legs); here it is a failure, as any other first line is.
+QUALITY_FILTER_ACTIVE=0
+declare -A QUALITY_KEYS=()
+load_quality_selection() {
+  QUALITY_FILTER_ACTIVE=0
+  QUALITY_KEYS=()
+  local file="${GO_QUALITY_SELECTION_FILE:-}" first line declared count=0
+  [ -n "${file}" ] || return 0
+  [ -f "${file}" ] || die "GO_QUALITY_SELECTION_FILE not found: ${file}"
+  first="$(head -n 1 "${file}")"
+  case "${first}" in
+    "FULL "*) return 0 ;;
+    "AFFECTED "*) ;;
+    *) die "GO_QUALITY_SELECTION_FILE ${file} has an unknown first line '${first}'" ;;
+  esac
+  declared="${first#AFFECTED }"
+  case "${declared}" in ""|*[!0-9]*) die "GO_QUALITY_SELECTION_FILE count is not numeric: '${declared}'" ;; esac
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    [ -d "${ROOT}/${line}" ] || die "go-quality selection names '${line}', which is not a directory of the root module"
+    [ -z "${QUALITY_KEYS[${line}]+set}" ] || die "go-quality selection lists '${line}' more than once"
+    QUALITY_KEYS["${line}"]=1
+    count=$((count + 1))
+  done < <(tail -n +2 "${file}")
+  [ "${count}" -eq "${declared}" ] || die "go-quality selection declares ${declared} package(s) but lists ${count}"
+  QUALITY_FILTER_ACTIVE=1
+}
+
+# quality_selected MODULE_DIR KEY: true when every package runs or KEY (relative to the root module) is selected.
+quality_selected() {
+  [ "${QUALITY_FILTER_ACTIVE}" -eq 0 ] || { [ "$1" = "." ] && [ -n "${QUALITY_KEYS[$2]+set}" ]; }
+}
+
+# quality_filter MODULE_DIR MODPATH: the import paths on stdin that the selection runs.
+quality_filter() {
+  local module_dir="$1" modpath="$2" pkg key
+  while IFS= read -r pkg; do
+    [ -n "${pkg}" ] || continue
+    key="${pkg#"${modpath}/"}"
+    [ "${pkg}" != "${modpath}" ] || key="."
+    if quality_selected "${module_dir}" "${key}"; then printf '%s\n' "${pkg}"; fi
+  done
+}
 
 check_test() {
   local module_dir all rest ran_heavy=0
@@ -477,6 +534,7 @@ check_test_shard_args() {
 check_test_shard_plan() {
   local shard="${1:-}" count="${2:-}" module_dir modpath pkg key selected=0
   check_test_shard_args "${shard}" "${count}"
+  load_quality_selection
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
     while IFS= read -r pkg; do
@@ -486,9 +544,10 @@ check_test_shard_plan() {
       printf '%s\t%s\t%s\n' "${module_dir}" "${pkg}" "${key}"
       selected=$((selected + 1))
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -f '{{.ImportPath}}' ./... \
+      | quality_filter "${module_dir}" "${modpath}" \
       | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_TEST_WEIGHTS}" -v defw=1 -f "${ROOT}/ci/go_race_shard.awk")
   done
-  [ "${selected}" -gt 0 ] \
+  [ "${selected}" -gt 0 ] || [ "${QUALITY_FILTER_ACTIVE}" -eq 1 ] \
     || die "test shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
 }
 
@@ -632,13 +691,49 @@ check_providersync_race_shard() {
   )
 }
 
-check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing
+check_race_shard_args() {
+  local shard="${1:-}" count="${2:-}"
   case "${shard}" in ""|*[!0-9]*) die "race SHARD must be a positive integer, got '${shard}'" ;; esac
   case "${count}" in ""|*[!0-9]*) die "race COUNT must be a positive integer, got '${count}'" ;; esac
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
     || die "race shard ${shard} is outside 1..${count}"
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race shards need ${GO_RACE_WEIGHTS_DIR}"
+}
+
+# race_shard_packages SHARD COUNT MODULE_DIR MODPATH [solo]: the import paths of the race slice (or, with solo, of its solo
+# packages) of one module, after the go-quality selection. internal/providersync is never listed: it runs as test-name slices.
+race_shard_packages() {
+  local shard="$1" count="$2" module_dir="$3" modpath="$4" part="${5:-}"
+  (cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...) \
+    | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
+    | quality_filter "${module_dir}" "${modpath}" \
+    | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part="${part}" -f "${ROOT}/ci/go_race_shard.awk"
+}
+
+# check_race_shard_plan SHARD COUNT: one "module<TAB>package<TAB>key" line per package the SHARD-th race leg runs.
+check_race_shard_plan() {
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg key
+  check_race_shard_args "${shard}" "${count}"
+  load_quality_selection
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed in ${module_dir}"
+    {
+      if [ "${module_dir}" = "." ] && quality_selected . internal/providersync; then printf '%s\n' "${modpath}/internal/providersync"; fi
+      race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}"
+      race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}" solo
+    } | while IFS= read -r pkg; do
+      [ -n "${pkg}" ] || continue
+      key="${pkg#"${modpath}/"}"
+      [ "${pkg}" != "${modpath}" ] || key="."
+      printf '%s\t%s\t%s\n' "${module_dir}" "${pkg}" "${key}"
+    done
+  done
+}
+
+check_race_shard() {
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing
+  check_race_shard_args "${shard}" "${count}"
+  load_quality_selection
   local -a pkgs solo_pkgs
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
@@ -654,17 +749,13 @@ check_race_shard() {
     pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
-    done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
-      | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
-      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -f "${ROOT}/ci/go_race_shard.awk")
+    done < <(race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}")
     solo_pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && solo_pkgs+=("${pkg}")
-    done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
-      | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
-      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part=solo -f "${ROOT}/ci/go_race_shard.awk")
+    done < <(race_shard_packages "${shard}" "${count}" "${module_dir}" "${modpath}" solo)
     printf 'go test -race (shard %s/%s): %s: %d package(s), %d solo\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}" "${#solo_pkgs[@]}"
-    if [ "${module_dir}" = "." ]; then
+    if [ "${module_dir}" = "." ] && quality_selected . internal/providersync; then
       # CHAOS-8166: internal/providersync runs in EVERY race leg, one test-name shard each (it is not in pkgs above).
       selected=$((selected + 1))
       check_providersync_race_shard "${shard}" "${count}"
@@ -687,7 +778,7 @@ check_race_shard() {
       )
     fi
   done
-  [ "${selected}" -gt 0 ] \
+  [ "${selected}" -gt 0 ] || [ "${QUALITY_FILTER_ACTIVE}" -eq 1 ] \
     || die "race shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
 }
 
@@ -796,7 +887,8 @@ check_ci_leg() {
       ;;
     test)
       ci_leg_stage "test ${2:-}/${3:-}" check_test_shard "${2:-}" "${3:-}"
-      if [ "${2:-}" = "1" ]; then
+      load_quality_selection
+      if [ "${2:-}" = "1" ] && quality_selected . internal/workerservice; then
         ci_leg_stage multi-replica-workers check_multi_replica_workers
       fi
       ;;
@@ -2823,8 +2915,8 @@ check_remaining_test_shard() {
 }
 
 # load_affected_selection reads INTEGRATION_AFFECTED_FILE, the output of
-# cmd/cigate affected-integration (CHAOS-9947). Unset, empty, or a first line other
-# than "AFFECTED <n>" means the whole suite. An AFFECTED key that is not a
+# cmd/cigate plan-verdict (CHAOS-9947). Unset or empty, or a FULL first line, means the
+# whole suite; NONE means no package; any other first line than "AFFECTED <n>" fails. An AFFECTED key that is not a
 # planned package is a failure, never an ignored line.
 load_affected_selection() {
   AFFECTED_FILTER_ACTIVE=0
@@ -2837,6 +2929,12 @@ load_affected_selection() {
   first="$(head -n 1 "${file}")"
   case "${first}" in
     "AFFECTED "*) ;;
+    "NONE")
+      [ "$(wc -l < "${file}")" -le 1 ] || die "INTEGRATION_AFFECTED_FILE ${file}: a NONE selection lists no package"
+      AFFECTED_FILTER_ACTIVE=1
+      printf 'integration affected selection: NONE -- no Go test reads the changed paths\n'
+      return 0
+      ;;
     "FULL "*)
       printf 'integration affected selection: %s -- running the full suite\n' "${first}"
       return 0
@@ -3791,6 +3889,10 @@ case "${1:-all}" in
   test-shard-plan)
     [ "$#" -eq 3 ] || die "test-shard-plan accepts SHARD COUNT"
     check_test_shard_plan "$2" "$3"
+    ;;
+  race-shard-plan)
+    [ "$#" -eq 3 ] || die "race-shard-plan accepts SHARD COUNT"
+    check_race_shard_plan "$2" "$3"
     ;;
   test-shard-wall-guard)
     [ "$#" -eq 5 ] || die "test-shard-wall-guard accepts SHARD COUNT WALL LOGFILE"

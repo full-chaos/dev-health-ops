@@ -1,10 +1,9 @@
-package cigates
+package affected
 
 import (
 	"errors"
 	"fmt"
-	"go/scanner"
-	"go/token"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -12,22 +11,31 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	goWorkflowPath   = ".github/workflows/go.yml"
-	checkGoPath      = "ci/check_go.sh"
-	shardManifestDir = "ci/go_integration_shards.d/"
+	goWorkflowPath      = ".github/workflows/go.yml"
+	goQualityWorkflow   = ".github/workflows/go-quality.yml"
+	checkGoPath         = "ci/check_go.sh"
+	shardManifestDir    = "ci/go_integration_shards.d/"
+	raceWeightsDir      = "ci/go_race_weights.d/"
+	integrationJobsNote = "integration job(s) changed: "
 )
 
-// Inputs of the integration plan and shard runner itself: a change here can move every shard.
+// Inputs of the plan and of the integration shard runner: a change here can move every shard or every leg.
 var (
 	runnerFiles    = map[string]bool{"ci/go_relevant_diff.sh": true, shardManifestDir + "_shards.tsv": true}
 	runnerPrefixes = []string{"ci/lib/"}
+	// Inputs of the go-quality legs and of their package partition: FULL for the go-quality plan (--go-files-full) only.
+	qualityRunnerFiles = map[string]bool{
+		goQualityWorkflow: true, "ci/go_test_weights.tsv": true, "ci/go_race_solo.tsv": true,
+		"ci/race_excluded_tests.tsv": true, "ci/go_race_shard.awk": true, "ci/go_race_missing_rows.awk": true,
+		"ci/go_providersync_race_weights.tsv": true, "ci/go_providersync_race_shard.awk": true,
+	}
+	qualityRunnerPrefixes = []string{raceWeightsDir}
 	// Each of these splits the tests of ONE integration package into shards.
 	splitTestManifests = map[string]string{
 		"ci/go_providersync_test_shards.tsv":    "internal/providersync",
@@ -36,200 +44,61 @@ var (
 		"ci/go_queryapi_server_test_shards.tsv": "internal/queryapi/server",
 		"ci/go_remaining_test_shards.tsv":       "internal/jobs/metrics/remaining",
 	}
-	// Non-Go trees no Go build embeds; an integration binary sees a file here only if its code names the path.
-	literalScanPrefixes = []string{"docs/", "contracts/", "ci/", ".github/", ".claude/", ".codex-review"}
 )
 
 type planRules struct {
 	root, base string
 	keys       map[string]bool
-	packages   map[string]goListEntry
-	binaries   map[string]map[string]bool
-	modulePath string
+	quality    bool // the go-quality legs' plan: their inputs and their check_go.sh verbs count too
 
 	headWorkflow    *integrationWorkflow
 	headWorkflowErr error
 	headLoaded      bool
-
-	literals map[string]packageLiterals
 }
 
-type packageLiterals struct{ prod, all []string }
-
-// classifyInput decides a changed path that names a CI input of the integration plan. handled=false means
-// the ordinary Go-package and data-file rules apply.
-func (r *planRules) classifyInput(p string) (full string, direct []string, handled bool) {
+// classifyInput decides a changed path that is an input of the plan or of the runners. A non-empty why makes the
+// change set FULL; keys are planned packages the path selects directly. The class rules still apply to the path.
+func (r *planRules) classifyInput(p string) (why string, keys []string) {
 	if runnerFiles[p] || hasAnyPrefix(p, runnerPrefixes) {
-		return "FULL integration runner input: " + p, nil, true
+		return "runner input", nil
+	}
+	if r.quality && (qualityRunnerFiles[p] || hasAnyPrefix(p, qualityRunnerPrefixes)) {
+		return "go-quality leg input", nil
 	}
 	if key, ok := splitTestManifests[p]; ok {
 		if !r.keys[key] {
-			return "FULL split test manifest for a package that is not planned: " + p, nil, true
+			return "split test manifest for a package that is not planned", nil
 		}
-		return "", []string{key}, true
+		return "", []string{key}
 	}
 	if strings.HasPrefix(p, shardManifestDir) {
 		if !strings.HasSuffix(p, ".tsv") || strings.Contains(strings.TrimPrefix(p, shardManifestDir), "/") {
-			return "", nil, true
+			return "", nil
 		}
 		key := strings.ReplaceAll(strings.TrimSuffix(path.Base(p), ".tsv"), "__", "/")
 		if r.keys[key] {
-			return "", []string{key}, true
+			return "", []string{key}
 		}
-		return "", nil, true
+		return "", nil
 	}
 	if p == goWorkflowPath {
-		if why := r.workflowChange(); why != "" {
-			return "FULL " + goWorkflowPath + ": " + why, nil, true
-		}
-		return "", nil, true
+		return r.workflowChange(), nil
 	}
 	if p == checkGoPath {
-		if why := r.checkGoChange(); why != "" {
-			return "FULL " + checkGoPath + ": " + why, nil, true
-		}
-		return "", nil, true
+		return r.checkGoChange(), nil
 	}
 	if strings.HasPrefix(p, ".github/") {
 		wf, err := r.head()
 		if err != nil {
-			return "FULL " + goWorkflowPath + " unreadable at head: " + err.Error(), nil, true
+			return goWorkflowPath + " unreadable at head: " + err.Error(), nil
 		}
 		for _, u := range wf.localUses {
 			if p == u || strings.HasPrefix(p, u+"/") {
-				return "FULL local action of an integration job: " + p, nil, true
+				return "local action of an integration job", nil
 			}
 		}
 	}
-	return "", nil, false
-}
-
-// literalReaders returns the integration keys whose test binary names p (or a directory above it, or a trailing part
-// of it) in a string literal: the package's own Go and test files, or the production files of any dependency.
-func (r *planRules) literalReaders(p string) ([]string, bool, error) {
-	// Repo-wide walkers (internal/testsupport/recordedfiles, venueoracle golden checks) read every testdata dir.
-	if !hasAnyPrefix(p, literalScanPrefixes) || strings.Contains("/"+p, "/testdata/") {
-		return nil, false, nil
-	}
-	if r.literals == nil {
-		if err := r.scanLiterals(); err != nil {
-			return nil, true, err
-		}
-	}
-	matchProd, matchAll := map[string]bool{}, map[string]bool{}
-	for imp, l := range r.literals {
-		if anyLiteralNames(l.prod, p) {
-			matchProd[imp] = true
-			matchAll[imp] = true
-		} else if anyLiteralNames(l.all, p) {
-			matchAll[imp] = true
-		}
-	}
-	var out []string
-	for key := range r.keys {
-		imp := r.importPath(key)
-		if matchAll[imp] {
-			out = append(out, key)
-			continue
-		}
-		for dep := range r.binaries[imp] {
-			if dep != imp && matchProd[dep] {
-				out = append(out, key)
-				break
-			}
-		}
-	}
-	sort.Strings(out)
-	return out, true, nil
-}
-
-func (r *planRules) importPath(key string) string {
-	if key == "." {
-		return r.modulePath
-	}
-	return r.modulePath + "/" + key
-}
-
-func (r *planRules) scanLiterals() error {
-	r.literals = map[string]packageLiterals{}
-	for rel, e := range r.packages {
-		if rel == ".." || strings.HasPrefix(rel, "../") {
-			continue
-		}
-		var l packageLiterals
-		for _, set := range []struct {
-			files []string
-			prod  bool
-		}{{e.GoFiles, true}, {e.CgoFiles, true}, {e.TestGoFiles, false}, {e.XTestGoFiles, false}} {
-			for _, f := range set.files {
-				lits, err := goStringLiterals(filepath.Join(e.Dir, f))
-				if err != nil {
-					return err
-				}
-				if set.prod {
-					l.prod = append(l.prod, lits...)
-				}
-				l.all = append(l.all, lits...)
-			}
-		}
-		r.literals[e.ImportPath] = l
-	}
-	return nil
-}
-
-func goStringLiterals(file string) ([]string, error) {
-	src, err := os.ReadFile(file)
-	if err != nil {
-		return nil, err
-	}
-	fset := token.NewFileSet()
-	var s scanner.Scanner
-	var scanErr error
-	s.Init(fset.AddFile(file, -1, len(src)), src, func(_ token.Position, msg string) { scanErr = errors.New(file + ": " + msg) }, 0)
-	var out []string
-	for {
-		_, tok, lit := s.Scan()
-		if tok == token.EOF {
-			break
-		}
-		if tok != token.STRING {
-			continue
-		}
-		v, err := strconv.Unquote(lit)
-		if err != nil {
-			continue
-		}
-		if v = normalizeLiteralPath(v); v != "" {
-			out = append(out, v)
-		}
-	}
-	return out, scanErr
-}
-
-func normalizeLiteralPath(v string) string {
-	for {
-		switch {
-		case strings.HasPrefix(v, "../"):
-			v = v[3:]
-		case strings.HasPrefix(v, "./"):
-			v = v[2:]
-		default:
-			v = strings.TrimRight(v, "/")
-			if v == ".." || v == "." {
-				return ""
-			}
-			return v
-		}
-	}
-}
-
-func anyLiteralNames(lits []string, p string) bool {
-	for _, l := range lits {
-		if l == p || strings.HasPrefix(p, l+"/") || strings.HasSuffix(p, "/"+l) {
-			return true
-		}
-	}
-	return false
+	return "", nil
 }
 
 func hasAnyPrefix(p string, prefixes []string) bool {
@@ -275,7 +144,7 @@ type integrationWorkflow struct {
 
 var (
 	checkGoVerb = regexp.MustCompile(`ci/check_go\.sh\s+([A-Za-z0-9_-]+)`)
-	planMarker  = regexp.MustCompile(`ci/check_go\.sh\s+integration|affected-integration`)
+	planMarker  = regexp.MustCompile(`ci/check_go\.sh\s+integration|plan-verdict`)
 )
 
 func parseIntegrationWorkflow(raw []byte) (*integrationWorkflow, error) {
@@ -414,7 +283,7 @@ func (r *planRules) workflowChange() string {
 	}
 	if len(moved) > 0 {
 		sort.Strings(moved)
-		return "integration job(s) changed: " + strings.Join(moved, ",")
+		return integrationJobsNote + strings.Join(moved, ",")
 	}
 	return ""
 }
@@ -444,7 +313,40 @@ func (r *planRules) checkGoChange() string {
 	if err != nil {
 		return "unparsable at the merge base: " + err.Error()
 	}
-	return shellIntegrationChange(base, head, wf.verbs)
+	verbs := map[string]bool{}
+	if r.quality {
+		if verbs, err = r.qualityVerbs(); err != nil {
+			return goQualityWorkflow + " unreadable at head: " + err.Error()
+		}
+	}
+	for v := range wf.verbs {
+		verbs[v] = true
+	}
+	return shellIntegrationChange(base, head, verbs)
+}
+
+// qualityVerbs is every check_go.sh verb a job of go-quality.yml runs (ci-leg reaches the unit, race and static
+// stages); an absent workflow has none.
+func (r *planRules) qualityVerbs() (map[string]bool, error) {
+	verbs := map[string]bool{}
+	raw, err := r.headFile(goQualityWorkflow)
+	if errors.Is(err, fs.ErrNotExist) {
+		return verbs, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	jobs, _ := doc["jobs"].(map[string]any)
+	for _, job := range jobs {
+		for _, m := range checkGoVerb.FindAllStringSubmatch(jobRunText(job), -1) {
+			verbs[m[1]] = true
+		}
+	}
+	return verbs, nil
 }
 
 type shellScript struct {

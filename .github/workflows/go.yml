@@ -147,7 +147,6 @@ on:
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
       - 'ci/go_relevance.py'
-      - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
@@ -380,7 +379,6 @@ on:
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
       - 'ci/go_relevance.py'
-      - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
@@ -691,15 +689,18 @@ jobs:
           cache-dependency-path: '**/go.sum'
 
       # CHAOS-9947: a pull request runs only the integration shards whose test
-      # binaries contain a changed package (go list -test, cmd/cigate affected-integration).
-      # A shared change, an unplaceable file or any failure here selects the FULL
-      # suite; main, merge_group and manual runs never run this step. --base lets it
-      # compare this file and ci/check_go.sh at the merge base: only an edit the
-      # integration jobs or verbs can see selects the FULL suite.
+      # binaries a change can reach: `cmd/cigate plan-verdict` (one verdict with
+      # go-quality.yml) selects the changed Go packages' reverse closure plus the
+      # declared readers of changed non-Go paths (internal/cigates/affected/reads.tsv),
+      # NONE when every path is in a class no test reads. --base compares this file and
+      # ci/check_go.sh at the merge base: only an edit the integration jobs or verbs can
+      # see is FULL. A shared change, an undeclared path or any failure here selects the
+      # FULL suite; main, merge_group and manual runs never run this step.
       - name: Select the integration packages the change can affect
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -uo pipefail
           out="${RUNNER_TEMP}/affected.txt"
@@ -711,8 +712,8 @@ jobs:
             full "could not list the integration packages"
           elif ! go list -mod=readonly -tags=integration -test -json ./... > "${RUNNER_TEMP}/golist.json"; then
             full "go list failed"
-          elif ! go run -trimpath -mod=readonly ./cmd/cigate affected-integration --changed "${RUNNER_TEMP}/changed.txt" \
-            --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
+          elif ! go run -trimpath -mod=readonly ./cmd/cigate plan-verdict --event "${EVENT_NAME}" \
+            --changed "${RUNNER_TEMP}/changed.txt" --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
             --root "${GITHUB_WORKSPACE}" --base "${BASE_SHA}" > "${out}"; then
             full "selection program failed"
           fi

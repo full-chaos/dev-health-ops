@@ -115,7 +115,7 @@ const (
 // Row is one work_graph_edges row.
 //
 // The column set and its types are read from the LIVE schema, not from
-// migrations/clickhouse/014_work_graph.sql -- that file predates two changes
+// internal/chmigrate/history/014_work_graph.sql -- that file predates two changes
 // that matter: org_id was added to the ORDER BY (so it IS part of the
 // ReplacingMergeTree dedup identity), and `day` was added alongside event_ts.
 //

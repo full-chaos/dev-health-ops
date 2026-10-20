@@ -363,7 +363,7 @@ moved. The walk restarts at the top of that page, attempt-neutral, and records
 
 Re-walking is safe **for row identity**: every cicd destination is a
 `ReplacingMergeTree` whose final sort key is org, repository and run
-(`src/dev_health_ops/migrations/clickhouse/027_add_org_id_to_sorting_keys.py`
+(the deleted Python migration `027_add_org_id_to_sorting_keys.py`
 and `042_rmt_org_id_dedup_keys.py` — the keys the initial DDL declares are not
 the ones in force), so
 re-processing an item replaces its row rather than duplicating it under

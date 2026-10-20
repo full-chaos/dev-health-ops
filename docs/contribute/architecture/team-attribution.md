@@ -6,8 +6,8 @@ owner: engineering
 source_of_truth:
   - src/dev_health_ops/metrics/compute_work_items.py
   - src/dev_health_ops/providers/teams.py
-  - src/dev_health_ops/migrations/clickhouse/051_team_attribution_dimensions.sql
-  - src/dev_health_ops/migrations/clickhouse/053_manual_attribution_fallbacks.sql
+  - internal/chmigrate/history/051_team_attribution_dimensions.sql
+  - internal/chmigrate/history/053_manual_attribution_fallbacks.sql
   - internal/workerservice/daily.go
   - internal/jobs/metrics/daily/compatibility_http.go
 applicability: current
@@ -4222,7 +4222,7 @@ detail the comments actually reference (the resolver internals), not at `work-gr
 | GitLab capture | `providers/gitlab/normalize.py` |
 | Recovery runbook | §5 above; backfill `backfill/runner.py`, investment `workers/work_graph_tasks.py` |
 | Tests | `tests/test_linked_issue_team_inheritance.py`, `tests/test_pr_issue_link_capture.py` |
-| Schema (base + widened) | `migrations/clickhouse/051_team_attribution_dimensions.sql`, `migrations/clickhouse/053_manual_attribution_fallbacks.sql` — see §0.6 |
+| Schema (base + widened) | `internal/chmigrate/history/051_team_attribution_dimensions.sql`, `internal/chmigrate/history/053_manual_attribution_fallbacks.sql` — see §0.6 |
 | Go dispatch → Python compatibility bridge (added §0.6) | `internal/workerservice/daily.go` (`NewHTTPCompatibilityExecutor`), `internal/jobs/metrics/daily/compatibility_http.go` |
 
 > All Python paths above are repo-relative to `src/dev_health_ops/` (e.g. `metrics/compute_work_items.py`

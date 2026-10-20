@@ -324,8 +324,10 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	normalizePython := billingNormalizer(seeded, recordedAt(t, golden, start))
 	python := normalizeAnswers(rawPython, normalizePython)
 	for index, answer := range python {
-		if strings.Contains(answer.Body, goOnlyEntitlementKey) || featuresHoldGoOnly(answer.Body) {
-			t.Fatalf("frozen python answer %q holds %s, so it is not Go-only", requests[index].Name, goOnlyEntitlementKey)
+		for _, key := range goOnlyEntitlementKeys {
+			if strings.Contains(answer.Body, key) || featuresHoldGoOnly(answer.Body, key) {
+				t.Fatalf("frozen python answer %q holds %s, so it is not Go-only", requests[index].Name, key)
+			}
 		}
 	}
 	// The reconciliation must have read the fake Stripe lists: a
@@ -363,7 +365,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 			if strings.HasPrefix(request.Name, "ent: ") && goResponse.Status == 200 {
 				entitlementsInspected++
 				if _, held := dropGoOnlyFeature(goResponse.Body); !held {
-					t.Errorf("%s: go entitlements lack features.%s=false", request.Name, goOnlyEntitlementKey)
+					t.Errorf("%s: go entitlements lack features.%v=false", request.Name, goOnlyEntitlementKeys)
 				}
 			}
 			wants, ok := reconcileWants[request.Name]
@@ -429,19 +431,20 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	golden.Finish(t)
 }
 
-// goOnlyEntitlementKey is a decision key added after the frozen Python build
-// (CHAOS-9311, #4032): its api tree is deleted, so no newer Python build can
-// record it and the Go registry is its only source. Go publishes it, false for
-// every seeded org, as a member of the entitlements "features" object. The
-// comparison drops that one member from the Go body only; the frozen answers
-// must not hold the key, and every Go entitlements answer must hold it under
-// "features" as false, so the allowance hides no drift. The same key anywhere
-// else in the body is not dropped and reads as a DIFF.
-const goOnlyEntitlementKey = "acr_service_model"
+// goOnlyEntitlementKeys are decision keys added after the frozen Python build
+// (acr_service_model: CHAOS-9311, #4032; platform_model_fallback: CHAOS-10262):
+// its api tree is deleted, so no newer Python build can record them and the Go
+// registry is their only source. Go publishes each, false for every seeded org,
+// as a member of the entitlements "features" object. The comparison drops those
+// members from the Go body only; the frozen answers must not hold a key, and
+// every Go entitlements answer must hold each under "features" as false, so the
+// allowance hides no drift. The same key anywhere else in the body is not
+// dropped and reads as a DIFF.
+var goOnlyEntitlementKeys = []string{"acr_service_model", "platform_model_fallback"}
 
 // featuresHoldGoOnly reports whether a body's decoded "features" object has
 // the Go-only key in any spelling, including a JSON escape of it.
-func featuresHoldGoOnly(body string) bool {
+func featuresHoldGoOnly(body, key string) bool {
 	value, err := pyjson.DecodeString(body)
 	if err != nil {
 		return false
@@ -455,12 +458,12 @@ func featuresHoldGoOnly(body string) bool {
 	if !ok {
 		return false
 	}
-	_, present := features.Get(goOnlyEntitlementKey)
+	_, present := features.Get(key)
 	return present
 }
 
-// dropGoOnlyFeature removes features.acr_service_model from an entitlements
-// body when it is there and false. held reports whether it was.
+// dropGoOnlyFeature removes every Go-only key from an entitlements body's
+// features when it is there and false. held reports whether all were.
 func dropGoOnlyFeature(body string) (out string, held bool) {
 	value, err := pyjson.DecodeString(body)
 	if err != nil {
@@ -475,10 +478,14 @@ func dropGoOnlyFeature(body string) (out string, held bool) {
 	if !ok {
 		return body, false
 	}
-	if flag, present := features.Get(goOnlyEntitlementKey); !present || flag != false {
-		return body, false
+	for _, key := range goOnlyEntitlementKeys {
+		if flag, present := features.Get(key); !present || flag != false {
+			return body, false
+		}
 	}
-	features.Delete(goOnlyEntitlementKey)
+	for _, key := range goOnlyEntitlementKeys {
+		features.Delete(key)
+	}
 	encoded, err := pyjson.Marshal(root)
 	if err != nil {
 		return body, false

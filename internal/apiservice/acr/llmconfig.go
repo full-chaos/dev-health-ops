@@ -27,10 +27,21 @@ const LLMConfigScope = "llm_config:read"
 const llmConfigSchemaVersion = "acr_llm_config.v1"
 
 // NoConfigHeader marks the 404 that means "the org has no BYO config".
+// NoConfigReasonHeader rides beside it only when BYO settings are stored but
+// the byo_llm gate is closed, so acr refuses the turn instead of reading "no
+// config"; the marker value stays "none" for the worker client.
 const (
-	NoConfigHeader = "X-Org-Llm-Config"
-	NoConfigValue  = "none"
+	NoConfigHeader         = "X-Org-Llm-Config"
+	NoConfigValue          = "none"
+	NoConfigReasonHeader   = "X-Org-Llm-Config-Reason"
+	NoConfigReasonGateShut = "byo_llm_gate_closed"
 )
+
+// noConfigReasonFor names a BYO org whose saved configs are for other purposes
+// only: byo_no_<purpose>_config (byo_no_investigate_config on the acr route).
+func noConfigReasonFor(purpose llmorgsettings.Purpose) string {
+	return "byo_no_" + string(purpose) + "_config"
+}
 
 // ErrCredentialInvalid is a missing, unknown, revoked or expired credential.
 var ErrCredentialInvalid = errors.New("service credential invalid")
@@ -140,8 +151,11 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 		}
 		if !found {
 			outcome, reason := "not_found", "none_configured"
-			if cfg.GateClosed {
+			switch {
+			case cfg.GateClosed:
 				outcome, reason = "byo_llm_gate_closed", "byo_llm_gate_closed"
+			case cfg.UnresolvedPurpose != "":
+				outcome, reason = "byo_no_purpose_config", noConfigReasonFor(cfg.UnresolvedPurpose)
 			}
 			logger.InfoContext(ctx, "acr llm-config: none served",
 				slog.String("org_id", orgID), slog.String("credential_id", credentialID), slog.String("reason", reason))
@@ -150,6 +164,12 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			// no config" from a missing route (an old replica, a wrong target)
 			// reads this header, never the bare 404.
 			w.Header().Set(NoConfigHeader, NoConfigValue)
+			switch {
+			case cfg.GateClosed:
+				w.Header().Set(NoConfigReasonHeader, NoConfigReasonGateShut)
+			case cfg.UnresolvedPurpose != "":
+				w.Header().Set(NoConfigReasonHeader, noConfigReasonFor(cfg.UnresolvedPurpose))
+			}
 			writeDetail(w, http.StatusNotFound, "Not found")
 			return
 		}

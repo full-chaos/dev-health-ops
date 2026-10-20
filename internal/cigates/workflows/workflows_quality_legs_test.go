@@ -138,8 +138,9 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	if !ran {
 		add("no go-quality-leg step runs `ci-leg ${{ matrix.args }}`")
 	}
-	if tm, ok := leg["timeout-minutes"].(int); !ok || tm > 30 {
-		add("go-quality-leg timeout-minutes must be <= 30, got %v", leg["timeout-minutes"])
+	const poolTimeout = "${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || 30 }}"
+	if tm, ok := leg["timeout-minutes"].(int); !(ok && tm <= 30) && leg["timeout-minutes"] != poolTimeout {
+		add("go-quality-leg timeout-minutes must be <= 30 (or the pool expression), got %v", leg["timeout-minutes"])
 	}
 
 	fan := asMap(jobs["go-quality"])
@@ -218,7 +219,8 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 		{"a stage runs in two legs", []mutation{{cg, "      ci_leg_stage test check_test\n", "      ci_leg_stage test check_test\n      ci_leg_stage vet2 check_vet\n"}}, []string{"runs in two legs", "check_vet"}},
 		{"a race entry goes missing from the matrix", []mutation{{wf, "args: race 2 3", "args: race 4 3"}}, []string{"not 1..N of N"}},
 		{"fail-fast comes back on", []mutation{{wf, "fail-fast: false", "fail-fast: true"}}, []string{"fail-fast must be false"}},
-		{"the fan-in can skip", []mutation{{wf, "if: always()", "if: success()"}}, []string{"fan-in must be always()"}},
+		{"the fan-in can skip", []mutation{{wf, "\n    if: always()\n", "\n    if: success()\n"}}, []string{"fan-in must be always()"}},
+		{"the pool timeout grows past 45", []mutation{{wf, "&& 45 || 30 }}", "&& 90 || 30 }}"}}, []string{"timeout-minutes must be <= 30"}},
 		{"the fan-in stops judging the legs unconditional", []mutation{{wf, "go-quality-leg|unconditional|", "go-quality-leg|path-filtered|"}}, []string{"unconditional"}},
 		{"the leg step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh ci-leg ${{ matrix.args }}", `run: echo "ci-leg ${{ matrix.args }}"`}}, []string{"no go-quality-leg step runs"}},
 		{"a leg stage survives only in a comment", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", "      # ci_leg_stage ratchets check_ratchets\n"}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},

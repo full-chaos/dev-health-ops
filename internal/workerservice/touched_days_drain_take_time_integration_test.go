@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -904,6 +905,72 @@ func takeTimeTouchedDaysDrainAStopLeavesTheRunsUnchecked(t *testing.T, ctx conte
 	}
 }
 
+// gatedPendingStore holds the first DaysPendingSinceBeforeTake call after its
+// read until release is closed; every later call answers with no pending day.
+type gatedPendingStore struct {
+	syncdispatchruntime.TouchedDaysDrainStore
+	inFirst chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (store *gatedPendingStore) DaysPendingSinceBeforeTake(
+	ctx context.Context, organizationID string, runs []syncdispatchruntime.TouchedRunKeys,
+) ([]time.Time, error) {
+	if store.calls.Add(1) > 1 {
+		return nil, nil
+	}
+	days, err := store.TouchedDaysDrainStore.DaysPendingSinceBeforeTake(ctx, organizationID, runs)
+	close(store.inFirst)
+	<-store.release
+	return days, err
+}
+
+type stampCountingRuns struct {
+	syncdispatchruntime.TouchedDaysDrainRuns
+	stamps atomic.Int32
+}
+
+func (runs *stampCountingRuns) MarkRunsChecked(ctx context.Context, organizationID string, runIDs []string) error {
+	runs.stamps.Add(1)
+	return runs.TouchedDaysDrainRuns.MarkRunsChecked(ctx, organizationID, runIDs)
+}
+
+// A clean pass does not stamp the runs while another pass of the organization is
+// still checking them: the other pass can stop on them.
+func takeTimeTouchedDaysDrainACleanPassDoesNotStampWhileAnotherPassChecks(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -1), uuid.NewString(), "touched", time.Now().UTC().Add(-5*time.Hour))
+	_, newest := drainBatches(t, ctx, rig, orgID, 3)
+	gate := &gatedPendingStore{TouchedDaysDrainStore: rig.touched, inFirst: make(chan struct{}), release: make(chan struct{})}
+	counting := &stampCountingRuns{TouchedDaysDrainRuns: rig.productionRuns()}
+	drain := rig.drain(t, gate, counting)
+	done := make(chan struct{}, 2)
+	go func() { drain.DrainTouchedDays(ctx, orgID, "e:"+newest[0]); done <- struct{}{} }()
+	select {
+	case <-gate.inFirst:
+	case <-time.After(time.Minute):
+		t.Fatal("the first pass never reached its pending read")
+	}
+	go func() { drain.DrainTouchedDays(ctx, orgID, "e:"+newest[1]); done <- struct{}{} }()
+	time.Sleep(2 * time.Second)
+	if got := counting.stamps.Load(); got != 0 {
+		t.Fatalf("%d stamps while the first pass is still checking the same runs, want 0", got)
+	}
+	close(gate.release)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(time.Minute):
+			t.Fatal("a pass did not end")
+		}
+	}
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1", got)
+	}
+}
+
 // More unchecked runs than the bound is a real overflow: it warns.
 func takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
@@ -946,6 +1013,7 @@ func TestTouchedDaysDrainTakeTime(t *testing.T) {
 		{"ARunIsCheckedOnceAndTheStampIsTheDatabaseClock", takeTimeTouchedDaysDrainARunIsCheckedOnceAndTheStampIsTheDatabaseClock},
 		{"AStopLeavesTheRunsUnchecked", takeTimeTouchedDaysDrainAStopLeavesTheRunsUnchecked},
 		{"AMissingCheckedColumnIsCountedNotFatal", takeTimeTouchedDaysDrainAMissingCheckedColumnIsCountedNotFatal},
+		{"ACleanPassDoesNotStampWhileAnotherPassChecks", takeTimeTouchedDaysDrainACleanPassDoesNotStampWhileAnotherPassChecks},
 		{"StopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow", takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow},
 		{"RunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound", takeTimeTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound},
 		{"AFailedRunWithALostMarkStopsTheChain", takeTimeTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain},

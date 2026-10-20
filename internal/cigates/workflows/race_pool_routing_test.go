@@ -113,7 +113,7 @@ func TestAssertNoTestcontainersAtJobStart(t *testing.T) {
 	if out, err := runAssertWithFakeDocker(t, "exit 0"); err != nil {
 		t.Fatalf("an empty daemon must pass, got %v: %s", err, out)
 	}
-	out, err := runAssertWithFakeDocker(t, `[ "$1 $2 $3" = "ps -q --filter" ] && [ "$4" = "label=org.testcontainers=true" ] && echo abc123def456`)
+	out, err := runAssertWithFakeDocker(t, `[ "$1 $2 $3" = "ps -aq --filter" ] && [ "$4" = "label=org.testcontainers=true" ] && echo abc123def456`)
 	if err == nil || !strings.Contains(out, "abc123def456") {
 		t.Fatalf("a labelled container must fail the step and name its id, got %v: %s", err, out)
 	}

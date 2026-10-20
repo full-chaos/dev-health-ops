@@ -183,6 +183,13 @@ func (s Store) notResolved(ctx context.Context, orgID string) (OrgConfig, bool, 
 		return OrgConfig{}, false, err
 	}
 	if saved {
+		closed, err := s.byoGateClosed(ctx, orgID)
+		if err != nil {
+			return OrgConfig{}, false, err
+		}
+		if closed {
+			return OrgConfig{GateClosed: true}, false, nil
+		}
 		return OrgConfig{UnresolvedPurpose: s.purpose}, false, nil
 	}
 	return OrgConfig{}, false, nil

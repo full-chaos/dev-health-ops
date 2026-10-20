@@ -138,6 +138,15 @@ func (s Store) loadGatedSettings(ctx context.Context, orgID string) (orgSettings
 	return project(gated, s.purpose), nil
 }
 
+// byoGateClosed reports whether the byo_llm gate is closed for an org that holds saved BYO settings.
+func (s Store) byoGateClosed(ctx context.Context, orgID string) (bool, error) {
+	gated, err := s.applyGate(ctx, orgID, orgSettings{keyProvider: "saved"})
+	if err != nil {
+		return false, err
+	}
+	return len(gated) == 0, nil
+}
+
 // applyGate is the byo_llm gate half of loadGatedSettings over already-read settings.
 func (s Store) applyGate(ctx context.Context, orgID string, settings orgSettings) (orgSettings, error) {
 	if len(settings) == 0 {

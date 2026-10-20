@@ -75,9 +75,8 @@ func TestInternalLLMConfigLapsedOrgServesNothing(t *testing.T) {
 	lapsedOverride := seedOrg("community", &yes)
 	switchedOff := seedOrg("enterprise", &no)
 
-	workerToken := "svc_wllm_" + uuid.NewString()
 	acrToken := "svc_acr_" + uuid.NewString()
-	for _, c := range []struct{ service, token string }{{"worker-llm-config", workerToken}, {"acr", acrToken}} {
+	for _, c := range []struct{ service, token string }{{"acr", acrToken}} {
 		if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials
 			(id, service_name, token_hash, token_prefix, scopes, created_at)
 			VALUES (gen_random_uuid(), $1, $2, $3, '["llm_config:read"]'::json, now())`,
@@ -93,7 +92,6 @@ func TestInternalLLMConfigLapsedOrgServesNothing(t *testing.T) {
 	handler := server.Handler()
 	routes := []struct{ name, path, token string }{
 		{"acr", "/api/v1/internal/acr/orgs/%s/llm-config", acrToken},
-		{"worker", "/api/v1/internal/workers/orgs/%s/llm-config/categorize", workerToken},
 	}
 	var reason string
 	get := func(route int, org string) (int, string, string) {

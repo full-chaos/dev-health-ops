@@ -25,7 +25,7 @@
 // (see this package's queries.go doc comments) rather than this file's
 // own guess.
 //
-// ENGINE NOTE: src/dev_health_ops/migrations/clickhouse/001_metrics_v2.sql
+// ENGINE NOTE: internal/chmigrate/history/001_metrics_v2.sql
 // creates work_item_metrics_daily, work_item_state_durations_daily and
 // file_metrics_daily as plain MergeTree, and no later migration in this
 // repo changes that -- plain MergeTree does not support FINAL at all

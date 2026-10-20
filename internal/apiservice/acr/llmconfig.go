@@ -220,22 +220,14 @@ type PostgresCredentialVerifier struct {
 	Pool *pgxpool.Pool
 	Now  func() time.Time
 	// Service and TokenPrefix name the credential family this verifier accepts;
-	// empty means acr (svc_acr_). The worker llm-config route sets
-	// worker-llm-config and svc_wllm_.
+	// empty means acr (svc_acr_).
 	Service     string
 	TokenPrefix string
 }
 
 const (
-	acrTokenPrefix          = "svc_acr_"
-	workerLLMConfigService  = "worker-llm-config"
-	workerLLMConfigTokenPre = "svc_wllm_"
+	acrTokenPrefix = "svc_acr_"
 )
-
-// WorkerCredentialVerifier verifies svc_wllm_ tokens of the worker-llm-config service.
-func WorkerCredentialVerifier(pool *pgxpool.Pool) PostgresCredentialVerifier {
-	return PostgresCredentialVerifier{Pool: pool, Service: workerLLMConfigService, TokenPrefix: workerLLMConfigTokenPre}
-}
 
 func (v PostgresCredentialVerifier) Verify(ctx context.Context, token, scope string) (string, error) {
 	service, prefix := v.Service, v.TokenPrefix

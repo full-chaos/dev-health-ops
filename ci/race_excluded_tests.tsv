@@ -2,12 +2,12 @@
 # each one by name WITHOUT -race, uncached, and fails unless the run prints its own "--- PASS:" line.
 # Key = package path relative to the module root, TAB, test name. Sorted, no duplicates.
 internal/auth/httpapi	TestARequestThatRecordsACauseAllocatesNoMoreThanOneThatDoesNot
-internal/cigates	TestCheckGoMultiReplicaGateExecutes
-internal/cigates	TestGoAffectedIntegrationPlannerMatrixShrinksWithASelection
-internal/cigates	TestGoAffectedIntegrationPlannerRejectsMalformedSelections
-internal/cigates	TestGoAffectedIntegrationRealModule
-internal/cigates	TestGoWorkflowPathFilters
+internal/cigates/affected	TestGoAffectedIntegrationPlannerMatrixShrinksWithASelection
+internal/cigates/affected	TestGoAffectedIntegrationPlannerRejectsMalformedSelections
+internal/cigates/affected	TestGoAffectedIntegrationRealModule
 internal/cigates/chartgates	TestExecGuardsPlantedByOverlay
+internal/cigates/checkgo	TestCheckGoMultiReplicaGateExecutes
+internal/cigates/workflows	TestGoWorkflowPathFilters
 internal/goapiproof	TestCandidateAccounting_EnumeratedAdmissionImpliesTheInvariant
 internal/goapiproof	TestPersonDrilldownPRs_EnumeratedCursorAdmissionImpliesTheInvariant
 internal/goapiproof	TestWriteSkewInvariant_RealSunburstDeclarations

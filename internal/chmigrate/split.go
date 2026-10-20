@@ -5,7 +5,7 @@ import "strings"
 // StripLineComments removes `-- ...` line comments, ignoring `--` inside
 // single- or double-quoted strings. Block comments are left untouched. It is
 // a port of strip_line_comments in
-// src/dev_health_ops/migrations/clickhouse/__init__.py; the split oracle test
+// the deleted Python runner (migrations/clickhouse/__init__.py); the split oracle test
 // runs both over every real migration file.
 func StripLineComments(sql string) string {
 	lines := splitLines(sql)

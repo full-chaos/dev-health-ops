@@ -289,7 +289,7 @@ def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
     files from the Go test made them inputs to the Go workflow, and
     ``go.yml``'s path filters do not cover ``alembic/versions`` -- so a PR
     changing only a migration would have satisfied ``go-quality``
-    vacuously (``internal/cigates/workflows_path_filters_test.go`` catches
+    vacuously (``internal/cigates/workflows/workflows_path_filters_test.go`` catches
     exactly that). Python's own workflow already runs on these files, so
     enforcing it here keeps the guard and costs no cross-language trigger.
     """

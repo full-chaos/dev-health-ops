@@ -16,7 +16,7 @@ import (
 // strict headroom 1 (ttl_horizon.py). A migration that changes the TTL fails this until the
 // ceiling follows.
 func TestCeilingFollowsTheTableTTL(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "src", "dev_health_ops", "migrations", "clickhouse", "041_product_telemetry_events.sql"))
+	raw, err := os.ReadFile(filepath.Join("..", "chmigrate", "history", "041_product_telemetry_events.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}

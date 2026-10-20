@@ -11,7 +11,7 @@ source_of_truth:
   - internal/scheduler/sync/source_discovery.go (sourceDiscoveryProviders, CHAOS-4602)
   - internal/scheduler/sync/backfill_planner.go (BuildBackfillPlan, CHAOS-4602)
   - src/dev_health_ops/sync/execution_trigger.py (create_sync_execution_trigger's Go hand-off branch, CHAOS-4602)
-  - scripts/gen_python_go_ledger_docs.py (curated columns; regenerate, do not hand-edit the generated blocks)
+  - scripts/gen_python_go_ledger_docs.py (deleted; the tables below are frozen, edit by hand)
 applicability: current
 lifecycle: active
 ---
@@ -31,7 +31,7 @@ The drift gate only guarantees *coverage* (every kind/route/file has a row) -- i
 
 - **state** is the header line's own claim (`native` / `bridge` / `mixed` / `dead-code`), followed by what `contracts/jobs/v1/migration-state.json` itself claims (`state`/`route`). The two can legitimately disagree: `migration-state.json`'s `route: river` only says River is the **dispatch transport** -- it says nothing about where the **compute** happens. A kind can be `go_default`/`river` in the contract and still bridge every byte of its actual work to Python. That gap is exactly what caused the confusion this ticket exists to close.
 - **evidence** is labeled `local` (re-executed against real synced data in org `70d529e0-3c06-4597-8480-794fd02328b6` on the shared dev stack), `fixtures` (generated, contrived), `live` (prod; this lane has no prod access, so no `live` rows below), or `argued` (established by reading code this session, not re-executed -- the tables/writers claim came from `rg`/direct file reads against ops main tip `7ea3cad23` on 2026-08-28, not from running the code path).
-- The three tables below (kinds, routes, worker files) are **generated** -- do not hand-edit the text between a `<!-- BEGIN/END GENERATED ... -->` marker pair.
+- The three tables below (kinds, routes, worker files) are **frozen**: the generator (scripts/gen_python_go_ledger_docs.py) is deleted, so edit the tables by hand.
 
 ## Sync family
 

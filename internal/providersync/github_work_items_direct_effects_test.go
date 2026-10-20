@@ -589,7 +589,7 @@ func TestAIAttributionResolveKeyMatchesTheMigrationSortingKey(t *testing.T) {
 	t.Parallel()
 	_, currentFile, _, _ := moduleroot.Caller(0)
 	migration := filepath.Join(filepath.Dir(currentFile), "..", "..",
-		"src", "dev_health_ops", "migrations", "clickhouse",
+		"internal", "chmigrate", "history",
 		"044_ai_attribution_repo_id_dedup_key.sql")
 	source, err := os.ReadFile(migration)
 	if err != nil {

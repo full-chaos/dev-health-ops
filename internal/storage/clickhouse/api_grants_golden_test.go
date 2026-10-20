@@ -41,6 +41,6 @@ func TestAPIGrantStatementsMatchTheGoldenTheBigboyRendererIsPinnedTo(t *testing.
 		t.Fatal(err)
 	}
 	if string(want) != rendered {
-		t.Fatalf("GrantStatements(APIPosture) no longer matches %s; if the manifest change is deliberate, regenerate it (UPDATE_API_GRANTS_GOLDEN=1 go test -run TestAPIGrantStatementsMatch ./internal/storage/clickhouse) and re-run tests/tooling/test_bigboy_clickhouse_users.py\n--- golden\n%s--- now\n%s", path, want, rendered)
+		t.Fatalf("GrantStatements(APIPosture) no longer matches %s; if the manifest change is deliberate, regenerate it (UPDATE_API_GRANTS_GOLDEN=1 go test -run TestAPIGrantStatementsMatch ./internal/storage/clickhouse) and re-run internal/cigates/bigboy (TestComposeCHRendererReal)\n--- golden\n%s--- now\n%s", path, want, rendered)
 	}
 }

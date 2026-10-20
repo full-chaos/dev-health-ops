@@ -277,3 +277,17 @@ func TestLogRejectedExplainOutputFallsBackToCompletionModel(t *testing.T) {
 		t.Fatalf("model = %v, want completion.Model fallback", line["model"])
 	}
 }
+
+func TestLogRejectedExplainOutputCarriesNoReasonSnippet(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	parseResult := ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "summary is not a string", ReasonSnippet: "SECRET-COMPLETION-FRAGMENT"}
+	logRejectedExplainOutput(context.Background(), parseResult, "openai", "gpt-5-nano", categorize.CompletionResult{Text: "SECRET-COMPLETION-FRAGMENT tail"})
+
+	if strings.Contains(buf.String(), "SECRET-COMPLETION-FRAGMENT") || strings.Contains(buf.String(), "reason_snippet") {
+		t.Fatalf("the warning carries completion text: %s", buf.String())
+	}
+}

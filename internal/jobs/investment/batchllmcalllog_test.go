@@ -29,6 +29,9 @@ func TestBatchModeLogsOneLLMCallLineForEachCompletedItem(t *testing.T) {
 			if record["level"] != "INFO" {
 				t.Fatalf("level = %v", record["level"])
 			}
+			if record["format_path"] != "schema" {
+				t.Fatalf("format_path = %v, want schema (batch requests send a strict json_schema)", record["format_path"])
+			}
 		}
 	}
 	if count != 3 {

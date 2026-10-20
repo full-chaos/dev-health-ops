@@ -37,3 +37,23 @@ func TestASuccessfulClassificationLogsOneLLMCallLine(t *testing.T) {
 		t.Fatalf("input_tokens = %v, want the response usage", record["input_tokens"])
 	}
 }
+
+func TestABilledResponseTheParserRejectsStillLogsOneLLMCallLine(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	body := `{"model":"jev-1.13.0","usage":{"input_tokens":40,"output_tokens":7},"answers":[]}`
+	got, err := newTestCompleter(t, staticTransport(body)).Classify(context.Background(), syntheticBundle(t))
+	if err != nil || got.State != StateRequestFailed {
+		t.Fatalf("classification = %+v err %v", got, err)
+	}
+	count := strings.Count(buf.String(), `"msg":"llm.call"`)
+	if count != 1 {
+		t.Fatalf("llm.call lines = %d, want 1 for a billed response; log:\n%s", count, buf.String())
+	}
+	if !strings.Contains(buf.String(), `"input_tokens":40`) || !strings.Contains(buf.String(), `"output_tokens":7`) {
+		t.Fatalf("line lacks the response usage: %s", buf.String())
+	}
+}

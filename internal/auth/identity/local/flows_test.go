@@ -262,7 +262,7 @@ func TestRegisterRefusals(t *testing.T) {
 			t.Errorf("calls = %v, want none", got)
 		}
 	})
-	t.Run("over 72 bytes is a policy refusal, not an error (A3 quirk: go-api 500)", func(t *testing.T) {
+	t.Run("over 72 bytes is a policy refusal, not an error (deliberate divergence from the corpus row)", func(t *testing.T) {
 		rig := newFlowRig(t, true)
 		out, err := rig.f.Register(context.Background(), RegisterRequest{Email: "x@example.com", Password: "Aa1-" + strings.Repeat("x", 80)})
 		if err != nil || out.Kind != FlowPolicy || !reflect.DeepEqual(out.Violations, []string{ViolationTooLong}) {

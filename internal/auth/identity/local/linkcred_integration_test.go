@@ -375,7 +375,7 @@ func TestForgotAndResendAnswerAlikeForKnownAndUnknownAddresses(t *testing.T) {
 }
 
 // authFlowHandler is the test-only HTTP face of the flows: it maps typed
-// outcomes to the status and body go-api answers, for the decision rows of the
+// outcomes to the status and body of the corpus, for the decision rows of the
 // A3 auth-flow corpus only.
 func authFlowHandler(f *Flows, mail *liveMail) http.Handler {
 	generic := func(w http.ResponseWriter, status int, body string) {
@@ -523,7 +523,7 @@ func TestCorpusAuthFlowDecisionRows(t *testing.T) {
 	s, b = post("/register", `{"email":"new@example.com","password":"abcdefghijklmnop"}`)
 	check("register: no digit", s, b, "")
 	s, b = post("/register", `{"email":"new@example.com","password":"Aa1-`+strings.Repeat("x", 100)+`"}`)
-	check("register: password over 72 bytes", s, b, "go-api answers 500 (bcrypt ValueError); the flows refuse with a 422 policy violation")
+	check("register: password over 72 bytes", s, b, "the corpus row records 500; the flows refuse an overlong password with a 422 policy violation")
 
 	for _, row := range []struct{ name, email string }{
 		{"resend: unknown address", "nobody@example.com"},
@@ -547,7 +547,7 @@ func TestCorpusAuthFlowDecisionRows(t *testing.T) {
 	s, b = get("/verify?token=40000000000040008000000000000003.sig")
 	check("verify: signed, no such token", s, b, "")
 	s, b = get("/verify?token=40000000000040008000000000000003.%C3%A9")
-	check("verify: non-ascii signature", s, b, "go-api answers 500 (hmac.compare_digest TypeError); the opaque secret has no signature, so it is an unknown credential: 400")
+	check("verify: non-ascii signature", s, b, "the corpus row records 500; an opaque secret has no signature, so any unknown secret is the same 400 refusal")
 
 	if err := f.Resend(ctx, "nina@example.com"); err != nil {
 		t.Fatal(err)

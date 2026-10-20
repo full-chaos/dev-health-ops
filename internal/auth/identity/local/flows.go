@@ -34,8 +34,7 @@ const (
 	FlowNotAllowed      FlowKind = "not_allowed"
 )
 
-// MaxPasswordBytes is bcrypt's limit. go-api answers a longer password with a
-// 500 (bcrypt ValueError); here it is a policy refusal.
+// MaxPasswordBytes is bcrypt's limit. A longer password is a policy refusal.
 const MaxPasswordBytes = 72
 
 // ViolationTooLong is the violation of a password over MaxPasswordBytes.
@@ -162,7 +161,10 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
 	}
-	email := Normalize(req.Email)
+	email, err := identity.NormalizeEmail(req.Email)
+	if err != nil {
+		return FlowOutcome{}, fmt.Errorf("local: %w", err)
+	}
 	if v := passwordRefusal(req.Password, true); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
@@ -224,7 +226,10 @@ func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl 
 	if err := f.gate(); err != nil {
 		return err
 	}
-	normalized := Normalize(email)
+	normalized, err := identity.NormalizeEmail(email)
+	if err != nil {
+		return fmt.Errorf("local: %w", err)
+	}
 	user, err := f.accounts.ByEmail(ctx, normalized)
 	if err != nil {
 		return fmt.Errorf("local: loading the user: %w", err)

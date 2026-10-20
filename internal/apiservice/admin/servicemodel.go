@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -141,6 +142,10 @@ func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQuer
 	if err != nil {
 		return serviceModelState{}, &llmStepError{"load agent_context_runtime state", err}
 	}
+	enabled, err := llmorgsettings.EffectiveServiceModel(ctx, q, org.String(), licensing.Decide(serviceModelFeature, service))
+	if err != nil {
+		return serviceModelState{}, &llmStepError{"resolve effective acr_service_model", err}
+	}
 	control := serviceModelControlNone
 	var overrideEnabled *bool
 	if override != nil {
@@ -151,7 +156,7 @@ func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQuer
 		}
 	}
 	return serviceModelState{
-		enabled:     licensing.Decide(serviceModelFeature, service).Allowed,
+		enabled:     enabled,
 		registered:  service.Registered,
 		tier:        tier,
 		tierAllowed: have >= want,

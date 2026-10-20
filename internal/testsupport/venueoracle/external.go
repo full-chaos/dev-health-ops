@@ -244,3 +244,19 @@ func checkTargetEnvScript() error {
 	}
 	return nil
 }
+
+// WithoutProvenanceHeaders is response without the headers a running dho api stamps on every answer to name its
+// plane and build (x-dev-health-plane, x-dev-health-build). The frozen goldens were recorded against the route set
+// served without that stamp, so a golden replay of an external target must not see them; the api's own tests hold
+// the stamp (internal/apiservice, internal/api/buildinfo).
+func WithoutProvenanceHeaders(response Response) Response {
+	headers := make(map[string]string, len(response.Headers))
+	for name, value := range response.Headers {
+		if lower := strings.ToLower(name); lower == "x-dev-health-plane" || lower == "x-dev-health-build" {
+			continue
+		}
+		headers[name] = value
+	}
+	response.Headers = headers
+	return response
+}

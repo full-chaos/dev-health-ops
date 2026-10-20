@@ -112,7 +112,7 @@ func TestEntitlementHandlerSuccess(t *testing.T) {
 }
 
 func testEntitlementHandlerSuccess(t *testing.T, serviceModel bool) {
-	store := &fakeStore{entitlement: Entitlement{OrgID: "the-org-id", AgentContextRuntime: true, ACRServiceModel: serviceModel}}
+	store := &fakeStore{entitlement: Entitlement{OrgID: "the-org-id", AgentContextRuntime: true, ACRServiceModel: serviceModel, PlatformModelFallback: !serviceModel}}
 	server := newTestServer(store)
 	defer server.Close()
 
@@ -132,10 +132,11 @@ func testEntitlementHandlerSuccess(t *testing.T, serviceModel bool) {
 		t.Fatal(err)
 	}
 	want := map[string]any{
-		"schema_version":        "acr_entitlement.v1",
-		"org_id":                "the-org-id",
-		"agent_context_runtime": true,
-		"acr_service_model":     serviceModel,
+		"schema_version":          "acr_entitlement.v1",
+		"org_id":                  "the-org-id",
+		"agent_context_runtime":   true,
+		"acr_service_model":       serviceModel,
+		"platform_model_fallback": !serviceModel,
 	}
 	for key, value := range want {
 		if body[key] != value {

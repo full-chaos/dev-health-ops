@@ -4,7 +4,7 @@
 
 | Answer | Meaning |
 | --- | --- |
-| 200 `acr_entitlement.v1` body | The organization exists. |
+| 200 `acr_entitlement.v1` body | The organization exists. Fields: `schema_version`, `org_id`, `agent_context_runtime`, `acr_service_model`, `platform_model_fallback` (booleans). `acr_service_model` is the effective value (`llmorgsettings.EffectiveServiceModel`): a globally disabled or invalid feature is OFF; else the org's active override; else ON for an org with a saved BYO config of any purpose; else the plan or license decision. `platform_model_fallback` opens only on an active org override (the superuser feature-overrides route). |
 | 404 `{"detail":"Not found","code":"acr_organization_unknown"}` | `org_id` is a well-formed UUID and no `organizations` row exists (deleted or never created). |
 | 404 `{"detail":"Not found"}` (no `code`) | `org_id` is not a UUID. Says nothing about deletion. |
 | 503 `{"detail":"Service unavailable"}` | The store cannot be read (database outage, no store configured). |
@@ -45,7 +45,7 @@ Unlike the entitlement route, it checks a bearer token. The token is a `svc_acr_
 | 200 `acr_llm_config.v1` body | `schema_version`, `org_id`, `provider`, `model`, `base_url`, `api_key` (decrypted), `version`. `version` is the hex sha256 over the org's BYO rows (`provider`, `model`, `api_key`, `base_url`), sorted by key, each as key, `updated_at` and the sha256 of the stored value; any write, delete or value change moves it, and a non-BYO llm row never does. `provider` is served in the writer's canonical form (stripped and lower-cased, `admin/llmsettings.go:393`). `Cache-Control: no-store`. |
 | 401 `{"detail":"Unauthorized"}` | Missing, unknown, revoked or expired bearer token. |
 | 403 `{"detail":"Forbidden"}` | Valid credential without the `llm_config:read` scope. |
-| 404 `{"detail":"Not found"}` | The org id is not a UUID, the org has no BYO settings, its provider is empty, `auto`, `mock` or `none`, or the `byo_llm` gate is closed for it (a closed gate is 404 so acr cannot tell it from no config and cannot probe the tier). acr falls back to the platform default, as every other reader of these settings does. |
+| 404 `{"detail":"Not found"}` | The org id is not a UUID, the org has no BYO settings, its provider is empty, `auto`, `mock` or `none`, or the `byo_llm` gate is closed for it. Every no-config 404 carries `X-Org-Llm-Config: none`. Two of them also carry `X-Org-Llm-Config-Reason`: `byo_llm_gate_closed` when BYO settings are stored but the `byo_llm` gate is closed, and `byo_no_investigate_config` (on the worker route, `byo_no_categorize_config`) when the org has a saved BYO config of another purpose only. acr refuses both with a reason and never uses the platform model in their place; with no reason header the org has no BYO config, and acr uses the platform model only with `acr_service_model` and `platform_model_fallback`. |
 | 503 `{"detail":"Service unavailable"}` | The credential store, the settings store or the `byo_llm` gate lookup failed, or the route has no database. |
 | 409 `{"detail":"Stored config unreadable"}` | A stored BYO setting could not be decrypted (wrong settings key or a corrupt row) while the gate is open. acr treats it as BYO configured but unusable and fails closed. |
 

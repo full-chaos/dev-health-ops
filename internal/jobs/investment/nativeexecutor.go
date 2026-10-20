@@ -447,16 +447,20 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 // map, so it does unless the failure vocabulary grows unboundedly -- which it
 // cannot, FailureClass returns from a closed set.
 func (executor *NativeExecutor) buildEvidence(claim workgraph.Claim, stats Stats) ([]byte, error) {
+	status := "success"
+	outcome := map[string]any{"stats": stats}
+	if stats.LLMAllFailed {
+		status = "degraded"
+		outcome["reason"] = "all_llm_calls_failed"
+	}
+	outcome["status"] = status
 	evidence := map[string]any{
 		"kind":                   string(claim.Request.Kind),
 		"model_ref":              claim.Request.ModelRef,
 		"prompt_ref":             claim.Request.PromptRef,
 		"llm_concurrency":        claim.Request.LLMConcurrency,
 		"spend_limit_microunits": claim.Request.SpendLimitMicrounits,
-		"outcome": map[string]any{
-			"status": "success",
-			"stats":  stats,
-		},
+		"outcome":                outcome,
 	}
 	encoded, err := json.Marshal(evidence)
 	if err != nil {

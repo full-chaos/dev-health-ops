@@ -38,6 +38,29 @@ func requireSameRows(t *testing.T, got, want []string) {
 	}
 }
 
+// maskFailureClass asserts every fallback row names the failure class the run
+// produced, then masks it so the rows can be compared across runs whose classes
+// legitimately differ (a batch timeout vs a synchronous transport failure).
+func maskFailureClass(t *testing.T, rows []string, class string) []string {
+	t.Helper()
+	tag := "llm_failure_class:" + class
+	fallbackRows := 0
+	masked := make([]string, len(rows))
+	for index, row := range rows {
+		if strings.HasPrefix(row, "work_unit_investments\x00") && strings.Contains(row, "llm_task_failed") {
+			fallbackRows++
+			if !strings.Contains(row, tag) {
+				t.Fatalf("fallback row does not carry %q: %q", tag, row)
+			}
+		}
+		masked[index] = strings.ReplaceAll(row, tag, "llm_failure_class:MASKED")
+	}
+	if fallbackRows == 0 {
+		t.Fatalf("no fallback row carries %q", tag)
+	}
+	return masked
+}
+
 func (h *shadowHarness) runMaterializer(t *testing.T, provider categorize.Provider, cfg Config) Stats {
 	t.Helper()
 	writer, err := chwrite.NewWriter(h.conn)
@@ -73,7 +96,7 @@ func TestBatchModeTimeoutWritesTheRowsOfASynchronousTransportFailure(t *testing.
 	if syncStats.LLMFailures == 0 {
 		t.Fatalf("the baseline had no transport failure: %+v", syncStats)
 	}
-	want := h.maskedRows(t, "sync-run")
+	want := maskFailureClass(t, h.maskedRows(t, "sync-run"), "llm_error")
 	h.truncate(t, servedTables...)
 
 	fake, server := newFakeOpenAI(t)
@@ -81,7 +104,7 @@ func TestBatchModeTimeoutWritesTheRowsOfASynchronousTransportFailure(t *testing.
 	cfg := h.batchConfig("batch-run", at, LLMBatchModeProvider)
 	cfg.LLMBatchTimeout = 50 * time.Millisecond
 	batchStats := h.runMaterializer(t, fakeProvider(server.URL), cfg)
-	requireSameRows(t, h.maskedRows(t, "batch-run"), want)
+	requireSameRows(t, maskFailureClass(t, h.maskedRows(t, "batch-run"), "batch_timeout"), want)
 	if fake.cancelled != 1 || batchStats.LLMFailures != syncStats.LLMFailures {
 		t.Fatalf("cancelled %d, failures batch %d sync %d", fake.cancelled, batchStats.LLMFailures, syncStats.LLMFailures)
 	}

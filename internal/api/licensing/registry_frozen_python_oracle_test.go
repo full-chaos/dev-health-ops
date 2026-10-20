@@ -27,7 +27,7 @@ print(json.dumps(out))
 // registry is their only source. They are not in the tier feature registry, so
 // licenses and billing entitlements stay byte-identical to the frozen answers.
 // The frozen answer must not hold them, so this allowance cannot hide a drift.
-var goOnlyDecisionKeys = map[string]bool{"acr_service_model": true}
+var goOnlyDecisionKeys = map[string]bool{"acr_service_model": true, "platform_model_fallback": true}
 
 // TestTierFeaturesMatchFrozenPython holds the Go registry, limits and
 // decision keys to the frozen Python ones, value and order.

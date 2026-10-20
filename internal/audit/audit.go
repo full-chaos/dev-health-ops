@@ -1,4 +1,4 @@
-// Package audit commits a security-state mutation, its outbox event and its
+// Package audit commits a security-state mutation, its outbox events and its
 // audit row in ONE PostgreSQL transaction.
 //
 // WHAT THIS GUARANTEES, stated at the strength three review rounds measured
@@ -65,11 +65,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -128,20 +131,25 @@ type AuditEvent struct {
 	RequestID          *string
 }
 
-// OutboxEvent is the durable record a consumer will later receive.
-//
-// IdempotencyKey is what makes redelivery safe: a consumer that has already
-// applied this key must recognise it without inspecting the payload. The
-// column is uniquely indexed, so a duplicate key fails the whole transaction
-// -- which is the correct outcome, because two mutations sharing a key would
-// be indistinguishable to every consumer downstream.
+// OutboxEvent is one provisioning-event.v1 event (the outbox row is the
+// envelope). The caller names the aggregate by its wire id
+// (provisioning.WireID) and gives the verb and the allowlisted change members;
+// Commit owns the rest: the per-aggregate revision, the idempotency key
+// aggregate_type:aggregate_id:revision, and the payload envelope. A caller
+// cannot set a revision or a key, so it cannot write a false one.
 type OutboxEvent struct {
-	AggregateType  string
-	AggregateID    string
-	EventType      string
-	Payload        map[string]any
-	IdempotencyKey string
+	AggregateType string
+	AggregateID   string
+	EventType     string
+	Change        map[string]any
 }
+
+// OffStreamSessionLifecycle marks a mutation that is deliberately not a
+// provisioning event: session and refresh-credential lifecycle (the
+// provisioning stream has no session aggregate).
+const OffStreamSessionLifecycle = "session_lifecycle"
+
+var offStreamReasons = map[string]bool{OffStreamSessionLifecycle: true}
 
 // TxOps is what a mutation may do inside the transaction.
 //
@@ -308,18 +316,26 @@ type errRow struct{ err error }
 
 func (e errRow) Scan(...any) error { return e.err }
 
-// Mutation is the state change and the two records that must accompany it.
+// Mutation is the state change and the records that must accompany it.
 //
 // Apply runs inside the transaction and receives it. Anything it writes commits
-// with the outbox event and the audit row, or none of them do. It returns the
-// error. The number of state rows it changed is counted by the database (the
-// guard trigger of migration 0006 counts every row written to a guarded table
-// other than the audit and outbox tables), not reported by the callback; zero
-// rolls everything back with ErrNoStateChange.
+// with the outbox events and the audit row, or none of them do. It returns the
+// error. The number of state rows it changed is counted by the database, not
+// reported by the callback: the guard trigger of migration 0006 counts every
+// row written to a guarded table other than the audit and outbox tables, and
+// migration 0013's create guard counts every principal or user row a
+// mutation inserts. Zero rolls everything back with ErrNoStateChange.
+//
+// Events lists the provisioning events of the mutation, one or more (one
+// mutation may create a principal, its user and its external identity).
+// OffStream, set instead of Events, names why the mutation has none. Exactly
+// one of the two is set: a mutation cannot forget its events by leaving a
+// slice empty.
 type Mutation struct {
-	Apply func(ctx context.Context, tx TxOps) error
-	Audit AuditEvent
-	Event OutboxEvent
+	Apply     func(ctx context.Context, tx TxOps) error
+	Audit     AuditEvent
+	Events    []OutboxEvent
+	OffStream string
 }
 
 func (m Mutation) validate() error {
@@ -330,26 +346,36 @@ func (m Mutation) validate() error {
 		return fmt.Errorf("%w: audit event_type is empty", ErrMutationFailed)
 	case !m.Audit.Outcome.Valid():
 		return fmt.Errorf("%w: audit outcome %q is outside the permitted set", ErrMutationFailed, m.Audit.Outcome)
-	case m.Event.AggregateType == "" || m.Event.AggregateID == "":
-		return fmt.Errorf("%w: outbox event names no aggregate", ErrMutationFailed)
-	case m.Event.EventType == "":
-		return fmt.Errorf("%w: outbox event_type is empty", ErrMutationFailed)
 	case ValidateAttributes(m.Audit.Attributes) != nil:
 		return ValidateAttributes(m.Audit.Attributes)
 	case validateEventType(m.Audit.EventType) != nil:
 		return validateEventType(m.Audit.EventType)
 	case m.Audit.RequestID != nil && validateRequestID(*m.Audit.RequestID) != nil:
 		return validateRequestID(*m.Audit.RequestID)
-	case m.Event.IdempotencyKey == "":
-		// An empty key is worse than a duplicate one: the unique index would
-		// accept exactly one such row ever, and every later mutation would
-		// fail for a reason that names the wrong cause.
-		return fmt.Errorf("%w: outbox idempotency_key is empty", ErrMutationFailed)
+	case len(m.Events) > 0 && m.OffStream != "":
+		return fmt.Errorf("%w: a mutation has outbox events or is off the stream, not both", ErrMutationFailed)
+	case len(m.Events) == 0 && m.OffStream == "":
+		return fmt.Errorf("%w: a mutation names its outbox events or why it has none", ErrMutationFailed)
+	case m.OffStream != "" && !offStreamReasons[m.OffStream]:
+		return fmt.Errorf("%w: off-stream reason %q is outside the permitted set", ErrMutationFailed, m.OffStream)
+	}
+	for _, e := range m.Events {
+		if err := provisioning.CheckEvent(e.AggregateType, e.AggregateID, e.EventType, e.Change); err != nil {
+			return fmt.Errorf("%w: %w", ErrMutationFailed, err)
+		}
+	}
+	for _, ref := range []struct {
+		aggregate string
+		id        *string
+	}{{"organization", m.Audit.OrganizationID}, {"principal", m.Audit.ActorPrincipalID}} {
+		if len(m.Events) > 0 && ref.id != nil && provisioning.WireID(ref.aggregate, *ref.id) == "" {
+			return fmt.Errorf("%w: audit %s id cannot be carried on the wire", ErrMutationFailed, ref.aggregate)
+		}
 	}
 	return nil
 }
 
-// Commit applies the mutation, its outbox event and its audit row in one
+// Commit applies the mutation, its outbox events and its audit row in one
 // transaction.
 //
 // On any failure the transaction is rolled back and NOTHING is written -- not
@@ -359,8 +385,8 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	defer func() {
 		if err != nil {
 			slog.ErrorContext(ctx, "audit: Commit failed; its own transaction rolled back",
-				"audit_event_type", m.Audit.EventType, "outbox_event_type", m.Event.EventType,
-				"aggregate_type", m.Event.AggregateType, logging.ErrorAttr(err))
+				"audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
+				"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err))
 		}
 	}()
 	if pool == nil {
@@ -414,7 +440,9 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 			"the outbox event and audit row could not be written atomically with it",
 			ErrMutationFailed, string(status))
 	}
-	if err := insertOutboxEvent(ctx, tx, schema, m.Event); err != nil {
+	// After the changed-row count: the revision rows are guarded, so a bump
+	// counted before it would make a no-op mutation look like a change.
+	if err := insertOutboxEvents(ctx, tx, schema, m); err != nil {
 		return err
 	}
 	if err := insertAuditEvent(ctx, tx, schema, m.Audit); err != nil {
@@ -426,20 +454,63 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	return nil
 }
 
-func insertOutboxEvent(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, e OutboxEvent) error {
-	payload, err := json.Marshal(orEmpty(e.Payload))
-	if err != nil {
-		return fmt.Errorf("%w: encoding the outbox payload", ErrMutationFailed)
-	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO `+authschema.Quote(schema)+`.auth_outbox_events
-		    (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
-		VALUES ($1, $2, $3, $4, $5)`,
-		e.AggregateType, e.AggregateID, e.EventType, payload, e.IdempotencyKey)
-	if err != nil {
-		return fmt.Errorf("%w: inserting the outbox event: %w", ErrMutationFailed, err)
+// insertOutboxEvents bumps each event's aggregate revision and writes the
+// event with that revision. Events are taken in (aggregate_type, aggregate_id)
+// order, so every transaction locks revision rows in one order and two
+// mutations over the same aggregates cannot deadlock; events of one aggregate
+// keep the caller's order. The upsert's row lock is held to commit, so the
+// next writer of an aggregate reads the committed value (contiguous), and a
+// rollback undoes the bump (no gap).
+func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, m Mutation) error {
+	events := append([]OutboxEvent(nil), m.Events...)
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].AggregateType != events[j].AggregateType {
+			return events[i].AggregateType < events[j].AggregateType
+		}
+		return events[i].AggregateID < events[j].AggregateID
+	})
+	q := authschema.Quote(schema)
+	for _, e := range events {
+		var revision int64
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO `+q+`.aggregate_revisions AS r (aggregate_type, aggregate_id, revision)
+			VALUES ($1, $2, 1)
+			ON CONFLICT (aggregate_type, aggregate_id)
+			DO UPDATE SET revision = r.revision + 1, updated_at = clock_timestamp()
+			RETURNING r.revision`, e.AggregateType, e.AggregateID).Scan(&revision); err != nil {
+			return fmt.Errorf("%w: bumping the %s revision: %w", ErrMutationFailed, e.AggregateType, err)
+		}
+		payload := map[string]any{"revision": revision, "change": orEmpty(e.Change)}
+		if m.Audit.OrganizationID != nil {
+			payload["organization_id"] = provisioning.WireID("organization", *m.Audit.OrganizationID)
+		}
+		if m.Audit.ActorPrincipalID != nil {
+			payload["actor_principal_id"] = provisioning.WireID("principal", *m.Audit.ActorPrincipalID)
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("%w: encoding the outbox payload", ErrMutationFailed)
+		}
+		key := e.AggregateType + ":" + e.AggregateID + ":" + strconv.FormatInt(revision, 10)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO `+q+`.auth_outbox_events
+			    (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
+			VALUES ($1, $2, $3, $4, $5)`,
+			e.AggregateType, e.AggregateID, e.EventType, encoded, key); err != nil {
+			return fmt.Errorf("%w: inserting the outbox event: %w", ErrMutationFailed, err)
+		}
+		slog.DebugContext(ctx, "audit: outbox event written",
+			"aggregate_type", e.AggregateType, "event_type", e.EventType, "revision", revision)
 	}
 	return nil
+}
+
+func aggregateTypes(events []OutboxEvent) []string {
+	out := make([]string, 0, len(events))
+	for _, e := range events {
+		out = append(out, e.AggregateType)
+	}
+	return out
 }
 
 func insertAuditEvent(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, a AuditEvent) error {

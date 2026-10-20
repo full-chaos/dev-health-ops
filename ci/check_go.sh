@@ -194,7 +194,7 @@ usage() {
          print the complete assignment, and write a GitHub Actions `matrix`
          output (and `legs`, the leg count) when GITHUB_OUTPUT is set. No Docker
          required. With INTEGRATION_AFFECTED_FILE set to the output of
-         ci/go_affected_integration.py (CHAOS-9947), the matrix holds only the legs
+         cmd/cigate affected-integration (CHAOS-9947), the matrix holds only the legs
          that cover an affected package; unset, or a FULL first line, keeps every leg.
   ratchets
          Hold every closed list named in ci/ratchets.tsv to its size on the merge base: a list may
@@ -613,17 +613,17 @@ check_race_weights_rows() {
   # CHAOS-10289: the solo rows. A missing file would silently put every solo package back into the shared split.
   [ -f "${GO_RACE_SOLO}" ] || die "race solo file missing: ${GO_RACE_SOLO}"
   local solo_rows solo_bad
-  solo_rows="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_SOLO}" | cut -f1)"
-  solo_bad="$(printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort -u | LC_ALL=C comm -23 - <(printf '%s\n' "${rows}" | cut -f1 | LC_ALL=C sort) | tr '\n' ' ')"
+  solo_rows="$({ grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_SOLO}" || [ "$?" -eq 1 ]; } | cut -f1)"
+  solo_bad="$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -u | LC_ALL=C comm -23 - <(printf "%s\n" "${rows}" | cut -f1 | LC_ALL=C sort) | tr '\n' ' ')"
   [ -z "${solo_bad}" ] \
     || die "ci/go_race_solo.tsv names package(s) with no file in ci/go_race_weights.d (a solo row needs its measured weight): ${solo_bad}"
-  [ -z "$(printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort | uniq -d)" ] \
+  [ -z "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort | uniq -d)" ] \
     || die "ci/go_race_solo.tsv lists a package twice"
-  printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort -c 2>/dev/null \
+  printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -c 2>/dev/null \
     || die "ci/go_race_solo.tsv is not sorted (LC_ALL=C)"
   ! printf '%s\n' "${solo_rows}" | grep -qx 'internal/providersync' \
     || die "ci/go_race_solo.tsv lists internal/providersync, which runs as test-name slices in every race leg and cannot be solo"
-  printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | grep -vc '^$')"
+  printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | wc -l)"
 }
 
 ci_leg_stage() {
@@ -2682,7 +2682,7 @@ check_remaining_test_shard() {
 }
 
 # load_affected_selection reads INTEGRATION_AFFECTED_FILE, the output of
-# ci/go_affected_integration.py (CHAOS-9947). Unset, empty, or a first line other
+# cmd/cigate affected-integration (CHAOS-9947). Unset, empty, or a first line other
 # than "AFFECTED <n>" means the whole suite. An AFFECTED key that is not a
 # planned package is a failure, never an ignored line.
 load_affected_selection() {
@@ -3071,9 +3071,17 @@ check_providersync_test_shard() {
 
   printf 'go test providersync test shard %s: %d top-level test(s)\n' \
     "${shard}" "${selected_count}"
+  # CHAOS-10290: -timeout sits under the 25 min job cap so a slow shard panics with the running test names instead of a
+  # silent cancel. -json goes to a file (per-test Elapsed for re-sharding); jq turns it back into the plain go test log,
+  # and pipefail keeps go test's exit code.
+  local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}"
+  mkdir -p "${json_dir}"
   (
+    set -o pipefail
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" ./internal/providersync
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -json -run "${test_regex}" ./internal/providersync \
+      | tee "${json_dir}/providersync-shard-${shard}.json" \
+      | jq -rj 'select(.Action == "output") | .Output'
   )
 }
 
@@ -3282,6 +3290,7 @@ AUTH_RACE_PACKAGES=(
   ./internal/auth/session
   ./internal/auth/identity
   ./internal/auth/identity/local
+  ./internal/audit
 )
 check_auth_race_integration() {
   local pkg output want got total=0
@@ -3368,7 +3377,7 @@ check_auth_vuln() {
     die "govulncheck failed to run"
   fi
   rm -f "${report}.err"
-  python3 "${ROOT}/ci/auth_govulncheck.py" <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
+  auth_go run -trimpath -mod=readonly ./cmd/cigate govulncheck <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
   rm -f "${report}"
 }
 
@@ -3459,7 +3468,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|ci/auth_govulncheck.py|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_scope_candidates.py|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -3529,7 +3538,7 @@ auth_scope_candidates() {
   for tag in ${tags}; do all+="${all:+,}${tag}"; done
   {
     for set in "" "${all}" ${tags}; do
-      auth_go list -mod=readonly -tags="${set}" -e -json ./... | python3 "${ROOT}/ci/auth_scope_candidates.py" "${module}"
+      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -trimpath -mod=readonly ./cmd/cigate scope-candidates "${module}"
     done
   } | LC_ALL=C sort -u
 }

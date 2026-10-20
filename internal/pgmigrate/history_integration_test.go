@@ -84,7 +84,7 @@ func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/history.json",
 		PythonBuild: historyPythonBuild,
-		SHA256:      "2f73a82acf67b5c166bb6524130290bd05468d95b2844df8d61ca8775372f239",
+		SHA256:      "8868fc77ea5805f360282711ac98c7da97c428164cce949a6f625345ab2a2e6b",
 		Recipe: "git worktree add --detach $DIR " + historyPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestHistoryMatchesTheFrozenAlembicOutput$' -python-root $DIR",
 	})
@@ -234,7 +234,7 @@ func recordedVersions(t *testing.T, uri string) []string {
 }
 
 // historyWalkSHA256 pins testdata/golden/history_walk.json (the record verb rewrites it).
-const historyWalkSHA256 = "658dc9ad70249d48d6bffd5628a66434d83331f4d6edecb17798e82b078a4df8"
+const historyWalkSHA256 = "2908b27a529ed543cde55f821f6a89eec8b30c014d2fc14a4f99effe7d6ce449"
 
 // historyWalkSettings are the variables that shape the walk program's answer: the producer's environment AND
 // part of the golden's request key.

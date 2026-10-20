@@ -13,9 +13,9 @@ import (
 	"testing"
 )
 
-// CHAOS-10289: internal/fixturescli runs alone in a race leg. ci/go_race_solo.tsv leaves it out of the weight-balanced
-// split of ci/go_race_shard.awk, and ci/check_go.sh runs it last, in its own `go test -race`, in the leg that is lightest
-// after the split. These guards drive the real awk and the real check_go.sh (a stand-in `go test` records its calls).
+// CHAOS-10289: a package listed in ci/go_race_solo.tsv is left out of the weight-balanced split of ci/go_race_shard.awk,
+// and ci/check_go.sh runs it last, in its own `go test -race`, in the leg that is lightest after the split. The committed
+// file has no row now. These guards drive the real awk and the real check_go.sh (a stand-in `go test` records its calls).
 
 func soloExec(t *testing.T, dir string, env []string, stdin string, name string, args ...string) (string, string, error) {
 	t.Helper()
@@ -87,42 +87,35 @@ func shardAwk(t *testing.T, root, mod string, pkgs []string, shard, count int, w
 	return strings.Fields(out)
 }
 
-func TestFixturescliIsPinnedToRunAloneInARaceLeg(t *testing.T) {
+func TestFixturescliSharesTheRaceSplit(t *testing.T) {
 	root := repoRoot(t)
 	solo := filepath.Join(root, "ci", "go_race_solo.tsv")
-	rows := soloRows(t, solo)
-	reason, ok := rows["internal/fixturescli"]
-	if !ok || strings.TrimSpace(reason) == "" {
-		t.Fatalf("ci/go_race_solo.tsv has no internal/fixturescli row with a reason: %v", rows)
+	if _, ok := soloRows(t, solo)["internal/fixturescli"]; ok {
+		t.Fatalf("ci/go_race_solo.tsv still pins internal/fixturescli: its race time no longer depends on its co-tenants")
 	}
-	weights := soloRows(t, mergedWeights(t, root))
+	weightsPath := mergedWeights(t, root)
+	if _, ok := soloRows(t, weightsPath)["internal/fixturescli"]; !ok {
+		t.Fatalf("ci/go_race_weights.d has no internal/fixturescli file")
+	}
 	mod, pkgs := raceModulePackages(t, root)
 	target := mod + "/internal/fixturescli"
 	if !contains(pkgs, target) {
 		t.Fatalf("%s is not a package of the module", target)
 	}
-	for row := range rows {
-		if _, ok := weights[row]; !ok {
-			t.Errorf("solo row %s has no file in ci/go_race_weights.d: a solo package keeps its measured weight", row)
-		}
-		if !contains(pkgs, mod+"/"+row) {
-			t.Errorf("solo row %s names no package of the module", row)
-		}
-	}
 	for count := 1; count <= 4; count++ {
 		var shared, alone []string
 		for k := 1; k <= count; k++ {
-			shared = append(shared, shardAwk(t, root, mod, pkgs, k, count, mergedWeights(t, root), solo, "")...)
-			alone = append(alone, shardAwk(t, root, mod, pkgs, k, count, mergedWeights(t, root), solo, "solo")...)
+			shared = append(shared, shardAwk(t, root, mod, pkgs, k, count, weightsPath, solo, "")...)
+			alone = append(alone, shardAwk(t, root, mod, pkgs, k, count, weightsPath, solo, "solo")...)
 		}
-		if !reflect.DeepEqual(alone, []string{target}) {
-			t.Fatalf("count %d: the solo parts are %v, want only %s", count, alone, target)
+		if len(alone) != 0 {
+			t.Fatalf("count %d: solo parts %v, want none", count, alone)
 		}
-		if contains(shared, target) {
-			t.Fatalf("count %d: %s is still in a shared split", count, target)
+		if !contains(shared, target) {
+			t.Fatalf("count %d: %s is not in a shared split", count, target)
 		}
-		if !sameMultiset(append(append([]string{}, shared...), alone...), pkgs) {
-			t.Fatalf("count %d: shared plus solo is not a partition of the package list", count)
+		if !sameMultiset(shared, pkgs) {
+			t.Fatalf("count %d: the shared split is not a partition of the package list", count)
 		}
 	}
 }
@@ -197,6 +190,10 @@ func TestRaceLegRunsItsSoloPackageLastAndInItsOwnGoTest(t *testing.T) {
 	}
 	mod, _ := raceModulePackages(t, root)
 	target := mod + "/internal/fixturescli"
+	soloFile := filepath.Join(t.TempDir(), "solo.tsv")
+	if err := os.WriteFile(soloFile, []byte("internal/fixturescli\tstand-in solo row\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	weights, err := os.ReadFile(filepath.Join(root, "ci", "go_providersync_race_weights.tsv"))
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +222,7 @@ func TestRaceLegRunsItsSoloPackageLastAndInItsOwnGoTest(t *testing.T) {
 		if err := os.WriteFile(log, nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_GO_LOG=" + log, "FAKE_GO_LISTING=" + listPath, "TMPDIR=" + dir}
+		env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_GO_LOG=" + log, "FAKE_GO_LISTING=" + listPath, "TMPDIR=" + dir, "GO_RACE_SOLO=" + soloFile}
 		stdout, errs, err := soloExec(t, root, env, "", "bash", "ci/check_go.sh", "ci-leg", "race", fmt.Sprint(shard), "3")
 		if err != nil {
 			t.Fatalf("race leg %d/3 failed: %v\n%s\n%s", shard, err, stdout, errs)
@@ -292,6 +289,9 @@ func TestRaceSoloCensusNamesEachDefect(t *testing.T) {
 	}
 	if errs, err := census(string(green), false); err != nil {
 		t.Fatalf("the committed solo file fails the census: %v\n%s", err, errs)
+	}
+	if errs, err := census("# comments only\n\n", false); err != nil {
+		t.Fatalf("a comments-only solo file fails the census: %v\n%s", err, errs)
 	}
 	for _, c := range []struct{ name, text, want string }{
 		{"no weights row", "internal/zz-no-weights-row\treason\n", "no file in ci/go_race_weights.d"},

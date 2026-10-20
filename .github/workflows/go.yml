@@ -173,6 +173,12 @@ on:
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'
+      # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
+      - 'ci/auth_corpus_external.sh'
+      - 'ci/auth_corpus_set_env.sh'
+      - 'ci/auth_corpus_external.override.yml'
+      - 'ci/auth_corpus_external.acp.override.yml'
+      - '.github/workflows/venue-oracles.yml'
       - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
@@ -209,7 +215,6 @@ on:
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
       # run reader and the venue workflow whose step names that reader filters on
       - 'ci/go_relevant_diff.sh'
-      - 'ci/go_affected_integration.py'
       - 'ci/last-venue-run.sh'
       - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
@@ -394,6 +399,12 @@ on:
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'
+      # CHAOS-10160: the external auth corpus job (venue-oracles.yml) and the files it runs.
+      - 'ci/auth_corpus_external.sh'
+      - 'ci/auth_corpus_set_env.sh'
+      - 'ci/auth_corpus_external.override.yml'
+      - 'ci/auth_corpus_external.acp.override.yml'
+      - '.github/workflows/venue-oracles.yml'
       - 'ci/auth_k8s/**'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
@@ -430,7 +441,6 @@ on:
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
       # run reader and the venue workflow whose step names that reader filters on
       - 'ci/go_relevant_diff.sh'
-      - 'ci/go_affected_integration.py'
       - 'ci/last-venue-run.sh'
       - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
@@ -667,7 +677,7 @@ jobs:
           cache-dependency-path: '**/go.sum'
 
       # CHAOS-9947: a pull request runs only the integration shards whose test
-      # binaries contain a changed package (go list -test, ci/go_affected_integration.py).
+      # binaries contain a changed package (go list -test, cmd/cigate affected-integration).
       # A shared change, an unplaceable file or any failure here selects the FULL
       # suite; main, merge_group and manual runs never run this step.
       - name: Select the integration packages the change can affect
@@ -685,10 +695,10 @@ jobs:
             full "could not list the integration packages"
           elif ! go list -mod=readonly -tags=integration -test -json ./... > "${RUNNER_TEMP}/golist.json"; then
             full "go list failed"
-          elif ! python3 -I ci/go_affected_integration.py --changed "${RUNNER_TEMP}/changed.txt" \
+          elif ! go run -trimpath -mod=readonly ./cmd/cigate affected-integration --changed "${RUNNER_TEMP}/changed.txt" \
             --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
             --root "${GITHUB_WORKSPACE}" > "${out}"; then
-            full "selection script failed"
+            full "selection program failed"
           fi
           cat "${out}"
           echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
@@ -824,6 +834,15 @@ jobs:
 
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
         run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
+
+      - name: Upload per-test timing json
+        if: always() && matrix.target == 'providersync'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-providersync-${{ matrix.shard }}
+          path: go-test-json/
+          retention-days: 14
+          if-no-files-found: ignore
 
   # Preserve the existing required-check contract while the implementation
   # fans out behind it. fail-fast is disabled above, so this job observes the

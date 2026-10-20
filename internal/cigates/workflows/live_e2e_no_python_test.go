@@ -3,6 +3,7 @@ package workflows_test
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -17,6 +18,7 @@ import (
 var (
 	pythonUseRe      = regexp.MustCompile(`\bpython3?\b|\brun_python\b|PY_PROG|py_program|\.py\b|\buv\b|\bpipx?3?\b|\.venv|PYTHONPATH|UV_`)
 	pythonOnlyFilter = regexp.MustCompile(`^(pyproject\.toml|requirements.*\.txt|uv\.lock|pytest\.ini|alembic\.ini|Makefile|tests/.*)$`)
+	contractDirRe    = regexp.MustCompile(`contracts/[a-z0-9-]+/[a-z0-9-]+`)
 	liveE2EScripts   = []string{
 		"ci/run_live_backend_e2e.sh",
 		"ci/run_metrics_executed_proof.sh",
@@ -105,6 +107,43 @@ func liveE2ENoPythonViolations(t *testing.T, root string) []string {
 			}
 		}
 	}
+	var entryRes []*regexp.Regexp
+	for _, p := range sortedKeysBool(listed) {
+		if re, err := githubGlobToRegexp(p); err == nil {
+			entryRes = append(entryRes, re)
+		}
+	}
+	covered := func(f string) bool {
+		for _, re := range entryRes {
+			if re.MatchString(f) {
+				return true
+			}
+		}
+		return false
+	}
+	// Every contracts directory the jobs build or read must trigger them: one that holds a Go package (embedded into
+	// the binaries) or that a runner script names.
+	contractDirs := map[string]bool{}
+	for _, f := range tracked {
+		if strings.HasPrefix(f, "contracts/") && strings.HasSuffix(f, ".go") {
+			contractDirs[path.Dir(f)] = true
+		}
+	}
+	for _, rel := range liveE2EScripts {
+		if raw, err := os.ReadFile(filepath.Join(root, rel)); err == nil {
+			for _, d := range contractDirRe.FindAllString(shellCode(string(raw)), -1) {
+				contractDirs[d] = true
+			}
+		}
+	}
+	for _, d := range sortedKeysBool(contractDirs) {
+		for _, f := range tracked {
+			if strings.HasPrefix(f, d+"/") && !strings.HasSuffix(f, ".py") && !strings.HasSuffix(f, ".md") && !covered(f) {
+				out = append(out, fmt.Sprintf("the live-e2e path filter does not cover %s, a file of %s that the jobs build or read", f, d))
+				break
+			}
+		}
+	}
 	for _, p := range []string{"cmd/**", "internal/**/*.go", "ci/run_*.sh", "ci/lib/**", "scripts/worker/**", "src/dev_health_ops/config/**", "go.mod", "go.sum", ".github/workflows/live-e2e.yml"} {
 		if !listed[p] {
 			out = append(out, fmt.Sprintf("the live-e2e path filter must list %s", p))
@@ -154,6 +193,7 @@ func TestLiveE2ENoPythonPlantedDefects(t *testing.T) {
 		{"the live tier function calls python", []mutation{{runTests, `run_step "live backend e2e" bash ./ci/run_live_backend_e2e.sh`, `run_step "live backend e2e" python3 ci/live.py`}}, []string{"live_e2e_tests uses Python"}},
 		{"the path filter lists uv.lock again", []mutation{{wf, "              - 'cmd/**'\n", "              - 'cmd/**'\n              - 'uv.lock'\n"}}, []string{"lists uv.lock"}},
 		{"a broad filter glob matches Python files", []mutation{{wf, "              - 'cmd/**'\n", "              - 'cmd/**'\n              - 'scripts/**'\n"}}, []string{"matches the tracked Python file"}},
+		{"the path filter drops the sync-dispatch contracts", []mutation{{wf, "              - 'contracts/sync-dispatch/v1/**'\n", ""}}, []string{"does not cover contracts/sync-dispatch/v1"}},
 		{"the path filter drops cmd/**", []mutation{{wf, "              - 'cmd/**'\n", ""}}, []string{"must list cmd/**"}},
 	}
 	for _, c := range cases {

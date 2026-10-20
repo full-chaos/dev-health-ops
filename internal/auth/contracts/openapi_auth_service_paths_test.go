@@ -10,6 +10,10 @@ import (
 	"testing"
 )
 
+// bearerClasses are the credential classes carried as an Authorization bearer
+// token: a row accepting one must declare a bearer security requirement.
+var bearerClasses = map[string]bool{"ops_access_token_hs256": true}
+
 func loadOpenAPIRaw(t *testing.T) map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "openapi", "auth-v1.openapi.json"))
@@ -47,12 +51,20 @@ func collectRefs(node any, out *[]string) {
 func openAPIPathProblems(document map[string]any, rows []map[string]any) []string {
 	var problems []string
 	want := map[string]bool{}
+	bearer := map[string]bool{}
 	for _, row := range rows {
 		id, _ := row["id"].(string)
 		if !strings.HasSuffix(id, "@api]") {
 			continue
 		}
-		want[strings.ToLower(row["method"].(string))+" "+row["route"].(string)] = true
+		key := strings.ToLower(row["method"].(string)) + " " + row["route"].(string)
+		want[key] = true
+		classes, _ := row["accepted_credential_classes"].([]any)
+		for _, class := range classes {
+			if bearerClasses[class.(string)] {
+				bearer[key] = true
+			}
+		}
 	}
 	components, _ := document["components"].(map[string]any)
 	schemas, _ := components["schemas"].(map[string]any)
@@ -77,13 +89,22 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 			}
 			operation, _ := op.(map[string]any)
 			security, _ := operation["security"].([]any)
+			bearerScheme := false
 			for _, requirement := range security {
 				names, _ := requirement.(map[string]any)
 				for name := range names {
-					if schemes[name] == nil {
+					scheme, _ := schemes[name].(map[string]any)
+					if scheme == nil {
 						problems = append(problems, fmt.Sprintf("OpenAPI operation %s requires security scheme %q, which is not defined", key, name))
+						continue
+					}
+					if scheme["type"] == "http" && scheme["scheme"] == "bearer" {
+						bearerScheme = true
 					}
 				}
+			}
+			if bearer[key] && !bearerScheme {
+				problems = append(problems, fmt.Sprintf("OpenAPI operation %s accepts a bearer credential class in its profile row but declares no bearer security requirement", key))
 			}
 			if len(refs) == 0 {
 				problems = append(problems, fmt.Sprintf("OpenAPI operation %s references no schema", key))
@@ -126,6 +147,15 @@ func TestTheOpenAPIPathGateRefusesPlantedMismatches(t *testing.T) {
 		"a security requirement names a missing scheme": func(document map[string]any) {
 			op := document["paths"].(map[string]any)["/v1/sessions/revoke-all"].(map[string]any)["post"].(map[string]any)
 			op["security"] = []any{map[string]any{"noSuchScheme": []any{}}}
+		},
+		"a protected operation loses its security requirement": func(document map[string]any) {
+			op := document["paths"].(map[string]any)["/v1/sessions/current"].(map[string]any)["get"].(map[string]any)
+			delete(op, "security")
+		},
+		"a protected operation names a scheme that is not a bearer": func(document map[string]any) {
+			document["components"].(map[string]any)["securitySchemes"].(map[string]any)["apiKeyOnly"] = map[string]any{"type": "apiKey", "in": "header", "name": "X-Key"}
+			op := document["paths"].(map[string]any)["/v1/sessions/revoke"].(map[string]any)["post"].(map[string]any)
+			op["security"] = []any{map[string]any{"apiKeyOnly": []any{}}}
 		},
 		"an operation no row profiles": func(document map[string]any) {
 			document["paths"].(map[string]any)["/v1/extra"] = map[string]any{"get": map[string]any{"responses": map[string]any{"200": map[string]any{"description": "x", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Session"}}}}}}}

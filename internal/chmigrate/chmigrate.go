@@ -2,7 +2,7 @@
 // database to the schema head of the analytics store.
 //
 // The head is not rebuilt from the historical chain. That chain
-// (src/dev_health_ops/migrations/clickhouse) mixes .sql files with procedural
+// (frozen as text in internal/chmigrate/history; its Python half is deleted) mixed .sql files with procedural
 // Python migrations that rebuild tables and move rows, and only a database
 // below the head needs them. So the head is a BASELINE: the end state of a
 // fresh database after the real Python chain has run, captured by executing

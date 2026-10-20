@@ -14,10 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuepredges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/prcommit"
-	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
-	"github.com/full-chaos/dev-health-ops/internal/orgllmconfig"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
 )
@@ -73,7 +70,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	// cutover would appear complete while production kept running the old
 	// plane -- exactly the state this ticket exists to end, and one nothing
 	// downstream could detect. Same reasoning as workgraphBuildPreSteps'.
-	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, observer, logger, postgresDatabase.pools.Domain)
+	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, observer, logger)
 	if nativeErr != nil {
 		return workerFamily{}, nativeErr
 	}
@@ -424,7 +421,6 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 // a nil into a refusal at the one place it matters -- the materialize case.
 func buildNativeInvestmentExecutor(
 	cfg config.Config, specs []jobruntime.HandlerSpec, observer jobruntime.Observer, logger *slog.Logger,
-	domainPool llmbudget.Pool,
 ) (workgraph.NativeExecutor, error) {
 	materializeSelected := false
 	for _, spec := range specs {
@@ -454,18 +450,6 @@ func buildNativeInvestmentExecutor(
 	executor, executorErr := investment.NewNativeExecutor(reader, writer, logger)
 	if executorErr != nil {
 		return nil, errWorkerDependencyUnavailable
-	}
-	// Org-aware categorization (CHAOS-10041): both ORG_LLM_CONFIG_* unset keeps
-	// the platform environment as the only source. A half-set pair refuses the
-	// family rather than quietly running a BYO org on the platform provider.
-	orgConfig, orgConfigErr := orgllmconfig.FromEnv(secrets.GetenvNamed)
-	if orgConfigErr != nil {
-		logger.Error("investment materialize is refused: the org llm config client is half-configured",
-			slog.String("error", orgConfigErr.Error()))
-		return nil, errWorkerDependencyUnavailable
-	}
-	if orgConfig != nil {
-		executor.SetOrgLLMConfig(orgConfig, llmbudget.PgStore{Pool: domainPool})
 	}
 	if collector := metricsCollectorFromObserver(observer); collector != nil {
 		executor.SetObserver(investment.CollectorRepoAttributionObserver{Collector: collector})

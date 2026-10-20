@@ -41,7 +41,7 @@ func TestDeployComputeFamilyWritesRealOrgIDAndIsolatesTenants(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Real production DDL: migrations/clickhouse/000_raw_tables.sql:108-122
+	// Real production DDL: internal/chmigrate/history/000_raw_tables.sql:108-122
 	// (deployments) and 004_quality_delivery_metrics.sql:35-45
 	// (deploy_metrics_daily), plus 024_add_org_id.sql's org_id ALTER.
 	for _, statement := range []string{

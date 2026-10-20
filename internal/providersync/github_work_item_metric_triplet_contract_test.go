@@ -172,7 +172,7 @@ func githubWorkItemMetricJSONFieldNames(structType reflect.Type) []string {
 func githubWorkItemMetricPartitionColumns(t *testing.T, table string) []string {
 	t.Helper()
 	source := githubWorkItemMetricReadSource(t,
-		"src/dev_health_ops/migrations/clickhouse/001_metrics_v2.sql")
+		"internal/chmigrate/history/001_metrics_v2.sql")
 	index := strings.Index(source, "CREATE TABLE IF NOT EXISTS "+table+" (")
 	if index < 0 {
 		t.Fatalf("migration 001 does not create %q", table)

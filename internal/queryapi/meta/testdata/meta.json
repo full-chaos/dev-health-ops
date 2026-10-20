@@ -1,6 +1,5 @@
 {
   "backend": "clickhouse",
-  "version": "24.3.1.2672",
   "last_ingest_at": null,
   "coverage": {},
   "limits": {

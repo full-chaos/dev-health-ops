@@ -109,17 +109,6 @@ def _heredocs(text: str) -> list[tuple[int, str, bytes]]:
     return found
 
 
-def _shell_string_programs(text: str, prefix: str) -> dict[str, str]:
-    """Every ``PREFIX_NAME='...'`` single-quoted shell string in ``text``.
-
-    A single-quoted shell string cannot contain a single quote, so the closing
-    quote is unambiguous: the first ``'`` at the start of a line.
-    """
-
-    pattern = re.compile(rf"^({prefix}[A-Z0-9_]+)='(.*?)^'$", re.S | re.M)
-    return {match.group(1): match.group(2) for match in pattern.finditer(text)}
-
-
 def _argmax_program(text: str) -> str:
     match = re.search(r"^ARGMAX_PROOF_PY='(.*?)'\n", text, re.S | re.M)
     assert match is not None, (

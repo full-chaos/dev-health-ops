@@ -32,6 +32,9 @@
               }
             }
           },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope (not error.v1)."
+          },
           "401": {
             "description": "error.v1 with an auth-outcome.v1 reason code",
             "content": {
@@ -81,6 +84,9 @@
               }
             }
           },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope (not error.v1)."
+          },
           "401": {
             "description": "error.v1 with an auth-outcome.v1 reason code",
             "content": {
@@ -123,6 +129,9 @@
           "204": {
             "description": "revoked"
           },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope (not error.v1)."
+          },
           "401": {
             "description": "error.v1 with an auth-outcome.v1 reason code",
             "content": {
@@ -164,6 +173,9 @@
         "responses": {
           "204": {
             "description": "revoked"
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope (not error.v1)."
           },
           "401": {
             "description": "error.v1 with an auth-outcome.v1 reason code",

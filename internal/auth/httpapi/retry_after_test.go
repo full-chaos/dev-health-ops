@@ -67,3 +67,18 @@ func TestEveryRateLimitedAnswerCarriesRetryAfter(t *testing.T) {
 		}
 	})
 }
+
+func TestBucketWaitIsTheTimeToTheNextToken(t *testing.T) {
+	now := time.Unix(0, 0)
+	bucket := NewBucket(2, 1, func() time.Time { return now })
+	if ok, wait := bucket.take(); !ok || wait != 0 {
+		t.Fatalf("first take = %v, %v; want true, 0", ok, wait)
+	}
+	if ok, wait := bucket.take(); ok || wait != 500*time.Millisecond {
+		t.Fatalf("second take = %v, %v; want false, 500ms", ok, wait)
+	}
+	now = now.Add(500 * time.Millisecond)
+	if ok, _ := bucket.take(); !ok {
+		t.Fatal("a token was due after 500ms")
+	}
+}

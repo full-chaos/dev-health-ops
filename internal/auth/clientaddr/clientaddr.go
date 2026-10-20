@@ -11,8 +11,9 @@
 //
 // The user agent is the first User-Agent value, each byte decoded as one
 // latin-1 code point, as go-api's userAgent() reads it
-// (internal/api/session/tokens.go). It is kept whole: net/http's header cap
-// (MaxHeaderBytes, 1 MiB by default) is the only bound, as in go-api.
+// (internal/api/session/tokens.go). It is kept whole: the API listener's
+// request-head cap (httpapi.ServerOptions.MaxHeaderBytes, 64 KiB by default;
+// a larger head is refused with 431) is the only bound.
 package clientaddr
 
 import (

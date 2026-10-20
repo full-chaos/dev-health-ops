@@ -1,71 +1,186 @@
-# package	scope	class   (a package that walks from the repository root; one row per class its walk reads, go-trees when it reads only Go package trees)
-cmd/dev-health-migration-matrix	test	go-trees
-cmd/gqlgen-guard	test	go-trees
-internal/api/integrationsadmin/discoveryvenue	test	go-trees
-internal/api/syncadmin	test	go-trees
-internal/audit	test	go-trees
-internal/auth/authruntime	test	go-trees
-internal/auth/contracts	test	contracts
-internal/auth/identity	test	go-trees
-internal/auth/writerinventory	test	go-trees
-internal/cigates/affected	code	go-trees
-internal/cigates/bigboy	test	.env.example
-internal/cigates/bigboy	test	ci
-internal/cigates/bigboy	test	compose.yml
-internal/cigates/bigboy	test	deploy
-internal/cigates/bigboy	test	docker
-internal/cigates/chartgates	test	.env.example
-internal/cigates/chartgates	test	alerts
-internal/cigates/chartgates	test	compose.yml
-internal/cigates/chartgates	test	contracts
-internal/cigates/chartgates	test	deploy
-internal/cigates/chartgates	test	docker
-internal/cigates/chartgates	test	docs
-internal/cigates/checkgo	test	ci
-internal/cigates/proofteardown	test	go-trees
-internal/cigates/scripts	test	ci
-internal/cigates/testshard	test	.github
-internal/cigates/testshard	test	ci
-internal/cigates/testshard	test	docker
-internal/cigates/workflows	test	.github
-internal/cigates/workflows	test	ci
-internal/cigates/workflows	test	deploy
-internal/fixturescli	test	go-trees
-internal/goapicli/routing	test	go-trees
-internal/goapiproof	test	ci
-internal/goapiproof	test	compose.yml
-internal/goapiproof	test	deploy
-internal/goapiproof	test	docker
-internal/gqlgenguard	code	go-trees
-internal/httpguard	test	go-trees
-internal/jobs/investment	test	ci
-internal/jobs/investment	test	compose.yml
-internal/jobs/investment	test	deploy
-internal/jobs/investment/categorize/decision	test	go-trees
-internal/jobs/investment/chwrite	test	go-trees
-internal/jobs/metrics/complexity	test	go-trees
-internal/jobs/metrics/daily	test	go-trees
-internal/jobs/metrics/daily/compoundingrisk	test	go-trees
-internal/jobs/metrics/prrework	test	go-trees
-internal/jobs/metrics/remaining	test	go-trees
-internal/jobs/workgraph/units	test	go-trees
-internal/pgmigrate	test	go-trees
-internal/providersync	test	go-trees
-internal/pythonparity/pyunicodedata	test	go-trees
-internal/queryapi/server	test	go-trees
-internal/scheduler/fixed	test	go-trees
-internal/storage/clickhouse/liverow	test	go-trees
-internal/storage/postgres	test	go-trees
-internal/synchandoff	test	go-trees
-internal/teamattribution	test	go-trees
-internal/teamcreated	test	go-trees
-internal/teamprovider	test	go-trees
-internal/testsupport/containers	test	go-trees
-internal/testsupport/moduleroot	test	go-trees
-internal/testsupport/pyoracle	test	go-trees
-internal/testsupport/recordedfiles	code	testdata
-internal/testsupport/venuechanged	test	.github
-internal/testsupport/venuechanged	test	ci
-internal/testsupport/venueoracle	code	go-trees
-internal/testsupport/venueoracle/goldenrecord	code	go-trees
-internal/workerservice	test	contracts
+# package	scope	site	root	skip	filter	classes   (one measured row per walk call site; see walks.go)
+cmd/dev-health-migration-matrix	test	contract_test.go	cmd/dev-health-migration-matrix	*	*_test.go	-
+cmd/gqlgen-guard	test	main_test.go	outside	-	-	-
+internal/api/integrationsadmin/discoveryvenue	test	discover_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	*	search_*.json	-
+internal/api/syncadmin	test	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	*	search_*.json	-
+internal/api/syncadmin	test	dataset_writer_census_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/api/syncadmin	test	gate_reader_census_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/audit	test	writer_guard_test.go	.	.git,node_modules,.venv,vendor	*.go	contracts,deploy
+internal/auth/authruntime	test	audit_request_id_scan_test.go	internal/auth	-	internal/auth/session/*.go,internal/auth/authapi/*.go	-
+internal/auth/contracts	test	authorization_goldens_test.go	contracts/auth/v1/examples	-	contracts/auth/v1/examples/authorization_request/*.json,contracts/auth/v1/examples/authorization_decision/*.json,contracts/auth/v1/examples/authorization_batch_request/*.json,contracts/auth/v1/examples/authorization_batch_response/*.json	contracts,json
+internal/auth/contracts	test	credential_goldens_test.go	contracts/auth/v1/examples	-	contracts/auth/v1/examples/credential-entry/*.json,contracts/auth/v1/examples/credential-list/*.json,contracts/auth/v1/examples/credential-receipt/*.json	contracts,json
+internal/auth/contracts	test	discovery_goldens_test.go	contracts/auth/v1/examples/discovery	*	*.json	contracts,json
+internal/auth/contracts	test	endpoint_auth_profile_goldens_test.go	contracts/auth/v1/examples/endpoint-auth-profile	*	*.json	contracts,json
+internal/auth/contracts	test	endpoint_profile_source_commit_history_test.go	contracts/auth/v1	*	endpoint-profiles.*.json	contracts,json
+internal/auth/contracts	test	endpoint_profiles_query_api_test.go	contracts/auth/v1	*	endpoint-profiles.*.json	contracts,json
+internal/auth/contracts	test	error_envelope_goldens_test.go	contracts/auth/v1/examples/error	*	*.json	contracts,json
+internal/auth/contracts	test	fixture_secret_scanner_test.go	contracts/auth/v1/examples	-	*	contracts,json
+internal/auth/contracts	test	jwks_document_goldens_test.go	contracts/auth/v1/examples/jwks	*	*.json	contracts,json
+internal/auth/contracts	test	principal_contract_goldens_test.go	contracts/auth/v1/examples/principal	*	*.json	contracts,json
+internal/auth/contracts	test	provisioning_event_goldens_test.go	contracts/auth/v1/examples	-	contracts/auth/v1/examples/provisioning-event/*.json,contracts/auth/v1/examples/audit-event/*.json	contracts,json
+internal/auth/contracts	test	schema_dialect_test.go	contracts/auth/v1/jsonschema	*	*.schema.json	contracts,json
+internal/auth/contracts	test	session_goldens_test.go	contracts/auth/v1/examples	-	contracts/auth/v1/examples/session/*,contracts/auth/v1/examples/refresh-request/*,contracts/auth/v1/examples/refresh-response/*,contracts/auth/v1/examples/auth-outcome/*	contracts,json
+internal/auth/identity	test	externalkey_test.go	internal/auth/identity	*	*.go	-
+internal/auth/writerinventory	test	scan_test.go	.	.*,_*,node_modules,vendor,testdata	*.go,go.mod	contracts,deploy
+internal/auth/writerinventory	test	scan_test.go	internal/storage/postgres/authschema/migrations	*	*.sql,*.SQL	-
+internal/cigates/affected	static	scan.go	.	*	*	.codex-review,.dockerignore,.env.example,.geminiignore,.gitattributes,.gitignore,.gitlab-ci.yml,.gitleaksignore,.pip-audit-ignore,AGENTS.md,DESIGN.md,GEMINI.md,GETTING-STARTED.md,LICENSE.md,Makefile,README.md,biome.json,compose.yml,json,lefthook.yml,mkdocs.yml,pyproject.toml,pytest.ini,query.json,requirements-docs.txt,requirements.txt,uv.lock,wrangler.jsonc
+internal/cigates/affected	static	scan.go	.	-	*.go	contracts,deploy
+internal/cigates/affected	static	scan.go	.	.*,testdata,vendor,node_modules	*.go	contracts,deploy
+internal/cigates/affected	static	walks.go	.	.git	*	.beads,.claude,.codex-review,.dockerignore,.env.example,.geminiignore,.gitattributes,.github,.gitignore,.gitlab,.gitlab-ci.yml,.gitleaksignore,.p3-logs,.pip-audit-ignore,.planning,AGENTS.md,DESIGN.md,GEMINI.md,GETTING-STARTED.md,LICENSE.md,Makefile,README.md,alerts,biome.json,ci,compose.yml,contracts,deploy,docker,docs,docs-data,json,lefthook.yml,mkdocs.yml,pyproject.toml,pytest.ini,query.json,requirements-docs.txt,requirements.txt,uv.lock,wrangler.jsonc
+internal/cigates/bigboy	test	compose_ch_users_test.go	ci/bigboy	*	*	ci
+internal/cigates/bigboy	test	compose_one_file_test.go	ci/bigboy	*	*.sh	ci
+internal/cigates/bigboy	test	compose_one_file_test.go	ci/bigboy	*	compose.bigboy*,stack.sh,stack.files	ci
+internal/cigates/bigboy	test	composecfg_misc_test.go	internal/platform/config	*	*.go	-
+internal/cigates/bigboy	test	cut_compose_chain_test.go	ci/bigboy	*	*.sh,*.py	ci
+internal/cigates/bigboy	test	cut_harness_test.go	ci/bigboy	*	*	ci
+internal/cigates/bigboy	test	harness_test.go	ci/bigboy	-	*	ci
+internal/cigates/bigboy	test	harness_test.go	outside	-	-	-
+internal/cigates/bigboy	test	repin_old8_guard_test.go	outside	-	-	-
+internal/cigates/bigboy	test	repin_support_test.go	outside	-	-	-
+internal/cigates/chartgates	test	helpers_test.go	deploy	-	*	deploy,json
+internal/cigates/chartgates	test	helpers_test.go	deploy/helm/dev-health	-	*	deploy,json
+internal/cigates/checkgo	test	race_weights_files_test.go	ci/go_race_weights.d	*	*	ci
+internal/cigates/checkgo	test	race_weights_files_test.go	ci/go_race_weights.d	*	*.tsv	ci
+internal/cigates/checkgo	test	support_test.go	ci	-	ci/go_race_weights.d/*.tsv,ci/go_integration_shards.d/*.tsv	ci
+internal/cigates/proofteardown	test	harness_test.go	outside	-	-	-
+internal/cigates/scripts	test	chmigrate_history_frozen_test.go	internal/chmigrate/history	*	*	-
+internal/cigates/scripts	test	helper_copies_drift_test.go	internal/cigates	-	*_test.go	-
+internal/cigates/scripts	test	shard_row_files_merge_test.go	ci	-	ci/go_integration_shards.d/*,ci/venue_oracle_weights.d/*	ci
+internal/cigates/scripts	test	shard_row_files_merge_test.go	ci	-	ci/go_integration_shards.d/*.tsv,ci/venue_oracle_weights.d/*.tsv	ci
+internal/cigates/scripts	test	tmp_dirs_removed_test.go	.	-	*_test.go	deploy
+internal/cigates/testshard	test	raceweightsdir_test.go	ci/go_race_weights.d	*	*.tsv	ci
+internal/cigates/testshard	test	trimpath_test.go	.	-	ci/*.sh,ci/**/*.sh,scripts/*.sh,scripts/**/*.sh,docker/*Dockerfile*,docker/**/*Dockerfile*	ci,docker
+internal/cigates/testshard	test	trimpath_test.go	.github/workflows	*	*.yml	.github
+internal/cigates/workflows	test	ttl_registry_test.go	internal/chmigrate	-	internal/chmigrate/history/*.sql,internal/chmigrate/history/*.py,internal/chmigrate/sql/*.sql,internal/chmigrate/sql/*.py	-
+internal/cigates/workflows	test	workflows_common_test.go	.github/workflows	*	*.yml,*.yaml	.github
+internal/cigates/workflows	test	workflows_go_resolver_test.go	.	-	*	.beads,.claude,.codex-review,.dockerignore,.env.example,.geminiignore,.gitattributes,.github,.gitignore,.gitlab,.gitlab-ci.yml,.gitleaksignore,.p3-logs,.pip-audit-ignore,.planning,AGENTS.md,DESIGN.md,GEMINI.md,GETTING-STARTED.md,LICENSE.md,Makefile,README.md,alerts,biome.json,ci,compose.yml,contracts,deploy,docker,docs,docs-data,json,lefthook.yml,mkdocs.yml,pyproject.toml,pytest.ini,query.json,requirements-docs.txt,requirements.txt,uv.lock,wrangler.jsonc
+internal/cigates/workflows	test	workflows_image_publishing_test.go	deploy	vendor	*.yml,*.yaml	deploy
+internal/cigates/workflows	test	workflows_path_filters_test.go	outside	-	-	-
+internal/cigates/workflows	test	workflows_venue_always_runs_test.go	.github/workflows	*	*.yml,*.yaml	.github
+internal/cigates/workflows	test	workflows_venue_shards_test.go	ci	-	ci/venue_oracle_registry.d/*.tsv,ci/venue_oracle_weights.d/*.tsv	ci
+internal/cigates/workflows	test	workflows_venue_shards_test.go	ci/venue_oracle_registry.d	*	*.tsv	ci
+internal/cigates/workflows	test	workflows_venue_shards_test.go	ci/venue_oracle_weights.d	*	*.tsv	ci
+internal/cigates/workflows	test	workflows_venue_shards_test.go	outside	-	-	-
+internal/fixturescli	test	dropped_columns_census_test.go	internal/chmigrate/sql	*	*.sql	-
+internal/fixturescli	test	generate_test.go	internal/fixturescli/testdata/generate	*	*	-
+internal/fixturescli	test	synthetic_test.go	internal/fixturescli/testdata/synthetic	*	*	-
+internal/goapicli/routing	test	sinks_test.go	internal/goapicli/routing	*	*.go	-
+internal/goapiproof	test	catalog_path_wiring_test.go	.	-	ci/**,scripts/**,deploy/helm/dev-health/templates/**,docker/**	ci,deploy,docker,json
+internal/goapiproof	test	credentialecho_test.go	outside	-	-	-
+internal/goapiproof	test	edge_bearer_env_var_absence_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/goapiproof	test	writeskew_inventory_test.go	internal	-	internal/goapiproof/*.go,internal/goapicli/restprove/*.go	-
+internal/gqlgenguard	code	fsutil.go	outside	-	-	-
+internal/gqlgenguard	code	plan.go	outside	-	-	-
+internal/gqlgenguard	test	confinement_test.go	outside	-	-	-
+internal/gqlgenguard	test	copyandwrite_test.go	outside	-	-	-
+internal/gqlgenguard	test	guard_test.go	outside	-	-	-
+internal/gqlgenguard	test	rootwrites_test.go	outside	-	-	-
+internal/httpguard	test	origin_census_test.go	.	testdata,internal/httpguard,internal/testsupport	internal/**/*.go	-
+internal/httpguard	test	redirect_sites_test.go	.	-	*_test.go	deploy
+internal/httpguard	test	redirect_sites_test.go	.	.git,node_modules	*.go	contracts,deploy
+internal/jobs/investment	test	categorization_platform_only_test.go	internal/jobs/investment	*	*.go	-
+internal/jobs/investment	test	providerselection_census_test.go	.	-	cmd/**/*.go,internal/**/*.go	-
+internal/jobs/investment	test	providerselection_census_test.go	.	-	src/**,scripts/**,ci/**,deploy/**	ci,deploy,json
+internal/jobs/investment	test	shadowexecutor_test.go	.	-	cmd/**/*.go,internal/**/*.go	-
+internal/jobs/investment/categorize/decision	test	adapter_test.go	.	-	cmd/**/*.go,internal/**/*.go	-
+internal/jobs/investment/categorize/decision	test	adapter_test.go	internal/jobs/investment/categorize/decision/testdata/responses	*	*.json	-
+internal/jobs/investment/categorize/decision	test	replay_oracle_test.go	internal/jobs/investment/categorize/decision/testdata/responses	*	*.json	-
+internal/jobs/investment/chwrite	test	shadow_reader_ban_test.go	.	-	internal/queryapi/**/*.go,internal/queryapiservice/**/*.go,internal/apiservice/**/*.go,internal/api/**/*.go	-
+internal/jobs/metrics/complexity	test	compute_test.go	internal/jobs/metrics/complexity/lizardcc/testdata/corpus_js_ts	*	*.txt	-
+internal/jobs/metrics/daily	test	stale_team_keys_census_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/jobs/metrics/daily	test	stale_team_keys_census_test.go	internal/jobs/metrics/daily	*	*.go	-
+internal/jobs/metrics/daily	test	team_active_census_test.go	internal/jobs/metrics/daily	-	*.go	-
+internal/jobs/metrics/daily	test	wellbeing_no_member_team_census_test.go	internal/jobs/metrics/daily	*	*.go	-
+internal/jobs/metrics/daily/compoundingrisk	test	pythonmax_callsites_test.go	internal/jobs/metrics/daily/compoundingrisk	*	*.go	-
+internal/jobs/metrics/prrework	test	readers_census_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/jobs/metrics/prrework	test	readers_census_test.go	.	-	internal/queryapi/explain/*.go,internal/queryapi/operatingreview/*.go	-
+internal/jobs/metrics/remaining	test	capacity_schema_contract_pin_test.go	internal/chmigrate/sql	*	*.sql,*.py	-
+internal/jobs/workgraph/units	test	live_python_corpus_guard_test.go	tests/fixtures	*	generate_*.py	-
+internal/jobs/workgraph/units	test	pr_link_protection_test.go	internal	-	*.go	-
+internal/pgmigrate	test	alembic_stamp_test.go	src/dev_health_ops/alembic/versions	__pycache__	*	-
+internal/pgmigrate	test	handddl_guard_integration_test.go	.	.git,node_modules,vendor,testdata	*_test.go	deploy
+internal/providersync	test	client_ledger_census_test.go	internal/providersync	*	*.go	-
+internal/providersync	test	github_repo_identity_census_test.go	internal/providersync	*	github_*.go	-
+internal/providersync	test	gitlab_repo_identity_census_test.go	internal/providersync	*	gitlab_*.go	-
+internal/providersync	test	ingested_at_writer_enumeration_test.go	internal	-	*.go	-
+internal/providersync	test	jira_search_endpoint_guard_test.go	internal/providersync	*	jira_*.go	-
+internal/providersync	test	log_sites_redaction_test.go	internal/providersync	*	*.go	-
+internal/providersync	test	oracle_golden_inventory_test.go	internal/providersync	*	*_test.go	-
+internal/providersync	test	oracle_golden_inventory_test.go	internal/providersync/testdata/oracle_golden	*	*.json	-
+internal/providersync	test	oracle_golden_test.go	internal/providersync/testdata	-	*.py	-
+internal/providersync	test	oracle_golden_test.go	internal/providersync/testdata	-	internal/providersync/testdata/investment_configs/**,internal/providersync/testdata/status_mapping_configs/**	-
+internal/providersync	test	oracle_script_golden_test.go	internal/providersync	*	*_test.go	-
+internal/providersync	test	oracle_script_golden_test.go	internal/providersync/testdata/script_golden	*	*.json	-
+internal/providersync	test	ownership_snapshot_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/providersync	test	page_info_census_test.go	internal/providersync	*	*.go	-
+internal/providersync	test	pagerduty_ordering_contract_test.go	internal/providersync	*	pagerduty_*.go	-
+internal/providersync	test	pagerduty_webhook_reconcile_golden_test.go	internal/providersync/testdata/pagerduty_webhook_goldens	*	*.json	-
+internal/providersync	test	prepared_discard_decision_test.go	internal/providersync	*	*.go	-
+internal/providersync	test	project_id_census_test.go	.	testdata,vendor	internal/**/*.go,cmd/**/*.go	-
+internal/providersync	test	response_read_census_test.go	.	-	internal/providersync/*.go,internal/scheduler/sync/*.go,internal/providerfoundation/*.go	-
+internal/providersync	test	route_template_census_test.go	.	-	internal/providersync/*.go,internal/scheduler/sync/*.go	-
+internal/providersync	test	route_template_census_test.go	internal/providerfoundation	*	*.go	-
+internal/providersync	test	route_wiring_comment_drift_test.go	internal/providersync	*	*.go	-
+internal/providersync	test	snapshot_close_site_census_test.go	.	-	internal/providersync/*.go,internal/atlassianteams/*.go	-
+internal/providersync	test	team_absence_test.go	internal/providersync	*	*.go	-
+internal/providersync	test	team_id_carry_seam_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/providersync	test	team_membership_first_seen_test.go	.	.git,node_modules,vendor,testdata	*.go	contracts,deploy
+internal/providersync	test	watermark_write_boundary_test.go	internal/providersync	*	*.go	-
+internal/pythonparity/pyunicodedata	test	import_guard_test.go	.	.*,node_modules,vendor,testdata	*.go,go.mod	contracts,deploy
+internal/queryapi/server	test	build_routes_integration_test.go	internal/queryapi/server	*	*.go	-
+internal/queryapi/server	test	direct_env_reads_test.go	internal/queryapi	-	*.go	-
+internal/queryapi/server	test	edge_users_test.go	internal/queryapi/server	*	*.go	-
+internal/queryapi/server	test	endpoint_profile_rows_test.go	.	-	internal/queryapi/server/*.go,internal/platform/health/*.go	-
+internal/queryapi/server	test	endpoint_profile_same_line_test.go	.	-	internal/queryapi/server/*.go,internal/platform/health/*.go	-
+internal/queryapi/server	test	internal_auth_test.go	.	node_modules,.git,testdata	internal/**/*.go,cmd/**/*.go	-
+internal/queryapi/server	test	internal_auth_test.go	internal/queryapi/server	*	*.go	-
+internal/queryapi/server	test	investment_scope_pin_wiring_test.go	internal/queryapi/server	*	*.go	-
+internal/queryapi/server	test	mcp_proof_route_retired_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/queryapi/server	test	org_scope_census_test.go	.	-	**/*.go	contracts,deploy
+internal/queryapi/server	test	org_scope_census_test.go	.	-	internal/queryapi/**/*.go,internal/api/**/*.go	-
+internal/queryapi/server	test	registered_document_field_gate_test.go	internal/queryapi	-	*.go	-
+internal/queryapi/server	test	registered_document_field_gate_test.go	internal/queryapi/graph/model	*	*.go	-
+internal/queryapi/server	test	rest_error_response_test.go	internal/queryapi/server	*	*.go	-
+internal/queryapi/server	test	rest_error_response_test.go	internal/queryapi/server	*	*_route.go	-
+internal/queryapi/server	test	rest_routes_test.go	internal/queryapi/server	*	*.go	-
+internal/queryapi/server	test	result_row_bound_census_test.go	.	-	*.go	contracts,deploy
+internal/queryapi/server	test	unrestricted_read_options_test.go	internal/queryapi/server	*	*.go	-
+internal/scheduler/fixed	test	readiness_timeout_test.go	internal/scheduler/fixed	*	*_test.go	-
+internal/storage/clickhouse/liverow	test	census_test.go	.	testdata	internal/**/*.go,cmd/**/*.go	-
+internal/storage/postgres	test	coordinator_posture_scheduler_coverage_test.go	internal/scheduler	-	*.go	-
+internal/storage/postgres	test	openers_test.go	.	.git,.venv,node_modules,vendor,.remember,worktrees	*.go	contracts,deploy
+internal/storage/postgres	test	posture_cache_cadence_test.go	internal/storage/postgres	*	*.go	-
+internal/storage/postgres	test	posture_identity_sites_test.go	internal	-	*.go	-
+internal/storage/postgres	test	venue_posture_coverage_test.go	.	-	**/*_test.go	deploy
+internal/storage/postgres	test	venue_posture_coverage_test.go	.	.*,vendor,node_modules,site,docs	*_test.go	deploy
+internal/synchandoff	test	trigger_writer_census_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/teamattribution	test	is_primary_census_test.go	.	.*,testdata	*.go	contracts,deploy
+internal/teamattribution	test	is_primary_census_test.go	internal	.*,testdata	*.go	-
+internal/teamcreated	test	census_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/teamprovider	test	census_test.go	.	-	internal/**/*.go,cmd/**/*.go	-
+internal/testsupport/containers	test	close_remote_test.go	.	.git,node_modules,vendor	*_test.go	deploy
+internal/testsupport/moduleroot	test	moduleroot_test.go	.	.git,node_modules,third_party,moduleroot	*.go	contracts,deploy
+internal/testsupport/pyoracle	test	pyoracle_test.go	.	.git,.venv,node_modules,vendor	*.go	contracts,deploy
+internal/testsupport/recordedfiles	code	recordedfiles.go	.	-	**/testdata/**,tests/fixtures/**	-
+internal/testsupport/recordedfiles	code	recordedfiles.go	.	.*,node_modules	**/testdata/**,tests/fixtures/**	-
+internal/testsupport/recordedfiles	code	recordedfiles.go	.	.*,node_modules,testdata,tests/fixtures	*.manifest.tsv	-
+internal/testsupport/venuechanged	test	closure_test.go	ci/venue_oracle_closure.d	*	*	ci
+internal/testsupport/venuechanged	test	closure_test.go	ci/venue_oracle_registry.d	*	*.tsv	ci
+internal/testsupport/venuechanged	test	trigger_coverage_test.go	.	-	**/*_test.go	deploy
+internal/testsupport/venuechanged	test	trigger_coverage_test.go	.	-	internal/**/*.go	-
+internal/testsupport/venuechanged	test	trigger_coverage_test.go	ci/venue_oracle_registry.d	*	*.tsv	ci
+internal/testsupport/venueoracle	code	golden.go	outside	-	-	-
+internal/testsupport/venueoracle	code	golden_walk.go	.	.git,node_modules,.venv	*.json,**/testdata/**/*.json.gz	.claude,.github,biome.json,ci,contracts,deploy,docs-data,json,query.json
+internal/testsupport/venueoracle	code	opened.go	.	-	**/testdata/**/*.json	-
+internal/testsupport/venueoracle	test	known_defects_test.go	internal	-	internal/**/testdata/**/*.json	-
+internal/testsupport/venueoracle	test	opened_test.go	.	-	**/*_test.go	deploy
+internal/testsupport/venueoracle	test	opened_test.go	.	.git,node_modules,.venv	**/testdata/**/*.json	-
+internal/testsupport/venueoracle	test	pythonenv_test.go	.	.git,node_modules,.venv	**/testdata/**/*.json	-
+internal/testsupport/venueoracle/goldenrecord	code	main.go	.	-	**/*_test.go	deploy
+internal/testsupport/venueoracle/goldenrecord	code	main.go	.	-	*.recording	-
+internal/testsupport/venueoracle/goldenrecord	code	main.go	outside	-	-	-
+internal/workerservice	test	dependencies_test.go	contracts/jobs/v1	-	*	contracts,json
+internal/workerservice	test	dependencies_test.go	internal/workerservice	*	*_test.go	-
+internal/workerservice	test	reports_test.go	contracts/jobs/v1	-	*	contracts,json
+internal/workerservice	test	venue_golden_address_test.go	internal/workerservice/testdata/golden	*	venue-*.golden.json	-
+internal/workerservice	test	writer_metrics_registration_test.go	internal/jobs/metrics/daily	-	internal/jobs/metrics/daily/*/*.go	-

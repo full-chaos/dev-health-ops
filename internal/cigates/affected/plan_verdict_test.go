@@ -67,6 +67,7 @@ README.md	README.md
 deploy	deploy/**
 testdata	**/testdata.manifest.tsv
 walked	walked/**
+filtered	filtered/**
 `
 
 const fixtureReads = `# package	scope	class
@@ -77,8 +78,9 @@ x	test	ci
 b	code	deploy
 `
 
-const fixtureWalks = `# package	scope	class
-x	test	walked
+const fixtureWalks = `# package	scope	site	root	skip	filter	classes
+x	test	x_test.go	walked	skipme	*	walked
+b	code	b.go	filtered	-	*.json	filtered
 `
 
 const fixtureGoYML = `name: Go
@@ -286,6 +288,12 @@ func planVerdictRows() []verdictRow {
 		{name: "python_source_in_a_declared_class_is_full", changed: []string{"docs/x.py"}, want: "FULL non-Go file is Python source*"},
 		{name: "python_fixture_under_testdata_is_its_package", changed: []string{"x/testdata/fixture.py"}, want: "AFFECTED 1", keys: []string{"x"}},
 		{name: "walk_row_selects_its_walker", changed: []string{"walked/f.txt"}, want: "AFFECTED 1", keys: []string{"x"}},
+		{name: "walk_skip_dir_is_not_read", changed: []string{"walked/skipme/f.txt"}, want: "NONE"},
+		{name: "walk_filter_selects_a_code_walker_and_its_importers", changed: []string{"filtered/a.json"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
+		{name: "walk_filter_leaves_other_files", changed: []string{"filtered/a.txt"}, want: "NONE"},
+		{name: "unexpressed_walk_is_full",
+			head:    map[string]string{"internal/cigates/affected/walks.tsv": fixtureWalks + "d\ttest\td_test.go\tunexpressed\t-\t*\t-\n"},
+			changed: []string{"AGENTS.md"}, want: "FULL unexpressed walk in d (d_test.go)*"},
 		{name: "walks_table_is_full", changed: []string{"internal/cigates/affected/walks.tsv"}, want: "FULL planner input*"},
 		{name: "undeclared_path_is_full", changed: []string{"zz/new.txt"}, want: "FULL non-Go file*"},
 		{name: "go_mod_is_full", changed: []string{".claude/x", "go.mod"}, want: "FULL shared change*"},
@@ -410,13 +418,23 @@ func TestPlanReadsGuard(t *testing.T) {
 		{"code_reader_needs_a_code_row", map[string]string{"r/r.go": plantedCodeReader,
 			"internal/cigates/affected/reads.tsv": "r\ttest\tcontracts\n"}, 1, []string{"r/r.go", "r\tcode\tcontracts"}},
 		{"root_walker_with_only_a_literal_row_is_named", map[string]string{"q/q_test.go": plantedRootWalker + "\nvar doc = \"../docs/a.md\"\n",
-			"internal/cigates/affected/reads.tsv": "q\ttest\tdocs\n"}, 1, []string{"q/q_test.go", "walks from the repository root", "walks.tsv"}},
+			"internal/cigates/affected/reads.tsv": "q\ttest\tdocs\n"}, 1, []string{"q/q_test.go", "undeclared walker", "walks.tsv"}},
+		{"walk_row_omitting_a_reachable_class_fails", map[string]string{"q/q_test.go": plantedRootWalker,
+			"internal/cigates/affected/walks.tsv": "q\ttest\tq_test.go\t.\t-\t*\tdocs\n"}, 1, []string{"q/q_test.go", "classes declared [docs], computed from the tree [contracts docs]"}},
+		{"walk_row_naming_an_unreached_class_fails", map[string]string{"q/q_test.go": plantedRootWalker,
+			"internal/cigates/affected/walks.tsv": "q\ttest\tq_test.go\t.\t-\t*.json\tcontracts,docs\n"}, 1, []string{"computed from the tree [contracts]"}},
 		{"code_root_walker_needs_a_code_walk_row", map[string]string{"q/q.go": plantedRootWalker,
-			"internal/cigates/affected/walks.tsv": "q\ttest\tdocs\n"}, 1, []string{"q/q.go", "q\tcode\t"}},
-		{"walk_row_for_a_package_that_does_not_walk_fails", map[string]string{"p/p_test.go": plantedLiteralReader,
-			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\n", "internal/cigates/affected/walks.tsv": "p\ttest\tdocs\n"}, 1, []string{"walks.tsv", "p"}},
+			"internal/cigates/affected/walks.tsv": "q\ttest\tq.go\t.\t-\t*\tcontracts,docs\n"}, 1, []string{"q/q.go", "q\tcode\tq.go"}},
+		{"walk_row_for_a_site_that_does_not_walk_fails", map[string]string{"p/p_test.go": plantedLiteralReader,
+			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\n", "internal/cigates/affected/walks.tsv": "p\ttest\tp_test.go\t.\t-\t*\tcontracts,docs\n"}, 1, []string{"p/p_test.go holds no walk"}},
+		{"walk_row_with_a_missing_root_reaches_nothing", map[string]string{"q/q_test.go": plantedRootWalker,
+			"internal/cigates/affected/walks.tsv": "q\ttest\tq_test.go\tgone\t-\t*\t-\n"}, 0, nil},
+		{"static_scope_outside_the_planner_fails", map[string]string{"q/q_test.go": plantedRootWalker,
+			"internal/cigates/affected/walks.tsv": "q\tstatic\tq_test.go\t.\t-\t*\tcontracts,docs\n"}, 1, []string{"scope static is reserved"}},
 		{"declared_readers_pass", map[string]string{"p/p_test.go": plantedLiteralReader, "q/q_test.go": plantedRootWalker, "r/r.go": plantedCodeReader,
-			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\nr\tcode\tcontracts\n", "internal/cigates/affected/walks.tsv": "q\ttest\tdocs\n"}, 0, nil},
+			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\nr\tcode\tcontracts\n", "internal/cigates/affected/walks.tsv": "q\ttest\tq_test.go\t.\t-\t*\tcontracts,docs\n"}, 0, nil},
+		{"outside_walk_reaches_nothing", map[string]string{"q/q_test.go": plantedRootWalker,
+			"internal/cigates/affected/walks.tsv": "q\ttest\tq_test.go\toutside\t-\t-\t-\n"}, 0, nil},
 		{"row_for_an_unknown_class_fails", map[string]string{"internal/cigates/affected/reads.tsv": "p\ttest\tnope\n"}, 1, []string{"nope"}},
 		{"row_for_a_package_with_no_go_file_fails", map[string]string{"internal/cigates/affected/reads.tsv": "gone\ttest\tdocs\n"}, 1, []string{"gone"}},
 		{"planted_non_ascii_literal_reader_is_named", map[string]string{"n/n_test.go": "package n\n\nvar doc = \"../docs/caf\u00e9.md\"\n"}, 1, []string{"n/n_test.go", "docs/caf\u00e9.md"}},
@@ -437,13 +455,6 @@ func TestPlanReadsGuard(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestPlanReadsRealRepository(t *testing.T) {
-	root := repoRoot(t)
-	if res := planReads(t, root); res.code != 0 {
-		t.Fatalf("the declared-read table does not cover the repository (plan-reads exited %d):\n%s%s", res.code, res.stdout, res.stderr)
 	}
 }
 

@@ -247,14 +247,13 @@ func checkReads(root string, t *tables, reads []Read) []string {
 		}
 		declared[r.pkg][r.class] = r.scope
 	}
-	walked := map[string]map[string]string{} // package -> class -> scope, from walks.tsv
-	for _, r := range t.walks {
-		if walked[r.pkg] == nil {
-			walked[r.pkg] = map[string]string{}
-		}
-		walked[r.pkg][r.class] = r.scope
+	type siteKey struct{ pkg, site string }
+	walkRows := map[siteKey][]walkRow{}
+	for _, w := range t.walks {
+		k := siteKey{w.pkg, w.site}
+		walkRows[k] = append(walkRows[k], w)
 	}
-	walkers := map[string]bool{}
+	walkSites := map[siteKey]bool{}
 	var out []string
 	seen := map[string]bool{}
 	report := func(s string) {
@@ -269,12 +268,19 @@ func checkReads(root string, t *tables, reads []Read) []string {
 			scope = scopeCode
 		}
 		if r.Path == "" {
-			walkers[r.Package] = true
-			switch {
-			case len(walked[r.Package]) == 0:
-				report(fmt.Sprintf("%s: undeclared walker: %s; add a walks.tsv row %s\t%s\t<class> for every class the walk reads (%s when it reads only Go package trees)", r.Package, r, r.Package, scope, goTrees))
-			case scope == scopeCode && len(codeOnly(walked[r.Package])) == 0:
-				report(fmt.Sprintf("%s: %s is a walk in non-test code, so its walks.tsv rows must be %s\t%s\t<class> (its importers' tests walk too)", r.Package, r, r.Package, scopeCode))
+			k := siteKey{r.Package, path.Base(r.File)}
+			walkSites[k] = true
+			rows := walkRows[k]
+			if len(rows) == 0 {
+				report(fmt.Sprintf("%s: undeclared walker: %s; add a walks.tsv row %s\t%s\t%s\t<root>\t<skip>\t<filter>\t<classes> measuring this walk", r.Package, r, r.Package, scope, k.site))
+			}
+			for _, w := range rows {
+				if w.scope == scopeStatic && w.pkg+"/" != plannerDir {
+					report(fmt.Sprintf("walks.tsv:%d: scope %s is reserved for the planner's own guard (%s); %s must be %s or %s", w.line, scopeStatic, plannerDir, w.pkg, scopeTest, scopeCode))
+				}
+				if scope == scopeCode && w.scope == scopeTest {
+					report(fmt.Sprintf("walks.tsv:%d: %s is a walk in non-test code, so the row must be %s\t%s\t%s\t... (its importers' tests walk too)", w.line, r, r.Package, scopeCode, k.site))
+				}
 			}
 			continue
 		}
@@ -289,9 +295,24 @@ func checkReads(root string, t *tables, reads []Read) []string {
 			report(fmt.Sprintf("%s: %s is read by non-test code, so the row must be %s\t%s\t%s (its importers' tests read it too)", r.Package, r, r.Package, scopeCode, class))
 		}
 	}
-	for _, r := range t.walks {
-		if !walkers[r.pkg] {
-			report(fmt.Sprintf("walks.tsv:%d: package %s does not walk from the repository root (no walk call in a package that locates the root)", r.line, r.pkg))
+	for _, w := range t.walks {
+		if !walkSites[siteKey{w.pkg, w.site}] {
+			report(fmt.Sprintf("walks.tsv:%d: %s/%s holds no walk of a package that locates the repository root", w.line, w.pkg, w.site))
+			continue
+		}
+		got, err := t.reach(root, w)
+		if err != nil {
+			report(fmt.Sprintf("walks.tsv:%d: %s/%s: %v", w.line, w.pkg, w.site, err))
+			continue
+		}
+		want := append([]string{}, w.classes...)
+		sort.Strings(want)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			gotCol := strings.Join(got, ",")
+			if gotCol == "" {
+				gotCol = "-"
+			}
+			report(fmt.Sprintf("walks.tsv:%d: %s/%s root=%s: classes declared %v, computed from the tree %v; the classes column must be %s", w.line, w.pkg, w.site, w.root, want, got, gotCol))
 		}
 	}
 	for _, r := range t.reads {

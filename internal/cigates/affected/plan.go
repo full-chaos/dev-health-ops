@@ -202,7 +202,8 @@ func plan(in planInput) (Verdict, error) {
 	changedPackages := map[string]bool{} // import paths whose reverse closure is selected
 	direct := map[string]bool{}          // import paths selected alone
 	hasGo := false
-	reached := map[string]bool{} // classes the changed non-Go paths fall in
+	reached := map[string]bool{}      // classes the changed non-Go paths fall in
+	walkSelected := map[string]bool{} // walking packages a changed path selected
 	for _, raw := range in.changed {
 		p := path.Clean(raw)
 		if strings.HasSuffix(p, ".go") {
@@ -220,6 +221,19 @@ func plan(in planInput) (Verdict, error) {
 		}
 		for _, k := range keys {
 			direct[importPath(k)] = true
+		}
+		if !strings.HasSuffix(p, ".go") {
+			for _, w := range in.tables.walkersOf(p) {
+				if w.root == walkUnexpressed {
+					return full("unexpressed walk in " + w.pkg + " (" + w.site + ") can read " + p), nil
+				}
+				walkSelected[w.pkg] = true
+				if w.scope == scopeCode {
+					changedPackages[importPath(w.pkg)] = true
+				} else {
+					direct[importPath(w.pkg)] = true
+				}
+			}
 		}
 		if strings.HasSuffix(p, ".go") && !inTestdata(p) {
 			owner, ok := packages[path.Dir(p)]
@@ -257,7 +271,7 @@ func plan(in planInput) (Verdict, error) {
 	if in.goFilesFull && hasGo {
 		return full("Go source in the change set: every package runs"), nil
 	}
-	in.tables.logRootWalks(in.log, reached)
+	in.tables.logRootWalks(in.log, reached, walkSelected)
 	if len(changedPackages) == 0 && len(direct) == 0 {
 		return Verdict{Kind: "NONE"}, nil
 	}

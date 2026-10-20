@@ -857,6 +857,14 @@ check_race_weights_rows() {
   printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | wc -l)"
 }
 
+# check_plan_reads: the declared-read guard of the plan verdict (`cmd/cigate plan-reads`) over the whole tree: every
+# package that reads a declared path class has a reads.tsv row, and every walk has a measured walks.tsv row whose classes
+# match the tree. It runs in the static leg, which runs on every change: its own walk reads every file, so as a selected
+# test it would select itself for every change.
+check_plan_reads() {
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root "${ROOT}")
+}
+
 ci_leg_stage() {
   local name="$1" started
   shift
@@ -869,7 +877,7 @@ ci_leg_stage() {
 # check_ci_leg LEG [SHARD COUNT]: one parallel slice of `ci` for the go-quality
 # workflow (CHAOS-6690). The legs together run exactly the steps of `ci`
 # (internal/cigates/workflows/workflows_quality_legs_test.go pins the union against the `ci` case):
-#   static   format, vet, build, contract, ratchets, integration-vet, the shard plans
+#   static   format, vet, build, contract, ratchets, integration-vet, the shard plans, the plan-reads guard
 #   test     go test, slice SHARD of COUNT (weight-balanced, ci/go_test_weights.tsv); shard 1 also the multi-replica worker gate
 #   race     go test -race, slice SHARD of COUNT (weight-balanced)
 check_ci_leg() {
@@ -885,6 +893,7 @@ check_ci_leg() {
       ci_leg_stage integration-vet check_integration_vet
       ci_leg_stage plan-integration-shards plan_integration_shards
       ci_leg_stage plan-providersync-shards plan_providersync_test_shards
+      ci_leg_stage plan-reads check_plan_reads
       ;;
     test)
       ci_leg_stage "test ${2:-}/${3:-}" check_test_shard "${2:-}" "${3:-}"
@@ -3997,6 +4006,7 @@ case "${1:-all}" in
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
+    check_plan_reads
     check_multi_replica_workers
     ;;
   all)

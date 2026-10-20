@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -18,17 +17,15 @@ import (
 // may hold several globs); a changed path in no class is FULL. reads.tsv says which package reads which class
 // (`package<TAB>scope<TAB>class`): scope test = the package's own tests read it (the package alone is selected), scope
 // code = its non-test code reads it (every test binary that links the package is selected). A class with no reads row
-// is reader-less. walks.tsv has the same shape and declares what a package that walks from the repository root reads
-// (a literal row never covers a walk: the walk reaches every class its filter lets through). A glob that starts with ** (a file kind anywhere, such as **/*.json) only adds readers: a path is known
-// only through a glob anchored at a first-level entry. The reserved class go-trees declares a walker that reads no class
-// (only Go package trees or FULL paths). `cigate plan-reads` is the guard that keeps reads.tsv complete.
+// is reader-less. walks.tsv (walks.go) measures every walk of the repository instead; a reads row never covers a walk.
+// A glob that starts with ** (a file kind anywhere, such as **/*.json) only adds readers: a path is known
+// only through a glob anchored at a first-level entry. `cigate plan-reads` is the guard that keeps reads.tsv complete.
 const (
 	classesFile = "classes.tsv"
 	readsFile   = "reads.tsv"
 	walksFile   = "walks.tsv"
 	scopeTest   = "test"
 	scopeCode   = "code"
-	goTrees     = "go-trees"
 )
 
 type classGlob struct{ class, glob string }
@@ -41,7 +38,7 @@ type readRow struct {
 type tables struct {
 	globs []classGlob
 	reads []readRow
-	walks []readRow // walks.tsv: what a package that walks from the repository root reads, one row per class
+	walks []walkRow // walks.tsv: one measured row per walk call site (walks.go)
 }
 
 func readTSV(file string, fields int) ([][]string, []int, error) {
@@ -96,7 +93,7 @@ func loadTables(dir string) (*tables, error) {
 	if t.reads, err = loadRows(dir, readsFile, known); err != nil {
 		return nil, err
 	}
-	if t.walks, err = loadRows(dir, walksFile, known); err != nil {
+	if t.walks, err = loadWalks(dir, known); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -114,7 +111,7 @@ func loadRows(dir, file string, known map[string]bool) ([]readRow, error) {
 		if row.scope != scopeTest && row.scope != scopeCode {
 			return nil, fmt.Errorf("%s:%d: scope %q is neither %s nor %s", file, row.line, row.scope, scopeTest, scopeCode)
 		}
-		if !known[row.class] && row.class != goTrees {
+		if !known[row.class] {
 			return nil, fmt.Errorf("%s:%d: class %q is not in %s", file, row.line, row.class, classesFile)
 		}
 		if path.Clean(row.pkg) != row.pkg || strings.HasPrefix(row.pkg, "/") || strings.HasPrefix(row.pkg, "../") {
@@ -222,44 +219,11 @@ func (t *tables) suggest(p string) string {
 
 func (t *tables) readersOf(classes map[string]bool) []readRow {
 	var out []readRow
-	for _, r := range append(append([]readRow{}, t.reads...), t.walks...) {
+	for _, r := range t.reads {
 		if classes[r.class] {
 			out = append(out, r)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].pkg < out[j].pkg })
 	return out
-}
-
-// logRootWalks writes, for every package with walks.tsv rows, the classes its walk is declared to read against the classes
-// the change reaches, and whether that selected it: a false NONE that rests on a walk declaration shows in the job log.
-func (t *tables) logRootWalks(w io.Writer, reached map[string]bool) {
-	if w == nil || len(reached) == 0 {
-		return
-	}
-	declared := map[string][]string{}
-	for _, r := range t.walks {
-		declared[r.pkg] = append(declared[r.pkg], r.class)
-	}
-	var reach []string
-	for c := range reached {
-		reach = append(reach, c)
-	}
-	sort.Strings(reach)
-	var pkgs []string
-	for p := range declared {
-		pkgs = append(pkgs, p)
-	}
-	sort.Strings(pkgs)
-	for _, p := range pkgs {
-		classes := declared[p]
-		sort.Strings(classes)
-		state := "not selected"
-		for _, c := range classes {
-			if reached[c] {
-				state = "selected"
-			}
-		}
-		fmt.Fprintf(w, "root walk in %s: classes declared %v, reachable %v; %s\n", p, classes, reach, state)
-	}
 }

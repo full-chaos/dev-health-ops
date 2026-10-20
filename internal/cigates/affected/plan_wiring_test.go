@@ -226,3 +226,27 @@ func TestQualityShardPlansRunOnlyTheSelection(t *testing.T) {
 		}
 	}
 }
+
+// The declared-read guard runs in the static leg, and the static leg runs on every change set: the guard walks every file,
+// so it is enforced by the always-run leg, never by a selection.
+func TestPlanReadsGuardRunsInTheAlwaysRunStaticLeg(t *testing.T) {
+	script := readText(t, scriptPath(t, "ci/check_go.sh"))
+	if !strings.Contains(script, "      ci_leg_stage plan-reads check_plan_reads\n") {
+		t.Error("the static ci-leg does not run check_plan_reads")
+	}
+	if !strings.Contains(script, "go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root \"${ROOT}\"") {
+		t.Error("check_plan_reads does not run cmd/cigate plan-reads over the repository root")
+	}
+	jobs := loadJobs(t, ".github/workflows/go-quality.yml")
+	var rel wfStep
+	for _, st := range jobs["go-quality-leg"].Steps {
+		if st.ID == "relevance" {
+			rel = st
+		}
+	}
+	_, block, ok := strings.Cut(rel.Run, "if [ \"${LEG}\" = \"static\" ]; then")
+	block, _, _ = strings.Cut(block, "fi\n")
+	if !ok || !strings.Contains(block, "relevant=true") || !strings.Contains(block, "exit 0") || strings.Contains(block, "relevant=false") {
+		t.Errorf("the relevance step does not run the static leg on every change set:\n%s", rel.Run)
+	}
+}

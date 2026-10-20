@@ -9,13 +9,13 @@ type Purpose string
 const (
 	PurposeInvestigate Purpose = "investigate"
 	PurposeExplain     Purpose = "explain"
-	PurposeCategorize  Purpose = "categorize"
 )
 
 // Purposes is the fixed list, in the order the admin API reports it.
-var Purposes = []Purpose{PurposeInvestigate, PurposeExplain, PurposeCategorize}
+var Purposes = []Purpose{PurposeInvestigate, PurposeExplain}
 
-// ParsePurpose accepts exactly the fixed names.
+// ParsePurpose accepts exactly the fixed names. Categorization is not a
+// purpose: it runs on the platform provider and takes no organization setting.
 func ParsePurpose(name string) (Purpose, bool) {
 	for _, purpose := range Purposes {
 		if string(purpose) == name {

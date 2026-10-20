@@ -241,17 +241,13 @@ func TestLLMConfigCountsEachOutcome(t *testing.T) {
 	}
 }
 
-// The worker route serves the categorize source behind the worker verifier,
-// never the investigate source or the acr verifier.
-func TestWorkerCategorizeRouteUsesItsOwnSourceAndVerifier(t *testing.T) {
-	acrVerifier, workerVerifier := &fakeVerifier{err: ErrCredentialInvalid}, &fakeVerifier{}
-	investigate, categorize := configured(), configured()
-	categorize.cfg.Model = "categorize-model"
+// The categorize worker route no longer exists: an org's BYO config never
+// reaches categorization.
+func TestWorkerCategorizeRouteIsGone(t *testing.T) {
 	mux := http.NewServeMux()
 	for _, route := range Routes(Deps{
 		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		LLMConfig: investigate, Credentials: acrVerifier,
-		CategorizeLLMConfig: categorize, WorkerCredentials: workerVerifier,
+		LLMConfig: configured(), Credentials: &fakeVerifier{},
 	}) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
@@ -259,25 +255,8 @@ func TestWorkerCategorizeRouteUsesItsOwnSourceAndVerifier(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+testToken)
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "categorize-model") {
-		t.Fatalf("status %d body %s", recorder.Code, recorder.Body.String())
-	}
-	if investigate.got != "" || acrVerifier.gotToken != "" {
-		t.Fatal("the worker route reached the investigate source or the acr verifier")
-	}
-	if workerVerifier.gotScope != LLMConfigScope {
-		t.Fatalf("worker verifier scope = %q", workerVerifier.gotScope)
-	}
-
-	// With no worker source or verifier the route answers 503 and never serves.
-	bare := http.NewServeMux()
-	for _, route := range Routes(Deps{Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)), LLMConfig: investigate, Credentials: acrVerifier}) {
-		bare.Handle(route.Method+" "+route.Pattern, route.Handler)
-	}
-	recorder = httptest.NewRecorder()
-	bare.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("unconfigured worker route answered %d", recorder.Code)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("the categorize route answered %d, want 404", recorder.Code)
 	}
 }
 

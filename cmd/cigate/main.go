@@ -9,6 +9,7 @@
 //	cigate query-api-flags [args]        bigboy query-api env names from deploy values
 //	cigate route-coverage [args]         ROUTEPROBE every routed path on the running Go planes
 //	cigate web-env-parity [args]         web env-name parity between deploy values and compose.bigboy.yml
+//	cigate live-e2e <verb>               live backend e2e harness checks and fixture steps
 package main
 
 import (
@@ -16,6 +17,7 @@ import (
 	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates"
+	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/metricsproof"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/routing"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -25,7 +27,7 @@ func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: cigate governance|affected-integration|govulncheck|scope-candidates|metrics-proof|plane-split-router|query-api-flags|route-coverage|web-env-parity [args]")
+		fmt.Fprintln(os.Stderr, "usage: cigate governance|affected-integration|govulncheck|scope-candidates|metrics-proof|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e [args]")
 		return 2
 	}
 	switch args[0] {
@@ -35,6 +37,8 @@ func run(args []string) int {
 		return cigates.AffectedIntegration(args[1:], os.Stdout, os.Stderr)
 	case "govulncheck":
 		return cigates.AuthGovulncheck(os.Stdin, os.Stdout, os.Stderr)
+	case "live-e2e":
+		return livee2e.Run(args[1:], processEnv, os.Stdout, os.Stderr)
 	case "metrics-proof":
 		return metricsproof.Run(args[1:], processEnv, metricsproof.OpenClickHouse, os.Stdout, os.Stderr)
 	case "plane-split-router":

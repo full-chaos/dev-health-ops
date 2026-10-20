@@ -390,6 +390,9 @@ func (fetcher GitHubWorkItemPRSocialFetcher) fetchPage(
 		if !ok || pull == nil || pull.Number != number {
 			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
 		}
+		if (commentsFirst > 0 && pull.Comments == nil) || (eventsFirst > 0 && pull.TimelineItems == nil) {
+			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
+		}
 		pulls[number] = *pull
 	}
 	return pulls, nil

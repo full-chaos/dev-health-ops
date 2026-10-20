@@ -718,7 +718,10 @@ func fetchGitHubBlame(
 	if err := providerfoundation.DecodeResponseJSON(response, bodyBytes, &envelope, providerfoundation.DecodeStrict); err != nil {
 		return nil, err
 	}
-	if closeErr != nil || len(envelope.Errors) > 0 {
+	if closeErr != nil {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyRead)
+	}
+	if len(envelope.Errors) > 0 {
 		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	return envelope.Data.Repository.Object.Blame.Ranges, nil

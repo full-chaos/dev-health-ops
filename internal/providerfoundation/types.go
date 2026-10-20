@@ -410,8 +410,10 @@ type ProviderError struct {
 	// structured log value (a map, a struct, a struct value) carries class,
 	// status, path and retry delay only.
 	Body string `json:"-"`
-	// Reason is a closed-set transport failure reason (TransportReason*),
-	// set only when no HTTP response arrived. Never raw cause text.
+	// Reason is a closed-set reason, never raw cause text: a transport failure
+	// reason (TransportReason*) when no HTTP response arrived, or a response
+	// failure reason (Reason*: body_read, body_decode, body_too_large,
+	// body_shape, status, redirect) when a response arrived but could not be used.
 	Reason string
 	// Dimension is the request budget dimension a rate-limited response
 	// belongs to (see RateLimitDimension), empty on every other class and when
@@ -423,9 +425,11 @@ type ProviderError struct {
 	cause error
 }
 
-// AfterResponse reports a failure raised after a 2xx response arrived (a body
-// that failed to read or decode), not an HTTP status classification. Callers
-// that read Class as the provider's verdict skip these.
+// AfterResponse reports a failure raised after an HTTP response arrived, for
+// any status or a redirect (a body that failed to read, decode, fit its cap or
+// have the expected shape; an unexpected success status; an error body that
+// could not be read), not an HTTP status classification. Callers that read
+// Class as the provider's verdict skip these.
 func (e *ProviderError) AfterResponse() bool { return e != nil && e.cause != nil }
 
 func (e *ProviderError) Unwrap() error {

@@ -428,7 +428,7 @@ func CollectLinearGraphQLPages(
 		}
 		connection, err := nestedJSONObject(payload, append([]string{"data"}, options.ConnectionPath...)...)
 		if err != nil {
-			return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
+			return PageCollection{}, paginationInvalid(response, ReasonBodyShape)
 		}
 		var nodes []json.RawMessage
 		if rawNodes, ok := connection["nodes"]; ok {
@@ -451,7 +451,7 @@ func CollectLinearGraphQLPages(
 			return result, nil
 		}
 		if pageInfo.EndCursor == "" || pageInfo.EndCursor == cursor {
-			return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
+			return PageCollection{}, paginationInvalid(response, ReasonBodyShape)
 		}
 		cursor = pageInfo.EndCursor
 	}
@@ -538,7 +538,7 @@ func CollectJiraTokenOffsetPages(
 		}
 		if next != "" {
 			if next == token {
-				return PageCollection{}, paginationInvalid(response, ReasonBodyDecode)
+				return PageCollection{}, paginationInvalid(response, ReasonBodyShape)
 			}
 			token = next
 			continue
@@ -670,10 +670,13 @@ func CollectLaunchDarklyAuditPages(
 		}
 		href, err := launchDarklyNextHref(payload)
 		if err != nil {
-			return PageCollection{}, err
+			return PageCollection{}, paginationInvalid(response, ReasonBodyShape)
 		}
 		if href == "" {
 			return result, nil
+		}
+		if seen[href] {
+			return PageCollection{}, paginationInvalid(response, ReasonBodyShape)
 		}
 		next = href
 	}
@@ -728,6 +731,9 @@ func decodePage(response *http.Response, dataKey string) ([]json.RawMessage, err
 		topLevel = '['
 	}
 	if trimmed := bytes.TrimSpace(body); len(trimmed) == 0 || trimmed[0] != topLevel {
+		if json.Valid(body) {
+			return nil, paginationInvalid(response, ReasonBodyShape)
+		}
 		return nil, paginationInvalid(response, ReasonBodyDecode)
 	}
 	if dataKey == "" {

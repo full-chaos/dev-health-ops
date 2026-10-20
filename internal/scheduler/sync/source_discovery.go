@@ -1060,7 +1060,7 @@ func discoverJiraLegacyProjects(ctx context.Context, client *providerfoundation.
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("legacy jira project listing: unexpected status %d", response.StatusCode)
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonStatus)
 	}
 	body, err := providerfoundation.ReadResponseBodyTransport(response, legacyJiraProjectListMaxBytes)
 	if err != nil {

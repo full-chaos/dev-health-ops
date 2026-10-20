@@ -243,6 +243,9 @@ func (fetcher GitHubPullRequestReviewFetcher) fetchPage(
 		if !ok || pull.Number != number {
 			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrNormalizationInvalid)
 		}
+		if pull.Reviews.PageInfo.HasNextPage && (pull.Reviews.PageInfo.EndCursor == "" || pull.Reviews.PageInfo.EndCursor == after[number]) {
+			return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrPaginationInvalid)
+		}
 		connections[number] = pull.Reviews
 	}
 	return connections, nil

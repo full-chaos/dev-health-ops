@@ -406,3 +406,30 @@ func TestCoverageProbesThePortPythonDid(t *testing.T) {
 		}
 	}
 }
+
+type countingProber struct{ calls int }
+
+func (p *countingProber) Probe(string, int, string, string) (int, error) { p.calls++; return 405, nil }
+
+// A routed path Python's http.client could not send (UnicodeEncodeError on a non-ASCII character, InvalidURL on a
+// control or space character) is refused before any probe: exit 1, one stderr line naming the path, nothing on stdout.
+func TestCoverageRefusesAPathPythonCouldNotSendBeforeAnyProbe(t *testing.T) {
+	for _, c := range []struct{ goPath, named string }{
+		{"/café/{id}", "'/café/routeprobe'"},
+		{"/n\u00a0b/{x}", `'/n\xa0b/routeprobe'`},
+		{"/a b", "'/a b'"},
+		{"/tab\there", `'/tab\there'`},
+	} {
+		v := m{"ingress": m{
+			"goApiPaths":    l{m{"path": "/api/v1/known"}, m{"path": c.goPath}},
+			"queryApiPaths": l{m{"path": "/api/v1/q", "pathType": "Exact"}},
+		}}
+		p := &countingProber{}
+		var so, se bytes.Buffer
+		code := routing.RunRouteCoverage([]string{writeFile(t, t.TempDir(), "v.yaml", dump(t, v))}, routing.Deps{Prober: p, Files: routing.OSFiles{}}, &so, &se)
+		want := "check-route-coverage: routed path " + c.named + " cannot be sent as a request target (a non-ASCII, control or space character): refusing before any probe\n"
+		if code != 1 || so.String() != "" || se.String() != want || p.calls != 0 {
+			t.Errorf("%q: exit %d stdout %q stderr %q probes %d, want exit 1, no stdout, stderr %q, 0 probes", c.goPath, code, so.String(), se.String(), p.calls, want)
+		}
+	}
+}

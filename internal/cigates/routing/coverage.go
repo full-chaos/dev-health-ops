@@ -99,6 +99,13 @@ func RunRouteCoverage(args []string, deps Deps, stdout, stderr io.Writer) int {
 			raise("%v", err)
 		}
 		goPaths, queryPaths := probePaths(mustLoad(raw, false))
+		// Python's http.client refused a request target with a non-ASCII character (UnicodeEncodeError) or a control
+		// or space character (InvalidURL). Such a path is refused here too, before any probe (D6129).
+		for _, p := range append(append([]string{}, goPaths...), queryPaths...) {
+			if !sendablePath(p) {
+				raise("check-route-coverage: routed path %s cannot be sent as a request target (a non-ASCII, control or space character): refusing before any probe", pyRepr(p))
+			}
+		}
 		failed := false
 		for _, plane := range []struct {
 			name, url string
@@ -145,4 +152,15 @@ func RunRouteCoverage(args []string, deps Deps, stdout, stderr io.Writer) int {
 		}
 		return 0
 	})
+}
+
+// sendablePath reports whether Python's http.client would put the path on a request line: ASCII only, and none of
+// the characters it rejects in a URL (0x00-0x20 and 0x7f).
+func sendablePath(p string) bool {
+	for i := 0; i < len(p); i++ {
+		if c := p[i]; c <= 0x20 || c >= 0x7f {
+			return false
+		}
+	}
+	return true
 }

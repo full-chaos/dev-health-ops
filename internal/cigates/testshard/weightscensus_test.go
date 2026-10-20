@@ -149,13 +149,13 @@ func censusWriteTemp(t *testing.T, name, text string) string {
 
 func censusRowsRun(t *testing.T, text string) (string, string, error) {
 	t.Helper()
-	return checkGo(t, []string{"GO_RACE_WEIGHTS=" + censusWriteTemp(t, "weights.tsv", text)}, "race-weights-rows")
+	return checkGo(t, raceweightsEnv(raceweightsDirFromRows(t, text)), "race-weights-rows")
 }
 
 const censusVictim = "internal/httpguard"
 
 func TestTheGoSideWeightsCensusAcceptsTheTable(t *testing.T) {
-	text := censusRead(t, "ci/go_race_weights.tsv")
+	text := raceweightsRealText(t)
 	out, errs, err := censusRowsRun(t, text)
 	if err != nil {
 		t.Fatalf("census refused the real table: %v\n%s", err, errs)
@@ -166,7 +166,7 @@ func TestTheGoSideWeightsCensusAcceptsTheTable(t *testing.T) {
 }
 
 func TestTheGoSideWeightsCensusPlantedDefectsEachName(t *testing.T) {
-	text := censusRead(t, "ci/go_race_weights.tsv")
+	text := raceweightsRealText(t)
 	if !strings.Contains(text, censusVictim+"\t") {
 		t.Fatalf("%s has no weights row", censusVictim)
 	}
@@ -191,7 +191,7 @@ func TestTheGoSideWeightsCensusPlantedDefectsEachName(t *testing.T) {
 	}
 	// The removed-row and stale-row diagnostics are distinct guards.
 	_, errs, _ := censusRowsRun(t, censusWithout(text, censusVictim))
-	if !strings.Contains(errs, "NO row in ci/go_race_weights.tsv") {
+	if !strings.Contains(errs, "NO row in ci/go_race_weights.d") {
 		t.Fatalf("missing-row message changed: %s", errs)
 	}
 	_, errs, _ = censusRowsRun(t, text+"internal/zz-gone-package\t1\n")
@@ -251,7 +251,7 @@ func censusMissing(mod string, pkgs []string, weights map[string]bool) []string 
 func censusWeightSet(t *testing.T) map[string]bool {
 	t.Helper()
 	set := map[string]bool{}
-	for _, k := range censusRowKeys(censusRead(t, "ci/go_race_weights.tsv")) {
+	for _, k := range censusRowKeys(raceweightsRealText(t)) {
 		set[k] = true
 	}
 	return set
@@ -260,7 +260,7 @@ func censusWeightSet(t *testing.T) map[string]bool {
 func TestEveryPackageOfTheRootModuleHasAWeightsRow(t *testing.T) {
 	mod, pkgs := censusPackages(t)
 	if missing := censusMissing(mod, pkgs, censusWeightSet(t)); len(missing) != 0 {
-		t.Fatalf("packages with no row in ci/go_race_weights.tsv: %v", missing)
+		t.Fatalf("packages with no row in ci/go_race_weights.d: %v", missing)
 	}
 }
 
@@ -288,7 +288,7 @@ func censusAwk(t *testing.T, mod, weights, packages string) (string, string, err
 
 func TestTheMissingRowAwkAcceptsTheRealTable(t *testing.T) {
 	mod, pkgs := censusPackages(t)
-	out, errs, err := censusAwk(t, mod, filepath.Join(repoRoot(t), "ci", "go_race_weights.tsv"), strings.Join(pkgs, "\n")+"\n")
+	out, errs, err := censusAwk(t, mod, raceweightsRealMerged(t), strings.Join(pkgs, "\n")+"\n")
 	if err != nil || out != "" {
 		t.Fatalf("awk on the real table: err=%v stdout=%q stderr=%q", err, out, errs)
 	}
@@ -297,8 +297,8 @@ func TestTheMissingRowAwkAcceptsTheRealTable(t *testing.T) {
 func TestTheMissingRowAwkPlantedRemovedRowAndEmptyInputs(t *testing.T) {
 	mod, pkgs := censusPackages(t)
 	text := strings.Join(pkgs, "\n") + "\n"
-	real := filepath.Join(repoRoot(t), "ci", "go_race_weights.tsv")
-	trimmed := censusWriteTemp(t, "trimmed.tsv", censusWithout(censusRead(t, "ci/go_race_weights.tsv"), censusVictim))
+	real := raceweightsRealMerged(t)
+	trimmed := censusWriteTemp(t, "trimmed.tsv", censusWithout(raceweightsRealText(t), censusVictim))
 	out, _, _ := censusAwk(t, mod, trimmed, text)
 	if got := strings.Fields(out); len(got) != 1 || got[0] != censusVictim {
 		t.Fatalf("awk did not name exactly the removed row: %q", out)
@@ -316,12 +316,11 @@ func TestTheMissingRowAwkPlantedRemovedRowAndEmptyInputs(t *testing.T) {
 }
 
 func TestARaceLegWithAPackageThatHasNoRowFailsBeforeAnyTestRunsPlanted(t *testing.T) {
-	trimmed := censusWriteTemp(t, "trimmed.tsv", censusWithout(censusRead(t, "ci/go_race_weights.tsv"), censusVictim))
-	r := runCheckGo(t, []string{"GO_RACE_WEIGHTS=" + trimmed}, false, "ci-leg", "race", "1", "3")
+	r := runCheckGo(t, raceweightsEnv(raceweightsDirFromRows(t, censusWithout(raceweightsRealText(t), censusVictim))), false, "ci-leg", "race", "1", "3")
 	if r.Err == nil {
 		t.Fatalf("race leg passed with a missing row: %s", r.Stdout)
 	}
-	if !strings.Contains(r.Stderr, "NO row in ci/go_race_weights.tsv") || !strings.Contains(r.Stderr, censusVictim) {
+	if !strings.Contains(r.Stderr, "NO row in ci/go_race_weights.d") || !strings.Contains(r.Stderr, censusVictim) {
 		t.Fatalf("stderr does not name the missing row: %s", r.Stderr)
 	}
 	if len(r.Calls) != 0 {
@@ -333,8 +332,7 @@ func TestARaceLegWithAPackageThatHasNoRowFailsBeforeAnyTestRunsPlanted(t *testin
 }
 
 func TestARaceLegWithAnEmptyWeightsFileFailsBeforeAnyTestRunsPlanted(t *testing.T) {
-	empty := censusWriteTemp(t, "empty.tsv", "# no rows\n")
-	r := runCheckGo(t, []string{"GO_RACE_WEIGHTS=" + empty}, false, "ci-leg", "race", "1", "3")
+	r := runCheckGo(t, raceweightsEnv(raceweightsDirFromFiles(t, map[string]string{"empty.tsv": "# no rows\n"})), false, "ci-leg", "race", "1", "3")
 	if r.Err == nil {
 		t.Fatalf("race leg passed with an empty weights file: %s", r.Stdout)
 	}

@@ -44,11 +44,7 @@ func raceshardParseWeights(text string) (order []string, weights map[string]int)
 
 func raceshardRealWeights(t *testing.T) map[string]int {
 	t.Helper()
-	b, err := os.ReadFile(raceshardPath(t, "ci/go_race_weights.tsv"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, w := raceshardParseWeights(string(b))
+	_, w := raceshardParseWeights(raceweightsRealText(t))
 	return w
 }
 
@@ -68,8 +64,9 @@ func raceshardAwk(t *testing.T, awkFile, mod string, pkgs []string, k, count int
 func raceshardSlices(t *testing.T, mod string, pkgs []string, count int) [][]string {
 	t.Helper()
 	var s [][]string
+	merged := raceweightsRealMerged(t)
 	for k := 1; k <= count; k++ {
-		s = append(s, raceshardAwk(t, raceshardPath(t, "ci/go_race_shard.awk"), mod, pkgs, k, count, raceshardPath(t, "ci/go_race_weights.tsv")))
+		s = append(s, raceshardAwk(t, raceshardPath(t, "ci/go_race_shard.awk"), mod, pkgs, k, count, merged))
 	}
 	return s
 }
@@ -200,15 +197,26 @@ func TestRaceShardsPartitionPlantedDefectsAreCaught(t *testing.T) {
 	}
 }
 
-// raceshardTableDefects is the check of the weights-table guard: sorted rows, no duplicates, no stale package.
-func raceshardTableDefects(text string, known map[string]bool) []string {
-	rows, _ := raceshardParseWeights(text)
+// raceshardTableDefects is the check of the weights-directory guard: each file holds exactly one row and is named after
+// its package, no package is weighed twice, no stale package.
+func raceshardTableDefects(files map[string]string, known map[string]bool) []string {
 	var defects []string
-	if !sort.StringsAreSorted(rows) {
-		defects = append(defects, "ci/go_race_weights.tsv is not sorted (LC_ALL=C)")
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
 	}
+	sort.Strings(names)
 	seen := map[string]bool{}
-	for _, r := range rows {
+	for _, n := range names {
+		rows, _ := raceshardParseWeights(files[n])
+		if len(rows) != 1 {
+			defects = append(defects, n+" must hold exactly one row")
+			continue
+		}
+		r := rows[0]
+		if want := raceweightsFileName(r); n != want {
+			defects = append(defects, n+" holds package "+r+": name the file "+want)
+		}
 		if seen[r] {
 			defects = append(defects, "a package is weighed twice: "+r)
 		}
@@ -231,42 +239,44 @@ func raceshardKnown(t *testing.T) map[string]bool {
 }
 
 func TestTheRaceWeightsTableIsClean(t *testing.T) {
-	b, err := os.ReadFile(raceshardPath(t, "ci/go_race_weights.tsv"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, d := range raceshardTableDefects(string(b), raceshardKnown(t)) {
+	for _, d := range raceshardTableDefects(raceweightsRealFiles(t), raceshardKnown(t)) {
 		t.Error(d)
 	}
 }
 
 func TestTheRaceWeightsTablePlantedDefectsAreCaught(t *testing.T) {
-	b, err := os.ReadFile(raceshardPath(t, "ci/go_race_weights.tsv"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	known := raceshardKnown(t)
-	text := string(b)
-	if d := raceshardTableDefects(text, known); len(d) != 0 {
+	real := raceweightsRealFiles(t)
+	if d := raceshardTableDefects(real, known); len(d) != 0 {
 		t.Fatalf("the real table must be clean, got %v", d)
 	}
-	var data []string
-	for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
-		if l != "" && !strings.HasPrefix(l, "#") {
-			data = append(data, l)
+	with := func(extra map[string]string) map[string]string {
+		m := map[string]string{}
+		for k, v := range real {
+			m[k] = v
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+	var first, firstName string
+	for n, text := range real {
+		if firstName == "" || n < firstName {
+			firstName, first = n, text
 		}
 	}
-	swapped := append([]string{}, data...)
-	swapped[0], swapped[1] = swapped[1], swapped[0]
 	for name, tc := range map[string]struct {
-		text   string
+		files  map[string]string
 		needle string
 	}{
-		"unsorted":  {strings.Join(swapped, "\n") + "\n", "not sorted"},
-		"duplicate": {text + data[0] + "\n", "weighed twice"},
-		"stale":     {text + "zz/no/such/package\t3\n", "no longer exists"},
+		"two rows in a file": {with(map[string]string{firstName: first + "zz/extra\t1\n"}), "exactly one row"},
+		"empty file":         {with(map[string]string{firstName: "# no row\n"}), "exactly one row"},
+		"misnamed file":      {with(map[string]string{"zz_misnamed.tsv": first}), "name the file"},
+		"duplicate":          {with(map[string]string{"zz_dup.tsv": first}), "weighed twice"},
+		"stale":              {with(map[string]string{raceweightsFileName("zz/no/such/package"): "zz/no/such/package\t3\n"}), "no longer exists"},
 	} {
-		got := strings.Join(raceshardTableDefects(tc.text, known), "; ")
+		got := strings.Join(raceshardTableDefects(tc.files, known), "; ")
 		if !strings.Contains(got, tc.needle) {
 			t.Errorf("%s: planted defect not caught (needle %q, got %q)", name, tc.needle, got)
 		}
@@ -456,24 +466,18 @@ func TestRaceVerbSlicesPlantedDefectsAreCaught(t *testing.T) {
 		t.Error("a dropped package was not caught")
 	}
 	// Planted in the real script: a weights file that lacks a row fails the leg before any go test runs.
-	b, err := os.ReadFile(raceshardPath(t, "ci/go_race_weights.tsv"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	realText := raceweightsRealText(t)
 	var kept []string
-	for _, l := range strings.Split(string(b), "\n") {
+	for _, l := range strings.Split(realText, "\n") {
 		if !strings.HasPrefix(l, "internal/httpguard\t") {
 			kept = append(kept, l)
 		}
 	}
-	if len(kept) == len(strings.Split(string(b), "\n")) {
+	if len(kept) == len(strings.Split(realText, "\n")) {
 		t.Skip("internal/httpguard has no weights row to remove")
 	}
-	planted := filepath.Join(t.TempDir(), "w.tsv")
-	if err := os.WriteFile(planted, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	r := runCheckGo(t, []string{"GO_RACE_WEIGHTS=" + planted}, false, "ci-leg", "race", "1", "2")
+	planted := raceweightsDirFromRows(t, strings.Join(kept, "\n"))
+	r := runCheckGo(t, raceweightsEnv(planted), false, "ci-leg", "race", "1", "2")
 	if r.Err == nil || !strings.Contains(r.Stderr, "NO row") {
 		t.Errorf("a missing weights row must fail the leg (err=%v): %s", r.Err, tail(r.Stderr))
 	}
@@ -499,7 +503,7 @@ func TestARaceSliceThatSelectsNothingPlantedControlSelectsSomething(t *testing.T
 	// Planted contrast: the awk gives shard 5000 of 5001 no package, so it is exactly the input the guard exists for;
 	// a real shard of the same awk is non-empty, so the guard is not an unconditional failure.
 	mod, pkgs := raceshardGoList(t)
-	awk, w := raceshardPath(t, "ci/go_race_shard.awk"), raceshardPath(t, "ci/go_race_weights.tsv")
+	awk, w := raceshardPath(t, "ci/go_race_shard.awk"), raceweightsRealMerged(t)
 	if got := raceshardAwk(t, awk, mod, pkgs, 5000, 5001, w); len(got) != 0 {
 		t.Errorf("shard 5000/5001 should select nothing, got %d", len(got))
 	}

@@ -388,3 +388,25 @@ func TestTheRaceExcludedCensusIsSplitOverTheShardsExactlyOnce(t *testing.T) {
 		t.Fatalf("the shards run %d race-excluded rows, the census lists %d: a row is lost or run twice", len(got), len(want))
 	}
 }
+
+// A missing or empty race-excluded census fails the test leg: the failure of the row loader must not be swallowed.
+func TestAMissingOrEmptyRaceExcludedCensusFailsTheTestLeg(t *testing.T) {
+	empty := filepath.Join(t.TempDir(), "empty.tsv")
+	if err := os.WriteFile(empty, []byte("# no rows\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, list := range map[string]string{"empty": empty, "missing": filepath.Join(t.TempDir(), "absent.tsv")} {
+		r := runCheckGo(t, []string{"GO_RACE_EXCLUDED_TESTS=" + list}, false, "ci-leg", "test", "350", "350")
+		if r.Err == nil {
+			t.Errorf("%s census: the test leg passed: %s", name, r.Stdout)
+			continue
+		}
+		if !strings.Contains(r.Stderr, "race_excluded_tests.tsv") {
+			t.Errorf("%s census: the failure does not name the census: %s", name, r.Stderr)
+		}
+	}
+	r := runCheckGo(t, nil, false, "ci-leg", "test", "350", "350")
+	if r.Err != nil {
+		t.Errorf("the real census must pass the same leg: %v\n%s", r.Err, r.Stderr)
+	}
+}

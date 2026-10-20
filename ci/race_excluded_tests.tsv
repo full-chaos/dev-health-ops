@@ -9,6 +9,15 @@ internal/cigates/chartgates	TestExecGuardsPlantedByOverlay
 internal/cigates/checkgo	TestCheckGoMultiReplicaGateExecutes
 internal/cigates/scripts	TestMergeTreeVetGoCacheAndScratchPlacement
 internal/cigates/scripts	TestMergeTreeVetScript
+internal/cigates/scripts	TestOracleChangedJobSelectStep
+internal/cigates/scripts	TestOracleChangedLegs
+internal/cigates/scripts	TestOracleClosureFiles
+internal/cigates/scripts	TestOracleLegPlan
+internal/cigates/scripts	TestOracleShardSlices
+internal/cigates/scripts	TestOracleShardsRealRegistry
+internal/cigates/scripts	TestOracleTriggerSelectionRule
+internal/cigates/scripts	TestOracleTriggerStaticCheck
+internal/cigates/scripts	TestOracleTriggersRealTree
 internal/cigates/scripts	TestRegistryGuardPlantedDefects
 internal/cigates/scripts	TestRegistryGuardRealTree
 internal/cigates/scripts	TestRegistryRunRowsCanLeaveAProof

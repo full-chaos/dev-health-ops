@@ -1,6 +1,7 @@
 package licensing
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -37,5 +38,11 @@ func TestPlatformModelFallbackOpensOnlyOnAnActiveOrgOverride(t *testing.T) {
 				t.Fatalf("decision = %+v, want allowed=%t reason=%s", decision, tc.allowed, tc.reason)
 			}
 		})
+	}
+}
+
+func TestEntitlementDecisionKeysIncludePlatformModelFallback(t *testing.T) {
+	if !slices.Contains(EntitlementDecisionKeys(), "platform_model_fallback") {
+		t.Fatalf("decision keys %v lack platform_model_fallback, so the billing entitlements response cannot report the grant", EntitlementDecisionKeys())
 	}
 }

@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
@@ -715,5 +717,101 @@ func TestEntitlementIsCheckedBeforeTheRequestBody(t *testing.T) {
 		if resp.StatusCode != http.StatusPaymentRequired {
 			t.Fatalf("%s with a malformed body for a non-entitled org = %d, want 402", route, resp.StatusCode)
 		}
+	}
+}
+
+func TestProviderChecksPrecedeConfigDecode(t *testing.T) {
+	h := newHarness(t, harnessOpts{signup: true})
+	for name, row := range map[string][2]string{"another protocol": {"saml", "active"}, "inactive": {"oidc", "inactive"}} {
+		t.Run(name, func(t *testing.T) {
+			provider := h.seedRawProviderAs(t, h.orgID, `[]`, row[0], row[1])
+			for route, call := range map[string]func() error{
+				"authorize": func() error { _, err := h.svc.Authorize(context.Background(), provider, ""); return err },
+				"callback": func() error {
+					_, _, err := h.svc.Callback(context.Background(), provider, CallbackInput{Code: "c", State: "s"})
+					return err
+				},
+			} {
+				var failure *Error
+				if err := call(); !errors.As(err, &failure) || failure.Status != http.StatusBadRequest {
+					t.Fatalf("%s with a malformed stored config = %v, want 400 before the config is decoded", route, err)
+				}
+			}
+		})
+	}
+}
+
+// outcomeCounts reads auth.oidc.outcomes by its route, outcome and reason labels.
+func outcomeCounts(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]int64{}
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != "auth.oidc.outcomes" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("auth.oidc.outcomes is %T", m.Data)
+			}
+			for _, dp := range sum.DataPoints {
+				route, _ := dp.Attributes.Value("route")
+				outcome, _ := dp.Attributes.Value("outcome")
+				reason, _ := dp.Attributes.Value("reason")
+				out[route.AsString()+"/"+outcome.AsString()+"/"+reason.AsString()] += dp.Value
+			}
+		}
+	}
+	return out
+}
+
+func TestEveryOutcomeIsRecordedOnce(t *testing.T) {
+	h := newHarness(t, harnessOpts{signup: true})
+	reader := sdkmetric.NewManualReader()
+	var logged bytes.Buffer
+	cfg := h.svc.cfg
+	cfg.Meter = sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")
+	cfg.Logger = slog.New(slog.NewTextHandler(&logged, nil))
+	svc, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.svc = svc
+	unlicensed := h.seedProvider(t, h.seedOrgTier(t, "community"), map[string]any{"client_id": h.clientID, "issuer": h.issuer,
+		"token_endpoint": h.idp.server.URL + "/token", "jwks_uri": h.idp.server.URL + "/jwks"}, true, nil)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/auth/oidc/{provider_id}/authorize", svc.AuthorizeHandler())
+	mux.Handle("POST /api/v1/auth/oidc/{provider_id}/callback", svc.CallbackHandler())
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	for _, route := range []string{"authorize", "callback"} {
+		resp, err := http.Post(server.URL+"/api/v1/auth/oidc/"+unlicensed.String()+"/"+route, "application/json",
+			strings.NewReader(`{"code":"c","state":"s"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusPaymentRequired {
+			t.Fatalf("%s for a non-entitled organization = %d, want 402", route, resp.StatusCode)
+		}
+	}
+	s := h.start(t)
+	if _, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-counted", uniqueEmail("counted")))); failure != nil {
+		t.Fatalf("callback: %v", failure)
+	}
+	counts := outcomeCounts(t, reader)
+	for key, want := range map[string]int64{
+		"authorize/denied/not_entitled": 1, "callback/denied/not_entitled": 1, "callback/success/accepted": 1,
+	} {
+		if counts[key] != want {
+			t.Errorf("auth.oidc.outcomes %s = %d, want %d (all: %v)", key, counts[key], want, counts)
+		}
+	}
+	if n := strings.Count(logged.String(), "reason=not_entitled"); n != 2 {
+		t.Errorf("refusal log lines with reason=not_entitled = %d, want 2:\n%s", n, logged.String())
 	}
 }

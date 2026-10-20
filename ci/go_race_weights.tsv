@@ -226,6 +226,7 @@ internal/platform/health	1
 internal/platform/lifecycle	1
 internal/platform/logging	22
 internal/platform/otlpmetrics	4
+internal/platform/pgident	1
 internal/platform/poolstat	1
 internal/platform/postureguard	1
 internal/platform/queuecontrol	1

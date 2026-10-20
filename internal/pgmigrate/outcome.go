@@ -49,8 +49,9 @@ func isRefusal(err error) bool {
 	var foreign ForeignDatabaseError
 	var mismatch SchemaMismatchError
 	var down DowngradeRefusal
+	var authMismatch AuthSchemaMismatchError
 	return errors.As(err, &below) || errors.As(err, &ahead) || errors.As(err, &foreign) ||
-		errors.As(err, &mismatch) || errors.As(err, &down)
+		errors.As(err, &mismatch) || errors.As(err, &down) || errors.As(err, &authMismatch)
 }
 
 func logRunOutcome(logger *slog.Logger, direction string, from []string, requested string, observed []string, outcome string) {

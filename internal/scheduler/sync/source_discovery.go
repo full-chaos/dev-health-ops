@@ -1048,6 +1048,8 @@ func jiraProjectSearchEndpointUnsupported(err error) bool {
 	}
 }
 
+const legacyJiraProjectListMaxBytes = 32 << 20
+
 // discoverJiraLegacyProjects is the unpaginated GET /rest/api/3/project
 // fallback: a plain JSON array of every project, no query params, no
 // pagination envelope.
@@ -1060,9 +1062,12 @@ func discoverJiraLegacyProjects(ctx context.Context, client *providerfoundation.
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("legacy jira project listing: unexpected status %d", response.StatusCode)
 	}
-	body, err := providerfoundation.ReadResponseBodyTransport(response, 32<<20-1)
+	body, err := providerfoundation.ReadResponseBodyTransport(response, legacyJiraProjectListMaxBytes)
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > legacyJiraProjectListMaxBytes {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
 	var items []json.RawMessage
 	if err := providerfoundation.DecodeResponseJSON(response, body, &items, providerfoundation.DecodeStrict); err != nil {

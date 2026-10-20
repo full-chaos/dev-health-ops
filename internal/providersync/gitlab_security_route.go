@@ -53,6 +53,8 @@ type GitLabSecurityRouteHandler struct {
 	RepoIdentity GitLabRepoIdentityReader
 }
 
+const gitLabSecurityMaxBodyBytes = 2 << 20
+
 type gitLabSecurityResponseObserver struct {
 	attempts    *int
 	lastStatus  int
@@ -207,9 +209,12 @@ func fetchGitLabSecurityObjects(
 		return nil, 0, providerfoundation.ErrNormalizationInvalid
 	}
 	defer response.Body.Close()
-	body, err := providerfoundation.ReadResponseBodyTransport(response, 2<<20-1)
+	body, err := providerfoundation.ReadResponseBodyTransport(response, gitLabSecurityMaxBodyBytes)
 	if err != nil {
 		return nil, 0, err
+	}
+	if len(body) > gitLabSecurityMaxBodyBytes {
+		return nil, 0, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
 	}
 	var rawItems []json.RawMessage
 	if err := providerfoundation.DecodeResponseJSON(response, body, &rawItems, providerfoundation.DecodeStrict); err != nil {

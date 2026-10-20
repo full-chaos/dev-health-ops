@@ -231,8 +231,11 @@ func (fetcher GitHubPullRequestReviewFetcher) fetchPage(
 	if err := providerfoundation.DecodeResponseJSONWith(response, raw, &envelope, providerfoundation.DecodeUseNumber, func(error) error { return providerfoundation.ErrPaginationInvalid }); err != nil {
 		return nil, err
 	}
-	if len(envelope.Errors) > 0 || envelope.Data.Repository == nil {
+	if len(envelope.Errors) > 0 {
 		return nil, providerfoundation.ErrGraphQLResponse
+	}
+	if envelope.Data.Repository == nil {
+		return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
 	}
 	connections := make(map[int]gitHubPullRequestReviewConnection, len(numbers))
 	for index, number := range numbers {

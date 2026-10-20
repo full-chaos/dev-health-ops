@@ -378,8 +378,11 @@ func (fetcher GitHubWorkItemPRSocialFetcher) fetchPage(
 	if err := providerfoundation.DecodeResponseJSONWith(response, raw, &envelope, providerfoundation.DecodeUseNumber, graphQLCause); err != nil {
 		return nil, err
 	}
-	if len(envelope.Errors) > 0 || envelope.Data.Repository == nil {
+	if len(envelope.Errors) > 0 {
 		return nil, providerfoundation.ErrGraphQLResponse
+	}
+	if envelope.Data.Repository == nil {
+		return nil, providerfoundation.ResponseShape(response, providerfoundation.ErrGraphQLResponse)
 	}
 	pulls := make(map[int]gitHubWorkItemPRSocialGraphQLPull, len(numbers))
 	for index, number := range numbers {

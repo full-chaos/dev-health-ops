@@ -789,7 +789,7 @@ func takeTimeTouchedDaysDrainASlowFanOutRunIsCheckedWhenItEnds(t *testing.T, ctx
 	take := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Millisecond)
 	_, newest := drainBatches(t, ctx, rig, orgID, 0)
 	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), uuid.NewString(), "touched", take.Add(-time.Minute))
-	slow := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "running", &take, time.Now().UTC().Add(-5*time.Hour))
+	slow := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "pending", &take, time.Now().UTC().Add(-5*time.Hour))
 	store := rig.productionRuns().store
 	runs, _, err := store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 200)
 	if err != nil {

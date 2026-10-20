@@ -288,20 +288,6 @@ def test_a_failing_stage_prints_no_done_and_fails_the_leg(tmp_path: Path) -> Non
     assert "ci-leg race: OK" not in proc.stdout
 
 
-def _race_weights_rows(tmp_path: Path, text: str):
-    weights = tmp_path / "weights.tsv"
-    weights.write_text(text, encoding="utf-8")
-    return subprocess.run(
-        ["bash", str(CHECK_GO), "race-weights-rows"],
-        cwd=ROOT,
-        env={**os.environ, "GO_RACE_WEIGHTS": str(weights)},
-        capture_output=True,
-        text=True,
-        timeout=280,
-        check=False,
-    )
-
-
 def test_fast_ci_all_and_the_static_leg_run_the_weights_census() -> None:
     source = CHECK_GO.read_text(encoding="utf-8")
     for verb in ("fast", "ci", "all"):

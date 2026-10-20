@@ -64,10 +64,11 @@ func (f fakeConfig) OrgConfig(context.Context, string) (OrgConfig, bool, error) 
 type savedRow struct{ provider string }
 
 func (r savedRow) Scan(dest ...any) error {
-	if r.provider == "" {
-		return pgx.ErrNoRows
+	out := []byte("[]")
+	if r.provider != "" {
+		out = []byte(`["` + r.provider + `"]`)
 	}
-	*(dest[0].(*string)) = r.provider
+	*(dest[0].(*[]byte)) = out
 	return nil
 }
 

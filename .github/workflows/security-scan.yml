@@ -61,6 +61,7 @@ jobs:
               - '!docs-data/**'
               - '!**/*.md'
               - '!.github/docs-legacy/**'
+              - '!mkdocs.yml'
 
   pip-audit:
     needs: [changes]

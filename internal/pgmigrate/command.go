@@ -153,7 +153,10 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		var ahead AheadOfBuildError
 		var foreign ForeignDatabaseError
 		var mismatch SchemaMismatchError
+		var authMismatch AuthSchemaMismatchError
 		switch {
+		case errors.As(err, &authMismatch):
+			return writeError(env.Stderr, ReasonAuthSchemaMismatch, err.Error())
 		case errors.As(err, &mismatch):
 			return writeError(env.Stderr, "schema_mismatch", err.Error())
 		case errors.As(err, &ahead):

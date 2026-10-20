@@ -201,6 +201,9 @@ const (
 	// StateAheadOfBuild: alembic_version records a revision this build does not
 	// know: a newer build migrated the database (an image was rolled back onto it).
 	StateAheadOfBuild
+	// StateAuthSchemaMismatch: objects but no alembic_version, and the auth
+	// migrator's lineage sits in a schema other than the configured auth schema.
+	StateAuthSchemaMismatch
 )
 
 // Observation is what Decide needs to know about a database.
@@ -213,6 +216,17 @@ type Observation struct {
 	Objects int
 	// PublicTables names the ordinary and partitioned tables in public.
 	PublicTables []string
+	// AuthConfigured is the auth schema name this migrator was given (default auth).
+	AuthConfigured string
+	// AuthSchema is the configured auth schema when it holds the lineage's
+	// bookkeeping table and so is not counted in Objects ("" otherwise);
+	// AuthObjects is how many objects it holds.
+	AuthSchema  string
+	AuthObjects int
+	// AuthLineageElsewhere is a schema other than the configured one that holds
+	// the auth lineage's bookkeeping table under a name the auth migrator could
+	// own ("" when none); set only for a database without alembic_version.
+	AuthLineageElsewhere string
 }
 
 // Plan is the decision Upgrade acts on.
@@ -227,6 +241,8 @@ type Plan struct {
 	// Unknown are the recorded revisions this build does not know
 	// (StateAheadOfBuild), sorted.
 	Unknown []string
+	// AuthSchemaFound is the schema StateAuthSchemaMismatch found.
+	AuthSchemaFound string
 }
 
 // applicationHead is the baseline head the chain continues: the one that is
@@ -252,6 +268,9 @@ func Decide(observation Observation, baseline Baseline, chain []ChainFile, known
 	if !observation.HasVersionTable {
 		if observation.Objects == 0 {
 			return Plan{State: StateEmpty, ApplicationHead: applicationHead(baseline), Pending: chain}
+		}
+		if observation.AuthLineageElsewhere != "" {
+			return Plan{State: StateAuthSchemaMismatch, AuthSchemaFound: observation.AuthLineageElsewhere}
 		}
 		return Plan{State: StateForeign}
 	}
@@ -359,6 +378,23 @@ type ForeignDatabaseError struct{ Objects int }
 
 func (e ForeignDatabaseError) Error() string {
 	return fmt.Sprintf("the database holds %d object(s) (relations, functions or types, in any schema but the system ones) but no public.alembic_version table; refusing to apply the head over a database this migrator did not create", e.Objects)
+}
+
+// AuthSchemaMismatchError is the refusal for a database that holds the auth
+// migrator's own lineage in a schema other than the one this migrator was told
+// (AUTH_DATABASE_SCHEMA): the two migrators disagree about the auth schema's
+// name. It is a refusal with its own cause, so the operator learns what to set
+// instead of reading a generic foreign-database message.
+type AuthSchemaMismatchError struct {
+	Found      string
+	Configured string
+	Objects    int
+}
+
+func (e AuthSchemaMismatchError) Error() string {
+	return fmt.Sprintf("the database holds %d object(s) and the auth migrator's lineage in schema %q, but %s names %q for this migrator; "+
+		"set %s=%s for the ops migrator (the value auth-migrate runs with); if %q is not the auth schema this database is foreign; "+
+		"refusing to apply the head", e.Objects, e.Found, AuthSchemaEnv, e.Configured, AuthSchemaEnv, e.Found, e.Found)
 }
 
 // SchemaMismatchError is the refusal for a database whose alembic_version

@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/pgident"
 )
 
 // advisoryLockKey serialises concurrent auth-migrate runs against one
@@ -62,55 +63,18 @@ var (
 	ErrMigrationFailed = errors.New("auth migration failed")
 )
 
-// identifierPattern bounds every identifier this package interpolates.
-//
-// Interpolation is unavoidable: PostgreSQL has no bind placeholder for a
-// schema or role name, so CREATE SCHEMA and GRANT cannot be parameterised.
-// The mitigation is that nothing reaches the SQL text without matching this
-// pattern first, and the pattern excludes quotes, whitespace, semicolons and
-// backslashes by construction rather than by escaping them afterwards.
-//
-// This is a stricter bound than authconfig's: it additionally rejects
-// PostgreSQL reserved keywords via reservedKeywords below, because unlike the
-// runtime -- which only ever binds the schema as a query parameter -- this
-// package genuinely does emit it as an identifier. That gap is what codex
-// round 3 found in CHAOS-4881's validator, one layer up.
-var identifierPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
-
-// reservedKeywords are the PostgreSQL reserved words that cannot appear as a
-// bare identifier. The list is deliberately short and covers the words a
-// human might plausibly choose for a schema or role; it is a usability guard
-// against a confusing runtime syntax error, not a security control -- the
-// security comes from identifierPattern excluding quotes and whitespace, and
-// from quoteIdentifier double-quoting whatever survives.
-var reservedKeywords = map[string]struct{}{
-	"all": {}, "analyse": {}, "analyze": {}, "and": {}, "any": {}, "array": {},
-	"as": {}, "asc": {}, "authorization": {}, "between": {}, "both": {},
-	"case": {}, "cast": {}, "check": {}, "collate": {}, "column": {},
-	"constraint": {}, "create": {}, "current_date": {}, "current_role": {},
-	"current_time": {}, "current_timestamp": {}, "current_user": {},
-	"default": {}, "deferrable": {}, "desc": {}, "distinct": {}, "do": {},
-	"else": {}, "end": {}, "except": {}, "false": {}, "for": {}, "foreign": {},
-	"from": {}, "grant": {}, "group": {}, "having": {}, "in": {}, "initially": {},
-	"intersect": {}, "into": {}, "leading": {}, "limit": {}, "localtime": {},
-	"localtimestamp": {}, "new": {}, "not": {}, "null": {}, "off": {},
-	"offset": {}, "old": {}, "on": {}, "only": {}, "or": {}, "order": {},
-	"placing": {}, "primary": {}, "references": {}, "returning": {},
-	"select": {}, "session_user": {}, "some": {}, "symmetric": {}, "table": {},
-	"then": {}, "to": {}, "trailing": {}, "true": {}, "union": {}, "unique": {},
-	"user": {}, "using": {}, "when": {}, "where": {}, "with": {},
-}
-
 // ValidateIdentifier reports whether a schema or role name may be emitted as
-// a bare identifier by this package.
+// a bare identifier by this package. The rule is internal/platform/pgident's,
+// shared with the ops migrator so the two cannot disagree about which schema
+// name the auth migrator can own.
 func ValidateIdentifier(name string) error {
-	if !identifierPattern.MatchString(name) {
+	switch pgident.Check(name) {
+	case pgident.BadShape:
 		return fmt.Errorf(
 			"%w: %q must match [a-z][a-z0-9_]* and be at most 63 characters",
 			ErrInvalidOptions, name,
 		)
-	}
-	if _, reserved := reservedKeywords[name]; reserved {
+	case pgident.ReservedKeyword:
 		return fmt.Errorf("%w: %q is a PostgreSQL reserved keyword", ErrInvalidOptions, name)
 	}
 	return nil

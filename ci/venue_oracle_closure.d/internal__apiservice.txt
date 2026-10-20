@@ -79,6 +79,7 @@ internal/platform/health
 internal/platform/lifecycle
 internal/platform/logging
 internal/platform/otlpmetrics
+internal/platform/pgident
 internal/platform/queuecontrol
 internal/platform/secrets
 internal/platform/shell

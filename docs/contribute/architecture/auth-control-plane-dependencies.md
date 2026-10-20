@@ -7,7 +7,7 @@ source_of_truth:
   - go.mod
   - internal/auth/keystore/keystore.go
   - internal/auth/authconfig/config.go
-  - ci/auth_govulncheck.py
+  - internal/cigates/govulncheck.go
 applicability: current
 lifecycle: active
 ---

@@ -378,14 +378,7 @@ func invTxDriftVerb(_ []string, stdout, stderr io.Writer) int {
 		return a1Traceback(stderr, "ValueError", err.Error())
 	}
 	docsDir := filepath.Join(root, invTxDocsRel)
-	var rels []string
-	_ = filepath.Walk(docsDir, func(path string, info os.FileInfo, werr error) error {
-		if werr == nil && info.Mode().IsRegular() && strings.HasSuffix(path, ".md") {
-			rel, _ := filepath.Rel(docsDir, path)
-			rels = append(rels, filepath.ToSlash(rel))
-		}
-		return nil
-	})
+	rels := invTxMarkdownPages(docsDir, "")
 	sort.Slice(rels, func(i, j int) bool { return a1PartsLess(rels[i], rels[j]) })
 	for _, rel := range rels {
 		text, rerr := a1ReadText(filepath.Join(docsDir, filepath.FromSlash(rel)))
@@ -394,7 +387,8 @@ func invTxDriftVerb(_ []string, stdout, stderr io.Writer) int {
 			if errors.As(rerr, &de) {
 				return a1ReadFail(stderr, "check-investment-drift:", rerr)
 			}
-			return a1Traceback(stderr, "OSError", rerr.Error())
+			kind, msg := a1OSError(rerr)
+			return a1Traceback(stderr, kind, msg)
 		}
 		errs = append(errs, invTxUnknownExampleKeys(text, rel)...)
 	}
@@ -406,4 +400,26 @@ func invTxDriftVerb(_ []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "Investment docs drift check passed")
 	return 0
+}
+
+// invTxMarkdownPages lists the "*.md" entries under dir as Python's Path.rglob("*.md") does (3.12): every entry whose
+// name ends in ".md", whatever it is (a symlink, a dangling or looping one, a directory), with the directories below
+// reached through real directories only. A symlink to a directory is not descended. An unreadable directory gives
+// nothing. The caller reads each page, so a page that cannot be read fails there as in Python.
+func invTxMarkdownPages(dir, rel string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		name := rel + e.Name()
+		if strings.HasSuffix(e.Name(), ".md") {
+			out = append(out, name)
+		}
+		if e.Type().IsDir() {
+			out = append(out, invTxMarkdownPages(filepath.Join(dir, e.Name()), name+"/")...)
+		}
+	}
+	return out
 }

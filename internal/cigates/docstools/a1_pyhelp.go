@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -158,4 +160,27 @@ func a1ListRepr(items []string) string {
 		parts[i] = a1Repr(it)
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// a1OSError is the Python exception line (kind, message) for a failed file read: FileNotFoundError, IsADirectoryError,
+// PermissionError, NotADirectoryError, else OSError with the errno.
+func a1OSError(err error) (kind, msg string) {
+	var pe *fs.PathError
+	if !errors.As(err, &pe) {
+		return "OSError", err.Error()
+	}
+	at := ": " + a1Repr(pe.Path)
+	switch {
+	case errors.Is(err, syscall.ENOENT):
+		return "FileNotFoundError", "[Errno 2] No such file or directory" + at
+	case errors.Is(err, syscall.EISDIR):
+		return "IsADirectoryError", "[Errno 21] Is a directory" + at
+	case errors.Is(err, syscall.EACCES):
+		return "PermissionError", "[Errno 13] Permission denied" + at
+	case errors.Is(err, syscall.ENOTDIR):
+		return "NotADirectoryError", "[Errno 20] Not a directory" + at
+	case errors.Is(err, syscall.ELOOP):
+		return "OSError", "[Errno 40] Too many levels of symbolic links" + at
+	}
+	return "OSError", err.Error()
 }

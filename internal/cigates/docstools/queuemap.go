@@ -125,6 +125,7 @@ type qmProcess struct {
 	Binary   string   `json:"binary"`
 	Queues   []string `json:"queues"`
 	JobKinds []string `json:"job_kinds"`
+	has      map[string]bool
 }
 
 type qmJob struct {
@@ -135,14 +136,81 @@ type qmJob struct {
 	State          string `json:"state"`
 	Route          string `json:"route"`
 	RollbackRoute  string `json:"rollback_route"`
+	has            map[string]bool
 }
 
-func qmLoadJSON(path string, v any) error {
-	text, err := a1ReadText(path)
+// qmPresent is the set of keys an object holds. The Python generator indexes every producer field with [] (never
+// .get()), so an absent key is a KeyError there, not a zero value; a key present with a null value is not absent.
+func qmPresent(b []byte) (map[string]bool, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, err
+	}
+	has := make(map[string]bool, len(raw))
+	for k := range raw {
+		has[k] = true
+	}
+	return has, nil
+}
+
+func (p *qmProcess) UnmarshalJSON(b []byte) error {
+	type plain qmProcess
+	has, err := qmPresent(b)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal([]byte(text), v)
+	if err := json.Unmarshal(b, (*plain)(p)); err != nil {
+		return err
+	}
+	p.has = has
+	return nil
+}
+
+func (j *qmJob) UnmarshalJSON(b []byte) error {
+	type plain qmJob
+	has, err := qmPresent(b)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, (*plain)(j)); err != nil {
+		return err
+	}
+	j.has = has
+	return nil
+}
+
+// need is Python's d[key] for each key in turn: the first absent one is a KeyError.
+func qmNeed(has map[string]bool, keys []string) error {
+	for _, k := range keys {
+		if !has[k] {
+			return qmKeyError{k}
+		}
+	}
+	return nil
+}
+
+func (p qmProcess) need(keys ...string) error { return qmNeed(p.has, keys) }
+func (j qmJob) need(keys ...string) error     { return qmNeed(j.has, keys) }
+
+// qmLoadList reads a producer file and returns the list under key (Python: data[key]); an absent key is a KeyError.
+func qmLoadList[T any](path, key string) ([]T, error) {
+	text, err := a1ReadText(path)
+	if err != nil {
+		return nil, err
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &top); err != nil {
+		return nil, err
+	}
+	raw, ok := top[key]
+	if !ok {
+		return nil, qmKeyError{key}
+	}
+	var out []T
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // qmReport prints the one stderr line for a failed verb step and returns exit code 1.
@@ -230,31 +298,44 @@ func qmTicks(items []string) string {
 
 // qmRender builds the generated block from the three producers under root.
 func qmRender(root string) (string, error) {
-	var dep struct {
-		Processes []qmProcess `json:"processes"`
-	}
-	if err := qmLoadJSON(filepath.Join(root, qmDeploymentRel), &dep); err != nil {
+	// Python loads each file, then indexes "name" / "kind" of every record, before it reads the next file.
+	processes, err := qmLoadList[qmProcess](filepath.Join(root, qmDeploymentRel), "processes")
+	if err != nil {
 		return "", err
 	}
-	var reg, mig struct {
-		Jobs []qmJob `json:"jobs"`
+	for _, p := range processes {
+		if err := p.need("name"); err != nil {
+			return "", err
+		}
 	}
-	if err := qmLoadJSON(filepath.Join(root, qmRegistryRel), &reg); err != nil {
+	regJobs, err := qmLoadList[qmJob](filepath.Join(root, qmRegistryRel), "jobs")
+	if err != nil {
 		return "", err
 	}
-	if err := qmLoadJSON(filepath.Join(root, qmMigrationRel), &mig); err != nil {
+	for _, j := range regJobs {
+		if err := j.need("kind"); err != nil {
+			return "", err
+		}
+	}
+	migJobs, err := qmLoadList[qmJob](filepath.Join(root, qmMigrationRel), "jobs")
+	if err != nil {
 		return "", err
+	}
+	for _, j := range migJobs {
+		if err := j.need("kind"); err != nil {
+			return "", err
+		}
 	}
 	deployment := map[string]qmProcess{}
-	for _, p := range dep.Processes {
+	for _, p := range processes {
 		deployment[p.Name] = p
 	}
 	registry := map[string]qmJob{}
-	for _, j := range reg.Jobs {
+	for _, j := range regJobs {
 		registry[j.Kind] = j
 	}
 	state := map[string]qmJob{}
-	for _, j := range mig.Jobs {
+	for _, j := range migJobs {
 		state[j.Kind] = j
 	}
 
@@ -270,23 +351,6 @@ func qmRender(root string) (string, error) {
 			" -- every registered kind must have a migration-state row."}
 	}
 
-	served := map[string]bool{}
-	for _, p := range dep.Processes {
-		for _, k := range p.JobKinds {
-			served[k] = true
-		}
-	}
-	var orphans []string
-	for _, k := range qmKeys(registry) {
-		if !served[k] {
-			orphans = append(orphans, k)
-		}
-	}
-	if len(orphans) > 0 {
-		return "", qmFail{"gen-queue-mapping: " + qmRegistryRel + " kinds " + qmList(orphans) +
-			" are in no process job_kinds of " + qmDeploymentRel + " -- every registered kind must be served by a worker."}
-	}
-
 	lines := []string{
 		qmBegin,
 		"| Go process (binary) | Go queue | Job kind(s) | Timeout(s) | Max attempts | Historical Celery queue(s) | Historical Celery consumer(s) | Plane / route status |",
@@ -294,6 +358,9 @@ func qmRender(root string) (string, error) {
 	}
 	for _, name := range qmKeys(deployment) {
 		process := deployment[name]
+		if err := process.need("queues"); err != nil {
+			return "", err
+		}
 		entries := qmCorrespondence[name]
 		queues := process.Queues
 		if len(queues) == 0 {
@@ -305,11 +372,17 @@ func qmRender(root string) (string, error) {
 				return "", qmFail{"gen-queue-mapping: process '" + name + "' queue '" + goQueue +
 					"' from deployment.json has no qmCorrespondence entry."}
 			}
+			if err := process.need("job_kinds"); err != nil {
+				return "", err
+			}
 			var kinds []string
 			for _, k := range process.JobKinds {
 				job, ok := registry[k]
 				if !ok {
 					return "", qmKeyError{k}
+				}
+				if err := job.need("queue"); err != nil {
+					return "", err
 				}
 				if job.Queue == goQueue {
 					kinds = append(kinds, k)
@@ -320,6 +393,16 @@ func qmRender(root string) (string, error) {
 			if len(kinds) > 0 {
 				var timeouts, attempts []int
 				ticked := make([]string, len(kinds))
+				for _, k := range kinds {
+					if err := registry[k].need("timeout_seconds"); err != nil {
+						return "", err
+					}
+				}
+				for _, k := range kinds {
+					if err := registry[k].need("max_attempts"); err != nil {
+						return "", err
+					}
+				}
 				for i, k := range kinds {
 					timeouts = append(timeouts, registry[k].TimeoutSeconds)
 					attempts = append(attempts, registry[k].MaxAttempts)
@@ -335,6 +418,9 @@ func qmRender(root string) (string, error) {
 			}
 			for _, k := range kinds {
 				st := state[k]
+				if err := st.need("state", "route", "rollback_route"); err != nil {
+					return "", err
+				}
 				flag := " ⚠"
 				if st.State == "go_default" {
 					flag = ""
@@ -342,12 +428,32 @@ func qmRender(root string) (string, error) {
 				plane += "<br>`" + k + "`: state=`" + st.State + "`" + flag + ", route=`" + st.Route +
 					"`, rollback_route=`" + st.RollbackRoute + "` (migration-state.json)"
 			}
+			if err := process.need("binary"); err != nil {
+				return "", err
+			}
 			lines = append(lines, "| `"+name+"` (`"+process.Binary+"`) | `"+goQueue+"` | "+kindCell+" | "+
 				timeoutCell+" | "+attemptsCell+" | "+qmTicks(entry.celeryQueues)+" | "+
 				qmTicks(entry.celeryConsumers)+" | "+plane+" |")
 		}
 	}
-	for _, p := range dep.Processes {
+	served := map[string]bool{}
+	for _, p := range processes {
+		for _, k := range p.JobKinds {
+			served[k] = true
+		}
+	}
+	var orphans []string
+	for _, k := range qmKeys(registry) {
+		if !served[k] {
+			orphans = append(orphans, k)
+		}
+	}
+	if len(orphans) > 0 {
+		return "", qmFail{"gen-queue-mapping: " + qmRegistryRel + " kinds " + qmList(orphans) +
+			" are in no process job_kinds of " + qmDeploymentRel + " -- every registered kind must be served by a worker."}
+	}
+
+	for _, p := range processes {
 		for _, k := range p.JobKinds {
 			if q := registry[k].Queue; !qmHas(p.Queues, q) {
 				return "", qmFail{"gen-queue-mapping: kind '" + k + "' is listed in job_kinds of process '" + p.Name +

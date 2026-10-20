@@ -149,7 +149,13 @@ type OutboxEvent struct {
 // provisioning stream has no session aggregate).
 const OffStreamSessionLifecycle = "session_lifecycle"
 
-var offStreamReasons = map[string]bool{OffStreamSessionLifecycle: true}
+// OffStreamLinkCredentialLifecycle marks the consume or supersede of a
+// single-use link credential: the credential's own lifecycle is not a
+// provisioning event. The account change it authorizes (a verified e-mail, a
+// new password) is a provisioning event written by the identity store.
+const OffStreamLinkCredentialLifecycle = "link_credential_lifecycle"
+
+var offStreamReasons = map[string]bool{OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true}
 
 // TxOps is what a mutation may do inside the transaction.
 //

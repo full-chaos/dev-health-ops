@@ -1,0 +1,34 @@
+# Measured wall seconds of one package under `go test` in the go-quality test leg (CHAOS-10355), the weight ci/go_race_shard.awk
+# balances the three test shards by (`check_go.sh ci-leg test K 3`). HEAVY packages only (20 s and up, main run 39424528475, 350
+# packages, ~3,030 s package time in sum): a package with no row weighs 1. The weights only need to be roughly right: a wrong one
+# costs balance, never coverage (the shards always partition `go list ./...`). Key = import path relative to the module root.
+# Sorted (LC_ALL=C), no duplicates; internal/cigates/testshard checks each row names a real package.
+cmd/dho	160
+cmd/gqlgen-guard	111
+deploy/helm/dev-health	117
+internal/api/credentials	36
+internal/api/syncadmin	37
+internal/api/teamsidentity	47
+internal/cigates/affectedmatrix	102
+internal/cigates/affectedmodule	32
+internal/cigates/affectedreject	173
+internal/cigates/chartgates	126
+internal/cigates/checkgo	317
+internal/cigates/scripts	29
+internal/cigates/workflows	38
+internal/goapiproof	120
+internal/gqlgenguard	223
+internal/httpguard	231
+internal/joboutbox	24
+internal/jobs/metrics/daily	50
+internal/jobs/workgraph/units	48
+internal/platform/logging	25
+internal/providersync	163
+internal/pythonparity	36
+internal/pythonparity/emailvalidator	44
+internal/pythonparity/pyidna	40
+internal/storedversion	33
+internal/streamrunnerservice	20
+internal/synccli	71
+internal/testsupport/goldenscan/treegate	38
+internal/testsupport/venuechanged	47

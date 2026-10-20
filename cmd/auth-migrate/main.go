@@ -120,10 +120,10 @@ func execute(
 	// Two connections: one holds the advisory lock for the run, the second is
 	// spare so a pool exhaustion cannot deadlock the run against itself.
 	poolConfig.MaxConns = 2
-	pool, err := postgresstore.Open(ctx, poolConfig)
+	pool, err := newDatabaseWait(poolConfig, stderr).run(ctx)
 	if err != nil {
-		// postgresstore.Open replaces every driver error with a stable
-		// category precisely so a DSN cannot reach a log line here.
+		// The wait writes only attempt numbers and error categories, never a
+		// driver error, so a DSN cannot reach a log line here.
 		fmt.Fprintln(stderr, "migration error: PostgreSQL migration endpoint unavailable")
 		return 1
 	}

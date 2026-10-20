@@ -39,7 +39,7 @@ class FamilyRowCount(TypedDict):
 
 
 # One representative table per family, keyed (repo_id, day) with a
-# `computed_at` column (src/dev_health_ops/migrations/clickhouse/
+# `computed_at` column (internal/chmigrate/history/
 # 004_quality_delivery_metrics.sql and friends). families.json
 # (internal/jobs/metrics/daily/families.json) lists every table each compute
 # call writes; checking the first is checking the call executed, since every

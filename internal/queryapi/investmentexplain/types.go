@@ -112,4 +112,10 @@ type ParseResult struct {
 
 	// RepairedFindings counts the findings whose evidence the parser moved to the subcategory their sentence names.
 	RepairedFindings int
+
+	// ConfidenceIgnored names the rule the model's confidence object broke
+	// on an accepted answer. The served confidence is always the computed
+	// one, so a rule break there is logged, not a reason to discard a paid
+	// answer. Empty Rule means the model's confidence passed.
+	ConfidenceIgnored validationRejection
 }

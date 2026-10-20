@@ -51,7 +51,7 @@ func uniqueNonEmpty(values []string) []string {
 // NOT *string despite the "_json" suffix on the underlying columns
 // (theme_distribution_json/subcategory_distribution_json) -- that suffix
 // is a legacy naming artifact from an earlier schema. The REAL columns
-// are Map(String, Float64) (migrations/clickhouse/017_investment_
+// are Map(String, Float64) (internal/chmigrate/history/017_investment_
 // materialize_tables.sql:11-12), and clickhouse-go refuses to scan a Map
 // into a *string outright ("converting Map(String, Float64) to
 // **string is unsupported"). A first draft here assumed a JSON-string

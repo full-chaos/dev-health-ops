@@ -375,7 +375,13 @@ func TestSharedOpenAIReplaysTheOpsPortBatchOracle(t *testing.T) {
 				}
 				got, _ := json.Marshal(results)
 				want, _ := json.Marshal(ops)
-				if !bytes.Equal(got, want) {
+				if pc.Name == "responses_output_chunks" {
+					// Named improvement: the shared gate keeps the reply's number
+					// text (1.0); the ops port rewrote it to 1.
+					if bytes.Equal(got, want) || len(results) != 1 || results[0].Text != `{"subcategories":{"feature_delivery.roadmap":1.0}}` {
+						t.Errorf("results = %s, want the reply text kept as {\"subcategories\":{\"feature_delivery.roadmap\":1.0}} (ops port %s)", got, want)
+					}
+				} else if !bytes.Equal(got, want) {
 					t.Errorf("results differ from the ops port:\n shared %s\n ops    %s", got, want)
 				}
 			}

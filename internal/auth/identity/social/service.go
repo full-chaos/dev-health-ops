@@ -129,7 +129,7 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 	}
 	principal, found, err := s.lookup(ctx, profile.ExternalKey)
 	if err != nil {
-		reason = ReasonStoreUnavailable
+		reason = lookupReason(err)
 		return ExchangeResult{}, err
 	}
 	if found {
@@ -182,7 +182,12 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 func (s *Service) lookup(ctx context.Context, key identity.ExternalKey) (identity.Principal, bool, error) {
 	legacy := &identity.LegacyMatch{AuthProvider: string(key.Provider)}
 	p, found, err := s.store.IdentityBySubject(ctx, key.Issuer, key.Provider, key.Subject, legacy)
-	if err != nil {
+	switch {
+	case errors.Is(err, identity.ErrProviderAlreadyLinked):
+		// The go-api account of this subject holds another identity at the
+		// provider: the projection wrote nothing and this sign-in is refused.
+		return identity.Principal{}, false, ErrProviderLinked
+	case err != nil:
 		return identity.Principal{}, false, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return p, found, nil
@@ -232,13 +237,20 @@ func (s *Service) emailOwner(ctx context.Context, email string) (string, bool, e
 func (s *Service) settleTaken(ctx context.Context, key identity.ExternalKey, method string) (ExchangeResult, Reason, error) {
 	principal, found, err := s.lookup(ctx, key)
 	if err != nil {
-		return ExchangeResult{}, ReasonStoreUnavailable, err
+		return ExchangeResult{}, lookupReason(err), err
 	}
 	if found {
 		reason, err := signInTo(principal)
 		return ExchangeResult{PrincipalID: principal.ID}, reason, err
 	}
 	return ExchangeResult{}, ReasonEmailCollision, &ConflictError{ExistingMethod: method}
+}
+
+func lookupReason(err error) Reason {
+	if errors.Is(err, ErrProviderLinked) {
+		return ReasonProviderLinked
+	}
+	return ReasonStoreUnavailable
 }
 
 func signInTo(p identity.Principal) (Reason, error) {
@@ -265,11 +277,11 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 	key := profile.ExternalKey
 	principal, found, err := s.lookup(ctx, key)
 	if err != nil {
-		reason = ReasonStoreUnavailable
+		reason = lookupReason(err)
 		return identity.Identity{}, err
 	}
 	if found && principal.ID != who.PrincipalID {
-		reason = ReasonEmailCollision
+		reason = ReasonIdentityConflict
 		return identity.Identity{}, identity.ErrIdentityConflict
 	}
 	all, err := s.store.ListIdentities(ctx, who.PrincipalID)
@@ -282,7 +294,7 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 			if have.Subject == key.Subject {
 				return have, nil
 			}
-			reason = ReasonEmailCollision
+			reason = ReasonProviderLinked
 			return identity.Identity{}, ErrProviderLinked
 		}
 	}
@@ -299,10 +311,10 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 		}
 		return linked, err
 	case errors.Is(err, identity.ErrProviderAlreadyLinked):
-		reason = ReasonEmailCollision
+		reason = ReasonProviderLinked
 		return identity.Identity{}, ErrProviderLinked
 	case errors.Is(err, identity.ErrIdentityConflict):
-		reason = ReasonEmailCollision
+		reason = ReasonIdentityConflict
 		return identity.Identity{}, err
 	case errors.Is(err, identity.ErrPrincipalUnavailable):
 		reason = ReasonPrincipalDeactivated

@@ -15,6 +15,8 @@ const (
 	ReasonEmailUnverified      Reason = "email_unverified"
 	ReasonEmailCollision       Reason = "email_collision"
 	ReasonSignupUnavailable    Reason = "signup_unavailable"
+	ReasonProviderLinked       Reason = "provider_already_linked"
+	ReasonIdentityConflict     Reason = "identity_conflict"
 	ReasonStoreUnavailable     Reason = "store_unavailable"
 	ReasonDependency           Reason = "dependency_unavailable"
 )
@@ -22,7 +24,7 @@ const (
 var allReasons = []Reason{
 	ReasonAccepted, ReasonMalformed, ReasonAudience, ReasonInvalidCredentials, ReasonExpired,
 	ReasonPrincipalNotFound, ReasonPrincipalDeactivated, ReasonEmailUnverified, ReasonEmailCollision,
-	ReasonSignupUnavailable, ReasonStoreUnavailable, ReasonDependency,
+	ReasonSignupUnavailable, ReasonProviderLinked, ReasonIdentityConflict, ReasonStoreUnavailable, ReasonDependency,
 }
 
 // Operation names the flow on the outcome counter.

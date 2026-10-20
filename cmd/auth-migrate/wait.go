@@ -54,7 +54,7 @@ func newDatabaseWait(config postgresstore.Config, stderr io.Writer) databaseWait
 		open: func(ctx context.Context) (*pgxpool.Pool, error) {
 			pool, err := postgresstore.New(ctx, config)
 			if err != nil {
-				return nil, err
+				return nil, configError{err}
 			}
 			if err := pool.Ping(ctx); err != nil {
 				pool.Close()
@@ -71,23 +71,42 @@ func newDatabaseWait(config postgresstore.Config, stderr io.Writer) databaseWait
 	}
 }
 
-// run returns the open pool, or postgresstore.ErrUnavailable. The error text of
-// a failed attempt is never written: it can carry the host and the login.
+// run returns the open pool, or postgresstore.ErrUnavailable. Each attempt runs
+// under the earlier of its own timeout and the wait's deadline (the bound from
+// the start, or the run's deadline when that comes first); no attempt starts
+// and no pause runs past that deadline. Every failed attempt writes one line
+// with its number, the elapsed time and its category; the error text is never
+// written: it can carry the host and the login.
 func (w databaseWait) run(ctx context.Context) (*pgxpool.Pool, error) {
 	start := w.now()
+	deadline := start.Add(w.bound)
+	if runDeadline, ok := ctx.Deadline(); ok && runDeadline.Before(deadline) {
+		deadline = runDeadline
+	}
 	for attempt := 1; ; attempt++ {
-		pool, err := w.open(ctx)
+		now := w.now()
+		if !now.Before(deadline) {
+			return nil, postgresstore.ErrUnavailable
+		}
+		attemptDeadline := deadline
+		if w.attemptTimeout > 0 && now.Add(w.attemptTimeout).Before(deadline) {
+			attemptDeadline = now.Add(w.attemptTimeout)
+		}
+		attemptCtx, cancel := context.WithDeadline(ctx, attemptDeadline)
+		pool, err := w.open(attemptCtx)
+		cancel()
 		if err == nil {
 			return pool, nil
 		}
 		category, retry := transportCategory(err)
-		elapsed := w.now().Sub(start)
+		fmt.Fprintf(w.stderr, "migration waiting: PostgreSQL migration endpoint not reachable (attempt %d, %s elapsed, %s)\n",
+			attempt, w.now().Sub(start).Round(100*time.Millisecond), category)
 		if !retry || ctx.Err() != nil {
 			return nil, postgresstore.ErrUnavailable
 		}
-		fmt.Fprintf(w.stderr, "migration waiting: PostgreSQL migration endpoint not reachable (attempt %d, %s elapsed, %s)\n",
-			attempt, elapsed.Round(100*time.Millisecond), category)
-		if elapsed+w.interval >= w.bound {
+		// The pause never runs past the deadline, and a pause that would end
+		// at it leaves no time for another attempt.
+		if deadline.Sub(w.now()) <= w.interval {
 			return nil, postgresstore.ErrUnavailable
 		}
 		if err := w.sleep(ctx, w.interval); err != nil {
@@ -104,10 +123,19 @@ func transportCategory(err error) (string, bool) {
 		// cannot_connect_now: the server is starting up, shutting down or in
 		// recovery, an availability answer like a refused dial. Every other
 		// server answer (authentication, permission) is final.
-		if pgErr.Code == "57P03" {
+		switch pgErr.Code {
+		case "57P03":
 			return "server_starting", true
+		case "28P01", "28000":
+			return "auth", false
+		case "42501":
+			return "permission", false
 		}
 		return "server", false
+	}
+	var config configError
+	if errors.As(err, &config) {
+		return "config", false
 	}
 	var unknownAuthority x509.UnknownAuthorityError
 	var hostname x509.HostnameError

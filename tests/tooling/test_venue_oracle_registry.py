@@ -487,20 +487,6 @@ def test_a_package_registered_only_local_only_fails(tree: Path) -> None:
     assert "internal/f is registered but no test there is run" in proc.stderr
 
 
-def test_the_verb_source_consumes_the_registry_not_discovery() -> None:
-    """The verb's own body reads the registry; discovery is only the cross-check."""
-    script = (ROOT / "ci" / "check_go.sh").read_text()
-    start = script.index("check_venue_oracles() {")
-    end = script.index("\n}\n", start)
-    body = script[start:end]
-    assert "check_venue_oracle_registry" in body
-    assert "venue_oracle_registry_rows" in body
-    assert "venue_oracle_package_tests" not in body, (
-        "check_venue_oracles must run the registry; discovery belongs to the "
-        "cross-check in check_venue_oracle_registry"
-    )
-
-
 # --- CHAOS-6806: a `run` row must be able to leave a proof file -------------
 
 

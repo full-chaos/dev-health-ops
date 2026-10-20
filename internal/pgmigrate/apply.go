@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/pgident"
 )
 
 // lockKey serializes concurrent `dho migrate postgres` runs against one
@@ -276,7 +277,12 @@ const AuthSchemaEnv = "AUTH_DATABASE_SCHEMA"
 
 const defaultAuthSchema = "auth"
 
-var authSchemaName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+// AuthSchemaUsable reports whether name is a schema name the auth migrator could
+// own: the identifier rule it applies (internal/platform/pgident, shared), and
+// never public, which this migrator owns.
+func AuthSchemaUsable(name string) bool {
+	return pgident.Check(name) == pgident.OK && name != "public"
+}
 
 // configuredAuthSchema is the auth migrator's schema as configured, or "" when
 // the configured value is not a plain identifier (then nothing is exempt).
@@ -285,7 +291,7 @@ func configuredAuthSchema() string {
 	if name == "" {
 		name = defaultAuthSchema
 	}
-	if !authSchemaName.MatchString(name) || name == "public" {
+	if !AuthSchemaUsable(name) {
 		return ""
 	}
 	return name

@@ -240,6 +240,22 @@ func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
 		_, err := f.dhoMigrate(t)
 		foreign(t, err)
 	})
+	t.Run("a reserved-word schema name never exempts anything, because the auth migrator could not own it", func(t *testing.T) {
+		t.Setenv("AUTH_DATABASE_SCHEMA", "with")
+		f := newOrderFixture(t)
+		conn := orderConnect(t, f.ctx, f.uri)
+		for _, statement := range []string{
+			`CREATE SCHEMA "with"`,
+			`CREATE TABLE "with".schema_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL)`,
+			`CREATE TABLE "with".foreign_object (id integer)`,
+		} {
+			if _, err := conn.Exec(f.ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, err := f.dhoMigrate(t)
+		foreign(t, err)
+	})
 	t.Run("an unrelated schema next to a real auth schema is foreign", func(t *testing.T) {
 		f := newOrderFixture(t)
 		f.authMigrate(t, "auth")

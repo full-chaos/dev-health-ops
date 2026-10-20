@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -89,8 +90,9 @@ func AssertHealth(payload []byte) error {
 // no job that passed before fails on real output): supported_endpoints must be a list holding the exact route
 // (Python's `in` also accepted a substring of a string or a key of a dict); tiles must be an object (Python's `in`
 // also accepted a list or a string naming the four keys); a raw Infinity or NaN literal in the JSON is refused by the
-// decoder (Python's json.loads accepts it); a hex float or a non-ASCII decimal digit in the coverage string is
-// refused (see number).
+// decoder (Python's json.loads accepts it). Strings follow Python's Unicode semantics: float() takes Unicode digits
+// and whitespace, str.lower() maps U+0130 to "i" plus a combining dot.
+
 // AssertMeta checks a /api/v1/meta answer.
 func AssertMeta(payload []byte) error {
 	p, err := decode(payload)
@@ -145,7 +147,7 @@ func AssertHome(payload []byte, fixtureProvider string) error {
 	}
 	for key := range expected {
 		state, _ := sources[key].(string)
-		if !homeAllowedStates[strings.ToLower(state)] {
+		if !homeAllowedStates[pythonLower(state)] {
 			return fmt.Errorf("source %q has state %v: %v", key, sources[key], sources)
 		}
 	}
@@ -350,14 +352,54 @@ func redactedURL(u *url.URL) string {
 	return c.String()
 }
 
-// pythonFloatRe is the text Python's float() accepts (after stripping whitespace): a decimal number whose digit
-// groups may be joined by single underscores, or inf, infinity and nan with an optional sign. Hex floats and
-// non-ASCII digits are the differences: Go's ParseFloat takes hex floats and Python refuses them (refused here too);
-// Python also takes non-ASCII decimal digits, which the payload of our own api never carries (refused here).
-var pythonFloatRe = regexp.MustCompile(`^[+-]?(?:(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?|(?i:inf|infinity|nan))$`)
+// pythonFloatRe is the ASCII text Python's float() accepts once whitespace is stripped and Unicode digits are mapped
+// to ASCII: a decimal number whose digit groups may be joined by single underscores. inf, infinity and nan (with an
+// optional sign, ASCII case-insensitive) are matched by pythonFloatWord. Hex floats are refused by Python and by this.
+var pythonFloatRe = regexp.MustCompile(`^[+-]?(?:(?:[0-9](?:_?[0-9])*(?:\.(?:[0-9](?:_?[0-9])*)?)?|\.[0-9](?:_?[0-9])*)(?:[eE][+-]?[0-9](?:_?[0-9])*)?)$`)
 
-// number reads a JSON value the way `float(value)` read it: a bool is 0 or 1, a number is itself, a string must be
-// float() text. null reads as 0 (float(None) raised, and 0 fails the same positive check); anything else is an error.
+var pythonFloatWord = map[string]bool{"inf": true, "infinity": true, "nan": true}
+
+// pythonSpace is what Python's str.strip() and float() treat as whitespace: Unicode White_Space plus U+001C to U+001F.
+func pythonSpace(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) }
+
+// decimalDigitValue is the value of a Unicode decimal digit (category Nd): the digits of a script are contiguous runs
+// of ten (or a multiple of ten, as in the mathematical digits), so the offset in its run, modulo ten, is the value.
+func decimalDigitValue(r rune) int {
+	n := 0
+	for unicode.Is(unicode.Nd, r-rune(n)-1) {
+		n++
+	}
+	return n % 10
+}
+
+// pythonASCIIDigits maps every Unicode decimal digit to its ASCII digit, as float() does before it parses.
+func pythonASCIIDigits(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r > unicode.MaxASCII && unicode.Is(unicode.Nd, r) {
+			return rune('0' + decimalDigitValue(r))
+		}
+		return r
+	}, s)
+}
+
+func asciiLower(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, s)
+}
+
+// pythonLower is str.lower(): Go's ToLower except U+0130 (I with a dot above), which Python lowers to "i" plus a
+// combining dot above.
+func pythonLower(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, "İ", "i̇"))
+}
+
+// number reads a JSON value the way `float(value)` read it: a bool is 0 or 1, a number is itself, a string is stripped
+// and must be float() text (Unicode digits and whitespace included). null reads as 0 (float(None) raised, and 0 fails
+// the same positive check); anything else is an error.
 func number(v any) (float64, error) {
 	switch x := v.(type) {
 	case nil:
@@ -370,7 +412,18 @@ func number(v any) (float64, error) {
 	case float64:
 		return x, nil
 	case string:
-		s := strings.TrimSpace(x)
+		s := pythonASCIIDigits(strings.TrimFunc(x, pythonSpace))
+		if word := strings.TrimLeft(s, "+-"); len(s)-len(word) <= 1 && pythonFloatWord[asciiLower(word)] {
+			switch asciiLower(word) {
+			case "nan":
+				return math.NaN(), nil
+			default:
+				if strings.HasPrefix(s, "-") {
+					return math.Inf(-1), nil
+				}
+				return math.Inf(1), nil
+			}
+		}
 		if !pythonFloatRe.MatchString(s) {
 			return 0, fmt.Errorf("not a float: %q", x)
 		}

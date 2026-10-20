@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -501,5 +502,33 @@ func TestAssertHomeSourceStatesLowerCaseLikePython(t *testing.T) {
 		if !wantOK && err == nil {
 			t.Errorf("state %q: Python refuses it", state)
 		}
+	}
+}
+
+// Every Unicode decimal digit run holds a multiple of ten digits, so the offset in its run is the value mod ten.
+func TestDecimalDigitRunsAreMultiplesOfTen(t *testing.T) {
+	runs, total := 0, 0
+	for r := rune(0x80); r <= unicode.MaxRune; r++ {
+		if !unicode.Is(unicode.Nd, r) {
+			continue
+		}
+		start := r
+		for unicode.Is(unicode.Nd, start-1) {
+			start--
+		}
+		if r == start {
+			end := r
+			for unicode.Is(unicode.Nd, end+1) {
+				end++
+			}
+			if n := int(end-start) + 1; n%10 != 0 {
+				t.Errorf("the decimal digit run at U+%04X has %d digits, not a multiple of ten", start, n)
+			}
+			runs++
+		}
+		total++
+	}
+	if runs < 20 || total < 400 {
+		t.Fatalf("only %d runs / %d digits found: the scan measures nothing", runs, total)
 	}
 }

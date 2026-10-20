@@ -18,8 +18,8 @@ import (
 // planted defect: the same repository with the defect absent passes.
 
 var mergeTreeVetCIFiles = []string{
-	"check_go.sh", "check_venue_oracle_registry.sh", "venue_oracle_discovery.awk", "venue_oracle_names.awk",
-	"venue_oracle_proof.awk", "lib/venue_oracle_registry.sh", "merge-tree-vet.sh",
+	"ci/check_go.sh", "ci/check_venue_oracle_registry.sh", "ci/venue_oracle_discovery.awk", "ci/venue_oracle_names.awk",
+	"ci/venue_oracle_proof.awk", "ci/lib/venue_oracle_registry.sh", "ci/merge-tree-vet.sh",
 }
 
 const (
@@ -55,8 +55,8 @@ func newMTV(t *testing.T) *mtvEnv {
 	e.repo.write("internal/venue/venue_test.go", mtvVenueTest)
 	e.repo.write("ci/venue_oracle_registry.d/internal__venue.tsv", mtvRegistry)
 	for _, f := range mergeTreeVetCIFiles {
-		e.repo.write("ci/"+f, readText(t, filepath.Join(root, "ci", f)))
-		if err := os.Chmod(filepath.Join(e.repo.dir, "ci", f), 0o755); err != nil {
+		e.repo.write(f, readText(t, filepath.Join(root, filepath.FromSlash(f))))
+		if err := os.Chmod(filepath.Join(e.repo.dir, filepath.FromSlash(f)), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

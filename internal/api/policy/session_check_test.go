@@ -112,3 +112,17 @@ func TestCheckClaimsRefusesASidTokenItCannotCheck(t *testing.T) {
 		t.Fatalf("a token without sid: %v", err)
 	}
 }
+
+func TestAuthSchemaFromEnv(t *testing.T) {
+	for value, want := range map[string]string{"": "auth", "  ": "auth", "acp": "acp", "auth_x": "auth_x"} {
+		got, err := AuthSchemaFromEnv(func(string) string { return value })
+		if err != nil || got != want {
+			t.Errorf("%q: got %q, %v; want %q", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"Bad-Name", `acp"; --`, "select"} {
+		if got, err := AuthSchemaFromEnv(func(string) string { return value }); err == nil {
+			t.Errorf("%q accepted as %q", value, got)
+		}
+	}
+}

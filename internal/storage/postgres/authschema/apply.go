@@ -97,6 +97,17 @@ func (o Options) Validate(migrationRole string) error {
 	// owned by the runtime role, which holds DDL over its own objects
 	// permanently -- the exact posture the ADR forbids, established silently
 	// by a successful-looking migration. Refuse instead.
+	seen := map[string]bool{}
+	for _, reader := range o.SessionReaderRoles {
+		if err := ValidateIdentifier(reader); err != nil {
+			return err
+		}
+		if reader == o.RuntimeRole || (migrationRole != "" && reader == migrationRole) || seen[reader] {
+			return fmt.Errorf("%w: session reader role %q must differ from the runtime role, the migration role and every other reader",
+				ErrInvalidOptions, reader)
+		}
+		seen[reader] = true
+	}
 	if migrationRole != "" && migrationRole == o.RuntimeRole {
 		return fmt.Errorf(
 			"%w: the migration role and the runtime role must be distinct "+

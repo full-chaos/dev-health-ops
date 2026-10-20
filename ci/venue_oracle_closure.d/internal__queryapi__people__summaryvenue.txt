@@ -16,6 +16,7 @@ internal/platform/dbspan
 internal/platform/errortext
 internal/platform/errortext/hardened
 internal/platform/logging
+internal/platform/pgident
 internal/platform/queuecontrol
 internal/platform/secrets
 internal/platform/version

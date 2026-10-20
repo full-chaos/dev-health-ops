@@ -17,7 +17,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
-	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -47,6 +46,7 @@ func (h *handlers) llmSettingsRoutes() []httpapi.Route {
 		{Method: http.MethodDelete, Pattern: governancePrefix + "/llm-settings", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteLLMSettings))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/status", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSettingsStatus))},
 		{Method: http.MethodPost, Pattern: governancePrefix + "/llm-settings/readiness", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.postLLMSettingsReadiness))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/models", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSettingsModels))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/budget", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMBudget))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/spend", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSpend))},
 	}
@@ -432,7 +432,21 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 	if in.baseURL != nil {
 		baseURLText = *in.baseURL
 	}
-	valid, reason, splitErr := llmorgsettings.ValidateBaseURLChecked(ctx, baseURLText)
+	var keys []string
+	if in.apiKey != nil {
+		keys = append(keys, *in.apiKey)
+	}
+	if baseURLText != "" {
+		stored, err := h.storedLLMKey(ctx, orgID)
+		if err != nil {
+			return nil, nil, &llmStepError{"read stored llm key", err}
+		}
+		keys = append(keys, stored)
+	}
+	valid, reason, keyHit, splitErr := checkBaseURL(ctx, baseURLText, keys, h.baseURLValidator())
+	if keyHit {
+		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
+	}
 	if splitErr != nil {
 		// urlsplit's ValueError escapes validate_llm_base_url: an unhandled 500.
 		return nil, nil, &llmStepError{"validate base url", splitErr}
@@ -512,6 +526,7 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		return nil, nil, &llmStepError{"commit llm settings", err}
 	}
 	committed = true
+	h.modelCache.invalidateOrg(orgID)
 	return out, nil, nil
 }
 
@@ -539,6 +554,7 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 		h.internalError(ctx, w, "delete llm settings", err)
 		return
 	}
+	h.modelCache.invalidateOrg(orgID)
 	if credentialsDeleted == 0 {
 		policy.WriteDetail(w, http.StatusNotFound, "LLM settings not found", nil)
 		return

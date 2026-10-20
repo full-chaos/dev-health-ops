@@ -19,11 +19,20 @@ const allowlistCondition = "vars.SELF_HOSTED_RUNNERS == 'enabled' && " +
 	"github.event_name == 'release' || " +
 	"github.event_name == 'schedule')"
 
+// racePoolTerm is the extra go-quality-leg route (CHAOS-10294): the legs flagged `pool` take the
+// CI_RACE_RUNNER pool on a push to main of this repository, never on a fork or a pull_request event.
+const racePoolTerm = "matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && " +
+	"github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'"
+
 const (
 	routingTernary = "${{ (" + allowlistCondition + ") " + `&& fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}`
 	cacheNegation  = "${{ !(" + allowlistCondition + ") }}"
-	denyFragment   = "github.event_name != 'pull_request'"
-	draftGate      = "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))"
+
+	goQualityRoutingTernary = "${{ (" + racePoolTerm + ") && vars.CI_RACE_RUNNER || " +
+		`(` + allowlistCondition + `) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}`
+	goQualityCacheNegation = "${{ !((" + allowlistCondition + ") || (" + racePoolTerm + ")) }}"
+	denyFragment           = "github.event_name != 'pull_request'"
+	draftGate              = "(!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))"
 )
 
 var routedWorkflowFiles = []string{"go-quality.yml", "test.yml", "live-e2e.yml", "go.yml", "docker-images.yml"}
@@ -63,7 +72,7 @@ var cacheNegationJobs = map[string]string{"go-quality.yml": "go-quality-leg", "t
 type cachePathSite struct{ job, step, ifWant string }
 
 var cachePathSites = map[string]cachePathSite{
-	"go-quality.yml": {"go-quality-leg", "Configure self-hosted Go cache paths", "steps.relevance.outputs.relevant == 'true' && " + allowlistCondition},
+	"go-quality.yml": {"go-quality-leg", "Configure self-hosted Go cache paths", "steps.relevance.outputs.relevant == 'true' && ((" + allowlistCondition + ") || (" + racePoolTerm + "))"},
 	"test.yml":       {"tooling-tests", "Configure self-hosted Go cache paths", allowlistCondition},
 	"live-e2e.yml":   {"metrics-executed-proof", "Configure self-hosted Go cache paths", allowlistCondition},
 }
@@ -168,8 +177,12 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 	for _, name := range sortedKeys(toAnyMap(requiredContextJobs)) {
 		for _, jn := range requiredContextJobs[name] {
 			if j, ok := job(name, jn); ok {
-				if got := str(j["runs-on"]); got != routingTernary {
-					add("%s:%s runs-on does not EXACTLY match the routing ternary: got %q, want %q", name, jn, got, routingTernary)
+				want := routingTernary
+				if name == "go-quality.yml" && jn == "go-quality-leg" {
+					want = goQualityRoutingTernary
+				}
+				if got := str(j["runs-on"]); got != want {
+					add("%s:%s runs-on does not EXACTLY match the routing ternary: got %q, want %q", name, jn, got, want)
 				}
 			}
 		}
@@ -191,8 +204,8 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 		}
 		if cache == nil {
 			add("%s:%s: no actions/setup-go step with a cache input found", name, jn)
-		} else if got := str(cache); got != cacheNegation {
-			add("%s:%s cache negation does not EXACTLY match the allow-list negation: got %q, want %q", name, jn, got, cacheNegation)
+		} else if want := map[bool]string{true: goQualityCacheNegation, false: cacheNegation}[name == "go-quality.yml"]; str(cache) != want {
+			add("%s:%s cache negation does not EXACTLY match the allow-list negation: got %q, want %q", name, jn, str(cache), want)
 		}
 	}
 

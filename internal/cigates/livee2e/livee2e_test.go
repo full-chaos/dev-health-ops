@@ -263,6 +263,7 @@ func serveRedis(t *testing.T, replies ...string) (url string, received func() []
 
 func TestValkeyPing(t *testing.T) {
 	url, received := serveRedis(t, "+PONG")
+	url = strings.TrimSuffix(url, "/1") + "/0"
 	if err := livee2e.ValkeyPing(context.Background(), url); err != nil {
 		t.Fatal(err)
 	}
@@ -270,10 +271,12 @@ func TestValkeyPing(t *testing.T) {
 		t.Errorf("commands %q", cmds)
 	}
 	bad, _ := serveRedis(t, "-LOADING busy")
+	bad = strings.TrimSuffix(bad, "/1") + "/0"
 	if err := livee2e.ValkeyPing(context.Background(), bad); err == nil {
 		t.Error("an error reply must fail")
 	}
 	authURL, authReceived := serveRedis(t, "+OK", "+PONG")
+	authURL = strings.TrimSuffix(authURL, "/1") + "/0"
 	authURL = strings.Replace(authURL, "redis://", "redis://:pw@", 1)
 	if err := livee2e.ValkeyPing(context.Background(), authURL); err != nil {
 		t.Fatal(err)
@@ -355,6 +358,7 @@ func TestRunEdgeRequestJWTSecretAndUsage(t *testing.T) {
 		}
 	}
 	url, _ := serveRedis(t, "+PONG")
+	url = strings.TrimSuffix(url, "/1") + "/0"
 	if rc, _, stderr := run(t, map[string]string{"REDIS_URL": url}, "valkey-ping"); rc != 0 {
 		t.Errorf("valkey-ping rc=%d %q", rc, stderr)
 	}

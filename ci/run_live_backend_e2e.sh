@@ -410,10 +410,7 @@ WORKER_LOG_FILE="${LIVE_E2E_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
 RECONCILER_LOG_FILE="${LIVE_E2E_RECONCILER_LOG_FILE:-${TMP_DIR}/reconciler.log}"
 start_worker_stack "${WORKER_LOG_FILE}" "${RECONCILER_LOG_FILE}"
 
-RUN_START="$(date -u +%Y-%m-%dT%H:%M:%S.%6N+00:00)"
-case "${RUN_START}" in
-  *N*) RUN_START="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" ;;
-esac
+RUN_START="$(run_start_stamp)"
 echo "==> [CHAOS-5362] seeding real source rows through the real sync path, run_start=${RUN_START}"
 ORG_ID="${E2E_ORG_ID}" REPO_NAME="${FIXTURE_REPO_NAME}" BACKFILL_DAYS="${FIXTURE_DAYS}" \
   seed_and_finalize_sync_targets cicd deployments incidents tests

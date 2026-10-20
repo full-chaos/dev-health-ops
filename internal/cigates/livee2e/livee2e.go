@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"reflect"
@@ -143,7 +144,7 @@ func AssertHome(payload []byte, fixtureProvider string) error {
 	}
 	coverage := obj(freshness["coverage"])
 	pct, err := number(coverage["repos_covered_pct"])
-	if err != nil || pct <= 0 {
+	if err != nil || math.IsNaN(pct) || pct <= 0 {
 		return fmt.Errorf("coverage.repos_covered_pct is not above zero: %v", coverage)
 	}
 	deltas, _ := p["deltas"].([]any)
@@ -320,6 +321,17 @@ func ValkeyPing(ctx context.Context, redisURL string) error {
 			return fmt.Errorf("AUTH refused: %q %v", reply, err)
 		}
 	}
+	if dbPath := strings.TrimPrefix(u.Path, "/"); dbPath != "" {
+		db, err := strconv.Atoi(dbPath)
+		if err != nil || db < 0 {
+			return fmt.Errorf("not a database number in %q", redactedURL(u))
+		}
+		if db != 0 {
+			if reply, err := send("SELECT", strconv.Itoa(db)); err != nil || !strings.HasPrefix(reply, "+OK") {
+				return fmt.Errorf("SELECT %d refused: %q %v", db, reply, err)
+			}
+		}
+	}
 	reply, err := send("PING")
 	if err != nil {
 		return err
@@ -328,4 +340,10 @@ func ValkeyPing(ctx context.Context, redisURL string) error {
 		return fmt.Errorf("PING answered %q", reply)
 	}
 	return nil
+}
+
+func redactedURL(u *url.URL) string {
+	c := *u
+	c.User = nil
+	return c.String()
 }

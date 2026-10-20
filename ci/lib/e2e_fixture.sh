@@ -27,15 +27,19 @@ generate_auth_token() {
     INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at)
       VALUES ('${E2E_ORG_ID}', 'e2e-org', 'E2E Org', '{}', 'enterprise', true, now(), now())
       ON CONFLICT (id) DO NOTHING;" >/dev/null
-  password="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
-  created="$(printf '%s\n' "${password}" | e2e_dho_admin users create --email e2e@test.local --password-stdin)" || {
-    echo "ERROR: dho admin users create failed: ${created}" >&2
-    return 1
-  }
-  user_id="$(printf '%s\n' "${created}" | sed -n 's/^Created user: .* (id: \([0-9a-fA-F-]*\))$/\1/p' | head -n 1)"
+  # A rerun against the same database reuses the user (a read), the way the fixed-id seed did.
+  user_id="$(e2e_psql -c "SELECT id FROM users WHERE email = 'e2e@test.local'" | head -n 1)"
   if [ -z "${user_id}" ]; then
-    echo "ERROR: could not read the user id from: ${created}" >&2
-    return 1
+    password="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+    created="$(printf '%s\n' "${password}" | e2e_dho_admin users create --email e2e@test.local --password-stdin)" || {
+      echo "ERROR: dho admin users create failed: ${created}" >&2
+      return 1
+    }
+    user_id="$(printf '%s\n' "${created}" | sed -n 's/^Created user: .* (id: \([0-9a-fA-F-]*\))$/\1/p' | head -n 1)"
+    if [ -z "${user_id}" ]; then
+      echo "ERROR: could not read the user id from: ${created}" >&2
+      return 1
+    fi
   fi
   e2e_dho_admin users update --id "${user_id}" --org "${E2E_ORG_ID}" --role admin >/dev/null || {
     echo "ERROR: dho admin users update could not add the e2e user to the e2e organization" >&2

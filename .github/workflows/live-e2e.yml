@@ -47,10 +47,13 @@ jobs:
         with:
           filters: |
             code:
-              - 'src/**'
-              - 'ci/**'
-              - 'migrations/**'
-              - 'scripts/**'
+              # What the jobs read: the worker config data, the runner scripts and their libs, the worker role SQL.
+              # No broad directory glob: src/, ci/, scripts/ and internal/ hold Python files, and a Python-only change
+              # must not run the jobs (TestLiveE2EInstallsNoPython expands every entry against the tracked files).
+              - 'src/dev_health_ops/config/**'
+              - 'ci/run_*.sh'
+              - 'ci/lib/**'
+              - 'scripts/worker/**'
               # CHAOS-4266 codex review: metrics-executed-proof builds and
               # runs the Go worker/reconciler/migrate binaries, so a Go-only
               # change (worker dispatch, daily/remaining metrics, job
@@ -58,7 +61,18 @@ jobs:
               # reported code=false for exactly the surfaces this gate
               # exists to protect, and the job silently skipped.
               - 'cmd/**'
-              - 'internal/**'
+              - 'internal/**/*.go'
+              # Files the Go binaries embed or read from internal/ (SQL, JSON, YAML, TSV, GraphQL, text).
+              - 'internal/**/*.sql'
+              - 'internal/**/*.json'
+              - 'internal/**/*.yaml'
+              - 'internal/**/*.yml'
+              - 'internal/**/*.tsv'
+              - 'internal/**/*.graphql'
+              - 'internal/**/*.txt'
+              - 'internal/**/*.md'
+              - 'internal/**/*.html'
+              - 'internal/chmigrate/history/**'
               - 'go.mod'
               - 'go.sum'
               - 'contracts/jobs/**'

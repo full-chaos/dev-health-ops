@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 493,
+            "line": 505,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +45,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 399,
+          "line": 411,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -264,5 +264,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "a7fad789a585fac9d0f1bd5bb85a1ffa1de4b06d"
+  "source_commit": "2fe0919e2f82f4a4fc52fefc99bf6c97a5cec59c"
 }

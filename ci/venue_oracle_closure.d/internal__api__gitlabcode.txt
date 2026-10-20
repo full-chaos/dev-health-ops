@@ -6,6 +6,7 @@ internal/api/restcore
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
+internal/auth/sessionid
 internal/chmigrate
 internal/cli
 internal/httpguard

@@ -207,6 +207,13 @@ authService:
     secretKey: AUTH_MIGRATION_DATABASE_URI
     # -- The runtime login auth-migrate grants privileges to.
     runtimeRole: devhealth_auth
+    # -- The logins of the services that end an access token when its
+    #    auth-service session is revoked (go-api's API_DATABASE_ROLE and
+    #    query-api's registry login). auth-migrate grants each exactly SELECT on
+    #    sessions(id, principal_id, revoked_at) in the auth schema
+    #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
+    #    a token auth-service issued is then refused by go-api and query-api.
+    sessionReaderRoles: []
     hookEvents: [pre-install, pre-upgrade]
     backoffLimit: 0
     activeDeadlineSeconds: 600

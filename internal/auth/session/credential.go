@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
 // A refresh credential is "dhr1_" + base64url(32 bytes), 48 characters, inside
@@ -84,16 +85,16 @@ func decodeSuccessorKey(s contracts.SecretString) (*[successorKeyBytes]byte, err
 
 // WireSessionID is the session.v1 form of a session id: "ses_" + base64url of
 // the uuid's 16 bytes.
-func WireSessionID(id uuid.UUID) string { return "ses_" + encoding.EncodeToString(id[:]) }
+func WireSessionID(id uuid.UUID) string { return sessionid.Wire(id) }
 
 // WirePrincipalID is the session.v1 form of a principal id.
 func WirePrincipalID(id uuid.UUID) string { return "prn_" + encoding.EncodeToString(id[:]) }
 
 // ParseWireSessionID reverses WireSessionID.
 func ParseWireSessionID(s string) (uuid.UUID, error) {
-	raw, err := encoding.DecodeString(strings.TrimPrefix(s, "ses_"))
-	if !strings.HasPrefix(s, "ses_") || err != nil || len(raw) != 16 {
+	id, err := sessionid.Parse(s)
+	if err != nil {
 		return uuid.UUID{}, fmt.Errorf("session: %w", ErrSessionNotFound)
 	}
-	return uuid.UUID(raw), nil
+	return id, nil
 }

@@ -42,6 +42,7 @@ internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/passwordpolicy
 internal/auth/ratelimitvalkey
+internal/auth/sessionid
 internal/auth/signedtoken
 internal/backfillrun
 internal/chmigrate

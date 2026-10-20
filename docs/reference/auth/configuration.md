@@ -69,6 +69,7 @@ Durations take Go syntax (`30s`, `5m`).
 | | `AUTH_MIGRATION_DATABASE_URI` or `AUTH_MIGRATION_DATABASE_URI_FILE` | Required. The **migration** login's DSN. Must not authenticate as the runtime role. |
 | | `AUTH_RUNTIME_DATABASE_ROLE` | Required to apply (not for `--check`). The login to grant the runtime privileges to. |
 | | `AUTH_DATABASE_SCHEMA` | Default `auth`. |
+| | `AUTH_SESSION_READER_ROLES` | Optional, comma-separated. The logins of go-api and query-api: each is granted exactly `SELECT (id, principal_id, revoked_at)` on the auth schema's `sessions` and `USAGE` on the schema, nothing else. With none, go-api and query-api cannot read the session, so every request with an access token auth-service issued fails (an error naming the missing grant, never a pass). Each role must exist. |
 | `--check` | | Report the lineage position without issuing DDL. |
 | `--version` | | Print build metadata. |
 

@@ -28,8 +28,7 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// Split so the literal is not a file reference: a Go test naming a tracked file makes go.yml's path lists cover it.
-const docsSiteConfig = "mkdocs" + ".yml"
+const docsSiteConfig = "mkdocs.yml"
 
 var docsOnlyPatterns = []string{"docs/**", "docs-data/**", "**/*.md", ".github/docs-legacy/**", docsSiteConfig}
 

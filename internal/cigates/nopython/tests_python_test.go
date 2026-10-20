@@ -91,7 +91,7 @@ type pyOwnedEntry struct {
 	owner string
 }
 
-const oracleOwner = "unassigned: oracle and golden-generator scripts under testdata"
+const oracleOwner = "#4566 (CHAOS-10365) deletes every .py under internal/"
 
 var pyOwnedEntries = []pyOwnedEntry{
 	{"src/dev_health_ops/", "CHAOS-10375"},
@@ -99,6 +99,7 @@ var pyOwnedEntries = []pyOwnedEntry{
 	{"tests/tooling/", "fcs tooling/docs leaves"},
 	{"tests/docs/", "fcs tooling/docs leaves"},
 	{"ci/bigboy/", "#4565/#4563"},
+	// ci/ itself is not a prefix: it would admit any new ci/*.py. Its three files are listed exactly.
 	{"ci/check_go_api_routing_digest", "fcs CHAOS-10367"},
 	{"ci/go_relevance", "fcs CHAOS-10367"},
 	{"ci/venue_oracle_weights", "fcs CHAOS-10367"},

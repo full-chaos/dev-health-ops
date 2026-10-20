@@ -35,6 +35,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      auth_corpus_only:
+        description: 'Run only the auth-corpus-external job (the venue-oracles shards report that they were not run)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -107,8 +112,15 @@ jobs:
           # which routes into the fail-open branch below).
           BASE_SHA: ${{ github.event.before }}
           EVENT_NAME: ${{ github.event_name }}
+          AUTH_CORPUS_ONLY: ${{ inputs.auth_corpus_only }}
         run: |
           set -euo pipefail
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ] && [ "${AUTH_CORPUS_ONLY:-}" = "true" ]; then
+            # A run by hand for the auth-corpus-external job alone (CHAOS-10160): the shards say so and stop.
+            echo "workflow_dispatch with auth_corpus_only: the venue-oracles shards are not run"
+            printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
             # A run by hand has no push range: it always runs the full suite.
             echo "workflow_dispatch: running the full oracle suite"
@@ -195,3 +207,31 @@ jobs:
           name: venue-oracle-receipt-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/venue-oracle-receipt/receipt.log
           if-no-files-found: ignore
+
+  # CHAOS-10160: TestAuthFlowVenueOracle (the auth-flow venue golden) driven through the base-URL runner against
+  # go-api running as its own container on its own stores, brought up by a private compose project
+  # (ci/auth_corpus_external.sh; compose.yml's own pinned images, an exception to the test-image mirror that this
+  # job alone has). Like the other venue-oracles jobs it runs on every push to main and by hand; it is
+  # informational, not a required check, and it builds the operator image from the tree. Leg acp puts auth-service behind go-api (AUTH_PROXY_*, CHAOS-10231); it may fail until its
+  # prerequisites are on main, and a failed acp leg does not fail the workflow run.
+  auth-corpus-external:
+    name: auth-corpus-external (${{ matrix.leg }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # leg acp: auth-service C1 PR2 (10228) and the C2-C5 route mounts are not on main yet; remove this line when they land
+    continue-on-error: ${{ matrix.leg == 'acp' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [go-api, acp]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Run the auth-flow corpus against the external go-api
+        run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"

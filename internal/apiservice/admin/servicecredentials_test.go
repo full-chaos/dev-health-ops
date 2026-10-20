@@ -62,7 +62,7 @@ func TestServiceCredentialScopes(t *testing.T) {
 			}
 		}
 	}
-	if !equalStrings(ServiceNames(), []string{"acr", "worker-llm-config", "worker-operator"}) {
+	if !equalStrings(ServiceNames(), []string{"acr", "worker-operator"}) {
 		t.Fatalf("service names %v", ServiceNames())
 	}
 }
@@ -161,22 +161,14 @@ func TestMetadataIsValidPerState(t *testing.T) {
 	}
 }
 
-// worker-llm-config holds llm_config:read and nothing else, and its tokens are
-// told apart from the retired worker-operator ones by prefix.
-func TestWorkerLLMConfigServiceCredential(t *testing.T) {
-	if got, err := ServiceCredentialScopes(ServiceWorkerLLMConfig, []string{"llm_config:read"}); err != nil || len(got) != 1 {
-		t.Fatalf("llm_config:read: %v %v", got, err)
+// worker-llm-config is a retired service: no credential can be issued to it.
+func TestWorkerLLMConfigServiceIsRetired(t *testing.T) {
+	if _, err := ServiceCredentialScopes("worker-llm-config", []string{"llm_config:read"}); err == nil {
+		t.Error("the retired worker-llm-config service accepted a scope")
 	}
-	for _, scope := range []string{"workers:operate", "entitlements:read"} {
-		if _, err := ServiceCredentialScopes(ServiceWorkerLLMConfig, []string{scope}); err == nil {
-			t.Errorf("%s accepted", scope)
+	for _, name := range ServiceNames() {
+		if name == "worker-llm-config" {
+			t.Error("worker-llm-config is still a service name")
 		}
-	}
-	if _, err := ServiceCredentialScopes(ServiceWorkerOperator, []string{"llm_config:read"}); err == nil {
-		t.Error("the retired worker-operator service gained llm_config:read")
-	}
-	token, err := generateServiceToken(ServiceWorkerLLMConfig)
-	if err != nil || !strings.HasPrefix(token, "svc_wllm_") {
-		t.Fatalf("token prefix: %v", err)
 	}
 }

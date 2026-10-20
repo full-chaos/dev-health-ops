@@ -104,8 +104,11 @@ internal/bigboycompose	1
 internal/billingcli	1
 internal/cacheinvalidation	1
 internal/chmigrate	1
-internal/cigates	386
+internal/cigates/affected	5
 internal/cigates/chartgates	148
+internal/cigates/checkgo	140
+internal/cigates/scripts	18
+internal/cigates/workflows	52
 internal/cli	2
 internal/clicredentials	11
 internal/contractcheck	1
@@ -205,7 +208,6 @@ internal/mintcli/envelope	1
 internal/mintcli/envelopekeys	2
 internal/operationalbackfill	2
 internal/operationalordering	35
-internal/orgllmconfig	2
 internal/pgmigrate	6
 internal/platform/buildstamp	1
 internal/platform/config	12

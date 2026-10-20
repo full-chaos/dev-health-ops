@@ -27,6 +27,10 @@ var (
 	// ErrLastSignInMethod reports an unlink that would leave the principal
 	// with no external identity and no password.
 	ErrLastSignInMethod = errors.New("identity: the external identity is the last sign-in method")
+	// ErrProviderAlreadyLinked reports a link of a key whose issuer and
+	// provider the principal already holds with another subject: one identity
+	// per provider per principal.
+	ErrProviderAlreadyLinked = errors.New("identity: the principal already has an identity at this provider")
 	// ErrPrincipalUnavailable reports a link to a principal that does not
 	// exist or is disabled.
 	ErrPrincipalUnavailable = errors.New("identity: principal missing or disabled")
@@ -170,14 +174,18 @@ WHERE u.auth_provider = $1 AND u.auth_provider_id = $2
 	return uuid.Nil, false, ErrMultipleUsers
 }
 
-// projectIdentity links key to the projected legacy user.
+// projectIdentity links key to the projected legacy user. A principal that
+// holds another subject at the key's issuer and provider is
+// ErrProviderAlreadyLinked: the projection writes nothing.
 func (s *Store) projectIdentity(ctx context.Context, key ExternalKey, principal uuid.UUID) (err error) {
 	defer func() { s.countLink(ctx, "project", err) }()
 	linkID := uuid.New()
 	target, subject := linkID.String(), principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			return s.insertIdentity(ctx, tx, linkID, key, principal, errProjectedConcurrently)
+			// A disabled legacy user is still projected; its sign-in is refused
+			// by the caller from DisabledAt.
+			return s.attachIdentity(ctx, tx, linkID, key, principal, false, errProjectedConcurrently, nil)
 		},
 		Audit:  identityAudit("auth.identity.projected", "identity_projected", key, target, subject, Actor{}),
 		Events: []audit.OutboxEvent{identityEvent("external_identity.linked", key, target, subject)},
@@ -188,8 +196,7 @@ func (s *Store) projectIdentity(ctx context.Context, key ExternalKey, principal 
 	if err != nil {
 		return s.domainErr(ctx, "project external identity", err)
 	}
-	s.logger.InfoContext(ctx, "identity: legacy external identity projected",
-		"principal_id", subject, "external_identity_id", target, "provider", string(key.Provider))
+	s.logger.InfoContext(ctx, "identity: legacy external identity projected", "provider", providerLabel(key.Provider))
 	return nil
 }
 
@@ -260,9 +267,7 @@ func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_
 VALUES ($1, $2, $3, clock_timestamp())`, principal, req.Email, emailLower); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.external_identities (id, principal_id, issuer, provider, subject)
-VALUES ($1, $2, $3, $4, $5)`, linkID, principal, req.Key.Issuer, string(req.Key.Provider), req.Key.Subject)
-			return err
+			return s.attachIdentity(ctx, tx, linkID, req.Key, principal, true, ErrIdentityTaken, ErrIdentityTaken)
 		},
 		Audit: auditEvent,
 		Events: []audit.OutboxEvent{
@@ -274,13 +279,12 @@ VALUES ($1, $2, $3, $4, $5)`, linkID, principal, req.Key.Issuer, string(req.Key.
 	case err == nil:
 	case isEmailCollision(err):
 		return uuid.Nil, ErrEmailTaken
-	case isUniqueViolation(err, externalIdentityKeyIndex):
+	case errors.Is(err, ErrIdentityTaken), isUniqueViolation(err, externalIdentityKeyIndex):
 		return uuid.Nil, ErrIdentityTaken
 	default:
 		return uuid.Nil, s.storeErr(ctx, "provision federated user", err)
 	}
-	s.logger.InfoContext(ctx, "identity: federated principal provisioned",
-		"principal_id", subject, "external_identity_id", target, "provider", string(req.Key.Provider))
+	s.logger.InfoContext(ctx, "identity: federated principal provisioned", "provider", providerLabel(req.Key.Provider))
 	return principal, nil
 }
 
@@ -300,8 +304,11 @@ func SelfSignUp(requestID *string) Actor { return Actor{RequestID: requestID, se
 
 // LinkIdentity links key to principal, with its audit row and outbox event in
 // one transaction. A key another principal holds is ErrIdentityConflict and is
-// never re-pointed; a key the principal already holds is ErrAlreadyLinked. It
-// returns the new external identity id.
+// never re-pointed; a key the principal already holds is ErrAlreadyLinked; a
+// key whose issuer and provider the principal holds with another subject is
+// ErrProviderAlreadyLinked. The principal row is locked FOR UPDATE first, as
+// UnlinkIdentity locks it, so links and unlinks of one principal run one after
+// the other in one lock order. It returns the new external identity id.
 func (s *Store) LinkIdentity(ctx context.Context, key ExternalKey, principal uuid.UUID, actor Actor) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "link", err) }()
 	if err := key.Validate(); err != nil {
@@ -311,10 +318,7 @@ func (s *Store) LinkIdentity(ctx context.Context, key ExternalKey, principal uui
 	target, subject := linkID.String(), principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			if err := s.requireLivePrincipal(ctx, tx, principal); err != nil {
-				return err
-			}
-			return s.insertIdentity(ctx, tx, linkID, key, principal, ErrAlreadyLinked)
+			return s.attachIdentity(ctx, tx, linkID, key, principal, true, ErrAlreadyLinked, nil)
 		},
 		Audit:  identityAudit("auth.identity.linked", "identity_linked", key, target, subject, actor),
 		Events: []audit.OutboxEvent{identityEvent("external_identity.linked", key, target, subject)},
@@ -322,8 +326,7 @@ func (s *Store) LinkIdentity(ctx context.Context, key ExternalKey, principal uui
 	if err != nil {
 		return uuid.Nil, s.domainErr(ctx, "link external identity", err)
 	}
-	s.logger.InfoContext(ctx, "identity: external identity linked",
-		"principal_id", subject, "external_identity_id", target, "provider", string(key.Provider))
+	s.logger.InfoContext(ctx, "identity: external identity linked", "provider", providerLabel(key.Provider))
 	return linkID, nil
 }
 
@@ -387,8 +390,7 @@ WHERE issuer = $1 AND provider = $2 AND subject = $3`, key.Issuer, string(key.Pr
 	if err != nil {
 		return s.domainErr(ctx, "unlink external identity", err)
 	}
-	s.logger.InfoContext(ctx, "identity: external identity unlinked",
-		"principal_id", subject, "external_identity_id", targetID, "provider", string(key.Provider))
+	s.logger.InfoContext(ctx, "identity: external identity unlinked", "provider", providerLabel(key.Provider))
 	return nil
 }
 
@@ -439,10 +441,49 @@ func (s *Store) hasPassword(ctx context.Context, queryRow func(context.Context, 
 	return has, err
 }
 
-func (s *Store) requireLivePrincipal(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error {
+// attachIdentity is the one writer of an external identity row (projection,
+// provisioning, link). It locks the principal row FOR UPDATE, the lock
+// UnlinkIdentity takes first, so every identity change of one principal runs
+// in one order; refuses a second subject at the key's issuer and provider
+// (ErrProviderAlreadyLinked); then inserts the key. A key the principal
+// already holds returns same; a key another principal holds is conflict, or
+// ErrIdentityConflict when conflict is nil. live refuses a disabled principal.
+func (s *Store) attachIdentity(ctx context.Context, tx audit.TxOps, id uuid.UUID, key ExternalKey, principal uuid.UUID,
+	live bool, same, conflict error) error {
+	if err := s.lockPrincipal(ctx, tx, principal, live); err != nil {
+		return err
+	}
+	if err := s.oneIdentityPerProvider(ctx, tx, key, principal); err != nil {
+		return err
+	}
+	err := s.insertIdentity(ctx, tx, id, key, principal, same)
+	if conflict != nil && errors.Is(err, ErrIdentityConflict) {
+		return conflict
+	}
+	return err
+}
+
+// oneIdentityPerProvider refuses a second subject at the key's issuer and
+// provider. The caller holds the principal row lock (attachIdentity).
+func (s *Store) oneIdentityPerProvider(ctx context.Context, tx audit.TxOps, key ExternalKey, principal uuid.UUID) error {
+	var others int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+s.q+`.external_identities
+WHERE principal_id = $1 AND issuer = $2 AND provider = $3 AND subject <> $4`,
+		principal, key.Issuer, string(key.Provider), key.Subject).Scan(&others); err != nil {
+		return err
+	}
+	if others > 0 {
+		return ErrProviderAlreadyLinked
+	}
+	return nil
+}
+
+// lockPrincipal locks the principal row FOR UPDATE. A missing principal, or a
+// disabled one when live is set, is ErrPrincipalUnavailable.
+func (s *Store) lockPrincipal(ctx context.Context, tx audit.TxOps, principal uuid.UUID, live bool) error {
 	var disabled bool
-	err := tx.QueryRow(ctx, `SELECT disabled_at IS NOT NULL FROM `+s.q+`.principals WHERE id = $1 FOR SHARE`, principal).Scan(&disabled)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && disabled) {
+	err := tx.QueryRow(ctx, `SELECT disabled_at IS NOT NULL FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, principal).Scan(&disabled)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && live && disabled) {
 		return ErrPrincipalUnavailable
 	}
 	return err
@@ -494,6 +535,8 @@ func (s *Store) countLink(ctx context.Context, action string, err error) {
 		outcome = "conflict"
 	case errors.Is(err, ErrAlreadyLinked):
 		outcome = "already_linked"
+	case errors.Is(err, ErrProviderAlreadyLinked):
+		outcome = "provider_already_linked"
 	case errors.Is(err, ErrNotFound):
 		outcome = "not_found"
 	case errors.Is(err, ErrNotOwner):
@@ -521,8 +564,8 @@ func (s *Store) countLink(ctx context.Context, action string, err error) {
 // domainErr keeps the domain refusals Apply returned (audit.Commit wraps them
 // with %w) and wraps everything else as ErrStore.
 func (s *Store) domainErr(ctx context.Context, op string, err error) error {
-	for _, domain := range []error{ErrIdentityConflict, ErrAlreadyLinked, ErrPrincipalUnavailable, ErrNotFound,
-		ErrNotOwner, ErrLastSignInMethod} {
+	for _, domain := range []error{ErrIdentityConflict, ErrAlreadyLinked, ErrProviderAlreadyLinked, ErrPrincipalUnavailable,
+		ErrNotFound, ErrNotOwner, ErrLastSignInMethod} {
 		if errors.Is(err, domain) {
 			return domain
 		}
@@ -533,4 +576,18 @@ func (s *Store) domainErr(ctx context.Context, op string, err error) error {
 func isUniqueViolation(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
+}
+
+// providerLabel is the provider attribute of a log line: a social provider's
+// name, or "sso" for an SSO provider row, whose id stays in the audit event.
+func providerLabel(p Provider) string {
+	switch p {
+	case ProviderGitHub:
+		return "github"
+	case ProviderGitLab:
+		return "gitlab"
+	case ProviderGoogle:
+		return "google"
+	}
+	return "sso"
 }

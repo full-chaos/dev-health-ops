@@ -14,8 +14,6 @@ import (
 // The external auth corpus job (CHAOS-10160): TestAuthFlowVenueOracle driven through the base-URL runner against
 // go-api (and, on leg acp, behind auth-service) brought up by a private compose project.
 
-const corpusLegAcpReason = "leg acp: auth-service C1 PR2 (10228) and the C2-C5 route mounts are not on main yet; remove this line when they land"
-
 func readRepoFile(t *testing.T, rel ...string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(append([]string{authProofRoot(t)}, rel...)...))
@@ -55,17 +53,15 @@ func TestAuthCorpusExternalJobIsInTheVenueWorkflow(t *testing.T) {
 	if job.TimeoutMinutes <= 0 || job.TimeoutMinutes > 60 {
 		t.Errorf("timeout-minutes = %d, want 1..60", job.TimeoutMinutes)
 	}
-	if got, _ := job.ContinueOnError.(string); got != "${{ matrix.leg == 'acp' }}" {
-		t.Errorf("continue-on-error = %v, want only leg acp to be allowed to fail", job.ContinueOnError)
+	// Leg acp forwards only what auth-service serves (ci/auth_corpus_external.sh), so both legs must pass.
+	if job.ContinueOnError != nil {
+		t.Errorf("continue-on-error = %v, want none: both legs are required to pass", job.ContinueOnError)
 	}
 	start := strings.Index(text, "\n  auth-corpus-external:")
 	if start < 0 {
 		t.Fatal("job text not found")
 	}
 	body := text[start+1:]
-	if !strings.Contains(body, corpusLegAcpReason) {
-		t.Errorf("the job does not carry the named reason for leg acp: %q", corpusLegAcpReason)
-	}
 	if !strings.Contains(body, `bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`) {
 		t.Error("the job does not run ci/auth_corpus_external.sh with its leg")
 	}

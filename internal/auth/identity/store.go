@@ -226,7 +226,7 @@ func (s *Store) Project(ctx context.Context, userID uuid.UUID) (err error) {
 	}
 	if inserted {
 		outcome = "inserted"
-		s.logger.InfoContext(ctx, "identity: principal projected", "principal_id", userID.String())
+		s.logger.InfoContext(ctx, "identity: principal projected")
 		return nil
 	}
 	cur, err := s.readProjection(ctx, userID)
@@ -244,8 +244,7 @@ func (s *Store) Project(ctx context.Context, userID uuid.UUID) (err error) {
 		return err
 	}
 	outcome = "updated"
-	s.logger.InfoContext(ctx, "identity: principal projection updated",
-		"principal_id", userID.String(), "changed_fields", changed)
+	s.logger.InfoContext(ctx, "identity: principal projection updated", "changed_fields", changed)
 	return nil
 }
 

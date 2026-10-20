@@ -35,6 +35,10 @@ type Options struct {
 	// RuntimeRole is the least-privilege role auth-service connects as. It is
 	// only ever the SUBJECT of a GRANT here; it never executes anything.
 	RuntimeRole string
+	// SessionReaderRoles are the roles of the services that end an access
+	// token when its session is revoked (go-api and query-api read
+	// SessionReaderColumns, and nothing else in the schema). Empty means none.
+	SessionReaderRoles []string
 	// Logger receives one structured line per applied migration. Optional.
 	Logger *slog.Logger
 	// AcknowledgeNarrowing is the one-shot operator acknowledgement of a

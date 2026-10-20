@@ -73,9 +73,9 @@ func TestValidateAttributesRefusesSecretsAndNeverEchoesThem(t *testing.T) {
 
 func TestMutationValidateAppliesTheAllowlist(t *testing.T) {
 	m := Mutation{
-		Apply: func(_ context.Context, _ TxOps) error { return nil },
-		Audit: AuditEvent{EventType: "member.updated", Outcome: OutcomeAllowed, Attributes: map[string]any{"password": "p"}},
-		Event: OutboxEvent{AggregateType: "a", AggregateID: "b", EventType: "c", IdempotencyKey: "k"},
+		Apply:     func(_ context.Context, _ TxOps) error { return nil },
+		Audit:     AuditEvent{EventType: "member.updated", Outcome: OutcomeAllowed, Attributes: map[string]any{"password": "p"}},
+		OffStream: OffStreamSessionLifecycle,
 	}
 	if err := m.validate(); !errors.Is(err, ErrAttributeNotAllowed) {
 		t.Fatalf("validate = %v, want ErrAttributeNotAllowed", err)
@@ -151,9 +151,9 @@ func TestEveryAttributeKeyHasAClosedValueRule(t *testing.T) {
 	}
 	rid := "password123"
 	m := Mutation{
-		Apply: func(context.Context, TxOps) error { return nil },
-		Audit: AuditEvent{EventType: "member.updated", Outcome: OutcomeAllowed, RequestID: &rid},
-		Event: OutboxEvent{AggregateType: "a", AggregateID: "b", EventType: "c", IdempotencyKey: "k"},
+		Apply:     func(context.Context, TxOps) error { return nil },
+		Audit:     AuditEvent{EventType: "member.updated", Outcome: OutcomeAllowed, RequestID: &rid},
+		OffStream: OffStreamSessionLifecycle,
 	}
 	if err := m.validate(); err == nil {
 		t.Error("request_id accepted a non-UUID")

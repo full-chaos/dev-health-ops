@@ -171,6 +171,7 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 				body.Set("org_id", entitlement.OrgID)
 				body.Set("agent_context_runtime", entitlement.AgentContextRuntime)
 				body.Set("acr_service_model", entitlement.ACRServiceModel)
+				body.Set("platform_model_fallback", entitlement.PlatformModelFallback)
 				writeModel(w, http.StatusOK, body)
 			})
 		case errors.Is(err, ErrOrgUnknown):

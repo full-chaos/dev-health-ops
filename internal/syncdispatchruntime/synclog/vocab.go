@@ -156,7 +156,6 @@ var (
 	KeyDrainDaysSkipped             = Key{"drain_days_skipped"}
 	KeyDrainDaysRetried             = Key{"drain_days_retried"}
 	KeyDrainDaysNotMarked           = Key{"drain_days_not_marked"}
-	KeyDrainRunsSkippedUnended      = Key{"drain_runs_skipped_unended"}
 	KeyDrainRunsInFlight            = Key{"drain_runs_in_flight"}
 	KeyDrainOldestPendingDay        = Key{"drain_oldest_pending_day"}
 	KeyDrainNewestSkippedDay        = Key{"drain_newest_skipped_day"}

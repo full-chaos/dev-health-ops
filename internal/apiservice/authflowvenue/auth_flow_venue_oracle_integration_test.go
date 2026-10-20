@@ -260,6 +260,9 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 	fmt.Fprintf(&r.receipt, "-- %s\n", label)
 	for index, s := range steps {
 		goResponse := venueoracle.Do(r.t, r.goBase, s.goSide)
+		if r.external {
+			goResponse = venueoracle.WithoutProvenanceHeaders(goResponse)
+		}
 		// The golden holds the Python answer projected (tokens to their claims,
 		// generated ids and times blanked); the Go answer is compared the same way.
 		goProjected := r.golden.Project(r.t, goResponse)

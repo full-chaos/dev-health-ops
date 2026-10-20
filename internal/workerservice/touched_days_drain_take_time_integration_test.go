@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -725,21 +726,44 @@ func drainBatches(t *testing.T, ctx context.Context, rig *drainRig, orgID string
 	return second, newest
 }
 
-// CHAOS-8881: an organization that ends far more marking runs a day than the
-// bound is the normal case, not an overflow: the check reads from the second
-// newest batch of the drain on, so it does not truncate.
-func takeTimeTouchedDaysDrainStopCheckReadsFromThePreviousBatchOnAndDoesNotTruncate(t *testing.T, ctx context.Context, rig *drainRig) {
+// An organization with more unchecked ended runs than the bound reads the
+// newest of them and says so: the rest is read by the next pass.
+func takeTimeTouchedDaysDrainStopCheckReadsTheNewestUncheckedRunsAndTruncatesAtTheBound(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	_, newest := drainBatches(t, ctx, rig, orgID, 250)
 	runs, truncated, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if truncated {
-		t.Fatal("truncated = true with 250 old runs behind the second batch: the check still reads the whole day")
+	if !truncated {
+		t.Fatal("truncated = false with 254 unchecked runs behind the trigger run")
 	}
-	if len(runs) != 4 {
-		t.Fatalf("%d runs checked, want 4 (the trigger run, the rest of the newest batch and the second batch)", len(runs))
+	if len(runs) != 201 || runs[0].RunID != newest[0] {
+		t.Fatalf("%d runs checked, want 201 (the trigger run and the newest 200)", len(runs))
+	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(runs))
+	for _, run := range runs {
+		seen[run.RunID] = true
+		ids = append(ids, run.RunID)
+	}
+	if err := rig.productionRuns().store.TouchedMarkRunsChecked(ctx, orgID, ids); err != nil {
+		t.Fatal(err)
+	}
+	next, truncated, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Fatal("second page truncated = true, want false: 254 unchecked runs minus the first 200")
+	}
+	if len(next) != 55 || next[0].RunID != newest[0] {
+		t.Fatalf("second page has %d runs, want 55 (the trigger run and the 54 left)", len(next))
+	}
+	for _, run := range next[1:] {
+		if seen[run.RunID] {
+			t.Fatalf("run %s is on both pages", run.RunID)
+		}
 	}
 }
 
@@ -748,8 +772,7 @@ func takeTimeTouchedDaysDrainStopCheckStillSeesTheMissingMarkOfThePreviousBatch(
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -1), uuid.NewString(), "touched", time.Now().UTC().Add(-5*time.Hour))
-	second, newest := drainBatches(t, ctx, rig, orgID, 250)
-	_ = second
+	_, newest := drainBatches(t, ctx, rig, orgID, 3)
 	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
 	if got := rig.observer.count(drainEventChainStopped); got != 1 {
 		t.Fatalf("chain_stopped_mark_missing = %d, want 1: the lost mark of a run of the previous batch was not seen", got)
@@ -759,9 +782,9 @@ func takeTimeTouchedDaysDrainStopCheckStillSeesTheMissingMarkOfThePreviousBatch(
 	}
 }
 
-// A fan-out run created after the second batch started is checked, however long
-// it ran; one older than that batch is not read.
-func takeTimeTouchedDaysDrainStopCheckKeepsFanOutRunsNewerThanThePreviousBatch(t *testing.T, ctx context.Context, rig *drainRig) {
+// Every ended unchecked run is read whatever its created_at is, the fan-out
+// run older than the second batch included.
+func takeTimeTouchedDaysDrainStopCheckReadsEveryUncheckedRunWhateverItsAge(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
@@ -776,63 +799,203 @@ func takeTimeTouchedDaysDrainStopCheckKeepsFanOutRunsNewerThanThePreviousBatch(t
 		seen[run.RunID] = true
 	}
 	if !seen[inside] {
-		t.Fatalf("the fan-out run created after the second batch started was not checked: %v", runs)
+		t.Fatalf("the fan-out run was not checked: %v", runs)
 	}
-	if len(runs) != 5 {
-		t.Fatalf("%d runs checked, want 5 (trigger, rest of the newest batch, the second batch, the fan-out run); the 3 runs older than the second batch must not be read", len(runs))
+	if len(runs) != 9 {
+		t.Fatalf("%d runs checked, want 9 (every ended run with a take time, the 3 older than the second batch included)", len(runs))
 	}
 }
 
-// The documented bound: a fan-out run that began before the second batch and is
-// still running is read by no pass, and the pass says so (warning and counter).
-// A run that began after the cut is read whatever any worker clock says: only
-// created_at, the PostgreSQL clock, decides.
-func takeTimeTouchedDaysDrainStopCheckSaysWhenAStillRunningRunBeforeTheCutIsNotRead(t *testing.T, ctx context.Context, rig *drainRig) {
+// A fan-out run still running when an earlier pass looked is read by the pass
+// after its end, however many batches of the drain ended meanwhile.
+func takeTimeTouchedDaysDrainASlowFanOutRunIsCheckedWhenItEnds(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	take := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Millisecond)
 	_, newest := drainBatches(t, ctx, rig, orgID, 0)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), uuid.NewString(), "touched", take.Add(-time.Minute))
 	slow := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -9), "pending", &take, time.Now().UTC().Add(-5*time.Hour))
-	lagging := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -8), "succeeded", &take, time.Now().UTC().Add(-80*time.Minute))
-	if _, err := rig.touchedRig.pool.Exec(ctx, `UPDATE public.daily_metrics_runs SET updated_at = $2 WHERE id = $1::uuid`,
-		lagging, time.Now().UTC().Add(-3*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	runs, _, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 200)
+	store := rig.productionRuns().store
+	runs, _, err := store.TouchedMarkingRunsToCheck(ctx, orgID, newest[0], 24*time.Hour, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seen := map[string]bool{}
 	for _, run := range runs {
-		seen[run.RunID] = true
+		if run.RunID == slow {
+			t.Fatal("the run that is still running was checked")
+		}
 	}
-	if seen[slow] || !seen[lagging] {
-		t.Fatalf("slow (pending, before the cut) read = %v, lagging-clock run (after the cut) read = %v; want false and true", seen[slow], seen[lagging])
+	if _, err := rig.touchedRig.pool.Exec(ctx, `UPDATE public.daily_metrics_runs SET status = 'succeeded', finalization_status = 'succeeded' WHERE id = $1::uuid`, slow); err != nil {
+		t.Fatal(err)
 	}
 	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
-	if got := rig.observer.count(jobruntime.TouchedDaysDrainStopCheckSkippedUnended); got != 1 {
-		t.Fatalf("stop_check_skipped_unended = %d, want 1 for the still-running run before the cut", got)
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1: the missing mark of the run that ended late was not seen", got)
+	}
+}
+
+func checkedAt(t *testing.T, ctx context.Context, rig *touchedRig, runID string) *time.Time {
+	t.Helper()
+	var at *time.Time
+	if err := rig.pool.QueryRow(ctx, `SELECT touched_checked_at FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// A pass that does not stop checks each ended run once: the runs it read are
+// stamped with the PostgreSQL clock and no later pass reads them again.
+func takeTimeTouchedDaysDrainARunIsCheckedOnceAndTheStampIsTheDatabaseClock(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	_, newest := drainBatches(t, ctx, rig, orgID, 3)
+	var before time.Time
+	if err := rig.touchedRig.pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
+	var after time.Time
+	if err := rig.touchedRig.pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if got := rig.observer.count(drainEventChainStopped); got != 0 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 0", got)
+	}
+	var unchecked int
+	if err := rig.touchedRig.pool.QueryRow(ctx, `SELECT count(*) FROM public.daily_metrics_runs WHERE org_id = $1::uuid AND touched_checked_at IS NULL AND touched_take_at IS NOT NULL`, orgID).Scan(&unchecked); err != nil {
+		t.Fatal(err)
+	}
+	if unchecked != 0 {
+		t.Fatalf("%d runs with a take time are still unchecked after a pass that did not stop", unchecked)
+	}
+	stamp := checkedAt(t, ctx, rig.touchedRig, newest[1])
+	if stamp == nil || stamp.Before(before.Add(-time.Second)) || stamp.After(after.Add(time.Second)) {
+		t.Fatalf("touched_checked_at = %v, want a time between the database clock reads %v and %v", stamp, before, after)
+	}
+	runs, _, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, "", 24*time.Hour, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("%d runs read again after they were checked, want 0", len(runs))
+	}
+}
+
+// A database without touched_checked_at (new code before 0152) does not fail
+// the pass: the miss is counted and logged, and the runs are read again.
+func takeTimeTouchedDaysDrainAMissingCheckedColumnIsCountedNotFatal(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	_, newest := drainBatches(t, ctx, rig, orgID, 3)
+	if _, err := rig.touchedRig.pool.Exec(ctx, `ALTER TABLE public.daily_metrics_runs DROP COLUMN touched_checked_at`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := rig.touchedRig.pool.Exec(ctx, `ALTER TABLE public.daily_metrics_runs ADD COLUMN touched_checked_at timestamptz`); err != nil {
+			t.Error(err)
+		}
+	}()
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainChecksUnwritten); got != 1 {
+		t.Fatalf("checked_column_absent = %d, want 1", got)
+	}
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainPassFailed); got != 0 {
+		t.Fatalf("pass_failed = %d, want 0", got)
 	}
 	found := false
 	for _, line := range rig.logLines("touched_days_drain.failed") {
-		found = found || strings.Contains(line, "stop_check_skipped_unended")
+		found = found || strings.Contains(line, "checked_column_absent")
 	}
 	if !found {
-		t.Fatal("no stop_check_skipped_unended warning line")
+		t.Fatal("no checked_column_absent warning line")
 	}
 }
 
-// A steady organization (nothing running before the cut) does not warn.
-func takeTimeTouchedDaysDrainStopCheckDoesNotWarnOfSkippedRunsWhenNoneIsRunningBeforeTheCut(t *testing.T, ctx context.Context, rig *drainRig) {
+// A pass that stops leaves the runs it read unchecked: the next pass reads them
+// again.
+func takeTimeTouchedDaysDrainAStopLeavesTheRunsUnchecked(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
-	_, newest := drainBatches(t, ctx, rig, orgID, 250)
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -1), uuid.NewString(), "touched", time.Now().UTC().Add(-5*time.Hour))
+	_, newest := drainBatches(t, ctx, rig, orgID, 3)
 	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+newest[0])
-	if got := rig.observer.count(jobruntime.TouchedDaysDrainStopCheckSkippedUnended); got != 0 {
-		t.Fatalf("stop_check_skipped_unended = %d, want 0", got)
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1", got)
+	}
+	var checked int
+	if err := rig.touchedRig.pool.QueryRow(ctx, `SELECT count(*) FROM public.daily_metrics_runs WHERE org_id = $1::uuid AND touched_checked_at IS NOT NULL`, orgID).Scan(&checked); err != nil {
+		t.Fatal(err)
+	}
+	if checked != 0 {
+		t.Fatalf("%d runs are stamped checked after a pass that stopped, want 0", checked)
 	}
 }
 
-// More runs than the bound since the second batch is a real overflow: it warns.
+// gatedPendingStore holds the first DaysPendingSinceBeforeTake call after its
+// read until release is closed; every later call answers with no pending day.
+type gatedPendingStore struct {
+	syncdispatchruntime.TouchedDaysDrainStore
+	inFirst chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (store *gatedPendingStore) DaysPendingSinceBeforeTake(
+	ctx context.Context, organizationID string, runs []syncdispatchruntime.TouchedRunKeys,
+) ([]time.Time, error) {
+	if store.calls.Add(1) > 1 {
+		return nil, nil
+	}
+	days, err := store.TouchedDaysDrainStore.DaysPendingSinceBeforeTake(ctx, organizationID, runs)
+	close(store.inFirst)
+	<-store.release
+	return days, err
+}
+
+type stampCountingRuns struct {
+	syncdispatchruntime.TouchedDaysDrainRuns
+	stamps atomic.Int32
+}
+
+func (runs *stampCountingRuns) MarkRunsChecked(ctx context.Context, organizationID string, runIDs []string) error {
+	runs.stamps.Add(1)
+	return runs.TouchedDaysDrainRuns.MarkRunsChecked(ctx, organizationID, runIDs)
+}
+
+// A clean pass does not stamp the runs while another pass of the organization is
+// still checking them: the other pass can stop on them.
+func takeTimeTouchedDaysDrainACleanPassDoesNotStampWhileAnotherPassChecks(t *testing.T, ctx context.Context, rig *drainRig) {
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -1), uuid.NewString(), "touched", time.Now().UTC().Add(-5*time.Hour))
+	_, newest := drainBatches(t, ctx, rig, orgID, 3)
+	gate := &gatedPendingStore{TouchedDaysDrainStore: rig.touched, inFirst: make(chan struct{}), release: make(chan struct{})}
+	counting := &stampCountingRuns{TouchedDaysDrainRuns: rig.productionRuns()}
+	drain := rig.drain(t, gate, counting)
+	done := make(chan struct{}, 2)
+	go func() { drain.DrainTouchedDays(ctx, orgID, "e:"+newest[0]); done <- struct{}{} }()
+	select {
+	case <-gate.inFirst:
+	case <-time.After(time.Minute):
+		t.Fatal("the first pass never reached its pending read")
+	}
+	go func() { drain.DrainTouchedDays(ctx, orgID, "e:"+newest[1]); done <- struct{}{} }()
+	time.Sleep(2 * time.Second)
+	if got := counting.stamps.Load(); got != 0 {
+		t.Fatalf("%d stamps while the first pass is still checking the same runs, want 0", got)
+	}
+	close(gate.release)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-done:
+		case <-time.After(time.Minute):
+			t.Fatal("a pass did not end")
+		}
+	}
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1", got)
+	}
+}
+
+// More unchecked runs than the bound is a real overflow: it warns.
 func takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
@@ -867,11 +1030,14 @@ func TestTouchedDaysDrainTakeTime(t *testing.T) {
 		{"ATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissingMark", takeTimeTouchedDaysDrainATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissingMark},
 		{"TheTakeTimeOfARunIsWrittenOnce", takeTimeTouchedDaysDrainTheTakeTimeOfARunIsWrittenOnce},
 		{"StopCheckUnderTheBoundChecksTheNewestRuns", takeTimeTouchedDaysDrainStopCheckUnderTheBoundChecksTheNewestRuns},
-		{"StopCheckReadsFromThePreviousBatchOnAndDoesNotTruncate", takeTimeTouchedDaysDrainStopCheckReadsFromThePreviousBatchOnAndDoesNotTruncate},
+		{"StopCheckReadsTheNewestUncheckedRunsAndTruncatesAtTheBound", takeTimeTouchedDaysDrainStopCheckReadsTheNewestUncheckedRunsAndTruncatesAtTheBound},
 		{"StopCheckStillSeesTheMissingMarkOfThePreviousBatch", takeTimeTouchedDaysDrainStopCheckStillSeesTheMissingMarkOfThePreviousBatch},
-		{"StopCheckKeepsFanOutRunsNewerThanThePreviousBatch", takeTimeTouchedDaysDrainStopCheckKeepsFanOutRunsNewerThanThePreviousBatch},
-		{"StopCheckSaysWhenAStillRunningRunBeforeTheCutIsNotRead", takeTimeTouchedDaysDrainStopCheckSaysWhenAStillRunningRunBeforeTheCutIsNotRead},
-		{"StopCheckDoesNotWarnOfSkippedRunsWhenNoneIsRunningBeforeTheCut", takeTimeTouchedDaysDrainStopCheckDoesNotWarnOfSkippedRunsWhenNoneIsRunningBeforeTheCut},
+		{"StopCheckReadsEveryUncheckedRunWhateverItsAge", takeTimeTouchedDaysDrainStopCheckReadsEveryUncheckedRunWhateverItsAge},
+		{"ASlowFanOutRunIsCheckedWhenItEnds", takeTimeTouchedDaysDrainASlowFanOutRunIsCheckedWhenItEnds},
+		{"ARunIsCheckedOnceAndTheStampIsTheDatabaseClock", takeTimeTouchedDaysDrainARunIsCheckedOnceAndTheStampIsTheDatabaseClock},
+		{"AStopLeavesTheRunsUnchecked", takeTimeTouchedDaysDrainAStopLeavesTheRunsUnchecked},
+		{"AMissingCheckedColumnIsCountedNotFatal", takeTimeTouchedDaysDrainAMissingCheckedColumnIsCountedNotFatal},
+		{"ACleanPassDoesNotStampWhileAnotherPassChecks", takeTimeTouchedDaysDrainACleanPassDoesNotStampWhileAnotherPassChecks},
 		{"StopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow", takeTimeTouchedDaysDrainStopCheckStillTruncatesWhenTheRunsSinceThePreviousBatchOverflow},
 		{"RunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound", takeTimeTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound},
 		{"AFailedRunWithALostMarkStopsTheChain", takeTimeTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain},

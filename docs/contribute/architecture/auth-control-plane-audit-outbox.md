@@ -27,12 +27,24 @@ enforced, what runs in Wave 1, and how to operate and debug it.
 
 ## The write path
 
-`audit.Commit(ctx, pool, schema, audit.Mutation{Apply, Audit, Event})` runs the
-caller's `Apply` callback inside a transaction it owns, then writes the audit row
-and the outbox event in the same transaction. The outbox and audit inserts are
-unexported: there is no exported way to write one without the others, and a
-mutation that changes no guarded row rolls back with `ErrNoStateChange`. Any
-failure rolls back **everything**.
+`audit.Commit(ctx, pool, schema, audit.Mutation{Apply, Audit, Events})` runs the
+caller's `Apply` callback inside a transaction it owns, then writes the outbox
+events and the audit row in the same transaction. The outbox and audit inserts
+are unexported: there is no exported way to write one without the others, and a
+mutation that changes no state rolls back with `ErrNoStateChange` (state = a
+guarded row written, migration `0006`, or a new principal or user row, the
+`0013` create guard). Any failure rolls back **everything**.
+
+Each outbox row is a `provisioning-event.v1` event (the row is the envelope).
+The caller gives the aggregate type, its wire id (`prn_`, `org_`, `idn_` ...),
+the verb and the allowlisted `change` members; `Commit` refuses anything the
+contract refuses, bumps the aggregate's revision in `aggregate_revisions`
+(migration `0013`) inside the same transaction and writes the payload
+`revision` and the key `aggregate_type:aggregate_id:revision`. The revision row
+lock is held to commit, so revisions are contiguous per aggregate and a
+rolled-back commit leaves no gap. A mutation that is not a provisioning event
+(session lifecycle) sets `OffStream` instead of `Events` and writes its audit
+row only.
 
 The guarantee is held by PostgreSQL for code that does not set out to defeat
 it. Migration `0006` puts a trigger on the audit and outbox tables and on the
@@ -123,15 +135,17 @@ impossible for a guarded table: the trigger refuses the write. If it happened,
 the table is classified unguarded (see `commit_guard_integration_test.go`, which
 lists and classifies every table), or the writer is bypassing `Commit`.
 
-**Duplicate key on commit.** `idempotency_key` is unique; two mutations sharing
-a key fail the whole transaction on purpose.
+**Duplicate key on commit.** `idempotency_key` is unique and is built from the
+aggregate's revision, which only `Commit` advances. A duplicate means a row was
+written outside `Commit` or a revision row was rewound; the whole transaction
+fails on purpose.
 
 **The table is large.** Published rows are reaped after the retention; an
 unpublished backlog is never reaped. Do not delete from the table by hand.
 
 ## Verified against
 
-- `internal/audit/audit.go` (`Commit`, `Mutation`, `OutboxEvent`) and `arm.go`; migration `0006`.
+- `internal/audit/audit.go` (`Commit`, `Mutation`, `OutboxEvent`, `insertOutboxEvents`) and `arm.go`; migrations `0006` and `0013`; `internal/auth/contracts/provisioning` (the vocabulary `Commit` checks).
 - `internal/audit/outboxloop.go` (`DefaultLoopConfig`, `CheckOutboxLoop`, `degradeAfter`, both gauges), `publisher.go` (counters, `AllFailureReasons`, backoff and timeout defaults), `reaper.go` (`Reap`).
 - `internal/auth/authruntime/runtime.go`: the sink-less `NewOutboxLoop` call and its comment.
 - `internal/audit/allowlist.go`: the attribute allowlist.

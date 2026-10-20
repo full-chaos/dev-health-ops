@@ -5,12 +5,14 @@ import (
 	"compress/gzip"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -45,10 +47,25 @@ func droppedColumnsOfTheMigrations(t *testing.T) map[string]map[string]bool {
 	return dropped
 }
 
+var (
+	frozenTablesOnce   sync.Once
+	frozenTablesResult map[string]map[string]bool
+	frozenTablesErr    error
+)
+
 // frozenTables returns every table (name -> its column names) that the embedded frozen files hold,
-// found by shape, so a new file layout is still seen.
-func frozenTables(t *testing.T, files ...embed.FS) map[string]map[string]bool {
+// found by shape, so a new file layout is still seen. One walk serves the package; callers only read
+// the map, and a failed walk fails every caller, not only the first.
+func frozenTables(t *testing.T) map[string]map[string]bool {
 	t.Helper()
+	frozenTablesOnce.Do(func() { frozenTablesResult, frozenTablesErr = walkFrozenTables(worldFiles, syntheticFiles) })
+	if frozenTablesErr != nil {
+		t.Fatal(frozenTablesErr)
+	}
+	return frozenTablesResult
+}
+
+func walkFrozenTables(files ...embed.FS) (map[string]map[string]bool, error) {
 	tables := map[string]map[string]bool{}
 	var walk func(node any)
 	walk = func(node any) {
@@ -87,19 +104,19 @@ func frozenTables(t *testing.T, files ...embed.FS) map[string]map[string]bool {
 			for _, entry := range entries {
 				raw, err := fsys.ReadFile(dir + "/" + entry.Name())
 				if err != nil {
-					t.Fatal(err)
+					return nil, err
 				}
 				reader, err := gzip.NewReader(bytes.NewReader(raw))
 				if err != nil {
-					t.Fatal(err)
+					return nil, err
 				}
 				plain, err := io.ReadAll(reader)
 				if err != nil {
-					t.Fatal(err)
+					return nil, err
 				}
 				var document any
 				if err := json.Unmarshal(plain, &document); err != nil {
-					t.Fatal(err)
+					return nil, err
 				}
 				walk(document)
 				read++
@@ -107,15 +124,15 @@ func frozenTables(t *testing.T, files ...embed.FS) map[string]map[string]bool {
 		}
 	}
 	if read < 3 {
-		t.Fatalf("the census read %d frozen files: it did not measure the worlds", read)
+		return nil, fmt.Errorf("the census read %d frozen files: it did not measure the worlds", read)
 	}
-	return tables
+	return tables, nil
 }
 
 func TestEveryDroppedColumnOfAFrozenWorldIsRetiredByName(t *testing.T) {
 	dropped := droppedColumnsOfTheMigrations(t)
 	var problems []string
-	for table, columns := range frozenTables(t, worldFiles, syntheticFiles) {
+	for table, columns := range frozenTables(t) {
 		for column := range columns {
 			if dropped[table][column] && !retiredColumns[table][column] {
 				problems = append(problems, table+"."+column+": a migration drops it and a frozen world still carries it: add it to retiredColumns")
@@ -133,7 +150,7 @@ func TestEveryDroppedColumnOfAFrozenWorldIsRetiredByName(t *testing.T) {
 	if len(problems) > 0 {
 		t.Fatalf("%s", strings.Join(problems, "\n"))
 	}
-	if !dropped["teams"]["members"] || !frozenTables(t, worldFiles, syntheticFiles)["teams"]["members"] {
+	if !dropped["teams"]["members"] || !frozenTables(t)["teams"]["members"] {
 		t.Fatalf("the census no longer sees teams.members in the migrations and the frozen worlds: it did not measure what it exists for")
 	}
 }
@@ -175,7 +192,7 @@ func TestEveryDroppedTableOfAFrozenWorldIsRetiredByName(t *testing.T) {
 			dropped[strings.ToLower(match[1])] = true
 		}
 	}
-	carried := frozenTables(t, worldFiles, syntheticFiles)
+	carried := frozenTables(t)
 	var problems []string
 	for table := range carried {
 		if dropped[table] && !retiredTables[table] {

@@ -32,6 +32,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -554,6 +555,7 @@ func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID str
 			EventType:          "auth.session.refresh_reuse_revoked",
 			Outcome:            audit.OutcomeDenied,
 			SubjectPrincipalID: &principal,
+			RequestID:          requestid.Audit(ctx),
 			Attributes: map[string]any{
 				"reason_code": "session_revoked", "target_kind": "session", "target_id": sessionID,
 				"credential_class": "refresh_credential",

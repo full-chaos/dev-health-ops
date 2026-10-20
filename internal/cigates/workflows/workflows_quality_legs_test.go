@@ -229,7 +229,7 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 		{"the fan-in stops judging the legs unconditional", []mutation{{wf, "go-quality-leg|unconditional|", "go-quality-leg|path-filtered|"}}, []string{"unconditional"}},
 		{"the leg step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh ci-leg ${{ matrix.args }}", `run: echo "ci-leg ${{ matrix.args }}"`}}, []string{"no go-quality-leg step runs"}},
 		{"a leg stage survives only in a comment", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", "      # ci_leg_stage ratchets check_ratchets\n"}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},
-		{"check_test_shard keeps the race-excluded proof only in a comment", []mutation{{cg, "\n    check_race_excluded_ran\n", "\n    # check_race_excluded_ran\n"}}, []string{"no longer runs check_race_excluded_ran"}},
+		{"check_test_shard keeps the race-excluded proof only in a comment", []mutation{{cg, "\n  check_race_excluded_ran \"${shard}\" \"${count}\"\n", "\n  # check_race_excluded_ran \"${shard}\" \"${count}\"\n"}}, []string{"no longer runs check_race_excluded_ran"}},
 		{"the GOFLAGS scrub is dropped", []mutation{{cg, "-u GOFLAGS ", ""}}, []string{"GOFLAGS scrub"}},
 	}
 	for _, c := range cases {

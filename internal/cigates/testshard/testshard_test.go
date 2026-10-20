@@ -352,3 +352,39 @@ func TestTheWallTimeGuardNamesTheHeaviestByWeightWhenNothingIsMeasured(t *testin
 		}
 	}
 }
+
+// The race-excluded census (ci/race_excluded_tests.tsv) is split over the test shards: every row runs in exactly one shard.
+func TestTheRaceExcludedCensusIsSplitOverTheShardsExactlyOnce(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "race_excluded_tests.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "#") {
+			want = append(want, l)
+		}
+	}
+	var got []string
+	for k := 1; k <= shardCount; k++ {
+		out, errs, err := checkGo(t, nil, "race-excluded-shard-plan", fmt.Sprint(k), fmt.Sprint(shardCount))
+		if err != nil {
+			t.Fatalf("race-excluded-shard-plan %d %d: %v\n%s", k, shardCount, err, errs)
+		}
+		var rows []string
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Count(l, "\t") == 1 {
+				rows = append(rows, l)
+			}
+		}
+		if len(rows) == 0 {
+			t.Errorf("test shard %d/%d runs no race-excluded row: the census is not split", k, shardCount)
+		}
+		got = append(got, rows...)
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("the shards run %d race-excluded rows, the census lists %d: a row is lost or run twice", len(got), len(want))
+	}
+}

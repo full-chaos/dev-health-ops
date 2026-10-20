@@ -105,7 +105,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -171,6 +171,17 @@ usage() {
          slices, ci/go_race_weights.tsv). The
          legs run exactly the steps of `ci` (pinned by a tooling test); each
          stage prints UTC start/done stamps.
+  test-shard-plan SHARD COUNT
+         Print the packages (module, import path, weights key) of the SHARD-th of
+         COUNT weight-balanced slices of the unit tests (ci/go_test_weights.tsv,
+         a package with no row weighs 1). Fails when the slice is empty.
+  race-excluded-shard-plan SHARD COUNT
+         Print the rows of ci/race_excluded_tests.tsv that the SHARD-th of COUNT
+         test legs runs without -race (every row runs in exactly one leg).
+  test-shard-wall-guard SHARD COUNT WALL LOGFILE
+         Log the wall seconds of a test shard and fail above 85% of the 30 min
+         job cap (GO_TEST_SHARD_CAP_SECONDS), naming the shard and its three
+         heaviest packages (measured in LOGFILE, else by weight).
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -376,12 +387,26 @@ check_vet() {
 # (the leg log then names every moved test). An empty list, a missing file, a missing PASS line or a non-zero go test
 # exit all fail (a measurement that did not happen is a failure). check_test calls it, so every leg that runs the
 # unit tests runs it.
-check_race_excluded_ran() {
-  local list="${ROOT}/ci/race_excluded_tests.tsv" row package name out count=0
+# With SHARD COUNT (CHAOS-10355) it runs only the rows at 0-based positions P with P % COUNT == SHARD - 1, so the test shards split
+# the census (~570 s, 16 rows) and every row runs in exactly one shard (`race-excluded-shard-plan SHARD COUNT` lists a shard's rows).
+# race_excluded_rows [SHARD COUNT]: the rows of ci/race_excluded_tests.tsv (the shard's rows with SHARD COUNT), one per line.
+race_excluded_rows() {
+  local list="${ROOT}/ci/race_excluded_tests.tsv" row shard="${1:-}" shard_count="${2:-}" position=0
   local -a rows=()
   [ -f "${list}" ] || die "ci/race_excluded_tests.tsv is missing"
   while IFS= read -r row; do rows+=("${row}"); done < <(grep -v '^#' "${list}" | grep -v '^$')
   [ "${#rows[@]}" -gt 0 ] || die "ci/race_excluded_tests.tsv lists no test: nothing would be measured"
+  if [ -n "${shard}" ]; then check_test_shard_args "${shard}" "${shard_count}"; fi
+  for row in "${rows[@]}"; do
+    if [ -z "${shard}" ] || [ "$((position % shard_count))" -eq "$((shard - 1))" ]; then printf '%s\n' "${row}"; fi
+    position=$((position + 1))
+  done
+}
+
+check_race_excluded_ran() {
+  local row package name out count=0
+  local -a rows=()
+  while IFS= read -r row; do rows+=("${row}"); done < <(race_excluded_rows "$@")
   for row in "${rows[@]}"; do
     name="${row#*$'\t'}"
     package="${row%%$'\t'*}"
@@ -495,8 +520,8 @@ check_test_shard_wall_guard() {
 }
 
 # check_test_shard SHARD COUNT: the SHARD-th of COUNT slices of the unit tests (what check_test runs as one). The slices
-# partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. Shard 1 also runs the race-excluded
-# census (check_race_excluded_ran), exactly once across the shards.
+# partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. Each shard also runs its slice of the
+# race-excluded census (check_race_excluded_ran SHARD COUNT): one run of the whole census took ~570 s and made shard 1 18.5 min.
 check_test_shard() {
   local shard="${1:-}" count="${2:-}" plan log started wall module_dir rest
   check_test_shard_args "${shard}" "${count}"
@@ -521,9 +546,7 @@ check_test_shard() {
       ) || { rm -f -- "${log}"; return 1; }
     fi
   done
-  if [ "${shard}" -eq 1 ]; then
-    check_race_excluded_ran
-  fi
+  check_race_excluded_ran "${shard}" "${count}"
   wall=$(($(date +%s) - started))
   (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}"; return 1; }
   rm -f -- "${log}"
@@ -3714,6 +3737,10 @@ case "${1:-all}" in
       { [ "$#" -eq 1 ] || [ "$#" -eq 3 ]; } || die "venue-oracles accepts no arguments, or SHARD COUNT (1-based shard of COUNT), or --changed FILE [--list]"
       check_venue_oracles "${2:-}" "${3:-}"
     fi
+    ;;
+  race-excluded-shard-plan)
+    [ "$#" -eq 3 ] || die "race-excluded-shard-plan accepts SHARD COUNT"
+    race_excluded_rows "$2" "$3"
     ;;
   test-shard-plan)
     [ "$#" -eq 3 ] || die "test-shard-plan accepts SHARD COUNT"

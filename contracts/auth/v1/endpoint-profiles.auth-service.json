@@ -16,7 +16,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 508,
+            "line": 515,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +45,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 414,
+          "line": 421,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },

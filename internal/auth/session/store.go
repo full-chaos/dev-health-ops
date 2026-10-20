@@ -223,7 +223,7 @@ func validAMR(amr []string) bool {
 // refresh lifetime, which is when its last credential expired.
 func (s *Store) sessionColumns() string {
 	return `s.id::text, s.principal_id::text, s.organization_id::text, s.revision,
-	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt()
+	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt() + `, s.legacy_token_version`
 }
 
 // effectiveRevokedAt is the expression for alias s's revoked_at as the record
@@ -252,7 +252,7 @@ func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 		id, principal     string
 		organization      *string
 		authTime          *time.Time
-		dest              = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt}
+		dest              = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt, &r.LegacyTokenVersion}
 		parseErr, scanErr error
 	)
 	if scanErr = row.Scan(append(dest, extra...)...); scanErr != nil {
@@ -278,6 +278,11 @@ func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 	}
 	return r, nil
 }
+
+// legacyTokenVersion is the pin a new session stores: go-api's readers take a
+// NULL token_version as 0, and a principal without a public.users row has no
+// go-api token to pin, so it is 0 rather than NULL.
+const legacyTokenVersion = `COALESCE(u.token_version, 0)`
 
 // Create starts a session for an active principal and issues its first
 // refresh credential, which starts a new family. auth_time is now.
@@ -306,11 +311,13 @@ func (s *Store) Create(ctx context.Context, principalID uuid.UUID, organizationI
 		// effective expiry (see sessionColumns).
 		var sessionID string
 		err := tx.QueryRow(ctx, `
-			INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr)
+			INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr,
+				legacy_token_version)
 			SELECT p.id, $2::uuid, $3, t.at, t.at, t.at,
 			       CASE WHEN $4::double precision > 0 THEN t.at + make_interval(secs => $4::double precision) ELSE 'infinity' END,
-			       t.at, $5
-			FROM `+s.q+`.principals p, (SELECT clock_timestamp() AS at) t
+			       t.at, $5, `+legacyTokenVersion+`
+			FROM `+s.q+`.principals p CROSS JOIN (SELECT clock_timestamp() AS at) t
+			LEFT JOIN public.users u ON u.id = p.id
 			WHERE p.id = $1 AND p.disabled_at IS NULL
 			RETURNING id::text`,
 			principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr).Scan(&sessionID)

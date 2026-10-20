@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -59,7 +58,7 @@ func (prover githubMembershipAbsence) Absence(ctx context.Context, teamID, membe
 		return AbsenceUnproven
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxMembershipLookupBody+1))
+	body, err := providerfoundation.ReadResponseBody(response, maxMembershipLookupBody)
 	if err != nil || len(body) > maxMembershipLookupBody {
 		return AbsenceUnproven
 	}
@@ -97,7 +96,7 @@ func (prover gitlabMembershipAbsence) Absence(ctx context.Context, teamID, membe
 		return AbsenceUnproven
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxMembershipLookupBody+1))
+	body, err := providerfoundation.ReadResponseBody(response, maxMembershipLookupBody)
 	if err != nil || len(body) > maxMembershipLookupBody {
 		return AbsenceUnproven
 	}

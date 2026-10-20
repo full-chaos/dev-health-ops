@@ -93,9 +93,9 @@ func TestFixturescliSharesTheRaceSplit(t *testing.T) {
 	if _, ok := soloRows(t, solo)["internal/fixturescli"]; ok {
 		t.Fatalf("ci/go_race_solo.tsv still pins internal/fixturescli: its race time no longer depends on its co-tenants")
 	}
-	weightsPath := filepath.Join(root, "ci", "go_race_weights.tsv")
+	weightsPath := mergedWeights(t, root)
 	if _, ok := soloRows(t, weightsPath)["internal/fixturescli"]; !ok {
-		t.Fatalf("ci/go_race_weights.tsv has no internal/fixturescli row")
+		t.Fatalf("ci/go_race_weights.d has no internal/fixturescli file")
 	}
 	mod, pkgs := raceModulePackages(t, root)
 	target := mod + "/internal/fixturescli"
@@ -122,7 +122,7 @@ func TestFixturescliSharesTheRaceSplit(t *testing.T) {
 
 func TestRaceShardWithoutASoloFileSplitsEveryPackageAsBefore(t *testing.T) {
 	root := repoRoot(t)
-	weights := filepath.Join(root, "ci", "go_race_weights.tsv")
+	weights := mergedWeights(t, root)
 	mod, pkgs := raceModulePackages(t, root)
 	missing := filepath.Join(t.TempDir(), "none.tsv")
 	for _, count := range []int{2, 3} {
@@ -294,7 +294,7 @@ func TestRaceSoloCensusNamesEachDefect(t *testing.T) {
 		t.Fatalf("a comments-only solo file fails the census: %v\n%s", err, errs)
 	}
 	for _, c := range []struct{ name, text, want string }{
-		{"no weights row", "internal/zz-no-weights-row\treason\n", "no row in ci/go_race_weights.tsv"},
+		{"no weights row", "internal/zz-no-weights-row\treason\n", "no file in ci/go_race_weights.d"},
 		{"listed twice", "internal/fixturescli\ta\ninternal/fixturescli\tb\n", "twice"},
 		{"unsorted", "internal/storage/clickhouse\ta\ninternal/fixturescli\tb\n", "not sorted"},
 		{"providersync", "internal/providersync\ta\n", "cannot be solo"},

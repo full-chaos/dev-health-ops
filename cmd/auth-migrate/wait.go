@@ -38,8 +38,16 @@ type databaseWait struct {
 	sleep    func(context.Context, time.Duration) error
 	bound    time.Duration
 	interval time.Duration
-	stderr   io.Writer
+	// attemptTimeout bounds one connect attempt (the pool's ConnectTimeout).
+	attemptTimeout time.Duration
+	stderr         io.Writer
 }
+
+// configError marks a failure to build the pool from its configuration, before
+// any connection is attempted.
+type configError struct{ error }
+
+func (e configError) Unwrap() error { return e.error }
 
 func newDatabaseWait(config postgresstore.Config, stderr io.Writer) databaseWait {
 	return databaseWait{
@@ -54,11 +62,12 @@ func newDatabaseWait(config postgresstore.Config, stderr io.Writer) databaseWait
 			}
 			return pool, nil
 		},
-		now:      time.Now,
-		sleep:    sleepContext,
-		bound:    connectWait,
-		interval: connectRetryInterval,
-		stderr:   stderr,
+		now:            time.Now,
+		sleep:          sleepContext,
+		bound:          connectWait,
+		interval:       connectRetryInterval,
+		attemptTimeout: config.ConnectTimeout,
+		stderr:         stderr,
 	}
 }
 

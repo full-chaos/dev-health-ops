@@ -30,8 +30,13 @@ type fakeWait struct {
 
 func (f *fakeWait) wait(stderr *bytes.Buffer) databaseWait {
 	return databaseWait{
-		open: func(context.Context) (*pgxpool.Pool, error) {
+		open: func(ctx context.Context) (*pgxpool.Pool, error) {
 			f.attempts++
+			// An attempt ends at its context's deadline, as a dial does.
+			if deadline, ok := ctx.Deadline(); ok && f.clock.Add(f.cost).After(deadline) {
+				f.clock = deadline
+				return nil, fmt.Errorf("failed to connect: %w", context.DeadlineExceeded)
+			}
 			f.clock = f.clock.Add(f.cost)
 			if f.attempts <= len(f.results) {
 				if err := f.results[f.attempts-1]; err != nil {
@@ -42,12 +47,17 @@ func (f *fakeWait) wait(stderr *bytes.Buffer) databaseWait {
 			}
 			return &pgxpool.Pool{}, nil
 		},
-		now:      func() time.Time { return f.clock },
-		sleep:    func(_ context.Context, d time.Duration) error { f.clock = f.clock.Add(d); return nil },
-		bound:    connectWait,
-		interval: connectRetryInterval,
-		stderr:   stderr,
+		now:            func() time.Time { return f.clock },
+		sleep:          func(_ context.Context, d time.Duration) error { f.clock = f.clock.Add(d); return nil },
+		bound:          connectWait,
+		interval:       connectRetryInterval,
+		attemptTimeout: 5 * time.Second,
+		stderr:         stderr,
 	}
+}
+
+func newFakeWait(results ...error) *fakeWait {
+	return &fakeWait{clock: time.Now(), results: results}
 }
 
 func dialErr(errno syscall.Errno) error {
@@ -105,28 +115,49 @@ func TestDatabaseWaitGivesUpAtTheBound(t *testing.T) {
 
 func TestDatabaseWaitStopsAtOnceOnANonTransportError(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		err  error
+		name, category string
+		err            error
 	}{
-		{"authentication", fmt.Errorf("failed to connect: %w", &pgconn.PgError{Code: "28P01"})},
-		{"permission", fmt.Errorf("failed to connect: %w", &pgconn.PgError{Code: "42501"})},
-		{"tls", fmt.Errorf("failed to connect: %w", fmt.Errorf("tls: %w", tlsAlert()))},
-		{"configuration", errors.New("cannot parse the connection string")},
+		{"authentication", "auth", fmt.Errorf("failed to connect: %w", &pgconn.PgError{Code: "28P01"})},
+		{"permission", "permission", fmt.Errorf("failed to connect: %w", &pgconn.PgError{Code: "42501"})},
+		{"tls", "tls", fmt.Errorf("failed to connect: %w", fmt.Errorf("tls: %w", tlsAlert()))},
+		{"configuration", "config", configError{errors.New("cannot parse the connection string")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer
-			f := &fakeWait{results: []error{tc.err, nil}}
+			f := newFakeWait(tc.err, nil)
 			pool, err := f.wait(&stderr).run(context.Background())
 			if pool != nil || !errors.Is(err, postgresstore.ErrUnavailable) {
 				t.Fatalf("run = %v, %v; want ErrUnavailable", pool, err)
 			}
 			if f.attempts != 1 {
-				t.Errorf("attempts = %d, want 1: a server or TLS answer is not retried", f.attempts)
+				t.Errorf("attempts = %d, want 1: a server, TLS or configuration answer is not retried", f.attempts)
 			}
-			if stderr.Len() != 0 {
-				t.Errorf("stderr = %q, want no attempt line", stderr.String())
+			line := strings.TrimSpace(stderr.String())
+			want := "migration waiting: PostgreSQL migration endpoint not reachable (attempt 1, "
+			if strings.Count(line, "\n") != 0 || !strings.HasPrefix(line, want) || !strings.HasSuffix(line, tc.category+")") {
+				t.Errorf("stderr = %q, want one attempt line with category %s", line, tc.category)
 			}
 		})
+	}
+}
+
+// Each attempt runs under min(its own timeout, the overall deadline), and no
+// attempt starts or sleep runs past the deadline: an attempt that takes 4.8 s
+// of a 5 s timeout must not carry the wait past the bound.
+func TestDatabaseWaitHoldsTheBound(t *testing.T) {
+	var stderr bytes.Buffer
+	f := newFakeWait(dialErr(syscall.ECONNREFUSED))
+	f.cost = 4800 * time.Millisecond
+	start := f.clock
+	if _, err := f.wait(&stderr).run(context.Background()); !errors.Is(err, postgresstore.ErrUnavailable) {
+		t.Fatalf("run = %v, want ErrUnavailable", err)
+	}
+	if spent := f.clock.Sub(start); spent > connectWait {
+		t.Errorf("the wait spent %s, past its %s bound", spent, connectWait)
+	}
+	if f.attempts < 2 {
+		t.Errorf("attempts = %d; the wait did not retry", f.attempts)
 	}
 }
 

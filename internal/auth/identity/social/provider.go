@@ -28,6 +28,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // Provider is the identity store's provider name; social sign-in uses the
@@ -192,11 +193,9 @@ func (c *ProviderClient) do(ctx context.Context, r request, out any) error {
 	}
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: requestTimeout}
+		client = httpguard.NewClient(requestTimeout)
 	}
-	noRedirect := *client
-	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := noRedirect.Do(req)
+	resp, err := httpguard.NoRedirects(client).Do(req)
 	if err != nil {
 		return &ProviderError{Reason: ReasonDependency, Step: r.step}
 	}

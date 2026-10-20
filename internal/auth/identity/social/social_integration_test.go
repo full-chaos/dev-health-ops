@@ -143,13 +143,13 @@ func TestProviderEmailCollisionIsAConflict(t *testing.T) {
 			want  string
 		}{
 			{"a password", func(t *testing.T, id uuid.UUID) {
-				e.guarded(t, ctx, `UPDATE auth.users SET password_hash = 'not-a-real-verifier', password_algorithm = 'bcrypt' WHERE principal_id = $1`, id)
+				if err := e.store(true).SetPasswordHash(ctx, id, testVerifier(t), identity.Actor{}); err != nil {
+					t.Fatalf("SetPasswordHash: %v", err)
+				}
 			}, "local"},
 			{"the oldest linked identity", func(t *testing.T, id uuid.UUID) {
-				e.guarded(t, ctx, `INSERT INTO auth.external_identities (principal_id, issuer, provider, subject, created_at)
-					VALUES ($1, $2, 'google', $3, now() - interval '1 day')`, id, SocialIssuer(Google), "old-"+id.String())
-				e.guarded(t, ctx, `INSERT INTO auth.external_identities (principal_id, issuer, provider, subject, created_at)
-					VALUES ($1, $2, 'gitlab', $3, now())`, id, SocialIssuer(GitLab), "new-"+id.String())
+				e.link(t, ctx, id, key(Google, "old-"+id.String()))
+				e.link(t, ctx, id, key(GitLab, "new-"+id.String()))
 			}, "google"},
 			{"no method", func(*testing.T, uuid.UUID) {}, ""},
 		}
@@ -237,10 +237,10 @@ func TestSubjectIsScopedByIssuer(t *testing.T) {
 	e := newEnv(t, ctx)
 	svc := e.service(t, true)
 	holder := e.localUser(t, ctx, "scoped@example.com")
-	e.linked(t, ctx, holder, identity.ExternalKey{Issuer: "https://github.example", Provider: GitHub, Subject: "700"})
-	e.linked(t, ctx, holder, key(GitLab, "701"))
+	e.link(t, ctx, holder, identity.ExternalKey{Issuer: SocialIssuer(GitHub), Provider: identity.Provider(uuid.NewString()), Subject: "700"})
+	e.link(t, ctx, holder, key(GitLab, "701"))
 
-	t.Run("same subject under another issuer", func(t *testing.T) {
+	t.Run("same subject and issuer at an SSO provider", func(t *testing.T) {
 		token := e.providers.token(t.Name(), account{provider: GitHub, id: 700, email: "scoped-a@example.com", verified: true, public: true})
 		res, err := svc.Exchange(ctx, GitHub, token, nil)
 		if err != nil {
@@ -359,9 +359,9 @@ func TestReplayedExchangeIsRefused(t *testing.T) {
 	e := newEnv(t, ctx)
 	svc := e.service(t, true)
 	holder := e.localUser(t, ctx, "holder@example.com")
-	e.linked(t, ctx, holder, github("900"))
-	e.linked(t, ctx, holder, key(GitLab, "900"))
-	e.linked(t, ctx, holder, key(Google, "g-900"))
+	e.link(t, ctx, holder, github("900"))
+	e.link(t, ctx, holder, key(GitLab, "900"))
+	e.link(t, ctx, holder, key(Google, "g-900"))
 
 	otherClient := []struct {
 		name string
@@ -482,8 +482,8 @@ func TestDisabledPrincipalIsRefused(t *testing.T) {
 	e := newEnv(t, ctx)
 	svc := e.service(t, true)
 	holder := e.localUser(t, ctx, "disabled@example.com")
-	e.linked(t, ctx, holder, github("1100"))
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, holder.String())
+	e.link(t, ctx, holder, github("1100"))
+	e.disable(t, ctx, holder)
 	token := e.providers.token("disabled", account{provider: GitHub, id: 1100, email: "disabled@example.com", verified: true, public: true})
 	if _, err := svc.Exchange(ctx, GitHub, token, nil); !errors.Is(err, ErrPrincipalDisabled) {
 		t.Fatalf("err = %v, want ErrPrincipalDisabled", err)

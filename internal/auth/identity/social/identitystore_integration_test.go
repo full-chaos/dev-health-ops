@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -122,7 +123,7 @@ func (e *env) goAPIUser(t *testing.T, ctx context.Context, email string, provide
 	id := uuid.New()
 	var hash, method, pid any = nil, "local", nil
 	if provider == "" {
-		hash = "$2b$12$abcdefghijklmnopqrstuuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0"
+		hash = testVerifier(t)
 	} else {
 		method, pid = string(provider), providerID
 	}
@@ -142,33 +143,33 @@ func (e *env) localUser(t *testing.T, ctx context.Context, email string) uuid.UU
 	return id
 }
 
-// linked seeds an identity row directly, in a transaction armed the way
-// audit.Commit arms it, so a key the store would refuse can be seeded too.
-func (e *env) linked(t *testing.T, ctx context.Context, principal uuid.UUID, key identity.ExternalKey) uuid.UUID {
+// link binds key to principal through the identity store, as an explicit link does.
+func (e *env) link(t *testing.T, ctx context.Context, principal uuid.UUID, key identity.ExternalKey) uuid.UUID {
 	t.Helper()
-	identityID := uuid.New()
-	e.guarded(t, ctx, `INSERT INTO auth.external_identities (id, principal_id, issuer, provider, subject) VALUES ($1, $2, $3, $4, $5)`,
-		identityID, principal, key.Issuer, string(key.Provider), key.Subject)
-	return identityID
+	id, err := e.store(false).LinkIdentity(ctx, key, principal, identity.Actor{})
+	if err != nil {
+		t.Fatalf("LinkIdentity: %v", err)
+	}
+	return id
 }
 
-// guarded runs one statement in a transaction armed the way audit.Commit arms it.
-func (e *env) guarded(t *testing.T, ctx context.Context, sql string, args ...any) {
+// disable deactivates a go-api account and projects the change.
+func (e *env) disable(t *testing.T, ctx context.Context, id uuid.UUID) {
 	t.Helper()
-	tx, err := e.admin.Begin(ctx)
+	e.exec(t, ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, id)
+	if err := e.store(false).Project(ctx, id); err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+}
+
+// testVerifier is a bcrypt verifier of a random password, built at run time.
+func testVerifier(t *testing.T) string {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(uuid.NewString()), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, sql, args...); err != nil {
-		t.Fatalf("guarded %q: %v", sql, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
+	return string(hash)
 }
 
 func (e *env) count(t *testing.T, ctx context.Context, sql string, args ...any) int {

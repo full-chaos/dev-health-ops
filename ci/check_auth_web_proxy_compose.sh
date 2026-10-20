@@ -106,11 +106,14 @@ API_PORT="$(compose port go-api 8000 | sed 's/.*://')"
 BASE="http://127.0.0.1:${API_PORT}"
 printf 'go-api (ephemeral): %s\n' "${BASE}"
 
+# The origin check of /api/v1/auth/register stays on: the request carries the origin the real Web
+# client sends, which compose.yml allows by default (CORS_ALLOWED_ORIGINS).
+WEB_ORIGIN="${AUTH_PROOF_WEB_ORIGIN:-http://localhost:3000}"
 printf 'step 2: seed one verified user through go-api register\n'
 EMAIL="webproof-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')@example.com"
 PASSWORD="Pw-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 status="$(curl --silent --show-error --max-time 20 --output /dev/stderr --write-out '%{http_code}' \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H "Origin: ${WEB_ORIGIN}" \
   --data "$(printf '{"email":"%s","password":"%s","full_name":"Web Proof","org_name":"Web Proof Org"}' "${EMAIL}" "${PASSWORD}")" \
   "${BASE}/api/v1/auth/register")"
 printf '\nPOST /api/v1/auth/register -> %s\n' "${status}"

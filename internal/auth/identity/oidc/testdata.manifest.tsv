@@ -1,0 +1,4 @@
+# Every file under internal/auth/identity/oidc/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+baf2e9f537ba8011f59ac23b6bd32fa93af568f1bf2d63a35638a0b46fc96ec0	go-generated	fuzz/FuzzParseCallbackBody/baf2e9f537ba8011

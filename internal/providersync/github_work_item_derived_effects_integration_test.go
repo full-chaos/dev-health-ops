@@ -21,7 +21,7 @@ import (
 )
 
 // This file authors NO DDL. The three tables come from the real migration
-// chain (src/dev_health_ops/migrations/clickhouse), applied by chschema through
+// chain (internal/chmigrate/history), applied by chschema through
 // the project's own canonical entrypoint.
 //
 // The previous hand-typed CREATE TABLE constants were a second, unversioned

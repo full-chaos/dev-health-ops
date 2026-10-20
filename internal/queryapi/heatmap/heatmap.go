@@ -24,7 +24,7 @@
 // heatmap.py) with no FINAL or argMax dedup at all -- confirmed reading
 // every one of the seven queries there. file_metrics_daily is
 // ReplacingMergeTree(computed_at) since migration 096
-// (src/dev_health_ops/migrations/clickhouse/096_daily_family_tables_
+// (internal/chmigrate/history/096_daily_family_tables_
 // replacing_merge_tree.py); the reference dedups it correctly via
 // clickhouse_dedup.dedup_from's "ORDER BY computed_at DESC LIMIT 1 BY
 // <key>" subquery (functionally equivalent to FINAL for a table whose

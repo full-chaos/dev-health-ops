@@ -73,6 +73,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -385,7 +386,7 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 		if err != nil {
 			slog.ErrorContext(ctx, "audit: Commit failed; its own transaction rolled back",
 				"audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
-				"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, "error", err)
+				"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err))
 		}
 	}()
 	if pool == nil {

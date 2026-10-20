@@ -35,7 +35,7 @@ const freezePoint = "099_team_project_ownership_last_synced.sql"
 // (name, engine, CREATE without the database name), the seeded rows and
 // schema_migrations versions as chmigrate.Baseline JSON into
 // python_chain_contract2.json; run split_sql_statements over every
-// src/dev_health_ops/migrations/clickhouse/*.sql into python_split.json
+// the pre-099 migrations (now internal/chmigrate/history/*.sql) into python_split.json
 // ({"<file>": {"sql": text, "statements": [...]}}); re-pin the digests here.
 var pythonGoldens = map[string]string{
 	"python_chain_contract2.json": "d86cd8faa0ee39867eea96264de7e536af1ed4bafb7e03b68e7a6992dbb01aa4",

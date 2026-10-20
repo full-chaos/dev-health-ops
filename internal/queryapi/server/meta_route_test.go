@@ -1,15 +1,11 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
-
-	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -83,44 +79,13 @@ func TestMetaRouteReachableWhenSwitchEnabled(t *testing.T) {
 	}
 }
 
-type fixedVersionMetaClient struct{ version string }
-
-func (c fixedVersionMetaClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-	return &fixedVersionMetaScanner{version: c.version}, nil
-}
-
-type fixedVersionMetaScanner struct {
-	version string
-	served  bool
-}
-
-func (s *fixedVersionMetaScanner) Next() bool {
-	if s.served {
-		return false
-	}
-	s.served = true
-	return true
-}
-func (s *fixedVersionMetaScanner) Scan(dest ...any) error {
-	*(dest[0].(*string)) = s.version
-	return nil
-}
-func (s *fixedVersionMetaScanner) Err() error   { return nil }
-func (s *fixedVersionMetaScanner) Close() error { return nil }
-
-type erroringMetaClient struct{}
-
-func (erroringMetaClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-	return nil, errors.New("clickhouse unavailable")
-}
-
 // TestNewMetaWorkHandlerRequiresNoAuthContext pins that this route's work
 // handler runs with NO claims attached at all -- unlike every sibling
 // route's newXWorkHandler, there is no authctx.FromContext check here
 // because the Python route this ports has no auth (see meta_route.go's
 // package doc comment for the citation trail).
 func TestNewMetaWorkHandlerRequiresNoAuthContext(t *testing.T) {
-	handler := newMetaWorkHandler(fixedVersionMetaClient{version: "24.3.1.2672"})
+	handler := newMetaWorkHandler()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil)
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
@@ -132,7 +97,7 @@ func TestNewMetaWorkHandlerRequiresNoAuthContext(t *testing.T) {
 // TestNewMetaWorkHandlerHappyPathShape pins the response Content-Type and
 // full body shape.
 func TestNewMetaWorkHandlerHappyPathShape(t *testing.T) {
-	handler := newMetaWorkHandler(fixedVersionMetaClient{version: "24.3.1.2672"})
+	handler := newMetaWorkHandler()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil)
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
@@ -144,7 +109,6 @@ func TestNewMetaWorkHandlerHappyPathShape(t *testing.T) {
 	}
 	var decoded struct {
 		Backend            string         `json:"backend"`
-		Version            string         `json:"version"`
 		LastIngestAt       *string        `json:"last_ingest_at"`
 		Coverage           map[string]any `json:"coverage"`
 		Limits             map[string]int `json:"limits"`
@@ -155,9 +119,6 @@ func TestNewMetaWorkHandlerHappyPathShape(t *testing.T) {
 	}
 	if decoded.Backend != "clickhouse" {
 		t.Fatalf("backend = %q, want clickhouse", decoded.Backend)
-	}
-	if decoded.Version != "24.3.1.2672" {
-		t.Fatalf("version = %q, want 24.3.1.2672", decoded.Version)
 	}
 	if decoded.LastIngestAt != nil {
 		t.Fatalf("last_ingest_at = %v, want nil", decoded.LastIngestAt)
@@ -170,34 +131,6 @@ func TestNewMetaWorkHandlerHappyPathShape(t *testing.T) {
 	}
 	if len(decoded.SupportedEndpoints) != 9 {
 		t.Fatalf("supported_endpoints len = %d, want 9", len(decoded.SupportedEndpoints))
-	}
-}
-
-// TestNewMetaWorkHandlerClickHouseFailureIsStill200 pins the one
-// consequential behavioural fact in meta_route.go's package doc comment:
-// a ClickHouse query failure degrades the version field to "unknown" and
-// still answers 200 -- it never surfaces as a 503, matching main.py's own
-// inner try/except (main.py:438-445) exactly. This is NOT the same
-// contract filter_options_route.go's sibling test pins (a 503 on
-// failure) -- the two Python routes genuinely behave differently here,
-// and this test exists so a future refactor that accidentally unified
-// their error handling would fail loudly.
-func TestNewMetaWorkHandlerClickHouseFailureIsStill200(t *testing.T) {
-	handler := newMetaWorkHandler(erroringMetaClient{})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil)
-	rec := httptest.NewRecorder()
-	serveRoute(t, handler, rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	var decoded struct {
-		Version string `json:"version"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
-		t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
-	}
-	if decoded.Version != "unknown" {
-		t.Fatalf("version = %q, want unknown", decoded.Version)
 	}
 }
 

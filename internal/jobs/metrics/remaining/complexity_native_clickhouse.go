@@ -364,7 +364,7 @@ func buildComplexityRef(
 
 // writeFileComplexitySnapshots batch-inserts file_complexity_snapshots rows,
 // column order matching the CREATE TABLE in
-// src/dev_health_ops/migrations/clickhouse/007_complexity_investment_issues.sql
+// internal/chmigrate/history/007_complexity_investment_issues.sql
 // (+ org_id from 024_add_org_id.sql).
 func writeFileComplexitySnapshots(
 	ctx context.Context, conn driver.Conn, rows []complexity.FileSnapshot,

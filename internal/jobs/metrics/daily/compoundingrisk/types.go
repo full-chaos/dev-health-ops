@@ -39,7 +39,7 @@
 // # Write mode
 //
 // compounding_risk_daily is a PLAIN MergeTree
-// (migrations/clickhouse/040_compounding_risk_daily.sql:19-59), ORDER BY
+// (internal/chmigrate/history/040_compounding_risk_daily.sql:19-59), ORDER BY
 // (org_id, scope, scope_id, day, computed_at), with NO version column. It is
 // append-only: re-running a day duplicates rows physically, and readers are
 // expected to argMax(<col>, computed_at) GROUP BY (org_id, scope, scope_id,

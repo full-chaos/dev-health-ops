@@ -385,6 +385,15 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, pyCmd("check_docs_candidate_facts"), pyCmd("check_docs_candidate_facts")+" || true")
 		}, "masks a failing command status"},
 	)
+	// The evidence upload is found by its action, never by its name: renaming it and disabling it is refused.
+	plants = append(plants,
+		plantCase{"the evidence upload is renamed and carries if: false", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Upload documentation quality evidence\n        if: always()\n", "      - name: Upload evidence\n        if: false\n")
+		}, "must be uploaded with if: always()"},
+		plantCase{"a checker step is renamed and carries if: false", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Check freshness inventory\n", "      - name: Freshness\n        if: false\n")
+		}, "Check freshness inventory"},
+	)
 	// A condition on a guarded step skips the guard on the runs where it is false: refused on every checker step and on the Go step.
 	guarded := []string{"Run the docs content guards"}
 	for _, c := range docsGuardsChecks {

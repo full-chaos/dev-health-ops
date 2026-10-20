@@ -193,7 +193,7 @@ func (e *routesEnv) seed(t *testing.T, ctx context.Context) (user, org uuid.UUID
 		{`INSERT INTO organizations (id, slug, name, tier, is_active, settings, managed_by, created_at, updated_at)
 VALUES ($1, $2, 'Routes Org', 'community', true, '{}', 'self', now(), now())`, []any{org, "routes-" + org.String()[:8]}},
 		{`INSERT INTO users (id, email, username, full_name, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-VALUES ($1, $2, 'routes', 'Routes User', NULL, 'local', true, true, false, 2, now(), now())`, []any{user, "routes-" + user.String()[:8] + "@example.test"}},
+VALUES ($1, $2, $3, 'Routes User', NULL, 'local', true, true, false, 2, now(), now())`, []any{user, "routes-" + user.String()[:8] + "@example.test", "routes-" + user.String()[:8]}},
 		{`INSERT INTO memberships (id, user_id, org_id, role, joined_at, created_at) VALUES (gen_random_uuid(), $1, $2, 'owner', now(), now())`, []any{user, org}},
 	} {
 		if _, err := e.admin.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -319,7 +319,7 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	}
 	payload := decodePayload(t, rotated.AccessToken.Reveal())
 	for key, want := range map[string]any{"sub": user.String(), "role": "owner", "tv": float64(2), "is_superuser": false,
-		"username": "routes", "full_name": "Routes User", "sid": rotated.SessionID, "type": "access"} {
+		"username": "routes-" + user.String()[:8], "full_name": "Routes User", "sid": rotated.SessionID, "type": "access"} {
 		if payload[key] != want {
 			t.Errorf("claim %s = %v, want %v", key, payload[key], want)
 		}
@@ -513,6 +513,104 @@ func TestReuseRevocationAuditCarriesTheRequestID(t *testing.T) {
 	if err != nil || requestid.WireOf(id) != wire {
 		t.Fatalf("audit request_id %q is not the id of X-Auth-Request-ID %s", *auditRequestID, wire)
 	}
+}
+
+// auditRequestIDOf reads the request id of the newest audit row of eventType
+// on targetID.
+func (e *routesEnv) auditRequestIDOf(t *testing.T, ctx context.Context, eventType, targetID string) *string {
+	t.Helper()
+	var id *string
+	if err := e.admin.QueryRow(ctx, `SELECT request_id FROM auth.security_audit_events
+		WHERE event_type = $1 AND attributes->>'target_id' = $2 ORDER BY occurred_at DESC LIMIT 1`,
+		eventType, targetID).Scan(&id); err != nil {
+		t.Fatalf("audit row %s on %s: %v", eventType, targetID, err)
+	}
+	return id
+}
+
+// TestEveryAuditRowARouteWritesCarriesItsRequestID drives every handler path
+// that writes an audit row (refresh reuse, refresh of a deactivated user,
+// refresh of a user that is gone, revoke, revoke-all) through the configured
+// handler, and asserts each row carries the request id of the answer that
+// wrote it (the UUID behind X-Auth-Request-ID).
+func TestEveryAuditRowARouteWritesCarriesItsRequestID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnv(t, ctx)
+	check := func(t *testing.T, got answer, eventType, targetID string) {
+		t.Helper()
+		wire := got.header.Get("X-Auth-Request-ID")
+		id := e.auditRequestIDOf(t, ctx, eventType, targetID)
+		if id == nil {
+			t.Fatalf("%s audit row has no request id; the answer carried %q", eventType, wire)
+		}
+		parsed, err := uuid.Parse(*id)
+		if err != nil || requestid.WireOf(parsed) != wire {
+			t.Fatalf("%s audit request_id %q is not the id of X-Auth-Request-ID %q", eventType, *id, wire)
+		}
+	}
+
+	t.Run("refresh reuse", func(t *testing.T) {
+		user, org := e.seed(t, ctx)
+		first := e.start(t, ctx, user, &org)
+		rotated, got := e.refresh(t, first.Credential.Reveal())
+		if rotated == nil {
+			t.Fatalf("refresh = %d %s", got.status, got.body)
+		}
+		if next, got := e.refresh(t, rotated.RefreshCredential.Reveal()); next == nil {
+			t.Fatalf("second rotation = %d %s", got.status, got.body)
+		}
+		reuse := e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(first.Credential.Reveal()), "")
+		e.refused(t, reuse, 401, "refresh_reused")
+		check(t, reuse, "auth.session.refresh_reuse_revoked", mustSessionUUID(t, rotated.SessionID).String())
+	})
+	t.Run("refresh of a deactivated user", func(t *testing.T) {
+		user, org := e.seed(t, ctx)
+		issued := e.start(t, ctx, user, &org)
+		if _, err := e.admin.Exec(ctx, `UPDATE users SET is_active = false WHERE id = $1`, user); err != nil {
+			t.Fatal(err)
+		}
+		got := e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(issued.Credential.Reveal()), "")
+		e.refused(t, got, 401, "principal_deactivated")
+		check(t, got, "auth.session.revoked", issued.Session.ID.String())
+	})
+	t.Run("refresh of a user that is gone", func(t *testing.T) {
+		user, org := e.seed(t, ctx)
+		issued := e.start(t, ctx, user, &org)
+		if _, err := e.admin.Exec(ctx, `DELETE FROM memberships WHERE user_id = $1`, user); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.admin.Exec(ctx, `DELETE FROM users WHERE id = $1`, user); err != nil {
+			t.Fatal(err)
+		}
+		got := e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(issued.Credential.Reveal()), "")
+		e.refused(t, got, 401, "principal_not_found")
+		check(t, got, "auth.session.revoked", issued.Session.ID.String())
+	})
+	t.Run("revoke", func(t *testing.T) {
+		user, org := e.seed(t, ctx)
+		tokens, got := e.refresh(t, e.start(t, ctx, user, &org).Credential.Reveal())
+		if tokens == nil {
+			t.Fatalf("refresh = %d %s", got.status, got.body)
+		}
+		got = e.do(t, http.MethodPost, "/v1/sessions/revoke", "", tokens.AccessToken.Reveal())
+		if got.status != http.StatusNoContent {
+			t.Fatalf("revoke = %d %s", got.status, got.body)
+		}
+		check(t, got, "auth.session.revoked", mustSessionUUID(t, tokens.SessionID).String())
+	})
+	t.Run("revoke-all", func(t *testing.T) {
+		user, org := e.seed(t, ctx)
+		tokens, got := e.refresh(t, e.start(t, ctx, user, &org).Credential.Reveal())
+		if tokens == nil {
+			t.Fatalf("refresh = %d %s", got.status, got.body)
+		}
+		got = e.do(t, http.MethodPost, "/v1/sessions/revoke-all", "", tokens.AccessToken.Reveal())
+		if got.status != http.StatusNoContent {
+			t.Fatalf("revoke-all = %d %s", got.status, got.body)
+		}
+		check(t, got, "auth.session.revoked_all", user.String())
+	})
 }
 
 func mustSessionUUID(t *testing.T, wire string) uuid.UUID {

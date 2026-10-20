@@ -18,7 +18,7 @@ var (
 )
 
 // ttlDays returns the table-level TTL in days. Quoted strings and quoted identifiers are blanked
-// (honouring backslash and doubled-quote escapes), and only a TTL outside the column list
+// (honouring backslash and doubled-quote escapes, in backtick identifiers too), and only a TTL outside the column list
 // (paren depth 0) counts, so neither quoted text nor a column TTL is taken for the table TTL.
 func ttlDays(create string) (int, bool) {
 	masked := []byte(create)
@@ -48,7 +48,7 @@ func ttlDays(create string) (int, bool) {
 			d--
 		case c == '\'' || c == '"' || c == '`':
 			for i++; i < len(create); i++ {
-				if create[i] == '\\' && c != '`' && i+1 < len(create) {
+				if create[i] == '\\' && i+1 < len(create) {
 					masked[i], masked[i+1] = ' ', ' '
 					i++
 					continue
@@ -118,13 +118,14 @@ func TestCeilingFollowsTheTableTTL(t *testing.T) {
 func TestTTLScanRejectsWhatIsNotATableTTL(t *testing.T) {
 	base := "CREATE TABLE product_telemetry_events (`a` String COMMENT 'x') ENGINE = ReplacingMergeTree ORDER BY a "
 	cases := map[string]string{
-		"quoted comment":  "CREATE TABLE t (`a` String COMMENT 'TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
-		"escaped quote":   "CREATE TABLE t (`a` String COMMENT 'it\\'s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
-		"doubled quote":   "CREATE TABLE t (`a` String COMMENT 'it''s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
-		"no ttl":          base + "SETTINGS index_granularity = 8192",
-		"block comment":   "CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a /* TTL occurred_at + toIntervalDay(180) */",
-		"line comment":    "CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a -- TTL occurred_at + toIntervalDay(180)\nSETTINGS index_granularity = 8192",
-		"column ttl only": "CREATE TABLE t (`a` DateTime TTL a + toIntervalDay(180), `b` String) ENGINE = MergeTree ORDER BY a",
+		"quoted comment":               "CREATE TABLE t (`a` String COMMENT 'TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"escaped quote":                "CREATE TABLE t (`a` String COMMENT 'it\\'s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"doubled quote":                "CREATE TABLE t (`a` String COMMENT 'it''s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
+		"no ttl":                       base + "SETTINGS index_granularity = 8192",
+		"block comment":                "CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a /* TTL occurred_at + toIntervalDay(180) */",
+		"line comment":                 "CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a -- TTL occurred_at + toIntervalDay(180)\nSETTINGS index_granularity = 8192",
+		"column ttl only":              "CREATE TABLE t (`a` DateTime TTL a + toIntervalDay(180), `b` String) ENGINE = MergeTree ORDER BY a",
+		"escaped backtick identifiers": "CREATE TABLE default.product_telemetry_events (`x\\` TTL d + toIntervalDay(180)` String, `y\\` TTL d + toIntervalDay(90)` String) ENGINE = MergeTree ORDER BY `x\\` TTL d + toIntervalDay(180)`",
 	}
 	for name, create := range cases {
 		if days, ok := ttlDays(create); ok {

@@ -156,6 +156,9 @@ type Record struct {
 	CreatedAt      time.Time
 	ExpiresAt      time.Time
 	RevokedAt      *time.Time
+	// LegacyTokenVersion is public.users.token_version when the session was
+	// created; nil on a session row older than migration 0015.
+	LegacyTokenVersion *int64
 }
 
 // Wire is the session.v1 document of the record.

@@ -38,6 +38,7 @@ const (
 type CompatSessions interface {
 	Sessions
 	RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor session.Actor) (bool, error)
+	ExchangeLegacy(ctx context.Context, legacy session.LegacyRefresh) (session.Result, error)
 	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
 }
 

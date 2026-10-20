@@ -123,6 +123,15 @@ func (i *Issuer) Verify(token string) (Bearer, string, error) {
 	return Bearer{PrincipalID: principal, SessionID: sessionID, TokenVersion: int64(tv)}, "", nil
 }
 
+// errLegacyRefreshShape is a verified go-api refresh token without a UUID sub,
+// a jti, or an org_id that is absent, empty or a UUID.
+var errLegacyRefreshShape = errors.New("authapi: refresh token has no usable sub, jti or org_id")
+
+// VerifyLegacyRefresh checks token as go-api's refresh route does.
+func (i *Issuer) VerifyLegacyRefresh(string) (session.LegacyRefresh, error) {
+	return session.LegacyRefresh{}, errLegacyRefreshShape
+}
+
 // roleText is go-api's role claim for a membership lookup: "member" without
 // an organization or a membership, the text "None" for a NULL role
 // (internal/api/session/refresh.go refreshRole, tokens.go roleText).

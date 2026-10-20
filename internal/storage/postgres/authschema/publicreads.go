@@ -52,6 +52,19 @@ func SessionReaderColumns() ColumnGrant {
 	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
 }
 
+// TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema
+// table, outside PublicReadColumns' read-only rule.
+type TableWriteGrant struct {
+	Table  string
+	Select []string
+	Update []string
+	// RemovedBy names the ticket that removes the grant.
+	RemovedBy string
+}
+
+// LegacyRefreshTokenGrant is the temporary grant on go-api's refresh tokens.
+func LegacyRefreshTokenGrant() TableWriteGrant { return TableWriteGrant{} }
+
 // rowQuerier1 is the slice of a connection the relation lookup needs.
 type rowQuerier1 interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row

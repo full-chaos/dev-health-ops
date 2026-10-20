@@ -31,13 +31,14 @@ const (
 	ReasonProvisioningDisabled Reason = "provisioning_disabled"
 	ReasonDomainNotAllowed     Reason = "domain_not_allowed"
 	ReasonNotEntitled          Reason = "not_entitled"
+	ReasonInvalidCredentials   Reason = "invalid_credentials"
 )
 
 var allReasons = []Reason{
 	ReasonAccepted, ReasonMalformed, ReasonBadSignature, ReasonAudience, ReasonIssuer, ReasonExpired,
 	ReasonNotYetValid, ReasonMissingSub, ReasonEmailUnverified, ReasonEmailCollision, ReasonPrincipalDeactivated,
 	ReasonStoreUnavailable, ReasonDependency, ReasonReplayed, ReasonNonceMismatch, ReasonSignupUnavailable,
-	ReasonProvisioningDisabled, ReasonDomainNotAllowed, ReasonNotEntitled,
+	ReasonProvisioningDisabled, ReasonDomainNotAllowed, ReasonNotEntitled, ReasonInvalidCredentials,
 }
 
 // Errors of the IdentityStore seam. StoreIdentities maps the identity store's

@@ -134,9 +134,13 @@ type Config struct {
 	AppBaseURL string
 	// HTTPClient reaches the IdP; nil means an SSRF-guarded client.
 	HTTPClient *http.Client
-	Now        func() time.Time
-	Logger     *slog.Logger
-	Meter      metric.Meter
+	// OAuthEndpoints are the OAuth providers' public URLs; nil means
+	// DefaultOAuthEndpoints. A self-hosted GitLab row's base_url overrides
+	// the GitLab base.
+	OAuthEndpoints *OAuthEndpoints
+	Now            func() time.Time
+	Logger         *slog.Logger
+	Meter          metric.Meter
 }
 
 // Service runs the OIDC flow.
@@ -194,40 +198,60 @@ func loginNonceCookieName(flowID string) string { return "dho_oidc_login_nonce_"
 // or any request body is decoded: 404 for an unknown provider, 402 for an
 // organization without the sso_saml entitlement, 400 for another protocol or
 // an inactive provider.
-func (s *Service) admit(ctx context.Context, providerID uuid.UUID) (ProviderHead, *Error) {
+func (s *Service) admit(ctx context.Context, providerID uuid.UUID, spec protocolSpec) (ProviderHead, *Error) {
 	head, err := s.cfg.Providers.ProviderHead(ctx, providerID)
 	if errors.Is(err, ErrProviderNotFound) {
-		return ProviderHead{}, deny(http.StatusNotFound, ReasonMalformed, detailProviderAbsent)
+		return ProviderHead{}, deny(http.StatusNotFound, ReasonMalformed, spec.notFound)
 	}
 	if err != nil {
 		return ProviderHead{}, internal(ReasonStoreUnavailable, err)
 	}
-	allowed, err := s.cfg.Entitlements.SSOAllowed(ctx, head.OrgID)
-	if err != nil {
-		s.cfg.Logger.ErrorContext(ctx, "auth oidc: entitlement check failed; denying", "org_id", head.OrgID.String(),
-			logging.ErrorAttr(err))
+	if failure := s.entitled(ctx, head.OrgID); failure != nil {
+		return ProviderHead{}, failure
 	}
-	if !allowed {
-		return ProviderHead{}, deny(http.StatusPaymentRequired, ReasonNotEntitled, s.cfg.Entitlements.DeniedDetail())
-	}
-	if head.Protocol != protocolOIDC {
-		return ProviderHead{}, deny(http.StatusBadRequest, ReasonMalformed, "Provider is not OIDC")
+	if !spec.accepts(head.Protocol) {
+		return ProviderHead{}, deny(http.StatusBadRequest, ReasonMalformed, spec.wrongProtocol)
 	}
 	if head.Status != "active" {
-		return ProviderHead{}, deny(http.StatusBadRequest, ReasonMalformed, "SSO provider is not active")
+		return ProviderHead{}, deny(http.StatusBadRequest, ReasonMalformed, spec.inactive)
 	}
 	return head, nil
 }
 
-func (s *Service) loadProvider(ctx context.Context, providerID uuid.UUID) (Provider, *Error) {
-	head, failure := s.admit(ctx, providerID)
+// entitled is the sso_saml entitlement gate for an organization (402).
+func (s *Service) entitled(ctx context.Context, orgID uuid.UUID) *Error {
+	allowed, err := s.cfg.Entitlements.SSOAllowed(ctx, orgID)
+	if err != nil {
+		s.cfg.Logger.ErrorContext(ctx, "auth oidc: entitlement check failed; denying", "org_id", orgID.String(),
+			logging.ErrorAttr(err))
+	}
+	if !allowed {
+		return deny(http.StatusPaymentRequired, ReasonNotEntitled, s.cfg.Entitlements.DeniedDetail())
+	}
+	return nil
+}
+
+// protocolSpec is what differs between the OIDC and the OAuth routes in the
+// shared provider checks.
+type protocolSpec struct {
+	accepts                           func(protocol string) bool
+	notFound, wrongProtocol, inactive string
+}
+
+var oidcSpec = protocolSpec{
+	accepts:  func(p string) bool { return p == protocolOIDC },
+	notFound: detailProviderAbsent, wrongProtocol: "Provider is not OIDC", inactive: "SSO provider is not active",
+}
+
+func (s *Service) loadProvider(ctx context.Context, providerID uuid.UUID, spec protocolSpec) (Provider, *Error) {
+	head, failure := s.admit(ctx, providerID, spec)
 	if failure != nil {
 		return Provider{}, failure
 	}
 	row, err := s.cfg.Providers.Provider(ctx, providerID)
 	switch {
 	case errors.Is(err, ErrProviderNotFound):
-		return Provider{}, deny(http.StatusNotFound, ReasonMalformed, detailProviderAbsent)
+		return Provider{}, deny(http.StatusNotFound, ReasonMalformed, spec.notFound)
 	case errors.Is(err, ErrProviderConfig):
 		return Provider{}, internal(ReasonDependency, err)
 	case err != nil:
@@ -252,7 +276,7 @@ func (s *Service) Authorize(ctx context.Context, providerID uuid.UUID, redirectU
 }
 
 func (s *Service) authorize(ctx context.Context, providerID uuid.UUID, redirectURI string) (AuthorizeResult, *Error) {
-	row, failure := s.loadProvider(ctx, providerID)
+	row, failure := s.loadProvider(ctx, providerID, oidcSpec)
 	if failure != nil {
 		return AuthorizeResult{}, failure
 	}
@@ -366,7 +390,7 @@ func (s *Service) refused(ctx context.Context, route string, providerID uuid.UUI
 }
 
 func (s *Service) callback(ctx context.Context, providerID uuid.UUID, in CallbackInput) (Login, *http.Cookie, *Error) {
-	row, failure := s.loadProvider(ctx, providerID)
+	row, failure := s.loadProvider(ctx, providerID, oidcSpec)
 	if failure != nil {
 		return Login{}, nil, failure
 	}
@@ -413,6 +437,9 @@ func (s *Service) callback(ctx context.Context, providerID uuid.UUID, in Callbac
 type validated struct {
 	key     ExternalKey
 	profile profile
+	// legacyAuthProvider is the go-api users.auth_provider value of an account
+	// this login created before the identity store: "oidc", or the OAuth type.
+	legacyAuthProvider string
 }
 
 func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state flowState, code string) (validated, *Error) {
@@ -453,8 +480,9 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 		}
 	}
 	return validated{
-		key:     ExternalKey{Issuer: claims.Issuer, Provider: row.ID.String(), Subject: claims.Subject},
-		profile: readProfile(mergeClaims(userinfo, claims.All), row.Config.ClaimMapping),
+		key:                ExternalKey{Issuer: claims.Issuer, Provider: row.ID.String(), Subject: claims.Subject},
+		profile:            readProfile(mergeClaims(userinfo, claims.All), row.Config.ClaimMapping),
+		legacyAuthProvider: ProviderKind,
 	}, nil
 }
 
@@ -463,7 +491,7 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 // by the provider, and held by no account; then a new account is created
 // only if the provider and the identity store both allow it.
 func (s *Service) resolve(ctx context.Context, row Provider, v validated, requestID *string) (Login, *Error) {
-	principal, err := s.cfg.Identities.IdentityBySubject(ctx, v.key, LegacyMatch{AuthProvider: ProviderKind, MembershipOrg: row.OrgID})
+	principal, err := s.cfg.Identities.IdentityBySubject(ctx, v.key, LegacyMatch{AuthProvider: v.legacyAuthProvider, MembershipOrg: row.OrgID})
 	newAccount := false
 	switch {
 	case err == nil:

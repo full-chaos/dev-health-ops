@@ -102,7 +102,7 @@ jobs:
     # (ops is public: a fork or PR event never reaches the pool through this term).
     # The variable unset or empty = hosted. SELF_HOSTED_RUNNERS keeps routing
     # every leg as before.
-    runs-on: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && vars.CI_RACE_RUNNER || (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.pool && 'oci-arc-runners' || (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # 20m -> 45m (chris/team-lead, first-live-run finding): this job's own
     # PR (#2242) timed out and was cancelled at the 20m cap on ARC -- load1
     # on bigboy was 160+ during that run (shared with codex rounds/
@@ -110,13 +110,13 @@ jobs:
     # VM; it is the wrong budget for a shared self-hosted pool. 45m is a
     # deliberately generous multiple, not a tight refit -- retune down once
     # real completion times on ARC are known.
-    timeout-minutes: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || 30 }}
+    timeout-minutes: ${{ matrix.pool && 45 || 30 }}
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
       # The default 600 s per-package go test timeout is too small for the pool.
-      DEV_HEALTH_GO_RACE_TEST_TIMEOUT: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && '25m' || '10m' }}
+      DEV_HEALTH_GO_RACE_TEST_TIMEOUT: ${{ matrix.pool && '25m' || '10m' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -177,7 +177,7 @@ jobs:
         # SHARED hostPath (unlike a GitHub-hosted runner's ephemeral per-job
         # filesystem), same as go.yml's self-hosted legs. Only set on the
         # self-hosted leg; the hosted leg keeps setup-go's normal cache.
-        if: steps.relevance.outputs.relevant == 'true' && ((vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) || (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'))
+        if: steps.relevance.outputs.relevant == 'true' && ((vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) || matrix.pool)
         run: |
           echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
           echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
@@ -193,7 +193,7 @@ jobs:
           # into the pool's persistent, concurrently-shared hostPath above --
           # a corruption risk against other jobs reading/writing it at the
           # same time (same reasoning as go.yml's self-hosted legs).
-          cache: ${{ !((vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) || (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops')) }}
+          cache: ${{ !((vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) || matrix.pool) }}
 
       - name: Set up Helm
         # internal/cigates/chartgates renders the chart with `helm template` in the test and race legs; the

@@ -22,7 +22,7 @@ const (
 func CheckProvider(provider string) (string, ConfigReason) {
 	name := normalizeProvider(provider)
 	switch name {
-	case "auto", "mock", "none":
+	case "", "auto", "mock", "none":
 		return name, ConfigNotConfigured
 	}
 	if !isKnownProvider(name) {

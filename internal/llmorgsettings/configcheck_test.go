@@ -25,6 +25,7 @@ func TestGateAndStatusAgreeOnWhatACannotServeConfigIs(t *testing.T) {
 		{"unknown provider", "no-such-provider", "k", "", ConfigUnknownProvider},
 		{"auto", "auto", "k", "", ConfigNotConfigured},
 		{"empty provider", "", "k", "", ConfigNotConfigured},
+		{"whitespace-only provider", "   ", "k", "", ConfigNotConfigured},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

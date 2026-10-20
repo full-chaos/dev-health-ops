@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 type recordedModelRequest struct {
@@ -292,5 +294,85 @@ func TestCheckBaseURLRefusesAKeyBeforeAnyResolution(t *testing.T) {
 	valid, _, keyHit, err := checkBaseURL(context.Background(), "https://p.example.invalid/v1", []string{stored}, spy)
 	if err != nil || !valid || keyHit || calls != 1 {
 		t.Fatalf("clean url: valid=%v keyHit=%v err=%v calls=%d", valid, keyHit, err, calls)
+	}
+}
+
+type resolverSpy struct{ calls int }
+
+func (s *resolverSpy) validate(context.Context, string) (bool, string, error) {
+	s.calls++
+	return true, "", nil
+}
+
+func newKeyGuardHandlers(spy *resolverSpy, stored string) *handlers {
+	return &handlers{
+		modelCache:  newLLMModelListCache(),
+		validateURL: spy.validate,
+		storedKey:   func(context.Context, string) (string, error) { return stored, nil },
+	}
+}
+
+func TestApplyLLMSettingsRefusesAKeyInTheBaseURLBeforeResolution(t *testing.T) {
+	stored, fresh := "sk-stored-"+"0123456789", "sk-fresh-"+"0123456789"
+	for name, tc := range map[string]struct {
+		in     llmUpsert
+		stored string
+	}{
+		"full PUT, new key in the host": {
+			in: llmUpsert{provider: "openai", apiKey: &fresh, baseURL: strPtr("https://" + fresh + ".example.invalid/v1")},
+		},
+		"partial PUT, stored key in the host": {
+			in:     llmUpsert{provider: "openai", baseURL: strPtr("https://" + stored + ".example.invalid/v1")},
+			stored: stored,
+		},
+		"full PUT with another key, stored key in the path": {
+			in:     llmUpsert{provider: "openai", apiKey: &fresh, baseURL: strPtr("https://p.example.invalid/" + stored)},
+			stored: stored,
+		},
+	} {
+		spy := &resolverSpy{}
+		h := newKeyGuardHandlers(spy, tc.stored)
+		out, refusal, err := h.applyLLMSettings(context.Background(), "org", tc.in)
+		if err != nil || out != nil || refusal == nil || refusal.status != 400 || spy.calls != 0 {
+			t.Fatalf("%s: out=%v refusal=%v err=%v resolver calls=%d", name, out, refusal, err, spy.calls)
+		}
+	}
+}
+
+func TestModelListRefusesAKeyInTheBaseURLBeforeResolution(t *testing.T) {
+	key := "sk-listed-" + "0123456789"
+	spy := &resolverSpy{}
+	h := newKeyGuardHandlers(spy, "")
+	doer := &scriptedModelDoer{}
+	h.upstreamDoer = doer
+	cfg := readinessBYOConfig{provider: "openai", apiKey: secrets.NewHidden(key), baseURL: "https://" + key + ".example.invalid/v1"}
+	out, err := h.modelList(context.Background(), "org", cfg)
+	if err != nil || spy.calls != 0 || len(doer.requests) != 0 {
+		t.Fatalf("err=%v resolver calls=%d provider calls=%d", err, spy.calls, len(doer.requests))
+	}
+	body, _ := out.MarshalJSON()
+	if !strings.Contains(string(body), `"reason":"invalid_base_url"`) || strings.Contains(string(body), key) {
+		t.Fatalf("body=%s", body)
+	}
+
+	clean := readinessBYOConfig{provider: "openai", apiKey: secrets.NewHidden(key), baseURL: "https://p.example.invalid/v1"}
+	doer.responses = []string{`{"data":[{"id":"gpt-5"}]}`}
+	out, err = h.modelList(context.Background(), "org", clean)
+	body, _ = out.MarshalJSON()
+	if err != nil || spy.calls != 1 || len(doer.requests) != 1 || !strings.Contains(string(body), `"source":"live"`) {
+		t.Fatalf("clean: err=%v resolver calls=%d provider calls=%d body=%s", err, spy.calls, len(doer.requests), body)
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
+func TestListProviderModelsRefusesALaterPageWithoutTheListField(t *testing.T) {
+	doer := &scriptedModelDoer{responses: []string{
+		`{"data":[{"id":"claude-a"}],"has_more":true,"last_id":"claude-a"}`,
+		`{}`,
+	}}
+	ids, reason := listProviderModels(context.Background(), doer, "anthropic", "", "a-key-of-some-length")
+	if ids != nil || reason != llmModelsReasonInvalidResponse || len(doer.requests) != 2 {
+		t.Fatalf("ids=%v reason=%q requests=%d", ids, reason, len(doer.requests))
 	}
 }

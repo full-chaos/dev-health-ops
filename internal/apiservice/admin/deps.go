@@ -11,6 +11,7 @@
 package admin
 
 import (
+	"context"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"log/slog"
 	"time"
@@ -153,6 +154,9 @@ type handlers struct {
 	// httpDoer above would bypass.
 	upstreamDoer providerfoundation.HTTPDoer
 	modelCache   *llmModelListCache
+	// validateURL and storedKey replace the base url validator and the stored key read in tests.
+	validateURL func(context.Context, string) (bool, string, error)
+	storedKey   func(context.Context, string) (string, error)
 	// write renders this area's own directly-written errors (the keyed
 	// rate limiter's 429) in the same wire shape every other error uses.
 	write httpapi.ErrorWriter

@@ -415,43 +415,66 @@ func (h *handlers) getLLMSettingsModels(w http.ResponseWriter, r *http.Request) 
 		h.internalError(ctx, w, "read byo llm config", err)
 		return
 	}
+	out, err := h.modelList(ctx, orgID, cfg)
+	if err != nil {
+		h.internalError(ctx, w, "validate byo base url", err)
+		return
+	}
+	policy.WriteJSON(w, http.StatusOK, out, nil)
+}
+
+// modelList answers the model list for a loaded BYO config; the base url is
+// vetted against the key before any resolution.
+func (h *handlers) modelList(ctx context.Context, orgID string, cfg readinessBYOConfig) (*pyjson.Object, error) {
 	provider := cfg.provider
 	if provider == "" && cfg.apiKey.Configured() {
 		provider = "openai"
 	}
 	apiKey := cfg.apiKey.Reveal()
-	unavailable := func(reason string) {
-		policy.WriteJSON(w, http.StatusOK, llmModelsResponse(nil, llmModelsSourceUnavailable, reason, nil), nil)
+	unavailable := func(reason string) (*pyjson.Object, error) {
+		return llmModelsResponse(nil, llmModelsSourceUnavailable, reason, nil), nil
 	}
 	if provider == "" {
-		unavailable(llmModelsReasonNotConfigured)
-		return
+		return unavailable(llmModelsReasonNotConfigured)
 	}
 	if !llmorgsettings.CredentialsComplete(provider, apiKey) {
-		unavailable(llmModelsReasonAPIKeyRequired)
-		return
+		return unavailable(llmModelsReasonAPIKeyRequired)
 	}
-	valid, _, _, err := checkBaseURL(ctx, cfg.baseURL, []string{apiKey}, llmorgsettings.ValidateBaseURLChecked)
+	valid, _, _, err := checkBaseURL(ctx, cfg.baseURL, []string{apiKey}, h.baseURLValidator())
 	if err != nil {
-		h.internalError(ctx, w, "validate byo base url", err)
-		return
+		return nil, err
 	}
 	if !valid {
-		unavailable(llmModelsReasonInvalidBaseURL)
-		return
+		return unavailable(llmModelsReasonInvalidBaseURL)
 	}
 	now := h.store.now().UTC()
 	key := llmModelListKey(orgID, provider, cfg.baseURL, apiKey)
 	if entry, hit := h.modelCache.get(key, now); hit {
-		policy.WriteJSON(w, http.StatusOK, llmModelsResponse(entry.models, llmModelsSourceCache, "", &entry.fetchedAt), nil)
-		return
+		return llmModelsResponse(entry.models, llmModelsSourceCache, "", &entry.fetchedAt), nil
 	}
 	client := newOpenAICompatibleReadinessProber(h.upstreamDoer).client
 	models, reason := listProviderModels(ctx, client, provider, cfg.baseURL, apiKey)
 	if reason != "" {
-		unavailable(reason)
-		return
+		return unavailable(reason)
 	}
 	h.modelCache.put(key, llmModelListEntry{orgID: orgID, models: models, fetchedAt: now}, now)
-	policy.WriteJSON(w, http.StatusOK, llmModelsResponse(models, llmModelsSourceLive, "", &now), nil)
+	return llmModelsResponse(models, llmModelsSourceLive, "", &now), nil
+}
+
+func (h *handlers) baseURLValidator() func(context.Context, string) (bool, string, error) {
+	if h.validateURL != nil {
+		return h.validateURL
+	}
+	return llmorgsettings.ValidateBaseURLChecked
+}
+
+func (h *handlers) storedLLMKey(ctx context.Context, orgID string) (string, error) {
+	if h.storedKey != nil {
+		return h.storedKey(ctx, orgID)
+	}
+	cfg, err := h.loadReadinessBYOConfig(ctx, orgID)
+	if err != nil {
+		return "", err
+	}
+	return cfg.apiKey.Reveal(), nil
 }

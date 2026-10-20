@@ -17,7 +17,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
-	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -438,13 +437,13 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		keys = append(keys, *in.apiKey)
 	}
 	if baseURLText != "" {
-		stored, err := h.loadReadinessBYOConfig(ctx, orgID)
+		stored, err := h.storedLLMKey(ctx, orgID)
 		if err != nil {
 			return nil, nil, &llmStepError{"read stored llm key", err}
 		}
-		keys = append(keys, stored.apiKey.Reveal())
+		keys = append(keys, stored)
 	}
-	valid, reason, keyHit, splitErr := checkBaseURL(ctx, baseURLText, keys, llmorgsettings.ValidateBaseURLChecked)
+	valid, reason, keyHit, splitErr := checkBaseURL(ctx, baseURLText, keys, h.baseURLValidator())
 	if keyHit {
 		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
 	}

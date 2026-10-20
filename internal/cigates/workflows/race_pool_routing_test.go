@@ -57,8 +57,23 @@ func TestRaceLegsRouteToThePoolOnlyOnPushToMainOfThisRepo(t *testing.T) {
 func TestRaceLegsOnThePoolRunWithoutRyukAndAssertAnEmptyDaemonAtStart(t *testing.T) {
 	leg := goQualityLeg(t)
 	env, _ := leg["env"].(map[string]any)
-	if env["TESTCONTAINERS_RYUK_DISABLED"] != "true" {
-		t.Fatalf("TESTCONTAINERS_RYUK_DISABLED must be 'true', got %v", env["TESTCONTAINERS_RYUK_DISABLED"])
+	wantRyuk := "${{ (" + racePoolTerm + ") && 'true' || 'false' }}"
+	if env["TESTCONTAINERS_RYUK_DISABLED"] != wantRyuk {
+		t.Fatalf("TESTCONTAINERS_RYUK_DISABLED must be on only for the pool legs\n got: %v\nwant: %s", env["TESTCONTAINERS_RYUK_DISABLED"], wantRyuk)
+	}
+	ryukArm := strings.TrimSuffix(strings.TrimPrefix(wantRyuk, "${{ ("), ") && 'true' || 'false' }}")
+	for name, over := range map[string]map[string]string{
+		"static":   {"matrix.pool": ""},
+		"test":     {"matrix.pool": ""},
+		"race-1":   {"matrix.pool": ""},
+		"pull req": {"github.event_name": "pull_request", "github.ref": "refs/pull/1/merge"},
+	} {
+		if evalRacePoolTerm(t, ryukArm, poolContext(over)) {
+			t.Fatalf("%s must not inherit TESTCONTAINERS_RYUK_DISABLED=true", name)
+		}
+	}
+	if !evalRacePoolTerm(t, ryukArm, poolContext(nil)) {
+		t.Fatal("the pool legs must run with Ryuk disabled")
 	}
 	if got, _ := env["DEV_HEALTH_GO_RACE_TEST_TIMEOUT"].(string); !strings.Contains(got, "'25m'") {
 		t.Fatalf("the pool race path needs a per-package go test timeout above the 600 s default, got %q", got)
@@ -101,6 +116,10 @@ func TestAssertNoTestcontainersAtJobStart(t *testing.T) {
 	out, err := runAssertWithFakeDocker(t, `[ "$1 $2 $3" = "ps -q --filter" ] && [ "$4" = "label=org.testcontainers=true" ] && echo abc123def456`)
 	if err == nil || !strings.Contains(out, "abc123def456") {
 		t.Fatalf("a labelled container must fail the step and name its id, got %v: %s", err, out)
+	}
+	stopped := `case " $* " in *" -a "*|*" -aq "*) echo dead0beef001;; esac`
+	if out, err := runAssertWithFakeDocker(t, stopped); err == nil || !strings.Contains(out, "dead0beef001") {
+		t.Fatalf("a stopped labelled container must fail the step too (docker ps -a), got %v: %s", err, out)
 	}
 	if out, err := runAssertWithFakeDocker(t, "echo daemon down >&2; exit 1"); err == nil {
 		t.Fatalf("a docker failure must exit nonzero, got: %s", out)

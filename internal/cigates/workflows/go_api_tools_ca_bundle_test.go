@@ -12,7 +12,7 @@ import (
 
 func runtimeStage(t *testing.T, dockerfile string) string {
 	t.Helper()
-	parts := regexp.MustCompile(`(?m)^FROM .* AS runtime\s*$`).Split(dockerfile, -1)
+	parts := regexp.MustCompile(`(?m)^FROM .* AS runtime`+pyS+`*$`).Split(dockerfile, -1)
 	if len(parts) != 2 {
 		t.Fatalf("expected exactly one runtime stage, found %d", len(parts)-1)
 	}

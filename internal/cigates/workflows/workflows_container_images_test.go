@@ -25,12 +25,12 @@ var nonContainerVerbs = map[string]bool{
 }
 
 var (
-	containerLeafPattern = regexp.MustCompile(`go test\b[^\n]*-tags=integration`)
-	goTestWithTags       = regexp.MustCompile(`go test\b[^\n]*-tags[= ]`)
-	checkGoInvocation    = regexp.MustCompile(`ci/check_go\.sh\s+(\S+)`)
-	containerTool        = regexp.MustCompile(`\b(docker|podman|compose|nerdctl)\b`)
-	tagsViaEnv           = regexp.MustCompile(`\b(GOFLAGS|GOEXPERIMENT)\b`)
-	mirrorHost           = regexp.MustCompile(`(?i)(?:^|[^\w.:/-])ghcr\.io(?::\d+)?/`)
+	containerLeafPattern = regexp.MustCompile(`go test` + pyAfterLine + `[^\n]*-tags=integration`)
+	goTestWithTags       = regexp.MustCompile(`go test` + pyAfterLine + `[^\n]*-tags[= ]`)
+	checkGoInvocation    = regexp.MustCompile(`ci/check_go\.sh` + pyS + `+(` + pyNotS + `+)`)
+	containerTool        = regexp.MustCompile(pyBefore + `(docker|podman|compose|nerdctl)` + pyAfterAny)
+	tagsViaEnv           = regexp.MustCompile(pyBefore + `(GOFLAGS|GOEXPERIMENT)` + pyAfterAny)
+	mirrorHost           = regexp.MustCompile(`(?i)(?:^|[^` + pyWordSet + `.:/-])ghcr\.io(?::` + pyD + `+)?/`)
 	verbShape            = regexp.MustCompile(`^[a-z0-9-]+$`)
 )
 
@@ -82,7 +82,7 @@ func verbsReachingAContainerLeaf(t *testing.T, src string) map[string]bool {
 	var reaches func(body string, seen map[string]bool) bool
 	reaches = func(body string, seen map[string]bool) bool {
 		for name, fb := range functions {
-			if seen[name] || !regexp.MustCompile(`\b`+regexp.QuoteMeta(name)+`\b`).MatchString(body) {
+			if seen[name] || !pyWordBounded(body, name) {
 				continue
 			}
 			next := map[string]bool{name: true}
@@ -166,7 +166,7 @@ func stepKind(step yamlMap) string {
 	if command == "" {
 		return ""
 	}
-	if regexp.MustCompile(`^(?:bash\s+)?` + regexp.QuoteMeta(prepullCommand) + `$`).MatchString(strings.TrimSpace(command)) {
+	if regexp.MustCompile(`^(?:bash` + pyS + `+)?` + regexp.QuoteMeta(prepullCommand) + `$`).MatchString(pyStrip(command)) {
 		return "prepull"
 	}
 	if runUsesGoTestHarness(command) {
@@ -335,6 +335,8 @@ func resolveImageExpressions(image string) string {
 	return strings.NewReplacer("${{ github.repository_owner }}", "full-chaos", "${{github.repository_owner}}", "full-chaos").Replace(image)
 }
 
+// Go lower-casing is stricter than python casefold for a few characters (for example U+017F, which casefold maps to s): a
+// refusal is the safe side here, so the difference is a named stricter refusal.
 func imageIsAllowed(image string) bool {
 	ref := strings.TrimSpace(resolveImageExpressions(image))
 	if strings.Contains(ref, "${{") || strings.Contains(ref, "${") {
@@ -627,7 +629,7 @@ func shlexSplit(line string) ([]string, bool) {
 			i, inWord = j, true
 		case c == '#' && !inWord:
 			i = len(runes)
-		case c == ' ' || c == '\t':
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
 			if inWord {
 				words = append(words, cur.String())
 				cur.Reset()
@@ -654,7 +656,7 @@ func trunc(s string) string {
 // runPulledImages: the images a run text pulls, and the reasons it could not be determined. An undeterminable image is
 // refused, not assumed safe.
 func runPulledImages(command string) (images, unknown []string) {
-	joined := regexp.MustCompile(`\\\n\s*`).ReplaceAllString(command, " ")
+	joined := regexp.MustCompile(`\\\n`+pyS+`*`).ReplaceAllString(command, " ")
 	for _, raw := range regexp.MustCompile(`[\n;]|&&|\|\|`).Split(joined, -1) {
 		line := strings.TrimSpace(raw)
 		if !containerTool.MatchString(line) {

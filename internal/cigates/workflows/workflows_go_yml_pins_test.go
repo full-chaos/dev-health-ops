@@ -120,7 +120,7 @@ func selfHostedSetupGoDefects(doc yamlMap) []string {
 var (
 	envAssignment    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 	leadingKeywords  = map[string]bool{"if": true, "elif": true, "while": true, "until": true, "!": true}
-	goTestTimeoutRe  = regexp.MustCompile(`go test\b[^\n]*?-timeout[ =](\S+)`)
+	goTestTimeoutRe  = regexp.MustCompile(`go test` + pyAfterLine + `[^\n]*?-timeout[ =](` + pyNotS + `+)`)
 	trailingBackslsh = regexp.MustCompile(`\\+$`)
 )
 
@@ -128,14 +128,16 @@ var (
 // keywords; a comment line yields nil. Tokens split on whitespace and keep their quotes, so a quoted lookalike of an
 // assignment stays a command name.
 func leadingCommandWords(line string, count int) []string {
-	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "#") {
+	// shlex splits on ' \t\r\n' only, and a '#' starts a comment only at the start of a word: a non-breaking space or other
+	// Unicode space stays inside its word, exactly as in the python guard.
+	if strings.HasPrefix(strings.TrimLeft(line, " \t\r\n"), "#") {
 		return nil
 	}
+	line = strings.TrimRightFunc(line, isPySpace)
 	if m := trailingBackslsh.FindString(line); len(m)%2 == 1 {
 		line = strings.TrimSuffix(line, `\`)
 	}
-	tokens := strings.Fields(line)
+	tokens := strings.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' })
 	for len(tokens) > 0 && (leadingKeywords[tokens[0]] || envAssignment.MatchString(tokens[0])) {
 		tokens = tokens[1:]
 	}
@@ -170,11 +172,11 @@ func innerTimeoutDefect(script string, outer int) string {
 		return "the go test invocation has no `-timeout` flag"
 	}
 	raw := m[1]
-	var inner int
 	if !strings.HasSuffix(raw, "m") {
 		return fmt.Sprintf("go test -timeout value %q is not a plain <N>m form", raw)
 	}
-	if _, err := fmt.Sscanf(strings.TrimSuffix(raw, "m"), "%d", &inner); err != nil {
+	inner, ok := pyAtoi(strings.TrimSuffix(raw, "m"))
+	if !ok {
 		return fmt.Sprintf("go test -timeout value %q is not a plain <N>m form", raw)
 	}
 	if inner >= outer {
@@ -363,13 +365,13 @@ func pilotDefects(doc yamlMap) []string {
 		add("%s timeout-minutes %v is not 57", selfHosted, sh["timeout-minutes"])
 	}
 	step, _ := stepNamed(sh, runStep)
-	m := regexp.MustCompile(`\btimeout (\d+)m\b`).FindStringSubmatch(asString(step["run"]))
+	m := regexp.MustCompile(pyBefore + `timeout (` + pyD + `+)m` + pyAfterAny).FindStringSubmatch(asString(step["run"]))
 	jt, ok := sh["timeout-minutes"].(int)
-	var inner int
+	inner, innerOK := 0, false
 	if m != nil {
-		fmt.Sscanf(m[1], "%d", &inner)
+		inner, innerOK = pyAtoi(m[1])
 	}
-	if m == nil || !ok || inner >= jt {
+	if m == nil || !ok || !innerOK || inner >= jt {
 		add("%s inner timeout %v is not strictly shorter than the job timeout %v", selfHosted, m, sh["timeout-minutes"])
 	}
 	for _, j := range []string{selfHosted, dind} {

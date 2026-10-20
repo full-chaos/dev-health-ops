@@ -392,7 +392,7 @@ func providerTests(t *testing.T) (map[string]bool, map[string]bool) {
 			return
 		}
 		providerTopLevel = map[string]bool{}
-		fn := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\s*\(`)
+		fn := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)` + pyS + `*\(`)
 		for _, f := range strings.Split(res.stdout, "\n") {
 			if f == "" {
 				continue
@@ -403,7 +403,7 @@ func providerTests(t *testing.T) (map[string]bool, map[string]bool) {
 		}
 		providerIntegrationT = map[string]bool{}
 		files, _ := filepath.Glob(filepath.Join(root, providerPackage, "*_test.go"))
-		tagged := regexp.MustCompile(`(?m)^//go:build.*\bintegration\b`)
+		tagged := regexp.MustCompile(`(?m)^//go:build.*` + pyBefore + `integration` + pyAfter)
 		fn2 := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)`)
 		for _, f := range files {
 			src := readText(t, f)
@@ -821,7 +821,7 @@ func TestAnIsolatedPackageKeyMatchingNothingFailsLoudlyAndWorkerserviceIsASingle
 
 func declaredImage(t *testing.T, constant string) string {
 	t.Helper()
-	m := regexp.MustCompile(`(?m)^\s*` + constant + `\s*=\s*"([^"]+)"`).FindStringSubmatch(readText(t, filepath.Join(rootOf(t), "internal", "testsupport", "containers", "harness.go")))
+	m := regexp.MustCompile(`(?m)^` + pyS + `*` + constant + pyS + `*=` + pyS + `*"([^"]+)"`).FindStringSubmatch(readText(t, filepath.Join(rootOf(t), "internal", "testsupport", "containers", "harness.go")))
 	if m == nil {
 		t.Fatalf("%s is not declared in the container harness", constant)
 	}

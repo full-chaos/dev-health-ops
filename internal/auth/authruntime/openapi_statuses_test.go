@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -20,6 +21,18 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
+
+// undeclaredStatuses names every observed status the declared responses lack.
+func undeclaredStatuses(operation string, observed map[int]bool, declared map[string]any) []string {
+	var problems []string
+	for status := range observed {
+		if _, ok := declared[strconv.Itoa(status)]; !ok {
+			problems = append(problems, fmt.Sprintf("%s: the stack answers %d, which the OpenAPI operation does not declare", operation, status))
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
 
 // TestEveryStatusTheStackAnswersIsAnOpenAPIResponse drives each OpenAPI
 // operation through the API handler configure builds (database unreachable)
@@ -118,11 +131,22 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 			var statuses []string
 			for status := range observed {
 				statuses = append(statuses, strconv.Itoa(status))
-				if _, declared := operation.Responses[strconv.Itoa(status)]; !declared {
-					t.Errorf("%s %s: the stack answers %d, which the OpenAPI operation does not declare", method, path, status)
-				}
 			}
 			sort.Strings(statuses)
+			for _, problem := range undeclaredStatuses(method+" "+path, observed, operation.Responses) {
+				t.Error(problem)
+			}
+			// Planted control: the same probe result against this operation's
+			// responses with 429 removed must be refused.
+			planted := map[string]any{}
+			for status, response := range operation.Responses {
+				if status != "429" {
+					planted[status] = response
+				}
+			}
+			if len(undeclaredStatuses(method+" "+path, observed, planted)) == 0 {
+				t.Errorf("%s %s: with 429 removed from the declared responses the gate reported nothing", method, path)
+			}
 			if !observed[http.StatusTooManyRequests] || len(observed) < 3 {
 				t.Errorf("%s %s: the probes reached only %v: they did not exercise the stack", method, path, statuses)
 			}

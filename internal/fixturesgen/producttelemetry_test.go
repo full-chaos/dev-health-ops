@@ -26,12 +26,27 @@ func ttlDays(create string) (int, bool) {
 	d := 0
 	for i := 0; i < len(create); i++ {
 		c := create[i]
-		switch c {
-		case '(':
+		switch {
+		case c == '-' && i+1 < len(create) && create[i+1] == '-':
+			for ; i < len(create) && create[i] != '\n'; i++ {
+				masked[i] = ' '
+			}
+			i--
+		case c == '/' && i+1 < len(create) && create[i+1] == '*':
+			end := strings.Index(create[i+2:], "*/")
+			stop := len(create)
+			if end >= 0 {
+				stop = i + 2 + end + 2
+			}
+			for ; i < stop; i++ {
+				masked[i] = ' '
+			}
+			i--
+		case c == '(':
 			d++
-		case ')':
+		case c == ')':
 			d--
-		case '\'', '"', '`':
+		case c == '\'' || c == '"' || c == '`':
 			for i++; i < len(create); i++ {
 				if create[i] == '\\' && c != '`' && i+1 < len(create) {
 					masked[i], masked[i+1] = ' ', ' '

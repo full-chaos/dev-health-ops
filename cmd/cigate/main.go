@@ -5,6 +5,7 @@
 //	cigate govulncheck                   gate govulncheck JSON on stdin
 //	cigate scope-candidates <module>     auth scope candidates from go list JSON on stdin
 //	cigate metrics-proof [flags]         metrics.daily executed-proof readback against ClickHouse
+//	cigate bigboy <verb> [args]          bigboy cut helpers: render-ch-users, grants-compare, pg-posture, bump-swap-values
 package main
 
 import (
@@ -12,6 +13,7 @@ import (
 	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates"
+	"github.com/full-chaos/dev-health-ops/internal/cigates/bigboyrender"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/metricsproof"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -20,7 +22,7 @@ func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: cigate governance|affected-integration|govulncheck|scope-candidates|metrics-proof [args]")
+		fmt.Fprintln(os.Stderr, "usage: cigate governance|affected-integration|govulncheck|scope-candidates|metrics-proof|bigboy [args]")
 		return 2
 	}
 	switch args[0] {
@@ -32,6 +34,8 @@ func run(args []string) int {
 		return cigates.AuthGovulncheck(os.Stdin, os.Stdout, os.Stderr)
 	case "metrics-proof":
 		return metricsproof.Run(args[1:], processEnv, metricsproof.OpenClickHouse, os.Stdout, os.Stderr)
+	case "bigboy":
+		return bigboyrender.Run(args[1:], os.Stdout, os.Stderr)
 	case "scope-candidates":
 		if len(args) != 2 {
 			fmt.Fprintln(os.Stderr, "usage: cigate scope-candidates <module>")

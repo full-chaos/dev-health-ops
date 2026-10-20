@@ -1,0 +1,18 @@
+package postgres
+
+func domainPosture() RolePosture {
+	return RolePosture{
+		// a comment with {"ghost", true, true, true} and RequiredSequences: nothing
+		RequiredTables: []TablePrivilege{
+			{"sync_runs", true, true, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"integration_credentials", "is_active", "UPDATE"},
+			{"integration_credentials", "updated_at", "UPDATE"},
+			{"worker_job_completion_fences", "completion_key", "SELECT"},
+			{"worker_job_completion_fences", "completion_key", "INSERT"},
+		},
+	}
+}
+
+func other() {}

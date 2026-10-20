@@ -619,7 +619,7 @@ compose file `ci/bigboy/compose.bigboy.yml` mounts the host file `DHO_API_CH_USE
 (default `$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml`) read-only at
 `/etc/clickhouse-server/users.d/dho_api_ch.xml`, so recreating the ClickHouse container no longer loses the
 user (a recreate that did, after the login was `docker cp`ed in, is what made go-api fail every ClickHouse call
-with code 516). `ci/bigboy/render-dho-api-ch-users.py <authorization.go> <out>` writes the file. It takes no XML: it builds a fixed
+with code 516). `cigate bigboy render-ch-users <authorization.go> <out>` writes the file. It takes no XML: it builds a fixed
 element table (`networks/ip`, `profile`, `quota`, `access_management`, `password_sha256_hex`, `grants/query`) whose only
 variable parts are the SHA-256 of the password in `API_CH_PASSWORD` (environment only, never printed) and the grants,
 read from the `APIPosture` manifest in the given `authorization.go` (the file at the ops sha being cut). No attribute,

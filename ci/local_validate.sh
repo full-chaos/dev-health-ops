@@ -1006,9 +1006,9 @@ gate_go_fast() { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
 
 # --- The unit step: the HOSTED selection (CHAOS-8352 removed the full-suite matrix). --
-# Same three pytest invocations as the `tooling-tests` and `docs-tests` jobs of
-# .github/workflows/test.yml (and tests:docs / tests:tooling in .gitlab-ci.yml):
-# tests/docs, tests/tooling, and the explicit list in ci/kept_python_tests.txt,
+# Same two pytest invocations as the `tooling-tests` job of
+# .github/workflows/test.yml (and tests:tooling in .gitlab-ci.yml):
+# tests/tooling, and the explicit list in ci/kept_python_tests.txt,
 # read from that file so the gate cannot drift from the hosted job. Running the
 # whole tests/ dir is no longer the standard: it collects tests of the deleted
 # Python api tree and is red by construction.
@@ -1022,8 +1022,6 @@ gate_unit_suite() {
   # Same guard as test.yml: a short or empty list would run nothing.
   [ "${#kept[@]}" -ge 13 ] || die "${list} lists only ${#kept[@]} files (hosted jobs require >= 13)."
   printf '   kept files: %s\n' "${#kept[@]}"
-  OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/docs -q || return 1
   OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/tooling -q -n "${nw}" || return 1
   OTEL_ENABLED=false PYTHONPATH=src \

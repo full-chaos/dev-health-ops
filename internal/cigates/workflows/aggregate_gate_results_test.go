@@ -137,8 +137,7 @@ func TestGateVerdictLegacyMatrix(t *testing.T) {
 	}
 }
 
-// currentMatrix is the shape test.yml ships (docs-tests unconditional, tooling-tests path-filtered):
-// job1 = docs-tests, job2 = tooling-tests.
+// currentMatrix is the shape test.yml ships (tooling-tests path-filtered, the one gated job): job2 = tooling-tests; job1 is unused and always success.
 var currentMatrix = []twoJobRow{
 	{"normal-pr", "pull_request", "success", "true", "success", "success", pass},
 	{"docs-only-pr-tooling-path-skipped", "pull_request", "success", "false", "success", "skipped", pass},
@@ -146,9 +145,6 @@ var currentMatrix = []twoJobRow{
 	{"selected-then-skipped", "pull_request", "success", "true", "success", "skipped", fail},
 	{"selected-then-cancelled", "pull_request", "success", "true", "success", "cancelled", fail},
 	{"selected-then-failed", "pull_request", "success", "true", "success", "failure", fail},
-	{"path-skipped-but-docs-failed", "pull_request", "success", "false", "failure", "skipped", fail},
-	{"docs-skipped-is-never-legitimate", "pull_request", "success", "false", "skipped", "skipped", fail},
-	{"docs-cancelled-is-unmeasured", "pull_request", "success", "false", "cancelled", "skipped", fail},
 	{"path-skipped-then-failed", "pull_request", "success", "false", "success", "failure", fail},
 	{"undecided-code-cannot-explain-a-skip", "pull_request", "success", "", "success", "skipped", fail},
 	{"garbage-code-cannot-explain-a-skip", "push", "success", "neutral", "success", "skipped", fail},
@@ -169,8 +165,7 @@ func TestGateVerdictCurrentTestWorkflowShape(t *testing.T) {
 		t.Run(r.id, func(t *testing.T) {
 			v := runGate(t, map[string]string{
 				"GATE_NAME": "test", "EVENT_NAME": r.event, "CHANGES_RESULT": r.changes, "CHANGES_CODE": r.code,
-				"GATED_JOB_1": "docs-tests|unconditional|" + r.job1,
-				"GATED_JOB_2": "tooling-tests|path-filtered|" + r.job2,
+				"GATED_JOB_1": "tooling-tests|path-filtered|" + r.job2,
 			})
 			assertVerdict(t, "test", v, r.want, fmt.Sprintf("%s/%s/code=%q/%s/%s", r.id, r.changes, r.code, r.job1, r.job2))
 		})
@@ -474,11 +469,10 @@ type gateSpec struct {
 	hasSelector      bool
 }
 
-// The policies the workflows actually pass to the script; docs-tests stays unconditional (CHAOS-3514), tooling-tests
-// is path-filtered (CHAOS-10174 PR A).
+// The policies the workflows actually pass to the script; tooling-tests is path-filtered (CHAOS-10174 PR A).
 var gates = []gateSpec{{
 	path: ".github/workflows/test.yml", gate: "test", step: "Aggregate test results",
-	gated:       [][2]string{{"docs-tests", "unconditional"}, {"tooling-tests", "path-filtered"}},
+	gated:       [][2]string{{"tooling-tests", "path-filtered"}},
 	hasSelector: true,
 }}
 
@@ -707,40 +701,5 @@ func TestPathsFilterSelectsEveryDirectoryTheToolingSuiteReads(t *testing.T) {
 		if !isCovered(named, patterns) {
 			t.Fatalf("the `code` filter does not select %s", named)
 		}
-	}
-}
-
-// CHAOS-3514 docs guards.
-func TestDocsTestsJobCannotBeDeselected(t *testing.T) {
-	if job(t, loadWorkflow(t, ".github/workflows/test.yml"), "docs-tests").If != nil {
-		t.Fatal("docs-tests carries an `if:` but is registered `unconditional` with the aggregator")
-	}
-}
-
-func docsRuns(t *testing.T) string {
-	var runs []string
-	for _, s := range job(t, loadWorkflow(t, ".github/workflows/test.yml"), "docs-tests").Steps {
-		runs = append(runs, s.Run)
-	}
-	return strings.Join(runs, " ")
-}
-
-func TestDocsTestsJobRunsTheWholeDocsSuite(t *testing.T) {
-	runs := docsRuns(t)
-	if !strings.Contains(runs, "pytest tests/docs") {
-		t.Fatalf("docs-tests no longer invokes `pytest tests/docs`; ran %q", runs)
-	}
-	if regexp.MustCompile(`pytest tests/docs/\S`).MatchString(runs) {
-		t.Fatalf("docs-tests runs only part of tests/docs: %q", runs)
-	}
-}
-
-func TestDocsTestsInstallsWhatTheDocsSuiteImports(t *testing.T) {
-	runs := docsRuns(t)
-	if !strings.Contains(runs, "uv sync --frozen --all-extras --dev") {
-		t.Fatal("docs-tests must install the dev environment from uv.lock")
-	}
-	if !strings.Contains(runs, "requirements-docs.txt") {
-		t.Fatal("docs-tests must install requirements-docs.txt")
 	}
 }

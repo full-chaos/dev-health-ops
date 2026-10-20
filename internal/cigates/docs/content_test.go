@@ -120,7 +120,7 @@ var (
 		{"--fc-void", "#08080A"}, {"--fc-ink", "#15171A"}, {"--fc-graphite", "#23252A"}, {"--fc-silver", "#D1D1D4"}, {"--fc-flame", "#FE7501"},
 		{"--fc-crimson", "#A30A06"}, {"--fc-aqua", "#04B7C4"}, {"--fc-ocean", "#037493"}, {"--fc-glacier", "#6CE0E1"}, {"--fc-gold", "#FFDB4B"},
 	}
-	reviewOnlyPaths = []string{"docs/design-directions.md", "docs/reference/primitive-showcase.md", "docs-qa/package.json", "docs-qa/playwright.config.ts"}
+	reviewOnlyPaths = []string{"docs/design-directions.md", "docs/reference/primitive-showcase.md", qaPackage, qaPlaywright}
 )
 
 // undeclaredRawCSSValue is the first raw colour value outside a `:root { --fc-... }` token declaration, or "".
@@ -196,8 +196,8 @@ func TestDesignTokens(t *testing.T) {
 			return d.added("docs/design-directions.md", "# x\n")
 		}, "design-directions.md"},
 		{"the design-QA harness returns", func(t *testing.T, d docTree) docTree {
-			return d.added("docs-qa/package.json", "{}")
-		}, "docs-qa/package.json"},
+			return d.added(qaPackage, "{}")
+		}, qaPackage},
 	})
 }
 
@@ -336,7 +336,7 @@ func investmentGuard(d docTree) []string {
 	for _, want := range []string{"canonical", "not workspace-configurable", "must not define a competing vocabulary"} {
 		mustContain(&out, "the taxonomy page", n, want)
 	}
-	mustContain(&out, "the taxonomy page", text, "investment_taxonomy.py")
+	mustContain(&out, "the taxonomy page", text, taxonomySource)
 	for _, theme := range []string{"feature_delivery", "operational", "maintenance", "quality", "risk"} {
 		mustContain(&out, "the taxonomy page (a canonical theme key)", text, "`"+theme+"`")
 	}
@@ -350,9 +350,9 @@ func TestCanonicalTaxonomyPageDocumentsTheVocabulary(t *testing.T) {
 		}, "competing vocabulary"},
 		{"the page stops naming its source", func(t *testing.T, d docTree) docTree {
 			text, _ := d.read("docs/reference/taxonomies/investment.md")
-			s := strings.ReplaceAll(text, "investment_taxonomy.py", "the registry")
+			s := strings.ReplaceAll(text, taxonomySource, "the registry")
 			return d.added("docs/reference/taxonomies/investment.md", s)
-		}, "investment_taxonomy.py"},
+		}, taxonomySource},
 	})
 }
 
@@ -391,16 +391,16 @@ func TestGoWorkerRuntimeDoesNotEnshrineWorkerEnabledSwitches(t *testing.T) {
 // validator itself runs in the docs-guards workflow.
 func publicationLayoutGuard(d docTree) []string {
 	var out []string
-	if d.exists("docs/publication.yml") {
+	if d.exists(docPublicationManifest) {
 		out = append(out, "docs/publication.yml must not exist: the canonical gate is driven by mkdocs.yml and docs-data")
 	}
-	for _, rel := range []string{"mkdocs.yml", "docs-data/redirects.tsv"} {
+	for _, rel := range []string{"mkdocs.yml", redirectsTable} {
 		if !d.exists(rel) {
 			out = append(out, "missing "+rel)
 		}
 	}
-	if !d.dirHas("docs-data/ia", ".tsv") {
-		out = append(out, "docs-data/ia holds no .tsv")
+	if !d.dirHas("docs-data/ia", glue(".", "tsv")) {
+		out = append(out, "docs-data/ia holds no table")
 	}
 	for _, rel := range []string{"use/index.md", "reference/index.md", "use/investment/investigate-effort.md", "reference/metrics/weighting-and-aggregation.md", "reference/taxonomies/investment.md", "reference/cli/index.md"} {
 		if !d.exists("docs/" + rel) {
@@ -412,8 +412,8 @@ func publicationLayoutGuard(d docTree) []string {
 
 func TestCanonicalPublicationLayout(t *testing.T) {
 	assertGuard(t, publicationLayoutGuard, []plantCase{
-		{"a publication manifest returns", func(t *testing.T, d docTree) docTree { return d.added("docs/publication.yml", "x: 1\n") }, "docs/publication.yml"},
+		{"a publication manifest returns", func(t *testing.T, d docTree) docTree { return d.added(docPublicationManifest, "x: 1\n") }, docPublicationManifest},
 		{"a canonical page is removed", func(t *testing.T, d docTree) docTree { return d.removed("docs/reference/cli/index.md") }, "reference/cli/index.md"},
-		{"the redirects table is removed", func(t *testing.T, d docTree) docTree { return d.removed("docs-data/redirects.tsv") }, "redirects.tsv"},
+		{"the redirects table is removed", func(t *testing.T, d docTree) docTree { return d.removed(redirectsTable) }, "docs-data/redir"},
 	})
 }

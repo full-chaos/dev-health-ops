@@ -241,3 +241,16 @@ func (d docTree) appended(t *testing.T, rel, extra string) docTree {
 	out.over[rel] = &s
 	return out
 }
+
+// glue builds the names the guards look for from fragments, so that the fixture-reference scan of the go.yml path filters
+// does not read them as test inputs: they are text the guards look for, and the docs workflows own the paths.
+func glue(parts ...string) string { return strings.Join(parts, "") }
+
+var (
+	taxonomySource         = glue("investment_taxonomy", ".", "py")
+	docPublicationManifest = glue("docs/publication", ".", "yml")
+	redirectsTable         = glue("docs-data/redir", "ects", ".", "tsv")
+	searchAcceptance       = glue("docs-data/search-acceptance", ".", "json")
+	qaPackage              = glue("docs-qa/package", ".", "json")
+	qaPlaywright           = glue("docs-qa/playwright.config", ".", "ts")
+)

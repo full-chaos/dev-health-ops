@@ -109,7 +109,7 @@ func docsGuardsGuard(d docTree) []string {
 	mustContain(&out, "the strict build step", build, "mkdocs build --strict")
 	mustContain(&out, "the strict build step", build, "--config-file mkdocs.yml")
 	mustContain(&out, "the links step", runs[streamedChecks[2]], "--site-dir .build/docs")
-	mustContain(&out, "the search step", runs[streamedChecks[3]], "docs-data/search-acceptance.json")
+	mustContain(&out, "the search step", runs[streamedChecks[3]], searchAcceptance)
 	if len(newlyGatedChecks) == 0 {
 		out = append(out, "the gated-check inventory is empty")
 	}

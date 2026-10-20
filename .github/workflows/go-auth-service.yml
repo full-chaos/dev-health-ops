@@ -112,6 +112,8 @@ jobs:
         run: bash ci/check_go.sh auth test
       - name: go test -race (auth packages)
         run: bash ci/check_go.sh auth race
+      - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207)
+        run: bash ci/check_go.sh auth race-integration
       - name: Dependency closure of the auth binaries (CHAOS-10131)
         run: bash ci/check_go.sh auth closure
       - name: Endpoint-profile source_commit resolves and anchors read the same there (CHAOS-4765)
@@ -137,6 +139,8 @@ jobs:
           - FuzzParseForwardedTrust
           - FuzzParseEd25519Key
           - FuzzConfigLoad
+          - FuzzNormalizeEmail
+          - FuzzExternalKeyValidate
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

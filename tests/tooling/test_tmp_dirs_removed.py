@@ -5,8 +5,10 @@ Go build cache under the system temp directory grew by ~850 MB per host. The che
 the two ways a test makes such a directory:
 
 * a Python test module that calls ``mkdtemp`` or ``tempfile.gettempdir()`` must also remove what it made
-  (a real ``rmtree``, ``atexit.register`` or finalizer call, found in the syntax tree);
-* a Go ``_test.go`` file that calls ``os.MkdirTemp`` must also call ``os.RemoveAll`` in code (a comment or a string that names it does not count).
+  (a real ``rmtree``, ``atexit.register`` or finalizer call, found in the syntax tree).
+
+The Go half (a ``_test.go`` file that calls ``os.MkdirTemp`` must also call ``os.RemoveAll`` in code) moved to
+internal/cigates/tmp_dirs_removed_test.go (CHAOS-10178). This Python half stays until the pytest steps go (CHAOS-10180).
 
 Python programs that a Go test embeds as text (frozen oracles) are outside this check: they run only when a
 golden is recorded.
@@ -21,7 +23,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SELF = Path(__file__).resolve()
-GO_SKIP_DIRS = {"web", "node_modules", ".git", ".venv", "vendor"}
 CLEANUP_CALLS = {"rmtree", "addfinalizer"}
 
 
@@ -82,31 +83,6 @@ def _py_removes(source: str) -> bool:
     return False
 
 
-def go_code(source: str) -> str:
-    """The Go source with comments and the inside of string, raw-string and rune literals blanked."""
-    out, i, n = [], 0, len(source)
-    while i < n:
-        two = source[i : i + 2]
-        ch = source[i]
-        if two == "//":
-            while i < n and source[i] != "\n":
-                i += 1
-        elif two == "/*":
-            end = source.find("*/", i + 2)
-            i = n if end < 0 else end + 2
-        elif ch in "\"'`":
-            out.append(ch)
-            i += 1
-            while i < n and source[i] != ch:
-                i += 2 if source[i] == "\\" and ch != "`" else 1
-            out.append(ch)
-            i += 1
-        else:
-            out.append(ch)
-            i += 1
-    return "".join(out)
-
-
 def python_offenders(root: Path) -> list[str]:
     out = []
     for path in sorted((root / "tests").rglob("*.py")):
@@ -118,30 +94,13 @@ def python_offenders(root: Path) -> list[str]:
     return out
 
 
-def go_offenders(root: Path) -> list[str]:
-    out = []
-    for path in sorted(root.rglob("*_test.go")):
-        rel = path.relative_to(root)
-        if rel.parts[0] in GO_SKIP_DIRS:
-            continue
-        code = go_code(path.read_text(encoding="utf-8"))
-        if "os.MkdirTemp(" in code and "os.RemoveAll(" not in code:
-            out.append(str(rel))
-    return out
-
-
 def test_python_tests_remove_the_temp_dirs_they_make():
     assert python_offenders(ROOT) == []
-
-
-def test_go_tests_remove_the_temp_dirs_they_make():
-    assert go_offenders(ROOT) == []
 
 
 def test_the_check_reads_something():
     # A scan that matched no file would pass for any tree.
     assert any((ROOT / "tests").rglob("*.py"))
-    assert any(ROOT.rglob("*_test.go"))
     assert _py_makes_temp_dir("import tempfile\ntempfile.mkdtemp()\n")
 
 
@@ -162,20 +121,6 @@ def test_python_check_flags_a_leak_and_accepts_a_cleanup(tmp_path, body):
         encoding="utf-8",
     )
     assert python_offenders(tmp_path) == []
-
-
-def test_go_check_flags_a_leak_and_accepts_a_cleanup(tmp_path):
-    source = tmp_path / "pkg" / "leak_test.go"
-    source.parent.mkdir()
-    source.write_text(
-        'package pkg\nvar _, _ = os.MkdirTemp("", "x-")\n', encoding="utf-8"
-    )
-    assert go_offenders(tmp_path) == ["pkg/leak_test.go"]
-    source.write_text(
-        'package pkg\nvar d, _ = os.MkdirTemp("", "x-")\nfunc f() { os.RemoveAll(d) }\n',
-        encoding="utf-8",
-    )
-    assert go_offenders(tmp_path) == []
 
 
 @pytest.mark.parametrize(
@@ -205,21 +150,3 @@ def test_python_check_accepts_a_real_cleanup_and_a_read_of_the_temp_dir(tmp_path
         "import tempfile\nprint(tempfile.gettempdir())\n", encoding="utf-8"
     )
     assert python_offenders(tmp_path) == []
-
-
-@pytest.mark.parametrize(
-    "tail",
-    [
-        "// os.RemoveAll(d)\n",
-        "/* os.RemoveAll(d) */\n",
-        'var note = "os.RemoveAll("\n',
-        "var note = `os.RemoveAll(`\n",
-    ],
-)
-def test_go_check_is_not_fooled_by_a_comment_or_a_string(tmp_path, tail):
-    source = tmp_path / "pkg" / "leak_test.go"
-    source.parent.mkdir()
-    source.write_text(
-        'package pkg\nvar d, _ = os.MkdirTemp("", "x-")\n' + tail, encoding="utf-8"
-    )
-    assert go_offenders(tmp_path) == ["pkg/leak_test.go"]

@@ -265,3 +265,64 @@ func TestTheRowSchemaClosesTheSelectorKindAndShape(t *testing.T) {
 		}
 	}
 }
+
+func TestTheRowSchemaRequiresASelectorOnARowThatAcceptsTwoClasses(t *testing.T) {
+	resolved, _ := resolveEndpointProfileSchema(t)
+	document := loadQueryAPIDocument(t)
+	var target map[string]any
+	for _, item := range document["rows"].([]any) {
+		if row := item.(map[string]any); row["class_disambiguator"] != nil {
+			target = row
+			break
+		}
+	}
+	if target == nil {
+		t.Fatal("no multi-class row to mutate")
+	}
+	if err := resolved.Validate(document); err != nil {
+		t.Fatalf("control: the unmutated document must validate: %v", err)
+	}
+	delete(target, "class_disambiguator")
+	if err := resolved.Validate(document); err == nil {
+		t.Errorf("the row schema accepted row %v with two classes and no class_disambiguator", target["id"])
+	}
+}
+
+func TestTheRowSchemaStillAcceptsASingleClassRowWithoutASelector(t *testing.T) {
+	resolved, _ := resolveEndpointProfileSchema(t)
+	document := loadQueryAPIDocument(t)
+	for _, item := range document["rows"].([]any) {
+		if row := item.(map[string]any); row["class_disambiguator"] == nil {
+			if classes, _ := row["accepted_credential_classes"].([]any); len(classes) == 1 {
+				if err := resolved.Validate(document); err != nil {
+					t.Fatalf("a single-class row without a selector must validate: %v", err)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("no single-class row found")
+}
+
+func TestTheRowSchemaRejectsARowWithoutAcceptedCredentialClasses(t *testing.T) {
+	resolved, _ := resolveEndpointProfileSchema(t)
+	document := loadQueryAPIDocument(t)
+	if err := resolved.Validate(document); err != nil {
+		t.Fatalf("control: the unmutated document must validate: %v", err)
+	}
+	for _, withSelector := range []bool{true, false} {
+		document := loadQueryAPIDocument(t)
+		for _, item := range document["rows"].([]any) {
+			row := item.(map[string]any)
+			if (row["class_disambiguator"] != nil) != withSelector {
+				continue
+			}
+			delete(row, "accepted_credential_classes")
+			delete(row, "class_disambiguator")
+			if err := resolved.Validate(document); err == nil {
+				t.Errorf("the row schema accepted row %v with no accepted_credential_classes (selector row: %v)", row["id"], withSelector)
+			}
+			break
+		}
+	}
+}

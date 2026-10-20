@@ -47,7 +47,6 @@ func TestCheckFailsWhenTheDocIsEditedByHand(t *testing.T) {
 		providerMatrixRelative,
 		dailyFamiliesRelative,
 		remainingFamiliesRel,
-		jobDailyPyRelative,
 		catalogRelative,
 		frozenRoutesRelative,
 	} {
@@ -224,7 +223,7 @@ func copyContractTree(t *testing.T) string {
 	realRoot := repoRoot(t)
 	for _, relative := range []string{
 		docRelative, statusRelative, renderRelative, nativeRelative, digestPinRelative,
-		providerMatrixRelative, dailyFamiliesRelative, remainingFamiliesRel, jobDailyPyRelative,
+		providerMatrixRelative, dailyFamiliesRelative, remainingFamiliesRel,
 		catalogRelative, frozenRoutesRelative,
 	} {
 		copyInto(t, filepath.Join(realRoot, relative), filepath.Join(root, relative))

@@ -121,7 +121,8 @@ var attributeVocabulary = map[string][]string{
 		"role_granted", "role_revoked", "membership_added", "membership_removed", "membership_status_changed",
 		"grant_created", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
 		"session_revoked", "organization_created", "organization_updated", "principal_disabled",
-		"principal_enabled", "identity_linked", "identity_unlinked", "policy_revision_activated",
+		"principal_enabled", "principal_projected", "principal_provisioned", "email_verified", "password_changed",
+		"identity_linked", "identity_unlinked", "identity_projected", "policy_revision_activated",
 		"entitlement_snapshot_applied", "denied_no_membership", "denied_no_grant", "denied_policy",
 	},
 	"target_kind": {
@@ -135,7 +136,7 @@ var attributeVocabulary = map[string][]string{
 	"client_service":   {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
 	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key"},
 	"changed_fields": {
-		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email_verified_at",
+		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
 		"scopes", "audiences", "organization_id",
 	},
 }

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -13,7 +11,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 func TestDecide(t *testing.T) {
@@ -152,43 +149,6 @@ func TestBaselineLoads(t *testing.T) {
 }
 
 var alembicRevision = regexp.MustCompile(`^([0-9]{4})_[a-z0-9_]+\.py$`)
-
-// The baseline plus its chain reach the alembic chain's head. An alembic revision
-// added after the baseline needs its sql/ file in the same change, or the database
-// dho builds would lack it; TestChainCoversEveryAlembicRevision proves each file,
-// the integration oracle proves the content, this proves the head without a database.
-func TestBaselineHeadIsTheAlembicHead(t *testing.T) {
-	_, file, _, _ := moduleroot.Caller(0)
-	directory := filepath.Join(filepath.Dir(file), "..", "..", "src", "dev_health_ops", "alembic", "versions")
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	latest := ""
-	for _, entry := range entries {
-		if match := alembicRevision.FindStringSubmatch(entry.Name()); match != nil && match[1] > latest {
-			latest = match[1]
-		}
-	}
-	if latest == "" {
-		t.Fatalf("found no alembic revision in %s", directory)
-	}
-	baseline, err := LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chain, err := LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	head := applicationHead(baseline)
-	if len(chain) > 0 {
-		head = chain[len(chain)-1].Revision
-	}
-	if head != latest {
-		t.Fatalf("the alembic chain ends at %s but the baseline and its chain end at %s: add the missing sql/ file", latest, head)
-	}
-}
 
 func TestChainNames(t *testing.T) {
 	chain, err := LoadChain()

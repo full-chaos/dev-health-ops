@@ -508,9 +508,8 @@ here instead of at each call site:
      as "the chart's configured operator repository". TRIED it (every OTHER
      hook already falls back to that value when unset, so it is the only
      candidate) and it FAILED two EXISTING tests:
-     test_provisioning_image_prefers_its_own_then_the_river_then_the_route_image
-     and test_river_migrate_takes_its_own_pinned_image
-     (test_helm_migration_hook_chain.py) both pin a hook's OWN image WINNING
+     chainProvisioningImagePreference and chainRiverTakesItsOwnPinnedImage
+     (internal/cigates/chartgates/operator_images_test.go) both pin a hook's OWN image WINNING
      over routeActivate's, from a DIFFERENT repository
      (dev-health-go-dho vs. dev-health-go-operator) -- by design: each hook is
      independently pinned to whatever commit THAT step needs, never required
@@ -530,8 +529,8 @@ here instead of at each call site:
      both still pass under a name-only check.
 
      A positive name allowlist WOULD, however, regress
-     test_route_activate_operator_image_override_is_honoured
-     (test_helm_route_activate_hooks.py), which pins a CUSTOM name
+     routeOperatorImageOverrideHonoured
+     (internal/cigates/chartgates/route_pgbouncer_test.go), which pins a CUSTOM name
      (ghcr.io/example/custom-operator) and expects it to render. D2693's own
      ruling on exactly this shape of test: "if it pins an arbitrary NAME as
      'the operator' and expects that to pass, it asserts a contract the chart
@@ -652,4 +651,13 @@ serve it).
 {{- fail (printf "goWorkers.operationalOrderingContract=%q: only contract 2 is supported (contract 1 is unsupported, CHAOS-7421); leave it unset or set it to 2" $value) -}}
 {{- end -}}
 {{- $value -}}
+{{- end -}}
+
+{{/*
+CHAOS-10231: "true" when go-api is enabled and any goApi.authProxy flag is on
+(go-api then forwards those /api/v1/auth/* routes to auth-service), else "".
+*/}}
+{{- define "dev-health.authProxyOn" -}}
+{{- $p := .Values.goApi.authProxy -}}
+{{- if and .Values.goApi.enabled (or $p.sessions $p.localLogin $p.credentials $p.social $p.oidc $p.saml) -}}true{{- end -}}
 {{- end -}}

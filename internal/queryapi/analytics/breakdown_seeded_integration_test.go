@@ -24,7 +24,7 @@
 // this ticket's single claim), measure=COUNT (SUM(work_items_completed)).
 //
 // SCHEMA: work_item_completion_daily, the exact production DDL from
-// src/dev_health_ops/migrations/clickhouse/119_work_item_completion_daily.sql -- the only table
+// internal/chmigrate/sql/119_work_item_completion_daily.sql -- the only table
 // CompileBreakdown's non-investment/default-measure path reads
 // (nonInvestmentSourceAndDateFilter falls through to
 // workItemCompletionDedupSource for MeasureCount, whose

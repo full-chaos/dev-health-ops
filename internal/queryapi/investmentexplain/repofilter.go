@@ -16,7 +16,7 @@ import (
 // different call site -- do not conflate the two or "simplify" one into
 // the other). Not found is (\"\", false, nil), never an error.
 //
-// repos is ReplacingMergeTree(last_synced) (migrations/clickhouse/
+// repos is ReplacingMergeTree(last_synced) (internal/chmigrate/history/
 // 000_raw_tables.sql, org_id added by 024, sorting key (org_id, id) since
 // 027) -- both branches read FINAL so a rename/resync in flight resolves
 // to the current row, not a stale un-merged copy, with org_id filtered in

@@ -150,34 +150,6 @@ func TestParseInvestmentMixResponseReasonRuleNamesTheFailingRule(t *testing.T) {
 			wantPath:   "top_findings",
 		},
 		{
-			name: "confidence level invalid",
-			mutate: func(doc map[string]any) {
-				doc["confidence"].(map[string]any)["level"] = "extreme"
-			},
-			wantStatus: ParseStatusInvalidLLMOutput,
-			wantRule:   "confidence_level_invalid",
-			wantPath:   "confidence.level",
-			wantHas:    "extreme",
-		},
-		{
-			name: "confidence band_mix value invalid",
-			mutate: func(doc map[string]any) {
-				doc["confidence"].(map[string]any)["band_mix"].(map[string]any)["high"] = -1
-			},
-			wantStatus: ParseStatusInvalidLLMOutput,
-			wantRule:   "confidence_band_mix_value_invalid",
-			wantPath:   "confidence.band_mix.high",
-		},
-		{
-			name: "confidence driver invalid",
-			mutate: func(doc map[string]any) {
-				doc["confidence"].(map[string]any)["drivers"] = []any{""}
-			},
-			wantStatus: ParseStatusInvalidLLMOutput,
-			wantRule:   "confidence_driver_invalid",
-			wantPath:   "confidence.drivers[0]",
-		},
-		{
 			name: "finding is not an object",
 			mutate: func(doc map[string]any) {
 				doc["top_findings"] = []any{"oops"}

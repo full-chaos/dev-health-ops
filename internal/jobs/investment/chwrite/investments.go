@@ -328,7 +328,15 @@ type TokenUsageRecord struct {
 	OutputTokens int
 	Calls        int
 	ComputedAt   time.Time
+	// CredentialSource is CredentialSourceOrg or CredentialSourcePlatform; empty
+	// is platform.
+	CredentialSource string
 }
+
+const (
+	CredentialSourceOrg      = "org"
+	CredentialSourcePlatform = "platform"
+)
 
 // TokenUsageSourceInvestmentMaterialize is the `source` label
 // materialize.py:1509 writes. It is a stored discriminator other consumers
@@ -385,8 +393,13 @@ func (w *Writer) WriteTokenUsage(ctx context.Context, orgID string, record Token
 		useCase = tokenUsageUseCaseLegacy
 	}
 
+	credentialSource := record.CredentialSource
+	if credentialSource == "" {
+		credentialSource = CredentialSourcePlatform
+	}
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO llm_token_usage (
-		org_id, run_id, provider, model, source, use_case, input_tokens, output_tokens, calls, computed_at
+		org_id, run_id, provider, model, source, use_case, input_tokens, output_tokens, calls, computed_at,
+		credential_source
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare llm_token_usage batch: %w", err)
@@ -394,7 +407,7 @@ func (w *Writer) WriteTokenUsage(ctx context.Context, orgID string, record Token
 	if err := batch.Append(
 		orgID, record.RunID, provider, model, record.Source, useCase,
 		uint64(inputTokens), uint64(outputTokens), uint64(maxInt(0, calls)),
-		record.ComputedAt.UTC(),
+		record.ComputedAt.UTC(), credentialSource,
 	); err != nil {
 		return 0, fmt.Errorf("append llm_token_usage row: %w", err)
 	}

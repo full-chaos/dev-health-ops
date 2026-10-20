@@ -57,6 +57,24 @@ goApi:
   #    api's CORS_ALLOWED_ORIGINS. Empty keeps the binary's default
   #    (http://localhost:3000, the Python api's own default).
   corsAllowedOrigins: ""
+  # -- The /api/v1/auth/* proxy to auth-service (CHAOS-10231), one flag per
+  #    aggregate. Every flag is off: go-api serves the route itself, as before.
+  #    A flag on forwards that aggregate to this release's auth-service
+  #    (AUTH_PROXY_URL is rendered from authService.port), behind go-api's own
+  #    guard and rate limits; an unreachable auth-service is a 503/504, never a
+  #    go-api answer. A flag needs authService.enabled, and every flag other
+  #    than sessions needs sessions. Do not switch login before social login
+  #    works through auth-service in production (CHAOS-3275). Set AUTH_PROXY_*
+  #    only here: a flag set through goApi.envFrom bypasses these checks and
+  #    the auth-service NetworkPolicy rule (go-api still refuses an unsafe
+  #    combination at start-up and logs its routing as "auth proxy routing").
+  authProxy:
+    sessions: false
+    localLogin: false
+    credentials: false
+    social: false
+    oidc: false
+    saml: false
   # -- Extra flags appended after the rendered ones (for example
   #    --log-level=debug). Credentials never go here: an argument is visible
   #    to anyone who can read the Pod spec.

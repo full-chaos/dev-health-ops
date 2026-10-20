@@ -20,9 +20,18 @@ on:
       - 'uv.lock'
       - 'contracts/jobs/v1/**'
       - 'deploy/go-workers/**'
+      # internal/cigates/chartgates reads these: alert rules, the Grafana dashboard, the deploy tree
+      # (no alternate may return), the Go worker Dockerfile, the env example and the bootstrap runbook.
+      - 'alerts/**'
+      - 'deploy/**'
+      - 'docker/go-worker.Dockerfile'
+      - '.env.example'
+      - 'docs/operate/runbooks/query-api-bootstrap.md'
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'
+      # the image publishing guard (internal/cigates, CHAOS-10177) scans every renderer YAML under deploy/ for the Go images it names
+      - 'deploy/go-api/**'
       # The migrate service's Go pins (internal/rivermigrate/deploy_wiring_test.go) read the
       # compose manifest that runs `dho migrate upgrade`.
       - 'compose.yml'
@@ -78,7 +87,7 @@ on:
       # directly as real-repo ComplexityScanner.should_process examples,
       # so a change to either is a genuine Go-test input even though
       # neither lives under any of the subdirectory globs above
-      # (test_go_workflow_path_filters.py's _files_named_by_go_tests
+      # (internal/cigates/workflows_path_filters_test.go's resolveNamedFiles
       # oracle: a file is a Go input because Go code NAMES it).
       - 'src/dev_health_ops/__init__.py'
       # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/cli.py (deleted); the
@@ -95,7 +104,7 @@ on:
       # upgrade; internal/joboperator's tests also read the worker_operator_audits revisions.
       # Revisions 0139 to 0141 were Python-only PRs that this list did not match, so the Go
       # integration shards never ran on them and rev 186's migrate hook failed (CHAOS-6801).
-      # tests/tooling/test_go_workflow_path_filters.py asserts every Alembic file matches.
+      # internal/cigates/workflows_path_filters_test.go asserts every Alembic file matches.
       - 'src/dev_health_ops/alembic/**'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
@@ -209,6 +218,19 @@ on:
       - '.github/workflows/test.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
+      # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
+      # run reader and the venue workflow whose step names that reader filters on
+      - 'ci/go_relevant_diff.sh'
+      - 'ci/go_affected_integration.py'
+      - 'ci/last-venue-run.sh'
+      - '.github/workflows/venue-oracles.yml'
+      # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
+      # and the auth closure allow-list
+      - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
+      - 'ci/builder_images.sh'
+      - 'ci/builder_images.tsv'
+      - 'ci/auth_closure_allow.tsv'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence
@@ -233,9 +255,18 @@ on:
       - 'uv.lock'
       - 'contracts/jobs/v1/**'
       - 'deploy/go-workers/**'
+      # internal/cigates/chartgates reads these: alert rules, the Grafana dashboard, the deploy tree
+      # (no alternate may return), the Go worker Dockerfile, the env example and the bootstrap runbook.
+      - 'alerts/**'
+      - 'deploy/**'
+      - 'docker/go-worker.Dockerfile'
+      - '.env.example'
+      - 'docs/operate/runbooks/query-api-bootstrap.md'
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'
+      # the image publishing guard (internal/cigates, CHAOS-10177) scans every renderer YAML under deploy/ for the Go images it names
+      - 'deploy/go-api/**'
       # The migrate service's Go pins (internal/rivermigrate/deploy_wiring_test.go) read the
       # compose manifest that runs `dho migrate upgrade`.
       - 'compose.yml'
@@ -291,7 +322,7 @@ on:
       # directly as real-repo ComplexityScanner.should_process examples,
       # so a change to either is a genuine Go-test input even though
       # neither lives under any of the subdirectory globs above
-      # (test_go_workflow_path_filters.py's _files_named_by_go_tests
+      # (internal/cigates/workflows_path_filters_test.go's resolveNamedFiles
       # oracle: a file is a Go input because Go code NAMES it).
       - 'src/dev_health_ops/__init__.py'
       # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/cli.py (deleted); the
@@ -308,7 +339,7 @@ on:
       # upgrade; internal/joboperator's tests also read the worker_operator_audits revisions.
       # Revisions 0139 to 0141 were Python-only PRs that this list did not match, so the Go
       # integration shards never ran on them and rev 186's migrate hook failed (CHAOS-6801).
-      # tests/tooling/test_go_workflow_path_filters.py asserts every Alembic file matches.
+      # internal/cigates/workflows_path_filters_test.go asserts every Alembic file matches.
       - 'src/dev_health_ops/alembic/**'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
@@ -422,6 +453,19 @@ on:
       - '.github/workflows/test.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
+      # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
+      # run reader and the venue workflow whose step names that reader filters on
+      - 'ci/go_relevant_diff.sh'
+      - 'ci/go_affected_integration.py'
+      - 'ci/last-venue-run.sh'
+      - '.github/workflows/venue-oracles.yml'
+      # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
+      # and the auth closure allow-list
+      - '.github/workflows/*.yml'
+      - '.github/workflows/*.yaml'
+      - 'ci/builder_images.sh'
+      - 'ci/builder_images.tsv'
+      - 'ci/auth_closure_allow.tsv'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence

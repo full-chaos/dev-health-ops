@@ -64,7 +64,10 @@ func target(raw string) (string, int) {
 		if err != nil || n < 0 || n > 65535 {
 			raise("ValueError: Port out of range 0-65535")
 		}
-		port = n
+		// Python read the port as `parts.port or 80`: an explicit :0 is port 80 too.
+		if n != 0 {
+			port = n
+		}
 	}
 	return host, port
 }

@@ -1,6 +1,7 @@
 package routing_test
 
 import (
+	"bytes"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -378,5 +379,30 @@ func TestQueryAPIFlagsWriteATimestampKeyAsPythonDid(t *testing.T) {
 	// 2002-1-1 has no time part, so PyYAML's resolver leaves it a string; the full timestamp is a datetime.
 	if want := "      GO_API_A_ENABLED: \"true\"\n      T: ${2002-1-1}\n      U: ${2001-12-14 21:59:43.100000-05:00}\n"; string(text) != want {
 		t.Fatalf("rendered:\n%s\nwant:\n%s", text, want)
+	}
+}
+
+type portProber struct{ ports []int }
+
+func (p *portProber) Probe(_ string, port int, _, _ string) (int, error) {
+	p.ports = append(p.ports, port)
+	return 405, nil
+}
+
+// The plane port is read as Python read it, `parts.port or 80`: no port and an explicit :0 both probe port 80.
+func TestCoverageProbesThePortPythonDid(t *testing.T) {
+	values := coverageValues(t)
+	for url, want := range map[string]int{"http://127.0.0.1:0": 80, "http://localhost": 80, "http://127.0.0.1:8093": 8093, "http://LOCALHOST:00": 80} {
+		p := &portProber{}
+		var so, se bytes.Buffer
+		code := routing.RunRouteCoverage([]string{values, "--go-api-url", url, "--query-api-url", url}, routing.Deps{Prober: p, Files: routing.OSFiles{}}, &so, &se)
+		if code != 0 || len(p.ports) == 0 {
+			t.Fatalf("%s: exit %d, %d probes: %s", url, code, len(p.ports), se.String())
+		}
+		for _, got := range p.ports {
+			if got != want {
+				t.Fatalf("%s probed port %d, want %d (Python: parts.port or 80)", url, got, want)
+			}
+		}
 	}
 }

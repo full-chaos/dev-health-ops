@@ -26,7 +26,7 @@ func TestInvestmentExplainStoreFailureKeepsDriverTextOutOfTheBody(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil)
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 	body := strings.NewReader(`{"filters":{"what":{"repos":["some-repo"]}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain", body)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
@@ -52,7 +52,7 @@ func TestInvestmentExplainStoreFailureLogsAtErrorLevelAndEchoesTheRequestID(t *t
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil)
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain",
 		strings.NewReader(`{"filters":{"what":{"repos":["some-repo"]}}}`))
 	req.Header.Set("X-Request-Id", "review-request-1")
@@ -89,7 +89,7 @@ func TestInvestmentExplainStreamingFailureLogsTheRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil)
+	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=mock", strings.NewReader(`{}`))
 	req.Header.Set("X-Request-Id", "stream-review-1")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))

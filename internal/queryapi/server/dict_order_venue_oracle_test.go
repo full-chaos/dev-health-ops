@@ -351,7 +351,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		"GET /api/v1/flame/aggregated":                   newFlameAggregatedWorkHandler(client),
 		"GET /api/v1/people/{person_id}/summary":         newPeopleSummaryHandler(peopleReader),
 		"GET /api/v1/work-units":                         newWorkUnitsGetHandler(workUnitsReader),
-		"POST /api/v1/work-units/{work_unit_id}/explain": newWorkUnitExplainHandler(workUnitsReader, nil, nil, nil),
+		"POST /api/v1/work-units/{work_unit_id}/explain": newWorkUnitExplainHandler(workUnitsReader, nil, nil, nil, testPlatformGate{}),
 	} {
 		key, handler := pattern, handler
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {

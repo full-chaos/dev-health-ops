@@ -168,7 +168,7 @@ usage() {
          package slices, ci/go_test_weights.tsv; shard 1 also runs the
          multi-replica worker gate), race SHARD
          COUNT (go test -race, the SHARD-th of COUNT weight-balanced package
-         slices, ci/go_race_weights.tsv). The
+         slices, ci/go_race_weights.d). The
          legs run exactly the steps of `ci` (pinned by a tooling test); each
          stage prints UTC start/done stamps.
   test-shard-plan SHARD COUNT
@@ -216,8 +216,8 @@ usage() {
          base with origin/main (the parent when HEAD is origin/main). A base that cannot be read is a
          failure, never a pass.
   race-weights-rows
-         Hold ci/go_race_weights.tsv to the package list without running a test: every package has a
-         row, no row names a package that is gone, rows are sorted and unique (CHAOS-4233). `fast`, `ci`
+         Hold ci/go_race_weights.d (one file per package) to the package list without running a test: every package has a
+         file, no file names a package that is gone, each file holds one unique row (CHAOS-4233, CHAOS-10300). `fast`, `ci`
          and the static leg run it, so the stale row is named before push.
   integration-images
          Print "<key>\t<image>" for every image declared by the Go test
@@ -560,10 +560,34 @@ check_race() {
 # slices of every module's packages under `go test -race`. The race stage was 17
 # of the 34 minutes of the single go-quality step, dominated by a few packages
 # (goapiproof, providersync, gqlgenguard, workgraph/units), so the slices are
-# balanced by measured package time (ci/go_race_weights.tsv, ci/go_race_shard.awk)
+# balanced by measured package time (ci/go_race_weights.d, ci/go_race_shard.awk)
 # and NOT by count. The slices always partition `go list ./...`: a wrong weight
 # costs balance, never coverage. A slice that selects no package at all fails.
-GO_RACE_WEIGHTS="${GO_RACE_WEIGHTS:-${ROOT}/ci/go_race_weights.tsv}"
+# CHAOS-10300: the weights are ONE FILE PER PACKAGE (ci/go_race_weights.d/<race_weights_file_name of the package>.tsv, one `package<TAB>seconds` row),
+# so a pull request that adds a package adds a file and conflicts with no other pull request. The awks read one weights stream:
+# race_weights_rows prints every row of the directory, in any order (the awks look rows up by key).
+GO_RACE_WEIGHTS_DIR="${GO_RACE_WEIGHTS_DIR:-${ROOT}/ci/go_race_weights.d}"
+# race_weights_file_name PACKAGE: the one file name of a package. `_` becomes `_u` and `/` becomes `__`, so two package paths
+# never share a name (zzreview__collision is zzreview_u_ucollision.tsv, zzreview/collision is zzreview__collision.tsv); the
+# root package `.` is `_root.tsv`, a name the `*.tsv` glob sees (a leading dot would be skipped).
+race_weights_file_name() {
+  if [ "$1" = "." ]; then
+    printf '_root.tsv'
+  else
+    printf '%s.tsv' "$(printf '%s' "$1" | sed 's#_#_u#g; s#/#__#g')"
+  fi
+}
+race_weights_rows() {
+  local f found=0
+  shopt -s dotglob
+  [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race weights directory missing: ${GO_RACE_WEIGHTS_DIR}"
+  for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
+    [ -f "${f}" ] || continue
+    found=1
+    grep -v '^\(#\|[[:space:]]*$\)' "${f}" || true
+  done
+  [ "${found}" -eq 1 ] || die "race weights directory holds no .tsv file: ${GO_RACE_WEIGHTS_DIR}"
+}
 # CHAOS-10289: packages that run alone (ci/go_race_solo.tsv): left out of the weight-balanced split, run in their own
 # `go test -race` invocation after the shard's other packages, so no heavy co-tenant can starve them.
 GO_RACE_SOLO="${GO_RACE_SOLO:-${ROOT}/ci/go_race_solo.tsv}"
@@ -614,7 +638,7 @@ check_race_shard() {
   case "${count}" in ""|*[!0-9]*) die "race COUNT must be a positive integer, got '${count}'" ;; esac
   { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
     || die "race shard ${shard} is outside 1..${count}"
-  [ -f "${GO_RACE_WEIGHTS}" ] || die "race shards need ${GO_RACE_WEIGHTS}"
+  [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race shards need ${GO_RACE_WEIGHTS_DIR}"
   local -a pkgs solo_pkgs
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
@@ -622,23 +646,23 @@ check_race_shard() {
       # CHAOS-8135: static and deterministic, before any test runs: every package of the root module has a weights row.
       # A package with no row weighs the shard awk's default and hides its cost from the shard plan.
       missing="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
-        | awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_missing_rows.awk")" \
+        | awk -v mod="${modpath}" -v weights=<(race_weights_rows) -f "${ROOT}/ci/go_race_missing_rows.awk")" \
         || die "ci/go_race_missing_rows.awk failed"
       [ -z "${missing}" ] \
-        || die "race package(s) with NO row in ci/go_race_weights.tsv (add each one: its measured go test -race seconds, 1 if it has no test): $(printf '%s' "${missing}" | tr '\n' ' ')"
+        || die "race package(s) with NO row in ci/go_race_weights.d (add each one: its measured go test -race seconds, 1 if it has no test): $(printf '%s' "${missing}" | tr '\n' ' ')"
     fi
     pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && pkgs+=("${pkg}")
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
       | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
-      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -v solo="${GO_RACE_SOLO}" -f "${ROOT}/ci/go_race_shard.awk")
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -f "${ROOT}/ci/go_race_shard.awk")
     solo_pkgs=()
     while IFS= read -r pkg; do
       [ -n "${pkg}" ] && solo_pkgs+=("${pkg}")
     done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
       | { if [ "${module_dir}" = "." ]; then grep -vx "${modpath}/internal/providersync"; else cat; fi; } \
-      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -v solo="${GO_RACE_SOLO}" -v part=solo -f "${ROOT}/ci/go_race_shard.awk")
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights=<(race_weights_rows) -v solo="${GO_RACE_SOLO}" -v part=solo -f "${ROOT}/ci/go_race_shard.awk")
     printf 'go test -race (shard %s/%s): %s: %d package(s), %d solo\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}" "${#solo_pkgs[@]}"
     if [ "${module_dir}" = "." ]; then
       # CHAOS-8166: internal/providersync runs in EVERY race leg, one test-name shard each (it is not in pkgs above).
@@ -681,41 +705,63 @@ check_ratchets() {
   )
 }
 
-# check_race_weights_rows (CHAOS-4233): the census of ci/go_race_weights.tsv, run by `fast`, `ci` and the static leg so a
-# package added, removed or renamed names the stale row on the author's machine. internal/cigates/workflows/workflows_quality_legs_test.go
-# keeps the same three checks (the CI-side guard); this one removes the surprise, not that test.
+# check_race_weights_rows (CHAOS-4233, CHAOS-10300): the census of ci/go_race_weights.d, run by `fast`, `ci` and the static leg so a
+# package added, removed or renamed names the missing or stale file on the author's machine. One file per package, one row each:
+#   1. every file holds exactly one `package<TAB>seconds` row (comments and blank lines are ignored);
+#   2. no package has two rows (two pull requests that weigh the same package in two files): both weights are printed;
+#   3. each file is named after its package (/ as __), so a package has one possible path and a duplicate cannot hide;
+#   4. every package of the root module has a file, and no file names a package that is gone.
+# Order is not checked: the directory has none, and the shard awks look rows up by key.
 check_race_weights_rows() {
-  local modpath listed missing stale
-  [ -f "${GO_RACE_WEIGHTS}" ] || die "race weights file missing: ${GO_RACE_WEIGHTS}"
+  local modpath listed missing stale dup f body key weight want rows
+  shopt -s dotglob
+  [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race weights directory missing: ${GO_RACE_WEIGHTS_DIR}"
+  rows="$(race_weights_rows)" || die "race weights unreadable: ${GO_RACE_WEIGHTS_DIR}"
+  for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
+    body="$(grep -v '^\(#\|[[:space:]]*$\)' "${f}" || true)"
+    [ "$(printf '%s\n' "${body}" | grep -c .)" -eq 1 ] \
+      || die "${f##*/} must hold exactly one row: package<TAB>seconds (race weight files, one per package)"
+    [ "$(printf '%s\n' "${body}" | awk -F'\t' '{ print NF }')" = 2 ] \
+      || die "${f##*/} must hold exactly two columns: package<TAB>seconds, a whole-number weight after the package (got: ${body})"
+    weight="$(printf '%s' "${body}" | cut -f2)"
+    case "${weight}" in ""|*[!0-9]*) die "${f##*/}: the weight '${weight}' is not a whole number of seconds (row: package<TAB>seconds)" ;; esac
+  done
+  dup="$(printf '%s\n' "${rows}" | cut -f1 | LC_ALL=C sort | uniq -d)"
+  if [ -n "${dup}" ]; then
+    for key in ${dup}; do
+      printf 'race weights: %s weighs twice: %s\n' "${key}" "$(printf '%s\n' "${rows}" | awk -F'\t' -v k="${key}" '$1 == k { printf "%s ", $2 }')" >&2
+    done
+    die "ci/go_race_weights.d weighs a package twice (rows above): delete the file that is not the newest measurement"
+  fi
+  for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
+    key="$(grep -v '^\(#\|[[:space:]]*$\)' "${f}" | cut -f1)"
+    want="$(race_weights_file_name "${key}")"
+    [ "${f##*/}" = "${want}" ] || die "${f##*/} holds package ${key}: name the file ${want}"
+  done
   modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
   listed="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...)" || die "go list ./... failed"
-  missing="$(printf '%s\n' "${listed}" | awk -v mod="${modpath}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_missing_rows.awk")" \
+  missing="$(printf '%s\n' "${listed}" | awk -v mod="${modpath}" -v weights=<(race_weights_rows) -f "${ROOT}/ci/go_race_missing_rows.awk")" \
     || die "ci/go_race_missing_rows.awk failed"
   [ -z "${missing}" ] \
-    || die "race package(s) with NO row in ci/go_race_weights.tsv (add each: its measured go test -race seconds, 1 if it has no test; guarded by this census): $(printf '%s' "${missing}" | tr '\n' ' ')"
-  stale="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_WEIGHTS}" | cut -f1 | LC_ALL=C sort -u \
+    || die "race package(s) with NO row in ci/go_race_weights.d (add ci/go_race_weights.d/<race_weights_file_name of the package>.tsv for each: package<TAB>its measured go test -race seconds, 1 if it has no test): $(printf '%s' "${missing}" | tr '\n' ' ')"
+  stale="$(printf '%s\n' "${rows}" | cut -f1 | LC_ALL=C sort -u \
     | LC_ALL=C comm -23 - <(printf '%s\n' "${listed}" | awk -v mod="${modpath}" '{ if ($0 == mod) print "."; else if (index($0, mod "/") == 1) print substr($0, length(mod) + 2); else print $0 }' | LC_ALL=C sort))"
   [ -z "${stale}" ] \
-    || die "ci/go_race_weights.tsv names package(s) that no longer exist (delete each row; guarded by this census): $(printf '%s' "${stale}" | tr '\n' ' ')"
-  local rows
-  rows="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_WEIGHTS}" | cut -f1)"
-  printf '%s\n' "${rows}" | LC_ALL=C sort -c 2>/dev/null \
-    || die "ci/go_race_weights.tsv is not sorted (LC_ALL=C) or weighs a package twice (guarded by this census)"
-  [ -z "$(printf '%s\n' "${rows}" | LC_ALL=C sort | uniq -d)" ] \
-    || die "ci/go_race_weights.tsv weighs a package twice (guarded by this census)"
+    || die "ci/go_race_weights.d names package(s) that no longer exist (delete each file): $(printf '%s' "${stale}" | tr '\n' ' ')"
   # CHAOS-10289: the solo rows. A missing file would silently put every solo package back into the shared split.
   [ -f "${GO_RACE_SOLO}" ] || die "race solo file missing: ${GO_RACE_SOLO}"
   local solo_rows solo_bad
   solo_rows="$({ grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_SOLO}" || [ "$?" -eq 1 ]; } | cut -f1)"
-  solo_bad="$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -u | LC_ALL=C comm -23 - <(printf '%s\n' "${rows}" | LC_ALL=C sort) | tr '\n' ' ')"
+  solo_bad="$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -u | LC_ALL=C comm -23 - <(printf "%s\n" "${rows}" | cut -f1 | LC_ALL=C sort) | tr '\n' ' ')"
   [ -z "${solo_bad}" ] \
-    || die "ci/go_race_solo.tsv names package(s) with no row in ci/go_race_weights.tsv (a solo row needs its measured weight; guarded by this census): ${solo_bad}"
+    || die "ci/go_race_solo.tsv names package(s) with no file in ci/go_race_weights.d (a solo row needs its measured weight): ${solo_bad}"
   [ -z "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort | uniq -d)" ] \
     || die "ci/go_race_solo.tsv lists a package twice"
   printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -c 2>/dev/null \
     || die "ci/go_race_solo.tsv is not sorted (LC_ALL=C)"
   ! printf '%s\n' "${solo_rows}" | grep -qx 'internal/providersync' \
     || die "ci/go_race_solo.tsv lists internal/providersync, which runs as test-name slices in every race leg and cannot be solo"
+  shopt -u dotglob
   printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | wc -l)"
 }
 

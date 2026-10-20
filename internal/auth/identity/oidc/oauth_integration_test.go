@@ -469,3 +469,25 @@ func TestOAuthHandlersRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestOAuthCodeOfAnotherFlowIsRefused(t *testing.T) {
+	for _, protocol := range []string{"oauth_github", "oauth_gitlab", "oauth_google"} {
+		t.Run(protocol, func(t *testing.T) {
+			h := newHarness(t, harnessOpts{signup: true})
+			provider, client := h.seedOAuthProvider(t, h.orgID, protocol, nil)
+			flowA := h.startOAuth(t, provider)
+			flowB := h.startOAuth(t, provider)
+			// Flow A's code (bound at the provider to flow A's authorize request)
+			// presented with flow B's state and cookie.
+			crossed := flowB
+			crossed.challenge = flowA.challenge
+			before := h.snapshot(t)
+			_, failure := h.finishOAuth(t, provider, client, crossed, fakeAccountWith(uniqueEmail("crossed"), true), true)
+			if failure == nil {
+				t.Fatal("a code issued for another flow completed this flow")
+			}
+			wantDenied(t, failure, http.StatusBadRequest, ReasonDependency)
+			wantUnchanged(t, h, before)
+		})
+	}
+}

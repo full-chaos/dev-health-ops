@@ -442,8 +442,8 @@ func TestAssertHomeRefusesANonPositiveOrNaNCoverage(t *testing.T) {
 
 // Python's `float(coverage.get("repos_covered_pct", 0.0)) > 0.0`: what float() accepts and what it refuses.
 func TestAssertHomeCoverageFollowsPythonFloat(t *testing.T) {
-	accepted := []any{true, 1, 0.5, "1", " 1 ", "\t2.5\n", "1_0", "1e3", ".5", "5.", "+3", "inf", "Infinity", "+INF"}
-	refused := []any{false, 0, -2, "0", "-1", "-inf", "nan", "NaN", "-nan", "", "  ", "0x10", "1__0", "_1", "1_", "1,5", "1 2", "most", nil, []any{1}, m{"a": 1}, "1e", "e5", ".", "+", "1_.5", "1._5"}
+	accepted := []any{true, 1, 0.5, "1", " 1 ", "\t2.5\n", "1_0", "1e3", ".5", "5.", "+3", "inf", "Infinity", "+INF", "\u00a01\u00a0", "\u20031\u2003", "\x1c1\x1f", "١٢", "１２", "١_٢", "𝟏", "1\u00a0"}
+	refused := []any{"café", "1é", "é", "１２é", "١ ٢", "1\u200b", false, 0, -2, "0", "-1", "-inf", "nan", "NaN", "-nan", "", "  ", "0x10", "1__0", "_1", "1_", "1,5", "1 2", "most", nil, []any{1}, m{"a": 1}, "1e", "e5", ".", "+", "1_.5", "1._5"}
 	for _, v := range accepted {
 		p := goodHome()
 		p["freshness"].(m)["coverage"] = m{"repos_covered_pct": v}
@@ -482,5 +482,24 @@ func TestAssertHomeRefusesAConstraintThatIsNotAnObject(t *testing.T) {
 	}
 	if err := livee2e.AssertHome(mustJSON(t, noMove(m{}, true)), "github"); err != nil {
 		t.Errorf("an empty constraint object is the empty card: %v", err)
+	}
+}
+
+// Python's `str(state).lower() in allowed_states`: str.lower() maps U+0130 (I with a dot) to "i" plus a combining dot,
+// which never equals an allowed state, and U+212A (Kelvin sign) to an ASCII "k".
+func TestAssertHomeSourceStatesLowerCaseLikePython(t *testing.T) {
+	for state, wantOK := range map[string]bool{
+		"OK": true, "Stale": true, "unKnown": true, "UNKNOWN": true,
+		"not_confİgured": false, "café": false, " ok": false, "ok ": false, "ｏｋ": false,
+	} {
+		p := goodHome()
+		p["freshness"].(m)["sources"] = m{"ci": "ok", "github": state}
+		err := livee2e.AssertHome(mustJSON(t, p), "github")
+		if wantOK && err != nil {
+			t.Errorf("state %q: Python accepts it: %v", state, err)
+		}
+		if !wantOK && err == nil {
+			t.Errorf("state %q: Python refuses it", state)
+		}
 	}
 }

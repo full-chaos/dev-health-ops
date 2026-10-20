@@ -155,6 +155,7 @@ func censusRowsRun(t *testing.T, text string) (string, string, error) {
 const censusVictim = "internal/httpguard"
 
 func TestTheGoSideWeightsCensusAcceptsTheTable(t *testing.T) {
+	t.Parallel()
 	text := raceweightsRealText(t)
 	out, errs, err := censusRowsRun(t, text)
 	if err != nil {
@@ -166,6 +167,7 @@ func TestTheGoSideWeightsCensusAcceptsTheTable(t *testing.T) {
 }
 
 func TestTheGoSideWeightsCensusPlantedDefectsEachName(t *testing.T) {
+	t.Parallel()
 	text := raceweightsRealText(t)
 	if !strings.Contains(text, censusVictim+"\t") {
 		t.Fatalf("%s has no weights row", censusVictim)
@@ -211,6 +213,7 @@ func censusVerbRunsCensus(source, verb string) bool {
 }
 
 func TestFastCiAllAndTheStaticLegRunTheWeightsCensus(t *testing.T) {
+	t.Parallel()
 	source := censusRead(t, "ci/check_go.sh")
 	for _, verb := range []string{"fast", "ci", "all", "static"} {
 		if !censusVerbRunsCensus(source, verb) {
@@ -220,6 +223,7 @@ func TestFastCiAllAndTheStaticLegRunTheWeightsCensus(t *testing.T) {
 }
 
 func TestFastCiAllAndTheStaticLegPlantedCensusRemoval(t *testing.T) {
+	t.Parallel()
 	source := censusRead(t, "ci/check_go.sh")
 	for _, verb := range []string{"fast", "ci", "all"} {
 		re := regexp.MustCompile(`(?ms)(^  ` + verb + `\)\n.*?)    check_race_weights_rows\n(.*?^    ;;)`)
@@ -258,6 +262,7 @@ func censusWeightSet(t *testing.T) map[string]bool {
 }
 
 func TestEveryPackageOfTheRootModuleHasAWeightsRow(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := censusPackages(t)
 	if missing := censusMissing(mod, pkgs, censusWeightSet(t)); len(missing) != 0 {
 		t.Fatalf("packages with no row in ci/go_race_weights.d: %v", missing)
@@ -265,6 +270,7 @@ func TestEveryPackageOfTheRootModuleHasAWeightsRow(t *testing.T) {
 }
 
 func TestEveryPackageOfTheRootModuleHasAWeightsRowPlanted(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := censusPackages(t)
 	set := censusWeightSet(t)
 	delete(set, censusVictim)
@@ -287,6 +293,7 @@ func censusAwk(t *testing.T, mod, weights, packages string) (string, string, err
 }
 
 func TestTheMissingRowAwkAcceptsTheRealTable(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := censusPackages(t)
 	out, errs, err := censusAwk(t, mod, raceweightsRealMerged(t), strings.Join(pkgs, "\n")+"\n")
 	if err != nil || out != "" {
@@ -295,6 +302,7 @@ func TestTheMissingRowAwkAcceptsTheRealTable(t *testing.T) {
 }
 
 func TestTheMissingRowAwkPlantedRemovedRowAndEmptyInputs(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := censusPackages(t)
 	text := strings.Join(pkgs, "\n") + "\n"
 	real := raceweightsRealMerged(t)
@@ -316,6 +324,7 @@ func TestTheMissingRowAwkPlantedRemovedRowAndEmptyInputs(t *testing.T) {
 }
 
 func TestARaceLegWithAPackageThatHasNoRowFailsBeforeAnyTestRunsPlanted(t *testing.T) {
+	t.Parallel()
 	r := runCheckGo(t, raceweightsEnv(raceweightsDirFromRows(t, censusWithout(raceweightsRealText(t), censusVictim))), false, "ci-leg", "race", "1", "3")
 	if r.Err == nil {
 		t.Fatalf("race leg passed with a missing row: %s", r.Stdout)
@@ -332,6 +341,7 @@ func TestARaceLegWithAPackageThatHasNoRowFailsBeforeAnyTestRunsPlanted(t *testin
 }
 
 func TestARaceLegWithAnEmptyWeightsFileFailsBeforeAnyTestRunsPlanted(t *testing.T) {
+	t.Parallel()
 	r := runCheckGo(t, raceweightsEnv(raceweightsDirFromFiles(t, map[string]string{"empty.tsv": "# no rows\n"})), false, "ci-leg", "race", "1", "3")
 	if r.Err == nil {
 		t.Fatalf("race leg passed with an empty weights file: %s", r.Stdout)
@@ -407,6 +417,7 @@ func censusReadFile(p string) (string, error) {
 }
 
 func TestEveryRaceExcludedTestIsListed(t *testing.T) {
+	t.Parallel()
 	mod, _ := censusPackages(t)
 	plain, raced := censusTestFiles(t)
 	if len(plain) == 0 {
@@ -423,6 +434,7 @@ func TestEveryRaceExcludedTestIsListed(t *testing.T) {
 }
 
 func TestEveryRaceExcludedTestIsListedPlanted(t *testing.T) {
+	t.Parallel()
 	mod, _ := censusPackages(t)
 	plain, raced := censusTestFiles(t)
 	listed := censusExcludedListed(t)

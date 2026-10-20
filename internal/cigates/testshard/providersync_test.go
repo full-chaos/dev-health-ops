@@ -159,6 +159,7 @@ func providersyncWeightsProblem(t *testing.T, awk, weightsPath string, names []s
 }
 
 func TestProvidersyncEveryTestIsInExactlyOneRaceShard(t *testing.T) {
+	t.Parallel()
 	weights, awk := providersyncPaths(t)
 	if p := providersyncPartitionProblem(t, awk, weights, providersyncNames(t)); p != "" {
 		t.Fatal(p)
@@ -166,6 +167,7 @@ func TestProvidersyncEveryTestIsInExactlyOneRaceShard(t *testing.T) {
 }
 
 func TestProvidersyncPlantedPartitionGuardFailsOnLostDuplicatedOrEmptyShard(t *testing.T) {
+	t.Parallel()
 	weights, _ := providersyncPaths(t)
 	names := providersyncNames(t)
 	mutants := map[string]string{
@@ -181,6 +183,7 @@ func TestProvidersyncPlantedPartitionGuardFailsOnLostDuplicatedOrEmptyShard(t *t
 }
 
 func TestProvidersyncRaceWeightsNameRealTestsAndBalance(t *testing.T) {
+	t.Parallel()
 	weights, awk := providersyncPaths(t)
 	if p := providersyncWeightsProblem(t, awk, weights, providersyncNames(t)); p != "" {
 		t.Fatal(p)
@@ -188,6 +191,7 @@ func TestProvidersyncRaceWeightsNameRealTestsAndBalance(t *testing.T) {
 }
 
 func TestProvidersyncPlantedWeightsGuardFailsOnUnsortedMissingDuplicateAndUnbalanced(t *testing.T) {
+	t.Parallel()
 	weights, awk := providersyncPaths(t)
 	names := providersyncNames(t)
 	keys, _ := providersyncParseWeights(t, weights)
@@ -228,6 +232,7 @@ func providersyncRunLeg(t *testing.T, env ...string) legRun {
 }
 
 func TestProvidersyncRaceLegWhoseShardsDoNotPartitionFailsBeforeAnyTestRuns(t *testing.T) {
+	t.Parallel()
 	empty := providersyncWrite(t, "empty.tsv", "# no rows\n")
 	r := providersyncRunLeg(t, "GO_PROVIDERSYNC_RACE_WEIGHTS="+empty)
 	if r.Err == nil {
@@ -242,6 +247,7 @@ func TestProvidersyncRaceLegWhoseShardsDoNotPartitionFailsBeforeAnyTestRuns(t *t
 }
 
 func TestProvidersyncPlantedRaceLegWithRealWeightsPassesTheShardCheck(t *testing.T) {
+	t.Parallel()
 	r := providersyncRunLeg(t)
 	if r.Err != nil {
 		t.Fatalf("clean leg failed: %v\n%s%s", r.Err, r.Stderr, r.Stdout)
@@ -290,6 +296,7 @@ func providersyncAssertListingCall(t *testing.T, r legRun) {
 }
 
 func TestProvidersyncEachRaceLegRunsExactlyItsOwnSlice(t *testing.T) {
+	t.Parallel()
 	weights, awk := providersyncPaths(t)
 	names := providersyncNames(t)
 	var union []string
@@ -319,6 +326,7 @@ func TestProvidersyncEachRaceLegRunsExactlyItsOwnSlice(t *testing.T) {
 }
 
 func TestProvidersyncPlantedLegSliceDiffersFromTheExpectedSliceUnderAnotherAwk(t *testing.T) {
+	t.Parallel()
 	// A valid partition with another assignment: leg 1 runs a different slice, so the own-slice comparison must see it.
 	weights, awk := providersyncPaths(t)
 	names := providersyncNames(t)
@@ -352,6 +360,7 @@ func providersyncMutatedAwk(t *testing.T, from, to string) string {
 }
 
 func TestProvidersyncShardAwkThatLosesATestFailsTheLegAtThePartitionCheck(t *testing.T) {
+	t.Parallel()
 	// Every shard stays non-empty, so only the exact-partition comparison can catch the lost test.
 	broken := providersyncMutatedAwk(t, "$0 ~ /^Test/ {", "$0 ~ /^Test/ && NR > 1 {")
 	r := providersyncRunLeg(t, "GO_PROVIDERSYNC_RACE_SHARD_AWK="+broken)
@@ -367,6 +376,7 @@ func TestProvidersyncShardAwkThatLosesATestFailsTheLegAtThePartitionCheck(t *tes
 }
 
 func TestProvidersyncPlantedLostTestAwkIsTheOnlyDifferenceFromTheRealAwk(t *testing.T) {
+	t.Parallel()
 	// Same mutation text with no change: the leg passes, so the failure above comes from the lost test alone.
 	same := providersyncMutatedAwk(t, "$0 ~ /^Test/ {", "$0 ~ /^Test/ {")
 	r := providersyncRunLeg(t, "GO_PROVIDERSYNC_RACE_SHARD_AWK="+same)
@@ -376,6 +386,7 @@ func TestProvidersyncPlantedLostTestAwkIsTheOnlyDifferenceFromTheRealAwk(t *test
 }
 
 func TestProvidersyncFailingSliceFailsTheLegAndStopsIt(t *testing.T) {
+	t.Parallel()
 	// The stand-in fails ONLY the providersync slice, so `|| true` on that call would be visible.
 	r := providersyncRunLeg(t, "FAKE_GO_FAIL_ONLY=providersync")
 	if len(providersyncCalls(r.Calls)) == 0 {
@@ -393,6 +404,7 @@ func TestProvidersyncFailingSliceFailsTheLegAndStopsIt(t *testing.T) {
 }
 
 func TestProvidersyncFailingPackageRaceRunFailsTheLegAfterAGreenSlice(t *testing.T) {
+	t.Parallel()
 	r := providersyncRunLeg(t, "FAKE_GO_FAIL_ONLY=packages")
 	if len(providersyncCalls(r.Calls)) == 0 {
 		t.Fatal("the providersync slice was never run")
@@ -409,6 +421,7 @@ func TestProvidersyncFailingPackageRaceRunFailsTheLegAfterAGreenSlice(t *testing
 }
 
 func TestProvidersyncPlantedFailureGuardsSeeAGreenLegWhenNothingFails(t *testing.T) {
+	t.Parallel()
 	// Without FAKE_GO_FAIL_ONLY the same leg ends OK, so the two failure tests above assert a real difference.
 	r := providersyncRunLeg(t)
 	if r.Err != nil {
@@ -423,6 +436,7 @@ func TestProvidersyncPlantedFailureGuardsSeeAGreenLegWhenNothingFails(t *testing
 }
 
 func TestProvidersyncNonTestNameInTheRaceListingFailsBeforeAnyTestRuns(t *testing.T) {
+	t.Parallel()
 	r := providersyncRunLeg(t, "FAKE_GO_LIST_EXTRA=FuzzSomething")
 	if r.Err == nil {
 		t.Fatalf("leg passed: %s", r.Stdout)
@@ -437,6 +451,7 @@ func TestProvidersyncNonTestNameInTheRaceListingFailsBeforeAnyTestRuns(t *testin
 }
 
 func TestProvidersyncPlantedListingWithoutExtraNameIsAccepted(t *testing.T) {
+	t.Parallel()
 	r := providersyncRunLeg(t)
 	if r.Err != nil || strings.Contains(r.Stderr, "no race shard would run") {
 		t.Fatalf("clean listing rejected: %v\n%s", r.Err, r.Stderr)
@@ -452,6 +467,7 @@ func providersyncSwapAwk(t *testing.T) string {
 }
 
 func TestProvidersyncShardAwkThatSwapsATestFailsAtTheSetCompare(t *testing.T) {
+	t.Parallel()
 	// Shard 2 runs the first test instead of its own first one: every shard non-empty, count unchanged, so only the
 	// sorted-set comparison can catch "one test twice, one test lost".
 	r := providersyncRunLeg(t, "GO_PROVIDERSYNC_RACE_SHARD_AWK="+providersyncSwapAwk(t))
@@ -467,6 +483,7 @@ func TestProvidersyncShardAwkThatSwapsATestFailsAtTheSetCompare(t *testing.T) {
 }
 
 func TestProvidersyncPlantedSwapAwkKeepsEveryShardNonEmptyAndTheCount(t *testing.T) {
+	t.Parallel()
 	// Proves the swap mutant evades the cheap checks (non-empty shards, same total), so the set compare is the only catch.
 	names := providersyncNames(t)
 	weights, _ := providersyncPaths(t)
@@ -510,6 +527,7 @@ func providersyncBalanceSizes(t *testing.T, awk string) []int {
 }
 
 func TestProvidersyncShardAwkBalancesByWeightAndWeighsAnUnlistedTest(t *testing.T) {
+	t.Parallel()
 	// By weight the heavy test sits alone and the six unlisted tests (default weight > 0) split 3/3.
 	_, awk := providersyncPaths(t)
 	got := providersyncBalanceSizes(t, awk)
@@ -519,6 +537,7 @@ func TestProvidersyncShardAwkBalancesByWeightAndWeighsAnUnlistedTest(t *testing.
 }
 
 func TestProvidersyncPlantedAwkIgnoringWeightsOrWeighingUnlistedZeroIsCaught(t *testing.T) {
+	t.Parallel()
 	rr := providersyncWrite(t, "rr.awk", "$0 ~ /^Test/ { n++; if ((n - 1) % count + 1 == shard) print }\n")
 	if got := fmt.Sprint(providersyncBalanceSizes(t, rr)); got == "[1 3 3]" {
 		t.Errorf("an awk ignoring weights was not caught: %s", got)

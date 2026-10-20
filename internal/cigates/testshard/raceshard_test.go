@@ -148,6 +148,7 @@ func raceshardGoList(t *testing.T) (string, []string) {
 }
 
 func TestRaceShardsPartitionThePackageListAndBalance(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := raceshardGoList(t)
 	if len(pkgs) < 100 {
 		t.Fatalf("only %d packages", len(pkgs))
@@ -162,6 +163,7 @@ func TestRaceShardsPartitionThePackageListAndBalance(t *testing.T) {
 }
 
 func TestRaceShardsPartitionPlantedDefectsAreCaught(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := raceshardGoList(t)
 	weights := raceshardRealWeights(t)
 	good := raceshardSlices(t, mod, pkgs, 3)
@@ -239,12 +241,14 @@ func raceshardKnown(t *testing.T) map[string]bool {
 }
 
 func TestTheRaceWeightsTableIsClean(t *testing.T) {
+	t.Parallel()
 	for _, d := range raceshardTableDefects(raceweightsRealFiles(t), raceshardKnown(t)) {
 		t.Error(d)
 	}
 }
 
 func TestTheRaceWeightsTablePlantedDefectsAreCaught(t *testing.T) {
+	t.Parallel()
 	known := raceshardKnown(t)
 	real := raceweightsRealFiles(t)
 	if d := raceshardTableDefects(real, known); len(d) != 0 {
@@ -311,12 +315,14 @@ func raceshardHoldsDefect(t *testing.T, awkFile string) string {
 }
 
 func TestTheShardPartitionHoldsWhateverTheWeightsSay(t *testing.T) {
+	t.Parallel()
 	if d := raceshardHoldsDefect(t, raceshardPath(t, "ci/go_race_shard.awk")); d != "" {
 		t.Error(d)
 	}
 }
 
 func TestTheShardPartitionPlantedAwkMutantsAreCaught(t *testing.T) {
+	t.Parallel()
 	b, err := os.ReadFile(raceshardPath(t, "ci/go_race_shard.awk"))
 	if err != nil {
 		t.Fatal(err)
@@ -409,6 +415,7 @@ func raceshardVerbDefects(mod string, pkgs []string, legs [][]string) []string {
 }
 
 func TestRaceVerbSlicesPartitionTheRealPackages(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := raceshardGoList(t)
 	var legs [][]string
 	for k := 1; k <= 2; k++ {
@@ -431,6 +438,7 @@ func tail(s string) string {
 }
 
 func TestRaceVerbSlicesPlantedDefectsAreCaught(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := raceshardGoList(t)
 	var legs [][]string
 	for k := 1; k <= 2; k++ {
@@ -487,6 +495,7 @@ func TestRaceVerbSlicesPlantedDefectsAreCaught(t *testing.T) {
 }
 
 func TestARaceSliceThatSelectsNothingFailsLoudly(t *testing.T) {
+	t.Parallel()
 	r := runCheckGo(t, nil, false, "ci-leg", "race", "5000", "5001")
 	if r.Err == nil {
 		t.Fatal("a race slice that selects nothing must fail")
@@ -500,6 +509,7 @@ func TestARaceSliceThatSelectsNothingFailsLoudly(t *testing.T) {
 }
 
 func TestARaceSliceThatSelectsNothingPlantedControlSelectsSomething(t *testing.T) {
+	t.Parallel()
 	// Planted contrast: the awk gives shard 5000 of 5001 no package, so it is exactly the input the guard exists for;
 	// a real shard of the same awk is non-empty, so the guard is not an unconditional failure.
 	mod, pkgs := raceshardGoList(t)
@@ -513,6 +523,7 @@ func TestARaceSliceThatSelectsNothingPlantedControlSelectsSomething(t *testing.T
 }
 
 func TestBadLegArgumentsFail(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args   []string
 		needle string
@@ -540,6 +551,7 @@ func TestBadLegArgumentsFail(t *testing.T) {
 }
 
 func TestBadLegArgumentsPlantedValidArgumentsAreNotRefused(t *testing.T) {
+	t.Parallel()
 	// Planted contrast: a valid in-range argument pair must not hit any argument message.
 	r := runCheckGo(t, nil, false, "ci-leg", "race", "2", "2")
 	for _, needle := range []string{"outside 1..", "must be a positive integer", "must be one of", "accepts LEG"} {
@@ -573,6 +585,7 @@ func raceshardStampDefects(stdout string) []string {
 }
 
 func TestEveryStagePrintsStartAndDoneStamps(t *testing.T) {
+	t.Parallel()
 	r := raceshardLeg(t, 1)
 	if r.Err != nil {
 		t.Fatalf("race 1/2: %v\n%s", r.Err, tail(r.Stderr))
@@ -583,6 +596,7 @@ func TestEveryStagePrintsStartAndDoneStamps(t *testing.T) {
 }
 
 func TestEveryStagePlantedUnstampedLogsAreCaught(t *testing.T) {
+	t.Parallel()
 	r := raceshardLeg(t, 1)
 	if r.Err != nil {
 		t.Fatalf("race 1/2: %v", r.Err)
@@ -623,6 +637,7 @@ func raceshardFailedLegDefects(r legRun) []string {
 }
 
 func TestAFailingStagePrintsNoDoneAndFailsTheLeg(t *testing.T) {
+	t.Parallel()
 	r := runCheckGo(t, nil, true, "ci-leg", "race", "1", "2")
 	for _, d := range raceshardFailedLegDefects(r) {
 		t.Error(d)
@@ -635,6 +650,7 @@ func TestAFailingStagePrintsNoDoneAndFailsTheLeg(t *testing.T) {
 }
 
 func TestAFailingStagePlantedPassingLegIsCaught(t *testing.T) {
+	t.Parallel()
 	// Planted: feed the failing-stage check a passing leg's result; it must report defects.
 	r := raceshardLeg(t, 1)
 	if r.Err != nil {

@@ -242,6 +242,7 @@ func trimpathRaceProblems(calls []string) []string {
 }
 
 func TestEveryGoBuildTestVetRunCallCarriesTrimpath(t *testing.T) {
+	t.Parallel()
 	calls := trimpathRealCalls(t)
 	if len(calls) < 35 {
 		t.Fatalf("the derivation found only %d go calls", len(calls))
@@ -255,6 +256,7 @@ func TestEveryGoBuildTestVetRunCallCarriesTrimpath(t *testing.T) {
 }
 
 func TestEveryGoBuildTestVetRunCallCarriesTrimpathPlanted(t *testing.T) {
+	t.Parallel()
 	good := "go build -trimpath ./...\ngo test -trimpath -race ./..."
 	if m := trimpathMissing(trimpathCallsInText("ci/x.sh", good)); len(m) != 0 {
 		t.Fatalf("clean text flagged: %v", m)
@@ -288,6 +290,7 @@ func TestEveryGoBuildTestVetRunCallCarriesTrimpathPlanted(t *testing.T) {
 }
 
 func TestEveryGoCallOfCheckGoNamesModReadonlyAndTrimpath(t *testing.T) {
+	t.Parallel()
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "check_go.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -298,6 +301,7 @@ func TestEveryGoCallOfCheckGoNamesModReadonlyAndTrimpath(t *testing.T) {
 }
 
 func TestEveryGoCallOfCheckGoNamesModReadonlyAndTrimpathPlanted(t *testing.T) {
+	t.Parallel()
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "check_go.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -325,6 +329,7 @@ func TestEveryGoCallOfCheckGoNamesModReadonlyAndTrimpathPlanted(t *testing.T) {
 }
 
 func TestTheStandInSeesTrimpathOnEveryRecordedRaceCall(t *testing.T) {
+	t.Parallel()
 	r := runCheckGo(t, nil, false, "ci-leg", "race", "1", "3")
 	if r.Err != nil {
 		t.Fatalf("%v\n%s", r.Err, trimpathHead(r.Stderr, 1500))
@@ -335,6 +340,7 @@ func TestTheStandInSeesTrimpathOnEveryRecordedRaceCall(t *testing.T) {
 }
 
 func TestTheStandInSeesTrimpathOnEveryRecordedRaceCallPlanted(t *testing.T) {
+	t.Parallel()
 	if p := trimpathRaceProblems([]string{"-mod=readonly -trimpath -race ./a", "-race -trimpath ./b"}); len(p) != 0 {
 		t.Errorf("clean calls flagged: %v", p)
 	}

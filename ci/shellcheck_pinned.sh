@@ -106,8 +106,6 @@ fi
 # the relaxation as coverage. Every file below is clean under BOTH versions.
 FILES=(
   # the set CI already linted before this change
-  "${ROOT}/tests/compatibility/river/run.sh"
-  "${ROOT}/tests/compatibility/river/record.sh"
   "${ROOT}/ci/check_go.sh"
   "${ROOT}/ci/check_river_compat_static.sh"
   # CHAOS-6584: the venue-oracles registry check. check_go.sh sources the lib,

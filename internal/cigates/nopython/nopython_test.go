@@ -1,7 +1,6 @@
 package nopython_test
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -149,27 +148,45 @@ func TestNoPythonFilesUnderInternal(t *testing.T) {
 	}
 }
 
-var scriptPython = regexp.MustCompile(`(^|[^A-Za-z0-9_./-])(python3?|run_python)([^A-Za-z0-9_.-]|$)`)
+var scriptPython = regexp.MustCompile(`(^|[^A-Za-z0-9_./-])(python3?|uv|pytest)([^A-Za-z0-9_.-]|$)`)
 
-// shellLiterals is every string literal ending in .sh inside the call's arguments, at any depth (filepath.Join(...)).
-func shellLiterals(call *ast.CallExpr) []string {
-	var names []string
-	for _, arg := range call.Args {
-		ast.Inspect(arg, func(node ast.Node) bool {
-			if literal, ok := node.(*ast.BasicLit); ok && literal.Kind == token.STRING {
-				if value, err := strconv.Unquote(literal.Value); err == nil && strings.HasSuffix(value, ".sh") {
-					names = append(names, filepath.Base(value))
-				}
-			}
-			return true
-		})
-	}
-	return names
+// shellPythonPending is the closed list of tracked shell scripts that still name Python, each owned by an open
+// change that removes it. An entry goes when its owner merges; a new entry needs a ruling.
+var shellPythonPending = map[string]string{
+	"ci/bigboy/bigboy-cut.sh":            "#4563 ports its routing helpers to Go",
+	"ci/bigboy/bigboy-grants-check.sh":   "#4565 ports its helper to Go",
+	"ci/bigboy/bump-swap.sh":             "#4565 ports its helper to Go",
+	"ci/bigboy/check-dho-api-ch-user.sh": "#4565 ports its helper to Go",
+	"ci/bigboy/cut-contents.sh":          "#4565 ports its helpers to Go",
+	"ci/local_validate.sh":               "#4567 and the pytest/uv removal leaves",
+	"ci/run_live_backend_e2e.sh":         "#4564 (live-e2e installs no Python)",
+	"ci/run_tests.sh":                    "#4564 (live-e2e installs no Python)",
 }
 
-func TestNoScriptRunByGoCodeRunsPython(t *testing.T) {
+// shellPythonData reads testdata/shell_python_data_lines.tsv: lines that name Python as data and run none.
+func shellPythonData(t *testing.T) map[string]bool {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "shell_python_data_lines.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.Contains(line, "\t") {
+			t.Fatalf("testdata/shell_python_data_lines.tsv: %q is not path<TAB>line", line)
+		}
+		lines[line] = false
+	}
+	return lines
+}
+
+func TestNoShellScriptRunsPython(t *testing.T) {
 	root := repoRoot(t)
-	scripts := map[string][]string{}
+	data := shellPythonData(t)
+	scanned := 0
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -180,58 +197,46 @@ func TestNoScriptRunByGoCodeRunsPython(t *testing.T) {
 			}
 			return nil
 		}
-		if strings.HasSuffix(path, ".sh") {
-			scripts[entry.Name()] = append(scripts[entry.Name()], path)
+		if !strings.HasSuffix(path, ".sh") {
+			return nil
+		}
+		scanned++
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for number, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") || !scriptPython.MatchString(line) {
+				continue
+			}
+			if _, ok := data[rel+"\t"+strings.TrimSpace(line)]; ok {
+				data[rel+"\t"+strings.TrimSpace(line)] = true
+				continue
+			}
+			if owner, ok := shellPythonPending[rel]; ok {
+				t.Logf("%s:%d still names Python (pending: %s)", rel, number+1, owner)
+				continue
+			}
+			t.Errorf("%s:%d names python/python3/uv/pytest: %s", rel, number+1, strings.TrimSpace(line))
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fset := token.NewFileSet()
-	run := map[string][]string{}
-	for _, path := range goFiles(t, root) {
-		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatal(err)
+	if scanned == 0 {
+		t.Fatal("found no .sh file; the scan is broken")
+	}
+	for entry, used := range data {
+		if !used {
+			t.Errorf("testdata/shell_python_data_lines.tsv: %q matches no line any more: remove it", entry)
 		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if pkg, ok := selector.X.(*ast.Ident); !ok || pkg.Name != "exec" || (selector.Sel.Name != "Command" && selector.Sel.Name != "CommandContext") {
-				return true
-			}
-			rel, _ := filepath.Rel(root, path)
-			for _, name := range shellLiterals(call) {
-				run[name] = append(run[name], fmt.Sprintf("%s:%d", rel, fset.Position(call.Pos()).Line))
-			}
-			return true
-		})
 	}
-	if len(run) == 0 {
-		t.Fatal("found no exec.Command that runs a .sh script; the scan is broken")
-	}
-	for name, callers := range run {
-		for _, path := range scripts[name] {
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			rel, _ := filepath.Rel(root, path)
-			for number, line := range strings.Split(string(raw), "\n") {
-				if strings.HasPrefix(strings.TrimSpace(line), "#") {
-					continue
-				}
-				if scriptPython.MatchString(line) {
-					t.Errorf("%s:%d runs Python, and Go code runs the script (%s): %s", rel, number+1, callers[0], strings.TrimSpace(line))
-				}
-			}
+	for rel := range shellPythonPending {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("%s is on the pending list but is gone: remove the entry", rel)
 		}
 	}
 }

@@ -1,0 +1,16 @@
+# Lines of tracked shell scripts that NAME python/python3/uv/pytest as data (the review harness classifies reviewer commands); they run no Python.
+# path<TAB>exact line, trimmed. A line not listed here fails TestNoShellScriptRunsPython.
+tools/codex-review/codex-review.sh	\`-tags=integration\` Go tests and any container-backed pytest yourself. Do not
+tools/codex-review/codex-review.sh	return s ~ /^([^ \t]*\/)?(pytest|ruff|mypy|python3|python|shellcheck)([^A-Za-z0-9_]|$)/ ||
+tools/codex-review/codex-review.sh	s ~ /^uv run([^A-Za-z0-9_]|$)/ ||
+tools/codex-review/codex-review.sh	return s ~ /(^|[^A-Za-z0-9_])(pytest|ruff|mypy|python3|python|shellcheck|py_compile)([^A-Za-z0-9_]|$)/ ||
+tools/codex-review/codex-review.sh	warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build, $PY_EXECS pytest/uv run/ruff/mypy/bash-or-sh-script/python/shellcheck/py_compile, ${DIFF_UNKNOWN:-0} unresolved/unknown)"
+tools/codex-review/codex-review.sh	warn "VOID IN FORM: reviewer executed nothing (workspace-write round, 0 go test/run/build and 0 pytest/uv run/ruff/mypy/bash/sh/python/shellcheck/py_compile exec blocks) -- do not ledger this verdict as executed evidence; relaunch or escalate"
+tools/codex-review/codex-review.sh	VOID_LINE="VOID IN FORM: reviewer executed nothing under workspace-write (0 go test/run/build and 0 pytest/uv run/ruff/mypy exec blocks) -- do not ledger this verdict as executed evidence; relaunch or escalate."
+tools/codex-review/test-codex-review.sh	'warn "round recorded $EXEC_BLOCKS exec block(s) ($GO_EXECS go test/run/build, $PY_EXECS pytest/uv run/ruff/mypy/bash-or-sh-script/python/shellcheck/py_compile, ${DIFF_UNKNOWN:-0} unresolved/unknown)"' \
+tools/codex-review/test-exec-classify.sh	python3 - <<'PY'
+tools/codex-review/test-exec-classify.sh	check "python3 heredoc on a later line" "$l" "0 1 0"
+tools/codex-review/test-exec-classify.sh	X=\\\"\\\$(python3 - <<'PY'
+tools/codex-review/test-exec-classify.sh	check "python3 inside a command substitution" "$l" "0 1 0"
+tools/codex-review/test-exec-classify.sh	l=$(newlog pytest); block "$l" "/bin/bash -lc \"set -e
+tools/codex-review/test-exec-classify.sh	.venv/bin/pytest -q tests/x.py\" in /w" " succeeded in 10ms:" "1 passed"; check "pytest on a later line" "$l" "0 1 0"

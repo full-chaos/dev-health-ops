@@ -350,7 +350,6 @@ echo "==> final readback assertion (this is the pass/fail signal for the job)"
 cat "${TMP_DIR}/assert.log" 2>/dev/null || true
 FINAL_RC=0
 assert_readback || FINAL_RC=$?
-TMP_DIR="${TMP_DIR}" ROOT_DIR="${ROOT_DIR}" BIN_DIR="${BIN_DIR}" ORG_ID="${ORG_ID}" RUN_START="${RUN_START}" CLICKHOUSE_URI_HTTP="${CLICKHOUSE_URI_HTTP}" CLICKHOUSE_URI_NATIVE="${CLICKHOUSE_URI_NATIVE}" bash "${ROOT_DIR}/ci/tmp_dual_gate_parity.sh" || true
 
 if [ -f "${ASSERT_SUMMARY_JSON}" ]; then
   echo "==> per-family rows-written summary"

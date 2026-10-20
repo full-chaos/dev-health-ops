@@ -113,7 +113,7 @@ internal/edgetokenmint	1
 internal/entitlements	1
 internal/envelopemint	1
 internal/externalrecompute	1
-internal/fixturescli	526
+internal/fixturescli	89
 internal/fixturesgen	12
 internal/goapicli	1
 internal/goapicli/prove	4

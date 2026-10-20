@@ -38,7 +38,7 @@ func PublicReadColumns() []ColumnGrant {
 		{Table: "memberships", Columns: []string{"user_id", "org_id", "role"}},
 		{Table: "sso_providers", Columns: []string{
 			"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
-			"config", "allowed_domains", "encrypted_secrets",
+			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at",
 		}},
 		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier"}},
 		{Table: "saml_assertion_replays", Columns: []string{"provider_id", "assertion_id", "expires_at"}},

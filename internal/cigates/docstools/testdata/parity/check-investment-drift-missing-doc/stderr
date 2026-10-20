@@ -1,0 +1,17 @@
+Traceback (most recent call last):
+  File "{WORK}/scripts/check_investment_docs_drift.py", line 198, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "{WORK}/scripts/check_investment_docs_drift.py", line 186, in main
+    *check_taxonomy_doc(),
+     ^^^^^^^^^^^^^^^^^^^^
+  File "{WORK}/scripts/check_investment_docs_drift.py", line 95, in check_taxonomy_doc
+    doc = TAXONOMY_DOC.read_text(encoding="utf-8")
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/pathlib.py", line 1029, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/pathlib.py", line 1015, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '{WORK}/docs/reference/taxonomies/investment.md'

@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "{WORK}/scripts/check_investment_docs_drift.py", line 198, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "{WORK}/scripts/check_investment_docs_drift.py", line 186, in main
+    *check_taxonomy_doc(),
+     ^^^^^^^^^^^^^^^^^^^^
+  File "{WORK}/scripts/check_investment_docs_drift.py", line 96, in check_taxonomy_doc
+    block_themes, block_subcategories, block_mapping = _keys_from_generated_block(
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "{WORK}/scripts/check_investment_docs_drift.py", line 81, in _keys_from_generated_block
+    raise ValueError(f"bad mapping line in generated block: {line}")
+ValueError: bad mapping line in generated block: risk.security risk

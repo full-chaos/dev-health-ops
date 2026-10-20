@@ -1,0 +1,6 @@
+ERROR: generated theme keys drift: expected ['feature_delivery', 'maintenance', 'operational', 'quality', 'risk'], found ['feature_delivery', 'maintenance', 'operational', 'quality']
+ERROR: generated subcategory keys drift: expected ['feature_delivery.customer', 'feature_delivery.enablement', 'feature_delivery.roadmap', 'maintenance.debt', 'maintenance.refactor', 'maintenance.upgrade', 'operational.incident_response', 'operational.on_call', 'operational.support', 'quality.bugfix', 'quality.reliability', 'quality.testing', 'risk.compliance', 'risk.security', 'risk.vulnerability'], found ['feature_delivery.customer', 'feature_delivery.enablement', 'feature_delivery.roadmap', 'maintenance.debt', 'maintenance.refactor', 'maintenance.upgrade', 'operational.incident_response', 'operational.on_call', 'operational.support', 'quality.bugfix', 'quality.reliability', 'quality.testing', 'risk.compliance', 'risk.security']
+ERROR: documented unknown subcategory keys: ['quality.x']
+ERROR: documented theme keys drift: expected ['feature_delivery', 'maintenance', 'operational', 'quality', 'risk'], found ['feature_delivery', 'maintenance', 'operational', 'quality']
+ERROR: documented subcategory keys missing: ['risk.security']
+ERROR: z.md JSON example #1 unknown themes keys: ['q']

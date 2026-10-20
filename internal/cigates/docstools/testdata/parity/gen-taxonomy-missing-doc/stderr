@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "{WORK}/scripts/gen_taxonomy_docs.py", line 102, in <module>
+    update_doc()
+  File "{WORK}/scripts/gen_taxonomy_docs.py", line 91, in update_doc
+    doc = DOC_PATH.read_text(encoding="utf-8")
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/pathlib.py", line 1029, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/pathlib.py", line 1015, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '{WORK}/docs/reference/taxonomies/investment.md'

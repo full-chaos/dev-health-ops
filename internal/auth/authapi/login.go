@@ -33,6 +33,9 @@ const (
 	textVerifyEmail        = "Please verify your email address before logging in"
 )
 
+// providerLocal is the audit provider of a password sign-in.
+const providerLocal = "local"
+
 // reasonNotMember is the audit reason of a sign-in to an organization the
 // principal is not a member of.
 const reasonNotMember = "denied_no_membership"
@@ -112,7 +115,7 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 	var notMember *notMemberError
 	switch {
 	case errors.As(err, &notMember):
-		if err := h.auditLoginFailed(ctx, notMember.principal, requested, reasonNotMember); err != nil {
+		if err := h.auditSignInFailed(ctx, notMember.principal, requested, reasonNotMember, providerLocal); err != nil {
 			h.fail(w, r, opCompatLogin, err)
 			return
 		}
@@ -130,7 +133,7 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 		h.loginUnverified(w, r, outcome, requested)
 		return
 	}
-	if err := h.auditLoginFailed(ctx, outcome.PrincipalID, requested, string(outcome.Reason)); err != nil {
+	if err := h.auditSignInFailed(ctx, outcome.PrincipalID, requested, string(outcome.Reason), providerLocal); err != nil {
 		h.fail(w, r, opCompatLogin, err)
 		return
 	}
@@ -180,7 +183,7 @@ func (h compatHandlers) loginUnverified(w http.ResponseWriter, r *http.Request, 
 		h.fail(w, r, opCompatLogin, errors.New("authapi: an unverified login's user is gone"))
 		return
 	}
-	if err := h.auditLoginFailed(ctx, outcome.PrincipalID, requested, string(outcome.Reason)); err != nil {
+	if err := h.auditSignInFailed(ctx, outcome.PrincipalID, requested, string(outcome.Reason), providerLocal); err != nil {
 		h.fail(w, r, opCompatLogin, err)
 		return
 	}
@@ -223,17 +226,18 @@ func (h compatHandlers) auditOrganization(ctx context.Context, principal uuid.UU
 	return &first.OrgID, nil
 }
 
-// auditLoginFailed appends the refused sign-in's audit row. A known
-// principal is projected first, since the row references it; one go-api no
-// longer holds is recorded without a subject.
-func (h compatHandlers) auditLoginFailed(ctx context.Context, principal uuid.UUID, requested *uuid.UUID, reason string) error {
+// auditSignInFailed is the one path every refused sign-in (password or
+// social) writes its auth.login.failed row through. A known principal is
+// projected first, since the row references it; one go-api no longer holds is
+// recorded without a subject.
+func (h compatHandlers) auditSignInFailed(ctx context.Context, principal uuid.UUID, requested *uuid.UUID, reason, provider string) error {
 	org, err := h.auditOrganization(ctx, principal, requested)
 	if err != nil {
 		return err
 	}
 	event := audit.AuditEvent{
 		EventType: audit.EventLoginFailed, Outcome: audit.OutcomeDenied, RequestID: requestid.Audit(ctx),
-		Attributes: map[string]any{"reason_code": reason, "provider": "local"},
+		Attributes: map[string]any{"reason_code": reason, "provider": provider},
 	}
 	if org != nil {
 		text := org.String()
@@ -285,7 +289,7 @@ func (s loginSessions) Create(ctx context.Context, principalID uuid.UUID, _ *uui
 	if !found {
 		return session.Issued{}, errors.New("authapi: a login's user is gone")
 	}
-	issued, err := s.h.startSession(ctx, principalID, membership, attempt.requested, amr, "local")
+	issued, err := s.h.startSession(ctx, principalID, membership, attempt.requested, amr, providerLocal)
 	if err != nil {
 		return session.Issued{}, err
 	}

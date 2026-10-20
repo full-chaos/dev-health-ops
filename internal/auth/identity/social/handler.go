@@ -177,8 +177,39 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_, _ = io.Copy(w, bytes.NewReader(payload))
 }
 
-// Classify is not built yet.
-func Classify(error) (int, Reason) { return 0, "" }
+// Classify is the status WriteError answers for err and its reason code, so a
+// caller can act on the answer (audit a refusal) before it writes it.
+func Classify(err error) (int, Reason) {
+	var conflict *ConflictError
+	switch {
+	case errors.As(err, &conflict):
+		return http.StatusConflict, ReasonEmailCollision
+	case errors.Is(err, ErrProviderUnavailable):
+		return http.StatusInternalServerError, ReasonDependency
+	case errors.Is(err, ErrProviderNotConfigured):
+		return http.StatusServiceUnavailable, ReasonDependency
+	case errors.Is(err, ErrProviderRefused):
+		return http.StatusUnauthorized, ReasonInvalidCredentials
+	case errors.Is(err, ErrEmailUnverified):
+		return http.StatusForbidden, ReasonEmailUnverified
+	case errors.Is(err, ErrPrincipalDisabled):
+		return http.StatusForbidden, ReasonPrincipalDeactivated
+	case errors.Is(err, identity.ErrSignupNotAvailable):
+		return http.StatusForbidden, ReasonSignupUnavailable
+	case errors.Is(err, ErrReauthenticationRequired):
+		return http.StatusForbidden, ReasonExpired
+	case errors.Is(err, identity.ErrIdentityConflict):
+		return http.StatusConflict, ReasonIdentityConflict
+	case errors.Is(err, ErrProviderLinked):
+		return http.StatusConflict, ReasonProviderLinked
+	case errors.Is(err, identity.ErrNotFound):
+		return http.StatusNotFound, ReasonPrincipalNotFound
+	case errors.Is(err, identity.ErrLastSignInMethod):
+		return http.StatusConflict, ReasonIdentityConflict
+	default:
+		return http.StatusInternalServerError, ReasonStoreUnavailable
+	}
+}
 
-// WriteError is not built yet.
-func WriteError(w http.ResponseWriter, provider Provider, err error) {}
+// WriteError writes go-api's answer for err (writeError).
+func WriteError(w http.ResponseWriter, provider Provider, err error) { writeError(w, provider, err) }

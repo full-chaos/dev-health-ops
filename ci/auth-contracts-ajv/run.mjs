@@ -100,6 +100,9 @@ const APPROVED_AUDIT = [
   "account_locked",
   "principal_deactivated",
   "email_unverified",
+  "email_collision",
+  "signup_unavailable",
+  "identity_conflict",
 ];
 const NOT_IN_THE_VOCABULARY = [
   "secret_0123456789abcdef0123",

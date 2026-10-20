@@ -62,8 +62,11 @@
       "invalid_credentials",
       "account_locked",
       "principal_deactivated",
-      "email_unverified"
+      "email_unverified",
+      "email_collision",
+      "signup_unavailable",
+      "identity_conflict"
     ],
-    "note": "The codes used by authorization decisions and error.v1 in valid fixtures of this corpus, the revoked_reason values, and the 33 reason codes the merged audit producer (internal/audit attributeVocabulary) accepts. A Go test checks the producer's list against audit-event.v1."
+    "note": "The codes used by authorization decisions and error.v1 in valid fixtures of this corpus, the revoked_reason values, and the 36 reason codes the merged audit producer (internal/audit attributeVocabulary) accepts. A Go test checks the producer's list against audit-event.v1."
   }
 }

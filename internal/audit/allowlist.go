@@ -125,6 +125,7 @@ var attributeVocabulary = map[string][]string{
 		"identity_linked", "identity_unlinked", "identity_projected", "policy_revision_activated",
 		"entitlement_snapshot_applied", "denied_no_membership", "denied_no_grant", "denied_policy",
 		"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified",
+		"email_collision", "signup_unavailable", "identity_conflict",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",

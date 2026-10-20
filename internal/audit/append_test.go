@@ -47,7 +47,8 @@ func TestCommitRefusesAnAppendOnlyEventType(t *testing.T) {
 }
 
 func TestTheLoginReasonsAreAuditVocabulary(t *testing.T) {
-	for _, reason := range []string{"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified", "denied_no_membership"} {
+	for _, reason := range []string{"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified", "denied_no_membership",
+		"email_collision", "signup_unavailable", "identity_conflict"} {
 		if err := ValidateAttributes(map[string]any{"reason_code": reason, "provider": "local"}); err != nil {
 			t.Errorf("%s: %v", reason, err)
 		}

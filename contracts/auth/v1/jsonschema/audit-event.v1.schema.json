@@ -108,7 +108,10 @@
             "invalid_credentials",
             "account_locked",
             "principal_deactivated",
-            "email_unverified"
+            "email_unverified",
+            "email_collision",
+            "signup_unavailable",
+            "identity_conflict"
           ],
           "description": "A reason code from a CLOSED vocabulary (contracts/auth/v1/vocabulary/reason-codes.json): the codes used by authorization decisions and error.v1 in this corpus, the revoked_reason values, and the reason codes the merged audit producer accepts. A pattern would admit a secret-shaped lowercase value, so the set is an enum. A new value arrives with the producer that emits it."
         },

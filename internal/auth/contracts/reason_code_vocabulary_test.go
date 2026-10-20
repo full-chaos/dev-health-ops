@@ -226,6 +226,9 @@ var approvedAuditReasonCodes = []string{
 	"account_locked",
 	"principal_deactivated",
 	"email_unverified",
+	"email_collision",
+	"signup_unavailable",
+	"identity_conflict",
 }
 
 func TestTheVocabularyFileIsExactlyTheApprovedLists(t *testing.T) {

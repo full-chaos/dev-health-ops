@@ -158,7 +158,7 @@ func (s *Service) AuthorizeOAuth(ctx context.Context, providerID uuid.UUID) (Aut
 		s.refused(ctx, routeOAuthAuthorize, providerID, failure)
 		return AuthorizeResult{}, failure
 	}
-	s.record(ctx, routeOAuthAuthorize, outcomeSuccess, ReasonAccepted)
+	s.succeeded(ctx, routeOAuthAuthorize, providerID, nil)
 	return result, nil
 }
 
@@ -171,7 +171,7 @@ func (s *Service) AuthorizeOAuthByType(ctx context.Context, providerType string,
 		s.refused(ctx, routeOAuthAuthorize, providerID, failure)
 		return AuthorizeResult{}, failure
 	}
-	s.record(ctx, routeOAuthAuthorize, outcomeSuccess, ReasonAccepted)
+	s.succeeded(ctx, routeOAuthAuthorize, providerID, nil)
 	return result, nil
 }
 
@@ -257,9 +257,7 @@ func (s *Service) CallbackOAuth(ctx context.Context, providerID uuid.UUID, in Ca
 		s.refused(ctx, routeOAuthCallback, providerID, failure)
 		return Login{}, clear, failure
 	}
-	s.record(ctx, routeOAuthCallback, outcomeSuccess, ReasonAccepted)
-	s.cfg.Logger.InfoContext(ctx, "auth oidc: signed in", "route", routeOAuthCallback, "provider_id", providerID.String(),
-		"principal_id", login.PrincipalID.String())
+	s.succeeded(ctx, routeOAuthCallback, providerID, &login.PrincipalID)
 	return login, clear, nil
 }
 

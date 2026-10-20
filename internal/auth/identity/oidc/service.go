@@ -271,7 +271,7 @@ func (s *Service) Authorize(ctx context.Context, providerID uuid.UUID, redirectU
 		s.refused(ctx, routeAuthorize, providerID, failure)
 		return AuthorizeResult{}, failure
 	}
-	s.record(ctx, routeAuthorize, outcomeSuccess, ReasonAccepted)
+	s.succeeded(ctx, routeAuthorize, providerID, nil)
 	return result, nil
 }
 
@@ -355,9 +355,7 @@ func (s *Service) Callback(ctx context.Context, providerID uuid.UUID, in Callbac
 		s.refused(ctx, routeCallback, providerID, failure)
 		return Login{}, clear, failure
 	}
-	s.record(ctx, routeCallback, outcomeSuccess, ReasonAccepted)
-	s.cfg.Logger.InfoContext(ctx, "auth oidc: signed in", "provider_id", providerID.String(),
-		"principal_id", login.PrincipalID.String(), "request_id", requestid.Wire(ctx))
+	s.succeeded(ctx, routeCallback, providerID, &login.PrincipalID)
 	return login, clear, nil
 }
 
@@ -367,11 +365,23 @@ const (
 	outcomeSuccess = "success"
 )
 
-// record counts one outcome. Every outcome of both routes is counted here
-// exactly once.
+// record counts one outcome. Only succeeded and refused call it, so every
+// outcome of every route is counted and logged exactly once.
 func (s *Service) record(ctx context.Context, route, outcome string, reason Reason) {
 	s.outcomes.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route),
 		attribute.String("outcome", outcome), attribute.String("reason", string(reason))))
+}
+
+// succeeded counts a success and writes its one log line. principal is the
+// signed-in account of a callback; an authorize has none.
+func (s *Service) succeeded(ctx context.Context, route string, providerID uuid.UUID, principal *uuid.UUID) {
+	s.record(ctx, route, outcomeSuccess, ReasonAccepted)
+	attrs := []any{"route", route, "outcome", outcomeSuccess, "reason", string(ReasonAccepted),
+		"provider_id", providerID.String(), "request_id", requestid.Wire(ctx)}
+	if principal != nil {
+		attrs = append(attrs, "principal_id", principal.String())
+	}
+	s.cfg.Logger.InfoContext(ctx, "auth oidc: request succeeded", attrs...)
 }
 
 // refused counts a refusal and writes its one log line.
@@ -381,8 +391,8 @@ func (s *Service) refused(ctx context.Context, route string, providerID uuid.UUI
 		outcome, level = "error", slog.LevelError
 	}
 	s.record(ctx, route, outcome, failure.Reason)
-	attrs := []any{"route", route, "provider_id", providerID.String(), "reason", string(failure.Reason),
-		"status", failure.Status, "request_id", requestid.Wire(ctx)}
+	attrs := []any{"route", route, "outcome", outcome, "reason", string(failure.Reason),
+		"provider_id", providerID.String(), "status", failure.Status, "request_id", requestid.Wire(ctx)}
 	if failure.err != nil {
 		attrs = append(attrs, logging.ErrorAttr(failure.err))
 	}

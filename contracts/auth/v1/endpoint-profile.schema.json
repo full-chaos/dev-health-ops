@@ -258,7 +258,8 @@
             "dev-health-web",
             "dev-health-acr-api",
             "dev-health-acr-mcp",
-            "dev-health-query-api"
+            "dev-health-query-api",
+            "dev-health-auth-service"
           ]
         },
         "source": {

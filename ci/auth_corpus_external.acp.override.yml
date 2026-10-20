@@ -1,6 +1,6 @@
 # Leg acp of ci/auth_corpus_external.sh (CHAOS-10160): go-api forwards the six auth aggregates to auth-service.
-# Added to the main override for that leg only. The six AUTH_PROXY_* flags and AUTH_PROXY_URL come from the project
-# state file, so ci/auth_corpus_set_env.sh keeps them across a recreate.
+# Added to the main override for that leg only. AUTH_PROXY_URL, and the AUTH_PROXY_* flag of each aggregate the running
+# auth-service serves, come from the project state file, so ci/auth_corpus_set_env.sh keeps them across a recreate.
 #
 # go-api also joins the auth network here, and a request from the runner may reach it through either network's
 # gateway: the auth network's subnet is pinned too (outside the default network's 10.199.90.0/24 and compose.yml's
@@ -27,3 +27,7 @@ services:
       - AUTH_PROXY_SOCIAL
       - AUTH_PROXY_OIDC
       - AUTH_PROXY_SAML
+  # The API listener too, on an ephemeral loopback port: ci/auth_corpus_external.sh asks the running auth-service which
+  # proxied routes it serves (OPTIONS: 405 served, 404 not) before it turns an aggregate's flag on.
+  auth-service:
+    ports: !override ["127.0.0.1::8096", "127.0.0.1::8095"]

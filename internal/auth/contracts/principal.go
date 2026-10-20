@@ -182,9 +182,9 @@ func checkTimestampRange(p *Principal) error {
 // class or discovering the class by validator fan-out. The credential
 // authenticates a principal but IS NOT the principal (TRD section 8 rule 2).
 type Credential struct {
-	// Class is a value from the closed vocabulary: the Wave 0 frozen 30 in
-	// contracts/auth/v1/credential-classes.json plus the three new platform
-	// credentials TRD section 11 defines. Unknown denies (G-26). The schema
+	// Class is a value from the closed vocabulary: the classes in
+	// contracts/auth/v1/credential-classes.json plus the platform credentials
+	// TRD section 11 defines that are not minted yet. Unknown denies (G-26). The schema
 	// enforces it, so a value here has already been checked.
 	Class string `json:"class"`
 	// CredentialID identifies the credential INSTANCE. Never the secret:

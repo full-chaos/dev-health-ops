@@ -142,6 +142,10 @@ jobs:
           - FuzzNormalizeEmail
           - FuzzExternalKeyValidate
           - FuzzParseRefreshRequest
+          - FuzzOpenState
+          - FuzzParseJOSEHeader
+          - FuzzValidateIDTokenClaims
+          - FuzzParseCallbackBody
           - FuzzParseSAMLResponse
           - FuzzSAMLSubject
     steps:

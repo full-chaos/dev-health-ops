@@ -121,6 +121,7 @@ func shardPlan(t *testing.T, shard, count int) []string {
 }
 
 func TestTheTestWeightsTableIsClean(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := goList(t)
 	known := map[string]bool{}
 	for _, p := range pkgs {
@@ -148,6 +149,7 @@ func TestTheTestWeightsTableIsClean(t *testing.T) {
 }
 
 func TestEveryShardIsNonEmptyAndTheShardsPartitionTheModule(t *testing.T) {
+	t.Parallel()
 	mod, pkgs := goList(t)
 	weights := map[string]int{}
 	for _, r := range weightRows(t) {
@@ -193,6 +195,7 @@ func TestEveryShardIsNonEmptyAndTheShardsPartitionTheModule(t *testing.T) {
 }
 
 func TestAShardThatSelectsNothingFailsLoudly(t *testing.T) {
+	t.Parallel()
 	_, errs, err := checkGo(t, nil, "test-shard-plan", "5000", "5001")
 	if err == nil {
 		t.Fatal("a test shard that selects no package must fail")
@@ -203,6 +206,7 @@ func TestAShardThatSelectsNothingFailsLoudly(t *testing.T) {
 }
 
 func TestBadShardArgumentsFail(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		args []string
 		want string
@@ -222,6 +226,7 @@ func TestBadShardArgumentsFail(t *testing.T) {
 // The leg-count pin: the matrix entries that run the test leg are exactly `test K N` for K = 1..N with N their count,
 // and the ci-leg verb takes that shape (and refuses the bare `test` and an out-of-range shard).
 func TestWorkflowTestLegsMatchTheCiLegArguments(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "go-quality.yml"))
 	if err != nil {
 		t.Fatal(err)
@@ -292,6 +297,7 @@ func writeLog(t *testing.T, text string) string {
 // Planted row: a fake shard over 85% of the 30 min cap (1530 s) trips the wall-time guard and names its three heaviest
 // packages by measured time.
 func TestTheWallTimeGuardTripsOnAFakeShardOverTheBound(t *testing.T) {
+	t.Parallel()
 	log := writeLog(t, strings.Join([]string{
 		"ok  \tgithub.com/x/a\t10.500s",
 		"ok  \tgithub.com/x/b\t900.000s",
@@ -326,6 +332,7 @@ func TestTheWallTimeGuardTripsOnAFakeShardOverTheBound(t *testing.T) {
 }
 
 func TestTheWallTimeGuardNamesTheHeaviestByWeightWhenNothingIsMeasured(t *testing.T) {
+	t.Parallel()
 	mod, _ := goList(t)
 	weights := map[string]int{}
 	for _, r := range weightRows(t) {
@@ -355,6 +362,7 @@ func TestTheWallTimeGuardNamesTheHeaviestByWeightWhenNothingIsMeasured(t *testin
 
 // The race-excluded census (ci/race_excluded_tests.tsv) is split over the test shards: every row runs in exactly one shard.
 func TestTheRaceExcludedCensusIsSplitOverTheShardsExactlyOnce(t *testing.T) {
+	t.Parallel()
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "race_excluded_tests.tsv"))
 	if err != nil {
 		t.Fatal(err)
@@ -386,5 +394,28 @@ func TestTheRaceExcludedCensusIsSplitOverTheShardsExactlyOnce(t *testing.T) {
 	sort.Strings(want)
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("the shards run %d race-excluded rows, the census lists %d: a row is lost or run twice", len(got), len(want))
+	}
+}
+
+// A missing or empty race-excluded census fails the test leg: the failure of the row loader must not be swallowed.
+func TestAMissingOrEmptyRaceExcludedCensusFailsTheTestLeg(t *testing.T) {
+	t.Parallel()
+	empty := filepath.Join(t.TempDir(), "empty.tsv")
+	if err := os.WriteFile(empty, []byte("# no rows\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, list := range map[string]string{"empty": empty, "missing": filepath.Join(t.TempDir(), "absent.tsv")} {
+		r := runCheckGo(t, []string{"GO_RACE_EXCLUDED_TESTS=" + list}, false, "ci-leg", "test", "350", "350")
+		if r.Err == nil {
+			t.Errorf("%s census: the test leg passed: %s", name, r.Stdout)
+			continue
+		}
+		if !strings.Contains(r.Stderr, "race_excluded_tests.tsv") {
+			t.Errorf("%s census: the failure does not name the census: %s", name, r.Stderr)
+		}
+	}
+	r := runCheckGo(t, nil, false, "ci-leg", "test", "350", "350")
+	if r.Err != nil {
+		t.Errorf("the real census must pass the same leg: %v\n%s", r.Err, r.Stderr)
 	}
 }

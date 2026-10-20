@@ -13,11 +13,7 @@ import (
 // public repo: the pool term must carry the push-to-main and same-repository guards, the variable
 // unset must mean hosted, and a pool job must run with Ryuk off, a per-job session id and a reap.
 
-const (
-	racePoolTerm = "matrix.heavy && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && " +
-		"github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops'"
-	raceHostedFallback = "'ubuntu-latest' }}"
-)
+const raceHostedFallback = "'ubuntu-latest' }}"
 
 func goQualityLeg(t *testing.T) map[string]any {
 	t.Helper()
@@ -100,4 +96,24 @@ func TestRaceLegsTurnSetupGoCacheOffOnThePool(t *testing.T) {
 		}
 	}
 	t.Fatal("no setup-go step in go-quality-leg")
+}
+
+// Only race-2 and race-3 are budgeted for the pool (ops pool share, MCP GO): race-1, static and test stay hosted.
+func TestOnlyRace2AndRace3CarryThePoolFlag(t *testing.T) {
+	leg := goQualityLeg(t)
+	strategy, _ := leg["strategy"].(map[string]any)
+	matrix, _ := strategy["matrix"].(map[string]any)
+	include, _ := matrix["include"].([]any)
+	got := map[string]bool{}
+	for _, e := range include {
+		entry, _ := e.(map[string]any)
+		name, _ := entry["name"].(string)
+		if pool, _ := entry["pool"].(bool); pool {
+			got[name] = true
+		}
+	}
+	want := map[string]bool{"race-2-of-3": true, "race-3-of-3": true}
+	if len(got) != len(want) || !got["race-2-of-3"] || !got["race-3-of-3"] {
+		t.Fatalf("pool-flagged legs = %v, want exactly race-2-of-3 and race-3-of-3", got)
+	}
 }

@@ -176,6 +176,9 @@ type Deps struct {
 	// warning, matching org_deletion.py's own behavior when its ClickHouse
 	// client cannot connect.
 	ClickHouseDSN string
+	// AuthProxy routes /api/v1/auth/* aggregates to auth-service
+	// (AUTH_PROXY_*); the zero value serves every route in go-api.
+	AuthProxy AuthProxyConfig
 	// Limits is the rate-limit store every limited route counts through
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.

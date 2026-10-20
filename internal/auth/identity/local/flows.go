@@ -47,7 +47,12 @@ type FlowOutcome struct {
 	PrincipalID uuid.UUID
 	Violations  []string
 	Issued      *session.Issued
+	RevokeErr   error
 }
+
+// ErrSessionsNotRevoked reports that RevokeAll failed every attempt after a
+// password change.
+var ErrSessionsNotRevoked = errors.New("local: sessions were not revoked")
 
 // RegisterRequest is one registration. Email is not yet normalized.
 type RegisterRequest struct {
@@ -72,6 +77,7 @@ type FlowsConfig struct {
 	Links    Links
 	Sessions SessionAdmin
 	Mail     Mailer
+	Locker   Locker
 	// UsersOwnedByAuth mirrors the B2 switch (D3). Off, every flow returns
 	// identity.ErrSignupNotAvailable before it reads or writes anything, so no
 	// credential is consumed for a write that cannot happen.

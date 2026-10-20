@@ -143,3 +143,8 @@ WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > 
 		return uuid.Nil, false, fmt.Errorf("local: consuming a link credential: %w", err)
 	}
 }
+
+// WithPrincipalLock is not implemented yet.
+func (l *PGLinks) WithPrincipalLock(ctx context.Context, principalID uuid.UUID, fn func(ctx context.Context) error) error {
+	return fn(ctx)
+}

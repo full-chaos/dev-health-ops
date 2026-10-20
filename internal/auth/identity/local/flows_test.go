@@ -48,6 +48,8 @@ type flowAccounts struct {
 	hashes   []string
 	newID    uuid.UUID
 	writeErr error
+	locker   *flowLocker
+	outside  int
 }
 
 func (a *flowAccounts) ByEmail(_ context.Context, email string) (*User, error) {
@@ -80,6 +82,9 @@ func (a *flowAccounts) SetEmailVerified(_ context.Context, id uuid.UUID) error {
 
 func (a *flowAccounts) SetPasswordHash(_ context.Context, _ uuid.UUID, hash string) error {
 	a.rec.add("SetPasswordHash")
+	if a.locker != nil && !a.locker.active {
+		a.outside++
+	}
 	if a.writeErr != nil {
 		return a.writeErr
 	}
@@ -111,9 +116,24 @@ func (l *flowLinks) Redeem(_ context.Context, req RedeemRequest) (uuid.UUID, boo
 }
 
 type flowSessions struct {
-	rec     *flowRecorder
-	revoked []uuid.UUID
-	created []uuid.UUID
+	rec       *flowRecorder
+	revoked   []uuid.UUID
+	created   []uuid.UUID
+	revokeErr error
+	attempts  int
+}
+
+type flowLocker struct {
+	active  bool
+	locked  []uuid.UUID
+	outside int
+}
+
+func (l *flowLocker) WithPrincipalLock(ctx context.Context, id uuid.UUID, fn func(context.Context) error) error {
+	l.locked = append(l.locked, id)
+	l.active = true
+	defer func() { l.active = false }()
+	return fn(ctx)
 }
 
 func (s *flowSessions) Create(_ context.Context, id uuid.UUID, _ *uuid.UUID, amr []string) (session.Issued, error) {
@@ -124,6 +144,10 @@ func (s *flowSessions) Create(_ context.Context, id uuid.UUID, _ *uuid.UUID, amr
 
 func (s *flowSessions) RevokeAll(_ context.Context, id uuid.UUID, _ session.Actor) (int, error) {
 	s.rec.add("RevokeAll")
+	s.attempts++
+	if s.revokeErr != nil {
+		return 0, s.revokeErr
+	}
 	s.revoked = append(s.revoked, id)
 	return 1, nil
 }
@@ -146,6 +170,7 @@ type flowRig struct {
 	links    *flowLinks
 	sessions *flowSessions
 	mail     *flowMail
+	locker   *flowLocker
 }
 
 const (
@@ -160,8 +185,10 @@ func newFlowRig(t *testing.T, owned bool) *flowRig {
 		links:    &flowLinks{rec: rec, redeem: map[[32]byte]uuid.UUID{}},
 		sessions: &flowSessions{rec: rec},
 		mail:     &flowMail{rec: rec},
+		locker:   &flowLocker{},
 	}
-	f, err := NewFlows(FlowsConfig{Accounts: rig.accounts, Links: rig.links, Sessions: rig.sessions, Mail: rig.mail,
+	rig.accounts.locker = rig.locker
+	f, err := NewFlows(FlowsConfig{Accounts: rig.accounts, Links: rig.links, Sessions: rig.sessions, Mail: rig.mail, Locker: rig.locker,
 		UsersOwnedByAuth: owned,
 		Hash:             func(p string) (string, error) { return "hash-of:" + p, nil },
 		Compare:          func(hash, p string) bool { return hash == "hash-of:"+p },
@@ -480,7 +507,7 @@ func TestMailFailureLogsAFixedClassNotTheErrorText(t *testing.T) {
 			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 			t.Cleanup(func() { slog.SetDefault(previous) })
 			rig := newFlowRig(t, true)
-			f, err := NewFlows(FlowsConfig{Accounts: rig.accounts, Links: rig.links, Sessions: rig.sessions, Mail: failingMail{cause}, UsersOwnedByAuth: true})
+			f, err := NewFlows(FlowsConfig{Accounts: rig.accounts, Links: rig.links, Sessions: rig.sessions, Mail: failingMail{cause}, Locker: rig.locker, UsersOwnedByAuth: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -496,4 +523,57 @@ func TestMailFailureLogsAFixedClassNotTheErrorText(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The password write and the session cleanup run under the principal lock.
+func TestPasswordFlowsRunUnderThePrincipalLock(t *testing.T) {
+	rig := newFlowRig(t, true)
+	u := rig.user("l@example.com", true)
+	rig.grant("s", u.ID)
+	if out, err := rig.f.Reset(context.Background(), "s", "A-new-pass-77"); err != nil || out.Kind != FlowOK {
+		t.Fatalf("Reset = %+v, %v", out, err)
+	}
+	if _, err := rig.f.Change(context.Background(), ChangeRequest{PrincipalID: u.ID, Current: "A-new-pass-77", New: "Brand-new-pass-42"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rig.locker.locked) != 2 || rig.locker.locked[0] != u.ID || rig.locker.locked[1] != u.ID {
+		t.Errorf("locks = %v, want two for the principal", rig.locker.locked)
+	}
+	if rig.accounts.outside != 0 {
+		t.Errorf("%d password writes ran outside the lock", rig.accounts.outside)
+	}
+}
+
+// The password change is the security event; ending older sessions is cleanup
+// that is retried and reported, never a failed flow.
+func TestRevokeFailureAfterAPasswordChangeIsRetriedAndReported(t *testing.T) {
+	boom := errors.New("sessions down")
+	t.Run("reset", func(t *testing.T) {
+		rig := newFlowRig(t, true)
+		u := rig.user("r@example.com", true)
+		rig.grant("s", u.ID)
+		rig.sessions.revokeErr = boom
+		out, err := rig.f.Reset(context.Background(), "s", "A-new-pass-77")
+		if err != nil || out.Kind != FlowOK {
+			t.Fatalf("Reset = %+v, %v; want success", out, err)
+		}
+		if !errors.Is(out.RevokeErr, ErrSessionsNotRevoked) || !errors.Is(out.RevokeErr, boom) {
+			t.Errorf("RevokeErr = %v", out.RevokeErr)
+		}
+		if rig.sessions.attempts != 3 || len(rig.accounts.hashes) != 1 {
+			t.Errorf("revoke attempts %d, password writes %d; want 3 and 1", rig.sessions.attempts, len(rig.accounts.hashes))
+		}
+	})
+	t.Run("change still issues the caller a session", func(t *testing.T) {
+		rig := newFlowRig(t, true)
+		u := rig.user("c@example.com", true)
+		rig.sessions.revokeErr = boom
+		out, err := rig.f.Change(context.Background(), ChangeRequest{PrincipalID: u.ID, Current: flowPassword, New: "Brand-new-pass-42"})
+		if err != nil || out.Kind != FlowOK || out.Issued == nil || !errors.Is(out.RevokeErr, ErrSessionsNotRevoked) {
+			t.Fatalf("Change = %+v, %v", out, err)
+		}
+		if rig.sessions.attempts != 3 || len(rig.sessions.created) != 1 {
+			t.Errorf("revoke attempts %d, sessions created %d; want 3 and 1", rig.sessions.attempts, len(rig.sessions.created))
+		}
+	})
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 )
@@ -290,7 +291,7 @@ func (m *liveMail) last(t *testing.T) Message {
 
 func liveFlows(t *testing.T, links *PGLinks, accounts *liveAccounts, mail *liveMail, rec *flowRecorder) *Flows {
 	t.Helper()
-	f, err := NewFlows(FlowsConfig{Accounts: accounts, Links: links, Sessions: &flowSessions{rec: rec}, Mail: mail, UsersOwnedByAuth: true,
+	f, err := NewFlows(FlowsConfig{Accounts: accounts, Links: links, Sessions: &flowSessions{rec: rec}, Mail: mail, Locker: links, UsersOwnedByAuth: true,
 		Hash:    func(p string) (string, error) { return "hash-of:" + p, nil },
 		Compare: func(h, p string) bool { return h == "hash-of:"+p }})
 	if err != nil {
@@ -308,7 +309,7 @@ func TestRaceResetReplay(t *testing.T) {
 	accounts := &liveAccounts{users: map[string]*User{}, byID: map[uuid.UUID]*User{}}
 	rec := &flowRecorder{}
 	sessions := &flowSessions{rec: rec}
-	f, err := NewFlows(FlowsConfig{Accounts: accounts, Links: links, Sessions: sessions, Mail: &liveMail{}, UsersOwnedByAuth: true})
+	f, err := NewFlows(FlowsConfig{Accounts: accounts, Links: links, Sessions: sessions, Mail: &liveMail{}, Locker: links, UsersOwnedByAuth: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -569,4 +570,143 @@ func TestCorpusAuthFlowDecisionRows(t *testing.T) {
 	if accounts.hashes != 1 {
 		t.Errorf("password writes = %d, want 1", accounts.hashes)
 	}
+}
+
+// TestRaceIssueLeavesOneLiveCredential: many issuers of one principal and
+// purpose at once leave exactly one unconsumed credential.
+func TestRaceIssueLeavesOneLiveCredential(t *testing.T) {
+	ctx := context.Background()
+	env, links := linkEnv(t, ctx)
+	p := env.principal(t, ctx)
+	const callers = 24
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs <- links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash(fmt.Sprintf("issue-%d", i)), TTL: ResetTTL})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("Issue: %v", err)
+		}
+	}
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE principal_id = $1 AND purpose = 'password_reset' AND consumed_at IS NULL`, p.String()); n != 1 {
+		t.Fatalf("unconsumed credentials = %d, want exactly 1", n)
+	}
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE principal_id = $1`, p.String()); n != callers {
+		t.Errorf("rows = %d, want %d (every issue stores one, older ones consumed)", n, callers)
+	}
+	markRace(t)
+}
+
+// stateSessions is a SessionAdmin whose live set is observable.
+type stateSessions struct {
+	mu   sync.Mutex
+	live map[uuid.UUID]bool
+}
+
+func (s *stateSessions) Create(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ []string) (session.Issued, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := uuid.New()
+	s.live[id] = true
+	return session.Issued{Session: session.Record{ID: id}}, nil
+}
+
+func (s *stateSessions) RevokeAll(context.Context, uuid.UUID, session.Actor) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range s.live {
+		s.live[id] = false
+	}
+	return len(s.live), nil
+}
+
+// statefulAccounts keeps one password hash; ByID reads it live.
+type statefulAccounts struct {
+	mu   sync.Mutex
+	user *User
+}
+
+func (a *statefulAccounts) ByEmail(context.Context, string) (*User, error) { return nil, nil }
+func (a *statefulAccounts) ByID(context.Context, uuid.UUID) (*User, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	u := *a.user
+	return &u, nil
+}
+func (a *statefulAccounts) ProvisionLocal(context.Context, ProvisionLocalRequest) (uuid.UUID, error) {
+	return uuid.Nil, identity.ErrEmailTaken
+}
+func (a *statefulAccounts) SetEmailVerified(context.Context, uuid.UUID) error { return nil }
+func (a *statefulAccounts) SetPasswordHash(_ context.Context, _ uuid.UUID, hash string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.user.PasswordHash = &hash
+	return nil
+}
+
+// TestRaceConcurrentChangeKeepsTheReturnedSession: concurrent changes made
+// with the same current password: one wins, the rest are refused, and the
+// session the winner was given is live.
+func TestRaceConcurrentChangeKeepsTheReturnedSession(t *testing.T) {
+	ctx := context.Background()
+	env, links := linkEnv(t, ctx)
+	p := env.principal(t, ctx)
+	start0 := "hash-of:" + flowPassword
+	provider := "local"
+	accounts := &statefulAccounts{user: &User{ID: p, IsActive: true, PasswordHash: &start0, AuthProvider: &provider}}
+	sessions := &stateSessions{live: map[uuid.UUID]bool{uuid.New(): true}}
+	f, err := NewFlows(FlowsConfig{Accounts: accounts, Links: links, Sessions: sessions, Mail: &liveMail{}, Locker: links, UsersOwnedByAuth: true,
+		Hash:    func(pw string) (string, error) { time.Sleep(20 * time.Millisecond); return "hash-of:" + pw, nil },
+		Compare: func(h, pw string) bool { return h == "hash-of:"+pw }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const callers = 12
+	type result struct {
+		out FlowOutcome
+		err error
+	}
+	results := make(chan result, callers)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			out, err := f.Change(ctx, ChangeRequest{PrincipalID: p, Current: flowPassword, New: fmt.Sprintf("Brand-new-pass-%d", 10+i)})
+			results <- result{out, err}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var winners []FlowOutcome
+	for r := range results {
+		if r.err != nil {
+			t.Fatalf("Change: %v", r.err)
+		}
+		if r.out.Kind == FlowOK {
+			winners = append(winners, r.out)
+		} else if r.out.Kind != FlowCurrentRejected {
+			t.Errorf("a refused change answered %s, want %s", r.out.Kind, FlowCurrentRejected)
+		}
+	}
+	if len(winners) != 1 {
+		t.Fatalf("successful changes = %d, want exactly 1", len(winners))
+	}
+	if !sessions.live[winners[0].Issued.Session.ID] {
+		t.Error("the session the winning change returned was revoked by another change")
+	}
+	markRace(t)
 }

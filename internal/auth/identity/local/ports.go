@@ -91,3 +91,8 @@ type Message struct {
 type Mailer interface {
 	Send(ctx context.Context, msg Message) error
 }
+
+// Locker runs fn while it holds a per-principal lock.
+type Locker interface {
+	WithPrincipalLock(ctx context.Context, principalID uuid.UUID, fn func(ctx context.Context) error) error
+}

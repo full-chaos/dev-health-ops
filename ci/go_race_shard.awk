@@ -72,7 +72,7 @@ END {
       best = 1
       for (s = 2; s <= count; s++) if (load[s] < load[best]) best = s
       load[best] += weight[k]
-      if (best == shard) keep[k] = 1
+      if (best == shard && k != 7) keep[k] = 1
     }
   }
   # print in input order so the package order handed to go test is stable

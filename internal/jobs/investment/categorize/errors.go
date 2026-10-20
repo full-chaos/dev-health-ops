@@ -328,9 +328,10 @@ func containsAnySubstring(haystack string, needles ...string) bool {
 
 const redactedMessageLimit = 200
 
-// RedactedMessage is err's text for a log line. Only errors whose text this
+// RedactedMessage is err's text for a log line. Only the matched error's OWN
+// text is used, never an outer wrapper's, and only for errors whose text this
 // package or the shared llm package fixes (a canonical sentence, "http <status>",
-// a context error) are logged, credential-redacted and cut to 200 runes; any
+// a context error); it is credential-redacted and cut to 200 runes; any
 // other error is logged by Go type alone, because its text can hold a response
 // body or prompt text.
 func RedactedMessage(err error) string {
@@ -340,17 +341,20 @@ func RedactedMessage(err error) string {
 	var text string
 	var typed *llmError
 	var status *httpStatusError
+	var shared *llm.Error
 	switch {
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		text = sanitizeMessage(err.Error())
-	case errors.As(err, &typed), errors.As(err, &status):
-		text = sanitizeMessage(err.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		text = context.DeadlineExceeded.Error()
+	case errors.Is(err, context.Canceled):
+		text = context.Canceled.Error()
+	case errors.As(err, &typed):
+		text = sanitizeMessage(typed.Error())
+	case errors.As(err, &status):
+		text = status.Error()
+	case errors.As(err, &shared) && shared.Class != llm.ClassGeneric:
+		text = sanitizeMessage(shared.Error())
 	default:
-		if class, ok := llm.ClassOf(err); ok && class != llm.ClassGeneric {
-			text = sanitizeMessage(err.Error())
-		} else {
-			text = fmt.Sprintf("error of type %T (text withheld)", err)
-		}
+		text = fmt.Sprintf("error of type %T (text withheld)", err)
 	}
 	if runes := []rune(text); len(runes) > redactedMessageLimit {
 		text = string(runes[:redactedMessageLimit])

@@ -202,7 +202,7 @@ func ownershipMigrationStatements(t *testing.T) []string {
 		t.Fatal("cannot locate this test file")
 	}
 	path := filepath.Join(filepath.Dir(file), "..", "..", "..", "..",
-		"src", "dev_health_ops", "migrations", "clickhouse", "095_git_blame_file_ownership.sql")
+		"internal", "chmigrate", "history", "095_git_blame_file_ownership.sql")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

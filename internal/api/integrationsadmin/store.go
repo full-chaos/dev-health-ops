@@ -161,14 +161,16 @@ type dataset struct {
 	UnavailableReason     *string
 	UnavailableSince      *time.Time
 	UnavailableLastSeenAt *time.Time
+	StateChangedAt        *time.Time
+	StateChangedBy        *string
 }
 
-const datasetColumns = `id, org_id, integration_id, dataset_key, is_enabled, options::text, unavailable_reason, unavailable_since, unavailable_last_seen_at`
+const datasetColumns = `id, org_id, integration_id, dataset_key, is_enabled, options::text, unavailable_reason, unavailable_since, unavailable_last_seen_at, state_changed_at, state_changed_by`
 
 func scanDataset(row pgx.Row) (dataset, error) {
 	var out dataset
 	err := row.Scan(&out.ID, &out.OrgID, &out.IntegrationID, &out.DatasetKey, &out.IsEnabled, &out.Options,
-		&out.UnavailableReason, &out.UnavailableSince, &out.UnavailableLastSeenAt)
+		&out.UnavailableReason, &out.UnavailableSince, &out.UnavailableLastSeenAt, &out.StateChangedAt, &out.StateChangedBy)
 	return out, err
 }
 

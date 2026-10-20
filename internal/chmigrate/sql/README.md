@@ -3,9 +3,9 @@ clickhouse upgrade` in file-name order. Each file is recorded in
 `schema_migrations` only after all its statements succeed, so every
 statement must be re-runnable (`IF NOT EXISTS`).
 
-Until the Python chain is deleted, a new migration is added in both places:
-here and in `src/dev_health_ops/migrations/clickhouse/`, byte-identical and
-`.sql` only. `TestChainAfterHeadMatchesThePythonChain` enforces it.
+A new migration is added ONLY here, `.sql` only. The pre-099 text is frozen in
+`../history/` and `src/dev_health_ops/migrations` may not come back
+(`internal/cigates` guards both).
 
 A migration that an operator may need to undo has a hand-run file
 `../rollback/<NNN_name>.down.sql`. It is not part of the chain. It undoes the

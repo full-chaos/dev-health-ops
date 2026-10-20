@@ -756,6 +756,31 @@ func TestInfoLogsCarryNoIds(t *testing.T) {
 		t.Fatalf("provisioning Exchange = %+v, %v", res, err)
 	}
 
+	hash := testVerifier(t)
+	if _, err := stores[true].ProvisionLocal(ctx, identity.LocalProvisionRequest{Email: "logs-local-new@example.com",
+		FullName: "Logs", PasswordHash: &hash}); err != nil {
+		t.Fatalf("ProvisionLocal: %v", err)
+	}
+	org := uuid.New()
+	e.exec(t, ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'logs')`, org, "logs-"+org.String()[:8])
+	if err := stores[false].ProjectOrganization(ctx, org); err != nil {
+		t.Fatalf("ProjectOrganization: %v", err)
+	}
+	e.exec(t, ctx, `UPDATE public.organizations SET name = 'logs renamed', slug = $2 WHERE id = $1`, org, "équipe_"+org.String()[:8])
+	if err := stores[false].ProjectOrganization(ctx, org); err != nil {
+		t.Fatalf("ProjectOrganization update: %v", err)
+	}
+	for _, message := range []string{
+		"legacy external identity projected", "principal projected", "principal projection updated",
+		"external identity linked", "external identity unlinked", "federated principal provisioned",
+		"local principal provisioned", "organization projected", "organization projection updated",
+		"organization slug not carried on the provisioning event",
+	} {
+		if !strings.Contains(logs.String(), "identity: "+message) {
+			t.Errorf("Info line %q was not driven:\n%s", message, logs.String())
+		}
+	}
+
 	uuidPattern := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	infos := 0
 	for _, line := range strings.Split(logs.String(), "\n") {
@@ -767,7 +792,7 @@ func TestInfoLogsCarryNoIds(t *testing.T) {
 			t.Errorf("an Info line carries an id: %s", line)
 		}
 	}
-	if infos < 6 {
+	if infos < 10 {
 		t.Fatalf("Info lines seen = %d, want the projection, link, unlink and provisioning lines:\n%s", infos, logs.String())
 	}
 }
@@ -787,4 +812,35 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// A go-api account whose principal holds another identity at the provider is
+// not given a second one when the go-api subject signs in.
+func TestLegacyProjectionKeepsOneIdentityPerProvider(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, ctx)
+	svc := e.service(t, false)
+	user := e.goAPIUser(t, ctx, "legacy-one@example.com", GitHub, "8200", true)
+	if err := e.store(false).Project(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Link(ctx, e.signedIn(user, time.Minute), GitHub, e.providers.token(t.Name()+"-new",
+		account{provider: GitHub, id: 8201, email: "legacy-one-new@example.com", verified: true, public: true})); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+	before := e.state(t, ctx)
+	legacyToken := e.providers.token(t.Name()+"-legacy", account{provider: GitHub, id: 8200, email: "legacy-one@example.com", verified: true, public: true})
+	if _, err := svc.Exchange(ctx, GitHub, legacyToken, nil); !errors.Is(err, ErrProviderLinked) {
+		t.Fatalf("Exchange with the go-api subject: err = %v, want ErrProviderLinked", err)
+	}
+	e.unchanged(t, ctx, before)
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1 AND provider = 'github'`, user); n != 1 {
+		t.Fatalf("github identities of the principal = %d, want 1", n)
+	}
+	body, _ := json.Marshal(map[string]string{"provider": "github", "provider_access_token": legacyToken.Reveal()})
+	rec := httptest.NewRecorder()
+	Handlers{Service: svc}.Exchange(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body))))
+	if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"detail":{"message":"A github account is already linked"}}` {
+		t.Fatalf("answer %d %q", rec.Code, rec.Body.String())
+	}
 }

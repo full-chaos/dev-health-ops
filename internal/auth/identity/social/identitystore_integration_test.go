@@ -68,6 +68,7 @@ func newEnv(t *testing.T, ctx context.Context) *env {
 		fmt.Sprintf(`GRANT SELECT (%s) ON public.users TO %q`, identityColumns, role),
 		fmt.Sprintf(`GRANT SELECT (user_id, org_id) ON public.memberships TO %q`, role),
 		fmt.Sprintf(`GRANT SELECT (id, org_id) ON public.sso_providers TO %q`, role),
+		fmt.Sprintf(`GRANT SELECT (id, slug, name, is_active) ON public.organizations TO %q`, role),
 	} {
 		if _, err := admin.Exec(ctx, grant); err != nil {
 			t.Fatalf("grant: %v", err)

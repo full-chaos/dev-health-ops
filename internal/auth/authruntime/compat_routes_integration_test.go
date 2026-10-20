@@ -97,7 +97,7 @@ func TestCompatRoutesThroughConfigure(t *testing.T) {
 	if err := e.admin.QueryRow(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING email`, user, hash).Scan(&email); err != nil {
 		t.Fatal(err)
 	}
-	client := map[string]string{"X-Forwarded-For": "198.51.100.7", "Content-Type": "application/json"}
+	client := map[string]string{"X-Forwarded-For": "198.51.100.7", "Content-Type": "application/json", "User-Agent": "compat-route-test/1.0"}
 
 	// A wrong password: go-api's 401, audited for the user at their org, from the client.
 	got := e.doWith(t, "/api/v1/auth/login", `{"email":"`+email+`","password":"wrong"}`, client)
@@ -130,8 +130,8 @@ func TestCompatRoutesThroughConfigure(t *testing.T) {
 	}
 	var sessions int
 	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1 AND organization_id = $2
-		AND host(client_ip) = '198.51.100.7' AND amr = ARRAY['pwd']`, user, org).Scan(&sessions); err != nil || sessions != 1 {
-		t.Fatalf("%d sessions for the sign-in (%v), want 1 at the org from the client", sessions, err)
+		AND host(client_ip) = '198.51.100.7' AND amr = ARRAY['pwd'] AND user_agent = 'compat-route-test/1.0'`, user, org).Scan(&sessions); err != nil || sessions != 1 {
+		t.Fatalf("%d sessions for the sign-in (%v), want 1 at the org from the client with its user agent", sessions, err)
 	}
 
 	// Refresh: go-api's wire with the rotated opaque credential.

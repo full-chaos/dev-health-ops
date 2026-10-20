@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/useragent"
 )
 
 func signInEvent(principal uuid.UUID) audit.AuditEvent {
@@ -34,6 +35,7 @@ func TestCreateAuditedCommitsTheSessionWithItsAuditRow(t *testing.T) {
 	principal := e.principal(t, ctx)
 	id := uuid.New()
 	ctx = clientaddr.With(requestid.With(ctx, id), netip.MustParseAddr("198.51.100.7"))
+	ctx = useragent.With(ctx, "Mozilla/5.0 (sign-in test) \u00e9")
 	issued, err := e.store.CreateAudited(ctx, principal, nil, []string{"pwd"}, signInEvent(principal))
 	if err != nil {
 		t.Fatalf("CreateAudited: %v", err)
@@ -49,6 +51,10 @@ func TestCreateAuditedCommitsTheSessionWithItsAuditRow(t *testing.T) {
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE id = $1 AND host(client_ip) = '198.51.100.7'`,
 		issued.Session.ID.String()); n != 1 {
 		t.Fatal("the session does not carry the client address")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE id = $1 AND user_agent = $2`,
+		issued.Session.ID.String(), "Mozilla/5.0 (sign-in test) \u00e9"); n != 1 {
+		t.Fatal("the session does not carry the request's user agent")
 	}
 	if e.outboxRows(t, ctx, principal.String()) != 0 {
 		t.Fatal("a sign-in wrote a provisioning event")

@@ -66,6 +66,7 @@ README.md	README.md
 .dockerignore	.dockerignore
 deploy	deploy/**
 testdata	**/testdata.manifest.tsv
+walked	walked/**
 `
 
 const fixtureReads = `# package	scope	class
@@ -74,6 +75,10 @@ b	code	contracts
 x	test	github
 x	test	ci
 b	code	deploy
+`
+
+const fixtureWalks = `# package	scope	class
+x	test	walked
 `
 
 const fixtureGoYML = `name: Go
@@ -133,6 +138,7 @@ func newVerdictFixture(work string, head map[string]string) (*verdictFixture, er
 		"internal/cigates/affected/plan.go":      "package affected\n",
 		"internal/cigates/affected/classes.tsv":  fixtureClasses,
 		"internal/cigates/affected/reads.tsv":    fixtureReads,
+		"internal/cigates/affected/walks.tsv":    fixtureWalks,
 		".github/workflows/go.yml":               fixtureGoYML,
 		"ci/check_go.sh":                         fixtureCheckGo,
 		"ci/go_integration_shards.d/_shards.tsv": "3\n",
@@ -276,6 +282,8 @@ func planVerdictRows() []verdictRow {
 		{name: "reader_less_paths_are_none", changed: []string{".claude/x.json", ".codex-review/r1.md", ".codex-review-notes.md", "AGENTS.md"}, want: "NONE"},
 		{name: "test_reader_selects_only_itself", changed: []string{"docs/a.md"}, want: "AFFECTED 1", keys: []string{"a"}},
 		{name: "code_reader_selects_its_reverse_deps", changed: []string{"contracts/auth/v1/x.json"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
+		{name: "walk_row_selects_its_walker", changed: []string{"walked/f.txt"}, want: "AFFECTED 1", keys: []string{"x"}},
+		{name: "walks_table_is_full", changed: []string{"internal/cigates/affected/walks.tsv"}, want: "FULL planner input*"},
 		{name: "undeclared_path_is_full", changed: []string{"zz/new.txt"}, want: "FULL non-Go file*"},
 		{name: "go_mod_is_full", changed: []string{".claude/x", "go.mod"}, want: "FULL shared change*"},
 		{name: "testsupport_is_full", changed: []string{"internal/testsupport/h/h.go"}, want: "FULL shared change*"},
@@ -398,8 +406,14 @@ func TestPlanReadsGuard(t *testing.T) {
 		{"planted_undeclared_root_walker_is_named", map[string]string{"q/q_test.go": plantedRootWalker}, 1, []string{"q/q_test.go", "walks from the repository root"}},
 		{"code_reader_needs_a_code_row", map[string]string{"r/r.go": plantedCodeReader,
 			"internal/cigates/affected/reads.tsv": "r\ttest\tcontracts\n"}, 1, []string{"r/r.go", "r\tcode\tcontracts"}},
+		{"root_walker_with_only_a_literal_row_is_named", map[string]string{"q/q_test.go": plantedRootWalker + "\nvar doc = \"../docs/a.md\"\n",
+			"internal/cigates/affected/reads.tsv": "q\ttest\tdocs\n"}, 1, []string{"q/q_test.go", "walks from the repository root", "walks.tsv"}},
+		{"code_root_walker_needs_a_code_walk_row", map[string]string{"q/q.go": plantedRootWalker,
+			"internal/cigates/affected/walks.tsv": "q\ttest\tdocs\n"}, 1, []string{"q/q.go", "q\tcode\t"}},
+		{"walk_row_for_a_package_that_does_not_walk_fails", map[string]string{"p/p_test.go": plantedLiteralReader,
+			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\n", "internal/cigates/affected/walks.tsv": "p\ttest\tdocs\n"}, 1, []string{"walks.tsv", "p"}},
 		{"declared_readers_pass", map[string]string{"p/p_test.go": plantedLiteralReader, "q/q_test.go": plantedRootWalker, "r/r.go": plantedCodeReader,
-			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\nq\ttest\tdocs\nr\tcode\tcontracts\n"}, 0, nil},
+			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\nr\tcode\tcontracts\n", "internal/cigates/affected/walks.tsv": "q\ttest\tdocs\n"}, 0, nil},
 		{"row_for_an_unknown_class_fails", map[string]string{"internal/cigates/affected/reads.tsv": "p\ttest\tnope\n"}, 1, []string{"nope"}},
 		{"row_for_a_package_with_no_go_file_fails", map[string]string{"internal/cigates/affected/reads.tsv": "gone\ttest\tdocs\n"}, 1, []string{"gone"}},
 		{"planted_non_ascii_literal_reader_is_named", map[string]string{"n/n_test.go": "package n\n\nvar doc = \"../docs/caf\u00e9.md\"\n"}, 1, []string{"n/n_test.go", "docs/caf\u00e9.md"}},

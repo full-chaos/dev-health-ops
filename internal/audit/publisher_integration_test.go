@@ -203,11 +203,14 @@ func TestPublisherRedeliversWhenTheMarkNeverCommits(t *testing.T) {
 		return err
 	})
 	p := newTestPublisher(t, env, crashing)
-	if _, err := p.Step(crashCtx, time.Now().Add(time.Second), 10); err == nil {
-		t.Fatal("Step reported success although its mark could not commit")
+	if _, err := p.Step(crashCtx, time.Now().Add(time.Second), 10); !errors.Is(err, ErrPublishFailed) {
+		t.Fatalf("Step = %v, want ErrPublishFailed from the mark that could not commit", err)
 	}
 	if r := readRow(t, ctx, env, k); r.published {
 		t.Fatalf("the event was marked published without a committed mark")
+	}
+	if n, ids := p.abandoned.Load(), p.abandonedIDs(); n != 0 || len(ids) != 0 {
+		t.Fatalf("abandoned deliveries = %d %v, want none: the sink call returned before the mark", n, ids)
 	}
 
 	p2 := newTestPublisher(t, env, consumer)

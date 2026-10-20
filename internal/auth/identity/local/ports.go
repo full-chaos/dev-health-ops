@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,9 +70,14 @@ type RedeemRequest struct {
 	TokenHash [32]byte
 }
 
+// ErrLinkSuperseded is returned by Redeem (with ok=false) for a live
+// credential that a newer one of the same principal and purpose replaced. The
+// refusal burns the stale credential and writes an audit row.
+var ErrLinkSuperseded = errors.New("local: the link credential was superseded")
+
 // Links is the link_credentials store (0010). Redeem returns ok=false for an
-// unknown, expired, consumed or wrong-purpose credential; the database clock
-// decides expiry.
+// unknown, expired, consumed or wrong-purpose credential, and ok=false with
+// ErrLinkSuperseded for a replaced one; the database clock decides expiry.
 type Links interface {
 	Issue(ctx context.Context, req IssueRequest) error
 	Redeem(ctx context.Context, req RedeemRequest) (principalID uuid.UUID, ok bool, err error)

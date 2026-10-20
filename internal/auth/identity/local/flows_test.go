@@ -577,3 +577,48 @@ func TestRevokeFailureAfterAPasswordChangeIsRetriedAndReported(t *testing.T) {
 		}
 	})
 }
+
+// Every flow that sets a password refuses a short, an overlong and a
+// byte-overlong one before it consumes a link or writes anything.
+func TestPasswordBoundsAreRefusedBeforeAnyConsumeInEveryFlow(t *testing.T) {
+	bounds := map[string]string{
+		"7 characters":   "Aa1-xyz",
+		"129 characters": "Aa1-" + strings.Repeat("x", 125),
+		"73 bytes":       "Aa1-" + strings.Repeat("x", 69),
+	}
+	flows := map[string]func(*flowRig, string) (FlowOutcome, error){
+		"register": func(rig *flowRig, pw string) (FlowOutcome, error) {
+			return rig.f.Register(context.Background(), RegisterRequest{Email: "p@example.com", Password: pw})
+		},
+		"reset": func(rig *flowRig, pw string) (FlowOutcome, error) {
+			u := rig.user("p@example.com", true)
+			rig.grant("bounds-secret", u.ID)
+			return rig.f.Reset(context.Background(), "bounds-secret", pw)
+		},
+		"change": func(rig *flowRig, pw string) (FlowOutcome, error) {
+			u := rig.user("p@example.com", true)
+			return rig.f.Change(context.Background(), ChangeRequest{PrincipalID: u.ID, Current: flowPassword, New: pw})
+		},
+	}
+	for flow, run := range flows {
+		for name, pw := range bounds {
+			t.Run(flow+"/"+name, func(t *testing.T) {
+				rig := newFlowRig(t, true)
+				out, err := run(rig, pw)
+				if err != nil || out.Kind != FlowPolicy || len(out.Violations) == 0 {
+					t.Fatalf("%s = %+v, %v; want a policy refusal", flow, out, err)
+				}
+				for _, call := range rig.rec.names() {
+					if call == "Redeem" || call == "ProvisionLocal" || call == "SetPasswordHash" {
+						t.Errorf("%s made the call %s before refusing", flow, call)
+					}
+				}
+				if flow == "reset" {
+					if _, ok := rig.links.redeem[sha256.Sum256([]byte("bounds-secret"))]; !ok {
+						t.Error("the link was consumed")
+					}
+				}
+			})
+		}
+	}
+}

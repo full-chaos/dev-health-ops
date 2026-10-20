@@ -6,9 +6,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -598,11 +602,21 @@ func TestRaceIssueLeavesOneLiveCredential(t *testing.T) {
 			t.Errorf("Issue: %v", err)
 		}
 	}
-	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE principal_id = $1 AND purpose = 'password_reset' AND consumed_at IS NULL`, p.String()); n != 1 {
-		t.Fatalf("unconsumed credentials = %d, want exactly 1", n)
-	}
 	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE principal_id = $1`, p.String()); n != callers {
-		t.Errorf("rows = %d, want %d (every issue stores one, older ones consumed)", n, callers)
+		t.Errorf("rows = %d, want %d (every issue stores one)", n, callers)
+	}
+	redeemable := 0
+	for i := 0; i < callers; i++ {
+		_, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash(fmt.Sprintf("issue-%d", i))})
+		if err != nil && !errors.Is(err, ErrLinkSuperseded) {
+			t.Fatalf("Redeem: %v", err)
+		}
+		if ok {
+			redeemable++
+		}
+	}
+	if redeemable != 1 {
+		t.Fatalf("redeemable credentials = %d, want exactly 1 (the newest)", redeemable)
 	}
 	markRace(t)
 }
@@ -709,4 +723,101 @@ func TestRaceConcurrentChangeKeepsTheReturnedSession(t *testing.T) {
 		t.Error("the session the winning change returned was revoked by another change")
 	}
 	markRace(t)
+}
+
+// sqlTrace records the SQL text of every statement a pool runs.
+type sqlTrace struct {
+	mu   sync.Mutex
+	sqls []string
+}
+
+func (r *sqlTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sqls = append(r.sqls, strings.Join(strings.Fields(data.SQL), " "))
+	return ctx
+}
+func (r *sqlTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func (r *sqlTrace) take() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := r.sqls
+	r.sqls = nil
+	return out
+}
+
+// TestIssueRunsOneStatementSequenceForEveryCase: an unknown address (decoy), a
+// first issue and a reissue run the same statements in the same order. The
+// invariant is statement-shape parity; timing parity is not claimed.
+func TestIssueRunsOneStatementSequenceForEveryCase(t *testing.T) {
+	ctx := context.Background()
+	env, _ := linkEnv(t, ctx)
+	trace := &sqlTrace{}
+	cfg := env.runtime.Config().Copy()
+	cfg.ConnConfig.Tracer = trace
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := NewPGLinks(pool, schema)
+	p := env.principal(t, ctx)
+
+	run := func(req IssueRequest) []string {
+		trace.take()
+		if err := links.Issue(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+		return trace.take()
+	}
+	decoy := run(IssueRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("decoy"), TTL: ResetTTL})
+	first := run(IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("first"), TTL: ResetTTL})
+	again := run(IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("again"), TTL: ResetTTL})
+	if len(decoy) == 0 {
+		t.Fatal("no statements were traced")
+	}
+	if !reflect.DeepEqual(decoy, first) || !reflect.DeepEqual(first, again) {
+		t.Errorf("statement sequences differ:\ndecoy  %q\nfirst  %q\nreissue %q", decoy, first, again)
+	}
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials`); n != 2 {
+		t.Errorf("rows = %d, want 2: the decoy wrote none", n)
+	}
+}
+
+// A replaced credential is refused as superseded; the refusal burns it and
+// writes a denied audit row. The newest one redeems.
+func TestOlderCredentialIsRefusedAsSupersededAndAudited(t *testing.T) {
+	ctx := context.Background()
+	env, links := linkEnv(t, ctx)
+	p := env.principal(t, ctx)
+	for _, s := range []string{"older", "newer"} {
+		if err := links.Issue(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash(s), TTL: ResetTTL}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("older")})
+	if ok || !errors.Is(err, ErrLinkSuperseded) {
+		t.Fatalf("older Redeem = ok %v, err %v; want ok=false, ErrLinkSuperseded", ok, err)
+	}
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events
+		WHERE event_type = 'auth.link_credential.superseded' AND outcome = 'denied' AND subject_principal_id = $1`, p.String()); n != 1 {
+		t.Errorf("superseded audit rows = %d, want 1", n)
+	}
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE principal_id = $1 AND consumed_at IS NOT NULL`, p.String()); n != 1 {
+		t.Errorf("consumed rows = %d, want 1 (the stale credential is burned)", n)
+	}
+	if _, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("older")}); ok || errors.Is(err, ErrLinkSuperseded) {
+		t.Errorf("a second presentation of the stale credential = ok %v, err %v; want a plain refusal", ok, err)
+	}
+	if _, ok, err := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("newer")}); err != nil || !ok {
+		t.Errorf("newest Redeem = ok %v, err %v", ok, err)
+	}
+	if _, ok, _ := links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: linkHash("newer")}); ok {
+		t.Error("the newest credential redeemed twice")
+	}
 }

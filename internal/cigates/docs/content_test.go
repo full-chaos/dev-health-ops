@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // Ports of tests/tooling-free docs content contracts: test_audience_navigation.py (4), test_design_tokens.py (4),
@@ -114,8 +115,8 @@ func TestNavigationContract(t *testing.T) {
 // ---- design tokens (test_design_tokens.py) ------------------------------------------------------------------------------
 
 var (
-	rawCSSValue  = regexp.MustCompile(`#[0-9a-fA-F]{3,8}\b`)
-	cssToken     = regexp.MustCompile(`(--[A-Za-z0-9_-]+)\s*:\s*([^;]+);`)
+	rawCSSValue  = regexp.MustCompile(`(#[0-9a-fA-F]{3,8})(?:[^\p{L}\p{N}_]|$)`)
+	cssToken     = regexp.MustCompile(`(--[A-Za-z0-9_-]+)[\s\p{Z}\x{0085}]*:[\s\p{Z}\x{0085}]*([^;]+);`)
 	requiredPals = [][2]string{
 		{"--fc-void", "#08080A"}, {"--fc-ink", "#15171A"}, {"--fc-graphite", "#23252A"}, {"--fc-silver", "#D1D1D4"}, {"--fc-flame", "#FE7501"},
 		{"--fc-crimson", "#A30A06"}, {"--fc-aqua", "#04B7C4"}, {"--fc-ocean", "#037493"}, {"--fc-glacier", "#6CE0E1"}, {"--fc-gold", "#FFDB4B"},
@@ -123,17 +124,25 @@ var (
 	reviewOnlyPaths = []string{"docs/design-directions.md", "docs/reference/primitive-showcase.md", qaPackage, qaPlaywright}
 )
 
+func paletteTokens(css string) map[string]string {
+	tokens := map[string]string{}
+	for _, m := range cssToken.FindAllStringSubmatch(css, -1) {
+		tokens[m[1]] = strings.TrimSpace(m[2])
+	}
+	return tokens
+}
+
 // undeclaredRawCSSValue is the first raw colour value outside a `:root { --fc-... }` token declaration, or "".
 func undeclaredRawCSSValue(css string) string {
 	inRoot := false
-	for _, line := range strings.Split(css, "\n") {
+	for _, line := range splitLines(css) {
 		if line == ":root {" {
 			inRoot = true
 		} else if inRoot && line == "}" {
 			inRoot = false
 		}
-		if v := rawCSSValue.FindString(line); v != "" && !(inRoot && strings.HasPrefix(strings.TrimLeft(line, " \t"), "--fc-")) {
-			return v
+		if m := rawCSSValue.FindStringSubmatch(line); m != nil && !(inRoot && strings.HasPrefix(strings.TrimLeftFunc(line, unicode.IsSpace), "--fc-")) {
+			return m[1]
 		}
 	}
 	return ""
@@ -143,10 +152,7 @@ func designGuard(d docTree) []string {
 	var out []string
 	palette, ok := readOrNote(&out, d, "docs/stylesheets/logo-palette.css")
 	if ok {
-		tokens := map[string]string{}
-		for _, m := range cssToken.FindAllStringSubmatch(palette, -1) {
-			tokens[m[1]] = strings.TrimSpace(m[2])
-		}
+		tokens := paletteTokens(palette)
 		for _, p := range requiredPals {
 			if tokens[p[0]] != p[1] {
 				out = append(out, fmt.Sprintf("palette token %s is %q, want %s", p[0], tokens[p[0]], p[1]))
@@ -270,7 +276,7 @@ func guidesGuard(d docTree) []string {
 			mustNotContain(&out, "pr-flow.md (a removed view)", n, c)
 		}
 		for _, c := range prFlowUnsupported {
-			mustNotContain(&out, "pr-flow.md (an unsupported claim)", n, strings.ToLower(c))
+			mustNotContain(&out, "pr-flow.md (an unsupported claim)", n, fold(c))
 		}
 	}
 	return out
@@ -332,7 +338,7 @@ func investmentGuard(d docTree) []string {
 	if !ok {
 		return out
 	}
-	n := strings.ToLower(text)
+	n := fold(text)
 	for _, want := range []string{"canonical", "not workspace-configurable", "must not define a competing vocabulary"} {
 		mustContain(&out, "the taxonomy page", n, want)
 	}

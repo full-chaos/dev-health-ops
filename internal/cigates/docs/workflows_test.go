@@ -9,19 +9,33 @@ import (
 // Ports of tests/docs/test_docs_guards_workflow.py (12 tests; the python-version pin is dropped, see the PR) and of the four
 // Cloudflare workflow tests of tests/docs/test_guard_failures.py: the shape of .github/workflows/docs-guards.yml and
 // .github/workflows/docs-cloudflare.yml, plus the production-confirmation gates executed under bash.
+//
+// A step is checked by the COMMAND it runs, not by its name: a step whose checker was replaced by `echo` must be refused.
 
-var streamedChecks = []string{
-	"Validate publication inventory and IA placement",
-	"Strict canonical build",
-	"Check rendered links, anchors, and assets",
-	"Check task-based search acceptance",
-	"Check structural accessibility invariants",
-	"Check objective documentation facts",
+func pyCmd(stem string) string { return "python scripts/" + stem + "." + "py" }
+
+// expectedCheck is one step of docs-guards.yml: its name, the command line it must run (binary and script) and the
+// arguments that command line must carry. A rename of a checker is an edit of this table.
+type expectedCheck struct {
+	step, command string
+	args          []string
 }
 
-var newlyGatedChecks = []string{"Check code prerequisites", "Check freshness inventory"}
+var docsGuardsChecks = []expectedCheck{
+	{"Validate publication inventory and IA placement", pyCmd("validate_docs_v2_publication"), nil},
+	{"Strict canonical build", "python -m mkdocs build --strict", []string{"--config-file mkdocs.yml"}},
+	{"Check rendered links, anchors, and assets", pyCmd("check_built_site_links"), []string{"--site-dir .build/docs"}},
+	{"Check task-based search acceptance", pyCmd("check_docs_candidate_search"), []string{"--site-dir .build/docs", "--queries " + searchAcceptance}},
+	{"Check structural accessibility invariants", pyCmd("check_docs_candidate_accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
+	{"Check objective documentation facts", pyCmd("check_docs_candidate_facts"), nil},
+	{"Check code prerequisites", pyCmd("check_code_prerequisites"), nil},
+	{"Check freshness inventory", pyCmd("check_freshness_inventory"), nil},
+}
 
-const docsGuardsPath = ".github/workflows/docs-guards.yml"
+const (
+	docsGuardsPath = ".github/workflows/docs-guards.yml"
+	contentJob     = "docs-content-guards"
+)
 
 func workflowSteps(wf map[string]any, job string) []map[string]any {
 	var steps []map[string]any
@@ -41,6 +55,42 @@ func stepRuns(steps []map[string]any) map[string]string {
 	return out
 }
 
+// commandLines joins backslash continuations and returns each command line of a run script, comments and blanks dropped.
+func commandLines(run string) []string {
+	var out []string
+	var cur string
+	for _, raw := range strings.Split(run, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasSuffix(line, "\\") {
+			cur += strings.TrimSuffix(line, "\\") + " "
+			continue
+		}
+		cur += line
+		if cur != "" && !strings.HasPrefix(cur, "#") {
+			out = append(out, strings.Join(strings.Fields(cur), " "))
+		}
+		cur = ""
+	}
+	return out
+}
+
+// runsCommand reports whether some command line of run STARTS with command (an echo of it does not count) and carries every arg.
+func runsCommand(run, command string, args ...string) bool {
+	for _, line := range commandLines(run) {
+		if !strings.HasPrefix(line, command) {
+			continue
+		}
+		ok := true
+		for _, a := range args {
+			ok = ok && strings.Contains(line, a)
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
 func docsGuardsGuard(d docTree) []string {
 	var out []string
 	wf, err := parseYAML(d, docsGuardsPath)
@@ -48,8 +98,13 @@ func docsGuardsGuard(d docTree) []string {
 		return []string{err.Error()}
 	}
 	jobs := asMap(wf["jobs"])
-	if len(jobs) != 1 || jobs["docs-guards"] == nil {
-		out = append(out, fmt.Sprintf("the workflow must be one canonical job named docs-guards, got %d job(s)", len(jobs)))
+	if jobs["docs-guards"] == nil {
+		out = append(out, "the workflow must carry the canonical job named docs-guards")
+	}
+	for _, retired := range []string{"changes", "docs-guards-job"} {
+		if jobs[retired] != nil {
+			out = append(out, "the workflow must not carry the retired aggregator job "+retired)
+		}
 	}
 	job := asMap(jobs["docs-guards"])
 	if _, ok := job["needs"]; ok {
@@ -90,37 +145,25 @@ func docsGuardsGuard(d docTree) []string {
 			out = append(out, "docs-guards must not set up node")
 		}
 	}
-	for _, forbidden := range []string{"docs-qa", "playwright", "pnpm", "npx", "wrangler", "screenshot", "visual regression", "exact prose", "check_external_links.py"} {
+	for _, forbidden := range []string{"docs-qa", "playwright", "pnpm", "npx", "wrangler", "screenshot", "visual regression", "exact prose", pyCmd("check_external_links")} {
 		if strings.Contains(allRuns, forbidden) {
 			out = append(out, "docs-guards must not run "+forbidden)
 		}
 	}
-	for _, name := range streamedChecks {
-		run, ok := runs[name]
+	if len(docsGuardsChecks) == 0 {
+		out = append(out, "the expected-check table is empty")
+	}
+	for _, c := range docsGuardsChecks {
+		run, ok := runs[c.step]
 		if !ok {
-			out = append(out, "missing reader-critical check step: "+name)
+			out = append(out, fmt.Sprintf("missing check step %q: its check would run only from a Makefile target, which no PR executes", c.step))
 			continue
+		}
+		if !runsCommand(run, c.command, c.args...) {
+			out = append(out, fmt.Sprintf("step %q does not run the command %q with %v (a step that echoes or replaces its checker is refused)", c.step, c.command, c.args))
 		}
 		if !strings.Contains(run, "set -o pipefail") || !strings.Contains(run, "| tee ") {
-			out = append(out, fmt.Sprintf("step %q must stream through tee under set -o pipefail", name))
-		}
-	}
-	build := runs[streamedChecks[1]]
-	mustContain(&out, "the strict build step", build, "mkdocs build --strict")
-	mustContain(&out, "the strict build step", build, "--config-file mkdocs.yml")
-	mustContain(&out, "the links step", runs[streamedChecks[2]], "--site-dir .build/docs")
-	mustContain(&out, "the search step", runs[streamedChecks[3]], searchAcceptance)
-	if len(newlyGatedChecks) == 0 {
-		out = append(out, "the gated-check inventory is empty")
-	}
-	for _, name := range newlyGatedChecks {
-		run, ok := runs[name]
-		if !ok {
-			out = append(out, fmt.Sprintf("%q is no longer a step in docs-guards.yml: its check would run only from a Makefile target, which no PR executes", name))
-			continue
-		}
-		if !strings.Contains(run, "set -o pipefail") || !strings.Contains(run, "tee") {
-			out = append(out, fmt.Sprintf("step %q must stream through tee under set -o pipefail", name))
+			out = append(out, fmt.Sprintf("step %q must stream through tee under set -o pipefail", c.step))
 		}
 	}
 	var uploads []map[string]any
@@ -139,14 +182,42 @@ func docsGuardsGuard(d docTree) []string {
 			out = append(out, "the evidence artifact must include .build/docs-*.log")
 		}
 	}
+	// The Go guards of the docs content run on every docs change, in a job that installs no Python.
+	content := asMap(jobs[contentJob])
+	if content == nil {
+		return append(out, "missing the Go docs guards job "+contentJob+": a docs-only pull request would run no docs content guard")
+	}
+	if _, ok := content["if"]; ok {
+		out = append(out, contentJob+" must not carry an if: it must run on every docs change")
+	}
+	if _, ok := content["needs"]; ok {
+		out = append(out, contentJob+" must not depend on another job")
+	}
+	csteps := workflowSteps(wf, contentJob)
+	goTest := false
+	for _, s := range csteps {
+		uses := asString(s["uses"])
+		if strings.HasPrefix(uses, "actions/setup-python@") || strings.Contains(uses, "setup-uv") {
+			out = append(out, contentJob+" must install no Python: "+uses)
+		}
+		if run := asString(s["run"]); runsCommand(run, "go test", "./internal/cigates/docs") {
+			goTest = true
+		}
+		if run := asString(s["run"]); strings.Contains(run, "uv ") || strings.Contains(run, "pip install") {
+			out = append(out, contentJob+" must install no Python: "+run)
+		}
+	}
+	if !goTest {
+		out = append(out, contentJob+" does not run `go test` on ./internal/cigates/docs")
+	}
 	return out
 }
 
 func TestDocsGuardsWorkflowContract(t *testing.T) {
-	assertGuard(t, docsGuardsGuard, []plantCase{
+	plants := []plantCase{
 		{"a second job is added", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "jobs:\n  docs-guards:", "jobs:\n  changes:\n    runs-on: ubuntu-latest\n    steps: []\n  docs-guards:")
-		}, "one canonical job"},
+			return d.edit(t, docsGuardsPath, "  docs-guards:\n    name: docs-guards\n", "  changes:\n    runs-on: ubuntu-latest\n    steps: []\n  docs-guards:\n    name: docs-guards\n")
+		}, "retired aggregator job changes"},
 		{"the job gains a needs", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "  docs-guards:\n    name: docs-guards\n", "  docs-guards:\n    name: docs-guards\n    needs: [changes]\n")
 		}, "must not depend"},
@@ -163,28 +234,53 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 		{"a node runtime is set up", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "      - name: Install documentation dependencies", "      - uses: actions/setup-node@v4\n      - name: Install documentation dependencies")
 		}, "set up node"},
-		{"a reader-critical check is dropped", func(t *testing.T, d docTree) docTree {
+		{"a reader-critical check is renamed", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "name: Check structural accessibility invariants", "name: Check accessibility")
 		}, "Check structural accessibility invariants"},
 		{"a streamed check loses pipefail", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "          set -o pipefail\n          python scripts/check_docs_candidate_facts.py", "          python scripts/check_docs_candidate_facts.py")
+			return d.edit(t, docsGuardsPath, "          set -o pipefail\n          "+pyCmd("check_docs_candidate_facts"), "          "+pyCmd("check_docs_candidate_facts"))
 		}, "Check objective documentation facts"},
-		{"the strict build loses --strict", func(t *testing.T, d docTree) docTree {
+		{"the strict build loses --strict (command replaced)", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "mkdocs build --strict", "mkdocs build")
-		}, "mkdocs build --strict"},
-		{"a gated script drops out of the workflow", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "name: Check freshness inventory", "name: Freshness")
-		}, "Check freshness inventory"},
+		}, "Strict canonical build"},
+		{"the search step loses its queries argument", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "--queries "+searchAcceptance, "--queries other-queries")
+		}, "Check task-based search acceptance"},
+		{"the accessibility step loses its css argument", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "--css docs/stylesheets/extra.css", "")
+		}, "Check structural accessibility invariants"},
 		{"the evidence upload is not always", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "        if: always()\n        uses: actions/upload-artifact", "        uses: actions/upload-artifact")
 		}, "if: always()"},
 		{"the external link check joins the gate", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "      - name: Check freshness inventory", "      - name: Extra\n        run: python scripts/check_external_links.py\n      - name: Check freshness inventory")
-		}, "check_external_links.py"},
-	})
+			return d.edit(t, docsGuardsPath, "      - name: Check freshness inventory", "      - name: Extra\n        run: "+pyCmd("check_external_links")+"\n      - name: Check freshness inventory")
+		}, "check_external_links"},
+		{"the Go docs guards job is removed", func(t *testing.T, d docTree) docTree {
+			text, _ := d.read(docsGuardsPath)
+			i := strings.Index(text, "  docs-content-guards:")
+			j := strings.Index(text, "  docs-guards:\n    name: docs-guards")
+			return d.added(docsGuardsPath, text[:i]+text[j:])
+		}, "missing the Go docs guards job"},
+		{"the Go docs guards job is gated by an if", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "  docs-content-guards:\n    name: docs-content-guards\n", "  docs-content-guards:\n    name: docs-content-guards\n    if: false\n")
+		}, "must not carry an if"},
+		{"the Go docs guards job echoes its test command", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "run: go test -mod=readonly", "run: echo go test -mod=readonly")
+		}, "does not run `go test`"},
+		{"the Go docs guards job installs Python", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, "      - name: Run the docs content guards", "      - uses: actions/setup-python@v6\n      - name: Run the docs content guards")
+		}, "must install no Python"},
+	}
+	// One more plant per checker command: the command is replaced by an echo of the same text (the name, pipefail and tee
+	// stay), which only a guard of the command line itself refuses.
+	for _, c := range docsGuardsChecks {
+		c := c
+		plants = append(plants, plantCase{"the " + c.step + " command is replaced by an echo", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, c.command, "echo "+c.command)
+		}, fmt.Sprintf("step %q does not run the command", c.step)})
+	}
+	assertGuard(t, docsGuardsGuard, plants)
 }
-
-// ---- docs-cloudflare.yml ------------------------------------------------------------------------------------------------
 
 const cloudflarePath = ".github/workflows/docs-cloudflare.yml"
 
@@ -248,7 +344,9 @@ func cloudflareGuard(d docTree) []string {
 	}
 	prun := asString(preview["run"])
 	mustContain(&out, "the preview build step", prun, "set -o pipefail")
-	mustContain(&out, "the preview build step", prun, "build_docs_cloudflare.py --mode preview --full-check")
+	if !runsCommand(prun, pyCmd("build_docs_cloudflare"), "--mode preview --full-check") {
+		out = append(out, "the preview build step does not run "+pyCmd("build_docs_cloudflare")+" --mode preview --full-check (an echo of it is refused)")
+	}
 	mustContain(&out, "the preview build step", prun, "| tee ")
 	record, err := cloudflareStep(d, "preview-or-build", "Record why a Cloudflare preview was not uploaded")
 	if err != nil {
@@ -272,8 +370,11 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 		{"the rollback version id is not required", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cloudflarePath, "test -n \"$VERSION_ID\"", "test -z \"$VERSION_ID_UNUSED\"")
 		}, "VERSION_ID"},
+		{"the preview build is replaced by an echo", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, pyCmd("build_docs_cloudflare")+" --mode preview --full-check", "echo "+pyCmd("build_docs_cloudflare")+" --mode preview --full-check")
+		}, "does not run"},
 		{"the preview build loses pipefail", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, cloudflarePath, "          set -o pipefail\n          python scripts/build_docs_cloudflare.py --mode preview", "          python scripts/build_docs_cloudflare.py --mode preview")
+			return d.edit(t, cloudflarePath, "          set -o pipefail\n          "+pyCmd("build_docs_cloudflare")+" --mode preview", "          "+pyCmd("build_docs_cloudflare")+" --mode preview")
 		}, "set -o pipefail"},
 		{"the no-op record starts to deploy", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cloudflarePath, "            echo '### Cloudflare preview not uploaded'", "            wrangler deploy\n            echo '### Cloudflare preview not uploaded'")

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/text/cases"
 	"gopkg.in/yaml.v3"
 )
 
@@ -161,7 +162,31 @@ func asString(v any) string {
 	return s
 }
 
-func normalized(text string) string { return strings.Join(strings.Fields(strings.ToLower(text)), " ") }
+// fold is Python casefold (full Unicode case folding), not ToLower: the pages are matched the way the Python tests matched them.
+func fold(s string) string { return cases.Fold().String(s) }
+
+func normalized(text string) string { return strings.Join(strings.Fields(fold(text)), " ") }
+
+// splitLines is Python str.splitlines: \n, \r\n, \r, \v, \f, \x1c-\x1e, \x85, \u2028 and \u2029 all end a line.
+func splitLines(s string) []string {
+	var out []string
+	start := 0
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		switch rs[i] {
+		case '\r', '\n', '\v', '\f', 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029:
+			out = append(out, string(rs[start:i]))
+			if rs[i] == '\r' && i+1 < len(rs) && rs[i+1] == '\n' {
+				i++
+			}
+			start = i + 1
+		}
+	}
+	if start < len(rs) {
+		out = append(out, string(rs[start:]))
+	}
+	return out
+}
 
 func mustContain(out *[]string, label, text, want string) {
 	if !strings.Contains(text, want) {

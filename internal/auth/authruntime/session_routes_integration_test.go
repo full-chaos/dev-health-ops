@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -478,6 +479,39 @@ func TestAStoreFailureIsLoggedWithoutTheDatabaseText(t *testing.T) {
 	}
 	if !strings.Contains(logs, `"code":"42P01"`) {
 		t.Fatalf("the failure is not logged with its SQLSTATE:\n%s", logs)
+	}
+}
+
+// TestReuseRevocationAuditCarriesTheRequestID: the audit row of a reuse
+// revocation carries the request id the answer carries in X-Auth-Request-ID.
+func TestReuseRevocationAuditCarriesTheRequestID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnv(t, ctx)
+	user, org := e.seed(t, ctx)
+	first := e.start(t, ctx, user, &org)
+	rotated, got := e.refresh(t, first.Credential.Reveal())
+	if rotated == nil {
+		t.Fatalf("refresh = %d %s", got.status, got.body)
+	}
+	if next, got := e.refresh(t, rotated.RefreshCredential.Reveal()); next == nil {
+		t.Fatalf("second rotation = %d %s", got.status, got.body)
+	}
+	reuse := e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(first.Credential.Reveal()), "")
+	e.refused(t, reuse, 401, "refresh_reused")
+	wire := reuse.header.Get("X-Auth-Request-ID")
+	var auditRequestID *string
+	if err := e.admin.QueryRow(ctx, `SELECT request_id FROM auth.security_audit_events
+		WHERE event_type = 'auth.session.refresh_reuse_revoked' AND attributes->>'target_id' = $1`,
+		mustSessionUUID(t, rotated.SessionID).String()).Scan(&auditRequestID); err != nil {
+		t.Fatalf("reuse audit row: %v", err)
+	}
+	if auditRequestID == nil {
+		t.Fatalf("the reuse revocation audit row has no request id; the answer carried %s", wire)
+	}
+	id, err := uuid.Parse(*auditRequestID)
+	if err != nil || requestid.WireOf(id) != wire {
+		t.Fatalf("audit request_id %q is not the id of X-Auth-Request-ID %s", *auditRequestID, wire)
 	}
 }
 

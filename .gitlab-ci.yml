@@ -337,7 +337,7 @@ governance:
   variables:
     PR_BODY: $CI_MERGE_REQUEST_DESCRIPTION
   script:
-    - go run -mod=readonly ./cmd/cigate governance --base-sha "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --head-sha "$CI_COMMIT_SHA"
+    - go run -trimpath -mod=readonly ./cmd/cigate governance --base-sha "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --head-sha "$CI_COMMIT_SHA"
 
 # ---------------------------------------------------------------------------
 # test (test.yml: docs-tests, tooling-tests incl. the kept Python tests)

@@ -3303,7 +3303,7 @@ check_auth_vuln() {
     die "govulncheck failed to run"
   fi
   rm -f "${report}.err"
-  auth_go run -mod=readonly ./cmd/cigate govulncheck <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
+  auth_go run -trimpath -mod=readonly ./cmd/cigate govulncheck <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
   rm -f "${report}"
 }
 
@@ -3464,7 +3464,7 @@ auth_scope_candidates() {
   for tag in ${tags}; do all+="${all:+,}${tag}"; done
   {
     for set in "" "${all}" ${tags}; do
-      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -mod=readonly ./cmd/cigate scope-candidates "${module}"
+      auth_go list -mod=readonly -tags="${set}" -e -json ./... | auth_go run -trimpath -mod=readonly ./cmd/cigate scope-candidates "${module}"
     done
   } | LC_ALL=C sort -u
 }

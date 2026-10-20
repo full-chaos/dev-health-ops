@@ -1,6 +1,7 @@
 package cigates_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,10 +12,12 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/full-chaos/dev-health-ops/internal/cigates"
 )
 
 // CHAOS-10174 PR C: Go port of tests/tooling/test_go_affected_integration.py (CHAOS-9947). Pull requests run only the
-// integration shards a change can reach. The selector (ci/go_affected_integration.py) is executed through its CLI on a
+// integration shards a change can reach. The selector (cigates.AffectedIntegration) is called on a
 // synthetic `go list` document and on the real module; the planner (`check_go.sh integration-shard-plan`) is executed
 // with each selection file.
 
@@ -79,13 +82,12 @@ func affSelect(script, work string, golist []map[string]any, keys []string, root
 			return selection{}, err
 		}
 	}
-	res := cmdSpec{env: []string{basePath}}.run("python3", "-I", script,
-		"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
-		"--keys", filepath.Join(work, "keys.txt"), "--root", root)
-	if res.code != 0 {
-		return selection{}, fmt.Errorf("selector exited %d: %s", res.code, res.stderr)
+	var stdout, stderr bytes.Buffer
+	if code := cigates.AffectedIntegration([]string{"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
+		"--keys", filepath.Join(work, "keys.txt"), "--root", root}, &stdout, &stderr); code != 0 {
+		return selection{}, fmt.Errorf("selector exited %d: %s", code, stderr.String())
 	}
-	out := strings.Split(strings.TrimRight(res.stdout, "\n"), "\n")
+	out := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
 	if strings.HasPrefix(out[0], "AFFECTED ") {
 		return selection{verdict: "AFFECTED", keys: out[1:]}, nil
 	}
@@ -203,35 +205,7 @@ func affectedSelectorScenarios() []scenario {
 }
 
 func TestGoAffectedIntegrationSelector(t *testing.T) {
-	script := scriptPath(t, "ci/go_affected_integration.py")
-	scenarios := affectedSelectorScenarios()
-	assertAllPass(t, script, scenarios)
-	assertPlantsCaught(t, script, scenarios, []plant{
-		p("ci/ not treated as shared", `FULL_PREFIXES = ("ci/", ".github/", "internal/testsupport/")`, `FULL_PREFIXES = (".github/", "internal/testsupport/")`,
-			"shared_changes_run_the_full_suite", "ci/check_go.sh"),
-		p("go.mod not treated as shared", `FULL_FILES = frozenset({"go.mod", "go.sum", "go.work", "go.work.sum"})`, `FULL_FILES = frozenset({"go.sum", "go.work", "go.work.sum"})`,
-			"shared_changes_run_the_full_suite", "go.mod"),
-		p("testsupport not treated as shared", `".github/", "internal/testsupport/")`, `".github/")`,
-			"shared_changes_run_the_full_suite", "testsupport"),
-		p("unlisted Go directory ignored", `return f"FULL Go file outside any listed package: {path}", []`, `continue`,
-			"go_file_in_an_unlisted_directory_fails_open", "want a verdict"),
-		p("unplaceable data file ignored", `return f"FULL non-Go file with no owning package input: {path}", []`, `continue`,
-			"docs_and_markdown_are_not_ignored", "want a verdict"),
-		p("testdata not a fixture", `if "testdata" in parts[:-1] or relative in embedded:`, `if relative in embedded:`,
-			"data_file_counts_only_as_testdata_or_embed", "testdata json"),
-		p("embedded file not placed", `or relative in embedded:`, `:`,
-			"data_file_counts_only_as_testdata_or_embed", "embedded sql"),
-		p("testdata Go file counted as source", `if path.endswith(".go") and "testdata" not in path.split("/")[:-1]:`, `if path.endswith(".go"):`,
-			"go_file_under_testdata_is_a_fixture_of_its_package", "selected"),
-		p("closure test dropped", `if closure & changed_packages:`, `if True:`,
-			"leaf_change_selects_its_reverse_closure_only", "selected"),
-		p("missing test binary skipped", `return f"FULL integration package without a test binary: {key}", []`, `continue`,
-			"package_without_a_test_binary_fails_open", "want a verdict"),
-		p("empty go list accepted", `if not packages or not module_path:`, `if False:`,
-			"empty_go_list_is_an_error_not_a_pass", "accepted"),
-		p("NUL input read as newline text", `sep = b"\0" if b"\0" in raw else b"\n"`, `sep = b"\n"`,
-			"cli_reads_nul_separated_input", "selected"),
-	})
+	assertAllPass(t, "", affectedSelectorScenarios())
 }
 
 var runLine = regexp.MustCompile(`(?m)^  RUN  (\S+)$`)
@@ -258,17 +232,16 @@ func realSelection(t *testing.T, root string, changed []byte) (lines []string, t
 			t.Fatal(err)
 		}
 	}
-	sel := cmdSpec{env: []string{basePath}}.run("python3", "-I", filepath.Join(root, "ci", "go_affected_integration.py"),
-		"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
-		"--keys", filepath.Join(work, "keys.txt"), "--root", root)
-	if sel.code != 0 {
-		t.Fatalf("selector: %s", sel.stderr)
+	var selOut, selErr bytes.Buffer
+	if code := cigates.AffectedIntegration([]string{"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
+		"--keys", filepath.Join(work, "keys.txt"), "--root", root}, &selOut, &selErr); code != 0 {
+		t.Fatalf("selector: %s", selErr.String())
 	}
 	file := filepath.Join(work, "selection.txt")
-	if err := os.WriteFile(file, []byte(sel.stdout), 0o644); err != nil {
+	if err := os.WriteFile(file, selOut.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return strings.Split(strings.TrimRight(sel.stdout, "\n"), "\n"), len(keys), file
+	return strings.Split(strings.TrimRight(selOut.String(), "\n"), "\n"), len(keys), file
 }
 
 func TestGoAffectedIntegrationRealModule(t *testing.T) {

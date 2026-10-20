@@ -221,7 +221,6 @@ on:
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
       # run reader and the venue workflow whose step names that reader filters on
       - 'ci/go_relevant_diff.sh'
-      - 'ci/go_affected_integration.py'
       - 'ci/last-venue-run.sh'
       - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
@@ -456,7 +455,6 @@ on:
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
       # run reader and the venue workflow whose step names that reader filters on
       - 'ci/go_relevant_diff.sh'
-      - 'ci/go_affected_integration.py'
       - 'ci/last-venue-run.sh'
       - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
@@ -713,7 +711,7 @@ jobs:
             full "could not list the integration packages"
           elif ! go list -mod=readonly -tags=integration -test -json ./... > "${RUNNER_TEMP}/golist.json"; then
             full "go list failed"
-          elif ! go run -mod=readonly ./cmd/cigate affected-integration --changed "${RUNNER_TEMP}/changed.txt" \
+          elif ! go run -trimpath -mod=readonly ./cmd/cigate affected-integration --changed "${RUNNER_TEMP}/changed.txt" \
             --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
             --root "${GITHUB_WORKSPACE}" > "${out}"; then
             full "selection program failed"

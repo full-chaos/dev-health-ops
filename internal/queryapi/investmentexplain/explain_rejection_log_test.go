@@ -251,8 +251,8 @@ func TestLogRejectedExplainOutputReasonDetailFields(t *testing.T) {
 	if line["reason_path"] != "top_findings[2].evidence.theme" {
 		t.Fatalf("reason_path = %v", line["reason_path"])
 	}
-	if line["reason_snippet"] != "made_up_theme" {
-		t.Fatalf("reason_snippet = %v", line["reason_snippet"])
+	if _, present := line["reason_snippet"]; present {
+		t.Fatalf("reason_snippet = %v, want no completion text in the log", line["reason_snippet"])
 	}
 }
 

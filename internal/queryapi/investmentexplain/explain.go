@@ -412,7 +412,6 @@ func logRejectedExplainOutput(ctx context.Context, parseResult ParseResult, prov
 		"reason", parseResult.Reason,
 		"reason_rule", parseResult.ReasonRule,
 		"reason_path", parseResult.ReasonPath,
-		"reason_snippet", parseResult.ReasonSnippet,
 		"provider", provider,
 		"model", model,
 		"prompt_tokens", tokenCountForLog(completion.InputTokens),

@@ -144,7 +144,11 @@ func (k *call) CompleteBundle(ctx context.Context, bundle units.TextBundle) (cat
 	}
 	typed, err := ParseResponse(body, ExpectedQuestions(c.rubric, built.Spans))
 	if err != nil {
-		_, usage := usageFromBody(body)
+		returnedModel, usage := usageFromBody(body)
+		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+			billedIn, billedOut := int(usage.InputTokens), int(usage.OutputTokens)
+			categorize.LogCompletion(ctx, categorize.CompletionResult{Model: boundToken(returnedModel), InputTokens: &billedIn, OutputTokens: &billedOut})
+		}
 		return categorize.CompletionResult{}, ended(&Terminal{State: StateRequestFailed, Details: []string{"request_failed:not_json"},
 			InputTokens: int(usage.InputTokens), OutputTokens: int(usage.OutputTokens)})
 	}

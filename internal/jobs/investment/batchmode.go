@@ -174,7 +174,7 @@ func (m *Materializer) categorizeBatch(
 		case !result.Succeeded():
 			return categorize.CategorizationOutcome{}, lineFailure(result, cfg.ProviderName, model)
 		}
-		categorize.LogCompletion(ctx, categorize.CompletionResult{Model: model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens})
+		categorize.LogCompletion(ctx, categorize.CompletionResult{Model: model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, FormatPath: "schema"})
 		return categorize.CategorizeCompletionText(ctx, entry.result.Bundle, result.Text, opts,
 			result.InputTokens, result.OutputTokens, model)
 	})

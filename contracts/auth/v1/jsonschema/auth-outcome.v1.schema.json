@@ -71,11 +71,16 @@
         "signup_unavailable",
         "provider_already_linked",
         "identity_conflict",
+        "replayed",
+        "nonce_mismatch",
+        "provisioning_disabled",
+        "domain_not_allowed",
+        "not_entitled",
         "rate_limited",
         "store_unavailable",
         "dependency_unavailable"
       ],
-      "description": "Closed vocabulary. The first nine denied codes are edgetoken.Reason* verbatim; the rest name refresh, session, principal, lockout and linking outcomes. A new code is a deliberate schema amendment."
+      "description": "Closed vocabulary. The first nine denied codes are edgetoken.Reason* verbatim; the rest name refresh, session, principal, lockout, linking and SSO flow outcomes. A new code is a deliberate schema amendment."
     },
     "request_id": {
       "type": "string",

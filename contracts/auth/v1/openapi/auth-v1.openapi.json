@@ -33,7 +33,14 @@
             }
           },
           "400": {
-            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope (not error.v1)."
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "401": {
             "description": "error.v1 with an auth-outcome.v1 reason code",
@@ -46,10 +53,24 @@
             }
           },
           "413": {
-            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope (not error.v1)."
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "429": {
-            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope (not error.v1), with Retry-After."
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",
@@ -85,7 +106,14 @@
             }
           },
           "400": {
-            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope (not error.v1)."
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "401": {
             "description": "error.v1 with an auth-outcome.v1 reason code",
@@ -98,10 +126,24 @@
             }
           },
           "413": {
-            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope (not error.v1)."
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "429": {
-            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope (not error.v1), with Retry-After."
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",
@@ -130,7 +172,14 @@
             "description": "revoked"
           },
           "400": {
-            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope (not error.v1)."
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "401": {
             "description": "error.v1 with an auth-outcome.v1 reason code",
@@ -143,10 +192,24 @@
             }
           },
           "413": {
-            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope (not error.v1)."
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "429": {
-            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope (not error.v1), with Retry-After."
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",
@@ -175,7 +238,14 @@
             "description": "revoked"
           },
           "400": {
-            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope (not error.v1)."
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "401": {
             "description": "error.v1 with an auth-outcome.v1 reason code",
@@ -188,10 +258,24 @@
             }
           },
           "413": {
-            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope (not error.v1)."
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "429": {
-            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope (not error.v1), with Retry-After."
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
           },
           "503": {
             "description": "error.v1: a store or key failure (retry_after_seconds)",
@@ -270,6 +354,9 @@
       },
       "Session": {
         "$ref": "../jsonschema/session.v1.schema.json"
+      },
+      "TransportError": {
+        "$ref": "../jsonschema/transport-error.v1.schema.json"
       }
     }
   }

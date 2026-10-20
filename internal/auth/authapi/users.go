@@ -132,4 +132,25 @@ func (p PGUsers) Memberships(ctx context.Context, userID uuid.UUID) ([]Membershi
 // go-api decides the same way when its activity read is unavailable; with
 // activity it may prefer an organization with newer metrics (a recorded
 // difference, CHAOS-10228 ruling).
-func chooseMembership([]Membership, *uuid.UUID) *Membership { return nil }
+func chooseMembership(memberships []Membership, requested *uuid.UUID) *Membership {
+	if requested != nil {
+		for index := range memberships {
+			if memberships[index].OrgID == *requested {
+				return &memberships[index]
+			}
+		}
+		return nil
+	}
+	var best *Membership
+	var bestJoined time.Time
+	for index := range memberships {
+		joined := memberships[index].CreatedAt
+		if memberships[index].JoinedAt != nil {
+			joined = *memberships[index].JoinedAt
+		}
+		if best == nil || joined.Before(bestJoined) {
+			best, bestJoined = &memberships[index], joined
+		}
+	}
+	return best
+}

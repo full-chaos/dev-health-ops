@@ -560,12 +560,12 @@ func TestRoutesRequireTheirCollaborators(t *testing.T) {
 func TestStoreFailuresAreLoggedWithoutTheirText(t *testing.T) {
 	f := newFixture(t)
 	header := f.bearer(f.grant())
-	leak := "leaked-key-value@example.com"
-	f.users.err = fmt.Errorf("%w: %w", errUsersStore, &pgconn.PgError{Code: "23505", Detail: "Key (email)=(" + leak + ") already exists."})
+	detailValue := "key-value@example.com"
+	f.users.err = fmt.Errorf("%w: %w", errUsersStore, &pgconn.PgError{Code: "23505", Detail: "Key (email)=(" + detailValue + ") already exists."})
 	f.build()
 	expectError(t, f.do(http.MethodGet, PatternCurrent, "", header), 503, "store_unavailable")
 	logs := f.logs.String()
-	if strings.Contains(logs, leak) || strings.Contains(logs, "already exists") {
+	if strings.Contains(logs, detailValue) || strings.Contains(logs, "already exists") {
 		t.Fatalf("the log carries the error text: %s", logs)
 	}
 	if !strings.Contains(logs, `"failure":"users_store"`) || !strings.Contains(logs, `"code":"23505"`) {

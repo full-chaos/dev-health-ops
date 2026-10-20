@@ -61,13 +61,18 @@ func readChanged(p string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	sep := byte('\n')
-	if bytes.IndexByte(raw, 0) >= 0 {
-		sep = 0
-	}
 	var out []string
-	for _, part := range bytes.Split(raw, []byte{sep}) {
-		if len(bytes.TrimSpace(part)) > 0 {
+	if bytes.IndexByte(raw, 0) >= 0 {
+		for _, part := range bytes.Split(raw, []byte{0}) {
+			if len(part) > 0 {
+				out = append(out, string(part))
+			}
+		}
+		return out, nil
+	}
+	// Newline mode trims ASCII blanks only: a path made of non-ASCII space (U+00A0) is a real path, never a blank line.
+	for _, part := range bytes.Split(raw, []byte{'\n'}) {
+		if len(bytes.Trim(part, " \t\r")) > 0 {
 			out = append(out, string(part))
 		}
 	}
@@ -338,7 +343,8 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, k)
 		}
 	default:
-		fmt.Fprintln(stdout, "FULL "+v.Reason)
+		// A path may hold a newline (git diff -z keeps it); the verdict is line-oriented, so the reason stays on one line.
+		fmt.Fprintln(stdout, "FULL "+strings.NewReplacer("\n", `\n`, "\r", `\r`).Replace(v.Reason))
 	}
 	return 0
 }

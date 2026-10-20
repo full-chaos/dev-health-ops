@@ -62,6 +62,10 @@ claude	.claude/**
 codex-review	.codex-review*
 codex-review	.codex-review*/**
 agents	AGENTS.md
+README.md	README.md
+.dockerignore	.dockerignore
+deploy	deploy/**
+testdata	**/testdata.manifest.tsv
 `
 
 const fixtureReads = `# package	scope	class
@@ -69,6 +73,7 @@ a	test	docs
 b	code	contracts
 x	test	github
 x	test	ci
+b	code	deploy
 `
 
 const fixtureGoYML = `name: Go
@@ -319,6 +324,12 @@ func planVerdictRows() []verdictRow {
 		{name: "reads_row_with_an_unknown_scope_is_an_error",
 			head:    map[string]string{"internal/cigates/affected/reads.tsv": fixtureReads + "a\tsometimes\tdocs\n"},
 			changed: []string{"docs/a.md"}, wantErr: true},
+		// Non-ASCII input (D6129): the planner never reads a path through \s \w \d; a non-ASCII name is matched rune by rune.
+		{name: "non_ascii_name_in_a_class_selects_its_readers", changed: []string{"docs/caf\u00e9.md", "docs/\u0663.md"}, want: "AFFECTED 1", keys: []string{"a"}},
+		{name: "a_path_of_non_ascii_space_is_a_path_not_a_blank", changed: []string{"\u00a0"}, want: "FULL non-Go file*"},
+		{name: "check_go_global_with_non_ascii_space_is_code_not_an_assignment",
+			head:    map[string]string{"ci/check_go.sh": checkGoWith("SHARDS=3\n", "SHARDS=3\nSHARDS\u00a0=4\n")},
+			changed: []string{"ci/check_go.sh"}, want: "FULL shared change: ci/check_go.sh: global code changed"},
 		{name: "unknown_event_is_an_error", event: "", extra: []string{"--event", "pull_request_target"}, changed: []string{"docs/a.md"}, wantErr: true},
 	}
 }
@@ -391,6 +402,7 @@ func TestPlanReadsGuard(t *testing.T) {
 			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\nq\ttest\tdocs\nr\tcode\tcontracts\n"}, 0, nil},
 		{"row_for_an_unknown_class_fails", map[string]string{"internal/cigates/affected/reads.tsv": "p\ttest\tnope\n"}, 1, []string{"nope"}},
 		{"row_for_a_package_with_no_go_file_fails", map[string]string{"internal/cigates/affected/reads.tsv": "gone\ttest\tdocs\n"}, 1, []string{"gone"}},
+		{"planted_non_ascii_literal_reader_is_named", map[string]string{"n/n_test.go": "package n\n\nvar doc = \"../docs/caf\u00e9.md\"\n"}, 1, []string{"n/n_test.go", "docs/caf\u00e9.md"}},
 		{"literal_outside_every_class_needs_no_row", map[string]string{"u/u_test.go": "package u\n\nvar f = \"../internal/x/y.json\"\n"}, 0, nil},
 	}
 	for _, c := range cases {
@@ -429,7 +441,18 @@ func TestPlanVerdictChangedListFormats(t *testing.T) {
 		{"newline_delimited_entries_are_separate", "AGENTS.md\ngo.mod\n", "FULL shared change: go.mod", nil},
 		{"nul_delimited_entries_are_separate", "AGENTS.md\x00go.mod\x00", "FULL shared change: go.mod", nil},
 		{"a_single_nul_terminated_entry_is_one_path", "AGENTS.md\x00", "NONE", nil},
+		{"a_newline_entry_of_non_ascii_space_is_kept", "AGENTS.md\n\u00a0\n", "FULL non-Go file in no declared class: \u00a0", nil},
 		{"a_yaml_workflow_selects_its_readers", ".github/workflows/only-changed.yaml\x00", "AFFECTED 1", []string{"x"}},
+		// Ported from the deleted ci/go_relevance.sh corpus (internal/relevancedecider): list formats.
+		{"empty_entries_between_nuls_are_skipped", "\x00docs/a.md\x00\x00", "AFFECTED 1", []string{"a"}},
+		{"newline_format_one_go_path", "x/x.go\n", "AFFECTED 1", []string{"x"}},
+		{"newline_format_blank_lines_are_skipped", "\ndocs/a.md\n\nAGENTS.md\n", "AFFECTED 1", []string{"a"}},
+		{"newline_format_padding_is_part_of_the_path", "  docs/a.md  \n", "FULL non-Go file in no declared class:*", nil},
+		{"newline_format_left_padding_is_part_of_the_path", "  x/x.go\n", "FULL Go file outside any listed package:*", nil},
+		{"nul_format_unterminated_last_entry", "docs/a.md\x00x/x.go", "AFFECTED 2", []string{"a", "x"}},
+		{"newline_format_unterminated_last_line", "docs/a.md\nx/x.go", "AFFECTED 2", []string{"a", "x"}},
+		{"nul_format_embedded_newline_in_a_go_path", "x/new\nline/module.go\x00", "FULL Go file outside any listed package: x/new\\nline/module.go", nil},
+		{"nul_format_embedded_newline_in_a_class_path", "docs/a\nb.md\x00", "AFFECTED 1", []string{"a"}},
 	}
 	for _, c := range cases {
 		c := c
@@ -451,8 +474,45 @@ func TestPlanVerdictChangedListFormats(t *testing.T) {
 			if len(lines) > 1 {
 				keys = lines[1:]
 			}
-			if res.code != 0 || lines[0] != c.want || !reflect.DeepEqual(keys, c.keys) {
+			first := lines[0] == c.want || (strings.HasSuffix(c.want, "*") && strings.HasPrefix(lines[0], strings.TrimSuffix(c.want, "*")))
+			if res.code != 0 || !first || !reflect.DeepEqual(keys, c.keys) {
 				t.Fatalf("plan-verdict over %q: exit %d, %q, want %q %q (%s)", c.raw, res.code, lines, c.want, c.keys, res.stderr)
+			}
+		})
+	}
+}
+
+// The decision cases of the deleted ci/go_relevance.sh corpus (internal/relevancedecider), as the go-quality plan
+// (--go-files-full) now answers them over the fixture tables. Old answers: relevant=true|false from go.yml's path list.
+func TestDeletedDeciderCasesArePlanned(t *testing.T) {
+	q := []string{"--go-files-full"}
+	rows := []verdictRow{
+		{name: "docs_only", extra: q, changed: []string{"docs/guide.md", "README.md"}, want: "AFFECTED 1", keys: []string{"a"}},
+		{name: "go_only", extra: q, changed: []string{"x/x.go"}, want: "FULL Go source*"},
+		{name: "root_go_file_and_go_mod", extra: q, changed: []string{"main.go", "go.mod", "go.sum"}, want: "FULL*"},
+		{name: "chart_only", extra: q, changed: []string{"deploy/helm/dev-health/values.yaml"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
+		{name: "chart_sibling_is_in_the_deploy_class", extra: q, changed: []string{"deploy/helm/other-chart/values.yaml"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
+		{name: "mixed_docs_go_and_an_undeclared_tree", extra: q, changed: []string{"docs/a.md", "x/y.go", "web/readme.md"}, want: "FULL*"},
+		{name: "deleted_go_file", extra: q, changed: []string{"internal/old/removed.go"}, want: "FULL*"},
+		{name: "rename_as_delete_and_add", extra: q, changed: []string{"x/x.go", "docs/a.md"}, want: "FULL Go source*"},
+		{name: "rename_within_an_undeclared_tree_is_full", extra: q, changed: []string{"notes/old.txt", "notes/new.txt"}, want: "FULL non-Go file*"},
+		{name: "testdata_is_its_package", extra: q, changed: []string{"x/testdata/x.txt"}, want: "AFFECTED 1", keys: []string{"x"}},
+		{name: "manifest_tsv_in_a_package_dir_is_full", extra: q, changed: []string{"x/testdata.manifest.tsv"}, want: "FULL non-Go file*"},
+		{name: "exact_check_go_entry_unchanged_content", extra: q, changed: []string{"ci/check_go.sh"}, want: "AFFECTED 1", keys: []string{"x"}},
+		{name: "near_miss_of_check_go", extra: q, changed: []string{"ci/check_go.sh.bak"}, want: "AFFECTED 1", keys: []string{"x"}},
+		{name: "python_source_is_full", extra: q, changed: []string{"src/dev_health_ops/api/routes.py"}, want: "FULL non-Go file*"},
+		{name: "regex_special_characters_in_a_path", extra: q, changed: []string{"x/a+b(c)/x.txt"}, want: "FULL non-Go file*"},
+		{name: "non_ascii_paths", extra: q, changed: []string{"docs/r\u00e9sum\u00e9.md"}, want: "AFFECTED 1", keys: []string{"a"}},
+		{name: "workflow_file_itself", extra: q, changed: []string{".github/workflows/go-quality.yml"}, want: "FULL shared change*"},
+		{name: "dotfile_entry_reader_less", extra: q, changed: []string{".dockerignore"}, want: "NONE"},
+		{name: "empty_change_set", extra: q, changed: nil, want: "FULL empty change set*"},
+	}
+	for _, row := range rows {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			if err := row.check(t); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

@@ -382,17 +382,22 @@ func cloneGitLabPullRequestValues(source url.Values) url.Values {
 
 func decodeGitLabPullRequestPage(response *http.Response) ([]json.RawMessage, error) {
 	if response == nil || response.Body == nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyRead)
 	}
 	defer response.Body.Close()
-	decoder := json.NewDecoder(io.LimitReader(response.Body, (32<<20)+1))
-	decoder.UseNumber()
-	var items []json.RawMessage
-	if err := decoder.Decode(&items); err != nil || items == nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	raw, err := providerfoundation.ReadResponseBody(response, providerResponseMaxBytes)
+	if err != nil {
+		return nil, err
 	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	if len(raw) > providerResponseMaxBytes {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+	}
+	var items []json.RawMessage
+	if err := providerfoundation.DecodeResponseJSON(response, raw, &items, providerfoundation.DecodeStrict|providerfoundation.DecodeUseNumber); err != nil {
+		return nil, err
+	}
+	if items == nil {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	return items, nil
 }

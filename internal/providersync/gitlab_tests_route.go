@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -599,10 +598,15 @@ func resolveGitLabTestsMergeRequest(ctx context.Context, client *providerfoundat
 	}
 	defer response.Body.Close()
 	var items []map[string]any
-	decoder := json.NewDecoder(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
-	decoder.UseNumber()
-	if err := decoder.Decode(&items); err != nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	raw, err := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > nativeMaxObjectBytes {
+		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+	}
+	if err := providerfoundation.DecodeResponseJSON(response, raw, &items, providerfoundation.DecodeUseNumber); err != nil {
+		return nil, err
 	}
 	candidates := map[uint32]struct{}{}
 	exact := map[uint32]struct{}{}
@@ -683,10 +687,15 @@ func fetchGitLabTestsReport(ctx context.Context, client *providerfoundation.HTTP
 		return result, false, nil
 	}
 	defer response.Body.Close()
-	decoder := json.NewDecoder(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
-	decoder.UseNumber()
-	if err := decoder.Decode(&result); err != nil {
-		return result, false, providerfoundation.ErrNormalizationInvalid
+	raw, err := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
+	if err != nil {
+		return result, false, err
+	}
+	if len(raw) > nativeMaxObjectBytes {
+		return result, false, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyTooLarge)
+	}
+	if err := providerfoundation.DecodeResponseJSON(response, raw, &result, providerfoundation.DecodeUseNumber); err != nil {
+		return result, false, err
 	}
 	return result, len(result.Suites) > 0, nil
 }
@@ -838,7 +847,7 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 		location := response.Header.Get("Location")
 		_ = response.Body.Close()
 		if location == "" {
-			return nil, withRoute(ErrGitLabTestsIncomplete, gitlabJobArtifactsRoute)
+			return nil, providerfoundation.ResponseFailure(response, "redirect", ErrGitLabTestsIncomplete)
 		}
 		response, err = client.DoUnauthenticatedRoute(ctx, http.MethodGet, gitlabJobArtifactsRoute, location)
 		if err != nil {
@@ -850,9 +859,9 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 		return nil, nil
 	}
 	if response.StatusCode >= 400 {
-		message, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		message, readErr := providerfoundation.ReadResponseBodyTransport(response, 1<<20-1)
 		if readErr != nil {
-			return nil, withRoute(logging.TransportFailure(readErr), gitlabJobArtifactsRoute)
+			return nil, readErr
 		}
 		if classified := providerfoundation.ClassifyHTTPForRequest("gitlab", responsePath(response), response.StatusCode, response.Header, string(message)); classified != nil {
 			classified.Route = gitlabJobArtifactsRoute
@@ -860,12 +869,12 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 		}
 		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: gitlabJobArtifactsRoute}
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, gitLabTestsMaxDownload+1))
+	body, err := providerfoundation.ReadResponseBodyTransport(response, gitLabTestsMaxDownload)
 	if err != nil {
-		return nil, withRoute(logging.TransportFailure(err), gitlabJobArtifactsRoute)
+		return nil, err
 	}
 	if len(body) > gitLabTestsMaxDownload {
-		return nil, ErrGitLabTestsIncomplete
+		return nil, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, ErrGitLabTestsIncomplete)
 	}
 	return body, nil
 }

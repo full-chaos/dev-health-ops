@@ -107,8 +107,18 @@ func decodeOAuthConfig(raw string) (OAuthConfig, error) {
 	return cfg, nil
 }
 
-// checkOAuthBase holds a row's base_url to its provider.
-func checkOAuthBase(protocol string, cfg OAuthConfig) error { return nil }
+// githubBase is the only GitHub this flow talks to: no GitHub Enterprise
+// Server, as for social sign-in.
+const githubBase = "https://github.com"
+
+// checkOAuthBase holds a row's base_url to its provider: a GitHub row may name
+// github.com only; a GitLab row may name a self-hosted instance.
+func checkOAuthBase(protocol string, cfg OAuthConfig) error {
+	if protocol == "oauth_github" && cfg.BaseURL != "" && strings.TrimRight(cfg.BaseURL, "/") != githubBase {
+		return fmt.Errorf("%w: a GitHub provider row may name %s only", errProviderShape, githubBase)
+	}
+	return nil
+}
 
 // oauthTarget is everything one OAuth row needs to reach its provider.
 type oauthTarget struct {
@@ -132,7 +142,7 @@ func (s *Service) oauthTarget(row Provider) (oauthTarget, *Error) {
 	t := oauthTarget{provider: p, endpoints: eps.Social, issuer: social.SocialIssuer(p)}
 	switch p {
 	case social.GitHub:
-		t.authorize, t.token = eps.GitHubAuthorize, eps.GitHubToken
+		t.authorize, t.token, t.pkce = eps.GitHubAuthorize, eps.GitHubToken, true
 	case social.Google:
 		t.authorize, t.token, t.pkce, t.googleOfflineMode = eps.GoogleAuthorize, eps.GoogleToken, true, true
 	case social.GitLab:

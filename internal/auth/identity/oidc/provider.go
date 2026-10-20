@@ -106,7 +106,9 @@ FROM public.sso_providers WHERE id = $1`, id).Scan(&row.ID, &row.OrgID, &row.Pro
 		return Provider{}, err
 	}
 	if _, oauth := oauthProviderOf(row.Protocol); oauth {
-		row.OAuth, err = decodeOAuthConfig(config)
+		if row.OAuth, err = decodeOAuthConfig(config); err == nil {
+			err = checkOAuthBase(row.Protocol, row.OAuth)
+		}
 	} else {
 		row.Config, err = decodeProviderConfig(config)
 	}

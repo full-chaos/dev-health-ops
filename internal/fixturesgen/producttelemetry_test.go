@@ -107,6 +107,8 @@ func TestTTLScanRejectsWhatIsNotATableTTL(t *testing.T) {
 		"escaped quote":   "CREATE TABLE t (`a` String COMMENT 'it\\'s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
 		"doubled quote":   "CREATE TABLE t (`a` String COMMENT 'it''s TTL d + toIntervalDay(180)') ENGINE = MergeTree ORDER BY a",
 		"no ttl":          base + "SETTINGS index_granularity = 8192",
+		"block comment":   "CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a /* TTL occurred_at + toIntervalDay(180) */",
+		"line comment":    "CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a -- TTL occurred_at + toIntervalDay(180)\nSETTINGS index_granularity = 8192",
 		"column ttl only": "CREATE TABLE t (`a` DateTime TTL a + toIntervalDay(180), `b` String) ENGINE = MergeTree ORDER BY a",
 	}
 	for name, create := range cases {
@@ -118,6 +120,8 @@ func TestTTLScanRejectsWhatIsNotATableTTL(t *testing.T) {
 		base + "TTL toDateTime(occurred_at) + toIntervalDay(90) SETTINGS a = 1":                                                       90,
 		base + "TTL occurred_at + INTERVAL 45 DAY DELETE":                                                                             45,
 		"CREATE TABLE t (`a` String COMMENT 'it''s') ENGINE = M TTL d + toIntervalDay(7)":                                             7,
+		"CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a /* TTL a + toIntervalDay(30) */ TTL a + toIntervalDay(90)":         90,
+		"CREATE TABLE t (`a` String) ENGINE = MergeTree ORDER BY a -- TTL a + toIntervalDay(30)\nTTL a + toIntervalDay(90)":           90,
 		"CREATE TABLE t (`a` DateTime TTL a + toIntervalDay(30), `b` String) ENGINE = MergeTree ORDER BY a TTL a + toIntervalDay(90)": 90,
 	} {
 		if days, ok := ttlDays(create); !ok || days != want {

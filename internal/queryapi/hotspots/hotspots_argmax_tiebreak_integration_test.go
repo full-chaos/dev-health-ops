@@ -29,7 +29,7 @@ import (
 )
 
 // fileHotspotDailyDDL mirrors the production schema exactly: the base table
-// from src/dev_health_ops/migrations/clickhouse/007_complexity_investment_issues.sql
+// from internal/chmigrate/history/007_complexity_investment_issues.sql
 // plus the org_id column added by 024_add_org_id.sql. fetchHotspotRows never
 // touches the `repos` table when repoIDs is empty (the case exercised here),
 // so no repos table is needed.

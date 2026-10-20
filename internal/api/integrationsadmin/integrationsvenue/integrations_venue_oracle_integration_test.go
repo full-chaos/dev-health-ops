@@ -33,7 +33,7 @@ import (
 // run in one order on each plane, so a write is visible to the reads after
 // it.
 func TestIntegrationsAdminVenueOracle(t *testing.T) {
-	golden := venueoracle.OpenGolden(t, venueGolden("integrations-admin-venue-oracle", t.Name(), "f78cc04ce9baab309eb756c66e2f4aa541522822b8c9cada52cae52eedc834de"))
+	golden := venueoracle.OpenGolden(t, venueGolden("integrations-admin-venue-oracle", t.Name(), "b41c77b9cddd2451f22dec58f134d73a4de2c93f4cb0a659f70c39d7cabfaf4a"))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-integrations-32b!"

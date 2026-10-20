@@ -47,17 +47,13 @@ jobs:
         with:
           filters: |
             code:
-              - 'src/**'
-              - 'tests/**'
-              - 'ci/**'
-              - 'migrations/**'
-              - 'requirements.txt'
-              - 'pyproject.toml'
-              - 'uv.lock'
-              - 'pytest.ini'
-              - 'alembic.ini'
-              - 'Makefile'
-              - 'scripts/**'
+              # What the jobs read: the worker config data, the runner scripts and their libs, the worker role SQL.
+              # No broad directory glob: src/, ci/, scripts/ and internal/ hold Python files, and a Python-only change
+              # must not run the jobs (TestLiveE2EInstallsNoPython expands every entry against the tracked files).
+              - 'src/dev_health_ops/config/**'
+              - 'ci/run_*.sh'
+              - 'ci/lib/**'
+              - 'scripts/worker/**'
               # CHAOS-4266 codex review: metrics-executed-proof builds and
               # runs the Go worker/reconciler/migrate binaries, so a Go-only
               # change (worker dispatch, daily/remaining metrics, job
@@ -65,10 +61,24 @@ jobs:
               # reported code=false for exactly the surfaces this gate
               # exists to protect, and the job silently skipped.
               - 'cmd/**'
-              - 'internal/**'
+              - 'internal/**/*.go'
+              # Files the Go binaries embed or read from internal/ (SQL, JSON, YAML, TSV, GraphQL, text).
+              - 'internal/**/*.sql'
+              - 'internal/**/*.json'
+              - 'internal/**/*.yaml'
+              - 'internal/**/*.yml'
+              - 'internal/**/*.tsv'
+              - 'internal/**/*.graphql'
+              - 'internal/**/*.txt'
+              - 'internal/**/*.md'
+              - 'internal/**/*.html'
+              - 'internal/chmigrate/history/**'
+              - 'internal/fixturescli/testdata/**'
               - 'go.mod'
               - 'go.sum'
               - 'contracts/jobs/**'
+              - 'contracts/graphql/v1/**'
+              - 'contracts/sync-dispatch/v1/**'
               - '.github/workflows/live-e2e.yml'
 
   live-e2e:
@@ -149,25 +159,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-
-      # CHAOS-6589: install EXACTLY uv.lock's resolution. This job used to
-      # `pip install -r requirements.txt` (`-e .[dev]`), which re-resolves
-      # every specifier in pyproject.toml against PyPI on every run and never
-      # reads uv.lock: SQLAlchemy 2.1.0, published mid-day 2026-09-24, was
-      # picked up here and broke main while every lock-installing job stayed
-      # green (CHAOS-6588 bounded it in pyproject as the stopgap). `uv sync
-      # --frozen` installs the locked (= deployed) set and FAILS the step if
-      # the lock is stale relative to pyproject.toml. The run scripts call
-      # `python3` from PATH, so the venv's bin goes on GITHUB_PATH.
-      - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          python-version: "3.14"
-
-      - name: Install dependencies
-        run: |
-          uv sync --frozen --all-extras --dev
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run live-e2e tier
         env:
@@ -323,25 +314,6 @@ jobs:
           # a corruption risk against other jobs reading/writing it at the
           # same time (same reasoning as go.yml's self-hosted legs).
           cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
-
-      # CHAOS-6589: install EXACTLY uv.lock's resolution. This job used to
-      # `pip install -r requirements.txt` (`-e .[dev]`), which re-resolves
-      # every specifier in pyproject.toml against PyPI on every run and never
-      # reads uv.lock: SQLAlchemy 2.1.0, published mid-day 2026-09-24, was
-      # picked up here and broke main while every lock-installing job stayed
-      # green (CHAOS-6588 bounded it in pyproject as the stopgap). `uv sync
-      # --frozen` installs the locked (= deployed) set and FAILS the step if
-      # the lock is stale relative to pyproject.toml. The run scripts call
-      # `python3` from PATH, so the venv's bin goes on GITHUB_PATH.
-      - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          python-version: "3.14"
-
-      - name: Install dependencies
-        run: |
-          uv sync --frozen --all-extras --dev
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run metrics executed-proof
         id: metrics-proof

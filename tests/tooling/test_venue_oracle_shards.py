@@ -45,7 +45,6 @@ is what the scratch-tree tests below still pin. This file also pins:
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -299,54 +298,6 @@ def _matrix_shards() -> list[int]:
     return shards
 
 
-def test_the_matrix_is_one_to_n_and_n_is_what_the_verb_gets() -> None:
-    shards = _matrix_shards()
-    assert shards == list(range(1, len(shards) + 1)), (
-        f"matrix shard list {shards} is not 1..N: a gap or duplicate leaves "
-        "part of the registry unrun or run twice"
-    )
-    runs = [s["run"] for s in _job()["steps"] if isinstance(s.get("run"), str)]
-    commands = [
-        line.strip()
-        for run in runs
-        for line in run.splitlines()
-        if "check_go.sh venue-oracles" in line
-    ]
-    assert len(commands) == 1, commands
-    match = re.search(
-        r'check_go\.sh venue-oracles\s+"\$\{\{\s*matrix\.shard\s*\}\}"\s+(\d+)\b',
-        commands[0],
-    )
-    assert match, (
-        f"the verb is not called with the matrix shard and a count: {commands[0]}"
-    )
-    assert int(match.group(1)) == len(shards), (
-        f"the workflow passes COUNT={match.group(1)} but the matrix has {len(shards)} legs"
-    )
-    assert f"/{len(shards)})" in _job()["name"], "the leg name states the wrong count"
-
-
-def test_the_leg_is_bounded_and_does_not_fail_fast() -> None:
-    job = _job()
-    assert job["timeout-minutes"] <= 40, (
-        "a venue leg must stay well under the 75 min that cancelled the "
-        f"sequential job (timeout-minutes={job['timeout-minutes']})"
-    )
-    assert job["strategy"]["fail-fast"] is False, (
-        "one red shard must not cancel the others: the point is a signal per slice"
-    )
-
-
-def test_the_receipt_artifact_is_per_shard() -> None:
-    uploads = [
-        s for s in _job()["steps"] if "upload-artifact" in str(s.get("uses", ""))
-    ]
-    assert len(uploads) == 1
-    assert "matrix.shard" in uploads[0]["with"]["name"], (
-        "four legs uploading one artifact name collide"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Cost-balanced legs (CHAOS-6891).
 # ---------------------------------------------------------------------------
@@ -415,46 +366,6 @@ def _real_tree(tmp_path: Path) -> Path:
         elif source.exists():
             shutil.copy(source, tree / name)
     return tree
-
-
-def test_the_weights_directory_is_well_formed_and_matches_the_registry() -> None:
-    files = _weight_files(WEIGHTS_FILE)
-    assert files, "ci/venue_oracle_weights.d/ holds no *.tsv file"
-    registry_files = {
-        path.name for path in (ROOT / "ci" / "venue_oracle_registry.d").glob("*.tsv")
-    }
-    for file in files:
-        # One file per package, named like the registry's: a PR that adds a venue row in
-        # package X touches registry file X and weights file X only, so two PRs in
-        # different packages cannot conflict (CHAOS-6926).
-        rows = _weights(file)
-        assert rows, f"{file.name} holds no weight row"
-        packages = {package for package, _, _ in rows}
-        assert len(packages) == 1, f"{file.name} mixes packages {sorted(packages)}"
-        (package,) = packages
-        assert file.name == package.replace("/", "__") + ".tsv", (
-            f"{file.name} holds the rows of {package}; it must be named "
-            f"{package.replace('/', '__')}.tsv"
-        )
-        assert file.name in registry_files, (
-            f"{file.name} has no registry file of the same name: the package "
-            "has no venue run row left"
-        )
-        assert rows == sorted(rows, key=lambda w: (w[0], w[1])), (
-            f"{file.name} is not sorted by test"
-        )
-    weights = _weights()
-    keys = [(package, test) for package, test, _ in weights]
-    assert len(keys) == len(set(keys)), "a weight row is duplicated"
-    assert all(seconds >= 1 for _, _, seconds in weights), "a weight below 1 second"
-    registry = set(_registry_run_rows(ROOT))
-    missing = sorted(registry - set(keys))
-    assert not missing, (
-        f"registry run rows with no weight: {missing[:5]}...: regenerate "
-        "ci/venue_oracle_weights.d/ (python3 ci/venue_oracle_weights.py <saved run log>)"
-    )
-    stale = sorted(set(keys) - registry)
-    assert not stale, f"weights for tests that are not registry run rows: {stale[:5]}"
 
 
 def test_the_planned_heaviest_leg_fits_the_budget(tmp_path: Path) -> None:

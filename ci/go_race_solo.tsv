@@ -2,5 +2,5 @@
 # hands each to the then-lightest shard, and check_go.sh runs them in their own `go test -race` invocation after the
 # shard's other packages and its providersync slice have finished. Format: package<TAB>reason. Key = import path relative
 # to the module root. Sorted (LC_ALL=C), no duplicates; every row names a real package that has a row in
-# ci/go_race_weights.tsv (check_go.sh race-weights-rows). The file may hold no rows. A package leaves this file when its race time no longer depends
+# ci/go_race_weights.d (check_go.sh race-weights-rows). The file may hold no rows. A package leaves this file when its race time no longer depends
 # on its co-tenants, and its weight stays the measured one either way.

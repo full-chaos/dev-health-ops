@@ -159,32 +159,18 @@ on:
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
-      - 'ci/venue_oracle_registry.d/**'
-      - 'ci/venue_oracle_triggers.d/**'
-      - 'ci/venue_oracle_closure.d/**'
-      - 'ci/venue_oracle_trigger_gaps.tsv'
+      # ci tables, awk scripts and per-package row directories (ci/go_race_weights.d, ci/go_integration_shards.d, the venue
+      # oracle registries): globs, so a new one never edits this list (CHAOS-10300)
+      - 'ci/*.tsv'
+      - 'ci/*.awk'
+      - 'ci/*.d/**'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
-      - 'ci/venue_oracle_weights.d/**'
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
-      - 'ci/go_race_shard.awk'
-      - 'ci/go_race_missing_rows.awk'
-      - 'ci/go_providersync_race_shard.awk'
-      - 'ci/go_providersync_race_weights.tsv'
-      - 'ci/race_excluded_tests.tsv'
-      - 'ci/go_race_weights.tsv'
-      - 'ci/go_race_solo.tsv'
-      - 'ci/go_test_weights.tsv'
-      - 'ci/ratchets.tsv'
       - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
-      - 'ci/venue_oracle_discovery.awk'
-      - 'ci/venue_oracle_names.awk'
-      - 'ci/venue_oracle_proof.awk'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
-      - 'ci/go_integration_shards.d/**'
-      - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
@@ -243,8 +229,6 @@ on:
       - '.github/workflows/*.yml'
       - '.github/workflows/*.yaml'
       - 'ci/builder_images.sh'
-      - 'ci/builder_images.tsv'
-      - 'ci/auth_closure_allow.tsv'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence
@@ -408,32 +392,18 @@ on:
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
-      - 'ci/venue_oracle_registry.d/**'
-      - 'ci/venue_oracle_triggers.d/**'
-      - 'ci/venue_oracle_closure.d/**'
-      - 'ci/venue_oracle_trigger_gaps.tsv'
+      # ci tables, awk scripts and per-package row directories (ci/go_race_weights.d, ci/go_integration_shards.d, the venue
+      # oracle registries): globs, so a new one never edits this list (CHAOS-10300)
+      - 'ci/*.tsv'
+      - 'ci/*.awk'
+      - 'ci/*.d/**'
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
-      - 'ci/venue_oracle_weights.d/**'
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
-      - 'ci/go_race_shard.awk'
-      - 'ci/go_race_missing_rows.awk'
-      - 'ci/go_providersync_race_shard.awk'
-      - 'ci/go_providersync_race_weights.tsv'
-      - 'ci/race_excluded_tests.tsv'
-      - 'ci/go_race_weights.tsv'
-      - 'ci/go_race_solo.tsv'
-      - 'ci/go_test_weights.tsv'
-      - 'ci/ratchets.tsv'
       - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
-      - 'ci/venue_oracle_discovery.awk'
-      - 'ci/venue_oracle_names.awk'
-      - 'ci/venue_oracle_proof.awk'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
-      - 'ci/go_integration_shards.d/**'
-      - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
@@ -492,8 +462,6 @@ on:
       - '.github/workflows/*.yml'
       - '.github/workflows/*.yaml'
       - 'ci/builder_images.sh'
-      - 'ci/builder_images.tsv'
-      - 'ci/auth_closure_allow.tsv'
       # lefthook.yml holds the LOCAL half of the same pin. codex round 2 (P2):
       # a lefthook-only change is relevant=false, so removing the pre-push hook
       # would land with the pin's own CI job never running. The hook's presence

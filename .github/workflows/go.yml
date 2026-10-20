@@ -867,6 +867,15 @@ jobs:
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
         run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
 
+      - name: Upload per-test timing json
+        if: always() && matrix.target == 'providersync'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-providersync-${{ matrix.shard }}
+          path: go-test-json/
+          retention-days: 14
+          if-no-files-found: ignore
+
   # Preserve the existing required-check contract while the implementation
   # fans out behind it. fail-fast is disabled above, so this job observes the
   # aggregate result only after every shard has reached a terminal state.

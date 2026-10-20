@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 )
 
 var (
@@ -178,8 +179,8 @@ func (s *Store) projectIdentity(ctx context.Context, key ExternalKey, principal 
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			return s.insertIdentity(ctx, tx, linkID, key, principal, errProjectedConcurrently)
 		},
-		Audit: identityAudit("auth.identity.projected", "identity_projected", key, target, subject, Actor{}),
-		Event: identityEvent("external_identity.projected", key, target, subject),
+		Audit:  identityAudit("auth.identity.projected", "identity_projected", key, target, subject, Actor{}),
+		Events: []audit.OutboxEvent{identityEvent("external_identity.linked", key, target, subject)},
 	})
 	if errors.Is(err, errProjectedConcurrently) {
 		return nil
@@ -264,10 +265,9 @@ VALUES ($1, $2, $3, $4, $5)`, linkID, principal, req.Key.Issuer, string(req.Key.
 			return err
 		},
 		Audit: auditEvent,
-		Event: audit.OutboxEvent{
-			AggregateType: "principal", AggregateID: subject, EventType: "principal.provisioned",
-			Payload:        map[string]any{"external_identity_id": target, "provider": string(req.Key.Provider)},
-			IdempotencyKey: "principal.provisioned:" + subject,
+		Events: []audit.OutboxEvent{
+			principalEvent(subject, "principal.created", true), userEvent(subject, "user.created"),
+			userEvent(subject, "user.email_verified"), identityEvent("external_identity.linked", req.Key, target, subject),
 		},
 	})
 	switch {
@@ -316,8 +316,8 @@ func (s *Store) LinkIdentity(ctx context.Context, key ExternalKey, principal uui
 			}
 			return s.insertIdentity(ctx, tx, linkID, key, principal, ErrAlreadyLinked)
 		},
-		Audit: identityAudit("auth.identity.linked", "identity_linked", key, target, subject, actor),
-		Event: identityEvent("external_identity.linked", key, target, subject),
+		Audit:  identityAudit("auth.identity.linked", "identity_linked", key, target, subject, actor),
+		Events: []audit.OutboxEvent{identityEvent("external_identity.linked", key, target, subject)},
 	})
 	if err != nil {
 		return uuid.Nil, s.domainErr(ctx, "link external identity", err)
@@ -381,8 +381,8 @@ WHERE issuer = $1 AND provider = $2 AND subject = $3`, key.Issuer, string(key.Pr
 			}
 			return err
 		},
-		Audit: identityAudit("auth.identity.unlinked", "identity_unlinked", key, targetID, subject, actor),
-		Event: identityEvent("external_identity.unlinked", key, targetID, subject),
+		Audit:  identityAudit("auth.identity.unlinked", "identity_unlinked", key, targetID, subject, actor),
+		Events: []audit.OutboxEvent{identityEvent("external_identity.unlinked", key, targetID, subject)},
 	})
 	if err != nil {
 		return s.domainErr(ctx, "unlink external identity", err)
@@ -471,11 +471,18 @@ func identityAudit(eventType, reason string, key ExternalKey, target, subject st
 	return event
 }
 
+// identityEvent is an external identity event. It names the principal the
+// identity belongs to (subject), never the actor. The wire carries a
+// provider's short name only: a social provider's name; an SSO provider is a
+// provider row id, which the provider member cannot carry, so it is omitted.
 func identityEvent(eventType string, key ExternalKey, target, subject string) audit.OutboxEvent {
+	change := map[string]any{"principal_id": provisioning.WireID("principal", subject)}
+	if key.Provider.IsSocial() {
+		change["provider"] = string(key.Provider)
+	}
 	return audit.OutboxEvent{
-		AggregateType: "external_identity", AggregateID: target, EventType: eventType,
-		Payload:        map[string]any{"principal_id": subject, "provider": string(key.Provider)},
-		IdempotencyKey: eventType + ":" + target,
+		AggregateType: "external_identity", AggregateID: provisioning.WireID("external_identity", target),
+		EventType: eventType, Change: change,
 	}
 }
 

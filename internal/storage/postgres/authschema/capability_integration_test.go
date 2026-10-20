@@ -52,6 +52,7 @@ func insertFixtures(ids map[string]string) []struct {
 		{"entitlement_snapshots", `INSERT INTO auth.entitlement_snapshots (organization_id, sequence, document, digest) VALUES ($1, 1, '{}'::jsonb, '\x02'::bytea)`, []any{ids["org"]}},
 		{"security_audit_events", `INSERT INTO auth.security_audit_events (event_type, outcome) VALUES ('cap.probe', 'allowed')`, nil},
 		{"auth_outbox_events", `INSERT INTO auth.auth_outbox_events (aggregate_type, aggregate_id, event_type, payload, idempotency_key) VALUES ('principal', $1, 'cap.created', '{}'::jsonb, 'cap-idem-1')`, []any{ids["principal"]}},
+		{"aggregate_revisions", `INSERT INTO auth.aggregate_revisions (aggregate_type, aggregate_id, revision) VALUES ('principal', 'prn_' || $1, 1)`, []any{ids["principal"]}},
 	}
 }
 

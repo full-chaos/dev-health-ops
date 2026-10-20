@@ -88,6 +88,7 @@ internal/auth/authconfig	1
 internal/auth/authruntime	5
 internal/auth/authstore	1
 internal/auth/contracts	2
+internal/auth/contracts/provisioning	1
 internal/auth/edgetoken	1
 internal/auth/httpapi	4
 internal/auth/identity	2

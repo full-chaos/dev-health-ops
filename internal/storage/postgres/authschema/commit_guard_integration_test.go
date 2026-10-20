@@ -16,15 +16,15 @@ var guardedTables = []string{
 	"auth_outbox_events", "security_audit_events", "resource_grants", "memberships",
 	"platform_role_assignments", "policy_revisions", "entitlement_snapshots",
 	"credential_registry", "service_accounts", "workloads", "external_identities",
-	"organizations",
+	"organizations", "aggregate_revisions",
 }
 
 // unguardedTables are deliberately outside the guard, each with its reason.
 var unguardedTables = map[string]string{
 	"sessions":            "high-rate session lifecycle rows; a per-write outbox event and audit row would be noise",
 	"refresh_credentials": "high-rate rotation lifecycle rows, same reason as sessions",
-	"users":               "profile and lifecycle columns written at high rate; identity linking is guarded on external_identities",
-	"principals":          "identity root row, created with its user or service account; carries no grant",
+	"users":               "profile and lifecycle columns written at high rate; identity linking is guarded on external_identities; a new row inside audit.Commit is counted by the 0013 create guard",
+	"principals":          "identity root row, created with its user or service account; carries no grant; a new row inside audit.Commit is counted by the 0013 create guard",
 	"actions":             "closed vocabulary; the runtime role has no write privilege, so only the migration role writes it",
 	"roles":               "closed vocabulary; the runtime role has no write privilege",
 	"role_actions":        "closed vocabulary; the runtime role has no write privilege",

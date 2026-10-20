@@ -145,16 +145,98 @@ func ParseCertificate(raw string) (*x509.Certificate, error) {
 
 // DecodeResponse base64-decodes a posted SAMLResponse with the size bound.
 func DecodeResponse(posted string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(posted)
+	if posted == "" || base64.StdEncoding.DecodedLen(len(posted)) > MaxResponseBytes {
+		return nil, refused(ReasonPayload, "empty or oversized SAMLResponse")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(posted)
+	if err != nil {
+		return nil, refused(ReasonPayload, "SAMLResponse is not base64")
+	}
+	return decoded, nil
 }
 
 // Verify checks one decoded SAML Response against sp at now. InResponseTo is
 // returned for the caller to match against its stored request; it is not
 // checked here.
-var _ = xrv.Validate
-
 func Verify(raw []byte, sp SP, now time.Time) (Verified, error) {
-	return Verified{}, nil
+	if len(raw) == 0 || len(raw) > MaxResponseBytes {
+		return Verified{}, refused(ReasonPayload, "response size %d", len(raw))
+	}
+	if err := refuseDirectives(raw); err != nil {
+		return Verified{}, err
+	}
+	if err := xrv.Validate(bytes.NewReader(raw)); err != nil {
+		return Verified{}, refused(ReasonXMLInvalid, "round trip")
+	}
+	doc := etree.NewDocument()
+	if err := doc.ReadFromBytes(raw); err != nil {
+		return Verified{}, refused(ReasonXMLInvalid, "parse")
+	}
+	root := doc.Root()
+	if root == nil || root.Tag != "Response" || root.NamespaceURI() != nsProtocol {
+		return Verified{}, refused(ReasonNotAResponse, "root element")
+	}
+	if err := refuseDuplicateIDs(root); err != nil {
+		return Verified{}, err
+	}
+	if n := len(childrenNS(root, nsAssertion, "EncryptedAssertion")); n > 0 {
+		return Verified{}, refused(ReasonEncryptedAssertion, "%d encrypted assertions", n)
+	}
+	assertions := childrenNS(root, nsAssertion, "Assertion")
+	if len(assertions) != 1 {
+		return Verified{}, refused(ReasonAssertionCount, "%d assertions", len(assertions))
+	}
+	if err := refuseStraySignatures(root, assertions[0]); err != nil {
+		return Verified{}, err
+	}
+
+	responseSigned := len(childrenNS(root, dsig.Namespace, "Signature")) == 1
+	assertionSigned := len(childrenNS(assertions[0], dsig.Namespace, "Signature")) == 1
+	if !responseSigned && !assertionSigned {
+		return Verified{}, refused(ReasonSignatureMissing, "neither the response nor the assertion is signed")
+	}
+
+	responseEl := root
+	assertionEl := assertions[0]
+	if responseSigned {
+		verified, err := verifyEnveloped(root, sp.IdPCert, now)
+		if err != nil {
+			return Verified{}, err
+		}
+		responseEl = verified
+		inner := childrenNS(verified, nsAssertion, "Assertion")
+		if len(inner) != 1 {
+			return Verified{}, refused(ReasonAssertionCount, "%d assertions in the signed response", len(inner))
+		}
+		assertionEl = inner[0]
+	}
+	if assertionSigned {
+		verified, err := verifyEnveloped(assertionEl, sp.IdPCert, now)
+		if err != nil {
+			return Verified{}, err
+		}
+		assertionEl = verified
+	}
+
+	var response crewsaml.Response
+	if err := unmarshalElement(responseEl, &response); err != nil {
+		return Verified{}, refused(ReasonXMLInvalid, "response")
+	}
+	var assertion crewsaml.Assertion
+	if err := unmarshalElement(assertionEl, &assertion); err != nil {
+		return Verified{}, refused(ReasonXMLInvalid, "assertion")
+	}
+	out, err := checkClaims(response, responseSigned, assertion, sp, now)
+	if err != nil {
+		return Verified{}, err
+	}
+	if err := checkAudiences(assertionEl, sp.EntityID); err != nil {
+		return Verified{}, err
+	}
+	if err := libraryCheck(raw, sp, out); err != nil {
+		return Verified{}, err
+	}
+	return out, nil
 }
 
 func checkClaims(response crewsaml.Response, responseSigned bool, a crewsaml.Assertion, sp SP, now time.Time) (Verified, error) {

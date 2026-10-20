@@ -170,7 +170,88 @@ type SignIn struct {
 // Consume verifies a posted SAMLResponse and resolves the account. cookie
 // returns a request cookie value by name ("" when absent).
 func (s *Service) Consume(ctx context.Context, providerID uuid.UUID, posted string, cookie func(string) string) (SignIn, error) {
-	return SignIn{}, nil
+	p, err := s.provider(ctx, providerID, true)
+	if err != nil {
+		return SignIn{}, err
+	}
+	raw, err := DecodeResponse(posted)
+	if err != nil {
+		return SignIn{}, s.refuse(ctx, p, err)
+	}
+	if p.Config.Certificate == "" {
+		return SignIn{}, s.refuse(ctx, p, refused(ReasonSignatureInvalid, "provider has no certificate"))
+	}
+	cert, err := ParseCertificate(p.Config.Certificate)
+	if err != nil {
+		return SignIn{}, s.refuse(ctx, p, refused(ReasonSignatureInvalid, "provider certificate does not parse"))
+	}
+	base := s.BaseURL()
+	now := s.now()
+	v, err := Verify(raw, SP{EntityID: p.SPEntityID(base), ACSURL: p.ACSURL(base), IdPEntityID: p.Config.EntityID, IdPCert: cert}, now)
+	if err != nil {
+		return SignIn{}, s.refuse(ctx, p, err)
+	}
+
+	if err := s.matchRequest(ctx, p, v, cookie, now); err != nil {
+		return SignIn{}, s.refuse(ctx, p, err)
+	}
+	if err := s.Uses.UseAssertion(ctx, p.ID, v.Issuer, v.AssertionID, v.NotOnOrAfter); err != nil {
+		return SignIn{}, s.refuse(ctx, p, err)
+	}
+
+	email := s.email(p, v)
+	if email == "" {
+		return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
+	}
+	if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
+		return SignIn{}, s.refuse(ctx, p, ErrEmailMalformed)
+	}
+	if !p.DomainAllowed(email) {
+		return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
+	}
+
+	subject, err := Subject(v.NameID)
+	if err != nil {
+		return SignIn{}, s.refuse(ctx, p, refused(ReasonNameID, "NameID cannot key an identity"))
+	}
+	id := Identity{Issuer: v.Issuer, Provider: p.ID.String(), Subject: subject}
+	legacy := &LegacyMatch{AuthProvider: "saml", Subject: v.NameID.Value, MembershipOrg: p.OrgID}
+	principal, found, err := s.Store.IdentityBySubject(ctx, id, legacy)
+	if err != nil {
+		return SignIn{}, err
+	}
+	created := false
+	if found {
+		if principal.Disabled {
+			return SignIn{}, s.refuse(ctx, p, ErrAccountDisabled)
+		}
+	} else {
+		principal.ID, err = s.provision(ctx, p, id, email, s.displayName(p, v))
+		if err != nil {
+			return SignIn{}, s.refuse(ctx, p, err)
+		}
+		created = true
+	}
+
+	out := SignIn{PrincipalID: principal.ID, ProviderID: p.ID, AMR: []string{AMRFederated}, AuthTime: now, Created: created}
+	member, err := s.Memberships.Member(ctx, principal.ID, p.OrgID)
+	if err != nil {
+		return SignIn{}, err
+	}
+	if !member && s.JIT != nil {
+		if err := s.JIT.JoinOnSignIn(ctx, principal.ID, p); err != nil {
+			return SignIn{}, err
+		}
+		if member, err = s.Memberships.Member(ctx, principal.ID, p.OrgID); err != nil {
+			return SignIn{}, err
+		}
+	}
+	if member {
+		org := p.OrgID
+		out.OrganizationID = &org
+	}
+	s.logger().InfoContext(ctx, "auth saml: sign-in accepted", "provider_id", p.ID, "created", created, "member", member)
+	return out, nil
 }
 
 // matchRequest binds a solicited response to its stored request and browser.

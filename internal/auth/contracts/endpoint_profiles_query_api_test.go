@@ -109,7 +109,7 @@ func TestQueryAPIEndpointProfilesValidateAndUseTheClosedVocabularies(t *testing.
 
 // TestAnUnknownServiceFailsAndTheEnumHoldsNoServiceWithoutRows: a row naming a
 // service outside the closed enum is refused by the schema, and every enum
-// value beyond the original five has rows in this file.
+// value beyond the original five has rows in an endpoint-profiles.*.json file.
 func TestAnUnknownServiceFailsAndTheEnumHoldsNoServiceWithoutRows(t *testing.T) {
 	resolved, enum := resolveEndpointProfileSchema(t)
 
@@ -122,12 +122,30 @@ func TestAnUnknownServiceFailsAndTheEnumHoldsNoServiceWithoutRows(t *testing.T) 
 	}
 
 	withRows := map[string]bool{}
-	for _, item := range loadQueryAPIDocument(t)["rows"].([]any) {
-		withRows[item.(map[string]any)["service"].(string)] = true
+	files, err := filepath.Glob(filepath.Join(ContractsDir(testRoot(t)), "endpoint-profiles.*.json"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no endpoint-profiles.*.json inventory found (err=%v)", err)
+	}
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var inventory struct {
+			Rows []struct {
+				Service string `json:"service"`
+			} `json:"rows"`
+		}
+		if err := json.Unmarshal(raw, &inventory); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		for _, row := range inventory.Rows {
+			withRows[row.Service] = true
+		}
 	}
 	for _, service := range enum.Services {
 		if !preQueryAPIServices[service] && !withRows[service] {
-			t.Errorf("service %q is in the enum but has no rows in endpoint-profiles.query-api.json", service)
+			t.Errorf("service %q is in the enum but has no rows in any endpoint-profiles.*.json", service)
 		}
 	}
 	for service := range withRows {

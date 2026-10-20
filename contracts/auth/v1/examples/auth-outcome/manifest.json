@@ -113,6 +113,18 @@
       "why": "Closed vocabulary member `email_collision`."
     },
     {
+      "file": "valid-reason-signup-unavailable.json",
+      "why": "Closed vocabulary member `signup_unavailable`."
+    },
+    {
+      "file": "valid-reason-provider-already-linked.json",
+      "why": "Closed vocabulary member `provider_already_linked`."
+    },
+    {
+      "file": "valid-reason-identity-conflict.json",
+      "why": "Closed vocabulary member `identity_conflict`."
+    },
+    {
       "file": "valid-reason-rate-limited.json",
       "why": "Closed vocabulary member `rate_limited`."
     },

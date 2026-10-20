@@ -274,13 +274,23 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 		served, metrics string
 		wantRecreates   int
 		wantForwards    string
+		wantProbes      []string
 		wantError       string
 	}{
-		"nothing served":           {wantForwards: "leg acp forwards: none ("},
-		"login without sessions":   {served: "/api/v1/auth/login", wantForwards: "leg acp forwards: none ("},
-		"sessions":                 {served: sessions, metrics: forwarded("sessions"), wantRecreates: 1, wantForwards: "leg acp forwards: sessions\n"},
-		"sessions and login":       {served: sessions + ",/api/v1/auth/login", metrics: forwarded("sessions") + "\n" + forwarded("local_login"), wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
-		"half an aggregate":        {served: "/api/v1/auth/refresh", wantError: "auth-service serves 1 of the 2 routes of aggregate sessions"},
+		"nothing served": {wantForwards: "leg acp forwards: none (", wantProbes: []string{
+			"probe sessions: not served (2 routes)", "probe local_login: not served (1 routes)", "probe credentials: not served (6 routes)",
+			"probe social: not served (1 routes)", "probe oidc: not served (2 routes)", "probe saml: not served (3 routes)"}},
+		"login without sessions": {served: "/api/v1/auth/login", wantForwards: "leg acp forwards: none (",
+			wantProbes: []string{"probe sessions: not served (2 routes)", "probe local_login: served (1 routes)"}},
+		"sessions":           {served: sessions, metrics: forwarded("sessions"), wantRecreates: 1, wantForwards: "leg acp forwards: sessions\n"},
+		"sessions and login": {served: sessions + ",/api/v1/auth/login", metrics: forwarded("sessions") + "\n" + forwarded("local_login"), wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
+		"half an aggregate": {served: "/api/v1/auth/refresh", wantError: "auth-service serves 1 of the 2 routes of aggregate sessions",
+			wantProbes: []string{"probe sessions: partial (1 of 2 routes served)"}},
+		"half a non-session aggregate": {served: sessions + ",/api/v1/auth/oidc/p-probe/authorize",
+			wantError:  "auth-service serves 1 of the 2 routes of aggregate oidc",
+			wantProbes: []string{"probe sessions: served (2 routes)", "probe oidc: partial (1 of 2 routes served)"}},
+		"half a non-session aggregate without sessions": {served: "/api/v1/auth/saml/p-probe/metadata",
+			wantError: "auth-service serves 1 of the 3 routes of aggregate saml"},
 		"served but not forwarded": {served: sessions, wantRecreates: 1, wantError: "no forwarded request for aggregate sessions"},
 		"forwarded while off":      {metrics: forwarded("saml"), wantError: "go-api forwarded aggregate saml, whose flag is off"},
 	} {
@@ -295,6 +305,11 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 			}
 			if tc.wantForwards != "" && !strings.Contains(out, tc.wantForwards) {
 				t.Errorf("want %q in the output:\n%s", tc.wantForwards, out)
+			}
+			for _, line := range tc.wantProbes {
+				if !strings.Contains(out, line+"\n") {
+					t.Errorf("want the probe line %q in the output:\n%s", line, out)
+				}
 			}
 			if got := proxyFlagRecreates(fake.calls(t)); len(got) != tc.wantRecreates {
 				t.Errorf("go-api recreated %d times for proxy flags, want %d: %q", len(got), tc.wantRecreates, got)

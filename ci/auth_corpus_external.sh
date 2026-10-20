@@ -119,10 +119,11 @@ VALKEY_PORT="$(hostport valkey 6379)"
 printf 'ports: api %s postgres %s clickhouse %s valkey %s\n' "${API_PORT}" "${PG_PORT}" "${CH_PORT}" "${VALKEY_PORT}"
 export AUTH_CORPUS_PROJECT="${PROJECT}" AUTH_CORPUS_STATE="${STATE}" AUTH_CORPUS_LEG="${LEG}"
 
-# served AGGREGATE: auth-service serves every route of it (405 to OPTIONS on each); none of them is "no"; some of
-# them is an error, since a change that mounts an aggregate mounts all of it.
-served() {
-  local aggregate="$1" method pattern path code mounted=0 missing=0
+# probe AGGREGATE sets PROBED to "served" (auth-service answers OPTIONS on every route of it with 405) or "not served"
+# (404 on every route). Some of them is a partial mount and fails the leg: a change that mounts an aggregate mounts all
+# of it.
+probe() {
+  local aggregate="$1" name method pattern path code mounted=0 missing=0
   while IFS=$'\t' read -r name method pattern; do
     [ "${name}" = "${aggregate}" ] || continue
     path="${pattern//\{provider_id\}/p-probe}"
@@ -135,23 +136,29 @@ served() {
   done < <(grep -v '^#' "${ROUTES}")
   [ $((mounted + missing)) -gt 0 ] || die "${ROUTES} lists no route of aggregate ${aggregate}"
   if [ "${mounted}" -gt 0 ] && [ "${missing}" -gt 0 ]; then
+    printf 'probe %s: partial (%d of %d routes served)\n' "${aggregate}" "${mounted}" "$((mounted + missing))"
     die "auth-service serves ${mounted} of the $((mounted + missing)) routes of aggregate ${aggregate}"
   fi
-  [ "${missing}" -eq 0 ]
+  if [ "${missing}" -eq 0 ]; then PROBED="served"; else PROBED="not served"; fi
+  printf 'probe %s: %s (%d routes)\n' "${aggregate}" "${PROBED}" "$((mounted + missing))"
 }
 
 FORWARDED=()
 if [ "${LEG}" = "acp" ]; then
   AUTH_API_PORT="$(hostport auth-service 8095)"
   printf 'step 1c: the aggregates auth-service serves\n'
-  if served sessions; then
-    for aggregate in "${AGGREGATES[@]}"; do
-      if [ "${aggregate}" = sessions ] || served "${aggregate}"; then
-        FORWARDED+=("${aggregate}")
-      fi
-    done
+  SERVED=()
+  for aggregate in "${AGGREGATES[@]}"; do
+    probe "${aggregate}"
+    if [ "${PROBED}" = served ]; then
+      SERVED+=("${aggregate}")
+    fi
+  done
+  # The sessions aggregate gates the others, as go-api's own start-up check does.
+  if [[ " ${SERVED[*]} " == *" sessions "* ]]; then
+    FORWARDED=("${SERVED[@]}")
   fi
-  printf 'leg acp forwards: %s\n' "${FORWARDED[*]:-none (auth-service serves no proxied aggregate; every route stays in go-api)}"
+  printf 'leg acp forwards: %s\n' "${FORWARDED[*]:-none (sessions is not served; every route stays in go-api)}"
   for aggregate in "${FORWARDED[@]}"; do
     bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" "AUTH_PROXY_$(tr '[:lower:]' '[:upper:]' <<<"${aggregate}")" true
   done

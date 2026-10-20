@@ -546,7 +546,7 @@ func TestALegacyEmptyIssuerRowIsNotMatched(t *testing.T) {
 		Audit: audit.AuditEvent{EventType: "auth.identity.linked", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal,
 			Attributes: map[string]any{"reason_code": "identity_linked", "target_kind": "external_identity", "target_id": legacy}},
 		Events: []audit.OutboxEvent{{AggregateType: "external_identity", AggregateID: "idn_" + legacy, EventType: "external_identity.linked",
-			Change: map[string]any{"provider": "google"}}},
+			Change: map[string]any{"provider": "google", "principal_id": "prn_" + principal}}},
 	}); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}

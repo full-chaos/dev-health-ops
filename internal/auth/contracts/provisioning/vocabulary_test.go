@@ -5,6 +5,8 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -20,6 +22,7 @@ type schemaNode struct {
 	MaxProperties *int                   `json:"maxProperties"`
 	Items         *schemaNode            `json:"items"`
 	PropertyNames *schemaNode            `json:"propertyNames"`
+	Required      []string               `json:"required"`
 	Properties    map[string]*schemaNode `json:"properties"`
 	AllOf         []struct {
 		If   *schemaNode `json:"if"`
@@ -92,9 +95,16 @@ func TestVocabularyMatchesTheSchema(t *testing.T) {
 		if got, want := sorted(a.Change), sorted(members); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s change members: Go %v, schema %v", name, got, want)
 		}
+		if got, want := sorted(a.Required), sorted(change.Required); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s required change members: Go %v, schema %v", name, got, want)
+		}
 	}
 	if len(branches) != len(enum) {
 		t.Errorf("schema has %d branches for %d aggregate types", len(branches), len(enum))
+	}
+
+	if want := "^[a-z_]{1,32}:[A-Za-z0-9_-]{1," + strconv.Itoa(MaxWireIDLength) + "}:[0-9]{1,16}$"; schema.Properties["idempotency_key"].Pattern != want {
+		t.Errorf("idempotency_key pattern %q does not bound the id at MaxWireIDLength %d", schema.Properties["idempotency_key"].Pattern, MaxWireIDLength)
 	}
 
 	defined := schema.Properties["payload"].Properties["change"].Properties
@@ -148,7 +158,13 @@ func TestCheckEventRefusesWhatTheSchemaRefuses(t *testing.T) {
 		{"member of another aggregate", "user", "prn_" + id, "user.created", map[string]any{"status": "active"}, false},
 		{"status outside vocabulary", "principal", "prn_" + id, "principal.disabled", map[string]any{"status": "locked"}, false},
 		{"slug outside pattern", "organization", "org_" + id, "organization.updated", map[string]any{"slug": "Café_東京"}, false},
-		{"provider uuid", "external_identity", "idn_" + id, "external_identity.linked", map[string]any{"provider": id}, false},
+		{"provider uuid", "external_identity", "idn_" + id, "external_identity.linked", map[string]any{"provider": id, "principal_id": "prn_" + id}, false},
+		{"identity link names its principal", "external_identity", "idn_" + id, "external_identity.linked", map[string]any{"provider": "google", "principal_id": "prn_" + id}, true},
+		{"identity unlink names its principal", "external_identity", "idn_" + id, "external_identity.unlinked", map[string]any{"principal_id": "prn_" + id}, true},
+		{"identity link without its principal", "external_identity", "idn_" + id, "external_identity.linked", map[string]any{"provider": "google"}, false},
+		{"identity principal of another prefix", "external_identity", "idn_" + id, "external_identity.unlinked", map[string]any{"principal_id": "org_" + id}, false},
+		{"id at the key bound", "principal", "prn_" + strings.Repeat("a", 60), "principal.created", map[string]any{}, true},
+		{"id past the key bound", "principal", "prn_" + strings.Repeat("a", 61), "principal.created", map[string]any{}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -168,7 +184,8 @@ func TestCheckEventRefusesWhatTheSchemaRefuses(t *testing.T) {
 	if Surface != contracts.ProvisioningEventSurface {
 		t.Errorf("Surface %q is not contracts' %q", Surface, contracts.ProvisioningEventSurface)
 	}
-	if WireID("principal", id) != "prn_"+id || WireID("session", id) != "" || WireID("principal", "a b") != "" {
+	if WireID("principal", id) != "prn_"+id || WireID("session", id) != "" || WireID("principal", "a b") != "" ||
+		WireID("principal", strings.Repeat("a", 60)) == "" || WireID("principal", strings.Repeat("a", 61)) != "" {
 		t.Error("WireID renders a wrong id")
 	}
 }

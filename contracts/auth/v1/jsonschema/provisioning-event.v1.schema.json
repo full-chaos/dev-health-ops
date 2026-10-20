@@ -108,6 +108,11 @@
               "type": "string",
               "pattern": "^prn_[A-Za-z0-9_-]{1,64}$"
             },
+            "principal_id": {
+              "type": "string",
+              "pattern": "^prn_[A-Za-z0-9_-]{1,64}$",
+              "description": "The principal an external identity belongs to: the event's subject, never its actor."
+            },
             "provider": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_-]{1,31}$",
@@ -270,9 +275,16 @@
             "properties": {
               "change": {
                 "type": "object",
+                "required": [
+                  "principal_id"
+                ],
+                "properties": {
+                  "principal_id": {}
+                },
                 "propertyNames": {
                   "enum": [
-                    "provider"
+                    "provider",
+                    "principal_id"
                   ]
                 }
               }

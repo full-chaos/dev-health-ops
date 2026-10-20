@@ -24,7 +24,11 @@ type Aggregate struct {
 	IDPrefix string
 	Events   []string
 	Change   []string
+	Required []string
 }
+
+// MaxWireIDLength is the longest aggregate_id the idempotency_key can carry.
+const MaxWireIDLength = 64
 
 var provisioningAggregates = map[string]Aggregate{
 	"principal": {IDPrefix: "prn_",
@@ -35,7 +39,7 @@ var provisioningAggregates = map[string]Aggregate{
 			"user.credentials_changed", "user.tokens_invalidated"}},
 	"external_identity": {IDPrefix: "idn_",
 		Events: []string{"external_identity.linked", "external_identity.unlinked"},
-		Change: []string{"provider"}},
+		Change: []string{"provider", "principal_id"}, Required: []string{"principal_id"}},
 	"organization": {IDPrefix: "org_",
 		Events: []string{"organization.created", "organization.updated", "organization.suspended", "organization.reactivated"},
 		Change: []string{"status", "slug"}},
@@ -72,6 +76,7 @@ var provisioningChangeMembers = map[string]changeMember{
 	"slug":               {pattern: `^[a-z0-9][a-z0-9-]{1,62}$`},
 	"role_id":            {pattern: `^rol_[A-Za-z0-9_-]{1,64}$`},
 	"owner_principal_id": {pattern: `^prn_[A-Za-z0-9_-]{1,64}$`},
+	"principal_id":       {pattern: `^prn_[A-Za-z0-9_-]{1,64}$`},
 	"provider":           {pattern: `^[a-z][a-z0-9_-]{1,31}$`},
 	"audiences":          {array: true, minItems: 1, maxItems: 16, pattern: `^[a-z][a-z0-9._:-]{0,63}$`},
 	"resource_type":      {enum: []string{"organization", "repository"}},
@@ -116,7 +121,7 @@ func AggregateOf(aggregateType string) (Aggregate, bool) {
 // CheckEvent then refuses.
 func WireID(aggregateType, id string) string {
 	a, ok := provisioningAggregates[aggregateType]
-	if !ok || !wireIDSuffix.MatchString(id) {
+	if !ok || !wireIDSuffix.MatchString(id) || len(a.IDPrefix)+len(id) > MaxWireIDLength {
 		return ""
 	}
 	return a.IDPrefix + id
@@ -124,8 +129,9 @@ func WireID(aggregateType, id string) string {
 
 // CheckEvent refuses an event the provisioning-event.v1 schema
 // would refuse: an unknown aggregate type, an id without the type's prefix,
-// a verb outside the type's vocabulary, a change member the type may not
-// carry, or a member value outside its rule.
+// an id longer than the idempotency_key carries, a verb outside the type's
+// vocabulary, a missing required change member, a change member the type may
+// not carry, or a member value outside its rule.
 func CheckEvent(aggregateType, aggregateID, eventType string, change map[string]any) error {
 	a, ok := provisioningAggregates[aggregateType]
 	if !ok {
@@ -135,8 +141,16 @@ func CheckEvent(aggregateType, aggregateID, eventType string, change map[string]
 		!wireIDSuffix.MatchString(aggregateID[len(a.IDPrefix):]) {
 		return fmt.Errorf("%s: aggregate_id %q is not a %s id", Surface, aggregateID, a.IDPrefix)
 	}
+	if len(aggregateID) > MaxWireIDLength {
+		return fmt.Errorf("%s: aggregate_id is %d characters; the idempotency_key carries at most %d", Surface, len(aggregateID), MaxWireIDLength)
+	}
 	if !listHas(a.Events, eventType) {
 		return fmt.Errorf("%s: event_type %q is not a %s event", Surface, eventType, aggregateType)
+	}
+	for _, name := range a.Required {
+		if _, ok := change[name]; !ok {
+			return fmt.Errorf("%s: %s must carry change.%s", Surface, aggregateType, name)
+		}
 	}
 	for name, value := range change {
 		if !listHas(a.Change, name) {

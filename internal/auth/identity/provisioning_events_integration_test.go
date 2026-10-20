@@ -100,7 +100,9 @@ func TestEachProducerWritesItsMappedEvent(t *testing.T) {
 
 	// Link and unlink.
 	key := googleKey("map-" + uuid.NewString())
-	link, err := e.store.LinkIdentity(ctx, key, user, Actor{PrincipalID: &user})
+	// The link is made by another principal: the event names the linked
+	// principal, never the actor.
+	link, err := e.store.LinkIdentity(ctx, key, user, Actor{PrincipalID: &inactive})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,8 +110,8 @@ func TestEachProducerWritesItsMappedEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.wantEvents(t, ctx, "external_identity", "idn_"+link.String(),
-		wireEvent{Verb: "external_identity.linked", Change: map[string]any{"provider": "google"}},
-		wireEvent{Verb: "external_identity.unlinked", Change: map[string]any{"provider": "google"}})
+		wireEvent{Verb: "external_identity.linked", Change: map[string]any{"provider": "google", "principal_id": p}},
+		wireEvent{Verb: "external_identity.unlinked", Change: map[string]any{"provider": "google", "principal_id": p}})
 
 	// Local sign-up, verification, password change.
 	hash := testBcrypt
@@ -140,7 +142,7 @@ func TestEachProducerWritesItsMappedEvent(t *testing.T) {
 		t.Fatalf("federated identities = %v, %v", identities, err)
 	}
 	e.wantEvents(t, ctx, "external_identity", "idn_"+identities[0].ID.String(),
-		wireEvent{Verb: "external_identity.linked", Change: map[string]any{"provider": "google"}})
+		wireEvent{Verb: "external_identity.linked", Change: map[string]any{"provider": "google", "principal_id": "prn_" + fed.String()}})
 
 	// Organizations: created, renamed, suspended, reactivated.
 	org := e.seedOrg(t, ctx)

@@ -152,26 +152,32 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
-func ttlMigrationFiles(t *testing.T, dir string) []string {
+func ttlMigrationFiles(t *testing.T, dirs ...string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var out []string
-	for _, e := range entries {
-		if ext := filepath.Ext(e.Name()); !e.IsDir() && (ext == ".sql" || ext == ".py") {
-			out = append(out, filepath.Join(dir, e.Name()))
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := len(out)
+		for _, e := range entries {
+			if ext := filepath.Ext(e.Name()); !e.IsDir() && (ext == ".sql" || ext == ".py") {
+				out = append(out, filepath.Join(dir, e.Name()))
+			}
+		}
+		if len(out) == before {
+			t.Fatalf("no migration files under %s: a TTL scan over nothing would pass empty", dir)
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return filepath.Base(out[i]) < filepath.Base(out[j]) })
 	return out
 }
 
-func ttlScan(t *testing.T, dir string) (precise map[string]ttlRetention, coarse map[string]bool) {
+func ttlScan(t *testing.T, dirs ...string) (precise map[string]ttlRetention, coarse map[string]bool) {
 	t.Helper()
 	precise, coarse = map[string]ttlRetention{}, map[string]bool{}
-	for _, path := range ttlMigrationFiles(t, dir) {
+	for _, path := range ttlMigrationFiles(t, dirs...) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -273,12 +279,14 @@ func ttlVocabularyProblems(precise map[string]ttlRetention, coarse map[string]bo
 	return problems
 }
 
-func ttlRealDir(t *testing.T) string {
-	return filepath.Join(repoRoot(t), "src", "dev_health_ops", "migrations", "clickhouse")
+// The pre-099 text is frozen in history/, the live chain is sql/; together they are every ClickHouse migration.
+func ttlRealDirs(t *testing.T) []string {
+	root := filepath.Join(repoRoot(t), "internal", "chmigrate")
+	return []string{filepath.Join(root, "history"), filepath.Join(root, "sql")}
 }
 
 func TestTTLVocabularyMatchesTheRealMigrations(t *testing.T) {
-	precise, coarse := ttlScan(t, ttlRealDir(t))
+	precise, coarse := ttlScan(t, ttlRealDirs(t)...)
 	if problems := ttlVocabularyProblems(precise, coarse); len(problems) > 0 {
 		t.Fatalf("TTL vocabulary inconsistent: %s", strings.Join(problems, "; "))
 	}
@@ -298,8 +306,8 @@ func TestTTLVocabularyMatchesTheRealMigrations(t *testing.T) {
 // Every table's generation ceiling (retention - shelf life - headroom) must stay above zero, and the tightest horizon
 // binds the global ceiling.
 func TestTTLCeilingsSurviveTheShelfLife(t *testing.T) {
-	dir := ttlRealDir(t)
-	precise, _ := ttlScan(t, dir)
+	dirs := ttlRealDirs(t)
+	precise, _ := ttlScan(t, dirs...)
 	tightest := 0
 	for table, r := range precise {
 		if ceiling := r.days - ttlShelfLifeDays - ttlHeadroomDays; ceiling < 1 || ceiling+ttlShelfLifeDays >= r.days {
@@ -310,7 +318,7 @@ func TestTTLCeilingsSurviveTheShelfLife(t *testing.T) {
 		}
 	}
 	horizons := map[string]int{}
-	for _, path := range ttlMigrationFiles(t, dir) {
+	for _, path := range ttlMigrationFiles(t, dirs...) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

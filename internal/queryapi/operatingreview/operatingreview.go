@@ -37,7 +37,7 @@
 //     ai_governance_coverage_daily) are ReplacingMergeTree(computed_at);
 //     the other seven are plain MergeTree. Both groups are read through the
 //     identical argMax collapse -- confirmed by reading every CREATE TABLE
-//     in src/dev_health_ops/migrations/clickhouse/ against every FROM
+//     in internal/chmigrate/history/ against every FROM
 //     target in build_operating_review_queries before writing a single
 //     query below (CHAOS-4505's DO-THIS-FIRST audit, reported and accepted
 //     before this file was started; no CHAOS-4515/4516-class gate exists
@@ -212,7 +212,7 @@ func formatDay(t time.Time) string {
 // this fix (their underlying DDL columns are themselves Nullable(Float64),
 // so ClickHouse's own Nullable-aware avg() already returns real NULL, not
 // NaN, over zero rows -- verified per-column against every CREATE
-// TABLE/ALTER TABLE in src/dev_health_ops/migrations/clickhouse/ before
+// TABLE/ALTER TABLE in internal/chmigrate/history/ before
 // picking the three guard sites, so as not to "attempt a general NaN
 // policy" outside operatingReview's own reachable defect surface, which
 // CHAOS-4534 owns). repoMetricsRow.codeOwnershipGini shares the identical
@@ -555,8 +555,8 @@ type repoMetricsRow struct {
 	// guard as hotspotsAggRow.riskScore/complexityAggRow.cyclomaticPerKloc
 	// above. Both underlying columns are plain (non-Nullable) Float64
 	// (repo_metrics_daily.single_owner_file_ratio_30d,
-	// migrations/clickhouse/004_quality_delivery_metrics.sql:8;
-	// .change_failure_rate, migrations/clickhouse/001_metrics_v2.sql:22),
+	// internal/chmigrate/history/004_quality_delivery_metrics.sql:8;
+	// .change_failure_rate, internal/chmigrate/history/001_metrics_v2.sql:22),
 	// so an empty window's avg() is NaN -- CHAOS-4534's
 	// "ownership_concentration" and "change_failure_rate" reachable cases.
 	// codeOwnershipGini below is DELIBERATELY left un-gated (still plain
@@ -699,7 +699,7 @@ type hotspotsAggRow struct {
 	// guard, see this package doc comment's "Zero-row average guard"
 	// section. avg(latest_risk_score) is a plain (non-Nullable) Float64
 	// aggregate (file_hotspot_daily.risk_score Float64,
-	// migrations/clickhouse/007_complexity_investment_issues.sql:48), so
+	// internal/chmigrate/history/007_complexity_investment_issues.sql:48), so
 	// ClickHouse returns NaN, not NULL, when the HAVING-filtered inner
 	// subquery is empty -- the exact CHAOS-4534 "hotspot_risk_score"
 	// reachable case. hotspotsCount (count() in the SAME query, already
@@ -753,7 +753,7 @@ type complexityAggRow struct {
 	// cyclomaticPerKloc is nil when the query's companion count is 0 --
 	// same CHAOS-4563 known_count guard as hotspotsAggRow.riskScore above.
 	// repo_complexity_daily.cyclomatic_per_kloc is a plain Float64
-	// (migrations/clickhouse/007_complexity_investment_issues.sql:28), so
+	// (internal/chmigrate/history/007_complexity_investment_issues.sql:28), so
 	// an empty window's avg() is NaN, matching CHAOS-4534's
 	// "complexity_per_kloc" reachable case. Unlike hotspotsAggRow, this
 	// query had no pre-existing count() column -- one is added below

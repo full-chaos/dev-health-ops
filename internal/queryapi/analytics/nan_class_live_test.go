@@ -305,7 +305,7 @@ func nanClassClickHouseURI(t testing.TB) (dsn string, hostPort string) {
 // dbExpression() output for MeasureCoverageLinePct (breakdown.go's own
 // production function, called live -- not a hand-copied string) around a
 // synthetic group standing in for testops_coverage_metrics_daily's
-// line_coverage_pct column (Nullable(Float64), migrations/clickhouse/029_testops_tables.sql:158).
+// line_coverage_pct column (Nullable(Float64), internal/chmigrate/history/029_testops_tables.sql:158).
 func nanClassQuerySQL(t *testing.T, allNull bool) string {
 	t.Helper()
 	measureExpr, err := dbExpression(MeasureCoverageLinePct, false, false)

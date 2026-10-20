@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
@@ -310,7 +311,7 @@ func TestLinkRequiresExplicitAuditedAction(t *testing.T) {
 			t.Fatalf("audit rows for the link = %d, want 1", n)
 		}
 		if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'external_identity.linked' AND aggregate_id = $1`,
-			linked.ID.String()); n != 1 {
+			provisioning.WireID("external_identity", linked.ID.String())); n != 1 {
 			t.Fatalf("outbox rows for the link = %d, want 1", n)
 		}
 		res, err := svc.Exchange(ctx, GitHub, token, nil)
@@ -519,8 +520,12 @@ func TestExistingGoAPISocialUserSignsIn(t *testing.T) {
 				t.Fatalf("projected identity owner = %v, %v", owner, ok)
 			}
 			after := e.state(t, ctx)
-			if after.identities != before.identities+1 || after.audits != before.audits+1 {
+			if after.identities != before.identities+1 {
 				t.Fatalf("projection rows before %+v, after %+v", before, after)
+			}
+			if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events
+				WHERE event_type = 'auth.identity.projected' AND subject_principal_id = $1`, existing.String()); n != 1 {
+				t.Fatalf("identity projection audit rows = %d, want 1", n)
 			}
 			res, err = svc.Exchange(ctx, p, token, nil)
 			if err != nil || res.PrincipalID != existing {

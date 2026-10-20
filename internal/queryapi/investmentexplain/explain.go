@@ -800,6 +800,16 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 			"model", resolvedModel,
 		)
 	}
+	if ignored := parseResult.ConfidenceIgnored; ignored.Rule != "" {
+		slog.WarnContext(ctx, "query_api.investment_mix_explain.confidence_ignored",
+			"org_id", opts.OrgID,
+			"reason_rule", ignored.Rule,
+			"reason_path", ignored.Path,
+			"reason_snippet", ignored.Snippet,
+			"provider", resolvedProvider,
+			"model", resolvedModel,
+		)
+	}
 	result := explainOutputToExplanation(*parseResult.Output)
 	annotateFindings(&result, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
 	applySizing(&result, sizing)

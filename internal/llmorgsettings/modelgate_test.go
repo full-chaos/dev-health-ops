@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -21,7 +22,7 @@ func TestDecideTable(t *testing.T) {
 		{"B1 with the grant never reads the platform", Inputs{Saved: true, ConfigUsable: true, ServiceModelOn: true, Fallback: true}, Own, ""},
 		{"B1-off", Inputs{Saved: true, ConfigUsable: true}, Refuse, CodeAIFeaturesTurnedOff},
 		{"flag off outranks a closed gate", Inputs{Saved: true, GateClosed: true}, Refuse, CodeAIFeaturesTurnedOff},
-		{"B1' flag on", Inputs{Saved: true, ServiceModelOn: true}, Refuse, CodeUnavailable},
+		{"B1' flag on", Inputs{Saved: true, ServiceModelOn: true, ConfigReason: ConfigMissingCredentials}, Refuse, string(ConfigMissingCredentials)},
 		{"B2", Inputs{Saved: true, GateClosed: true, ServiceModelOn: true}, Refuse, CodeOwnModelGateClosed},
 		{"B2 with the grant", Inputs{Saved: true, GateClosed: true, ServiceModelOn: true, Fallback: true}, Refuse, CodeOwnModelGateClosed},
 		{"B3", Inputs{ServiceModelOn: true, Fallback: true}, Platform, ""},
@@ -90,7 +91,7 @@ func TestPgSourceReadsTheEffectiveFlagAndTheClosedGate(t *testing.T) {
 	gate := func(lic fakeLicensing, savedBYO bool, cfg fakeConfig) Decision {
 		return Gate{Source: PgSource{Licensing: lic, Queryer: saved(savedBYO), Config: cfg}}.Decide(context.Background(), "org")
 	}
-	own := fakeConfig{cfg: OrgConfig{Provider: "anthropic"}, found: true}
+	own := fakeConfig{cfg: OrgConfig{Provider: "anthropic", APIKey: secrets.NewHidden("k")}, found: true}
 	if d := gate(fakeLicensing{ACRServiceModelFeatureKey: plan, PlatformModelFallbackFeatureKey: plan}, true, own); d.Kind != Own {
 		t.Errorf("a saved config turns acr_service_model on: %+v", d)
 	}
@@ -112,7 +113,7 @@ func TestPgSourceReadsTheEffectiveFlagAndTheClosedGate(t *testing.T) {
 		t.Errorf("an unreadable grant is not a grant: %+v", d)
 	}
 	unreadable := fakeConfig{err: ErrStoredSettingUnreadable}
-	if d := gate(both, false, unreadable); d.Status != http.StatusServiceUnavailable {
-		t.Errorf("an unreadable saved config refuses as unavailable, never the platform: %+v", d)
+	if d := gate(both, false, unreadable); d.Code != string(ConfigUnreadableRow) {
+		t.Errorf("an unreadable saved config refuses with a reason, never the platform: %+v", d)
 	}
 }

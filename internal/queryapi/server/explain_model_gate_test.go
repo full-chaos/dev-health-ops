@@ -5,10 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -70,7 +71,7 @@ var explainGateRows = []struct {
 	{"B1 saved config, acr_service_model on: own model", gateSource{in: llmorgsettings.Inputs{Saved: true, ConfigUsable: true, ServiceModelOn: true}}, true, 0, ""},
 	{"B1-off saved config, acr_service_model off", gateSource{in: llmorgsettings.Inputs{Saved: true, ConfigUsable: true}}, false, http.StatusForbidden, "ai_features_turned_off"},
 	{"B1-unknown entitlement read fails", gateSource{err: errors.New("entitlement read failed")}, false, http.StatusServiceUnavailable, "Service unavailable"},
-	{"B1' saved but unusable", gateSource{in: llmorgsettings.Inputs{Saved: true, ServiceModelOn: true}}, false, http.StatusForbidden, "own_model_unusable"},
+	{"B1' saved but unusable", gateSource{in: llmorgsettings.Inputs{Saved: true, ServiceModelOn: true, ConfigReason: llmorgsettings.ConfigMissingCredentials}}, false, http.StatusForbidden, "missing_credentials"},
 	{"flag off, saved config, gate closed", gateSource{in: llmorgsettings.Inputs{Saved: true, GateClosed: true, Fallback: true}}, false, http.StatusForbidden, "ai_features_turned_off"},
 	{"flag off, saved and unusable", gateSource{in: llmorgsettings.Inputs{Saved: true}}, false, http.StatusForbidden, "ai_features_turned_off"},
 	{"B2 saved behind a closed gate, with the grant", gateSource{in: llmorgsettings.Inputs{Saved: true, GateClosed: true, ServiceModelOn: true, Fallback: true}}, false, http.StatusForbidden, "own_model_gate_closed"},
@@ -165,15 +166,54 @@ func assertGateOutcome(t *testing.T, rec *httptest.ResponseRecorder, resolver *c
 	}
 }
 
-// Every production builder of an explain route must hand its handler the real gate.
-func TestExplainRouteBuildersWireTheModelGate(t *testing.T) {
-	for _, file := range []string{"investment_explain_route.go", "workunit_explain_route.go"} {
-		src, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(src), "newModelGate(orgSettingsPool, orgSettings)") {
-			t.Errorf("%s: the route handler is built without newModelGate", file)
-		}
+// countingSettings is the org settings of the production handlers, counting every resolution.
+type countingSettings struct{ *countingResolver }
+
+func (countingSettings) OrgConfig(context.Context, string) (llmorgsettings.OrgConfig, bool, error) {
+	return llmorgsettings.OrgConfig{}, false, nil
+}
+
+type denyingGate struct{ asked atomic.Int64 }
+
+func (g *denyingGate) Decide(context.Context, string) llmorgsettings.Decision {
+	g.asked.Add(1)
+	return llmorgsettings.Decision{Kind: llmorgsettings.Refuse, Code: "gate_denied_for_test", Status: http.StatusForbidden}
+}
+
+// The handlers the route builders mount consult the gate the factory returns and obey its refusal: no
+// provider is resolved and no ClickHouse query runs.
+func TestMountedExplainHandlersObeyTheModelGate(t *testing.T) {
+	deny := &denyingGate{}
+	previous := explainModelGate
+	explainModelGate = func(*pgxpool.Pool, llmorgsettings.ConfigSource) modelGate { return deny }
+	t.Cleanup(func() { explainModelGate = previous })
+
+	reader, err := investmentexplain.NewReader(unusedQueryClient{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, run := range map[string]func(*countingSettings) *httptest.ResponseRecorder{
+		"investment explain": func(settings *countingSettings) *httptest.ResponseRecorder {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain", nil)
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			rec := httptest.NewRecorder()
+			investmentExplainHandler(reader, nil, settings, nil)(rec, req)
+			return rec
+		},
+		"work-unit explain": func(settings *countingSettings) *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			workUnitExplainHandler(reader, nil, settings, nil)(rec, newWorkUnitExplainRequest(t, "wu-ABC-123", ""))
+			return rec
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := deny.asked.Load()
+			settings := &countingSettings{&countingResolver{}}
+			rec := run(settings)
+			assertGateOutcome(t, rec, settings.countingResolver, admittedOutcome{}, false, http.StatusForbidden, "gate_denied_for_test")
+			if deny.asked.Load() != before+1 {
+				t.Fatalf("the gate was asked %d times, want 1", deny.asked.Load()-before)
+			}
+		})
 	}
 }

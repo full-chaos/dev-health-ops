@@ -32,6 +32,7 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 
@@ -143,7 +144,7 @@ func buildWorkUnitExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (hand
 	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}.ForPurpose(llmorgsettings.PurposeExplain)
 
 	routeMux := routeswitch.NewMux(workUnitExplainSwitchFromEnv(getenv))
-	routeMux.Register(workUnitExplainOperation, newWorkUnitExplainHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}, newModelGate(orgSettingsPool, orgSettings)))
+	routeMux.Register(workUnitExplainOperation, workUnitExplainHandler(reader, cacheWriter, orgSettings, orgSettingsPool))
 
 	entryHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -224,6 +225,12 @@ func parseWorkUnitExplainQuery(r *http.Request) (workUnitExplainQuery, []pydanti
 		parsed.endDate = &endDate
 	}
 	return parsed, validationErrors
+}
+
+// workUnitExplainHandler is the route handler with the production dependencies: the model gate always
+// runs before any provider is resolved.
+func workUnitExplainHandler(reader *investmentexplain.Reader, writer *investmentexplain.CacheWriter, orgSettings explainOrgSettings, pool *pgxpool.Pool) http.HandlerFunc {
+	return newWorkUnitExplainHandler(reader, writer, orgSettings, llmbudget.PgStore{Pool: pool}, explainModelGate(pool, orgSettings))
 }
 
 // newWorkUnitExplainHandler is the routeswitch-registered handler.

@@ -55,6 +55,8 @@ type Inputs struct {
 	Saved bool
 	// ConfigUsable: the saved configuration resolves for this call.
 	ConfigUsable bool
+	// ConfigReason names why a saved configuration cannot serve (a ConfigReason value; never a stored value).
+	ConfigReason ConfigReason
 	// GateClosed: the byo_llm plan gate is closed for the org.
 	GateClosed bool
 	// ServiceModelOn is the effective acr_service_model.
@@ -65,7 +67,7 @@ type Inputs struct {
 
 // Decide is the D6107 table, in the order of decide.go: the effective acr_service_model comes first.
 // Flag off: ai_features_turned_off for every org (B1-off, B5), before any BYO, gate or grant question.
-// Flag on: a saved config is B2 own_model_gate_closed (even with the grant), B1' 503 when unusable, B1 own
+// Flag on: a saved config is B2 own_model_gate_closed (even with the grant), B1' a 403 whose detail is the ConfigReason (missing_credentials, invalid_base_url, unknown_provider, not_configured, unreadable_row) when it cannot serve, B1 own
 // model; no config is B3 platform (with the grant) or B4 service_model_not_entitled.
 func Decide(in Inputs) Decision {
 	refuse := func(code string) Decision { return Decision{Kind: Refuse, Code: code, Status: http.StatusForbidden} }
@@ -77,7 +79,11 @@ func Decide(in Inputs) Decision {
 		case in.GateClosed:
 			return refuse(CodeOwnModelGateClosed)
 		case !in.ConfigUsable:
-			return Decision{Kind: Refuse, Code: CodeUnavailable, Status: http.StatusServiceUnavailable}
+			reason := in.ConfigReason
+			if reason == "" || reason == ConfigActive {
+				reason = ConfigUnreadableRow
+			}
+			return refuse(string(reason))
 		}
 		return Decision{Kind: Own}
 	}
@@ -138,12 +144,19 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 		return Inputs{}, err
 	}
 	cfg, found, err := s.Config.OrgConfig(ctx, orgID)
+	usable, reason := false, ConfigNotConfigured
 	switch {
 	case errors.Is(err, ErrStoredSettingUnreadable):
 		// Saved but unusable: row B1'.
-		found, saved = false, true
+		found, saved, reason = false, true, ConfigUnreadableRow
 	case err != nil:
 		return Inputs{}, fmt.Errorf("llmmodelgate: org config: %w", err)
+	case found:
+		checked, checkErr := CheckConfig(ctx, cfg.Provider, cfg.APIKey.Reveal(), cfg.BaseURL)
+		if checkErr != nil {
+			return Inputs{}, fmt.Errorf("llmmodelgate: check org config: %w", checkErr)
+		}
+		usable, reason = checked == ConfigActive, checked
 	}
 	saved = saved || found || cfg.GateClosed
 	serviceModel, err := s.Licensing.Decide(ctx, orgID, ACRServiceModelFeatureKey)
@@ -159,7 +172,7 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 		return Inputs{}, fmt.Errorf("llmmodelgate: %s: %w", PlatformModelFallbackFeatureKey, err)
 	}
 	return Inputs{
-		Saved: saved, ConfigUsable: found, GateClosed: cfg.GateClosed,
+		Saved: saved, ConfigUsable: usable, ConfigReason: reason, GateClosed: cfg.GateClosed,
 		ServiceModelOn: serviceModelOn, Fallback: fallback.Allowed,
 	}, nil
 }

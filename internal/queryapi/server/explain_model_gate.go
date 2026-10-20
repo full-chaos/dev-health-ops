@@ -17,6 +17,15 @@ type modelGate interface {
 	Decide(ctx context.Context, orgID string) llmorgsettings.Decision
 }
 
+// explainOrgSettings is the org settings both explain routes read: provider credentials and the saved config.
+type explainOrgSettings interface {
+	llmorgsettings.Resolver
+	llmorgsettings.ConfigSource
+}
+
+// explainModelGate builds the gate for a route; a test swaps it to see what a route does with a refusing gate.
+var explainModelGate = newModelGate
+
 // newModelGate wires the production gate over the registry pool and the explain-purpose settings.
 func newModelGate(pool *pgxpool.Pool, config llmorgsettings.ConfigSource) modelGate {
 	return llmorgsettings.Gate{Source: llmorgsettings.PgSource{

@@ -41,17 +41,20 @@ func (s storedConfig) OrgConfig(context.Context, string) (llmorgsettings.OrgConf
 // A saved provider that cannot serve a call is refused before any provider is resolved and before any
 // ClickHouse read, on both explain routes, with the platform environment key present or not.
 func TestExplainRoutesRefuseASavedConfigThatCannotServe(t *testing.T) {
-	for name, cfg := range map[string]llmorgsettings.OrgConfig{
-		"no key":    {Provider: "openai"},
-		"bad url":   {Provider: "openai", APIKey: secrets.NewHidden("k"), BaseURL: "http://169.254.169.254/v1"},
-		"bad kind":  {Provider: "no-such-provider", APIKey: secrets.NewHidden("k")},
-		"empty key": {Provider: "anthropic", APIKey: secrets.NewHidden("")},
+	for name, c := range map[string]struct {
+		cfg    llmorgsettings.OrgConfig
+		reason string
+	}{
+		"no key":    {llmorgsettings.OrgConfig{Provider: "openai"}, "missing_credentials"},
+		"bad url":   {llmorgsettings.OrgConfig{Provider: "openai", APIKey: secrets.NewHidden("k"), BaseURL: "http://169.254.169.254/v1"}, "invalid_base_url"},
+		"bad kind":  {llmorgsettings.OrgConfig{Provider: "no-such-provider", APIKey: secrets.NewHidden("k")}, "unknown_provider"},
+		"empty key": {llmorgsettings.OrgConfig{Provider: "anthropic", APIKey: secrets.NewHidden("")}, "missing_credentials"},
 	} {
 		for _, platformKey := range []string{"", "sk-platform"} {
 			t.Run(name+"/platform key "+platformKey, func(t *testing.T) {
 				t.Setenv("OPENAI_API_KEY", platformKey)
 				t.Setenv("ANTHROPIC_API_KEY", platformKey)
-				gate := llmorgsettings.Gate{Source: llmorgsettings.PgSource{Licensing: grantedLicensing{}, Queryer: savedOpenAI{}, Config: storedConfig{cfg}}}
+				gate := llmorgsettings.Gate{Source: llmorgsettings.PgSource{Licensing: grantedLicensing{}, Queryer: savedOpenAI{}, Config: storedConfig{c.cfg}}}
 
 				resolver := &countingResolver{}
 				reader, err := investmentexplain.NewReader(unusedQueryClient{})
@@ -62,12 +65,12 @@ func TestExplainRoutesRefuseASavedConfigThatCannotServe(t *testing.T) {
 				req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 				rec := httptest.NewRecorder()
 				newInvestmentExplainWorkHandler(reader, nil, resolver, nil, gate)(rec, req)
-				assertGateOutcome(t, rec, resolver, admittedOutcome{}, false, http.StatusForbidden, "own_model_unusable")
+				assertGateOutcome(t, rec, resolver, admittedOutcome{}, false, http.StatusForbidden, c.reason)
 
 				resolver = &countingResolver{}
 				rec = httptest.NewRecorder()
 				newWorkUnitExplainHandler(reader, nil, resolver, nil, gate)(rec, newWorkUnitExplainRequest(t, "wu-ABC-123", ""))
-				assertGateOutcome(t, rec, resolver, admittedOutcome{}, false, http.StatusForbidden, "own_model_unusable")
+				assertGateOutcome(t, rec, resolver, admittedOutcome{}, false, http.StatusForbidden, c.reason)
 			})
 		}
 	}

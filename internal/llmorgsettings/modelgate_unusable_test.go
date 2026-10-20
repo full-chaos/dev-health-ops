@@ -15,17 +15,20 @@ import (
 func TestSavedConfigThatCannotServeIsARefusalWithAReason(t *testing.T) {
 	grant := licensing.Decision{Allowed: true, Reason: licensing.ReasonEnabledByOrgOverride}
 	both := fakeLicensing{ACRServiceModelFeatureKey: grant, PlatformModelFallbackFeatureKey: grant}
-	for name, cfg := range map[string]fakeConfig{
-		"provider without a key":      {cfg: OrgConfig{Provider: "openai"}, found: true},
-		"provider with an empty key":  {cfg: OrgConfig{Provider: "anthropic", APIKey: secrets.NewHidden("")}, found: true},
-		"base url the guard refuses":  {cfg: OrgConfig{Provider: "openai", APIKey: secrets.NewHidden("k"), BaseURL: "http://169.254.169.254/v1"}, found: true},
-		"provider the service lacks":  {cfg: OrgConfig{Provider: "no-such-provider", APIKey: secrets.NewHidden("k")}, found: true},
-		"stored value cannot be read": {err: ErrStoredSettingUnreadable},
+	for name, c := range map[string]struct {
+		cfg    fakeConfig
+		reason string
+	}{
+		"provider without a key":      {fakeConfig{cfg: OrgConfig{Provider: "openai"}, found: true}, "missing_credentials"},
+		"provider with an empty key":  {fakeConfig{cfg: OrgConfig{Provider: "anthropic", APIKey: secrets.NewHidden("")}, found: true}, "missing_credentials"},
+		"base url the guard refuses":  {fakeConfig{cfg: OrgConfig{Provider: "openai", APIKey: secrets.NewHidden("k"), BaseURL: "http://169.254.169.254/v1"}, found: true}, "invalid_base_url"},
+		"provider the service lacks":  {fakeConfig{cfg: OrgConfig{Provider: "no-such-provider", APIKey: secrets.NewHidden("k")}, found: true}, "unknown_provider"},
+		"stored value cannot be read": {fakeConfig{err: ErrStoredSettingUnreadable}, "unreadable_row"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := Gate{Source: PgSource{Licensing: both, Queryer: saved(true), Config: cfg}}.Decide(context.Background(), "org")
-			if d.Kind != Refuse || d.Status != http.StatusForbidden || d.Code != "own_model_unusable" {
-				t.Fatalf("decision = %+v, want a 403 refusal own_model_unusable", d)
+			d := Gate{Source: PgSource{Licensing: both, Queryer: saved(true), Config: c.cfg}}.Decide(context.Background(), "org")
+			if d.Kind != Refuse || d.Status != http.StatusForbidden || d.Code != c.reason {
+				t.Fatalf("decision = %+v, want a 403 refusal with detail %q", d, c.reason)
 			}
 		})
 	}

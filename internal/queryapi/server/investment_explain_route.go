@@ -46,6 +46,7 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
@@ -227,7 +228,7 @@ func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (ha
 	orgSettings := llmorgsettings.Store{Pool: orgSettingsPool, Decryptor: decryptor}.ForPurpose(llmorgsettings.PurposeExplain)
 
 	routeMux := routeswitch.NewMux(investmentExplainSwitchFromEnv(getenv))
-	routeMux.Register(investmentExplainOperation, newInvestmentExplainWorkHandler(reader, cacheWriter, orgSettings, llmbudget.PgStore{Pool: orgSettingsPool}, newModelGate(orgSettingsPool, orgSettings)))
+	routeMux.Register(investmentExplainOperation, investmentExplainHandler(reader, cacheWriter, orgSettings, orgSettingsPool))
 
 	// Auth runs BEFORE Dispatch, same order /query's newQueryHandler uses
 	// (query_route.go:1180-1194: resolve operation, THEN auth, THEN
@@ -254,6 +255,12 @@ func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (ha
 		orgSettingsPool.Close()
 	}
 	return entryHandler, cleanupFn, true, nil
+}
+
+// investmentExplainHandler is the route handler with the production dependencies: the model gate always
+// runs before any provider is resolved.
+func investmentExplainHandler(reader *investmentexplain.Reader, writer *investmentexplain.CacheWriter, orgSettings explainOrgSettings, pool *pgxpool.Pool) http.HandlerFunc {
+	return newInvestmentExplainWorkHandler(reader, writer, orgSettings, llmbudget.PgStore{Pool: pool}, explainModelGate(pool, orgSettings))
 }
 
 // investmentExplainRequestBody ports api/models/filters.py's

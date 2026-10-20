@@ -5,10 +5,9 @@
 // ONE copy, for the reason providersyncschema exists: the alternative was
 // a second hand-kept DDL in the cmd package, drifting from this one with
 // nothing to notice. The DDL below mirrors alembic migrations 0114, 0127
-// and 0128 (and the later ones listed on DDL) as a FROZEN schema. The Python
-// alembic chain and its migration test are deleted, so no live migration proof
-// exists: the Go tests run against this DDL, and nothing checks it against a
-// migrated database.
+// and 0128 (and the later ones listed on DDL) as a FROZEN schema. The 0128
+// upgrade and downgrade are proven only by the migration runner itself; no test
+// compares this DDL with a migrated database.
 package registryschema
 
 import (

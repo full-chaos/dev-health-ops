@@ -111,7 +111,8 @@ on:
       - 'src/dev_health_ops/workers/job_contracts/**'
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
-      - 'tests/**'
+      - 'tests/*.py'
+      - 'tests/scripts/**'
       - '**/testdata/**'
       # The manifests of the recordedfiles guard sit BESIDE their directory
       # (internal/x/testdata.manifest.tsv, tests/fixtures.manifest.tsv), and
@@ -345,7 +346,8 @@ on:
       - 'src/dev_health_ops/workers/job_contracts/**'
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
-      - 'tests/**'
+      - 'tests/*.py'
+      - 'tests/scripts/**'
       - '**/testdata/**'
       # The manifests of the recordedfiles guard sit BESIDE their directory
       # (internal/x/testdata.manifest.tsv, tests/fixtures.manifest.tsv), and

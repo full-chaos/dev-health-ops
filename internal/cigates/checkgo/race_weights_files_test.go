@@ -61,14 +61,13 @@ func TestRaceWeightsFiles(t *testing.T) {
 		fail   bool
 		want   []string
 	}{
-		{"the real directory is accepted", func(string) {}, false, []string{"race-weights-rows:"}},
 		{"a package with no file", func(d string) { _ = os.Remove(filepath.Join(d, victimFile)) }, true, []string{"NO row", victim}},
 		{"a file of a package that is gone", func(d string) { write(d, "internal__zz-gone-package.tsv", "internal/zz-gone-package\t1\n") }, true, []string{"no longer exist", "internal/zz-gone-package"}},
 		{"the same package in two files names both weights", func(d string) { write(d, "internal__httpguard__again.tsv", victim+"\t999\n") }, true, []string{"weighs a package twice", victim, victimWeight, "999"}},
 		{"a file whose name is not its package", func(d string) { write(d, "internal__other.tsv", "internal/zz-other\t1\n") }, true, []string{"internal__other.tsv", "internal__zz-other.tsv"}},
 		{"a file with two rows", func(d string) { write(d, victimFile, string(victimRow)+"cmd/dho\t5\n") }, true, []string{victimFile, "exactly one row"}},
 		{"a row with no weight", func(d string) { write(d, victimFile, victim+"\n") }, true, []string{victimFile, "weight"}},
-		{"a comment and a blank line in a file are not rows", func(d string) { write(d, victimFile, "# note\n\n"+string(victimRow)) }, false, []string{"race-weights-rows:"}},
+		{"the real directory with a comment and a blank line in a file is accepted", func(d string) { write(d, victimFile, "# note\n\n"+string(victimRow)) }, false, []string{"race-weights-rows:"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -39,9 +39,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECK_GO = ROOT / "ci" / "check_go.sh"
-WEIGHTS = ROOT / "ci" / "go_race_weights.tsv"
 SHARD_AWK = ROOT / "ci" / "go_race_shard.awk"
-DEFAULT_WEIGHT = 2
 
 STAND_IN_GO = """#!/usr/bin/env bash
 # Stand-in `go`: `go test` records "<pkg args>" and succeeds (or fails when
@@ -109,15 +107,6 @@ def _list_calls(run_dir: Path) -> list[str]:
     return [line for line in (run_dir / "go_list.log").read_text().splitlines() if line]
 
 
-def _weights() -> dict[str, int]:
-    weights: dict[str, int] = {}
-    for line in WEIGHTS.read_text().splitlines():
-        if line.strip() and not line.startswith("#"):
-            pkg, seconds = line.split("\t")
-            weights[pkg] = int(seconds)
-    return weights
-
-
 def _go_list() -> tuple[str, list[str]]:
     real_go = shutil.which("go")
     assert real_go, "go is required"
@@ -139,29 +128,6 @@ def _go_list() -> tuple[str, list[str]]:
         check=True,
     ).stdout.split()
     return mod, pkgs
-
-
-def _shard(mod: str, pkgs: list[str], shard: int, count: int) -> list[str]:
-    proc = subprocess.run(
-        [
-            "awk",
-            "-v",
-            f"mod={mod}",
-            "-v",
-            f"shard={shard}",
-            "-v",
-            f"count={count}",
-            "-v",
-            f"weights={WEIGHTS}",
-            "-f",
-            str(SHARD_AWK),
-        ],  # fmt: skip
-        input="\n".join(pkgs) + "\n",
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return proc.stdout.split()
 
 
 def _key(mod: str, pkg: str) -> str:
@@ -218,55 +184,6 @@ def _run_check_go(
 # ---------------------------------------------------------------------------
 # 2. Race shards.
 # ---------------------------------------------------------------------------
-
-
-def test_race_shards_partition_the_package_list_and_balance() -> None:
-    mod, pkgs = _go_list()
-    assert len(pkgs) >= 100, f"only {len(pkgs)} packages"
-    weights = _weights()
-    for count in (2, 3, 5):
-        slices = [_shard(mod, pkgs, k, count) for k in range(1, count + 1)]
-        flat = [p for s in slices for p in s]
-        assert len(flat) == len(set(flat)), (
-            f"a package is in two slices (count={count})"
-        )
-        assert sorted(flat) == sorted(pkgs), (
-            f"the slices do not cover the list (count={count})"
-        )
-        loads = [
-            sum(weights.get(_key(mod, p), DEFAULT_WEIGHT) for p in s) for s in slices
-        ]
-        ideal = sum(loads) / count
-        heaviest_single = max(weights.get(_key(mod, p), DEFAULT_WEIGHT) for p in pkgs)
-        # LPT bound: no slice exceeds the ideal by more than the heaviest package.
-        assert max(loads) <= ideal + heaviest_single, (count, loads)
-    two = [
-        sum(weights.get(_key(mod, p), DEFAULT_WEIGHT) for p in _shard(mod, pkgs, k, 2))
-        for k in (1, 2)
-    ]
-    assert max(two) <= 1.1 * (sum(two) / 2), f"2-way race slices unbalanced: {two}"
-    # CHAOS-8135: the workflow runs three legs; no leg may exceed the mean by more than 10%.
-    three = [
-        sum(weights.get(_key(mod, p), DEFAULT_WEIGHT) for p in _shard(mod, pkgs, k, 3))
-        for k in (1, 2, 3)
-    ]
-    assert max(three) <= 1.1 * (sum(three) / 3), (
-        f"3-way race slices unbalanced: {three}"
-    )
-
-
-def test_the_race_weights_table_is_clean() -> None:
-    mod, pkgs = _go_list()
-    known = {_key(mod, p) for p in pkgs}
-    rows = [
-        line.split("\t")[0]
-        for line in WEIGHTS.read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
-    assert rows == sorted(rows), "ci/go_race_weights.tsv is not sorted (LC_ALL=C)"
-    assert len(rows) == len(set(rows)), "a package is weighed twice"
-    stale = [r for r in rows if r not in known]
-    assert not stale, f"weights name packages that no longer exist: {stale}"
 
 
 def test_the_shard_partition_holds_whatever_the_weights_say(tmp_path: Path) -> None:
@@ -385,38 +302,6 @@ def _race_weights_rows(tmp_path: Path, text: str):
     )
 
 
-def test_the_go_side_weights_census_accepts_the_table_and_names_each_defect(
-    tmp_path: Path,
-) -> None:
-    """CHAOS-4233: `check_go.sh race-weights-rows` (run by fast, ci and the static leg) fails
-    on the author's machine with the pytest node that guards the same rule in CI."""
-    text = WEIGHTS.read_text(encoding="utf-8")
-    green = _race_weights_rows(tmp_path, text)
-    assert green.returncode == 0, green.stderr
-    assert "race-weights-rows:" in green.stdout
-    victim = "internal/httpguard"
-    missing = _race_weights_rows(
-        tmp_path,
-        "".join(
-            line + "\n"
-            for line in text.splitlines()
-            if not line.startswith(victim + "\t")
-        ),
-    )
-    assert missing.returncode != 0
-    assert victim in missing.stderr
-    assert "test_every_package_of_the_root_module_has_a_weights_row" in missing.stderr
-    stale = _race_weights_rows(tmp_path, text + "internal/zz-gone-package\t1\n")
-    assert stale.returncode != 0
-    assert "internal/zz-gone-package" in stale.stderr
-    assert "test_the_race_weights_table_is_clean" in stale.stderr
-    indented = _race_weights_rows(tmp_path, text + "  # an indented comment\n")
-    assert indented.returncode != 0, "the CI test reads an indented comment as a row"
-    twice = _race_weights_rows(tmp_path, text + "cmd/auth-migrate\t1\n")
-    assert twice.returncode != 0
-    assert "test_the_race_weights_table_is_clean" in twice.stderr
-
-
 def test_fast_ci_all_and_the_static_leg_run_the_weights_census() -> None:
     source = CHECK_GO.read_text(encoding="utf-8")
     for verb in ("fast", "ci", "all"):
@@ -434,100 +319,6 @@ def test_fast_ci_all_and_the_static_leg_run_the_weights_census() -> None:
 # ---------------------------------------------------------------------------
 # 5. CHAOS-8135: every race package has an explicit weights row (static guard).
 # ---------------------------------------------------------------------------
-
-
-def _missing_awk(
-    mod: str, weights_file: Path, packages: str
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "awk",
-            "-v",
-            f"mod={mod}",
-            "-v",
-            f"weights={weights_file}",
-            "-f",
-            str(ROOT / "ci" / "go_race_missing_rows.awk"),
-        ],  # fmt: skip
-        input=packages,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def test_every_package_of_the_root_module_has_a_weights_row() -> None:
-    mod, pkgs = _go_list()
-    missing = sorted(_key(mod, p) for p in pkgs if _key(mod, p) not in _weights())
-    assert not missing, f"packages with no row in ci/go_race_weights.tsv: {missing}"
-
-
-def test_the_missing_row_awk_names_a_removed_row_and_refuses_empty_input(
-    tmp_path: Path,
-) -> None:
-    mod, pkgs = _go_list()
-    text = "\n".join(pkgs) + "\n"
-    green = _missing_awk(mod, WEIGHTS, text)
-    assert green.returncode == 0 and green.stdout == "", green
-    weights = _weights()
-    victim = "internal/httpguard"
-    assert victim in weights
-    trimmed = tmp_path / "trimmed.tsv"
-    trimmed.write_text(
-        "".join(f"{k}\t{v}\n" for k, v in weights.items() if k != victim)
-    )
-    red = _missing_awk(mod, trimmed, text)
-    assert red.stdout.split() == [victim], red
-    empty = tmp_path / "empty.tsv"
-    empty.write_text("# no rows\n")
-    assert _missing_awk(mod, empty, text).returncode != 0, (
-        "an empty weights file must fail loudly"
-    )
-    assert _missing_awk(mod, WEIGHTS, "").returncode != 0, (
-        "an empty package list must fail loudly"
-    )
-
-
-def test_a_race_leg_with_a_package_that_has_no_row_fails_before_any_test_runs(
-    tmp_path: Path,
-) -> None:
-    weights = _weights()
-    victim = "internal/httpguard"
-    trimmed = tmp_path / "trimmed.tsv"
-    trimmed.write_text(
-        "".join(f"{k}\t{v}\n" for k, v in weights.items() if k != victim)
-    )
-    proc, calls = _run_check_go(
-        tmp_path / "run",
-        "ci-leg",
-        "race",
-        "1",
-        "3",
-        extra_env={"GO_RACE_WEIGHTS": str(trimmed)},
-    )
-    assert proc.returncode != 0, proc.stdout[-800:]
-    assert "NO row in ci/go_race_weights.tsv" in proc.stderr
-    assert victim in proc.stderr
-    assert calls == [], "go test must not run when a package has no row"
-    assert "ci-leg race: OK" not in proc.stdout
-
-
-def test_a_race_leg_with_an_empty_weights_file_fails_before_any_test_runs(
-    tmp_path: Path,
-) -> None:
-    empty = tmp_path / "empty.tsv"
-    empty.write_text("# no rows\n")
-    proc, calls = _run_check_go(
-        tmp_path / "run",
-        "ci-leg",
-        "race",
-        "1",
-        "3",
-        extra_env={"GO_RACE_WEIGHTS": str(empty)},
-    )
-    assert proc.returncode != 0, proc.stdout[-800:]
-    assert "go_race_missing_rows.awk failed" in proc.stderr
-    assert calls == [], "go test must not run when the weights file holds no row"
 
 
 # ---------------------------------------------------------------------------

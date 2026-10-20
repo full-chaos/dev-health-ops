@@ -1,0 +1,5 @@
+values.prod.yaml
+--go-api-url
+{GO_URL}
+--query-api-url
+{QUERY_URL}

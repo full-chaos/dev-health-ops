@@ -490,8 +490,8 @@ func TestCLICrossOrgOnlyRowsFail(t *testing.T) {
 	}
 }
 
-// Parity pair: the stdout below is the exact output of ci/assert_metrics_executed_proof.py (json.dumps indent=2,
-// then the OK line) on the same recorded input, as run on the base commit.
+// Parity pair: the stdout below follows the layout the deleted ci/assert_metrics_executed_proof.py printed (json.dumps indent=2,
+// then the OK line): key order, 2-space indent, empty lists as [] and the blank line before OK.
 func TestCLIOutputParityRecordedPair(t *testing.T) {
 	c := &honestConn{repos: map[string]string{repo: orgA}, tables: map[string][]rec{
 		"cicd_metrics_daily": {{org: orgA, repo: repo, at: late}},

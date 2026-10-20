@@ -9,7 +9,7 @@ scrollback are readable. Two exposure classes are pinned here:
 * display — `ch_migrate`/`ch_provision`/the (now-retired, CHAOS-5307)
   `metrics_readback` stage printed the full URI;
 * argv — `fixtures generate --sink <uri>` and
-  `assert_metrics_executed_proof.py --clickhouse-uri <uri>` passed it as an
+  the metrics proof gate with `--clickhouse-uri <uri>` passed it as an
   argument.
 
 The argv fixes are deletions rather than new contracts: both consumers already
@@ -21,14 +21,12 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 _GATE = _ROOT / "ci" / "local_validate.sh"
-_PROOF = _ROOT / "ci" / "assert_metrics_executed_proof.py"
 
 _SECRET = "sup3rsecret"
 
@@ -97,19 +95,6 @@ def test_no_child_receives_the_scratch_uri_as_an_argument() -> None:
         "these flags pass the credential-bearing SCRATCH_URI in argv, where a "
         f"process listing can read it: {offenders}. Export CLICKHOUSE_URI instead."
     )
-
-
-@pytest.mark.skipif(not _PROOF.is_file(), reason="proof script missing")
-def test_metrics_proof_accepts_the_dsn_from_the_environment() -> None:
-    """The argv fix is only safe because the consumer reads the env."""
-    source = _PROOF.read_text(encoding="utf-8")
-    assert 'os.getenv("CLICKHOUSE_URI")' in source, (
-        "--clickhouse-uri must default from CLICKHOUSE_URI, otherwise dropping it "
-        "from argv silently passes None"
-    )
-    assert not re.search(
-        r'add_argument\(\s*"--clickhouse-uri",\s*required=True', source
-    ), "--clickhouse-uri must not be required once it defaults from the environment"
 
 
 def _uri_encode(value: str) -> str:
@@ -364,31 +349,3 @@ def test_non_ascii_credentials_are_refused_rather_than_mis_encoded(
         "expected the known-truncating output; if this changed, uri_encode was "
         "fixed — remove the guard's non-ASCII clause and this assertion"
     )
-
-
-@pytest.mark.skipif(not _PROOF.is_file(), reason="proof script missing")
-def test_metrics_proof_requires_a_dsn_from_flag_or_env() -> None:
-    """Defaulting from the env must not degrade into silently passing None.
-
-    Dropping --clickhouse-uri from the gate's argv was only safe because the
-    script reads CLICKHOUSE_URI. With neither set it previously proceeded and
-    failed deep inside the sink, where the error names something else entirely.
-    """
-    # PYTHONPATH=src exactly as the gate invokes it -- this script imports
-    # dev_health_ops at module scope, and a worktree venv built with
-    # `uv sync --no-install-project` (the CHAOS-4181 workaround) has no
-    # installed package, so without it the run dies at import before argparse
-    # is ever reached and the test would be asserting the wrong failure.
-    env = {k: v for k, v in os.environ.items() if k != "CLICKHOUSE_URI"}
-    env["PYTHONPATH"] = "src"
-    result = subprocess.run(
-        [sys.executable, str(_PROOF), "--org-id", "x", "--run-start", "1"],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=_ROOT,
-    )
-    assert result.returncode != 0, "must not proceed without a DSN"
-    assert "--clickhouse-uri or CLICKHOUSE_URI is required" in (
-        result.stderr + result.stdout
-    ), f"expected an explicit argparse error, got: {result.stderr or result.stdout}"

@@ -541,7 +541,7 @@ wait_for_redis
 # wait_for_native_family_telemetry, ci/lib/go_worker_fixture.sh), not from
 # Python compute of any kind. For real executed-proof of the metrics
 # pipeline generally, see the `metrics-executed-proof` job in
-# .github/workflows/live-e2e.yml and ci/assert_metrics_executed_proof.py.
+# .github/workflows/live-e2e.yml and `cigate metrics-proof`.
 # dho loads a frozen world (CHAOS-7301) into a migrated ClickHouse: migrate first,
 # to the head (ordering contract 2, which the worker started later must also use).
 export OPERATIONAL_ORDERING_CONTRACT=2

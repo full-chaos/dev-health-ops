@@ -34,11 +34,7 @@ func TestMCPClickHouseCeilingAgainstARealClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start ClickHouse test dependency: %v", err)
 	}
-	defer func() {
-		if ch != nil && ch.Container != nil {
-			_ = ch.Container.Terminate(context.Background())
-		}
-	}()
+	defer func() { _ = ch.Close(context.Background()) }()
 
 	t.Run("production_client_sends_the_class_ceilings", func(t *testing.T) {
 		client, err := newMCPClickHouseClient(ch.URI)

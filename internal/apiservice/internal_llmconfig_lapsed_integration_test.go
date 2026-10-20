@@ -105,19 +105,19 @@ func TestInternalLLMConfigLapsedOrgServesNothing(t *testing.T) {
 	}
 	noConfig := uuid.NewString()
 	pgseed.Org(ctx, t, pool, noConfig, "enterprise")
-	categorizeOnly := uuid.NewString()
-	pgseed.Org(ctx, t, pool, categorizeOnly, "enterprise")
-	pgseed.Setting(ctx, t, pool, categorizeOnly, "llm", "purpose:categorize:provider", "openai", false)
-	pgseed.Setting(ctx, t, pool, categorizeOnly, "llm", "purpose:categorize:model", "categorize-model", false)
-	if code, marker, _ := get(0, categorizeOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_no_investigate_config" {
-		t.Fatalf("acr route, BYO keys for categorize only: answered %d marker %q reason %q, want the marked 404 with reason byo_no_investigate_config", code, marker, reason)
+	explainOnly := uuid.NewString()
+	pgseed.Org(ctx, t, pool, explainOnly, "enterprise")
+	pgseed.Setting(ctx, t, pool, explainOnly, "llm", "purpose:explain:provider", "openai", false)
+	pgseed.Setting(ctx, t, pool, explainOnly, "llm", "purpose:explain:model", "explain-model", false)
+	if code, marker, _ := get(0, explainOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_no_investigate_config" {
+		t.Fatalf("acr route, BYO keys for explain only: answered %d marker %q reason %q, want the marked 404 with reason byo_no_investigate_config", code, marker, reason)
 	}
-	lapsedCategorizeOnly := uuid.NewString()
-	pgseed.Org(ctx, t, pool, lapsedCategorizeOnly, "community")
-	pgseed.Setting(ctx, t, pool, lapsedCategorizeOnly, "llm", "purpose:categorize:provider", "openai", false)
-	pgseed.Setting(ctx, t, pool, lapsedCategorizeOnly, "llm", "purpose:categorize:model", "categorize-model", false)
-	if code, marker, _ := get(0, lapsedCategorizeOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_llm_gate_closed" {
-		t.Fatalf("acr route, lapsed tier with BYO keys for categorize only: answered %d marker %q reason %q, want the marked 404 with reason byo_llm_gate_closed", code, marker, reason)
+	lapsedExplainOnly := uuid.NewString()
+	pgseed.Org(ctx, t, pool, lapsedExplainOnly, "community")
+	pgseed.Setting(ctx, t, pool, lapsedExplainOnly, "llm", "purpose:explain:provider", "openai", false)
+	pgseed.Setting(ctx, t, pool, lapsedExplainOnly, "llm", "purpose:explain:model", "explain-model", false)
+	if code, marker, _ := get(0, lapsedExplainOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_llm_gate_closed" {
+		t.Fatalf("acr route, lapsed tier with BYO keys for explain only: answered %d marker %q reason %q, want the marked 404 with reason byo_llm_gate_closed", code, marker, reason)
 	}
 	for i, route := range routes {
 		if code, marker, _ := get(i, noConfig); code != http.StatusNotFound || marker != "none" || reason != "" {

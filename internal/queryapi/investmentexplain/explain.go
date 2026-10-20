@@ -805,7 +805,6 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 			"org_id", opts.OrgID,
 			"reason_rule", ignored.Rule,
 			"reason_path", ignored.Path,
-			"reason_snippet", ignored.Snippet,
 			"provider", resolvedProvider,
 			"model", resolvedModel,
 		)

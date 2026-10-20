@@ -104,7 +104,7 @@ func setEnvFixture(t *testing.T, fake fakeDocker) (state string, env []string) {
 func TestAuthCorpusSetEnvRecreatesGoAPIAndKeepsTheState(t *testing.T) {
 	fake := newFakeDocker(t)
 	state, env := setEnvFixture(t, fake)
-	if out, code := runScript(t, "auth_corpus_set_env.sh", env, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF "); code != 0 {
+	if out, code := runSetEnv(t, env, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF "); code != 0 {
 		t.Fatalf("set: exit %d: %s", code, out)
 	}
 	calls := fake.calls(t)
@@ -116,7 +116,7 @@ func TestAuthCorpusSetEnvRecreatesGoAPIAndKeepsTheState(t *testing.T) {
 	if !strings.Contains(text, "export JWT_SECRET_KEY=key") || strings.Contains(text, "=old") || !strings.Contains(text, "AUTH_AUTO_CREATE_ORG_ON_REGISTER=") {
 		t.Errorf("state after the set:\n%s", text)
 	}
-	if out, code := runScript(t, "auth_corpus_set_env.sh", env, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", ""); code != 0 {
+	if out, code := runSetEnv(t, env, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", ""); code != 0 {
 		t.Fatalf("unset: exit %d: %s", code, out)
 	}
 	raw, _ = os.ReadFile(state)

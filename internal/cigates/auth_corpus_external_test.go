@@ -71,9 +71,9 @@ func TestAuthCorpusExternalJobIsInTheVenueWorkflow(t *testing.T) {
 	}
 }
 
-func runScript(t *testing.T, script string, env []string, args ...string) (string, int) {
+func runSetEnv(t *testing.T, env []string, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command("bash", append([]string{filepath.Join(authProofRoot(t), "ci", script)}, args...)...)
+	cmd := exec.Command("bash", append([]string{filepath.Join(authProofRoot(t), "ci", "auth_corpus_set_env.sh")}, args...)...)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -110,13 +110,13 @@ func TestAuthCorpusSetEnvScriptIsBoundedAndComposeOnly(t *testing.T) {
 		t.Error("the readiness wait is not bounded")
 	}
 	env := []string{"PATH=" + os.Getenv("PATH")}
-	if out, code := runScript(t, "auth_corpus_set_env.sh", env, "X", "Y"); code == 0 || !strings.Contains(out, "AUTH_CORPUS_PROJECT") {
+	if out, code := runSetEnv(t, env, "X", "Y"); code == 0 || !strings.Contains(out, "AUTH_CORPUS_PROJECT") {
 		t.Errorf("without AUTH_CORPUS_PROJECT: exit %d, output %q; want a refusal naming AUTH_CORPUS_PROJECT", code, out)
 	}
-	if out, code := runScript(t, "auth_corpus_set_env.sh", append(env, "AUTH_CORPUS_PROJECT=../x"), "X", "Y"); code == 0 || !strings.Contains(out, "AUTH_CORPUS_PROJECT") {
+	if out, code := runSetEnv(t, append(env, "AUTH_CORPUS_PROJECT=../x"), "X", "Y"); code == 0 || !strings.Contains(out, "AUTH_CORPUS_PROJECT") {
 		t.Errorf("with a project name that is not authcorpus<hex>: exit %d, output %q; want a refusal", code, out)
 	}
-	if _, code := runScript(t, "auth_corpus_set_env.sh", append(env, "AUTH_CORPUS_PROJECT=authcorpus1a2b3c"), "ONLYNAME"); code != 2 {
+	if _, code := runSetEnv(t, append(env, "AUTH_CORPUS_PROJECT=authcorpus1a2b3c"), "ONLYNAME"); code != 2 {
 		t.Errorf("one argument: exit %d, want 2 (usage)", code)
 	}
 }

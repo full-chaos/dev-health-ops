@@ -176,7 +176,7 @@ func TestGoImagePublishingPlantedDefects(t *testing.T) {
 		{"a renderer names an unpublished image", []mutation{{values, "ghcr.io/full-chaos/dev-health-go-dho", "ghcr.io/full-chaos/dev-health-go-ghost"}}, []string{"never publishes", "ghost"}},
 		{"a renderer's active image is swapped while a stale comment still names the Go image", []mutation{{"deploy/go-api/compose-query-api.yml", "ghcr.io/full-chaos/dev-health-go-dho:local}", "docker.io/library/busybox:latest}"}}, []string{"deploy/go-api/compose-query-api.yml no longer names a Go image"}},
 		{"a renderer's active image names an unpublished target while a comment names a published one", []mutation{{"deploy/go-api/compose-query-api.yml", "ghcr.io/full-chaos/dev-health-go-dho:local}", "ghcr.io/full-chaos/dev-health-go-ghost:local}"}}, []string{"never publishes", "ghost"}},
-		{"a renderer outside the go.yml path filters is invisible to the Go workflow", []mutation{{goYmlFile, "      - 'deploy/go-api/**'\n", allMarker}}, []string{"deploy/go-api/compose-query-api.yml", "matches no push path filter"}},
+		{"a renderer outside the go.yml path filters is invisible to the Go workflow", []mutation{{goYmlFile, "      - 'deploy/go-api/**'\n", allMarker}, {goYmlFile, "      - 'deploy/**'\n", allMarker}}, []string{"deploy/go-api/compose-query-api.yml", "matches no push path filter"}},
 		{"the publish workflow cannot republish itself", []mutation{{publishWorkflow, "              - '.github/workflows/docker-images.yml'\n", ""}}, []string{"changes filter", "publish pipeline"}},
 	}
 	for _, c := range cases {

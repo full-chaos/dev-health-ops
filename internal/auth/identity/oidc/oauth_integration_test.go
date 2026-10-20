@@ -398,10 +398,13 @@ func TestOAuthOutcomesRecordedOnce(t *testing.T) {
 	if _, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), fakeAccountWith(uniqueEmail("counted"), true), true); failure != nil {
 		t.Fatalf("callback: %v", failure)
 	}
+	if _, err := svc.AuthorizeOAuthByType(context.Background(), "gitlab", h.orgID); err != nil {
+		t.Fatalf("by type: %v", err)
+	}
 	counts := outcomeCounts(t, reader)
 	for key, want := range map[string]int64{
 		"oauth_authorize/denied/not_entitled": 1, "oauth_callback/denied/not_entitled": 1,
-		"oauth_authorize/success/accepted": 1, "oauth_callback/success/accepted": 1,
+		"oauth_authorize/success/accepted": 2, "oauth_callback/success/accepted": 1,
 	} {
 		if counts[key] != want {
 			t.Errorf("auth.oidc.outcomes %s = %d, want %d (all: %v)", key, counts[key], want, counts)
@@ -410,6 +413,7 @@ func TestOAuthOutcomesRecordedOnce(t *testing.T) {
 	if n := strings.Count(logged.String(), "reason=not_entitled"); n != 2 {
 		t.Errorf("refusal log lines with reason=not_entitled = %d, want 2", n)
 	}
+	wantOneLogLinePerOutcome(t, logged.String(), counts)
 }
 
 func TestOAuthHandlersRoundTrip(t *testing.T) {

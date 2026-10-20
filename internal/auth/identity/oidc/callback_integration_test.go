@@ -814,4 +814,24 @@ func TestEveryOutcomeIsRecordedOnce(t *testing.T) {
 	if n := strings.Count(logged.String(), "reason=not_entitled"); n != 2 {
 		t.Errorf("refusal log lines with reason=not_entitled = %d, want 2:\n%s", n, logged.String())
 	}
+	wantOneLogLinePerOutcome(t, logged.String(), counts)
+}
+
+// wantOneLogLinePerOutcome holds every counted outcome (route/outcome/reason)
+// to exactly as many log lines naming it, and no outcome log line to be
+// uncounted: success and refusal alike.
+func wantOneLogLinePerOutcome(t *testing.T, logged string, counts map[string]int64) {
+	t.Helper()
+	var total int64
+	for key, n := range counts {
+		total += n
+		parts := strings.SplitN(key, "/", 3)
+		needle := "route=" + parts[0] + " outcome=" + parts[1] + " reason=" + parts[2]
+		if got := int64(strings.Count(logged, needle)); got != n {
+			t.Errorf("log lines %q = %d, want %d (the counted outcomes):\n%s", needle, got, n, logged)
+		}
+	}
+	if lines := int64(strings.Count(logged, " outcome=")); lines != total {
+		t.Errorf("outcome log lines = %d, counted outcomes = %d:\n%s", lines, total, logged)
+	}
 }

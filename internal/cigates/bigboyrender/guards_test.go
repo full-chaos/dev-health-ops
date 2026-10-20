@@ -283,7 +283,7 @@ func TestGrantsCompareFailsLoudlyWhenTheManifestCannotBeParsed(t *testing.T) {
 	if code, out, stderr := run("grants-compare", "SELECT\tteams\n", "package clickhouse\n"); code != 1 || out != "" || stderr != "GRANTS_CHECK_FAIL manifest not parsed: no func APIPosture\n" {
 		t.Errorf("no function: exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
-	if code, _, stderr := run("grants-compare", "only one"); code != 2 || !strings.Contains(stderr, "usage:") {
+	if code, _, stderr := run("grants-compare", "only one"); code != 1 || !strings.Contains(stderr, "usage:") {
 		t.Errorf("usage: exit %d, %q", code, stderr)
 	}
 }
@@ -574,7 +574,7 @@ func TestBumpSwapValuesRefusesAPlantedDefect(t *testing.T) {
 		}
 	}
 	bumpFiles(t, prodValues(), localValues())
-	if code, _, stderr := run("bump-swap-values", "only", "two"); code != 2 || !strings.Contains(stderr, "usage:") {
+	if code, _, stderr := run("bump-swap-values", "only", "two"); code != 1 || !strings.Contains(stderr, "usage:") {
 		t.Errorf("usage: exit %d, %q", code, stderr)
 	}
 }

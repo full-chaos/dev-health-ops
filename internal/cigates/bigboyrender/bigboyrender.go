@@ -12,6 +12,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 const usage = "usage: cigate bigboy render-ch-users|grants-compare|pg-posture api|domain|bump-swap-values [args]"
@@ -80,8 +81,35 @@ func beforeFirst(s, sep string) string {
 	return head
 }
 
+// pyWord and pySpace are Python's str \w and \s as Go regexp classes (Go's own are ASCII). \w is every letter, number
+// and underscore (Python: str.isalnum() or "_"); \s is exactly the code points where str.isspace() is true
+// (checked over all of Unicode on Python 3.12: \t \n \v \f \r, \x1c-\x1f, space, \x85, \xa0, \u1680, \u2000-\u200a,
+// \u2028, \u2029, \u202f, \u205f, \u3000).
+const (
+	pyWord  = `\p{L}\p{N}_`
+	pySpace = `\x{9}-\x{d}\x{1c}-\x{20}\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
+)
+
+func isPyWord(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) }
+
+func isPySpace(r rune) bool {
+	switch {
+	case r >= 0x9 && r <= 0xd, r >= 0x1c && r <= 0x20, r == 0x85, r == 0xa0, r == 0x1680, r >= 0x2000 && r <= 0x200a,
+		r == 0x2028, r == 0x2029, r == 0x202f, r == 0x205f, r == 0x3000:
+		return true
+	}
+	return false
+}
+
+// utf8Refusal is what Python did on bytes that are not UTF-8 (a text-mode read or .decode()): an uncaught
+// UnicodeDecodeError. The verb prints this one line and exits 1; what is the file or the git object.
+func utf8Refusal(stderr io.Writer, what string) int {
+	fmt.Fprintf(stderr, "UnicodeDecodeError: %s: invalid UTF-8\n", what)
+	return 1
+}
+
 // apiTable is the CH APIPosture row `{Database: database, Table: "x", Allow...: true}`.
-var apiTable = regexp.MustCompile(`\{Database: database, Table: "(\w+)",([^}]*)\}`)
+var apiTable = regexp.MustCompile(`\{Database: database, Table: "([` + pyWord + `]+)",([^}]*)\}`)
 
 var chPrivileges = [][2]string{{"AllowSelect", "SELECT"}, {"AllowInsert", "INSERT"}, {"AllowDelete", "ALTER DELETE"}}
 

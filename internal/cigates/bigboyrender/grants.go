@@ -12,7 +12,7 @@ import (
 func grantsCompare(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 2 {
 		fmt.Fprintln(stderr, "usage: cigate bigboy grants-compare <actual-grants-tsv> <authorization.go source>")
-		return 2
+		return 1
 	}
 	pairs, ok := chManifest(args[1])
 	if !ok {

@@ -6,9 +6,10 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
-var armComment = regexp.MustCompile(`(The arm64 child \(prod's own arch\) is\n\s+# sha256:)[0-9a-f]{64}`)
+var armComment = regexp.MustCompile(`(The arm64 child \(prod's own arch\) is\n[` + pySpace + `]+# sha256:)[0-9a-f]{64}`)
 
 // bumpSwapValues: `bump-swap-values <old-sha> <new-sha> <o7> <s7> <old-operator-digest> <new-operator-digest>
 // <old-dho-digest> <new-dho-digest> <dho-arm-child-digest>`, run from the deploy worktree. It rewrites
@@ -16,7 +17,7 @@ var armComment = regexp.MustCompile(`(The arm64 child \(prod's own arch\) is\n\s
 func bumpSwapValues(args []string, stderr io.Writer) int {
 	if len(args) != 9 {
 		fmt.Fprintln(stderr, "usage: cigate bigboy bump-swap-values <old-sha> <new-sha> <o7> <s7> <old-operator-digest> <new-operator-digest> <old-dho-digest> <new-dho-digest> <dho-arm-child-digest>")
-		return 2
+		return 1
 	}
 	old, newSHA, o7, s7, oo, no, od, nd, arm := args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]
 	const prod, local = "values.prod.yaml", "values.local.yaml"
@@ -24,6 +25,9 @@ func bumpSwapValues(args []string, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if !utf8.Valid(raw) {
+		return utf8Refusal(stderr, prod)
 	}
 	s := universalNewlines(string(raw))
 	for _, pair := range [][2]string{{old, newSHA}, {o7, s7}, {oo, no}, {od, nd}} {
@@ -54,10 +58,20 @@ func bumpSwapValues(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if !utf8.Valid(rawLocal) {
+		return utf8Refusal(stderr, local)
+	}
 	t := universalNewlines(string(rawLocal))
 	o12, n12 := prefixRunes(old, 12), prefixRunes(newSHA, 12)
-	if !strings.Contains(t, o12) || !strings.Contains(t, od) {
-		fmt.Fprintln(stderr, "AssertionError")
+	var lacks []string
+	if !strings.Contains(t, o12) {
+		lacks = append(lacks, o12)
+	}
+	if !strings.Contains(t, od) {
+		lacks = append(lacks, "the old dho digest "+od)
+	}
+	if len(lacks) > 0 {
+		fmt.Fprintf(stderr, "AssertionError: %s does not hold %s\n", local, strings.Join(lacks, " nor "))
 		return 1
 	}
 	t = strings.ReplaceAll(strings.ReplaceAll(t, o12, n12), od, nd)

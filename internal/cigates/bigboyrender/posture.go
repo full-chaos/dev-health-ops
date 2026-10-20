@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // pgPosture: `pg-posture api|domain <old-sha> <new-sha> <pg-expect-out-file>`.
@@ -26,7 +27,7 @@ import (
 func pgPosture(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 4 {
 		fmt.Fprintln(stderr, "usage: cigate bigboy pg-posture api|domain <old-sha> <new-sha> <pg-expect-out-file>")
-		return 2
+		return 1
 	}
 	var role, gofile, fn, unparsable string
 	switch args[0] {
@@ -40,8 +41,15 @@ func pgPosture(args []string, stdout, stderr io.Writer) int {
 	}
 	oldSHA, newSHA, outFile := args[1], args[2], args[3]
 	repo := os.Getenv("BIGBOY_OPS_REPO")
-	before, okBefore := loadPosture(repo, oldSHA, gofile, fn)
-	after, okAfter := loadPosture(repo, newSHA, gofile, fn)
+	// Python loaded both before it looked at either: an undecodable object stops it first, old before new.
+	before, okBefore, badBefore := loadPosture(repo, oldSHA, gofile, fn)
+	after, okAfter, badAfter := loadPosture(repo, newSHA, gofile, fn)
+	if badBefore != "" {
+		return utf8Refusal(stderr, badBefore)
+	}
+	if badAfter != "" {
+		return utf8Refusal(stderr, badAfter)
+	}
 	if !okBefore || !okAfter {
 		fmt.Fprintln(stdout, unparsable)
 		return 1
@@ -84,10 +92,37 @@ type posture struct {
 
 var (
 	lineComment = regexp.MustCompile(`//[^\n]*`)
-	tableRow    = regexp.MustCompile(`\{\s*"(\w+)"\s*,\s*(true|false)\s*,\s*(true|false)\s*,\s*(true|false)\s*\}`)
-	columnRow   = regexp.MustCompile(`\{\s*"(\w+)"\s*,\s*"(\w+)"\s*,\s*"(SELECT|INSERT|UPDATE|REFERENCES)"\s*\}`)
-	keyedField  = regexp.MustCompile(`\b(\w+)\s*:`)
+	tableRow    = regexp.MustCompile(`\{[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*(true|false)[` + pySpace + `]*,[` + pySpace + `]*(true|false)[` + pySpace + `]*,[` + pySpace + `]*(true|false)[` + pySpace + `]*\}`)
+	columnRow   = regexp.MustCompile(`\{[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"([` + pyWord + `]+)"[` + pySpace + `]*,[` + pySpace + `]*"(SELECT|INSERT|UPDATE|REFERENCES)"[` + pySpace + `]*\}`)
 )
+
+// keyedFields is the keys of re.finditer(r"\b(\w+)\s*:(?!=)", s): a word run that starts at a word boundary, optional
+// whitespace, a colon not followed by "=". Matches do not overlap, so the scan resumes after the colon.
+func keyedFields(s string) []string {
+	runes := []rune(s)
+	var keys []string
+	for i := 0; i < len(runes); {
+		if !isPyWord(runes[i]) || i > 0 && isPyWord(runes[i-1]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(runes) && isPyWord(runes[j]) {
+			j++
+		}
+		k := j
+		for k < len(runes) && isPySpace(runes[k]) {
+			k++
+		}
+		if k < len(runes) && runes[k] == ':' && !(k+1 < len(runes) && runes[k+1] == '=') {
+			keys = append(keys, string(runes[i:j]))
+			i = k + 1
+			continue
+		}
+		i = j
+	}
+	return keys
+}
 
 // LoadPostureSource parses the posture function fn out of Go source; ok is false when it cannot be read.
 func loadPostureSource(src, fn string) (posture, bool) {
@@ -120,23 +155,18 @@ func loadPostureSource(src, fn string) (posture, bool) {
 		rows = after
 	}
 	literalRows := 0
-	for i := 0; i < len(rows); i++ {
-		if rows[i] != '{' {
-			continue
+	prev := rune(-1)
+	for _, r := range rows {
+		if r == '{' && !(isPyWord(prev) || prev == ']') {
+			literalRows++
 		}
-		if i > 0 && (isWord(rows[i-1]) || rows[i-1] == ']') {
-			continue
-		}
-		literalRows++
+		prev = r
 	}
 	// The read-back covers tables and columns only: any other keyed grant list, whatever its value
 	// (RequiredSequences: []string{...}, a name or a call) is a grant it cannot read back, so it must fail
 	// rather than vanish from the delta.
-	for _, loc := range keyedField.FindAllStringSubmatchIndex(body, -1) {
-		if loc[1] < len(body) && body[loc[1]] == '=' {
-			continue
-		}
-		if key := body[loc[2]:loc[3]]; key != "RequiredTables" && key != "ColumnScoped" {
+	for _, key := range keyedFields(body) {
+		if key != "RequiredTables" && key != "ColumnScoped" {
 			return posture{}, false
 		}
 	}
@@ -146,22 +176,25 @@ func loadPostureSource(src, fn string) (posture, bool) {
 	return p, true
 }
 
-func isWord(c byte) bool {
-	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
 // loadPosture reads posture fn of gofile at sha with `git -C repo show`; ok is false when it cannot be read.
-func loadPosture(repo, sha, gofile, fn string) (posture, bool) {
+// undecodable is the object name (sha:path) when git printed bytes that are not UTF-8: Python's .decode() raised
+// there, which no handler caught.
+func loadPosture(repo, sha, gofile, fn string) (p posture, ok bool, undecodable string) {
 	if repo == "" {
-		return posture{}, false
+		return posture{}, false, ""
 	}
-	cmd := exec.Command("git", "-C", repo, "show", sha+":internal/storage/postgres/"+gofile)
+	object := sha + ":internal/storage/postgres/" + gofile
+	cmd := exec.Command("git", "-C", repo, "show", object)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
-		return posture{}, false
+		return posture{}, false, ""
 	}
-	return loadPostureSource(out.String(), fn)
+	if !utf8.Valid(out.Bytes()) {
+		return posture{}, false, object
+	}
+	p, ok = loadPostureSource(out.String(), fn)
+	return p, ok, ""
 }
 
 // postureDelta is the expectation lines of the privileges after has and before lacks, tables then columns, sorted.

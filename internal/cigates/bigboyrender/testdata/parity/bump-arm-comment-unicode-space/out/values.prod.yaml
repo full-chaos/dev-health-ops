@@ -1,0 +1,9 @@
+# values.prod.yaml (synthetic)
+image:
+  dho: ghcr.io/full-chaos/dev-health-go-dho:sha-fedcba9@sha256:d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4
+  operator: ghcr.io/full-chaos/dev-health-go-operator@sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
+  tag: fedcba9876543210fedcba9876543210fedcba98
+queryApi:
+  # The arm64 child (prod's own arch) is
+  # sha256:f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6
+  note: sha-fedcba9 is the old build

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -36,6 +37,9 @@ func renderCHUsers(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if !utf8.Valid(raw) {
+		return utf8Refusal(stderr, manifest)
 	}
 	statements := rowStatements(string(raw))
 	xml, err := renderUsersXML(statements, password)

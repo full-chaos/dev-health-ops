@@ -36,6 +36,19 @@ repository `$R` with the two commits instead of the files `old.go`/`new.go`); `$
 `$R` is built with `git init`, then for each of the two texts: write the posture file, `git add -A`, `git commit
 --allow-empty` (author and committer `t <t@t>`, dates 2026-01-01).
 
+Cases added with the refusal-parity round (same commands as above; Python 3.12.3, `LC_ALL=C.UTF-8`):
+
+- `*-missing-args`, `bump-extra-args`: too few (or, for bump, too many) arguments. Python crashed unpacking
+  `sys.argv` (rc 1, empty stdout); Go prints its usage line (`stderr.traceback`) with rc 1. `grants-extra-args` and
+  `pg-api-extra-args` are accepted by Python (it slices `argv`) and by Go. `render-missing-args` is Python's own rc 2
+  and empty stdout; only the usage text differs, pinned in `stderr.traceback`.
+- `*unicode*`: Python's `\w`, `\s` and `\b` are Unicode (letters and numbers, and the str.isspace set: `\t\n\v\f\r`,
+  `\x1c-\x1f`, space, `\x85`, `\xa0`, `\u1680`, `\u2000-\u200a`, `\u2028`, `\u2029`, `\u202f`, `\u205f`, `\u3000`).
+- `*invalid-utf8*`: Python read the file in text mode, or `.decode()`d the `git show` bytes, and stopped on an
+  uncaught `UnicodeDecodeError` (rc 1, empty stdout). `bump-local-invalid-utf8` shows the prod file already written;
+  `bump-prod-invalid-utf8` shows nothing written. Go prints `UnicodeDecodeError: <path or sha:path>: invalid UTF-8`.
+- `bump-local-lacks-*`: Python's bare `AssertionError`; Go names the missing text.
+
 Not recorded, because the Go verb differs on purpose: the usage lines (they name the verb, not the `.py` file).
 `guards_test.go` covers those. `grants-no-function` is recorded: Python stopped on an IndexError (traceback on
 stderr, empty stdout, exit 1); Go prints the line in its `stderr.traceback` instead.

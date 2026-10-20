@@ -1,4 +1,4 @@
-# CHAOS-8135: prints every package of the input that has NO row in the weights file (ci/go_race_weights.tsv).
+# CHAOS-8135: prints every package of the input that has NO row in the weights file (ci/go_race_weights.d).
 #
 #   awk -v mod=<module path> -v weights=<tsv> -f ci/go_race_missing_rows.awk < packages
 #

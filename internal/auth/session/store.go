@@ -625,7 +625,7 @@ func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (b
 		},
 		Audit: audit.AuditEvent{
 			EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: actor.RequestID,
+			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
 			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "session", "target_id": id},
 		},
 		Event: audit.OutboxEvent{
@@ -693,7 +693,7 @@ func (s *Store) RevokeAll(ctx context.Context, principalID uuid.UUID, actor Acto
 		},
 		Audit: audit.AuditEvent{
 			EventType: "auth.session.revoked_all", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: actor.RequestID,
+			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
 			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "principal", "target_id": principal},
 		},
 		Event: audit.OutboxEvent{
@@ -745,7 +745,7 @@ func (s *Store) BumpRevision(ctx context.Context, sessionID uuid.UUID, actor Act
 		},
 		Audit: audit.AuditEvent{
 			EventType: "auth.session.revision_bumped", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: actor.RequestID,
+			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
 			Attributes: map[string]any{"target_kind": "session", "target_id": id},
 		},
 		Event: audit.OutboxEvent{
@@ -775,6 +775,16 @@ func (s *Store) Current(ctx context.Context, sessionID uuid.UUID) (Record, error
 		return Record{}, fmt.Errorf("%w: reading the session: %w", ErrStore, err)
 	}
 	return record, nil
+}
+
+// requestIDOf is the audit request id of a write: the actor's, else the id of
+// the request the write runs in (internal/auth/requestid), so every audit row
+// a request writes carries it.
+func requestIDOf(ctx context.Context, a Actor) *string {
+	if a.RequestID != nil {
+		return a.RequestID
+	}
+	return requestid.Audit(ctx)
 }
 
 func actorID(a Actor) *string {

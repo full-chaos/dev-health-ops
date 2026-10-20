@@ -57,7 +57,7 @@
 // user_metrics_daily, repo_metrics_daily) are ReplacingMergeTree
 // (computed_at) in prod (confirmed directly against prod's own
 // system.tables), the first two since migration 055, the last two since
-// migration 096 (src/dev_health_ops/migrations/clickhouse/
+// migration 096 (internal/chmigrate/history/
 // 096_daily_family_tables_replacing_merge_tree.py -- TARGET_SORT_KEYS
 // covers both with a sorting key that matches this package's own dedup
 // key), and take the identical FINAL treatment: a ReplacingMergeTree

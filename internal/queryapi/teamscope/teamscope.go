@@ -22,7 +22,7 @@
 // user_metrics_daily is not that source. Its team_id is per-author
 // membership attribution, which falls back to author membership whenever
 // repository-ownership resolution misses
-// (migrations/clickhouse/081_team_cognitive_load_daily.sql records that
+// (internal/chmigrate/history/081_team_cognitive_load_daily.sql records that
 // finding, and the rule it states -- team means repository ownership, never
 // person membership).
 package teamscope
@@ -64,7 +64,7 @@ const Marker = "FROM team_repo_ownership AS o FINAL"
 // now64(3): two reads inside one response must resolve the same membership,
 // and a seeded test must be able to state the instant it is asserting about.
 // Its parameter type names 'UTC', matching the columns it is compared with
-// (valid_from/valid_to are DateTime64(3, 'UTC'), migrations/clickhouse/
+// (valid_from/valid_to are DateTime64(3, 'UTC'), internal/chmigrate/history/
 // 051_team_attribution_dimensions.sql). A DateTime64 parameter that names no
 // zone is parsed in the SERVER's zone, and the driver sends a bare wall-clock
 // string, so on a server running anything but UTC the whole validity window
@@ -73,7 +73,7 @@ const Marker = "FROM team_repo_ownership AS o FINAL"
 //
 // FINAL, not a raw WHERE on valid_to. team_repo_ownership is
 // ReplacingMergeTree(updated_at) keyed on (org_id, provider, repo_full_name,
-// team_id, source, valid_from) (migrations/clickhouse/
+// team_id, source, valid_from) (internal/chmigrate/history/
 // 051_team_attribution_dimensions.sql), and a revocation is a REPLACEMENT row
 // under that same key carrying valid_to and a newer updated_at
 // (internal/providersync/team_repo_ownership_derivation_clickhouse.go's

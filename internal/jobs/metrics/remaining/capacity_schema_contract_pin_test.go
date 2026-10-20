@@ -1,6 +1,7 @@
 package remaining
 
 import (
+	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"os"
 	"path/filepath"
@@ -81,7 +82,8 @@ type clickHouseMigration struct {
 // ordered the way the migration runner applies them.
 func readClickHouseMigrations(t *testing.T) []clickHouseMigration {
 	t.Helper()
-	root := clickHouseMigrationsDir(t)
+	chmigrateDir := clickHouseMigrationsDir(t)
+	root := filepath.Join(chmigrateDir, "sql")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatalf("read migrations directory: %v", err)
@@ -117,6 +119,7 @@ func readClickHouseMigrations(t *testing.T) []clickHouseMigration {
 	if len(migrations) == 0 {
 		t.Fatalf("no migrations found under %s", root)
 	}
+	migrations = append(readBaselineObjects(t, chmigrateDir), migrations...)
 	sort.Slice(migrations, func(i, j int) bool {
 		if migrations[i].ordinal != migrations[j].ordinal {
 			return migrations[i].ordinal < migrations[j].ordinal
@@ -124,6 +127,33 @@ func readClickHouseMigrations(t *testing.T) []clickHouseMigration {
 		return migrations[i].name < migrations[j].name
 	})
 	return migrations
+}
+
+// readBaselineObjects turns each table of baseline/head.json (the schema as of
+// the frozen pre-099 chain) into one pseudo migration that sorts before every
+// chain file, so the chronological scan starts from the baseline.
+func readBaselineObjects(t *testing.T, chmigrateDir string) []clickHouseMigration {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(chmigrateDir, "baseline", "head.json"))
+	if err != nil {
+		t.Fatalf("read baseline: %v", err)
+	}
+	var head struct {
+		Objects []struct {
+			Name   string `json:"name"`
+			Create string `json:"create"`
+		} `json:"objects"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		t.Fatalf("parse baseline: %v", err)
+	}
+	var out []clickHouseMigration
+	for _, object := range head.Objects {
+		out = append(out, clickHouseMigration{
+			ordinal: -1, name: "baseline/head.json:" + object.Name + ".sql", content: object.Create,
+		})
+	}
+	return out
 }
 
 // clickHouseMigrationsDir walks up from THIS test file, matching how
@@ -138,13 +168,13 @@ func clickHouseMigrationsDir(t *testing.T) string {
 	}
 	directory := filepath.Dir(file)
 	for {
-		migrations := filepath.Join(directory, "src", "dev_health_ops", "migrations", "clickhouse")
+		migrations := filepath.Join(directory, "internal", "chmigrate")
 		if info, err := os.Stat(migrations); err == nil && info.IsDir() {
 			return migrations
 		}
 		parent := filepath.Dir(directory)
 		if parent == directory {
-			t.Fatalf("no src/dev_health_ops/migrations/clickhouse found above %s", file)
+			t.Fatalf("no internal/chmigrate found above %s", file)
 		}
 		directory = parent
 	}

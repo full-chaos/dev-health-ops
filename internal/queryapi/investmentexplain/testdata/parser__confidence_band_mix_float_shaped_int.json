@@ -24,7 +24,29 @@
       "velocity": 62.5
     }
   },
-  "output": null,
-  "status": "invalid_llm_output",
+  "note": "Go-owned since CHAOS-10244: the model confidence is never served, so a rule break there keeps the answer and the served confidence is the computed fallback.",
+  "output": {
+    "anti_claims": [],
+    "confidence": {
+      "band_mix": {
+        "high": 2,
+        "low": 1,
+        "moderate": 3,
+        "unknown": 0,
+        "very_low": 0
+      },
+      "drivers": [
+        "thin_component"
+      ],
+      "level": "moderate",
+      "quality_mean": 0.6,
+      "quality_stddev": 0.1
+    },
+    "status": "valid",
+    "summary": "Effort leans toward velocity work overall.",
+    "top_findings": [],
+    "what_to_check_next": []
+  },
+  "status": "valid",
   "text": "{\"summary\": \"Effort leans toward velocity work overall.\", \"top_findings\": [], \"what_to_check_next\": [], \"anti_claims\": [], \"confidence\": {\"level\": \"moderate\", \"quality_mean\": 0.6, \"quality_stddev\": 0.1, \"band_mix\": {\"high\": 3.0, \"moderate\": 0, \"low\": 0, \"very_low\": 0, \"unknown\": 0}, \"drivers\": []}}"
 }

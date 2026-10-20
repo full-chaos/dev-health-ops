@@ -115,3 +115,83 @@ func TestSoloLoadIgnoredTripsTheSpreadRule(t *testing.T) {
 		t.Fatalf("loads %v with the solo placed last pass the spread rule (spread %d): the guard cannot detect an ignored solo load", loads, spread)
 	}
 }
+
+// go test starts packages in the order it is given, so a shard lists its packages heaviest first.
+var orderWeights = map[string]int{"a": 5, "b": 90, "c": 20, "d": 90, "e": 1, "f": 60}
+
+func orderFixture(t *testing.T) (root, weights string, pkgs []string) {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w strings.Builder
+	for _, k := range []string{"a", "b", "c", "d", "e", "f"} {
+		fmt.Fprintf(&w, "%s\t%d\n", k, orderWeights[k])
+		pkgs = append(pkgs, soloLoadMod+"/"+k)
+	}
+	weights = filepath.Join(t.TempDir(), "weights.tsv")
+	if err := os.WriteFile(weights, []byte(w.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root, weights, pkgs
+}
+
+func orderHeavyFirst(t *testing.T, awkFile, weights string, pkgs []string, count int) (ok bool, detail string) {
+	t.Helper()
+	root, _ := filepath.Abs(filepath.Join("..", "..", ".."))
+	var all []string
+	for k := 1; k <= count; k++ {
+		args := []string{"-v", "mod=" + soloLoadMod, "-v", fmt.Sprint("shard=", k), "-v", fmt.Sprint("count=", count), "-v", "weights=" + weights, "-f", awkFile}
+		out, errs, err := soloExec(t, root, nil, strings.Join(pkgs, "\n")+"\n", "awk", args...)
+		if err != nil {
+			t.Fatalf("awk: %v\n%s", err, errs)
+		}
+		got := strings.Fields(out)
+		all = append(all, got...)
+		prev := 1 << 30
+		for _, p := range got {
+			w := orderWeights[strings.TrimPrefix(p, soloLoadMod+"/")]
+			if w > prev {
+				return false, fmt.Sprintf("shard %d/%d lists %v: a package of weight %d follows a lighter one", k, count, got, w)
+			}
+			prev = w
+		}
+	}
+	slices.Sort(all)
+	want := slices.Clone(pkgs)
+	slices.Sort(want)
+	if !slices.Equal(all, want) {
+		return false, fmt.Sprintf("the shards %v are not an exactly-once partition of %v", all, want)
+	}
+	return true, ""
+}
+
+func TestRaceShardListsHeaviestFirst(t *testing.T) {
+	root, weights, pkgs := orderFixture(t)
+	for count := 1; count <= 4; count++ {
+		if ok, detail := orderHeavyFirst(t, filepath.Join(root, "ci", "go_race_shard.awk"), weights, pkgs, count); !ok {
+			t.Fatalf("count %d: %s", count, detail)
+		}
+	}
+}
+
+// Planted: the awk that prints in input order must fail the heaviest-first rule on the same fixture.
+func TestRaceShardInputOrderTripsHeaviestFirst(t *testing.T) {
+	root, weights, pkgs := orderFixture(t)
+	src, err := os.ReadFile(filepath.Join(root, "ci", "go_race_shard.awk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sorted = "    k = order[i]\n    if ((k in keep)"
+	if !strings.Contains(string(src), sorted) {
+		t.Fatalf("ci/go_race_shard.awk no longer holds the print loop %q: update this planted copy", sorted)
+	}
+	planted := filepath.Join(t.TempDir(), "input_order.awk")
+	if err := os.WriteFile(planted, []byte(strings.Replace(string(src), sorted, "    k = i\n    if ((k in keep)", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := orderHeavyFirst(t, planted, weights, pkgs, 1); ok {
+		t.Fatal("the awk that prints in input order passes the heaviest-first rule: the guard cannot detect it")
+	}
+}

@@ -76,6 +76,11 @@ END {
       if (best == shard) keep[k] = 1
     }
   }
-  # print in input order so the package order handed to go test is stable
-  for (k = 1; k <= n; k++) if ((k in keep) && ((part == "solo") == (soloPkg[k] == 1))) print path[k]
+  # print in weight-descending order (the order of the split, ties by path): go test starts packages in the order given, so the
+  # longest ones start first and no heavy package starts late and ends the leg alone. The order is a pure function of
+  # (input, weights, count), so it is stable.
+  for (i = 1; i <= n; i++) {
+    k = order[i]
+    if ((k in keep) && ((part == "solo") == (soloPkg[k] == 1))) print path[k]
+  }
 }

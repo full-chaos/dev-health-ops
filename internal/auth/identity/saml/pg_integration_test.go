@@ -603,6 +603,44 @@ func TestSAMLLegacyAccountSignsInBySubject(t *testing.T) {
 	})
 }
 
+// TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail: on a key hit the stored
+// account signs in; the assertion's email is neither required nor compared.
+func TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail(t *testing.T) {
+	h := newHarness(t, true)
+	user := h.linkedUser(uniqueEmail("u"), "user-1")
+	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = '["corp.example.com"]'::json WHERE id = $1`, h.provider.ID); err != nil {
+		t.Fatal(err)
+	}
+	for name, email := range map[string]string{"no email": "", "a domain outside the allowed list": "a@other.example.com"} {
+		t.Run(name, func(t *testing.T) {
+			signIn, err := h.consume(h.respond(resp{nameID: nid("user-1"), email: email}), nil)
+			if err != nil || signIn.PrincipalID != user {
+				t.Fatalf("sign-in %+v err %v, want the linked account", signIn, err)
+			}
+		})
+	}
+	t.Run("a miss still needs an email", func(t *testing.T) {
+		_, err := h.consume(h.respond(resp{nameID: nid("unlinked-" + uuid.NewString())}), nil)
+		if !errors.Is(err, saml.ErrEmailMissing) {
+			t.Fatalf("err = %v, want ErrEmailMissing", err)
+		}
+	})
+}
+
+// TestSAMLAllowedDomainsCompareWithoutCase: the email domain and the allowed
+// list compare case-insensitively.
+func TestSAMLAllowedDomainsCompareWithoutCase(t *testing.T) {
+	h := newHarness(t, true)
+	h.ownUsers()
+	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = '["Example.COM"]'::json WHERE id = $1`, h.provider.ID); err != nil {
+		t.Fatal(err)
+	}
+	signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: "new-" + uuid.NewString()[:8] + "@EXAMPLE.com"}), nil)
+	if err != nil || !signIn.Created {
+		t.Fatalf("sign-up %+v err %v, want an account", signIn, err)
+	}
+}
+
 func TestSAMLDisabledAccountIsRefused(t *testing.T) {
 	h := newHarness(t, true)
 	ctx := context.Background()

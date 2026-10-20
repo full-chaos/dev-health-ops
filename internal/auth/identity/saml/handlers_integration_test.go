@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -299,5 +301,105 @@ func TestSAMLACSAcceptsTheAdvertisedHTTPPostBinding(t *testing.T) {
 	mux.ServeHTTP(rec, missing)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("form without SAMLResponse: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestSAMLBrowserCompletesSignInAtTheAdvertisedACSURL: a browser with a cookie
+// jar starts the flow, reads the ACS URL from the metadata and posts the form
+// there; the binding cookie must reach that URL. The routes are mounted under
+// the configured base, whatever its path.
+func TestSAMLBrowserCompletesSignInAtTheAdvertisedACSURL(t *testing.T) {
+	h := newHarness(t, false)
+	user := h.linkedUser(uniqueEmail("u"), "user-1")
+	issuer := &recordingIssuer{}
+	handlers := saml.Handlers{Service: h.svc, Sessions: issuer}
+	mux := http.NewServeMux()
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+	const prefix = "/sso-under-test"
+	h.svc.BaseURL = func() string { return srv.URL + prefix }
+	mux.HandleFunc("GET "+prefix+"/saml/{provider_id}/metadata", handlers.Metadata)
+	mux.HandleFunc("POST "+prefix+"/saml/{provider_id}/initiate", handlers.Initiate)
+	mux.HandleFunc("POST "+prefix+"/saml/{provider_id}/acs", handlers.ACS)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := srv.Client()
+	client.Jar = jar
+	base := srv.URL + prefix + "/saml/" + h.provider.ID.String()
+
+	resp0, err := client.Post(base+"/initiate", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var initBody map[string]string
+	if err := json.NewDecoder(resp0.Body).Decode(&initBody); err != nil || resp0.StatusCode != http.StatusOK {
+		t.Fatalf("initiate %d %v", resp0.StatusCode, err)
+	}
+	resp0.Body.Close()
+	requestID := requestIDFromRedirect(t, initBody["redirect_url"])
+
+	md, err := client.Get(base + "/metadata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mdBody map[string]string
+	if err := json.NewDecoder(md.Body).Decode(&mdBody); err != nil {
+		t.Fatal(err)
+	}
+	md.Body.Close()
+	location := regexp.MustCompile(`Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"\s+Location="([^"]+)"`).FindStringSubmatch(mdBody["metadata_xml"])
+	if location == nil || location[1] != mdBody["acs_url"] {
+		t.Fatalf("metadata advertises no HTTP-POST ACS location: %s", mdBody["metadata_xml"])
+	}
+	acs, err := url.Parse(location[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jar.Cookies(acs)) != 1 {
+		t.Fatalf("the browser holds no binding cookie for the advertised ACS URL %s", acs)
+	}
+
+	posted := b64(h.idp.response(t, resp{inResponseTo: requestID, nameID: nid("user-1"), email: "a@example.com",
+		destination: strp(location[1]), recipient: strp(location[1]), audiences: [][]string{{mdBody["entity_id"]}}}))
+	res, err := client.PostForm(location[1], url.Values{"SAMLResponse": {posted}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || len(issuer.got) != 1 || issuer.got[0].PrincipalID != user {
+		t.Fatalf("form post to the advertised ACS URL: %d sessions %+v", res.StatusCode, issuer.got)
+	}
+	if len(jar.Cookies(acs)) != 0 {
+		t.Fatal("the binding cookie outlived the sign-in")
+	}
+}
+
+// TestSAMLEntitlementIsCheckedBeforeTheBody: a non-entitled organization gets
+// 402 on every route whatever the body or content type.
+func TestSAMLEntitlementIsCheckedBeforeTheBody(t *testing.T) {
+	h := newHarness(t, true)
+	h.svc.Entitlements = saml.LicensingEntitlements{DB: h.db.runtime}
+	mux := h.mux(&recordingIssuer{})
+	base := "/api/v1/auth/saml/" + h.provider.ID.String()
+	for name, tc := range map[string]struct{ path, contentType, body string }{
+		"initiate, malformed JSON":   {"/initiate", "application/json", "{"},
+		"initiate, text/plain":       {"/initiate", "text/plain", "x"},
+		"acs, malformed JSON":        {"/acs", "application/json", "{"},
+		"acs, unsupported type":      {"/acs", "application/xml", "<x/>"},
+		"acs, form without response": {"/acs", "application/x-www-form-urlencoded", "RelayState=x"},
+		"acs, oversized form":        {"/acs", "application/x-www-form-urlencoded", "SAMLResponse=" + strings.Repeat("A", 2<<20)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, base+tc.path, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", tc.contentType)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusPaymentRequired || !strings.Contains(rec.Body.String(), "feature_not_licensed") {
+				t.Fatalf("%d %s, want 402 feature_not_licensed", rec.Code, rec.Body)
+			}
+		})
 	}
 }

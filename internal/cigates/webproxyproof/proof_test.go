@@ -1,4 +1,4 @@
-package authwebproxy_test
+package webproxyproof_test
 
 import (
 	"encoding/json"

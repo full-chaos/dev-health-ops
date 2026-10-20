@@ -166,3 +166,23 @@ func TestOllamaProviderLogsNoFormatPathWhenTheSchemaIsDropped(t *testing.T) {
 	}
 	requireLLMCallRecord(t, records[0], map[string]any{"format_path": "", "format_reason": "schema_rejected"})
 }
+
+func TestOllamaProviderLogsOneLLMCallLineForEachIncompleteAnswerThatCarriesUsage(t *testing.T) {
+	buf := captureLLMCallLines(t)
+	calls := 0
+	provider, _ := newTestOllamaProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"model":"gemma3","message":{"role":"assistant","content":"SECRET_COMPLETION_SENTINEL"},"done":false,"prompt_eval_count":7,"eval_count":5}`))
+	})
+	if _, err := provider.Complete(context.Background(), CategorizationRequest("p")); err == nil {
+		t.Fatal("an incomplete answer must fail")
+	}
+	records := llmCallRecords(t, buf)
+	if calls == 0 || len(records) != calls {
+		t.Fatalf("llm.call lines = %d, want %d (one per call the model answered); log:\n%s", len(records), calls, buf.String())
+	}
+	requireLLMCallRecord(t, records[0], map[string]any{"model": "gemma3", "input_tokens": float64(7), "output_tokens": float64(5)})
+	if strings.Contains(buf.String(), "SECRET_COMPLETION_SENTINEL") {
+		t.Fatalf("the log carries completion text: %s", buf.String())
+	}
+}

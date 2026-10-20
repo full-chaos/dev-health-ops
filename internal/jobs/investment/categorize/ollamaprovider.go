@@ -179,6 +179,9 @@ func (p *OllamaProvider) Complete(ctx context.Context, request CompletionRequest
 
 		content, promptEvalCount, evalCount, err := p.executeChatRequest(withLLMAttempt(ctx, attempt+1), body)
 		if err != nil {
+			if promptEvalCount != nil || evalCount != nil {
+				LogCompletion(ctx, CompletionResult{Model: p.cfg.Model, InputTokens: promptEvalCount, OutputTokens: evalCount})
+			}
 			if statusCodeOf(err) == http.StatusBadRequest && format != nil && attempt < ollamaMaxRetries {
 				// Mirrors local.py/LocalProvider's 400-on-structured-output
 				// fallback: not every model tag Ollama can serve actually
@@ -278,7 +281,7 @@ func (p *OllamaProvider) executeChatRequest(ctx context.Context, body ollamaChat
 	// rather than assuming `stream:false` alone guarantees completion.
 	if !decoded.Done {
 		markInvalidAnswer(resp)
-		return "", nil, nil, &llmError{
+		return "", decoded.PromptEvalCount, decoded.EvalCount, &llmError{
 			kind:     llmErrorOutput,
 			message:  "ollama response incomplete (done=false)",
 			provider: "ollama",

@@ -99,3 +99,20 @@ func TestBatchModeLogsOneLLMCallLineForEachBilledLineOfACancelledBatch(t *testin
 		t.Fatalf("llm.call lines = %d, want 1 (the billed line of the cancelled batch); log:\n%s", n, buf.String())
 	}
 }
+
+func TestBatchModeLogsOneLLMCallLineForEachBilledLineOfATimedOutBatch(t *testing.T) {
+	buf := captureInfoLog(t)
+	pending := batchPending(t, 2)
+	fake, server := newFakeOpenAI(t)
+	fake.statuses = []string{"in_progress"}
+	fake.outputOnCancel = okLine("run-batch-test-0", "{}") + "\n" + okLine("run-batch-test-1", "{}") + "\n"
+	cfg := batchTestConfig(LLMBatchModeProvider)
+	cfg.LLMBatchTimeout = 30 * time.Millisecond
+	got := runCategorize(t, context.Background(), fakeProvider(server.URL), cfg, pending)
+	if got.stats.LLMCalls != 2 {
+		t.Fatalf("result %+v", got)
+	}
+	if n := countLLMCallLines(buf); n != 2 {
+		t.Fatalf("llm.call lines = %d, want 2; log:\n%s", n, buf.String())
+	}
+}

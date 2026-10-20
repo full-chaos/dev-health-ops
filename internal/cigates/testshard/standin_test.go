@@ -41,31 +41,25 @@ exit 0
 
 var (
 	listReplayOnce sync.Once
-	listReplayPath string
+	listReplayData []byte
 )
 
-// providersyncRaceListing runs the REAL `go test -race -list .* ./internal/providersync` once; the stand-in replays it.
-func providersyncRaceListing(t *testing.T) string {
+// providersyncRaceListing returns the REAL `go test -race -list .* ./internal/providersync` output, produced once per process.
+func providersyncRaceListing(t *testing.T) []byte {
 	t.Helper()
 	listReplayOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "providersync-listing-")
-		if err != nil {
-			return
-		}
 		cmd := exec.Command("go", "test", "-mod=readonly", "-race", "-list", ".*", "./internal/providersync")
 		cmd.Dir = repoRoot(t)
 		cmd.Env = append(os.Environ(), "GOWORK=off")
 		out, err := cmd.Output()
-		if err != nil {
-			return
+		if err == nil {
+			listReplayData = out
 		}
-		listReplayPath = filepath.Join(dir, "providersync_race_list.txt")
-		_ = os.WriteFile(listReplayPath, out, 0o644)
 	})
-	if listReplayPath == "" {
+	if len(listReplayData) == 0 {
 		t.Fatal("could not produce the real providersync race listing")
 	}
-	return listReplayPath
+	return listReplayData
 }
 
 type legRun struct {
@@ -99,10 +93,14 @@ func runCheckGoIn(t *testing.T, root string, extraEnv []string, fail bool, args 
 	if err := os.MkdirAll(filepath.Join(dir, "tmp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	replay := filepath.Join(dir, "providersync_race_list.txt")
+	if err := os.WriteFile(replay, providersyncRaceListing(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	env := append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GO_LOG="+log, "FAKE_GO_LIST_LOG="+listLog, "TMPDIR="+filepath.Join(dir, "tmp"),
-		"FAKE_GO_LIST_REPLAY="+providersyncRaceListing(t))
+		"FAKE_GO_LIST_REPLAY="+replay)
 	env = append(env, extraEnv...)
 	if fail {
 		env = append(env, "FAKE_GO_FAIL=1")

@@ -34,10 +34,7 @@ func providersyncWrite(t *testing.T, name, text string) string {
 // providersyncNames: the Test* names of the real providersync race listing (produced once).
 func providersyncNames(t *testing.T) []string {
 	t.Helper()
-	b, err := os.ReadFile(providersyncRaceListing(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := providersyncRaceListing(t)
 	var names []string
 	for _, l := range strings.Split(string(b), "\n") {
 		if strings.HasPrefix(l, "Test") {

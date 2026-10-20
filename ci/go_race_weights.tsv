@@ -116,7 +116,7 @@ internal/cigates/affectedreject	5
 internal/cigates/chartgates	148
 internal/cigates/checkgo	140
 internal/cigates/scripts	18
-internal/cigates/testshard	150
+internal/cigates/testshard	200
 internal/cigates/workflowpaths	1
 internal/cigates/workflows	52
 internal/cli	2

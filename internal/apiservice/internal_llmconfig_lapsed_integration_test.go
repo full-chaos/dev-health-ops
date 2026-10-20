@@ -93,23 +93,44 @@ func TestInternalLLMConfigLapsedOrgServesNothing(t *testing.T) {
 	routes := []struct{ name, path, token string }{
 		{"acr", "/api/v1/internal/acr/orgs/%s/llm-config", acrToken},
 	}
+	var reason string
 	get := func(route int, org string) (int, string, string) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, strings.Replace(routes[route].path, "%s", org, 1), nil)
 		req.Header.Set("Authorization", "Bearer "+routes[route].token)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
+		reason = rec.Header().Get("X-Org-Llm-Config-Reason")
 		return rec.Code, rec.Header().Get("X-Org-Llm-Config"), rec.Body.String()
 	}
+	noConfig := uuid.NewString()
+	pgseed.Org(ctx, t, pool, noConfig, "enterprise")
+	explainOnly := uuid.NewString()
+	pgseed.Org(ctx, t, pool, explainOnly, "enterprise")
+	pgseed.Setting(ctx, t, pool, explainOnly, "llm", "purpose:explain:provider", "openai", false)
+	pgseed.Setting(ctx, t, pool, explainOnly, "llm", "purpose:explain:model", "explain-model", false)
+	if code, marker, _ := get(0, explainOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_no_investigate_config" {
+		t.Fatalf("acr route, BYO keys for explain only: answered %d marker %q reason %q, want the marked 404 with reason byo_no_investigate_config", code, marker, reason)
+	}
+	lapsedExplainOnly := uuid.NewString()
+	pgseed.Org(ctx, t, pool, lapsedExplainOnly, "community")
+	pgseed.Setting(ctx, t, pool, lapsedExplainOnly, "llm", "purpose:explain:provider", "openai", false)
+	pgseed.Setting(ctx, t, pool, lapsedExplainOnly, "llm", "purpose:explain:model", "explain-model", false)
+	if code, marker, _ := get(0, lapsedExplainOnly); code != http.StatusNotFound || marker != "none" || reason != "byo_llm_gate_closed" {
+		t.Fatalf("acr route, lapsed tier with BYO keys for explain only: answered %d marker %q reason %q, want the marked 404 with reason byo_llm_gate_closed", code, marker, reason)
+	}
 	for i, route := range routes {
+		if code, marker, _ := get(i, noConfig); code != http.StatusNotFound || marker != "none" || reason != "" {
+			t.Fatalf("%s route, no config: answered %d marker %q reason %q, want the marked 404 with no reason", route.name, code, marker, reason)
+		}
 		code, _, body := get(i, entitled)
 		if code != http.StatusOK || !strings.Contains(body, savedKey) {
 			t.Fatalf("%s route: an entitled org with a saved config answered %d, want 200 with its config", route.name, code)
 		}
 		for name, org := range map[string]string{"community tier": lapsed, "community tier with a positive override": lapsedOverride, "org override off": switchedOff} {
 			code, marker, body := get(i, org)
-			if code != http.StatusNotFound || marker != "none" {
-				t.Fatalf("%s route, %s: answered %d marker %q, want the marked 404", route.name, name, code, marker)
+			if code != http.StatusNotFound || marker != "none" || reason != "byo_llm_gate_closed" {
+				t.Fatalf("%s route, %s: answered %d marker %q reason %q, want the marked 404 with reason byo_llm_gate_closed", route.name, name, code, marker, reason)
 			}
 			if strings.Contains(body, savedKey) || strings.Contains(body, "saved-model") {
 				t.Fatalf("%s route, %s: the body carries the saved config", route.name, name)

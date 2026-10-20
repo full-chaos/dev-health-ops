@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,9 +17,16 @@ import (
 // Python: dev_health_ops.licensing.registry.py, "agent_context_runtime".
 const agentContextRuntimeFeatureKey = "agent_context_runtime"
 
-// acrServiceModelFeatureKey is the second feature this route decides: the org
-// may use the platform LLM for MCP investigations without its own BYO LLM.
+// acrServiceModelFeatureKey is the second feature this route decides: ACR AI
+// features are on for the org. The route serves its effective value (see
+// llmorgsettings.EffectiveServiceModel); it does not grant the platform LLM by
+// itself.
 const acrServiceModelFeatureKey = "acr_service_model"
+
+// platformModelFallbackFeatureKey is the third: a platform-admin grant (an
+// active org override only) that lets an org with no saved BYO LLM draw the
+// platform LLM. acr_service_model alone never does.
+const platformModelFallbackFeatureKey = "platform_model_fallback"
 
 // ErrOrgNotFound means the organization row does not exist. Python:
 // api/internal/acr.py:181-192's 404 ("Not found") on both an unparseable
@@ -46,9 +54,12 @@ type Entitlement struct {
 	// which trivially holds by construction on both planes.
 	OrgID               string
 	AgentContextRuntime bool
-	// ACRServiceModel is false for an org without the grant and for an org
-	// where the feature row does not exist yet (not registered reads closed).
+	// ACRServiceModel is the effective acr_service_model: the org's explicit
+	// override, else true for an org with a saved BYO LLM configuration, else
+	// the plan decision (false for an unregistered feature row).
 	ACRServiceModel bool
+	// PlatformModelFallback reads closed the same way.
+	PlatformModelFallback bool
 }
 
 // EntitlementStore looks up one org's agent_context_runtime entitlement.
@@ -103,7 +114,15 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModel.Allowed}, nil
+	serviceModelOn, err := llmorgsettings.EffectiveServiceModel(ctx, store.Pool, parsedOrgID.String(), serviceModel)
+	if err != nil {
+		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	fallback, err := decisionStore.Decide(ctx, parsedOrgID.String(), platformModelFallbackFeatureKey)
+	if err != nil {
+		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModelOn, PlatformModelFallback: fallback.Allowed}, nil
 }
 
 // readyTimeout bounds the health route's ping, so an unreachable store is a

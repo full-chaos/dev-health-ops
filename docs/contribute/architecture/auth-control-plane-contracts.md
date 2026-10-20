@@ -45,8 +45,8 @@ Distinct from these are the **inventory** contracts, which describe the
 credentials that exist today rather than what the new service emits:
 `credential-classes.json` (the closed credential vocabulary, with issuer,
 validators, lifecycle and consumers per class) and
-`endpoint-profiles.query-api.json` (the authentication profile of every
-query-api route). See the [credential classes](../../reference/auth/credential-classes.md)
+`endpoint-profiles.query-api.json` and `endpoint-profiles.auth-service.json`
+(the authentication profile of every query-api and auth-service route). See the [credential classes](../../reference/auth/credential-classes.md)
 reference.
 
 ## The corpus: one manifest per surface

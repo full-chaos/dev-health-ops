@@ -1,6 +1,7 @@
 package routing_test
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -333,4 +334,32 @@ func TestQueryAPICarriesLLMModelExplain(t *testing.T) {
 		}
 	}
 	t.Fatal("query-api does not pass LLM_MODEL_EXPLAIN through with an empty default")
+}
+
+// HTTPProber's client sets CheckRedirect to return http.ErrUseLastResponse: a plane that answers a probe with a
+// redirect gives the redirect status, and the redirect target sees no request.
+func TestTheProberNeverFollowsARedirect(t *testing.T) {
+	var followed sync.Mutex
+	hits := 0
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		followed.Lock()
+		hits++
+		followed.Unlock()
+		w.WriteHeader(405)
+	}))
+	t.Cleanup(other.Close)
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.RequestURI, http.StatusFound)
+	}))
+	t.Cleanup(redirecting.Close)
+	host, port := strings.Split(strings.TrimPrefix(redirecting.URL, "http://"), ":")[0], redirecting.Listener.Addr().(*net.TCPAddr).Port
+	status, err := routing.OSDeps().Prober.Probe(host, port, "ROUTEPROBE", "/api/v1/known")
+	if err != nil {
+		t.Fatal(err)
+	}
+	followed.Lock()
+	defer followed.Unlock()
+	if status != http.StatusFound || hits != 0 {
+		t.Fatalf("status %d, redirect target hit %d times: the prober followed the redirect (its client's CheckRedirect must return http.ErrUseLastResponse)", status, hits)
+	}
 }

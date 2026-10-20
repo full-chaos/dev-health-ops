@@ -168,6 +168,7 @@ on:
       # alone must run go-quality.
       - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
+      - 'internal/cigates/affected/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/requirements-clickhouse-migrations.txt'
@@ -402,6 +403,7 @@ on:
       # alone must run go-quality.
       - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
+      - 'internal/cigates/affected/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/requirements-clickhouse-migrations.txt'

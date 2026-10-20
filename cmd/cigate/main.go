@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/metricsproof"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -30,7 +31,7 @@ func run(args []string) int {
 	case "govulncheck":
 		return cigates.AuthGovulncheck(os.Stdin, os.Stdout, os.Stderr)
 	case "metrics-proof":
-		return metricsproof.Run(args[1:], os.Getenv, metricsproof.OpenClickHouse, os.Stdout, os.Stderr)
+		return metricsproof.Run(args[1:], processEnv, metricsproof.OpenClickHouse, os.Stdout, os.Stderr)
 	case "scope-candidates":
 		if len(args) != 2 {
 			fmt.Fprintln(os.Stderr, "usage: cigate scope-candidates <module>")
@@ -40,4 +41,10 @@ func run(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "cigate: unknown command %q\n", args[0])
 	return 2
+}
+
+// processEnv reads the environment through the registry, so a DSN password never reaches the process logger.
+func processEnv(name string) string {
+	value, _ := secrets.ProcessLookup(name)
+	return value
 }

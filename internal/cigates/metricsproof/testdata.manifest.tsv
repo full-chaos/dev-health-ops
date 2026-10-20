@@ -1,0 +1,4 @@
+# Every file under internal/cigates/metricsproof/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: fa9fab8bcaaf2d79be49710fa5fdcf9ed8817bd31821c53d61a299f6656d8e31 (1 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+3f4f25ec38d58afa6b3f8274dda1e222f21ca9f96463c5a8fe70d47f2fc5489c	python-recorded	python_proof_stdout.txt

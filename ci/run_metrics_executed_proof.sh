@@ -411,7 +411,7 @@ echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from th
 # readback --families list above, because this script's own E2E seed loop
 # cannot causally satisfy it (no complexity-scan seed step, so
 # repo_complexity_daily -- team_complexity's only input -- never populates;
-# see tests/test_executed_proof_family_coverage.py's KNOWN_UNCOVERED entry,
+# see knownUncovered in internal/cigates/metricsproof/proof_test.go,
 # CHAOS-5283). Adding it here would wait NATIVE_TELEMETRY_WAIT_SECS every
 # run for a sample that can never arrive.
 #

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -74,33 +76,20 @@ func (h Handlers) Initiate(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: init.CookieName, Value: init.CookieValue, Path: init.CookiePath,
-		MaxAge: int(init.MaxAge.Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, bindingCookie(init.CookieName, init.CookieValue, init.CookiePath, int(init.MaxAge.Seconds())))
 	writeJSON(w, http.StatusOK, map[string]string{"redirect_url": init.RedirectURL})
 }
 
-// ACS is POST /saml/{provider_id}/acs with {"SAMLResponse": ..., "RelayState": ...}
-// (snake_case names are accepted too).
+// ACS is POST /saml/{provider_id}/acs. It takes the SAML HTTP-POST binding the
+// metadata advertises (a form with SAMLResponse and RelayState) and the go-api
+// JSON body ({"SAMLResponse"|"saml_response", "RelayState"|"relay_state"}).
 func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
 	providerID, ok := h.providerID(w, r)
 	if !ok {
 		return
 	}
-	var body struct {
-		SAMLResponse  *string `json:"SAMLResponse"`
-		SAMLResponse2 *string `json:"saml_response"`
-	}
-	if !readJSON(w, r, &body) {
-		return
-	}
-	posted := body.SAMLResponse
-	if posted == nil {
-		posted = body.SAMLResponse2
-	}
-	if posted == nil {
-		writeDetail(w, http.StatusUnprocessableEntity, "SAMLResponse is required")
+	posted, ok := readSAMLResponse(w, r)
+	if !ok {
 		return
 	}
 	cookie := func(name string) string {
@@ -108,16 +97,101 @@ func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return ""
 		}
-		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: ACSPath(Provider{ID: providerID}),
-			MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+		http.SetCookie(w, bindingCookie(name, "", ACSPath(Provider{ID: providerID}), -1))
 		return c.Value
 	}
-	signIn, err := h.Service.Consume(r.Context(), providerID, *posted, cookie)
+	signIn, err := h.Service.Consume(r.Context(), providerID, posted, cookie)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
 	}
 	h.Sessions.IssueFederatedSession(w, r, signIn)
+}
+
+// acsInput is the ACS request, from either accepted encoding.
+type acsInput struct {
+	SAMLResponse string
+	RelayState   string
+}
+
+// readSAMLResponse decodes the ACS body into one acsInput: the HTTP-POST
+// binding the metadata advertises (application/x-www-form-urlencoded with
+// SAMLResponse and RelayState) or the go-api JSON body (no content type,
+// application/json or application/*+json; "SAMLResponse" or "saml_response").
+// Any other content type, a missing or repeated SAMLResponse, is refused.
+func readSAMLResponse(w http.ResponseWriter, r *http.Request) (string, bool) {
+	in, ok := decodeACS(w, r)
+	if !ok {
+		return "", false
+	}
+	return in.SAMLResponse, true
+}
+
+func decodeACS(w http.ResponseWriter, r *http.Request) (acsInput, bool) {
+	contentType := r.Header.Get("Content-Type")
+	mediaType := ""
+	if contentType != "" {
+		parsed, _, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			writeDetail(w, http.StatusUnprocessableEntity, "Request body must be JSON or a form")
+			return acsInput{}, false
+		}
+		mediaType = parsed
+	}
+	switch {
+	case mediaType == "application/x-www-form-urlencoded":
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		if err := r.ParseForm(); err != nil {
+			writeDetail(w, http.StatusUnprocessableEntity, "Request body must be a form")
+			return acsInput{}, false
+		}
+		responses, relay := r.PostForm["SAMLResponse"], r.PostForm["RelayState"]
+		if len(responses) != 1 || len(relay) > 1 {
+			writeDetail(w, http.StatusUnprocessableEntity, "SAMLResponse is required")
+			return acsInput{}, false
+		}
+		in := acsInput{SAMLResponse: responses[0]}
+		if len(relay) == 1 {
+			in.RelayState = relay[0]
+		}
+		return in, true
+	case mediaType == "" || mediaType == "application/json" || (strings.HasPrefix(mediaType, "application/") && strings.HasSuffix(mediaType, "+json")):
+		var body struct {
+			SAMLResponse  *string `json:"SAMLResponse"`
+			SAMLResponse2 *string `json:"saml_response"`
+			RelayState    *string `json:"RelayState"`
+			RelayState2   *string `json:"relay_state"`
+		}
+		if !readJSON(w, r, &body) {
+			return acsInput{}, false
+		}
+		posted, relay := body.SAMLResponse, body.RelayState
+		if posted == nil {
+			posted = body.SAMLResponse2
+		}
+		if relay == nil {
+			relay = body.RelayState2
+		}
+		if posted == nil {
+			writeDetail(w, http.StatusUnprocessableEntity, "SAMLResponse is required")
+			return acsInput{}, false
+		}
+		in := acsInput{SAMLResponse: *posted}
+		if relay != nil {
+			in.RelayState = *relay
+		}
+		return in, true
+	}
+	writeDetail(w, http.StatusUnprocessableEntity, "Request body must be JSON or a form")
+	return acsInput{}, false
+}
+
+// bindingCookie is the per-request browser binding cookie. The IdP returns the
+// browser to the ACS with a cross-site form POST, so the cookie is
+// SameSite=None (and therefore Secure); its value is random, bound to one
+// stored request and consumed once.
+func bindingCookie(name, value, path string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: name, Value: value, Path: path, MaxAge: maxAge, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode}
 }
 
 func (h Handlers) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

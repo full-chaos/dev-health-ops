@@ -258,8 +258,9 @@ func TestSAMLACSAcceptsTheAdvertisedHTTPPostBinding(t *testing.T) {
 		t.Fatalf("initiate %d %s", init.Code, init.Body)
 	}
 	cookies := init.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].SameSite != http.SameSiteNoneMode || !cookies[0].Secure {
-		t.Fatalf("the binding cookie must reach a cross-site form post (SameSite=None; Secure): %+v", cookies)
+	if len(cookies) != 1 || cookies[0].SameSite != http.SameSiteNoneMode || !cookies[0].Secure || !cookies[0].HttpOnly ||
+		cookies[0].Path != saml.ACSPath(h.provider) || cookies[0].MaxAge != int(saml.FlowTTL.Seconds()) {
+		t.Fatalf("binding cookie must be SameSite=None; Secure; HttpOnly; Path=ACS; Max-Age=flow TTL: %+v", cookies)
 	}
 	requestID := requestIDFromRedirect(t, initBody["redirect_url"])
 
@@ -271,6 +272,25 @@ func TestSAMLACSAcceptsTheAdvertisedHTTPPostBinding(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || len(issuer.got) != 1 || issuer.got[0].PrincipalID != user {
 		t.Fatalf("HTTP-POST binding at the ACS: %d %s sessions %+v", rec.Code, rec.Body, issuer.got)
+	}
+	cleared := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == cookies[0].Name && c.MaxAge < 0 && c.SameSite == http.SameSiteNoneMode {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Fatal("the binding cookie was not cleared on consume")
+	}
+
+	for name, ct := range map[string]string{"text/plain": "text/plain", "XML": "application/xml"} {
+		other := httptest.NewRequest(http.MethodPost, base+"/acs", strings.NewReader(form.Encode()))
+		other.Header.Set("Content-Type", ct)
+		rec = httptest.NewRecorder()
+		mux.ServeHTTP(rec, other)
+		if rec.Code != http.StatusUnprocessableEntity || len(issuer.got) != 1 {
+			t.Fatalf("%s body: %d %s", name, rec.Code, rec.Body)
+		}
 	}
 
 	missing := httptest.NewRequest(http.MethodPost, base+"/acs", strings.NewReader("RelayState=x"))

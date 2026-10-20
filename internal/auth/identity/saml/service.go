@@ -254,14 +254,14 @@ func (s *Service) Consume(ctx context.Context, providerID uuid.UUID, posted stri
 	return out, nil
 }
 
-// matchRequest binds a solicited response to its stored request and browser.
-// A response that answers no stored request is accepted only for a provider
-// with allow_idp_initiated = true; every other check has already applied. A
-// response to a request that was already used is refused for every provider.
+// matchRequest binds a response to its stored request and browser. A response
+// that names a request (InResponseTo) must match an open request of this
+// provider whose binding cookie this browser holds; a response that names none
+// is accepted only for a provider with allow_idp_initiated = true. Every other
+// check has already applied.
 func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cookie func(string) string, now time.Time) error {
-	unsolicitedAllowed := p.AllowIdPInitiated
 	if v.InResponseTo == "" {
-		if !unsolicitedAllowed {
+		if !p.AllowIdPInitiated {
 			return ErrUnsolicited
 		}
 		return nil
@@ -270,14 +270,10 @@ func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cook
 	if cookie != nil {
 		nonce = cookie(BindingCookieName(v.InResponseTo))
 	}
-	err := ErrFlowNotFound
-	if nonce != "" {
-		err = s.Flows.ConsumeFlow(ctx, p.ID, v.InResponseTo, bindingHash(nonce), now)
+	if nonce == "" {
+		return ErrFlowNotFound
 	}
-	if errors.Is(err, ErrFlowNotFound) && unsolicitedAllowed {
-		return nil
-	}
-	return err
+	return s.Flows.ConsumeFlow(ctx, p.ID, v.InResponseTo, bindingHash(nonce), now)
 }
 
 func (s *Service) provision(ctx context.Context, p Provider, id Identity, email, name string) (uuid.UUID, error) {

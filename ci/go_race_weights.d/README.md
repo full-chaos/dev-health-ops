@@ -3,7 +3,7 @@
 Measured wall seconds of one package under `go test -race` (CHAOS-6690). ci/go_race_shard.awk balances the race shards by
 these weights. A wrong weight costs balance, never coverage: the shards always partition the full package list.
 
-- One file per package of the root module: `<package path with / as __>.tsv`, for example `internal/httpguard` is
+- One file per package of the root module: `race_weights_file_name PACKAGE` of ci/check_go.sh: `_` becomes `_u`, `/` becomes `__`, so no two packages share a name, and the root package is `_root.tsv`; for example `internal/httpguard` is
   `internal__httpguard.tsv`. The file holds one row: `package<TAB>seconds`. Comment lines (`#`) and blank lines are ignored.
 - A new package adds its file: its measured `go test -race` seconds from a hosted race leg (job id in the PR body), 1 when
   it has no test. It edits no other file, so two pull requests that add packages never conflict.

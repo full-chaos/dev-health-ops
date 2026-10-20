@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// CHAOS-10300: the race weights are one file per package (ci/go_race_weights.d/<package with / as __>.tsv, one row each),
+// CHAOS-10300: the race weights are one file per package (ci/go_race_weights.d/<race_weights_file_name of the package>.tsv, one row each),
 // so a pull request that adds a package adds a file and never edits a line another pull request edits. These tests run
 // `ci/check_go.sh race-weights-rows` against a temp copy of the directory (GO_RACE_WEIGHTS_DIR) with one planted defect,
 // and pin the go.yml path filters that make a new ci table need no go.yml edit.

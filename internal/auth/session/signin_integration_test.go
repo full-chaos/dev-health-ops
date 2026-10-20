@@ -5,8 +5,8 @@ package session
 import (
 	"context"
 	"errors"
-	"reflect"
 	"net/netip"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"

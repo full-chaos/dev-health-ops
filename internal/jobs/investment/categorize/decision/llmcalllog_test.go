@@ -57,3 +57,18 @@ func TestABilledResponseTheParserRejectsStillLogsOneLLMCallLine(t *testing.T) {
 		t.Fatalf("line lacks the response usage: %s", buf.String())
 	}
 }
+
+func TestAResponseTheParserRejectsLogsOneLLMCallLineEvenWithNoUsage(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	got, err := newTestCompleter(t, staticTransport(`{"model":"jev-1.13.0","answers":[]}`)).Classify(context.Background(), syntheticBundle(t))
+	if err != nil || got.State != StateRequestFailed {
+		t.Fatalf("classification = %+v err %v", got, err)
+	}
+	if n := strings.Count(buf.String(), `"msg":"llm.call"`); n != 1 {
+		t.Fatalf("llm.call lines = %d, want 1 for a response the transport returned; log:\n%s", n, buf.String())
+	}
+}

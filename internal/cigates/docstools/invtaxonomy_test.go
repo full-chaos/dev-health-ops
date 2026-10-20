@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/cigates/docstools"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
@@ -75,16 +76,46 @@ func TestInvestmentTaxonomyDriftCheckExitsClean(t *testing.T) {
 	}
 }
 
-func TestCanonicalTaxonomyGeneratedBlockMatchesRegistry(t *testing.T) {
-	root := repoRoot(t)
-	actual := realBlock(t, mustRead(t, filepath.Join(root, invTxDoc)), invTxBegin, invTxEnd)
+// investmentBlockStale renders the block from the registry on a copy of the page and compares it with actual;
+// it returns the guard's failure message, or "" when they are equal.
+func investmentBlockStale(t *testing.T, actual string) string {
+	t.Helper()
 	seedFromRoot(t, invTxDoc) // read-only for the real tree: the generator runs on a copy
 	if code, _, stderr := runDocs("gen-taxonomy"); code != 0 {
 		t.Fatalf("gen-taxonomy rc %d: %s", code, stderr)
 	}
-	expected := realBlock(t, mustRead(t, invTxDoc), invTxBegin, invTxEnd)
-	if actual != expected {
-		t.Fatalf("Generated block in %s is stale. Run 'cigate docs gen-taxonomy' and commit the result.", invTxDoc)
+	if expected := realBlock(t, mustRead(t, invTxDoc), invTxBegin, invTxEnd); actual != expected {
+		return "Generated block in " + invTxDoc + " is stale. Run 'cigate docs gen-taxonomy' and commit the result."
+	}
+	return ""
+}
+
+func TestCanonicalTaxonomyGeneratedBlockMatchesRegistry(t *testing.T) {
+	actual := realBlock(t, mustRead(t, filepath.Join(repoRoot(t), invTxDoc)), invTxBegin, invTxEnd)
+	if msg := investmentBlockStale(t, actual); msg != "" {
+		t.Fatal(msg)
+	}
+}
+
+// Planted producer defect: the registry maps feature_delivery.customer to risk. Both the block guard and the
+// drift verb must fail on the unchanged page.
+func TestInvestmentGuardsFailWhenTheRegistryMapsCustomerToRisk(t *testing.T) {
+	root := repoRoot(t)
+	actual := realBlock(t, mustRead(t, filepath.Join(root, invTxDoc)), invTxBegin, invTxEnd)
+	defer docstools.SetThemeOfForTest(func(s string) string {
+		if s == "feature_delivery.customer" {
+			return "risk"
+		}
+		return units.ThemeOf(s)
+	})()
+	want := "Generated block in docs/reference/taxonomies/investment.md is stale."
+	if msg := investmentBlockStale(t, actual); !strings.HasPrefix(msg, want) {
+		t.Fatalf("block guard passed the planted map (message %q, want prefix %q)", msg, want)
+	}
+	t.Chdir(root)
+	code, stdout, _ := runDocs("check-investment-drift")
+	if code != 1 || !strings.Contains(stdout, "generated subcategory mapping drift") || !strings.Contains(stdout, "'feature_delivery.customer': 'risk'") {
+		t.Fatalf("check-investment-drift passed the planted map: rc %d\n%s", code, stdout)
 	}
 }
 
@@ -130,17 +161,54 @@ func TestQueueMappingDriftCheckExitsClean(t *testing.T) {
 	}
 }
 
-func TestGoWorkerRuntimeGeneratedBlockMatchesProducers(t *testing.T) {
-	const begin, end = "<!-- BEGIN GENERATED QUEUE MAP -->", "<!-- END GENERATED QUEUE MAP -->"
-	root := repoRoot(t)
-	actual := realBlock(t, mustRead(t, filepath.Join(root, qmRealDoc)), begin, end)
-	seedFromRoot(t, qmRealDoc, "deploy/go-workers/deployment.json",
-		"contracts/jobs/v1/registry.json", "contracts/jobs/v1/migration-state.json")
+const qmBegin, qmEnd = "<!-- BEGIN GENERATED QUEUE MAP -->", "<!-- END GENERATED QUEUE MAP -->"
+
+var qmProducers = []string{"deploy/go-workers/deployment.json", "contracts/jobs/v1/registry.json", "contracts/jobs/v1/migration-state.json"}
+
+// queueMapBlockStale renders the block from the real producers on a copy and compares it with actual; it returns
+// the guard's failure message, or "" when they are equal.
+func queueMapBlockStale(t *testing.T, actual string) string {
+	t.Helper()
+	seedFromRoot(t, append([]string{qmRealDoc}, qmProducers...)...)
 	if code, _, stderr := runDocs("gen-queue-mapping"); code != 0 {
 		t.Fatalf("gen-queue-mapping rc %d: %s", code, stderr)
 	}
-	if expected := realBlock(t, mustRead(t, qmRealDoc), begin, end); actual != expected {
-		t.Fatalf("Generated block in %s is stale. Run 'cigate docs gen-queue-mapping' and commit the result.", qmRealDoc)
+	if expected := realBlock(t, mustRead(t, qmRealDoc), qmBegin, qmEnd); actual != expected {
+		return "Generated block in " + qmRealDoc + " is stale. Run 'cigate docs gen-queue-mapping' and commit the result."
+	}
+	return ""
+}
+
+func TestGoWorkerRuntimeGeneratedBlockMatchesProducers(t *testing.T) {
+	actual := realBlock(t, mustRead(t, filepath.Join(repoRoot(t), qmRealDoc)), qmBegin, qmEnd)
+	if msg := queueMapBlockStale(t, actual); msg != "" {
+		t.Fatal(msg)
+	}
+}
+
+// Planted page defect: a line "STALE QUEUE MAPPING" inside the generated block. Both the block guard and the drift
+// verb must fail.
+func TestQueueMapGuardsFailOnAStaleLineInTheBlock(t *testing.T) {
+	root := repoRoot(t)
+	doc := mustRead(t, filepath.Join(root, qmRealDoc))
+	at := strings.Index(doc, qmBegin)
+	if at == -1 {
+		t.Fatal("queue-map begin marker missing")
+	}
+	at += len(qmBegin)
+	planted := doc[:at] + "\nSTALE QUEUE MAPPING" + doc[at:]
+	if !strings.Contains(realBlock(t, planted, qmBegin, qmEnd), "STALE QUEUE MAPPING") {
+		t.Fatal("the plant did not land inside the generated block")
+	}
+	want := "Generated block in docs/contribute/architecture/go-worker-runtime.md is stale."
+	if msg := queueMapBlockStale(t, realBlock(t, planted, qmBegin, qmEnd)); !strings.HasPrefix(msg, want) {
+		t.Fatalf("block guard passed the planted line (message %q, want prefix %q)", msg, want)
+	}
+	work := seedFromRoot(t, qmProducers...)
+	writeTree(t, filepath.Join(work, qmRealDoc), planted, 0o644)
+	code, stdout, _ := runDocs("check-queue-mapping-drift")
+	if code != 1 || !strings.Contains(stdout, "is stale") {
+		t.Fatalf("check-queue-mapping-drift passed the planted line: rc %d\n%s", code, stdout)
 	}
 }
 

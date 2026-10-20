@@ -36,6 +36,9 @@ func init() {
 	register("check-investment-drift", invTxDriftVerb)
 }
 
+// invTxThemeOf is the registry's subcategory -> theme map; a test swaps it to plant a producer defect.
+var invTxThemeOf = units.ThemeOf
+
 func invTxThemes() []string        { return append([]string(nil), units.SortedThemes[:]...) }
 func invTxSubcategories() []string { return append([]string(nil), units.SortedSubcategories[:]...) }
 
@@ -76,7 +79,7 @@ func invTxRender(themes, subs []string) string {
 	lines = append(lines, subs...)
 	lines = append(lines, "", "# SUBCATEGORY_TO_THEME")
 	for _, s := range subs {
-		lines = append(lines, s+" -> "+units.ThemeOf(s))
+		lines = append(lines, s+" -> "+invTxThemeOf(s))
 	}
 	lines = append(lines, "```", invTxEnd)
 	return strings.Join(lines, "\n")
@@ -194,7 +197,7 @@ func invTxCheckDoc(docPath string) ([]string, error) {
 	canonKeys := append([]string(nil), subs...)
 	canonMap := map[string]string{}
 	for _, s := range subs {
-		canonMap[s] = units.ThemeOf(s)
+		canonMap[s] = invTxThemeOf(s)
 	}
 
 	doc, err := a1ReadText(docPath)

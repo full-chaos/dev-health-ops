@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -78,6 +79,7 @@ type Store struct {
 	logger      *slog.Logger
 	projections metric.Int64Counter
 	links       metric.Int64Counter
+	slugOmitted metric.Int64Counter
 }
 
 // New validates the configuration and builds a Store.
@@ -104,6 +106,10 @@ func New(cfg Config) (*Store, error) {
 	if s.links, err = meter.Int64Counter("auth.identity.external_links",
 		metric.WithDescription("External identity link and unlink attempts, by action and outcome.")); err != nil {
 		return nil, fmt.Errorf("identity: registering the link counter: %w", err)
+	}
+	if s.slugOmitted, err = meter.Int64Counter("auth.identity.wire_slug_omitted",
+		metric.WithDescription("Organization events whose slug the provisioning wire cannot carry, so it was left out.")); err != nil {
+		return nil, fmt.Errorf("identity: registering the slug counter: %w", err)
 	}
 	return s, nil
 }
@@ -198,9 +204,9 @@ type projected struct {
 }
 
 // Project makes auth.principals and auth.users agree with public.users for one
-// user. A first projection inserts both rows. A later one changes only what
-// differs, through audit.Commit (those columns are guarded), with one audit row
-// and one outbox event naming the changed fields. An unchanged user writes
+// user. A first projection inserts both rows, and a later one changes only
+// what differs; each commits through audit.Commit with one audit row and one
+// provisioning event per created aggregate or changed field. An unchanged user writes
 // nothing. The password verifier is never copied.
 func (s *Store) Project(ctx context.Context, userID uuid.UUID) (err error) {
 	outcome := "unchanged"
@@ -270,39 +276,65 @@ func storedLoginKey(email string) string {
 	return pythonparity.Strip(pythonparity.Lower(email))
 }
 
+// errPrincipalExists ends a first projection whose principal row already
+// exists (an earlier or a concurrent projection); Project then compares and
+// updates instead.
+var errPrincipalExists = errors.New("identity: principal already projected")
+
 // insertProjection inserts the principal and user rows when the principal is
-// new. Both inserts touch only unguarded columns, so they commit in a plain
-// transaction. It reports whether it inserted.
+// new, in one audit.Commit with one audit row (reason principal_projected)
+// and the principal.created and user.created events, plus user.email_verified
+// when the source is verified. The rows are written as the source holds them;
+// the 0013 create guard counts them as the state change. It reports whether
+// it inserted.
 func (s *Store) insertProjection(ctx context.Context, id uuid.UUID, src source) (bool, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return false, s.storeErr(ctx, "begin projection", err)
+	// Most projections are of a principal that exists: answer those with a
+	// read, not a refused commit. The insert below still decides a race.
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+s.q+`.principals WHERE id = $1)`, id).Scan(&exists); err != nil {
+		return false, s.storeErr(ctx, "read principal", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	tag, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.principals (id, kind, disabled_at)
-VALUES ($1, 'user', CASE WHEN $2::boolean THEN NULL ELSE clock_timestamp() END)
-ON CONFLICT (id) DO NOTHING`, id, src.active)
-	if err != nil {
-		return false, s.storeErr(ctx, "insert principal", err)
-	}
-	if tag.RowsAffected() == 0 {
+	if exists {
 		return false, nil
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.users (principal_id, email, email_lower, email_verified_at)
+	principal := id.String()
+	events := []audit.OutboxEvent{principalEvent(principal, "principal.created", src.active), userEvent(principal, "user.created")}
+	if src.verified {
+		events = append(events, userEvent(principal, "user.email_verified"))
+	}
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			var inserted uuid.UUID
+			err := tx.QueryRow(ctx, `INSERT INTO `+s.q+`.principals (id, kind, disabled_at)
+VALUES ($1, 'user', CASE WHEN $2::boolean THEN NULL ELSE clock_timestamp() END)
+ON CONFLICT (id) DO NOTHING
+RETURNING id`, id, src.active).Scan(&inserted)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errPrincipalExists
+			}
+			if err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.users (principal_id, email, email_lower, email_verified_at)
 VALUES ($1, $2, $3, CASE WHEN $4::boolean THEN clock_timestamp() ELSE NULL END)`,
-		id, src.email, src.emailLower, src.verified); err != nil {
-		if isEmailCollision(err) {
-			return false, ErrEmailCollision
-		}
-		return false, s.storeErr(ctx, "insert user", err)
+				id, src.email, src.emailLower, src.verified)
+			return err
+		},
+		Audit: audit.AuditEvent{
+			EventType: "auth.principal.projected", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal,
+			Attributes: map[string]any{"reason_code": "principal_projected", "target_kind": "principal", "target_id": principal},
+		},
+		Events: events,
+	})
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, errPrincipalExists):
+		return false, nil
+	case isEmailCollision(err):
+		return false, ErrEmailCollision
 	}
-	if err := tx.Commit(ctx); err != nil {
-		if isEmailCollision(err) {
-			return false, ErrEmailCollision
-		}
-		return false, s.storeErr(ctx, "commit projection", err)
-	}
-	return true, nil
+	return false, s.storeErr(ctx, "insert projection", err)
 }
 
 func (s *Store) readProjection(ctx context.Context, id uuid.UUID) (projected, error) {
@@ -345,7 +377,6 @@ func (s *Store) applyProjectionChange(ctx context.Context, id uuid.UUID, src sou
 		reason = "principal_disabled"
 	}
 	principal := id.String()
-	eventID := uuid.New()
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.principals
@@ -371,11 +402,7 @@ WHERE principal_id = $1 AND (email_verified_at IS NOT NULL) IS DISTINCT FROM $2:
 				"reason_code": reason, "target_kind": "principal", "target_id": principal, "changed_fields": changed,
 			},
 		},
-		Event: audit.OutboxEvent{
-			AggregateType: "principal", AggregateID: principal, EventType: "principal.projected",
-			Payload:        map[string]any{"changed_fields": changed},
-			IdempotencyKey: "principal.projected:" + principal + ":" + eventID.String(),
-		},
+		Events: projectionEvents(principal, src, changed),
 	})
 	switch {
 	case err == nil:
@@ -387,6 +414,45 @@ WHERE principal_id = $1 AND (email_verified_at IS NOT NULL) IS DISTINCT FROM $2:
 		return ErrEmailCollision
 	}
 	return s.storeErr(ctx, "update projection", err)
+}
+
+// projectionEvents is one provisioning event per changed field.
+func projectionEvents(principal string, src source, changed []string) []audit.OutboxEvent {
+	var events []audit.OutboxEvent
+	for _, field := range changed {
+		switch field {
+		case "disabled_at":
+			verb := "principal.disabled"
+			if src.active {
+				verb = "principal.enabled"
+			}
+			events = append(events, principalEvent(principal, verb, src.active))
+		case "email":
+			events = append(events, userEvent(principal, "user.email_changed"))
+		case "email_verified_at":
+			verb := "user.email_unverified"
+			if src.verified {
+				verb = "user.email_verified"
+			}
+			events = append(events, userEvent(principal, verb))
+		}
+	}
+	return events
+}
+
+// principalEvent is a principal event carrying the status after it.
+func principalEvent(principal, verb string, active bool) audit.OutboxEvent {
+	status := "disabled"
+	if active {
+		status = "active"
+	}
+	return audit.OutboxEvent{AggregateType: "principal", AggregateID: provisioning.WireID("principal", principal),
+		EventType: verb, Change: map[string]any{"status": status}}
+}
+
+// userEvent is a user event; a user event carries no change member.
+func userEvent(principal, verb string) audit.OutboxEvent {
+	return audit.OutboxEvent{AggregateType: "user", AggregateID: provisioning.WireID("user", principal), EventType: verb}
 }
 
 func projectionOutcome(err error) string {

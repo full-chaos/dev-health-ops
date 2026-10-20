@@ -10,8 +10,16 @@
       "why": "The minimal event: no optional members and an empty change. A user event carries no change members at all."
     },
     {
+      "file": "valid-user-email-changed.json",
+      "why": "An email change says only that the email changed: the address is a high-cardinality identity and has no member."
+    },
+    {
+      "file": "valid-user-email-unverified.json",
+      "why": "Verification removed (the projected source is no longer verified). Like every user event it carries no change member."
+    },
+    {
       "file": "valid-external-identity-linked.json",
-      "why": "An identity link names the provider's short name, never the provider's subject or issuer."
+      "why": "An identity link names the principal it belongs to and the provider's short name, never the provider's subject or issuer."
     },
     {
       "file": "valid-organization-created.json",
@@ -204,6 +212,18 @@
       "expect_instance_location": "/payload/change/action_set",
       "expect_keyword": "minItems",
       "why": "An empty action set grants nothing; it is a malformed event, not a harmless one."
+    },
+    {
+      "file": "invalid-external-identity-principal-absent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "An identity event without the principal it belongs to: a consumer cannot attach the identity to anyone."
+    },
+    {
+      "file": "invalid-aggregate-id-past-key-bound.json",
+      "expect_instance_location": "/idempotency_key",
+      "expect_keyword": "pattern",
+      "why": "An aggregate_id of 65 characters: the idempotency_key carries at most 64."
     },
     {
       "file": "invalid-occurred-at-hour-24.json",

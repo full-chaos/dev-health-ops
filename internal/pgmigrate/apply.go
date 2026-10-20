@@ -266,12 +266,27 @@ func readStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []
 	return status, err
 }
 
+// authLineageSchemas selects the OIDs of the schemas the auth migrator owns. A
+// schema is the auth lineage's only if it holds the lineage's own bookkeeping
+// table: schema_migrations(version integer, name text, applied_at timestamptz),
+// exactly. The auth migrator creates the schema first on a fresh install that
+// starts both migrators together; the objects in it are not a database this
+// migrator would collide with, because it creates only public. Matching the
+// table's exact shape, not a schema name, keeps a foreign schema that happens to
+// be called auth (Supabase's GoTrue has one, with schema_migrations(version
+// varchar)) a foreign database. A test in internal/storage/postgres/authschema
+// keeps this shape equal to what the auth migrator creates.
+const authLineageSchemas = "(SELECT bk.relnamespace FROM pg_class bk WHERE bk.relname = 'schema_migrations' AND bk.relkind = 'r' AND " +
+	"(SELECT array_agg(a.attname::text || ':' || format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum) FROM pg_attribute a " +
+	"WHERE a.attrelid = bk.oid AND a.attnum > 0 AND NOT a.attisdropped) = " +
+	"ARRAY['version:integer', 'name:text', 'applied_at:timestamp with time zone'])"
+
 // userObject is the WHERE clause selecting the rows of catalog (aliased o,
-// its namespace aliased n) that are not in a system schema and not owned by
-// an extension.
+// its namespace aliased n) that are not in a system schema, not in the auth
+// lineage's schema and not owned by an extension.
 func userObject(catalog string) string {
 	return "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_toast%' " +
-		"AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = '" + catalog +
+		"AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND n.oid NOT IN " + authLineageSchemas + " AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = '" + catalog +
 		"'::regclass AND d.objid = o.oid AND d.deptype = 'e')"
 }
 

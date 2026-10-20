@@ -98,6 +98,19 @@ func TestOpsMigrateSucceedsAfterAuthMigrateOnAnEmptyDatabase(t *testing.T) {
 		t.Run(schema, func(t *testing.T) {
 			f := newOrderFixture(t)
 			f.authMigrate(t, schema)
+			// The marker matches what the auth migrator really creates: the
+			// database still reads as empty to the ops migrator.
+			baseline, err := pgmigrate.LoadBaseline()
+			if err != nil {
+				t.Fatal(err)
+			}
+			chain, err := pgmigrate.LoadChain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status, err := pgmigrate.ReadStatus(f.ctx, connect(t, f.uri), baseline, chain); err != nil || status.State != "empty" {
+				t.Fatalf("status after auth-migrate = %q, %v; want empty", status.State, err)
+			}
 			result, err := f.dhoMigrate(t)
 			if err != nil {
 				t.Fatalf("dho migrate after auth-migrate: %v", err)

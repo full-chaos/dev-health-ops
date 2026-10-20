@@ -1,4 +1,5 @@
-// Package clientaddr is the client address of one auth-service request.
+// Package clientaddr is the client of one auth-service request: its address
+// and its user agent.
 //
 // The address is the socket peer, unless the peer is a configured trusted
 // proxy (AUTH_SERVICE_TRUSTED_PROXIES) that sent exactly one X-Forwarded-For
@@ -7,6 +8,11 @@
 // so a chain, a second header or an unparsable value is not a proxy's answer
 // and falls back to the peer. X-Forwarded-Proto and the other forwarded
 // headers are never read.
+//
+// The user agent is the first User-Agent value, each byte decoded as one
+// latin-1 code point, as go-api's userAgent() reads it
+// (internal/api/session/tokens.go). It is kept whole: net/http's header cap
+// (MaxHeaderBytes, 1 MiB by default) is the only bound, as in go-api.
 package clientaddr
 
 import (
@@ -109,18 +115,43 @@ func (t Trust) Resolve(r *http.Request) netip.Addr {
 
 type key struct{}
 
-// Middleware binds the resolved client address to every request.
+type userAgentKey struct{}
+
+// Middleware binds the resolved client address and the user agent to every
+// request.
 func Middleware(t Trust) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			addr := t.Resolve(r)
-			if !addr.IsValid() {
-				next.ServeHTTP(w, r)
-				return
+			ctx := r.Context()
+			if addr := t.Resolve(r); addr.IsValid() {
+				ctx = With(ctx, addr)
 			}
-			next.ServeHTTP(w, r.WithContext(With(r.Context(), addr)))
+			if values := r.Header.Values("User-Agent"); len(values) > 0 {
+				ctx = WithUserAgent(ctx, latin1(values[0]))
+			}
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func latin1(raw string) string {
+	var builder strings.Builder
+	builder.Grow(len(raw))
+	for index := 0; index < len(raw); index++ {
+		builder.WriteRune(rune(raw[index]))
+	}
+	return builder.String()
+}
+
+// WithUserAgent binds agent to ctx.
+func WithUserAgent(ctx context.Context, agent string) context.Context {
+	return context.WithValue(ctx, userAgentKey{}, agent)
+}
+
+// UserAgent returns the user agent bound to ctx.
+func UserAgent(ctx context.Context) (string, bool) {
+	agent, ok := ctx.Value(userAgentKey{}).(string)
+	return agent, ok
 }
 
 // With binds addr to ctx.
@@ -143,9 +174,3 @@ func Text(ctx context.Context) *string {
 	text := addr.String()
 	return &text
 }
-
-// UserAgent is not built yet.
-func UserAgent(context.Context) (string, bool) { return "", false }
-
-// WithUserAgent is not built yet.
-func WithUserAgent(ctx context.Context, _ string) context.Context { return ctx }

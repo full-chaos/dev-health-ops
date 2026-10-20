@@ -14,7 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
-	"github.com/full-chaos/dev-health-ops/internal/auth/useragent"
 )
 
 // CreateAudited is Create with event committed in the same transaction
@@ -79,7 +78,7 @@ func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uu
 		FROM `+s.q+`.principals p, (SELECT clock_timestamp() AS at) t
 		WHERE p.id = $1 AND p.disabled_at IS NULL
 		RETURNING id::text`,
-		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr, clientaddr.Text(ctx), useragent.Text(ctx)).Scan(&sessionID)
+		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr, clientaddr.Text(ctx), userAgentOf(ctx)).Scan(&sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Issued{}, ErrPrincipalUnavailable
 	}
@@ -167,4 +166,13 @@ func (s *Store) RevokeByCredential(ctx context.Context, credential contracts.Sec
 	default:
 		return false, fmt.Errorf("%w: revoking a session by its credential: %w", ErrStore, err)
 	}
+}
+
+// userAgentOf is the bound user agent for the user_agent column, or nil.
+func userAgentOf(ctx context.Context) *string {
+	agent, ok := clientaddr.UserAgent(ctx)
+	if !ok {
+		return nil
+	}
+	return &agent
 }

@@ -42,7 +42,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
-	"github.com/full-chaos/dev-health-ops/internal/auth/useragent"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -559,9 +558,9 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		// The server-minted request id (internal/auth/requestid) wraps the
 		// whole mux, so the transport's own refusals (404, 405, 413, 429)
 		// carry X-Auth-Request-ID as route answers do. The client address
-		// (internal/auth/clientaddr) is bound for every audit row and session,
-		// and the user agent (internal/auth/useragent) for every session.
-		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies), useragent.Middleware},
+		// (every audit row and session) and the user agent (every session)
+		// are bound by internal/auth/clientaddr.
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies)},
 		// The transport id is always minted here, never a client's
 		// X-Request-ID: it reaches every log line and envelope.
 		AcceptRequestID: func(string) bool { return false },

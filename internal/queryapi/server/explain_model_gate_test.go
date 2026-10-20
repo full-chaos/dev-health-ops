@@ -70,7 +70,7 @@ var explainGateRows = []struct {
 	{"B1 saved config, acr_service_model on: own model", gateSource{in: llmorgsettings.Inputs{Saved: true, ConfigUsable: true, ServiceModelOn: true}}, true, 0, ""},
 	{"B1-off saved config, acr_service_model off", gateSource{in: llmorgsettings.Inputs{Saved: true, ConfigUsable: true}}, false, http.StatusForbidden, "ai_features_turned_off"},
 	{"B1-unknown entitlement read fails", gateSource{err: errors.New("entitlement read failed")}, false, http.StatusServiceUnavailable, "Service unavailable"},
-	{"B1' saved but unusable", gateSource{in: llmorgsettings.Inputs{Saved: true, ServiceModelOn: true}}, false, http.StatusServiceUnavailable, "Service unavailable"},
+	{"B1' saved but unusable", gateSource{in: llmorgsettings.Inputs{Saved: true, ServiceModelOn: true}}, false, http.StatusForbidden, "own_model_unusable"},
 	{"flag off, saved config, gate closed", gateSource{in: llmorgsettings.Inputs{Saved: true, GateClosed: true, Fallback: true}}, false, http.StatusForbidden, "ai_features_turned_off"},
 	{"flag off, saved and unusable", gateSource{in: llmorgsettings.Inputs{Saved: true}}, false, http.StatusForbidden, "ai_features_turned_off"},
 	{"B2 saved behind a closed gate, with the grant", gateSource{in: llmorgsettings.Inputs{Saved: true, GateClosed: true, ServiceModelOn: true, Fallback: true}}, false, http.StatusForbidden, "own_model_gate_closed"},
@@ -95,7 +95,7 @@ func TestInvestmentExplainRunsTheModelGateBeforeAnyProvider(t *testing.T) {
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 			rec := httptest.NewRecorder()
 			handler(rec, req)
-			assertGateOutcome(t, rec, resolver, row.admit, row.status, row.refusal)
+			assertGateOutcome(t, rec, resolver, investmentAdmitted(row.source.in.Saved), row.admit, row.status, row.refusal)
 		})
 	}
 }
@@ -104,10 +104,17 @@ func TestWorkUnitExplainRunsTheModelGateBeforeAnyProvider(t *testing.T) {
 	for _, row := range explainGateRows {
 		t.Run(row.name, func(t *testing.T) {
 			resolver := &countingResolver{}
-			handler := newWorkUnitExplainHandler(newTestWorkUnitsReader(t), nil, resolver, nil, llmorgsettings.Gate{Source: row.source})
+			reader := newTestWorkUnitsReader(t)
+			if !row.admit {
+				var err error
+				if reader, err = investmentexplain.NewReader(unusedQueryClient{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			handler := newWorkUnitExplainHandler(reader, nil, resolver, nil, llmorgsettings.Gate{Source: row.source})
 			rec := httptest.NewRecorder()
 			handler(rec, newWorkUnitExplainRequest(t, "wu-ABC-123", "llm_provider=mock"))
-			assertGateOutcome(t, rec, resolver, row.admit, row.status, row.refusal)
+			assertGateOutcome(t, rec, resolver, admittedOutcome{http.StatusNotFound, "not found"}, row.admit, row.status, row.refusal)
 		})
 	}
 }
@@ -126,11 +133,27 @@ func TestExplainRoutesRefuseWithoutAGate(t *testing.T) {
 	}
 }
 
-func assertGateOutcome(t *testing.T, rec *httptest.ResponseRecorder, resolver *countingResolver, admit bool, status int, refusal string) {
+// investmentAdmitted: an own-model org that reaches the investment route gets no platform answer (its own
+// model cannot be built here), a platform org gets the summary.
+func investmentAdmitted(own bool) admittedOutcome {
+	if own {
+		return admittedOutcome{http.StatusOK, "Streaming error"}
+	}
+	return admittedOutcome{http.StatusOK, `"summary"`}
+}
+
+// admittedOutcome is what an admitted request must end as once the gate has let it through: the exact
+// status and a marker of the body that proves which path ran.
+type admittedOutcome struct {
+	status int
+	marker string
+}
+
+func assertGateOutcome(t *testing.T, rec *httptest.ResponseRecorder, resolver *countingResolver, admitted admittedOutcome, admit bool, status int, refusal string) {
 	t.Helper()
 	if admit {
-		if rec.Code == http.StatusForbidden || rec.Code == http.StatusServiceUnavailable {
-			t.Fatalf("an admitted request was refused: %d %s", rec.Code, rec.Body.String())
+		if rec.Code != admitted.status || !strings.Contains(rec.Body.String(), admitted.marker) {
+			t.Fatalf("an admitted request ended as %d %s, want %d containing %q", rec.Code, rec.Body.String(), admitted.status, admitted.marker)
 		}
 		return
 	}

@@ -19,7 +19,7 @@
 # Reads: ROOT_DIR, BIN_DIR, TMP_DIR, POSTGRES_URI, CLICKHOUSE_URI_NATIVE,
 # E2E_ORG_ID, JWT_SECRET_KEY, QUERY_API_PORT, READINESS_ATTEMPTS,
 # READINESS_SLEEP_SECS, EXIT_FAILURE. Sets QUERY_API_PID (the caller declares
-# it and stops it with stop_service). Requires the cigate binary in BIN_DIR, e2e_psql and
+# it and stops it with stop_service). Requires the cigate and dho binaries in BIN_DIR, e2e_psql, e2e_dho_admin and
 # wait_for_http_ready to be defined.
 #
 # CHAOS-6241: query_api_e2e_start/query_api_e2e_mint_envelope_token are also
@@ -50,8 +50,11 @@ go_api_prove_e2e_pgx_uri() {
   printf '%s' "${POSTGRES_URI/+asyncpg/}"
 }
 
-# The proof service principal fixture, in SQL against the same throwaway Postgres (e2e_psql of the caller). The users
-# row itself comes from the application schema migration, never from this fixture. E2E_ORG_ID is a fixed uuid.
+# The proof service principal fixture, through the dho admin verbs of the caller (e2e_dho_admin) where one exists, and
+# a plain SELECT for the shape check (e2e_psql of the caller). The users row itself comes from the application schema
+# migration, never from this fixture. E2E_ORG_ID is a fixed uuid. The one raw write left is bump-token-version: no
+# dho verb exists for advancing token_version alone (`users delete` also ends the login, `users update --password`
+# sets a password hash on a service principal).
 go_api_prove_e2e_principal() {
   local id="${GO_API_PROVE_E2E_PRINCIPAL_ID}" shape
   case "$1" in
@@ -68,14 +71,13 @@ go_api_prove_e2e_principal() {
       fi
       ;;
     grant-membership)
-      e2e_psql -c "INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)
-        VALUES (gen_random_uuid(), '${id}', '${E2E_ORG_ID}', 'viewer', now(), now()) ON CONFLICT DO NOTHING" >/dev/null
+      e2e_dho_admin users update --id "${id}" --org "${E2E_ORG_ID}" --role viewer >/dev/null
       ;;
     bump-token-version)
       e2e_psql -c "UPDATE users SET token_version = token_version + 1 WHERE id = '${id}'" >/dev/null
       ;;
     deactivate)
-      e2e_psql -c "UPDATE users SET is_active = false WHERE id = '${id}'" >/dev/null
+      e2e_dho_admin users update --id "${id}" --no-active >/dev/null
       ;;
     *)
       echo "unknown action $1"

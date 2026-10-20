@@ -204,7 +204,7 @@ func TestJWTSecretIsTheHexSha256(t *testing.T) {
 func TestMintTokenIsAnHS256AdminToken(t *testing.T) {
 	secret := livee2e.JWTSecret("k")
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
-	raw, err := livee2e.MintToken(secret, livee2e.DefaultOrgID, now, "jti-1")
+	raw, err := livee2e.MintToken(secret, livee2e.E2EUserID, livee2e.DefaultOrgID, now, "jti-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestRunEdgeRequestJWTSecretAndUsage(t *testing.T) {
 }
 
 func TestRunMintTokenPrintsAnHS256TokenForTheEncryptionKey(t *testing.T) {
-	rc, out, stderr := run(t, map[string]string{"E2E_ORG_ID": "org-7", "SETTINGS_ENCRYPTION_KEY": "k"}, "mint-token")
+	rc, out, stderr := run(t, map[string]string{"E2E_USER_ID": "user-7", "E2E_ORG_ID": "org-7", "SETTINGS_ENCRYPTION_KEY": "k"}, "mint-token")
 	if rc != 0 || stderr != "" {
 		t.Fatalf("rc=%d stderr=%q", rc, stderr)
 	}
@@ -369,7 +369,7 @@ func TestRunMintTokenPrintsAnHS256TokenForTheEncryptionKey(t *testing.T) {
 	if _, err := jwt.ParseWithClaims(strings.TrimSpace(out), claims, func(*jwt.Token) (any, error) { return []byte(livee2e.JWTSecret("k")), nil }, jwt.WithValidMethods([]string{"HS256"})); err != nil {
 		t.Fatalf("printed token does not verify with the secret of the encryption key: %v", err)
 	}
-	if claims["org_id"] != "org-7" || claims["sub"] != livee2e.E2EUserID {
+	if claims["org_id"] != "org-7" || claims["sub"] != "user-7" {
 		t.Errorf("claims %v", claims)
 	}
 	rc, out, _ = run(t, nil, "mint-token")

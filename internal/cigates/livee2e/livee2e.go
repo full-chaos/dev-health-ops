@@ -266,9 +266,9 @@ const (
 )
 
 // MintToken signs the e2e admin access token (HS256, one hour).
-func MintToken(secret, orgID string, now time.Time, jti string) (string, error) {
+func MintToken(secret, userID, orgID string, now time.Time, jti string) (string, error) {
 	claims := jwt.MapClaims{
-		"sub":          E2EUserID,
+		"sub":          userID,
 		"email":        e2eEmail,
 		"org_id":       orgID,
 		"role":         "admin",

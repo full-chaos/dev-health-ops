@@ -13,7 +13,7 @@ import (
 const usage = `usage: cigate live-e2e <verb>
   assert-health FILE | assert-meta FILE | assert-home FILE
   edge-request DOCUMENTS OPERATION ORG
-  mint-token                             (env E2E_ORG_ID, SETTINGS_ENCRYPTION_KEY)
+  mint-token                             (env E2E_USER_ID, E2E_ORG_ID, SETTINGS_ENCRYPTION_KEY)
   jwt-secret                             (env ENC_KEY_INPUT)
   valkey-ping                            (env REDIS_URL)
 `
@@ -86,6 +86,10 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		if !need(0) {
 			return 2
 		}
+		userID := getenv("E2E_USER_ID")
+		if userID == "" {
+			userID = E2EUserID
+		}
 		orgID := getenv("E2E_ORG_ID")
 		if orgID == "" {
 			orgID = DefaultOrgID
@@ -94,7 +98,7 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		if key == "" {
 			key = DefaultEncryptionKey
 		}
-		token, err := MintToken(JWTSecret(key), orgID, time.Now().UTC(), uuid.NewString())
+		token, err := MintToken(JWTSecret(key), userID, orgID, time.Now().UTC(), uuid.NewString())
 		if err != nil {
 			return fail(err)
 		}

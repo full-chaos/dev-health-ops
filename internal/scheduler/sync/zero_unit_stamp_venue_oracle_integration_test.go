@@ -104,10 +104,8 @@ func TestZeroUnitRunAuthStampVenueOracleMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
-		Name: "zero-unit plan", Text: pythonZeroUnitPlanProgram, Stdin: input,
-		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test", "SETTINGS_ENCRYPTION_KEY": zeroUnitStampVenueKey},
-		PerRun: oracleDatabase(t, venue), PerRunNames: []string{oracleDatabaseEnv},
+	answer := programoracle.Produce(t, golden, []programoracle.Program{{
+		Name: "zero-unit plan", Stdin: input,
 	}})[0]
 	if answer.ExitCode != 0 {
 		t.Fatalf("the zero-unit plan program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)

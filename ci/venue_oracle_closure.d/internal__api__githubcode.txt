@@ -32,12 +32,9 @@ internal/storage/postgres
 internal/storage/river
 internal/storage/roleacl
 internal/testsupport/containers
-internal/testsupport/goldenscan
 internal/testsupport/moduleroot
 internal/testsupport/programoracle
 internal/testsupport/pydanticecho
-internal/testsupport/pyoracle
-internal/testsupport/recordedfiles
 internal/testsupport/redirectprobe
 internal/testsupport/venueoracle
 ~internal/chmigrate/baseline

@@ -87,7 +87,7 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 		jwtKey = "venue-oracle-jwt-signing-key-32-bytes-min"
 	)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root), JWTKey: jwtKey,
+		Golden: golden, Root: root, JWTKey: jwtKey,
 		PythonEnv: []string{"INGEST_API_KEYS=other-key, " + apiKey, "INGEST_SIGNING_SECRET=" + secret},
 		Seed: func(*testing.T, context.Context, *pgxpool.Pool, *venueoracle.Venue) map[string]map[string]any {
 			return nil
@@ -189,16 +189,12 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 	t.Log(receipt)
 
 	goStream := venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "ingest:*", "ingestion_id")
-	pythonStream := golden.CompareRows(t, "ingest stream entries", func() string {
-		return venueoracle.StreamEntries(t, ctx, venue.PythonValkeyURI, "ingest:*", "ingestion_id")
-	}, goStream)
+	pythonStream := golden.CompareRows(t, "ingest stream entries", goStream)
 	if pythonStream == "" {
 		t.Error("ingest stream entries are empty")
 	}
 	goKeys := idempotencyKeys(t, ctx, venue.ValkeyURI)
-	pythonKeys := golden.CompareRows(t, "idempotency keys", func() string {
-		return idempotencyKeys(t, ctx, venue.PythonValkeyURI)
-	}, goKeys)
+	pythonKeys := golden.CompareRows(t, "idempotency keys", goKeys)
 	if pythonKeys == "" {
 		t.Error("idempotency keys are empty")
 	}
@@ -221,7 +217,7 @@ func TestLegacyIngestTelemetryVenueOracle(t *testing.T) {
 		secret = "venue-ingest-secret"
 	)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"INGEST_API_KEYS=" + apiKey, "INGEST_SIGNING_SECRET=" + secret},
 		Seed: func(*testing.T, context.Context, *pgxpool.Pool, *venueoracle.Venue) map[string]map[string]any {
 			return nil

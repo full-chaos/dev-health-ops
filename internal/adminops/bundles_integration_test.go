@@ -210,7 +210,7 @@ func (db *database) bundleState(t *testing.T) string {
 	return string(raw)
 }
 
-func bundleSession(t *testing.T, python bool) []bundleResult {
+func bundleSession(t *testing.T) []bundleResult {
 	t.Helper()
 	db := startDatabase(t)
 	ctx := context.Background()
@@ -231,11 +231,7 @@ func bundleSession(t *testing.T, python bool) []bundleResult {
 		}
 		var code int
 		var stdout string
-		if python {
-			code, stdout = pythonVerbFull(t, db, s.env, nil, s.args)
-		} else {
-			code, stdout = goVerbEnv(t, db, s.env, s.args)
-		}
+		code, stdout = goVerbEnv(t, db, s.env, s.args)
 		switch {
 		case s.dbError && strings.HasPrefix(stdout, "Error: "):
 			stdout = "Error: <database error>\n"
@@ -269,11 +265,10 @@ func compareBundles(t *testing.T, got, want []bundleResult, wantName string) {
 
 // TestBundlesMatchTheFrozenPythonOutput runs the script and compares every step (exit, stdout, the rows
 // left) with what the REAL `dev-hops admin licenses|bundles` verbs did. The answers were executed once on
-// adminPythonBuild and are frozen in testdata/golden/bundles.json (the recipe regenerates them by
-// execution); the script is part of the golden's key. A printed license is stored in its normalized form
+// adminPythonBuild and are frozen in testdata/golden/bundles.json; the script is part of the golden's key. A printed license is stored in its normalized form
 // (signature checked, fields masked), a key pair as its consistency: the golden holds no key or token.
 func TestBundlesMatchTheFrozenPythonOutput(t *testing.T) {
-	golden, root := adminGolden(t, "bundles", "0982edcbdbd30655d7f33f975ccb8e50794e9266aea1206400ba8342facfad56", "TestBundlesMatchTheFrozenPythonOutput")
+	golden := adminGolden(t, "bundles", "0982edcbdbd30655d7f33f975ccb8e50794e9266aea1206400ba8342facfad56")
 	script := make([]map[string]any, len(bundleScript))
 	for index, s := range bundleScript {
 		script[index] = map[string]any{"args": s.args, "env": s.env, "dbError": s.dbError, "sql": s.sql, "seed": s.seed}
@@ -282,12 +277,12 @@ func TestBundlesMatchTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := adminProduce(t, golden, root, "bundles script", input, func() any { return bundleSession(t, true) })
+	raw := adminProduce(t, golden, "bundles script", input)
 	var frozen []bundleResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
 	}
-	compareBundles(t, bundleSession(t, false), frozen, "frozen Python")
+	compareBundles(t, bundleSession(t), frozen, "frozen Python")
 	created, refused := 0, 0
 	for _, item := range frozen {
 		if strings.HasPrefix(item.Stdout, "Created") || strings.HasPrefix(item.Stdout, "Assigned") || strings.HasPrefix(item.Stdout, "signature valid=true") {

@@ -28,7 +28,7 @@ func TestResolveModelNameMatchesPythonGolden(t *testing.T) {
 		t.Fatalf("glob goldens: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no resolve_model_name__*.json goldens found -- run generate_resolve_model_name_golden.py")
+		t.Fatal("no resolve_model_name__*.json goldens found")
 	}
 
 	// Every env var any case sets, cleared up front so a case that omits

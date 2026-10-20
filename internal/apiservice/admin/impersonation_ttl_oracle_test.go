@@ -48,7 +48,7 @@ func runImpersonationTTLCase(t *testing.T, name, ttlMinutes string) {
 	t.Helper()
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation_ttl_"+name, t.Name(), impersonationTTLDigests[name]))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("impttl-" + name)
 	jwtKey := "venue-oracle-test-secret-key-for-impersonation-ttl-32bytes!"
 

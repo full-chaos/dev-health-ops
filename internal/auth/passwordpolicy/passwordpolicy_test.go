@@ -1,32 +1,9 @@
 package passwordpolicy
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 )
-
-// TestEmbeddedListMatchesThePythonOne pins the embedded denylist to the file
-// password_policy.py reads, byte for byte.
-func TestEmbeddedListMatchesThePythonOne(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test file")
-	}
-	pythonList := filepath.Join(filepath.Dir(file), "..", "..", "..", "src", "dev_health_ops", "data", "common_passwords.txt")
-	want, err := os.ReadFile(pythonList)
-	if err != nil {
-		t.Fatalf("read the Python denylist: %v", err)
-	}
-	if string(want) != commonPasswordsFile {
-		t.Fatalf("data/common_passwords.txt differs from %s; copy the Python list here", pythonList)
-	}
-	if len(loadCommonPasswords()) == 0 {
-		t.Fatal("the embedded denylist parsed to no entries")
-	}
-}
 
 func TestValidate(t *testing.T) {
 	for _, tc := range []struct {
@@ -58,5 +35,11 @@ func TestValidate(t *testing.T) {
 	long[0] = '1'
 	if got := Validate(string(long)); !reflect.DeepEqual(got, []string{"Password must be no more than 128 characters long"}) {
 		t.Errorf("Validate(129 runes) = %q", got)
+	}
+}
+
+func TestEmbeddedDenylistParses(t *testing.T) {
+	if len(loadCommonPasswords()) == 0 {
+		t.Fatal("the embedded denylist parsed to no entries")
 	}
 }

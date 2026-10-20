@@ -101,10 +101,8 @@ func TestJiraRenameVenueOracleMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
-		Name: "jira rename discovery", Text: pythonJiraRenameProgram, Stdin: input,
-		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test"},
-		PerRun: oracleDatabase(t, venue), PerRunNames: []string{oracleDatabaseEnv},
+	answer := programoracle.Produce(t, golden, []programoracle.Program{{
+		Name: "jira rename discovery", Stdin: input,
 	}})[0]
 	if answer.ExitCode != 0 {
 		t.Fatalf("the Jira rename program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)
@@ -172,10 +170,10 @@ func TestJiraRenameVenueOracleMatchesFrozenPython(t *testing.T) {
   dataset_key, coalesce(last_synced_at::text, '<null>'), CASE WHEN updated_at = '` + seedAt + `' THEN 'seed' ELSE 'moved' END) AS r
   FROM sync_watermarks) AS rows`,
 	}
-	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
+	goDB := venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integration_sources", "sync_watermarks"} {
 		goRows := venueoracle.TableRows(t, ctx, goDB, queries[table])
-		golden.CompareRows(t, "rows:"+table, func() string { return venueoracle.TableRows(t, ctx, source, queries[table]) }, goRows)
+		golden.CompareRows(t, "rows:"+table, goRows)
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
 	}
 	// The writes happened: a renamed row, moved watermarks, a deleted

@@ -118,7 +118,7 @@ func runSavedReportVenue(t *testing.T, goldenName, pin string, cases []oracleCas
 	golden := venueoracle.OpenGolden(t, venueGolden(goldenName, t.Name(), pin))
 	userA, userB := stableVenueID(goldenName+"/user-a"), stableVenueID(goldenName+"/user-b")
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root), JWTKey: oracleJWTKey,
+		Golden: golden, Root: root, JWTKey: oracleJWTKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -640,7 +640,6 @@ FROM worker_job_outbox ORDER BY regexp_replace(args::text, '(report-run:|report\
 		// The rows are compared as sorted sets: two clones of one source share every
 		// ordering column the query has, so their position is not part of the answer.
 		golden.CompareRows(t, "rows:"+name,
-			func() string { return sorted(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)) },
 			sorted(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)))
 	}
 }
@@ -689,7 +688,6 @@ func compareRowCounts(t *testing.T, ctx context.Context, golden *venueoracle.Gol
 	// Python must have written exactly `declared` more saved reports than Go (the declared refusals):
 	// the frozen Python count is compared with Go's count plus the declared number.
 	golden.CompareRows(t, "saved report count",
-		func() string { return fmt.Sprint(count(venue.AdminURI(t, venue.SourceDB))) },
 		fmt.Sprint(count(venue.AdminURI(t, venue.GoDB))+declared))
 }
 

@@ -13,16 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const pythonSanitizeProgram = `
-import hashlib, json, sys
-from dev_health_ops.sync.error_sanitize import sanitize_error_text
-out = []
-for text, cap in json.loads(sys.stdin.read()):
-    sanitized = sanitize_error_text(text, max_length=(cap or None)).encode("utf-8")
-    out.append({"sha256": hashlib.sha256(sanitized).hexdigest(), "bytes": len(sanitized)})
-print(json.dumps(out))
-`
-
 // sanitizeCorpus mixes real-shaped secrets with random concatenations of the
 // fragments the patterns care about, including the characters where `re`'s
 // Unicode rules differ from RE2's: no-break and ideographic spaces, Unicode
@@ -90,7 +80,7 @@ func TestSanitizeErrorTextMatchesFrozenPython(t *testing.T) {
 	corpus := sanitizeCorpus()
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "errorsanitize.golden.json",
-		programoracle.Program{Name: "sanitize error text", Text: pythonSanitizeProgram, Stdin: input})[0]
+		programoracle.Program{Name: "sanitize error text", Stdin: input})[0]
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var want []struct {
 		SHA256 string `json:"sha256"`

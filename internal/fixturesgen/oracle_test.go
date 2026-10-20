@@ -1,27 +1,18 @@
 package fixturesgen
 
 import (
-	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
 	"math/rand"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-//go:embed testdata/generators_oracle.py
-var generatorsOracleProgram string
 
 type leaf struct {
 	T string `json:"t"`
@@ -33,26 +24,19 @@ type leaf struct {
 const generatorsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 // openOracle opens the golden of one oracle test (file under testdata/golden,
-// its pinned digest) and returns it with the root its Python runs from while
-// recording.
-func openOracle(t *testing.T, file, digest string) (*venueoracle.Golden, string) {
+// its pinned digest).
+func openOracle(t *testing.T, file, digest string) *venueoracle.Golden {
 	t.Helper()
-	_, currentFile, _, _ := moduleroot.Caller(0)
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
-	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+	return venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/" + file + ".json",
 		PythonBuild: generatorsPythonBuild,
 		SHA256:      digest,
-		Recipe: "git worktree add --detach $DIR " + generatorsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/fixturesgen/ -test '^" + t.Name() + "$' -python-root $DIR",
 	})
-	return golden, golden.PythonRoot(t, repoRoot)
 }
 
-// askPython sends every request line to ONE run of the oracle program and
-// returns its answer lines, one per request: executed on the pinned build while
-// recording, read from the golden otherwise.
-func askPython(t *testing.T, golden *venueoracle.Golden, root string, requests []any) []json.RawMessage {
+// askPython sends every request line as ONE program request and returns its
+// frozen answer lines, one per request.
+func askPython(t *testing.T, golden *venueoracle.Golden, requests []any) []json.RawMessage {
 	t.Helper()
 	var input strings.Builder
 	for _, request := range requests {
@@ -63,26 +47,8 @@ func askPython(t *testing.T, golden *venueoracle.Golden, root string, requests [
 		input.Write(line)
 		input.WriteByte('\n')
 	}
-	env := map[string]string{"PYTHONHASHSEED": "0"}
-	request := venueoracle.ProgramRequest("generators", generatorsOracleProgram, []byte(input.String()), env)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		ctx := context.Background()
-		producer.RequireDeployed()
-		command, err := producer.Command(ctx, env, nil, "-c", generatorsOracleProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = strings.NewReader(input.String())
-		output, err := command.Output()
-		if err != nil {
-			var stderr []byte
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				stderr = exitErr.Stderr
-			}
-			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, stderr))
-		}
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
-	})
+	request := venueoracle.ProgramRequest("generators", []byte(input.String()))
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	lines := strings.Split(strings.TrimSpace(venueoracle.UnpackBody(t, answers[0].Body)), "\n")
 	if len(lines) != len(requests) {
@@ -166,13 +132,13 @@ func intLeaf(value int64) leaf { return leaf{"int", strconv.FormatInt(value, 10)
 // TestRandMatchesThePythonRandom drives Rand and a REAL random.Random over the same operation
 // sequences and compares every value: getrandbits, randrange, randint, choice and random().
 func TestRandMatchesThePythonRandom(t *testing.T) {
-	golden, root := openOracle(t, "pyrand", "374d1a8c9e5dbf6dc032ed91dd4e857cb13e5fbbcf9253b50fc7d3515aa6c365")
+	golden := openOracle(t, "pyrand", "374d1a8c9e5dbf6dc032ed91dd4e857cb13e5fbbcf9253b50fc7d3515aa6c365")
 	corpus, seeds := randomCorpus()
 	requests := make([]any, len(corpus))
 	for i := range corpus {
 		requests[i] = corpus[i]
 	}
-	answers := askPython(t, golden, root, requests)
+	answers := askPython(t, golden, requests)
 	compared := 0
 	for index, request := range corpus {
 		var want struct {
@@ -296,7 +262,7 @@ func columnValue(row ProductTelemetryRow, column string) (leaf, bool) {
 // instead of being skipped. ingested_at is the wall clock of the write, not of the generation, so
 // it is the one column not compared, and the test says so by requiring it to be exactly that.
 func TestProductTelemetryMatchesThePythonGenerator(t *testing.T) {
-	golden, root := openOracle(t, "product_telemetry", "92e09ff4abde267db4e929ab8149ae720cb45ea37c01be2fc08d825f76fa1bcb")
+	golden := openOracle(t, "product_telemetry", "92e09ff4abde267db4e929ab8149ae720cb45ea37c01be2fc08d825f76fa1bcb")
 	corpus := telemetryCorpus()
 	requests := make([]any, len(corpus))
 	for i, c := range corpus {
@@ -304,7 +270,7 @@ func TestProductTelemetryMatchesThePythonGenerator(t *testing.T) {
 			"sessions_per_day": c.SessionsPerDay, "seed": c.Seed, "end_time": c.EndTime}
 		requests[i] = request
 	}
-	answers := askPython(t, golden, root, requests)
+	answers := askPython(t, golden, requests)
 	rowsCompared, nonEmpty := 0, 0
 	for index, c := range corpus {
 		label := fmt.Sprintf("org=%q days=%d sessions=%d seed=%v end=%s", c.OrgID, c.Days, c.SessionsPerDay, c.Seed, c.EndTime)
@@ -366,8 +332,8 @@ func TestProductTelemetryMatchesThePythonGenerator(t *testing.T) {
 // TestSyntheticOrgIDsMatchThePythonFallback compares the fallback org ids with the ones the
 // Python verb's own expression yields.
 func TestSyntheticOrgIDsMatchThePythonFallback(t *testing.T) {
-	golden, root := openOracle(t, "synthetic_orgs", "f58597fdb836189f8f3f725245be08ab6a09166e63365232f42b43a490505505")
-	answers := askPython(t, golden, root, []any{map[string]any{"kind": "synthetic_orgs", "count": 12}})
+	golden := openOracle(t, "synthetic_orgs", "f58597fdb836189f8f3f725245be08ab6a09166e63365232f42b43a490505505")
+	answers := askPython(t, golden, []any{map[string]any{"kind": "synthetic_orgs", "count": 12}})
 	var want struct {
 		IDs []string `json:"ids"`
 	}

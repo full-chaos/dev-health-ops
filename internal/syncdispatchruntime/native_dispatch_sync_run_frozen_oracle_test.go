@@ -2,9 +2,6 @@ package syncdispatchruntime
 
 import (
 	"encoding/json"
-	"os"
-	"path"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,7 +9,7 @@ import (
 )
 
 // Frozen-Python oracle for dispatch_sync_run's BudgetGuard admission math
-// (CHAOS-4198): its frozen answer is testdata/dispatch_admission_oracle.py
+// (CHAOS-4198): its frozen answer is a script
 // executed once on the pinned build. The script calls the REAL, unmodified
 // dev_health_ops.sync.budget_guard._observe_estimate/_baseline_unfitness/
 // _cooldown_expiry/_matching_cooldown_expiry, and this test diffs Go's
@@ -115,12 +112,8 @@ func mustParseOracleTime(t *testing.T, value string) time.Time {
 // TestBudgetAdmissionMathMatchesFrozenPython is the CHAOS-4198 frozen-Python
 // oracle for BudgetGuard's admission math.
 func TestBudgetAdmissionMathMatchesFrozenPython(t *testing.T) {
-	script, err := os.ReadFile(filepath.Join("testdata", "dispatch_admission_oracle.py"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	output := []byte(frozenPython(t, "dispatch-admission.golden.json",
-		programoracle.Script("dispatch admission oracle", path.Join("internal", "syncdispatchruntime", "testdata", "dispatch_admission_oracle.py"), string(script), nil))[0])
+		programoracle.Program{Name: "dispatch admission oracle", Stdin: nil})[0])
 	var want dispatchAdmissionOracle
 	if err := json.Unmarshal(output, &want); err != nil {
 		t.Fatalf("decode Python dispatch admission oracle: %v: %s", err, output)

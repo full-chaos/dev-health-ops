@@ -40,12 +40,9 @@ internal/storage/river
 internal/storage/roleacl
 internal/teamkeytables
 internal/testsupport/containers
-internal/testsupport/goldenscan
 internal/testsupport/moduleroot
 internal/testsupport/programoracle
 internal/testsupport/pydanticecho
-internal/testsupport/pyoracle
-internal/testsupport/recordedfiles
 internal/testsupport/venueoracle
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql

@@ -16,29 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonEnvelopeProgram runs BatchEnvelope.model_validate_json on each
-// base64 body: "ok", the errors as [type, loc, msg], or the TypeError.
-const pythonEnvelopeProgram = `
-import base64, json, sys
-from pydantic import ValidationError
-from dev_health_ops.api.external_ingest.schemas import BatchEnvelope
-out = []
-for raw in json.loads(sys.stdin.read()):
-    try:
-        BatchEnvelope.model_validate_json(base64.b64decode(raw))
-        out.append("ok")
-    except ValidationError as exc:
-        try:
-            rendered = json.dumps([dict(e) for e in exc.errors()], ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        except (TypeError, ValueError):
-            rendered = "UNRENDERABLE"
-        out.append({"rows": [[e["type"], list(e["loc"]), e["msg"]] for e in exc.errors()], "dicts": rendered})
-        continue
-    except TypeError:
-        out.append("TypeError")
-print(json.dumps(out))
-`
-
 // envelopeCorpus is JSON syntax errors of every jiter kind, envelope field
 // errors in and out of order, and a seeded fuzz: valid envelopes with parts
 // replaced, dropped, duplicated, renamed or cut.
@@ -174,7 +151,7 @@ func TestEnvelopeValidationMatchesFrozenPython(t *testing.T) {
 	}
 	input, _ := json.Marshal(encoded)
 	output := []byte(frozenPython(t, "envelope-validation.golden.json",
-		programoracle.Program{Name: "batch envelope validation", Text: pythonEnvelopeProgram, Stdin: input})[0])
+		programoracle.Program{Name: "batch envelope validation", Stdin: input})[0])
 	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
 	var want []json.RawMessage
 	if err := json.Unmarshal(lines[len(lines)-1], &want); err != nil {
@@ -285,38 +262,6 @@ func renderDicts(errs []recordvalidation.PydanticError) string {
 	return string(text)
 }
 
-// pythonDataPlaneParseProgram answers each body as router.py's
-// _parse_envelope_or_400 does through the Python api's handlers: 200
-// "valid", the 400 external_ingest_error_body JSONResponse, or the
-// unhandled 500 when that response cannot be rendered or the validator
-// raises.
-const pythonDataPlaneParseProgram = `
-import base64, json, sys
-from pydantic import ValidationError
-from starlette.responses import JSONResponse
-from dev_health_ops.api.external_ingest.schemas import BatchEnvelope
-from dev_health_ops.api.external_ingest.errors import external_ingest_error_body
-out = []
-for raw in json.loads(sys.stdin.read()):
-    body = base64.b64decode(raw)
-    try:
-        BatchEnvelope.model_validate_json(body)
-        out.append([200, "valid"])
-        continue
-    except ValidationError as exc:
-        try:
-            response = JSONResponse(status_code=400, content=external_ingest_error_body(
-                "invalid_envelope", "Malformed batch envelope", [dict(e) for e in exc.errors()]))
-            out.append([400, response.body.decode()])
-            continue
-        except Exception:
-            pass
-    except Exception:
-        pass
-    out.append([500, json.dumps(external_ingest_error_body("internal_error", "Internal Server Error"), separators=(",", ":"))])
-print(json.dumps(out))
-`
-
 // TestDataPlaneEnvelopeParseMatchesFrozenPython compares the data plane's
 // parseEnvelope answers (status and body bytes, written by
 // writeIngestError) with the Python api's on envelopeCorpus.
@@ -328,7 +273,7 @@ func TestDataPlaneEnvelopeParseMatchesFrozenPython(t *testing.T) {
 	}
 	input, _ := json.Marshal(encoded)
 	output := []byte(frozenPython(t, "dataplane-parse.golden.json",
-		programoracle.Program{Name: "data plane envelope parse", Text: pythonDataPlaneParseProgram, Stdin: input})[0])
+		programoracle.Program{Name: "data plane envelope parse", Stdin: input})[0])
 	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
 	var want [][2]any
 	if err := json.Unmarshal(lines[len(lines)-1], &want); err != nil {

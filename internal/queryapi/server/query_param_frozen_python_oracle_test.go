@@ -5,12 +5,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -18,40 +16,13 @@ import (
 // producers import the Python api and its ClickHouse reader module as they
 // are, so the route signatures and the reader SQL are the real ones.
 var serverGoldens = programoracle.Set{
-	Package:  "./internal/queryapi/server/",
 	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
 	Identity: "python 3.14.7\nunicodedata 16.0.0",
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
 		"dedup-sources.golden.json": "550db38800dd3d6c124e5fde250699042faf6ae7ce450badfb4527a12d6c9a4c",
 		"query-params.golden.json":  "6ae1b2cdc65971de9cb655418eedb5c7ae0b60f25b3827c5659be9c75b35af2a",
 	},
 }
-
-// pythonQueryParamProgram answers each (path, query) with the REAL Python
-// api's own request validation: the app is imported as it is,
-// get_current_user is overridden so the request reaches parameter
-// validation, and the route's own signature (date | None, datetime | None,
-// int, ...) produces the status and body. A request that fails validation is
-// a 422 before any endpoint code runs.
-const pythonQueryParamProgram = `
-import json, sys
-# The app logs timestamped lines to stdout while it loads: they go to stderr,
-# so the answer is the only stdout and it is the same in every run.
-answer = sys.stdout
-sys.stdout = sys.stderr
-from fastapi.testclient import TestClient
-from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.main import app
-app.dependency_overrides[get_current_user] = lambda: None
-client = TestClient(app, raise_server_exceptions=False)
-out = []
-for case in json.loads(sys.stdin.read()):
-    response = client.get(case["path"] + "?" + case["query"])
-    out.append({"status": response.status_code, "body": response.text})
-answer.write("RESULT " + json.dumps(out) + "\n")
-`
 
 // TestQueryParamValidationMatchesFrozenPython answers each request with the
 // frozen answer of the real Python api's own request validation and with the
@@ -101,16 +72,9 @@ func TestQueryParamValidationMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	output := serverGoldens.Outputs(t, root, "query-params.golden.json", programoracle.Program{
+	output := serverGoldens.Outputs(t, "query-params.golden.json", programoracle.Program{
 		Name:  "query params",
-		Text:  pythonQueryParamProgram,
 		Stdin: payload,
-		Env:   map[string]string{"OTEL_SDK_DISABLED": "true"},
 	})[0]
 	var answers []struct {
 		Status int    `json:"status"`

@@ -36,7 +36,7 @@ const pagerDutyDisconnectUnconfiguredGoldenDigest = "0f0082dda881b4fe43e504ede26
 func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("disconnect_noclient", "TestPagerDutyDisconnectWithoutClientIDVenueOracle", pagerDutyDisconnectUnconfiguredGoldenDigest))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-disconnect-32-by"
 
 	fake := &pagerDutyDisconnectFakeServer{failTokens: map[string]bool{}}
@@ -57,7 +57,6 @@ func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 		PythonEnv: []string{
 			"PAGER_DUTY_CLIENT_ID=",
 			"SETTINGS_ENCRYPTION_KEY=" + pagerDutyDisconnectVenueEncryptionKey,
-			"VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE=" + fakeServer.URL,
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -142,15 +141,13 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 		"integration_credentials":   `SELECT org_id, provider, name, is_active, (credentials_encrypted IS NULL)::text FROM integration_credentials ORDER BY org_id, name`,
 		"provider_oauth_credential": `SELECT org_id, provider, credential_name FROM provider_oauth_credentials ORDER BY org_id`,
 	} {
-		golden.CompareRows(t, "rows: "+name, func() string { return rows(venue.SourceDB, query) }, rows(venue.GoDB, query))
+		golden.CompareRows(t, "rows: "+name, rows(venue.GoDB, query))
 	}
 
 	// The named difference, asserted on each side.
 	const revocations = `SELECT count(*) FROM provider_oauth_revocations WHERE org_id = '%s' AND provider = 'pagerduty' AND purpose = 'disconnect' AND status = 'pending' AND attempts = 0`
 	connected := orgs["connected"].String()
-	if got := golden.InspectRows(t, "python revocations of the connected org", func() string {
-		return rows(venue.SourceDB, strings.Replace(revocations, "%s", connected, 1))
-	}); got != "0" {
+	if got := golden.InspectRows(t, "python revocations of the connected org"); got != "0" {
 		t.Errorf("Python queued %s revocation rows for the token it dropped, want 0", got)
 	}
 	if got := rows(venue.GoDB, strings.Replace(revocations, "%s", connected, 1)); got != "1" {

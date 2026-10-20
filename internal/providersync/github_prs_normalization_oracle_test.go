@@ -64,12 +64,7 @@ func mustParseOracleTime(t *testing.T, value string) *time.Time {
 // this does and deliberately does not cover.
 func TestGitHubPRSNormalizationMatchesFrozenPythonFunctions(t *testing.T) {
 	output := frozenScriptAnswer(t, scriptOracle{
-		name:   "github-prs-normalization",
-		script: "testdata/python_github_prs_normalization_oracle.py",
-		sources: []string{
-			"src/dev_health_ops/providers/pr_state.py",
-			"src/dev_health_ops/processors/base_git.py",
-		},
+		name: "github-prs-normalization",
 	})
 	var got []struct {
 		ID                string  `json:"id"`

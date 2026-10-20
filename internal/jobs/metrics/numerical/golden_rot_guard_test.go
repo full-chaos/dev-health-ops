@@ -41,12 +41,9 @@ import (
 // the guard still fails when the fixture is edited without recording the producer again.
 func TestRemainingMetricsGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRoot(t)
-	spec := rotguard.Spec("testdata/golden/remaining_metrics_rot_guard.json", "22d5bf8fe0990e9a6b14993844854c2fafb52ece749ed1e790f7cbdce8fec033",
-		"./internal/jobs/metrics/numerical/", "^TestRemainingMetricsGoldenMatchesLivePython$")
-	rendered := []byte(rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/remaining_metrics_rot_guard.json", "22d5bf8fe0990e9a6b14993844854c2fafb52ece749ed1e790f7cbdce8fec033")
+	rendered := []byte(rotguard.Run(t, spec, rotguard.Generator{
 		Name: "remaining metrics golden generator",
-		Path: "tests/fixtures/generate_remaining_metrics_python_golden.py",
-		Args: []string{"--stdout"},
 	})[0])
 
 	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", "remaining_metrics_python_golden.json"))
@@ -76,10 +73,8 @@ func TestRemainingMetricsGoldenMatchesLivePython(t *testing.T) {
 	t.Errorf(
 		"the recorded Python render no longer equals the checked-in golden.\n"+
 			"Either %s was edited by hand or the producer moved, and TestPythonNumericalGoldenParity only proves Go "+
-			"matches the FILE. Regenerate with\n"+
-			"    python tests/fixtures/generate_remaining_metrics_python_golden.py\n"+
-			"review the diff as a real behaviour change -- if Go should follow, change Go too; "+
-			"if it should not, the Python change is the bug -- and record the producer again (the golden's recipe).\n"+
+			"matches the FILE. Review the diff as a real behaviour change -- if Go should follow, change Go too; "+
+			"if it should not, the Python change is the bug -- and record the producer again.\n"+
 			"first differing line: %s",
 		"tests/fixtures/remaining_metrics_python_golden.json",
 		firstDifferingLine(frozen, rendered),

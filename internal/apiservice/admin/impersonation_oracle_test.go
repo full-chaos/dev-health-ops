@@ -25,7 +25,7 @@ import (
 func TestImpersonationStartStopMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("impersonation", t.Name(), "5987024ab34598026aaeee851ff0f3bc025c4f1efd586f40c166c8dc223892be"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("imp")
 	const jwtKey = "venue-oracle-test-secret-key-for-impersonation-flow-32bytes!"
 
@@ -173,9 +173,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, target.membershipID, orgID,
 	t.Log(receipt)
 
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), impersonationAuditQuery(adminID, targetID))
-	if source := golden.CompareRows(t, "audit_logs rows", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), impersonationAuditQuery(adminID, targetID))
-	}, goRows); source == "" {
+	if source := golden.CompareRows(t, "audit_logs rows", goRows); source == "" {
 		t.Error("audit_logs: the query matched no rows on the Python plane; the comparison proves nothing")
 	}
 	compareAuditJSONWithSpacingGap(t, ctx, golden, venue, fmt.Sprintf("user_id = '%s' AND resource_id = '%s'", adminID, targetID), "request_metadata")

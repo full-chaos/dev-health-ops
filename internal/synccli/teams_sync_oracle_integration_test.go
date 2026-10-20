@@ -3,18 +3,15 @@
 package synccli
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -32,9 +29,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-//go:embed testdata/teams_sync_oracle.py
-var teamsSyncOracleProgram string
 
 // fakeGitHub is the one GitHub both planes read: PyGithub (the real Python verb) and the
 // Go catalog. It serves every path either of them asks for from one data set.
@@ -211,20 +205,15 @@ type teamsOracle struct {
 	admin            driver.Conn
 	pythonDatabase   string
 	goDatabase       string
-	pythonHTTPDSN    string
 	goNativeDSN      string
 	goConn           driver.Conn
-	ask              func(map[string]any) map[string]any
 	tablesWrittenAny []string
 
-	// recording is true only while the golden is being recorded: the Python child answers each scenario and
-	// recorded keeps what it did. Otherwise frozen holds those answers and next is the position of the
-	// scenario being compared; cur is the answer of the scenario in hand either way.
-	recording bool
-	recorded  []teamsFrozen
-	frozen    []teamsFrozen
-	next      int
-	cur       *teamsFrozen
+	// frozen holds the answers of the golden and next is the position of the
+	// scenario being compared; cur is the answer of the scenario in hand.
+	frozen []teamsFrozen
+	next   int
+	cur    *teamsFrozen
 }
 
 // teamsFrozen is what the real Python verb did for one scenario, executed once and frozen in the golden: how
@@ -237,13 +226,6 @@ type teamsFrozen struct {
 	Code   string                         `json:"code"`
 	Tables map[string][]map[string]string `json:"tables"`
 }
-
-// teamsPythonTables are the tables the comparison reads on Python's side.
-var teamsPythonTables = []string{"teams", "team_memberships", "team_repo_ownership", "team_project_ownership", "projects"}
-
-// teamsPythonSettings are the constants of the producer's environment: the entries its answers depend on,
-// part of the golden's request.
-var teamsPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1"}
 
 // teamsCorpusKey is the golden's request key: the scenarios' inputs, hashed. A closure (a seed, an assertion)
 // is named by the text it runs, never by its address.
@@ -258,48 +240,11 @@ func teamsCorpusKey(provider string, entries any) []byte {
 
 var teamsUUID4 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-// normalizePythonTeam replaces the values Python generates (see teamsFrozen) by their kind.
-func normalizePythonTeam(row map[string]string) map[string]string {
-	out := map[string]string{}
-	for column, value := range row {
-		switch {
-		case column == "team_uuid" && teamsUUID4.MatchString(value):
-			value = "<uuid4>"
-		case (column == "updated_at" || column == "last_synced") && value != "" && value != "<NULL>":
-			value = "<time>"
-		}
-		out[column] = value
-	}
-	return out
-}
-
-// python runs (recording) or replays (comparing) the legacy verb for the scenario name: afterwards cur holds
-// how it ended and what it wrote. A golden that does not hold the scenario at this position is a corpus that
-// changed without a re-record.
-func (o *teamsOracle) python(name string, request map[string]any) {
+// python selects the frozen answer of the legacy verb for the scenario name: afterwards cur holds how it
+// ended and what it wrote. A golden that does not hold the scenario at this position is a corpus that
+// changed.
+func (o *teamsOracle) python(name string) {
 	o.t.Helper()
-	if o.recording {
-		answer := o.ask(request)
-		value := func(key string) string {
-			if item, ok := answer[key].(map[string]any); ok {
-				return fmt.Sprint(item["v"])
-			}
-			return ""
-		}
-		record := teamsFrozen{Name: name, Stage: value("stage"), Code: value("code"), Tables: map[string][]map[string]string{}}
-		for _, table := range teamsPythonTables {
-			rows := o.rows(o.pythonDatabase, table, "org-1")
-			if table == "teams" {
-				for i := range rows {
-					rows[i] = normalizePythonTeam(rows[i])
-				}
-			}
-			record.Tables[table] = rows
-		}
-		o.recorded = append(o.recorded, record)
-		o.cur = &o.recorded[len(o.recorded)-1]
-		return
-	}
 	if o.next >= len(o.frozen) || o.frozen[o.next].Name != name {
 		o.t.Fatalf("the golden does not hold the scenario %q at position %d: the corpus changed without a re-record", name, o.next)
 	}
@@ -318,7 +263,7 @@ func (o *teamsOracle) pythonRows(table string) []map[string]string {
 }
 
 // newTeamsOracle builds the two ClickHouse databases and the migration chain both planes write to. It starts no
-// Python: a recording asks startPython for the child, a comparison replays the golden.
+// Python.
 func newTeamsOracle(t *testing.T) *teamsOracle {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
@@ -362,10 +307,6 @@ func newTeamsOracle(t *testing.T) *teamsOracle {
 			t.Fatalf("clone %s: %v", name, err)
 		}
 	}
-	httpDSN, err := containers.ClickHouseHTTPDSN(ctx, instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	goURL := *nativeURL
 	goURL.Path = "/" + goDatabase
 	goConn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(goURL.String()))
@@ -375,50 +316,7 @@ func newTeamsOracle(t *testing.T) *teamsOracle {
 	t.Cleanup(func() { _ = goConn.Close() })
 
 	return &teamsOracle{t: t, ctx: ctx, admin: admin, pythonDatabase: pythonDatabase, goDatabase: goDatabase,
-		pythonHTTPDSN: httpDSN, goNativeDSN: goURL.String(), goConn: goConn, tablesWrittenAny: names}
-}
-
-// startPython starts the legacy verb's long-lived child (the producer only), in the closed environment the
-// producer gives it: the fixed set of the harness, the declared constants (teamsPythonSettings) and nothing of
-// the test process's environment.
-func (o *teamsOracle) startPython(producer *venueoracle.Producer, program string) {
-	t := o.t
-	t.Helper()
-	command, err := producer.Command(o.ctx, teamsPythonSettings, nil, "-c", program)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stderr strings.Builder
-	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = stdin.Close(); _ = command.Wait() })
-	reader := bufio.NewReaderSize(stdout, 1<<20)
-	o.recording = true
-	o.ask = func(request map[string]any) map[string]any {
-		raw, _ := json.Marshal(request)
-		if _, err := io.WriteString(stdin, string(raw)+"\n"); err != nil {
-			t.Fatalf("python stdin: %v", err)
-		}
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			t.Fatalf("python answer: %v\n%s", err, stderr.String())
-		}
-		var answer map[string]any
-		if err := json.Unmarshal(line, &answer); err != nil {
-			t.Fatalf("python answer %q: %v", line, err)
-		}
-		return answer
-	}
+		goNativeDSN: goURL.String(), goConn: goConn, tablesWrittenAny: names}
 }
 
 func (o *teamsOracle) truncateAll() {
@@ -495,28 +393,8 @@ func (o *teamsOracle) runGitHub(fake *fakeGitHub, orgID, owner, token string, pr
 		prepare()
 		o.requireSeedsOlderThanTheFrozenClock()
 	}
-	viaEnv := strings.HasPrefix(token, "env:")
-	token = strings.TrimPrefix(token, "env:")
-	argv := []string{"--org", orgID, "sync", "teams", "--provider", "github"}
-	if owner != "" { // a scenario with no owner omits the flag in both planes
-		argv = append(argv, "--owner", owner)
-	}
-	pythonEnv := map[string]string{"CLICKHOUSE_URI": o.pythonHTTPDSN}
-	if sc != nil && sc.envToken != "" {
-		pythonEnv["GITHUB_TOKEN"] = sc.envToken
-	}
-	if viaEnv {
-		pythonEnv["GITHUB_TOKEN"] = token
-	} else if token != "" { // a scenario with no token sends no --auth in either plane
-		argv = append(argv, "--auth", token)
-	}
-	argv = append(argv, extra...)
-	o.python(sc.name, map[string]any{"argv": argv, "github_base": fake.base(), "env": pythonEnv})
+	o.python(sc.name)
 	run := githubRun{pythonStage: o.cur.Stage, pythonCode: o.cur.Code}
-	if o.recording {
-		return run // the recording asks Python only: the Go plane runs in the comparison
-	}
-
 	run.goCode, run.goStdout, run.goStderr = o.runGo(fake, orgID, owner, token, sc, extra...)
 	return run
 }
@@ -1124,28 +1002,15 @@ const teamsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 // openTeamsGolden opens the golden of one provider's teams oracle and returns the answers frozen in it (the
 // legacy verb's, one per scenario) once it has been recorded by executing the real verb on teamsPythonBuild.
-func openTeamsGolden(t *testing.T, provider, name, pin, program string, key []byte, record func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen) ([]teamsFrozen, *venueoracle.Golden) {
+func openTeamsGolden(t *testing.T, provider, pin string, key []byte) ([]teamsFrozen, *venueoracle.Golden) {
 	t.Helper()
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/teams_" + provider + ".json",
 		PythonBuild: teamsPythonBuild,
 		SHA256:      pin,
-		Recipe: "git worktree add --detach $DIR " + teamsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^" + name + "$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
-	request := venueoracle.ProgramRequest("teams "+provider+" corpus", program, key, teamsPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		body, err := json.Marshal(record(t, producer))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
-	})
+	request := venueoracle.ProgramRequest("teams "+provider+" corpus", key)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen []teamsFrozen
 	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &frozen); err != nil {
@@ -1160,16 +1025,7 @@ func openTeamsGolden(t *testing.T, provider, name, pin, program string, key []by
 // on teamsPythonBuild and are frozen in testdata/golden/teams_github.json (the recipe regenerates them by
 // execution). The rows differ by design in the columns teamsRules names; everything else must be equal.
 func TestSyncTeamsGitHubMatchesFrozenPython(t *testing.T) {
-	frozen, golden := openTeamsGolden(t, "github", "TestSyncTeamsGitHubMatchesFrozenPython", "b8883eb487b4a98f4670d496c65cbae5e6553f0e6bd8535fcfd3f5baceedc4f7", teamsSyncOracleProgram, githubCorpusKey(),
-		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
-			o := newTeamsOracle(t)
-			o.startPython(producer, teamsSyncOracleProgram)
-			fake := newFakeGitHub(t)
-			for _, sc := range githubScenarios() {
-				o.arrangeAndRunGitHub(sc, fake)
-			}
-			return o.recorded
-		})
+	frozen, golden := openTeamsGolden(t, "github", "b8883eb487b4a98f4670d496c65cbae5e6553f0e6bd8535fcfd3f5baceedc4f7", githubCorpusKey())
 	o := newTeamsOracle(t)
 	o.frozen = frozen
 	fake := newFakeGitHub(t)

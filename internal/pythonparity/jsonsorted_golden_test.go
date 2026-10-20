@@ -22,7 +22,7 @@ func TestMarshalPythonJSONSortedMatchesPythonGolden(t *testing.T) {
 		t.Fatalf("glob goldens: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no json_sorted__*.json goldens found -- run generate_json_sorted_golden.py")
+		t.Fatal("no json_sorted__*.json goldens found")
 	}
 
 	for _, path := range files {

@@ -8,7 +8,6 @@ import (
 
 // templateFiles holds the HTML templates this package can render. Each is a
 // byte-for-byte copy of src/dev_health_ops/templates/email/<name>.html --
-// TestEmbeddedTemplatesMatchThePythonOnes fails when either side drifts --
 // because `//go:embed` cannot reach outside the package directory.
 //
 //go:embed templates/*.html

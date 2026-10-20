@@ -1,11 +1,9 @@
 package apiservice
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -13,61 +11,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyheaders"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// pythonCORSProgram builds the api's own CORSMiddleware (its keyword
-// arguments read from register_middleware's app, never restated) around a
-// route that sets 0, 1 or 2 Vary headers, per origin configuration, and
-// answers every case through the installed Starlette.
-const pythonCORSProgram = `
-import json, os, sys
-from fastapi import FastAPI
-from starlette.applications import Starlette
-from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import Response
-from starlette.routing import Route
-from starlette.testclient import TestClient
-import starlette
-
-def vary_route(request):
-    count = int(request.query_params.get("vary", "0"))
-    response = Response("ok", media_type="text/plain")
-    for value in ["Accept-Encoding", "X-Two"][:count]:
-        response.raw_headers.append((b"vary", value.encode()))
-    return response
-
-payload = json.loads(sys.stdin.read())
-out = {"starlette": starlette.__version__, "configs": {}}
-for name, origins in payload["configs"].items():
-    if origins is None:
-        os.environ.pop("CORS_ALLOWED_ORIGINS", None)
-    else:
-        os.environ["CORS_ALLOWED_ORIGINS"] = origins
-    import importlib, dev_health_ops.api._middleware as middleware
-    from dev_health_ops.api.middleware.rate_limit import limiter
-    importlib.reload(middleware)
-    api = FastAPI()
-    api.state.limiter = limiter
-    middleware.register_middleware(api)
-    kwargs = [m for m in api.user_middleware if m.cls is CORSMiddleware][0].kwargs
-    app = Starlette(routes=[Route("/v", vary_route, methods=["GET", "POST", "OPTIONS"])])
-    app.add_middleware(CORSMiddleware, **kwargs)
-    client = TestClient(app)
-    answers = []
-    for case in payload["cases"]:
-        r = client.request(case["method"], "/v?vary=%d" % case["vary"], headers=case["headers"])
-        headers = {}
-        for key, value in r.headers.multi_items():
-            key = key.lower()
-            if key == "vary" or key.startswith("access-control-"):
-                headers.setdefault(key, []).append(value)
-        answers.append({"status": r.status_code, "headers": headers})
-    out["configs"][name] = {"allow_origins": list(kwargs["allow_origins"]), "answers": answers}
-print(json.dumps(out))
-`
 
 type corsCase struct {
 	Method  string            `json:"method"`
@@ -76,17 +21,13 @@ type corsCase struct {
 }
 
 // TestCORSMatchesFrozenStarlette pins the Go CORS middleware against the
-// installed Starlette CORSMiddleware built with the api's own arguments:
+// Starlette CORSMiddleware answers, frozen from the build that carried the api's own arguments:
 // every Origin shape (absent, empty, allowed, disallowed) crossed with 0, 1
 // or 2 handler-set Vary headers, on a simple request and on a preflight, for
 // the default, list and "*" origin configurations. Compared: status, every
-// Vary value and every Access-Control-* header. It imports the api's own
-// middleware module, so it needs the full project environment: it runs in
-// the venue-oracles job, which discovers it by name and requires its proof.
+// Vary value and every Access-Control-* header.
 func TestCORSMatchesFrozenStarlette(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, programGolden("cors-starlette", t.Name(), "b9b95dc21c75108e286bb853e53a8158b7b50aae8fec00a9d94c72828cb09074"))
-	_, file, _, _ := moduleroot.Caller(0)
-	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
 
 	configs := map[string]*string{
 		"default": nil,
@@ -114,20 +55,8 @@ func TestCORSMatchesFrozenStarlette(t *testing.T) {
 		}
 	}
 	input, _ := json.Marshal(map[string]any{"configs": configs, "cases": cases})
-	request := venueoracle.ProgramRequest("cors matrix", pythonCORSProgram, input, producerEnv)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		command, err := producer.Command(context.Background(), producerEnv, nil, "-c", pythonCORSProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = strings.NewReader(string(input))
-		output, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("live Starlette: %v", pyoracle.RunError(command.Path, err, output))
-		}
-		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
-	})
+	request := venueoracle.ProgramRequest("cors matrix", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	output := []byte(answers[0].Body)
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")

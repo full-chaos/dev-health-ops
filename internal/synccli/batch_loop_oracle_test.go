@@ -1,13 +1,9 @@
 package synccli
 
 import (
-	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -15,12 +11,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-//go:embed testdata/batch_loop_oracle.py
-var batchLoopOracleProgram string
 
 type loopRepo struct {
 	Name string `json:"name"`
@@ -139,14 +131,12 @@ type loopRecorded struct {
 // the Python CLI.
 const batchLoopPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-var batchLoopPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-
 // TestBatchLoopMatchesFrozenPython runs the batch LOOP of `dho sync <target> --search` and compares each run's
 // shape with what the REAL process_github_repos_batch / process_gitlab_projects_batch did with the network and
-// the store replaced (testdata/batch_loop_oracle.py): the same scripted repositories, batch size and
+// the store replaced: the same scripted repositories, batch size and
 // concurrency go to both, and the shape of each run (which repositories ran, how many at once, whether the
 // batches ran in turn) must match. The answers were executed once on batchLoopPythonBuild and are frozen in
-// testdata/golden/batch_loop.json (the recipe regenerates them by execution); the corpus is the golden's key.
+// testdata/golden/batch_loop.json; the corpus is the golden's key.
 //
 // Named divergences, asserted where they occur rather than compared:
 //   - a repository that fails on its own: dev-hops logs it and exits 0, dho reports it
@@ -154,18 +144,11 @@ var batchLoopPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENA
 //   - a rate-limit error: dev-hops raises out of the batch (the run ends, exit 1) while
 //     dho, whose routes back off on their own, records the failure and runs the rest (exit 1).
 func TestBatchLoopMatchesFrozenPython(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/batch_loop.json",
 		PythonBuild: batchLoopPythonBuild,
 		SHA256:      "294e3556daa8a229e271ee4505f8fb97759ef1208c842538aaa90b9f4c77ecd0",
-		Recipe: "git worktree add --detach $DIR " + batchLoopPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestBatchLoopMatchesFrozenPython$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	corpus := loopCorpus()
 	var input strings.Builder
@@ -177,45 +160,8 @@ func TestBatchLoopMatchesFrozenPython(t *testing.T) {
 		input.Write(line)
 		input.WriteByte('\n')
 	}
-	request := venueoracle.ProgramRequest("batch loop corpus", batchLoopOracleProgram, []byte(input.String()), batchLoopPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		command, err := producer.Command(context.Background(), batchLoopPythonSettings, nil, "-c", batchLoopOracleProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = strings.NewReader(input.String())
-		output, err := command.Output()
-		if err != nil {
-			var stderr []byte
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				stderr = exitErr.Stderr
-			}
-			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, stderr))
-		}
-		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-		if len(lines) != len(corpus) {
-			t.Fatalf("python answered %d for %d cases", len(lines), len(corpus))
-		}
-		recorded := make([]loopRecorded, len(corpus))
-		for index, c := range corpus {
-			var answer loopAnswer
-			if err := json.Unmarshal([]byte(lines[index]), &answer); err != nil {
-				t.Fatalf("decode python answer %d: %v", index, err)
-			}
-			order := make([]string, len(c.Repos))
-			for i, r := range c.Repos {
-				order[i] = r.Name
-			}
-			batch, _ := new(big.Int).SetString(c.BatchSize, 10)
-			recorded[index] = loopRecorded{Stage: answer.Stage, Type: answer.Type, Shape: shapeOf(answer.Events, order, max(1, clampInt(batch)))}
-		}
-		body, err := json.Marshal(recorded)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("batch loop corpus", []byte(input.String()))
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen []loopRecorded
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {

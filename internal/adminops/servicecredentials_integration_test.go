@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,7 +18,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -332,7 +330,7 @@ func credGo(t *testing.T, db *database, args []string) (int, string, string) {
 	if strings.Contains(stdout.String()+stderr.String(), "postgres://") {
 		t.Fatal("the output carries the DSN")
 	}
-	return code, stdout.String(), credStderr(code, stderr.String(), false)
+	return code, stdout.String(), credStderr(code, stderr.String())
 }
 
 // credStderr reduces what a run said on stderr to what both producers can be compared on. Exit 0
@@ -340,20 +338,12 @@ func credGo(t *testing.T, db *database, args []string) (int, string, string) {
 // text, Go's flag text) and compare as such. A refusal (exit 1) compares by message: a Python
 // ValueError's message is the text dho puts in its JSON error's detail; any other failure (a
 // database error) compares as one class.
-func credStderr(code int, text string, python bool) string {
+func credStderr(code int, text string) string {
 	switch code {
 	case 0:
 		return ""
 	case 2:
 		return "<usage error>"
-	}
-	if python {
-		lines := strings.Split(strings.TrimSpace(text), "\n")
-		last := lines[len(lines)-1]
-		if message, ok := strings.CutPrefix(last, "ValueError: "); ok {
-			return message
-		}
-		return "<failure>"
 	}
 	var payload struct {
 		Error struct{ Code, Detail string } `json:"error"`
@@ -367,30 +357,6 @@ func credStderr(code int, text string, python bool) string {
 		}
 	}
 	return "<no error line>"
-}
-
-// credPythonProgram is the entry point the producer runs: the real dev-hops CLI.
-const credPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-
-func credPython(t *testing.T, db *database, args []string) (int, string, string) {
-	t.Helper()
-	command := adminCommand(t, db, adminPythonSettings, nil, append([]string{"-c", credPythonProgram, "service-credentials"}, args...)...)
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
-	code := 0
-	if exit, ok := err.(*exec.ExitError); ok {
-		code = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(command.Args[0], err, []byte(stderr.String())))
-	}
-	if code == 1 && strings.Contains(stderr.String(), "Traceback") {
-		// A ValueError (or a database error) is a traceback, exit 1, nothing on stdout.
-		if stdout.Len() != 0 {
-			t.Fatalf("python printed %q before its traceback", stdout.String())
-		}
-	}
-	return code, stdout.String(), credStderr(code, stderr.String(), true)
 }
 
 func (db *database) credSession(t *testing.T, run func(*testing.T, *database, []string) (int, string, string)) ([]stepResult, map[int]map[string]bool) {
@@ -508,11 +474,11 @@ func compareCredentials(t *testing.T, got, want []stepResult, validity map[int]m
 // TestServiceCredentialsMatchTheFrozenPythonOutput runs the script on a real PostgreSQL at the migration head
 // and compares every step (exit, stdout, stderr, the rows left) with what the REAL `dev-hops
 // service-credentials` verbs did. The answers were executed once on adminPythonBuild and are frozen in
-// testdata/golden/svc_verbs.json (the recipe regenerates them by execution); the script is part of
+// testdata/golden/svc_verbs.json; the script is part of
 // the golden's key. Printed tokens are stored as typed placeholders (<svc_acr_token>, <svc_worker_token>)
 // proven against the rows' hashes, never as values; clock times are one-minute buckets.
 func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
-	golden, root := adminGolden(t, "svc_verbs", "a5724d54fec6a597166225fb3d825b900e527b0cb2e1b3b40463be5031bfa853", "TestServiceCredentialsMatchTheFrozenPythonOutput")
+	golden := adminGolden(t, "svc_verbs", "a5724d54fec6a597166225fb3d825b900e527b0cb2e1b3b40463be5031bfa853")
 	script := make([]map[string]any, len(credScript))
 	for index, s := range credScript {
 		script[index] = map[string]any{"args": s.args, "sql": s.sql}
@@ -521,16 +487,8 @@ func TestServiceCredentialsMatchTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("service-credentials script", credPythonProgram, input, adminPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		useAdminProducer(t, producer)
-		steps, _ := startDatabase(t).credSession(t, credPython)
-		body, err := json.Marshal(steps)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("service-credentials script", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen []stepResult
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {

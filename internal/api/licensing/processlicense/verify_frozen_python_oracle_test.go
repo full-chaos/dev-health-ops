@@ -9,49 +9,13 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
-
-// pythonLicenseProgram is the real producer and the real verifier. Stdin is
-// {"sign": [[seed_b64, org, tier, issued_at, days], ...], "judge": [[public_b64,
-// license, now], ...]}; licenses naming "@<n>" are the n-th license the sign
-// step produced. The answer names each signed license by its digest only
-// ({"sha256", "length"}): the text is a signed token and is not stored.
-// Signing is licensing.generator.sign_license; judging is
-// what LicenseManager.initialize does with the pair (LicenseValidator(public)
-// then .validate(license)), at a fixed clock, with any exception -- which the
-// api lifespan swallows into the community tier -- answered as not in force.
-// Each judgement is [in_force, tier, in_grace_period, features].
-const pythonLicenseProgram = `
-import hashlib, json, sys
-from dev_health_ops.licensing.generator import sign_license
-from dev_health_ops.licensing.validator import LicenseValidator
-request = json.loads(sys.stdin.read())
-signed = [sign_license(seed, org_id=org, tier=tier, issued_at=issued, duration_days=days, license_id="lic")
-          for seed, org, tier, issued, days in request["sign"]]
-judged = []
-for public, license, now in request["judge"]:
-    if license.startswith("@"):
-        license = signed[int(license[1:])]
-    try:
-        result = LicenseValidator(public).validate(license, current_time=now)
-    except Exception:
-        judged.append([False, None, False, None])
-        continue
-    if not result.valid:
-        judged.append([False, None, False, None])
-        continue
-    judged.append([True, result.payload.tier.value, result.in_grace_period, result.payload.features])
-digests = [{"sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "length": len(text.encode("utf-8"))} for text in signed]
-print(json.dumps({"signed": digests, "judged": judged}))
-`
 
 type judgeCase struct {
 	name, public, license string
@@ -280,12 +244,7 @@ func TestVerifierMatchesFrozenPythonLicenseValidator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
-	output := verifierGoldens.Outputs(t, root, "license-verifier.golden.json", programoracle.Program{Name: "license verifier", Text: pythonLicenseProgram, Stdin: stdin})[0]
+	output := verifierGoldens.Outputs(t, "license-verifier.golden.json", programoracle.Program{Name: "license verifier", Stdin: stdin})[0]
 	var answer struct {
 		Signed []struct {
 			SHA256 string `json:"sha256"`
@@ -352,12 +311,8 @@ func TestVerifierMatchesFrozenPythonLicenseValidator(t *testing.T) {
 // distributions under them, so Identity names those distributions. A golden
 // recorded by another producer is refused.
 var verifierGoldens = programoracle.Set{
-	Package:       "./internal/api/licensing/processlicense/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5\npynacl 1.6.2",
-	Distributions: []string{"pydantic", "pydantic-core", "pynacl"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5\npynacl 1.6.2",
 	Pins: map[string]string{
 		"license-verifier.golden.json": "ef24930f4da7843b34874367780476a43350c2f7df1442641e766f2921fe6d69",
 	},

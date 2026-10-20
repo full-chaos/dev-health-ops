@@ -268,7 +268,7 @@ func scenarios() []scenario {
 func TestAdminSetupStatusVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, setupGolden(t.Name(), "cbc3024e22b98a2da6d47942c74ec269917b484756f4ddd4e54aa37fdefa1dc8"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := stableIDs("setup")
 	const jwtKey = "venue-oracle-test-secret-key-for-setup-status-32-by"
 	cases := scenarios()
@@ -330,8 +330,6 @@ func setupGolden(test, digest string) venueoracle.GoldenSpec {
 		Path:        "testdata/golden/setup_status.json",
 		PythonBuild: setupPythonBuild,
 		SHA256:      digest,
-		Recipe: "git worktree add --detach $DIR " + setupPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/adminsetupvenue/ -test '^" + test + "$' -python-root $DIR",
 	}
 }
 

@@ -53,9 +53,8 @@ func openVenueGolden(t *testing.T, name string) (*venueoracle.Golden, string) {
 		Path:        filepath.Join("testdata", "golden", name),
 		PythonBuild: venueGoldenPythonBuild,
 		SHA256:      pin,
-		Recipe:      recipe,
 	})
-	return golden, golden.PythonRoot(t, root)
+	return golden, root
 }
 
 // oracleDatabase is the per-run environment of a program that reads the Python

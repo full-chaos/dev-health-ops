@@ -139,7 +139,6 @@ internal/teamresolve
 internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/fakehttp
-internal/testsupport/goldenscan
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed
@@ -147,8 +146,6 @@ internal/testsupport/poolpg
 internal/testsupport/programoracle
 internal/testsupport/providersyncschema
 internal/testsupport/pydanticecho
-internal/testsupport/pyoracle
-internal/testsupport/recordedfiles
 internal/testsupport/venueoracle
 internal/workitemcontract
 third_party/vendor/atlassian/atlassian
@@ -163,5 +160,4 @@ third_party/vendor/atlassian/atlassian/graph/mappers
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
-~internal/scheduler/sync/testdata
 ~internal/testsupport/chschema/testdata

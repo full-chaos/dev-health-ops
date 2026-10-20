@@ -284,7 +284,7 @@ func runOwnership(t *testing.T, golden *venueoracle.Golden, cases []scenario, wi
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx := context.Background()
 	idSeq = 0 // each oracle numbers its ids from 1, whichever tests ran before it
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-ownership-32-bytes!"
 	all := make([]ids, len(cases))
 	for i := range cases {

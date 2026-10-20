@@ -35,10 +35,8 @@ const baselineStatesSHA256 = "7ca7170d46bd7280d52b9f45979d53ae9da8d968df4337a52f
 // capture is a drift check.
 const updateEnv = "DHO_PG_BASELINE_UPDATE"
 
-// upgradeProgram runs the Python upgrade the migrate Job runs
-// (`dev-hops migrate postgres`: _run_upgrade) against one database, once per
-// revision named after the URI ("head" for the whole chain, "0138" to stop at a
-// revision), with no River step (MIGRATION_DATABASE_URI is unset).
+// upgradeProgram is a field of the downgrade golden's request (its digest is part of the golden key). Nothing
+// executes it: no Python runs, the answers are frozen.
 const upgradeProgram = `
 import argparse, sys
 from dev_health_ops.db import normalize_async_postgres_uri

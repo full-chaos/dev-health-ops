@@ -3,7 +3,6 @@
 package adminllmvenue
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -26,10 +25,6 @@ func goldenSpec(file, test, digest string) venueoracle.GoldenSpec {
 		Path:        "testdata/" + file + ".json",
 		PythonBuild: pythonBuild,
 		SHA256:      digest,
-		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s; then from the repository root: "+
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/adminllmvenue/ -test '^%s$' -python-root $DIR "+
-			"(records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-			pythonBuild, test),
 	}
 }
 

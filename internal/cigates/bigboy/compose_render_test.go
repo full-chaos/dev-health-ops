@@ -1,6 +1,7 @@
 package bigboy_test
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"regexp"
@@ -8,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -246,6 +249,9 @@ func composeRender(g *guard, in composeIn) composeOut {
 		sort.Strings(errs)
 		return composeOut{err: strings.Join(errs, "\n")}
 	}
+	if msg := composeSchemaError(g.read(composeFile), env); msg != "" {
+		return composeOut{err: "compose schema: " + msg}
+	}
 	out := composeOut{top: raw, services: map[string]doc{}}
 	for name, s := range mp(raw["services"]) {
 		svc := mp(s)
@@ -455,4 +461,25 @@ func composeSortedStrs(in []string) []string {
 	out := append([]string(nil), in...)
 	sort.Strings(out)
 	return out
+}
+
+// composeSchemaError loads the file with the Compose spec loader (the library docker compose uses): schema validation,
+// interpolation against env, normalisation and the cross-reference consistency check, with every profile enabled so a
+// defect in an inactive service is seen too. It returns the loader's error, or "" for a valid file.
+func composeSchemaError(content string, env map[string]string) string {
+	details := types.ConfigDetails{
+		WorkingDir:  "/nonexistent-project-dir",
+		ConfigFiles: []types.ConfigFile{{Filename: "compose.yml", Content: []byte(content)}},
+		Environment: env,
+	}
+	_, err := loader.LoadWithContext(context.Background(), details, func(o *loader.Options) {
+		o.SetProjectName("bigboy", true)
+		o.SkipResolveEnvironment = true
+		o.SkipResolveLabels = true
+		o.Profiles = []string{"*"}
+	})
+	if err != nil {
+		return err.Error()
+	}
+	return ""
 }

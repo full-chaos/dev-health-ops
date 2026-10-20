@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -159,11 +160,28 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 	return nil
 }
 
-func passwordRefusal(password string, applyPolicy bool) []string {
-	if applyPolicy {
+// Password bounds, in code points and bytes. go-api's reset model required 8
+// to 128 characters; bcrypt reads at most 72 bytes.
+const (
+	minPasswordRunes = 8
+	maxPasswordRunes = 128
+)
+
+// passwordRefusal is the one password policy of the flows that set a password,
+// applied before anything is consumed or written. strength adds the strength
+// policy that go-api applies on register and change (its violations come
+// first); every flow gets the bounds.
+func passwordRefusal(password string, strength bool) []string {
+	if strength {
 		if v := passwordpolicy.Validate(password); len(v) > 0 {
 			return v
 		}
+	}
+	switch n := utf8.RuneCountInString(password); {
+	case n < minPasswordRunes:
+		return []string{"Password must be at least 8 characters long"}
+	case n > maxPasswordRunes:
+		return []string{"Password must be no more than 128 characters long"}
 	}
 	if len(password) > MaxPasswordBytes {
 		return []string{ViolationTooLong}
@@ -213,6 +231,9 @@ func (f *Flows) Verify(ctx context.Context, secret string) (FlowOutcome, error) 
 		return FlowOutcome{}, err
 	}
 	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposeEmailVerification, TokenHash: sha256.Sum256([]byte(secret))})
+	if errors.Is(err, ErrLinkSuperseded) {
+		return FlowOutcome{Kind: FlowInvalidToken}, nil
+	}
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: redeeming a verification link: %w", err)
 	}
@@ -267,6 +288,9 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
 	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposePasswordReset, TokenHash: sha256.Sum256([]byte(secret))})
+	if errors.Is(err, ErrLinkSuperseded) {
+		return FlowOutcome{Kind: FlowInvalidToken}, nil
+	}
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: redeeming a reset link: %w", err)
 	}

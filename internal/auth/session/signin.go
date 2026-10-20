@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/useragent"
 )
 
 // CreateAudited is Create with event committed in the same transaction
@@ -49,7 +50,8 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 
 // insertSession writes a session and its first refresh credential, the rows
 // Create writes, inside the caller's transaction. The session's client_ip is
-// the request's client address, when one is bound.
+// the request's client address and its user_agent the request's user agent,
+// when they are bound.
 func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string) (Issued, error) {
 	credential, err := newCredential()
 	if err != nil {
@@ -70,14 +72,14 @@ func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uu
 	// effective expiry (see sessionColumns).
 	var sessionID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr, client_ip)
+		INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr, client_ip, user_agent)
 		SELECT p.id, $2::uuid, $3, t.at, t.at, t.at,
 		       CASE WHEN $4::double precision > 0 THEN t.at + make_interval(secs => $4::double precision) ELSE 'infinity' END,
-		       t.at, $5, $6::inet
+		       t.at, $5, $6::inet, $7
 		FROM `+s.q+`.principals p, (SELECT clock_timestamp() AS at) t
 		WHERE p.id = $1 AND p.disabled_at IS NULL
 		RETURNING id::text`,
-		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr, clientaddr.Text(ctx)).Scan(&sessionID)
+		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr, clientaddr.Text(ctx), useragent.Text(ctx)).Scan(&sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Issued{}, ErrPrincipalUnavailable
 	}

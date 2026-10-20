@@ -7,7 +7,7 @@
     "That table is dropped (alembic 0147, CHAOS-8706); the pin still names the",
     "schema that proof receipts and acr vendoring were made against.",
     "",
-    "ci/check_go_api_routing_digest.py fails when this value does not match the",
+    "`go test ./internal/goapicli/routing` (TestSchemaDigestPinMatchesTheSDLAndIsInTheHistoryTable) fails when this value does not match the",
     "digest computed from schema.graphql, and again when the value is not",
     "recorded in the Schema-digest history table of",
     "docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md -- so",

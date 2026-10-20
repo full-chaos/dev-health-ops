@@ -210,7 +210,7 @@ include-package-data = true
 # _current_schema_digest until the routing-enablement change moved it to its
 # own stdlib-only module so the CLI and CI checker can import it; same file,
 # same read, same packaging requirement -- and now ALSO read by
-# `dev-hops go-api routing` and ci/check_go_api_routing_digest.py.) Caught by codex round 1 on #2204 before it shipped
+# `dev-hops go-api routing` and the digest pin test.) Caught by codex round 1 on #2204 before it shipped
 # (tests/tooling/test_contract_artifact_packaging.py's RUNTIME_CONTRACT_TREES
 # now covers this tree too).
 "contracts/graphql/v1" = [

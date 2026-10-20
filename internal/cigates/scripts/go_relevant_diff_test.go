@@ -12,7 +12,7 @@ import (
 
 // CHAOS-10174 PR C: Go port of tests/tooling/test_go_relevant_diff.py. ci/go_relevant_diff.sh is the diff-range
 // producer the Go-relevance decider consumes; a wrong range yields a plausible, non-empty, WRONG file list.
-// The three matcher tests of the Python file drove ci/go_relevance.py, which no workflow calls any more; the live
+// The three matcher tests of the Python file drove the Python decider, which is deleted; the live
 // decider is ci/go_relevance.sh (internal/relevancedecider pins its decisions), so the same stdin-format contract is
 // executed against it here.
 

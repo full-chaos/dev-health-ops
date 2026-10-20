@@ -266,7 +266,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t kept < <(grep -v '^[[:space:]]*#' ci/kept_python_tests.txt | grep -v '^[[:space:]]*$')
-          if [ "${#kept[@]}" -lt 11 ]; then
+          if [ "${#kept[@]}" -lt 9 ]; then
             echo "ci/kept_python_tests.txt lists only ${#kept[@]} files: a short or empty list would run nothing (or everything)" >&2
             exit 1
           fi

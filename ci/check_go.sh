@@ -3217,6 +3217,8 @@ check_auth_race() {
 AUTH_RACE_MARKER="AUTH_RACE_EXECUTED"
 AUTH_RACE_PACKAGES=(
   ./internal/auth/session
+  ./internal/auth/identity
+  ./internal/auth/identity/local
 )
 check_auth_race_integration() {
   local pkg output want got total=0

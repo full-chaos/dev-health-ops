@@ -86,6 +86,7 @@ var heldBy = map[string]string{
 var namesOnly = map[string]struct{ reader, why string }{
 	"internal/providersync/":                                    {"", "sync writers and destinations"},
 	"internal/jobs/metrics/daily/":                              {"", "daily family writers"},
+	"internal/cigates/metricsproof/proof.go":                    {"", "executed-proof readback of the rows one CI run wrote: table names of its family maps, no product read"},
 	"internal/jobs/metrics/workitemengine/":                     {"", "compute and insert of the work item engine rows (writer)"},
 	"internal/teamkeytables/teamkeytables.go":                   {"", "the registry of the tables and their measures"},
 	"internal/storage/clickhouse/liverow/liverow.go":            {"", "the reader side of the rule"},

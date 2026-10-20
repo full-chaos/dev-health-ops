@@ -1,0 +1,124 @@
+{
+  "cicd": {
+    "table": "cicd_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 10,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  },
+  "deploy": {
+    "table": "deploy_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 10,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  },
+  "testops_pipeline": {
+    "table": "testops_pipeline_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 11,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  },
+  "testops_test": {
+    "table": "testops_test_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 11,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  },
+  "testops_coverage": {
+    "table": "testops_coverage_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 5,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  },
+  "dora": {
+    "table": "dora_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 72,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  },
+  "repo_user_commit": {
+    "table": "repo_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 10,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  },
+  "team_wellbeing": {
+    "table": "team_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 7,
+    "teams_with_rows": [
+      "core"
+    ]
+  },
+  "team_cognitive_load": {
+    "table": "team_cognitive_load_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 2,
+    "teams_with_rows": [
+      "core"
+    ]
+  },
+  "compounding_risk": {
+    "table": "compounding_risk_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 8,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  },
+  "compounding_risk_team": {
+    "table": "compounding_risk_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 1,
+    "teams_with_rows": [
+      "core"
+    ]
+  },
+  "ic_finalize": {
+    "table": "user_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 111,
+    "repo_ids_outside_org": []
+  },
+  "work_item_issue_type": {
+    "table": "issue_type_metrics_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 29,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  },
+  "work_item_investment": {
+    "table": "work_item_completion_daily",
+    "org_id": "c0ffee00-dead-4bee-8bad-f00dfeedface",
+    "rows_written": 9,
+    "repos_with_rows": [
+      "c3db4b11-d67a-5eed-a7b3-8f727c97be18"
+    ],
+    "repo_ids_outside_org": []
+  }
+}
+
+OK: 14 family(ies) produced rows for org c0ffee00-dead-4bee-8bad-f00dfeedface, all within its 1 live repo id(s).

@@ -4,10 +4,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,30 +35,11 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-func skipDir(name string) bool {
-	return name == ".git" || name == "node_modules" || name == "vendor" || name == ".venv"
-}
-
 func goFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if path != root && skipDir(entry.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasSuffix(path, ".go") {
-			files = append(files, path)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+	for _, rel := range trackedFiles(t, root, "*.go") {
+		files = append(files, filepath.Join(root, filepath.FromSlash(rel)))
 	}
 	return files
 }
@@ -126,25 +107,15 @@ func TestNoGoCodeRunsPython(t *testing.T) {
 
 func TestNoPythonFilesUnderInternal(t *testing.T) {
 	root := repoRoot(t)
-	count := 0
-	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	files := trackedFiles(t, root, "internal/*.py")
+	for i, rel := range files {
+		if i == 20 {
+			break
 		}
-		if !entry.IsDir() && strings.HasSuffix(path, ".py") {
-			count++
-			if count <= 20 {
-				rel, _ := filepath.Rel(root, path)
-				t.Errorf("%s is Python; freeze what a Go test needs as data, not as a .py file", rel)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+		t.Errorf("%s is Python; freeze what a Go test needs as data, not as a .py file", rel)
 	}
-	if count > 20 {
-		t.Errorf("%d .py files under internal/ in all", count)
+	if len(files) > 20 {
+		t.Errorf("%d .py files under internal/ in all", len(files))
 	}
 }
 
@@ -185,53 +156,61 @@ func shellPythonData(t *testing.T) map[string]bool {
 	return lines
 }
 
+// shellPythonLines is every line of a shell script, outside comments, that names a Python command: number -> text.
+func shellPythonLines(raw string) map[int]string {
+	hits := map[int]string{}
+	for number, line := range strings.Split(raw, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") || !scriptPython.MatchString(line) {
+			continue
+		}
+		hits[number+1] = strings.TrimSpace(line)
+	}
+	return hits
+}
+
+// trackedShellPython is every tracked .sh line under root that names Python: "path:line" -> text.
+func trackedShellPython(t *testing.T, root string) (map[string]string, int) {
+	t.Helper()
+	found := map[string]string{}
+	files := trackedFiles(t, root, "*.sh")
+	for _, rel := range files {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for number, line := range shellPythonLines(string(raw)) {
+			found[rel+":"+strconv.Itoa(number)] = line
+		}
+	}
+	return found, len(files)
+}
+
 func TestNoShellScriptRunsPython(t *testing.T) {
 	root := repoRoot(t)
 	data := shellPythonData(t)
 	pendingHits := map[string]int{}
-	scanned := 0
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if path != root && skipDir(entry.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".sh") {
-			return nil
-		}
-		scanned++
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for number, line := range strings.Split(string(raw), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "#") || !scriptPython.MatchString(line) {
-				continue
-			}
-			if _, ok := data[rel+"\t"+strings.TrimSpace(line)]; ok {
-				data[rel+"\t"+strings.TrimSpace(line)] = true
-				continue
-			}
-			if owner, ok := shellPythonPending[rel]; ok {
-				pendingHits[rel]++
-				t.Logf("%s:%d still names Python (pending: %s)", rel, number+1, owner)
-				continue
-			}
-			t.Errorf("%s:%d names python/python3/uv/pytest: %s", rel, number+1, strings.TrimSpace(line))
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	found, scanned := trackedShellPython(t, root)
 	if scanned == 0 {
-		t.Fatal("found no .sh file; the scan is broken")
+		t.Fatal("found no tracked .sh file; the scan is broken")
+	}
+	keys := make([]string, 0, len(found))
+	for key := range found {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		line := found[key]
+		rel := key[:strings.LastIndex(key, ":")]
+		if _, ok := data[rel+"\t"+line]; ok {
+			data[rel+"\t"+line] = true
+			continue
+		}
+		if owner, ok := shellPythonPending[rel]; ok {
+			pendingHits[rel]++
+			t.Logf("%s still names Python (pending: %s)", key, owner)
+			continue
+		}
+		t.Errorf("%s names python/python3/uv/pytest: %s", key, line)
 	}
 	for entry, used := range data {
 		if !used {
@@ -244,6 +223,18 @@ func TestNoShellScriptRunsPython(t *testing.T) {
 		} else if pendingHits[rel] == 0 {
 			t.Errorf("%s is on the pending list but names no Python any more: remove the entry", rel)
 		}
+	}
+}
+
+func TestShellPythonScanSeesOnlyTrackedScripts(t *testing.T) {
+	dir := plantedRepo(t, map[string]string{
+		"ci/tracked.sh":          "python3 -c 'print(1)'\n",
+		".uv-cache/untracked.sh": "python3 -c 'print(1)'\n",
+		"scratch/untracked.sh":   "/usr/bin/python3 x.py\n",
+	}, "ci/tracked.sh")
+	found, scanned := trackedShellPython(t, dir)
+	if scanned != 1 || len(found) != 1 || found["ci/tracked.sh:1"] == "" {
+		t.Fatalf("scan of the planted repo = %v (%d scripts); want only ci/tracked.sh:1", found, scanned)
 	}
 }
 

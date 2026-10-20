@@ -16,7 +16,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": {},
-      "body": "[{\"name\":\"heads\",\"stdout\":\"0066 (river_cutover) (head)\\n0151 (application_schema) (head)\\n\"},{\"name\":\"current at the head\",\"stdout\":\"0066 (head)\\n0151 (head)\\n\"},{\"name\":\"current without the cutover head\",\"stdout\":\"0151 (head)\\n\"},{\"name\":\"current below the head\",\"stdout\":\"0066 (head)\\n0151 (head)\\n\"},{\"name\":\"current of an empty version table\",\"stdout\":\"\"},{\"name\":\"current without a version table\",\"stdout\":\"\"}]"
+      "body": "[{\"name\":\"heads\",\"stdout\":\"0066 (river_cutover) (head)\\n0152 (application_schema) (head)\\n\"},{\"name\":\"current at the head\",\"stdout\":\"0066 (head)\\n0152 (head)\\n\"},{\"name\":\"current without the cutover head\",\"stdout\":\"0152 (head)\\n\"},{\"name\":\"current below the head\",\"stdout\":\"0066 (head)\\n0152 (head)\\n\"},{\"name\":\"current of an empty version table\",\"stdout\":\"\"},{\"name\":\"current without a version table\",\"stdout\":\"\"}]"
     }
   ]
 }

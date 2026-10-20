@@ -48,6 +48,8 @@ const (
 	stageDrainStartBegin     postSyncStage = "drain_start_begin"
 	stageDrainStartLock      postSyncStage = "drain_start_lock"
 	stageDrainStartCommit    postSyncStage = "drain_start_commit"
+	stageDrainCheckBegin     postSyncStage = "drain_check_begin"
+	stageDrainCheckLock      postSyncStage = "drain_check_lock"
 )
 
 // postSyncStages is every stage constant; stepLabel reads only from it, so a free string never reaches a log line.
@@ -57,7 +59,7 @@ var postSyncStages = map[postSyncStage]struct{}{
 	stageDaily: {}, stageTouchedStart: {}, stageWorkGraph: {}, stageInvestment: {}, stageMembership: {}, stageDora: {},
 	stageTeamAutoimport: {}, stageOwnershipDerivation: {}, stageTouchedSetup: {}, stageTouchedWindow: {}, stageTouchedPlan: {},
 	stageTouchedBegin: {}, stageDrainConstruct: {}, stageDrainInFlightBeg: {}, stageDrainStartBegin: {}, stageDrainStartLock: {},
-	stageDrainStartCommit: {},
+	stageDrainStartCommit: {}, stageDrainCheckBegin: {}, stageDrainCheckLock: {},
 }
 
 // stepLabel is the log label of a stage: the stage itself when it is a declared one, "unknown" otherwise.

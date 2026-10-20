@@ -141,7 +141,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/revisions.json",
 		PythonBuild: revisionsPythonBuild,
-		SHA256:      "dcfcee953e5c4130bd23e295cdae94d6e58ae9cb5bb706d87d2f8909b5ca210f",
+		SHA256:      "2a739c531a37758783463f25e1ac489375fbb3d99d5f90b38953511e9d2101ce",
 		Recipe: "git worktree add --detach $DIR " + revisionsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestRevisionsMatchTheFrozenAlembicOutput$' -python-root $DIR",
 	})

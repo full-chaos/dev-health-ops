@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 )
 
 var (
@@ -77,7 +78,7 @@ func (s *Store) ProjectOrganization(ctx context.Context, orgID uuid.UUID) (err e
 	case cur == src:
 		return nil
 	}
-	if err := s.updateOrganization(ctx, orgID, src); err != nil {
+	if err := s.updateOrganization(ctx, orgID, src, cur); err != nil {
 		return err
 	}
 	outcome = "updated"
@@ -108,11 +109,8 @@ RETURNING id`, orgID, src.slug, src.name, src.active).Scan(&inserted)
 			}
 			return ErrOrganizationSlugCollision
 		},
-		Audit: organizationAudit("auth.organization.projected", "organization_created", org),
-		Event: audit.OutboxEvent{
-			AggregateType: "organization", AggregateID: org, EventType: "organization.projected",
-			IdempotencyKey: "organization.projected:" + org,
-		},
+		Audit:  organizationAudit("auth.organization.projected", "organization_created", org),
+		Events: []audit.OutboxEvent{s.organizationEvent(ctx, org, "organization.created", src, true)},
 	})
 	switch {
 	case err == nil:
@@ -126,9 +124,19 @@ RETURNING id`, orgID, src.slug, src.name, src.active).Scan(&inserted)
 	return s.storeErr(ctx, "insert organization", err)
 }
 
-func (s *Store) updateOrganization(ctx context.Context, orgID uuid.UUID, src orgState) error {
+func (s *Store) updateOrganization(ctx context.Context, orgID uuid.UUID, src, cur orgState) error {
 	org := orgID.String()
-	eventID := uuid.New()
+	var events []audit.OutboxEvent
+	if src.slug != cur.slug || src.name != cur.name {
+		events = append(events, s.organizationEvent(ctx, org, "organization.updated", src, src.slug != cur.slug))
+	}
+	if src.active != cur.active {
+		verb := "organization.suspended"
+		if src.active {
+			verb = "organization.reactivated"
+		}
+		events = append(events, s.organizationEvent(ctx, org, verb, src, false))
+	}
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.organizations
@@ -138,11 +146,8 @@ WHERE id = $1 AND (slug IS DISTINCT FROM $2 OR name IS DISTINCT FROM $3 OR (disa
 				orgID, src.slug, src.name, src.active)
 			return err
 		},
-		Audit: organizationAudit("auth.organization.projection_updated", "organization_updated", org),
-		Event: audit.OutboxEvent{
-			AggregateType: "organization", AggregateID: org, EventType: "organization.projection_updated",
-			IdempotencyKey: "organization.projection_updated:" + org + ":" + eventID.String(),
-		},
+		Audit:  organizationAudit("auth.organization.projection_updated", "organization_updated", org),
+		Events: events,
 	})
 	switch {
 	case err == nil:
@@ -155,6 +160,32 @@ WHERE id = $1 AND (slug IS DISTINCT FROM $2 OR name IS DISTINCT FROM $3 OR (disa
 		return ErrOrganizationSlugCollision
 	}
 	return s.storeErr(ctx, "update organization", err)
+}
+
+// organizationEvent is an organization event: the status after it, and the
+// slug when withSlug is set and the wire can carry it. go-api slugs may hold
+// letters the wire pattern refuses (apiservice/admin slugify keeps Unicode
+// letters and "_"); such a slug is left out and counted, never rewritten. The
+// name is free text and is never carried.
+func (s *Store) organizationEvent(ctx context.Context, org, verb string, src orgState, withSlug bool) audit.OutboxEvent {
+	status := "suspended"
+	if src.active {
+		status = "active"
+	}
+	change := map[string]any{"status": status}
+	if verb == "organization.updated" {
+		delete(change, "status")
+	}
+	if withSlug {
+		if provisioning.ChangeAllows("slug", src.slug) {
+			change["slug"] = src.slug
+		} else {
+			s.slugOmitted.Add(ctx, 1)
+			s.logger.InfoContext(ctx, "identity: organization slug not carried on the provisioning event", "organization_id", org)
+		}
+	}
+	return audit.OutboxEvent{AggregateType: "organization", AggregateID: provisioning.WireID("organization", org),
+		EventType: verb, Change: change}
 }
 
 func organizationAudit(eventType, reason, org string) audit.AuditEvent {

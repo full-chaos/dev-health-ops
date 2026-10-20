@@ -146,7 +146,7 @@ func openState(secret, token, providerID string, now time.Time) (flowState, erro
 
 // oauthStateHKDFInfo derives the OAuth state key: a key of its own, so an
 // OIDC state never opens as an OAuth state and the reverse.
-const oauthStateHKDFInfo = stateHKDFInfo
+const oauthStateHKDFInfo = "dev-health-ops:auth-service:oauth-state-aead-v1"
 
 // oauthFlowState is the sealed OAuth state. OAuth validates no ID token, so it
 // carries no nonce; CodeVerifier is empty for a provider without PKCE.

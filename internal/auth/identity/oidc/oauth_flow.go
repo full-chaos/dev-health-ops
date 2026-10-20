@@ -23,8 +23,6 @@ const (
 	routeOAuthCallback  = "oauth_callback"
 )
 
-// The OAuth flow is a stub in this commit: authorize and callback refuse.
-
 // OAuthEndpoints are the public URLs of the OAuth providers. GitLab's
 // authorize and token URLs hang off its base (Social.GitLabBase, or a
 // self-hosted row's base_url).
@@ -98,6 +96,14 @@ func decodeOAuthConfig(raw string) (OAuthConfig, error) {
 			cfg.Scopes = append(cfg.Scopes, text)
 		}
 	}
+	for _, candidate := range []string{cfg.BaseURL, cfg.RedirectURI} {
+		if candidate == "" {
+			continue
+		}
+		if err := validateHTTPSOrLoopback(candidate); err != nil {
+			return OAuthConfig{}, fmt.Errorf("base_url/redirect_uri %w", err)
+		}
+	}
 	return cfg, nil
 }
 
@@ -125,14 +131,16 @@ func (s *Service) oauthTarget(row Provider) (oauthTarget, *Error) {
 	case social.GitHub:
 		t.authorize, t.token = eps.GitHubAuthorize, eps.GitHubToken
 	case social.Google:
-		t.authorize, t.token, t.googleOfflineMode = eps.GoogleAuthorize, eps.GoogleToken, true
+		t.authorize, t.token, t.pkce, t.googleOfflineMode = eps.GoogleAuthorize, eps.GoogleToken, true, true
 	case social.GitLab:
 		base := strings.TrimRight(eps.Social.GitLabBase, "/")
 		if row.OAuth.BaseURL != "" {
 			base = strings.TrimRight(row.OAuth.BaseURL, "/")
+			// A self-hosted instance is its own issuer.
+			t.issuer = base
 		}
 		t.endpoints.GitLabBase = base
-		t.authorize, t.token = base+"/oauth/authorize", base+"/oauth/token"
+		t.authorize, t.token, t.pkce = base+"/oauth/authorize", base+"/oauth/token", true
 	}
 	return t, nil
 }
@@ -188,10 +196,6 @@ func (s *Service) authorizeOAuthByType(ctx context.Context, providerType string,
 }
 
 func (s *Service) authorizeOAuth(ctx context.Context, providerID uuid.UUID) (AuthorizeResult, *Error) {
-	return AuthorizeResult{}, internal(ReasonDependency, errors.New("oidc: OAuth flow not implemented"))
-}
-
-func (s *Service) authorizeOAuthImpl(ctx context.Context, providerID uuid.UUID) (AuthorizeResult, *Error) {
 	row, failure := s.loadProvider(ctx, providerID, oauthSpec)
 	if failure != nil {
 		return AuthorizeResult{}, failure
@@ -265,10 +269,6 @@ func oauthFailure(reason Reason, code string, cause error) *Error {
 }
 
 func (s *Service) callbackOAuth(ctx context.Context, providerID uuid.UUID, in CallbackInput) (Login, *http.Cookie, *Error) {
-	return Login{}, nil, internal(ReasonDependency, errors.New("oidc: OAuth flow not implemented"))
-}
-
-func (s *Service) callbackOAuthImpl(ctx context.Context, providerID uuid.UUID, in CallbackInput) (Login, *http.Cookie, *Error) {
 	row, failure := s.loadProvider(ctx, providerID, oauthSpec)
 	if failure != nil {
 		return Login{}, nil, failure

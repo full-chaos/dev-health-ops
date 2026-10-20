@@ -64,7 +64,7 @@ func lvStubBin(t *testing.T, dir string) (dockerMarker, curlLog string) {
 	return dockerMarker, curlLog
 }
 
-func lvRunGate(script, dir string, env map[string]string, unset []string, args ...string) string {
+func lvRunGate(script, dir string, env map[string]string, unset []string, args ...string) (string, int) {
 	cmd := exec.Command("bash", append([]string{script}, args...)...)
 	cmd.Dir = filepath.Dir(filepath.Dir(script))
 	skip := map[string]bool{"CH_TRANSPORT": false}
@@ -83,8 +83,14 @@ func lvRunGate(script, dir string, env map[string]string, unset []string, args .
 		out = append(out, k+"="+v)
 	}
 	cmd.Env = out
-	b, _ := cmd.CombinedOutput()
-	return string(b)
+	b, err := cmd.CombinedOutput()
+	rc := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		rc = ee.ExitCode()
+	} else if err != nil {
+		rc = -1
+	}
+	return string(b), rc
 }
 
 func lvPathWith(bin string) string { return bin + ":" + os.Getenv("PATH") }
@@ -223,7 +229,7 @@ func lvGateViolations(t *testing.T, script string) []string {
 	read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
 
 	reset()
-	lvRunGate(script, dir, httpEnv(nil), nil, "--ch-query-probe", "SELECT 1")
+	probeOut, probeRC := lvRunGate(script, dir, httpEnv(nil), nil, "--ch-query-probe", "SELECT 1")
 	if _, err := os.Stat(marker); err == nil {
 		add("ch_query shelled out to docker under CH_TRANSPORT=http: %s", read(marker))
 	}
@@ -247,6 +253,9 @@ func lvGateViolations(t *testing.T, script string) []string {
 			add("credentials must be passed through a private --config file: %s", argv)
 		}
 	}
+	if probeRC != 0 {
+		add("ch_query reported failure (rc=%d): %s", probeRC, probeOut)
+	}
 	cfg := read(filepath.Join(dir, "captured-config"))
 	if !strings.Contains(cfg, `header = "X-ClickHouse-User: ch"`) || !strings.Contains(cfg, `header = "X-ClickHouse-Key: secret"`) {
 		add("the credential headers were not handed to curl in the --config file: %s", cfg)
@@ -256,20 +265,20 @@ func lvGateViolations(t *testing.T, script string) []string {
 	}
 
 	reset()
-	lvRunGate(script, dir, map[string]string{"PATH": pathEnv, "CH_CONTAINER": "dev-health-clickhouse-1"}, []string{"CH_TRANSPORT", "CH_HTTP_SCHEME"}, "--ch-query-probe", "SELECT 1")
+	_, _ = lvRunGate(script, dir, map[string]string{"PATH": pathEnv, "CH_CONTAINER": "dev-health-clickhouse-1"}, []string{"CH_TRANSPORT", "CH_HTTP_SCHEME"}, "--ch-query-probe", "SELECT 1")
 	if m := read(marker); !strings.Contains(m, "dev-health-clickhouse-1") {
 		add("default (unset CH_TRANSPORT) must still drive ClickHouse via docker exec")
 	}
 
 	reset()
-	lvRunGate(script, dir, httpEnv(map[string]string{"CH_HTTP_SCHEME": "https", "CH_HOST": "clickhouse.example.com", "CH_HTTP_PORT": "8443"}), nil, "--ch-query-probe", "SELECT 1")
+	_, _ = lvRunGate(script, dir, httpEnv(map[string]string{"CH_HTTP_SCHEME": "https", "CH_HOST": "clickhouse.example.com", "CH_HTTP_PORT": "8443"}), nil, "--ch-query-probe", "SELECT 1")
 	if e := endpoints(read(curlLog)); len(e) != 1 || e[0] != "https://clickhouse.example.com:8443/" {
 		add("CH_HTTP_SCHEME=https must reach a TLS endpoint: %v", e)
 	}
 
 	// Sub-delims are not refused, unsupported combinations refuse up front.
 	for _, cred := range []string{"sec!ret", "p$w=1", "a,b;c", "it's"} {
-		out := lvRunGate(script, dir, map[string]string{"PATH": pathEnv, "CH_PASS": cred}, nil, "--ch-query-probe", "SELECT 1")
+		out, _ := lvRunGate(script, dir, map[string]string{"PATH": pathEnv, "CH_PASS": cred}, nil, "--ch-query-probe", "SELECT 1")
 		if strings.Contains(out, "may not contain") {
 			add("docker mode refused the sub-delim credential %q: %s", cred, out)
 		}
@@ -282,17 +291,17 @@ func lvGateViolations(t *testing.T, script string) []string {
 		{map[string]string{"CH_PASS": "sec/ret"}, "may not contain"},
 		{map[string]string{"CH_USER": "user@host"}, "may not contain"},
 	} {
-		if out := lvRunGate(script, dir, httpEnv(c.env), nil, "--ch-query-probe", "SELECT 1"); !strings.Contains(out, c.expected) {
+		if out, _ := lvRunGate(script, dir, httpEnv(c.env), nil, "--ch-query-probe", "SELECT 1"); !strings.Contains(out, c.expected) {
 			add("expected a refusal mentioning %q for %v; got: %s", c.expected, c.env, out)
 		}
 	}
 	for _, port := range []map[string]string{{"CH_HTTP_SCHEME": "http", "CH_HTTP_PORT": "30501"}, {"CH_HTTP_SCHEME": "https", "CH_HTTP_PORT": "8443"}} {
-		out := lvRunGate(script, dir, httpEnv(port), nil, "--ch-query-probe", "SELECT 1")
+		out, _ := lvRunGate(script, dir, httpEnv(port), nil, "--ch-query-probe", "SELECT 1")
 		if strings.Contains(out, "only supported on port") || strings.Contains(out, "may not contain") {
 			add("supported combination %v was refused: %s", port, out)
 		}
 	}
-	if out := lvRunGate(script, dir, map[string]string{"PATH": pathEnv, "CH_PASS": "café"}, nil, "--ch-query-probe", "SELECT 1"); !strings.Contains(out, "may not contain") {
+	if out, _ := lvRunGate(script, dir, map[string]string{"PATH": pathEnv, "CH_PASS": "café"}, nil, "--ch-query-probe", "SELECT 1"); !strings.Contains(out, "may not contain") {
 		add("non-ASCII credential must be refused while uri_encode truncates it: %s", out)
 	}
 	return bad

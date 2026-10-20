@@ -526,6 +526,26 @@ func TestEmptyTrackedListForTheRepoRootFailsLoudly(t *testing.T) {
 
 // ---- helper tests: the glob translator and the resolver, one case per shape the oracle claims ---------------------
 
+// A .py file at any depth under tests/ is scanned by the nopython guard, so go.yml must run on it in both events.
+func TestGoYmlTriggersOnNestedTestsPython(t *testing.T) {
+	root := repoRoot(t)
+	for _, event := range []string{"pull_request", "push"} {
+		matched := false
+		for _, pat := range goPaths(t, root, event) {
+			re, err := githubGlobToRegexp(pat)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if re.MatchString("tests/new_nested/test_planted.py") {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("go.yml %s.paths does not match a nested tests/new_nested/test_planted.py, so the nopython guard would be skipped", event)
+		}
+	}
+}
+
 func TestGlobTranslatorMatchesGithubSemantics(t *testing.T) {
 	cases := []struct {
 		pattern, path string
@@ -543,6 +563,10 @@ func TestGlobTranslatorMatchesGithubSemantics(t *testing.T) {
 		{"docs/**", "docs/a/b.md", true},
 		{"**/*.go", "internal/newline\ndirectory/module.go", true},
 		{"**/*.go", "internal/\n/module.go", true},
+		{"tests/**/*.py", "tests/new_nested/test_planted.py", true},
+		{"tests/**/*.py", "tests/x.py", true},
+		{"tests/**/*.py", "tests/docs/fixtures/a.md", false},
+		{"tests/**/*.py", "tests/testops/fixtures/a.xml", false},
 	}
 	for _, c := range cases {
 		re, err := githubGlobToRegexp(c.pattern)

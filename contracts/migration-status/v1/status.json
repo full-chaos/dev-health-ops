@@ -497,7 +497,7 @@
         "status": "verified",
         "ticket": "CHAOS-5800",
         "sha": "84e5d60d76a3ffd77027c42d03ea10a287fcac0e",
-        "evidence": "internal/jobs/metrics/numerical/capacity_forecast_test.go TestCapacityForecastMatchesPython (frozen golden tests/fixtures/capacity_forecast_golden.json, 95 cases/5 seeds, whole kernel output) + capacity_golden_rot_guard_test.go TestCapacityForecastGoldenMatchesLivePython (live-CPython rot guard proving the golden still matches live Python, gated DEV_HEALTH_LIVE_PYTHON_ORACLES=1 via ci/check_go.sh live-python-oracles); PASS re-run at this sha"
+        "evidence": "internal/jobs/metrics/numerical/capacity_forecast_test.go TestCapacityForecastMatchesPython (frozen golden tests/fixtures/capacity_forecast_golden.json, 95 cases/5 seeds, whole kernel output); the live-CPython rot guard was deleted with the Python tree, so the golden is frozen; PASS re-run at this sha"
       },
       "deployed": {
         "revision": "unknown",

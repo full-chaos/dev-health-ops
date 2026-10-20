@@ -30,7 +30,7 @@ var (
 )
 
 // EmailConflictError: no identity matched, and the asserted email belongs to
-// an existing account. Nothing was written. The user signs in with Method and
+// an existing account. No account, identity or session was written; the request and assertion are consumed. The user signs in with Method and
 // links the identity explicitly.
 type EmailConflictError struct {
 	Method string

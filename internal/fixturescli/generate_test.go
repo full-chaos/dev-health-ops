@@ -1,6 +1,8 @@
 package fixturescli
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -45,7 +47,7 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 		} else if got != want {
 			t.Fatalf("%s digest = %s, want %s: the frozen rows changed without their digest. They are not rewritten: the Python producer that froze them cannot run again (CHAOS-7793)", path, got, want)
 		}
-		world, err := decodeWorld(raw)
+		world, err := decodeWorldCached(raw, sha256.Sum256(raw))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -710,5 +712,62 @@ func TestWorldContentComparesValuesAndHoldsUnpinnedColumnsToTheirClass(t *testin
 		if c.diff == "" && c.problem == "" {
 			t.Errorf("%s: the case names nothing to see", name)
 		}
+	}
+}
+
+func TestLoadFrozenWorldDecodesEachWorldOnceAndHandsOutCopies(t *testing.T) {
+	frozen := GenerateParams{Provider: "synthetic", RepoName: "acme/live-e2e", RepoCount: 1, Days: 14, CommitsPerDay: 6, PRCount: 24, TeamCount: 10, Seed: 20260219, WithMetrics: true, WithWorkGraph: true}
+	first, err := LoadFrozenWorld(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := worldDecodes.Load()
+	second, err := LoadFrozenWorld(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFrozenWorld(frozen); err != nil {
+		t.Fatal(err)
+	}
+	if got := worldDecodes.Load() - before; got != 0 {
+		t.Fatalf("a repeated load of a loaded world decoded %d world(s); it must decode none (a success path must not decode every frozen world)", got)
+	}
+	if len(first.Tables) == 0 || len(first.Tables[0].Rows) == 0 || len(first.Tables[0].Rows[0]) == 0 {
+		t.Fatal("the frozen world has no first row to mutate")
+	}
+	first.Tables[0].Rows[0][0] = "mutated by the caller"
+	first.Tables[0].Name = "mutated"
+	third, err := LoadFrozenWorld(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Tables[0].Rows[0][0] == "mutated by the caller" || third.Tables[0].Name == "mutated" || second.Tables[0].Rows[0][0] == "mutated by the caller" {
+		t.Fatal("a caller's change to a loaded world reached the next load")
+	}
+}
+
+func TestDecodeWorldCachedKeysByContent(t *testing.T) {
+	pack := func(org string) []byte {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write([]byte(`{"producer":"p","org_id":"` + org + `","tables":[]}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	a, b := pack("org-a"), pack("org-b")
+	first, err := decodeWorldCached(a, sha256.Sum256(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := decodeWorldCached(b, sha256.Sum256(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.OrgID != "org-a" || second.OrgID != "org-b" {
+		t.Fatalf("a different file got another file's decode: %q, %q", first.OrgID, second.OrgID)
 	}
 }

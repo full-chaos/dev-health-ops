@@ -114,13 +114,13 @@ func TestWorkflowPathFiltersCodeQLOtherTriggersUnfiltered(t *testing.T) {
 	}
 }
 
-func TestWorkflowPathFiltersCodeQLMatrixIsGoOnly(t *testing.T) {
+func TestWorkflowPathFiltersCodeQLMatrixKeepsEveryMainConfiguration(t *testing.T) {
 	wf := loadWorkflowMap(t, "codeql-analysis.yml")
 	job := wf["jobs"].(map[string]any)["analyze"].(map[string]any)
 	matrix := job["strategy"].(map[string]any)["matrix"].(map[string]any)
 	got := stringList(t, matrix["language"])
-	if !reflect.DeepEqual(got, []string{"go"}) {
-		t.Errorf("CodeQL language matrix = %v, want [go]: the Python source is deleted", got)
+	if !reflect.DeepEqual(got, []string{"python", "go"}) {
+		t.Errorf("CodeQL language matrix = %v, want [python go]: dropping a configuration that main has makes the code_scanning ruleset block every pull request until its stale analyses are deleted", got)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestDecideTable(t *testing.T) {
@@ -60,8 +61,25 @@ func (f fakeConfig) OrgConfig(context.Context, string) (OrgConfig, bool, error) 
 	return f.cfg, f.found, f.err
 }
 
-func saved(v bool) func(context.Context, string) (bool, error) {
-	return func(context.Context, string) (bool, error) { return v, nil }
+type savedRow struct{ provider string }
+
+func (r savedRow) Scan(dest ...any) error {
+	if r.provider == "" {
+		return pgx.ErrNoRows
+	}
+	*(dest[0].(*string)) = r.provider
+	return nil
+}
+
+type fakeSaved struct{ provider string }
+
+func (f fakeSaved) QueryRow(context.Context, string, ...any) pgx.Row { return savedRow{f.provider} }
+
+func saved(v bool) SavedQueryer {
+	if v {
+		return fakeSaved{"anthropic"}
+	}
+	return fakeSaved{}
 }
 
 func TestPgSourceReadsTheEffectiveFlagAndTheClosedGate(t *testing.T) {
@@ -69,7 +87,7 @@ func TestPgSourceReadsTheEffectiveFlagAndTheClosedGate(t *testing.T) {
 	off := licensing.Decision{Allowed: false, Reason: licensing.ReasonOrgOverrideDisabled}
 	plan := licensing.Decision{Allowed: false, Reason: licensing.ReasonTierRequired}
 	gate := func(lic fakeLicensing, savedBYO bool, cfg fakeConfig) Decision {
-		return Gate{Source: PgSource{Licensing: lic, Saved: saved(savedBYO), Config: cfg}}.Decide(context.Background(), "org")
+		return Gate{Source: PgSource{Licensing: lic, Queryer: saved(savedBYO), Config: cfg}}.Decide(context.Background(), "org")
 	}
 	own := fakeConfig{cfg: OrgConfig{Provider: "anthropic"}, found: true}
 	if d := gate(fakeLicensing{ACRServiceModelFeatureKey: plan, PlatformModelFallbackFeatureKey: plan}, true, own); d.Kind != Own {

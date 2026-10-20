@@ -21,10 +21,8 @@ type modelGate interface {
 func newModelGate(pool *pgxpool.Pool, config llmorgsettings.ConfigSource) modelGate {
 	return llmorgsettings.Gate{Source: llmorgsettings.PgSource{
 		Licensing: licensing.PostgresStore{Pool: pool},
-		Saved: func(ctx context.Context, orgID string) (bool, error) {
-			return llmorgsettings.HasSavedBYO(ctx, pool, orgID)
-		},
-		Config: config,
+		Queryer:   pool,
+		Config:    config,
 	}}
 }
 

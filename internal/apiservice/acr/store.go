@@ -17,6 +17,17 @@ import (
 // Python: dev_health_ops.licensing.registry.py, "agent_context_runtime".
 const agentContextRuntimeFeatureKey = "agent_context_runtime"
 
+// acrServiceModelFeatureKey is the second feature this route decides: ACR AI
+// features are on for the org. The route serves its effective value (see
+// llmorgsettings.EffectiveServiceModel); it does not grant the platform LLM by
+// itself.
+const acrServiceModelFeatureKey = llmorgsettings.ACRServiceModelFeatureKey
+
+// platformModelFallbackFeatureKey is the third: a platform-admin grant (an
+// active org override only) that lets an org with no saved BYO LLM draw the
+// platform LLM. acr_service_model alone never does.
+const platformModelFallbackFeatureKey = llmorgsettings.PlatformModelFallbackFeatureKey
+
 // ErrOrgNotFound means the organization row does not exist. Python:
 // api/internal/acr.py:181-192's 404 ("Not found") on both an unparseable
 // org_id and a missing Organization row.
@@ -99,16 +110,15 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	serviceModel, err := decisionStore.Decide(ctx, parsedOrgID.String(), llmorgsettings.ACRServiceModelFeatureKey)
+	serviceModel, err := decisionStore.Decide(ctx, parsedOrgID.String(), acrServiceModelFeatureKey)
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	saved, err := llmorgsettings.HasSavedBYO(ctx, store.Pool, parsedOrgID.String())
+	serviceModelOn, err := llmorgsettings.EffectiveServiceModel(ctx, store.Pool, parsedOrgID.String(), serviceModel)
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	serviceModelOn := llmorgsettings.EffectiveServiceModel(serviceModel, saved)
-	fallback, err := decisionStore.Decide(ctx, parsedOrgID.String(), llmorgsettings.PlatformModelFallbackFeatureKey)
+	fallback, err := decisionStore.Decide(ctx, parsedOrgID.String(), platformModelFallbackFeatureKey)
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}

@@ -87,18 +87,6 @@ func Decide(in Inputs) Decision {
 	return refuse(CodeServiceModelNotEntitled)
 }
 
-// EffectiveServiceModel is the acr_service_model an org really has: an active org override (Decide put
-// it first), OFF when the feature is globally disabled or invalid, else ON for an org with a saved BYO
-// configuration, else the plan decision.
-func EffectiveServiceModel(decision licensing.Decision, saved bool) bool {
-	switch decision.Reason {
-	case licensing.ReasonEnabledByOrgOverride, licensing.ReasonOrgOverrideDisabled,
-		licensing.ReasonGlobalDisabled, licensing.ReasonInvalidFeatureState:
-		return decision.Allowed
-	}
-	return saved || decision.Allowed
-}
-
 // Source reads the table's inputs for one org. An error is an unknown fact; the gate refuses on it.
 type Source interface {
 	Inputs(ctx context.Context, orgID string) (Inputs, error)
@@ -140,12 +128,12 @@ type ConfigSource interface {
 // PgSource reads the inputs from the licensing decisions and the org's settings.
 type PgSource struct {
 	Licensing licensing.Store
-	Saved     func(ctx context.Context, orgID string) (bool, error)
+	Queryer   SavedQueryer
 	Config    ConfigSource
 }
 
 func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
-	saved, err := s.Saved(ctx, orgID)
+	saved, err := HasSavedBYO(ctx, s.Queryer, orgID)
 	if err != nil {
 		return Inputs{}, err
 	}
@@ -162,12 +150,16 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 	if err != nil {
 		return Inputs{}, fmt.Errorf("llmmodelgate: %s: %w", ACRServiceModelFeatureKey, err)
 	}
+	serviceModelOn, err := EffectiveServiceModel(ctx, s.Queryer, orgID, serviceModel)
+	if err != nil {
+		return Inputs{}, fmt.Errorf("llmorgsettings: effective %s: %w", ACRServiceModelFeatureKey, err)
+	}
 	fallback, err := s.Licensing.Decide(ctx, orgID, PlatformModelFallbackFeatureKey)
 	if err != nil {
 		return Inputs{}, fmt.Errorf("llmmodelgate: %s: %w", PlatformModelFallbackFeatureKey, err)
 	}
 	return Inputs{
 		Saved: saved, ConfigUsable: found, GateClosed: cfg.GateClosed,
-		ServiceModelOn: EffectiveServiceModel(serviceModel, saved), Fallback: fallback.Allowed,
+		ServiceModelOn: serviceModelOn, Fallback: fallback.Allowed,
 	}, nil
 }

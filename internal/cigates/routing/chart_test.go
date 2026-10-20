@@ -25,6 +25,7 @@ type chartRule struct{ path, pathType, service string }
 
 type chartRender struct {
 	refused   bool
+	stderr    string
 	ingresses []any
 }
 
@@ -57,7 +58,7 @@ func renderChart(t *testing.T, chartValues m) chartRender {
 		if !errors.As(err, &ee) {
 			t.Fatalf("helm: %v", err)
 		}
-		return chartRender{refused: true}
+		return chartRender{refused: true, stderr: se.String()}
 	}
 	dec := yaml.NewDecoder(&so)
 	var out []any
@@ -158,8 +159,13 @@ func chartValuesFor(shared l) m {
 // beside an anchored query-api entry on one host), so the generator is not asked.
 func TestTheRouterGivesEveryPathTheBackendTheChartGivesIt(t *testing.T) {
 	shared := l{m{"path": "/ops-status", "pathType": "Prefix"}, m{"path": "/status", "pathType": "Exact"}, qaEntry}
-	if r := renderChart(t, chartValuesFor(shared)); !r.refused {
+	r := renderChart(t, chartValuesFor(shared))
+	if !r.refused {
 		t.Fatal("plain-python-only: the matrix says the chart refuses, and it rendered")
+	}
+	// The refusal must be the ingress template's own fail, not helm failing for another reason.
+	if !strings.Contains(r.stderr, "execution error at (dev-health/templates/ingress.yaml:") {
+		t.Fatalf("helm failed, but not by the ingress template's refusal:\n%s", r.stderr)
 	}
 }
 

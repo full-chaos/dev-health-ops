@@ -47,12 +47,19 @@ type FlowOutcome struct {
 	PrincipalID uuid.UUID
 	Violations  []string
 	Issued      *session.Issued
-	RevokeErr   error
+	// RevokeErr is set when the password changed but ending the older
+	// sessions failed after retries (errors.Is ErrSessionsNotRevoked). The
+	// answer is still success: the stamp on the password keeps older sessions
+	// from verifying.
+	RevokeErr error
 }
 
 // ErrSessionsNotRevoked reports that RevokeAll failed every attempt after a
 // password change.
 var ErrSessionsNotRevoked = errors.New("local: sessions were not revoked")
+
+// revokeAttempts is how often RevokeAll runs before it is given up.
+const revokeAttempts = 3
 
 // RegisterRequest is one registration. Email is not yet normalized.
 type RegisterRequest struct {
@@ -77,7 +84,8 @@ type FlowsConfig struct {
 	Links    Links
 	Sessions SessionAdmin
 	Mail     Mailer
-	Locker   Locker
+	// Locker serializes the flows that set a password, per principal.
+	Locker Locker
 	// UsersOwnedByAuth mirrors the B2 switch (D3). Off, every flow returns
 	// identity.ErrSignupNotAvailable before it reads or writes anything, so no
 	// credential is consumed for a write that cannot happen.
@@ -94,6 +102,7 @@ type Flows struct {
 	links    Links
 	sessions SessionAdmin
 	mail     Mailer
+	locker   Locker
 	owned    bool
 	compare  func(hash, password string) bool
 	hash     func(password string) (string, error)
@@ -101,10 +110,10 @@ type Flows struct {
 
 // NewFlows validates the configuration.
 func NewFlows(cfg FlowsConfig) (*Flows, error) {
-	if cfg.Accounts == nil || cfg.Links == nil || cfg.Sessions == nil || cfg.Mail == nil {
-		return nil, errors.New("local: accounts, links, sessions and mail are required")
+	if cfg.Accounts == nil || cfg.Links == nil || cfg.Sessions == nil || cfg.Mail == nil || cfg.Locker == nil {
+		return nil, errors.New("local: accounts, links, sessions, mail and locker are required")
 	}
-	f := &Flows{accounts: cfg.Accounts, links: cfg.Links, sessions: cfg.Sessions, mail: cfg.Mail,
+	f := &Flows{accounts: cfg.Accounts, links: cfg.Links, sessions: cfg.Sessions, mail: cfg.Mail, locker: cfg.Locker,
 		owned: cfg.UsersOwnedByAuth, compare: cfg.Compare, hash: cfg.Hash}
 	if f.compare == nil {
 		f.compare = bcryptMatches
@@ -264,17 +273,37 @@ func (f *Flows) Reset(ctx context.Context, secret, newPassword string) (FlowOutc
 	if !ok {
 		return FlowOutcome{Kind: FlowInvalidToken}, nil
 	}
-	hash, err := f.hash(newPassword)
+	out := FlowOutcome{Kind: FlowOK, PrincipalID: id}
+	err = f.locker.WithPrincipalLock(ctx, id, func(ctx context.Context) error {
+		hash, err := f.hash(newPassword)
+		if err != nil {
+			return fmt.Errorf("local: hashing the password: %w", err)
+		}
+		if err := f.accounts.SetPasswordHash(ctx, id, hash); err != nil {
+			return fmt.Errorf("local: setting the password: %w", err)
+		}
+		out.RevokeErr = f.revokeAll(ctx, id, session.Actor{PrincipalID: &id})
+		return nil
+	})
 	if err != nil {
-		return FlowOutcome{}, fmt.Errorf("local: hashing the password: %w", err)
+		return FlowOutcome{}, err
 	}
-	if err := f.accounts.SetPasswordHash(ctx, id, hash); err != nil {
-		return FlowOutcome{}, fmt.Errorf("local: setting the password: %w", err)
+	return out, nil
+}
+
+// revokeAll ends every session of the principal after a password change. It
+// is cleanup: the password stamp already voids older sessions, so a failure
+// is retried, logged by class, and returned as ErrSessionsNotRevoked for the
+// caller to carry, never as a failed flow.
+func (f *Flows) revokeAll(ctx context.Context, id uuid.UUID, actor session.Actor) error {
+	var err error
+	for attempt := 0; attempt < revokeAttempts; attempt++ {
+		if _, err = f.sessions.RevokeAll(ctx, id, actor); err == nil {
+			return nil
+		}
 	}
-	if _, err := f.sessions.RevokeAll(ctx, id, session.Actor{PrincipalID: &id}); err != nil {
-		return FlowOutcome{}, fmt.Errorf("local: revoking sessions: %w", err)
-	}
-	return FlowOutcome{Kind: FlowOK, PrincipalID: id}, nil
+	slog.WarnContext(ctx, "local: sessions not revoked after a password change", logging.ErrorAttr(err))
+	return fmt.Errorf("%w: %w", ErrSessionsNotRevoked, err)
 }
 
 // Change sets a signed-in user's password, revokes every session and issues
@@ -289,6 +318,19 @@ func (f *Flows) Change(ctx context.Context, req ChangeRequest) (FlowOutcome, err
 	if v := passwordRefusal(req.New, true); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
+	var out FlowOutcome
+	err := f.locker.WithPrincipalLock(ctx, req.PrincipalID, func(ctx context.Context) error {
+		var err error
+		out, err = f.changeLocked(ctx, req)
+		return err
+	})
+	if err != nil {
+		return FlowOutcome{}, err
+	}
+	return out, nil
+}
+
+func (f *Flows) changeLocked(ctx context.Context, req ChangeRequest) (FlowOutcome, error) {
 	user, err := f.accounts.ByID(ctx, req.PrincipalID)
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: loading the user: %w", err)
@@ -318,12 +360,10 @@ func (f *Flows) Change(ctx context.Context, req ChangeRequest) (FlowOutcome, err
 		id := user.ID
 		actor.PrincipalID = &id
 	}
-	if _, err := f.sessions.RevokeAll(ctx, user.ID, actor); err != nil {
-		return FlowOutcome{}, fmt.Errorf("local: revoking sessions: %w", err)
-	}
+	revokeErr := f.revokeAll(ctx, user.ID, actor)
 	issued, err := f.sessions.Create(ctx, user.ID, req.OrganizationID, []string{"pwd"})
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: creating the session: %w", err)
 	}
-	return FlowOutcome{Kind: FlowOK, PrincipalID: user.ID, Issued: &issued}, nil
+	return FlowOutcome{Kind: FlowOK, PrincipalID: user.ID, Issued: &issued, RevokeErr: revokeErr}, nil
 }

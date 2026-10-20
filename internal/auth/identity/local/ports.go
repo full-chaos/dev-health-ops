@@ -92,7 +92,9 @@ type Mailer interface {
 	Send(ctx context.Context, msg Message) error
 }
 
-// Locker runs fn while it holds a per-principal lock.
+// Locker runs fn while it holds a per-principal lock, so the flows that set a
+// password for one principal run one at a time. fn's error is returned after
+// the lock is released.
 type Locker interface {
 	WithPrincipalLock(ctx context.Context, principalID uuid.UUID, fn func(ctx context.Context) error) error
 }

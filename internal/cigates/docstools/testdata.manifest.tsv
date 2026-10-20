@@ -1,7 +1,7 @@
 # Every file under internal/cigates/docstools/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: a8e3c29d257dbdf2f088e60cb5e576b807d928af58ef9ec2593215dbb278feb2 (120 files)
+# python-recorded set: d48acbc50ab6d1864fe3038f5c92c4b93cf9bbdaac2e7ce5afdd968f4e3617e3 (126 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-5e9fd2fc10e74475e6d3a8885b382d39f81a6fc3e253154f0e6a385579c61593	hand-written	README.md
+d8d5bed7993bdfe86ef20521dfe5780bfca256b62c80b144ea58afe158da831a	hand-written	README.md
 022b02bc6930d958238306a5bbb82baedc9af3eed3e1189a46a3629fcb570374	hand-written	operational-external.md
 daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	parity/check-investment-drift-all-errors/args
 3a6b37e459a3080b618da454af311d1f1a55249367a82f153b41b2912ff04646	hand-written	parity/check-investment-drift-all-errors/in/docs/reference/taxonomies/investment.md
@@ -29,6 +29,11 @@ daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	pa
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-investment-drift-block-theme-missing/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-investment-drift-block-theme-missing/stderr
 0f3b1c91ab8f51db320a6b4075133c836c6b270ac1f290a1db5a93b7c0f9c8d2	python-recorded	parity/check-investment-drift-block-theme-missing/stdout
+daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	parity/check-investment-drift-block-unicode-space/args
+85788ad506b7bc03af37a3a39f39bd9316ca62fc1328230fbc1b850743c88d9b	hand-written	parity/check-investment-drift-block-unicode-space/in/docs/reference/taxonomies/investment.md
+9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/check-investment-drift-block-unicode-space/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-investment-drift-block-unicode-space/stderr
+466d01b3707dec964b1369785eb9bf4be398cb8ddef2719440ab9ef2e282ebfa	python-recorded	parity/check-investment-drift-block-unicode-space/stdout
 daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	parity/check-investment-drift-doc-subcategory-not-documented/args
 3bfae4775b38a8cf83ea90003c400a89ffda8107214fd70881a85e967ec7bd74	hand-written	parity/check-investment-drift-doc-subcategory-not-documented/in/docs/reference/taxonomies/investment.md
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-investment-drift-doc-subcategory-not-documented/rc
@@ -56,6 +61,12 @@ daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	pa
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-investment-drift-json-nan-example/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-investment-drift-json-nan-example/stderr
 2d9ceb6530890ed733d398821fc4c506b821285b666c095de6c11acb401dcf9c	python-recorded	parity/check-investment-drift-json-nan-example/stdout
+daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	parity/check-investment-drift-json-nbsp-fence/args
+f0a0bb066e8286aaecc1aec8c2ec9b8b503c0bc06b081e2baa08636980f03877	hand-written	parity/check-investment-drift-json-nbsp-fence/in/docs/n.md
+189bb206cccfa3c7de9b4e4a908ef475f9820f09ff91c0f12183149c16c3d870	hand-written	parity/check-investment-drift-json-nbsp-fence/in/docs/reference/taxonomies/investment.md
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-investment-drift-json-nbsp-fence/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-investment-drift-json-nbsp-fence/stderr
+212eddab99fe7a98e127c69c1d96d3ecc26a7d2865927533809fa61dba3b9a8e	python-recorded	parity/check-investment-drift-json-nbsp-fence/stdout
 daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	parity/check-investment-drift-json-unknown-keys/args
 fb2f9f361f146e16836c376669d1e836c4bd60b39a6f91f20e05c3c036d7c3f6	hand-written	parity/check-investment-drift-json-unknown-keys/in/docs/b.md
 189bb206cccfa3c7de9b4e4a908ef475f9820f09ff91c0f12183149c16c3d870	hand-written	parity/check-investment-drift-json-unknown-keys/in/docs/reference/taxonomies/investment.md

@@ -28,7 +28,7 @@ const (
 
 var (
 	invTxKeyRe       = regexp.MustCompile("`([a-z][a-z_]*(?:\\.[a-z][a-z_]*)?)`")
-	invTxJSONBlockRe = regexp.MustCompile("(?s)```json\\s*(.*?)\\s*```")
+	invTxJSONBlockRe = regexp.MustCompile("(?s)```json[" + a1PySpace + "]*(.*?)[" + a1PySpace + "]*```")
 )
 
 func init() {
@@ -125,7 +125,7 @@ func invTxBlockKeys(block string) (themes, subs map[string]bool, mapKeys []strin
 	themes, subs, mapping = map[string]bool{}, map[string]bool{}, map[string]string{}
 	section := ""
 	for _, raw := range invTxSplitLines(block) {
-		line := strings.TrimSpace(raw)
+		line := a1Strip(raw)
 		if line == "" || line == "```text" || line == "```" {
 			continue
 		}

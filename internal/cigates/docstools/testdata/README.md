@@ -78,5 +78,12 @@ Differences on purpose:
 - "THEMES not found / not a set literal / non-string literal / lacks theme prefix" ValueErrors have no Go equivalent.
 - `generated subcategory mapping drift` is not recorded: Python printed the expected dict in set-iteration order (changes with
   `PYTHONHASHSEED`). Go prints it in sorted-key order; `invtaxonomy_guard_test.go` asserts it.
-- `\s` in the JSON-fence regex is ASCII in Go and Unicode in Python. JSON examples decode as in Python: NaN, Infinity and
+- Python's `str` regex and string classes are Unicode: `\s` (and `str.strip()`) match exactly the code points where
+  `str.isspace()` is true (`\t`-`\r`, `\x1c`-`\x1f`, space, `\x85`, `\xa0`, `\u1680`, `\u2000`-`\u200a`, `\u2028`, `\u2029`,
+  `\u202f`, `\u205f`, `\u3000`; checked over all code points). The Go port uses the same set (`a1PySpace`, `a1Strip`),
+  not Go's `\s` or `unicode.IsSpace` (which lacks `\x1c`-`\x1f`). Cases: `check-investment-drift-json-nbsp-fence` (NBSP,
+  U+3000, `\x1c`, `\x1f` around the JSON fence body hide no unknown key) and `check-investment-drift-block-unicode-space`
+  (generated-block lines padded with `\x1f`, U+3000, U+2003 U+00A0, U+1680, U+0085 still parse). The other regex in the
+  package, the key regex, has only `[a-z_.]` classes (ASCII in Python too); no `\w`, `\d` or `\b` is ported.
+- JSON examples decode as in Python: NaN, Infinity and
   -Infinity outside strings are accepted (rewritten to null before Go's decoder); other input Python rejects, Go rejects.

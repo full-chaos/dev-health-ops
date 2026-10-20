@@ -10,6 +10,23 @@ import (
 	"unicode/utf8"
 )
 
+// a1PySpace is Python's str \s as a Go regexp class (Go's own is ASCII): exactly the code points where str.isspace() is
+// true (checked over all of Unicode on Python 3.12): \t \n \v \f \r, \x1c-\x1f, space, \x85, \xa0, \u1680, \u2000-\u200a,
+// \u2028, \u2029, \u202f, \u205f, \u3000. Go's unicode.IsSpace differs (it lacks \x1c-\x1f), so do not use it.
+const a1PySpace = `\x{9}-\x{d}\x{1c}-\x{20}\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
+
+func a1IsPySpace(r rune) bool {
+	switch {
+	case r >= 0x9 && r <= 0xd, r >= 0x1c && r <= 0x20, r == 0x85, r == 0xa0, r == 0x1680, r >= 0x2000 && r <= 0x200a,
+		r == 0x2028, r == 0x2029, r == 0x202f, r == 0x205f, r == 0x3000:
+		return true
+	}
+	return false
+}
+
+// a1Strip is str.strip() with no argument.
+func a1Strip(s string) string { return strings.TrimFunc(s, a1IsPySpace) }
+
 // a1Traceback is where Python died on an uncaught exception: one line "Kind: message" on stderr (the exception
 // line of the traceback, without the stack), exit code 1. The parity cases pin that line (stderr.traceback).
 func a1Traceback(stderr io.Writer, kind, msg string) int {

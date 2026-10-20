@@ -168,6 +168,10 @@ func (r composeCHRun) has(name string) bool   { return exists(filepath.Join(r.di
 func (r composeCHRun) out() string            { return r.stdout + r.stderr }
 
 func composeCHShims(g *guard, dir string, o composeCHOpts) string {
+	// Temporary: the check runs the Python renderer through a real python3 until its owner ports it to Go. A missing
+	// interpreter or script must fail the guard, never skip it.
+	g.expect(composeRealBin("python3") != "", "python3 is not installed: the check's canonical render cannot run, and this guard must not skip")
+	g.expect(exists(g.path(composeCHRenderer)), "%s is missing: the check's canonical render cannot run", composeCHRenderer)
 	bin := filepath.Join(dir, "bin")
 	argv, envLog := filepath.Join(dir, "child-argv.log"), filepath.Join(dir, "child-env.log")
 	args, stdin := filepath.Join(dir, "docker-args.log"), filepath.Join(dir, "docker-stdin.log")
@@ -737,6 +741,7 @@ func TestComposeCHUsersPlanted(t *testing.T) {
 	m := func(old, repl string) func(*testing.T, string) { return mut(composeCHCheck, old, repl) }
 	c := func(old, repl string) func(*testing.T, string) { return all(gitDir, mut(composeCHCut, old, repl)) }
 	runPlanted(t, []planted{
+		{name: "renderer script missing fails loudly", copy: []string{composeCHCheck}, check: composeCHPassesLive, want: "render-dho-api-ch-users.py is missing"},
 		{name: "check prints the hash", copy: chk, check: composeCHPassesLive, want: "prints the password hash",
 			mutate: m(`mode=$mode canonical=yes"`, `mode=$mode canonical=yes hash=$(cat "$canon_dir/real.hash")"`)},
 		{name: "0600 accepted", copy: chk, check: composeCHRefuses0600, want: "0600",

@@ -11,7 +11,7 @@ set -euo pipefail
 # finalize-synthetic-sync`), let the REAL Go worker +
 # reconciler process the resulting sync_dispatch_outbox(kind=post_sync) row
 # exactly as a real provider sync would, then assert rows landed in
-# ClickHouse (ci/assert_metrics_executed_proof.py).
+# ClickHouse (`cigate metrics-proof`, internal/cigates/metricsproof).
 #
 # This is deliberately RED on current main: CHAOS-4263 (daily_metrics_
 # partitions built from the wrong id space) means the partition this run
@@ -51,9 +51,6 @@ cd "${ROOT_DIR}" || exit "${EXIT_FAILURE}"
 # shellcheck source=ci/lib/go_worker_fixture.sh
 source "${ROOT_DIR}/ci/lib/go_worker_fixture.sh"
 
-PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
-export PYTHONPATH
-
 require_cmd() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -70,6 +67,7 @@ require_cmd() {
 require_cmd go
 require_cmd psql
 require_cmd curl
+require_cmd jq
 
 # ---------------------------------------------------------------------------
 # Connection settings. Defaults match this job's own services: block in
@@ -215,7 +213,10 @@ WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
 RECONCILER_LOG_FILE="${METRICS_PROOF_RECONCILER_LOG_FILE:-${TMP_DIR}/reconciler.log}"
 start_worker_stack "${WORKER_LOG_FILE}" "${RECONCILER_LOG_FILE}"
 
-RUN_START="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
+RUN_START="$(date -u +%Y-%m-%dT%H:%M:%S.%6N+00:00)"
+case "${RUN_START}" in
+  *N*) RUN_START="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" ;;
+esac
 # Ordering contract (CHAOS-4266): seed ALL FOUR targets' ClickHouse rows
 # BEFORE finalizing ANY of their sync_runs. NativePostSyncService.Fanout
 # dispatches a remaining-metric family (dora needs cicd+deployments+
@@ -325,9 +326,10 @@ ASSERT_SUMMARY_JSON="${METRICS_PROOF_SUMMARY_JSON_FILE:-${TMP_DIR}/family-summar
 # team_cognitive_load does (team_repo_ownership from the fixtures call) -- the
 # identical causal chain as team_cognitive_load, so it is satisfied by the
 # same seeding with no separate fixture path needed.
+go build -trimpath -o "${BIN_DIR}/cigate" ./cmd/cigate
 assert_readback() {
-  # The DSN reaches the script by environment (it reads CLICKHOUSE_URI), not argv: it can hold a password.
-  CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
+  # The DSN reaches the gate by environment (it reads CLICKHOUSE_URI), not argv: it can hold a password.
+  CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" "${BIN_DIR}/cigate" metrics-proof \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
     --families cicd deploy testops_pipeline testops_test testops_coverage dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk compounding_risk_team ic_finalize work_item_issue_type work_item_investment \
@@ -359,12 +361,7 @@ if [ -f "${ASSERT_SUMMARY_JSON}" ]; then
     # (tests/tooling/test_local_validate_heredocs.py), which does not parse
     # bash well enough to see it is inside a quoted `echo` string, not an
     # actual heredoc.
-    python3 -c "
-import json
-summary = json.load(open('${ASSERT_SUMMARY_JSON}'))
-for family, info in summary.items():
-    print(f'rows_written_{family}={info[\"rows_written\"]}')
-" >>"${GITHUB_OUTPUT}"
+    jq -r 'to_entries[] | "rows_written_\(.key)=\(.value.rows_written)"' "${ASSERT_SUMMARY_JSON}" >>"${GITHUB_OUTPUT}"
   fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
@@ -414,7 +411,7 @@ echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from th
 # readback --families list above, because this script's own E2E seed loop
 # cannot causally satisfy it (no complexity-scan seed step, so
 # repo_complexity_daily -- team_complexity's only input -- never populates;
-# see tests/test_executed_proof_family_coverage.py's KNOWN_UNCOVERED entry,
+# see knownUncovered in internal/cigates/metricsproof/proof_test.go,
 # CHAOS-5283). Adding it here would wait NATIVE_TELEMETRY_WAIT_SECS every
 # run for a sample that can never arrive.
 #

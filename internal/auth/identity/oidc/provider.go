@@ -38,12 +38,19 @@ var errProviderShape = errors.New("oidc: stored provider column has the wrong JS
 
 // ProviderSource loads a provider by id. A missing row is ErrProviderNotFound.
 //
-// ProviderOrg reads only the row's organization, so the entitlement gate runs
-// before anything stored is decoded. Provider reads and decodes the whole
-// row; a stored column it cannot read is ErrProviderConfig.
+// ProviderHead reads only the row's organization, protocol and status, so the
+// entitlement gate and the protocol and status checks run before anything
+// stored is decoded. Provider reads and decodes the whole row; a stored column
+// it cannot read is ErrProviderConfig.
 type ProviderSource interface {
-	ProviderOrg(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	ProviderHead(ctx context.Context, id uuid.UUID) (ProviderHead, error)
 	Provider(ctx context.Context, id uuid.UUID) (Provider, error)
+}
+
+// ProviderHead is the part of a provider row read before any decode.
+type ProviderHead struct {
+	ID, OrgID        uuid.UUID
+	Protocol, Status string
 }
 
 // ErrProviderNotFound reports an unknown provider id.
@@ -56,13 +63,14 @@ var ErrProviderConfig = errors.New("oidc: stored provider configuration is malfo
 // on the columns below and nothing else.
 type PGProviders struct{ Pool *pgxpool.Pool }
 
-func (p PGProviders) ProviderOrg(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
-	var org uuid.UUID
-	err := p.Pool.QueryRow(ctx, `SELECT org_id FROM public.sso_providers WHERE id = $1`, id).Scan(&org)
+func (p PGProviders) ProviderHead(ctx context.Context, id uuid.UUID) (ProviderHead, error) {
+	var head ProviderHead
+	err := p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status FROM public.sso_providers WHERE id = $1`, id).
+		Scan(&head.ID, &head.OrgID, &head.Protocol, &head.Status)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.UUID{}, ErrProviderNotFound
+		return ProviderHead{}, ErrProviderNotFound
 	}
-	return org, err
+	return head, err
 }
 
 func (p PGProviders) Provider(ctx context.Context, id uuid.UUID) (Provider, error) {

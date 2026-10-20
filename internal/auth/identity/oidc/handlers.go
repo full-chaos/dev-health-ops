@@ -110,13 +110,18 @@ func parseCallbackBody(data []byte) (callbackBody, []fieldError) {
 	return body, errs
 }
 
-func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+func readBody(w http.ResponseWriter, r *http.Request) ([]byte, *Error) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"detail": "Request body too large"})
-		return nil, false
+		return nil, deny(http.StatusRequestEntityTooLarge, ReasonMalformed, "Request body too large")
 	}
-	return data, true
+	return data, nil
+}
+
+// reject records a refusal of route once and writes its response.
+func (s *Service) reject(w http.ResponseWriter, r *http.Request, route string, providerID uuid.UUID, failure *Error) {
+	s.refused(r.Context(), route, providerID, failure)
+	s.writeError(w, failure)
 }
 
 // writeJSON serializes first and writes the bytes with their length, the
@@ -143,34 +148,35 @@ func (s *Service) writeError(w http.ResponseWriter, err error) {
 	writeJSON(w, failure.Status, map[string]any{"detail": failure.Detail})
 }
 
-func providerIDFrom(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+func providerIDFrom(r *http.Request) (uuid.UUID, *Error) {
 	id, err := uuid.Parse(r.PathValue("provider_id"))
 	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"detail": []fieldError{{
-			Type: "uuid_parsing", Loc: []string{"path", "provider_id"}, Msg: "Input should be a valid UUID"}}})
-		return uuid.UUID{}, false
+		return uuid.UUID{}, deny(http.StatusUnprocessableEntity, ReasonMalformed, []fieldError{{
+			Type: "uuid_parsing", Loc: []string{"path", "provider_id"}, Msg: "Input should be a valid UUID"}})
 	}
-	return id, true
+	return id, nil
 }
 
 // AuthorizeHandler serves POST /api/v1/auth/oidc/{provider_id}/authorize.
 func (s *Service) AuthorizeHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		providerID, ok := providerIDFrom(w, r)
-		if !ok {
+		providerID, failure := providerIDFrom(r)
+		if failure != nil {
+			s.reject(w, r, routeAuthorize, providerID, failure)
 			return
 		}
-		if _, failure := s.gate(r.Context(), providerID); failure != nil {
-			s.writeError(w, failure)
+		if _, failure := s.admit(r.Context(), providerID); failure != nil {
+			s.reject(w, r, routeAuthorize, providerID, failure)
 			return
 		}
-		data, ok := readBody(w, r)
-		if !ok {
+		data, failure := readBody(w, r)
+		if failure != nil {
+			s.reject(w, r, routeAuthorize, providerID, failure)
 			return
 		}
 		body, errs := parseAuthorizeBody(data)
 		if len(errs) > 0 {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"detail": errs})
+			s.reject(w, r, routeAuthorize, providerID, deny(http.StatusUnprocessableEntity, ReasonMalformed, errs))
 			return
 		}
 		result, err := s.Authorize(r.Context(), providerID, body.RedirectURI)
@@ -186,21 +192,23 @@ func (s *Service) AuthorizeHandler() http.Handler {
 // CallbackHandler serves POST /api/v1/auth/oidc/{provider_id}/callback.
 func (s *Service) CallbackHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		providerID, ok := providerIDFrom(w, r)
-		if !ok {
+		providerID, failure := providerIDFrom(r)
+		if failure != nil {
+			s.reject(w, r, routeCallback, providerID, failure)
 			return
 		}
-		if _, failure := s.gate(r.Context(), providerID); failure != nil {
-			s.writeError(w, failure)
+		if _, failure := s.admit(r.Context(), providerID); failure != nil {
+			s.reject(w, r, routeCallback, providerID, failure)
 			return
 		}
-		data, ok := readBody(w, r)
-		if !ok {
+		data, failure := readBody(w, r)
+		if failure != nil {
+			s.reject(w, r, routeCallback, providerID, failure)
 			return
 		}
 		body, errs := parseCallbackBody(data)
 		if len(errs) > 0 {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"detail": errs})
+			s.reject(w, r, routeCallback, providerID, deny(http.StatusUnprocessableEntity, ReasonMalformed, errs))
 			return
 		}
 		login, clear, err := s.Callback(r.Context(), providerID, CallbackInput{

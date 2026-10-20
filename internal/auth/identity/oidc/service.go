@@ -141,8 +141,8 @@ type Config struct {
 
 // Service runs the OIDC flow.
 type Service struct {
-	cfg       Config
-	callbacks metric.Int64Counter
+	cfg      Config
+	outcomes metric.Int64Counter
 }
 
 // New validates the configuration.
@@ -167,12 +167,12 @@ func New(cfg Config) (*Service, error) {
 	if meter == nil {
 		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc")
 	}
-	counter, err := meter.Int64Counter("auth.oidc.callbacks",
-		metric.WithDescription("OIDC SSO callbacks by outcome and reason code."))
+	counter, err := meter.Int64Counter("auth.oidc.outcomes",
+		metric.WithDescription("OIDC SSO authorize and callback outcomes by route, outcome and reason code."))
 	if err != nil {
 		return nil, err
 	}
-	return &Service{cfg: cfg, callbacks: counter}, nil
+	return &Service{cfg: cfg, outcomes: counter}, nil
 }
 
 // AuthorizeResult is the authorize response and the browser-binding cookie.
@@ -190,30 +190,37 @@ func loginNonceCookieName(flowID string) string { return "dho_oidc_login_nonce_"
 
 // loadProvider runs the checks go-api runs before any flow work, in its order:
 // 404, entitlement, protocol, status.
-// gate resolves the provider row to its organization and runs the SSO
-// entitlement check: 404, then 402. It runs before the stored config or any
-// request body is decoded.
-func (s *Service) gate(ctx context.Context, providerID uuid.UUID) (uuid.UUID, *Error) {
-	org, err := s.cfg.Providers.ProviderOrg(ctx, providerID)
+// admit runs the provider checks in one fixed order, before the stored config
+// or any request body is decoded: 404 for an unknown provider, 402 for an
+// organization without the sso_saml entitlement, 400 for another protocol or
+// an inactive provider.
+func (s *Service) admit(ctx context.Context, providerID uuid.UUID) (ProviderHead, *Error) {
+	head, err := s.cfg.Providers.ProviderHead(ctx, providerID)
 	if errors.Is(err, ErrProviderNotFound) {
-		return uuid.UUID{}, deny(http.StatusNotFound, ReasonMalformed, detailProviderAbsent)
+		return ProviderHead{}, deny(http.StatusNotFound, ReasonMalformed, detailProviderAbsent)
 	}
 	if err != nil {
-		return uuid.UUID{}, internal(ReasonStoreUnavailable, err)
+		return ProviderHead{}, internal(ReasonStoreUnavailable, err)
 	}
-	allowed, err := s.cfg.Entitlements.SSOAllowed(ctx, org)
+	allowed, err := s.cfg.Entitlements.SSOAllowed(ctx, head.OrgID)
 	if err != nil {
-		s.cfg.Logger.ErrorContext(ctx, "auth oidc: entitlement check failed; denying", "org_id", org.String(),
+		s.cfg.Logger.ErrorContext(ctx, "auth oidc: entitlement check failed; denying", "org_id", head.OrgID.String(),
 			logging.ErrorAttr(err))
 	}
 	if !allowed {
-		return uuid.UUID{}, deny(http.StatusPaymentRequired, ReasonNotEntitled, s.cfg.Entitlements.DeniedDetail())
+		return ProviderHead{}, deny(http.StatusPaymentRequired, ReasonNotEntitled, s.cfg.Entitlements.DeniedDetail())
 	}
-	return org, nil
+	if head.Protocol != protocolOIDC {
+		return ProviderHead{}, deny(http.StatusBadRequest, ReasonMalformed, "Provider is not OIDC")
+	}
+	if head.Status != "active" {
+		return ProviderHead{}, deny(http.StatusBadRequest, ReasonMalformed, "SSO provider is not active")
+	}
+	return head, nil
 }
 
 func (s *Service) loadProvider(ctx context.Context, providerID uuid.UUID) (Provider, *Error) {
-	org, failure := s.gate(ctx, providerID)
+	head, failure := s.admit(ctx, providerID)
 	if failure != nil {
 		return Provider{}, failure
 	}
@@ -225,16 +232,9 @@ func (s *Service) loadProvider(ctx context.Context, providerID uuid.UUID) (Provi
 		return Provider{}, internal(ReasonDependency, err)
 	case err != nil:
 		return Provider{}, internal(ReasonStoreUnavailable, err)
-	case row.OrgID != org:
-		// The row moved to another organization between the two reads: the
-		// gate decided for the old one.
-		return Provider{}, internal(ReasonStoreUnavailable, errors.New("provider organization changed during the request"))
-	}
-	if row.Protocol != protocolOIDC {
-		return Provider{}, deny(http.StatusBadRequest, ReasonMalformed, "Provider is not OIDC")
-	}
-	if row.Status != "active" {
-		return Provider{}, deny(http.StatusBadRequest, ReasonMalformed, "SSO provider is not active")
+	case row.OrgID != head.OrgID || row.Protocol != head.Protocol || row.Status != head.Status:
+		// The row changed between the two reads: the checks decided for the old one.
+		return Provider{}, internal(ReasonStoreUnavailable, errors.New("provider row changed during the request"))
 	}
 	return row, nil
 }
@@ -242,6 +242,16 @@ func (s *Service) loadProvider(ctx context.Context, providerID uuid.UUID) (Provi
 // Authorize starts a flow: a sealed single-use state, PKCE S256 always, and a
 // per-flow login-nonce cookie that binds the state to this browser.
 func (s *Service) Authorize(ctx context.Context, providerID uuid.UUID, redirectURI string) (AuthorizeResult, error) {
+	result, failure := s.authorize(ctx, providerID, redirectURI)
+	if failure != nil {
+		s.refused(ctx, routeAuthorize, providerID, failure)
+		return AuthorizeResult{}, failure
+	}
+	s.record(ctx, routeAuthorize, outcomeSuccess, ReasonAccepted)
+	return result, nil
+}
+
+func (s *Service) authorize(ctx context.Context, providerID uuid.UUID, redirectURI string) (AuthorizeResult, *Error) {
 	row, failure := s.loadProvider(ctx, providerID)
 	if failure != nil {
 		return AuthorizeResult{}, failure
@@ -318,27 +328,41 @@ type Login struct {
 func (s *Service) Callback(ctx context.Context, providerID uuid.UUID, in CallbackInput) (Login, *http.Cookie, error) {
 	login, clear, failure := s.callback(ctx, providerID, in)
 	if failure != nil {
-		outcome, level := "denied", slog.LevelWarn
-		if failure.Status >= http.StatusInternalServerError {
-			outcome, level = "error", slog.LevelError
-		}
-		s.record(ctx, outcome, failure.Reason)
-		attrs := []any{"provider_id", providerID.String(), "reason", string(failure.Reason), "status", failure.Status,
-			"request_id", requestid.Wire(ctx)}
-		if failure.err != nil {
-			attrs = append(attrs, logging.ErrorAttr(failure.err))
-		}
-		s.cfg.Logger.Log(ctx, level, "auth oidc: callback refused", attrs...)
+		s.refused(ctx, routeCallback, providerID, failure)
 		return Login{}, clear, failure
 	}
-	s.record(ctx, "success", ReasonAccepted)
+	s.record(ctx, routeCallback, outcomeSuccess, ReasonAccepted)
 	s.cfg.Logger.InfoContext(ctx, "auth oidc: signed in", "provider_id", providerID.String(),
 		"principal_id", login.PrincipalID.String(), "request_id", requestid.Wire(ctx))
 	return login, clear, nil
 }
 
-func (s *Service) record(ctx context.Context, outcome string, reason Reason) {
-	s.callbacks.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome), attribute.String("reason", string(reason))))
+const (
+	routeAuthorize = "authorize"
+	routeCallback  = "callback"
+	outcomeSuccess = "success"
+)
+
+// record counts one outcome. Every outcome of both routes is counted here
+// exactly once.
+func (s *Service) record(ctx context.Context, route, outcome string, reason Reason) {
+	s.outcomes.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route),
+		attribute.String("outcome", outcome), attribute.String("reason", string(reason))))
+}
+
+// refused counts a refusal and writes its one log line.
+func (s *Service) refused(ctx context.Context, route string, providerID uuid.UUID, failure *Error) {
+	outcome, level := "denied", slog.LevelWarn
+	if failure.Status >= http.StatusInternalServerError {
+		outcome, level = "error", slog.LevelError
+	}
+	s.record(ctx, route, outcome, failure.Reason)
+	attrs := []any{"route", route, "provider_id", providerID.String(), "reason", string(failure.Reason),
+		"status", failure.Status, "request_id", requestid.Wire(ctx)}
+	if failure.err != nil {
+		attrs = append(attrs, logging.ErrorAttr(failure.err))
+	}
+	s.cfg.Logger.Log(ctx, level, "auth oidc: request refused", attrs...)
 }
 
 func (s *Service) callback(ctx context.Context, providerID uuid.UUID, in CallbackInput) (Login, *http.Cookie, *Error) {

@@ -4,26 +4,28 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// testsPyAllowed is the closed list of Python files that may stay under tests/.
+// testsPyAllowed is the closed list of Python files that may stay under tests/, as the path under tests/ without the
+// ".py" suffix. Stems, not file names: a literal file name would make the go.yml path-filter guard treat each file as
+// a path a Go test reads, and these files are not inputs of any Go test.
 // Anything under tests/tooling/ and tests/docs/ is allowed as a whole.
 var testsPyAllowed = map[string]bool{
-	"tests/__init__.py":                             true,
-	"tests/conftest.py":                             true,
-	"tests/_env_isolation.py":                       true,
-	"tests/test_go_api_routing_digest_checker.py":   true,
-	"tests/test_go_api_routing_operator_text.py":    true,
-	"tests/test_compose_config.py":                  true,
-	"tests/scripts/test_strip_agent_attribution.py": true,
+	"__init__":                             true,
+	"conftest":                             true,
+	"_env_isolation":                       true,
+	"test_go_api_routing_digest_checker":   true,
+	"test_go_api_routing_operator_text":    true,
+	"scripts/test_strip_agent_attribution": true,
 }
 
 func testsTreeRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
+	_, file, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate test file")
 	}
@@ -56,7 +58,7 @@ func testsTreePythonFiles(t *testing.T, root string) []string {
 func testsTreeStray(files []string) []string {
 	var stray []string
 	for _, f := range files {
-		if testsPyAllowed[f] || strings.HasPrefix(f, "tests/tooling/") || strings.HasPrefix(f, "tests/docs/") {
+		if testsPyAllowed[strings.TrimSuffix(strings.TrimPrefix(f, "tests/"), ".py")] || strings.HasPrefix(f, "tests/tooling/") || strings.HasPrefix(f, "tests/docs/") {
 			continue
 		}
 		stray = append(stray, f)

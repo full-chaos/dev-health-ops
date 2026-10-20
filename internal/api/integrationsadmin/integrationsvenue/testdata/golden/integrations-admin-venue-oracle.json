@@ -530,7 +530,7 @@
       "request_headers_sha256": "4c014b544df84fee97b22f957003834cad5096ee0e29d79e23b92502d945b673",
       "status": 200,
       "headers": {
-        "content-length": "751",
+        "content-length": "749",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -550,7 +550,7 @@
       "request_headers_sha256": "4c014b544df84fee97b22f957003834cad5096ee0e29d79e23b92502d945b673",
       "status": 200,
       "headers": {
-        "content-length": "688",
+        "content-length": "686",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -4065,7 +4065,7 @@
       "request_headers_sha256": "a327d4f24a8d6455e24e505d39b628bb2d6ed06da18ff333f4544b367fb296ba",
       "status": 200,
       "headers": {
-        "content-length": "346",
+        "content-length": "345",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",

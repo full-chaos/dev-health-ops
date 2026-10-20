@@ -85,6 +85,7 @@ internal/apiservice/ownershipvenue	1
 internal/apiservice/ssovenue	1
 internal/atlassianteams	18
 internal/audit	96
+internal/auth/authapi	1
 internal/auth/authconfig	1
 internal/auth/authruntime	5
 internal/auth/authstore	1
@@ -98,6 +99,7 @@ internal/auth/keystore	1
 internal/auth/passwordhash	11
 internal/auth/passwordpolicy	1
 internal/auth/ratelimitvalkey	1
+internal/auth/requestid	1
 internal/auth/session	2
 internal/auth/signedtoken	1
 internal/auth/writerinventory	20

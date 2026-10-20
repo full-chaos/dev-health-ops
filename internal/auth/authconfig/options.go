@@ -80,9 +80,10 @@ const (
 	GroupHTTP     = "HTTP surface"
 	GroupDatabase = "Database"
 	GroupKeys     = "Signing keys"
+	GroupSession  = "Session routes"
 )
 
-var groupOrder = []string{GroupRuntime, GroupHTTP, GroupDatabase, GroupKeys}
+var groupOrder = []string{GroupRuntime, GroupHTTP, GroupDatabase, GroupKeys, GroupSession}
 
 var optionRegistry = []Option{
 	{
@@ -103,7 +104,7 @@ var optionRegistry = []Option{
 	{
 		Flag: "http-addr", Env: EnvAPIAddress, Kind: KindString,
 		Default: defaultAPIAddress, Group: GroupHTTP,
-		Usage: "host:port for the auth API surface (no routes are mounted in this wave)",
+		Usage: "host:port for the auth API surface (the session routes mount only when both session secrets are set)",
 	},
 	{
 		Flag: "operator-http-addr", Env: EnvOperatorAddress, Kind: KindString,
@@ -161,6 +162,27 @@ var optionRegistry = []Option{
 		Group: GroupKeys,
 		Usage: "JWKS `kid` for the configured signing key (ACP-ADR-02 §5)",
 	},
+	{
+		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
+			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Set together with " +
+			EnvSessionSuccessorKey + "; with neither, no session route is mounted",
+	},
+	{
+		Env: EnvSessionSuccessorKey, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "32-byte session successor key, base64url without padding; " +
+			EnvSessionSuccessorKey + "_FILE reads it from a mounted file instead",
+	},
+	{
+		Flag: "jwt-issuer", Env: EnvAccessTokenIssuer, Kind: KindString,
+		Default: defaultAccessTokenIssuer, Group: GroupSession,
+		Usage: "iss of the compatibility access token (go-api's JWT_ISSUER)",
+	},
+	{
+		Flag: "jwt-audience", Env: EnvAccessTokenAudience, Kind: KindString,
+		Default: defaultAccessTokenAudience, Group: GroupSession,
+		Usage: "aud of the compatibility access token (go-api's JWT_AUDIENCE)",
+	},
 }
 
 // Options returns the declared option set in registry order.
@@ -171,7 +193,7 @@ func Options() []Option {
 // HelpText renders the option registry as the binary's --help output.
 func HelpText() string {
 	var out strings.Builder
-	fmt.Fprintf(&out, "%s -- Auth Control Plane service (dormant: no route is mounted in this wave)\n\n", Service)
+	fmt.Fprintf(&out, "%s -- Auth Control Plane service (dormant unless the session secrets are set)\n\n", Service)
 	fmt.Fprintf(&out, "Usage:\n  %s [options]\n\n", Service)
 	fmt.Fprint(&out, "Options:\n  --version\n        print build metadata as JSON and exit\n  --healthcheck\n        probe this deployment's own operator /readyz over loopback; exit 0 only on 200\n  --help\n        print this message and exit\n")
 

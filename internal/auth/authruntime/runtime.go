@@ -8,10 +8,10 @@
 // mains are worth the small indirection -- and for why that note is not a
 // licence to build a plugin host here.
 //
-// Nothing here knows what an identity, a session or a token is. It wires
-// interfaces: keystore.Source for signing-key custody, authstore.Prober for
-// storage, httpapi.Route for transport. The domain packages later waves add
-// plug in at this one site.
+// It wires interfaces: keystore.Source for signing-key custody,
+// authstore.Prober for storage, httpapi.Route for transport. The domain
+// packages plug in at this one site: the session routes (internal/auth/authapi
+// over internal/auth/session) mount here when their secrets are configured.
 package authruntime
 
 import (
@@ -30,16 +30,21 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
+	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Readiness check names. They are metric label values (see
@@ -56,21 +61,37 @@ type IO struct {
 	Stderr io.Writer
 }
 
-// Routes is the service's mounted route set.
-//
-// It is EMPTY, and that is the whole of CHAOS-4881's dormancy requirement:
-// "the service is built dormant, nothing in prod calls it, no production token
-// issuance". The transport that would serve routes is fully built and fully
-// tested in internal/auth/httpapi; what is withheld is the mounting, at this
-// one visible site, so that adding the first real route is a one-line,
-// reviewable change rather than an archaeology exercise.
-//
-// A request to any path therefore receives this service's 404 envelope.
 // maxInFlightRequests caps concurrent requests on the auth API listener; at the
 // 1 MiB default body limit that bounds buffering near 64 MiB.
 const maxInFlightRequests = 64
 
-func Routes() []httpapi.Route { return nil }
+// sessionRoutes is the service's mounted route set: the session routes
+// (CHAOS-10228) when cfg.Session is enabled, and nothing otherwise. Without
+// the session secrets the service stays as CHAOS-4881 built it, dormant: every
+// path receives the 404 envelope and no token is issued. No deployed stack
+// sets those secrets yet; prod enablement is a separate decision (CHAOS-3275
+// D1).
+func sessionRoutes(
+	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+) ([]httpapi.Route, error) {
+	if !cfg.Session.Enabled {
+		return nil, nil
+	}
+	sessions, err := session.New(session.Config{
+		Pool: pool, Schema: schema, Logger: logger,
+		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
+	})
+	if err != nil {
+		return nil, err
+	}
+	issuer, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
+	if err != nil {
+		return nil, err
+	}
+	return authapi.Routes(authapi.Deps{
+		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+	})
+}
 
 // Main runs the command and exits with its status.
 func Main() {
@@ -183,13 +204,14 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 func configure(
 	ctx context.Context, cfg authconfig.Config, logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
-	return configureWithRoutes(ctx, cfg, logger, Routes())
+	return configureWithRoutes(ctx, cfg, logger, nil)
 }
 
-// configureWithRoutes is configure with the API route table supplied, so the
-// production-stack test drives the handler configure really builds.
+// configureWithRoutes is configure with extra API routes mounted beside the
+// service's own, so the production-stack test drives the handler configure
+// really builds.
 func configureWithRoutes(
-	ctx context.Context, cfg authconfig.Config, logger *slog.Logger, routes []httpapi.Route,
+	ctx context.Context, cfg authconfig.Config, logger *slog.Logger, extra []httpapi.Route,
 ) ([]lifecycle.Component, error) {
 	store, err := authstore.Open(ctx, authstore.Config{
 		URI:            cfg.DatabaseURI.Reveal(),
@@ -296,6 +318,19 @@ func configureWithRoutes(
 		return nil, err
 	}
 
+	schemaID, err := authschema.NewValidatedIdentifier(cfg.DatabaseSchema)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	routes, err := sessionRoutes(cfg, logger, store.Pool(), schemaID)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra))
+	routes = append(routes, extra...)
+
 	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))
 	if err != nil {
 		closeStore()
@@ -306,11 +341,6 @@ func configureWithRoutes(
 	// sink: publishing stays off (a sink-less publisher would mark events
 	// delivered that nobody received) and the reaper runs. A sink is injected
 	// here when the first consumer lands.
-	schemaID, err := authschema.NewValidatedIdentifier(cfg.DatabaseSchema)
-	if err != nil {
-		closeStore()
-		return nil, err
-	}
 	loopConfig := audit.DefaultLoopConfig(schemaID, registry)
 	loopConfig.Logger = logger
 	outboxLoop, err := audit.NewOutboxLoop(store.Pool(), nil, loopConfig)
@@ -467,6 +497,13 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		RateLimit:      cfg.RateLimit.PerSecond,
 		RateLimitBurst: cfg.RateLimit.Burst,
 		MaxInFlight:    maxInFlightRequests,
+		// The server-minted request id (internal/auth/requestid) wraps the
+		// whole mux, so the transport's own refusals (404, 405, 413, 429)
+		// carry X-Auth-Request-ID as route answers do.
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware},
+		// The transport id is always minted here, never a client's
+		// X-Request-ID: it reaches every log line and envelope.
+		AcceptRequestID: func(string) bool { return false },
 	}
 }
 

@@ -176,3 +176,9 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.WriteHeader(status)
 	_, _ = io.Copy(w, bytes.NewReader(payload))
 }
+
+// Classify is not built yet.
+func Classify(error) (int, Reason) { return 0, "" }
+
+// WriteError is not built yet.
+func WriteError(w http.ResponseWriter, provider Provider, err error) {}

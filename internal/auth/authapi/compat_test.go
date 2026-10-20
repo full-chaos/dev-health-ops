@@ -5,9 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,12 +18,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -234,6 +234,7 @@ type compatFixture struct {
 	projector  *fakeProjector
 	appended   []audit.AuditEvent
 	appendErr  error
+	social     SocialExchange
 	orgB       uuid.UUID
 	orgD       uuid.UUID
 }
@@ -276,6 +277,7 @@ func (f *compatFixture) buildCompat() {
 			Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey),
 			Compare: func(hash, password string) bool { return hash == "hash:"+password },
 		},
+		Social: f.social,
 	})
 	if err != nil {
 		f.t.Fatal(err)
@@ -667,30 +669,159 @@ func TestCompatLoginFailsClosedWhenItsAuditRowCannotBeWritten(t *testing.T) {
 	}
 }
 
-func TestSocialSessionAnswersGoAPIsSocialLoginResponse(t *testing.T) {
+// fakeSocial is the social sign-in domain with a programmable answer.
+type fakeSocial struct {
+	result   social.ExchangeResult
+	err      error
+	calls    int
+	provider social.Provider
+	token    string
+}
+
+func (f *fakeSocial) Exchange(_ context.Context, provider social.Provider, token contracts.SecretString, _ *string) (social.ExchangeResult, error) {
+	f.calls++
+	f.provider, f.token = provider, token.Reveal()
+	return f.result, f.err
+}
+
+func newSocialFixture(t *testing.T) (*compatFixture, *fakeSocial) {
+	t.Helper()
 	f := newCompatFixture(t)
-	h := compatHandlers{CompatDeps: CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: f.projector,
-		Logger: slog.New(slog.NewJSONHandler(f.logs, nil))}}
-	rec, err := newRecorder(h.Logger, noop.NewMeterProvider().Meter("test"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.rec = rec
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, PatternCompatSocialLogin, nil)
-	socialSessions{h: h}.WriteSession(response, request, f.principal, true)
+	fake := &fakeSocial{}
+	f.social = fake
+	f.buildCompat()
+	return f, fake
+}
+
+func TestCompatSocialLoginStartsAFederatedSessionAndAnswersGoAPIsSocialLoginResponse(t *testing.T) {
+	f, fake := newSocialFixture(t)
+	fake.result = social.ExchangeResult{PrincipalID: f.principal, Created: true}
+	response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"gho_test"}`, nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", response.Code, response.Body)
 	}
 	if got, want := keyOrder(t, response.Body.String()), goldenKeyOrder(t, "social: github new user"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("members %v, golden %v", got, want)
 	}
-	if decodeObject(t, response.Body.Bytes())["is_new_user"] != true {
-		t.Fatalf("body %s", response.Body)
+	if decodeObject(t, response.Body.Bytes())["is_new_user"] != true || fake.provider != social.GitHub || fake.token != "gho_test" {
+		t.Fatalf("body %s, exchange %s/%s", response.Body, fake.provider, fake.token)
 	}
 	created := f.sessions.created[0]
-	if !reflect.DeepEqual(created.amr, []string{"fed"}) || created.event.EventType != EventLoginSucceeded || *created.org != f.orgB {
+	if !reflect.DeepEqual(created.amr, []string{"fed"}) || created.event.EventType != EventLoginSucceeded || *created.org != f.orgB ||
+		created.event.Attributes["provider"] != "github" {
 		t.Fatalf("session %+v", created)
+	}
+	if len(f.appended) != 0 {
+		t.Fatal("a social sign-in appended a failure row")
+	}
+}
+
+func TestCompatSocialLoginValidatesTheBodyAsGoAPIDoes(t *testing.T) {
+	for golden, body := range map[string]string{
+		"social: missing token":    `{"provider":"github"}`,
+		"social: unknown provider": `{"provider":"bitbucket","provider_access_token":"x"}`,
+	} {
+		f, fake := newSocialFixture(t)
+		response := f.do(http.MethodPost, PatternCompatSocialLogin, body, nil)
+		expectGolden(t, response, response.Body.Bytes(), golden)
+		if fake.calls != 0 || len(f.appended) != 0 {
+			t.Fatalf("%s: a refused body reached the exchange (%d) or the audit (%d)", golden, fake.calls, len(f.appended))
+		}
+	}
+	f, _ := newSocialFixture(t)
+	for _, body := range []string{`[]`, ``, `{"provider":"github"`} {
+		response := f.do(http.MethodPost, PatternCompatSocialLogin, body, nil)
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("body %q answered %d, want go-api's 422", body, response.Code)
+		}
+		if _, isList := decodeObject(t, response.Body.Bytes())["detail"].([]any); !isList {
+			t.Fatalf("body %q answered %s, want a FastAPI validation list", body, response.Body)
+		}
+	}
+}
+
+// Every refused social sign-in writes its auth.login.failed row through the
+// same path as a refused password sign-in; an operational failure (5xx) is no
+// sign-in decision and writes none.
+func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		provider string
+		status   int
+		golden   string
+		reason   string
+	}{
+		{"provider refused", fmt.Errorf("fetch: %w", social.ErrProviderRefused), "github", 401, "social: github refused token", "invalid_credentials"},
+		{"email of another provider", &social.ConflictError{ExistingMethod: "github"}, "gitlab", 409, "social: gitlab email of a github user", "email_collision"},
+		{"email unverified", social.ErrEmailUnverified, "github", 403, "", "email_unverified"},
+		{"principal disabled", social.ErrPrincipalDisabled, "github", 403, "", "principal_deactivated"},
+		{"sign-up not available", identity.ErrSignupNotAvailable, "google", 403, "", "signup_unavailable"},
+		{"identity conflict", identity.ErrIdentityConflict, "github", 409, "", "identity_conflict"},
+		{"provider not configured", social.ErrProviderNotConfigured, "google", 503, "social: google not configured", ""},
+		{"provider unavailable", social.ErrProviderUnavailable, "github", 500, "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f, fake := newSocialFixture(t)
+			fake.err = c.err
+			response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"`+c.provider+`","provider_access_token":"tok"}`, nil)
+			if c.golden != "" {
+				expectGolden(t, response, response.Body.Bytes(), c.golden)
+			} else if response.Code != c.status {
+				t.Fatalf("status %d, want %d: %s", response.Code, c.status, response.Body)
+			}
+			if len(f.sessions.created) != 0 {
+				t.Fatal("a refused social sign-in created a session")
+			}
+			if c.reason == "" {
+				if len(f.appended) != 0 {
+					t.Fatalf("an operational failure appended %+v", f.appended)
+				}
+				return
+			}
+			if len(f.appended) != 1 {
+				t.Fatalf("%d audit rows, want 1", len(f.appended))
+			}
+			event := f.appended[0]
+			if event.EventType != audit.EventLoginFailed || event.Outcome != audit.OutcomeDenied || event.RequestID == nil ||
+				event.Attributes["reason_code"] != c.reason || event.Attributes["provider"] != c.provider {
+				t.Fatalf("audit row %+v", event)
+			}
+			if err := audit.ValidateAttributes(event.Attributes); err != nil {
+				t.Fatalf("the audit row's attributes are outside the allowlist: %v", err)
+			}
+		})
+	}
+}
+
+func TestCompatSocialRefusalFailsClosedWhenItsAuditRowCannotBeWritten(t *testing.T) {
+	f, fake := newSocialFixture(t)
+	fake.err = social.ErrProviderRefused
+	f.appendErr = errors.New("audit down")
+	response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"tok"}`, nil)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500 when the refusal cannot be audited", response.Code)
+	}
+}
+
+// Every refusal a password sign-in answers is audited too, and every audit
+// row of a sign-in refusal carries attributes the audit allowlist admits.
+func TestEveryLoginRefusalIsAuditedWithAllowlistedAttributes(t *testing.T) {
+	f := newCompatFixture(t)
+	for _, body := range []string{
+		loginBody(compatEmail, "wrong", ""),
+		loginBody("nobody@example.com", "x", ""),
+		loginBody(compatEmail, compatPassword, f.orgD.String()),
+	} {
+		before := len(f.appended)
+		response := f.do(http.MethodPost, PatternCompatLogin, body, nil)
+		if response.Code < 400 || response.Code >= 500 || len(f.appended) != before+1 {
+			t.Fatalf("answer %d with %d new audit rows, want a 4xx with one", response.Code, len(f.appended)-before)
+		}
+		if err := audit.ValidateAttributes(f.appended[len(f.appended)-1].Attributes); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -41,6 +41,11 @@ type CompatSessions interface {
 	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
 }
 
+// SocialExchange is the social sign-in domain (*social.Service).
+type SocialExchange interface {
+	Exchange(ctx context.Context, provider social.Provider, token contracts.SecretString, requestID *string) (social.ExchangeResult, error)
+}
+
 // Projector makes the auth schema's principal and organization rows agree
 // with go-api's before a session or an audit row names them
 // (*identity.Store).
@@ -73,7 +78,7 @@ type CompatDeps struct {
 	// Login mounts POST /api/v1/auth/login; nil leaves it unmounted.
 	Login *LoginConfig
 	// Social mounts POST /api/v1/auth/social-login; nil leaves it unmounted.
-	Social *social.Service
+	Social SocialExchange
 }
 
 type compatHandlers struct {
@@ -117,8 +122,7 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin)})
 	}
 	if deps.Social != nil {
-		exchange := social.Handlers{Service: deps.Social, Sessions: socialSessions{h: h}}.Exchange
-		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(exchange)})
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin)})
 	}
 	return routes, nil
 }

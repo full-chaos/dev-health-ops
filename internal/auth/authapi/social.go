@@ -48,3 +48,8 @@ func (s socialSessions) WriteSession(w http.ResponseWriter, r *http.Request, pri
 	writeCompatModel(w, loginResponse(access, issued, membership == nil && !user.IsSuperuser,
 		userInfo(principalID, user, membership), &created))
 }
+
+// compatSocialLogin is not built yet.
+func (h compatHandlers) compatSocialLogin(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}

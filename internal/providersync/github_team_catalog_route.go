@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -379,15 +378,19 @@ func (collector GitHubTeamCatalogRouteHandler) resolveEmail(
 		return nil, err
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxGitHubUserResponseBytes+1))
-	if err != nil || len(body) > maxGitHubUserResponseBytes {
-		return nil, providerfoundation.ErrPaginationInvalid
+	paginationCause := func(error) error { return providerfoundation.ErrPaginationInvalid }
+	body, err := providerfoundation.ReadResponseBodyWith(response, maxGitHubUserResponseBytes, paginationCause)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxGitHubUserResponseBytes {
+		return nil, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, providerfoundation.ErrPaginationInvalid)
 	}
 	var payload struct {
 		Email *string `json:"email"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, providerfoundation.ErrNormalizationInvalid
+	if err := providerfoundation.DecodeResponseJSON(response, body, &payload, providerfoundation.DecodeStrict); err != nil {
+		return nil, err
 	}
 	cache[login] = payload.Email
 	return payload.Email, nil

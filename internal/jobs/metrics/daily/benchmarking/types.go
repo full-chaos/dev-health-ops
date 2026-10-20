@@ -20,7 +20,7 @@
 // # Write mode
 //
 // All six output tables are PLAIN MergeTree
-// (migrations/clickhouse/031_testops_benchmarking.sql) with no version column,
+// (internal/chmigrate/history/031_testops_benchmarking.sql) with no version column,
 // so every write appends. That is why the Python write-skip guard is
 // load-bearing and why the once-per-org fix above matters.
 //

@@ -115,7 +115,7 @@ func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, ro
 		return SnapshotAbsenceNotProven
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxOwnershipLookupBody+1))
+	body, err := providerfoundation.ReadResponseBody(response, maxOwnershipLookupBody)
 	if err != nil || len(body) > maxOwnershipLookupBody {
 		return SnapshotAbsenceNotProven
 	}
@@ -148,7 +148,7 @@ func (prover gitlabGroupProjectAbsence) projectByID(ctx context.Context, groupPa
 		return SnapshotAbsenceNotProven
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxOwnershipLookupBody+1))
+	body, err := providerfoundation.ReadResponseBody(response, maxOwnershipLookupBody)
 	if err != nil || len(body) > maxOwnershipLookupBody || response.StatusCode != http.StatusOK {
 		return SnapshotAbsenceNotProven
 	}
@@ -259,7 +259,7 @@ func (prover githubTeamAbsence) TeamAbsence(ctx context.Context, teamID string) 
 		return SnapshotAbsenceNotProven
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxOwnershipLookupBody+1))
+	body, err := providerfoundation.ReadResponseBody(response, maxOwnershipLookupBody)
 	if err != nil || len(body) > maxOwnershipLookupBody || response.StatusCode != http.StatusOK {
 		return SnapshotAbsenceNotProven
 	}
@@ -318,7 +318,7 @@ func (prover gitlabTeamAbsence) TeamAbsence(ctx context.Context, teamID string) 
 		return SnapshotAbsenceNotProven
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxOwnershipLookupBody+1))
+	body, err := providerfoundation.ReadResponseBody(response, maxOwnershipLookupBody)
 	if err != nil || len(body) > maxOwnershipLookupBody || response.StatusCode != http.StatusOK {
 		return SnapshotAbsenceNotProven
 	}

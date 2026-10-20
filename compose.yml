@@ -588,7 +588,7 @@ services:
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       # CHAOS-4587: migration 067 checks this same
       # variable to decide whether to apply the ordering-contract cutover
-      # (src/dev_health_ops/migrations/clickhouse/067_operational_ordering_contract.py) --
+      # (the deleted Python migration 067_operational_ordering_contract.py) --
       # without a reference here, an operator's shell export never reaches
       # this container, 067 silently defers ("successfully"), and workers
       # wired to the same export (the go-worker-* services below) start

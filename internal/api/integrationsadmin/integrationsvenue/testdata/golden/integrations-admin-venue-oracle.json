@@ -14,10 +14,11 @@
       "body $[].created_at": 46,
       "body $[].id": 114,
       "body $[].updated_at": 58,
-      "header content-length": 92,
+      "header content-length": 96,
       "header date": 263,
       "header x-dev-health-plane": 263,
-      "header x-request-id": 516
+      "header x-request-id": 516,
+      "body $[].state_changed_at": 50
     }
   },
   "requests": [
@@ -529,7 +530,7 @@
       "request_headers_sha256": "4c014b544df84fee97b22f957003834cad5096ee0e29d79e23b92502d945b673",
       "status": 200,
       "headers": {
-        "content-length": "653",
+        "content-length": "749",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -539,7 +540,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\"}]"
+      "body": "[{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":null,\"state_changed_by\":null},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\",\"state_changed_at\":null,\"state_changed_by\":null}]"
     },
     {
       "name": "datasets jira",
@@ -549,7 +550,7 @@
       "request_headers_sha256": "4c014b544df84fee97b22f957003834cad5096ee0e29d79e23b92502d945b673",
       "status": 200,
       "headers": {
-        "content-length": "590",
+        "content-length": "686",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -559,7 +560,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"fa9c0ed9-c355-5ed4-802b-f9d5beb40aae\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"incidents\",\"is_enabled\":false,\"options\":{\"a\":1.0},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"cf6479b3-a453-56b0-a117-a20c115b9ea4\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"fa9c0ed9-c355-5ed4-802b-f9d5beb40aae\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"incidents\",\"is_enabled\":false,\"options\":{\"a\":1.0},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":null,\"state_changed_by\":null},{\"id\":\"cf6479b3-a453-56b0-a117-a20c115b9ea4\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":null,\"state_changed_by\":null}]"
     },
     {
       "name": "datasets empty",
@@ -4064,7 +4065,7 @@
       "request_headers_sha256": "a327d4f24a8d6455e24e505d39b628bb2d6ed06da18ff333f4544b367fb296ba",
       "status": 200,
       "headers": {
-        "content-length": "297",
+        "content-length": "345",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -4074,7 +4075,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"47548300-d4c6-569c-bc7b-0885cff8e011\",\"org_id\":\"3e68827e-c0ea-544a-9bab-bd8ec67344a4\",\"integration_id\":\"1ee2f5ca-d7ed-5c7d-9774-71e84d958c28\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{\"o\":true},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"47548300-d4c6-569c-bc7b-0885cff8e011\",\"org_id\":\"3e68827e-c0ea-544a-9bab-bd8ec67344a4\",\"integration_id\":\"1ee2f5ca-d7ed-5c7d-9774-71e84d958c28\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{\"o\":true},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":null,\"state_changed_by\":null}]"
     },
     {
       "name": "clock: pairs update renders the pair config",
@@ -4150,7 +4151,7 @@
       "request_headers_sha256": "2d79f69b3266b9933c502dc8caba254e0c4b598dad47ba8fa7e338cbf2136bdf",
       "status": 200,
       "headers": {
-        "content-length": "298",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -4160,7 +4161,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"47548300-d4c6-569c-bc7b-0885cff8e011\",\"org_id\":\"3e68827e-c0ea-544a-9bab-bd8ec67344a4\",\"integration_id\":\"1ee2f5ca-d7ed-5c7d-9774-71e84d958c28\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"o\":true},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"47548300-d4c6-569c-bc7b-0885cff8e011\",\"org_id\":\"3e68827e-c0ea-544a-9bab-bd8ec67344a4\",\"integration_id\":\"1ee2f5ca-d7ed-5c7d-9774-71e84d958c28\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"o\":true},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: pairs list org D after the rollbacks",
@@ -4670,7 +4671,7 @@
       "request_headers_sha256": "08107f5dcf738f36f2703f49de1da96e74e04d65835d4045ae668b9e09bfd1c9",
       "status": 200,
       "headers": {
-        "content-length": "653",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -4680,7 +4681,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\"}]"
+      "body": "[{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\",\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "datasets same values",
@@ -4690,7 +4691,7 @@
       "request_headers_sha256": "08107f5dcf738f36f2703f49de1da96e74e04d65835d4045ae668b9e09bfd1c9",
       "status": 200,
       "headers": {
-        "content-length": "300",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -4700,7 +4701,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "datasets spelled enabled",
@@ -4710,7 +4711,7 @@
       "request_headers_sha256": "08107f5dcf738f36f2703f49de1da96e74e04d65835d4045ae668b9e09bfd1c9",
       "status": 200,
       "headers": {
-        "content-length": "653",
+        "content-length": "\u003clength of projected body\u003e",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
         "referrer-policy": "strict-origin-when-cross-origin",
@@ -4720,7 +4721,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\"}]"
+      "body": "[{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\",\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: datasets create registered keys github",
@@ -4740,7 +4741,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"repo-metadata\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"cicd\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"repo-metadata\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"cicd\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "datasets unknown key for github",
@@ -4860,7 +4861,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"cicd\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"repo-metadata\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"cicd\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\",\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"repo-metadata\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: datasets key repeated in one batch",
@@ -4880,7 +4881,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"blame\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"blame\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"blame\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"blame\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: datasets jira create and toggle",
@@ -4900,7 +4901,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"cf6479b3-a453-56b0-a117-a20c115b9ea4\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-items\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"fa9c0ed9-c355-5ed4-802b-f9d5beb40aae\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{\"a\":1.0},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-item-history\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"cf6479b3-a453-56b0-a117-a20c115b9ea4\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-items\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"fa9c0ed9-c355-5ed4-802b-f9d5beb40aae\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{\"a\":1.0},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-item-history\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "datasets jira key not in the jira registry",
@@ -4940,7 +4941,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"69c1ab05-3007-5ecb-bf55-3e172e5e8ee1\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"69c1ab05-3007-5ecb-bf55-3e172e5e8ee1\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: datasets linear valid keys",
@@ -4960,7 +4961,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"5faaa123-5641-5994-b13f-48915d004da6\",\"dataset_key\":\"work-item-comments\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"5faaa123-5641-5994-b13f-48915d004da6\",\"dataset_key\":\"work-items\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"5faaa123-5641-5994-b13f-48915d004da6\",\"dataset_key\":\"work-item-comments\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"5faaa123-5641-5994-b13f-48915d004da6\",\"dataset_key\":\"work-items\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "datasets linear key it lacks",
@@ -5000,7 +5001,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"c47d0639-a852-5327-bcab-c8a5d548cd68\",\"dataset_key\":\"on-calls\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"c47d0639-a852-5327-bcab-c8a5d548cd68\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"c47d0639-a852-5327-bcab-c8a5d548cd68\",\"dataset_key\":\"incident-notes\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"c47d0639-a852-5327-bcab-c8a5d548cd68\",\"dataset_key\":\"on-calls\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"c47d0639-a852-5327-bcab-c8a5d548cd68\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"c47d0639-a852-5327-bcab-c8a5d548cd68\",\"dataset_key\":\"incident-notes\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "datasets pagerduty key it lacks",
@@ -5040,7 +5041,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"746cfcfe-6aa0-5e3b-b42f-0c4ef02563bc\",\"dataset_key\":\"feature-flags\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"746cfcfe-6aa0-5e3b-b42f-0c4ef02563bc\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"746cfcfe-6aa0-5e3b-b42f-0c4ef02563bc\",\"dataset_key\":\"feature-flags\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"746cfcfe-6aa0-5e3b-b42f-0c4ef02563bc\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "datasets gitlab key only github has",
@@ -5080,7 +5081,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"1d184118-359d-54e5-9c2b-5df0b3b397fa\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"1d184118-359d-54e5-9c2b-5df0b3b397fa\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"1d184118-359d-54e5-9c2b-5df0b3b397fa\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"1d184118-359d-54e5-9c2b-5df0b3b397fa\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "datasets provider with no registry entry",
@@ -5140,7 +5141,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"blame\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"cicd\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"repo-metadata\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"blame\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"cicd\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"a20e79c0-72d6-5bc9-8dae-388ce0d98643\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"commits\",\"is_enabled\":false,\"options\":{\"depth\":30},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"962ecee0-776c-532b-9053-6c65f34a7bc1\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"prs\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":\"provider_dataset_unavailable\",\"unavailable_since\":\"2026-04-01T00:00:00.000001Z\",\"unavailable_last_seen_at\":\"2026-04-02T00:00:00Z\",\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"repo-metadata\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"cccd037a-25cc-54e0-b17a-297ff215b854\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: datasets after writes jira",
@@ -5160,7 +5161,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"fa9c0ed9-c355-5ed4-802b-f9d5beb40aae\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{\"a\":1.0},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-item-history\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"cf6479b3-a453-56b0-a117-a20c115b9ea4\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-items\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"fa9c0ed9-c355-5ed4-802b-f9d5beb40aae\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{\"a\":1.0},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-item-history\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"cf6479b3-a453-56b0-a117-a20c115b9ea4\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"3634915a-de0b-513b-87fb-994f540a5c9e\",\"dataset_key\":\"work-items\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: datasets after writes upper",
@@ -5180,7 +5181,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"69c1ab05-3007-5ecb-bf55-3e172e5e8ee1\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"69c1ab05-3007-5ecb-bf55-3e172e5e8ee1\",\"dataset_key\":\"work-items\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: datasets after writes linear",
@@ -5200,7 +5201,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"5faaa123-5641-5994-b13f-48915d004da6\",\"dataset_key\":\"work-item-comments\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"5faaa123-5641-5994-b13f-48915d004da6\",\"dataset_key\":\"work-items\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"5faaa123-5641-5994-b13f-48915d004da6\",\"dataset_key\":\"work-item-comments\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"5faaa123-5641-5994-b13f-48915d004da6\",\"dataset_key\":\"work-items\",\"is_enabled\":false,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: datasets after writes gitlab",
@@ -5220,7 +5221,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"746cfcfe-6aa0-5e3b-b42f-0c4ef02563bc\",\"dataset_key\":\"feature-flags\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"746cfcfe-6aa0-5e3b-b42f-0c4ef02563bc\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"746cfcfe-6aa0-5e3b-b42f-0c4ef02563bc\",\"dataset_key\":\"feature-flags\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"746cfcfe-6aa0-5e3b-b42f-0c4ef02563bc\",\"dataset_key\":\"incidents\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "clock: datasets after writes gitlab keys created",
@@ -5240,7 +5241,7 @@
         "x-frame-options": "DENY",
         "x-request-id": "\u003cvolatile\u003e"
       },
-      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"1d184118-359d-54e5-9c2b-5df0b3b397fa\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"1d184118-359d-54e5-9c2b-5df0b3b397fa\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null}]"
+      "body": "[{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"1d184118-359d-54e5-9c2b-5df0b3b397fa\",\"dataset_key\":\"commits\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"},{\"id\":\"\u003cid\u003e\",\"org_id\":\"533c4c58-300c-51e0-9330-ecedc558a0d1\",\"integration_id\":\"1d184118-359d-54e5-9c2b-5df0b3b397fa\",\"dataset_key\":\"security\",\"is_enabled\":true,\"options\":{},\"unavailable_reason\":null,\"unavailable_since\":null,\"unavailable_last_seen_at\":null,\"state_changed_at\":\"\u003cnow\u003e\",\"state_changed_by\":\"api:dataset_endpoint\"}]"
     },
     {
       "name": "datasets after writes custom",

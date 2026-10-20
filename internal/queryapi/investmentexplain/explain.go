@@ -358,7 +358,7 @@ func invalidLLMOutputExplanation(topThemes []keyValue, totalEffort float64, conf
 		}
 		theme := kv.Key
 		fallbackFindings = append(fallbackFindings, InvestmentMixFinding{
-			Finding: capitalizeFirst(noun) + " appears concentrated in " + theme + " (~" + formatPercentZeroDecimals(pct) + "% of total).",
+			Finding: capitalizeFirst(noun) + " appears concentrated in " + themeLabel(theme) + " (~" + formatPercentZeroDecimals(pct) + "% of total).",
 			Evidence: InvestmentMixFindingEvidence{
 				Theme:               theme,
 				SharePct:            pct,
@@ -809,6 +809,16 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 			"org_id", opts.OrgID,
 			"repaired_findings", parseResult.RepairedFindings,
 			"findings", len(parseResult.Output.TopFindings),
+			"provider", resolvedProvider,
+			"model", resolvedModel,
+		)
+	}
+	if ignored := parseResult.ConfidenceIgnored; ignored.Rule != "" {
+		slog.WarnContext(ctx, "query_api.investment_mix_explain.confidence_ignored",
+			"org_id", opts.OrgID,
+			"reason_rule", ignored.Rule,
+			"reason_path", ignored.Path,
+			"reason_snippet", ignored.Snippet,
 			"provider", resolvedProvider,
 			"model", resolvedModel,
 		)

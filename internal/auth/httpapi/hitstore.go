@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // Limit is one route's rate limit: at most Count hits per Window per
@@ -266,7 +268,7 @@ func (l *KeyedLimiter) AllowCounted(ctx context.Context, key, path string) (bool
 	if err != nil {
 		id := l.ID()
 		slog.ErrorContext(ctx, "rate limit store failed; answering 500",
-			slog.String("limit", id), slog.String("backend", l.Backend()), slog.String("error", err.Error()))
+			slog.String("limit", id), slog.String("backend", l.Backend()), logging.ErrorAttr(err))
 		RateLimitStoreErrors.inc(id)
 	}
 	return allowed, err
@@ -280,7 +282,7 @@ func (l *KeyedLimiter) TestCounted(ctx context.Context, key, path string) (bool,
 	if err != nil {
 		id := l.ID()
 		slog.ErrorContext(ctx, "rate limit store failed; answering 500",
-			slog.String("limit", id), slog.String("backend", l.Backend()), slog.String("error", err.Error()))
+			slog.String("limit", id), slog.String("backend", l.Backend()), logging.ErrorAttr(err))
 		RateLimitStoreErrors.inc(id)
 	}
 	return allowed, err

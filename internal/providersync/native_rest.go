@@ -1,10 +1,8 @@
 package providersync
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -691,26 +689,18 @@ func fetchObjectRoute(ctx context.Context, client *providerfoundation.HTTPClient
 	// case), so a transport hiccup on the very read that crosses the cap
 	// would otherwise report readErr first and silently drop the cap signal
 	// the caller needs.
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, nativeMaxObjectBytes+1))
+	body, readErr := providerfoundation.ReadResponseBody(response, nativeMaxObjectBytes)
 	if len(body) > nativeMaxObjectBytes {
-		return &providerfoundation.ObjectTooLargeError{
+		return providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, &providerfoundation.ObjectTooLargeError{
 			Path:          path,
 			CapBytes:      nativeMaxObjectBytes,
 			ContentLength: response.ContentLength,
-		}
+		})
 	}
 	if readErr != nil {
-		return providerfoundation.ErrNormalizationInvalid
+		return readErr
 	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	if err := decoder.Decode(target); err != nil {
-		return providerfoundation.ErrNormalizationInvalid
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return providerfoundation.ErrNormalizationInvalid
-	}
-	return nil
+	return providerfoundation.DecodeResponseJSON(response, body, target, providerfoundation.DecodeStrict|providerfoundation.DecodeUseNumber)
 }
 
 func filterWorkItemWindow(items []json.RawMessage, claim Claim) []json.RawMessage {
@@ -901,16 +891,4 @@ func resultWithEvidence(
 
 var _ DatasetHandler = NativeRESTHandler{}
 
-// routedError names the route template of a failure a route builds itself,
-// outside the HTTP client (a redirect with no target, a body that fails to
-// read). It wraps the cause, so errors.Is and errors.As still see it.
-type routedError struct {
-	err   error
-	route string
-}
-
-func (e routedError) Error() string { return e.err.Error() + " route=" + e.route }
-
-func (e routedError) Unwrap() error { return e.err }
-
-func withRoute(err error, route string) error { return routedError{err: err, route: route} }
+const providerResponseMaxBytes = 32 << 20

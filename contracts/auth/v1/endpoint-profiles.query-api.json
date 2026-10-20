@@ -665,7 +665,7 @@
       "graphql_field_name": null,
       "id": "GET /api/v1/meta [dev-health-query-api @query,internal]",
       "method": "GET",
-      "public_rationale": "Unauthenticated by design: static limits and endpoint list plus the ClickHouse server version, no tenant data (meta_route.go); Python parity.",
+      "public_rationale": "Unauthenticated by design: static limits and endpoint list, no tenant data and no database server build information (meta_route.go).",
       "route": "/api/v1/meta",
       "service": "dev-health-query-api",
       "source": {

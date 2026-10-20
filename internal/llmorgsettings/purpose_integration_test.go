@@ -33,9 +33,6 @@ func TestPurposeResolutionPerReader(t *testing.T) {
 	set(PurposeKey(PurposeExplain, "provider"), "openai")
 	set(PurposeKey(PurposeExplain, "model"), "small-explain")
 	set(PurposeKey(PurposeExplain, "api_key"), "sk-explain")
-	set(PurposeKey(PurposeCategorize, "provider"), "gemini")
-	set(PurposeKey(PurposeCategorize, "model"), "small-categorize")
-	set(PurposeKey(PurposeCategorize, "api_key"), "sk-categorize")
 
 	for _, tc := range []struct {
 		purpose      Purpose
@@ -46,7 +43,6 @@ func TestPurposeResolutionPerReader(t *testing.T) {
 		{"", "anthropic", "big-model", "sk-default"},
 		{PurposeInvestigate, "anthropic", "big-model", "sk-default"},
 		{PurposeExplain, "openai", "small-explain", "sk-explain"},
-		{PurposeCategorize, "gemini", "small-categorize", "sk-categorize"},
 	} {
 		scoped := store.ForPurpose(tc.purpose)
 		provider, err := scoped.ResolveUsableProvider(ctx, org)

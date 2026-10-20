@@ -6,7 +6,7 @@
 // # Write mode
 //
 // review_edges_daily is a PLAIN MergeTree
-// (migrations/clickhouse/004_quality_delivery_metrics.sql:11-20),
+// (internal/chmigrate/history/004_quality_delivery_metrics.sql:11-20),
 // PARTITION BY toYYYYMM(day), ORDER BY (repo_id, reviewer, author, day). It is
 // append-only, and `org_id` was bolted on later by migration 024 and is NOT in
 // the sort key. Readers deduplicate on READ via clickhouse_dedup.py:115

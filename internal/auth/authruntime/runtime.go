@@ -504,6 +504,9 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		// The transport id is always minted here, never a client's
 		// X-Request-ID: it reaches every log line and envelope.
 		AcceptRequestID: func(string) bool { return false },
+		// A GET route does not also answer HEAD: every method the API serves
+		// is one its endpoint profile names.
+		ExplicitHead: true,
 	}
 }
 

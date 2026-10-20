@@ -475,7 +475,7 @@ schema when `MIGRATION_DATABASE_URI` is set. The one-shot setup services
 (`go-river-provision`, `go-river-migrate`, `go-contractcheck` and the four
 `*-route-activate` services) wait on it. No long-running Go process (worker,
 reconciler, scheduler, stream runner) declares `depends_on: migrate`;
-`tests/test_compose_config.py::test_go_profile_overlay_never_depends_on_python_migrate`
+`internal/cigates/bigboy` (`go_profile_overlay_never_depends_on_python_migrate`)
 pins that. `compose.yml` has no profiles.
 
 Bring the application schema current first, from the `migrate` service (its image

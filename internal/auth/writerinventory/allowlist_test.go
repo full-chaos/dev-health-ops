@@ -63,7 +63,6 @@ var Allowlist = []Entry{
 	{File: "internal/audit/audit.go", Func: "insertOutboxEvents", Table: "auth.auth_outbox_events", Verb: "INSERT"},
 	{File: "internal/audit/publisher.go", Func: "Publisher.deliverOne", Table: "auth.auth_outbox_events", Verb: "UPDATE"},
 	{File: "internal/audit/reaper.go", Func: "Reap", Table: "auth.auth_outbox_events", Verb: "DELETE"},
-	{File: "internal/auth/identity/identities.go", Func: "Store.ProvisionFederated", Table: "auth.external_identities", Verb: "INSERT"},
 	{File: "internal/auth/identity/identities.go", Func: "Store.ProvisionFederated", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/identities.go", Func: "Store.ProvisionFederated", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/identities.go", Func: "Store.UnlinkIdentity", Table: "auth.external_identities", Verb: "DELETE"},

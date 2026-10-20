@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/url"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -182,18 +183,6 @@ func AssertHome(payload []byte, fixtureProvider string) error {
 	return nil
 }
 
-func number(v any) (float64, error) {
-	switch x := v.(type) {
-	case nil:
-		return 0, nil
-	case float64:
-		return x, nil
-	case string:
-		return strconv.ParseFloat(x, 64)
-	}
-	return 0, fmt.Errorf("not a number: %v", v)
-}
-
 func sortedKeys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -346,4 +335,37 @@ func redactedURL(u *url.URL) string {
 	c := *u
 	c.User = nil
 	return c.String()
+}
+
+// pythonFloatRe is the text Python's float() accepts (after stripping whitespace): a decimal number whose digit
+// groups may be joined by single underscores, or inf, infinity and nan with an optional sign. Hex floats and
+// non-ASCII digits are the differences: Go's ParseFloat takes hex floats and Python refuses them (refused here too);
+// Python also takes non-ASCII decimal digits, which the payload of our own api never carries (refused here).
+var pythonFloatRe = regexp.MustCompile(`^[+-]?(?:(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?|(?i:inf|infinity|nan))$`)
+
+// number reads a JSON value the way `float(value)` read it: a bool is 0 or 1, a number is itself, a string must be
+// float() text. null reads as 0 (float(None) raised, and 0 fails the same positive check); anything else is an error.
+func number(v any) (float64, error) {
+	switch x := v.(type) {
+	case nil:
+		return 0, nil
+	case bool:
+		if x {
+			return 1, nil
+		}
+		return 0, nil
+	case float64:
+		return x, nil
+	case string:
+		s := strings.TrimSpace(x)
+		if !pythonFloatRe.MatchString(s) {
+			return 0, fmt.Errorf("not a float: %q", x)
+		}
+		f, err := strconv.ParseFloat(strings.ReplaceAll(s, "_", ""), 64)
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
+			return 0, err
+		}
+		return f, nil
+	}
+	return 0, fmt.Errorf("not a number: %v", v)
 }

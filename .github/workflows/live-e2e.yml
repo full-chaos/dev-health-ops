@@ -76,6 +76,8 @@ jobs:
               - 'go.mod'
               - 'go.sum'
               - 'contracts/jobs/**'
+              - 'contracts/graphql/v1/**'
+              - 'contracts/sync-dispatch/v1/**'
               - '.github/workflows/live-e2e.yml'
 
   live-e2e:

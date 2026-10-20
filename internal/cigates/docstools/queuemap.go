@@ -190,6 +190,15 @@ func qmList(items []string) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
+func qmHas(items []string, want string) bool {
+	for _, s := range items {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
 func qmRange(vals []int) string {
 	if len(vals) > 1 {
 		return strconv.Itoa(vals[0]) + "-" + strconv.Itoa(vals[len(vals)-1])
@@ -336,6 +345,14 @@ func qmRender(root string) (string, error) {
 			lines = append(lines, "| `"+name+"` (`"+process.Binary+"`) | `"+goQueue+"` | "+kindCell+" | "+
 				timeoutCell+" | "+attemptsCell+" | "+qmTicks(entry.celeryQueues)+" | "+
 				qmTicks(entry.celeryConsumers)+" | "+plane+" |")
+		}
+	}
+	for _, p := range dep.Processes {
+		for _, k := range p.JobKinds {
+			if q := registry[k].Queue; !qmHas(p.Queues, q) {
+				return "", qmFail{"gen-queue-mapping: kind '" + k + "' is listed in job_kinds of process '" + p.Name +
+					"' but its registry queue '" + q + "' is not among that process's queues " + qmList(p.Queues) + "."}
+			}
 		}
 	}
 	lines = append(lines, "",

@@ -139,3 +139,30 @@ func TestQueuemapRefusesInvalidUTF8(t *testing.T) {
 		}
 	}
 }
+
+// A kind a process lists in job_kinds whose registry queue is not one of that process's queues is refused, naming the
+// kind, the process and the queue. (Python generated the page without the kind and the drift check passed.)
+func TestQueuemapRefusesKindQueueMismatch(t *testing.T) {
+	queuemapSeed(t)
+	reg := mustRead(t, "contracts/jobs/v1/registry.json")
+	i := strings.Index(reg, `"kind": "sync.s"`)
+	if i < 0 {
+		t.Fatal("seed has no sync.s")
+	}
+	j := i + strings.Index(reg[i:], `"queue": "sync"`)
+	writeTree(t, "contracts/jobs/v1/registry.json", reg[:j]+`"queue": "metrics"`+reg[j+len(`"queue": "sync"`):], 0o644)
+	for _, verb := range []string{"gen-queue-mapping", "check-queue-mapping-drift"} {
+		code, out, stderr := runDocs(verb)
+		all := out + stderr
+		if code != 1 || !strings.Contains(all, "'sync.s'") || !strings.Contains(all, "'sync'") || !strings.Contains(all, "'metrics'") {
+			t.Errorf("%s: rc %d out %q stderr %q", verb, code, out, stderr)
+		}
+		// Failure contract: gen prints the reason on stderr and nothing on stdout; check prints its ERROR line.
+		if verb == "gen-queue-mapping" && (out != "" || stderr == "") {
+			t.Errorf("gen: stdout must be empty and the reason on stderr: out %q stderr %q", out, stderr)
+		}
+		if verb == "check-queue-mapping-drift" && !strings.HasPrefix(out, "ERROR: generator failed to render") {
+			t.Errorf("check: want the usual ERROR line on stdout, got %q", out)
+		}
+	}
+}

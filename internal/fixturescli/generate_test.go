@@ -45,7 +45,7 @@ func TestFrozenWorldFilesAreTheFilesTheDigestsPin(t *testing.T) {
 		} else if got != want {
 			t.Fatalf("%s digest = %s, want %s: the frozen rows changed without their digest. They are not rewritten: the Python producer that froze them cannot run again (CHAOS-7793)", path, got, want)
 		}
-		world, err := decodeWorld(raw)
+		world, err := decodeWorldCached(raw, sha256.Sum256(raw))
 		if err != nil {
 			t.Fatal(err)
 		}

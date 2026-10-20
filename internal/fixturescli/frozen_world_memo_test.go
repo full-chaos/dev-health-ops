@@ -1,9 +1,13 @@
 package fixturescli
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -179,3 +183,124 @@ const (
 	wantWorldRefusal = "no frozen world for --provider synthetic --repo-name acme/live-e2e --repo-count 1 --days 15 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph; the frozen worlds are:\n  --provider github --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219\n  --provider github --repo-name chaos-fixtures/payments-api --repo-count 2 --days 120 --commits-per-day 0 --pr-count 6 --team-count 4 --seed 1\n  --provider gitlab --repo-name chaos-gl/billing-service --repo-count 2 --days 160 --commits-per-day 0 --pr-count 3 --team-count 4 --seed 1\n  --provider jira --repo-name chaos-fx/PAY --repo-count 2 --days 180 --commits-per-day 0 --pr-count 4 --team-count 4 --seed 1\n  --provider linear --repo-name chaos-fx/ENG --repo-count 2 --days 160 --commits-per-day 0 --pr-count 4 --team-count 4 --seed 1\n  --provider mixed --repo-name chaos-fixtures/shared-api --repo-count 18 --days 180 --commits-per-day 0 --pr-count 189 --team-count 8 --seed 9440\n  --provider synthetic --repo-name acme/live-e2e --repo-count 1 --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph\n  --provider synthetic --repo-name ci-metrics-executed-proof/repo --repo-count 1 --days 7 --commits-per-day 5 --pr-count 20 --team-count 1 --seed 4276"
 	wantSetRefusal   = "no frozen synthetic rows for organization c0ffee00-dead-4bee-8bad-f00dfeedface, repository ci-metrics-executed-proof/repo, 8 day(s); the frozen sets are: 11111111-2222-4333-8444-555555555555 / acme/live-e2e / 14 days; c0ffee00-dead-4bee-8bad-f00dfeedface / ci-metrics-executed-proof/repo / 7 days"
 )
+
+func TestDecodeWorldCachedKeysByContent(t *testing.T) {
+	pack := func(org string) []byte {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write([]byte(`{"producer":"p","org_id":"` + org + `","tables":[]}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	a, b := pack("org-a"), pack("org-b")
+	first, err := decodeWorldCached(a, sha256.Sum256(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := decodeWorldCached(b, sha256.Sum256(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.OrgID != "org-a" || second.OrgID != "org-b" {
+		t.Fatalf("a different file got another file's decode: %q, %q", first.OrgID, second.OrgID)
+	}
+}
+
+// Every reference-typed field of a memoized type, found by reflection, is filled and must come out of
+// the copy on its own memory: a field added later that the copy does not cover fails here, before it
+// can let one caller's change reach the memo.
+func TestTheMemoCopiesShareNoMemoryWithTheMemo(t *testing.T) {
+	for name, copyOf := range map[string]func(any) any{
+		"FrozenWorld": func(v any) any { return cloneWorld(v.(FrozenWorld)) },
+		"FrozenSet":   func(v any) any { return cloneSet(v.(FrozenSet)) },
+	} {
+		typ := reflect.TypeOf(FrozenWorld{})
+		if name == "FrozenSet" {
+			typ = reflect.TypeOf(FrozenSet{})
+		}
+		original := reflect.New(typ).Elem()
+		fillEveryReference(original, 0)
+		copied := reflect.ValueOf(copyOf(original.Interface()))
+		var shared []string
+		sharedMemory(name, original, copied, &shared)
+		if len(shared) > 0 {
+			t.Errorf("the copy of %s shares memory with the memo at: %v", name, shared)
+		}
+	}
+}
+
+func fillEveryReference(v reflect.Value, depth int) {
+	if depth > 8 {
+		return
+	}
+	switch v.Kind() {
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if v.Field(i).CanSet() {
+				fillEveryReference(v.Field(i), depth+1)
+			}
+		}
+	case reflect.Slice:
+		v.Set(reflect.MakeSlice(v.Type(), 1, 1))
+		fillEveryReference(v.Index(0), depth+1)
+	case reflect.Map:
+		v.Set(reflect.MakeMap(v.Type()))
+		key := reflect.New(v.Type().Key()).Elem()
+		elem := reflect.New(v.Type().Elem()).Elem()
+		fillEveryReference(elem, depth+1)
+		v.SetMapIndex(key, elem)
+	case reflect.Pointer:
+		v.Set(reflect.New(v.Type().Elem()))
+		fillEveryReference(v.Elem(), depth+1)
+	case reflect.Interface:
+		if v.NumMethod() == 0 {
+			v.Set(reflect.ValueOf([]any{map[string]any{"k": []any{"v"}}}))
+		}
+	}
+}
+
+func sharedMemory(path string, a, b reflect.Value, shared *[]string) {
+	if a.Kind() != b.Kind() {
+		return
+	}
+	switch a.Kind() {
+	case reflect.Struct:
+		for i := 0; i < a.NumField(); i++ {
+			sharedMemory(path+"."+a.Type().Field(i).Name, a.Field(i), b.Field(i), shared)
+		}
+	case reflect.Slice:
+		if a.Len() > 0 && b.Len() > 0 && a.Pointer() == b.Pointer() {
+			*shared = append(*shared, path)
+			return
+		}
+		for i := 0; i < a.Len() && i < b.Len(); i++ {
+			sharedMemory(fmt.Sprintf("%s[%d]", path, i), a.Index(i), b.Index(i), shared)
+		}
+	case reflect.Map:
+		if a.Len() > 0 && a.Pointer() == b.Pointer() {
+			*shared = append(*shared, path)
+			return
+		}
+		for _, key := range a.MapKeys() {
+			if other := b.MapIndex(key); other.IsValid() {
+				sharedMemory(fmt.Sprintf("%s[%v]", path, key), a.MapIndex(key), other, shared)
+			}
+		}
+	case reflect.Pointer:
+		if !a.IsNil() && a.Pointer() == b.Pointer() {
+			*shared = append(*shared, path)
+			return
+		}
+		if !a.IsNil() && !b.IsNil() {
+			sharedMemory(path, a.Elem(), b.Elem(), shared)
+		}
+	case reflect.Interface:
+		if !a.IsNil() && !b.IsNil() {
+			sharedMemory(path, a.Elem(), b.Elem(), shared)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -184,7 +185,7 @@ case " $* " in *" -list "*)
   cat "${FAKE_GO_LISTING}"
   exit 0 ;;
 esac
-printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
+printf '%%s\t%%s\n' "$PWD" "$*" >> "${FAKE_GO_LOG}"
 exit 0
 `
 
@@ -230,7 +231,11 @@ func TestRaceLegRunsItsSoloPackageLastAndInItsOwnGoTest(t *testing.T) {
 			t.Fatalf("race leg %d/3 failed: %v\n%s\n%s", shard, err, stdout, errs)
 		}
 		b, _ := os.ReadFile(log)
-		calls := strings.Split(strings.TrimSpace(string(b)), "\n")
+		var calls, cwds []string
+		for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+			cwd, args, _ := strings.Cut(l, "\t")
+			cwds, calls = append(cwds, cwd), append(calls, args)
+		}
 		var carrying []int
 		for i, c := range calls {
 			if contains(strings.Fields(c), target) {
@@ -245,17 +250,8 @@ func TestRaceLegRunsItsSoloPackageLastAndInItsOwnGoTest(t *testing.T) {
 			t.Fatalf("shard %d: %s runs %d times in one leg: %v", shard, target, len(carrying), calls)
 		}
 		soloAt := carrying[0]
-		lastShared, provider, widest := -1, -1, 0
-		for i, c := range calls {
-			if n := len(strings.Fields(c)); !contains(strings.Fields(c), target) && n > widest {
-				lastShared, widest = i, n
-			}
-			if strings.HasSuffix(c, "./internal/providersync") {
-				provider = i
-			}
-		}
-		if lastShared < 0 || provider < 0 || soloAt < lastShared || soloAt < provider {
-			t.Fatalf("shard %d: %s must run after the leg's other packages and its providersync slice: %v", shard, target, calls)
+		if err := soloComesLast(soloAt, calls, cwds, root); err != nil {
+			t.Fatalf("shard %d: %v", shard, err)
 		}
 		var pkgsOfCall []string
 		for _, w := range strings.Fields(calls[soloAt]) {
@@ -320,4 +316,55 @@ func sameMultiset(a, b []string) bool {
 	sort.Strings(x)
 	sort.Strings(y)
 	return reflect.DeepEqual(x, y)
+}
+
+// soloComesLast: the solo call runs after EVERY other root-module `go test` call of its leg (the shared call, every split
+// slice, the providersync slice), and at least one such call exists so the check cannot pass vacuously.
+func soloComesLast(soloAt int, calls, cwds []string, root string) error {
+	others, providerSeen := 0, false
+	for i, c := range calls {
+		if i == soloAt || cwds[i] != root {
+			continue
+		}
+		others++
+		if strings.HasSuffix(c, "./internal/providersync") {
+			providerSeen = true
+		}
+		if i > soloAt {
+			return fmt.Errorf("the solo go test (call %d) runs before the other go test call %d: %v", soloAt, i, calls)
+		}
+	}
+	if others == 0 || !providerSeen {
+		return fmt.Errorf("the leg has no other go test call (%d) or no providersync slice (%v): the order cannot be proved: %v", others, providerSeen, calls)
+	}
+	return nil
+}
+
+func TestSoloOrderGuardFiresOnAMisorderedLeg(t *testing.T) {
+	const root = "/r"
+	prov := "test -race -run ^(A)$ ./internal/providersync"
+	shared := "test -race m/a m/b"
+	solo := "test -race m/fixturescli"
+	for _, c := range []struct {
+		name  string
+		calls []string
+		cwds  []string
+		want  string
+	}{
+		{"green", []string{prov, shared, solo}, []string{root, root, root}, ""},
+		{"nested-module-after-solo-is-allowed", []string{prov, shared, solo, "test -race n/x"}, []string{root, root, root, "/r/nested"}, ""},
+		{"one-package-call-after-solo", []string{prov, shared, solo, "test -race m/c"}, []string{root, root, root, root}, "runs before the other go test call 3"},
+		{"split-slice-after-solo", []string{prov, solo, shared}, []string{root, root, root}, "runs before the other go test call 2"},
+		{"providersync-after-solo", []string{shared, solo, prov}, []string{root, root, root}, "runs before the other go test call 2"},
+		{"no-other-call", []string{solo}, []string{root}, "cannot be proved"},
+		{"no-providersync-slice", []string{shared, solo}, []string{root, root}, "cannot be proved"},
+	} {
+		err := soloComesLast(slices.IndexFunc(c.calls, func(x string) bool { return x == solo }), c.calls, c.cwds, root)
+		if c.want == "" && err != nil {
+			t.Fatalf("%s: unexpected failure: %v", c.name, err)
+		}
+		if c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Fatalf("%s: want an error containing %q, got %v", c.name, c.want, err)
+		}
+	}
 }

@@ -343,7 +343,7 @@ Every check below fails loud with a named finding; none can pass on an empty or 
 - **Names-only container env reader** (`container-env-names.sh`, R462/R463): the only sanctioned way
   to read a container's environment on bigboy. The name is cut inside docker's own Go template, so a
   value never leaves the docker CLI; any line that is not an env-var name is withheld and exits 3.
-- **Router host scope** (`tests/tooling/test_bigboy_plane_split_router.py`): every rule the generator
+- **Router host scope** (`internal/cigates/bigboy/compose_router_test.go`): every rule the generator
   can emit (file-provider and label form) and the checked-in example must be exactly
   `Host(`traefik`)` or `Host(`traefik`) && PathRegexp(...)`. A public hostname, a second Host
   matcher, or an `||` that lets a rule match without the Host clause fails (the D2735 shape).

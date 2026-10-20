@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -24,8 +23,12 @@ func runMain(m *testing.M) int {
 		return 1
 	}
 	defer os.RemoveAll(dir)
-	_, self, _, _ := runtime.Caller(0)
-	root := filepath.Join(filepath.Dir(self), "..", "..", "..")
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "bigboy tests: no working directory:", err)
+		return 1
+	}
+	root = filepath.Join(root, "..", "..", "..")
 	prebuiltCigate = filepath.Join(dir, "cigate")
 	cmd := exec.Command("go", "build", "-C", root, "-buildvcs=false", "-trimpath", "-mod=readonly", "-o", prebuiltCigate, "./cmd/cigate")
 	if out, err := cmd.CombinedOutput(); err != nil {

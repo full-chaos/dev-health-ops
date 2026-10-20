@@ -103,3 +103,38 @@ func TestExplicitRevokeKeepsItsTimestampUnderAStamp(t *testing.T) {
 		t.Errorf("revoked_at moved: %v -> %v", before.RevokedAt, after.RevokedAt)
 	}
 }
+
+// A stamp-void session answers the plain session_revoked refusal. The derived
+// revoked_at is not an event: no reuse incident, no family revoke and no
+// revoke audit row are written, whether the presented credential is live or
+// already consumed.
+func TestStampVoidSessionIsNotRefreshReuse(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	p := e.principal(t, ctx)
+	issued := e.create(t, ctx, p)
+	rotated := e.exchange(t, ctx, e.store, issued.Credential)
+	if rotated.Reason != ReasonAccepted {
+		t.Fatalf("rotation reason = %s", rotated.Reason)
+	}
+	e.stampUser(t, ctx, p, "clock_timestamp()")
+
+	audits := func() int {
+		return e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type IN ('auth.session.refresh_reuse_revoked', 'auth.session.revoked', 'auth.session.revoked_all')`)
+	}
+	before := audits()
+	for name, credential := range map[string]Issued{"live credential": {Credential: rotated.Issued.Credential}, "consumed credential": issued} {
+		if got := e.exchange(t, ctx, e.store, credential.Credential); got.Reason != ReasonSessionRevoked {
+			t.Errorf("%s: reason = %s, want %s", name, got.Reason, ReasonSessionRevoked)
+		}
+	}
+	if after := audits(); after != before {
+		t.Errorf("revoke or reuse audit rows went from %d to %d", before, after)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE id = $1 AND revoked_at IS NOT NULL`, issued.Session.ID.String()); n != 0 {
+		t.Error("the derived revocation was written to sessions.revoked_at")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.refresh_credentials WHERE session_id = $1 AND revoked_at IS NOT NULL`, issued.Session.ID.String()); n != 0 {
+		t.Error("a family revoke was written")
+	}
+}

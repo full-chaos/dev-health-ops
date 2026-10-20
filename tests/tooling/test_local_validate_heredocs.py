@@ -45,6 +45,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 CI_DIR = ROOT / "ci"
 SCRIPT = ROOT / "ci" / "local_validate.sh"
@@ -184,6 +186,32 @@ def _tracked_ci_scripts() -> list[Path]:
     return [ROOT / name for name in result.stdout.split("\0") if name]
 
 
+def _has_executable_statement(text: str) -> bool:
+    """True when a script has a line that is not a shebang, comment, blank or ``set``."""
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.split()[0] == "set":
+            continue
+        return True
+    return False
+
+
+@pytest.mark.parametrize(
+    ("sample", "expected"),
+    [
+        ("#!\n", False),
+        ("#!/usr/bin/env bash\n# note\n\nset -euo pipefail\n", False),
+        ("#!/usr/bin/env bash\nset -e\necho ok\n", True),
+        ("run_it() {\n  :\n}\n", True),
+    ],
+)
+def test_script_content_floor_needs_an_executable_statement(
+    sample: str, expected: bool
+) -> None:
+    assert _has_executable_statement(sample) is expected
+
+
 def test_no_ci_script_has_a_heredoc_over_the_measured_pipe_budget() -> None:
     """No here-document under ``ci/`` may exceed the measured budget.
 
@@ -208,7 +236,9 @@ def test_no_ci_script_has_a_heredoc_over_the_measured_pipe_budget() -> None:
     for path in scripts:
         text = path.read_text(encoding="utf-8")
         # Each script must have real content behind it, for the same reason.
-        assert len(text) > 500, f"{path} is unexpectedly small ({len(text)} bytes)"
+        assert _has_executable_statement(text), (
+            f"{path} has no executable statement ({len(text)} bytes)"
+        )
         oversized.extend(
             (path.name, line, delimiter, len(body))
             for line, delimiter, body in _heredocs(text)

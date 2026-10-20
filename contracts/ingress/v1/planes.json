@@ -98,6 +98,7 @@
     {"path": "/api/v1/admin/setup/status$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/admin/llm-settings$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/admin/llm-settings/budget$", "path_type": "ImplementationSpecific", "plane": "go-api"},
+    {"path": "/api/v1/admin/llm-settings/models$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/admin/llm-settings/spend$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/admin/llm-settings/status$", "path_type": "ImplementationSpecific", "plane": "go-api"},
     {"path": "/api/v1/admin/llm-settings/readiness$", "path_type": "ImplementationSpecific", "plane": "go-api"},

@@ -55,6 +55,7 @@ var goRoutesWithoutPython = map[string]string{
 	"POST /api/v1/admin/ip-allowlist/{entry_id}":          "dispatches POST /api/v1/admin/ip-allowlist/check; any other id is 405",
 	"POST /api/v1/auth/change-password":                   "Go-only self-service route (no Python ancestor); answers the switch-org token shape",
 	"GET /buildinfo":                                      "Go-only build stamp; the Python api has no such route",
+	"GET /api/v1/admin/llm-settings/models":               "Go-only list of the saved BYO provider's model ids; the Python api has no such route",
 	"GET /api/v1/admin/llm-settings/service-model":        "Go-only self-service acr_service_model toggle (CHAOS-10243); no Python ancestor",
 	"PUT /api/v1/admin/llm-settings/service-model":        "Go-only self-service acr_service_model toggle (CHAOS-10243); no Python ancestor",
 	"POST /api/v1/billing/plans/{plan_id}":                "answers 405 for every id; POST /api/v1/billing/plans/pull-stripe is its own pattern",

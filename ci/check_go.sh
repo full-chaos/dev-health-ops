@@ -582,17 +582,17 @@ check_race_weights_rows() {
   # CHAOS-10289: the solo rows. A missing file would silently put every solo package back into the shared split.
   [ -f "${GO_RACE_SOLO}" ] || die "race solo file missing: ${GO_RACE_SOLO}"
   local solo_rows solo_bad
-  solo_rows="$(grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_SOLO}" | cut -f1)"
-  solo_bad="$(printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort -u | LC_ALL=C comm -23 - <(printf '%s\n' "${rows}" | LC_ALL=C sort) | tr '\n' ' ')"
+  solo_rows="$({ grep -v '^\(#\|[[:space:]]*$\)' "${GO_RACE_SOLO}" || [ "$?" -eq 1 ]; } | cut -f1)"
+  solo_bad="$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -u | LC_ALL=C comm -23 - <(printf '%s\n' "${rows}" | LC_ALL=C sort) | tr '\n' ' ')"
   [ -z "${solo_bad}" ] \
     || die "ci/go_race_solo.tsv names package(s) with no row in ci/go_race_weights.tsv (a solo row needs its measured weight; CI-side guard tests/tooling/test_go_quality_legs.py::test_a_solo_package_is_a_real_weighed_package): ${solo_bad}"
-  [ -z "$(printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort | uniq -d)" ] \
+  [ -z "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort | uniq -d)" ] \
     || die "ci/go_race_solo.tsv lists a package twice"
-  printf '%s\n' "${solo_rows}" | grep -v '^$' | LC_ALL=C sort -c 2>/dev/null \
+  printf '%s\n' "${solo_rows}" | sed '/^$/d' | LC_ALL=C sort -c 2>/dev/null \
     || die "ci/go_race_solo.tsv is not sorted (LC_ALL=C)"
   ! printf '%s\n' "${solo_rows}" | grep -qx 'internal/providersync' \
     || die "ci/go_race_solo.tsv lists internal/providersync, which runs as test-name slices in every race leg and cannot be solo"
-  printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | grep -vc '^$')"
+  printf 'race-weights-rows: %d row(s) match the package list, %d solo\n' "$(printf '%s\n' "${rows}" | wc -l)" "$(printf '%s\n' "${solo_rows}" | sed '/^$/d' | wc -l)"
 }
 
 ci_leg_stage() {

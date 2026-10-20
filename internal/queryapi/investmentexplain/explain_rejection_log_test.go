@@ -146,24 +146,11 @@ func TestLogRejectedExplainOutputFields(t *testing.T) {
 	if line["output_length"] != wantLen {
 		t.Fatalf("output_length = %v, want %v (full length, not truncated)", line["output_length"], wantLen)
 	}
-	head, ok := line["output_head"].(string)
-	if !ok {
-		t.Fatalf("output_head missing or not a string: %v", line["output_head"])
+	if _, present := line["output_head"]; present {
+		t.Fatalf("output_head = %v, want no completion text in the log", line["output_head"])
 	}
-	// The head is truncated to llmOutputRejectionLogHeadRunes RAW runes
-	// first, THEN each embedded newline is escaped to the two-rune
-	// sequence "\n" -- so the escaped result can be slightly longer than
-	// the cap (one extra rune per embedded newline), never shorter.
-	// Un-escaping back gives exactly the truncation window.
-	unescaped := strings.ReplaceAll(head, "\\n", "\n")
-	if got, want := len([]rune(unescaped)), llmOutputRejectionLogHeadRunes; got != want {
-		t.Fatalf("output_head unescaped length = %d, want %d (truncation window)", got, want)
-	}
-	if strings.Contains(head, "\n") {
-		t.Fatalf("output_head contains a raw newline, want it escaped: %q", head)
-	}
-	if !strings.Contains(head, "\\n") {
-		t.Fatalf("output_head = %q, want the escaped newline from the fenced code block to survive", head)
+	if strings.Contains(buf.String(), strings.Repeat("x", 20)) {
+		t.Fatalf("the warning carries completion text: %s", buf.String())
 	}
 }
 

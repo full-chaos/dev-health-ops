@@ -46,9 +46,9 @@ type Principal struct {
 }
 
 // LegacyMatch scopes the fallback to accounts go-api signed in before the
-// identity store existed: exactly one public.users row with this
-// auth_provider and the subject as auth_provider_id, and a membership in
-// MembershipOrg. Anything else is a miss.
+// identity store existed: exactly one public.users row, across all
+// organizations, with this auth_provider and the subject as auth_provider_id,
+// and that account a member of MembershipOrg. No row is a miss.
 type LegacyMatch struct {
 	AuthProvider  string
 	MembershipOrg uuid.UUID
@@ -66,8 +66,9 @@ type FederatedAccount struct {
 // IdentityStore is the identity store as this flow uses it.
 //
 // IdentityBySubject looks the key up, then the legacy fallback; on a fallback
-// hit the store links the key to that account under audit. A miss, including
-// more than one legacy match, is ErrIdentityNotFound. EmailInUse normalizes the address and reports whether
+// hit the store links the key to that account under audit. A miss is
+// ErrIdentityNotFound; more than one legacy match is ErrIdentityAmbiguous; one
+// outside the provider organization is ErrNotOrgMember. EmailInUse normalizes the address and reports whether
 // any account holds it; it is used only to refuse, never to select. A bad
 // address is ErrInvalidEmail. ProvisionFederated creates the principal, its
 // user and the identity under audit; while new accounts are off it returns
@@ -507,6 +508,12 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	case err == nil:
 	case errors.Is(err, ErrInvalidKey):
 		return Login{}, authFailed(ReasonMalformed, err)
+	case errors.Is(err, ErrIdentityAmbiguous):
+		return Login{}, deny(http.StatusConflict, ReasonIdentityConflict,
+			"More than one account carries this sign-in. Contact your organization administrator.")
+	case errors.Is(err, ErrNotOrgMember):
+		return Login{}, deny(http.StatusForbidden, ReasonMembershipRequired,
+			"This account is not a member of the provider's organization.")
 	case errors.Is(err, ErrIdentityNotFound):
 		var failure *Error
 		if principal, failure = s.provision(ctx, row, v, requestID); failure != nil {

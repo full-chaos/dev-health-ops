@@ -173,7 +173,7 @@ func categorizeCompletion(
 	repairPrompt := BuildRepairPrompt(validation.Errors, bundle.SourceBlock, completionText)
 	repaired, err := opts.Provider.Complete(ctx, CategorizationRequest(repairPrompt))
 	if err != nil {
-		return CategorizationOutcome{}, err
+		return CategorizationOutcome{}, &ModelAnsweredError{Err: err}
 	}
 	tally.InputTokens += tokenCount(repaired.InputTokens)
 	tally.OutputTokens += tokenCount(repaired.OutputTokens)

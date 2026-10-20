@@ -830,7 +830,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	_ = fallbackCount
 
-	stats.LLMAllFailed = stats.LLMFailures > 0 && stats.llmSucceeded == 0
+	stats.LLMAllFailed = allLLMCallsFailed(stats)
 
 	if stats.RejectedConfidences > 0 {
 		m.logger.WarnContext(ctx, nonFiniteConfidenceRejectedEvent,
@@ -857,6 +857,22 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// no result on purpose: see shadowphase.go.
 	m.runShadow(ctx, cfg, all)
 	return stats, nil
+}
+
+// allLLMCallsFailed is true when some LLM call failed and no unit got a model
+// answer.
+func allLLMCallsFailed(stats Stats) bool {
+	return stats.LLMFailures > 0 && stats.llmSucceeded == 0
+}
+
+// failureLogMessage is the log text of a unit failure: the served failure's
+// closed label, else categorize.RedactedMessage.
+func failureLogMessage(err error) string {
+	var served *servedFailure
+	if errors.As(err, &served) {
+		return served.Error()
+	}
+	return categorize.RedactedMessage(err)
 }
 
 // logLLMFailureSummary logs the run's per-class failure counts: WARN when some
@@ -1036,7 +1052,7 @@ func (account *categorizeAccount) record(index int, outcome categorize.Categoriz
 			account.logger.Warn("investment categorization llm call failed (first of run)",
 				"org_id", account.orgID, "run_id", account.runID,
 				"class", class, "deterministic", deterministic,
-				"message", categorize.RedactedMessage(err),
+				"message", failureLogMessage(err),
 			)
 		}
 		// A served decision request that failed after a response was
@@ -1052,6 +1068,9 @@ func (account *categorizeAccount) record(index int, outcome categorize.Categoriz
 			account.stats.LLMCalls++
 			account.stats.LLMInputTokens += billed.inputTokens
 			account.stats.LLMOutputTokens += billed.outputTokens
+		}
+		if categorize.ModelAnswered(err) {
+			account.stats.llmSucceeded++
 		}
 		if deterministic && account.fatalErr == nil {
 			account.fatalErr = err

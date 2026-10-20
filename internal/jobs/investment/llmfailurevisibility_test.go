@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -122,5 +123,64 @@ func TestLLMFailureSummaryLogsPerClassCountsAtLevelByOutcome(t *testing.T) {
 	out = buf.String()
 	if !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "all_failed=true") {
 		t.Fatalf("all-failed must be ERROR: %s", out)
+	}
+}
+
+type scriptedProvider struct {
+	replies []func() (categorize.CompletionResult, error)
+	calls   int
+}
+
+func (p *scriptedProvider) Complete(context.Context, categorize.CompletionRequest) (categorize.CompletionResult, error) {
+	reply := p.replies[p.calls]
+	p.calls++
+	return reply()
+}
+func (p *scriptedProvider) Close() error  { return nil }
+func (p *scriptedProvider) Model() string { return "scripted" }
+
+func TestRepairFailureAfterModelAnswerIsNotAllCallsFailed(t *testing.T) {
+	pending := batchPending(t, 2)
+	provider := &scriptedProvider{replies: []func() (categorize.CompletionResult, error){
+		func() (categorize.CompletionResult, error) { return categorize.CompletionResult{Text: "not json"}, nil },
+		func() (categorize.CompletionResult, error) {
+			return categorize.CompletionResult{}, errors.New("repair down")
+		},
+		func() (categorize.CompletionResult, error) { return categorize.CompletionResult{Text: "not json"}, nil },
+		func() (categorize.CompletionResult, error) {
+			return categorize.CompletionResult{}, errors.New("repair down")
+		},
+	}}
+	cfg := batchTestConfig(LLMBatchModeSync)
+	cfg.LLMConcurrency = 1
+	got := runCategorize(t, context.Background(), provider, cfg, pending)
+	if got.stats.LLMFailures != 2 || got.stats.llmSucceeded != 2 {
+		t.Fatalf("failures=%d answered=%d, want 2 and 2", got.stats.LLMFailures, got.stats.llmSucceeded)
+	}
+	if allLLMCallsFailed(got.stats) {
+		t.Fatal("a run whose units all got a first model answer was called all-failed")
+	}
+	if !allLLMCallsFailed(Stats{LLMFailures: 1}) {
+		t.Fatal("zero answers with a failure must be all-failed")
+	}
+}
+
+func TestRedactedMessageKeepsBodyAndPromptTextOut(t *testing.T) {
+	leak := errors.New("upstream said BODY_SENTINEL for prompt PROMPT_SENTINEL")
+	if got := categorize.RedactedMessage(leak); strings.Contains(got, "SENTINEL") || !strings.Contains(got, "*errors.errorString") {
+		t.Fatalf("untyped error text leaked or type missing: %q", got)
+	}
+	wrapped := fmt.Errorf("wrapped: %w", leak)
+	if got := categorize.RedactedMessage(wrapped); strings.Contains(got, "SENTINEL") {
+		t.Fatalf("wrapped untyped error text leaked: %q", got)
+	}
+	if got := categorize.RedactedMessage(context.DeadlineExceeded); !strings.Contains(got, "deadline") {
+		t.Fatalf("context error text lost: %q", got)
+	}
+	var buf bytes.Buffer
+	account := newTestAccount(&buf)
+	account.record(0, categorize.CategorizationOutcome{}, leak)
+	if strings.Contains(buf.String(), "SENTINEL") {
+		t.Fatalf("first-failure log leaked: %s", buf.String())
 	}
 }

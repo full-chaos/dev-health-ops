@@ -1,6 +1,7 @@
 package categorize
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-go/llm"
 )
 
 // llmErrorKind is llm/errors.py's exception hierarchy, collapsed to one Go
@@ -325,16 +328,46 @@ func containsAnySubstring(haystack string, needles ...string) bool {
 
 const redactedMessageLimit = 200
 
-// RedactedMessage is err's text for a log line: credentials redacted, newlines
-// folded, cut to 200 runes. It never carries a response body or prompt text
-// beyond what the error itself holds.
+// RedactedMessage is err's text for a log line. Only errors whose text this
+// package or the shared llm package fixes (a canonical sentence, "http <status>",
+// a context error) are logged, credential-redacted and cut to 200 runes; any
+// other error is logged by Go type alone, because its text can hold a response
+// body or prompt text.
 func RedactedMessage(err error) string {
 	if err == nil {
 		return ""
 	}
-	text := sanitizeMessage(err.Error())
+	var text string
+	var typed *llmError
+	var status *httpStatusError
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		text = sanitizeMessage(err.Error())
+	case errors.As(err, &typed), errors.As(err, &status):
+		text = sanitizeMessage(err.Error())
+	default:
+		if class, ok := llm.ClassOf(err); ok && class != llm.ClassGeneric {
+			text = sanitizeMessage(err.Error())
+		} else {
+			text = fmt.Sprintf("error of type %T (text withheld)", err)
+		}
+	}
 	if runes := []rune(text); len(runes) > redactedMessageLimit {
 		text = string(runes[:redactedMessageLimit])
 	}
 	return text
+}
+
+// ModelAnsweredError marks a unit failure that came after the model had
+// already answered one call of the unit (the repair call failed). It keeps the
+// wrapped error's class and text.
+type ModelAnsweredError struct{ Err error }
+
+func (e *ModelAnsweredError) Error() string { return e.Err.Error() }
+func (e *ModelAnsweredError) Unwrap() error { return e.Err }
+
+// ModelAnswered reports whether err's chain carries a ModelAnsweredError.
+func ModelAnswered(err error) bool {
+	var answered *ModelAnsweredError
+	return errors.As(err, &answered)
 }

@@ -44,16 +44,19 @@ func requireSameRows(t *testing.T, got, want []string) {
 func maskFailureClass(t *testing.T, rows []string, class string) []string {
 	t.Helper()
 	tag := "llm_failure_class:" + class
-	found := false
+	fallbackRows := 0
 	masked := make([]string, len(rows))
 	for index, row := range rows {
-		if strings.Contains(row, tag) {
-			found = true
+		if strings.HasPrefix(row, "work_unit_investments\x00") && strings.Contains(row, "llm_task_failed") {
+			fallbackRows++
+			if !strings.Contains(row, tag) {
+				t.Fatalf("fallback row does not carry %q: %q", tag, row)
+			}
 		}
 		masked[index] = strings.ReplaceAll(row, tag, "llm_failure_class:MASKED")
 	}
-	if !found {
-		t.Fatalf("no row carries %q", tag)
+	if fallbackRows == 0 {
+		t.Fatalf("no fallback row carries %q", tag)
 	}
 	return masked
 }

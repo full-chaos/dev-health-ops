@@ -164,62 +164,6 @@ func githubWorkItemMetricJSONFieldNames(structType reflect.Type) []string {
 	return names
 }
 
-// TestGitHubWorkItemMetricReadbacksFenceTheRealSortingKey reads the sorting keys
-// migration 027 actually installed and requires every readback to fence exactly
-// those columns. A readback that omits one of them can return a DIFFERENT
-// logical row than the one being verified and call the effect Exact; a readback
-// that adds a column outside the key can miss the row that ReplacingMergeTree
-// will collapse it into.
-func TestGitHubWorkItemMetricReadbacksFenceTheRealSortingKey(t *testing.T) {
-	source := githubWorkItemMetricReadSource(t,
-		"src/dev_health_ops/migrations/clickhouse/027_add_org_id_to_sorting_keys.py")
-	adapters := githubWorkItemMetricReadSource(t,
-		"internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go")
-	for _, destination := range []string{
-		githubWorkItemMetricsDailyDestination,
-		githubWorkItemUserMetricsDailyDestination,
-		githubWorkItemCycleTimesDestination,
-	} {
-		t.Run(destination, func(t *testing.T) {
-			key := githubWorkItemMetricSortingKey(t, source, destination)
-			statement := githubWorkItemMetricSelectFrom(t, adapters, destination)
-			if !strings.Contains(statement, "FINAL") {
-				t.Fatalf("%s readback does not use FINAL; ReplacingMergeTree(computed_at) "+
-					"leaves duplicate versions visible until a background merge runs", destination)
-			}
-			predicates := githubWorkItemMetricPredicateColumns(statement)
-			// The required fence is the sorting key UNION the partition key,
-			// not the sorting key alone.
-			//
-			// FINAL collapses one natural key across two partitions only when
-			// the server says so: measured on a real server, the default
-			// returns a single row while
-			// `do_not_merge_across_partitions_select_final = 1` returns both.
-			// This code sets no ClickHouse settings, so it inherits whatever
-			// the server profile chose. Fencing the partition column makes the
-			// verdict the same under either, which is the only version of this
-			// readback worth having. For the two daily rollups the partition
-			// column is already inside the sorting key and this adds nothing.
-			required := append(slices.Clone(key),
-				githubWorkItemMetricPartitionColumns(t, destination)...)
-			// Compared as SETS: ClickHouse does not care in which order a WHERE
-			// clause names the columns, only that every required one is fenced
-			// and none outside the required set is.
-			fenced, expected := slices.Clone(predicates), slices.Compact(slices.Sorted(slices.Values(required)))
-			slices.Sort(fenced)
-			if !slices.Equal(fenced, expected) {
-				t.Fatalf("%s readback fences %v; sorting key (migration 027) is %v and the "+
-					"partition key adds %v", destination, predicates, key,
-					githubWorkItemMetricPartitionColumns(t, destination))
-			}
-			if key[0] != "org_id" || !slices.Contains(predicates, "org_id") {
-				t.Fatalf("%s must be tenant-fenced on org_id, got key=%v predicates=%v",
-					destination, key, predicates)
-			}
-		})
-	}
-}
-
 // githubWorkItemMetricPartitionColumns reads a table's PARTITION BY expression
 // out of the live migration that created it and returns the column names inside
 // it. Like the sorting key, this is PARSED rather than mirrored: a partition

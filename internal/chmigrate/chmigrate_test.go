@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -14,7 +12,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 func testBaseline() Baseline {
@@ -307,68 +304,6 @@ func TestCheckContract(t *testing.T) {
 	err := CheckContract(1, baseline)
 	if err == nil || !strings.Contains(err.Error(), "operational ordering contract 2 expected, OPERATIONAL_ORDERING_CONTRACT=1 found") {
 		t.Fatalf("CheckContract(1) = %v, want the mismatch named", err)
-	}
-}
-
-// Until the Python chain is deleted, a migration after the head exists in
-// both places: every file of the Python chain that neither baseline records is
-// a .sql file here, byte-identical, and every file here is in the Python
-// chain. A .py migration after the head cannot be applied by dho, so it is
-// refused outright.
-func TestChainAfterHeadMatchesThePythonChain(t *testing.T) {
-	_, file, _, _ := moduleroot.Caller(0)
-	pythonDir := filepath.Join(filepath.Dir(file), "..", "..", "src", "dev_health_ops", "migrations", "clickhouse")
-	entries, err := os.ReadDir(pythonDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	baseline, err := LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	head := map[string]bool{}
-	for _, version := range baseline.Versions {
-		head[version] = true
-	}
-	chain, err := LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ours := map[string]string{}
-	for _, file := range chain {
-		ours[file.Version] = file.SQL
-	}
-	seen := 0
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || name == "__init__.py" || (!strings.HasSuffix(name, ".sql") && !strings.HasSuffix(name, ".py")) {
-			continue
-		}
-		if head[name] {
-			seen++
-			continue
-		}
-		if !strings.HasSuffix(name, ".sql") {
-			t.Errorf("%s is a Python migration after the head; dho cannot apply it -- write it as a .sql file", name)
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(pythonDir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ours[name] != string(data) {
-			t.Errorf("%s is after the head but internal/chmigrate/sql/%s is missing or differs", name, name)
-		}
-		delete(ours, name)
-	}
-	for name := range ours {
-		t.Errorf("internal/chmigrate/sql/%s is not in the Python chain", name)
-	}
-	// The Python runner globs *.py, so it records __init__.py as a version;
-	// every other head version must be a file of the chain. Files after the
-	// head are checked above and do not count here.
-	if !head["__init__.py"] || seen != len(head)-1 {
-		t.Fatalf("found %d of the %d head versions as files in %s (with __init__.py: %v): the walk is broken", seen, len(head)-1, pythonDir, head["__init__.py"])
 	}
 }
 

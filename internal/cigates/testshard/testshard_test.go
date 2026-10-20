@@ -104,6 +104,7 @@ func weightRows(t *testing.T) []weightRow {
 	return rows
 }
 
+// shardPlan is the root-module part of a shard (the plan also holds the packages of nested modules).
 func shardPlan(t *testing.T, shard, count int) []string {
 	t.Helper()
 	out, errs, err := checkGo(t, nil, "test-shard-plan", fmt.Sprint(shard), fmt.Sprint(count))
@@ -112,8 +113,8 @@ func shardPlan(t *testing.T, shard, count int) []string {
 	}
 	var pkgs []string
 	for _, l := range strings.Split(out, "\n") {
-		if strings.HasPrefix(l, "github.com/") {
-			pkgs = append(pkgs, strings.TrimSpace(l))
+		if f := strings.Split(l, "\t"); len(f) == 3 && f[0] == "." {
+			pkgs = append(pkgs, f[1])
 		}
 	}
 	return pkgs

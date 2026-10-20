@@ -67,6 +67,9 @@ func qualityLegViolations(t *testing.T, root string) []string {
 			if s == "check_race_shard" {
 				s = "check_race"
 			}
+			if s == "check_test_shard" {
+				s = "check_test"
+			}
 			legSteps = append(legSteps, s)
 		}
 		if len(ciSteps) == 0 {
@@ -106,14 +109,16 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	for _, a := range args {
 		if strings.HasPrefix(a, "race ") {
 			races = append(races, a)
+		} else if strings.HasPrefix(a, "test ") {
+			// the test shards are pinned by internal/cigates/testshard
 		} else {
 			nonRace = append(nonRace, a)
 		}
 	}
 	sort.Strings(nonRace)
 	sort.Strings(races)
-	if !reflect.DeepEqual(nonRace, []string{"static", "test"}) {
-		add("the non-race legs must be exactly static and test, got %v", nonRace)
+	if !reflect.DeepEqual(nonRace, []string{"static"}) {
+		add("the legs that are neither race nor test shards must be exactly static, got %v", nonRace)
 	}
 	want := make([]string, len(races))
 	for k := range races {
@@ -186,8 +191,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 		}
 	}
 
-	if !strings.Contains(func() string { b, _ := caseBlock(script, "check_test() {", "\n}\n"); return b }(), "check_race_excluded_ran") {
-		add("check_test no longer runs check_race_excluded_ran: tests compiled out of the race leg would run nowhere")
+	if !strings.Contains(func() string { b, _ := caseBlock(script, "check_test_shard() {", "\n}\n"); return b }(), "check_race_excluded_ran") {
+		add("check_test_shard no longer runs check_race_excluded_ran: tests compiled out of the race leg would run nowhere")
 	}
 	var goEnvOff string
 	for _, line := range strings.Split(script, "\n") {
@@ -216,7 +221,7 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 		want []string
 	}{
 		{"a leg drops the ratchets stage", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", ""}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},
-		{"a stage runs in two legs", []mutation{{cg, "      ci_leg_stage test check_test\n", "      ci_leg_stage test check_test\n      ci_leg_stage vet2 check_vet\n"}}, []string{"runs in two legs", "check_vet"}},
+		{"a stage runs in two legs", []mutation{{cg, "      ci_leg_stage \"test ${2:-}/${3:-}\" check_test_shard \"${2:-}\" \"${3:-}\"\n", "      ci_leg_stage \"test ${2:-}/${3:-}\" check_test_shard \"${2:-}\" \"${3:-}\"\n      ci_leg_stage vet2 check_vet\n"}}, []string{"runs in two legs", "check_vet"}},
 		{"a race entry goes missing from the matrix", []mutation{{wf, "args: race 2 3", "args: race 4 3"}}, []string{"not 1..N of N"}},
 		{"fail-fast comes back on", []mutation{{wf, "fail-fast: false", "fail-fast: true"}}, []string{"fail-fast must be false"}},
 		{"the fan-in can skip", []mutation{{wf, "\n    if: always()\n", "\n    if: success()\n"}}, []string{"fan-in must be always()"}},
@@ -224,7 +229,7 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 		{"the fan-in stops judging the legs unconditional", []mutation{{wf, "go-quality-leg|unconditional|", "go-quality-leg|path-filtered|"}}, []string{"unconditional"}},
 		{"the leg step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh ci-leg ${{ matrix.args }}", `run: echo "ci-leg ${{ matrix.args }}"`}}, []string{"no go-quality-leg step runs"}},
 		{"a leg stage survives only in a comment", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", "      # ci_leg_stage ratchets check_ratchets\n"}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},
-		{"check_test keeps the race-excluded proof only in a comment", []mutation{{cg, "\n  check_race_excluded_ran\n", "\n  # check_race_excluded_ran\n"}}, []string{"no longer runs check_race_excluded_ran"}},
+		{"check_test_shard keeps the race-excluded proof only in a comment", []mutation{{cg, "\n    check_race_excluded_ran\n", "\n    # check_race_excluded_ran\n"}}, []string{"no longer runs check_race_excluded_ran"}},
 		{"the GOFLAGS scrub is dropped", []mutation{{cg, "-u GOFLAGS ", ""}}, []string{"GOFLAGS scrub"}},
 	}
 	for _, c := range cases {

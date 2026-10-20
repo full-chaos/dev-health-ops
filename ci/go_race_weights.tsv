@@ -1,7 +1,7 @@
 # Measured wall seconds of one package under `go test -race` (CHAOS-6690), the weight ci/go_race_shard.awk balances the
 # race shards by. The weights only need to be roughly right: a stale one costs balance, never coverage (the shards always
 # partition the full package list). Key = import path relative to the module root. Sorted (LC_ALL=C), no duplicates;
-# tests/tooling/test_go_quality_legs.py checks each row names a real package.
+# `ci/check_go.sh race-weights-rows` checks each row names a real package.
 # CHAOS-8135: EVERY package of the root module has a row, and ci/check_go.sh check_race_shard fails a race leg BEFORE it runs
 # when one is missing (ci/go_race_missing_rows.awk), so a new heavy package can never take the default weight and hide its
 # cost from the shard plan (httpguard: 324 s, no row, shared a leg with goapiproof). A new package adds its row: its measured

@@ -43,7 +43,7 @@ func TestRelevanceInputsNeverPlanNone(t *testing.T) {
 	// Built by concatenation: these are inputs of the check, not files this package reads, and plan-reads counts literals.
 	for _, p := range []string{
 		".planning" + "/x.py", ".claude/hooks/x.py", "internal/cigates/x.py",
-		"ci/requirements-clickhouse-migrations.txt", "ci/requirements-docs.txt",
+		"ci/requirements-clickhouse-migrations.txt", "ci/requirements-docs.txt", "ci/local_validate.sh", "ci/run_live_backend_e2e.sh",
 		"mkdocs" + ".yml",
 		"docs/reference/limits-and-compatibility/provider-limits.md",
 	} {

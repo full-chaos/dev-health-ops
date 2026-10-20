@@ -47,3 +47,20 @@ func TestConfigReadFaultIsUnavailable(t *testing.T) {
 		t.Fatalf("decision = %+v, want 503", d)
 	}
 }
+
+// A value the base_url parser rejects is a verdict on the saved value, not an infrastructure error, and
+// the effective acr_service_model decides first: flag off is ai_features_turned_off whatever is saved.
+func TestUnparsableBaseURLNeverOutranksTheFlagOrBecomesA5xx(t *testing.T) {
+	grant := licensing.Decision{Allowed: true, Reason: licensing.ReasonEnabledByOrgOverride}
+	off := licensing.Decision{Allowed: false, Reason: licensing.ReasonOrgOverrideDisabled}
+	cfg := fakeConfig{cfg: OrgConfig{Provider: "openai", APIKey: secrets.NewHidden("k"), BaseURL: "https://[::1"}, found: true}
+	gate := func(lic fakeLicensing) Decision {
+		return Gate{Source: PgSource{Licensing: lic, Queryer: saved(true), Config: cfg}}.Decide(context.Background(), "org")
+	}
+	if d := gate(fakeLicensing{ACRServiceModelFeatureKey: off, PlatformModelFallbackFeatureKey: grant}); d.Status != http.StatusForbidden || d.Code != CodeAIFeaturesTurnedOff {
+		t.Errorf("flag off with an unparsable url: %+v, want 403 %s", d, CodeAIFeaturesTurnedOff)
+	}
+	if d := gate(fakeLicensing{ACRServiceModelFeatureKey: grant, PlatformModelFallbackFeatureKey: grant}); d.Status != http.StatusForbidden || d.Code != "invalid_base_url" {
+		t.Errorf("flag on with an unparsable url: %+v, want 403 invalid_base_url", d)
+	}
+}

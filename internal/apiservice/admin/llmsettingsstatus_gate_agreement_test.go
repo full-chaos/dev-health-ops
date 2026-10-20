@@ -91,4 +91,19 @@ func TestExplainGateAndLLMStatusRouteAgreeOnSavedConfigs(t *testing.T) {
 			}
 		})
 	}
+
+	// unreadable_row is gate-only: the status route answers an undecryptable stored value with an error.
+	t.Run("unreadable stored value", func(t *testing.T) {
+		orgID := uuid.NewString()
+		pgseed.Org(ctx, t, pool, orgID, "team")
+		pgseed.Setting(ctx, t, pool, orgID, "llm", "provider", "openai", false)
+		pgseed.Setting(ctx, t, pool, orgID, "llm", "api_key", "not-a-fernet-token", true)
+		if _, err := h.evaluateOrgLLMStatus(ctx, orgID); err == nil {
+			t.Fatal("the status route must answer an undecryptable stored value with an error")
+		}
+		decision := gate.Decide(ctx, orgID)
+		if decision.Status != 403 || decision.Code != string(llmorgsettings.ConfigUnreadableRow) {
+			t.Fatalf("gate decision %+v, want 403 %s", decision, llmorgsettings.ConfigUnreadableRow)
+		}
+	})
 }

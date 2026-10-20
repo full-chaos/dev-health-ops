@@ -45,10 +45,11 @@ func TestExplainRoutesRefuseASavedConfigThatCannotServe(t *testing.T) {
 		cfg    llmorgsettings.OrgConfig
 		reason string
 	}{
-		"no key":    {llmorgsettings.OrgConfig{Provider: "openai"}, "missing_credentials"},
-		"bad url":   {llmorgsettings.OrgConfig{Provider: "openai", APIKey: secrets.NewHidden("k"), BaseURL: "http://169.254.169.254/v1"}, "invalid_base_url"},
-		"bad kind":  {llmorgsettings.OrgConfig{Provider: "no-such-provider", APIKey: secrets.NewHidden("k")}, "unknown_provider"},
-		"empty key": {llmorgsettings.OrgConfig{Provider: "anthropic", APIKey: secrets.NewHidden("")}, "missing_credentials"},
+		"no key":         {llmorgsettings.OrgConfig{Provider: "openai"}, "missing_credentials"},
+		"bad url":        {llmorgsettings.OrgConfig{Provider: "openai", APIKey: secrets.NewHidden("k"), BaseURL: "http://169.254.169.254/v1"}, "invalid_base_url"},
+		"bad kind":       {llmorgsettings.OrgConfig{Provider: "no-such-provider", APIKey: secrets.NewHidden("k")}, "unknown_provider"},
+		"unparsable url": {llmorgsettings.OrgConfig{Provider: "openai", APIKey: secrets.NewHidden("k"), BaseURL: "https://[::1"}, "invalid_base_url"},
+		"empty key":      {llmorgsettings.OrgConfig{Provider: "anthropic", APIKey: secrets.NewHidden("")}, "missing_credentials"},
 	} {
 		for _, platformKey := range []string{"", "sk-platform"} {
 			t.Run(name+"/platform key "+platformKey, func(t *testing.T) {

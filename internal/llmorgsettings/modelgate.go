@@ -69,6 +69,9 @@ type Inputs struct {
 // Flag off: ai_features_turned_off for every org (B1-off, B5), before any BYO, gate or grant question.
 // Flag on: a saved config is B2 own_model_gate_closed (even with the grant), B1' a 403 whose detail is the ConfigReason (missing_credentials, invalid_base_url, unknown_provider, not_configured, unreadable_row) when it cannot serve, B1 own
 // model; no config is B3 platform (with the grant) or B4 service_model_not_entitled.
+// unreadable_row is gate-only: the org LLM status route answers an undecryptable stored value with an error (its
+// Python behaviour), so only the gate names it. A base_url the parser rejects is invalid_base_url here, while the
+// status route returns an error for it (urlsplit parity).
 func Decide(in Inputs) Decision {
 	refuse := func(code string) Decision { return Decision{Kind: Refuse, Code: code, Status: http.StatusForbidden} }
 	if !in.ServiceModelOn {
@@ -144,19 +147,13 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 		return Inputs{}, err
 	}
 	cfg, found, err := s.Config.OrgConfig(ctx, orgID)
-	usable, reason := false, ConfigNotConfigured
+	reason := ConfigNotConfigured
 	switch {
 	case errors.Is(err, ErrStoredSettingUnreadable):
 		// Saved but unusable: row B1'.
 		found, saved, reason = false, true, ConfigUnreadableRow
 	case err != nil:
 		return Inputs{}, fmt.Errorf("llmmodelgate: org config: %w", err)
-	case found:
-		checked, checkErr := CheckConfig(ctx, cfg.Provider, cfg.APIKey.Reveal(), cfg.BaseURL)
-		if checkErr != nil {
-			return Inputs{}, fmt.Errorf("llmmodelgate: check org config: %w", checkErr)
-		}
-		usable, reason = checked == ConfigActive, checked
 	}
 	saved = saved || found || cfg.GateClosed
 	serviceModel, err := s.Licensing.Decide(ctx, orgID, ACRServiceModelFeatureKey)
@@ -170,6 +167,15 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 	fallback, err := s.Licensing.Decide(ctx, orgID, PlatformModelFallbackFeatureKey)
 	if err != nil {
 		return Inputs{}, fmt.Errorf("llmmodelgate: %s: %w", PlatformModelFallbackFeatureKey, err)
+	}
+	usable := false
+	if found && serviceModelOn && !cfg.GateClosed {
+		checked, checkErr := CheckConfig(ctx, cfg.Provider, cfg.APIKey.Reveal(), cfg.BaseURL)
+		if checkErr != nil {
+			// A base_url the parser rejects is a verdict on the saved value, not an infrastructure error.
+			checked = ConfigInvalidBaseURL
+		}
+		usable, reason = checked == ConfigActive, checked
 	}
 	return Inputs{
 		Saved: saved, ConfigUsable: usable, ConfigReason: reason, GateClosed: cfg.GateClosed,

@@ -13,7 +13,8 @@ const (
 	ConfigMissingCredentials ConfigReason = "missing_credentials"
 	ConfigInvalidBaseURL     ConfigReason = "invalid_base_url"
 	ConfigActive             ConfigReason = "active"
-	// ConfigUnreadableRow: a stored setting exists and could not be read back (not decryptable).
+	// ConfigUnreadableRow: a stored setting exists and could not be read back (not decryptable). Gate-only: the status
+	// route answers this shape with an error.
 	ConfigUnreadableRow ConfigReason = "unreadable_row"
 )
 

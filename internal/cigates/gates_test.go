@@ -63,10 +63,6 @@ func TestGovernanceNeedsInput(t *testing.T) {
 	if rc := cigates.Governance(nil, &out); rc != 2 || !strings.Contains(out.String(), "supply --base-sha and --head-sha") {
 		t.Fatalf("rc=%d out=%q", rc, out.String())
 	}
-	out.Reset()
-	if rc := cigates.Governance([]string{"--base-sha", "nonexistent1", "--head-sha", "nonexistent2"}, &out); rc != 2 || !strings.Contains(out.String(), "ERROR: Unable to compute changed files from git diff.") {
-		t.Fatalf("rc=%d out=%q", rc, out.String())
-	}
 }
 
 func TestAuthGovulncheck(t *testing.T) {

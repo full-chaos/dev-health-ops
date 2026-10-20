@@ -222,7 +222,6 @@ on:
       - '.github/workflows/docs-cloudflare.yml'
       - '.github/workflows/docs-guards.yml'
       - '.github/workflows/security-scan.yml'
-      - 'mkdocs.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue
@@ -464,7 +463,6 @@ on:
       - '.github/workflows/docs-cloudflare.yml'
       - '.github/workflows/docs-guards.yml'
       - '.github/workflows/security-scan.yml'
-      - 'mkdocs.yml'
       - 'requirements-docs.txt'
       - 'ci/aggregate_gate_results.sh'
       # executed or read by internal/cigates (CHAOS-10178): the diff producer, the affected-package selector, the venue

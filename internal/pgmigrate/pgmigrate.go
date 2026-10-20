@@ -361,6 +361,23 @@ func (e ForeignDatabaseError) Error() string {
 	return fmt.Sprintf("the database holds %d object(s) (relations, functions or types, in any schema but the system ones) but no public.alembic_version table; refusing to apply the head over a database this migrator did not create", e.Objects)
 }
 
+// AuthSchemaMismatchError is the refusal for a database that holds the auth
+// migrator's own lineage in a schema other than the one this migrator was told
+// (AUTH_DATABASE_SCHEMA): the two migrators disagree about the auth schema's
+// name. It is a refusal with its own cause, so the operator learns what to set
+// instead of reading a generic foreign-database message.
+type AuthSchemaMismatchError struct {
+	Found      string
+	Configured string
+	Objects    int
+}
+
+func (e AuthSchemaMismatchError) Error() string {
+	return fmt.Sprintf("the database holds %d object(s) and the auth migrator's lineage in schema %q, but %s names %q for this migrator; "+
+		"set %s=%s for the ops migrator (the value auth-migrate runs with); if %q is not the auth schema this database is foreign; "+
+		"refusing to apply the head", e.Objects, e.Found, AuthSchemaEnv, e.Configured, AuthSchemaEnv, e.Found, e.Found)
+}
+
 // SchemaMismatchError is the refusal for a database whose alembic_version
 // records the baseline heads while tables the baseline creates are absent.
 type SchemaMismatchError struct {

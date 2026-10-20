@@ -3,9 +3,12 @@
 package authschema
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +93,33 @@ func (f *orderFixture) dhoMigrate(t *testing.T) (pgmigrate.Result, error) {
 	return pgmigrate.Upgrade(f.ctx, conn, baseline, chain)
 }
 
+// dhoMigrateLogged is dhoMigrate with its log lines captured.
+func (f *orderFixture) dhoMigrateLogged(t *testing.T) (pgmigrate.Result, string, error) {
+	t.Helper()
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	result, err := pgmigrate.UpgradeLogged(f.ctx, orderConnect(t, f.ctx, f.uri), baseline, chain, slog.New(slog.NewTextHandler(&logs, nil)))
+	return result, logs.String(), err
+}
+
+// lineageRows is every row of the auth lineage table, values included.
+func (f *orderFixture) lineageRows(t *testing.T, schema string) string {
+	t.Helper()
+	conn := orderConnect(t, f.ctx, f.uri)
+	var rows string
+	if err := conn.QueryRow(f.ctx, `SELECT coalesce(string_agg(version::text || '|' || name || '|' || applied_at::text, ';' ORDER BY version), '') FROM `+schema+`.schema_migrations`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
 func (f *orderFixture) count(t *testing.T, query string) int {
 	t.Helper()
 	conn := orderConnect(t, f.ctx, f.uri)
@@ -121,9 +151,18 @@ func TestOpsMigrateSucceedsAfterAuthMigrateOnAnEmptyDatabase(t *testing.T) {
 			if status, err := pgmigrate.ReadStatus(f.ctx, orderConnect(t, f.ctx, f.uri), baseline, chain); err != nil || status.State != "empty" {
 				t.Fatalf("status after auth-migrate = %q, %v; want empty", status.State, err)
 			}
-			result, err := f.dhoMigrate(t)
+			rowsBefore := f.lineageRows(t, schema)
+			result, logs, err := f.dhoMigrateLogged(t)
 			if err != nil {
 				t.Fatalf("dho migrate after auth-migrate: %v", err)
+			}
+			if rowsAfter := f.lineageRows(t, schema); rowsBefore == "" || rowsAfter != rowsBefore {
+				t.Errorf("the auth lineage rows changed:\nbefore %s\nafter  %s", rowsBefore, rowsAfter)
+			}
+			// One Info line says which schema was not counted, and how many objects
+			// it held, so a wrong exemption is visible without a debugger.
+			if !strings.Contains(logs, "schema="+schema) || !strings.Contains(logs, "objects=") {
+				t.Errorf("no Info line names the exempted schema and its object count:\n%s", logs)
 			}
 			if result.Action != "baseline_applied" {
 				t.Errorf("action = %q, want baseline_applied", result.Action)
@@ -157,6 +196,19 @@ func TestAuthMigrateSucceedsAfterOpsMigrateOnAnEmptyDatabase(t *testing.T) {
 
 // Only the auth lineage's own schema is ignored. Anything else stays foreign.
 func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
+	mismatch := func(t *testing.T, err error, found, configured string) {
+		t.Helper()
+		var refusal pgmigrate.AuthSchemaMismatchError
+		if !errors.As(err, &refusal) {
+			t.Fatalf("err = %v, want an AuthSchemaMismatchError", err)
+		}
+		if refusal.Found != found || refusal.Configured != configured {
+			t.Errorf("mismatch = found %q configured %q, want found %q configured %q", refusal.Found, refusal.Configured, found, configured)
+		}
+		if message := refusal.Error(); !strings.Contains(message, found) || !strings.Contains(message, "AUTH_DATABASE_SCHEMA") {
+			t.Errorf("the refusal does not name the schema it found and the variable to set: %s", message)
+		}
+	}
 	foreign := func(t *testing.T, err error) {
 		t.Helper()
 		var refusal pgmigrate.ForeignDatabaseError
@@ -217,7 +269,7 @@ func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
 		_, err := f.dhoMigrate(t)
 		foreign(t, err)
 	})
-	t.Run("an exact-shape bookkeeping table in a schema that is not the configured one is foreign", func(t *testing.T) {
+	t.Run("an exact-shape bookkeeping table in a schema that is not the configured one is refused as an auth schema mismatch", func(t *testing.T) {
 		t.Setenv("AUTH_DATABASE_SCHEMA", "auth")
 		f := newOrderFixture(t)
 		conn := orderConnect(t, f.ctx, f.uri)
@@ -231,14 +283,14 @@ func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
 			}
 		}
 		_, err := f.dhoMigrate(t)
-		foreign(t, err)
+		mismatch(t, err, "lookalike", "auth")
 	})
 	t.Run("the configured auth schema is exempt only under its configured name", func(t *testing.T) {
 		t.Setenv("AUTH_DATABASE_SCHEMA", "identity_plane")
 		f := newOrderFixture(t)
 		f.authMigrate(t, "auth")
 		_, err := f.dhoMigrate(t)
-		foreign(t, err)
+		mismatch(t, err, "auth", "identity_plane")
 	})
 	t.Run("a reserved-word schema name never exempts anything, because the auth migrator could not own it", func(t *testing.T) {
 		t.Setenv("AUTH_DATABASE_SCHEMA", "with")
@@ -266,4 +318,39 @@ func TestOpsMigrateStillRefusesForeignObjectsNextToAnAuthSchema(t *testing.T) {
 		_, err := f.dhoMigrate(t)
 		foreign(t, err)
 	})
+}
+
+// When the two migrators disagree about the auth schema's name the ops migrator
+// refuses with a cause of its own, in every surface it reports through.
+func TestOpsMigrateRefusesWithTheCauseWhenItIsNotToldTheAuthSchema(t *testing.T) {
+	t.Setenv("AUTH_DATABASE_SCHEMA", "")
+	f := newOrderFixture(t)
+	f.authMigrate(t, "identity_plane")
+
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := pgmigrate.ReadStatus(f.ctx, orderConnect(t, f.ctx, f.uri), baseline, chain)
+	if err != nil || status.State != "auth_schema_mismatch" {
+		t.Errorf("status = %q, %v; want auth_schema_mismatch", status.State, err)
+	}
+	_, upgradeErr := f.dhoMigrate(t)
+	var refusal pgmigrate.AuthSchemaMismatchError
+	if !errors.As(upgradeErr, &refusal) || refusal.Found != "identity_plane" {
+		t.Fatalf("upgrade err = %v, want an AuthSchemaMismatchError naming identity_plane", upgradeErr)
+	}
+	var foreign pgmigrate.ForeignDatabaseError
+	if errors.As(upgradeErr, &foreign) {
+		t.Error("the refusal is also a generic foreign-database error")
+	}
+	// Told the name, the same database migrates.
+	t.Setenv("AUTH_DATABASE_SCHEMA", "identity_plane")
+	if result, err := f.dhoMigrate(t); err != nil || result.Action != "baseline_applied" {
+		t.Errorf("dho migrate with the variable set = %q, %v; want baseline_applied", result.Action, err)
+	}
 }

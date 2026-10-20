@@ -105,6 +105,7 @@ internal/billingcli	1
 internal/cacheinvalidation	1
 internal/chmigrate	1
 internal/cigates/affected	5
+internal/cigates/bigboy	20
 internal/cigates/chartgates	148
 internal/cigates/checkgo	140
 internal/cigates/scripts	18

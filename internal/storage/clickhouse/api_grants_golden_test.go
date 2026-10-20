@@ -10,7 +10,7 @@ import (
 // The bigboy users.d declaration of dho_api_ch (ci/bigboy/render-dho-api-ch-users.py) is rendered by
 // Python from this same manifest. Two implementations of one grant list drift unless one file pins both:
 // this test pins GrantStatements(APIPosture) to testdata/api_grants.golden and the Python renderer's
-// test (tests/tooling/test_bigboy_clickhouse_users.py) pins its output to the SAME file.
+// test (internal/cigates/bigboy/compose_ch_users_test.go) pins its output to the SAME file.
 //
 // The golden lists each statement as users.d holds it, without the "TO <role>" suffix (the declaration
 // already names the user). To regenerate after a deliberate manifest change: set UPDATE_API_GRANTS_GOLDEN=1

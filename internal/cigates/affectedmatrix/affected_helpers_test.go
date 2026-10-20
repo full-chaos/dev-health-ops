@@ -1,6 +1,7 @@
 package affectedmatrix_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,10 +10,12 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/cigates"
 )
 
 // CHAOS-10174 PR C: Go port of tests/tooling/test_go_affected_integration.py (CHAOS-9947). Pull requests run only the
-// integration shards a change can reach. The selector (ci/go_affected_integration.py) is executed through its CLI on a
+// integration shards a change can reach. The selector (cigates.AffectedIntegration) is called on a
 // synthetic `go list` document and on the real module; the planner (`check_go.sh integration-shard-plan`) is executed
 // with each selection file.
 
@@ -77,13 +80,12 @@ func affSelect(script, work string, golist []map[string]any, keys []string, root
 			return selection{}, err
 		}
 	}
-	res := cmdSpec{env: []string{basePath}}.run("python3", "-I", script,
-		"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
-		"--keys", filepath.Join(work, "keys.txt"), "--root", root)
-	if res.code != 0 {
-		return selection{}, fmt.Errorf("selector exited %d: %s", res.code, res.stderr)
+	var stdout, stderr bytes.Buffer
+	if code := cigates.AffectedIntegration([]string{"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
+		"--keys", filepath.Join(work, "keys.txt"), "--root", root}, &stdout, &stderr); code != 0 {
+		return selection{}, fmt.Errorf("selector exited %d: %s", code, stderr.String())
 	}
-	out := strings.Split(strings.TrimRight(res.stdout, "\n"), "\n")
+	out := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
 	if strings.HasPrefix(out[0], "AFFECTED ") {
 		return selection{verdict: "AFFECTED", keys: out[1:]}, nil
 	}
@@ -224,17 +226,16 @@ func realSelection(t *testing.T, root string, changed []byte) (lines []string, t
 			t.Fatal(err)
 		}
 	}
-	sel := cmdSpec{env: []string{basePath}}.run("python3", "-I", filepath.Join(root, "ci", "go_affected_integration.py"),
-		"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
-		"--keys", filepath.Join(work, "keys.txt"), "--root", root)
-	if sel.code != 0 {
-		t.Fatalf("selector: %s", sel.stderr)
+	var selOut, selErr bytes.Buffer
+	if code := cigates.AffectedIntegration([]string{"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
+		"--keys", filepath.Join(work, "keys.txt"), "--root", root}, &selOut, &selErr); code != 0 {
+		t.Fatalf("selector: %s", selErr.String())
 	}
 	file := filepath.Join(work, "selection.txt")
-	if err := os.WriteFile(file, []byte(sel.stdout), 0o644); err != nil {
+	if err := os.WriteFile(file, selOut.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return strings.Split(strings.TrimRight(sel.stdout, "\n"), "\n"), len(keys), file
+	return strings.Split(strings.TrimRight(selOut.String(), "\n"), "\n"), len(keys), file
 }
 
 var planOutLine = regexp.MustCompile(`(?m)^([a-z]+)=(.*)$`)

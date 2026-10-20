@@ -422,8 +422,9 @@ SSO paths while bigboy still ran 4f014a9d). So the values source is an explicit 
   build the cut runs. Every values-driven STEP (router-current, query-api flags, web-env parity,
   route-coverage) reads the file it wrote. Without `DEPLOY_SHA` those STEPs report rc=2 SKIPPED.
   The cut builds `cigate` once for these STEPs (`go build -trimpath -o _records/bigboy-<sha8>.bin/cigate
-  ./cmd/cigate` in `BIGBOY_OPS_REPO`, so `go` must be on `PATH`); a failed build is `deploy-pin rc=1`
-  with the build log in `_records/bigboy-<sha8>.cigate-build.err`.
+  ./cmd/cigate` in `BIGBOY_OPS_REPO`); a failed build is `deploy-pin rc=1` with the build log in
+  `_records/bigboy-<sha8>.cigate-build.err`. With `DEPLOY_SHA` set and no `go` on `PATH`, the cut stops before any
+  STEP with one line: `FAIL: bigboy-cut: go not found on PATH; needed to build cigate for the DEPLOY_SHA STEPs`.
 - STEP `route-coverage` (`cigate route-coverage`): one `ROUTEPROBE` request per routed path to each
   Go plane; net/http's method-aware mux answers 405 (or 401 behind auth) for a registered path and
   404 for none, before any handler runs. A 404 fails the STEP by name.

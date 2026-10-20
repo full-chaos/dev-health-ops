@@ -43,6 +43,11 @@ export BIGBOY_OPS_REPO=$OPS_REPO   # absolute: the cut changes directory below, 
 for need in _records/images.env _records; do
   [ -e "$R/$need" ] || { echo "FAIL: BIGBOY_ROOT=$R is missing $need -- refusing to run against a root that is not a real bigboy tree" >&2; exit 1; }
 done
+# CHAOS-10346: with DEPLOY_SHA the values-driven STEPs run cigate, which the cut builds with go (see deploy-pin below).
+# No go = one line and stop here, before any STEP, never a deploy-pin failure found later in the log.
+if [ -n "${DEPLOY_SHA:-}" ] && ! command -v go >/dev/null 2>&1; then
+  echo "FAIL: bigboy-cut: go not found on PATH; needed to build cigate for the DEPLOY_SHA STEPs" >&2; exit 1
+fi
 # CHAOS-7131: the router settings are part of the one compose file. It sets web's BACKEND_URL (the plane-split router)
 # and AUTH_URL; without it `up` below recreated web from the base file alone and web lost both -- REST
 # calls 500'd and the auth callback/logout used the wrong origin. It stays last so its web.environment wins.

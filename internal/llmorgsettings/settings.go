@@ -131,9 +131,15 @@ func (s Store) loadGatedSettings(ctx context.Context, orgID string) (orgSettings
 	if err != nil {
 		return nil, err
 	}
+	turnedOff := ownModelTurnedOff(settings)
+	delete(settings, KeyOwnModelEnabled)
 	gated, err := s.applyGate(ctx, orgID, settings)
 	if err != nil {
 		return nil, err
+	}
+	// An org admin turned the saved config off: no reader sees an own model.
+	if turnedOff {
+		return orgSettings{}, nil
 	}
 	return project(gated, s.purpose), nil
 }

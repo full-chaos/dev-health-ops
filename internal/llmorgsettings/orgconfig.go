@@ -35,6 +35,10 @@ type OrgConfig struct {
 	// purpose-scoped Store: the org has a saved BYO config of another purpose
 	// (HasSavedBYO), but nothing resolves for this one. The org is a BYO org.
 	UnresolvedPurpose Purpose
+	// TurnedOff is set only with found=false and GateClosed=false: the org has
+	// a saved BYO config of some purpose and an org admin turned it off
+	// (KeyOwnModelEnabled). The org has no usable own model.
+	TurnedOff bool
 }
 
 // ErrStoredSettingUnreadable means a stored llm setting exists but could not
@@ -95,8 +99,26 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 	if err := versionRows.Err(); err != nil {
 		return OrgConfig{}, false, fmt.Errorf("iterate org llm settings version: %w", err)
 	}
+	turnedOff := false
+	if ownModelTurnedOff(raw) {
+		if turnedOff, err = HasSavedBYO(ctx, tx, orgID); err != nil {
+			return OrgConfig{}, false, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return OrgConfig{}, false, fmt.Errorf("end org llm settings snapshot: %w", err)
+	}
+	// Turned off by an org admin: no own model, whatever is stored (an
+	// unreadable key included). A closed byo_llm gate still wins.
+	if turnedOff {
+		closed, err := s.byoGateClosed(ctx, orgID)
+		if err != nil {
+			return OrgConfig{}, false, err
+		}
+		if closed {
+			return OrgConfig{GateClosed: true}, false, nil
+		}
+		return OrgConfig{TurnedOff: true}, false, nil
 	}
 	// The effective source is the purpose override when one is stored, else the
 	// default row; the version covers that source only, so a write to the

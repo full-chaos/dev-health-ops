@@ -245,11 +245,10 @@ func TestRaceLegRunsItsSoloPackageLastAndInItsOwnGoTest(t *testing.T) {
 			t.Fatalf("shard %d: %s runs %d times in one leg: %v", shard, target, len(carrying), calls)
 		}
 		soloAt := carrying[0]
-		lastShared, provider := -1, -1
+		lastShared, provider, widest := -1, -1, 0
 		for i, c := range calls {
-			f := strings.Fields(c)
-			if contains(f, mod+"/cmd/dho") && !contains(f, target) {
-				lastShared = i
+			if n := len(strings.Fields(c)); !contains(strings.Fields(c), target) && n > widest {
+				lastShared, widest = i, n
 			}
 			if strings.HasSuffix(c, "./internal/providersync") {
 				provider = i

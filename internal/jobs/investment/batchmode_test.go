@@ -251,6 +251,9 @@ func TestBatchModeAnswersEachUnitAsTheSynchronousCallDoes(t *testing.T) {
 	fake.statuses = []string{"validating", "in_progress", "finalizing", "completed"}
 	got := runCategorize(t, context.Background(), fakeProvider(server.URL), batchTestConfig(LLMBatchModeProvider), pending)
 	requireSameCategorization(t, got, want)
+	if got.stats.llmSucceeded != 3 || allLLMCallsFailed(got.stats) {
+		t.Fatalf("batch run with every unit answered: answered=%d allFailed=%v", got.stats.llmSucceeded, allLLMCallsFailed(got.stats))
+	}
 	if fake.syncCalls != 0 {
 		t.Fatalf("%d synchronous calls on the batch path", fake.syncCalls)
 	}
@@ -336,6 +339,18 @@ func TestBatchModeTimeoutFailsUnitsAsASynchronousTransportFailure(t *testing.T) 
 		t.Fatalf("failure counts %v, want batch_timeout for every unit", got.stats.LLMFailureCounts)
 	}
 	got.stats.LLMFailureCounts = want.stats.LLMFailureCounts
+	if !allLLMCallsFailed(got.stats) || !allLLMCallsFailed(want.stats) {
+		t.Fatalf("every call failed but allFailed: batch %v sync %v", allLLMCallsFailed(got.stats), allLLMCallsFailed(want.stats))
+	}
+	wantBatchClasses := map[int]string{0: "batch_timeout", 1: "batch_timeout", 2: "batch_timeout"}
+	wantSyncClasses := map[int]string{0: "llm_error", 1: "llm_error", 2: "llm_error"}
+	if !reflect.DeepEqual(got.stats.failureClassByIndex, wantBatchClasses) {
+		t.Fatalf("batch per-unit classes %v, want %v", got.stats.failureClassByIndex, wantBatchClasses)
+	}
+	if !reflect.DeepEqual(want.stats.failureClassByIndex, wantSyncClasses) {
+		t.Fatalf("sync per-unit classes %v, want %v", want.stats.failureClassByIndex, wantSyncClasses)
+	}
+	got.stats.failureClassByIndex = want.stats.failureClassByIndex
 	requireSameCategorization(t, got, want)
 	if fake.cancelled != 1 {
 		t.Fatalf("cancelled %d times, want 1", fake.cancelled)

@@ -187,7 +187,7 @@ func venueAlwaysRunsFiles(t *testing.T, root string) []string {
 func TestVenueJobAlwaysRunsPlantedDefects(t *testing.T) {
 	root := repoRoot(t)
 	const f = venueWorkflow
-	const triggers = "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n"
+	const triggers = "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n    inputs:\n      auth_corpus_only:\n        description: 'Run only the auth-corpus-external job (the venue-oracles shards report that they were not run)'\n        type: boolean\n        default: false\n"
 	cases := []struct {
 		name string
 		muts []mutation

@@ -257,13 +257,13 @@ const (
 	// committed without a take time because the column is absent.
 	TouchedDaysDrainTakeTimeUnwritten TouchedDaysDrainEvent = "take_time_unwritten"
 	// TouchedDaysDrainStopCheckTruncated counts the passes that checked the
-	// marks of the newest runs only because more runs than the bound ended in
-	// the last day.
+	// marks of the newest unchecked runs only because more of them than the
+	// bound ended in the last day.
 	TouchedDaysDrainStopCheckTruncated TouchedDaysDrainEvent = "stop_check_truncated"
-	// TouchedDaysDrainStopCheckSkippedUnended counts the passes that left out of
-	// the stop check marking runs that are still running and began before the
-	// check's cut: no later pass reads them (the nightly pass never stops).
-	TouchedDaysDrainStopCheckSkippedUnended TouchedDaysDrainEvent = "stop_check_skipped_unended"
+	// TouchedDaysDrainChecksUnwritten counts the passes that checked runs but
+	// could not record it because the column is absent: those runs are read
+	// again by the next pass.
+	TouchedDaysDrainChecksUnwritten TouchedDaysDrainEvent = "checked_column_absent"
 )
 
 func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
@@ -274,7 +274,7 @@ func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
 		TouchedDaysDrainMarkFailed, TouchedDaysDrainReadTruncated,
 		TouchedDaysDrainDaysRetried, TouchedDaysDrainChainStopped, TouchedDaysDrainReturnReadTruncated,
 		TouchedDaysDrainTakeTimeAbsent, TouchedDaysDrainTakeTimeUnwritten, TouchedDaysDrainStopCheckTruncated,
-		TouchedDaysDrainStopCheckSkippedUnended,
+		TouchedDaysDrainChecksUnwritten,
 	}
 }
 

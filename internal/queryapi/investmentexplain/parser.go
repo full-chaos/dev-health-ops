@@ -207,7 +207,10 @@ func isJSONIdentByte(b byte) bool {
 }
 
 // ParseInvestmentMixResponse ports parse_investment_mix_response
-// (investment_mix_parser.py:43-133) exactly, field order and all.
+// (investment_mix_parser.py:43-133), field order and all, with one
+// departure: a rule break in the model's confidence object is reported in
+// ConfidenceIgnored instead of rejecting the answer, because the output's
+// confidence is always the computed fallback.
 //
 // The combined boolean conditions Python (and an earlier draft of this
 // port) tests in one `if` are split into sequential `if`s below purely
@@ -249,14 +252,13 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 	if len(rawFindings) > 10 {
 		return ParseResult{Status: ParseStatusInvalidLLMOutput, Reason: "top_findings has more than 10 entries", ReasonRule: "top_findings_too_many", ReasonPath: "top_findings", ReasonSnippet: snippetOf(len(rawFindings))}
 	}
+	// The output's Confidence below is built from the computed fallback
+	// values, never from the model's object, so a rule break there is
+	// reported on the result and the answer is kept.
+	var confidenceIgnored validationRejection
 	if confidenceOK, confidenceRejection := validConfidence(parsed["confidence"]); !confidenceOK {
-		return ParseResult{
-			Status:        ParseStatusInvalidLLMOutput,
-			Reason:        "confidence failed validation",
-			ReasonRule:    confidenceRejection.Rule,
-			ReasonPath:    "confidence." + confidenceRejection.Path,
-			ReasonSnippet: confidenceRejection.Snippet,
-		}
+		confidenceIgnored = confidenceRejection
+		confidenceIgnored.Path = "confidence." + confidenceRejection.Path
 	}
 
 	findingOpts := parseFindingOptions{
@@ -363,7 +365,7 @@ func ParseInvestmentMixResponse(text string, opts ParseOptions) ParseResult {
 		AntiClaims:      antiClaims,
 	}
 
-	return ParseResult{Status: ParseStatusValid, Output: &output, RepairedFindings: repairedFindings}
+	return ParseResult{Status: ParseStatusValid, Output: &output, RepairedFindings: repairedFindings, ConfidenceIgnored: confidenceIgnored}
 }
 
 // ParseOptions bundles parse_investment_mix_response's keyword-only

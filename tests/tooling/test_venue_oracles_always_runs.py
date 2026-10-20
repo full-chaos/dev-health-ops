@@ -1,7 +1,7 @@
 """The relevance step of the `venue-oracles` workflow, EXECUTED in a scratch repo.
 
 The workflow-shape tests (one declaring workflow, push to main and workflow_dispatch only, no path filter, no job-level
-`if:`, the wired `github.event.before`) are in internal/cigates/workflows_venue_always_runs_test.go (CHAOS-10177); only the
+`if:`, the wired `github.event.before`) are in internal/cigates/workflows/workflows_venue_always_runs_test.go (CHAOS-10177); only the
 two tests that execute the step stay here until the venue-script port (CHAOS-10178). Original rationale follows.
 
 WHY THIS TEST EXISTS

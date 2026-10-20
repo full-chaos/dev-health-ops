@@ -1,12 +1,14 @@
 package nopython_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -144,5 +146,92 @@ func TestNoPythonFilesUnderInternal(t *testing.T) {
 	}
 	if count > 20 {
 		t.Errorf("%d .py files under internal/ in all", count)
+	}
+}
+
+var scriptPython = regexp.MustCompile(`(^|[^A-Za-z0-9_./-])(python3?|run_python)([^A-Za-z0-9_.-]|$)`)
+
+// shellLiterals is every string literal ending in .sh inside the call's arguments, at any depth (filepath.Join(...)).
+func shellLiterals(call *ast.CallExpr) []string {
+	var names []string
+	for _, arg := range call.Args {
+		ast.Inspect(arg, func(node ast.Node) bool {
+			if literal, ok := node.(*ast.BasicLit); ok && literal.Kind == token.STRING {
+				if value, err := strconv.Unquote(literal.Value); err == nil && strings.HasSuffix(value, ".sh") {
+					names = append(names, filepath.Base(value))
+				}
+			}
+			return true
+		})
+	}
+	return names
+}
+
+func TestNoScriptRunByGoCodeRunsPython(t *testing.T) {
+	root := repoRoot(t)
+	scripts := map[string][]string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path != root && skipDir(entry.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".sh") {
+			scripts[entry.Name()] = append(scripts[entry.Name()], path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	run := map[string][]string{}
+	for _, path := range goFiles(t, root) {
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if pkg, ok := selector.X.(*ast.Ident); !ok || pkg.Name != "exec" || (selector.Sel.Name != "Command" && selector.Sel.Name != "CommandContext") {
+				return true
+			}
+			rel, _ := filepath.Rel(root, path)
+			for _, name := range shellLiterals(call) {
+				run[name] = append(run[name], fmt.Sprintf("%s:%d", rel, fset.Position(call.Pos()).Line))
+			}
+			return true
+		})
+	}
+	if len(run) == 0 {
+		t.Fatal("found no exec.Command that runs a .sh script; the scan is broken")
+	}
+	for name, callers := range run {
+		for _, path := range scripts[name] {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rel, _ := filepath.Rel(root, path)
+			for number, line := range strings.Split(string(raw), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "#") {
+					continue
+				}
+				if scriptPython.MatchString(line) {
+					t.Errorf("%s:%d runs Python, and Go code runs the script (%s): %s", rel, number+1, callers[0], strings.TrimSpace(line))
+				}
+			}
+		}
 	}
 }

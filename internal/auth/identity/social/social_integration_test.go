@@ -598,3 +598,110 @@ func TestSignupNeedsUsersOwnedByAuth(t *testing.T) {
 		}
 	})
 }
+
+// barrierStore holds the first two ListIdentities calls until both arrived, so
+// two Link calls both pass the existing-identity check before either writes.
+type barrierStore struct {
+	Store
+	arrived chan struct{}
+	release chan struct{}
+}
+
+func newBarrierStore(inner Store) *barrierStore {
+	b := &barrierStore{Store: inner, arrived: make(chan struct{}, 2), release: make(chan struct{})}
+	go func() {
+		<-b.arrived
+		<-b.arrived
+		close(b.release)
+	}()
+	return b
+}
+
+func (b *barrierStore) ListIdentities(ctx context.Context, principal uuid.UUID) ([]identity.Identity, error) {
+	out, err := b.Store.ListIdentities(ctx, principal)
+	select {
+	case b.arrived <- struct{}{}:
+		select {
+		case <-b.release:
+		case <-time.After(10 * time.Second):
+		}
+	default:
+	}
+	return out, err
+}
+
+func (e *env) barrierService(t *testing.T) *Service {
+	t.Helper()
+	svc, err := New(Config{Store: newBarrierStore(e.store(false)), Providers: e.providers.client(), Now: func() time.Time { return e.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
+}
+
+func TestConcurrentLinksKeepOneIdentityPerProvider(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, ctx)
+	owner := e.localUser(t, ctx, "two-links@example.com")
+	svc := e.barrierService(t)
+	tokens := []string{"first", "second"}
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i, name := range tokens {
+		token := e.providers.token(t.Name()+name, account{provider: GitHub, id: int64(7100 + i), email: name + "@example.com", verified: true, public: true})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = svc.Link(ctx, e.signedIn(owner, time.Minute), GitHub, token)
+		}()
+	}
+	wg.Wait()
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1 AND provider = 'github'`, owner); n != 1 {
+		t.Fatalf("github identities of the principal = %d, want 1 (errors %v)", n, errs)
+	}
+	refused := 0
+	for _, err := range errs {
+		if errors.Is(err, ErrProviderLinked) {
+			refused++
+		} else if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("refused links = %d, want 1 (errors %v)", refused, errs)
+	}
+}
+
+func TestConcurrentDuplicateLinkAnswersLikeASequentialOne(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, ctx)
+	owner := e.localUser(t, ctx, "dup-link@example.com")
+	token := e.providers.token(t.Name(), account{provider: GitHub, id: 7200, email: "dup-link@example.com", verified: true, public: true})
+	who := e.signedIn(owner, time.Minute)
+	h := Handlers{Service: e.barrierService(t), Auth: signedInAs{who: &who}}
+	body, _ := json.Marshal(map[string]string{"provider": "github", "provider_access_token": token.Reveal()})
+	recs := make([]*httptest.ResponseRecorder, 2)
+	var wg sync.WaitGroup
+	for i := range recs {
+		recs[i] = httptest.NewRecorder()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.Link(recs[i], httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body))))
+		}()
+	}
+	wg.Wait()
+	sequential := httptest.NewRecorder()
+	Handlers{Service: e.service(t, false), Auth: signedInAs{who: &who}}.Link(sequential, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(body))))
+	for i, rec := range recs {
+		if rec.Code != sequential.Code || rec.Body.String() != sequential.Body.String() {
+			t.Fatalf("concurrent link %d answered %d %q; a sequential duplicate answers %d %q", i, rec.Code, rec.Body.String(), sequential.Code, sequential.Body.String())
+		}
+	}
+	if sequential.Code != http.StatusOK {
+		t.Fatalf("sequential duplicate answered %d %q", sequential.Code, sequential.Body.String())
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1`, owner); n != 1 {
+		t.Fatalf("identities = %d, want 1", n)
+	}
+}

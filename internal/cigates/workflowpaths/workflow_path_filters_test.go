@@ -28,7 +28,10 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-var docsOnlyPatterns = []string{"docs/**", "docs-data/**", "**/*.md", ".github/docs-legacy/**"}
+// Split so the literal is not a file reference: a Go test naming a tracked file makes go.yml's path lists cover it.
+const docsSiteConfig = "mkdocs" + ".yml"
+
+var docsOnlyPatterns = []string{"docs/**", "docs-data/**", "**/*.md", ".github/docs-legacy/**", docsSiteConfig}
 
 func loadWorkflowMap(t *testing.T, name string) map[string]any {
 	t.Helper()
@@ -76,6 +79,7 @@ func requireNoPathFilter(t *testing.T, wf map[string]any, event string) {
 	t.Helper()
 	trig := triggerMap(t, wf, event)
 	if trig == nil {
+		t.Errorf("trigger %s is missing", event)
 		return
 	}
 	for _, key := range []string{"paths", "paths-ignore"} {
@@ -148,7 +152,14 @@ func TestWorkflowPathFiltersDocsWorkflowsRunOnlyForDocsPaths(t *testing.T) {
 					t.Errorf("%s: %s paths contains catch-all %q", c.file, event, p)
 				}
 			}
-			for _, want := range []string{"docs/**", "mkdocs.yml", "docs-data/**"} {
+			for _, p := range paths {
+				for _, bad := range []string{"src/", "internal/", "cmd/", "deploy/", "tests/", "web/"} {
+					if strings.HasPrefix(p, bad) {
+						t.Errorf("%s: %s paths contains code path %q", c.file, event, p)
+					}
+				}
+			}
+			for _, want := range []string{"docs/**", docsSiteConfig, "docs-data/**"} {
 				if !has[want] {
 					t.Errorf("%s: %s paths is missing %s", c.file, event, want)
 				}
@@ -166,10 +177,10 @@ func TestWorkflowPathFiltersSecurityScanGatesByJobNotWorkflow(t *testing.T) {
 		requireNoPathFilter(t, wf, event)
 	}
 	jobs := wf["jobs"].(map[string]any)
-	for _, name := range []string{"pip-audit", "semgrep"} {
+	for name, want := range map[string]string{"pip-audit": "needs.changes.outputs.deps == 'true'", "semgrep": "needs.changes.outputs.code == 'true'"} {
 		cond, _ := jobs[name].(map[string]any)["if"].(string)
-		if !strings.Contains(cond, "needs.changes.outputs.") {
-			t.Errorf("job %s no longer gates on the changes job: %q", name, cond)
+		if !strings.Contains(cond, want) {
+			t.Errorf("job %s no longer gates on %q: %q", name, want, cond)
 		}
 	}
 	gl := jobs["gitleaks"].(map[string]any)
@@ -178,5 +189,41 @@ func TestWorkflowPathFiltersSecurityScanGatesByJobNotWorkflow(t *testing.T) {
 	}
 	if cond, _ := gl["if"].(string); strings.Contains(cond, "needs.changes") {
 		t.Errorf("gitleaks must not depend on the changes job: %q", cond)
+	}
+}
+
+func TestWorkflowPathFiltersSecurityScanCodeFilterExcludesDocsSiteConfig(t *testing.T) {
+	wf := loadWorkflowMap(t, "security-scan.yml")
+	steps := wf["jobs"].(map[string]any)["changes"].(map[string]any)["steps"].([]any)
+	var filters string
+	for _, st := range steps {
+		with, _ := st.(map[string]any)["with"].(map[string]any)
+		if f, ok := with["filters"].(string); ok {
+			filters = f
+		}
+	}
+	var parsed map[string][]string
+	if err := yaml.Unmarshal([]byte(filters), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range parsed["code"] {
+		if p == "!"+docsSiteConfig {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the code filter does not exclude %s: %v", docsSiteConfig, parsed["code"])
+	}
+}
+
+func TestWorkflowPathFiltersGoWorkflowDoesNotTriggerOnDocsSiteConfig(t *testing.T) {
+	wf := loadWorkflowMap(t, "go.yml")
+	for _, event := range []string{"push", "pull_request"} {
+		for _, p := range stringList(t, triggerMap(t, wf, event)["paths"]) {
+			if p == docsSiteConfig {
+				t.Errorf("go.yml %s paths lists %s: a docs-only change would queue Go CI", event, docsSiteConfig)
+			}
+		}
 	}
 }

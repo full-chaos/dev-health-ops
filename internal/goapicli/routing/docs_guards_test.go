@@ -39,7 +39,7 @@ func leadingFence(stripped string) (byte, int, string) {
 	return 0, 0, ""
 }
 
-var tableSeparator = regexp.MustCompile(`^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?$`)
+var tableSeparator = regexp.MustCompile(`^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$`)
 
 // digestInHistoryRow is true iff the digest appears in a four-cell table row of THIS section: not in a fenced block (tracked
 // by character and run length so nested fences cannot smuggle an example row), not after the next heading, not a stub row.
@@ -181,14 +181,16 @@ func TestSchemaDigestGatePlantedDefects(t *testing.T) {
 		{"pin bumped without a history row", sdl, d, "| other | a | b | c |\n", "not a row"},
 		{"prose mention does not count", sdl, d, "The digest " + d + " was recorded here.\n", "not a row"},
 		{"stub row with empty cells does not count", sdl, d, "| " + d + " | | | |\n", "not a row"},
-		{"fenced row does not count", sdl, d, "```\n" + row + "```\n", "not a row"},
-		{"nested fences cannot smuggle a row", sdl, d, "````\n```\n```\n" + row + "````\n", "not a row"},
+		{"fenced row does not count", sdl, d, "```\n" + hdr + sep + row + "```\n", "not a row"},
+		{"nested fences cannot smuggle a row", sdl, d, "````\n```\n```\n" + hdr + sep + row + "````\n", "not a row"},
 		{"a longer closing fence still closes the block", sdl, d, "```\nexample\n````\n" + hdr + sep + row, ""},
 		{"a lone pipe row without a header and separator does not count", sdl, d, row, "not a row"},
 		{"a fence line followed by text does not close the block", sdl, d, "~~~\nexample\n~~~this is content\n" + hdr + sep + row, "not a row"},
 		{"a header and separator make the row count", sdl, d, hdr + sep + row, ""},
-		{"row after the next heading does not count", sdl, d, "## Later\n" + row, "not a row"},
-		{"row of a later table under no heading counts only inside the section", sdl, d, "text\n\n## Other table\n\n" + row, "not a row"},
+		{"single-hyphen separator cells make a real table", sdl, d, hdr + "|-|-|-|-|\n" + row, ""},
+		{"a whole table inside a fence does not count", sdl, d, "```\n" + hdr + sep + row + "```\n", "not a row"},
+		{"row after the next heading does not count", sdl, d, "## Later\n" + hdr + sep + row, "not a row"},
+		{"row of a later table under no heading counts only inside the section", sdl, d, "text\n\n## Other table\n\n" + hdr + sep + row, "not a row"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

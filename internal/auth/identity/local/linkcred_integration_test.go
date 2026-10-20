@@ -793,8 +793,14 @@ func TestIssueRunsOneStatementSequenceForEveryCase(t *testing.T) {
 	if !reflect.DeepEqual(decoy, first) || !reflect.DeepEqual(first, again) {
 		t.Errorf("statement sequences differ:\ndecoy   %q\nfirst   %q\nreissue %q", decoy, first, again)
 	}
-	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials`); n != 2 {
-		t.Errorf("rows = %d, want 2: the decoy wrote none", n)
+	// The reissue deleted the first issue's unconsumed row, so one live row
+	// remains, the reissue's; the decoy wrote none.
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials`); n != 1 {
+		t.Errorf("rows = %d, want 1: the decoy wrote none and the reissue replaced the first issue", n)
+	}
+	last := linkHash("again")
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.link_credentials WHERE principal_id = $1 AND token_hash = $2 AND consumed_at IS NULL`, p.String(), last[:]); n != 1 {
+		t.Errorf("the remaining row is not the reissue's unconsumed credential")
 	}
 }
 

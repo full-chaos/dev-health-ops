@@ -298,8 +298,16 @@ const (
 // run whole, because the expression's case folding reaches beyond ASCII. A differential test holds this equal to the expression over
 // the whole text.
 func matchSpans(text string) [][2]int {
+	spans, _ := matchSpansCounting(text)
+	return spans
+}
+
+// matchSpansCounting is matchSpans and the number of start positions the expression was asked to search from (its cost: the
+// expression is a linear-time automaton started at each of them).
+func matchSpansCounting(text string) ([][2]int, int) {
+	starts := 0
 	if !hasSegmentRun(text) {
-		return nil
+		return nil, starts
 	}
 	// the scanner runs a rule only on text whose lower-cased form holds one of the rule's keywords (a long s is not folded there)
 	lowered := strings.ToLower(text)
@@ -311,7 +319,7 @@ func matchSpans(text string) [][2]int {
 		}
 	}
 	if !found {
-		return nil
+		return nil, starts
 	}
 	ascii := true
 	for i := 0; i < len(text); i++ {
@@ -322,10 +330,11 @@ func matchSpans(text string) [][2]int {
 	}
 	if !ascii {
 		var spans [][2]int
+		starts += len(text)
 		for _, loc := range generic.FindAllStringIndex(text, -1) {
 			spans = append(spans, [2]int{loc[0], loc[1]})
 		}
-		return spans
+		return spans, starts
 	}
 	var windows [][2]int
 	for _, word := range keywords {
@@ -366,11 +375,12 @@ func matchSpans(text string) [][2]int {
 	}
 	var spans [][2]int
 	for _, window := range merged {
+		starts += window[1] - window[0]
 		for _, loc := range generic.FindAllStringIndex(text[window[0]:window[1]], -1) {
 			spans = append(spans, [2]int{window[0] + loc[0], window[0] + loc[1]})
 		}
 	}
-	return spans
+	return spans, starts
 }
 
 // isSecretByte is a character of either secret form: [\w.=-] or the base64 alphabet.

@@ -32,3 +32,30 @@ func TestClassGlobs(t *testing.T) {
 		}
 	}
 }
+
+// The relevance inputs of the deleted go-quality decider (fcc #4570) never plan NONE on the real tables: each is a FULL
+// path or a known class with at least one reader. Removing the rows that read one of them turns its case red.
+func TestRelevanceInputsNeverPlanNone(t *testing.T) {
+	tb, err := loadTables(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Built by concatenation: these are inputs of the check, not files this package reads, and plan-reads counts literals.
+	for _, p := range []string{
+		".planning" + "/x.py", ".claude/hooks/x.py", "internal/cigates/x.py",
+		"ci/requirements-clickhouse-migrations.txt", "ci/requirements-docs.txt",
+		"mkdocs" + ".yml",
+		"docs/reference/limits-and-compatibility/provider-limits.md",
+	} {
+		if isPythonSource(p) {
+			continue
+		}
+		classes, known := tb.classesOf(p)
+		if !known {
+			continue // an undeclared path is FULL
+		}
+		if len(tb.readersOf(classes)) == 0 {
+			t.Errorf("%s is in reader-less class(es) %v: a change to it alone would plan NONE", p, classes)
+		}
+	}
+}

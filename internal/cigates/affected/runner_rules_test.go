@@ -273,7 +273,7 @@ func TestFullPlanStaysForRunnerAndSharedInputs(t *testing.T) {
 		{"ci/go_integration_shards.d/_shards.tsv", sharedFull + "ci/go_integration_shards.d/_shards.tsv: runner input\n"},
 		{"ci/lib/a.sh", sharedFull + "ci/lib/a.sh: runner input\n"},
 		{"ci/go_relevant_diff.sh", sharedFull + "ci/go_relevant_diff.sh: runner input\n"},
-		{"scripts/x.py", "FULL non-Go file in no declared class: scripts/x.py\n"},
+		{"scripts/x.py", "FULL non-Go file is Python source: scripts/x.py\n"},
 		{"go.mod", sharedFull + "go.mod\n"},
 		{"internal/testsupport/h.go", sharedFull + "internal/testsupport/h.go\n"},
 	}

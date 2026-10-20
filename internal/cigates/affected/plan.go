@@ -144,7 +144,11 @@ type planInput struct {
 	root, base  string
 	tables      *tables
 	goFilesFull bool
+	log         io.Writer // one line per root-walk decision; nil discards
 }
+
+// isPythonSource: a Python file outside a Go package's testdata or embed files has no declared reader; it plans FULL.
+func isPythonSource(p string) bool { return strings.HasSuffix(p, ".py") }
 
 func plan(in planInput) (Verdict, error) {
 	if !judgedEvents[in.event] {
@@ -198,6 +202,7 @@ func plan(in planInput) (Verdict, error) {
 	changedPackages := map[string]bool{} // import paths whose reverse closure is selected
 	direct := map[string]bool{}          // import paths selected alone
 	hasGo := false
+	reached := map[string]bool{} // classes the changed non-Go paths fall in
 	for _, raw := range in.changed {
 		p := path.Clean(raw)
 		if strings.HasSuffix(p, ".go") {
@@ -228,7 +233,13 @@ func plan(in planInput) (Verdict, error) {
 			changedPackages[owner] = true
 			continue
 		}
+		if isPythonSource(p) {
+			return full("non-Go file is Python source: " + p), nil
+		}
 		classes, known := in.tables.classesOf(p)
+		for c := range classes {
+			reached[c] = true
+		}
 		if !known {
 			if len(keys) > 0 {
 				continue
@@ -246,6 +257,7 @@ func plan(in planInput) (Verdict, error) {
 	if in.goFilesFull && hasGo {
 		return full("Go source in the change set: every package runs"), nil
 	}
+	in.tables.logRootWalks(in.log, reached)
 	if len(changedPackages) == 0 && len(direct) == 0 {
 		return Verdict{Kind: "NONE"}, nil
 	}
@@ -329,7 +341,7 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	v, err := plan(planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, base: *base, tables: tb, goFilesFull: *goFilesFull})
+	v, err := plan(planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, base: *base, tables: tb, goFilesFull: *goFilesFull, log: stderr})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

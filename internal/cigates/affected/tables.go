@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -228,4 +229,37 @@ func (t *tables) readersOf(classes map[string]bool) []readRow {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].pkg < out[j].pkg })
 	return out
+}
+
+// logRootWalks writes, for every package with walks.tsv rows, the classes its walk is declared to read against the classes
+// the change reaches, and whether that selected it: a false NONE that rests on a walk declaration shows in the job log.
+func (t *tables) logRootWalks(w io.Writer, reached map[string]bool) {
+	if w == nil || len(reached) == 0 {
+		return
+	}
+	declared := map[string][]string{}
+	for _, r := range t.walks {
+		declared[r.pkg] = append(declared[r.pkg], r.class)
+	}
+	var reach []string
+	for c := range reached {
+		reach = append(reach, c)
+	}
+	sort.Strings(reach)
+	var pkgs []string
+	for p := range declared {
+		pkgs = append(pkgs, p)
+	}
+	sort.Strings(pkgs)
+	for _, p := range pkgs {
+		classes := declared[p]
+		sort.Strings(classes)
+		state := "not selected"
+		for _, c := range classes {
+			if reached[c] {
+				state = "selected"
+			}
+		}
+		fmt.Fprintf(w, "root walk in %s: classes declared %v, reachable %v; %s\n", p, classes, reach, state)
+	}
 }

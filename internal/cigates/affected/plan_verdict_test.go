@@ -282,6 +282,9 @@ func planVerdictRows() []verdictRow {
 		{name: "reader_less_paths_are_none", changed: []string{".claude/x.json", ".codex-review/r1.md", ".codex-review-notes.md", "AGENTS.md"}, want: "NONE"},
 		{name: "test_reader_selects_only_itself", changed: []string{"docs/a.md"}, want: "AFFECTED 1", keys: []string{"a"}},
 		{name: "code_reader_selects_its_reverse_deps", changed: []string{"contracts/auth/v1/x.json"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
+		{name: "python_source_in_a_reader_less_class_is_full", changed: []string{".claude/hooks/x.py"}, want: "FULL non-Go file is Python source*"},
+		{name: "python_source_in_a_declared_class_is_full", changed: []string{"docs/x.py"}, want: "FULL non-Go file is Python source*"},
+		{name: "python_fixture_under_testdata_is_its_package", changed: []string{"x/testdata/fixture.py"}, want: "AFFECTED 1", keys: []string{"x"}},
 		{name: "walk_row_selects_its_walker", changed: []string{"walked/f.txt"}, want: "AFFECTED 1", keys: []string{"x"}},
 		{name: "walks_table_is_full", changed: []string{"internal/cigates/affected/walks.tsv"}, want: "FULL planner input*"},
 		{name: "undeclared_path_is_full", changed: []string{"zz/new.txt"}, want: "FULL non-Go file*"},
@@ -527,6 +530,35 @@ func TestDeletedDeciderCasesArePlanned(t *testing.T) {
 			t.Parallel()
 			if err := row.check(t); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// A verdict that rests on a root walk says so in the job log: one stderr line per walker, its declared classes against the
+// classes the change reaches.
+func TestPlanVerdictLogsEachRootWalkDecision(t *testing.T) {
+	cases := []struct{ changed, want string }{
+		{"docs/a.md", "root walk in x: classes declared [walked], reachable [docs]; not selected"},
+		{"walked/f.txt", "root walk in x: classes declared [walked], reachable [walked]; selected"},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.changed, func(t *testing.T) {
+			t.Parallel()
+			work := t.TempDir()
+			f, err := newVerdictFixture(work, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			list := filepath.Join(work, "changed.txt")
+			if err := os.WriteFile(list, []byte(c.changed+"\x00"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			res := cmdSpec{dir: f.root, env: gitEnv}.run(cigate(t), "plan-verdict", "--event", "pull_request", "--changed", list,
+				"--golist", f.golist, "--keys", f.keys, "--root", f.root, "--base", f.base)
+			if res.code != 0 || !strings.Contains(res.stderr, c.want+"\n") {
+				t.Fatalf("plan-verdict over %s: exit %d, stderr %q, want the line %q", c.changed, res.code, res.stderr, c.want)
 			}
 		})
 	}

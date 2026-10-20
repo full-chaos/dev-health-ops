@@ -73,6 +73,7 @@ jobs:
               - 'internal/**/*.md'
               - 'internal/**/*.html'
               - 'internal/chmigrate/history/**'
+              - 'internal/fixturescli/testdata/**'
               - 'go.mod'
               - 'go.sum'
               - 'contracts/jobs/**'

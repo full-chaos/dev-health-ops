@@ -85,6 +85,12 @@ func AssertHealth(payload []byte) error {
 	return nil
 }
 
+// Where this is stricter than the Python assertions it replaces (each a refusal of a payload the api never emits, so
+// no job that passed before fails on real output): supported_endpoints must be a list holding the exact route
+// (Python's `in` also accepted a substring of a string or a key of a dict); tiles must be an object (Python's `in`
+// also accepted a list or a string naming the four keys); a raw Infinity or NaN literal in the JSON is refused by the
+// decoder (Python's json.loads accepts it); a hex float or a non-ASCII decimal digit in the coverage string is
+// refused (see number).
 // AssertMeta checks a /api/v1/meta answer.
 func AssertMeta(payload []byte) error {
 	p, err := decode(payload)
@@ -170,7 +176,14 @@ func AssertHome(payload []byte, fixtureProvider string) error {
 			return fmt.Errorf("tiles has no %s: %v", key, tiles)
 		}
 	}
-	constraint := obj(p["constraint"])
+	constraint := doc{}
+	if raw, present := p["constraint"]; present {
+		c, ok := raw.(doc)
+		if !ok {
+			return fmt.Errorf("constraint is not an object: %v", raw)
+		}
+		constraint = c
+	}
 	if hasMove {
 		if !truthy(constraint["title"]) || !truthy(constraint["evidence"]) {
 			return fmt.Errorf("a metric moved between two windows but the constraint card is empty: %v", constraint)

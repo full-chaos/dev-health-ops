@@ -443,8 +443,8 @@ func TestAssertHomeRefusesANonPositiveOrNaNCoverage(t *testing.T) {
 
 // Python's `float(coverage.get("repos_covered_pct", 0.0)) > 0.0`: what float() accepts and what it refuses.
 func TestAssertHomeCoverageFollowsPythonFloat(t *testing.T) {
-	accepted := []any{true, 1, 0.5, "1", " 1 ", "\t2.5\n", "1_0", "1e3", ".5", "5.", "+3", "inf", "Infinity", "+INF", "\u00a01\u00a0", "\u20031\u2003", "\x1c1\x1f", "١٢", "１２", "١_٢", "𝟏", "1\u00a0"}
-	refused := []any{"café", "1é", "é", "１２é", "١ ٢", "1\u200b", false, 0, -2, "0", "-1", "-inf", "nan", "NaN", "-nan", "", "  ", "0x10", "1__0", "_1", "1_", "1,5", "1 2", "most", nil, []any{1}, m{"a": 1}, "1e", "e5", ".", "+", "1_.5", "1._5"}
+	accepted := []any{true, 1, 0.5, "1", " 1 ", "\t2.5\n", "1_0", "1e3", ".5", "5.", "+3", "inf", "Infinity", "+INF", "\u00a01\u00a0", "\u20031\u2003", "١٢", "１２", "١_٢", "𝟏", "1\u00a0"}
+	refused := []any{"\x1c1", "1\x1f", "\x1c1\x1f", "\x1d1", "1\x1e", "café", "1é", "é", "１２é", "١ ٢", "1\u200b", false, 0, -2, "0", "-1", "-inf", "nan", "NaN", "-nan", "", "  ", "0x10", "1__0", "_1", "1_", "1,5", "1 2", "most", nil, []any{1}, m{"a": 1}, "1e", "e5", ".", "+", "1_.5", "1._5"}
 	for _, v := range accepted {
 		p := goodHome()
 		p["freshness"].(m)["coverage"] = m{"repos_covered_pct": v}
@@ -490,8 +490,8 @@ func TestAssertHomeRefusesAConstraintThatIsNotAnObject(t *testing.T) {
 // which never equals an allowed state, and U+212A (Kelvin sign) to an ASCII "k".
 func TestAssertHomeSourceStatesLowerCaseLikePython(t *testing.T) {
 	for state, wantOK := range map[string]bool{
-		"OK": true, "Stale": true, "unKnown": true, "UNKNOWN": true,
-		"not_confİgured": false, "café": false, " ok": false, "ok ": false, "ｏｋ": false,
+		"OK": true, "Stale": true, "un\u212Anown": true, "UNKNOWN": true,
+		"not_conf\u0130gured": false, "café": false, " ok": false, "ok ": false, "ｏｋ": false,
 	} {
 		p := goodHome()
 		p["freshness"].(m)["sources"] = m{"ci": "ok", "github": state}
@@ -530,5 +530,35 @@ func TestDecimalDigitRunsAreMultiplesOfTen(t *testing.T) {
 	}
 	if runs < 20 || total < 400 {
 		t.Fatalf("only %d runs / %d digits found: the scan measures nothing", runs, total)
+	}
+}
+
+// The whitespace float() strips is the table of internal/pythonparity's int(): Go's unicode.IsSpace agrees with it on
+// every character, and neither includes U+001C..U+001F (str.isspace() does).
+func TestFloatWhitespaceIsTheASCIISpacesAndTheUnicodeSpaces(t *testing.T) {
+	for _, r := range []rune{0x1c, 0x1d, 0x1e, 0x1f} {
+		p := goodHome()
+		p["freshness"].(m)["coverage"] = m{"repos_covered_pct": "1" + string(r)}
+		if err := livee2e.AssertHome(mustJSON(t, p), "github"); err == nil {
+			t.Errorf("float() refuses U+%04X around a number", r)
+		}
+		p["freshness"].(m)["coverage"] = m{"repos_covered_pct": string(r) + "1"}
+		if err := livee2e.AssertHome(mustJSON(t, p), "github"); err == nil {
+			t.Errorf("float() refuses a leading U+%04X", r)
+		}
+	}
+	for _, r := range []rune{0x9, 0xa, 0xb, 0xc, 0xd, 0x20, 0x85, 0xa0, 0x1680, 0x2000, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000} {
+		p := goodHome()
+		p["freshness"].(m)["coverage"] = m{"repos_covered_pct": string(r) + "1" + string(r)}
+		if err := livee2e.AssertHome(mustJSON(t, p), "github"); err != nil {
+			t.Errorf("float() strips U+%04X: %v", r, err)
+		}
+	}
+	for _, r := range []rune{0x180e, 0x200b, 0x2060, 0xfeff} {
+		p := goodHome()
+		p["freshness"].(m)["coverage"] = m{"repos_covered_pct": "1" + string(r)}
+		if err := livee2e.AssertHome(mustJSON(t, p), "github"); err == nil {
+			t.Errorf("U+%04X is not whitespace to float()", r)
+		}
 	}
 }

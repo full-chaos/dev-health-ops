@@ -359,8 +359,17 @@ var pythonFloatRe = regexp.MustCompile(`^[+-]?(?:(?:[0-9](?:_?[0-9])*(?:\.(?:[0-
 
 var pythonFloatWord = map[string]bool{"inf": true, "infinity": true, "nan": true}
 
-// pythonSpace is what Python's str.strip() and float() treat as whitespace: Unicode White_Space plus U+001C to U+001F.
-func pythonSpace(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) }
+// pythonFloatSpaces is every character CPython's float() strips (it folds Unicode whitespace to an ASCII space and then
+// skips only ASCII space characters): \t \n \v \f \r, space, and the Unicode spaces above 127. It is NOT str.isspace():
+// U+001C..U+001F are whitespace to that and are REJECTED by float(). Same set as internal/pythonparity's pythonIntSpaces.
+var pythonFloatSpaces = map[rune]bool{
+	0x9: true, 0xa: true, 0xb: true, 0xc: true, 0xd: true, 0x20: true, 0x85: true, 0xa0: true,
+	0x1680: true, 0x2000: true, 0x2001: true, 0x2002: true, 0x2003: true, 0x2004: true, 0x2005: true, 0x2006: true,
+	0x2007: true, 0x2008: true, 0x2009: true, 0x200a: true, 0x2028: true, 0x2029: true, 0x202f: true, 0x205f: true,
+	0x3000: true,
+}
+
+func pythonSpace(r rune) bool { return pythonFloatSpaces[r] }
 
 // decimalDigitValue is the value of a Unicode decimal digit (category Nd): the digits of a script are contiguous runs
 // of ten (or a multiple of ten, as in the mathematical digits), so the offset in its run, modulo ten, is the value.
@@ -372,6 +381,9 @@ func decimalDigitValue(r rune) int {
 	return n % 10
 }
 
+// Version divergence, named: the digit table is Go's (Go 1.27 carries Unicode 17) and CPython's float() uses the table
+// of its own release (3.12: Unicode 15, 3.14: Unicode 16), so a decimal digit added in a newer Unicode than the Python
+// of record is accepted here and refused there. The payload of our own api never carries such a digit.
 // pythonASCIIDigits maps every Unicode decimal digit to its ASCII digit, as float() does before it parses.
 func pythonASCIIDigits(s string) string {
 	return strings.Map(func(r rune) rune {

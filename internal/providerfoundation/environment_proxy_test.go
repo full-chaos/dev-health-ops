@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/proxycapture"
 )
 
@@ -46,7 +47,7 @@ func TestThePerRequestOriginGuardGivesASuppliedClientATransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	guarded, _ := originGuardedDoer(&http.Client{}, target, nil)
-	if client, ok := guarded.(*http.Client); !ok || client.Transport == nil {
-		t.Fatalf("originGuardedDoer over a client with no transport = %#v, want a copy with a transport", guarded)
+	if client, ok := guarded.(*http.Client); !ok || client.Transport != http.RoundTripper(httpguard.SharedTransport()) {
+		t.Fatalf("originGuardedDoer over a client with no transport = %#v, want a copy over httpguard.SharedTransport()", guarded)
 	}
 }

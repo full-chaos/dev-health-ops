@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield", "unproven", "byvalue", "wrapper", "assigndefault", "clientcopy"}
+var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield", "unproven", "byvalue", "wrapper", "assigndefault", "clientcopy", "promoted"}
 
 // The walker is itself tested: each planted package under testdata/planted must yield exactly its sites, and the
 // negative package none. A clause removed from kindsOf is RED here.
@@ -44,6 +44,24 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 		{dir + "byvalue/byvalue.go", "type Embedded", "client-by-value"}:                1,
 		{dir + "assigndefault/assigndefault.go", "Replace", "default-transport"}:        1,
 		{dir + "clientcopy/clientcopy.go", "Copied", "client-copy"}:                     1,
+		{dir + "clientcopy/clientcopy.go", "Argument", "client-copy"}:                   1,
+		{dir + "clientcopy/clientcopy.go", "Argument", "client-parameter"}:              1,
+		{dir + "clientcopy/clientcopy.go", "Returned", "client-copy"}:                   1,
+		{dir + "clientcopy/clientcopy.go", "Returned", "client-parameter"}:              1,
+		{dir + "clientcopy/clientcopy.go", "Sent", "client-by-value"}:                   1,
+		{dir + "clientcopy/clientcopy.go", "Sent", "client-copy"}:                       1,
+		{dir + "clientcopy/clientcopy.go", "Sent", "client-parameter"}:                  1,
+		{dir + "clientcopy/clientcopy.go", "consume", "client-parameter"}:               1,
+		{dir + "promoted/promoted.go", "NamedPointerWrite", "transport-nil"}:            1,
+		{dir + "promoted/promoted.go", "OverwriteClient", "value-overwrite"}:            1,
+		{dir + "promoted/promoted.go", "OverwriteTransport", "value-overwrite"}:         1,
+		{dir + "promoted/promoted.go", "PromotedAddress", "transport-address"}:          1,
+		{dir + "promoted/promoted.go", "PromotedNil", "transport-nil"}:                  1,
+		{dir + "promoted/promoted.go", "PromotedProxySet", "proxy"}:                     1,
+		{dir + "promoted/promoted.go", "PromotedTuple", "transport-unproven"}:           1,
+		{dir + "promoted/promoted.go", "PromotedUnproven", "transport-unproven"}:        1,
+		{dir + "promoted/promoted.go", "ProxyAddress", "proxy"}:                         1,
+		{dir + "promoted/promoted.go", "RangeWrite", "transport-unproven"}:              1,
 		{dir + "clientcopy/clientcopy.go", "Copied", "client-parameter"}:                1,
 		{dir + "clientcopy/clientcopy.go", "Passed", "client-parameter"}:                1,
 		{dir + "clientcopy/clientcopy.go", "ByValue", "client-parameter"}:               1,

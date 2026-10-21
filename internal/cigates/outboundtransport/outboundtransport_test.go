@@ -20,11 +20,14 @@
 //	client-by-value      a struct field (embedded or named), a defined type or alias, or an array, slice, map or channel
 //	                     element whose type is the non-pointer net/http.Client: its zero value has no Transport and its
 //	                     (promoted) Do uses http.DefaultTransport, and no literal of net/http.Client is ever written
-//	transport-address    &c.Transport for a net/http.Client c: a write through the pointer is invisible to every other rule
+//	transport-address    &c.Transport (resolved through the type checker: promoted fields and named pointer types included):
+//	                     a write through the pointer is invisible to every other rule; &t.Proxy is a proxy site
 //	client-copy          a copy of a supplied net/http.Client (`*client`): the copy keeps a nil Transport unless the
 //	                     code gives it one, so every copy needs a row naming where its transport comes from
 //	client-parameter     a parameter of type *net/http.Client or net/http.Client: the constructor sweep. Every function that
 //	                     takes a supplied client is listed with where that client gets its transport, so a new one fails
+//	value-overwrite      an assignment to `*p` for a pointer to net/http.Client or net/http.Transport (or such a range target):
+//	                     the whole value is replaced, which no field rule sees
 //	client-instantiate   a generic function or type instantiated with the non-pointer net/http.Client (zero[http.Client]())
 //	default-transport    any use of net/http.DefaultTransport
 //	default-transport-assign  an assignment to net/http.DefaultTransport: FORBIDDEN, no allow row admits it (the transport
@@ -179,38 +182,83 @@ func scan(t *testing.T, root string, patterns []string, skip func(string) bool) 
 func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 	switch n := node.(type) {
 	case *ast.CompositeLit:
-		tv, ok := info.Types[n]
-		if !ok {
-			return nil
-		}
-		switch {
-		case isNamed(tv.Type, "Client"):
-			value, ok := fieldValue(n, "Transport", 0)
-			if !ok || isNil(info, value) {
-				return []string{"client-no-transport"}
-			}
-			if !provenTransport(info, declaration, value, 0) {
-				return []string{"transport-unproven"}
-			}
-		case isNamed(tv.Type, "Transport"):
-			if value, ok := fieldValue(n, "Proxy", -1); ok && !isNil(info, value) {
-				return []string{"proxy"}
+		var kinds []string
+		if tv, ok := info.Types[n]; ok {
+			switch {
+			case isNamed(tv.Type, "Client"):
+				value, ok := fieldValue(n, "Transport", 0)
+				if !ok || isNil(info, value) {
+					kinds = append(kinds, "client-no-transport")
+				} else if !provenTransport(info, declaration, value, 0) {
+					kinds = append(kinds, "transport-unproven")
+				}
+			case isNamed(tv.Type, "Transport"):
+				if value, ok := fieldValue(n, "Proxy", -1); ok && !isNil(info, value) {
+					kinds = append(kinds, "proxy")
+				}
 			}
 		}
+		for _, element := range n.Elts {
+			if keyed, ok := element.(*ast.KeyValueExpr); ok {
+				element = keyed.Value
+			}
+			if isClientCopy(info, element) {
+				kinds = append(kinds, "client-copy")
+			}
+		}
+		return kinds
 	case *ast.CallExpr:
+		var kinds []string
 		if ident, ok := n.Fun.(*ast.Ident); ok && len(n.Args) == 1 {
 			if builtin, ok := info.Uses[ident].(*types.Builtin); ok && builtin.Name() == "new" && isNamed(info.Types[n.Args[0]].Type, "Client") {
-				return []string{"client-no-transport"}
+				kinds = append(kinds, "client-no-transport")
 			}
 		}
-	case *ast.UnaryExpr:
-		if selector, ok := ast.Unparen(n.X).(*ast.SelectorExpr); ok && n.Op.String() == "&" && selector.Sel.Name == "Transport" && isNamed(derefPointer(info.Types[selector.X].Type), "Client") {
-			return []string{"transport-address"}
+		for _, argument := range n.Args {
+			if isClientCopy(info, argument) {
+				kinds = append(kinds, "client-copy")
+			}
 		}
-	case *ast.StarExpr:
-		if tv, ok := info.Types[n]; ok && tv.IsValue() && isNamed(tv.Type, "Client") {
+		return kinds
+	case *ast.ReturnStmt:
+		var kinds []string
+		for _, result := range n.Results {
+			if isClientCopy(info, result) {
+				kinds = append(kinds, "client-copy")
+			}
+		}
+		return kinds
+	case *ast.SendStmt:
+		if isClientCopy(info, n.Value) {
 			return []string{"client-copy"}
 		}
+	case *ast.UnaryExpr:
+		if n.Op.String() != "&" {
+			return nil
+		}
+		switch writtenField(info, n.X) {
+		case "Transport":
+			return []string{"transport-address"}
+		case "Proxy":
+			return []string{"proxy"}
+		}
+	case *ast.RangeStmt:
+		var kinds []string
+		for _, target := range []ast.Expr{n.Key, n.Value} {
+			if target == nil {
+				continue
+			}
+			switch writtenField(info, target) {
+			case "Transport":
+				kinds = append(kinds, "transport-unproven")
+			case "Proxy":
+				kinds = append(kinds, "proxy")
+			}
+			if isValueOverwrite(info, target) {
+				kinds = append(kinds, "value-overwrite")
+			}
+		}
+		return kinds
 	case *ast.FuncType:
 		var kinds []string
 		if n.Params != nil {
@@ -261,33 +309,45 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 			return []string{"client-by-value"}
 		}
 	case *ast.ValueSpec:
+		var kinds []string
 		if n.Type != nil && len(n.Values) == 0 && isNamed(info.Types[n.Type].Type, "Client") {
-			return []string{"client-no-transport"}
+			kinds = append(kinds, "client-no-transport")
 		}
+		for _, value := range n.Values {
+			if isClientCopy(info, value) {
+				kinds = append(kinds, "client-copy")
+			}
+		}
+		return kinds
 	case *ast.AssignStmt:
 		var kinds []string
+		tuple := len(n.Lhs) != len(n.Rhs)
 		for i, lhs := range n.Lhs {
 			if isDefaultTransportVar(info, lhs) {
 				kinds = append(kinds, "default-transport-assign")
 			}
-			selector, ok := ast.Unparen(lhs).(*ast.SelectorExpr)
-			if !ok {
-				continue
+			if isValueOverwrite(info, lhs) {
+				kinds = append(kinds, "value-overwrite")
 			}
-			if i >= len(n.Rhs) || len(n.Lhs) != len(n.Rhs) {
-				if selector.Sel.Name == "Transport" && isNamed(derefPointer(info.Types[selector.X].Type), "Client") {
+			switch writtenField(info, lhs) {
+			case "Transport":
+				switch {
+				case tuple:
+					kinds = append(kinds, "transport-unproven")
+				case isNil(info, n.Rhs[i]):
+					kinds = append(kinds, "transport-nil")
+				case !provenTransport(info, declaration, n.Rhs[i], 0):
 					kinds = append(kinds, "transport-unproven")
 				}
-				continue
+			case "Proxy":
+				if tuple || !isNil(info, n.Rhs[i]) {
+					kinds = append(kinds, "proxy")
+				}
 			}
-			owner := derefPointer(info.Types[selector.X].Type)
-			switch {
-			case selector.Sel.Name == "Transport" && isNamed(owner, "Client") && isNil(info, n.Rhs[i]):
-				kinds = append(kinds, "transport-nil")
-			case selector.Sel.Name == "Transport" && isNamed(owner, "Client") && !provenTransport(info, declaration, n.Rhs[i], 0):
-				kinds = append(kinds, "transport-unproven")
-			case selector.Sel.Name == "Proxy" && isNamed(owner, "Transport") && !isNil(info, n.Rhs[i]):
-				kinds = append(kinds, "proxy")
+		}
+		for _, rhs := range n.Rhs {
+			if isClientCopy(info, rhs) {
+				kinds = append(kinds, "client-copy")
 			}
 		}
 		return kinds
@@ -320,6 +380,72 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 		}
 	}
 	return nil
+}
+
+// writtenField names the net/http field expression selects, resolved through the type checker's selection (so a field
+// promoted through an embedded *http.Client or *http.Transport, a named pointer type and parentheses all resolve):
+// "Transport" for net/http.Client.Transport, "Proxy" for net/http.Transport.Proxy, "" otherwise.
+func writtenField(info *types.Info, expression ast.Expr) string {
+	selector, ok := ast.Unparen(expression).(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	selection, ok := info.Selections[selector]
+	if !ok || selection.Kind() != types.FieldVal {
+		return ""
+	}
+	field, ok := selection.Obj().(*types.Var)
+	if !ok || !field.IsField() || field.Pkg() == nil || field.Pkg().Path() != "net/http" {
+		return ""
+	}
+	switch {
+	case field.Name() == "Transport" && field == netHTTPField(field.Pkg(), "Client", "Transport"):
+		return "Transport"
+	case field.Name() == "Proxy" && field == netHTTPField(field.Pkg(), "Transport", "Proxy"):
+		return "Proxy"
+	}
+	return ""
+}
+
+// netHTTPField is the field object name of the struct type typeName of package net/http.
+func netHTTPField(pkg *types.Package, typeName, name string) *types.Var {
+	obj := pkg.Scope().Lookup(typeName)
+	if obj == nil {
+		return nil
+	}
+	structType, ok := obj.Type().Underlying().(*types.Struct)
+	if !ok {
+		return nil
+	}
+	for i := 0; i < structType.NumFields(); i++ {
+		if structType.Field(i).Name() == name {
+			return structType.Field(i)
+		}
+	}
+	return nil
+}
+
+// isClientCopy: expression is `*p` for a pointer to net/http.Client used as a value (a copy that keeps a nil Transport
+// unless the code gives it one). A dereference that is only the base of a field selector, or the target of an
+// assignment, is not a copy.
+func isClientCopy(info *types.Info, expression ast.Expr) bool {
+	star, ok := ast.Unparen(expression).(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	tv, ok := info.Types[star]
+	return ok && tv.IsValue() && isNamed(tv.Type, "Client")
+}
+
+// isValueOverwrite: the assignment target is `*p` for a pointer to net/http.Client or net/http.Transport: the whole
+// value is replaced, which no field rule sees.
+func isValueOverwrite(info *types.Info, expression ast.Expr) bool {
+	star, ok := ast.Unparen(expression).(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	tv, ok := info.Types[star]
+	return ok && (isNamed(tv.Type, "Client") || isNamed(tv.Type, "Transport"))
 }
 
 // approvedTransportConstructors are the functions whose result is a non-nil RoundTripper that never uses an

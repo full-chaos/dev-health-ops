@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 func TestASuppliedHeartbeatClientWithoutATransportGetsOne(t *testing.T) {
@@ -13,7 +15,7 @@ func TestASuppliedHeartbeatClientWithoutATransportGetsOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dispatcher.httpClient.Transport == nil {
+	if dispatcher.httpClient.Transport != http.RoundTripper(httpguard.SharedTransport()) {
 		t.Fatal("a supplied heartbeat client with no transport would dial through http.DefaultTransport and its environment proxy")
 	}
 	if supplied.Transport != nil {

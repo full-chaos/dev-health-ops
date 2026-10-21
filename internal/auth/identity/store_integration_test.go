@@ -796,6 +796,83 @@ func TestARefusedIdentityProjectionWritesNoPrincipalOrUserRow(t *testing.T) {
 	}
 }
 
+// A projection that waits for the account's row lock re-reads the account's
+// identities after it holds the lock: an identity at the provider that
+// committed meanwhile makes the lookup refuse, and the account rows stay as
+// they were.
+func TestAProjectionChecksTheProviderIdentitiesUnderTheAccountLock(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	issuer, _ := SocialIssuer(ProviderGitHub)
+	held, wanted := "gh-held-"+uuid.NewString(), "gh-wanted-"+uuid.NewString()
+	email := uniqueEmail("locked")
+	user := e.seedLegacy(t, ctx, email, "github", wanted, false)
+	e.project(t, ctx, user)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET email = $2, is_active = false, updated_at = now() WHERE id = $1`,
+		user, uniqueEmail("changed")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() [6]int {
+		return [6]int{
+			e.count(t, ctx, `SELECT count(*) FROM auth.principals WHERE id = $1 AND disabled_at IS NULL`, user),
+			e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND email_lower = lower($2)`, user, email),
+			e.auditRows(t, ctx, "auth.principal.projection_updated", user.String()),
+			e.auditRows(t, ctx, "auth.identity.projected", user.String()),
+			e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1 AND subject = $2`, user, wanted),
+			e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1`, user),
+		}
+	}
+	before := snapshot()
+
+	holder, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM auth.principals WHERE id = $1 FOR UPDATE`, user); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		principal Principal
+		found     bool
+		err       error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, found, err := e.store.IdentityBySubject(ctx, issuer, ProviderGitHub, wanted, socialLegacy(ProviderGitHub))
+		done <- result{p, found, err}
+	}()
+	deadline := time.Now().Add(20 * time.Second)
+	for e.count(t, ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%principals%' AND query NOT LIKE '%pg_stat_activity%'`) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the lookup never waited for the account's row lock")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := holder.Exec(ctx, `INSERT INTO auth.external_identities (id, principal_id, issuer, provider, subject) VALUES ($1, $2, $3, 'github', $4)`,
+		uuid.New(), user, issuer, held); err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		if !errors.Is(r.err, ErrProviderAlreadyLinked) || r.found || r.principal.ID != user {
+			t.Fatalf("IdentityBySubject = %+v, %v, %v; want the refusal naming %v", r.principal, r.found, r.err, user)
+		}
+	case <-ctx.Done():
+		t.Fatal("the lookup did not return")
+	}
+	after := snapshot()
+	want := before
+	want[5]++
+	if after != want {
+		t.Fatalf("account rows before %v, after %v; want only the committed identity added", before, after)
+	}
+}
+
 func TestIdentityBySubjectLegacyRefusals(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()

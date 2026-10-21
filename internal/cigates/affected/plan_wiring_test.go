@@ -143,7 +143,7 @@ func TestGoQualityLegsRunThePlanVerdict(t *testing.T) {
 	}
 }
 
-func TestVenueOraclesRelevanceRunsThePlanVerdict(t *testing.T) {
+func TestVenueRelevanceStepRunsThePlanVerdict(t *testing.T) {
 	jobs := loadJobs(t, ".github/workflows/venue-oracles.yml")
 	found := false
 	for _, j := range jobs {

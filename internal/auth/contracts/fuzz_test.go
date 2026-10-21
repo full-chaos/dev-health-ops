@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,6 +144,10 @@ func FuzzParseAccessToken(f *testing.F) {
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		token, err := ParseAccessToken(root, raw)
 		if err != nil {
+			var refusal *CredentialRefusal
+			if !errors.As(err, &refusal) || refusal.Surface != AccessTokenSurface || !credentialRefusalStages[refusal.Stage] || err.Error() != refusal.Error() {
+				t.Fatalf("a refusal that is not a fixed CredentialRefusal: %q", err.Error())
+			}
 			return
 		}
 		c := token.Claims

@@ -146,6 +146,7 @@ func pyCode(src string) string {
 				i++
 			}
 		case c == '\'' || c == '"':
+			fstring := isFStringStart(rs, i)
 			quote := c
 			triple := i+2 < len(rs) && rs[i+1] == quote && rs[i+2] == quote
 			if triple {
@@ -168,6 +169,26 @@ func pyCode(src string) string {
 					i++
 					break
 				}
+				if fstring && rs[i] == '{' {
+					if i+1 < len(rs) && rs[i+1] == '{' {
+						i += 2
+						continue
+					}
+					// the expression of an f-string is code: it is kept (a call in it counts), the literal text around it is not
+					depth, j := 1, i+1
+					for j < len(rs) && depth > 0 {
+						switch rs[j] {
+						case '{':
+							depth++
+						case '}':
+							depth--
+						}
+						j++
+					}
+					out.WriteString(" " + string(rs[i+1:j-1]) + " ")
+					i = j
+					continue
+				}
 				if rs[i] == '\n' {
 					out.WriteRune('\n')
 				}
@@ -183,7 +204,7 @@ func pyCode(src string) string {
 }
 
 var (
-	pyFromTempfile = regexp.MustCompile(`(?m)^[ \t]*from[ \t]+tempfile[ \t]+import[ \t]+(.+)$`)
+	pyFromTempfile = regexp.MustCompile(`^[ \t]*from[ \t]+tempfile[ \t]+import[ \t]+(.+)$`)
 	pyImportAlias  = regexp.MustCompile(`(mkdtemp|gettempdir)(?:[ \t]+as[ \t]+(\w+))?`)
 	pyRemoves      = regexp.MustCompile(`(?:^|[^\w])(?:rmtree|addfinalizer)[ \t]*\(|(?:^|[^\w])atexit[ \t]*\.[ \t]*register[ \t]*\(`)
 )
@@ -221,8 +242,14 @@ func pyLogicalLines(code string) []string {
 func pyMakesTempDir(src string) bool {
 	code := pyCode(src)
 	names := map[string]string{"mkdtemp": "mkdtemp", "gettempdir": "gettempdir"}
-	for _, m := range pyFromTempfile.FindAllStringSubmatch(code, -1) {
-		for _, a := range pyImportAlias.FindAllStringSubmatch(m[1], -1) {
+	logical := pyLogicalLines(code)
+	for _, line := range logical {
+		m := pyFromTempfile.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		imported := strings.NewReplacer("(", " ", ")", " ").Replace(m[1])
+		for _, a := range pyImportAlias.FindAllStringSubmatch(imported, -1) {
 			if a[2] != "" {
 				names[a[2]] = a[1]
 			}
@@ -314,6 +341,12 @@ func TestPythonTempDirCheckFlagsALeakAndIsNotFooledByTextOrAnAlias(t *testing.T)
 		{"a read of the temp dir alone makes nothing", "import tempfile\nprint(tempfile.gettempdir())\n", false},
 		{"a mkdtemp named only in a comment makes nothing", "# tempfile.mkdtemp()\nx = 1\n", false},
 		{"a mkdtemp named only in a string makes nothing", "x = 'tempfile.mkdtemp()'\n", false},
+		{"an f-string expression that calls mkdtemp", "import tempfile\nx = f\"{tempfile.mkdtemp()}\"\n", true},
+		{"a nested f-string expression that calls mkdtemp", "import tempfile\nx = rf'a{{b}}{tempfile.mkdtemp(prefix=\"x\")}'\n", true},
+		{"f-string text naming mkdtemp outside its braces makes nothing", "x = f'tempfile.mkdtemp() {1}'\n", false},
+		{"a parenthesised multi-line alias import", "from tempfile import (\n    mkdtemp as make,\n)\nx = make()\n", true},
+		{"a backslash continued alias import", "from tempfile import \\\n    mkdtemp as make\nx = make()\n", true},
+		{"a multi-line gettempdir join", "import tempfile\nfrom pathlib import Path\nC = (\n    Path(tempfile.gettempdir())\n    / 'fixed'\n)\n", true},
 	} {
 		got := pyMakesTempDir(c.body) && !pyHasCleanup(c.body)
 		if got != c.want {
@@ -331,4 +364,23 @@ func TestPythonTempDirCheckFlagsALeakAndIsNotFooledByTextOrAnAlias(t *testing.T)
 	if err != nil || len(got) != 1 || got[0] != "tests/tooling/test_leak.py" {
 		t.Fatalf("a leaking .py under tests/ is not reported: %v %v", got, err)
 	}
+}
+
+// isFStringStart reports whether the quote at rs[i] opens an f-string: its prefix is made of letters from rbufRBUF and holds f or F.
+func isFStringStart(rs []rune, i int) bool {
+	hasF := false
+	for j := i - 1; j >= 0 && i-j <= 3; j-- {
+		switch rs[j] {
+		case 'f', 'F':
+			hasF = true
+		case 'r', 'R', 'b', 'B', 'u', 'U':
+		default:
+			return hasF && !isPyIdentRune(rs[j])
+		}
+	}
+	return hasF
+}
+
+func isPyIdentRune(r rune) bool {
+	return r == '_' || (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r > 127
 }

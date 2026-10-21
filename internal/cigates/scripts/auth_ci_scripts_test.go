@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ func runScope(t *testing.T, repo, script string, env ...string) (cmdResult, stri
 	if err := os.WriteFile(out, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res := cmdSpec{dir: repo, env: append([]string{basePath, "GITHUB_OUTPUT=" + out}, env...)}.run("bash", script)
+	res := cmdSpec{dir: repo, env: append([]string{shimBasePath(), "GITHUB_OUTPUT=" + out}, env...)}.run("bash", script)
 	return res, readText(t, out)
 }
 
@@ -117,9 +118,9 @@ func TestKindProofPutsNoCredentialInArgv(t *testing.T) {
 	}
 }
 
-func postgresContainer(t *testing.T, root string) map[string]any {
+func postgresContainerOf(t *testing.T, text string) map[string]any {
 	t.Helper()
-	dec := yaml.NewDecoder(strings.NewReader(readText(t, filepath.Join(root, "ci", "auth_k8s", "postgres.yaml"))))
+	dec := yaml.NewDecoder(strings.NewReader(text))
 	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
 		t.Fatal(err)
@@ -128,8 +129,10 @@ func postgresContainer(t *testing.T, root string) map[string]any {
 	return spec["containers"].([]any)[0].(map[string]any)
 }
 
-func TestKindPostgresPasswordIsASecretReferenceAndRunsNonRoot(t *testing.T) {
-	c := postgresContainer(t, rootOf(t))
+// postgresDefects: the password is a secret reference and not a literal, postgres runs as non-root, and the capabilities map
+// is exactly {drop: [ALL]}: an `add` entry (or any other key) is a defect, as in the python guard's whole-map comparison.
+func postgresDefects(c map[string]any) []string {
+	var out []string
 	var password map[string]any
 	for _, e := range c["env"].([]any) {
 		if m := e.(map[string]any); m["name"] == "POSTGRES_PASSWORD" {
@@ -137,20 +140,61 @@ func TestKindPostgresPasswordIsASecretReferenceAndRunsNonRoot(t *testing.T) {
 		}
 	}
 	if password == nil {
-		t.Fatal("no POSTGRES_PASSWORD env")
+		return []string{"no POSTGRES_PASSWORD env"}
 	}
 	if _, literal := password["value"]; literal {
-		t.Error("POSTGRES_PASSWORD is a literal value: kubectl describe prints it into CI logs")
+		out = append(out, "POSTGRES_PASSWORD is a literal value: kubectl describe prints it into CI logs")
 	}
 	if vf, _ := password["valueFrom"].(map[string]any); vf["secretKeyRef"] == nil {
-		t.Error("POSTGRES_PASSWORD has no secretKeyRef")
+		out = append(out, "POSTGRES_PASSWORD has no secretKeyRef")
 	}
 	sc, _ := c["securityContext"].(map[string]any)
 	if sc["runAsNonRoot"] != true {
-		t.Error("postgres does not run as a non-root user")
+		out = append(out, "postgres does not run as a non-root user")
 	}
 	caps, _ := sc["capabilities"].(map[string]any)
-	if drop, _ := caps["drop"].([]any); len(drop) != 1 || drop[0] != "ALL" {
-		t.Errorf("capabilities drop is %v, want [ALL]", caps["drop"])
+	drop, _ := caps["drop"].([]any)
+	if len(caps) != 1 || len(drop) != 1 || drop[0] != "ALL" {
+		out = append(out, fmt.Sprintf("capabilities is %v, want exactly {drop: [ALL]}", caps))
+	}
+	return out
+}
+
+func TestKindPostgresPasswordIsASecretReferenceAndRunsNonRoot(t *testing.T) {
+	t.Parallel()
+	root := rootOf(t)
+	text := readText(t, filepath.Join(root, "ci", "auth_k8s", "postgres.yaml"))
+	if d := postgresDefects(postgresContainerOf(t, text)); len(d) > 0 {
+		t.Fatal(strings.Join(d, "\n"))
+	}
+	for _, m := range []struct{ name, old, new string }{
+		{"a capability added", "{drop: [ALL]}", "{drop: [ALL], add: [SYS_ADMIN]}"},
+		{"a literal password", "              valueFrom:", "              value: hunter2\n              valueFrom:"},
+		{"root allowed", "            runAsNonRoot: true", "            runAsNonRoot: false"},
+	} {
+		if !strings.Contains(text, m.old) {
+			t.Fatalf("planted defect %q did not land: %q not in postgres.yaml", m.name, m.old)
+		}
+		if d := postgresDefects(postgresContainerOf(t, strings.Replace(text, m.old, m.new, 1))); len(d) == 0 {
+			t.Errorf("planted defect not caught: %s", m.name)
+		}
+	}
+}
+
+// A shim-first PATH reaches every child these guards start: a script that calls python3 fails with 127 through the same
+// runner the scope guard uses.
+func TestAScriptCallingPythonFailsThroughTheGuardRunners(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	planted := filepath.Join(dir, "scope.sh")
+	if err := os.WriteFile(planted, []byte("#!/usr/bin/env bash\nset -euo pipefail\npython3 -c 'print(1)'\necho run=true >> \"${GITHUB_OUTPUT}\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, out := runScope(t, dir, planted, "EVENT=push")
+	if res.code != 127 || strings.Contains(out, "run=true") {
+		t.Fatalf("a python3 call ran through the scope runner: exit %d output %q", res.code, out)
+	}
+	if r := (freeSpec{dir: dir, env: []string{shimBasePath()}}).run("bash", "-c", "python -c 1"); r.code != 127 {
+		t.Errorf("python resolved to a real interpreter under the shim-first base PATH: exit %d", r.code)
 	}
 }

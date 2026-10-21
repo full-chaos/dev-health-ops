@@ -8,6 +8,11 @@ import (
 
 // No test of this package may run Python: the process PATH starts with shims for python, python3, uv and pip that exit 127,
 // so any ci script a test launches that reaches for them fails loudly instead of using the host's interpreter.
+// noPythonDir is the shim directory; every child environment that sets its own PATH puts it first (withShims).
+var noPythonDir string
+
+func withShims(rest string) string { return noPythonDir + string(os.PathListSeparator) + rest }
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "no-python-shims-")
 	if err != nil {
@@ -19,7 +24,8 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
-	os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	noPythonDir = dir
+	os.Setenv("PATH", withShims(os.Getenv("PATH")))
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

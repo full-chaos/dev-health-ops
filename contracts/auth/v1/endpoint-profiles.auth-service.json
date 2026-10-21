@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 515,
+            "line": 522,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +45,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 421,
+          "line": 424,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },

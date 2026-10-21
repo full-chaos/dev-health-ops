@@ -415,6 +415,9 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 // of a consumed credential is reuse: the family and the session are revoked,
 // audited and announced in one audit.Commit transaction (refresh_reused).
 //
+// A session without a legacy_token_version pin is refused (ReasonRevisionStale)
+// under its lock before anything is written.
+//
 // A refusal is a Result with a non-success Reason and a nil error. The error
 // is set only when the store failed or the grace successor could not be
 // recomputed; Result.Reason then says which.
@@ -459,6 +462,10 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 			result.Reason = ReasonSessionExpired
 		case locked.principalDisabled:
 			result.Reason = ReasonPrincipalDeactivated
+		case locked.LegacyTokenVersion == nil:
+			s.logger.WarnContext(ctx, "refresh refused: session has no token_version pin",
+				"session_id", sessionID, "reason_code", string(ReasonRevisionStale))
+			result.Reason = ReasonRevisionStale
 		case !p.consumed && p.expired:
 			result.Reason = ReasonRefreshExpired
 		case !p.consumed:

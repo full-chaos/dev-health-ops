@@ -108,6 +108,12 @@ var (
 	ErrEmailTaken = identity.ErrEmailTaken
 	// ErrInvalidEmailAddress: the asserted email is not an address.
 	ErrInvalidEmailAddress = identity.ErrInvalidEmail
+	// ErrNotOrgMember: the one go-api account carrying the NameID is not a
+	// member of the provider's organization.
+	ErrNotOrgMember = errors.New("saml: the account is not a member of the provider organization")
+	// ErrIdentityAmbiguous: more than one go-api account, in any
+	// organization, carries the NameID.
+	ErrIdentityAmbiguous = errors.New("saml: more than one account carries the NameID")
 )
 
 // Store is the identity store this package needs (internal/auth/identity).
@@ -115,7 +121,9 @@ var (
 type Store interface {
 	// IdentityBySubject resolves the identity key only. With legacy set, a
 	// miss also tries the go-api account and, on a hit, projects the identity
-	// under audit.Commit. It never matches by email.
+	// under audit.Commit. It never matches by email. A go-api account outside
+	// the provider's organization is ErrNotOrgMember; more than one go-api
+	// account carrying the NameID is ErrIdentityAmbiguous.
 	IdentityBySubject(ctx context.Context, id Identity, legacy *LegacyMatch) (Principal, bool, error)
 	NormalizeEmail(raw string) (string, error)
 	PrincipalByEmail(ctx context.Context, email string) (EmailOwner, bool, error)

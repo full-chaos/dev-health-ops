@@ -3,7 +3,6 @@ package saml
 import (
 	"context"
 	"errors"
-	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -13,20 +12,13 @@ import (
 // IdentityStore is Store over the auth-service identity store.
 type IdentityStore struct {
 	Identities *identity.Store
-	Logger     *slog.Logger
-}
-
-func (s IdentityStore) logger() *slog.Logger {
-	if s.Logger != nil {
-		return s.Logger
-	}
-	return slog.Default()
 }
 
 // IdentityBySubject looks up the key; the go-api account fallback matches the
 // raw NameID and requires a membership in the provider's organization. Two
-// go-api accounts with the same NameID, in any organization, match neither;
-// one outside the provider's organization does not match.
+// go-api accounts with the same NameID, in any organization, are
+// ErrIdentityAmbiguous; one outside the provider's organization is
+// ErrNotOrgMember.
 func (s IdentityStore) IdentityBySubject(ctx context.Context, id Identity, legacy *LegacyMatch) (Principal, bool, error) {
 	var match *identity.LegacyMatch
 	if legacy != nil {
@@ -34,12 +26,11 @@ func (s IdentityStore) IdentityBySubject(ctx context.Context, id Identity, legac
 		match = &identity.LegacyMatch{AuthProvider: legacy.AuthProvider, MembershipOrg: &org, Subject: legacy.Subject}
 	}
 	p, found, err := s.Identities.IdentityBySubject(ctx, id.Issuer, identity.Provider(id.Provider), id.Subject, match)
-	if errors.Is(err, identity.ErrMultipleUsers) {
-		s.logger().WarnContext(ctx, "auth saml: more than one go-api account holds the NameID; no account matched", "provider_id", id.Provider)
-		return Principal{}, false, nil
-	}
-	if errors.Is(err, identity.ErrLegacyNotMember) {
-		return Principal{}, false, nil
+	switch {
+	case errors.Is(err, identity.ErrMultipleUsers):
+		return Principal{}, false, ErrIdentityAmbiguous
+	case errors.Is(err, identity.ErrLegacyNotMember):
+		return Principal{}, false, ErrNotOrgMember
 	}
 	if err != nil || !found {
 		return Principal{}, false, err

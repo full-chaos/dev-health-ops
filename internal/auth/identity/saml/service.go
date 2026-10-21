@@ -237,6 +237,9 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 	id := Identity{Issuer: v.Issuer, Provider: p.ID.String(), Subject: subject}
 	legacy := &LegacyMatch{AuthProvider: "saml", Subject: v.NameID.Value, MembershipOrg: p.OrgID}
 	principal, found, err := s.Store.IdentityBySubject(ctx, id, legacy)
+	if errors.Is(err, ErrNotOrgMember) || errors.Is(err, ErrIdentityAmbiguous) {
+		return SignIn{}, s.refuse(ctx, p, err)
+	}
 	if err != nil {
 		return SignIn{}, err
 	}
@@ -395,6 +398,10 @@ func OutcomeReason(err error) string {
 		return "not_entitled"
 	case errors.Is(err, ErrAccountDisabled):
 		return "principal_deactivated"
+	case errors.Is(err, ErrNotOrgMember):
+		return "membership_required"
+	case errors.Is(err, ErrIdentityAmbiguous):
+		return "identity_conflict"
 	case errors.Is(err, ErrEmailMissing), errors.Is(err, ErrEmailMalformed), errors.Is(err, ErrInvalidEmailAddress):
 		return "malformed"
 	}

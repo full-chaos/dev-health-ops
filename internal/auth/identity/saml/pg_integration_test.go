@@ -591,10 +591,17 @@ func TestSAMLLegacyAccountSignsInBySubject(t *testing.T) {
 	legacy := h.goAPIUser(email, "saml", &nameID, false)
 
 	t.Run("not a member of the provider's organization", func(t *testing.T) {
-		_, err := h.consume(h.respond(resp{nameID: nid(nameID), email: email}), nil)
-		var conflict *saml.EmailConflictError
-		if !errors.As(err, &conflict) || conflict.Method != "saml" {
-			t.Fatalf("err = %v, want EmailConflictError naming saml", err)
+		for asserted, address := range map[string]string{"the account's email": email, "a free email": uniqueEmail("free")} {
+			t.Run(asserted, func(t *testing.T) {
+				before := h.writeCounts()
+				_, err := h.consume(h.respond(resp{nameID: nid(nameID), email: address}), nil)
+				if !errors.Is(err, saml.ErrNotOrgMember) || saml.OutcomeReason(err) != "membership_required" {
+					t.Fatalf("err = %v, want ErrNotOrgMember (membership_required)", err)
+				}
+				if after := h.writeCounts(); after != before {
+					t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
+				}
+			})
 		}
 	})
 	t.Run("member", func(t *testing.T) {
@@ -615,11 +622,27 @@ func TestSAMLLegacyAccountSignsInBySubject(t *testing.T) {
 		for _, e := range []string{uniqueEmail("s1"), uniqueEmail("s2")} {
 			h.member(h.goAPIUser(e, "saml", &shared, false))
 		}
+		before := h.writeCounts()
 		_, err := h.consume(h.respond(resp{nameID: nid(shared), email: uniqueEmail("s3")}), nil)
-		if !errors.Is(err, saml.ErrSignupNotAvailable) {
-			t.Fatalf("err = %v, want no match (ErrSignupNotAvailable)", err)
+		if !errors.Is(err, saml.ErrIdentityAmbiguous) || saml.OutcomeReason(err) != "identity_conflict" {
+			t.Fatalf("err = %v, want ErrIdentityAmbiguous (identity_conflict)", err)
+		}
+		if after := h.writeCounts(); after != before {
+			t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
 		}
 	})
+}
+
+// writeCounts counts the rows a sign-in can write: users, memberships,
+// principals, auth users and external identities.
+func (h *harness) writeCounts() [5]int {
+	return [5]int{
+		h.count(`SELECT count(*) FROM public.users`),
+		h.count(`SELECT count(*) FROM public.memberships`),
+		h.count(`SELECT count(*) FROM auth.principals`),
+		h.count(`SELECT count(*) FROM auth.users`),
+		h.identityCount(),
+	}
 }
 
 // TestSAMLNameIDInTwoOrganizationsIsRefusedWithoutWrites: two go-api accounts
@@ -642,23 +665,14 @@ func TestSAMLNameIDInTwoOrganizationsIsRefusedWithoutWrites(t *testing.T) {
 	if _, err := h.db.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'member')`, uuid.New(), elsewhere, otherOrg); err != nil {
 		t.Fatal(err)
 	}
-	counts := func() [5]int {
-		return [5]int{
-			h.count(`SELECT count(*) FROM public.users`),
-			h.count(`SELECT count(*) FROM public.memberships`),
-			h.count(`SELECT count(*) FROM auth.principals`),
-			h.count(`SELECT count(*) FROM auth.users`),
-			h.identityCount(),
-		}
-	}
 	for name, email := range map[string]string{"a new email": uniqueEmail("asserted"), "the in-org account's email": inOrgEmail} {
 		t.Run(name, func(t *testing.T) {
-			before := counts()
+			before := h.writeCounts()
 			signIn, err := h.consume(h.respond(resp{nameID: nid(shared), email: email}), nil)
-			if err == nil {
-				t.Fatalf("sign-in %+v accepted, want a refusal", signIn)
+			if !errors.Is(err, saml.ErrIdentityAmbiguous) {
+				t.Fatalf("sign-in %+v err %v, want ErrIdentityAmbiguous", signIn, err)
 			}
-			if after := counts(); after != before {
+			if after := h.writeCounts(); after != before {
 				t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
 			}
 		})

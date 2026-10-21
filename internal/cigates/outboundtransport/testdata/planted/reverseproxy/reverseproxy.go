@@ -12,4 +12,6 @@ func NilTransport() *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{Transport: nil}
 }
 
-func Single(target *url.URL) *httputil.ReverseProxy { return httputil.NewSingleHostReverseProxy(target) }
+func Single(target *url.URL) *httputil.ReverseProxy {
+	return httputil.NewSingleHostReverseProxy(target)
+}

@@ -3387,6 +3387,7 @@ AUTH_PACKAGES=(
   ./internal/auth/...
   ./internal/audit/...
   ./internal/storage/postgres/authschema/...
+  ./internal/token/...
 )
 # One fuzz target per parser, each its own corpus (the target's f.Add seeds plus
 # any testdata/fuzz/<Target> entries) and its own proof marker. Format:
@@ -3403,6 +3404,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/httpapi FuzzParseLimit"
   "./internal/auth/httpapi FuzzParseForwardedTrust"
   "./internal/auth/keystore FuzzParseEd25519Key"
+  "./internal/auth/keystore FuzzParseKeySetManifest"
   "./internal/auth/authconfig FuzzConfigLoad"
   "./internal/auth/identity FuzzNormalizeEmail"
   "./internal/auth/identity FuzzExternalKeyValidate"
@@ -3424,9 +3426,14 @@ auth_go() {
 }
 
 check_auth_fmt() {
-  local output
-  output="$(cd "${ROOT}" && git ls-files --cached --others --exclude-standard -z -- \
-    'cmd/auth-service/*.go' 'cmd/auth-migrate/*.go' 'internal/auth/*.go' 'internal/audit/*.go' 'internal/storage/postgres/authschema/*.go' \
+  local output pkg specs=()
+  # The gated packages, one pathspec each, so a package added to AUTH_PACKAGES
+  # is formatted by this gate too.
+  for pkg in "${AUTH_PACKAGES[@]}"; do
+    pkg="${pkg#./}"
+    specs+=("${pkg%/...}/*.go")
+  done
+  output="$(cd "${ROOT}" && git ls-files --cached --others --exclude-standard -z -- "${specs[@]}" \
     | xargs -0 -r "${GOFMT}" -l)"
   if [ -n "${output}" ]; then
     printf 'auth gofmt: these files need formatting:\n%s\n' "${output}" >&2

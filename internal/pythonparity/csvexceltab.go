@@ -45,7 +45,7 @@ func (r *csvReader) add(c rune) error {
 	return nil
 }
 
-// process is parse_process_char of CPython 3.12 _csv.c for delimiter TAB, quotechar '"', doublequote, no escapechar,
+// process is parse_process_char of CPython 3.12 _csv.c (3.14 behaves the same) for delimiter TAB, quotechar '"', doublequote, no escapechar,
 // skipinitialspace off, strict off, QUOTE_MINIMAL.
 func (r *csvReader) process(c rune) error {
 	nl := c == '\n' || c == '\r'
@@ -158,7 +158,7 @@ func csvLines(data string) [][]rune {
 	return lines
 }
 
-// ReadCSVTab is list(csv.reader(io.StringIO(data, newline=""), delimiter="\t")) on CPython 3.12.3.
+// ReadCSVTab is list(csv.reader(io.StringIO(data, newline=""), delimiter="\t")) on CPython 3.14.7 (and 3.12.3).
 func ReadCSVTab(data string) ([][]string, error) {
 	rows := [][]string{}
 	lines := csvLines(data)
@@ -190,7 +190,7 @@ func ReadCSVTab(data string) ([][]string, error) {
 	}
 }
 
-// WriteCSVTabRow is what csv.writer(f, delimiter="\t", lineterminator="\n").writerow(fields) writes on CPython 3.12.3.
+// WriteCSVTabRow is what csv.writer(f, delimiter="\t", lineterminator="\n").writerow(fields) writes on CPython 3.14.7 (and 3.12.3).
 func WriteCSVTabRow(fields []string) (string, error) {
 	var b strings.Builder
 	for i, f := range fields {

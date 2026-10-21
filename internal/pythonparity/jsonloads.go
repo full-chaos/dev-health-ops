@@ -33,7 +33,7 @@ type PyValueError struct{ Msg string }
 
 func (e *PyValueError) Error() string { return e.Msg }
 
-// LoadsJSON is CPython 3.12 json.loads(text) on the C scanner: None -> nil, bool, int -> *big.Int, float -> float64,
+// LoadsJSON is CPython 3.14 json.loads(text) on the C scanner: None -> nil, bool, int -> *big.Int, float -> float64,
 // str -> string, list -> []any, dict -> OrderedObject (a repeated key keeps its first position and its last value).
 func LoadsJSON(text string) (any, error) {
 	d := &jsonLoader{s: []rune(text)}
@@ -243,7 +243,7 @@ func (d *jsonLoader) str(end int) (any, int, error) {
 		}
 		next++
 		end = next + 4
-		if end >= n {
+		if end > n {
 			return nil, 0, d.fail("Invalid \\uXXXX escape", next-1)
 		}
 		c = 0
@@ -254,7 +254,7 @@ func (d *jsonLoader) str(end int) (any, int, error) {
 			}
 			c = c<<4 | h
 		}
-		if c >= 0xd800 && c <= 0xdbff && end+6 < n && d.s[next] == '\\' && d.s[next+1] == 'u' {
+		if c >= 0xd800 && c <= 0xdbff && end+6 <= n && d.s[next] == '\\' && d.s[next+1] == 'u' {
 			next += 2
 			end += 6
 			var c2 rune
@@ -328,7 +328,11 @@ func (d *jsonLoader) object(idx int) (any, int, error) {
 			if idx >= n || d.s[idx] != ',' {
 				return nil, 0, d.fail("Expecting ',' delimiter", idx)
 			}
+			comma := idx
 			idx = d.ws(idx + 1)
+			if idx < n && d.s[idx] == '}' {
+				return nil, 0, d.fail("Illegal trailing comma before end of object", comma)
+			}
 		}
 	}
 	return obj, idx + 1, nil
@@ -356,7 +360,11 @@ func (d *jsonLoader) array(idx int) (any, int, error) {
 			if idx >= n || d.s[idx] != ',' {
 				return nil, 0, d.fail("Expecting ',' delimiter", idx)
 			}
+			comma := idx
 			idx = d.ws(idx + 1)
+			if idx < n && d.s[idx] == ']' {
+				return nil, 0, d.fail("Illegal trailing comma before end of array", comma)
+			}
 		}
 	}
 	return list, idx + 1, nil

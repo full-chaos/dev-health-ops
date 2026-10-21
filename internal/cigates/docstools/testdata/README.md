@@ -156,8 +156,11 @@ key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-
 
 # validate-inventory-review
 
-Cases `parity/val-*`. Recorded with Python 3.12.3 (`python3 -I`) from `scripts/validate_docs_inventory_review.py` as at
-ops `8f2e19e47` (frozen as `refusals/validate_docs_inventory_review.py.frozen`), the script itself unmodified.
+Cases `parity/val-*`. Recorded with Python 3.14.7 (`python3.14 -I`, the version CI ran the script on) from
+`scripts/validate_docs_inventory_review.py` as at ops `8f2e19e47` (frozen as
+`refusals/validate_docs_inventory_review.py.frozen`), the script itself unmodified. Recorded again with 3.12.3: every
+rc, stdout, stderr, stderr.traceback and out/ file is byte-identical; only the 72 whole tracebacks (`stderr.python`)
+differ, in their frame layout.
 
 Per case, in a fresh work directory `$W`: write the inputs (below), make the links of `symlinks`, pad (below), then run, with cwd `$W`,
 `python3 -I pyrun.py validate-inventory-review <script> <args after the verb>` with `PYTHONHASHSEED=0`. `pyrun.py`
@@ -176,21 +179,22 @@ case; the recording did the same, so the recorded bytes are those of the full in
 
 Padding: the script checks fixed sizes (439 disposition rows: 303 ops, 136 web). A case holds a few rows; its `counts`
 file says how many ("disposition ops web"). Before the run, Python's and Go's alike (`ivPadCase` in
-`validate_inventory_review_cases_test.go`), the disposition matrix gets `303-ops` ops and `136-web` web filler rows
-appended (`full-chaos/dev-health-ops pad/ops-NNNN.md ...`, `full-chaos/dev-health-web pad/web-NNNN.tsx ...`, valid and
-non-public), the web snapshot the same web rows, and `docs-data/inventory/ops-~pad.tsv` the ops rows under the standard
-header. A file that is missing or not a regular file is not padded. So the recorded script and the Go verb check the
+`validate_inventory_review_cases_test.go`), the disposition matrix gets the first `303-ops` ops and `136-web` web rows of
+the one shared filler file `validate_inventory_filler.tsv` (valid, non-public rows) appended, the web snapshot the same
+web rows, and `docs-data/inventory/ops-~pad.tsv` the ops rows under the standard header. A file that is missing or not a regular file is not padded. So the recorded script and the Go verb check the
 real constants.
 
-`validate_inventory_argparse.golden.json`: Python 3.12 argparse with the script's three options over 3371 argument
-vectors (recipe inside); `TestValidateInventoryArgparseMatchesPython` compares exit code, help, usage error and the
+`validate_inventory_argparse.golden.json`: Python 3.14.7 argparse with the script's three options over 5657 argument
+vectors (recipe inside). 736 rows differ on 3.12.3 (3.14 reports an ambiguous prefix only when it consumes it, treats
+`-1e5` / `-.5x` as negative numbers, splits `-x=y` prefixes at `=`, and prints Unicode 16 characters in repr); each keeps
+the 3.12.3 result in `py312` and the Go verb follows 3.14.7. `TestValidateInventoryArgparseMatchesPython` compares exit code, help, usage error and the
 `str(Path)` of each value.
 
 The refusal inventory (`refusals/validate-inventory-review.tsv`) maps every line of the frozen script that can refuse
 to the cases (run live through the built binary by `TestValidateInventoryRefusalRowsRunLiveThroughTheCLI`) or Go tests
 that answer it.
 
-Not recordable, hand-written in `validate_inventory_review_refusals_test.go` with what Python 3.12.3 printed:
+Not recordable, hand-written in `validate_inventory_review_refusals_test.go` with what Python 3.14.7 printed (3.12.3 printed the same):
 mode 000 inputs (`PermissionError`; an unreadable IA directory is an empty glob in Python, so every target URL is
 non-IA).
 
@@ -203,7 +207,7 @@ field per row) and `LIST_FIELDS` (which list field's `TypeError` comes first whe
 The Go verb refuses these (exit 1, no stdout, one stderr line `cigate: refused (stricter than the Python checker): ...`);
 `TestValidateInventoryStricterThanPython` pins each.
 
-| input | Python 3.12.3 |
+| input | Python 3.14.7 (and 3.12.3) |
 | --- | --- |
 | a JSON string with a lone surrogate (`\ud800`) in a field the TSV writes | rc 1, `UnicodeEncodeError` |
 | the same in a key nothing writes | rc 0 |

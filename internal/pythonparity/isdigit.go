@@ -23,3 +23,10 @@ func IsDigit(r rune) bool {
 	}
 	return false
 }
+
+// IsDecimal is CPython's str.isdecimal() for one code point (Unicode category Nd, pythonNdRuns): the set the str
+// pattern \d of re matches.
+func IsDecimal(r rune) bool {
+	_, ok := pythonDecimalDigit(r)
+	return ok
+}

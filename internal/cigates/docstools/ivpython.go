@@ -1,6 +1,6 @@
 package docstools
 
-// Python 3.12 semantics the validate-inventory-review port relies on: argparse for options that take one value,
+// Python 3.14 semantics the validate-inventory-review port relies on: argparse for options that take one value,
 // pathlib path strings, UTF-8 decoding errors, OSError lines, and str()/repr()/==/truthiness of json.loads values.
 
 import (
@@ -15,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 )
 
 // ivExc is an uncaught Python exception: the verb prints "Kind: msg" (the last part of the traceback) and exits 1.
@@ -28,29 +27,17 @@ func ivStricter(msg string) ivExc {
 	return ivExc{"cigate", "refused (stricter than the Python checker): " + msg}
 }
 
-// ---- argparse (3.12.3): -h/--help plus options with nargs=None, allow_abbrev ----
+// ---- argparse (3.14.7): -h/--help plus options with nargs=None, allow_abbrev ----
 
-// ivNegNumber is argparse's _negative_number_matcher, ^-\d+$|^-\d*\.\d+$: \d is Unicode 15 Nd, $ also matches before a
-// final newline.
+// ivNegNumber is argparse's _negative_number_matcher.match: re '-\.?\d' at the start.
 func ivNegNumber(s string) bool {
 	rest, ok := strings.CutPrefix(s, "-")
 	if !ok {
 		return false
 	}
-	rest = strings.TrimSuffix(rest, "\n")
-	digits := func(t string) bool {
-		for _, r := range t {
-			if pyunicodedata.Category(r) != "Nd" {
-				return false
-			}
-		}
-		return true
-	}
-	if rest != "" && digits(rest) {
-		return true
-	}
-	whole, frac, dot := strings.Cut(rest, ".")
-	return dot && frac != "" && digits(whole) && digits(frac)
+	rest = strings.TrimPrefix(rest, ".")
+	r, size := utf8.DecodeRuneInString(rest)
+	return size > 0 && pythonparity.IsDecimal(r)
 }
 
 type ivArgparse struct {
@@ -79,55 +66,52 @@ func (p ivArgparse) known(s string) bool {
 func strp(s string) *string { return &s }
 
 // parseOptional is ArgumentParser._parse_optional; nil means a positional ('A').
-func (p ivArgparse) parseOptional(arg string) (*ivOptTuple, *ivArgError) {
+func (p ivArgparse) parseOptional(arg string) []ivOptTuple {
 	if arg == "" || arg[0] != '-' {
-		return nil, nil
+		return nil
 	}
 	if p.known(arg) {
-		return &ivOptTuple{opt: arg}, nil
+		return []ivOptTuple{{opt: arg}}
 	}
-	if len([]rune(arg)) == 1 {
-		return nil, nil
+	if utf8.RuneCountInString(arg) == 1 {
+		return nil
 	}
 	if head, tail, ok := strings.Cut(arg, "="); ok && p.known(head) {
-		return &ivOptTuple{opt: head, sep: strp("="), explicit: strp(tail)}, nil
+		return []ivOptTuple{{opt: head, sep: strp("="), explicit: strp(tail)}}
 	}
 	var tuples []ivOptTuple
-	if len(arg) > 1 && arg[1] == '-' {
-		prefix, tail, ok := strings.Cut(arg, "=")
+	prefix, tail, hasEq := strings.Cut(arg, "=")
+	withEq := func(o string) ivOptTuple {
+		t := ivOptTuple{opt: o}
+		if hasEq {
+			t.sep, t.explicit = strp("="), strp(tail)
+		}
+		return t
+	}
+	if arg[1] == '-' {
 		for _, o := range p.actions() {
 			if strings.HasPrefix(o, prefix) {
-				t := ivOptTuple{opt: o}
-				if ok {
-					t.sep, t.explicit = strp("="), strp(tail)
-				}
-				tuples = append(tuples, t)
+				tuples = append(tuples, withEq(o))
 			}
 		}
 	} else {
-		short := arg[:2]
+		_, size := utf8.DecodeRuneInString(arg[1:])
+		short := arg[:1+size]
 		for _, o := range p.actions() {
 			if o == short {
-				tuples = append(tuples, ivOptTuple{opt: o, sep: strp(""), explicit: strp(arg[2:])})
-			} else if strings.HasPrefix(o, arg) {
-				tuples = append(tuples, ivOptTuple{opt: o})
+				tuples = append(tuples, ivOptTuple{opt: o, sep: strp(""), explicit: strp(arg[1+size:])})
+			} else if strings.HasPrefix(o, prefix) {
+				tuples = append(tuples, withEq(o))
 			}
 		}
 	}
-	if len(tuples) > 1 {
-		names := make([]string, len(tuples))
-		for i, t := range tuples {
-			names[i] = t.opt
-		}
-		return nil, &ivArgError{fmt.Sprintf("ambiguous option: %s could match %s", arg, strings.Join(names, ", "))}
-	}
-	if len(tuples) == 1 {
-		return &tuples[0], nil
+	if len(tuples) > 0 {
+		return tuples
 	}
 	if ivNegNumber(arg) || strings.Contains(arg, " ") {
-		return nil, nil
+		return nil
 	}
-	return &ivOptTuple{}, nil
+	return []ivOptTuple{{}}
 }
 
 func ivActionName(opt string) string {
@@ -145,7 +129,7 @@ func (p ivArgparse) parse(args []string, stdout, stderr io.Writer) (map[string]s
 		fmt.Fprintf(stderr, "%s: error: %s\n", p.prog, msg)
 		return nil, 2, true
 	}
-	tuples := map[int]*ivOptTuple{}
+	tuples := map[int][]ivOptTuple{}
 	var pattern []byte
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--" {
@@ -155,11 +139,7 @@ func (p ivArgparse) parse(args []string, stdout, stderr io.Writer) (map[string]s
 			}
 			break
 		}
-		t, err := p.parseOptional(args[i])
-		if err != nil {
-			return fail(err.msg)
-		}
-		if t == nil {
+		if t := p.parseOptional(args[i]); t == nil {
 			pattern = append(pattern, 'A')
 		} else {
 			tuples[i] = t
@@ -170,8 +150,15 @@ func (p ivArgparse) parse(args []string, stdout, stderr io.Writer) (map[string]s
 	var extras []string
 	help := false
 	consume := func(start int) (int, *ivArgError) {
-		t := tuples[start]
-		opt, sep, explicit := t.opt, t.sep, t.explicit
+		ts := tuples[start]
+		if len(ts) > 1 {
+			names := make([]string, len(ts))
+			for i, t := range ts {
+				names[i] = t.opt
+			}
+			return 0, &ivArgError{fmt.Sprintf("ambiguous option: %s could match %s", args[start], strings.Join(names, ", "))}
+		}
+		opt, sep, explicit := ts[0].opt, ts[0].sep, ts[0].explicit
 		type taken struct {
 			opt  string
 			args []string
@@ -245,11 +232,12 @@ func (p ivArgparse) parse(args []string, stdout, stderr io.Writer) (map[string]s
 	}
 	start := 0
 	for start <= maxOpt {
-		next := -1
-		for i := range tuples {
-			if i >= start && (next < 0 || i < next) {
-				next = i
+		next := start
+		for next <= maxOpt {
+			if _, ok := tuples[next]; ok {
+				break
 			}
+			next++
 		}
 		if start != next {
 			extras = append(extras, args[start:next]...)
@@ -325,13 +313,14 @@ func ivEmptyName(p string) ivExc {
 	return ivExc{"ValueError", "PosixPath(" + pythonparity.StrRepr(ivPath(p)) + ") has an empty name"}
 }
 
-// ivWithSuffix is str(Path(p).with_suffix(suffix)).
+// ivWithSuffix is str(Path(p).with_suffix(suffix)) on Python 3.14: the suffix is os.path.splitext's (a trailing "."
+// counts; leading dots do not).
 func ivWithSuffix(p, suffix string) (string, error) {
 	dir, name := ivSplitName(p)
 	if name == "" {
 		return "", ivEmptyName(p)
 	}
-	if i := strings.LastIndex(name, "."); i > 0 && i < len(name)-1 {
+	if i := strings.LastIndex(name, "."); strings.Trim(name[:max(i, 0)], ".") != "" {
 		name = name[:i]
 	}
 	return dir + name + suffix, nil

@@ -1,14 +1,16 @@
 Traceback (most recent call last):
   File "{RECORDER}/pyrun.py", line 4, in <module>
     exec(compile(open(script, encoding="utf-8").read(), script, "exec"), {"__name__": "__main__", "__file__": script})
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "{SCRIPTS}/validate_docs_inventory_review.py", line 303, in <module>
     raise SystemExit(main())
-                     ^^^^^^
+                     ~~~~^^
   File "{SCRIPTS}/validate_docs_inventory_review.py", line 298, in main
     validate(args.generated_json, args.inventory_dir, args.ia_dir)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "{SCRIPTS}/validate_docs_inventory_review.py", line 185, in validate
     _write_factual_tsv(generated_tsv, factual_rows)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "{SCRIPTS}/validate_docs_inventory_review.py", line 89, in _write_factual_tsv
     normalized = dict(row)
-                 ^^^^^^^^^
 TypeError: 'int' object is not iterable

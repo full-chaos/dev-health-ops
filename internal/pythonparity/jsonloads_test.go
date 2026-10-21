@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -63,12 +64,15 @@ func TestLoadsJSONMatchesRecordedPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var golden struct{ Rows []jsonLoadsRow }
+	var golden struct {
+		Python string
+		Rows   []jsonLoadsRow
+	}
 	if err := json.Unmarshal(raw, &golden); err != nil {
 		t.Fatal(err)
 	}
-	if len(golden.Rows) < 300 {
-		t.Fatalf("only %d golden rows", len(golden.Rows))
+	if !strings.HasPrefix(golden.Python, "3.14.7 ") || len(golden.Rows) < 300 {
+		t.Fatalf("golden is not the 3.14.7 recording: python %q, %d rows", golden.Python, len(golden.Rows))
 	}
 	for i, row := range golden.Rows {
 		got, err := LoadsJSON(row.In)

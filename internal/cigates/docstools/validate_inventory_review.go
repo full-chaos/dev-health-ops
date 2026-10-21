@@ -1,6 +1,6 @@
 package docstools
 
-// validate-inventory-review: port of scripts/validate_docs_inventory_review.py (Python 3.12). It regenerates the TSV
+// validate-inventory-review: port of scripts/validate_docs_inventory_review.py (Python 3.14, the version CI ran it on). It regenerates the TSV
 // and summary views of the factual JSON inventory, compares them with the committed snapshots, and checks the frozen
 // disposition matrix against the locked IA. Python semantics are kept step by step (ivpython.go); a shape the port
 // cannot follow exactly is refused (ivStricter), never accepted.

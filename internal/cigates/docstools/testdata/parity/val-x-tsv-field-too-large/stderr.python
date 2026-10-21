@@ -1,18 +1,17 @@
 Traceback (most recent call last):
   File "{RECORDER}/pyrun.py", line 4, in <module>
     exec(compile(open(script, encoding="utf-8").read(), script, "exec"), {"__name__": "__main__", "__file__": script})
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "{SCRIPTS}/validate_docs_inventory_review.py", line 303, in <module>
     raise SystemExit(main())
-                     ^^^^^^
+                     ~~~~^^
   File "{SCRIPTS}/validate_docs_inventory_review.py", line 298, in main
     validate(args.generated_json, args.inventory_dir, args.ia_dir)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "{SCRIPTS}/validate_docs_inventory_review.py", line 201, in validate
     disposition = _load_tsv(inventory_dir / "disposition-matrix.tsv")
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "{SCRIPTS}/validate_docs_inventory_review.py", line 76, in _load_tsv
     return list(csv.DictReader(handle, delimiter="\t"))
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.12/csv.py", line 116, in __next__
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/csv.py", line 177, in __next__
     row = next(self.reader)
-          ^^^^^^^^^^^^^^^^^
 _csv.Error: field larger than field limit (131072)

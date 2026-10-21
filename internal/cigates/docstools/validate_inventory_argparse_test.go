@@ -6,20 +6,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// The argument parsing of validate-inventory-review against Python 3.12 argparse, recorded once over 3371 argument
-// vectors (testdata/validate_inventory_argparse.golden.json, recipe inside).
+// The argument parsing of validate-inventory-review against Python 3.14.7 argparse, recorded once over 5657 argument
+// vectors (testdata/validate_inventory_argparse.golden.json, recipe inside); 736 rows keep the different 3.12.3 result.
 func TestValidateInventoryArgparseMatchesPython(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "validate_inventory_argparse.golden.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var golden struct {
-		Usage string `json:"usage"`
-		Help  string `json:"help"`
-		Rows  []struct {
+		Python string `json:"python"`
+		Usage  string `json:"usage"`
+		Help   string `json:"help"`
+		Rows   []struct {
 			Argv   []string `json:"argv"`
 			RC     int      `json:"rc"`
 			Help   bool     `json:"help"`
@@ -30,7 +32,7 @@ func TestValidateInventoryArgparseMatchesPython(t *testing.T) {
 	if err := json.Unmarshal(raw, &golden); err != nil {
 		t.Fatal(err)
 	}
-	if len(golden.Rows) < 3000 || golden.Usage != ivUsage || golden.Help != ivHelp {
+	if !strings.HasPrefix(golden.Python, "3.14.7 ") || len(golden.Rows) < 5000 || golden.Usage != ivUsage || golden.Help != ivHelp {
 		t.Fatalf("golden has %d rows; usage/help match: %v %v", len(golden.Rows), golden.Usage == ivUsage, golden.Help == ivHelp)
 	}
 	bad := 0
@@ -73,7 +75,8 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// str(Path(p)), with_suffix(".tsv"), with_name(...) and Path(p) / name, as Python 3.12.3 printed them.
+// str(Path(p)), with_suffix(".tsv"), with_name(...) and Path(p) / name, as Python 3.14.7 printed them (3.12.3 differs
+// on "x.": its suffix rule gave "x..tsv").
 func TestValidateInventoryPathSemantics(t *testing.T) {
 	const empty = "ValueError: PosixPath(%s) has an empty name"
 	for _, c := range []struct{ in, str, suffix, name, join string }{
@@ -91,7 +94,10 @@ func TestValidateInventoryPathSemantics(t *testing.T) {
 		{"//", "//", fmt.Sprintf(empty, "'//'"), fmt.Sprintf(empty, "'//'"), "//documentation-inventory.json"},
 		{"", ".", fmt.Sprintf(empty, "'.'"), fmt.Sprintf(empty, "'.'"), "documentation-inventory.json"},
 		{"a//b/./c/", "a/b/c", "a/b/c.tsv", "a/b/documentation-inventory-summary.md", "a/b/c/documentation-inventory.json"},
-		{"x.", "x.", "x..tsv", "documentation-inventory-summary.md", "x./documentation-inventory.json"},
+		{"x.", "x.", "x.tsv", "documentation-inventory-summary.md", "x./documentation-inventory.json"},
+		{".x.", ".x.", ".x.tsv", "documentation-inventory-summary.md", ".x./documentation-inventory.json"},
+		{"a..", "a..", "a..tsv", "documentation-inventory-summary.md", "a../documentation-inventory.json"},
+		{"...", "...", "....tsv", "documentation-inventory-summary.md", ".../documentation-inventory.json"},
 		{"x..y", "x..y", "x..tsv", "documentation-inventory-summary.md", "x..y/documentation-inventory.json"},
 	} {
 		show := func(s string, err error) string {

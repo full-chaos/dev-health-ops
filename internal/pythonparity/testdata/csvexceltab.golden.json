@@ -1,6 +1,6 @@
 {
-"python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
-"recipe": "Recorded once on the host python3 -I (CPython 3.12.3) by a throwaway recorder (not kept): reader rows = list(csv.reader(io.StringIO(in, newline=\"\"), delimiter=\"\\t\")) or str(csv.Error); writer rows = what csv.writer(io.StringIO(newline=\"\"), delimiter=\"\\t\", lineterminator=\"\\n\").writerow(fields) wrote, or str(csv.Error). Corpus: hand-picked edge cases plus random strings (random.Random(10235)) over a, \", tab, CR, LF, space, NUL, e-acute. A string longer than 1000 code points is stored as {\"runs\": [[char, count], ...]}.",
+"python": "3.14.7 (main, Sep  1 2026, 14:16:03) [Clang 22.1.3 ]",
+"recipe": "Recorded once with python3 -I by a throwaway recorder (not kept): reader rows = list(csv.reader(io.StringIO(in, newline=\"\"), delimiter=\"\\t\")) or str(csv.Error); writer rows = what csv.writer(io.StringIO(newline=\"\"), delimiter=\"\\t\", lineterminator=\"\\n\").writerow(fields) wrote, or str(csv.Error). Corpus: hand-picked edge cases plus random strings (random.Random(10235)) over a, \", tab, CR, LF, space, NUL, e-acute. A string longer than 1000 code points is stored as {\"runs\": [[char, count], ...]}. Recorded on Python 3.14.7 (the version CI ran the ported scripts on); 3.12.3 gives the same result for every row.",
 "reader": [
 {
 "in": "",

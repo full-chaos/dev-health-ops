@@ -106,7 +106,7 @@ func ivSetJSON(t *testing.T, text string) {
 	}
 }
 
-// What Python 3.12.3 printed for each of these is in the comment of the row (recorded once by hand; a mode 000 file
+// What Python 3.14.7 (and 3.12.3, the same) printed for each of these is in the comment of the row (recorded once by hand; a mode 000 file
 // cannot be a recorded case).
 func TestValidateInventoryUnreadableInputs(t *testing.T) {
 	if os.Geteuid() == 0 {

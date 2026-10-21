@@ -65,8 +65,8 @@ func loadCSVGolden(t *testing.T) csvGolden {
 	if err := json.Unmarshal(raw, &g); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(g.Python, "3.12.3 ") || len(g.Reader) < 300 || len(g.Writer) < 100 {
-		t.Fatalf("golden is not the 3.12.3 recording: python %q, %d reader rows, %d writer rows", g.Python, len(g.Reader), len(g.Writer))
+	if !strings.HasPrefix(g.Python, "3.14.7 ") || len(g.Reader) < 300 || len(g.Writer) < 100 {
+		t.Fatalf("golden is not the 3.14.7 recording: python %q, %d reader rows, %d writer rows", g.Python, len(g.Reader), len(g.Writer))
 	}
 	return g
 }

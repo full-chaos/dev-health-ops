@@ -63,9 +63,29 @@ func PythonNotGlobal(addr netip.Addr) bool {
 // BlockedAddressClass names why a dialled address is refused, "" when it is
 // public. The Python-parity tables (PythonNotGlobal) come first;
 // multicast, the unspecified address and RFC 6598 shared address space are
-// refused here as well, which Validate's own tables do not list.
+// refused here as well, which Validate's own tables do not list. A metadata address (in any embedded form) is
+// "metadata" first, whatever range it sits in, so no allow list for its range can admit it.
 func BlockedAddressClass(addr netip.Addr) string {
-	addr = addr.Unmap()
+	addr = addr.Unmap().WithZone("")
+	if metadataAddrs[addr] {
+		return "metadata"
+	}
+	// A translation address (NAT64, 6to4) reaches the IPv4 address it embeds: it takes that address's class, so an
+	// allow list for the IPv6 range never admits what the IPv4 address itself would not be admitted as.
+	embedded := embeddedIPv4(addr)
+	for _, candidate := range embedded {
+		if metadataAddrs[candidate] {
+			return "metadata"
+		}
+	}
+	for _, candidate := range embedded {
+		if candidate.IsUnspecified() {
+			continue // the zero fill of a candidate position, not an embedded target
+		}
+		if class := BlockedAddressClass(candidate); class != "" {
+			return class
+		}
+	}
 	switch {
 	case addr.IsUnspecified():
 		return "unspecified"
@@ -74,9 +94,6 @@ func BlockedAddressClass(addr netip.Addr) string {
 	case addr.IsLoopback():
 		return "loopback"
 	case addr.IsLinkLocalUnicast():
-		if addr == metadataAddr {
-			return "metadata"
-		}
 		return "link_local"
 	case addr.IsPrivate():
 		if addr.Is6() {
@@ -91,7 +108,40 @@ func BlockedAddressClass(addr netip.Addr) string {
 	return ""
 }
 
-var metadataAddr = netip.MustParseAddr("169.254.169.254")
+// metadataAddrs are the cloud instance-metadata endpoints (they hand out the node's credentials): AWS, GCP, Azure and
+// OCI 169.254.169.254, AWS ECS task metadata 169.254.170.2 and .23, Alibaba 100.100.100.200, AWS IPv6 fd00:ec2::254
+// and its DNS fd00:ec2::23.
+var metadataAddrs = map[netip.Addr]bool{
+	netip.MustParseAddr("169.254.169.254"): true, netip.MustParseAddr("169.254.170.2"): true,
+	netip.MustParseAddr("169.254.170.23"): true, netip.MustParseAddr("100.100.100.200"): true,
+	netip.MustParseAddr("fd00:ec2::254"): true, netip.MustParseAddr("fd00:ec2::23"): true,
+}
+
+var (
+	nat64WellKnown = netip.MustParsePrefix("64:ff9b::/96")
+	nat64LocalUse  = netip.MustParsePrefix("64:ff9b:1::/48")
+	sixToFour      = netip.MustParsePrefix("2002::/16")
+)
+
+// embeddedIPv4 is every IPv4 address an IPv6 translation address can carry: NAT64 well-known /96 (RFC 6052), the
+// local-use prefix 64:ff9b:1::/48 at every RFC 6052 length it allows (/48, /56, /64, /96; RFC 8215), and 6to4 (RFC
+// 3056). Every candidate is returned, so the strictest reading wins.
+func embeddedIPv4(addr netip.Addr) []netip.Addr {
+	if !addr.Is6() {
+		return nil
+	}
+	b := addr.As16()
+	at := func(p0, p1, p2, p3 int) netip.Addr { return netip.AddrFrom4([4]byte{b[p0], b[p1], b[p2], b[p3]}) }
+	switch {
+	case nat64WellKnown.Contains(addr):
+		return []netip.Addr{at(12, 13, 14, 15)}
+	case nat64LocalUse.Contains(addr):
+		return []netip.Addr{at(6, 7, 9, 10), at(7, 9, 10, 11), at(9, 10, 11, 12), at(12, 13, 14, 15)}
+	case sixToFour.Contains(addr):
+		return []netip.Addr{at(2, 3, 4, 5)}
+	}
+	return nil
+}
 
 // sharedAddressSpace is RFC 6598 carrier-grade NAT space (100.64.0.0/10): not global, and used inside cloud and overlay
 // networks; Python's tables leave it out, so only the dial-time check refuses it.

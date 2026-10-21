@@ -156,6 +156,22 @@ func TestCheckNeverAdmitsMetadataLinkLocalMulticastOrUnspecified(t *testing.T) {
 	}
 }
 
+// An allow list that covers the range a metadata address sits in (RFC 6598 for Alibaba's 100.100.100.200, NAT64 and
+// 6to4 for an embedded 169.254.169.254, the AWS IPv6 ULA) still never admits the metadata address itself.
+func TestCheckNeverAdmitsAMetadataAddressInsideAnAllowedRange(t *testing.T) {
+	allowOnly(t, "100.64.0.0/10", "64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "fd00::/8")
+	_ = captureLogs(t)
+	for _, address := range []string{"100.100.100.200", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a9fe:a9fe", "2002:a9fe:a9fe::", "fd00:ec2::254"} {
+		var refused *RefusedError
+		if err := check(netip.MustParseAddr(address)); !errors.As(err, &refused) || refused.Class != "metadata" {
+			t.Errorf("check(%s) = %v, want the metadata refusal", address, err)
+		}
+	}
+	if err := check(netip.MustParseAddr("100.64.0.1")); err != nil {
+		t.Errorf("an allowed shared address was refused: %v", err)
+	}
+}
+
 func TestCheckDefaultDeniesEveryNonPublicClass(t *testing.T) {
 	allowOnly(t)
 	_ = captureLogs(t)

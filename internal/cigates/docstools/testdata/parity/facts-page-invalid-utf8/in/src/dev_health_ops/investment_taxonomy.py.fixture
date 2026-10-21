@@ -1,0 +1,25 @@
+THEMES: set[str] = {
+    "feature_delivery",
+    "operational",
+    "maintenance",
+    "quality",
+    "risk",
+}
+
+SUBCATEGORIES: set[str] = {
+    "feature_delivery.customer",
+    "feature_delivery.roadmap",
+    "feature_delivery.enablement",
+    "operational.incident_response",
+    "operational.on_call",
+    "operational.support",
+    "maintenance.refactor",
+    "maintenance.upgrade",
+    "maintenance.debt",
+    "quality.testing",
+    "quality.bugfix",
+    "quality.reliability",
+    "risk.security",
+    "risk.compliance",
+    "risk.vulnerability",
+}

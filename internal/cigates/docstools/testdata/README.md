@@ -153,3 +153,63 @@ except where marked. Hand-written rows: `TestQueuemapRefusesNullAndNonIntegerPro
 Same as Python (recorded pairs): an absent key (`genqm-missing-registry-queue`, `genqm-missing-state`), a case-folded
 key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-folded key
 (`genqm-key-unicode-folded-state`, U+017F): `KeyError` naming the key, rc 1.
+
+# Part c1: check-built-site-links, check-docs-search, check-docs-facts
+
+Cases `parity/links-*`, `parity/search-*`, `parity/facts-*` and the helper corpora under `helpers/`. Recorded once with
+Python 3.12.3 (`python3 -I -B`, Unicode 15.0.0) from `scripts/check_built_site_links.py`,
+`scripts/check_docs_candidate_search.py` and `scripts/check_docs_candidate_facts.py` at ops `a64af6106a44`
+(`git show a64af6106a44:scripts/<script>`). The three scripts, their tests under `tests/docs` and the `.py` registry the facts
+check read are not part of the recording.
+
+Record recipe, per case, in a fresh work directory `$W` (cwd `$W`, so the facts script's `ROOT` is `$W`): write the files of the
+case's `in/` into `$W` (a `.fixture` suffix is dropped; `symlinks` lines `<link> -> <target>` are made after), copy the script to
+`$W/scripts/`, run `python3 -I -B $W/scripts/<script> <args>` (`{WORK}` in `args` is `$W`), store rc, stdout and stderr with `$W`
+replaced by `{WORK}`, and under `out/` every file the run created or changed (the search report). The facts cases also carry a
+stub `src/dev_health_ops/investment_taxonomy.py` (the 5 themes and 15 subcategories as two set literals) in `in/`; the Go verb does not read it.
+
+Cases with `stderr.traceback`: Python died on an uncaught exception (a traceback); the Go verb prints the one exception line
+instead. Three of those lines are edited on purpose: for `UnicodeDecodeError` Go names the file, Python the byte position
+(`links-invalid-utf8-page`, `facts-page-invalid-utf8`).
+
+| Go verb | Python | cases |
+| --- | --- | --- |
+| `check-built-site-links` | `check_built_site_links.py` | `links-*`: Unicode `\b` before `href=`/`src=`/`id=` (the `\w` of a non-ASCII letter, digit or underscore blocks the match; a rejected match restarts one character on), same-page anchors skipped when `--site-dir` is relative (`relative_to` of a relative path on a resolved one raises), `Path.resolve()` of symlinks, loops and NUL, `urlsplit` ValueErrors, `rglob` order and symlinked directories, unreadable pages |
+| `check-docs-search` | `check_docs_candidate_search.py` | `search-*`: ranking, stemming, double `html.unescape`, tag stripping, `str.lower` with final sigma and U+0130, URL normalisation, every `max_rank` form, the TSV report bytes (tab dialect, `\r\n`), error order |
+| `check-docs-facts` | `check_docs_candidate_facts.py` | `facts-*`: key regex, missing and unknown keys (a dotted placeholder is unknown), extra arguments ignored |
+
+Helper corpora (`helpers/*.jsonl`, rows `{"in", "out"}` or `{"in", "err"}`), each replayed by `dc_helpers_test.go`:
+`urlsplit` (4784 strings of URL pieces, control characters, brackets, fullwidth characters), `unquote` (4116, invalid UTF-8
+escapes), `unescape` (11394, every HTML5 entity name with and without `;` and with a suffix, numeric references), `lower` (6625,
+final-sigma contexts), `floatrepr` (523), `csvrow` (3000 rows, `csv.writer(delimiter="\t")`), `normalize` (34, `_normalize_url`).
+`pytables/lower.tsv` (every code point whose `str.lower()` differs from itself), `pytables/charref.tsv` (every numeric character
+reference whose `html.unescape` result differs from `chr(n)`) and `pytables/final_sigma.tsv` (Case_Ignorable and Cased ranges, probed
+through `str.lower()` of U+03A3) are the Python tables the Go helpers use directly; `TestHelperLowerTableCoversEveryCodePoint` and the corpora check them.
+
+Also run, not stored (the built site needs mkdocs): on the real built site (212 pages, 1352 search documents) the Go verbs gave the same
+exit code, stdout and report bytes as Python for `check-built-site-links` (relative and absolute `--site-dir`), the 28 queries of
+`docs-data/search-acceptance.json`, and 600 generated queries (538 failing, 62 passing: every rank and top result equal).
+
+## Stricter than Python, or different on purpose (RISK-NOTES)
+
+Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (98 rows, pinned) unless marked.
+
+- Arguments: no abbreviation of an option, no `-h`/`--help` (exit 0 in Python, exit 2 here), no `--`, no value that starts with `-` (a
+  negative number, `"-a b"`, `--site-dir=-x`), no empty value (`Path("")` is `.` in Python). Exit code 2 and a usage line; the text differs from argparse's.
+- A bracketed netloc (`//[::1]/x`): Python validates the host as an IP address and accepts a valid one; Go refuses every bracketed netloc
+  (an unclosed or stray bracket is Python's own `Invalid IPv6 URL`).
+- JSON: a lone surrogate escape (`"\ud800"`) is refused (the Python str keeps it); nesting deeper than 500 is refused (Python raises
+  `RecursionError` near 990); the error text of a malformed file is Go's, not `JSONDecodeError`'s, with the same exit code. NaN, Infinity and -Infinity are accepted as Python does.
+- Search fields: `location`, `title`, `text`, `query`, `expected` must be strings (Python took `str()` of a truthy number, list or object);
+  `max_rank` as a non-empty string is refused (Python parsed it with `int()`). Falsy values still mean the default as in Python.
+- Page names that are not UTF-8 and a named pipe named `*.html` are refused (Python listed the first and blocked on the second).
+- `check-docs-facts` reads the Go registry (`internal/jobs/workgraph/units`, the source `check-investment-drift` reads) and not
+  `src/dev_health_ops/investment_taxonomy.py`: the Python refusals "registry file missing", "not a set literal", "non-string literal",
+  "not found" and a `SyntaxError` in that file have no Go counterpart (the vocabulary cannot be missing or malformed). Named gap; Go never refuses what Python accepted here.
+- A decimal character reference of more than 4300 digits is refused in the search text (Python 3.12's integer string limit raises `ValueError`).
+- Drift that no test can pin: `repr()` of a string prints a code point as itself when Go's `unicode.IsPrint` (Unicode 17) says printable,
+  Python 3.12 (Unicode 15) escapes the newest ones (`'ᲊ'` against `'ᲊ'`), which only shows in the text of a failure line; `str.lower()`,
+  `html.unescape` numeric references and the final-sigma rule use the Python 3.12.3 tables recorded here (CI's Python 3.14 has a newer Unicode); named entities
+  come from Go's table plus `nGt;` and `nLt;`, which it lacks (the corpus runs every Python entity name through both); `\w` before `href`, `src` and `id` is
+  letters, numbers and `_` of Go's Unicode (17).
+- A file name or an input path with a non-UTF-8 byte is not compared for ordering with Python's surrogate escape (refused for page names; other paths are used as the OS gives them).

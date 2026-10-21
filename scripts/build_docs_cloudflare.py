@@ -14,6 +14,7 @@ SITE_DIR = ROOT / ".build" / "docs"
 ASSET_DIR = ROOT / ".build" / "docs-cloudflare"
 REDIRECTS = ROOT / "docs-data" / "redirects.tsv"
 SEARCH_ACCEPTANCE = ROOT / "docs-data" / "search-acceptance.json"
+CIGATE_DOCS = ["go", "run", "-trimpath", "-mod=readonly", "./cmd/cigate", "docs"]
 
 
 def _run(args: list[str]) -> None:
@@ -73,16 +74,16 @@ def build(*, mode: str, full_check: bool) -> None:
     if full_check:
         _run(
             [
-                sys.executable,
-                "scripts/check_built_site_links.py",
+                *CIGATE_DOCS,
+                "check-built-site-links",
                 "--site-dir",
                 str(SITE_DIR.relative_to(ROOT)),
             ]
         )
         _run(
             [
-                sys.executable,
-                "scripts/check_docs_candidate_search.py",
+                *CIGATE_DOCS,
+                "check-docs-search",
                 "--site-dir",
                 str(SITE_DIR.relative_to(ROOT)),
                 "--queries",
@@ -99,7 +100,7 @@ def build(*, mode: str, full_check: bool) -> None:
                 "docs/stylesheets/extra.css",
             ]
         )
-        _run([sys.executable, "scripts/check_docs_candidate_facts.py"])
+        _run([*CIGATE_DOCS, "check-docs-facts"])
 
     _run(
         [

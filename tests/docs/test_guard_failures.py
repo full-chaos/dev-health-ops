@@ -7,7 +7,6 @@ import pytest
 import yaml
 from markdown.extensions.toc import slugify as mkdocs_slugify
 
-from scripts.check_built_site_links import check_built_site
 from scripts.check_code_prerequisites import pages_missing_prerequisite_link
 from scripts.check_docs_links import check_docs, slugify
 from scripts.check_external_links import FetchResult, check_external_links
@@ -51,7 +50,7 @@ def test_slugify_matches_the_real_mkdocs_toc_anchor(heading: str) -> None:
     `unicode=False` -- this repo's mkdocs.yml does not opt into unicode
     slugs), not an approximation that happens to look plausible. A mismatch
     here is exactly the class of bug that let a link pass this checker
-    while 404ing on the real built site (tests/docs/test_built_site_links.py
+    while 404ing on the real built site (`cigate docs check-built-site-links`
     is the ground-truth check against real rendered HTML; this test is the
     cheap, fast one that keeps this checker's approximation honest without
     a full mkdocs build).
@@ -78,23 +77,6 @@ def test_slugify_html_and_backtick_stripping_matches_the_rendered_text() -> None
     raw = "<code>HTML</code> tags and `backticks` are stripped"
     rendered_inner_text = "HTML tags and backticks are stripped"
     assert slugify(raw) == mkdocs_slugify(rendered_inner_text, "-")
-
-
-def test_broken_built_asset_fails(tmp_path: Path) -> None:
-    """Given built HTML referencing a stylesheet that was never emitted, when
-    the built-site guard runs, then it reports the missing built asset."""
-    site_dir = tmp_path / "site"
-    _write(
-        site_dir / "index.html",
-        '<html><head><link rel="stylesheet" href="assets/theme.css"></head>'
-        "<body>Home</body></html>",
-    )
-
-    errors = check_built_site(site_dir)
-
-    assert len(errors) == 1
-    assert "assets/theme.css" in errors[0]
-    assert "missing built asset" in errors[0]
 
 
 def test_expired_allowlist_fails(tmp_path: Path) -> None:

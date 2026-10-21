@@ -1,0 +1,1 @@
+{"queries": [{"query": "install the cli", "expected": "/guide/install/", "max_rank": 1}, {"query": "secrets", "expected": "guide/config/"}, {"query": "graphql endpoints", "expected": "reference/api.html", "max_rank": 2}]}

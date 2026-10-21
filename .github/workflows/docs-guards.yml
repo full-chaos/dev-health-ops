@@ -8,10 +8,7 @@ on:
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
       - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_built_site_links.py'
-      - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
-      - 'scripts/check_docs_candidate_facts.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
   pull_request:
@@ -21,10 +18,7 @@ on:
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
       - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_built_site_links.py'
-      - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
-      - 'scripts/check_docs_candidate_facts.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
   merge_group:
@@ -52,6 +46,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -76,14 +76,14 @@ jobs:
       - name: Check rendered links, anchors, and assets
         run: |
           set -o pipefail
-          python scripts/check_built_site_links.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-built-site-links \
             --site-dir .build/docs \
             2>&1 | tee .build/docs-links.log
 
       - name: Check task-based search acceptance
         run: |
           set -o pipefail
-          python scripts/check_docs_candidate_search.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-search \
             --site-dir .build/docs \
             --queries docs-data/search-acceptance.json \
             2>&1 | tee .build/docs-search.log
@@ -99,7 +99,7 @@ jobs:
       - name: Check objective documentation facts
         run: |
           set -o pipefail
-          python scripts/check_docs_candidate_facts.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-facts \
             2>&1 | tee .build/docs-facts.log
 
       # CHAOS-3514 (chris ruling: gate the scripts, keep the tests). These two

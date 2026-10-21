@@ -1,0 +1,1 @@
+{"queries": [{"query": "tab\there \"quoted\" and\nnewline", "expected": "/guide/install/"}, {"query": "plain, comma; semi", "expected": "/guide/install/"}, {"query": "  padded  ", "expected": "/guide/install/"}]}

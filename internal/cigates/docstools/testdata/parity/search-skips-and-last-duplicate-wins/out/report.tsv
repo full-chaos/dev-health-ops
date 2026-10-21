@@ -1,0 +1,3 @@
+query	expected	rank	max_rank	top_result	status
+zed	/z/	1	5	/z/	pass
+zed	/z/	1	5	/z/	pass

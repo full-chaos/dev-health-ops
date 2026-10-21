@@ -141,18 +141,18 @@ def test_reader_critical_checks_invoke_the_canonical_scripts() -> None:
     assert "--config-file mkdocs.yml" in strict_build
 
     links = run_by_name[STREAMED_CHECK_STEPS[2]]
-    assert "check_built_site_links.py" in links
+    assert "cigate docs check-built-site-links" in links
     assert "--site-dir .build/docs" in links
 
     search = run_by_name[STREAMED_CHECK_STEPS[3]]
-    assert "check_docs_candidate_search.py" in search
+    assert "cigate docs check-docs-search" in search
     assert "docs-data/search-acceptance.json" in search
 
     accessibility = run_by_name[STREAMED_CHECK_STEPS[4]]
     assert "check_docs_candidate_accessibility.py" in accessibility
 
     facts = run_by_name[STREAMED_CHECK_STEPS[5]]
-    assert "check_docs_candidate_facts.py" in facts
+    assert "cigate docs check-docs-facts" in facts
 
 
 def test_streamed_docs_checks_propagate_checker_failures() -> None:

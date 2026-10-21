@@ -174,7 +174,10 @@ func reasonForError(err error) []string {
 	var foreign pgmigrate.ForeignDatabaseError
 	var mismatch pgmigrate.SchemaMismatchError
 	var settings pgmigrate.SettingsMismatchError
+	var authMismatch pgmigrate.AuthSchemaMismatchError
 	switch {
+	case errors.As(err, &authMismatch):
+		return []string{pgmigrate.ReasonAuthSchemaMismatch}
 	case errors.As(err, &settings):
 		return []string{pgmigrate.ReasonSettingsMismatch}
 	case errors.As(err, &mismatch):

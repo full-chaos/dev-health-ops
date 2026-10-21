@@ -28,7 +28,7 @@ type mockProviderGoldenDocument struct {
 	Cases []mockProviderGoldenCase `json:"cases"`
 }
 
-// mockProviderPrompt mirrors generate_mock_provider_python_golden.py's
+// mockProviderPrompt mirrors generate_mock_provider_python_golden (generator deleted, golden frozen)'s
 // _prompt(): the canonical marker text that routes MockProvider.complete
 // into the categorization branch, followed by the varying source block.
 func mockProviderPrompt(sourceBlock string) string {

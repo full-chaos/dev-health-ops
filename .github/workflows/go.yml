@@ -126,6 +126,10 @@ on:
       - 'src/dev_health_ops/workers/job_contracts/**'
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
+      # the CHAOS-10376 guards read every tracked .py and ci/requirements-*.txt (the provider-limits page and mkdocs.yml: docs-drift.yml)
+      - '**/*.py'
+      - 'ci/requirements-*.txt'
+      - 'tests/scripts/**'
       - '**/testdata/**'
       # The manifests of the recordedfiles guard sit BESIDE their directory
       # (internal/x/testdata.manifest.tsv, tests/fixtures.manifest.tsv), and
@@ -180,7 +184,6 @@ on:
       - 'internal/cigates/affected/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
-      - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'
@@ -375,6 +378,10 @@ on:
       - 'src/dev_health_ops/workers/job_contracts/**'
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
+      # the CHAOS-10376 guards read every tracked .py and ci/requirements-*.txt (the provider-limits page and mkdocs.yml: docs-drift.yml)
+      - '**/*.py'
+      - 'ci/requirements-*.txt'
+      - 'tests/scripts/**'
       - '**/testdata/**'
       # The manifests of the recordedfiles guard sit BESIDE their directory
       # (internal/x/testdata.manifest.tsv, tests/fixtures.manifest.tsv), and
@@ -429,7 +436,6 @@ on:
       - 'internal/cigates/affected/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
-      - 'ci/requirements-clickhouse-migrations.txt'
       - 'ci/check_go_containers.sh'
       - 'ci/check_auth_compose.sh'
       - 'ci/auth_compose_proof.override.yml'

@@ -11,7 +11,7 @@ import (
 
 // The golden parity test for the kernel, against
 // tests/fixtures/throughput_forecast_golden.json -- captured by
-// tests/fixtures/generate_throughput_forecast_golden.py from the REAL
+// generate_throughput_forecast_golden (generator deleted, golden frozen) from the REAL
 // dev_health_ops.metrics.forecast, before any Python deletion.
 //
 // Every float is compared by IEEE-754 BIT PATTERN, never by tolerance. A

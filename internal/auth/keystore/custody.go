@@ -44,6 +44,7 @@ const (
 	ReasonManifestInvalid     Reason = "keyset_manifest_invalid"
 	ReasonKeyUnknown          Reason = "key_id_unknown"
 	ReasonKeyNotActive        Reason = "key_not_active"
+	ReasonNotOneActiveKey     Reason = "keyset_not_one_active_key"
 )
 
 // MaxManifestBytes bounds a key-set manifest file.
@@ -188,8 +189,8 @@ func (c *FileCustody) Keys(ctx context.Context) ([]Key, error) {
 	return keys, nil
 }
 
-// Sign signs with kid when the manifest names it active, both before and
-// after the signature is made. A rotation that lands while the key is read
+// Sign signs with kid when the manifest names it the one active key, both
+// before and after the signature is made. A rotation that lands while the key is read
 // and used (the kid retired, replaced or compromised) discards the signature
 // and returns ReasonKeyNotActive: a signature is returned only when the kid
 // is still active at the manifest read that follows it.
@@ -219,11 +220,21 @@ func (c *FileCustody) Sign(ctx context.Context, kid string, message []byte) ([]b
 // read.
 var afterSign func()
 
-// activeEntry returns kid's manifest entry when its effective state is active.
+// activeEntry returns kid's manifest entry when the set has exactly one key
+// in effective state active and that key is kid.
 func (c *FileCustody) activeEntry(ctx context.Context, kid string) (manifestEntry, error) {
 	entries, states, err := c.load(ctx)
 	if err != nil {
 		return manifestEntry{}, err
+	}
+	active := 0
+	for _, state := range states {
+		if state == StateActive {
+			active++
+		}
+	}
+	if active != 1 {
+		return manifestEntry{}, failure(ReasonNotOneActiveKey, nil)
 	}
 	for i, entry := range entries {
 		if entry.KeyID != kid {

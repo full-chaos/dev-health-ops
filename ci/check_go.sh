@@ -3388,9 +3388,14 @@ auth_go() {
 }
 
 check_auth_fmt() {
-  local output
-  output="$(cd "${ROOT}" && git ls-files --cached --others --exclude-standard -z -- \
-    'cmd/auth-service/*.go' 'cmd/auth-migrate/*.go' 'internal/auth/*.go' 'internal/audit/*.go' 'internal/storage/postgres/authschema/*.go' \
+  local output pkg specs=()
+  # The gated packages, one pathspec each, so a package added to AUTH_PACKAGES
+  # is formatted by this gate too.
+  for pkg in "${AUTH_PACKAGES[@]}"; do
+    pkg="${pkg#./}"
+    specs+=("${pkg%/...}/*.go")
+  done
+  output="$(cd "${ROOT}" && git ls-files --cached --others --exclude-standard -z -- "${specs[@]}" \
     | xargs -0 -r "${GOFMT}" -l)"
   if [ -n "${output}" ]; then
     printf 'auth gofmt: these files need formatting:\n%s\n' "${output}" >&2

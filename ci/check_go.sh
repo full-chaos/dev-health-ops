@@ -3350,6 +3350,7 @@ AUTH_PACKAGES=(
   ./internal/auth/...
   ./internal/audit/...
   ./internal/storage/postgres/authschema/...
+  ./internal/token/...
 )
 # One fuzz target per parser, each its own corpus (the target's f.Add seeds plus
 # any testdata/fuzz/<Target> entries) and its own proof marker. Format:
@@ -3365,6 +3366,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/httpapi FuzzParseLimit"
   "./internal/auth/httpapi FuzzParseForwardedTrust"
   "./internal/auth/keystore FuzzParseEd25519Key"
+  "./internal/auth/keystore FuzzParseKeySetManifest"
   "./internal/auth/authconfig FuzzConfigLoad"
   "./internal/auth/identity FuzzNormalizeEmail"
   "./internal/auth/identity FuzzExternalKeyValidate"

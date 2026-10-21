@@ -50,6 +50,10 @@ type Route struct {
 	// wildcard route that dispatches a literal path itself (a Python
 	// route of its own) reports that path's answer.
 	ResponseModelFor func(*http.Request) bool
+	// ErrorWriter, when set, renders this route's transport refusals (its
+	// body bound, rate limit, in-flight cap and recovered panic) instead of
+	// the server's.
+	ErrorWriter ErrorWriter
 }
 
 // RouteWriter is implemented by the writer every registered route's
@@ -491,6 +495,9 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 // route's own panic recovery closest to the handler so the log line names the
 // real pattern.
 func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) http.Handler {
+	if route.ErrorWriter != nil {
+		write = route.ErrorWriter
+	}
 	perSecond := route.RateLimitPerSecond
 	if perSecond <= 0 {
 		perSecond = options.RateLimit

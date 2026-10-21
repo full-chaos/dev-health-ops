@@ -52,7 +52,7 @@ func (p *budgetedProvider) Complete(ctx context.Context, request CompletionReque
 		if err != nil {
 			return llmbudget.Usage{}, err
 		}
-		return llmbudget.UsageFrom(result.InputTokens, result.OutputTokens, result.CachedInputTokens), nil
+		return llmbudget.UsageFrom(result.InputTokens, result.OutputTokens, result.CachedInputTokens, result.CacheCreationInputTokens), nil
 	})
 	if err != nil {
 		return CompletionResult{}, err

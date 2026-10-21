@@ -1,0 +1,1 @@
+ValueError: allow.yml entries must be mappings, got 1.5

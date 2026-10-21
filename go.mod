@@ -14,7 +14,7 @@ require (
 	github.com/compose-spec/compose-go/v2 v2.16.1
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/crewjam/saml v0.5.1
-	github.com/full-chaos/dev-health-go v0.25.2
+	github.com/full-chaos/dev-health-go v0.26.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0

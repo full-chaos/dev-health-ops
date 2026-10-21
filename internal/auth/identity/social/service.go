@@ -101,7 +101,9 @@ func New(cfg Config) (*Service, error) {
 	return s, nil
 }
 
-// ExchangeResult is a signed-in principal.
+// ExchangeResult is a signed-in principal. With a refusal, PrincipalID names
+// the principal the refusal concerns when one is known (a disabled account,
+// the account that holds a colliding email), else uuid.Nil.
 type ExchangeResult struct {
 	PrincipalID uuid.UUID
 	Created     bool
@@ -130,7 +132,7 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 	principal, found, err := s.lookup(ctx, profile.ExternalKey)
 	if err != nil {
 		reason = lookupReason(err)
-		return ExchangeResult{}, err
+		return ExchangeResult{PrincipalID: principal.ID}, err
 	}
 	if found {
 		reason, err = signInTo(principal)
@@ -145,11 +147,11 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 		reason = ReasonEmailUnverified
 		return ExchangeResult{}, ErrEmailUnverified
 	}
-	if method, taken, err := s.emailOwner(ctx, email); err != nil {
+	if method, owner, taken, err := s.emailOwner(ctx, email); err != nil {
 		reason = ReasonStoreUnavailable
 		return ExchangeResult{}, err
 	} else if taken {
-		res, reason, err = s.settleTaken(ctx, profile.ExternalKey, method)
+		res, reason, err = s.settleTaken(ctx, profile.ExternalKey, method, owner)
 		return res, err
 	}
 	name := profile.FullName
@@ -164,12 +166,12 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 		reason = ReasonSignupUnavailable
 		return ExchangeResult{}, err
 	case errors.Is(err, identity.ErrIdentityTaken), errors.Is(err, identity.ErrEmailTaken):
-		method, _, lookupErr := s.emailOwner(ctx, email)
+		method, owner, _, lookupErr := s.emailOwner(ctx, email)
 		if lookupErr != nil {
 			reason = ReasonStoreUnavailable
 			return ExchangeResult{}, errors.Join(err, lookupErr)
 		}
-		res, reason, err = s.settleTaken(ctx, profile.ExternalKey, method)
+		res, reason, err = s.settleTaken(ctx, profile.ExternalKey, method, owner)
 		return res, err
 	default:
 		reason = ReasonStoreUnavailable
@@ -186,7 +188,8 @@ func (s *Service) lookup(ctx context.Context, key identity.ExternalKey) (identit
 	case errors.Is(err, identity.ErrProviderAlreadyLinked):
 		// The go-api account of this subject holds another identity at the
 		// provider: the projection wrote nothing and this sign-in is refused.
-		return identity.Principal{}, false, ErrProviderLinked
+		// The refusal names that account.
+		return identity.Principal{ID: p.ID}, false, ErrProviderLinked
 	case err != nil:
 		return identity.Principal{}, false, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
@@ -197,53 +200,54 @@ func (s *Service) lookup(ctx context.Context, key identity.ExternalKey) (identit
 // to name in the conflict, so the user knows how to sign in before linking:
 // go-api's auth_provider before the users cutover; after it "local" for an
 // account with a password, else the provider of its oldest linked identity
-// ("sso" for an enterprise SSO provider row), else "". More than one account
-// holding the email is a conflict too.
-func (s *Service) emailOwner(ctx context.Context, email string) (string, bool, error) {
+// ("sso" for an enterprise SSO provider row), else "", and the account that
+// holds it. More than one account holding the email is a conflict too, with
+// no single owner (uuid.Nil).
+func (s *Service) emailOwner(ctx context.Context, email string) (string, uuid.UUID, bool, error) {
 	owner, err := s.store.ByEmail(ctx, email)
 	switch {
 	case errors.Is(err, identity.ErrMultipleUsers):
-		return "", true, nil
+		return "", uuid.Nil, true, nil
 	case err != nil:
-		return "", false, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return "", uuid.Nil, false, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	case owner == nil:
-		return "", false, nil
+		return "", uuid.Nil, false, nil
 	case owner.AuthProvider != nil:
-		return *owner.AuthProvider, true, nil
+		return *owner.AuthProvider, owner.ID, true, nil
 	}
 	hasPassword, err := s.store.HasPassword(ctx, owner.ID)
 	if err != nil {
-		return "", false, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return "", uuid.Nil, false, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if hasPassword {
-		return "local", true, nil
+		return "local", owner.ID, true, nil
 	}
 	linked, err := s.store.ListIdentities(ctx, owner.ID)
 	if err != nil {
-		return "", false, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return "", uuid.Nil, false, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if len(linked) == 0 {
-		return "", true, nil
+		return "", owner.ID, true, nil
 	}
 	if p := linked[0].Provider; p.IsSocial() {
-		return string(p), true, nil
+		return string(p), owner.ID, true, nil
 	}
-	return "sso", true, nil
+	return "sso", owner.ID, true, nil
 }
 
 // settleTaken answers an exchange whose email is held by an account. A
 // concurrent first exchange of the same identity may be that account; only a
 // binding of this identity signs in, otherwise it is a conflict.
-func (s *Service) settleTaken(ctx context.Context, key identity.ExternalKey, method string) (ExchangeResult, Reason, error) {
+func (s *Service) settleTaken(ctx context.Context, key identity.ExternalKey, method string, owner uuid.UUID) (ExchangeResult, Reason, error) {
 	principal, found, err := s.lookup(ctx, key)
 	if err != nil {
-		return ExchangeResult{}, lookupReason(err), err
+		return ExchangeResult{PrincipalID: principal.ID}, lookupReason(err), err
 	}
 	if found {
 		reason, err := signInTo(principal)
 		return ExchangeResult{PrincipalID: principal.ID}, reason, err
 	}
-	return ExchangeResult{}, ReasonEmailCollision, &ConflictError{ExistingMethod: method}
+	return ExchangeResult{PrincipalID: owner}, ReasonEmailCollision, &ConflictError{ExistingMethod: method}
 }
 
 func lookupReason(err error) Reason {

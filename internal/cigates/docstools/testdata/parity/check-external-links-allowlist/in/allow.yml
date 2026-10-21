@@ -1,0 +1,16 @@
+- url: https://expired.example.com/
+  owner: docs-content
+  reason: temporary vendor outage
+  expires: '2026-01-01'
+- url: https://flaky.example.com/
+  owner: docs-content
+  reason: known flaky vendor endpoint
+  expires: '2999-01-01'
+- url: https://docs.fullchaos.dev/guide/
+  owner: docs-content
+  reason: temporary canonical migration
+  expires: '2026-01-01'
+- url: https://flaky.example.com/
+  owner: last
+  reason: wins
+  expires: '2025-12-31'

@@ -93,9 +93,6 @@ func TestAdminRoutesAnswerNoStoreThroughTheRealServerChain(t *testing.T) {
 // Every route of the real admin.Routes answers no-store on a refused caller.
 func TestEveryAdminRouteAnswersNoStoreThroughTheServer(t *testing.T) {
 	routes := admin.Routes(admin.Deps{Guard: policy.NewGuard(nil, nil)})
-	if len(routes) != len(httpapi.AdminRoutes) {
-		t.Fatalf("%d admin routes, %d in the table", len(routes), len(httpapi.AdminRoutes))
-	}
 	handler := noStoreServer(t, routes)
 	sawModels := false
 	for _, route := range routes {

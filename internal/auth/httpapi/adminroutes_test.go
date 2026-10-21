@@ -20,7 +20,8 @@ func TestNoStoreRoutesMatchesWithTheRoutersOwnPathRules(t *testing.T) {
 		{"GET", "/api%2Fv1/admin/llm-settings/models", true},
 		{"GET", "/api/v1/admin/users/a%2Fb", false},
 		{"PATCH", "/api/v1/admin/llm-settings/models", false},
-		{"GET", "/api/v1/admin/credentials", false},
+		{"GET", "/api/v1/admin/credentials", true},
+		{"GET", "/api/v1/admin/unmounted", false},
 		{"GET", "/api/v1/admin/llm-settings/models/extra", false},
 		{"GET", "/api/v1/other", false},
 	}

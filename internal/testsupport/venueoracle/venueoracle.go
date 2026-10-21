@@ -30,6 +30,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"log/slog"
@@ -557,6 +558,9 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 		// middleware that adds the security headers, so no header is compared.
 		return true, nil, py, gr
 	}
+	if intendedNoStore(request, py, gr) {
+		skip = withSkipped(skip, "cache-control")
+	}
 	compared := headerUnion(py.Headers, gr.Headers, skip)
 	for _, header := range compared {
 		pv, pok := py.Headers[header]
@@ -566,6 +570,36 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 		}
 	}
 	return same, compared, py, gr
+}
+
+// intendedNoStore is the declared divergence "admin no-store": every Go admin
+// route answers Cache-Control: no-store, which the frozen Python goldens never
+// carried. It applies only to a route of the admin route table
+// (httpapi.AdminRoutes), only when the golden has no cache-control, and only for
+// exactly "no-store"; any other Go value, a golden that has the header, or an
+// admin-prefixed route of another package still compares.
+// adminNoStore is the serving router's own no-store decision, unbound: the
+// same decode, strict-path and mux-pattern steps as the api service.
+var adminNoStore = httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
+
+func intendedNoStore(request Request, py, gr Response) bool {
+	target, err := url.ParseRequestURI(request.Path)
+	if err != nil || !adminNoStore.Matches(&http.Request{Method: request.Method, URL: target}) {
+		return false
+	}
+	if _, has := py.Headers["cache-control"]; has {
+		return false
+	}
+	return gr.Headers["cache-control"] == "no-store"
+}
+
+func withSkipped(skip map[string]bool, name string) map[string]bool {
+	out := make(map[string]bool, len(skip)+1)
+	for key, value := range skip {
+		out[key] = value
+	}
+	out[name] = true
+	return out
 }
 
 // Mark is "SAME" or "DIFF".

@@ -50,6 +50,7 @@ var sourceHealthStages = map[string]bool{
 	"terminal_river_delivery":          true,
 	"time_limit":                       true,
 	"timeout":                          true,
+	"tree_walk_limit":                  true,
 	"validation":                       true,
 	"worker_lost":                      true,
 	"worker_lost_retry_exhausted":      true,

@@ -14,7 +14,7 @@ import (
 // CHAOS-10177 (B2): Go port of tests/tooling/test_venue_oracles_always_runs.py, the workflow-shape tests. The
 // `venue-oracles` job runs on main and by hand, never as a pull request check, from exactly one workflow with no path
 // filter; the relevance step wires github.event.before and answers relevant=true for workflow_dispatch before any diff
-// is read. The two tests that EXECUTE the relevance step stay in Python until the venue-script port (CHAOS-10178).
+// is read. The tests that EXECUTE the relevance step are internal/cigates/scripts/relevance_step_script_test.go.
 
 const (
 	venueJobID       = "venue-oracles"

@@ -39,7 +39,7 @@ func runDiff(script string, r *gitRepo, head string, env ...string) (cmdResult, 
 	if r.err != nil {
 		return cmdResult{}, r.err
 	}
-	return cmdSpec{dir: r.dir, env: append([]string{basePath}, env...)}.run("bash", script), nil
+	return cmdSpec{dir: r.dir, env: append([]string{shimBasePath()}, env...)}.run("bash", script), nil
 }
 
 func diffNames(script string, r *gitRepo, head, base string) ([]string, error) {

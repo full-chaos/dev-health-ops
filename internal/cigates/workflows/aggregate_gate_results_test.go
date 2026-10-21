@@ -52,7 +52,7 @@ type verdict struct {
 func runGate(t *testing.T, env map[string]string) verdict {
 	t.Helper()
 	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "aggregate_gate_results.sh"))
-	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin"}
+	cmd.Env = []string{"PATH=" + withShims("/usr/bin:/bin:/usr/local/bin")}
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

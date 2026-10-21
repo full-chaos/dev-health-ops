@@ -48,7 +48,7 @@ func wireParityRun(t *testing.T, script string, env ...string) []string {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", "-e", "-c", script)
-	cmd.Env = append([]string{"PATH=" + dir + ":/usr/bin:/bin", "PNPM_LOG=" + logPath}, env...)
+	cmd.Env = append([]string{"PATH=" + dir + ":" + withShims("/usr/bin:/bin"), "PNPM_LOG=" + logPath}, env...)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {

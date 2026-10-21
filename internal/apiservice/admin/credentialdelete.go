@@ -17,7 +17,9 @@ import (
 
 func (h *handlers) credentialDeleteRoutes() []httpapi.Route {
 	return []httpapi.Route{
-		// No Allow: the router lists every method the path serves.
+		// No Allow: the credentials plane's GET route is registered first
+		// for this pattern and its Allow is the one the router keeps, as the
+		// first-registered FastAPI route's is.
 		{Method: http.MethodDelete, Pattern: governancePrefix + "/credentials/{provider}/{name}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteCredential))},
 	}
 }

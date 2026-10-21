@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -176,3 +177,37 @@ func TestNewRefusesAnythingButAnIssuerCredential(t *testing.T) {
 		t.Fatalf("a good credential: %v", err)
 	}
 }
+
+// The service credential never goes to an ambient HTTP proxy: the client
+// dials auth-service itself.
+func TestIssueIgnoresTheEnvironmentsHTTPProxy(t *testing.T) {
+	var proxied atomicCount
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied.add()
+		_, _ = io.WriteString(w, `{"access_token":"forged","refresh_token":"forged","token_type":"bearer"}`)
+	}))
+	defer proxy.Close()
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("HTTPS_PROXY", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+	client, err := New(baseOf(t, "http://auth-service.invalid:8095"), testToken(t), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := client.Issue(context.Background(), endUserRequest(), Request{PrincipalID: uuid.New(), AMR: []string{"pwd"}})
+	if proxied.get() != 0 {
+		t.Fatalf("the issue call went through the environment's proxy %d time(s)", proxied.get())
+	}
+	if !errors.Is(err, ErrUnavailable) || pair.Access != "" {
+		t.Fatalf("issue to an unresolvable host = %+v, %v; want ErrUnavailable and no pair", pair, err)
+	}
+}
+
+type atomicCount struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *atomicCount) add() { c.mu.Lock(); c.n++; c.mu.Unlock() }
+
+func (c *atomicCount) get() int { c.mu.Lock(); defer c.mu.Unlock(); return c.n }

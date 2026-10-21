@@ -128,3 +128,67 @@ func TestSSOLoginAnswers503WhenTheIssueRouteIsDown(t *testing.T) {
 		t.Fatalf("%d refresh_tokens rows with the issue route down", n)
 	}
 }
+
+// samlLogin posts a signed assertion for a new user to the ACS route and
+// returns the status and body.
+func samlLogin(t *testing.T, ctx context.Context, st stack, email string) (int, map[string]any) {
+	t.Helper()
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp := newSAMLIdP(t)
+	const (
+		spEntityID = "https://sp.test/saml/metadata"
+		acsURL     = "https://sp.test/saml/acs"
+	)
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":%q,"sp_acs_url":%q}`,
+		idp.idp.MetadataURL.String(), idp.certConfigValue(), spEntityID, acsURL)
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
+	response := idp.signedSAMLResponse(t, samlResponseOpts{spEntityID: spEntityID, acsURL: acsURL, email: email, fullName: "SAML User", nameID: email})
+	return postJSON(t, st.server, "/api/v1/auth/saml/"+providerID.String()+"/acs", map[string]any{"SAMLResponse": response})
+}
+
+func TestSAMLLoginTakesItsPairFromTheIssueRouteWhenAuthOwnsSessions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	var mu sync.Mutex
+	var calls int
+	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		_, _ = io.WriteString(w, `{"access_token":"issued.by.auth","refresh_token":"dhr1_issued_by_auth","token_type":"bearer","expires_in":3600}`)
+	}))
+	defer auth.Close()
+	st := startStackWith(t, ctx, ssoIssueClient(t, auth.URL))
+	status, body := samlLogin(t, ctx, st, "saml.issued@allowed.example")
+	if status != http.StatusOK || body["access_token"] != "issued.by.auth" || body["refresh_token"] != "dhr1_issued_by_auth" {
+		t.Fatalf("acs: %d %v, want the issued pair", status, body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("%d issue calls, want 1", calls)
+	}
+	if n := ssoRefreshRows(t, ctx, st); n != 0 {
+		t.Fatalf("%d refresh_tokens rows; go-api must write none", n)
+	}
+}
+
+func TestSAMLLoginAnswers503WhenTheIssueRouteIsDown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	down := "http://" + closed.Addr().String()
+	_ = closed.Close()
+	st := startStackWith(t, ctx, ssoIssueClient(t, down))
+	status, body := samlLogin(t, ctx, st, "saml.down@allowed.example")
+	raw, _ := json.Marshal(body)
+	if status != http.StatusServiceUnavailable || !strings.Contains(string(raw), sessionissue.UnavailableText) || body["access_token"] != nil {
+		t.Fatalf("acs: %d %s, want 503 %q and no token", status, raw, sessionissue.UnavailableText)
+	}
+	if n := ssoRefreshRows(t, ctx, st); n != 0 {
+		t.Fatalf("%d refresh_tokens rows with the issue route down", n)
+	}
+}

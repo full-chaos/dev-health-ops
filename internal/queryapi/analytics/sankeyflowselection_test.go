@@ -122,3 +122,49 @@ func TestResolveSelected_EverythingSelectedStillReadsFlowAndCoverage(t *testing.
 		t.Fatal("a coverage-only selection must not select the flow")
 	}
 }
+
+// The grouped-path probes (argMax transition guard, repo join dedup) belong to the flow. Each run uses a fresh org
+// because both probes keep a per-org cooldown.
+func TestResolveSankey_GroupedPathProbesFollowTheFlowSelection(t *testing.T) {
+	useInvestment := true
+	input := flowSelectionInput(model.DimensionInputTeam, model.DimensionInputTheme, model.DimensionInputRepo)
+	input.UseInvestment = &useInvestment
+	orgs := 0
+	run := func(coverage, flow bool) *recordingClient {
+		orgs++
+		c := &recordingClient{}
+		org := "org-probe-" + t.Name() + "-" + string(rune('a'+orgs))
+		if _, err := resolveSankey(context.Background(), c, org, input, nil, nil, coverage, flow); err != nil {
+			t.Fatalf("resolveSankey(coverage=%v, flow=%v): %v", coverage, flow, err)
+		}
+		return c
+	}
+
+	flowOnly := run(false, true)
+	if got, want := flowOnly.total(), 3; got != want {
+		t.Fatalf("flow only: %d statements, want %d (grouped sankey + argMax guard + repo join dedup)", got, want)
+	}
+	if flowOnly.countContaining("excess_repo_versions") != 1 {
+		t.Fatalf("flow only: the repo join dedup probe was not sent")
+	}
+
+	req, err := SankeyRequestFromInput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgs++
+	alone := &recordingClient{}
+	resolveSankeyCoverage(context.Background(), alone, "org-probe-direct-"+string(rune('a'+orgs)), req, queryTimeoutSecs, true, nil)
+
+	coverageOnly := run(true, false)
+	if coverageOnly.countContaining("AS grouping_set,") != 0 {
+		t.Fatal("coverage only: the grouped sankey statement was sent")
+	}
+	if got, want := coverageOnly.total(), alone.total(); got != want {
+		t.Fatalf("coverage only: %d statements, but the coverage alone sends %d; the flow's probes leaked", got, want)
+	}
+
+	if got := run(false, false).total(); got != 0 {
+		t.Fatalf("nothing selected: %d statements, want 0", got)
+	}
+}

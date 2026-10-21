@@ -30,11 +30,11 @@ var publicVerbs = []string{
 // check_integration call). Anything else is a coverage regression in one verb or the other.
 var (
 	fastSteps = []string{"check_format", "check_vet", "check_test", "check_build", "check_contract", "check_ratchets",
-		"check_race_weights_rows", "check_integration_vet", "plan_integration_shards", "plan_providersync_test_shards", "check_multi_replica_workers"}
+		"check_race_weights_rows", "check_integration_vet", "plan_integration_shards", "plan_providersync_test_shards", "check_plan_reads", "check_multi_replica_workers"}
 	ciSteps = []string{"check_format", "check_vet", "check_test", "check_race", "check_build", "check_contract", "check_ratchets",
-		"check_race_weights_rows", "check_integration_vet", "plan_integration_shards", "plan_providersync_test_shards", "check_multi_replica_workers"}
+		"check_race_weights_rows", "check_integration_vet", "plan_integration_shards", "plan_providersync_test_shards", "check_plan_reads", "check_multi_replica_workers"}
 	allSteps = []string{"check_format", "check_vet", "check_test", "check_race", "check_build", "check_contract", "check_ratchets",
-		"check_race_weights_rows", "check_integration_vet", "check_integration", "check_multi_replica_workers"}
+		"check_race_weights_rows", "check_integration_vet", "check_integration", "check_plan_reads", "check_multi_replica_workers"}
 )
 
 var verbSteps = map[string][]string{"fast": fastSteps, "ci": ciSteps, "all": allSteps}

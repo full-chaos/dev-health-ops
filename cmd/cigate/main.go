@@ -5,6 +5,7 @@
 //	cigate govulncheck                   gate govulncheck JSON on stdin
 //	cigate scope-candidates <module>     auth scope candidates from go list JSON on stdin
 //	cigate metrics-proof [flags]         metrics.daily executed-proof readback against ClickHouse
+//	cigate bigboy <verb> [args]          bigboy cut helpers: render-ch-users, grants-compare, pg-posture, bump-swap-values
 //	cigate docs <verb> [args]            documentation, docs-delivery and commit-message gates
 //	cigate plane-split-router [args]     bigboy traefik plane-split router from deploy values
 //	cigate query-api-flags [args]        bigboy query-api env names from deploy values
@@ -18,6 +19,7 @@ import (
 	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates"
+	"github.com/full-chaos/dev-health-ops/internal/cigates/bigboyrender"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/docsprepare"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/docstools"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e"
@@ -30,7 +32,7 @@ func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: cigate governance|affected-integration|govulncheck|scope-candidates|metrics-proof|docs|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e [args]")
+		fmt.Fprintln(os.Stderr, "usage: cigate governance|affected-integration|govulncheck|scope-candidates|metrics-proof|bigboy|docs|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e [args]")
 		return 2
 	}
 	switch args[0] {
@@ -46,6 +48,8 @@ func run(args []string) int {
 		return livee2e.Run(args[1:], processEnv, os.Stdout, os.Stderr)
 	case "metrics-proof":
 		return metricsproof.Run(args[1:], processEnv, metricsproof.OpenClickHouse, os.Stdout, os.Stderr)
+	case "bigboy":
+		return bigboyrender.Run(args[1:], os.Stdout, os.Stderr)
 	case "docs":
 		return docstools.Run(args[1:], os.Stdout, os.Stderr)
 	case "plane-split-router":

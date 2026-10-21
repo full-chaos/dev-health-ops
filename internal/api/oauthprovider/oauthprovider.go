@@ -110,7 +110,7 @@ type Client struct {
 
 // NewClient builds a Client with DefaultEndpoints.
 func NewClient() *Client {
-	return &Client{HTTP: &http.Client{Timeout: requestTimeout}, Endpoints: DefaultEndpoints}
+	return &Client{HTTP: &http.Client{Timeout: requestTimeout, Transport: httpguard.SharedTransport()}, Endpoints: DefaultEndpoints}
 }
 
 // FetchUserInfo is create_oauth_provider(provider, ...).fetch_user_info(token).
@@ -140,7 +140,7 @@ func (c *Client) get(ctx context.Context, url string, headers map[string]string,
 	}
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: requestTimeout}
+		client = &http.Client{Timeout: requestTimeout, Transport: httpguard.SharedTransport()}
 	}
 	// httpx does not follow redirects by default, and raise_for_status
 	// refuses a 3xx: the redirect is returned, not followed.

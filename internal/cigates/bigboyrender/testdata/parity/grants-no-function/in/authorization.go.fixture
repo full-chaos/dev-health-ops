@@ -1,0 +1,3 @@
+package clickhouse
+
+// no APIPosture function in this file

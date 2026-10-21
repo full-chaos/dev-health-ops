@@ -1,0 +1,8 @@
+package postgres
+
+func apiPosture() []RequiredTable {
+	return []RequiredTable{
+		{"alpha", true, false, false},
+		{TableName: "beta", AllowInsert: true},
+	}
+}

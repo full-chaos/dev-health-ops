@@ -150,6 +150,7 @@ on:
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
       - 'internal/httpguard/*.tsv'
+      - 'internal/cigates/outboundtransport/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/check_go_containers.sh'
@@ -370,6 +371,7 @@ on:
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
       - 'internal/httpguard/*.tsv'
+      - 'internal/cigates/outboundtransport/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/check_go_containers.sh'

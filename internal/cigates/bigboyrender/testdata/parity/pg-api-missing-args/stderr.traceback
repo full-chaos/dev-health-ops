@@ -1,0 +1,1 @@
+usage: cigate bigboy pg-posture api|domain <old-sha> <new-sha> <pg-expect-out-file>

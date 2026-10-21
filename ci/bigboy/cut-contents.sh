@@ -29,12 +29,20 @@ item "#3048 migration 0140 (invoices)" "3048"
 # PG api/domain posture deltas, computed from the manifest itself (RequiredTables {table, insert,
 # update, delete}; SELECT implied): every privilege ADDED between $OLD and $NEW becomes an
 # expectation `devhealth_<role> <table> <PRIV>` (has_table_privilege read-back). Replaces the
-# by-name item matching for PG grants. Extracted to sibling files, not inline here-documents
-# (CHAOS-3362/CHAOS-6964: both bodies are well over the 400-byte here-document pipe budget).
+# by-name item matching for PG grants (`cigate bigboy pg-posture api|domain`).
 # CHAOS-10137: a manifest that cannot be read at a sha is a failure of this script, not a quiet exit 0.
 rc=0
-python3 "$HERE/cut-contents-pg-api-posture.py" "$OLD" "$NEW" "$OUTF" || rc=1
-python3 "$HERE/cut-contents-pg-domain-posture.py" "$OLD" "$NEW" "$OUTF" || rc=1
+CG=$(mktemp -d) || { echo "FAIL: no scratch directory for cigate" >&2; exit 1; }
+trap 'rm -rf "$CG"' EXIT
+# CHAOS-10347: the deltas are Go: BIGBOY_CIGATE (a prebuilt cigate) is used when set, else cigate is built from the checkout these tools come from (BIGBOY_CIGATE_SRC overrides).
+CGBIN=$CG/cigate
+if [ -x "${BIGBOY_CIGATE:-}" ]; then CGBIN=$BIGBOY_CIGATE; else go build -C "${BIGBOY_CIGATE_SRC:-$HERE/../..}" -buildvcs=false -trimpath -mod=readonly -o "$CGBIN" ./cmd/cigate 2>"$CG/build.err"; fi
+if [ -x "$CGBIN" ]; then
+  "$CGBIN" bigboy pg-posture api "$OLD" "$NEW" "$OUTF" || rc=1
+  "$CGBIN" bigboy pg-posture domain "$OLD" "$NEW" "$OUTF" || rc=1
+else
+  echo "FAIL: cigate build: $(head -c 300 "$CG/build.err")" >&2; rc=1
+fi
 echo "alembic versions added in range: $(files | grep -E 'alembic/versions/' | sed 's#.*/##' | tr '\n' ' ')"
 echo "APIPosture (CH) delta: $(git -C "$O" diff "$OLD" "$NEW" -- internal/storage/clickhouse/authorization.go | grep -E '^\+.*Table:' | sed -E 's/.*Table: "(\w+)".*/\1/' | tr '\n' ' ')"
 echo "PG posture (api) files changed: $(files | grep -E 'internal/storage/postgres/.*authorization' | tr '\n' ' ')"

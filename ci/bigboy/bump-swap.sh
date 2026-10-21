@@ -29,10 +29,13 @@ OLD_ARM=$(grep -oE 'sha256:[0-9a-f]{64};$' values.prod.yaml | head -1 | tr -d ';
 echo "old operator=$OLD_OP"; echo "old dho=$OLD_DHO"
 echo "old sha $OLD -> new $NEW"
 [[ $APPLY == --apply ]] || { echo "DRY RUN (add --apply)"; exit 0; }
-# values.prod.yaml/values.local.yaml sha rewrite, extracted to a sibling file, not an inline
-# here-document (CHAOS-3362/CHAOS-6964: body is well over the 400-byte here-document pipe budget).
+# values.prod.yaml/values.local.yaml sha rewrite: `cigate bigboy bump-swap-values`, run in this worktree (cwd).
+# CHAOS-10347: cigate is built from the checkout these tools come from (BIGBOY_CIGATE: a prebuilt cigate, no build; BIGBOY_CIGATE_SRC overrides the source).
 HERE=$(cd "$(dirname "$0")" && pwd)
-python3 "$HERE/bump-swap-rewrite-values.py" "$OLD" "$NEW" "$O7" "$S7" "$OLD_OP" "${NEWD[dev-health-go-operator]}" "$OLD_DHO" "${NEWD[dev-health-go-dho]}" "$DHO_ARM"
+CG=$(mktemp -d); trap 'rm -rf "$CG"' EXIT
+CGBIN=$CG/cigate
+if [ -x "${BIGBOY_CIGATE:-}" ]; then CGBIN=$BIGBOY_CIGATE; else go build -C "${BIGBOY_CIGATE_SRC:-$HERE/../..}" -buildvcs=false -trimpath -mod=readonly -o "$CGBIN" ./cmd/cigate; fi
+"$CGBIN" bigboy bump-swap-values "$OLD" "$NEW" "$O7" "$S7" "$OLD_OP" "${NEWD[dev-health-go-operator]}" "$OLD_DHO" "${NEWD[dev-health-go-dho]}" "$DHO_ARM"
 git -C vendor/dev-health-ops fetch -q origin && git -C vendor/dev-health-ops checkout -q "$NEW"
 git update-index --cacheinfo 160000,"$NEW",vendor/dev-health-ops
 echo "applied. NEXT: make verify; update ci/bigboy/images.env (the tracked bigboy pins); commit."

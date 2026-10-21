@@ -3,9 +3,11 @@ package goldenscan
 import (
 	_ "embed"
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 //go:embed allowlist.tsv
@@ -136,22 +138,48 @@ func CheckRows(scanned map[string][]Hit, rows []Row) []string {
 }
 
 // CheckTree scans every golden path of the tree (repository paths of golden files; read gives the bytes of one) against the rows and
-// returns every problem, rows included.
+// returns every problem, rows included. The goldens are read and scanned by several workers (read is called from several goroutines);
+// the problems keep the order of the paths, and the error returned is the first one in that order.
 func CheckTree(paths []string, read func(path string) ([]byte, error), rows []Row) ([]string, error) {
+	type result struct {
+		hits []Hit
+		err  error
+	}
+	results := make([]result, len(paths))
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < max(2, runtime.GOMAXPROCS(0)); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				raw, err := read(paths[i])
+				if err != nil {
+					results[i].err = err
+					continue
+				}
+				leaves, err := Leaves(raw)
+				if err != nil {
+					results[i].err = fmt.Errorf("%s: %w", paths[i], err)
+					continue
+				}
+				results[i].hits = Hits(leaves)
+			}
+		}()
+	}
+	for i := range paths {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
 	scanned := map[string][]Hit{}
 	var problems []string
-	for _, path := range paths {
-		raw, err := read(path)
-		if err != nil {
-			return nil, err
+	for i, path := range paths {
+		if results[i].err != nil {
+			return nil, results[i].err
 		}
-		leaves, err := Leaves(raw)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
-		}
-		hits := Hits(leaves)
-		scanned[path] = hits
-		problems = append(problems, checkHits(path, hits, rows)...)
+		scanned[path] = results[i].hits
+		problems = append(problems, checkHits(path, results[i].hits, rows)...)
 	}
 	return append(problems, CheckRows(scanned, rows)...), nil
 }

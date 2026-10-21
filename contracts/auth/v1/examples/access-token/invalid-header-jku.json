@@ -1,0 +1,21 @@
+{
+  "header": {
+    "alg": "EdDSA",
+    "typ": "at+jwt",
+    "kid": "auth-example-2026-10",
+    "jku": "https://auth.example.test/.well-known/jwks.json"
+  },
+  "claims": {
+    "iss": "https://auth.example.test",
+    "aud": "dev-health-api",
+    "sub": "prn_AAAAAAAAAAAAAAAAAAAAAA",
+    "principal_type": "human",
+    "sid": "ses_AAAAAAAAAAAAAAAAAAAAAQ",
+    "jti": "000000000000000000000001",
+    "iat": 1760000000,
+    "nbf": 1760000000,
+    "exp": 1760000600,
+    "org_id": "00000000-0000-4000-8000-000000000001",
+    "scope": "api:access"
+  }
+}

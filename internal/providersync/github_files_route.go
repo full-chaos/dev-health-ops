@@ -479,8 +479,9 @@ func gitHubFilesInventory(
 		return nil, nil, false, continueGitHubFilesTraversal(treeErr, fullName)
 	}
 	if treeCapExceeded || tree.Truncated {
-		paths, sizes, walkErr := gitHubWalkTree(ctx, client, root, treeRef, "")
+		paths, sizes, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", defaultGitHubTreeWalkLimits())
 		if walkErr != nil {
+			logGitHubTreeWalkStop(walkErr, stats)
 			return nil, nil, true, continueGitHubFilesTraversal(fmt.Errorf("ref=%s: %w", treeRef, walkErr), fullName)
 		}
 		return paths, sizes, true, nil
@@ -495,56 +496,6 @@ func gitHubFilesInventory(
 		sizes[entry.Path] = entry.Size
 	}
 	return paths, sizes, false, nil
-}
-
-// gitHubWalkTree recovers a complete blob inventory when the recursive tree
-// listing reports truncated. It re-fetches the same tree object without
-// recursive=1 and descends into every "tree" entry by its own sha, joining
-// each level's path onto prefix. A subtree that itself reports truncated, or
-// any fetch that fails, aborts the whole walk instead of returning the paths
-// already collected -- a partial walk is exactly the incomplete inventory
-// this recovery exists to avoid.
-func gitHubWalkTree(
-	ctx context.Context,
-	client *providerfoundation.HTTPClient,
-	root, sha, prefix string,
-) ([]string, map[string]*int, error) {
-	var tree gitHubTreePayload
-	if err := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(sha), &tree); err != nil {
-		return nil, nil, fmt.Errorf("path=%q: %w", prefix, err)
-	}
-	if tree.Truncated {
-		return nil, nil, fmt.Errorf("path=%q: %w", prefix, ErrGitHubFilesSubtreeTruncated)
-	}
-	paths := make([]string, 0, len(tree.Tree))
-	sizes := make(map[string]*int, len(tree.Tree))
-	for _, entry := range tree.Tree {
-		if entry.Path == "" {
-			continue
-		}
-		fullPath := entry.Path
-		if prefix != "" {
-			fullPath = prefix + "/" + entry.Path
-		}
-		switch entry.Type {
-		case "blob":
-			paths = append(paths, fullPath)
-			sizes[fullPath] = entry.Size
-		case "tree":
-			if entry.SHA == "" {
-				return nil, nil, fmt.Errorf("path=%q: %w", fullPath, providerfoundation.ErrNormalizationInvalid)
-			}
-			childPaths, childSizes, err := gitHubWalkTree(ctx, client, root, entry.SHA, fullPath)
-			if err != nil {
-				return nil, nil, err
-			}
-			paths = append(paths, childPaths...)
-			for childPath, size := range childSizes {
-				sizes[childPath] = size
-			}
-		}
-	}
-	return paths, sizes, nil
 }
 
 func continueGitHubFilesTraversal(err error, repository string) error {

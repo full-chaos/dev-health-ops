@@ -29,6 +29,7 @@ require (
 	github.com/riverqueue/river/rivertype v0.44.0
 	github.com/riverqueue/rivercontrib/otelriver v0.12.0
 	github.com/russellhaering/goxmldsig v1.6.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1
 	github.com/stripe/stripe-go/v86 v86.4.2
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/valkey-io/valkey-go v1.0.76
@@ -111,7 +112,6 @@ require (
 	github.com/riverqueue/river/riverdriver v0.44.0 // indirect
 	github.com/riverqueue/river/rivershared v0.44.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.5 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect

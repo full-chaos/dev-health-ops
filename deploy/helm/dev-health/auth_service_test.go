@@ -330,6 +330,8 @@ func TestAuthServiceRefusals(t *testing.T) {
 		"same port":           {append(append([]string{}, authBase...), "--set", "authService.operatorPort=8095"), "must differ"},
 		"shutdown too long":   {append(append([]string{}, authBase...), "--set", "authService.shutdownTimeout=30s"), "must be below authService.terminationGracePeriodSeconds"},
 		"direct signing key":  {append(append([]string{}, authBase...), "--set", "authService.extraEnv[0].name=AUTH_SIGNING_KEY", "--set", "authService.extraEnv[0].value=x"), "AUTH_SIGNING_KEY"},
+		"key-set manifest":    {append(append([]string{}, authBase...), "--set", "authService.extraEnv[0].name=AUTH_SIGNING_KEYSET_FILE", "--set", "authService.extraEnv[0].value=/k/keyset.json"), "AUTH_SIGNING_KEYSET_FILE"},
+		"key-set, folded":     {append(append([]string{}, authBase...), "--set-json", `authService.extraEnv=[{"name":" auth_signing_keyset_file ","value":"/k/keyset.json"}]`), "AUTH_SIGNING_KEYSET_FILE"},
 		"policy without db":   {[]string{"--set", "authService.enabled=true", "--set", "authService.database.secretName=d", "--set", "authService.signingKey.secretName=k", "--set", "authService.signingKey.keyId=x", "--set", "authService.migrate.secretName=m"}, "authService.networkPolicy.egress.database.to is required"},
 		"empty podSelector":   {append(append([]string{}, authBase...), "--set-json", `authService.networkPolicy.allowedFrom=[{"matchLabels":{}}]`), "non-empty matchLabels"},
 	}

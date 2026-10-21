@@ -434,14 +434,38 @@ func TestTypedValueObjectsDecodeFromTheirAliases(t *testing.T) {
 
 // TestPatchRecordsMatchTheVendoredFiles keeps the patch records (third_party/vendor/atlassian/patches) and the
 // vendored files in step: every line a patch adds is present in the file it patches, so a re-vendor that drops
-// a local change, or a change made without its record, shows here.
+// a local change, or a change made without its record, shows here. A line a LATER patch removes from the same file
+// is excused (the later patch replaced it; TestVendoredTreeIsUpstreamPlusExactlyTheRecordedPatches proves the chain).
 func TestPatchRecordsMatchTheVendoredFiles(t *testing.T) {
 	root := filepath.Join("..", "..")
 	patches, err := filepath.Glob(filepath.Join(root, "third_party", "vendor", "atlassian", "patches", "*.patch"))
 	if err != nil || len(patches) == 0 {
 		t.Fatalf("no patch record found (%v)", err)
 	}
-	for _, patch := range patches {
+	sort.Strings(patches)
+	removedLater := make([]map[string]bool, len(patches))
+	for i := len(patches) - 1; i >= 0; i-- {
+		removedLater[i] = map[string]bool{}
+		if i+1 < len(patches) {
+			for key := range removedLater[i+1] {
+				removedLater[i][key] = true
+			}
+			raw, err := os.ReadFile(patches[i+1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var target string
+			for _, line := range strings.Split(string(raw), "\n") {
+				switch {
+				case strings.HasPrefix(line, "+++ b/"):
+					target = strings.TrimPrefix(line, "+++ b/")
+				case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+					removedLater[i][target+"\x00"+strings.TrimPrefix(line, "-")] = true
+				}
+			}
+		}
+	}
+	for i, patch := range patches {
 		raw, err := os.ReadFile(patch)
 		if err != nil {
 			t.Fatal(err)
@@ -458,6 +482,9 @@ func TestPatchRecordsMatchTheVendoredFiles(t *testing.T) {
 				}
 				contents = string(body)
 			case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+				if removedLater[i][target+"\x00"+strings.TrimPrefix(line, "+")] {
+					continue
+				}
 				if !strings.Contains(contents, strings.TrimPrefix(line, "+")) {
 					t.Errorf("%s: the line %q is not in %s: the local change is gone or unrecorded", filepath.Base(patch), strings.TrimPrefix(line, "+"), target)
 				}

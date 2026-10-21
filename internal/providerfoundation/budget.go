@@ -279,6 +279,7 @@ type Metrics struct {
 	projectsV2DegradedSnapshots    map[string]uint64
 	unitClaimed                    map[string]uint64
 	unitFailed                     map[string]uint64
+	treeWalkNearCeiling            map[string]uint64
 	cicdPartialSuccess             map[string]uint64
 	duplicateTestCase              map[string]uint64
 	duplicateTestSuite             map[string]uint64
@@ -339,6 +340,7 @@ func NewMetrics() *Metrics {
 		projectsV2DegradedSnapshots:    map[string]uint64{},
 		unitClaimed:                    map[string]uint64{},
 		unitFailed:                     map[string]uint64{},
+		treeWalkNearCeiling:            map[string]uint64{},
 		cicdPartialSuccess:             map[string]uint64{},
 		duplicateTestCase:              map[string]uint64{},
 		duplicateTestSuite:             map[string]uint64{},
@@ -1061,6 +1063,29 @@ func (m *Metrics) RecordUnitFailed(provider, dataset, reason string) {
 	defer m.mu.Unlock()
 	m.unitFailed[metricProvider(provider)+":"+MetricDatasetLabel(dataset)+
 		":"+MetricUnitFailureReasonLabel(reason)]++
+}
+
+// metricTreeWalkLimitVocabulary bounds the limit label of the near-ceiling
+// counter (CHAOS-8829): the ceilings of a GitHub tree walk.
+var metricTreeWalkLimitVocabulary = map[string]struct{}{
+	"depth": {}, "dirs": {}, "entries": {}, "time": {},
+}
+
+// RecordTreeWalkNearCeiling counts ONE GitHub tree walk that passed half of a
+// ceiling (CHAOS-8829), by the ceiling's bounded name. It fires once per walk
+// and ceiling, so a repository growing toward a ceiling shows as a rising
+// series long before a walk is stopped.
+func (m *Metrics) RecordTreeWalkNearCeiling(limit string) {
+	if m == nil {
+		return
+	}
+	limit = strings.ToLower(strings.TrimSpace(limit))
+	if _, known := metricTreeWalkLimitVocabulary[limit]; !known {
+		limit = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.treeWalkNearCeiling[limit]++
 }
 
 // RecordAllArtifactsUnreadable counts ONE provider unit that failed because
@@ -1824,6 +1849,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_provider_unit_failed_total",
 		"Provider units terminalized FAILED, by bounded provider, dataset, and reason (CHAOS-4078).",
 		"reason", m.unitFailed,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_github_tree_walk_near_ceiling_total",
+		"GitHub tree walks that passed half of a ceiling, by the ceiling (CHAOS-8829).",
+		"limit", m.treeWalkNearCeiling,
 	); err != nil {
 		return err
 	}

@@ -1,0 +1,163 @@
+package main
+
+import (
+	"fmt"
+	"path"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+type composeKeyService struct {
+	Environment map[string]string `yaml:"environment"`
+	Volumes     []yaml.Node       `yaml:"volumes"`
+}
+
+type composeKeyFile struct {
+	Services map[string]composeKeyService `yaml:"services"`
+}
+
+// keyVolume returns the named volume of the most specific mount over the
+// directory of the file that env names (a nested mount shadows its parent), or
+// "" when that mount is not a named volume or none covers the file.
+func keyVolume(service composeKeyService, env string) (string, error) {
+	file := service.Environment[env]
+	if file == "" {
+		return "", nil
+	}
+	dir := path.Dir(file)
+	best, bestSource := "", ""
+	for _, node := range service.Volumes {
+		var source, target string
+		switch node.Kind {
+		case yaml.ScalarNode:
+			parts := strings.Split(node.Value, ":")
+			if len(parts) < 2 {
+				continue
+			}
+			source, target = parts[0], parts[1]
+		case yaml.MappingNode:
+			var mount struct {
+				Type   string `yaml:"type"`
+				Source string `yaml:"source"`
+				Target string `yaml:"target"`
+			}
+			if err := node.Decode(&mount); err != nil {
+				return "", err
+			}
+			source, target = mount.Source, mount.Target
+			if mount.Type != "" && mount.Type != "volume" {
+				source = ""
+			}
+		default:
+			return "", fmt.Errorf("volume entry of kind %d", node.Kind)
+		}
+		target = strings.TrimSuffix(target, "/")
+		if (dir == target || strings.HasPrefix(dir, target+"/")) && len(target) > len(best) {
+			best, bestSource = target, source
+		}
+	}
+	return bestSource, nil
+}
+
+// authKeyVolumeFindings: auth-service's signing key comes from a named volume
+// of its own, never the volume go-api's envelope key comes from (the access
+// issuer has its own key and kid in every stack).
+func authKeyVolumeFindings(text []byte) ([]string, error) {
+	var file composeKeyFile
+	if err := yaml.Unmarshal(text, &file); err != nil {
+		return nil, err
+	}
+	auth, ok := file.Services["auth-service"]
+	if !ok {
+		return []string{"compose has no auth-service"}, nil
+	}
+	authVolume, err := keyVolume(auth, "AUTH_SIGNING_KEY_FILE")
+	if err != nil {
+		return nil, err
+	}
+	var findings []string
+	if authVolume == "" {
+		findings = append(findings, "auth-service: AUTH_SIGNING_KEY_FILE is not on a named volume")
+	}
+	for name, service := range file.Services {
+		envelope, err := keyVolume(service, "GO_API_ENVELOPE_PRIVATE_KEY_FILE")
+		if err != nil {
+			return nil, err
+		}
+		if envelope != "" && envelope == authVolume {
+			findings = append(findings, fmt.Sprintf("auth-service signs from volume %s, which holds %s's envelope key", authVolume, name))
+		}
+	}
+	return findings, nil
+}
+
+func TestAuthServiceSigningKeyIsNotTheEnvelopeKey(t *testing.T) {
+	text := readCompose(t, "compose.yml")
+	findings, err := authKeyVolumeFindings(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range findings {
+		t.Error(finding)
+	}
+	var file composeKeyFile
+	if err := yaml.Unmarshal(text, &file); err != nil {
+		t.Fatal(err)
+	}
+	authVolume, _ := keyVolume(file.Services["auth-service"], "AUTH_SIGNING_KEY_FILE")
+	envelopeVolume, _ := keyVolume(file.Services["go-api"], "GO_API_ENVELOPE_PRIVATE_KEY_FILE")
+	if authVolume == "" || envelopeVolume == "" {
+		t.Fatalf("the guard resolved auth %q and envelope %q: it compared nothing", authVolume, envelopeVolume)
+	}
+}
+
+func TestTheSigningKeyGuardRefusesAPlantedEnvelopeMount(t *testing.T) {
+	planted := []byte(`
+services:
+  go-api:
+    environment:
+      GO_API_ENVELOPE_PRIVATE_KEY_FILE: /run/envelope/private/envelope-private-key.pem
+    volumes:
+      - type: volume
+        source: envelope_keys
+        target: /run/envelope/private
+  auth-service:
+    environment:
+      AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
+    volumes:
+      - envelope_keys:/run/auth/signing:ro
+`)
+	findings, err := authKeyVolumeFindings(planted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || !strings.Contains(findings[0], "envelope_keys") {
+		t.Fatalf("findings %v, want one naming envelope_keys", findings)
+	}
+}
+
+func TestTheSigningKeyGuardSeesANestedEnvelopeMount(t *testing.T) {
+	planted := []byte(`
+services:
+  go-api:
+    environment:
+      GO_API_ENVELOPE_PRIVATE_KEY_FILE: /run/envelope/private/envelope-private-key.pem
+    volumes:
+      - envelope_keys:/run/envelope/private:ro
+  auth-service:
+    environment:
+      AUTH_SIGNING_KEY_FILE: /run/auth/signing/keys/envelope-private-key.pem
+    volumes:
+      - signing_keys:/run/auth/signing:ro
+      - envelope_keys:/run/auth/signing/keys:ro
+`)
+	findings, err := authKeyVolumeFindings(planted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || !strings.Contains(findings[0], "envelope_keys") {
+		t.Fatalf("findings %v, want one naming the nested envelope_keys mount", findings)
+	}
+}

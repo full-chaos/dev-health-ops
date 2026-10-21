@@ -110,6 +110,7 @@ internal/teamkeytables
 internal/teamprovider
 internal/testsupport/containers
 internal/testsupport/moduleroot
+internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
 internal/testsupport/redirectprobe
 internal/testsupport/venueoracle

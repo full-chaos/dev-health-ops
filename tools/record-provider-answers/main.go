@@ -103,7 +103,7 @@ func (r *recorder) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 	inner := r.inner
 	if inner == nil {
-		inner = http.DefaultTransport
+		inner = httpguard.SharedTransport()
 	}
 	response, err := inner.RoundTrip(request)
 	if err != nil {

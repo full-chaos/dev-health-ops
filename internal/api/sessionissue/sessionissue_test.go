@@ -211,3 +211,32 @@ type atomicCount struct {
 func (c *atomicCount) add() { c.mu.Lock(); c.n++; c.mu.Unlock() }
 
 func (c *atomicCount) get() int { c.mu.Lock(); defer c.mu.Unlock(); return c.n }
+
+// A redirect from the issue route is never followed: the other origin sees no
+// request (no credential leaves with it) and the call is ErrUnavailable.
+func TestIssueNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	var reached atomicCount
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.add()
+		_, _ = io.WriteString(w, `{"access_token":"a","refresh_token":"r","token_type":"bearer"}`)
+	}))
+	defer other.Close()
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirecting.Close()
+	client, err := New(baseOf(t, redirecting.URL), testToken(t), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.http.CheckRedirect == nil || client.http.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("the client's own CheckRedirect does not answer http.ErrUseLastResponse")
+	}
+	pair, err := client.Issue(context.Background(), endUserRequest(), Request{PrincipalID: uuid.New(), AMR: []string{"pwd"}})
+	if reached.get() != 0 {
+		t.Fatalf("the redirect target saw %d request(s)", reached.get())
+	}
+	if !errors.Is(err, ErrUnavailable) || pair.Access != "" {
+		t.Fatalf("redirect = %+v, %v; want ErrUnavailable and no pair", pair, err)
+	}
+}

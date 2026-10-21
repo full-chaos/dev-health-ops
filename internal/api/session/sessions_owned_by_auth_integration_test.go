@@ -138,7 +138,7 @@ func TestSessionsOwnedByAuthTakeEveryPairFromTheIssueRoute(t *testing.T) {
 	for _, step := range []struct {
 		name, path, token, body, org, amr string
 	}{
-		{"login", "/api/v1/auth/login", "", `{"email": "alice@example.com", "password": "` + sessionscenario.Password + `"}`, orgA, "pwd"},
+		{"login", "/api/v1/auth/login", "", `{"email": "alice@example.com", "password": "` + sessionscenario.Password + `", "org_id": "` + orgA + `"}`, orgA, "pwd"},
 		{"switch-org", "/api/v1/auth/switch-org", alice, `{"org_id": "` + ownedOrgB + `"}`, ownedOrgB, "pwd"},
 		{"social", "/api/v1/auth/social-login", "", `{"provider": "github", "provider_access_token": "gh-frank"}`, "", "fed"},
 		{"accept-invite", "/api/v1/auth/accept-invite", alice, `{"token": "` + invite + `"}`, ownedOrgD, "pwd"},

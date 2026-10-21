@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // CHAOS-10446: the HS256 access-token key (JWT_SECRET_KEY) lives in its own Secret, referenced explicitly by go-api
@@ -168,5 +170,59 @@ func TestHS256KeyChangeRollsGoAPI(t *testing.T) {
 	}
 	if strings.Contains(a, "key-A") {
 		t.Fatalf("the key value leaked into the pod template")
+	}
+}
+
+// The hs256 Secret must never alias the shared Secret the worker groups envFrom, in any spelling.
+func TestHS256SecretMustDifferFromTheSharedSecret(t *testing.T) {
+	for _, alias := range []string{"shared-ext", "Shared-Ext", " shared-ext "} {
+		out, err := helmOut(t, false, "--set", "secrets.create=false", "--set", "secrets.externalSecretName=shared-ext",
+			"--set", "hs256Secret.externalSecretName="+alias)
+		if err == nil || !strings.Contains(out, "must differ") {
+			t.Fatalf("hs256Secret.externalSecretName=%q aliasing the shared Secret was not refused: err=%v\n%.300s", alias, err, out)
+		}
+	}
+}
+
+// A user pod annotation of the same name must not displace the chart's checksum: parse the YAML, do not grep.
+func TestUserAnnotationCannotOverrideTheHS256Checksum(t *testing.T) {
+	annotations := func(key string) map[string]any {
+		out, err := helmOut(t, false, "--set", "secrets.data.JWT_SECRET_KEY="+key, "--set", "goApi.podAnnotations.checksum/hs256=user-value", "--set", "goApi.podAnnotations.keep=me")
+		if err != nil {
+			t.Fatalf("render failed: %v\n%s", err, out)
+		}
+		api, _ := docByName(t, out, "Deployment", "hs256-dev-health-go-api")
+		var parsed struct {
+			Spec struct {
+				Template struct {
+					Metadata struct {
+						Annotations map[string]any `yaml:"annotations"`
+					} `yaml:"metadata"`
+				} `yaml:"template"`
+			} `yaml:"spec"`
+		}
+		if err := yaml.Unmarshal([]byte(api), &parsed); err != nil {
+			t.Fatalf("parse go-api: %v\n%s", err, api)
+		}
+		return parsed.Spec.Template.Metadata.Annotations
+	}
+	a, b := annotations("key-A"), annotations("key-B")
+	if a["checksum/hs256"] == "user-value" || a["checksum/hs256"] == b["checksum/hs256"] {
+		t.Fatalf("the user annotation displaced the chart checksum: A=%v B=%v", a["checksum/hs256"], b["checksum/hs256"])
+	}
+	if a["keep"] != "me" {
+		t.Fatalf("a user annotation was dropped: %v", a)
+	}
+}
+
+// web.localDevelopment is not a way to render a production web without a session secret.
+func TestWebLocalDevelopmentStillNeedsAnAuthSecretInProduction(t *testing.T) {
+	out, err := helmOut(t, true, "--set", "web.env.BACKEND_URL=http://x", "--set", "web.localDevelopment.enabled=true")
+	if err == nil || !strings.Contains(out, "web.authSecret.secretName (or web.env.AUTH_SECRET) is required") {
+		t.Fatalf("localDevelopment with NODE_ENV=production and no auth secret was not refused: err=%v\n%.300s", err, out)
+	}
+	out, err = helmOut(t, true, "--set", "web.env.BACKEND_URL=http://x", "--set", "web.localDevelopment.enabled=true", "--set", "web.env.NODE_ENV=development")
+	if err != nil {
+		t.Fatalf("localDevelopment with NODE_ENV=development must render without an auth secret: %v\n%.300s", err, out)
 	}
 }

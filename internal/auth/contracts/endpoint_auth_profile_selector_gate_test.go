@@ -215,6 +215,7 @@ func TestMarkerKindIsAReferenceToTheProfileSelectorNotACopy(t *testing.T) {
 						Items struct {
 							Properties struct {
 								Kind map[string]any `json:"kind"`
+								Name map[string]any `json:"name"`
 							} `json:"properties"`
 						} `json:"items"`
 					} `json:"markers"`
@@ -225,14 +226,16 @@ func TestMarkerKindIsAReferenceToTheProfileSelectorNotACopy(t *testing.T) {
 	if err := json.Unmarshal(raw, &registrySchema); err != nil {
 		t.Fatal(err)
 	}
-	kind := registrySchema.Defs.Class.Properties.Markers.Items.Properties.Kind
-	const want = "jsonschema/endpoint-auth-profile.v1.schema.json#/properties/class_disambiguator/properties/kind"
-	if got, _ := kind["$ref"].(string); got != want {
-		t.Fatalf("marker kind $ref = %q, want %q", got, want)
-	}
-	for _, banned := range []string{"enum", "const", "type", "pattern"} {
-		if _, present := kind[banned]; present {
-			t.Errorf("marker kind carries its own %q beside the $ref: a second definition of the selector kinds", banned)
+	marker := registrySchema.Defs.Class.Properties.Markers.Items.Properties
+	for field, node := range map[string]map[string]any{"kind": marker.Kind, "name": marker.Name} {
+		want := "jsonschema/endpoint-auth-profile.v1.schema.json#/properties/class_disambiguator/properties/" + field
+		if got, _ := node["$ref"].(string); got != want {
+			t.Errorf("marker %s $ref = %q, want %q", field, got, want)
+		}
+		for _, banned := range []string{"enum", "const", "type", "pattern"} {
+			if _, present := node[banned]; present {
+				t.Errorf("marker %s carries its own %q beside the $ref: a second definition of the selector %s", field, banned, field)
+			}
 		}
 	}
 }

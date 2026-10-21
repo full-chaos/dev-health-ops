@@ -205,4 +205,5 @@ WHERE org_id = $1 AND resource_id = 'llm/own_model_enabled' ORDER BY created_at 
 			t.Fatal("the other org has a toggle row")
 		}
 	})
+	venueoracle.WriteGoOnlyProof(t, "org-admin own-model toggle: persisted flag, audit row with actor and old/new value, saved rows unchanged, member refused")
 }

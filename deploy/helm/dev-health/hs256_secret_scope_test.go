@@ -332,3 +332,31 @@ func TestWebCannotReachTheMintKeyThroughAnySelector(t *testing.T) {
 		}
 	}
 }
+
+// A literal can carry the key too: web.extraEnv values, a trimmed literal AUTH_SECRET, and names web.authSecret owns.
+func TestWebLiteralsAndOwnedNamesCannotCarryTheMintKey(t *testing.T) {
+	base := []string{"--set", "web.env.BACKEND_URL=http://x", "--set", "web.authSecret.secretName=web-auth-ok", "--set", "secrets.data.JWT_SECRET_KEY=the-hs256-key"}
+	extra := func(entry string) []string { return []string{"--set-json", "web.extraEnv=[" + entry + "]"} }
+	cases := map[string]struct {
+		args []string
+		want string
+	}{
+		"extraEnv AUTH_SECRET literal":     {extra(`{"name":"AUTH_SECRET","value":"x"}`), "own the names AUTH_SECRET and NEXTAUTH_SECRET"},
+		"extraEnv NEXTAUTH_SECRET literal": {extra(`{"name":"NEXTAUTH_SECRET","value":"x"}`), "own the names AUTH_SECRET and NEXTAUTH_SECRET"},
+		"extraEnv literal equals the key":  {extra(`{"name":"X","value":"the-hs256-key"}`), "equals secrets.data.JWT_SECRET_KEY"},
+		"extraEnv literal equals, trimmed": {extra(`{"name":"X","value":"  the-hs256-key\n"}`), "equals secrets.data.JWT_SECRET_KEY"},
+		"AUTH_SECRET literal equals, trim": {[]string{"--set", "web.env.AUTH_SECRET= the-hs256-key "}, "equals secrets.data.JWT_SECRET_KEY"},
+		"csi publish ref hs256 Secret":     {[]string{"--set-json", `web.extraVolumes=[{"name":"v","csi":{"driver":"d","nodePublishSecretRef":{"name":"hs256-dev-health-hs256"}}}]`}, "must not name the HS256 key's Secret"},
+		"csi publish ref shared, folded":   {[]string{"--set-json", `web.extraVolumes=[{"name":"v","csi":{"driver":"d","nodePublishSecretRef":{"name":" HS256-Dev-Health-Secrets "}}}]`}, "must not name the HS256 key's Secret"},
+	}
+	for name, c := range cases {
+		out, err := helmOut(t, true, append(append([]string{}, base...), c.args...)...)
+		if err == nil || !strings.Contains(out, c.want) {
+			t.Fatalf("%s: was not refused with %q: err=%v\n%.300s", name, c.want, err, out)
+		}
+	}
+	out, err := helmOut(t, true, append(append([]string{}, base...), extra(`{"name":"X","value":"unrelated"}`)...)...)
+	if err != nil {
+		t.Fatalf("an unrelated literal extraEnv must render: %v\n%.300s", err, out)
+	}
+}

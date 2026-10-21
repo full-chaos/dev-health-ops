@@ -1,0 +1,21 @@
+# Every refusing site of scripts/check_freshness_inventory.py (frozen beside this file, at ops 8f2e19e471) and the Go answer: site<TAB>kind<TAB>refs.
+# site: the trimmed source line, "#N" for the Nth identical line ("return 1" is always numbered); kind case = recorded pairs run live through the cigate binary, go = a named Go test.
+ROOT = Path(__file__).resolve().parents[1]	case	check-freshness-missing-inventory;check-freshness-ok
+if not path.is_file():	case	check-freshness-missing-inventory;check-freshness-args-dir-inventory;check-freshness-args-missing-path
+raise FreshnessInventoryError(f"missing freshness inventory: {path}")	case	check-freshness-missing-inventory
+raw = yaml.safe_load(path.read_text(encoding="utf-8")) or []	case	check-freshness-invalid-utf8;check-freshness-yaml-parse-error;check-freshness-yaml-two-documents;check-freshness-yaml-value-tag;check-freshness-yaml-unhashable-key;check-freshness-yaml-nonprintable;check-freshness-yaml-bad-timestamp;check-freshness-yaml-bad-binary-int;check-freshness-yaml-bad-offset;check-freshness-yaml-bad-hour;check-freshness-yaml-bang-block-bool;check-freshness-empty-file;check-freshness-falsy-66616c7365;check-freshness-falsy-212030
+raw = yaml.safe_load(path.read_text(encoding="utf-8")) or []#unsupported	go	TestYAMLLoadRefusesAnchorsMergeKeysAndTags
+raise FreshnessInventoryError(f"{path} must be a YAML list of entries")	case	check-freshness-not-a-list;check-freshness-truthy-scalar
+raise FreshnessInventoryError(	case	check-freshness-item-not-mapping
+raise FreshnessInventoryError(#2	case	check-freshness-missing-fields;check-freshness-yaml-bang-quoted;check-freshness-yaml-duplicate-keys
+raise FreshnessInventoryError(#3	case	check-freshness-invalid-disposition;check-freshness-missing-disposition;check-freshness-unicode
+raise FreshnessInventoryError(#4	case	check-freshness-nonstring-replacement
+last_reviewed=date.fromisoformat(last_reviewed_raw),	case	check-freshness-bad-day;check-freshness-bad-isoformat;check-freshness-nonascii-digit-date;check-freshness-iso-week-overflow;check-freshness-isoformat-trailing
+if not source_path.is_file():	case	check-freshness-findings
+if not replacement_path.is_file():	case	check-freshness-findings
+args = parser.parse_args(argv)	go	TestArgumentParsingMatchesPythonArgparse
+except FreshnessInventoryError as error:	case	check-freshness-missing-inventory;check-freshness-not-a-list
+return 1#1	case	check-freshness-item-not-mapping
+return 1#2	case	check-freshness-findings
+return 1#2#stale	go	TestCheckFreshnessInventoryRejectsAStaleReviewDate;TestCheckFreshnessInventoryCadenceBoundary
+raise SystemExit(main(sys.argv[1:]))	case	check-freshness-ok;check-freshness-findings

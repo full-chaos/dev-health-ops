@@ -1,0 +1,8 @@
+- url: https://docs.fullchaos.dev:8443/x
+  owner: docs
+  reason: other port
+  expires: '2999-01-01'
+- url: http://docs.fullchaos.dev/guide/
+  owner: docs
+  reason: http
+  expires: '2999-01-01'

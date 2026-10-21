@@ -1,0 +1,3 @@
+ERROR: index.html: allowlist entry for https://expired.example.com/ expired on 2026-01-01 (owner: docs-content, reason: temporary vendor outage)
+ERROR: index.html: allowlist entry for https://flaky.example.com/ expired on 2025-12-31 (owner: last, reason: wins)
+ERROR: index.html: allowlist entry for https://docs.fullchaos.dev/guide/ expired on 2026-01-01 (owner: docs-content, reason: temporary canonical migration)

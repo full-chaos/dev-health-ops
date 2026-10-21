@@ -397,7 +397,6 @@ docs:guards:
       python scripts/check_docs_candidate_search.py --site-dir .build/docs --queries docs-data/search-acceptance.json 2>&1 | tee .build/docs-search.log
       python scripts/check_docs_candidate_accessibility.py --site-dir .build/docs --css docs/stylesheets/extra.css 2>&1 | tee .build/docs-accessibility.log
       python scripts/check_code_prerequisites.py 2>&1 | tee .build/docs-code-prerequisites.log
-      python scripts/check_freshness_inventory.py 2>&1 | tee .build/docs-freshness-inventory.log
   artifacts:
     when: always
     expire_in: 14 days
@@ -409,6 +408,12 @@ docs:facts:
   stage: test
   script:
     - go run -trimpath -mod=readonly ./cmd/cigate docs check-candidate-facts
+
+docs:freshness:
+  image: $GO_IMAGE
+  stage: test
+  script:
+    - go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness
 
 docs:inventory-review:
   extends: .python_job
@@ -424,7 +429,8 @@ docs:inventory-review:
         --inventory-dir docs-data/inventory \
         --ia-dir docs-data/ia
 
-# Scheduled and diagnostic: never blocks a merge request.
+# Scheduled and diagnostic: never blocks a merge request. The Python job builds the site; the Go job checks its
+# external links.
 docs:health-report:
   extends: .python_job
   stage: test
@@ -435,12 +441,24 @@ docs:health-report:
     - mkdir -p .build
   script:
     - python -m mkdocs build --strict --config-file mkdocs.yml
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - .build/docs/
+
+docs:external-links:
+  image: $GO_IMAGE
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  needs: ["docs:health-report"]
+  script:
     # Only the external-link step may fail (continue-on-error in docs-health-report.yml);
-    # the build above fails the job.
+    # the build in docs:health-report fails that job.
     - |
       set -o pipefail
       rc=0
-      python scripts/check_external_links.py \
+      go run -trimpath -mod=readonly ./cmd/cigate docs check-external-links \
         --built-site .build/docs \
         --allowlist docs-data/external-link-allowlist.yml \
         --site-url https://docs.fullchaos.dev \

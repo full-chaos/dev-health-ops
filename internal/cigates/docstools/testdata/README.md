@@ -153,3 +153,22 @@ except where marked. Hand-written rows: `TestQueuemapRefusesNullAndNonIntegerPro
 Same as Python (recorded pairs): an absent key (`genqm-missing-registry-queue`, `genqm-missing-state`), a case-folded
 key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-folded key
 (`genqm-key-unicode-folded-state`, U+017F): `KeyError` naming the key, rc 1.
+
+# Recorded Python/Go parity pairs, link and freshness verbs
+
+Cases `check-docs-links-*`, `check-freshness-*` and `check-external-links-*` under `parity/`, and
+`argparse-cases.json`. The Python side was recorded once from `scripts/check_docs_links.py`,
+`scripts/check_freshness_inventory.py` and `scripts/check_external_links.py` as at ops `8f2e19e471` (frozen under
+`refusals/`), with Python 3.14.7 and PyYAML 6.0.3, in a network namespace with no network (`unshare -rn`), so no case
+reached the internet. Each script ran from `$W/scripts/` with cwd `$W` (its `ROOT`) and the case's `in/` and `symlinks`
+in `$W`; `{E9}` in a path is `é`. `$W` is replaced by `{WORK}`.
+
+A case with `stderr.prefix` has a Python traceback whose message the Go verb does not reproduce word for word (a
+PyYAML parser message, a UnicodeDecodeError position): `stderr.python` holds the Python exception text, and the Go
+verb prints one line that starts with the text of `stderr.prefix` (`yaml.` for a PyYAML parse error). The dates in
+these cases are far in the past or the future, so no recorded output depends on the day it runs; the review cadence
+itself is tested with a fixed date.today() in `link_gates_test.go`.
+
+`argparse-cases.json`: for each argument list, the exit code of the script in a work dir holding only an empty
+`site/`, and either the argparse error message (exit 2), `help` (usage on stdout, exit 0) or stdout and stderr.
+`TestArgumentParsingMatchesPythonArgparse` compares the Go verb with each row.

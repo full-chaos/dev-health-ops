@@ -1,0 +1,34 @@
+# Every refusing site of scripts/check_external_links.py (frozen beside this file, at ops 8f2e19e471) and the Go answer: site<TAB>kind<TAB>refs.
+# site: the trimmed source line, "#N" for the Nth identical line ("return 1" is always numbered); kind case = recorded pairs run live through the cigate binary, go = a named Go test.
+ROOT = Path(__file__).resolve().parents[1]	case	check-external-links-default-args
+parsed_url = urlsplit(newurl)	go	TestHttpRedirectHandlerRejectsNonHttpRedirectTargets
+raise urllib.error.URLError("unsupported redirect URL scheme")	go	TestHttpRedirectHandlerRejectsNonHttpRedirectTargets
+if not path.is_file():	case	check-external-links-missing-site;check-external-links-same-site
+raw = yaml.safe_load(path.read_text(encoding="utf-8")) or []	case	check-external-links-allowlist-yaml-error;check-external-links-allowlist-falsy
+raw = yaml.safe_load(path.read_text(encoding="utf-8")) or []#unsupported	go	TestYAMLLoadRefusesAnchorsMergeKeysAndTags;TestYAMLLoadRaisesWherePyYAMLRaises
+raise ValueError(f"{path} must be a YAML list of entries")	case	check-external-links-allowlist-not-list
+raise ValueError(f"{path} entries must be mappings, got {item!r}")	case	check-external-links-allowlist-item-not-mapping
+raise ValueError(f"{path} entry missing required string fields: {item!r}")	case	check-external-links-allowlist-missing-fields
+url=url, owner=owner, reason=reason, expires=date.fromisoformat(expires_raw)	case	check-external-links-allowlist-bad-date
+for html_path in sorted(site_dir.rglob("*.html")):	case	check-external-links-sort-order;check-external-links-dir-named-html
+text = html_path.read_text(encoding="utf-8")	case	check-external-links-invalid-utf8;check-external-links-dir-named-html
+parsed_url = urlsplit(url)	case	check-external-links-ipv6-invalid;check-external-links-ipv6-garbage;check-external-links-netloc-nfkc;check-external-links-site-url-ipv6-invalid
+port = parsed_url.port	case	check-external-links-nonnumeric-port
+except ValueError:	case	check-external-links-nonnumeric-port
+parsed_url = urlsplit(url)#2	case	check-external-links-same-site;check-external-links-case-folding;check-external-links-final-sigma
+destination = (site_dir / unquote(parsed_url.path).lstrip("/")).resolve()	case	check-external-links-same-site
+destination.relative_to(site_dir.resolve())	case	check-external-links-same-site
+except ValueError:#2	case	check-external-links-same-site
+if destination.is_dir():	case	check-external-links-same-site
+if not destination.is_file():	case	check-external-links-same-site;check-external-links-default-args
+if anchor and anchor not in ID_RE.findall(destination.read_text(encoding="utf-8")):	case	check-external-links-unicode-boundaries;check-external-links-anchor-invalid-utf8
+parsed_url = urlsplit(url)#3	case	check-external-links-unsupported-scheme
+request = urllib.request.Request(	case	check-external-links-space-in-path;check-external-links-control-in-host;check-external-links-nonascii-path;check-external-links-nonascii-host
+with opener.open(request, timeout=timeout_seconds) as response:	go	TestFetcherHeadThenGet;TestFetcherFollowsRedirectsOnlyToHttp;TestFetcherStopsARedirectLoopLikeUrllib;TestFetcherRefusesWhatHttpClientRefuses;TestFetcherReportsWhatHttpClientDoesNotRefuse
+except urllib.error.HTTPError as error:	go	TestFetcherHeadThenGet;TestFetcherFollowsRedirectsOnlyToHttp
+except (urllib.error.URLError, TimeoutError, OSError) as error:	go	TestFetcherHeadThenGet;TestHttpRedirectHandlerRejectsNonHttpRedirectTargets
+args = parser.parse_args(argv)	go	TestArgumentParsingMatchesPythonArgparse
+if not args.built_site.is_dir():	case	check-external-links-missing-site;check-external-links-site-is-file
+return 1#1	case	check-external-links-missing-site
+return 1#2	case	check-external-links-allowlist;check-external-links-unsupported-scheme
+raise SystemExit(main(sys.argv[1:]))	case	check-external-links-empty-site;check-external-links-allowlist

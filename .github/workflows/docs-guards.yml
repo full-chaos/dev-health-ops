@@ -75,6 +75,12 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
 
@@ -130,7 +136,7 @@ jobs:
       - name: Check freshness inventory
         run: |
           set -o pipefail
-          python scripts/check_freshness_inventory.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness \
             2>&1 | tee .build/docs-freshness-inventory.log
 
       - name: Upload documentation quality evidence

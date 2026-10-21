@@ -1,0 +1,13 @@
+- page: café.md
+  disposition: refresh
+  owner: équipe
+  last-reviewed: '2999-01-01'
+- page: "café\u00a0x.md"
+  disposition: retire
+  owner: é
+  last-reviewed: '2999-01-01'
+  replacement: café.md
+- page: guide.md
+  disposition: "refresh\u00a0"
+  owner: a
+  last-reviewed: '2999-01-01'

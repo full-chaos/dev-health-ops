@@ -1,0 +1,6 @@
+- page: guide.md
+  disposition: refresh
+  owner: a
+  last-reviewed: '2999-01-01'
+  x: ! |
+    true

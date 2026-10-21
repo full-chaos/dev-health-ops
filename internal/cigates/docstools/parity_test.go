@@ -95,6 +95,12 @@ func replayCase(t *testing.T, dir string) {
 		if want := subst(string(line)); stderr != want || strings.Count(stderr, "\n") != 1 {
 			t.Errorf("stderr is not the one error line that replaces the Python traceback\ngot:\n%q\nwant:\n%q", stderr, want)
 		}
+	} else if prefix, err := os.ReadFile(filepath.Join(dir, "stderr.prefix")); err == nil {
+		// Python died on an exception whose message Go does not reproduce word for word (stderr.python holds it): the
+		// verb prints one line that starts with this text, the exception's kind or module.
+		if want := subst(strings.TrimSuffix(string(prefix), "\n")); !strings.HasPrefix(stderr, want) || strings.Count(stderr, "\n") != 1 || !strings.HasSuffix(stderr, "\n") {
+			t.Errorf("stderr is not one error line starting with %q\ngot:\n%q", want, stderr)
+		}
 	} else if want := subst(mustRead(t, filepath.Join(dir, "stderr"))); stderr != want {
 		t.Errorf("stderr differs from the recording\ngot:\n%q\nrecorded:\n%q", stderr, want)
 	}

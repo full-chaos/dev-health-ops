@@ -18,7 +18,7 @@ docs\:check-drift:
 	go run -trimpath -mod=readonly ./cmd/cigate docs check-queue-mapping-drift
 
 docs\:check-links:
-	$(PYTHON) scripts/check_docs_links.py
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-links
 
 # `docs:check` is the gate. It must stay equivalent to what CI enforces, so that a
 # green run here means a green run there. CI's docs jobs are:
@@ -48,7 +48,7 @@ docs\:check:
 docs\:check-fast:
 	go run -trimpath -mod=readonly ./cmd/cigate docs check-investment-drift
 	go run -trimpath -mod=readonly ./cmd/cigate docs check-queue-mapping-drift
-	$(PYTHON) scripts/check_docs_links.py
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-links
 
 docs\:build:
 	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
@@ -59,10 +59,10 @@ docs\:check-built-site:
 
 docs\:check-external-links:
 	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
-	$(PYTHON) scripts/check_external_links.py --built-site .build/docs --allowlist docs-data/external-link-allowlist.yml --site-url https://docs.fullchaos.dev
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-external-links --built-site .build/docs --allowlist docs-data/external-link-allowlist.yml --site-url https://docs.fullchaos.dev
 
 docs\:check-freshness:
-	$(PYTHON) scripts/check_freshness_inventory.py
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness
 
 docs\:check-code-prerequisites:
 	$(PYTHON) scripts/check_code_prerequisites.py

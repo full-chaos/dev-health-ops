@@ -1,0 +1,8 @@
+- url: https://one.example/
+  owner: a
+  reason: b
+  expires: '2000-01-01'
+- url: https://two.example/
+  owner: a
+  reason: b
+  expires: '2000-01-01'

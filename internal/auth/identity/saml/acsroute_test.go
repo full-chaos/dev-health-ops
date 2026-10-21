@@ -21,7 +21,8 @@ func TestSAMLACSOverrideMustEndInTheRowsOwnPath(t *testing.T) {
 		"https://sp.example.com/xsaml/" + id.String() + "/acs?q=/saml/" + id.String(): false,
 		"https://sp.example.com/api/v1/auth/saml%2F" + id.String() + "%2Facs":         false,
 		"https://sp.example.com/api/v1/auth/saml/" + id.String() + "%2facs":           false,
-		"https://sp.example.com/api/v1/auth%2Fsaml/" + id.String() + "/acs":           true,
+		"https://sp.example.com/api/v1/auth%2Fsaml/" + id.String() + "/acs":           false,
+		"https://sp.example.com/edge%2Fv2/api/v1/auth/saml/" + id.String() + "/acs":   true,
 		"https://sp.example.com/api/v1/auth/saml/" + id.String() + "/%61cs":           false,
 	} {
 		err := ValidateACSOverride(Config{SPACSURL: override}, id)

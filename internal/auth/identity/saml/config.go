@@ -194,13 +194,14 @@ func normalizeDomain(d string) string { return strings.ToLower(strings.TrimSpace
 
 // ValidateACSOverride refuses an sp_acs_url override that is not this row's ACS
 // URL: its path must end with /saml/{row id}/acs. A proxy prefix in front of
-// that is allowed.
+// that is allowed. The suffix must hold both decoded and as written: an escaped
+// separator does not match the served route.
 func ValidateACSOverride(cfg Config, rowID uuid.UUID) error {
 	if cfg.SPACSURL == "" {
 		return nil
 	}
 	u, err := url.Parse(cfg.SPACSURL)
-	if err != nil || !strings.HasSuffix(u.Path, acsPathSuffix(rowID)) {
+	if err != nil || !strings.HasSuffix(u.Path, acsPathSuffix(rowID)) || !strings.HasSuffix(u.EscapedPath(), acsPathSuffix(rowID)) {
 		return fmt.Errorf("%w: sp_acs_url must end with /saml/{provider id}/acs of this provider", ErrConfig)
 	}
 	return nil

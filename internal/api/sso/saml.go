@@ -183,15 +183,17 @@ func validateSAMLConfigHTTPS(cfg samlConfigValues) error {
 }
 
 // validateSAMLACSOverridePath refuses an sp_acs_url override whose path does
-// not end with /saml/{provider id}/acs (exact case, no trailing slash); a
-// proxy prefix in front is allowed. The error names the provider id and the
+// not end with /saml/{provider id}/acs (exact case, no trailing slash), both
+// decoded and as written (an escaped separator does not match the served
+// route); a proxy prefix in front is allowed. The error names the provider id and the
 // rule, never the configured value.
 func validateSAMLACSOverridePath(cfg samlConfigValues, providerID string) error {
 	if cfg.SPACSURL == "" {
 		return nil
 	}
 	parsed, err := url.Parse(cfg.SPACSURL)
-	if err != nil || !strings.HasSuffix(parsed.Path, "/saml/"+providerID+"/acs") {
+	suffix := "/saml/" + providerID + "/acs"
+	if err != nil || !strings.HasSuffix(parsed.Path, suffix) || !strings.HasSuffix(parsed.EscapedPath(), suffix) {
 		return fmt.Errorf("SAML sp_acs_url must end with /saml/%s/acs of this provider", providerID)
 	}
 	return nil

@@ -30,6 +30,7 @@ case " $* " in *" -list "*)
   exit 0 ;;
 esac
 printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
+case " $* " in *" -json "*) printf '{"Time":"2026-01-01T00:00:00Z","Action":"pass","Package":"p","Test":"TestFake","Elapsed":0.01}\n' ;; esac
 [ -z "${FAKE_GO_FAIL:-}" ] || exit 1
 # FAKE_GO_FAIL_ONLY fails exactly one of the two race calls of a leg: "providersync" or "packages".
 case "${FAKE_GO_FAIL_ONLY:-}" in

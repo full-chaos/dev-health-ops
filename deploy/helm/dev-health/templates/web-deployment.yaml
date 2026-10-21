@@ -52,6 +52,13 @@ spec:
             - name: AUTH_SECRET
               value: {{ .Values.web.env.AUTH_SECRET | quote }}
             {{- else if .Values.web.authSecret.secretName }}
+            {{- /* web's session secret is never the HS256 key's Secret, the shared Secret, or the key JWT_SECRET_KEY */}}
+            {{- $webAuthName := lower (trim .Values.web.authSecret.secretName) }}
+            {{- $hs256Name := lower (trim (.Values.hs256Secret.externalSecretName | default (ternary (printf "%s-hs256" (include "dev-health.fullname" .)) "" .Values.secrets.create))) }}
+            {{- $sharedName := lower (trim ((ternary (printf "%s-secrets" (include "dev-health.fullname" .)) (.Values.secrets.externalSecretName | default "") .Values.secrets.create))) }}
+            {{- if or (and $hs256Name (eq $webAuthName $hs256Name)) (and $sharedName (eq $webAuthName $sharedName)) (eq (trim (.Values.web.authSecret.key | default "AUTH_SECRET")) "JWT_SECRET_KEY") }}
+            {{- fail "web.authSecret must not name the HS256 key's Secret, the shared Secret, or the key JWT_SECRET_KEY (CHAOS-10446): web would hold a token-minting key" }}
+            {{- end }}
             - name: AUTH_SECRET
               valueFrom:
                 secretKeyRef:

@@ -253,3 +253,27 @@ func TestWebAuthSecretRefusalPointsAtTheDocs(t *testing.T) {
 		}
 	}
 }
+
+// web.authSecret must not name the HS256 key's Secret, the shared Secret, or the key JWT_SECRET_KEY itself.
+func TestWebAuthSecretCannotPointAtTheMintKey(t *testing.T) {
+	cases := map[string][]string{
+		"chart-created hs256 Secret":     {"--set", "web.authSecret.secretName=hs256-dev-health-hs256"},
+		"chart-created shared Secret":    {"--set", "web.authSecret.secretName=hs256-dev-health-secrets"},
+		"case-folded hs256 Secret":       {"--set", "web.authSecret.secretName= HS256-Dev-Health-HS256 "},
+		"key is JWT_SECRET_KEY":          {"--set", "web.authSecret.key=JWT_SECRET_KEY"},
+		"external hs256 Secret":          {"--set", "secrets.create=false", "--set", "secrets.externalSecretName=shared-ext", "--set", "hs256Secret.externalSecretName=hs256-ext", "--set", "web.authSecret.secretName=hs256-ext"},
+		"external shared Secret":         {"--set", "secrets.create=false", "--set", "secrets.externalSecretName=shared-ext", "--set", "hs256Secret.externalSecretName=hs256-ext", "--set", "web.authSecret.secretName=Shared-Ext"},
+		"external hs256, web key is JWT": {"--set", "secrets.create=false", "--set", "secrets.externalSecretName=shared-ext", "--set", "hs256Secret.externalSecretName=hs256-ext", "--set", "web.authSecret.key=JWT_SECRET_KEY"},
+	}
+	for name, args := range cases {
+		args = append([]string{"--set", "web.authSecret.secretName=web-auth-ok"}, args...)
+		out, err := helmOut(t, true, append([]string{"--set", "web.env.BACKEND_URL=http://x"}, args...)...)
+		if err == nil || !strings.Contains(out, "web.authSecret must not") {
+			t.Fatalf("%s: was not refused: err=%v\n%.300s", name, err, out)
+		}
+	}
+	out, err := helmOut(t, true, "--set", "web.env.BACKEND_URL=http://x", "--set", "web.authSecret.secretName=web-auth-ok")
+	if err != nil {
+		t.Fatalf("a distinct web.authSecret must render: %v\n%.300s", err, out)
+	}
+}

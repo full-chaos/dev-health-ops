@@ -727,9 +727,8 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 `not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record (D5987,
-option C); the shared ownership readers are judged against that rule at now and on every item day. Known red
-today: ownership and membership start at the sync, and the shared readers do not apply the first owners
-backward (CHAOS-9404),
+option C); the shared ownership readers are judged against that rule at now and on every item day, and apply the
+first owners backward (CHAOS-9404). Known red today: ownership and membership start at the sync (CHAOS-10521),
 and GitLab ownership names the project by path (CHAOS-8883). The inferred repository owner starts at its earliest
 linked evidence since CHAOS-9403 (#4049): its cell is pass. The GitHub cell of a pull request's `linked_issue` row
 is pass since CHAOS-9409: owners tied at the top rank with no main row (two `provider_access` grants) are all the
@@ -741,7 +740,8 @@ defects the matrix exists to catch into the same state the production verbs wrot
 landscape grouped by membership, an issue-key prefix taken as a native link, a pull request team inherited
 without a linked issue, from a donor without a team of its own or naming another team than its issue's, a
 co-owner written as a candidate row, a reader with its own ownership SQL, a tied team written as a co-owner, a
-shared reader that names one tied owner) and requires the judging cell to turn red on each.
+shared reader that names one tied owner, a shared reader that gives no owner before a repository's first record)
+and requires the judging cell to turn red on each.
 
 **The full-tie cell (CHAOS-9533, D5990).** None of the worlds holds a repository that two teams reach with equal
 link counts at every tier, so the matrix adds one to each world before the production verbs run: a repository,
@@ -2337,9 +2337,17 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
 
 > **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
 > of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
-> before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. Not yet
-> implemented in the readers (`OwnersByRepo`, `AuthoritativeOwnersByRepo`, `teamscope`): CHAOS-9404; the
-> `valid_from` of the inferred derivation is CHAOS-9403.
+> before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. The one rule is
+> `internal/ownershipwindow` (CHAOS-9404): the instant a reader tests an ownership row at is clamped up to the
+> repository's first record, so the rows valid at the first record are the owners. It is rendered by the shared
+> readers (`OwnedRepoIDs`, `OwnersByRepo`, `OwnerSharesByRepo` and `AuthoritativeOwnersByRepo` of
+> `internal/teamownership`) and by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`). The
+> first record of a repository is the earliest `valid_from` of its rows of ACTIVE teams (an inactive team owns
+> nothing, section 0.4g rule 1, so it does not set it, in `teamscope` too); an instant at or after the first record
+> reads as before, and an instant in a gap between two records has no owner. Not yet applying it: the work-item
+> cascade `LoadRepos` (CHAOS-10517), the investment materialize fallback (CHAOS-10518), `work_item_attribution`
+> (CHAOS-10519) and the investment team ownership read of `queryapi/analytics` (CHAOS-10520); the `valid_from` of
+> the catalog writers (the sync time) is CHAOS-10521; the `valid_from` of the inferred derivation is CHAOS-9403.
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
   `completed_at`), and the start of the current day for an item that is not completed. A done item with no

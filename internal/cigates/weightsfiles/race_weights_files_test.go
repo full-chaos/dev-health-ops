@@ -1,4 +1,6 @@
-package checkgo_test
+//go:build !race
+
+package weightsfiles_test
 
 import (
 	"fmt"
@@ -38,10 +40,11 @@ func copyWeights(t *testing.T, root string) string {
 
 func runWeightsCheck(t *testing.T, root, dir string) cmdResult {
 	t.Helper()
-	return cmdSpec{dir: root, env: inheritedEnv(nil, "GO_RACE_WEIGHTS_DIR="+dir)}.run("bash", "ci/check_go.sh", "race-weights-rows")
+	return freeSpec{dir: root, env: inheritedEnv(nil, "GO_RACE_WEIGHTS_DIR="+dir)}.run("bash", "ci/check_go.sh", "race-weights-rows")
 }
 
 func TestRaceWeightsFiles(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	victim := "internal/httpguard"
 	victimFile := "internal__httpguard.tsv"
@@ -73,6 +76,7 @@ func TestRaceWeightsFiles(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			dir := copyWeights(t, root)
 			c.mutate(dir)
 			got := runWeightsCheck(t, root, dir)
@@ -94,6 +98,7 @@ func TestRaceWeightsFiles(t *testing.T) {
 // TestRaceShardPlanIgnoresFileOrder: the shard awk reads the rows as a lookup, so the same rows in any order give the
 // same partition. This is what makes concatenating a directory safe.
 func TestRaceShardPlanIgnoresFileOrder(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	entries, err := os.ReadDir(filepath.Join(root, weightsDir))
 	if err != nil {
@@ -122,14 +127,14 @@ func TestRaceShardPlanIgnoresFileOrder(t *testing.T) {
 	if err := os.WriteFile(backward, []byte(strings.Join(rev, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	list := cmdSpec{dir: root, env: inheritedEnv(nil)}.run("go", "list", "./...")
+	list := freeSpec{dir: root, env: inheritedEnv(nil)}.run("go", "list", "./...")
 	if list.code != 0 {
 		t.Fatalf("go list: %s", list.stderr)
 	}
 	for _, shard := range []string{"1", "2", "3"} {
 		var out [2]string
 		for i, w := range []string{forward, backward} {
-			r := cmdSpec{dir: root, env: inheritedEnv(nil), stdin: []byte(list.stdout)}.run("awk", "-v", "mod=github.com/full-chaos/dev-health-ops", "-v", "shard="+shard, "-v", "count=3", "-v", "weights="+w, "-f", "ci/go_race_shard.awk")
+			r := freeSpec{dir: root, env: inheritedEnv(nil), stdin: []byte(list.stdout)}.run("awk", "-v", "mod=github.com/full-chaos/dev-health-ops", "-v", "shard="+shard, "-v", "count=3", "-v", "weights="+w, "-f", "ci/go_race_shard.awk")
 			if r.code != 0 || r.stdout == "" {
 				t.Fatalf("shard %s: exit %d %q %s", shard, r.code, r.stdout, r.stderr)
 			}
@@ -196,13 +201,14 @@ func runWeightsCheckForPackages(t *testing.T, packages []string, files map[strin
 		}
 	}
 	env := inheritedEnv(nil, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GO_PACKAGES="+listed.String(), "GO_RACE_WEIGHTS_DIR="+dir, "GO_RACE_SOLO="+solo)
-	return cmdSpec{dir: root, env: env}.run("bash", "ci/check_go.sh", "race-weights-rows")
+	return freeSpec{dir: root, env: env}.run("bash", "ci/check_go.sh", "race-weights-rows")
 }
 
 // TestRaceWeightsFileNamesAreOneToOne: the file name of a package is injective, so two packages whose paths differ
 // only in `_` versus `/` (zzreview__collision, zzreview/collision) each have their own file, and the root package has one
 // that a `*.tsv` glob sees.
 func TestRaceWeightsFileNamesAreOneToOne(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		packages []string
@@ -218,6 +224,7 @@ func TestRaceWeightsFileNamesAreOneToOne(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			got := runWeightsCheckForPackages(t, c.packages, c.files)
 			out := got.stdout + got.stderr
 			if c.fail && got.code == 0 {
@@ -235,6 +242,7 @@ func TestRaceWeightsFileNamesAreOneToOne(t *testing.T) {
 
 // TestRaceWeightsRowHasExactlyTwoColumns: package<TAB>seconds, nothing after the weight.
 func TestRaceWeightsRowHasExactlyTwoColumns(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{"internal/zzcols\t3\textra\n", "internal/zzcols\t3\t\n"} {
 		got := runWeightsCheckForPackages(t, []string{"internal/zzcols"}, map[string]string{"internal__zzcols.tsv": body})
 		out := got.stdout + got.stderr

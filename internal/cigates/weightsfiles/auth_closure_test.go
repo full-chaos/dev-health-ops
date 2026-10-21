@@ -1,4 +1,6 @@
-package checkgo_test
+//go:build !race
+
+package weightsfiles_test
 
 import (
 	"os"
@@ -12,10 +14,11 @@ import (
 
 func runAuthClosure(t *testing.T, root, allow string) cmdResult {
 	t.Helper()
-	return cmdSpec{dir: root, env: inheritedEnv(nil, "AUTH_CLOSURE_ALLOW="+allow)}.run("bash", "ci/check_go.sh", "auth", "closure")
+	return freeSpec{dir: root, env: inheritedEnv(nil, "AUTH_CLOSURE_ALLOW="+allow)}.run("bash", "ci/check_go.sh", "auth", "closure")
 }
 
 func TestAuthClosureCheckExecutesAndFailsOnAForbiddenOrStaleModule(t *testing.T) {
+	t.Parallel()
 	root := rootOf(t)
 	real := filepath.Join(root, "ci", "auth_closure_allow.tsv")
 	lines := strings.Split(strings.TrimRight(readText(t, real), "\n"), "\n")

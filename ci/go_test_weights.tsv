@@ -18,6 +18,7 @@ internal/cigates/integrationshards	150
 internal/cigates/scripts	100
 internal/cigates/splitshards	100
 internal/cigates/testshard	165
+internal/cigates/weightsfiles	40
 internal/cigates/workflows	38
 internal/goapiproof	120
 internal/gqlgenguard	223

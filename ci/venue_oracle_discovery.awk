@@ -6,7 +6,7 @@
 # oracle), and "LOCAL <Test> <file>"
 # for such a test carrying the local-only marker (-v marker=...) on the line
 # directly above it. A file, not a here-document: a here-document over the
-# measured pipe budget can wedge (tests/tooling/test_local_validate_heredocs.py).
+# measured pipe budget can wedge (the Go heredoc guard).
 function flush() {
   if (decl != "") { body[decl] = text; decl = "" ; text = "" }
 }

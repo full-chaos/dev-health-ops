@@ -306,7 +306,7 @@ pipeline:validate:
               name = need["job"] if isinstance(need, dict) else need
               if name not in jobs:
                   errors.append(f"{k}: needs unknown job {name}")
-      removed = {"lint", "typecheck:mypy", "test", "coverage", "integration", "live-e2e", "docker:build"}
+      removed = {"lint", "typecheck:mypy", "test", "coverage", "integration", "live-e2e", "docker:build", "security:pip-audit"}
       errors += [f"retired job is back: {j}" for j in sorted(removed & set(jobs))]
       if errors:
           raise SystemExit("\n".join(errors))

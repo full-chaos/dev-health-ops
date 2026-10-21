@@ -43,16 +43,23 @@ spec:
               value: "::"
             - name: BACKEND_URL
               value: {{ required "web.env.BACKEND_URL is required whenever web.enabled=true (CHAOS-8310): it is the base URL of the backend web's server-side requests go to -- REST (go-api) and /graphql (query-api) are different Go services, so no single in-chart default is correct. Set web.env.BACKEND_URL explicitly for this environment (for example the ingress host that fans out both), or web.enabled=false." .Values.web.env.BACKEND_URL | quote }}
+            {{- /*
+            CHAOS-10446: AUTH_SECRET (the Auth.js session secret) never falls back to
+            JWT_SECRET_KEY, the HS256 access-token key. It is a literal (dev) or one
+            key of its own Secret; web.enabled without either fails the render.
+            */}}
+            {{- if .Values.web.env.AUTH_SECRET }}
             - name: AUTH_SECRET
-              {{- if .Values.web.env.AUTH_SECRET }}
               value: {{ .Values.web.env.AUTH_SECRET | quote }}
-              {{- else }}
+            {{- else if .Values.web.authSecret.secretName }}
+            - name: AUTH_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "dev-health.secretName" . }}
-                  key: JWT_SECRET_KEY
-                  optional: true
-              {{- end }}
+                  name: {{ .Values.web.authSecret.secretName | quote }}
+                  key: {{ .Values.web.authSecret.key | default "AUTH_SECRET" | quote }}
+            {{- else if not .Values.web.localDevelopment.enabled }}
+            {{- fail "web.authSecret.secretName (or web.env.AUTH_SECRET) is required whenever web.enabled=true outside web.localDevelopment (CHAOS-10446): web's session secret has its own Secret and never falls back to JWT_SECRET_KEY" }}
+            {{- end }}
             - name: NODE_ENV
               value: {{ .Values.web.env.NODE_ENV | quote }}
             {{- if .Values.valkey.enabled }}

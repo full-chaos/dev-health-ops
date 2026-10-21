@@ -131,6 +131,22 @@ Secret name — either the one we create or an external one
 {{- end }}
 
 {{/*
+CHAOS-10446: the Secret that holds JWT_SECRET_KEY, the HS256 access-token key. It is
+its own Secret so the shared Secret the worker groups envFrom never carries it.
+hs256Secret.externalSecretName names an operator-managed one; otherwise the chart
+creates <fullname>-hs256 (secrets.create). Only go-api reads it through the chart.
+*/}}
+{{- define "dev-health.hs256SecretName" -}}
+{{- if .Values.hs256Secret.externalSecretName }}
+{{- .Values.hs256Secret.externalSecretName }}
+{{- else if .Values.secrets.create }}
+{{- include "dev-health.fullname" . }}-hs256
+{{- else }}
+{{- fail "hs256Secret.externalSecretName is required when secrets.create is false (CHAOS-10446): JWT_SECRET_KEY lives in its own Secret, not in secrets.externalSecretName" }}
+{{- end }}
+{{- end }}
+
+{{/*
 ConfigMap name
 */}}
 {{- define "dev-health.configMapName" -}}
@@ -325,7 +341,7 @@ Secret.
 */}}
 {{- define "dev-health.secretData" -}}
 {{- range $key, $value := .Values.secrets.data }}
-{{- if $value }}
+{{- if and $value (ne $key "JWT_SECRET_KEY") }}
 {{ $key }}: {{ $value | quote }}
 {{- end }}
 {{- end }}

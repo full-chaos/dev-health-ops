@@ -117,13 +117,13 @@ spec:
             them `dho api` refuses to start, and a missing Secret key shows
             as CreateContainerConfigError on the Pod instead of a crash loop.
             API_DATABASE_URI is the api role's own DSN (API_DATABASE_ROLE,
-            default devhealth_api); JWT_SECRET_KEY is the access-token key the
-            Python api and web already read.
+            default devhealth_api); JWT_SECRET_KEY is the HS256 access-token key, read
+            from its own Secret (dev-health.hs256SecretName), not the shared one.
             */}}
             - name: API_DATABASE_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: API_DATABASE_URI}}
             - name: JWT_SECRET_KEY
-              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: JWT_SECRET_KEY}}
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.hs256SecretName" . }}, key: JWT_SECRET_KEY}}
             {{- if .Values.authService.enabled }}
             {{- /* The auth schema the sid check reads auth-service sessions in. */}}
             - name: AUTH_DATABASE_SCHEMA

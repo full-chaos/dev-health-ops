@@ -778,8 +778,16 @@ web:
     #    web's server-side requests (REST on go-api and /graphql on query-api: two services, so no single in-chart
     #    default is correct). The render fails while it is not set.
     BACKEND_URL: ""
+    # -- Literal Auth.js secret (dev only). Prefer authSecret below.
     AUTH_SECRET: ""
     NODE_ENV: "production"
+  # -- CHAOS-10446: where web's AUTH_SECRET (the Auth.js session secret) comes
+  #    from: one Secret key, never the shared Secret and never JWT_SECRET_KEY.
+  #    REQUIRED when web.enabled unless web.env.AUTH_SECRET or
+  #    web.localDevelopment.enabled is set; the render fails otherwise.
+  authSecret:
+    secretName: ""
+    key: AUTH_SECRET
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1158,6 +1166,13 @@ config:
 # =============================================================================
 # Secrets
 # =============================================================================
+# -- CHAOS-10446: the Secret holding JWT_SECRET_KEY (the HS256 access-token key), apart
+#    from the shared Secret the Go worker groups envFrom, so no worker or web pod can
+#    mint a user token. Empty with secrets.create: the chart creates <release>-hs256.
+#    Required when secrets.create is false.
+hs256Secret:
+  externalSecretName: ""
+
 secrets:
   # -- Create a Kubernetes Secret from these values. Set to false to use an
   #    existing secret (externalSecretName).
@@ -1209,6 +1224,7 @@ secrets:
     #    leg grants (API_DATABASE_ROLE, default devhealth_api). Required when
     #    goApi.enabled.
     API_DATABASE_URI: ""
+    # -- Rendered into the hs256 Secret (hs256Secret), never the shared one.
     JWT_SECRET_KEY: ""
     SETTINGS_ENCRYPTION_KEY: ""
     ADMIN_API_KEY: ""

@@ -31,7 +31,7 @@ non-ranking interpretation guidance and the existing AI evidence paths.
 | `DOCS-STRICT-SOURCE` | `make docs:check` |
 | `DOCS-SOURCE-LINKS` | `make docs:check-links` |
 | `DOCS-STRICT-BUILT` | `python -m mkdocs build --strict --site-dir .build/site` |
-| `DOCS-BUILT-LINKS` | `python scripts/check_built_site_links.py --site-dir .build/site` |
+| `DOCS-BUILT-LINKS` | `go run ./cmd/cigate docs check-built-site-links --site-dir .build/site` |
 | `DOCS-EXTERNAL-LINKS` | `make docs:check-external-links` |
 | `DOCS-FRESHNESS` | `make docs:check-freshness` |
 | `DOCS-CODE-PREREQ` | `make docs:check-code-prerequisites` |

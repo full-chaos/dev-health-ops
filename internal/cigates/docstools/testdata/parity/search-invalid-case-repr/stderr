@@ -1,0 +1,1 @@
+ERROR: invalid search case: {'query': '', 'expected': 'x', 'max_rank': 1e+16, 'a': 1000000000000000.0, 'b': 1e-05, 'c': -0.0, 'd': 12345678901234567890, 'e': 'it\'s "q"', 'f': 'é\x01\t', 'g': [True, False, None], 'h': {'x': {}}}

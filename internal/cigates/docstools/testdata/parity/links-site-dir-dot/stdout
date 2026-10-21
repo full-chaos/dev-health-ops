@@ -1,0 +1,2 @@
+ERROR: index.html -> m.html: missing built asset
+ERROR: sub/p.html -> ../n.html: missing built asset

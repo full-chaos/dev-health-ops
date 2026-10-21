@@ -1,0 +1,9 @@
+query	expected	rank	max_rank	top_result	status
+alpha	/a/	1	5	/a/	pass
+beta	/b/	1	5	/b/	pass
+gamma	/c/d/e/	1	5	/c/d/e/	pass
+delta	/f/g.html	1	5	/f/g.html	pass
+eps	/h.md	1	5	/h.md	pass
+zeta	/x/	1	5	/x/	pass
+eta	/i/./j/	1	5	/i/./j/	pass
+theta	/k../	missing	5	/k..	fail

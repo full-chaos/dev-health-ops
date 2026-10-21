@@ -217,6 +217,17 @@ var crossPackageRollupSeamRegistry = []crossPackageWriteSite{
 		snippet:      `runID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed)`,
 		exemptReason: "read-only bucket-discovery SELECT (SELECT DISTINCT org_id, provider, cost_class ... for the bucket-lock-first fix) -- writes nothing; matches the heuristic only because it passes the same two status constants a real write nearby also does",
 	},
+	{
+		// CHAOS-8459: the dispatch re-arm back-off reads the newest
+		// success/failed unit end of a run (lastRunProgressAt) to measure idle
+		// time. It passes the same two status constants as a write, so the
+		// heuristic flags it. It writes nothing; it is registered, not hidden
+		// behind SQL literals, so the guard still sees every status reader.
+		pkgDir:       "../syncdispatchruntime",
+		file:         "schedule_redispatch.go",
+		snippet:      `syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at)`,
+		exemptReason: "read-only progress SELECT (MAX(updated_at) of success/failed units of one run, for the dispatch re-arm idle back-off) -- writes nothing; matches the heuristic only because it passes the two terminal status constants as query arguments",
+	},
 	// --- syncreconciler (CHAOS-4586, chris: "the guard must be the thing
 	// that would have caught line 1144") ---
 	{

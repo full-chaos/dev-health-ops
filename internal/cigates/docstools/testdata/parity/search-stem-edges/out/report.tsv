@@ -1,0 +1,4 @@
+query	expected	rank	max_rank	top_result	status
+tied tries	/s/	1	5	/s/	pass
+ties	/s/	1	5	/s/	pass
+using used	/s/	1	5	/s/	pass

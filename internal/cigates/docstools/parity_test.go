@@ -49,7 +49,7 @@ func replayCase(t *testing.T, dir string) {
 	_ = filepath.Walk(in, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(in, path)
-			rel = strings.ReplaceAll(strings.TrimSuffix(rel, ".fixture"), "{E9}", "é")
+			rel = caseName(strings.TrimSuffix(rel, ".fixture"))
 			expected[rel] = true
 			writeTree(t, filepath.Join(work, rel), mustRead(t, path), info.Mode().Perm())
 		} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
@@ -61,6 +61,14 @@ func replayCase(t *testing.T, dir string) {
 	seedSymlinks(t, filepath.Join(dir, "symlinks"), work)
 	sub := map[string]string{"{WORK}": work}
 	t.Chdir(work)
+	if raw, err := os.ReadFile(filepath.Join(dir, "cwd")); err == nil {
+		// the case runs from a directory below the work directory (the former scripts found their root from their own path)
+		sub := filepath.Join(work, strings.TrimSpace(string(raw)))
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(sub)
+	}
 	for _, setup := range caseSetups {
 		setup(t, dir, work, sub)
 	}
@@ -108,7 +116,7 @@ func replayCase(t *testing.T, dir string) {
 	_ = filepath.Walk(out, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(out, path)
-			rel = strings.ReplaceAll(rel, "{E9}", "é")
+			rel = caseName(rel)
 			expected[rel] = true
 			if got, want := mustRead(t, filepath.Join(work, rel)), mustRead(t, path); got != want {
 				t.Errorf("%s differs from the recording\ngot:\n%q\nrecorded:\n%q", rel, got, want)
@@ -130,6 +138,12 @@ func replayCase(t *testing.T, dir string) {
 	if len(left) > 0 {
 		t.Errorf("the verb left files the Python script did not: %v", left)
 	}
+}
+
+// caseName turns the placeholders of a stored file name into the characters they stand for: git quotes a non-ASCII name,
+// and the workflow path-filter guards read file names from `git ls-files`.
+func caseName(rel string) string {
+	return strings.NewReplacer("{E9}", "é", "{FC}", "ü").Replace(rel)
 }
 
 func mustRead(t *testing.T, path string) string {
@@ -182,7 +196,7 @@ func seedSymlinks(t *testing.T, list, work string) {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(work, link)), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(target, filepath.Join(work, link)); err != nil {
+		if err := os.Symlink(strings.ReplaceAll(target, "{WORK}", work), filepath.Join(work, link)); err != nil {
 			t.Fatal(err)
 		}
 	}

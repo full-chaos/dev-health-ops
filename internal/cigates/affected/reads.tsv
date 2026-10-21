@@ -137,8 +137,6 @@ internal/jobs/investment	test	compose.yml
 internal/jobs/investment	test	deploy
 internal/jobs/investment	test	docs
 internal/jobs/metrics/complexity	test	README.md
-internal/jobs/metrics/complexity/lizardcc	test	uv.lock
-internal/jobs/metrics/complexity/pycc	test	uv.lock
 internal/jobs/metrics/daily	test	contracts
 internal/jobs/metrics/remaining	test	contracts
 internal/jobs/report	test	contracts

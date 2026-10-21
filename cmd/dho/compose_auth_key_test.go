@@ -18,13 +18,16 @@ type composeKeyFile struct {
 	Services map[string]composeKeyService `yaml:"services"`
 }
 
-// keyVolume returns the named volume mounted over the directory of the file
-// that env names, or "" when none is.
+// keyVolume returns the named volume of the most specific mount over the
+// directory of the file that env names (a nested mount shadows its parent), or
+// "" when that mount is not a named volume or none covers the file.
 func keyVolume(service composeKeyService, env string) (string, error) {
 	file := service.Environment[env]
 	if file == "" {
 		return "", nil
 	}
+	dir := path.Dir(file)
+	best, bestSource := "", ""
 	for _, node := range service.Volumes {
 		var source, target string
 		switch node.Kind {
@@ -43,18 +46,19 @@ func keyVolume(service composeKeyService, env string) (string, error) {
 			if err := node.Decode(&mount); err != nil {
 				return "", err
 			}
-			if mount.Type != "" && mount.Type != "volume" {
-				continue
-			}
 			source, target = mount.Source, mount.Target
+			if mount.Type != "" && mount.Type != "volume" {
+				source = ""
+			}
 		default:
 			return "", fmt.Errorf("volume entry of kind %d", node.Kind)
 		}
-		if target == path.Dir(file) || strings.HasPrefix(path.Dir(file), strings.TrimSuffix(target, "/")+"/") {
-			return source, nil
+		target = strings.TrimSuffix(target, "/")
+		if (dir == target || strings.HasPrefix(dir, target+"/")) && len(target) > len(best) {
+			best, bestSource = target, source
 		}
 	}
-	return "", nil
+	return bestSource, nil
 }
 
 // authKeyVolumeFindings: auth-service's signing key comes from a named volume

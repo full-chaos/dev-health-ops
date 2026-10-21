@@ -188,26 +188,54 @@ func (c *FileCustody) Keys(ctx context.Context) ([]Key, error) {
 	return keys, nil
 }
 
-// Sign signs with kid when the manifest names it active.
+// Sign signs with kid when the manifest names it active, both before and
+// after the signature is made. A rotation that lands while the key is read
+// and used (the kid retired, replaced or compromised) discards the signature
+// and returns ReasonKeyNotActive: a signature is returned only when the kid
+// is still active at the manifest read that follows it.
 func (c *FileCustody) Sign(ctx context.Context, kid string, message []byte) ([]byte, error) {
-	entries, states, err := c.load(ctx)
+	entry, err := c.activeEntry(ctx, kid)
 	if err != nil {
 		return nil, err
+	}
+	signature, err := signWithFile(c.keyPath(entry), message)
+	if err != nil {
+		return nil, err
+	}
+	if afterSign != nil {
+		afterSign()
+	}
+	again, err := c.activeEntry(ctx, kid)
+	if err != nil {
+		return nil, err
+	}
+	if again.File != entry.File {
+		return nil, failure(ReasonKeyNotActive, nil)
+	}
+	return signature, nil
+}
+
+// afterSign is a test hook run between the signature and the second manifest
+// read.
+var afterSign func()
+
+// activeEntry returns kid's manifest entry when its effective state is active.
+func (c *FileCustody) activeEntry(ctx context.Context, kid string) (manifestEntry, error) {
+	entries, states, err := c.load(ctx)
+	if err != nil {
+		return manifestEntry{}, err
 	}
 	for i, entry := range entries {
 		if entry.KeyID != kid {
 			continue
 		}
 		if states[i] != StateActive {
-			return nil, failure(ReasonKeyNotActive, nil)
+			return manifestEntry{}, failure(ReasonKeyNotActive, nil)
 		}
-		return signWithFile(c.keyPath(entry), message)
+		return entry, nil
 	}
-	return nil, failure(ReasonKeyUnknown, nil)
+	return manifestEntry{}, failure(ReasonKeyUnknown, nil)
 }
-
-// afterSign is a test hook run after the signature is made.
-var afterSign func()
 
 func (c *FileCustody) keyPath(entry manifestEntry) string {
 	return filepath.Join(filepath.Dir(c.manifestPath), entry.File)

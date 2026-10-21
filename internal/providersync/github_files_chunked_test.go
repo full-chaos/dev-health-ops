@@ -675,12 +675,13 @@ func TestGitHubFilesUnitRestartsFromTheHeadWhenThePinnedTreeIsGone(t *testing.T)
 			if rewritten == 0 {
 				t.Fatal("no path was rewritten under the later instant")
 			}
-			if fmt.Sprint(result.Result["repinned"]) != "1" || fmt.Sprint(result.Result["paths_total"]) != "56" ||
-				fmt.Sprint(result.Result["eligible_total"]) != "56" {
+			if fmt.Sprint(result.Result["pin_lost"]) != "1" || fmt.Sprint(result.Result["paths_total"]) != "56" ||
+				fmt.Sprint(result.Result["eligible_total"]) != "56" || fmt.Sprint(result.Result["files_synced"]) != "56" ||
+				fmt.Sprint(result.Result["files_with_contents"]) != "56" {
 				t.Fatalf("result=%v", result.Result)
 			}
 			text := logs.String()
-			for _, want := range []string{"pinned tree is gone", "repinned=1", "paths_total=56", "eligible_total=56"} {
+			for _, want := range []string{"pinned tree is gone", "pin_lost=1", "paths_total=56", "eligible_total=56"} {
 				if !strings.Contains(text, want) {
 					t.Fatalf("log lacks %q", want)
 				}
@@ -696,7 +697,7 @@ func TestGitHubFilesUnitRestartsFromTheHeadWhenThePinnedTreeIsGone(t *testing.T)
 // vanished pin. The cursor and the pin stay, and the next attempt finishes the
 // SAME tree.
 func TestGitHubFilesUnitKeepsItsPinOnAServerErrorOfThePinnedTree(t *testing.T) {
-	for _, status := range []int{http.StatusServiceUnavailable, http.StatusInternalServerError} {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusInternalServerError, http.StatusTooManyRequests} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			fake := newFilesChunkFake(t, 60, 600_000, 0)
 			sink := &filesReadbackSink{}
@@ -736,8 +737,8 @@ func TestGitHubFilesUnitKeepsItsPinOnAServerErrorOfThePinnedTree(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if fmt.Sprint(result.Result["repinned"]) != "0" || len(sink.rows) != 60 {
-				t.Fatalf("repinned=%v rows=%d, want the pinned tree finished untouched", result.Result["repinned"], len(sink.rows))
+			if fmt.Sprint(result.Result["pin_lost"]) != "0" || len(sink.rows) != 60 {
+				t.Fatalf("pin_lost=%v rows=%d, want the pinned tree finished untouched", result.Result["pin_lost"], len(sink.rows))
 			}
 			for _, call := range fake.graphql {
 				if call.ref != "tree-1" {

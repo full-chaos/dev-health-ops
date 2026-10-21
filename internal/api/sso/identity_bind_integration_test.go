@@ -98,6 +98,13 @@ func assertMembershipRequired(t *testing.T, ctx context.Context, st stack, provi
 		providerID.String()).Scan(&audits); err != nil {
 		t.Fatal(err)
 	}
+	var touched int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE last_login_at IS NOT NULL OR full_name IS NOT NULL`).Scan(&touched); err != nil {
+		t.Fatal(err)
+	}
+	if touched != 0 {
+		t.Fatalf("%d users rows were updated by a refused sign-in", touched)
+	}
 	if sessions != 0 || providerStatus != "active" || audits != 1 {
 		t.Fatalf("refresh rows=%d provider status=%q failure audits=%d, want 0, active, 1", sessions, providerStatus, audits)
 	}
@@ -359,4 +366,30 @@ func TestOAuthSignInWithoutMembershipAnswers403(t *testing.T) {
 	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
 		map[string]any{"code": "c", "state": authResp["state"]})
 	assertMembershipRequired(t, ctx, st, providerID, status, body)
+}
+
+func TestOAuthSignInOfANewAccountAnswers403AndWritesNoUser(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	gitlab := startFakeGitLab(t)
+	gitlab.email = "oauth.fresh@allowed.example"
+	gitlab.userID = "gl-fresh"
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
+		clientSecretEncryptedFallback: "gitlab-secret",
+	})
+
+	client := newCookieClient(t)
+	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+	if status != http.StatusOK {
+		t.Fatalf("authorize: %d %v", status, authResp)
+	}
+	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+		map[string]any{"code": "c", "state": authResp["state"]})
+	assertMembershipRequired(t, ctx, st, providerID, status, body)
+	if _, n := readIdentity(t, ctx, st.pool, gitlab.email); n != 0 {
+		t.Fatalf("an account was created: %d rows", n)
+	}
 }

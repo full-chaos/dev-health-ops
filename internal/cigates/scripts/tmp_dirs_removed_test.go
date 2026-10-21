@@ -179,32 +179,9 @@ func pyCode(src string) string {
 						continue
 					}
 					// the expression of an f-string is code: it is kept (a call in it counts), the literal text around it is not
-					depth, j := 1, i+1
-					for j < len(rs) && depth > 0 {
-						switch rs[j] {
-						case '\'', '"':
-							q := rs[j]
-							j++
-							for j < len(rs) && rs[j] != q {
-								if rs[j] == '\\' && j+1 < len(rs) {
-									j++
-								}
-								j++
-							}
-						case '{':
-							depth++
-						case '}':
-							depth--
-						}
-						j++
-					}
-					end := j - 1
-					if depth > 0 {
-						end = len(rs)
-					}
-					// a quoted string inside the expression is skipped when matching braces, and its text is not code
-					out.WriteString(" " + pyCode(string(rs[i+1:end])) + " ")
-					i = j
+					code, next := fstringField(rs, i+1)
+					out.WriteString(code)
+					i = next
 					continue
 				}
 				if rs[i] == '\n' {
@@ -285,7 +262,7 @@ func pyStatements(code string) []string {
 	return out
 }
 
-var pyCompoundKeyword = regexp.MustCompile(`^[ \t]*(?:async[ \t]+)?(?:if|elif|else|try|except|finally|for|while|with|def|class)(?:[^\p{L}\p{N}_]|$)`)
+var pyCompoundKeyword = regexp.MustCompile(`^[ \t]*(?:async[ \t]+)?(?:if|elif|else|try|except|finally|for|while|with|def|class|match|case)(?:[^\p{L}\p{N}_]|$)`)
 
 func pySplitHeader(stmt string) []string {
 	if !pyCompoundKeyword.MatchString(stmt) {
@@ -422,6 +399,14 @@ func TestPythonTempDirCheckFlagsALeakAndIsNotFooledByTextOrAnAlias(t *testing.T)
 		{"a backslash continued alias import", "from tempfile import \\\n    mkdtemp as make\nx = make()\n", true},
 		{"an alias import after a semicolon", "import os; from tempfile import mkdtemp as make\nx = make()\n", true},
 		{"a non-ASCII alias", "from tempfile import mkdtemp as café\nx = café()\n", true},
+		{"a match statement with a case import", "match x:\n    case 1: from tempfile import mkdtemp as m\nm()\n", true},
+		{"a case header cut from its body", "case 1: from tempfile import mkdtemp as m\nm()\n", true},
+		{"a quote in an f-string format spec opens no string", "import tempfile\nx = f\"{1:'>10}\"\ny = '}'; d = tempfile.mkdtemp()\n", true},
+		{"a format spec with a quote alone makes nothing", "x = f\"{1:'>10}\"\n", false},
+		{"a conversion then a spec with a quote", "import tempfile\nx = f\"{y!r:'>{w}}\"\nd = tempfile.mkdtemp()\n", true},
+		{"a nested field in a format spec is code", "import tempfile\nx = f\"{y:{tempfile.mkdtemp()}}\"\n", true},
+		{"a not-equal sign is not a conversion", "import tempfile\nx = f\"{a != tempfile.mkdtemp()}\"\n", true},
+		{"a dict colon inside braces does not start a spec", "import tempfile\nx = f\"{ {1: tempfile.mkdtemp()}[1] }\"\n", true},
 		{"an alias import after an if header on the same line", "if True: from tempfile import mkdtemp as m\nx = m()\n", true},
 		{"an alias import in a try body on the same line", "try: from tempfile import mkdtemp as m\nexcept ImportError: pass\nx = m()\n", true},
 		{"an alias import and its call in a one-line def", "def f(): from tempfile import mkdtemp as m; return m()\n", true},
@@ -470,4 +455,68 @@ func isFStringStart(rs []rune, i int) bool {
 
 func isPyIdentRune(r rune) bool {
 	return r == '_' || (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r > 127
+}
+
+// fstringField reads one replacement field of an f-string from rs[start] (just after its `{`) and returns the code it holds and
+// the index after its closing `}`. Only the expression part is code: a quote there opens a string that is skipped (braces in it
+// do not count), a `:` or `!` outside brackets and nested braces starts the format spec, whose text is literal (a quote in it
+// opens nothing), and a nested replacement field in the spec is code again.
+func fstringField(rs []rune, start int) (string, int) {
+	var code strings.Builder
+	paren, brace, exprStart, j := 0, 1, start, start
+	inSpec := false
+	flush := func(end int) { code.WriteString(" " + pyCode(string(rs[exprStart:end])) + " ") }
+	for j < len(rs) {
+		c := rs[j]
+		if inSpec {
+			switch c {
+			case '{':
+				sub, next := fstringField(rs, j+1)
+				code.WriteString(sub)
+				j = next
+				continue
+			case '}':
+				return code.String(), j + 1
+			}
+			j++
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			j++
+			for j < len(rs) && rs[j] != c {
+				if rs[j] == '\\' && j+1 < len(rs) {
+					j++
+				}
+				j++
+			}
+		case '(', '[':
+			paren++
+		case ')', ']':
+			paren--
+		case '{':
+			brace++
+		case '}':
+			brace--
+			if brace == 0 {
+				flush(j)
+				return code.String(), j + 1
+			}
+		case ':':
+			if paren == 0 && brace == 1 {
+				flush(j)
+				inSpec = true
+			}
+		case '!':
+			if paren == 0 && brace == 1 && !(j+1 < len(rs) && rs[j+1] == '=') {
+				flush(j)
+				inSpec = true
+			}
+		}
+		j++
+	}
+	if !inSpec {
+		flush(len(rs))
+	}
+	return code.String(), j
 }

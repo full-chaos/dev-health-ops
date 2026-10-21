@@ -172,3 +172,23 @@ itself is tested with a fixed date.today() in `link_gates_test.go`.
 `argparse-cases.json`: for each argument list, the exit code of the script in a work dir holding only an empty
 `site/`, and either the argparse error message (exit 2), `help` (usage on stdout, exit 0) or stdout and stderr.
 `TestArgumentParsingMatchesPythonArgparse` compares the Go verb with each row.
+
+# Recorded Python/Go parity pairs, check-code-prerequisites
+
+Cases `check-code-prerequisites-*` under `parity/`. The Python side was recorded once from `scripts/check_code_prerequisites.py`
+at the parent of the porting commit (Python 3.12.3, PyYAML 6.0.1): `$W/scripts/` holds the script, cwd is `$W`, `$W` is `{WORK}`.
+The frozen script and its refusal inventory are `refusals/check_code_prerequisites.py.frozen` and
+`refusals/check-code-prerequisites.tsv` (`refusals_codeprereq_test.go`).
+
+Named differences from the Python:
+- The repository root is the working directory, not the script location.
+- Where Python stops on an uncaught exception the case holds `stderr.traceback` and the verb prints that one `Kind: message` line with the same exit code, as in every docstools verb (a ruled divergence, D6129; the harness requires exactly that line). A scope file the reader refuses prints `YAMLError: <path>: not loadable by yaml.safe_load`.
+- The scope reader is stricter than PyYAML `safe_load`. It accepts only an empty file, or a block sequence at column 0 whose items are plain, single-quoted or double-quoted (no backslash) scalars on one line, with whole-line `#` comments and blank lines. It refuses, with the load-error line and exit code 1: tags, anchors, aliases, merge keys, flow collections, mappings, block scalars, multi-line scalars, directives, `---` and `...`, tabs, a BOM, control characters, indented items, trailing comments, an item followed by anything after its closing quote, and every non-sequence root (including the roots Python reads as empty: null, `0`, `false`, `""`, `{}`, `[]`). An item PyYAML 1.1 reads as a non-string (yes, 5, 1.5, a date, an empty item) is refused with the `ValueError` line, as in Python. Scope files that Python loads and the Go reader refuses are under `stricter-scope/` (`python-rc` and `python-stdout` record the Python answer; `TestCodePrerequisitesIsStricterThanPython` requires exit code 1, no stdout and the load-error line). Scope files Python also refuses stay under `parity/`.
+- A usage error is one stderr line with exit code 2; an abbreviated option is refused (`TestCodePrerequisitesRefusesAbbreviatedOptions`); `-hfoo` is refused; `--help` prints the Go usage line (the `help` case stdout is hand-written).
+- The callers run the verb through `go run`, which adds the line `exit status 1` to stderr when the verb exits non-zero; every cigate caller has that line.
+
+Unicode rows: U+00E9 and U+0663 before the variable name (not a credential), U+00A0, U+001C and U+001F before it (a credential), `_` before it (not a credential); U+088F and U+A7CE are word characters in Go's Unicode 17.0 tables but not in Python's `\w`, so they do not stop a credential (a credential).
+
+## Unicode word table
+
+The `\b` of the credential pattern is Python's `\w` (letter, number, underscore by Python's Unicode data). Go 1.27 ships Unicode 17.0.0, CI Python 3.14 ships 16.0.0. `codeprereq_unicode.go` lists the 4657 code points that Go counts as word characters and Python does not (no code point is a word character in Python only); the verb treats them as non-word. `TestCodePrerequisitesUnicodeTableMatchesGo` fails when `unicode.Version` differs from the version the table was generated for, and when a listed code point is no Go word character. No test runs Python. To generate the table again (by hand, outside CI), print every code point with `unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_'` from a Go program, then with python3.14 compare it against `re.match(r'\w', chr(c))` for every code point except the surrogates, and write the ranges where Go says word and Python does not (and note any range where Python says word and Go does not: the verb would have to treat those as word) into `codeprereq_unicode.go` with both versions (`unicodedata.unidata_version`, `unicode.Version`).

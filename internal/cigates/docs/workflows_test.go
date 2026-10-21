@@ -30,8 +30,8 @@ var docsGuardsChecks = []expectedCheck{
 	{"Check rendered links, anchors, and assets", pyCmd("check_built_site_links"), []string{"--site-dir .build/docs"}},
 	{"Check task-based search acceptance", pyCmd("check_docs_candidate_search"), []string{"--site-dir .build/docs", "--queries " + searchAcceptance}},
 	{"Check structural accessibility invariants", pyCmd("check_docs_candidate_accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
-	{"Check code prerequisites", pyCmd("check_code_prerequisites"), nil},
-	{"Check freshness inventory", cigateDocs + " check-freshness", nil},
+	{"Check code prerequisites", cigateDocs, []string{"check-code-prerequisites"}},
+	{"Check freshness inventory", cigateDocs, []string{"check-freshness"}},
 }
 
 const (
@@ -210,6 +210,13 @@ func docsGuardsGuard(d docTree) []string {
 			out = append(out, "docs-guards must not run "+forbidden)
 		}
 	}
+	goSetup := false
+	for _, s := range steps {
+		goSetup = goSetup || strings.HasPrefix(asString(s["uses"]), "actions/setup-go@")
+	}
+	if !goSetup {
+		out = append(out, "docs-guards must set up Go: its Go checkers run through cmd/cigate")
+	}
 	if len(docsGuardsChecks) == 0 {
 		out = append(out, "the expected-check table is empty")
 	}
@@ -293,6 +300,14 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			s := text[:i+j] + "'doc/**'" + text[i+j+len("'docs/**'"):]
 			return d.added(docsGuardsPath, s)
 		}, "pull_request trigger"},
+		{"the Go setup step is removed", func(t *testing.T, d docTree) docTree {
+			text, _ := d.read(docsGuardsPath)
+			i := strings.Index(text, "      - name: Set up Go\n        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache-dependency-path: '**/go.sum'\n\n      - name: Validate")
+			if i < 0 {
+				t.Fatal("no Go setup step before the first check of docs-guards")
+			}
+			return d.added(docsGuardsPath, text[:i]+text[i+strings.Index(text[i:], "      - name: Validate"):])
+		}, "must set up Go"},
 		{"a node runtime is set up", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "      - name: Install documentation dependencies", "      - uses: actions/setup-node@v4\n      - name: Install documentation dependencies")
 		}, "set up node"},
@@ -300,7 +315,7 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, "name: Check structural accessibility invariants", "name: Check accessibility")
 		}, "Check structural accessibility invariants"},
 		{"a streamed check loses pipefail", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "          set -o pipefail\n          "+pyCmd("check_code_prerequisites"), "          "+pyCmd("check_code_prerequisites"))
+			return d.edit(t, docsGuardsPath, "          set -o pipefail\n          "+cigateDocs+" check-code-prerequisites", "          "+cigateDocs+" check-code-prerequisites")
 		}, "Check code prerequisites"},
 		{"the strict build loses --strict (command replaced)", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "mkdocs build --strict", "mkdocs build")
@@ -338,7 +353,11 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 	for _, c := range docsGuardsChecks {
 		c := c
 		plants = append(plants, plantCase{"the " + c.step + " command is replaced by an echo", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, c.command, "echo "+c.command)
+			anchor := c.command
+			if c.command == cigateDocs {
+				anchor += " " + c.args[0]
+			}
+			return d.edit(t, docsGuardsPath, anchor, "echo "+anchor)
 		}, fmt.Sprintf("step %q does not run the command", c.step)})
 	}
 	// One plant per (event, path): the path is dropped from that event's list only.
@@ -381,8 +400,8 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 		plantCase{"the Go docs guards job sets continue-on-error", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "  docs-content-guards:\n    name: docs-content-guards\n", "  docs-content-guards:\n    name: docs-content-guards\n    continue-on-error: true\n")
 		}, "must not set continue-on-error"},
-		plantCase{"a Python checker status is masked by || true", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, pyCmd("check_code_prerequisites"), pyCmd("check_code_prerequisites")+" || true")
+		plantCase{"a Go checker status is masked by || true", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsGuardsPath, cigateDocs+" check-code-prerequisites", cigateDocs+" check-code-prerequisites || true")
 		}, "masks a failing command status"},
 	)
 	// The evidence upload is found by its action, never by its name: renaming it and disabling it is refused.

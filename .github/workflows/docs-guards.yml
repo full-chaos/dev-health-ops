@@ -75,14 +75,14 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Install documentation dependencies
+        run: pip install -r requirements-docs.txt
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-
-      - name: Install documentation dependencies
-        run: pip install -r requirements-docs.txt
 
       - name: Validate publication inventory and IA placement
         run: |
@@ -130,7 +130,7 @@ jobs:
       - name: Check code prerequisites
         run: |
           set -o pipefail
-          python scripts/check_code_prerequisites.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites \
             2>&1 | tee .build/docs-code-prerequisites.log
 
       - name: Check freshness inventory

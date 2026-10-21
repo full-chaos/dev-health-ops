@@ -1,0 +1,12 @@
+# Every refusing site of the Python scripts/check_code_prerequisites.py (frozen beside this file) and the Go row that answers it.
+# site<TAB>kind<TAB>refs. site: the trimmed source line, "#N" for the Nth identical line; kind case = parity cases run live through the cigate binary, go = a named Go test.
+if not path.is_file():	case	check-code-prerequisites-ok-no-scope-file;check-code-prerequisites-scope-path-is-a-directory
+raw = yaml.safe_load(path.read_text(encoding="utf-8")) or []	case	check-code-prerequisites-scope-invalid-utf8;check-code-prerequisites-scope-invalid-yaml;check-code-prerequisites-scope-two-documents;check-code-prerequisites-scope-undefined-alias;check-code-prerequisites-scope-tab-indent;check-code-prerequisites-scope-custom-tag-is-refused;check-code-prerequisites-scope-python-object-tag-is-refused
+raw = yaml.safe_load(path.read_text(encoding="utf-8")) or []#unreadable	go	TestCodePrerequisitesUnreadableFiles
+raise ValueError(f"{path} must be a YAML list of relative doc paths")	case	check-code-prerequisites-scope-mapping;check-code-prerequisites-scope-plain-string;check-code-prerequisites-scope-int-item;check-code-prerequisites-scope-yes-item;check-code-prerequisites-scope-null-item;check-code-prerequisites-scope-alias-to-int;check-code-prerequisites-scope-flag-path-normalized-in-errors
+if not doc_path.is_file():	case	check-code-prerequisites-missing-page;check-code-prerequisites-page-is-a-directory;check-code-prerequisites-scope-entry-through-a-missing-directory
+text = doc_path.read_text(encoding="utf-8")	case	check-code-prerequisites-page-invalid-utf8
+text = doc_path.read_text(encoding="utf-8")#unreadable	go	TestCodePrerequisitesUnreadableFiles
+args = parser.parse_args(argv)	case	check-code-prerequisites-unknown-flag;check-code-prerequisites-positional-argument;check-code-prerequisites-scope-flag-without-value;check-code-prerequisites-docs-root-flag-without-value;check-code-prerequisites-scope-flag-value-looks-like-an-option;check-code-prerequisites-help
+return 1#1	case	check-code-prerequisites-missing-link;check-code-prerequisites-errors-sorted-and-deduplicated
+raise SystemExit(main(sys.argv[1:]))	case	check-code-prerequisites-ok-link-present;check-code-prerequisites-missing-link

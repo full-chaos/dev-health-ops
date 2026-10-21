@@ -354,7 +354,6 @@ docs:guards:
       python scripts/check_built_site_links.py --site-dir .build/docs 2>&1 | tee .build/docs-links.log
       python scripts/check_docs_candidate_search.py --site-dir .build/docs --queries docs-data/search-acceptance.json 2>&1 | tee .build/docs-search.log
       python scripts/check_docs_candidate_accessibility.py --site-dir .build/docs --css docs/stylesheets/extra.css 2>&1 | tee .build/docs-accessibility.log
-      python scripts/check_code_prerequisites.py 2>&1 | tee .build/docs-code-prerequisites.log
   artifacts:
     when: always
     expire_in: 14 days
@@ -366,6 +365,17 @@ docs:facts:
   stage: test
   script:
     - go run -trimpath -mod=readonly ./cmd/cigate docs check-candidate-facts
+    - |
+      mkdir -p .build
+      status=0
+      go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites > .build/docs-code-prerequisites.log 2>&1 || status=$?
+      cat .build/docs-code-prerequisites.log
+      exit $status
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - .build/docs-code-prerequisites.log
 
 docs:freshness:
   image: $GO_IMAGE

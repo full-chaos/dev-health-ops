@@ -8,10 +8,11 @@ import (
 	"sync/atomic"
 )
 
-// AdminRoutes is the one table of every "METHOD pattern" of admin.Routes; the
-// no-store middleware and the venue oracle (admin no-store divergence) both read
-// it, and other /api/v1/admin-prefixed packages are not in it. A test in package admin_test
-// keeps it equal to the real route table.
+// AdminRoutes is the one table of every "METHOD pattern" the api mounts under
+// /api/v1/admin (admin, credentials, customerpush, syncadmin, integrationsadmin,
+// githubapp, teamsidentity); the no-store middleware and the venue oracle (admin
+// no-store divergence) both read it. A test in package apiservice walks the real
+// route set and fails when the table and the mounted routes differ.
 var AdminRoutes = []string{
 	"DELETE /api/v1/admin/credentials/{provider}/{name}",
 	"DELETE /api/v1/admin/ip-allowlist/{entry_id}",
@@ -21,16 +22,35 @@ var AdminRoutes = []string{
 	"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}",
 	"DELETE /api/v1/admin/retention-policies/{policy_id}",
 	"DELETE /api/v1/admin/settings/{category}/{key}",
+	"DELETE /api/v1/admin/sync-configs/{config_id}",
+	"DELETE /api/v1/admin/teams/{team_id}",
 	"DELETE /api/v1/admin/users/{user_id}",
 	"GET /api/v1/admin/audit-logs",
 	"GET /api/v1/admin/audit-logs/resource/{resource_type}/{resource_id}",
 	"GET /api/v1/admin/audit-logs/user/{user_id}",
 	"GET /api/v1/admin/audit-logs/{log_id}",
+	"GET /api/v1/admin/backfill-jobs",
+	"GET /api/v1/admin/backfill-jobs/{job_id}",
+	"GET /api/v1/admin/credentials",
+	"GET /api/v1/admin/credentials/{provider}/{name}",
+	"GET /api/v1/admin/customer-push/batches/{ingestion_id}",
+	"GET /api/v1/admin/customer-push/schemas",
+	"GET /api/v1/admin/customer-push/schemas/{schema_version}",
+	"GET /api/v1/admin/customer-push/sources",
+	"GET /api/v1/admin/customer-push/sources/{source_id}",
+	"GET /api/v1/admin/customer-push/sources/{source_id}/batches",
+	"GET /api/v1/admin/customer-push/sources/{source_id}/tokens",
+	"GET /api/v1/admin/customer-push/tokens",
 	"GET /api/v1/admin/feature-flags",
+	"GET /api/v1/admin/identities",
 	"GET /api/v1/admin/impersonate/status",
+	"GET /api/v1/admin/integrations",
 	"GET /api/v1/admin/integrations/pagerduty/services",
 	"GET /api/v1/admin/integrations/pagerduty/status",
 	"GET /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}",
+	"GET /api/v1/admin/integrations/{integration_id}",
+	"GET /api/v1/admin/integrations/{integration_id}/datasets",
+	"GET /api/v1/admin/integrations/{integration_id}/sources",
 	"GET /api/v1/admin/ip-allowlist",
 	"GET /api/v1/admin/ip-allowlist/{entry_id}",
 	"GET /api/v1/admin/llm-settings",
@@ -50,17 +70,49 @@ var AdminRoutes = []string{
 	"GET /api/v1/admin/settings/{category}",
 	"GET /api/v1/admin/settings/{category}/{key}",
 	"GET /api/v1/admin/setup/status",
+	"GET /api/v1/admin/sync-configs",
+	"GET /api/v1/admin/sync-configs/auto-import-capabilities",
+	"GET /api/v1/admin/sync-configs/{config_id}",
+	"GET /api/v1/admin/sync-configs/{config_id}/coverage",
+	"GET /api/v1/admin/sync-configs/{config_id}/jobs",
+	"GET /api/v1/admin/sync-configs/{config_id}/repositories",
+	"GET /api/v1/admin/sync-runs/{run_id}",
+	"GET /api/v1/admin/sync-runs/{run_id}/units",
+	"GET /api/v1/admin/sync-targets",
+	"GET /api/v1/admin/teams",
+	"GET /api/v1/admin/teams/{team_id}",
+	"GET /api/v1/admin/teams/{team_id}/discover-members",
+	"GET /api/v1/admin/teams/{team_id}/infer-members",
 	"GET /api/v1/admin/users",
 	"GET /api/v1/admin/users/{user_id}",
+	"PATCH /api/v1/admin/credentials/{provider}/{name}",
+	"PATCH /api/v1/admin/customer-push/sources/{source_id}",
 	"PATCH /api/v1/admin/feature-flags/{flag_id}",
+	"PATCH /api/v1/admin/integrations/{integration_id}",
+	"PATCH /api/v1/admin/integrations/{integration_id}/datasets",
+	"PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}",
 	"PATCH /api/v1/admin/ip-allowlist/{entry_id}",
 	"PATCH /api/v1/admin/orgs/{org_id}",
 	"PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}",
 	"PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}",
 	"PATCH /api/v1/admin/retention-policies/{policy_id}",
+	"PATCH /api/v1/admin/sync-configs/{config_id}",
+	"PATCH /api/v1/admin/teams/{team_id}",
 	"PATCH /api/v1/admin/users/{user_id}",
+	"POST /api/v1/admin/credentials",
+	"POST /api/v1/admin/credentials/test",
+	"POST /api/v1/admin/customer-push/sources",
+	"POST /api/v1/admin/customer-push/sources/{source_id}/tokens",
+	"POST /api/v1/admin/customer-push/sources/{source_id}/validate",
+	"POST /api/v1/admin/customer-push/tokens",
+	"POST /api/v1/admin/customer-push/tokens/{token_id}/revoke",
+	"POST /api/v1/admin/customer-push/tokens/{token_id}/rotate",
+	"POST /api/v1/admin/identities",
 	"POST /api/v1/admin/impersonate",
 	"POST /api/v1/admin/impersonate/stop",
+	"POST /api/v1/admin/integrations",
+	"POST /api/v1/admin/integrations/github/install-callback",
+	"POST /api/v1/admin/integrations/github/install-url",
 	"POST /api/v1/admin/integrations/pagerduty/api-token",
 	"POST /api/v1/admin/integrations/pagerduty/authorize",
 	"POST /api/v1/admin/integrations/pagerduty/callback",
@@ -71,6 +123,9 @@ var AdminRoutes = []string{
 	"POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate",
 	"POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke",
 	"POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate",
+	"POST /api/v1/admin/integrations/{integration_id}/backfill",
+	"POST /api/v1/admin/integrations/{integration_id}/discover",
+	"POST /api/v1/admin/integrations/{integration_id}/sync",
 	"POST /api/v1/admin/ip-allowlist",
 	"POST /api/v1/admin/ip-allowlist/{entry_id}",
 	"POST /api/v1/admin/llm-settings/readiness",
@@ -82,11 +137,22 @@ var AdminRoutes = []string{
 	"POST /api/v1/admin/retention-policies",
 	"POST /api/v1/admin/retention-policies/{policy_id}/execute",
 	"POST /api/v1/admin/settings",
+	"POST /api/v1/admin/sync-configs",
+	"POST /api/v1/admin/sync-configs/batch",
+	"POST /api/v1/admin/sync-configs/{config_id}/backfill",
+	"POST /api/v1/admin/sync-configs/{config_id}/trigger",
+	"POST /api/v1/admin/teams",
+	"POST /api/v1/admin/teams/{team_id}",
+	"POST /api/v1/admin/teams/{team_id}/approve-changes",
+	"POST /api/v1/admin/teams/{team_id}/confirm-inferred-members",
+	"POST /api/v1/admin/teams/{team_id}/confirm-members",
+	"POST /api/v1/admin/teams/{team_id}/dismiss-changes",
 	"POST /api/v1/admin/users",
 	"POST /api/v1/admin/users/{user_id}/password",
 	"PUT /api/v1/admin/llm-settings",
 	"PUT /api/v1/admin/llm-settings/service-model",
 	"PUT /api/v1/admin/settings/{category}/{key}",
+	"PUT /api/v1/admin/sync-configs/{config_id}/repositories",
 }
 
 // DecodePath routes on the percent-decoded path, as Starlette does: an encoded
@@ -115,12 +181,15 @@ type NoStoreRoutes struct {
 	patterns map[string]bool
 	once     sync.Once
 	own      *http.ServeMux
-	router   atomic.Pointer[boundRouter]
+	// ownRedirect is the unbound router's slash redirector (the venue oracle's).
+	ownRedirect *slashRedirector
+	router      atomic.Pointer[boundRouter]
 }
 
 type boundRouter struct {
-	mux    *http.ServeMux
-	strict bool
+	mux      *http.ServeMux
+	strict   bool
+	redirect *slashRedirector
 }
 
 // NewNoStoreRoutes lists the "METHOD pattern" routes that answer no-store.
@@ -132,8 +201,8 @@ func NewNoStoreRoutes(patterns []string) *NoStoreRoutes {
 	return &NoStoreRoutes{patterns: set}
 }
 
-func (n *NoStoreRoutes) bind(mux *http.ServeMux, strict bool) {
-	n.router.Store(&boundRouter{mux: mux, strict: strict})
+func (n *NoStoreRoutes) bind(mux *http.ServeMux, strict bool, redirect *slashRedirector) {
+	n.router.Store(&boundRouter{mux: mux, strict: strict, redirect: redirect})
 }
 
 func (n *NoStoreRoutes) route() *boundRouter {
@@ -143,25 +212,59 @@ func (n *NoStoreRoutes) route() *boundRouter {
 	n.once.Do(func() {
 		n.own = http.NewServeMux()
 		none := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+		seen := map[string]bool{}
+		var paths []string
 		for pattern := range n.patterns {
 			n.own.Handle(pattern, none)
+			if path := pattern[strings.IndexByte(pattern, ' ')+1:]; !seen[path] {
+				seen[path] = true
+				paths = append(paths, path)
+			}
 		}
+		n.ownRedirect = newSlashRedirector(paths, ParseForwardedTrust(""))
 	})
-	return &boundRouter{mux: n.own, strict: true}
+	return &boundRouter{mux: n.own, strict: true, redirect: n.ownRedirect}
 }
 
-// Matches reports whether the router routes r to one of the listed patterns.
+// Matches reports whether the router routes r to one of the listed patterns,
+// or answers it with its trailing-slash 307 redirect to a path of the table.
 func (n *NoStoreRoutes) Matches(r *http.Request) bool {
 	router := n.route()
-	target := DecodePath(r)
+	decoded := DecodePath(r)
+	target, routable := decoded, true
 	if router.strict {
-		var ok bool
-		if target, ok = strictTarget(target); !ok {
-			return false
+		target, routable = strictTarget(decoded)
+	}
+	if routable {
+		if _, pattern := router.mux.Handler(target); n.patterns[pattern] {
+			return true
 		}
 	}
-	_, pattern := router.mux.Handler(target)
-	return n.patterns[pattern]
+	return router.redirect != nil && n.redirectsToTable(router.redirect, decoded)
+}
+
+// redirectsToTable reports whether the router answers target with its 307
+// slash redirect to a path of the table: no route matches target itself and the
+// toggled path matches a table path. The 307 names the admin path, so it
+// carries no-store like the route it points at.
+func (n *NoStoreRoutes) redirectsToTable(redirect *slashRedirector, target *http.Request) bool {
+	if _, routed := redirect.matches(target, target.URL.Path); routed {
+		return false
+	}
+	toggled, ok := toggledSlash(target.URL.Path)
+	if !ok {
+		return false
+	}
+	pattern, ok := redirect.matches(target, toggled)
+	if !ok {
+		return false
+	}
+	for entry := range n.patterns {
+		if strings.HasSuffix(entry, " "+pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // Middleware sets Cache-Control: no-store before next runs when Matches, so a

@@ -65,7 +65,7 @@ docs\:check-freshness:
 	go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness
 
 docs\:check-code-prerequisites:
-	$(PYTHON) scripts/check_code_prerequisites.py
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites
 
 # Canonical documentation lifecycle:
 #   make docs:serve

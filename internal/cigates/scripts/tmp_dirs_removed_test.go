@@ -157,6 +157,10 @@ func pyCode(src string) string {
 			out.WriteRune(quote)
 			for i < len(rs) {
 				if rs[i] == '\\' && i+1 < len(rs) {
+					if fstring && rs[i+1] == '{' {
+						i++ // `\{` in an f-string: python keeps the backslash and the brace still opens an expression, raw or not
+						continue
+					}
 					i += 2
 					continue
 				}
@@ -178,6 +182,15 @@ func pyCode(src string) string {
 					depth, j := 1, i+1
 					for j < len(rs) && depth > 0 {
 						switch rs[j] {
+						case '\'', '"':
+							q := rs[j]
+							j++
+							for j < len(rs) && rs[j] != q {
+								if rs[j] == '\\' && j+1 < len(rs) {
+									j++
+								}
+								j++
+							}
 						case '{':
 							depth++
 						case '}':
@@ -185,7 +198,12 @@ func pyCode(src string) string {
 						}
 						j++
 					}
-					out.WriteString(" " + string(rs[i+1:j-1]) + " ")
+					end := j - 1
+					if depth > 0 {
+						end = len(rs)
+					}
+					// a quoted string inside the expression is skipped when matching braces, and its text is not code
+					out.WriteString(" " + pyCode(string(rs[i+1:end])) + " ")
 					i = j
 					continue
 				}
@@ -243,7 +261,8 @@ func pyLogicalLines(code string) []string {
 	return lines
 }
 
-// pyStatements: the logical lines, each cut at a top-level `;` (a `;` inside brackets belongs to the expression).
+// pyStatements: the logical lines, each cut at a top-level `;` (a `;` inside brackets belongs to the expression) and each
+// compound header (`if x:`, `try:`, `except E:`, `else:`, `def f():`, ...) cut from the statement that follows its `:` on the same line.
 func pyStatements(code string) []string {
 	var out []string
 	for _, line := range pyLogicalLines(code) {
@@ -256,14 +275,41 @@ func pyStatements(code string) []string {
 				depth--
 			case ';':
 				if depth == 0 {
-					out = append(out, line[start:i])
+					out = append(out, pySplitHeader(line[start:i])...)
 					start = i + 1
 				}
 			}
 		}
-		out = append(out, line[start:])
+		out = append(out, pySplitHeader(line[start:])...)
 	}
 	return out
+}
+
+var pyCompoundKeyword = regexp.MustCompile(`^[ \t]*(?:async[ \t]+)?(?:if|elif|else|try|except|finally|for|while|with|def|class)(?:[^\p{L}\p{N}_]|$)`)
+
+func pySplitHeader(stmt string) []string {
+	if !pyCompoundKeyword.MatchString(stmt) {
+		return []string{stmt}
+	}
+	depth := 0
+	rs := []rune(stmt)
+	for i, r := range rs {
+		switch r {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		case ':':
+			if depth == 0 && !(i+1 < len(rs) && rs[i+1] == '=') {
+				rest := string(rs[i+1:])
+				if strings.TrimSpace(rest) == "" {
+					return []string{stmt}
+				}
+				return append([]string{string(rs[:i+1])}, pySplitHeader(rest)...)
+			}
+		}
+	}
+	return []string{stmt}
 }
 
 // pyMakesTempDir: a mkdtemp call, or a gettempdir() joined into a path (a read of the name alone makes nothing).
@@ -376,6 +422,14 @@ func TestPythonTempDirCheckFlagsALeakAndIsNotFooledByTextOrAnAlias(t *testing.T)
 		{"a backslash continued alias import", "from tempfile import \\\n    mkdtemp as make\nx = make()\n", true},
 		{"an alias import after a semicolon", "import os; from tempfile import mkdtemp as make\nx = make()\n", true},
 		{"a non-ASCII alias", "from tempfile import mkdtemp as café\nx = café()\n", true},
+		{"an alias import after an if header on the same line", "if True: from tempfile import mkdtemp as m\nx = m()\n", true},
+		{"an alias import in a try body on the same line", "try: from tempfile import mkdtemp as m\nexcept ImportError: pass\nx = m()\n", true},
+		{"an alias import and its call in a one-line def", "def f(): from tempfile import mkdtemp as m; return m()\n", true},
+		{"an else header on one line", "if a: pass\nelse: from tempfile import mkdtemp as m\nx = m()\n", true},
+		{"a raw f-string with a backslash before its brace", "import tempfile\nx = rf\"\\{tempfile.mkdtemp()}\"\n", true},
+		{"an f-string expression with a closing brace inside a quoted string", "import tempfile\nx = f\"{'}' + tempfile.mkdtemp()}\"\n", true},
+		{"a quoted string in an f-string expression names mkdtemp but calls nothing", "x = f\"{'tempfile.mkdtemp()'}\"\n", false},
+		{"an annotation colon in brackets is no header", "x: int = 1\n", false},
 		{"a call glued to a non-ASCII word is not the alias", "from tempfile import mkdtemp as make\nx = émake()\n", false},
 		{"a semicolon inside brackets does not split a join", "import tempfile\nC = (1; 2) / tempfile.gettempdir()\n", true},
 		{"a cleanup after a semicolon counts", "import shutil, tempfile\nd = tempfile.mkdtemp(); shutil.rmtree(d)\n", false},

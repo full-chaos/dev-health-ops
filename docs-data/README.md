@@ -11,7 +11,7 @@ Reader-facing documentation guidance lives under
 
 | Path | Consumed by |
 | --- | --- |
-| `ia/*.tsv` | `scripts/validate_docs_ia_v2.py`, `scripts/validate_docs_v2_publication.py`, `scripts/validate_docs_inventory_review.py`, `tests/docs/test_docs_ia_v2.py`, `tests/docs/test_built_site_links.py` |
+| `ia/*.tsv` | `scripts/validate_docs_ia_v2.py`, `scripts/validate_docs_v2_publication.py`, `scripts/validate_docs_inventory_review.py` |
 | `redirects.tsv` | `scripts/validate_docs_v2_publication.py`, `scripts/build_docs_cloudflare.py`, `.github/workflows/docs-cloudflare.yml` |
 | `search-acceptance.json` | `scripts/check_docs_candidate_search.py` via `.github/workflows/docs-guards.yml`, `scripts/build_docs_cloudflare.py` |
 | `inventory/` | `scripts/docs_inventory_review.py`, `scripts/validate_docs_inventory_review.py`, `.github/workflows/docs-inventory-review.yml` |

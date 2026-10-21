@@ -26,17 +26,22 @@ func (s IdentityStore) IdentityBySubject(ctx context.Context, id Identity, legac
 		match = &identity.LegacyMatch{AuthProvider: legacy.AuthProvider, MembershipOrg: &org, Subject: legacy.Subject}
 	}
 	p, found, err := s.Identities.IdentityBySubject(ctx, id.Issuer, identity.Provider(id.Provider), id.Subject, match)
-	switch {
-	case errors.Is(err, identity.ErrMultipleUsers):
-		return Principal{}, false, ErrIdentityAmbiguous
-	case errors.Is(err, identity.ErrLegacyNotMember):
-		return Principal{}, false, ErrNotOrgMember
-	}
 	if err != nil || !found {
-		return Principal{}, false, err
+		return Principal{}, false, lookupError(err)
 	}
 	out := Principal{ID: p.ID, Disabled: p.DisabledAt != nil || !p.IsActive}
 	return out, true, nil
+}
+
+// lookupError is the SAML error for an identity store lookup error.
+func lookupError(err error) error {
+	switch {
+	case errors.Is(err, identity.ErrMultipleUsers):
+		return ErrIdentityAmbiguous
+	case errors.Is(err, identity.ErrLegacyNotMember):
+		return ErrNotOrgMember
+	}
+	return err
 }
 
 // NormalizeEmail is the identity store's email rule.

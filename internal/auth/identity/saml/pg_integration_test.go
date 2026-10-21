@@ -173,10 +173,44 @@ VALUES ($1, $2, $3, 'saml', 'active', $4, $5::json)`, p.ID, p.OrgID, "idp-"+p.ID
 	if err != nil {
 		t.Fatal(err)
 	}
+	joins := &recordedJoins{stored: pg, joined: map[uuid.UUID]bool{}}
 	return &harness{t: t, db: d, idp: idp, provider: loaded, svc: &saml.Service{
-		Providers: pg, Entitlements: allowSSO{}, Flows: pg, Uses: pg, Store: saml.IdentityStore{Identities: d.legacy}, Memberships: pg,
-		BaseURL: func() string { return baseURL },
+		Providers: pg, Entitlements: allowSSO{}, Flows: pg, Uses: pg, Store: saml.IdentityStore{Identities: d.legacy},
+		Memberships: joins, JIT: joins, BaseURL: func() string { return baseURL },
 	}}
+}
+
+// recordedJoins is the membership seam of the harness: JoinOnSignIn records
+// the principal (memberships stay a go-api write, and a provisioned principal
+// has no public.users row to reference), and Member answers from the record
+// or the stored memberships.
+type recordedJoins struct {
+	stored saml.Memberships
+	mu     sync.Mutex
+	joined map[uuid.UUID]bool
+}
+
+func (r *recordedJoins) JoinOnSignIn(_ context.Context, principalID uuid.UUID, _ saml.Provider) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.joined[principalID] = true
+	return nil
+}
+
+func (r *recordedJoins) Member(ctx context.Context, principalID, orgID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	joined := r.joined[principalID]
+	r.mu.Unlock()
+	if joined {
+		return true, nil
+	}
+	return r.stored.Member(ctx, principalID, orgID)
+}
+
+// withoutJoins removes the membership seam: memberships are only the stored rows.
+func (h *harness) withoutJoins() {
+	h.svc.JIT = nil
+	h.svc.Memberships = h.svc.Memberships.(*recordedJoins).stored
 }
 
 // ownUsers switches the harness to the identity store after the users cutover.
@@ -793,8 +827,8 @@ func TestSAMLNewAccountNeedsUsersOwnedByAuth(t *testing.T) {
 	}
 	h.ownUsers()
 	signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: uniqueEmail("new")}), nil)
-	if err != nil || !signIn.Created || signIn.OrganizationID != nil {
-		t.Fatalf("sign-up: %+v err %v", signIn, err)
+	if err != nil || !signIn.Created || signIn.OrganizationID == nil || *signIn.OrganizationID != h.provider.OrgID {
+		t.Fatalf("sign-up: %+v err %v, want a new account in the provider's org", signIn, err)
 	}
 
 	t.Run("auto provisioning disabled", func(t *testing.T) {
@@ -806,6 +840,34 @@ func TestSAMLNewAccountNeedsUsersOwnedByAuth(t *testing.T) {
 			t.Fatalf("err = %v, want ErrAutoProvisionDisabled", err)
 		}
 	})
+}
+
+// TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites: with no membership
+// seam, a linked account that is not a member of the provider's organization
+// and a new account are refused with ErrNotOrgMember (membership_required)
+// and write nothing; the linked account signs in once it is a member.
+func TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites(t *testing.T) {
+	h := newHarness(t, true)
+	h.withoutJoins()
+	user := h.linkedUser(uniqueEmail("u"), "user-1")
+	h.ownUsers()
+	for name, nameID := range map[string]string{"linked account": "user-1", "new account": "new-" + uuid.NewString()} {
+		t.Run(name, func(t *testing.T) {
+			before := h.writeCounts()
+			signIn, err := h.consume(h.respond(resp{nameID: nid(nameID), email: uniqueEmail("free")}), nil)
+			if !errors.Is(err, saml.ErrNotOrgMember) || saml.OutcomeReason(err) != "membership_required" {
+				t.Fatalf("sign-in %+v err %v, want ErrNotOrgMember (membership_required)", signIn, err)
+			}
+			if after := h.writeCounts(); after != before {
+				t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
+			}
+		})
+	}
+	h.member(user)
+	signIn, err := h.consume(h.respond(resp{nameID: nid("user-1"), email: uniqueEmail("free")}), nil)
+	if err != nil || signIn.PrincipalID != user || signIn.OrganizationID == nil || *signIn.OrganizationID != h.provider.OrgID {
+		t.Fatalf("member: sign-in %+v err %v, want the account in the provider's org", signIn, err)
+	}
 }
 
 // TestSAMLAllowedDomainsAreEnforcedOnAMiss: without a linked identity the

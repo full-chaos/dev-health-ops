@@ -138,7 +138,8 @@ type Memberships interface {
 }
 
 // MembershipJIT is the seam for organization membership on first sign-in.
-// go-api owns membership writes until Wave 4; a nil MembershipJIT adds none.
+// go-api owns membership writes until Wave 4; with a nil MembershipJIT no
+// membership is added and a sign-in that needs one is refused.
 type MembershipJIT interface {
 	JoinOnSignIn(ctx context.Context, principalID uuid.UUID, p Provider) error
 }

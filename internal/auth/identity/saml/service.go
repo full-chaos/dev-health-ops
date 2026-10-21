@@ -204,6 +204,9 @@ func (s *Service) BoundToRoute(ctx context.Context, p Provider, routeID uuid.UUI
 // resolves the account. cookie returns a request cookie value by name (""
 // when absent). On an identity key hit the account signs in from its stored
 // state and the assertion's email is not read; only a miss needs the email.
+// Every sign-in ends in the provider's organization: an account that is not
+// a member after the membership seam ran is ErrNotOrgMember, and so is a new
+// account when no MembershipJIT is set (refused before it is provisioned).
 func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, cookie func(string) string) (SignIn, error) {
 	raw, err := DecodeResponse(posted)
 	if err != nil {
@@ -266,7 +269,6 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		created = true
 	}
 
-	out := SignIn{PrincipalID: principal.ID, ProviderID: p.ID, AMR: []string{AMRFederated}, AuthTime: now, Created: created}
 	member, err := s.Memberships.Member(ctx, principal.ID, p.OrgID)
 	if err != nil {
 		return SignIn{}, err
@@ -279,12 +281,12 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 			return SignIn{}, err
 		}
 	}
-	if member {
-		org := p.OrgID
-		out.OrganizationID = &org
+	if !member {
+		return SignIn{}, s.refuse(ctx, p, ErrNotOrgMember)
 	}
-	s.logger().InfoContext(ctx, "auth saml: sign-in accepted", "provider_id", p.ID, "created", created, "member", member)
-	return out, nil
+	org := p.OrgID
+	s.logger().InfoContext(ctx, "auth saml: sign-in accepted", "provider_id", p.ID, "created", created)
+	return SignIn{PrincipalID: principal.ID, OrganizationID: &org, ProviderID: p.ID, AMR: []string{AMRFederated}, AuthTime: now, Created: created}, nil
 }
 
 // matchRequest binds a response to its stored request and browser. A response
@@ -323,6 +325,9 @@ func (s *Service) provision(ctx context.Context, p Provider, id Identity, email,
 	}
 	if !p.AutoProvision {
 		return uuid.Nil, ErrAutoProvisionDisabled
+	}
+	if s.JIT == nil {
+		return uuid.Nil, ErrNotOrgMember
 	}
 	principalID, err := s.Store.ProvisionFederated(ctx, NewFederatedUser{
 		Email: normalized, DisplayName: name, Identity: id, AuditRequestID: auditRequestID(ctx),

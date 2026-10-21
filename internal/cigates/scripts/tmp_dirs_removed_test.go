@@ -290,11 +290,13 @@ func pySplitHeader(stmt string) []string {
 }
 
 // pyMakesTempDir: a mkdtemp call, or a gettempdir() joined into a path (a read of the name alone makes nothing).
+var pyJoinCall = regexp.MustCompile(`(?:^|[^\p{L}\p{N}_])join[ \t]*\(`)
+
 func pyMakesTempDir(src string) bool {
 	code := pyCode(src)
 	names := map[string]string{"mkdtemp": "mkdtemp", "gettempdir": "gettempdir"}
-	logical := pyStatements(code)
-	for _, line := range logical {
+	statements := pyStatements(code)
+	for _, line := range statements {
 		m := pyFromTempfile.FindStringSubmatch(line)
 		if m == nil {
 			continue
@@ -306,22 +308,25 @@ func pyMakesTempDir(src string) bool {
 			}
 		}
 	}
-	callsOf := func(line, want string) bool {
+	// one pattern per original name over all the local names bound to it, built once per file
+	callPattern := func(want string) *regexp.Regexp {
+		var locals []string
 		for local, orig := range names {
-			if orig != want {
-				continue
-			}
-			if regexp.MustCompile(`(?:^|[^\p{L}\p{N}_])` + regexp.QuoteMeta(local) + `[ \t]*\(`).MatchString(line) {
-				return true
+			if orig == want {
+				locals = append(locals, regexp.QuoteMeta(local))
 			}
 		}
-		return false
+		return regexp.MustCompile(`(?:^|[^\p{L}\p{N}_])(?:` + strings.Join(locals, "|") + `)[ \t]*\(`)
 	}
-	for _, line := range pyStatements(code) {
-		if callsOf(line, "mkdtemp") {
+	mkdtemp, gettempdir := callPattern("mkdtemp"), callPattern("gettempdir")
+	for _, line := range statements {
+		if !strings.Contains(line, "(") {
+			continue
+		}
+		if mkdtemp.MatchString(line) {
 			return true
 		}
-		if callsOf(line, "gettempdir") && (strings.Contains(line, "/") || regexp.MustCompile(`(?:^|[^\p{L}\p{N}_])join[ \t]*\(`).MatchString(line)) {
+		if gettempdir.MatchString(line) && (strings.Contains(line, "/") || pyJoinCall.MatchString(line)) {
 			return true
 		}
 	}

@@ -5,6 +5,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -24,11 +26,11 @@ func sendCanary(ctx context.Context, client *http.Client) {
 }
 
 func TestNewClientNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) { sendCanary(ctx, NewClient(5*time.Second)) }).AssertNothingReached(t)
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) { sendCanary(ctx, NewClient(5*time.Second)) }).AssertNothingReached(t)
 }
 
 func TestTransportAndSharedTransportNeverDialTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
 		sendCanary(ctx, &http.Client{Transport: Transport()})
 		sendCanary(ctx, &http.Client{Transport: SharedTransport()})
 	}).AssertNothingReached(t)
@@ -49,7 +51,7 @@ func TestSharedTransportIsOnePool(t *testing.T) {
 // A supplied client with no Transport would dial through http.DefaultTransport; NoRedirects (and every seam that guards
 // a supplied client with it) gives the copy SharedTransport instead.
 func TestNoRedirectsGivesASuppliedClientWithoutATransportNoEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
 		sendCanary(ctx, NoRedirects(&http.Client{Timeout: 5 * time.Second}))
 		sendCanary(ctx, NoRedirectsDoer(&http.Client{Timeout: 5 * time.Second}))
 	}).AssertNothingReached(t)
@@ -86,7 +88,7 @@ func TestTransportSurvivesAReplacedDefaultTransport(t *testing.T) {
 }
 
 func TestWithTransportGivesASuppliedClientWithoutATransportNoEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) { sendCanary(ctx, WithTransport(&http.Client{})) }).AssertNothingReached(t)
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) { sendCanary(ctx, WithTransport(&http.Client{})) }).AssertNothingReached(t)
 	supplied := &http.Client{}
 	if WithTransport(supplied).Transport == nil || supplied.Transport != nil {
 		t.Fatal("WithTransport must give its copy a transport and leave the supplied client unchanged")
@@ -95,4 +97,11 @@ func TestWithTransportGivesASuppliedClientWithoutATransportNoEnvironmentProxy(t 
 	if WithTransport(own) != own || WithTransport(nil) != nil {
 		t.Fatal("WithTransport must return a client that has a transport, and nil, unchanged")
 	}
+}
+
+// runCaptureChild re-runs this test binary for proxycapture.Check.
+func runCaptureChild(args, env []string) ([]byte, error) {
+	command := exec.Command(os.Args[0], args...)
+	command.Env = env
+	return command.CombinedOutput()
 }

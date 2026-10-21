@@ -3,6 +3,8 @@ package workerservice
 import (
 	"context"
 	"net/http"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -21,11 +23,18 @@ func sendCanaryWith(ctx context.Context, client *http.Client) {
 }
 
 func TestTheDefaultAtlassianTeamsDoerNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) { sendCanaryWith(ctx, defaultAtlassianTeamsDoer()) }).AssertNothingReached(t)
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) { sendCanaryWith(ctx, defaultAtlassianTeamsDoer()) }).AssertNothingReached(t)
 }
 
 func TestTheContractDeadlineClientNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
 		sendCanaryWith(ctx, contractDeadlineHTTPClient(5*time.Second))
 	}).AssertNothingReached(t)
+}
+
+// runCaptureChild re-runs this test binary for proxycapture.Check.
+func runCaptureChild(args, env []string) ([]byte, error) {
+	command := exec.Command(os.Args[0], args...)
+	command.Env = env
+	return command.CombinedOutput()
 }

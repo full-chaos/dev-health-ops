@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -25,11 +27,11 @@ func sendBasicCanary(ctx context.Context, client *http.Client) {
 }
 
 func TestTheGatewayClientNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) { sendBasicCanary(ctx, GatewayHTTPClient(5*time.Second)) }).AssertNothingReached(t)
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) { sendBasicCanary(ctx, GatewayHTTPClient(5*time.Second)) }).AssertNothingReached(t)
 }
 
 func TestTheTenantInfoDefaultClientNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
 		tenant, err := url.Parse(proxycapture.Target)
 		if err != nil {
 			panic(err)
@@ -39,7 +41,14 @@ func TestTheTenantInfoDefaultClientNeverDialsTheEnvironmentProxy(t *testing.T) {
 }
 
 func TestTheVendoredDefaultClientNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
 		sendBasicCanary(ctx, atlassian.NewDefaultHTTPClient(5*time.Second))
 	}).AssertNothingReached(t)
+}
+
+// runCaptureChild re-runs this test binary for proxycapture.Check.
+func runCaptureChild(args, env []string) ([]byte, error) {
+	command := exec.Command(os.Args[0], args...)
+	command.Env = env
+	return command.CombinedOutput()
 }

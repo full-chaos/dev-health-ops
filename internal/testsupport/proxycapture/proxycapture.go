@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -39,10 +38,14 @@ type Capture struct {
 	FirstLines  []string
 }
 
-// Check runs send in a child process whose environment points HTTP_PROXY and HTTPS_PROXY at a capture proxy, and
-// returns what reached the proxy (in the child it runs send and returns a zero Capture). send gets a context that
-// ends after a few seconds; its errors are expected (the target does not resolve) and ignored.
-func Check(t *testing.T, send func(ctx context.Context)) Capture {
+// Runner runs the test binary again with args and env and returns its combined output. The calling package's _test.go
+// supplies it (exec.Command(os.Args[0], args...)): re-executing the test binary belongs to the test code itself.
+type Runner func(args, env []string) ([]byte, error)
+
+// Check runs send in a child process (through run) whose environment points HTTP_PROXY and HTTPS_PROXY at a capture
+// proxy, and returns what reached the proxy (in the child it runs send and returns a zero Capture). send gets a context
+// that ends after a few seconds; its errors are expected (the target does not resolve) and ignored.
+func Check(t *testing.T, run Runner, send func(ctx context.Context)) Capture {
 	t.Helper()
 	if os.Getenv(childEnv) == t.Name() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -51,14 +54,13 @@ func Check(t *testing.T, send func(ctx context.Context)) Capture {
 		return Capture{}
 	}
 	proxy := startCapture(t)
-	cmd := exec.Command(os.Args[0], "-test.run="+runPattern(t.Name()), "-test.count=1", "-test.timeout=2m")
 	address := "http://" + proxy.address
-	cmd.Env = append(cleanEnv(os.Environ()),
+	env := append(cleanEnv(os.Environ()),
 		childEnv+"="+t.Name(),
 		"HTTP_PROXY="+address, "http_proxy="+address,
 		"HTTPS_PROXY="+address, "https_proxy="+address,
 	)
-	output, err := cmd.CombinedOutput()
+	output, err := run([]string{"-test.run=" + runPattern(t.Name()), "-test.count=1", "-test.timeout=2m"}, env)
 	if err != nil {
 		t.Fatalf("the child test run failed: %v\n%s", err, output)
 	}

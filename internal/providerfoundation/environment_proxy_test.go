@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -23,20 +25,20 @@ func sendCanaryThrough(ctx context.Context, doer HTTPDoer) {
 }
 
 func TestTheDefaultPagerDutyValidationClientNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
 		sendCanaryThrough(ctx, pagerDutyValidationClient(nil, 5*time.Second))
 	}).AssertNothingReached(t)
 }
 
 // A supplied client with no transport gets one without the environment proxy where the provider client is built.
 func TestASuppliedClientWithoutATransportNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
 		sendCanaryThrough(ctx, originGuardedAtConstruction(&http.Client{Timeout: 5 * time.Second}))
 	}).AssertNothingReached(t)
 }
 
 func TestASuppliedPagerDutyValidationClientWithoutATransportNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
 		sendCanaryThrough(ctx, pagerDutyValidationClient(&http.Client{Timeout: 5 * time.Second}, 5*time.Second))
 	}).AssertNothingReached(t)
 }
@@ -50,4 +52,11 @@ func TestThePerRequestOriginGuardGivesASuppliedClientATransport(t *testing.T) {
 	if client, ok := guarded.(*http.Client); !ok || client.Transport != http.RoundTripper(httpguard.SharedTransport()) {
 		t.Fatalf("originGuardedDoer over a client with no transport = %#v, want a copy over httpguard.SharedTransport()", guarded)
 	}
+}
+
+// runCaptureChild re-runs this test binary for proxycapture.Check.
+func runCaptureChild(args, env []string) ([]byte, error) {
+	command := exec.Command(os.Args[0], args...)
+	command.Env = env
+	return command.CombinedOutput()
 }

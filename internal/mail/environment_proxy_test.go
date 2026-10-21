@@ -3,6 +3,7 @@ package mail
 import (
 	"context"
 	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/proxycapture"
@@ -10,7 +11,7 @@ import (
 
 // The child sets the provider variables itself: the parent's environment is not changed.
 func TestTheDefaultResendClientNeverDialsTheEnvironmentProxy(t *testing.T) {
-	proxycapture.Check(t, func(ctx context.Context) {
+	proxycapture.Check(t, runCaptureChild, func(ctx context.Context) {
 		for name, value := range map[string]string{
 			"EMAIL_PROVIDER": "resend", "EMAIL_FROM_ADDRESS": "noreply@example.com",
 			"EMAIL_API_KEY": proxycapture.Canary, "RESEND_API_BASE_URL": "http://upstream.invalid",
@@ -25,4 +26,11 @@ func TestTheDefaultResendClientNeverDialsTheEnvironmentProxy(t *testing.T) {
 		}
 		_ = sender.Send(ctx, Message{To: "someone@example.com", Subject: "s", HTML: "<p>h</p>"})
 	}).AssertNothingReached(t)
+}
+
+// runCaptureChild re-runs this test binary for proxycapture.Check.
+func runCaptureChild(args, env []string) ([]byte, error) {
+	command := exec.Command(os.Args[0], args...)
+	command.Env = env
+	return command.CombinedOutput()
 }

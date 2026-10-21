@@ -187,6 +187,13 @@ func validateSAMLConfigHTTPS(cfg samlConfigValues) error {
 // proxy prefix in front is allowed. The error names the provider id and the
 // rule, never the configured value.
 func validateSAMLACSOverridePath(cfg samlConfigValues, providerID string) error {
+	if cfg.SPACSURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(cfg.SPACSURL)
+	if err != nil || !strings.HasSuffix(parsed.Path, "/saml/"+providerID+"/acs") {
+		return fmt.Errorf("SAML sp_acs_url must end with /saml/%s/acs of this provider", providerID)
+	}
 	return nil
 }
 

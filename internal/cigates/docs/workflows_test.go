@@ -32,7 +32,7 @@ var docsGuardsChecks = []expectedCheck{
 	{"Check task-based search acceptance", goCmd("check-docs-search"), []string{"--site-dir .build/docs", "--queries " + searchAcceptance}},
 	{"Check structural accessibility invariants", pyCmd("check_docs_candidate_accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
 	{"Check code prerequisites", goCmd("check-code-prerequisites"), nil},
-	{"Check freshness inventory", pyCmd("check_freshness_inventory"), nil},
+	{"Check freshness inventory", goCmd("check-freshness"), nil},
 }
 
 const (
@@ -206,7 +206,7 @@ func docsGuardsGuard(d docTree) []string {
 			out = append(out, "docs-guards must not set up node")
 		}
 	}
-	for _, forbidden := range []string{"docs-qa", "playwright", "pnpm", "npx", "wrangler", "screenshot", "visual regression", "exact prose", pyCmd("check_external_links")} {
+	for _, forbidden := range []string{"docs-qa", "playwright", "pnpm", "npx", "wrangler", "screenshot", "visual regression", "exact prose", "check-external-links"} {
 		if strings.Contains(allRuns, forbidden) {
 			out = append(out, "docs-guards must not run "+forbidden)
 		}
@@ -348,8 +348,8 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, "        if: always()\n        uses: actions/upload-artifact", "        uses: actions/upload-artifact")
 		}, "the evidence artifact must be uploaded with if: always()"},
 		{"the external link check joins the gate", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "      - name: Check freshness inventory", "      - name: Extra\n        run: "+pyCmd("check_external_links")+"\n      - name: Check freshness inventory")
-		}, "docs-guards must not run " + pyCmd("check_external_links")},
+			return d.edit(t, docsGuardsPath, "      - name: Check freshness inventory", "      - name: Extra\n        run: "+goCmd("check-external-links")+" --built-site .build/docs\n      - name: Check freshness inventory")
+		}, "docs-guards must not run check-external-links"},
 		{"the Go docs guards job is removed", func(t *testing.T, d docTree) docTree {
 			text, _ := d.read(docsGuardsPath)
 			i := strings.Index(text, "  docs-content-guards:")

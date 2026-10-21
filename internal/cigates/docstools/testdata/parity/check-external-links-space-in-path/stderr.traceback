@@ -1,0 +1,1 @@
+http.client.InvalidURL: URL can't contain control characters. '/a b' (found at least ' ')

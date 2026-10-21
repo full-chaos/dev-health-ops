@@ -132,7 +132,7 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 	principal, found, err := s.lookup(ctx, profile.ExternalKey)
 	if err != nil {
 		reason = lookupReason(err)
-		return ExchangeResult{}, err
+		return ExchangeResult{PrincipalID: principal.ID}, err
 	}
 	if found {
 		reason, err = signInTo(principal)
@@ -188,7 +188,8 @@ func (s *Service) lookup(ctx context.Context, key identity.ExternalKey) (identit
 	case errors.Is(err, identity.ErrProviderAlreadyLinked):
 		// The go-api account of this subject holds another identity at the
 		// provider: the projection wrote nothing and this sign-in is refused.
-		return identity.Principal{}, false, ErrProviderLinked
+		// The refusal names that account.
+		return identity.Principal{ID: p.ID}, false, ErrProviderLinked
 	case err != nil:
 		return identity.Principal{}, false, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
@@ -240,7 +241,7 @@ func (s *Service) emailOwner(ctx context.Context, email string) (string, uuid.UU
 func (s *Service) settleTaken(ctx context.Context, key identity.ExternalKey, method string, owner uuid.UUID) (ExchangeResult, Reason, error) {
 	principal, found, err := s.lookup(ctx, key)
 	if err != nil {
-		return ExchangeResult{}, lookupReason(err), err
+		return ExchangeResult{PrincipalID: principal.ID}, lookupReason(err), err
 	}
 	if found {
 		reason, err := signInTo(principal)

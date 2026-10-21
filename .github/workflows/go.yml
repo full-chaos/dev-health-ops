@@ -1191,6 +1191,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          # CHAOS-10486: no setup-go cache here. Its key is shared by every workflow, and a job that compiles little or
+          # nothing saved it first and left the heavy jobs an empty entry.
+          cache: false
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
         with:

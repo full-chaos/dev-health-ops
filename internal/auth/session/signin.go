@@ -51,7 +51,7 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 // Create writes, inside the caller's transaction. The session's client_ip is
 // the request's client address and its user_agent the request's user agent,
 // when they are bound.
-func (s *Store) insertSession(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID, amr []string) (Issued, error) {
+func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string) (Issued, error) {
 	credential, err := newCredential()
 	if err != nil {
 		return Issued{}, err
@@ -71,25 +71,18 @@ func (s *Store) insertSession(ctx context.Context, tx audit.TxOps, principalID u
 	// effective expiry (see sessionColumns).
 	var sessionID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, client_ip, user_agent)
+		INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr, client_ip, user_agent)
 		SELECT p.id, $2::uuid, $3, t.at, t.at, t.at,
 		       CASE WHEN $4::double precision > 0 THEN t.at + make_interval(secs => $4::double precision) ELSE 'infinity' END,
-		       $5::inet, $6
+		       t.at, $5, $6::inet, $7
 		FROM `+s.q+`.principals p, (SELECT clock_timestamp() AS at) t
 		WHERE p.id = $1 AND p.disabled_at IS NULL
 		RETURNING id::text`,
-		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), clientaddr.Text(ctx), userAgentOf(ctx)).Scan(&sessionID)
+		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr, clientaddr.Text(ctx), userAgentOf(ctx)).Scan(&sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Issued{}, ErrPrincipalUnavailable
 	}
 	if err != nil {
-		return Issued{}, err
-	}
-	// auth_time and amr are the session's guarded security columns (migration
-	// 0010's commit guard): they are written by an UPDATE, which the guard
-	// counts, so audit.Commit sees the sign-in change state (an insert into
-	// sessions is not counted). The values are Create's.
-	if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.sessions SET auth_time = issued_at, amr = $2 WHERE id = $1`, sessionID, amr); err != nil {
 		return Issued{}, err
 	}
 	var out Issued

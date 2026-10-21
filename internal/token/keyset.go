@@ -78,7 +78,7 @@ func NewKeySet(keys []Key) (KeySet, error) {
 	if len(keys) == 0 {
 		return KeySet{}, failure(ReasonNoKeys)
 	}
-	seen := map[string]bool{}
+	seen, publics := map[string]bool{}, map[string]bool{}
 	active := -1
 	for i, key := range keys {
 		if !keystore.KeyIDPattern.MatchString(key.KeyID) || !key.State.Valid() ||
@@ -89,6 +89,10 @@ func NewKeySet(keys []Key) (KeySet, error) {
 			return KeySet{}, failure(ReasonDuplicateKeyID)
 		}
 		seen[key.KeyID] = true
+		if publics[string(key.PublicKey)] {
+			return KeySet{}, failure(ReasonDuplicatePublicKey)
+		}
+		publics[string(key.PublicKey)] = true
 		if key.State == StateActive {
 			if active >= 0 {
 				return KeySet{}, failure(ReasonManyActiveKeys)

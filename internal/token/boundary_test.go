@@ -27,7 +27,7 @@ func keystoreImportViolations(root string) ([]string, error) {
 		}
 		if entry.IsDir() {
 			switch entry.Name() {
-			case ".git", "vendor", "node_modules", "testdata":
+			case ".git", "vendor", "testdata":
 				return filepath.SkipDir
 			}
 			return nil

@@ -45,6 +45,7 @@ const (
 	ReasonKeyUnknown          Reason = "key_id_unknown"
 	ReasonKeyNotActive        Reason = "key_not_active"
 	ReasonNotOneActiveKey     Reason = "keyset_not_one_active_key"
+	ReasonDuplicatePublicKey  Reason = "keyset_duplicate_public_key"
 )
 
 // MaxManifestBytes bounds a key-set manifest file.
@@ -99,15 +100,26 @@ func (s FileSource) Sign(ctx context.Context, kid string, message []byte) ([]byt
 }
 
 func signWithFile(path string, message []byte) ([]byte, error) {
+	signature, _, err := signWithFileKey(path, message)
+	return signature, err
+}
+
+// signWithFileKey signs and also returns the public half of the key that
+// signed, so a caller can check it is the key it read before.
+func signWithFileKey(path string, message []byte) ([]byte, ed25519.PublicKey, error) {
 	pemBytes, err := readCustodiedFile(path, MaxKeyFileBytes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	private, err := parseEd25519Private(pemBytes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return ed25519.Sign(private, message), nil
+	public, ok := private.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil, nil, failure(ReasonWrongAlgorithm, nil)
+	}
+	return ed25519.Sign(private, message), public, nil
 }
 
 // FileCustody is file custody of a key set (ACP-ADR-02 §3). A manifest names
@@ -130,32 +142,37 @@ type FileCustody struct {
 
 // NewFileCustody returns custody for the manifest at path.
 func NewFileCustody(path string) *FileCustody {
-	return &FileCustody{manifestPath: path, compromised: &latch{seen: map[string]bool{}}}
+	return &FileCustody{manifestPath: path, compromised: &latch{kids: map[string]bool{}, publics: map[string]bool{}}}
 }
 
 var _ Custody = (*FileCustody)(nil)
 
 type latch struct {
-	mu   sync.Mutex
-	seen map[string]bool
+	mu      sync.Mutex
+	kids    map[string]bool
+	publics map[string]bool
 }
 
-// apply records the compromised kids of entries and returns each entry's
-// effective state.
-func (l *latch) apply(entries []manifestEntry) []State {
+// apply records the compromised kids and public keys of keys and returns the
+// keys with the effective state: a key whose kid or public key was ever seen
+// compromised is compromised.
+func (l *latch) apply(keys []Key) []Key {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	states := make([]State, len(entries))
-	for i, entry := range entries {
-		if entry.State == StateCompromised {
-			l.seen[entry.KeyID] = true
-		}
-		states[i] = entry.State
-		if l.seen[entry.KeyID] {
-			states[i] = StateCompromised
+	for _, key := range keys {
+		if key.State == StateCompromised {
+			l.kids[key.KeyID] = true
+			l.publics[string(key.PublicKey)] = true
 		}
 	}
-	return states
+	out := make([]Key, len(keys))
+	for i, key := range keys {
+		out[i] = key
+		if l.kids[key.KeyID] || l.publics[string(key.PublicKey)] {
+			out[i].State = StateCompromised
+		}
+	}
+	return out
 }
 
 type manifestEntry struct {
@@ -178,14 +195,16 @@ func (c *FileCustody) Keys(ctx context.Context) ([]Key, error) {
 }
 
 // readSet loads the manifest and reads every key it names under the file
-// contract: a set with any key that is not custodied is refused whole.
+// contract: a set with any key that is not custodied, or with one key under two
+// kids, is refused whole. States are the effective ones (see latch).
 func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, error) {
-	entries, states, err := c.load(ctx)
+	entries, err := c.load(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	keys := make([]Key, 0, len(entries))
-	for i, entry := range entries {
+	publics := map[string]bool{}
+	for _, entry := range entries {
 		pemBytes, err := readCustodiedFile(c.keyPath(entry), MaxKeyFileBytes)
 		if err != nil {
 			return nil, nil, err
@@ -194,9 +213,13 @@ func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, erro
 		if err != nil {
 			return nil, nil, err
 		}
-		keys = append(keys, Key{KeyID: entry.KeyID, State: states[i], Algorithm: Algorithm, PublicKey: public})
+		if publics[string(public)] {
+			return nil, nil, failure(ReasonDuplicatePublicKey, nil)
+		}
+		publics[string(public)] = true
+		keys = append(keys, Key{KeyID: entry.KeyID, State: entry.State, Algorithm: Algorithm, PublicKey: public})
 	}
-	return entries, keys, nil
+	return entries, c.compromised.apply(keys), nil
 }
 
 // Sign signs with kid when every key the manifest names is custodied and kid
@@ -205,25 +228,28 @@ func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, erro
 // and returns ReasonKeyNotActive: a signature is returned only when the kid
 // is still active at the manifest read that follows it.
 func (c *FileCustody) Sign(ctx context.Context, kid string, message []byte) ([]byte, error) {
-	entry, err := c.activeEntry(ctx, kid)
+	entry, key, err := c.activeEntry(ctx, kid)
 	if err != nil {
 		return nil, err
 	}
 	if beforeSign != nil {
 		beforeSign()
 	}
-	signature, err := signWithFile(c.keyPath(entry), message)
+	signature, signer, err := signWithFileKey(c.keyPath(entry), message)
 	if err != nil {
 		return nil, err
+	}
+	if !signer.Equal(key.PublicKey) {
+		return nil, failure(ReasonKeyNotActive, nil)
 	}
 	if afterSign != nil {
 		afterSign()
 	}
-	again, err := c.activeEntry(ctx, kid)
+	again, againKey, err := c.activeEntry(ctx, kid)
 	if err != nil {
 		return nil, err
 	}
-	if again.File != entry.File {
+	if again.File != entry.File || !againKey.PublicKey.Equal(key.PublicKey) {
 		return nil, failure(ReasonKeyNotActive, nil)
 	}
 	return signature, nil
@@ -237,13 +263,13 @@ var beforeSign func()
 // read.
 var afterSign func()
 
-// activeEntry returns kid's manifest entry when every key the manifest names
-// is custodied, exactly one key is in effective state active, and that key is
-// kid.
-func (c *FileCustody) activeEntry(ctx context.Context, kid string) (manifestEntry, error) {
+// activeEntry returns kid's manifest entry and key when every key the
+// manifest names is custodied, exactly one key is in effective state active,
+// and that key is kid.
+func (c *FileCustody) activeEntry(ctx context.Context, kid string) (manifestEntry, Key, error) {
 	entries, keys, err := c.readSet(ctx)
 	if err != nil {
-		return manifestEntry{}, err
+		return manifestEntry{}, Key{}, err
 	}
 	active := 0
 	for _, key := range keys {
@@ -252,46 +278,45 @@ func (c *FileCustody) activeEntry(ctx context.Context, kid string) (manifestEntr
 		}
 	}
 	if active != 1 {
-		return manifestEntry{}, failure(ReasonNotOneActiveKey, nil)
+		return manifestEntry{}, Key{}, failure(ReasonNotOneActiveKey, nil)
 	}
 	for i, entry := range entries {
 		if entry.KeyID != kid {
 			continue
 		}
 		if keys[i].State != StateActive {
-			return manifestEntry{}, failure(ReasonKeyNotActive, nil)
+			return manifestEntry{}, Key{}, failure(ReasonKeyNotActive, nil)
 		}
-		return entry, nil
+		return entry, keys[i], nil
 	}
-	return manifestEntry{}, failure(ReasonKeyUnknown, nil)
+	return manifestEntry{}, Key{}, failure(ReasonKeyUnknown, nil)
 }
 
 func (c *FileCustody) keyPath(entry manifestEntry) string {
 	return filepath.Join(filepath.Dir(c.manifestPath), entry.File)
 }
 
-func (c *FileCustody) load(ctx context.Context) ([]manifestEntry, []State, error) {
+func (c *FileCustody) load(ctx context.Context) ([]manifestEntry, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if c.manifestPath == "" {
-		return nil, nil, failure(ReasonPathUnconfigured, nil)
+		return nil, failure(ReasonPathUnconfigured, nil)
 	}
 	raw, err := readCustodiedFile(c.manifestPath, MaxManifestBytes)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	entries, err := parseManifest(raw)
-	if err != nil {
-		return nil, nil, err
-	}
-	return entries, c.compromised.apply(entries), nil
+	return parseManifest(raw)
 }
 
 // parseManifest decodes a closed manifest: an unknown member, trailing data,
 // an empty set, an invalid kid, state or file name, or a repeated kid or file
 // is refused.
 func parseManifest(raw []byte) ([]manifestEntry, error) {
+	if err := exactMembers(raw); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var document manifest
@@ -319,4 +344,57 @@ func parseManifest(raw []byte) ([]manifestEntry, error) {
 func bareFileName(name string) bool {
 	return name != "" && name != "." && name != ".." && len(name) <= 255 &&
 		!strings.ContainsAny(name, "/\\\x00") && filepath.Base(name) == name
+}
+
+// exactMembers walks raw token by token: the document is {"keys": [...]} and
+// each entry an object of "kid", "state" and "file", every member name exact
+// (encoding/json matches names without case) and none repeated (encoding/json
+// keeps the last).
+func exactMembers(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	bad := func() error { return failure(ReasonManifestUnparseable, nil) }
+	expect := func(want json.Delim) error {
+		token, err := decoder.Token()
+		if err != nil || token != want {
+			return bad()
+		}
+		return nil
+	}
+	object := func(allowed map[string]bool, value func(name string) error) error {
+		if err := expect('{'); err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for decoder.More() {
+			token, err := decoder.Token()
+			name, ok := token.(string)
+			if err != nil || !ok || !allowed[name] || seen[name] {
+				return bad()
+			}
+			seen[name] = true
+			if err := value(name); err != nil {
+				return err
+			}
+		}
+		return expect('}')
+	}
+	skip := func(string) error {
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return bad()
+		}
+		return nil
+	}
+	entryNames := map[string]bool{"kid": true, "state": true, "file": true}
+	return object(map[string]bool{"keys": true}, func(string) error {
+		if err := expect('['); err != nil {
+			return err
+		}
+		for decoder.More() {
+			if err := object(entryNames, skip); err != nil {
+				return err
+			}
+		}
+		return expect(']')
+	})
 }

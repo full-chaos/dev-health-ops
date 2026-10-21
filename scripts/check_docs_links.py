@@ -23,7 +23,7 @@ def slugify(heading: str) -> str:
     extension, `markdown.extensions.toc.slugify`, `unicode=False` -- this
     repo's mkdocs.yml does not opt into unicode slugs), so an anchor that
     passes this checker matches what `mkdocs build` actually renders and
-    what `tests/docs/test_built_site_links.py` checks against real built
+    what `cigate docs check-built-site-links` checks against real built
     HTML (CHAOS-5417/CHAOS-5439: the old regex here additionally folded
     `_` into `-`, which markdown's own slugify never does -- an anchor
     that satisfied only THIS checker then 404'd on the real built site).

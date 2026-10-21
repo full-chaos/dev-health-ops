@@ -3,7 +3,7 @@
 // api/billing/stripe_client.py get_stripe_client().
 //
 // stripe-go is pinned (go.mod) to the release whose API version equals the
-// one the Python SDK in uv.lock sends, so both planes ask Stripe for the same
+// one the Python SDK in the last uv.lock sends, so both planes ask Stripe for the same
 // object shapes; TestPinnedAPIVersionMatchesPythonSDK holds the two together.
 package stripeclient
 

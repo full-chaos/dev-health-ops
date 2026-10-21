@@ -1,0 +1,5 @@
+ERROR: B.html -> m.html: missing built asset
+ERROR: a.html -> m.html: missing built asset
+ERROR: b/z.html -> m.html: missing built asset
+ERROR: b-c.html -> m.html: missing built asset
+ERROR: b.html -> m.html: missing built asset

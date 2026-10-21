@@ -1,0 +1,7 @@
+check-docs-search
+--site-dir
+site
+--queries
+queries.json
+--report
+a/b/c/report.tsv

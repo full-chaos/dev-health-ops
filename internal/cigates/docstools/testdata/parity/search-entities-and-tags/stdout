@@ -1,0 +1,3 @@
+ERROR: '<b>bold</b>': expected /reference/api/ at rank <= 1, found missing; top=/reference/api.html
+ERROR: '&amp;lt;b&amp;gt;': expected /reference/api/ at rank <= 5, found missing; top=/guide/config/
+Search acceptance failed; report: report.tsv

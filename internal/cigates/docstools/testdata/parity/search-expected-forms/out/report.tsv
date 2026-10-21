@@ -1,0 +1,4 @@
+query	expected	rank	max_rank	top_result	status
+install	/guide/install/	1	3	/guide/install/	pass
+install	/guide/install/	1	5	/guide/install/	pass
+install	/guide/install/	1	5	/guide/install/	pass

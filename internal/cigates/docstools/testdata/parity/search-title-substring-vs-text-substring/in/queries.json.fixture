@@ -1,0 +1,1 @@
+{"queries": [{"query": "deploy to production", "expected": "/t/", "max_rank": 1}, {"query": "deploy to production", "expected": "/x/", "max_rank": 1}]}

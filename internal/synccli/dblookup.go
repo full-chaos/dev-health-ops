@@ -58,7 +58,7 @@ import (
 //   - dialects other than postgresql/mysql/mariadb/oracle/mssql (sqlite, ...):
 //     the exception type is unverified and reported as NoSuchModuleError, and
 //     the type of a database driver that IS installed in a Python environment
-//     beyond pyproject.toml's (psycopg, pg8000, aiomysql) is not what Python
+//     beyond the last pyproject.toml's (psycopg, pg8000, aiomysql) is not what Python
 //     raises there;
 //   - database URL query options: the first-organization read accepts libpq's
 //     keywords (an unknown one is "none", as in Python) and the credential
@@ -288,9 +288,9 @@ func asyncEngineRefusal(dbURL string) string {
 		case "", "psycopg2":
 			return "InvalidRequestError" // the driver is not asyncio
 		}
-		return "ModuleNotFoundError" // psycopg, pg8000, ...: not in pyproject.toml
+		return "ModuleNotFoundError" // psycopg, pg8000, ...: not in the last pyproject.toml
 	case "mysql", "mariadb", "oracle", "mssql":
-		return "ModuleNotFoundError" // the DBAPI is not in pyproject.toml
+		return "ModuleNotFoundError" // the DBAPI is not in the last pyproject.toml
 	}
 	return "NoSuchModuleError"
 }

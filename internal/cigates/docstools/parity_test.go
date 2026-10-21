@@ -56,6 +56,14 @@ func replayCaseWith(t *testing.T, dir string, run func(args ...string) (int, str
 	sub := map[string]string{"{WORK}": work}
 	t.Chdir(work)
 	caseScaffold = map[string]bool{}
+	if raw, err := os.ReadFile(filepath.Join(dir, "cwd")); err == nil {
+		// the case runs from a directory below the work directory (the former scripts found their root from their own path)
+		sub := filepath.Join(work, strings.TrimSpace(string(raw)))
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(sub)
+	}
 	for _, setup := range caseSetups {
 		setup(t, dir, work, sub)
 	}
@@ -163,7 +171,7 @@ func placeInputs(t *testing.T, dir, work string, expected map[string]bool) {
 // caseRel is the work-directory path of a stored case file: tokens stand for what a tracked path cannot hold well,
 // {E9} for e-acute, {DOT} for a leading dot an ignore rule would match (.build), {FF} and {FE} for those raw bytes.
 func caseRel(rel string) string {
-	return strings.NewReplacer("{E9}", "é", "{DOT}", ".", "{FF}", "\xff", "{FE}", "\xfe").Replace(rel)
+	return strings.NewReplacer("{E9}", "é", "{DOT}", ".", "{FC}", "ü", "{FF}", "\xff", "{FE}", "\xfe").Replace(rel)
 }
 
 func mustRead(t *testing.T, path string) string {
@@ -216,7 +224,7 @@ func seedSymlinks(t *testing.T, list, work string) {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(work, link)), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(target, filepath.Join(work, link)); err != nil {
+		if err := os.Symlink(strings.ReplaceAll(target, "{WORK}", work), filepath.Join(work, link)); err != nil {
 			t.Fatal(err)
 		}
 	}

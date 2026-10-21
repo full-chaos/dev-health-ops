@@ -1,0 +1,4 @@
+query	expected	rank	max_rank	top_result	status
+install the cli	/guide/install/	1	1	/guide/install/	pass
+secrets	/guide/config/	1	5	/guide/config/	pass
+graphql endpoints	/reference/api.html	1	2	/reference/api.html	pass

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -98,5 +99,31 @@ func TestRetryAfterSecondsRoundsUpAndIsAtLeastOne(t *testing.T) {
 		if got := retryAfterSeconds(wait); got != want {
 			t.Errorf("retryAfterSeconds(%v) = %d, want %d", wait, got, want)
 		}
+	}
+}
+
+// A route's own ErrorWriter renders the transport refusals of that route's
+// chain (its body bound and its rate limit); other routes keep the server's.
+func TestARouteErrorWriterRendersItsOwnTransportRefusals(t *testing.T) {
+	var codes []Code
+	own := func(w http.ResponseWriter, r *http.Request, code Code) {
+		codes = append(codes, code)
+		WriteError(w, r, code)
+	}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	options := testOptions(
+		Route{Method: http.MethodPost, Pattern: "/v1/own", Handler: ok, MaxBodyBytes: 4, ErrorWriter: own},
+		Route{Method: http.MethodPost, Pattern: "/v1/other", Handler: ok, MaxBodyBytes: 4},
+	)
+	h := handlerFor(t, options)
+	for _, path := range []string{"/v1/own", "/v1/other"} {
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader("too large")))
+		if response.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("%s: status %d, want 413", path, response.Code)
+		}
+	}
+	if len(codes) != 1 || codes[0] != CodePayloadTooLarge {
+		t.Fatalf("the route's writer saw %v, want one payload_too_large from /v1/own only", codes)
 	}
 }

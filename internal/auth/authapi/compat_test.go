@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
@@ -269,7 +271,12 @@ func (f *compatFixture) buildCompat() {
 		Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
 		Logger:    slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Projector: f.projector,
+		// The real writer (audit.Append) refuses an attribute outside the
+		// allowlist; so does this one.
 		AppendAudit: func(_ context.Context, event audit.AuditEvent) error {
+			if err := audit.ValidateAttributes(event.Attributes); err != nil {
+				return err
+			}
 			f.appended = append(f.appended, event)
 			return f.appendErr
 		},
@@ -863,6 +870,127 @@ func TestCompatRoutesNeedAProjectorAndAnAuditAppender(t *testing.T) {
 	for _, route := range base {
 		if strings.HasPrefix(route.Pattern, "/api/") {
 			t.Fatalf("the session routes mount %s", route.Pattern)
+		}
+	}
+}
+
+// Every reason social.Classify names for a refusal (4xx) is an audit reason,
+// so no social refusal turns into a 500 at its audit row.
+func TestEverySocialRefusalReasonIsAnAuditReason(t *testing.T) {
+	for _, err := range []error{
+		&social.ConflictError{ExistingMethod: "github"}, social.ErrProviderUnavailable, social.ErrProviderNotConfigured,
+		social.ErrProviderRefused, social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
+		social.ErrReauthenticationRequired, identity.ErrIdentityConflict, social.ErrProviderLinked, identity.ErrNotFound,
+		identity.ErrLastSignInMethod, errors.New("anything else"),
+	} {
+		status, reason := social.Classify(err)
+		if status >= http.StatusInternalServerError {
+			continue
+		}
+		if err := audit.ValidateAttributes(map[string]any{"reason_code": string(reason), "provider": "github"}); err != nil {
+			t.Errorf("%v: reason %q is not an audit reason: %v", status, reason, err)
+		}
+	}
+}
+
+func TestAProviderAlreadyLinkedRefusalAnswers409AndIsAudited(t *testing.T) {
+	f, fake := newSocialFixture(t)
+	fake.err = social.ErrProviderLinked
+	response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"tok"}`, nil)
+	if response.Code != http.StatusConflict || len(f.appended) != 1 || f.appended[0].Attributes["reason_code"] != "provider_already_linked" {
+		t.Fatalf("status %d, audit %+v", response.Code, f.appended)
+	}
+}
+
+// A refusal of a principal the social domain knows names it, and its
+// organization, as a refused password sign-in does.
+func TestAKnownSocialPrincipalsRefusalNamesIt(t *testing.T) {
+	f, fake := newSocialFixture(t)
+	fake.result, fake.err = social.ExchangeResult{PrincipalID: f.principal}, social.ErrPrincipalDisabled
+	response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"tok"}`, nil)
+	if response.Code != http.StatusForbidden || len(f.appended) != 1 {
+		t.Fatalf("status %d, %d audit rows", response.Code, len(f.appended))
+	}
+	event := f.appended[0]
+	if event.SubjectPrincipalID == nil || *event.SubjectPrincipalID != f.principal.String() ||
+		event.OrganizationID == nil || *event.OrganizationID != f.orgB.String() {
+		t.Fatalf("audit row %+v, want the principal and its first membership", event)
+	}
+}
+
+// Every 4xx answer of a sign-in route, a refused body included, writes its
+// auth.login.failed row; the provider is named only when it parsed.
+func TestARefusedSignInBodyIsAudited(t *testing.T) {
+	cases := []struct {
+		path, body, provider string
+	}{
+		{PatternCompatLogin, `{}`, "local"},
+		{PatternCompatLogin, `[]`, "local"},
+		{PatternCompatSocialLogin, `{"provider":"github"}`, "github"},
+		{PatternCompatSocialLogin, `{"provider":"bitbucket","provider_access_token":"x"}`, ""},
+		{PatternCompatSocialLogin, `{"provider":"github"`, ""},
+	}
+	for _, c := range cases {
+		f, _ := newSocialFixture(t)
+		response := f.do(http.MethodPost, c.path, c.body, nil)
+		if response.Code != http.StatusUnprocessableEntity || len(f.appended) != 1 {
+			t.Fatalf("%s %s: status %d, %d audit rows", c.path, c.body, response.Code, len(f.appended))
+		}
+		event := f.appended[0]
+		provider, named := event.Attributes["provider"]
+		if event.Attributes["reason_code"] != "malformed" || (c.provider == "" && named) || (c.provider != "" && provider != c.provider) {
+			t.Fatalf("%s %s: audit row %+v", c.path, c.body, event)
+		}
+		if err := audit.ValidateAttributes(event.Attributes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, _ := newSocialFixture(t)
+	f.appendErr = errors.New("audit down")
+	if response := f.do(http.MethodPost, PatternCompatLogin, `{}`, nil); response.Code != http.StatusInternalServerError {
+		t.Fatalf("a refused body that cannot be audited answered %d, want 500", response.Code)
+	}
+}
+
+// The sign-in routes carry a transport ErrorWriter: a body over the limit or
+// one that could not be read is a refused sign-in and is audited; the rate
+// limit's 429 is not (one audit insert per refused request would defeat the
+// bucket that guards the store).
+func TestTheSignInRoutesAuditTheirTransportRefusals(t *testing.T) {
+	f, _ := newSocialFixture(t)
+	routes, err := CompatRoutes(CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: f.projector,
+		AppendAudit: func(_ context.Context, event audit.AuditEvent) error {
+			f.appended = append(f.appended, event)
+			return nil
+		},
+		Login:  &LoginConfig{Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey)},
+		Social: f.social})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signIn := map[string]bool{PatternCompatLogin: true, PatternCompatSocialLogin: true}
+	for _, route := range routes {
+		if !signIn[route.Pattern] {
+			if route.ErrorWriter != nil {
+				t.Fatalf("%s carries a sign-in transport writer", route.Pattern)
+			}
+			continue
+		}
+		if route.ErrorWriter == nil {
+			t.Fatalf("%s has no transport writer", route.Pattern)
+		}
+		for code, audited := range map[httpapi.Code]bool{
+			httpapi.CodePayloadTooLarge: true, httpapi.CodeInvalidRequest: true, httpapi.CodeRateLimited: false, httpapi.CodeInternal: false,
+		} {
+			before := len(f.appended)
+			response := httptest.NewRecorder()
+			route.ErrorWriter(response, httptest.NewRequest(http.MethodPost, route.Pattern, nil), code)
+			if got := len(f.appended) - before; (got == 1) != audited || got > 1 {
+				t.Fatalf("%s %s: %d audit rows, audited=%v", route.Pattern, code, got, audited)
+			}
+			if !strings.Contains(response.Body.String(), string(code)) {
+				t.Fatalf("%s %s: answer %s is not the transport envelope", route.Pattern, code, response.Body)
+			}
 		}
 	}
 }

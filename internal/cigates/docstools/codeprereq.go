@@ -340,7 +340,7 @@ func codePrereqUnsafe(n *yaml.Node, seen map[*yaml.Node]bool) bool {
 				}
 				continue
 			}
-			if codePrereqUnsafe(k, seen) || codePrereqUnsafe(v, seen) {
+			if codePrereqResolve(k).Kind != yaml.ScalarNode || codePrereqUnsafe(k, seen) || codePrereqUnsafe(v, seen) {
 				return true
 			}
 		}

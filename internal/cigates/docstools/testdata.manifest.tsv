@@ -1,5 +1,5 @@
 # Every file under internal/cigates/docstools/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: ac62f0ac8468e5751d60bb2340a52a90d01cb2c1141acf5bd5291c9822b9b1ab (936 files)
+# python-recorded set: 0b159d94b037f5b1b1e1accc8198c36d17f74b3e96ae0530831cd8264bac7a71 (956 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 db38b11bbfcc1bff25d51430883cf6855cf97842ad9f53186366831ca5ff455f	hand-written	README.md
 022b02bc6930d958238306a5bbb82baedc9af3eed3e1189a46a3629fcb570374	hand-written	operational-external.md
@@ -644,6 +644,11 @@ bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-root-timestamp-is-truthy/rc
 daca12a27131d0ac313d007b7096f8cb60916c8423c3af0ece3957132098ec7b	python-recorded	parity/check-code-prerequisites-scope-root-timestamp-is-truthy/stderr.traceback
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-root-timestamp-is-truthy/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-scalar-complex-key-root/args
+33fc18623c69f861e4a17a3adbec40c876bbfc18ead409d0e0ba0dd7706ba484	python-recorded	parity/check-code-prerequisites-scope-scalar-complex-key-root/in/docs/code-prerequisite-scope.yml
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-scalar-complex-key-root/rc
+daca12a27131d0ac313d007b7096f8cb60916c8423c3af0ece3957132098ec7b	python-recorded	parity/check-code-prerequisites-scope-scalar-complex-key-root/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-scalar-complex-key-root/stdout
 bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-seq-tag-on-mapping/args
 cd9ad63ac8517660c964d7333b09f62fa7ec5c3712d8cb39b83ffa000bbdfd02	python-recorded	parity/check-code-prerequisites-scope-seq-tag-on-mapping/in/docs/code-prerequisite-scope.yml
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-seq-tag-on-mapping/rc
@@ -699,6 +704,21 @@ bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-underscore-int-item/rc
 daca12a27131d0ac313d007b7096f8cb60916c8423c3af0ece3957132098ec7b	python-recorded	parity/check-code-prerequisites-scope-underscore-int-item/stderr.traceback
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-underscore-int-item/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-unhashable-alias-key/args
+09474c10906607758e7a05a402091793e0dd936a7bd69c71a47cbef09a9a83e6	python-recorded	parity/check-code-prerequisites-scope-unhashable-alias-key/in/docs/code-prerequisite-scope.yml
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-unhashable-alias-key/rc
+a4d845ee2d9b3e066f797a57ec50a11f2bef5ff4fca2d8a1c95b29d315f0a591	python-recorded	parity/check-code-prerequisites-scope-unhashable-alias-key/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-unhashable-alias-key/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-unhashable-list-key-in-item/args
+a79b905ade02c2ff691ae11e34469cf0fb8493e2f9b4a0cda2fb8120dad39f99	python-recorded	parity/check-code-prerequisites-scope-unhashable-list-key-in-item/in/docs/code-prerequisite-scope.yml
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-unhashable-list-key-in-item/rc
+a4d845ee2d9b3e066f797a57ec50a11f2bef5ff4fca2d8a1c95b29d315f0a591	python-recorded	parity/check-code-prerequisites-scope-unhashable-list-key-in-item/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-unhashable-list-key-in-item/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-unhashable-mapping-key-root/args
+feb9527ed9bdb905b41b23008f19a0b215e589702fa8cba585741101ad0ed5ce	python-recorded	parity/check-code-prerequisites-scope-unhashable-mapping-key-root/in/docs/code-prerequisite-scope.yml
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-unhashable-mapping-key-root/rc
+a4d845ee2d9b3e066f797a57ec50a11f2bef5ff4fca2d8a1c95b29d315f0a591	python-recorded	parity/check-code-prerequisites-scope-unhashable-mapping-key-root/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-unhashable-mapping-key-root/stdout
 bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-value-item/args
 04ea44dcd45ad758e9827c7d8813b61f42eaab8a21fceea8c2ad3efac133a313	python-recorded	parity/check-code-prerequisites-scope-value-item/in/docs/code-prerequisite-scope.yml
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-value-item/rc

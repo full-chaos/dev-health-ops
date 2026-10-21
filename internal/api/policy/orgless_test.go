@@ -27,7 +27,7 @@ func TestOrglessNonSuperuserReachesOnlyTheAuthRoutes(t *testing.T) {
 		"/api/v1/auth/sso/providers":               403,
 		"/api/v1/auth/sso/providers/p-1/activate":  403,
 		"/api/v1/auth/onboard/extra":               403,
-		"/api/v1/auth/validate":                    403,
+		"/api/v1/auth/validate":                    200,
 		"/api/v1/orgs/me":                          403,
 		"/api/v1/authx/onboard":                    403,
 		"/api/v1/auth":                             403,

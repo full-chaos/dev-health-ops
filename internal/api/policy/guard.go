@@ -154,6 +154,7 @@ var orglessRoutes = map[string]bool{
 	"/api/v1/auth/onboarding/skip-integration": true,
 	"/api/v1/auth/accept-invite":               true,
 	"/api/v1/auth/me":                          true,
+	"/api/v1/auth/validate":                    true,
 	"/api/v1/auth/me/organizations":            true,
 	"/api/v1/auth/switch-org":                  true,
 	"/api/v1/auth/refresh":                     true,

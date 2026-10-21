@@ -24,7 +24,7 @@ if not destination.is_file():	case	check-external-links-same-site;check-external
 if anchor and anchor not in ID_RE.findall(destination.read_text(encoding="utf-8")):	case	check-external-links-unicode-boundaries;check-external-links-anchor-invalid-utf8
 parsed_url = urlsplit(url)#3	case	check-external-links-unsupported-scheme
 request = urllib.request.Request(	case	check-external-links-space-in-path;check-external-links-control-in-host;check-external-links-nonascii-path;check-external-links-nonascii-host
-with opener.open(request, timeout=timeout_seconds) as response:	go	TestFetcherHeadThenGet;TestFetcherFollowsRedirectsOnlyToHttp;TestFetcherStopsARedirectLoopLikeUrllib;TestFetcherRefusesWhatHttpClientRefuses;TestFetcherReportsWhatHttpClientDoesNotRefuse
+with opener.open(request, timeout=timeout_seconds) as response:	go	TestFetcherKeepsHeadAcrossARedirectAsUrllibDoes;TestFetcherHeadThenGet;TestFetcherFollowsRedirectsOnlyToHttp;TestFetcherStopsARedirectLoopLikeUrllib;TestFetcherRefusesWhatHttpClientRefuses;TestFetcherReportsWhatHttpClientDoesNotRefuse
 except urllib.error.HTTPError as error:	go	TestFetcherHeadThenGet;TestFetcherFollowsRedirectsOnlyToHttp
 except (urllib.error.URLError, TimeoutError, OSError) as error:	go	TestFetcherHeadThenGet;TestHttpRedirectHandlerRejectsNonHttpRedirectTargets
 args = parser.parse_args(argv)	go	TestArgumentParsingMatchesPythonArgparse

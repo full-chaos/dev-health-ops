@@ -182,3 +182,18 @@ func TestHttpRedirectHandlerRejectsNonHttpRedirectTargets(t *testing.T) {
 		t.Errorf("file: redirect: ok %v detail %q; want the HTTPError 302 the script counts as reachable", ok, detail)
 	}
 }
+
+// urllib keeps HEAD on a redirect (Python 3.14 Lib/urllib/request.py redirect_request: method="HEAD" if m == "HEAD"
+// else "GET"), and the GET retry starts again at the first URL. Recorded once with the frozen script and a local
+// http.server on Python 3.14.7: (False, 'status 404 (GET)'), requests HEAD /start, HEAD /target, GET /start.
+func TestFetcherKeepsHeadAcrossARedirectAsUrllibDoes(t *testing.T) {
+	ok, detail, _, got := fetchOnce(t, "https://example.com/start", "302 /target", "405", "404")
+	want := []string{"HEAD /start", "HEAD /target", "GET /start"}
+	var gotReq []string
+	for _, s := range got {
+		gotReq = append(gotReq, s.method+" "+s.uri)
+	}
+	if ok || detail != "status 404 (GET)" || strings.Join(gotReq, ",") != strings.Join(want, ",") {
+		t.Errorf("ok %v detail %q requests %v; Python (False, 'status 404 (GET)') %v", ok, detail, gotReq, want)
+	}
+}

@@ -107,6 +107,42 @@ func goCacheViolations(t *testing.T, root string) []string {
 			}
 		}
 	}
+	// check_go.sh builds into DEV_HEALTH_GO_CACHE, else an inherited GOCACHE, else a configured one, else /tmp/dev-health-go-build-cache.
+	// A hosted runner's GOCACHE is the unset default (~/.cache/go-build), so without an export the restored cache is never read.
+	exportAt := -1
+	var export yamlMap
+	for i, s := range steps {
+		if strings.Contains(shellCode(asString(s["run"])), "DEV_HEALTH_GO_CACHE=") {
+			exportAt, export = i, s
+		}
+	}
+	if restore != nil {
+		if export == nil {
+			add("go-quality.yml:go-quality-leg: no step exports DEV_HEALTH_GO_CACHE: check_go.sh builds into /tmp/dev-health-go-build-cache and never reads the restored cache")
+		} else {
+			run, cond := shellCode(asString(export["run"])), asString(export["if"])
+			if exportAt > legAt {
+				add("go-quality.yml: DEV_HEALTH_GO_CACHE is exported after the leg step, so check_go.sh never sees it")
+			}
+			if !strings.Contains(cond, "runner.environment == 'github-hosted'") {
+				add("go-quality.yml: the DEV_HEALTH_GO_CACHE export must run on GitHub-hosted legs only (if: %q); the pool keeps its hostPath", cond)
+			}
+			if !strings.Contains(run, `>> "${GITHUB_ENV}"`) {
+				add("go-quality.yml: the DEV_HEALTH_GO_CACHE export must append to GITHUB_ENV so the leg step inherits it")
+			}
+			for _, p := range strings.Fields(paths(restore)) {
+				if !strings.HasSuffix(p, "/.cache/go-build") {
+					continue
+				}
+				want := "DEV_HEALTH_GO_CACHE=${HOME}" + strings.TrimPrefix(p, "~")
+				if strings.Contains(run, "DEV_HEALTH_GO_CACHE=~") {
+					add("go-quality.yml: DEV_HEALTH_GO_CACHE is a literal ~ the shell does not expand: use ${HOME}")
+				} else if !strings.Contains(run, want+`"`) {
+					add("go-quality.yml: DEV_HEALTH_GO_CACHE is not the restored path %s (want %s)", p, want)
+				}
+			}
+		}
+	}
 	if save == nil {
 		add("go-quality.yml:go-quality-leg: no actions/cache/save step (a push to main saves the leg's cache)")
 	} else {
@@ -155,6 +191,11 @@ func TestGoCacheGuardPlantedDefectsAreCaught(t *testing.T) {
 		{"save on a hit", mutation{gq, " && steps.go-cache.outputs.cache-hit != 'true'", ""}, "cache-hit"},
 		{"save a different key", mutation{gq, "key: ${{ steps.go-cache.outputs.cache-primary-key }}", "key: go-quality-other"}, "not the restore step's primary key"},
 		{"save loses the module cache", mutation{gq, "            ~/go/pkg/mod\n          key: ${{ steps.go-cache", "          key: ${{ steps.go-cache"}, "paths differ"},
+		{"no step exports the restored dir", mutation{gq, `echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"`, `echo "X=1" >> "${GITHUB_ENV}"`}, "no step exports DEV_HEALTH_GO_CACHE"},
+		{"the export names another dir", mutation{gq, "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build", "DEV_HEALTH_GO_CACHE=${RUNNER_TEMP}/go-build"}, "is not the restored path"},
+		{"the export is a literal tilde", mutation{gq, "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build", "DEV_HEALTH_GO_CACHE=~/.cache/go-build"}, "literal ~"},
+		{"the export is on the pool path only", mutation{gq, "&& runner.environment == 'github-hosted'\n        run: echo \"DEV_HEALTH_GO_CACHE", "&& vars.SELF_HOSTED_RUNNERS == 'enabled'\n        run: echo \"DEV_HEALTH_GO_CACHE"}, "GitHub-hosted legs only"},
+		{"the export is set after check_go.sh", mutation{gq, "        run: bash ci/check_go.sh ci-leg ${{ matrix.args }}\n", "        run: bash ci/check_go.sh ci-leg ${{ matrix.args }}\n\n      - name: late export\n        if: runner.environment == 'github-hosted'\n        run: echo \"DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build\" >> \"${GITHUB_ENV}\"\n"}, "after the leg step"},
 		{"auth-changes back on the shared cache", mutation{".github/workflows/go-auth-service.yml", "          cache: false", "          cache: true"}, "go-auth-service.yml:auth-changes"},
 		{"graphql-wire-parity back on the shared cache", mutation{".github/workflows/go.yml", "empty entry.\n          cache: false\n\n      - uses: pnpm/action-setup", "empty entry.\n          cache: true\n\n      - uses: pnpm/action-setup"}, "go.yml:graphql-wire-parity"},
 		{"docs preview back on the shared cache", mutation{".github/workflows/docs-cloudflare.yml", "          cache: false", "          cache: true"}, "docs-cloudflare.yml:preview-or-build"},

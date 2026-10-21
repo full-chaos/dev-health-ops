@@ -4,7 +4,6 @@ summary: Rules for canonical provider, identity, API, schema, job, route, metric
 content_type: architecture
 owner: engineering
 source_of_truth:
-  - docs/contributing/platform-contract.md
   - contracts/jobs/v1/
   - contracts/sync-dispatch/v1/
   - current ADRs and canonical registries

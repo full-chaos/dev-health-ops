@@ -6,7 +6,6 @@ owner: product-analytics
 source_of_truth:
   - internal/queryapi/investment/reader.go
   - internal/queryapi/investment/response.go
-  - src/components/work/investment/charts/InvestmentMixSection.tsx
 applicability: current
 lifecycle: active
 ---
@@ -60,4 +59,4 @@ Theme and subcategory keys come from the [canonical Investment taxonomy](../taxo
 
 - `internal/queryapi/investment/reader.go`
 - `internal/queryapi/investment/response.go::BuildResponse`
-- `src/components/work/investment/charts/InvestmentMixSection.tsx`
+- the investment mix chart section in the web repo

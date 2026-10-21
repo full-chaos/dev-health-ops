@@ -6,7 +6,6 @@ owner: product-analytics
 source_of_truth:
   - current /plan/capacity product surface
   - current Monte Carlo throughput forecast implementation
-  - docs/user-guide/views/capacity-planning.md
 applicability: current
 lifecycle: active
 ---

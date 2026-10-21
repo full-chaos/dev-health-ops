@@ -6,7 +6,6 @@ owner: product-analytics
 source_of_truth:
   - full-chaos/dev-health-web docs/reports.md
   - current report GraphQL schema and workers
-  - docs/user-guide/reports.md
 applicability: current
 lifecycle: active
 hide:

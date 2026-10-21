@@ -5,7 +5,6 @@ content_type: task-guide
 owner: product-analytics
 source_of_truth:
   - current Report Center create, update, and clone mutations
-  - docs/user-guide/reports.md
 applicability: current
 lifecycle: active
 ---

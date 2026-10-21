@@ -4,7 +4,6 @@ summary: Review product telemetry and data-handling choices at the workspace bou
 content_type: concept
 owner: platform-product
 source_of_truth:
-  - docs/user-guide/product-telemetry.md
   - current telemetry and privacy controls
 applicability: current
 lifecycle: active

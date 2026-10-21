@@ -6,7 +6,6 @@ owner: product-analytics
 source_of_truth:
   - current product state behavior
   - internal/queryapi/investment/response.go
-  - docs/user-guide/how-to-read-dev-health.md
 applicability: current
 lifecycle: active
 ---

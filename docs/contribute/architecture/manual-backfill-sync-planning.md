@@ -6,8 +6,7 @@ owner: engineering
 source_of_truth:
   - internal/scheduler/sync/backfill_planner.go (BuildBackfillPlan)
   - internal/scheduler/sync/materializer.go (loadMaterializationPlan's sync_manual_triggers lookup, Materialize's mode routing)
-  - src/dev_health_ops/sync/execution_trigger.py (create_sync_execution_trigger's Go hand-off branch, await_sync_execution_trigger_materialized)
-  - src/dev_health_ops/alembic/versions/0118_add_sync_manual_triggers.py
+  - internal/pgmigrate/baseline/head.json
   - internal/api/syncadmin/manual_trigger.go (the Go trigger and backfill routes, CHAOS-6871)
   - internal/synchandoff/handoff.go (Mint, Wait)
 applicability: current

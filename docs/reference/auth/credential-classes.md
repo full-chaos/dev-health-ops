@@ -125,28 +125,27 @@ lifetime is at most the 60 min HS256-compat ceiling. The class is
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 
-`OrgIdMiddleware` scans every request for an `authorization` header
-(`src/dev_health_ops/api/middleware/__init__.py:39-40`) and, if present,
-decodes it as a user access JWT
-(`get_authenticated_user_from_headers` → `authenticate_access_token`,
-same file, lines 36-50) — **regardless of what the token actually is** —
-except for one explicit path-prefix exemption:
+The org scope (`Scope.OrgScope`, `internal/api/policy/scope.go:128`) reads every
+request's `authorization` header through `Scope.headerAuthenticate`
+(`internal/api/policy/scope.go:103-120`), which calls
+`Authenticator.Authenticate` (`internal/api/policy/principal.go:109`) and
+decodes it as a user access JWT — **regardless of what the token actually
+is** — except for one explicit path-prefix exemption (`acrInternalPrefix`,
+`internal/api/policy/scope.go:97-98`, checked at `:130`):
 
-```python
-if path.startswith("/api/v1/internal/acr/"):
-    # These routes authenticate opaque ACR service credentials themselves.
-    await self.app(scope, receive, send)
-    return
+```go
+if strings.HasPrefix(r.URL.Path, acrInternalPrefix) {
+	next.ServeHTTP(w, r)
+	return
+}
 ```
 
-`src/dev_health_ops/api/middleware/__init__.py:85-89`
-
-Post-fix, a non-JWT bearer value no longer crashes: `AuthService.validate_token`
-catches `InvalidTokenError` and returns `None`
-(`src/dev_health_ops/api/services/auth.py:336-338`), so the request proceeds
-as anonymous through `OrgIdMiddleware` and its *real* validator still gets a
-turn. **But the credential still transited a validator it does not own**,
-which is exactly the shape CHAOS-3271 warns about. Every class below hits
+A non-JWT bearer value does not fail the request: `Authenticator.Authenticate`
+returns a refusal, and `Scope.headerAuthenticate` treats a refusal as no user
+(`internal/api/policy/scope.go:116-118`), so the request proceeds as anonymous
+through the org scope and its *real* validator still gets a turn. **But the
+credential still transited a validator it does not own**, which is exactly the
+shape CHAOS-3271 warns about. Every class below hits
 this:
 
 | Credential class | Route(s) | Exempted from the path prefix? |
@@ -169,43 +168,40 @@ list of path prefixes.**
 `acr`'s `Authenticator.MiddlewareFor` dispatches on the *credential's own
 header* before choosing a decoder, and explicitly **rejects** a request that
 carries both `X-ACR-Web-Assertion` and `Authorization`
-(`internal/auth/web_assertion_middleware.go:11-16`) rather than silently
+(in the acr repo) rather than silently
 preferring one. This is the shape a class-aware gate should generalize.
 
 ## Permissive-when-unconfigured: the legacy ingest path
 
-`src/dev_health_ops/api/ingest/auth.py` documents its own guardrail
-violation in its module docstring: *"All layers degrade gracefully when not
-configured (permissive mode for development)."*
+The legacy ingest handler (`internal/api/legacyingest/auth.go`) is permissive
+only in a development environment. Its checks work like this:
 
-- `_get_api_keys()` returns `[]` when `INGEST_API_KEYS` is unset, and
-  `validate_ingest_auth` only checks the key `if valid_keys:` — so an unset
-  env var **skips the check entirely**, not fails it
-  (`src/dev_health_ops/api/ingest/auth.py:24-32,97-100`).
-- Same shape for the HMAC signature: unset `INGEST_SIGNING_SECRET` skips
-  `_verify_signature` entirely (`src/dev_health_ops/api/ingest/auth.py:35-37,102-106`).
+- If `INGEST_API_KEYS` and `INGEST_SIGNING_SECRET` are both unset outside a
+  development environment, the request gets a 401 (fail closed;
+  `internal/api/legacyingest/auth.go:155-159`).
+- If only one of them is set, only that check runs: an unset key list skips
+  the API-key check, and an unset signing secret skips the HMAC signature
+  check (`internal/api/legacyingest/auth.go:160-195`).
 
-This is precisely what the engineering guardrails prohibit: "missing config
-must never mean auth disabled in production." Every webhook validator in
-`src/dev_health_ops/api/webhooks/auth.py` (GitHub, GitLab, Jira) and the
-Stripe webhook (`src/dev_health_ops/api/billing/stripe_client.py:46-50`)
-gets this right — they raise `500`/`RuntimeError` when their secret is
-unset, i.e. **fail closed**. The legacy ingest path is the one place that
-doesn't. This inventory did not confirm which routes are still mounted
-behind `validate_ingest_auth` in the current route table — that is the next
-step before deciding whether this is a live exposure or dead code (see gaps
-below).
+The engineering guardrails say: "missing config must never mean auth
+disabled in production." The webhook validators in
+`internal/api/webhookintake/` (`github.go` HMAC, `gitlab.go` token compare,
+`jira.go` HMAC) and the Stripe webhook
+(`internal/api/billing/webhook.go:60-84`, signature check in
+`internal/api/billing/webhooksig.go`) also fail closed: each answers 500
+when its secret is unset. The legacy ingest path is the one place where an
+unset single credential skips its own check, so it stays a gap to review.
 
 ## Unconsumed credential: `svc_worker_*`
 
 `WORKER_OPERATOR_TOKEN_PREFIX = "svc_worker_"` is defined and minted through
 the exact same code path as `svc_acr_*`
-(`src/dev_health_ops/models/internal_service_credential.py:14,17-23`), with
+(`internal/apiservice/admin/servicecredentials.go`), with
 its own scope set (`workers:read`, `workers:operate`,
-`src/dev_health_ops/service_credentials.py:16`) and a full CLI lifecycle
+`internal/apiservice/admin/servicecredentials.go:36-44`) and a full CLI lifecycle
 (create/list/rotate/revoke). No HTTP route in ops, web, or acr was found
-that validates a `svc_worker_`-prefixed bearer token — `internal/acr.py`'s
-`_extract_token` only accepts the `svc_acr_` prefix. Either this is
+that validates a `svc_worker_`-prefixed bearer token — `internal/apiservice/acr/internalauth.go:57-71`
+`extractToken` only accepts the `svc_acr_` prefix. Either this is
 scaffolding for a not-yet-wired consumer, or a consumer exists in the Go
 worker binaries or `dev-health-go` outside this lane's assigned read scope.
 Flagged rather than guessed.
@@ -223,7 +219,7 @@ Flagged rather than guessed.
 - **`sso_saml_exchange`** / **`sso_oidc_exchange`** — the router's gating
   (`@require_feature("sso")`) and schemas are anchored; the actual
   SAML-signature/OIDC-code verification logic in
-  `src/dev_health_ops/api/services/sso.py` was not read this pass.
+  `internal/api/sso/` was not read this pass.
 - **`license_key`** — whether `LicenseValidator`/`licensing/gating.py` fails
   open or closed when `LICENSE_PUBLIC_KEY` or the license string itself is
   unset was not traced to its call site.

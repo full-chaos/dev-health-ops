@@ -4,9 +4,6 @@ summary: Preserve Postgres semantic authority, ClickHouse analytics, River queue
 content_type: architecture
 owner: engineering
 source_of_truth:
-  - docs/architecture/database-architecture.md
-  - docs/architecture/data-pipeline.md
-  - docs/architecture/dispatch-outbox.md
   - docs/operate/configure/databases-and-storage.md
   - current migrations and sink code
 applicability: current

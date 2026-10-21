@@ -7,7 +7,6 @@ source_of_truth:
   - go.mod
   - requirements-docs.txt
   - compose.yml
-  - docs/getting-started.md
   - current CI workflows
 applicability: current
 lifecycle: active

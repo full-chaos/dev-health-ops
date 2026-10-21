@@ -5,7 +5,6 @@ content_type: task-guide
 owner: platform-api
 source_of_truth:
   - current /api/v1/admin/customer-push source and token routes
-  - docs/customer-push-ingestion/setup-guide.md
 applicability: current
 lifecycle: active
 ---

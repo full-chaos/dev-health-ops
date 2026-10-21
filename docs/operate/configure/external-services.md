@@ -4,7 +4,6 @@ summary: Configure email, model, provider, and other external services with expl
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
-  - docs/email-setup.md
   - current model and provider runtime configuration
 applicability: current
 lifecycle: active

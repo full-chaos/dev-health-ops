@@ -390,7 +390,11 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
-	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra))
+	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
+		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
+	})...)
+	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra),
+		"discovery_mounted", cfg.TokenIssuerURL != "")
 	routes = append(routes, extra...)
 
 	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))

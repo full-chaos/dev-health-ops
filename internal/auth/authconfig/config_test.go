@@ -1,6 +1,7 @@
 package authconfig
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -329,6 +330,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSigningKeyFile:         "/tmp/other-key.pem",
 		EnvSigningKeyID:           "other-kid",
 		EnvSigningKeySetFile:      "/tmp/other-keyset.json",
+		EnvTokenIssuerURL:         "https://other-issuer.example.test",
 		EnvAccessTokenIssuer:      "other-issuer",
 		EnvAccessTokenAudience:    "other-audience",
 		EnvTrustedProxies:         "10.0.0.5,192.168.0.0/16",
@@ -353,6 +355,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSigningKeyFile:         func(c Config) string { return c.SigningKeyPath },
 		EnvSigningKeyID:           func(c Config) string { return c.SigningKeyID },
 		EnvSigningKeySetFile:      func(c Config) string { return c.SigningKeySetPath },
+		EnvTokenIssuerURL:         func(c Config) string { return c.TokenIssuerURL },
 		EnvAccessTokenIssuer:      func(c Config) string { return c.Session.AccessIssuer },
 		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
 		EnvTrustedProxies:         func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
@@ -436,4 +439,57 @@ func itoa(value int64) string {
 
 func ftoa(value float64) string {
 	return strconv.FormatFloat(value, 'g', -1, 64)
+}
+
+func TestTokenIssuerURLIsOptionalAndHasTheDiscoveryShape(t *testing.T) {
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
+	if err != nil || cfg.TokenIssuerURL != "" {
+		t.Fatalf("unset: issuer %q err %v, want empty and no error", cfg.TokenIssuerURL, err)
+	}
+	for value, ok := range map[string]bool{
+		"https://auth.example.test":                 true,
+		"https://auth.example.test:8443/dev-health": true,
+		"  https://auth.example.test  ":             true,
+		"http://auth.example.test":                  false,
+		"https://auth.example.test/":                false,
+		"https://Auth.Example.test":                 false,
+		"https://user@auth.example.test":            false,
+		"https://auth.example.test?x=1":             false,
+		"https://auth.example.test#f":               false,
+		"auth.example.test":                         false,
+	} {
+		env := baseEnv()
+		env[EnvTokenIssuerURL] = value
+		cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+		if ok != (err == nil) {
+			t.Errorf("%q: err = %v, want ok=%v", value, err, ok)
+			continue
+		}
+		if ok && cfg.TokenIssuerURL != strings.TrimSpace(value) {
+			t.Errorf("%q: issuer %q", value, cfg.TokenIssuerURL)
+		}
+		if err != nil && strings.Contains(err.Error(), "example.test") {
+			t.Errorf("%q: the error echoes the value: %v", value, err)
+		}
+	}
+}
+
+func TestIssuerURLPatternIsTheDiscoverySchemaPattern(t *testing.T) {
+	raw, err := os.ReadFile("../../../contracts/auth/v1/jsonschema/discovery.v1.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Issuer struct {
+				Pattern string `json:"pattern"`
+			} `json:"issuer"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema.Properties.Issuer.Pattern != issuerURLPattern.String() {
+		t.Fatalf("issuer pattern drifted from discovery.v1: %q vs %q", issuerURLPattern.String(), schema.Properties.Issuer.Pattern)
+	}
 }

@@ -1624,20 +1624,6 @@ lock_probe_time() {
     printf '%s' "${t}"
     return 0
   fi
-  if command -v python3 >/dev/null 2>&1; then
-    t="$(python3 -c 'import time; print(f"{time.time():.6f}")' 2>/dev/null)"
-    if _looks_like_subsecond_time "${t}"; then
-      printf '%s' "${t}"
-      return 0
-    fi
-  fi
-  if command -v perl >/dev/null 2>&1; then
-    t="$(perl -MTime::HiRes=time -e 'printf "%.6f", time()' 2>/dev/null)"
-    if _looks_like_subsecond_time "${t}"; then
-      printf '%s' "${t}"
-      return 0
-    fi
-  fi
   return 1
 }
 
@@ -1653,7 +1639,7 @@ if [ "${1:-}" = "--lock-probe" ]; then
   hold_secs="${1:-0}"
   acquire_lock
   acquired_at="$(lock_probe_time)" || {
-    printf 'lock-probe: FATAL -- no sub-second time source available (EPOCHREALTIME unset, date +%%N not interpreted, no python3/perl on PATH); refusing to silently degrade to whole-second resolution.\n' >&2
+    printf 'lock-probe: FATAL -- no sub-second time source available (EPOCHREALTIME unset, date +%%N not interpreted); refusing to silently degrade to whole-second resolution.\n' >&2
     exit 1
   }
   printf 'lock-probe: acquired (pid %s) at %s\n' "$$" "${acquired_at}"

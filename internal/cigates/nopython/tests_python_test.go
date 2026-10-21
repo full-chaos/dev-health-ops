@@ -1,7 +1,6 @@
 package nopython_test
 
 import (
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,27 +31,10 @@ func testsTreeRoot(t *testing.T) string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "..")
 }
 
+// testsTreePythonFiles lists the tracked .py files under tests/ (slash paths).
 func testsTreePythonFiles(t *testing.T, root string) []string {
 	t.Helper()
-	var found []string
-	err := filepath.WalkDir(filepath.Join(root, "tests"), func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(p, ".py") {
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		found = append(found, filepath.ToSlash(rel))
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return found
+	return trackedFiles(t, root, "tests/*.py")
 }
 
 func testsTreeStray(files []string) []string {
@@ -106,32 +88,22 @@ func (e pyOwnedEntry) covers(stem string) bool {
 	return stem == e.stem
 }
 
-// pyDeadWalk lists every .py file under root (slash paths), skipping VCS and dependency directories.
+// pyDeadWalk lists every .py file git tracks under root (slash paths). Untracked files (tool caches, scratch) are not
+// tracked Python; vendored trees are skipped.
 func pyDeadWalk(t *testing.T, root string) []string {
 	t.Helper()
 	var found []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
+	for _, f := range trackedFiles(t, root, "*.py") {
+		skip := false
+		for _, part := range strings.Split(f, "/") {
+			switch part {
 			case ".git", "node_modules", "vendor", ".venv":
-				return filepath.SkipDir
+				skip = true
 			}
-			return nil
 		}
-		if strings.HasSuffix(p, ".py") {
-			rel, err := filepath.Rel(root, p)
-			if err != nil {
-				return err
-			}
-			found = append(found, filepath.ToSlash(rel))
+		if !skip {
+			found = append(found, f)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	return found
 }
@@ -170,40 +142,34 @@ func TestNoTrackedPythonOutsideOwnedEntries(t *testing.T) {
 	}
 }
 
-// pyPlantedTree writes one .py file per owned entry, plus the extra paths, under a temp dir that is not the real tree.
+// pyPlantedTree stages one .py file per owned entry, plus the extra paths, in a temp git repository that is not the
+// real tree, and returns what pyDeadWalk finds there.
 func pyPlantedTree(t *testing.T, skipStem string, extra ...string) []string {
 	t.Helper()
-	root := t.TempDir()
-	paths := append([]string{}, extra...)
+	files := map[string]string{}
+	var track []string
+	add := func(p string) {
+		files[p] = ""
+		track = append(track, p)
+	}
+	for _, p := range extra {
+		add(p)
+	}
 	for _, e := range pyOwnedEntries {
 		if e.stem == skipStem {
 			continue
 		}
 		if strings.HasSuffix(e.stem, "/") {
-			paths = append(paths, e.stem+"a.py")
+			add(e.stem + "a.py")
 		} else {
-			paths = append(paths, e.stem+".py")
+			add(e.stem + ".py")
 		}
 	}
-	for _, p := range paths {
-		full := filepath.Join(root, filepath.FromSlash(p))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
+	// skipped directories must not be scanned
+	for _, skip := range []string{"node_modules", "vendor", ".venv"} {
+		add(skip + "/skipped.py")
 	}
-	// skipped directories must not be walked
-	for _, skip := range []string{".git", "node_modules", "vendor", ".venv"} {
-		if err := os.MkdirAll(filepath.Join(root, skip), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, skip, "skipped.py"), nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return pyDeadWalk(t, root)
+	return pyDeadWalk(t, plantedRepo(t, files, track...))
 }
 
 func TestNoTrackedPythonFiresOnPlantedRows(t *testing.T) {

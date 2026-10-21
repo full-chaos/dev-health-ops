@@ -127,6 +127,11 @@ on:
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
       - 'tests/**/*.py'
+      # the CHAOS-10376 guards read every tracked .py, ci/requirements-*.txt, mkdocs.yml and the provider-limits page
+      - '**/*.py'
+      - 'ci/requirements-*.txt'
+      - 'mkdocs.yml'
+      - 'docs/reference/limits-and-compatibility/provider-limits.md'
       - 'tests/scripts/**'
       - '**/testdata/**'
       # The manifests of the recordedfiles guard sit BESIDE their directory
@@ -377,6 +382,11 @@ on:
       - 'src/dev_health_ops/work_graph/**'
       - 'tests/fixtures/**'
       - 'tests/**/*.py'
+      # the CHAOS-10376 guards read every tracked .py, ci/requirements-*.txt, mkdocs.yml and the provider-limits page
+      - '**/*.py'
+      - 'ci/requirements-*.txt'
+      - 'mkdocs.yml'
+      - 'docs/reference/limits-and-compatibility/provider-limits.md'
       - 'tests/scripts/**'
       - '**/testdata/**'
       # The manifests of the recordedfiles guard sit BESIDE their directory

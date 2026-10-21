@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -12,65 +13,75 @@ import (
 // line of scripts/prepare_docs_cloudflare.py at the merge base (9127c3728d51) that refuses it (STRICTER = Go refuses what
 // Python accepted, allowed by the port rule). Removing a row, or a refusal from the table, fails the test.
 var pythonRefusals = map[string]string{
-	"missing source":                           "165 add_argument(--source, required=True): argparse exit 2",
-	"missing output":                           "166 add_argument(--output, required=True): argparse exit 2",
-	"missing mode":                             "167 add_argument(--mode, required=True): argparse exit 2",
-	"missing redirects":                        "168 add_argument(--redirects, required=True): argparse exit 2",
-	"mode staging":                             "167 choices=(preview, production): argparse exit 2",
-	"trailing positional":                      "174 parse_args: unrecognized arguments (junk after valid options)",
-	"trailing positional then flag":            "174 parse_args: unrecognized arguments (junk, then a later --mode)",
-	"unknown option":                           "174 parse_args: unrecognized arguments (--nope)",
-	"abbreviated option":                       "174 STRICTER: argparse accepted --mod as --mode",
-	"single dash option":                       "174 parse_args: -mode is no option of the parser",
-	"double dash":                              "174 parse_args: -- ends options, leaving positional junk",
-	"option without value":                     "174 parse_args: expected one argument",
-	"value that looks like an option":          "174 parse_args: expected one argument (-abc taken as an option)",
-	"empty required value":                     "165 STRICTER: Path('') is '.' in Python",
-	"origin http":                              "26 raise ValueError: scheme != https",
-	"origin no scheme":                         "26 raise ValueError: no scheme",
-	"origin empty netloc":                      "26 raise ValueError: empty netloc",
-	"origin with path":                         "26 raise ValueError: path not empty or /",
-	"origin unclosed bracket":                  "24 urlparse raises ValueError: Invalid IPv6 URL",
-	"origin bad IPv6":                          "24 urlparse raises ValueError: bracketed host is no IPv6 address",
-	"origin IPv4 in brackets":                  "24 urlparse raises ValueError: An IPv4 address cannot be in brackets",
-	"origin text before bracket":               "24 urlparse raises ValueError: Invalid IPv6 URL (text before the bracket)",
-	"origin fullwidth slash":                   "24 urlparse _checknetloc: NFKC netloc gains /",
-	"origin fullwidth colon":                   "24 urlparse _checknetloc: NFKC netloc gains :",
-	"origin fullwidth question":                "24 urlparse _checknetloc: NFKC netloc gains ?",
-	"origin fullwidth hash":                    "24 urlparse _checknetloc: NFKC netloc gains #",
-	"origin fullwidth at":                      "24 urlparse _checknetloc: NFKC netloc gains @",
-	"production origin that is not UTF-8":      "88 write_text(robots.txt): UnicodeEncodeError on a surrogate (production only)",
-	"source missing":                           "121-122 raise ValueError: built documentation directory not found",
-	"source without index":                     "123-124 raise ValueError: no index.html",
-	"source without 404":                       "125-126 raise ValueError: no 404.html",
-	"redirects missing":                        "127-128 raise ValueError: redirect manifest not found",
-	"redirects not UTF-8":                      "33-34 open(encoding=utf-8) + csv read: UnicodeDecodeError (ValueError)",
-	"redirects empty file":                     "36-37 raise ValueError: manifest is missing columns (no fieldnames)",
-	"redirects wrong header":                   "36-37 raise ValueError: manifest is missing columns",
-	"redirects empty first line":               "36-37 DictReader takes the empty first line as the header",
-	"redirects source over the csv limit":      "34 csv.Error: field larger than field limit (131072), source field",
-	"redirects target over the csv limit":      "34 csv.Error: field larger than field limit (131072), target field",
-	"redirects extra field over the csv limit": "34 csv.Error: field larger than field limit (131072), unused extra field",
-	"redirects header over the csv limit":      "34 csv.Error: field larger than field limit (131072), header field",
-	"redirects empty target":                   "41-42 raise ValueError: empty redirect",
-	"redirects short row":                      "41-42 raise ValueError: empty redirect (row with one field)",
-	"redirects relative":                       "43-47 raise ValueError: redirect paths must be site-relative",
-	"redirects self":                           "48-49 raise ValueError: self redirect",
-	"redirects duplicate":                      "50-53 raise ValueError: duplicate redirect source",
-	"redirects CRLF in quotes":                 "65 STRICTER: Python keeps CRLF in _redirects; Go csv would fold it to LF",
-	"redirects LF in quotes":                   "65 STRICTER: a line break inside a _redirects field corrupts the file",
-	"redirects CR in quotes":                   "65 STRICTER: same, bare CR",
-	"redirects tab in quotes":                  "65 STRICTER: a tab inside a _redirects field corrupts the file",
-	"redirects NUL":                            "65 STRICTER: control character in a redirect field",
-	"output is a file":                         "132 shutil.rmtree(file): NotADirectoryError (OSError)",
-	"output is a symlink to a directory":       "132 shutil.rmtree(symlink): Cannot call rmtree on a symbolic link",
-	"output is a dangling symlink":             "133 shutil.copytree: makedirs File exists (OSError)",
-	"markdown file in the output":              "139-142 raise ValueError: output contains Markdown source (file)",
-	"directory named .md in the output":        "139-142 raise ValueError: rglob('*.md') also matches directories",
-	"dangling symlink in the source":           "133 shutil.copytree: copy2 of a dangling symlink (shutil.Error)",
+	"named pipe in the source":                  "133 shutil.copytree: copy2 SpecialFileError, a named pipe",
+	"origin zone that is empty":                 "24 urlparse: ip_address empty scope id",
+	"origin zone with a second percent":         "24 urlparse: ip_address scope id contains %",
+	"output is a symlink with a trailing slash": "132 shutil.rmtree(symlink): Cannot call rmtree on a symbolic link (pathlib drops the slash)",
+	"dash value with a space":                   "174 STRICTER: argparse accepted '-a b' as a value",
+	"negative number as a value":                "174 STRICTER: argparse accepted -1 as a value",
+	"help flag alone":                           "174 STRICTER: argparse printed help and exited 0",
+	"help flag after double dash":               "174 parse_args: -- then -h is positional junk (exit 2)",
+	"help flag as the source value":             "174 parse_args: -h/--help is an option, so --source has no value (exit 2)",
+	"help flag as an option value":              "174 parse_args: -h is an option, so --source-revision has no value (exit 2)",
+	"missing source":                            "165 add_argument(--source, required=True): argparse exit 2",
+	"missing output":                            "166 add_argument(--output, required=True): argparse exit 2",
+	"missing mode":                              "167 add_argument(--mode, required=True): argparse exit 2",
+	"missing redirects":                         "168 add_argument(--redirects, required=True): argparse exit 2",
+	"mode staging":                              "167 choices=(preview, production): argparse exit 2",
+	"trailing positional":                       "174 parse_args: unrecognized arguments (junk after valid options)",
+	"trailing positional then flag":             "174 parse_args: unrecognized arguments (junk, then a later --mode)",
+	"unknown option":                            "174 parse_args: unrecognized arguments (--nope)",
+	"abbreviated option":                        "174 STRICTER: argparse accepted --mod as --mode",
+	"single dash option":                        "174 parse_args: -mode is no option of the parser",
+	"double dash":                               "174 parse_args: -- ends options, leaving positional junk",
+	"option without value":                      "174 parse_args: expected one argument",
+	"value that looks like an option":           "174 parse_args: expected one argument (-abc taken as an option)",
+	"empty required value":                      "165 STRICTER: Path('') is '.' in Python",
+	"origin http":                               "26 raise ValueError: scheme != https",
+	"origin no scheme":                          "26 raise ValueError: no scheme",
+	"origin empty netloc":                       "26 raise ValueError: empty netloc",
+	"origin with path":                          "26 raise ValueError: path not empty or /",
+	"origin unclosed bracket":                   "24 urlparse raises ValueError: Invalid IPv6 URL",
+	"origin bad IPv6":                           "24 urlparse raises ValueError: bracketed host is no IPv6 address",
+	"origin IPv4 in brackets":                   "24 urlparse raises ValueError: An IPv4 address cannot be in brackets",
+	"origin text before bracket":                "24 urlparse raises ValueError: Invalid IPv6 URL (text before the bracket)",
+	"origin fullwidth slash":                    "24 urlparse _checknetloc: NFKC netloc gains /",
+	"origin fullwidth colon":                    "24 urlparse _checknetloc: NFKC netloc gains :",
+	"origin fullwidth question":                 "24 urlparse _checknetloc: NFKC netloc gains ?",
+	"origin fullwidth hash":                     "24 urlparse _checknetloc: NFKC netloc gains #",
+	"origin fullwidth at":                       "24 urlparse _checknetloc: NFKC netloc gains @",
+	"production origin that is not UTF-8":       "88 write_text(robots.txt): UnicodeEncodeError on a surrogate (production only)",
+	"source missing":                            "121-122 raise ValueError: built documentation directory not found",
+	"source without index":                      "123-124 raise ValueError: no index.html",
+	"source without 404":                        "125-126 raise ValueError: no 404.html",
+	"redirects missing":                         "127-128 raise ValueError: redirect manifest not found",
+	"redirects not UTF-8":                       "33-34 open(encoding=utf-8) + csv read: UnicodeDecodeError (ValueError)",
+	"redirects empty file":                      "36-37 raise ValueError: manifest is missing columns (no fieldnames)",
+	"redirects wrong header":                    "36-37 raise ValueError: manifest is missing columns",
+	"redirects empty first line":                "36-37 DictReader takes the empty first line as the header",
+	"redirects source over the csv limit":       "34 csv.Error: field larger than field limit (131072), source field",
+	"redirects target over the csv limit":       "34 csv.Error: field larger than field limit (131072), target field",
+	"redirects extra field over the csv limit":  "34 csv.Error: field larger than field limit (131072), unused extra field",
+	"redirects header over the csv limit":       "34 csv.Error: field larger than field limit (131072), header field",
+	"redirects empty target":                    "41-42 raise ValueError: empty redirect",
+	"redirects short row":                       "41-42 raise ValueError: empty redirect (row with one field)",
+	"redirects relative":                        "43-47 raise ValueError: redirect paths must be site-relative",
+	"redirects self":                            "48-49 raise ValueError: self redirect",
+	"redirects duplicate":                       "50-53 raise ValueError: duplicate redirect source",
+	"redirects CRLF in quotes":                  "65 STRICTER: Python keeps CRLF in _redirects; Go csv would fold it to LF",
+	"redirects LF in quotes":                    "65 STRICTER: a line break inside a _redirects field corrupts the file",
+	"redirects CR in quotes":                    "65 STRICTER: same, bare CR",
+	"redirects tab in quotes":                   "65 STRICTER: a tab inside a _redirects field corrupts the file",
+	"redirects NUL":                             "65 STRICTER: control character in a redirect field",
+	"output is a file":                          "132 shutil.rmtree(file): NotADirectoryError (OSError)",
+	"output is a symlink to a directory":        "132 shutil.rmtree(symlink): Cannot call rmtree on a symbolic link",
+	"output is a dangling symlink":              "133 shutil.copytree: makedirs File exists (OSError)",
+	"markdown file in the output":               "139-142 raise ValueError: output contains Markdown source (file)",
+	"directory named .md in the output":         "139-142 raise ValueError: rglob('*.md') also matches directories",
+	"dangling symlink in the source":            "133 shutil.copytree: copy2 of a dangling symlink (shutil.Error)",
 }
 
-const pythonRefusalRows = 56
+const pythonRefusalRows = 66
 
 // Every input the former Python helper refused (its argparse errors, its ValueError and OSError paths, and the stdlib
 // calls that raise inside it) must be refused by `cigate docs-prepare`: exit 2 for a usage error as argparse did, exit 1
@@ -130,6 +141,14 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		{"option without value", []string{"--source", site, "--redirects", ok, "--output", out("l"), "--mode"}, 2, "expected one argument"},
 		{"value that looks like an option", base("m", "--source-revision", "-abc"), 2, "expected one argument"},
 		{"empty required value", []string{"--source", "", "--redirects", ok, "--output", out("n"), "--mode", "preview"}, 2, "required: --source"},
+		{"help flag as an option value", base("h1", "--source-revision", "-h"), 2, "expected one argument"},
+		{"help flag as the source value", []string{"--source", "--help", "--redirects", ok, "--output", out("h2"), "--mode", "preview"}, 2, "expected one argument"},
+		{"help flag after double dash", base("h3", "--", "-h"), 2, "unrecognized"},
+		{"help flag alone", []string{"-h"}, 2, "unrecognized"},
+		{"negative number as a value", base("h4", "--source-revision", "-1"), 2, "expected one argument"},
+		{"dash value with a space", base("h5", "--source-revision", "-a b"), 2, "expected one argument"},
+		{"origin zone with a second percent", base("z1", "--canonical-origin", "https://[fe80::1%a%b]"), 1, "does not appear to be an IPv4 or IPv6 address"},
+		{"origin zone that is empty", base("z2", "--canonical-origin", "https://[fe80::1%]"), 1, "does not appear to be an IPv4 or IPv6 address"},
 		// the canonical origin (urlsplit and its NFKC netloc check)
 		{"origin http", base("o", "--canonical-origin", "http://x.com"), 1, "must be an HTTPS origin"},
 		{"origin no scheme", base("p", "--canonical-origin", "x.com"), 1, "must be an HTTPS origin"},
@@ -189,6 +208,13 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		write(t, dangling, f, "x")
 	}
 	_ = os.Symlink(filepath.Join(dir, "gone"), filepath.Join(dangling, "bad"))
+	fifoSite := filepath.Join(dir, "fifosite")
+	for _, f := range []string{"index.html", "404.html"} {
+		write(t, fifoSite, f, "x")
+	}
+	if err := syscall.Mkfifo(filepath.Join(fifoSite, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	mk := func(src, output string) []string {
 		return []string{"--source", src, "--redirects", ok, "--output", output, "--mode", "preview"}
 	}
@@ -199,6 +225,8 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		row{"markdown file in the output", mk(mdSite, out("md1")), 1, "Markdown source"},
 		row{"directory named .md in the output", mk(mdDir, out("md2")), 1, "Markdown source"},
 		row{"dangling symlink in the source", mk(dangling, out("dl")), 1, ""},
+		row{"output is a symlink with a trailing slash", mk(site, link+"/"), 1, "symbolic link"},
+		row{"named pipe in the source", mk(fifoSite, out("ff")), 1, "special file"},
 	)
 	if len(rows) != pythonRefusalRows || len(pythonRefusals) != pythonRefusalRows {
 		t.Fatalf("refusal table has %d rows and %d Python references, want %d each: a refusal was removed or added without its reference", len(rows), len(pythonRefusals), pythonRefusalRows)

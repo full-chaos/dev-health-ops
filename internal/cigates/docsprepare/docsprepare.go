@@ -81,12 +81,6 @@ func parseArgs(args []string) (Options, string) {
 
 // Run is the `cigate docs-prepare` entry point. Exit 1 on a validation or I/O error, 2 on a usage error.
 func Run(args []string, stdout, stderr io.Writer) int {
-	for _, a := range args {
-		if a == "-h" || a == "--help" {
-			fmt.Fprintln(stdout, usage)
-			return 0
-		}
-	}
 	o, problem := parseArgs(args)
 	if problem != "" {
 		fmt.Fprintf(stderr, "%s\ndocs-prepare: error: %s\n", usage, problem)
@@ -129,7 +123,7 @@ func Prepare(o Options) (manifestInfo, error) {
 	if err != nil {
 		return manifestInfo{}, err
 	}
-	if lfi, serr := os.Lstat(o.Output); serr == nil {
+	if lfi, serr := os.Lstat(filepath.Clean(o.Output)); serr == nil {
 		if lfi.Mode()&os.ModeSymlink != 0 {
 			return manifestInfo{}, fmt.Errorf("Cannot call rmtree on a symbolic link")
 		}
@@ -430,6 +424,9 @@ func checkBracketedHost(netloc string) error {
 		}
 		return nil
 	}
+	if _, scope, hasScope := strings.Cut(host, "%"); hasScope && (scope == "" || strings.Contains(scope, "%")) {
+		return fmt.Errorf("%s does not appear to be an IPv4 or IPv6 address", pyRepr(host))
+	}
 	addr, err := netip.ParseAddr(host)
 	if err != nil {
 		return fmt.Errorf("%s does not appear to be an IPv4 or IPv6 address", pyRepr(host))
@@ -647,6 +644,9 @@ func copyTree(src, dst string) error {
 				return err
 			}
 			continue
+		}
+		if !st.Mode().IsRegular() {
+			return fmt.Errorf("`%s` is a special file (named pipe, socket or device), not copied", s)
 		}
 		if err := copyFile(s, d, st.Mode().Perm()); err != nil {
 			return err

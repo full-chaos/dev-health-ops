@@ -105,7 +105,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -182,6 +182,9 @@ usage() {
          Log the wall seconds of a test shard and fail above 85% of the 30 min
          job cap (GO_TEST_SHARD_CAP_SECONDS), naming the shard and its three
          heaviest packages (measured in LOGFILE, else by weight).
+  test-shard-unweighted-guard SHARD COUNT LOGFILE
+         Fail when a package of the shard ran 30 s or more in LOGFILE (its go
+         test log) and has no row in ci/go_test_weights.tsv; prints the row.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -520,6 +523,18 @@ check_test_shard_wall_guard() {
   die "test shard ${shard}/${count} took ${wall}s, over ${GO_TEST_SHARD_WALL_PERCENT}% (${limit}s) of the ${GO_TEST_SHARD_CAP_SECONDS}s job cap; heaviest packages by ${basis}: ${top} -- rebalance ci/go_test_weights.tsv or add a shard"
 }
 
+# check_test_shard_unweighted_guard SHARD COUNT LOGFILE (CHAOS-10498): fails when a package of the shard ran 30 s or more in
+# LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints the row to add. A package with no row weighs
+# 1, so an unweighted heavy package unbalances the shards without anyone seeing it; this makes it red on the leg that ran it.
+check_test_shard_unweighted_guard() {
+  local shard="${1:-}" count="${2:-}" log="${3:-}" plan
+  check_test_shard_args "${shard}" "${count}"
+  [ -f "${log}" ] || die "test-shard-unweighted-guard needs the shard's go test log, got '${log}'"
+  plan="$(check_test_shard_plan "${shard}" "${count}")"
+  awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" \
+    -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}"
+}
+
 # check_test_shard SHARD COUNT: the SHARD-th of COUNT slices of the unit tests (what check_test runs as one). The slices
 # partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. Each shard also runs its slice of the
 # race-excluded census (check_race_excluded_ran SHARD COUNT): one run of the whole census took ~570 s and made shard 1 18.5 min.
@@ -549,6 +564,7 @@ check_test_shard() {
   done
   check_race_excluded_ran "${shard}" "${count}"
   wall=$(($(date +%s) - started))
+  (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}"; return 1; }
   (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}"; return 1; }
   rm -f -- "${log}"
 }
@@ -3847,6 +3863,10 @@ case "${1:-all}" in
   test-shard-wall-guard)
     [ "$#" -eq 5 ] || die "test-shard-wall-guard accepts SHARD COUNT WALL LOGFILE"
     check_test_shard_wall_guard "$2" "$3" "$4" "$5"
+    ;;
+  test-shard-unweighted-guard)
+    [ "$#" -eq 4 ] || die "test-shard-unweighted-guard accepts SHARD COUNT LOGFILE"
+    check_test_shard_unweighted_guard "$2" "$3" "$4"
     ;;
   venue-oracle-plan)
     [ "$#" -eq 2 ] || die "venue-oracle-plan accepts COUNT"

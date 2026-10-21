@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // A docs page that names a repository path must name a path git tracks, or carry pathRemovedNote on the same line.
@@ -26,14 +28,13 @@ var (
 	pathChars     = regexp.MustCompile(`^[A-Za-z0-9_.@\-/]+$`)
 	pythonTree    = regexp.MustCompile(`src/dev_health_ops(?:/[^\s` + "`" + `)'"]*)?`)
 	lineSuffix    = regexp.MustCompile(`:\d+(?:-\d+)?$`)
-	frontValue    = regexp.MustCompile(`^\s*(?:-\s+|[A-Za-z_][A-Za-z0-9_]*:\s+)["']?([^\s"']+)["']?\s*$`)
 	// History records keep their text: a name that was true when the record was written (a planned package, a web
 	// repository directory, a migration range) stays, and is listed here by page and name.
 	historyNames = map[string][]string{
 		"docs/contribute/architecture/auth-control-plane-adrs.md": {"internal/identity", "internal/keystore",
-			"src/lib/admin/server", "src/lib/billing/actions"},
+			"src/lib/admin/server", "src/lib/billing/actions", "src/dev_health_ops/api", "ci/check_endpoint_profiles.py"},
 		"docs/contribute/architecture/auth-control-plane-decision-sheet.md": {"internal/identity", "internal/keystore",
-			"src/lib/admin/server", "src/lib/billing/actions"},
+			"src/lib/admin/server", "src/lib/billing/actions", "src/dev_health_ops/api", "ci/check_endpoint_profiles.py"},
 		"docs/contribute/development/integration-suite-targets.md":           {"internal/testsupport/computeparity"},
 		"docs/contribute/development/lane-isolation-kiac.md":                 {"deploy/local/kiac.sh", "deploy/local/trial-data.sh", "deploy/vendor"},
 		"docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md": {"cmd/go-api-routing"},
@@ -114,26 +115,73 @@ func repoPathOf(token string, topDirs map[string]bool) (string, bool) {
 	return strings.TrimSuffix(token, "/"), true
 }
 
-func pathTokens(line string, front bool, topDirs map[string]bool) []string {
-	var raw []string
-	for _, m := range backtickToken.FindAllStringSubmatch(line, -1) {
-		raw = append(raw, m[1])
-	}
-	for _, m := range linkTarget.FindAllStringSubmatch(line, -1) {
-		raw = append(raw, m[1])
-	}
-	if front {
-		if m := frontValue.FindStringSubmatch(line); m != nil {
-			raw = append(raw, m[1])
+type pathRef struct {
+	ref string
+	end int
+}
+
+// lineRefs lists the repo paths named on one body line, with the offset where each token ends. The retired Python tree
+// is listed wherever it appears, in code fences and with placeholders too; other tokens only outside fences.
+func lineRefs(line string, fenced bool, topDirs map[string]bool) []pathRef {
+	var out []pathRef
+	if !fenced {
+		for _, re := range []*regexp.Regexp{backtickToken, linkTarget} {
+			for _, m := range re.FindAllStringSubmatchIndex(line, -1) {
+				if p, ok := repoPathOf(line[m[2]:m[3]], topDirs); ok {
+					out = append(out, pathRef{p, m[3]})
+				}
+			}
 		}
 	}
-	var out []string
-	for _, r := range raw {
-		if p, ok := repoPathOf(r, topDirs); ok {
-			out = append(out, p)
-		}
+	for _, m := range pythonTree.FindAllStringIndex(line, -1) {
+		out = append(out, pathRef{strings.TrimSuffix(lineSuffix.ReplaceAllString(strings.TrimRight(line[m[0]:m[1]], ".,;:"), ""), "/"), m[1]})
 	}
 	return out
+}
+
+// check reports every ref that git does not track. The removed note exempts only the one path it follows: the nearest
+// path that ends before the note.
+func checkRefs(rel string, lineNo int, text string, refs []pathRef, files, dirs map[string]bool) []string {
+	exempt := map[string]bool{}
+	for from := 0; ; {
+		i := strings.Index(text[from:], pathRemovedNote)
+		if i < 0 {
+			break
+		}
+		n := from + i
+		best := -1
+		for k, r := range refs {
+			if r.end <= n && (best < 0 || r.end >= refs[best].end) {
+				best = k
+			}
+		}
+		if best >= 0 {
+			exempt[refs[best].ref] = true
+		}
+		from = n + len(pathRemovedNote)
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range refs {
+		if seen[r.ref] {
+			continue
+		}
+		seen[r.ref] = true
+		if exempt[r.ref] || slices.Contains(historyNames[rel], r.ref) || files[r.ref] || dirs[r.ref] || namesGoSymbolIn(r.ref, dirs) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s:%d names %s, which git does not track: name the Go owner, or write %q right after that path when no Go owner exists", rel, lineNo, r.ref, pathRemovedNote))
+	}
+	return out
+}
+
+func frontMatterScalars(n *yaml.Node, visit func(line int, value string)) {
+	if n.Kind == yaml.ScalarNode {
+		visit(n.Line, n.Value)
+	}
+	for _, c := range n.Content {
+		frontMatterScalars(c, visit)
+	}
 }
 
 // namesGoSymbolIn reports a Go qualified symbol such as internal/jobs/workgraph/linktier.Rank: dropping the trailing
@@ -174,41 +222,43 @@ func docsRepoPathGuard(d docTree) []string {
 			out = append(out, fmt.Sprintf("%s: %v", rel, err))
 			continue
 		}
-		front, fenced := false, false
-		for i, line := range strings.Split(text, "\n") {
-			if i == 0 && strings.TrimSpace(line) == "---" {
-				front = true
-				continue
+		lines := strings.Split(text, "\n")
+		body := 0
+		if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+			for i := 1; i < len(lines); i++ {
+				if strings.TrimSpace(lines[i]) == "---" {
+					body = i + 1
+					break
+				}
 			}
-			if front && strings.TrimSpace(line) == "---" {
-				front = false
-				continue
+		}
+		if body > 0 {
+			var doc yaml.Node
+			if err := yaml.Unmarshal([]byte(strings.Join(lines[1:body-1], "\n")), &doc); err != nil {
+				out = append(out, fmt.Sprintf("%s: front matter: %v", rel, err))
 			}
-			if !front && strings.HasPrefix(strings.TrimSpace(line), "```") {
+			// Every string in the front matter, in any YAML shape (block or flow list, mapping, scalar), is a candidate:
+			// its first word is the path, and the rest is prose.
+			frontMatterScalars(&doc, func(line int, value string) {
+				var refs []pathRef
+				if first := strings.Fields(value); len(first) > 0 {
+					if p, ok := repoPathOf(first[0], topDirs); ok {
+						refs = append(refs, pathRef{p, len(first[0])})
+					}
+				}
+				for _, m := range pythonTree.FindAllStringIndex(value, -1) {
+					refs = append(refs, pathRef{strings.TrimSuffix(lineSuffix.ReplaceAllString(strings.TrimRight(value[m[0]:m[1]], ".,;:"), ""), "/"), m[1]})
+				}
+				out = append(out, checkRefs(rel, line+1, value, refs, files, dirs)...)
+			})
+		}
+		fenced := false
+		for i := body; i < len(lines); i++ {
+			line := lines[i]
+			if strings.HasPrefix(strings.TrimSpace(line), "```") {
 				fenced = !fenced
 			}
-			if strings.Contains(line, pathRemovedNote) {
-				continue
-			}
-			refs := []string(nil)
-			if !fenced {
-				refs = pathTokens(line, front, topDirs)
-			}
-			// The retired Python tree is checked everywhere on the line, in code fences and with placeholders too.
-			for _, m := range pythonTree.FindAllString(line, -1) {
-				refs = append(refs, strings.TrimSuffix(strings.TrimRight(m, ".,;:"), "/"))
-			}
-			seen := map[string]bool{}
-			for _, ref := range refs {
-				if seen[ref] {
-					continue
-				}
-				seen[ref] = true
-				if slices.Contains(historyNames[rel], ref) || files[ref] || dirs[ref] || namesGoSymbolIn(ref, dirs) {
-					continue
-				}
-				out = append(out, fmt.Sprintf("%s:%d names %s, which git does not track: name the Go owner, or write %q on that line when no Go owner exists", rel, i+1, ref, pathRemovedNote))
-			}
+			out = append(out, checkRefs(rel, i+1, line, lineRefs(line, fenced, topDirs), files, dirs)...)
 		}
 	}
 	return out

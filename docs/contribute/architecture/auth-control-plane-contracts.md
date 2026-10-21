@@ -109,6 +109,6 @@ by registry tests. Two are worth knowing before you touch a class:
 ## Verified against
 
 - `contracts/auth/v1/jsonschema/*.schema.json`, `contracts/auth/v1/openapi/auth-v1.openapi.json`.
-- `internal/auth/contracts` and `src/dev_health_ops/authclient` file names above; `tests/authclient/`. (removed with the Python api)
+- `internal/auth/contracts` and `src/dev_health_ops/authclient` (removed with the Python api) file names above; `tests/authclient/` (removed with the Python api).
 - `ci/auth-contracts-ajv/run.mjs`, `scope.sh`; `.github/workflows/auth-contracts-ajv.yml`.
 - `internal/queryapi/server/endpoint_profile_rows_test.go`: the two registry tests.

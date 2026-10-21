@@ -4177,7 +4177,7 @@ only the two doc references were fixed here; the rest are reported for a follow-
 - `AGENTS.md:38` and `:40` — now point at `docs/contribute/architecture/team-attribution.md`.
 
 **Still stale — code comments, out of scope for a docs-only change:**
-- `internal/teamattribution/cascade.go` (on `_SOURCE_ORDER`) and `:154` (on
+- `src/dev_health_ops/metrics/compute_work_items.py:135` (removed with the Python api) (on `_SOURCE_ORDER`) and `:154` (on
   `_DONOR_SOURCES`) — two citations in this one file, not one.
 - `src/dev_health_ops/external_ingest/sinks.py:514` (removed with the Python api).
 
@@ -4221,7 +4221,7 @@ detail the comments actually reference (the resolver internals), not at `work-gr
 | GitHub comment / body capture | `providers/github/normalize.py` (`extract_github_comment_dependencies`, `extract_github_dependencies`) |
 | GitLab capture | `providers/gitlab/normalize.py` |
 | Recovery runbook | §5 above; backfill `backfill/runner.py`, investment `workers/work_graph_tasks.py` |
-| Tests | `tests/test_linked_issue_team_inheritance.py`, `tests/test_pr_issue_link_capture.py` (removed with the Python api) |
+| Tests | `tests/test_linked_issue_team_inheritance.py` (removed with the Python api), `tests/test_pr_issue_link_capture.py` (removed with the Python api) |
 | Schema (base + widened) | `internal/chmigrate/history/051_team_attribution_dimensions.sql`, `internal/chmigrate/history/053_manual_attribution_fallbacks.sql` — see §0.6 |
 | Go dispatch → Python compatibility bridge (added §0.6) | `internal/workerservice/daily.go` (`NewHTTPCompatibilityExecutor`) (HTTP compatibility executor removed with the Python api) |
 

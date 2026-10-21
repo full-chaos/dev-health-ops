@@ -95,19 +95,18 @@ comes from the framework and the location still comes from real source.
 
 ### Deployed apps
 
-Routes are declared by **one deployed `FastAPI()` instance**. A second one,
+Routes are served by **one deployed Go app** (`dev-health-ops-api`). A second one,
 the Python billing edge (`dev-health-ops-billing-edge`, zero shared
 middleware), was deleted with its rows; the go-api billing-edge listener now
 serves the billing host and is outside this ops-Python inventory. `service`
 stays a per-deployed-app field, and the closed `service` vocabulary keeps the
 retired value:
 
-- `dev-health-ops-api` — `cmd/dho/main.go` via `internal/apiservice/service.go`, the main app. Full
-  middleware stack registered in `api/_middleware.py`: on the request path,
-  `CorrelationIdMiddleware` → `OrgIdMiddleware` → `ImpersonationMiddleware` →
-  `SlowAPIMiddleware` → `OriginValidationMiddleware` (CSRF) →
-  `GraphQLQuerySizeLimitMiddleware` → `SecurityHeadersMiddleware` →
-  `CORSMiddleware` → the route.
+- `dev-health-ops-api` — `cmd/dho/main.go` via `internal/apiservice/service.go`, the main app. The Go
+  transport stack is composed in `NewServer` (`internal/apiservice/service.go`): on the request path, the
+  plane and build stamp, the request id, panic recovery, the org scope and impersonation policy
+  (`internal/api/policy/scope.go`, when a database is configured), the origin check (CSRF), security
+  headers and CORS, then the route (with its own recovery, deadline and body bound).
 
 Every row's `service` field says which app serves it. `reachable_validators`
 is derived from the middleware that app mounts.

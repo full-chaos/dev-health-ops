@@ -772,8 +772,8 @@ func TestARefusedIdentityProjectionWritesNoPrincipalOrUserRow(t *testing.T) {
 		user, uniqueEmail("changed")); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := func() [7]int {
-		return [7]int{
+	snapshot := func() [8]int {
+		return [8]int{
 			e.count(t, ctx, `SELECT count(*) FROM auth.principals WHERE id = $1`, user),
 			e.count(t, ctx, `SELECT count(*) FROM auth.principals WHERE id = $1 AND disabled_at IS NULL`, user),
 			e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND email_lower = lower($2)`, user, email),
@@ -781,6 +781,7 @@ func TestARefusedIdentityProjectionWritesNoPrincipalOrUserRow(t *testing.T) {
 			e.auditRows(t, ctx, "auth.principal.projection_updated", user.String()),
 			e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1`, user),
 			e.auditRows(t, ctx, "auth.identity.projected", user.String()),
+			e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_id LIKE '%' || $1::text`, user.String()),
 		}
 	}
 	before := snapshot()
@@ -813,14 +814,15 @@ func TestAProjectionChecksTheProviderIdentitiesUnderTheAccountLock(t *testing.T)
 		user, uniqueEmail("changed")); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := func() [6]int {
-		return [6]int{
+	snapshot := func() [7]int {
+		return [7]int{
 			e.count(t, ctx, `SELECT count(*) FROM auth.principals WHERE id = $1 AND disabled_at IS NULL`, user),
 			e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND email_lower = lower($2)`, user, email),
 			e.auditRows(t, ctx, "auth.principal.projection_updated", user.String()),
 			e.auditRows(t, ctx, "auth.identity.projected", user.String()),
 			e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1 AND subject = $2`, user, wanted),
 			e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1`, user),
+			e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_id LIKE '%' || $1::text`, user.String()),
 		}
 	}
 	before := snapshot()

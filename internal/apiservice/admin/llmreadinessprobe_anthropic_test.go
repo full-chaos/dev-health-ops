@@ -85,9 +85,11 @@ func TestAnthropicProbeReady(t *testing.T) {
 				if len(wire.Tools) != 1 || wire.Tools[0]["name"] != readinessEchoWireName {
 					t.Errorf("round 1 tools = %v", wire.Tools)
 				}
-				if wire.ToolChoice["type"] != "tool" || wire.ToolChoice["name"] != readinessEchoWireName {
-					t.Errorf("round 1 tool_choice = %v", wire.ToolChoice)
+				if wire.ToolChoice["type"] != "auto" || wire.ToolChoice["disable_parallel_tool_use"] != true {
+					t.Errorf("round 1 tool_choice = %v, want auto with parallel tool use disabled", wire.ToolChoice)
 				}
+			} else if len(wire.Tools) != 1 {
+				t.Errorf("round 2 declares %d tools, want the readiness tool (a tool_use turn in the history needs it)", len(wire.Tools))
 			} else if !strings.Contains(string(body), `"tool_use_id":"toolu_01"`) {
 				t.Errorf("round 2 does not answer toolu_01: %s", body)
 			}
@@ -221,5 +223,20 @@ func TestReadinessProberForDispatchesByProvider(t *testing.T) {
 	}
 	if _, ok := readinessProberFor("gemini", nil); ok {
 		t.Fatal("gemini must have no prober")
+	}
+}
+
+// The production client carries the key: it must follow no redirect and be the guarded transport,
+// not a plain http.Client.
+func TestAnthropicProberDefaultClientIsGuardedAndFollowsNoRedirect(t *testing.T) {
+	client, ok := newAnthropicReadinessProber(nil).client.(*http.Client)
+	if !ok {
+		t.Fatalf("default client is %T, want *http.Client", newAnthropicReadinessProber(nil).client)
+	}
+	if client.Transport == nil || client.Transport == http.DefaultTransport {
+		t.Fatalf("default client transport = %T, want the guarded transport", client.Transport)
+	}
+	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("default client follows redirects")
 	}
 }

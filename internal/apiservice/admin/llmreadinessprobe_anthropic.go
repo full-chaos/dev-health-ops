@@ -186,7 +186,9 @@ func (p *anthropicReadinessProber) probe(ctx context.Context, _, model, baseURL,
 			Description: "Return the supplied nonce.",
 			InputSchema: json.RawMessage(readinessToolParametersSchema),
 		}},
-		ToolChoice: &anthropicToolChoice{Type: "tool", Name: readinessEchoWireName, DisableParallelToolUse: true},
+		// "auto", not a forced tool: newer model families refuse a forced tool_choice with a 400, and the
+		// prompt names the one tool, so a model that answers in text fails as invalid_response.
+		ToolChoice: &anthropicToolChoice{Type: "auto", DisableParallelToolUse: true},
 	}
 	resp1, failure := p.doMessage(ctx, baseURL, apiKey, round1)
 	if failure != nil {

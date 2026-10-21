@@ -1,4 +1,5 @@
 # package	scope	class
+cmd/cigate	test	compose.yml
 cmd/dev-health-migration-matrix	code	contracts
 cmd/dev-health-migration-matrix	code	docs
 cmd/dho	test	compose.yml
@@ -48,8 +49,16 @@ internal/cigates/chartgates	test	deploy
 internal/cigates/chartgates	test	docker
 internal/cigates/chartgates	test	docs
 internal/cigates/checkgo	test	ci
+internal/cigates/docstools	code	contracts
+internal/cigates/docstools	code	deploy
+internal/cigates/docstools	code	docs
+internal/cigates/docstools	test	Makefile
 internal/cigates/metricsproof	test	ci
+internal/cigates/nopython	test	ci
 internal/cigates/proofteardown	test	ci
+internal/cigates/routing	test	ci
+internal/cigates/routing	test	compose.yml
+internal/cigates/routing	test	deploy
 internal/cigates/scripts	test	.github
 internal/cigates/scripts	test	README.md
 internal/cigates/scripts	test	ci
@@ -57,10 +66,13 @@ internal/cigates/scripts	test	docs
 internal/cigates/testshard	test	.github
 internal/cigates/testshard	test	ci
 internal/cigates/workflowpaths	test	.github
+internal/cigates/workflowpaths	test	contracts
+internal/cigates/workflowpaths	test	deploy
 internal/cigates/workflowpaths	test	mkdocs.yml
 internal/cigates/workflows	test	.github
 internal/cigates/workflows	test	ci
 internal/cigates/workflows	test	compose.yml
+internal/cigates/workflows	test	contracts
 internal/cigates/workflows	test	deploy
 internal/cigates/workflows	test	docker
 internal/cigates/workflows	test	docs
@@ -80,6 +92,7 @@ internal/fixturescli	test	deploy
 internal/goapicli/prove	test	docs
 internal/goapicli/restprove	test	docs
 internal/goapicli/routing	test	contracts
+internal/goapicli/routing	test	docs
 internal/goapiproof	code	contracts
 internal/goapiproof	test	compose.yml
 internal/goapiproof	test	deploy

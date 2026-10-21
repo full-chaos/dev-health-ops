@@ -220,6 +220,13 @@ jobs:
           restore-keys: |
             go-quality-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
+      - name: Build into the restored Go cache (GitHub-hosted legs)
+        # CHAOS-10486: check_go.sh builds into DEV_HEALTH_GO_CACHE, else an inherited or configured GOCACHE, else
+        # /tmp/dev-health-go-build-cache. A hosted runner's GOCACHE is the unset default, so the cache restored above was
+        # never read. An expanded absolute path (a literal ~ is not expanded by the shell). The pool legs keep their hostPath.
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
+        run: echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"
+
       - name: Set up Helm
         # internal/cigates/chartgates renders the chart with `helm template` in the test and race legs; the
         # oci-arc-runners image ships no helm (same pin as test.yml's tooling-tests job). A missing helm fails

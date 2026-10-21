@@ -66,6 +66,9 @@ var (
 	// ErrMaterializerUnavailable identifies a missing or unusable materializer.
 	ErrMaterializerUnavailable = errors.New("scheduled sync materializer is unavailable")
 	// ErrOccurrenceReconcilerUnavailable identifies an unusable reconciler.
+	// ErrReconcileBudgetEnded marks a Reconcile that stopped because the caller's
+	// own context ended, never a failed failure-record write.
+	ErrReconcileBudgetEnded            = errors.New("scheduled sync occurrence reconcile budget ended")
 	ErrOccurrenceReconcilerUnavailable = errors.New("scheduled sync occurrence reconciler is unavailable")
 )
 
@@ -198,6 +201,22 @@ func (reconciler *OccurrenceReconciler) begin(ctx context.Context) (pgx.Tx, erro
 // failureWriteTimeout bounds a recorded failure that must outlive the step
 // context that just ended.
 const failureWriteTimeout = 5 * time.Second
+
+// errFailureRecordWrite marks an error from the detached deferral or
+// quarantine write, so its own timeout is never read as the step budget ending.
+var errFailureRecordWrite = errors.New("record occurrence failure")
+
+// budgetEnd marks err as the step budget ending when ctx itself ended and err
+// is that ctx error, not a failed failure-record write.
+func budgetEnd(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) && !errors.Is(err, errFailureRecordWrite) {
+		return fmt.Errorf("%w: %w", ErrReconcileBudgetEnded, err)
+	}
+	return err
+}
 
 // WithInitialBackfill makes each Reconcile window also enqueue the initial
 // backfill of configurations whose first sync just succeeded, so the
@@ -356,16 +375,16 @@ func (reconciler *OccurrenceReconciler) Reconcile(
 
 	keys, err := reconciler.dueOccurrenceKeys(ctx, now, limit)
 	if err != nil {
-		return OccurrenceReconcileResult{}, err
+		return OccurrenceReconcileResult{}, budgetEnd(ctx, err)
 	}
 	result := OccurrenceReconcileResult{Scanned: len(keys)}
 	for _, key := range keys {
 		if err := ctx.Err(); err != nil {
-			return result, err
+			return result, budgetEnd(ctx, err)
 		}
 		outcome, err := reconciler.reconcileOne(ctx, now, key)
 		if err != nil {
-			return result, err
+			return result, budgetEnd(ctx, err)
 		}
 		switch outcome {
 		case OccurrenceReconcileCompleted:
@@ -541,6 +560,13 @@ func (reconciler *OccurrenceReconciler) recordMaterializeFailure(
 	return reconciler.deferOccurrence(ctx, now, occurrence, code)
 }
 
+func markRecordWrite(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", errFailureRecordWrite, err)
+}
+
 // deferOccurrence records a bounded retry or the terminal quarantine in its own
 // transaction.
 func (reconciler *OccurrenceReconciler) deferOccurrence(
@@ -548,7 +574,8 @@ func (reconciler *OccurrenceReconciler) deferOccurrence(
 	now time.Time,
 	occurrence PendingOccurrence,
 	code string,
-) (string, error) {
+) (_ string, writeErr error) {
+	defer func() { writeErr = markRecordWrite(writeErr) }()
 	ctx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), failureWriteTimeout)
 	defer cancelWrite()
 	attempt := occurrence.AttemptCount + 1
@@ -616,7 +643,8 @@ func (reconciler *OccurrenceReconciler) deferOccurrence(
 // retry could accomplish.
 func (reconciler *OccurrenceReconciler) quarantineInvalidPlan(
 	ctx context.Context, now time.Time, occurrence PendingOccurrence,
-) (string, error) {
+) (_ string, writeErr error) {
+	defer func() { writeErr = markRecordWrite(writeErr) }()
 	ctx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), failureWriteTimeout)
 	defer cancelWrite()
 	tx, err := reconciler.begin(ctx)

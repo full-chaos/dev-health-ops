@@ -333,13 +333,19 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	if err != nil {
 		// Only the window's own deadline after a committed handoff is a budget
 		// end; shutdown or any other error still fails the window.
-		if !errors.Is(err, context.DeadlineExceeded) ||
-			!errors.Is(stepCtx.Err(), context.DeadlineExceeded) || parent.Err() != nil {
+		// A budget end with no progress at all is a stuck head of the batch,
+		// not partial progress, and stays a failed window.
+		progress := reconciled.Completed + reconciled.Retried + reconciled.Quarantined
+		if !errors.Is(err, ErrReconcileBudgetEnded) || !errors.Is(err, context.DeadlineExceeded) ||
+			!errors.Is(stepCtx.Err(), context.DeadlineExceeded) || parent.Err() != nil || progress == 0 {
 			return fmt.Errorf("consume pending scheduled sync occurrences: %w", err)
 		}
 		budgetEnded = true
 		loop.logger().WarnContext(parent, "sync scheduler reconcile budget exhausted",
 			"completed", reconciled.Completed, "retried", reconciled.Retried, "quarantined", reconciled.Quarantined, "scanned", reconciled.Scanned)
+	}
+	if err := parent.Err(); err != nil {
+		return err
 	}
 	span.SetAttributes(
 		attribute.Int("dev_health.scheduler.occurrences_completed", reconciled.Completed),

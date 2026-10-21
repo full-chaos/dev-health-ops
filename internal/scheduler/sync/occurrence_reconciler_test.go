@@ -135,3 +135,29 @@ func TestRecordMaterializeFailureRealPlannerErrorCountsAttemptEvenWhenStepContex
 		t.Fatalf("code = %v", b.tx.execArgs[2])
 	}
 }
+
+func TestBudgetEndMarksOnlyTheCallersOwnContextError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	if err := budgetEnd(ctx, fmt.Errorf("lock: %w", context.DeadlineExceeded)); !errors.Is(err, ErrReconcileBudgetEnded) {
+		t.Fatalf("own deadline not marked: %v", err)
+	}
+	if err := budgetEnd(ctx, markRecordWrite(context.DeadlineExceeded)); errors.Is(err, ErrReconcileBudgetEnded) {
+		t.Fatalf("a failure-record write timeout was marked as the budget ending: %v", err)
+	}
+	if err := budgetEnd(ctx, errors.New("boom")); errors.Is(err, ErrReconcileBudgetEnded) {
+		t.Fatalf("a non-context error was marked: %v", err)
+	}
+	if err := budgetEnd(context.Background(), context.DeadlineExceeded); errors.Is(err, ErrReconcileBudgetEnded) {
+		t.Fatalf("a deadline with a live ctx was marked: %v", err)
+	}
+}
+
+func TestDeferOccurrenceBeginFailureIsMarkedAsAFailureRecordWrite(t *testing.T) {
+	r := &OccurrenceReconciler{beginTx: func(context.Context) (pgx.Tx, error) { return nil, context.DeadlineExceeded }}
+	_, err := r.deferOccurrence(context.Background(), time.Now(), PendingOccurrence{ID: "o"}, OccurrenceErrorPlannerError)
+	if !errors.Is(err, errFailureRecordWrite) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+}

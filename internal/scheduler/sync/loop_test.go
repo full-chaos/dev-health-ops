@@ -812,7 +812,7 @@ type blockingOccurrences struct {
 func (b *blockingOccurrences) Reconcile(ctx context.Context, _ time.Time, _ int) (OccurrenceReconcileResult, error) {
 	b.calls.Add(1)
 	<-ctx.Done()
-	return b.result, fmt.Errorf("begin occurrence reconcile transaction: %w", ctx.Err())
+	return b.result, fmt.Errorf("%w: begin occurrence reconcile transaction: %w", ErrReconcileBudgetEnded, ctx.Err())
 }
 
 func TestLoopReconcileBudgetEndAfterCommittedHandoffIsPartialProgressNotFailure(t *testing.T) {
@@ -870,5 +870,40 @@ func TestLoopReconcileNonDeadlineErrorStaysAFailedWindow(t *testing.T) {
 		&stubOccurrences{err: errors.New("lock scheduled sync occurrence: boom")})
 	if err := loop.step(context.Background(), at("2026-07-23T12:00:00Z")); err == nil {
 		t.Fatal("a non-deadline reconcile error was swallowed")
+	}
+}
+
+func TestLoopReconcileBudgetEndWithNoProgressStaysAFailedWindow(t *testing.T) {
+	loop := newBudgetLoop(t, schedulerHandoffStepper(func() (HandoffResult, error) { return HandoffResult{}, nil }),
+		&blockingOccurrences{result: OccurrenceReconcileResult{Scanned: 5}})
+	if err := loop.step(context.Background(), at("2026-07-23T12:00:00Z")); err == nil {
+		t.Fatal("a reconcile that made no progress in the whole budget was reported as a successful window")
+	}
+}
+
+func TestLoopReconcileDeadlineNotMarkedAsBudgetEndStaysAFailedWindow(t *testing.T) {
+	loop := newBudgetLoop(t, schedulerHandoffStepper(func() (HandoffResult, error) { return HandoffResult{}, nil }),
+		&stubOccurrences{
+			result: OccurrenceReconcileResult{Completed: 1},
+			err:    fmt.Errorf("%w: %w", errFailureRecordWrite, context.DeadlineExceeded),
+		})
+	if err := loop.step(context.Background(), at("2026-07-23T12:00:00Z")); err == nil {
+		t.Fatal("a failed failure-record write was read as the step budget ending")
+	}
+}
+
+type cancelingOccurrences struct{ cancel context.CancelFunc }
+
+func (c cancelingOccurrences) Reconcile(context.Context, time.Time, int) (OccurrenceReconcileResult, error) {
+	c.cancel()
+	return OccurrenceReconcileResult{Retried: 1}, nil
+}
+
+func TestLoopShutdownCancelDuringAnErrorFreeReconcileStaysAFailedWindow(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	loop := newBudgetLoop(t, schedulerHandoffStepper(func() (HandoffResult, error) { return HandoffResult{}, nil }),
+		cancelingOccurrences{cancel: cancel})
+	if err := loop.step(parent, at("2026-07-23T12:00:00Z")); err == nil {
+		t.Fatal("shutdown during an error-free reconcile was reported as a successful window")
 	}
 }

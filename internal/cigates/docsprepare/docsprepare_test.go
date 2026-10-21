@@ -2,6 +2,7 @@ package docsprepare
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,5 +215,21 @@ func TestTheRepositoryRedirectManifestFitsTheContract(t *testing.T) {
 	}
 	if len(got) < 100 {
 		t.Errorf("only %d redirects read from docs-data/redirects.tsv", len(got))
+	}
+}
+
+// A Close that fails on a copied file must fail the run: the data of that file may not have reached the disk.
+func TestAFailedCloseOfACopiedFileFailsTheRun(t *testing.T) {
+	site, redirects := writeFixture(t)
+	orig := closeWritten
+	defer func() { closeWritten = orig }()
+	closeWritten = func(f *os.File) error {
+		_ = f.Close()
+		return errors.New("close failed: disk full")
+	}
+	outDir := filepath.Join(t.TempDir(), "out")
+	code, stdout, stderr := run(t, "--source", site, "--output", outDir, "--mode", "preview", "--redirects", redirects)
+	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "ERROR: ") || !strings.Contains(stderr, "close failed") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }

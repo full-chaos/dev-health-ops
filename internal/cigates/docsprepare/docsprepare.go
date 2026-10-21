@@ -5,6 +5,7 @@ package docsprepare
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"io"
@@ -582,6 +583,10 @@ func copyTree(src, dst string) error {
 	return os.Chmod(dst, fi.Mode().Perm())
 }
 
+// closeWritten closes a file this tool wrote; a failed Close can lose buffered data, so its error is always returned.
+// It is a variable so a test can make the Close fail.
+var closeWritten = func(f *os.File) error { return f.Close() }
+
 func copyFile(src, dst string, perm os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -593,10 +598,9 @@ func copyFile(src, dst string, perm os.FileMode) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
+		return errors.Join(err, closeWritten(out))
 	}
-	if err := out.Close(); err != nil {
+	if err := closeWritten(out); err != nil {
 		return err
 	}
 	return os.Chmod(dst, perm)

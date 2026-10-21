@@ -206,6 +206,7 @@ func (s *Service) admit(ctx context.Context, providerID uuid.UUID, spec protocol
 	if err != nil {
 		return StoredProvider{}, internal(ReasonStoreUnavailable, err)
 	}
+	selected(ctx, row.ID)
 	if failure := s.entitled(ctx, row.OrgID); failure != nil {
 		return StoredProvider{}, failure
 	}

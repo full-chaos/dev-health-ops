@@ -215,6 +215,7 @@ func (s *Service) authorizeOAuthByType(ctx context.Context, providerType string,
 	if err != nil {
 		return AuthorizeResult{}, uuid.Nil, internal(ReasonStoreUnavailable, err)
 	}
+	selected(ctx, row.ID)
 	spec := oauthSpec
 	spec.accepts = func(p string) bool { return p == protocol }
 	if failure := spec.check(row); failure != nil {

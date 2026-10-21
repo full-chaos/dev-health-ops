@@ -119,10 +119,21 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, *Error) {
 	return data, nil
 }
 
-// outcomeMark records, for one handler request, that its outcome was counted.
-type outcomeMark struct{ recorded bool }
+// outcomeMark is one handler request's panic state: whether its outcome was
+// counted, and the provider row it selected.
+type outcomeMark struct {
+	recorded   bool
+	providerID uuid.UUID
+}
 
 type outcomeMarkKey struct{}
+
+// selected notes the provider row a request selected, for its panic log line.
+func selected(ctx context.Context, providerID uuid.UUID) {
+	if mark, ok := ctx.Value(outcomeMarkKey{}).(*outcomeMark); ok {
+		mark.providerID = providerID
+	}
+}
 
 var errHandlerPanic = errors.New("oidc: handler panicked")
 
@@ -134,6 +145,7 @@ var errHandlerPanic = errors.New("oidc: handler panicked")
 func (s *Service) guarded(route string, serve http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mark := &outcomeMark{}
+		mark.providerID, _ = uuid.Parse(r.PathValue("provider_id"))
 		ctx := context.WithValue(r.Context(), outcomeMarkKey{}, mark)
 		defer func() {
 			recovered := recover()
@@ -142,8 +154,7 @@ func (s *Service) guarded(route string, serve http.HandlerFunc) http.Handler {
 			}
 			abort, _ := recovered.(error)
 			if !mark.recorded && !errors.Is(abort, http.ErrAbortHandler) {
-				providerID, _ := uuid.Parse(r.PathValue("provider_id"))
-				s.refused(ctx, route, providerID, internal(ReasonDependency, errHandlerPanic))
+				s.refused(ctx, route, mark.providerID, internal(ReasonDependency, errHandlerPanic))
 			}
 			panic(recovered)
 		}()

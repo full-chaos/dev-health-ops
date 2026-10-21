@@ -174,7 +174,9 @@ script's own `_write_factual_tsv` and `_summary`.
 
 Inputs: a case with a `base` file (`val-ok`) starts from that case's `in/`; its own `in/` holds only the files that
 differ and is written over it; its `drop` file lists base inputs it does not have (removed). A `.fixture` suffix is
-dropped from a name: it marks an input that is not valid JSON. `placeInputs` in `parity_test.go` does this for every
+dropped from a name: it marks an input that is not valid JSON. In stored paths `{DOT}` stands for a leading dot (the
+`.build` directories, which the repository's ignore rules would drop), `{FF}` and `{FE}` for those raw bytes of a
+non-UTF-8 name, and `{E9}` for e-acute (`caseRel` in `parity_test.go`). `placeInputs` in `parity_test.go` does this for every
 case; the recording did the same, so the recorded bytes are those of the full inputs.
 
 Padding: the script checks fixed sizes (439 disposition rows: 303 ops, 136 web). A case holds a few rows; its `counts`
@@ -215,4 +217,4 @@ The Go verb refuses these (exit 1, no stdout, one stderr line `cigate: refused (
 | `publication_classification` / `artifact_type` values of mixed types (None next to str) | rc 1, `TypeError: '<' not supported ...` |
 | two or more numeric (bool/int/float) classification or artifact-type values | sorts them; rc 0 when the snapshots match |
 | `rows` a str, an empty str, or an object; a row given as a list of pairs | iterates it (`dict()` of the items); rc 0 or rc 1 by shape |
-| a non-UTF-8 file name the `ops-*.tsv` or `*.tsv` glob matches (one it does not match is skipped, as Python skips it) | rc 0 |
+| a non-UTF-8 file name the `ops-*.tsv` or `*.tsv` glob matches (one it does not match is skipped, as Python skips it: `val-x-nonutf8-names-glob-misses`) | rc 0 |

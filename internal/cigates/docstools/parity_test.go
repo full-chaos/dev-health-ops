@@ -106,7 +106,7 @@ func replayCaseWith(t *testing.T, dir string, run func(args ...string) (int, str
 	_ = filepath.Walk(out, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(out, path)
-			rel = strings.ReplaceAll(rel, "{E9}", "é")
+			rel = caseRel(rel)
 			expected[rel] = true
 			if got, want := mustRead(t, filepath.Join(work, rel)), mustRead(t, path); got != want {
 				t.Errorf("%s differs from the recording\ngot:\n%q\nrecorded:\n%q", rel, got, want)
@@ -141,7 +141,7 @@ func placeInputs(t *testing.T, dir, work string, expected map[string]bool) {
 	_ = filepath.Walk(in, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(in, path)
-			rel = strings.ReplaceAll(strings.TrimSuffix(rel, ".fixture"), "{E9}", "é")
+			rel = caseRel(strings.TrimSuffix(rel, ".fixture"))
 			expected[rel] = true
 			writeTree(t, filepath.Join(work, rel), mustRead(t, path), info.Mode().Perm())
 		} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
@@ -158,6 +158,12 @@ func placeInputs(t *testing.T, dir, work string, expected map[string]bool) {
 			delete(expected, rel)
 		}
 	}
+}
+
+// caseRel is the work-directory path of a stored case file: tokens stand for what a tracked path cannot hold well,
+// {E9} for e-acute, {DOT} for a leading dot an ignore rule would match (.build), {FF} and {FE} for those raw bytes.
+func caseRel(rel string) string {
+	return strings.NewReplacer("{E9}", "é", "{DOT}", ".", "{FF}", "\xff", "{FE}", "\xfe").Replace(rel)
 }
 
 func mustRead(t *testing.T, path string) string {

@@ -90,7 +90,7 @@ func ivLiveTree(t *testing.T) string {
 	_ = filepath.Walk(in, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(in, path)
-			writeTree(t, filepath.Join(work, rel), mustRead(t, path), 0o644)
+			writeTree(t, filepath.Join(work, caseRel(rel)), mustRead(t, path), 0o644)
 		}
 		return nil
 	})
@@ -187,18 +187,5 @@ func TestValidateInventoryStricterThanPython(t *testing.T) {
 				t.Errorf("rc %d stdout %q stderr %q; want rc 1, no stdout, one stricter-refusal line (Python: %s)", code, stdout, stderr, c.python)
 			}
 		})
-	}
-}
-
-// A non-UTF-8 name the glob does not match is skipped, as Python skips it (Python 3.14.7 printed the Validated line).
-func TestValidateInventoryIgnoresNonUTF8NamesTheGlobMisses(t *testing.T) {
-	run := runCigate(t)
-	ivLiveTree(t)
-	writeTree(t, "docs-data/inventory/unrelated-\xff.txt", "x\n", 0o644)
-	writeTree(t, "docs-data/inventory/ops-\xff.tsvx", "x\n", 0o644)
-	writeTree(t, "docs-data/ia/\xff\xfe.md", "x\n", 0o644)
-	code, stdout, stderr := run("validate-inventory-review")
-	if want := "Validated 4 factual ops rows and 439 reviewed dispositions against the locked IA.\n"; code != 0 || stdout != want || stderr != "" {
-		t.Errorf("rc %d stdout %q stderr %q; Python rc 0, stdout %q", code, stdout, stderr, want)
 	}
 }

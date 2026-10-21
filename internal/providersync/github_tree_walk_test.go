@@ -467,3 +467,32 @@ func TestGitHubTreeWalkWarnsOncePerCeilingAtHalf(t *testing.T) {
 		})
 	}
 }
+
+// A walk can first SEE its elapsed time at a directory entry that is already
+// past the stop budget (a slow request between two entries). It must still say
+// it passed half of the time ceiling, once, before it stops (r1 finding).
+func TestGitHubTreeWalkWarnsAboutHalfTheTimeEvenWhenTheBudgetStopsItAtThatEntry(t *testing.T) {
+	logs := captureWalkLog(t)
+	start := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	offsets := []time.Duration{0, 0, 12 * time.Minute} // walk start, root entry, first child entry
+	calls := 0
+	limits := defaultGitHubTreeWalkLimits()
+	limits.now = func() time.Time {
+		offset := offsets[min(calls, len(offsets)-1)]
+		calls++
+		return start.Add(offset)
+	}
+	client := walkWide(3).client(t)
+	metrics := providerfoundation.NewMetrics()
+	client.Metrics = metrics
+	_, _, _, err := gitHubWalkTreeLimited(context.Background(), client, "/repos/acme/api", "root", "", limits)
+	if limit := walkLimitOf(t, err); limit.Limit != GitHubTreeWalkLimitTime {
+		t.Fatalf("limit=%+v, want the budget stop", limit)
+	}
+	if got := nearCeilingWarns(logs, GitHubTreeWalkLimitTime); got != 1 {
+		t.Fatalf("time half-way WARN lines=%d want 1: %s", got, logs.String())
+	}
+	if got := nearCeilingCounter(t, metrics, GitHubTreeWalkLimitTime); got != 1 {
+		t.Fatalf("time counter=%d want 1", got)
+	}
+}

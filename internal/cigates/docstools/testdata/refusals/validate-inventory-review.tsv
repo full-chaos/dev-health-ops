@@ -1,0 +1,60 @@
+# Every refusing site of scripts/validate_docs_inventory_review.py (frozen beside this file) and the Go row that answers it.
+# site<TAB>kind<TAB>refs. site: the trimmed source line, "#N" for the Nth identical line, or a second answer with #unreadable / #stricter / #argparse; kind case = parity cases run live through the cigate binary, go = a named Go test (it runs the binary too).
+with path.open(encoding="utf-8", newline="") as handle:	case	val-x-disposition-missing;val-x-web-snapshot-missing;val-x-split-dir-named-tsv;val-x-split-dangling-link;val-x-ia-dir-named-tsv
+with path.open(encoding="utf-8", newline="") as handle:#unreadable	go	TestValidateInventoryUnreadableInputs
+return list(csv.DictReader(handle, delimiter="\t"))	case	val-x-tsv-invalid-utf8;val-x-ia-hidden-tsv;val-x-tsv-field-too-large;val-x-tsv-crlf;val-x-tsv-quoted;val-x-tsv-blank-lines;val-x-tsv-extra-fields-same;val-x-tsv-duplicate-header
+with path.open("w", encoding="utf-8", newline="") as handle:	case	val-x-tsv-path-is-dir
+for row in rows:	case	val-x-row-not-object;val-x-row-null
+for row in rows:#stricter	go	TestValidateInventoryStricterThanPython
+normalized = dict(row)	case	val-x-row-not-object;val-x-row-null
+normalized = dict(row)#stricter	go	TestValidateInventoryStricterThanPython
+normalized[field] = " | ".join(	case	val-x-list-field-number;val-x-list-field-true;val-x-ok-value-shapes
+classifications = Counter(row["publication_classification"] for row in rows)	case	val-x-no-classification;val-x-unhashable-classification
+artifact_types = Counter(row["artifact_type"] for row in rows)	case	val-x-no-artifact-type;val-x-unhashable-artifact-type;val-x-ok-single-numeric-class
+row for row in rows if row["publication_classification"] == "unclassified"	case	val-x-no-classification;val-unclassified
+row for row in rows if row["publication_classification"] == "gap-unverified"	case	val-x-no-classification;val-extra-gap
+if row.get("public_today") and row["artifact_type"] == "markdown-page"	case	val-x-no-artifact-type;val-x-ok-public-today-shapes
+f"- `{name}`: {count}" for name, count in sorted(classifications.items())	go	TestValidateInventoryStricterThanPython
+f"- `{name}`: {count}" for name, count in sorted(artifact_types.items())	case	val-x-ok-single-numeric-class
+f"- `{name}`: {count}" for name, count in sorted(artifact_types.items())#stricter	go	TestValidateInventoryStricterThanPython
+f"- `{row['source_path']}` — {row.get('notes') or ''}" for row in gaps	case	val-x-gap-no-source-path;val-x-ok-value-shapes
+for path in sorted(ia_dir.glob("*.tsv")):	case	val-x-ia-dir-named-tsv;val-x-ia-hidden-tsv;val-x-ia-two-files;val-no-ia-dir
+for path in sorted(ia_dir.glob("*.tsv")):#stricter	go	TestValidateInventoryStricterThanPython
+url = row.get("url", "").strip()	case	val-x-ia-none-url;val-x-ia-short-url
+if actual.read_bytes() != expected.read_bytes():	case	val-x-committed-tsv-missing;val-missing-committed
+raise ValueError(	case	val-stale-json;val-stale-tsv;val-stale-summary
+factual = json.loads(generated_json.read_text(encoding="utf-8"))	case	val-missing-generated;val-x-generated-is-dir;val-x-json-invalid-utf8;val-x-json-truncated-utf8;val-x-json-bom;val-x-json-extra-data;val-x-row-count-digits
+factual = json.loads(generated_json.read_text(encoding="utf-8"))#unreadable	go	TestValidateInventoryUnreadableInputs
+factual = json.loads(generated_json.read_text(encoding="utf-8"))#stricter	go	TestValidateInventoryStricterThanPython
+factual_rows = factual["rows"]	case	val-x-json-no-rows;val-x-json-top-list;val-x-json-top-null
+committed = json.loads(committed_json.read_text(encoding="utf-8"))	case	val-missing-committed;val-x-inventory-dir-dot
+expected_factual_rows = committed["row_count"]	case	val-x-json-no-row-count
+if len(committed["rows"]) != expected_factual_rows:	case	val-x-rows-int;val-x-row-count-half;val-x-row-count-nan;val-x-ok-row-count-float
+raise ValueError("Committed factual inventory row_count is inconsistent")	case	val-committed-rowcount-inconsistent;val-x-row-count-half
+factual["row_count"] != expected_factual_rows	case	val-generated-rowcount-differs;val-x-row-count-string-factual
+or len(factual_rows) != expected_factual_rows	case	val-generated-rowcount-differs
+raise ValueError(#2	case	val-generated-rowcount-differs;val-x-row-count-string-factual
+f"found {factual['row_count']}"	case	val-x-row-count-string-factual
+generated_tsv = generated_json.with_suffix(".tsv")	go	TestValidateInventoryPathSemantics
+generated_summary = generated_json.with_name("documentation-inventory-summary.md")	go	TestValidateInventoryPathSemantics
+generated_summary.write_text(_summary(factual_rows), encoding="utf-8")	case	val-x-summary-path-is-dir
+raise ValueError(#3	case	val-disposition-count;val-disposition-count-extra-repo
+row for row in disposition if row["source_repo"] == "full-chaos/dev-health-ops"	case	val-x-tsv-no-source-repo;val-x-tsv-bom
+row for row in disposition if row["source_repo"] == "full-chaos/dev-health-web"	case	val-x-tsv-no-source-repo
+raise ValueError(#4	case	val-ops-count;val-web-count
+raise ValueError(#5	case	val-x-web-count
+for path in sorted(inventory_dir.glob("ops-*.tsv"))	case	val-x-split-dir-named-tsv;val-x-split-dangling-link;val-x-split-glob-misses;val-x-split-later-file-wins;val-x-split-later-file-differs;val-split-missing-file
+ops_by_path = {row["source_path"]: row for row in ops_rows}	case	val-split-duplicate-row-file
+reviewed_ops_by_path = {row["source_path"]: row for row in reviewed_ops_rows}	case	val-split-differs;val-x-split-later-file-wins
+raise ValueError("Ops disposition matrix differs from its reviewed split files")	case	val-split-differs;val-x-tsv-extra-fields-differ;val-x-tsv-extra-fields-one-side;val-x-tsv-duplicate-header
+raise ValueError("dev-health-web-snapshot.tsv differs from the reviewed matrix")	case	val-snapshot-differs
+key = f"{row['source_repo']}:{row['source_path']}"	case	val-missing-field;val-many-errors
+if not row.get(field, "").strip():	case	val-missing-field;val-blank-field;val-x-strip-unicode-space;val-x-tsv-short-row-required
+target_url = row.get("target_url", "").strip()	case	val-x-tsv-short-row-target;val-x-strip-nbsp-target;val-web-public-without-target-and-url-trim
+if any(row["publication_classification"] == "unclassified" for row in factual_rows):	case	val-unclassified
+if row["publication_classification"] == "gap-unverified"	case	val-no-gap;val-extra-gap
+if [row["source_path"] for row in gaps] != [	case	val-no-gap;val-extra-gap
+raise ValueError("Inventory review failed:\n" + "\n".join(errors[:50]))	case	val-many-errors;val-x-errors-over-50;val-public-without-target;val-non-ia-url-and-missing
+args = parser.parse_args()	case	val-help;val-ambiguous;val-expected-one;val-unrecognized;val-ok-abbrev;val-ok-default-args
+args = parser.parse_args()#argparse	go	TestValidateInventoryArgparseMatchesPython
+raise SystemExit(main())	case	val-ok;val-many-errors

@@ -1,0 +1,3 @@
+ValueError: Inventory review failed:
+full-chaos/dev-health-ops:docs/index.md targets non-IA URL /
+full-chaos/dev-health-web:app/page.tsx targets non-IA URL /guide/

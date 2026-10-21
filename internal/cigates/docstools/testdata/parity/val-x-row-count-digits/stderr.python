@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "{RECORDER}/pyrun.py", line 4, in <module>
+    exec(compile(open(script, encoding="utf-8").read(), script, "exec"), {"__name__": "__main__", "__file__": script})
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 303, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 298, in main
+    validate(args.generated_json, args.inventory_dir, args.ia_dir)
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 167, in validate
+    factual = json.loads(generated_json.read_text(encoding="utf-8"))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 353, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Exceeds the limit (4300 digits) for integer string conversion: value has 4301 digits; use sys.set_int_max_str_digits() to increase the limit

@@ -7,7 +7,11 @@ on:
     paths:
       - 'docs-data/inventory/**'
       - 'docs-data/ia/**'
-      - 'scripts/validate_docs_inventory_review.py'
+      - 'internal/cigates/docstools/**'
+      - 'internal/pythonparity/**'
+      - 'cmd/cigate/**'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/docs-inventory-review.yml'
   pull_request:
     branches:
@@ -15,7 +19,11 @@ on:
     paths:
       - 'docs-data/inventory/**'
       - 'docs-data/ia/**'
-      - 'scripts/validate_docs_inventory_review.py'
+      - 'internal/cigates/docstools/**'
+      - 'internal/pythonparity/**'
+      - 'cmd/cigate/**'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/docs-inventory-review.yml'
   workflow_dispatch:
 
@@ -40,23 +48,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          python-version: '3.14'
-
-      - name: Install inventory dependency
-        # CHAOS-3948: pinned to the uv.lock version, same shape/fix as
-        # lint.yml's ruff pin (CHAOS-3946) -- a bare floor specifier resolves
-        # to whatever is newest on PyPI at CI run time, not the version
-        # contributors actually run locally via `uv sync`.
-        run: python -m pip install 'PyYAML==6.0.3'
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
 
       - name: Validate the frozen Phase 1 inventory and dispositions
         run: |
           mkdir -p .build
           cp docs-data/inventory/documentation-inventory.json \
             .build/documentation-inventory.json
-          python scripts/validate_docs_inventory_review.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs validate-inventory-review \
             --generated-json .build/documentation-inventory.json \
             --inventory-dir docs-data/inventory \
             --ia-dir docs-data/ia

@@ -16,6 +16,9 @@ import (
 // command runner, a git repository. They run after the case inputs are in the work directory and before the verb.
 var caseSetups []func(t *testing.T, caseDir, work string, sub map[string]string)
 
+// caseScaffold holds the files a setup hook wrote for the current case that are neither inputs nor outputs.
+var caseScaffold map[string]bool
+
 func runDocs(args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	code := docstools.Run(args, &stdout, &stderr)
@@ -42,7 +45,10 @@ func TestCLIOutputParityRecordedPair(t *testing.T) {
 	}
 }
 
-func replayCase(t *testing.T, dir string) {
+func replayCase(t *testing.T, dir string) { replayCaseWith(t, dir, runDocs) }
+
+// replayCaseWith replays a case with run (in process, or the built cigate binary) as the verb.
+func replayCaseWith(t *testing.T, dir string, run func(args ...string) (int, string, string)) {
 	work := t.TempDir()
 	expected := map[string]bool{}
 	in := filepath.Join(dir, "in")
@@ -61,6 +67,7 @@ func replayCase(t *testing.T, dir string) {
 	seedSymlinks(t, filepath.Join(dir, "symlinks"), work)
 	sub := map[string]string{"{WORK}": work}
 	t.Chdir(work)
+	caseScaffold = map[string]bool{}
 	for _, setup := range caseSetups {
 		setup(t, dir, work, sub)
 	}
@@ -83,7 +90,7 @@ func replayCase(t *testing.T, dir string) {
 		}
 	}
 
-	code, stdout, stderr := runDocs(args...)
+	code, stdout, stderr := run(args...)
 	if want := strings.TrimSpace(mustRead(t, filepath.Join(dir, "rc"))); want != strconv.Itoa(code) {
 		t.Errorf("exit %d, recorded %s", code, want)
 	}
@@ -91,9 +98,18 @@ func replayCase(t *testing.T, dir string) {
 		t.Errorf("stdout differs from the recording\ngot:\n%q\nrecorded:\n%q", stdout, want)
 	}
 	if line, err := os.ReadFile(filepath.Join(dir, "stderr.traceback")); err == nil {
-		// Python stopped on an uncaught exception: the verb prints exactly this one line on stderr instead.
-		if want := subst(string(line)); stderr != want || strings.Count(stderr, "\n") != 1 {
-			t.Errorf("stderr is not the one error line that replaces the Python traceback\ngot:\n%q\nwant:\n%q", stderr, want)
+		// Python stopped on an uncaught exception: the verb prints exactly the exception text on stderr instead. It is
+		// one line, or, when the case keeps the whole recorded traceback (stderr.python), the text that ends it.
+		want := subst(string(line))
+		if full, err := os.ReadFile(filepath.Join(dir, "stderr.python")); err == nil {
+			if !strings.HasPrefix(string(full), "Traceback (most recent call last):\n") || !strings.HasSuffix(string(full), "\n"+string(line)) {
+				t.Errorf("stderr.traceback is not the exception text that ends the recorded traceback stderr.python")
+			}
+		} else if strings.Count(want, "\n") != 1 {
+			t.Errorf("stderr.traceback without stderr.python must be one line")
+		}
+		if stderr != want {
+			t.Errorf("stderr is not the exception text that replaces the Python traceback\ngot:\n%q\nwant:\n%q", stderr, want)
 		}
 	} else if want := subst(mustRead(t, filepath.Join(dir, "stderr"))); stderr != want {
 		t.Errorf("stderr differs from the recording\ngot:\n%q\nrecorded:\n%q", stderr, want)
@@ -114,7 +130,7 @@ func replayCase(t *testing.T, dir string) {
 	_ = filepath.Walk(work, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(work, path)
-			if !expected[rel] {
+			if !expected[rel] && !caseScaffold[rel] {
 				left = append(left, rel)
 			}
 		}

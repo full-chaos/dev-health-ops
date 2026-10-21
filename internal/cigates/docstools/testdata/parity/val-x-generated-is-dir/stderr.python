@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "{RECORDER}/pyrun.py", line 4, in <module>
+    exec(compile(open(script, encoding="utf-8").read(), script, "exec"), {"__name__": "__main__", "__file__": script})
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 303, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 298, in main
+    validate(args.generated_json, args.inventory_dir, args.ia_dir)
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 167, in validate
+    factual = json.loads(generated_json.read_text(encoding="utf-8"))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/pathlib.py", line 1029, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/pathlib.py", line 1015, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+IsADirectoryError: [Errno 21] Is a directory: '.build'

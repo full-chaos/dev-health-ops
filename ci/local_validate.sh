@@ -1530,9 +1530,7 @@ verify_stage_manifest() {
 # ch_provision() hard failure against the FULL 8-id declaration, never a
 # reason to shrink it at runtime. Factored out of main() so the CHAOS-3571
 # `--stage-manifest-probe` test-only hook near the bottom of this file can
-# exercise this exact sequencing (with the expensive leaf stages stubbed) --
-# same precedent as `--lock-probe` exercising the real acquire_lock/
-# release_lock without paying for preflight/lint/mypy/the unit suite.
+# exercise this exact sequencing (with the expensive leaf stages stubbed).
 run_declared_stages() {
   if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
     DECLARED_STAGE_IDS=(lint_format lint_check unit_suite)
@@ -1583,105 +1581,6 @@ main() {
   run_declared_stages
 }
 
-# High-resolution timestamp for --lock-probe, in order of preference: bash's
-# own EPOCHREALTIME builtin (no fork); `date +%s.%N` where it is actually
-# interpreted (GNU date, and modern BSD date); python3 -- available under this
-# harness's PATH and virtually every CI image, and unlike EPOCHREALTIME/date it
-# cannot silently degrade to whole seconds; perl's Time::HiRes as a last resort.
-#
-# This exists because whole-second resolution doesn't just make the probe
-# coarser -- it makes the tests that consume it UNFALSIFIABLE. Those tests
-# assert non-overlapping [acquired, released) intervals specifically so a
-# reintroduced microsecond-scale double-acquisition bug can be caught; at
-# whole-second resolution two racing acquisitions round to IDENTICAL integer
-# timestamps, and `a_end <= b_start` treats equal integers as "no overlap" --
-# i.e. PASS. That failure mode is silent (a test that cannot fail reads as
-# coverage), so a source that can't actually produce sub-second resolution
-# must FAIL LOUDLY here rather than quietly handing back whole seconds.
-
-# Accepts only a string that is purely digits-and-a-single-dot (e.g.
-# "1785988080.123456") -- rejects empty output, a literal "N" (old BSD date's
-# unsubstituted %N), and anything else a fallback might emit on failure.
-# `command -v` / a zero exit status from a fallback proves the TOOL exists,
-# not that its OUTPUT this time was actually a valid high-res timestamp --
-# every fallback below is validated the same way rather than trusted blind.
-_looks_like_subsecond_time() {
-  case "$1" in
-  '' | *[!0-9.]*) return 1 ;;
-  *.*) return 0 ;;
-  *) return 1 ;;
-  esac
-}
-
-lock_probe_time() {
-  if [ -n "${EPOCHREALTIME:-}" ]; then
-    printf '%s' "${EPOCHREALTIME}"
-    return 0
-  fi
-  local t
-  t="$(date +%s.%N 2>/dev/null)"
-  if _looks_like_subsecond_time "${t}"; then
-    printf '%s' "${t}"
-    return 0
-  fi
-  return 1
-}
-
-# Test-only harness hook (CHAOS-3403), same idea as ci/check_go.sh's narrow
-# "integration-coverage" verb (see internal/cigates/checkgo/check_go_script_test.go):
-# exercises the REAL acquire_lock/release_lock/reclaim_stale_lock functions above —
-# not a reimplementation — without paying for preflight, lint, mypy, ClickHouse, or
-# the unit suite, so a regression test can race the actual lock acquisition path
-# cheaply and repeatably. Never invoked by main(); only by
-# tests/tooling/test_local_validate_lock.py.
-if [ "${1:-}" = "--lock-probe" ]; then
-  shift
-  hold_secs="${1:-0}"
-  acquire_lock
-  acquired_at="$(lock_probe_time)" || {
-    printf 'lock-probe: FATAL -- no sub-second time source available (EPOCHREALTIME unset, date +%%N not interpreted); refusing to silently degrade to whole-second resolution.\n' >&2
-    exit 1
-  }
-  printf 'lock-probe: acquired (pid %s) at %s\n' "$$" "${acquired_at}"
-  sleep "${hold_secs}"
-  released_at="$(lock_probe_time)" || {
-    printf 'lock-probe: FATAL -- lost sub-second time source between acquire and release.\n' >&2
-    exit 1
-  }
-  printf 'lock-probe: releasing (pid %s) at %s\n' "$$" "${released_at}"
-  exit 0
-fi
-
-# Test-only harness hook (CHAOS-3403 adversarial-review fix): proves
-# release_lock() runs BEFORE cleanup_scratch() inside the consolidated on_exit()
-# trap, by swapping cleanup_scratch() for a stand-in that sleeps and then writes
-# a marker file. A test can then observe the real lock symlink disappear (via
-# the real release_lock()) strictly before the marker appears — i.e. the mutex
-# is free before the slow step even finishes, not after. Never invoked by
-# main(); only by tests/tooling/test_local_validate_lock.py.
-if [ "${1:-}" = "--lock-probe-exit-order" ]; then
-  shift
-  hold_secs="${1:?hold_secs required}"
-  cleanup_delay="${2:?cleanup_delay required}"
-  marker="${3:?marker path required}"
-  # Companion to cleanup_scratch: the http transport's credential file must not
-cleanup_scratch() {
-  cleanup_ch_curl_config
-    sleep "${cleanup_delay}"
-    : >"${marker}"
-  }
-  acquire_lock
-  printf 'lock-probe-exit-order: acquired (pid %s)\n' "$$"
-  # Without an explicit hold, acquire-then-immediately-exit leaves the lock
-  # symlink existing for a near-zero window (a handful of shell statements,
-  # no I/O wait) before on_exit() removes it — too short for an external
-  # poll loop to reliably observe "it existed" at all, which produced
-  # exactly that flaky non-observation during this hook's own development.
-  # hold_secs makes the window a real, controllable duration to poll for.
-  sleep "${hold_secs}"
-  exit 0
-fi
-
 # Test-only harness hook (CHAOS-3571): exercises the REAL ch_probe_docker()
 # function in isolation -- no lock, no preflight, no lint/mypy/unit suite, no
 # scratch db. Prints its return code and CH_PROBE_DETAIL so a test can plant a
@@ -1701,9 +1600,8 @@ fi
 # Test-only harness hook (CHAOS-3571): exercises the REAL stage-declaration /
 # stage-execution / verify_stage_manifest / verdict-line bookkeeping in
 # run_declared_stages() end-to-end, with every expensive or environment-
-# dependent LEAF stage swapped for a trivial stand-in -- same technique as
-# --lock-probe-exit-order's cleanup_scratch() override above, applied to eight
-# functions instead of one. This is deliberately NOT a test of any individual
+# dependent LEAF stage swapped for a trivial stand-in (eight functions are
+# overridden). This is deliberately NOT a test of any individual
 # gate's correctness (lint/mypy/pytest are not being exercised here at all);
 # it is a test that the manifest machinery itself -- the part CHAOS-3571 was
 # actually about -- correctly declares, tracks, diffs, and reports, without

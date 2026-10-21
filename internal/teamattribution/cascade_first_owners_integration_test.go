@@ -28,7 +28,7 @@ func TestLoadReposAppliesTheFirstRecordedOwnersBackward(t *testing.T) {
 	synced := day(time.September, 1)
 	repoIDs := map[string]string{
 		"pair": "aaaaaaaa-0000-4000-8000-000000000001", "gap": "aaaaaaaa-0000-4000-8000-000000000002",
-		"grant-only": "aaaaaaaa-0000-4000-8000-000000000003", "revoked": "aaaaaaaa-0000-4000-8000-000000000004",
+		"grant-only": "aaaaaaaa-0000-4000-8000-000000000003", "gone-open": "aaaaaaaa-0000-4000-8000-000000000007", "revoked": "aaaaaaaa-0000-4000-8000-000000000004",
 		"tie": "aaaaaaaa-0000-4000-8000-000000000005", "by-name": "aaaaaaaa-0000-4000-8000-000000000006",
 	}
 	for name, id := range repoIDs {
@@ -41,7 +41,7 @@ func TestLoadReposAppliesTheFirstRecordedOwnersBackward(t *testing.T) {
 		synced, synced, org); err != nil {
 		t.Fatal(err)
 	}
-	ended, endedEarly := day(time.April, 1), day(time.January, 20)
+	ended, endedEarly, goneEnded := day(time.April, 1), day(time.January, 20), day(time.February, 20)
 	type row struct {
 		team, repo string
 		byName     bool
@@ -54,8 +54,12 @@ func TestLoadReposAppliesTheFirstRecordedOwnersBackward(t *testing.T) {
 		{"team-b", "pair", false, 2, day(time.March, 1), nil},
 		{"team-a", "gap", false, 1, day(time.March, 1), &ended},
 		{"team-c", "gap", false, 1, day(time.May, 1), nil},
-		{"team-gone", "grant-only", false, 1, day(time.February, 1), nil},
+		// grant-only: an inactive team's earlier row, closed on February 20 (LoadRepos keeps inactive rows; the cascade drops them).
+		{"team-gone", "grant-only", false, 1, day(time.February, 1), &goneEnded},
 		{"team-a", "grant-only", false, 1, day(time.March, 1), nil},
+		// gone-open: the inactive team's row stays open. LoadRepos keeps it (the cascade drops it), clamped to March 1, and it does not set the first record.
+		{"team-gone", "gone-open", false, 1, day(time.February, 1), nil},
+		{"team-a", "gone-open", false, 1, day(time.March, 1), nil},
 		// revoked: a row that ended before it began is never valid; the repository is owned from March 1 only.
 		{"team-d", "revoked", false, 1, day(time.February, 1), &endedEarly},
 		{"team-a", "revoked", false, 1, day(time.March, 1), nil},
@@ -111,17 +115,17 @@ func TestLoadReposAppliesTheFirstRecordedOwnersBackward(t *testing.T) {
 		want map[string][]string
 	}{
 		{"before every record", beforeAll, map[string][]string{
-			"pair": {"team-a", "team-b"}, "gap": {"team-a"}, "grant-only": {"team-a"}, "tie": {"team-a", "team-b"}, "by-name": {"team-a"},
+			"pair": {"team-a", "team-b"}, "gap": {"team-a"}, "grant-only": {"team-a"}, "gone-open": {"team-a", "team-gone"}, "tie": {"team-a", "team-b"}, "by-name": {"team-a"},
 		}},
 		{"at the first record", atFirst, map[string][]string{
-			"pair": {"team-a", "team-b"}, "gap": {"team-a"}, "grant-only": {"team-a"}, "revoked": {"team-a"},
+			"pair": {"team-a", "team-b"}, "gap": {"team-a"}, "grant-only": {"team-a"}, "gone-open": {"team-a", "team-gone"}, "revoked": {"team-a"},
 			"tie": {"team-a", "team-b"}, "by-name": {"team-a"},
 		}},
 		{"in a gap between records", inGap, map[string][]string{
-			"pair": {"team-a", "team-b"}, "grant-only": {"team-a"}, "revoked": {"team-a"}, "tie": {"team-a", "team-b"}, "by-name": {"team-a"},
+			"pair": {"team-a", "team-b"}, "grant-only": {"team-a"}, "gone-open": {"team-a", "team-gone"}, "revoked": {"team-a"}, "tie": {"team-a", "team-b"}, "by-name": {"team-a"},
 		}},
 		{"after the records", later, map[string][]string{
-			"pair": {"team-a", "team-b"}, "gap": {"team-c"}, "grant-only": {"team-a"}, "revoked": {"team-a"},
+			"pair": {"team-a", "team-b"}, "gap": {"team-c"}, "grant-only": {"team-a"}, "gone-open": {"team-a", "team-gone"}, "revoked": {"team-a"},
 			"tie": {"team-a", "team-b"}, "by-name": {"team-a"},
 		}},
 	}

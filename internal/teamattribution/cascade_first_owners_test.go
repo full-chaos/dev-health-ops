@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 )
 
+// This guard reads query text only; TestLoadReposAppliesTheFirstRecordedOwnersBackward (integration) is the behaviour proof.
 func TestLoadReposTestsTheOwnershipWindowOfTheSharedRule(t *testing.T) {
 	window := ownershipwindow.Window(ownershipwindow.Names{Org: "org_id", AsOf: "as_of"})
 	query := loadReposQuery(loadReposOwnershipWindow)

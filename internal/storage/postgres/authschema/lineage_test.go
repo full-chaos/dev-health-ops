@@ -135,18 +135,23 @@ var secretRoot = regexp.MustCompile(`(?i)(password|secret|token|credential|priva
 // all would also silently admit the next column someone adds with a similar
 // shape, which is precisely the thing this guard exists to stop.
 var approvedSecretColumns = map[string]string{
-	"password_hash":        "a one-way verifier, never the password",
-	"password_algorithm":   "names the KDF, not the material",
-	"password_updated_at":  "a timestamp",
-	"token_hash":           "a one-way digest; the token is returned once and never stored",
-	"secret_hash":          "a one-way digest of a registered credential",
-	"credential_class":     "a classification from contracts/auth/v1, not material",
-	"public_key_jwk":       "the PUBLIC half; this is what /jwks serves",
-	"idempotency_key":      "a dedup key for outbox delivery, not a credential",
-	"role_key":             "a role identifier",
-	"action_key":           "an action identifier",
-	"hash_algorithm":       "names the hash, not the material",
-	"legacy_token_version": "a version number the session is pinned to, not material",
+	"password_hash":       "a one-way verifier, never the password",
+	"password_algorithm":  "names the KDF, not the material",
+	"password_updated_at": "a timestamp",
+	"token_hash":          "a one-way digest; the token is returned once and never stored",
+	"secret_hash":         "a one-way digest of a registered credential",
+	"credential_class":    "a classification from contracts/auth/v1, not material",
+	"public_key_jwk":      "the PUBLIC half; this is what /jwks serves",
+	"idempotency_key":     "a dedup key for outbox delivery, not a credential",
+	"role_key":            "a role identifier",
+	"action_key":          "an action identifier",
+	"hash_algorithm":      "names the hash, not the material",
+}
+
+// approvedSecretTableColumns approves one column of one table, of one type,
+// where the name alone would also admit the same name elsewhere.
+var approvedSecretTableColumns = map[string]struct{ dataType, reason string }{
+	"sessions.legacy_token_version": {"bigint", "the go-api token_version the session is pinned to, a number, not material"},
 }
 
 // approvedSecretSuffixes are the shapes that are safe by construction.
@@ -184,6 +189,9 @@ var columnDefinition = regexp.MustCompile(`(?m)^\s+([a-z_][a-z0-9_]*)\s+`)
 // approval of that exact column and type.
 func secretColumnApproved(table, column, dataType string) bool {
 	if _, approved := approvedSecretColumns[column]; approved {
+		return true
+	}
+	if scoped, approved := approvedSecretTableColumns[table+"."+column]; approved && scoped.dataType == dataType {
 		return true
 	}
 	return hasApprovedSuffix(column)

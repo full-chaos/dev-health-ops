@@ -142,10 +142,14 @@ WHERE sync_run_id = $1::uuid`, syncRunID, syncRunUnitStatusSuccess, syncRunUnitS
 // rearmBackoff returns the countdown for a pass that claimed nothing and left
 // due-now work behind, plus log attributes when it grew. A failed read gives
 // the base: the back-off is an optimisation and must not delay a run.
-func rearmBackoff(ctx context.Context, pool *pgxpool.Pool, syncRunID string, now time.Time) (time.Duration, []synclog.Attr) {
+func rearmBackoff(ctx context.Context, pool *pgxpool.Pool, logger *synclog.Logger, syncRunID string, now time.Time) (time.Duration, []synclog.Attr) {
 	base := redispatchCountdown()
 	progressAt, err := lastRunProgressAt(ctx, pool, syncRunID)
-	if err != nil || progressAt == nil {
+	if err != nil {
+		logger.Warn(ctx, synclog.MsgDispatchSyncRunRedispatchBackoffReadFailed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Failure(err))
+		return base, nil
+	}
+	if progressAt == nil {
 		return base, nil
 	}
 	return countdownForIdle(base, redispatchCountdownMax(base), now.Sub(*progressAt), syncRunID)

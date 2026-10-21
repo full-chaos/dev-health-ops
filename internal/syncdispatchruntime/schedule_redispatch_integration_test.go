@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -121,5 +122,57 @@ func TestScheduleRedispatchNeverPanicsOrPropagatesWhenTheTransactionFails(t *tes
 		pool.Close()
 		now := pgNow()
 		scheduleRedispatch(ctx, pool, nil, discoveryTestRun, nil, now) // must not panic
+	})
+}
+
+func seedBackoffUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, dataset, status string, updatedAgo time.Duration) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at,integration_id,cost_class,mode,attempts,created_at)
+VALUES ($1,$2,$3,'github',$4,$5,$6,now() - make_interval(secs => $7),(SELECT integration_id FROM sync_runs WHERE id = $3::uuid),'medium','incremental',0,now() - interval '3 hours')`,
+		id, discoveryTestOrg, discoveryTestRun, dataset, dispatchTestSource, status, updatedAgo.Seconds()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRearmBackoffGrowsWhileNoUnitEndsAndResetsWhenOneEnds reads the real
+// sync_run_units rows: a running unit with a fresh heartbeat is not progress,
+// the last success two hours ago is, and a unit that ends now resets the
+// back-off on the next arm.
+func TestRearmBackoffGrowsWhileNoUnitEndsAndResetsWhenOneEnds(t *testing.T) {
+	t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "10")
+	t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN_MAX", "300")
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		seedBackoffUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000012a1", "files", "running", 0)
+		seedBackoffUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000012a2", "commits", "success", 2*time.Hour)
+		seedBackoffUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000012a3", "blame", "planned", 0)
+
+		held, attrs := rearmBackoff(ctx, pool, nil, discoveryTestRun, time.Now().UTC())
+		if held <= 10*time.Second || held > 300*time.Second || len(attrs) == 0 {
+			t.Fatalf("held run got countdown=%s attrs=%d want a back-off in (10s,300s]", held, len(attrs))
+		}
+
+		if _, err := pool.Exec(ctx, `UPDATE sync_run_units SET status='success', updated_at=now() WHERE id=$1`, "00000000-0000-4000-8000-0000000012a1"); err != nil {
+			t.Fatal(err)
+		}
+		reset, attrs := rearmBackoff(ctx, pool, nil, discoveryTestRun, time.Now().UTC())
+		if reset != 10*time.Second || attrs != nil {
+			t.Fatalf("after a unit end got countdown=%s attrs=%v want the 10s base and no back-off fields", reset, attrs)
+		}
+	})
+}
+
+// TestRearmBackoffFallsBackToTheBaseWhenTheReadFails pins the fail-open rule:
+// a failed progress read never delays a run and logs a Warn.
+func TestRearmBackoffFallsBackToTheBaseWhenTheReadFails(t *testing.T) {
+	t.Setenv("SYNC_DISPATCH_REDISPATCH_COUNTDOWN", "10")
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		got, attrs := rearmBackoff(cancelled, pool, synclog.Default(), discoveryTestRun, time.Now().UTC())
+		if got != 10*time.Second || attrs != nil {
+			t.Fatalf("got countdown=%s attrs=%v want the base and no back-off fields on a read error", got, attrs)
+		}
 	})
 }

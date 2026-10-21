@@ -658,7 +658,7 @@ WHERE id = $1::uuid`,
 		// CHAOS-8459: this pass claimed nothing, so the run is waiting on a
 		// cap or a long unit; the re-arm backs off with the idle time and a
 		// unit end wakes the pass at once (CHAOS-10013).
-		backoff, backoffAttrs := rearmBackoff(ctx, service.pool, run.id, armAt)
+		backoff, backoffAttrs := rearmBackoff(ctx, service.pool, service.logger, run.id, armAt)
 		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAtAfter(counts.nextDeferredAt, armAt, backoff), armAt, backoffAttrs...)
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
 		return nil

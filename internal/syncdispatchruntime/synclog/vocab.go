@@ -69,6 +69,7 @@ var (
 	MsgSyncRunRollupBumped                               = Msg{"sync_run.rollup_bumped"}
 	MsgDispatchSyncRunRedispatchRearmFailed              = Msg{"dispatch_sync_run.redispatch_rearm_failed"}
 	MsgDispatchSyncRunRedispatchRearmed                  = Msg{"dispatch_sync_run.redispatch_rearmed"}
+	MsgDispatchSyncRunRedispatchBackoffReadFailed        = Msg{"dispatch_sync_run.redispatch_backoff_read_failed"}
 	MsgDispatchSyncRunWokenByUnitCompletion              = Msg{"dispatch_sync_run.woken_by_unit_completion"}
 	MsgDispatchSyncRunUnitCompletionWakeFailed           = Msg{"dispatch_sync_run.unit_completion_wake_failed"}
 	MsgTeamRepoOwnershipDerivation                       = Msg{"team_repo_ownership_derivation"}

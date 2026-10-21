@@ -11,7 +11,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/adminroutes"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -94,8 +93,8 @@ func TestAdminRoutesAnswerNoStoreThroughTheRealServerChain(t *testing.T) {
 // Every route of the real admin.Routes answers no-store on a refused caller.
 func TestEveryAdminRouteAnswersNoStoreThroughTheServer(t *testing.T) {
 	routes := admin.Routes(admin.Deps{Guard: policy.NewGuard(nil, nil)})
-	if len(routes) != len(adminroutes.Table) {
-		t.Fatalf("%d admin routes, %d in the table", len(routes), len(adminroutes.Table))
+	if len(routes) != len(httpapi.AdminRoutes) {
+		t.Fatalf("%d admin routes, %d in the table", len(routes), len(httpapi.AdminRoutes))
 	}
 	handler := noStoreServer(t, routes)
 	sawModels := false

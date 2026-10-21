@@ -1,17 +1,15 @@
-// Package adminroutes is the one table of the routes admin.Routes serves, and
-// the outermost middleware that answers each of them Cache-Control: no-store.
-// The venue oracle reads the same table for its declared "admin no-store"
-// divergence. Other /api/v1/admin-prefixed packages are not in it.
-package adminroutes
+package httpapi
 
 import (
 	"net/http"
 	"sort"
 )
 
-// Table is every "METHOD pattern" of admin.Routes. A test in package admin_test
+// AdminRoutes is the one table of every "METHOD pattern" of admin.Routes; the
+// no-store middleware and the venue oracle (admin no-store divergence) both read
+// it, and other /api/v1/admin-prefixed packages are not in it. A test in package admin_test
 // keeps it equal to the real route table.
-var Table = []string{
+var AdminRoutes = []string{
 	"DELETE /api/v1/admin/credentials/{provider}/{name}",
 	"DELETE /api/v1/admin/ip-allowlist/{entry_id}",
 	"DELETE /api/v1/admin/llm-settings",
@@ -91,34 +89,34 @@ var Table = []string{
 var matcher = func() *http.ServeMux {
 	mux := http.NewServeMux()
 	none := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
-	for _, entry := range Table {
+	for _, entry := range AdminRoutes {
 		mux.Handle(entry, none)
 	}
 	return mux
 }()
 
-// Matches reports whether a request of method and path is served by an admin
+// MatchesAdminRoute reports whether a request of method and path is served by an admin
 // route, by net/http's own pattern rules.
-func Matches(r *http.Request) bool {
+func MatchesAdminRoute(r *http.Request) bool {
 	_, pattern := matcher.Handler(r)
 	return pattern != ""
 }
 
-// NoStore sets Cache-Control: no-store before next runs on every request that
+// NoStoreAdminRoutes sets Cache-Control: no-store before next runs on every request that
 // Matches, so a response written by any later layer (scope, origin check,
 // rate limit, body bound, guard, handler) carries it.
-func NoStore(next http.Handler) http.Handler {
+func NoStoreAdminRoutes(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if Matches(r) {
+		if MatchesAdminRoute(r) {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// Sorted returns a sorted copy of Table.
-func Sorted() []string {
-	out := append([]string(nil), Table...)
+// SortedAdminRoutes returns a sorted copy of AdminRoutes.
+func SortedAdminRoutes() []string {
+	out := append([]string(nil), AdminRoutes...)
 	sort.Strings(out)
 	return out
 }

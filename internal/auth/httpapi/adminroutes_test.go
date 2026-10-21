@@ -1,4 +1,4 @@
-package adminroutes
+package httpapi
 
 import (
 	"net/http"
@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestMatchesUsesMethodAndPatternRules(t *testing.T) {
+func TestMatchesAdminRouteUsesMethodAndPatternRules(t *testing.T) {
 	cases := []struct {
 		method, path string
 		want         bool
@@ -19,19 +19,19 @@ func TestMatchesUsesMethodAndPatternRules(t *testing.T) {
 		{"GET", "/api/v1/other", false},
 	}
 	for _, tc := range cases {
-		if got := Matches(httptest.NewRequest(tc.method, tc.path, nil)); got != tc.want {
+		if got := MatchesAdminRoute(httptest.NewRequest(tc.method, tc.path, nil)); got != tc.want {
 			t.Errorf("%s %s: Matches = %v, want %v", tc.method, tc.path, got, tc.want)
 		}
 	}
 }
 
-func TestNoStoreSetsTheHeaderBeforeTheNextHandlerOnlyOnAdminRoutes(t *testing.T) {
+func TestNoStoreAdminRoutesSetsTheHeaderBeforeTheNextHandlerOnlyOnAdminRoutes(t *testing.T) {
 	seen := ""
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		seen = w.Header().Get("Cache-Control")
 		w.WriteHeader(http.StatusForbidden)
 	})
-	handler := NoStore(next)
+	handler := NoStoreAdminRoutes(next)
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest("GET", "/api/v1/admin/llm-settings/models", nil))
 	if seen != "no-store" || recorder.Header().Get("Cache-Control") != "no-store" {

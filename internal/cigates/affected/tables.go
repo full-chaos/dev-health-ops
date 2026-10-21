@@ -9,21 +9,15 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
-// The declared-read tables. classes.tsv names the repository path classes the planner knows (`class<TAB>glob`, a class
-// may hold several globs); a changed path in no class is FULL. reads.tsv says which package reads which class
-// (`package<TAB>scope<TAB>class`): scope test = the package's own tests read it (the package alone is selected), scope
-// code = its non-test code reads it (every test binary that links the package is selected). A class with no reads row
-// is reader-less. walks.tsv (walks.go) measures every walk of the repository instead; a reads row never covers a walk.
-// A glob that starts with ** (a file kind anywhere, such as **/*.json) only adds readers: a path is known
-// only through a glob anchored at a first-level entry. `cigate plan-reads` is the guard that keeps reads.tsv complete.
+// The declared-read tables of `cigate plan-reads`. classes.tsv names repository path classes (`class<TAB>glob`, a class
+// may hold several globs). reads.tsv says which package reads which class (`package<TAB>scope<TAB>class`): scope test =
+// the package's own tests name it, scope code = its non-test code names it.
 const (
 	classesFile = "classes.tsv"
 	readsFile   = "reads.tsv"
-	walksFile   = "walks.tsv"
 	scopeTest   = "test"
 	scopeCode   = "code"
 )
@@ -36,13 +30,8 @@ type readRow struct {
 }
 
 type tables struct {
-	globs    []classGlob
-	reads    []readRow
-	walks    []walkRow // walks.tsv: one measured row per walk call site (walks.go)
-	dynReads []dynRow  // dynreads.tsv: one declared row per file with a non-constant read (dynreads.go)
-
-	trackedLoaded bool
-	trackedFiles  []string
+	globs []classGlob
+	reads []readRow
 }
 
 func readTSV(file string, fields int) ([][]string, []int, error) {
@@ -78,8 +67,7 @@ func readTSV(file string, fields int) ([][]string, []int, error) {
 	return rows, lines, sc.Err()
 }
 
-// loadTables reads classes.tsv and reads.tsv from dir. A missing file is an empty table: with no class every non-Go
-// path outside a package is FULL.
+// loadTables reads classes.tsv and reads.tsv from dir. A missing file is an empty table.
 func loadTables(dir string) (*tables, error) {
 	t := &tables{}
 	cls, _, err := readTSV(filepath.Join(dir, classesFile), 2)
@@ -95,12 +83,6 @@ func loadTables(dir string) (*tables, error) {
 		known[r[0]] = true
 	}
 	if t.reads, err = loadRows(dir, readsFile, known); err != nil {
-		return nil, err
-	}
-	if t.walks, err = loadWalks(dir, known); err != nil {
-		return nil, err
-	}
-	if t.dynReads, err = loadDynReads(dir, known); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -178,21 +160,6 @@ func matchSegs(g, p []string) bool {
 	return len(p) == 0
 }
 
-// classesOf is the classes of p, and whether one of them is anchored at a first-level entry (p is a known path).
-func (t *tables) classesOf(p string) (map[string]bool, bool) {
-	out := map[string]bool{}
-	anchored := false
-	for _, g := range t.globs {
-		if globMatch(g.glob, p) {
-			out[g.class] = true
-			if !strings.HasPrefix(g.glob, "**") {
-				anchored = true
-			}
-		}
-	}
-	return out, anchored
-}
-
 // covers reports whether a read of p (a file, or a directory the reader walks) is covered by one of the classes: a glob
 // that matches p, or a glob X/** with p equal to X or under it.
 func (t *tables) covers(p string, classes map[string]string) bool {
@@ -222,15 +189,4 @@ func (t *tables) suggest(p string) string {
 		}
 	}
 	return ""
-}
-
-func (t *tables) readersOf(classes map[string]bool) []readRow {
-	var out []readRow
-	for _, r := range t.reads {
-		if classes[r.class] {
-			out = append(out, r)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].pkg < out[j].pkg })
-	return out
 }

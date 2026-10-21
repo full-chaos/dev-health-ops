@@ -142,11 +142,11 @@ func TestAffectedIntegration(t *testing.T) {
 		{"go file in dep", "b/x.go\n", "AFFECTED 2\na\nb\n"},
 		{"go file in leaf", "c/x.go\n", "AFFECTED 1\nc\n"},
 		{"nul separated", "b/x.go\x00", "AFFECTED 2\na\nb\n"},
-		{"testdata of b", "b/testdata/f.json\n", "AFFECTED 2\na\nb\n"},
-		{"embed file", "b/tmpl.txt\n", "AFFECTED 2\na\nb\n"},
-		{"non embed file", "b/readme.md\n", "FULL non-Go file in no declared class: b/readme.md\n"},
+		{"testdata of b", "b/testdata/f.json\n", "FULL non-Go file: b/testdata/f.json\n"},
+		{"embed file", "b/tmpl.txt\n", "FULL non-Go file: b/tmpl.txt\n"},
+		{"non embed file", "b/readme.md\n", "FULL non-Go file: b/readme.md\n"},
 		{"go.mod", "go.mod\n", "FULL shared change: go.mod\n"},
-		{"ci file in no declared class", "./ci/x.sh\n", "FULL non-Go file in no declared class: ci/x.sh\n"},
+		{"ci file", "./ci/x.sh\n", "FULL shared change: ci/x.sh\n"},
 		{"unlisted go", "zz/x.go\n", "FULL Go file outside any listed package: zz/x.go\n"},
 	}
 	for _, c := range cases {

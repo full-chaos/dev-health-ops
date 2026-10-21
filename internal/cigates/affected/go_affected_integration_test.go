@@ -144,18 +144,10 @@ func affectedSelectorScenarios() []scenario {
 			g, err := sel(s, w, "internal/ghost/g.go")
 			return wantFull(g, err, "FULL Go file outside any listed package")
 		}},
-		{"data_file_counts_only_as_testdata_or_embed", func(s, w string) error {
-			g, err := sel(s, w, "internal/mid/sql/001.sql")
-			if err := wantSelection(g, err, "AFFECTED", "internal/mid", "internal/top"); err != nil {
-				return fmt.Errorf("embedded sql: %w", err)
-			}
-			g, err = sel(s, w, "internal/leaf/testdata/a.json")
-			if err != nil || g.verdict != "AFFECTED" {
-				return fmt.Errorf("testdata json: %v %v", g, err)
-			}
-			// a file the package neither embeds nor keeps under testdata may be read at run time by any test
-			for _, path := range []string{"internal/mid/fixtures/a.json", "src/dev_health_ops/x.py"} {
-				g, err = sel(s, w, path)
+		{"data_files_run_every_package", func(s, w string) error {
+			// embedded, testdata or loose: a data file can be read at run time by any test
+			for _, path := range []string{"internal/mid/sql/001.sql", "internal/leaf/testdata/a.json", "internal/mid/fixtures/a.json", "src/dev_health_ops/x.py"} {
+				g, err := sel(s, w, path)
 				if err := wantFull(g, err, "FULL non-Go"); err != nil {
 					return fmt.Errorf("%s: %w", path, err)
 				}
@@ -171,7 +163,7 @@ func affectedSelectorScenarios() []scenario {
 			}
 			return nil
 		}},
-		{"embedded_markdown_is_placed_by_its_owner", func(s, w string) error {
+		{"embedded_markdown_runs_every_package", func(s, w string) error {
 			golist := []map[string]any{
 				affPkg("internal/mid", map[string]any{"EmbedFiles": []string{"sql/README.md"}}),
 				affPkg("internal/top", nil),
@@ -179,7 +171,7 @@ func affectedSelectorScenarios() []scenario {
 				affBinary("internal/top", "internal/mid"),
 			}
 			g, err := affSelect(s, w, golist, []string{"internal/mid", "internal/top"}, affRoot, "internal/mid/sql/README.md")
-			return wantSelection(g, err, "AFFECTED", "internal/mid", "internal/top")
+			return wantFull(g, err, "FULL non-Go")
 		}},
 		{"go_file_under_testdata_is_a_fixture_of_its_package", func(s, w string) error {
 			g, err := sel(s, w, "internal/leaf/testdata/plant/plant.go")

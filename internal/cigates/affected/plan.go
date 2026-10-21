@@ -1,5 +1,8 @@
-// Package affected decides which Go test packages a change set can affect: one verdict, NONE / AFFECTED / FULL, for the
-// integration plan job of go.yml and for the go-quality legs.
+// Package affected decides which Go test packages a change set can affect: one verdict for the integration plan job of
+// go.yml and for the go-quality legs. A pull request whose every changed path is a .go file plans AFFECTED: the changed
+// packages' reverse import closure. Any other path (data, tsv, yaml, docs, workflows, scripts, testdata) plans FULL, as do
+// shared inputs and every push to main, merge group, schedule or manual run. NONE is part of the contract (check_go.sh and
+// go-quality.yml accept it) but no change set plans it: bounding which tests read a non-Go file is separate work.
 package affected
 
 import (
@@ -17,9 +20,9 @@ import (
 )
 
 var (
-	sharedPrefixes = []string{"internal/testsupport/"}
+	sharedPrefixes = []string{"ci/", ".github/", "internal/testsupport/"}
 	sharedFiles    = map[string]bool{"go.mod": true, "go.sum": true, "go.work": true, "go.work.sum": true}
-	// The planner's own code and tables: a change here changes the verdict of this very change set.
+	// The planner's own code: a change here changes the verdict of this very change set.
 	plannerDir = "internal/cigates/affected/"
 	// Events that judge a change set. Every other event (push, merge_group, schedule, workflow_dispatch) runs everything.
 	judgedEvents = map[string]bool{"pull_request": true, "range": true}
@@ -126,8 +129,7 @@ func ownerOfDataFile(p string, packages map[string]goListEntry) (string, bool) {
 	return "", false
 }
 
-// Verdict is the plan for one change set. Kind is NONE (every changed path is in a class no Go test reads), AFFECTED
-// (Keys: the planned packages the change reaches) or FULL (Reason).
+// Verdict is the plan for one change set: AFFECTED (Keys: the planned packages the change reaches) or FULL (Reason).
 type Verdict struct {
 	Kind   string
 	Reason string
@@ -141,15 +143,18 @@ type planInput struct {
 	changed     []string
 	golist      []goListEntry
 	keys        []string
-	root, base  string
-	tables      *tables
+	root        string
 	goFilesFull bool
-	log         io.Writer // one line per root-walk and dynamic-read decision; nil discards
-	dynDiff     []string  // differences between dynreads.tsv and the rows the tree calls for
 }
 
-// isPythonSource: a Python file outside a Go package's testdata or embed files has no declared reader; it plans FULL.
-func isPythonSource(p string) bool { return strings.HasSuffix(p, ".py") }
+func hasAnyPrefix(p string, prefixes []string) bool {
+	for _, pre := range prefixes {
+		if strings.HasPrefix(p, pre) {
+			return true
+		}
+	}
+	return false
+}
 
 func plan(in planInput) (Verdict, error) {
 	if !judgedEvents[in.event] {
@@ -159,7 +164,6 @@ func plan(in planInput) (Verdict, error) {
 		return full("empty change set: a wrong base reads as no change"), nil
 	}
 	packages := map[string]goListEntry{}
-	listed := map[string]bool{}
 	binaries := map[string]map[string]bool{}
 	modulePath := ""
 	for _, e := range in.golist {
@@ -180,7 +184,6 @@ func plan(in planInput) (Verdict, error) {
 			return Verdict{}, err
 		}
 		packages[filepath.ToSlash(rel)] = e
-		listed[e.ImportPath] = true
 		if modulePath == "" && e.Module != nil {
 			modulePath = e.Module.Path
 		}
@@ -194,129 +197,42 @@ func plan(in planInput) (Verdict, error) {
 		}
 		return modulePath + "/" + key
 	}
-	keySet := map[string]bool{}
-	for _, k := range in.keys {
-		keySet[k] = true
-	}
-	rules := &planRules{root: in.root, base: in.base, keys: keySet, quality: in.goFilesFull}
 
 	changedPackages := map[string]bool{} // import paths whose reverse closure is selected
-	direct := map[string]bool{}          // import paths selected alone
-	hasGo := false
-	reached := map[string]bool{}      // classes the changed non-Go paths fall in
-	walkSelected := map[string]bool{} // walking packages a changed path selected
-	dynSelected := map[string]bool{}  // packages a dynreads.tsv row selected
 	for _, raw := range in.changed {
 		p := path.Clean(raw)
-		if strings.HasSuffix(p, ".go") {
-			hasGo = true
-		}
 		if sharedFiles[p] || hasAnyPrefix(p, sharedPrefixes) {
 			return full("shared change: " + p), nil
+		}
+		if !strings.HasSuffix(p, ".go") {
+			return full("non-Go file: " + p), nil
 		}
 		if strings.HasPrefix(p, plannerDir) && !strings.HasSuffix(p, "_test.go") && !inTestdata(p) {
 			return full("planner input: " + p), nil
 		}
-		why, keys := rules.classifyInput(p)
-		if why != "" {
-			return full("shared change: " + p + ": " + why), nil
-		}
-		for _, k := range keys {
-			direct[importPath(k)] = true
-		}
-		if !strings.HasSuffix(p, ".go") {
-			if len(in.dynDiff) > 0 {
-				return full("dynreads.tsv differs from the tree (" + in.dynDiff[0] + ") and can miss " + p), nil
-			}
-			pc, _ := in.tables.classesOf(p)
-			for _, d := range in.tables.dynReads {
-				switch {
-				case d.unexpressed():
-					// The tool cannot bound the path: the package can read any file, so every non-Go change selects it, and
-					// a read in non-test code selects the tests of every package that links it.
-					dynSelected[d.pkg] = true
-					if d.scope() == scopeCode {
-						changedPackages[importPath(d.pkg)] = true
-					} else {
-						direct[importPath(d.pkg)] = true
-					}
-				default:
-					for _, c := range d.classes {
-						if pc[c] {
-							dynSelected[d.pkg] = true
-							if d.scope() == scopeCode {
-								changedPackages[importPath(d.pkg)] = true
-							} else {
-								direct[importPath(d.pkg)] = true
-							}
-						}
-					}
-				}
-			}
-			for _, w := range in.tables.walkersOf(p) {
-				walkSelected[w.pkg] = true
-				if w.scope() == scopeCode {
-					changedPackages[importPath(w.pkg)] = true
-				} else {
-					direct[importPath(w.pkg)] = true
-				}
-			}
-		}
-		if strings.HasSuffix(p, ".go") && !inTestdata(p) {
-			owner, ok := packages[path.Dir(p)]
+		if inTestdata(p) {
+			owner, ok := ownerOfDataFile(p, packages)
 			if !ok {
-				return full("Go file outside any listed package: " + p), nil
+				return full("Go fixture with no owning package: " + p), nil
 			}
-			changedPackages[owner.ImportPath] = true
-			continue
-		}
-		if owner, ok := ownerOfDataFile(p, packages); ok {
 			changedPackages[owner] = true
 			continue
 		}
-		if isPythonSource(p) {
-			return full("non-Go file is Python source: " + p), nil
+		owner, ok := packages[path.Dir(p)]
+		if !ok {
+			return full("Go file outside any listed package: " + p), nil
 		}
-		classes, known := in.tables.classesOf(p)
-		for c := range classes {
-			reached[c] = true
-		}
-		if !known {
-			if len(keys) > 0 {
-				continue
-			}
-			return full("non-Go file in no declared class: " + p), nil
-		}
-		for _, row := range in.tables.readersOf(classes) {
-			if row.scope == scopeCode {
-				changedPackages[importPath(row.pkg)] = true
-			} else {
-				direct[importPath(row.pkg)] = true
-			}
-		}
+		changedPackages[owner.ImportPath] = true
 	}
-	if in.goFilesFull && hasGo {
+	if in.goFilesFull {
 		return full("Go source in the change set: every package runs"), nil
-	}
-	in.tables.logRootWalks(in.log, reached, walkSelected)
-	in.tables.logDynamicReads(in.log, reached, dynSelected)
-	if len(changedPackages) == 0 && len(direct) == 0 {
-		return Verdict{Kind: "NONE"}, nil
 	}
 	var affected []string
 	for _, key := range in.keys {
 		imp := importPath(key)
 		closure, ok := binaries[imp]
-		if !ok && !(in.goFilesFull && listed[imp]) {
-			return full("integration package without a test binary: " + key), nil
-		}
 		if !ok {
-			// A package with no test file: go test only compiles it, so only a change to the package itself selects it.
-			closure = map[string]bool{imp: true}
-		}
-		if direct[imp] {
-			affected = append(affected, key)
-			continue
+			return full("integration package without a test binary: " + key), nil
 		}
 		for p := range closure {
 			if changedPackages[p] {
@@ -329,8 +245,8 @@ func plan(in planInput) (Verdict, error) {
 	return Verdict{Kind: "AFFECTED", Keys: affected}, nil
 }
 
-// PlanVerdict prints the plan verdict of a change set: NONE, `AFFECTED <n>` and one key per line, or `FULL <reason>`.
-// It returns the exit code: 0 with a verdict, 1 on a read, table or event error, 2 on a usage error.
+// PlanVerdict prints the plan verdict of a change set: `AFFECTED <n>` and one key per line, or `FULL <reason>`.
+// It returns the exit code: 0 with a verdict, 1 on a read or event error, 2 on a usage error.
 func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("plan-verdict", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -339,8 +255,7 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 	golistP := fs.String("golist", "", "go list -test -json output")
 	keysP := fs.String("keys", "", "planned package keys, one per line, relative to the module root")
 	root := fs.String("root", "", "repository root")
-	base := fs.String("base", "", "base sha; go.yml and ci/check_go.sh are compared at its merge base with HEAD")
-	tablesDir := fs.String("tables", "", "directory of classes.tsv and reads.tsv (default ROOT/internal/cigates/affected)")
+	fs.String("base", "", "base sha of the change set (kept for the callers; the verdict reads no file at the base)")
 	goFilesFull := fs.Bool("go-files-full", false, "a change set with any .go file is FULL (the go-quality legs then run no package subset)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -351,15 +266,6 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 	}
 	if !knownEvents[*event] {
 		fmt.Fprintf(stderr, "plan-verdict: unknown event %q\n", *event)
-		return 1
-	}
-	dir := *tablesDir
-	if dir == "" {
-		dir = filepath.Join(*root, filepath.FromSlash(plannerDir))
-	}
-	tb, err := loadTables(dir)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	changed, err := readChanged(*changedP)
@@ -383,28 +289,19 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	diff, err := planDynamic(*root, tb)
-	if err != nil {
-		fmt.Fprintln(stderr, "scan the Go sources for dynamic reads:", err)
-		return 1
-	}
-	v, err := plan(planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, base: *base, tables: tb,
-		goFilesFull: *goFilesFull, log: stderr, dynDiff: diff})
+	v, err := plan(planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, goFilesFull: *goFilesFull})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	switch v.Kind {
-	case "NONE":
-		fmt.Fprintln(stdout, "NONE")
-	case "AFFECTED":
+	if v.Kind == "AFFECTED" {
 		fmt.Fprintf(stdout, "AFFECTED %d\n", len(v.Keys))
 		for _, k := range v.Keys {
 			fmt.Fprintln(stdout, k)
 		}
-	default:
-		// A path may hold a newline (git diff -z keeps it); the verdict is line-oriented, so the reason stays on one line.
-		fmt.Fprintln(stdout, "FULL "+strings.NewReplacer("\n", `\n`, "\r", `\r`).Replace(v.Reason))
+		return 0
 	}
+	// A path may hold a newline (git diff -z keeps it); the verdict is line-oriented, so the reason stays on one line.
+	fmt.Fprintln(stdout, "FULL "+strings.NewReplacer("\n", `\n`, "\r", `\r`).Replace(v.Reason))
 	return 0
 }

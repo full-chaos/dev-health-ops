@@ -858,9 +858,8 @@ check_race_weights_rows() {
 }
 
 # check_plan_reads: the declared-read guard of the plan verdict (`cmd/cigate plan-reads`) over the whole tree: every
-# package that reads a declared path class has a reads.tsv row, and every walk has a measured walks.tsv row whose classes
-# match the tree. It runs in the static leg, which runs on every change: its own walk reads every file, so as a selected
-# test it would select itself for every change.
+# package that names a path of a declared class in a string literal has a reads.tsv row. It runs in the static leg,
+# which runs on every change.
 check_plan_reads() {
   (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go run -mod=readonly -trimpath ./cmd/cigate plan-reads --root "${ROOT}")
 }

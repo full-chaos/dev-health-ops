@@ -32,6 +32,11 @@
 //	reverseproxy-no-transport  a composite literal of net/http/httputil.ReverseProxy whose Transport is absent or nil, and
 //	                     any call to httputil.NewSingleHostReverseProxy (its proxy has no Transport): either sends through
 //	                     http.DefaultTransport, which honours the environment proxy
+//	reverseproxy-by-value  a struct field, defined type or alias, array/slice/map/chan element, or generic type argument of
+//	                     the non-pointer httputil.ReverseProxy (its zero value has no Transport); a var of that type with no
+//	                     value, a named result or new() of it is reverseproxy-no-transport; a Transport written to a
+//	                     ReverseProxy (literal, assignment, &p.Transport) follows the net/http.Client rules above, so a
+//	                     value not proven non-nil (a parameter) is transport-unproven and nil is transport-nil
 //	default-transport    any use of net/http.DefaultTransport
 //	default-transport-assign  an assignment to net/http.DefaultTransport: FORBIDDEN, no allow row admits it (the transport
 //	                     helpers fall back to net/http's defaults when it is replaced, so repository code must never replace it)
@@ -196,8 +201,11 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 					kinds = append(kinds, "transport-unproven")
 				}
 			case isNamedIn(tv.Type, "net/http/httputil", "ReverseProxy"):
-				if value, ok := fieldValue(n, "Transport", -1); !ok || isNil(info, value) {
+				value, ok := fieldValue(n, "Transport", -1)
+				if !ok || isNil(info, value) {
 					kinds = append(kinds, "reverseproxy-no-transport")
+				} else if !provenTransport(info, declaration, value, 0) {
+					kinds = append(kinds, "transport-unproven")
 				}
 			case isNamed(tv.Type, "Transport"):
 				if value, ok := fieldValue(n, "Proxy", -1); ok && !isNil(info, value) {
@@ -219,6 +227,8 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 		if ident, ok := n.Fun.(*ast.Ident); ok && len(n.Args) == 1 {
 			if builtin, ok := info.Uses[ident].(*types.Builtin); ok && builtin.Name() == "new" && isNamed(info.Types[n.Args[0]].Type, "Client") {
 				kinds = append(kinds, "client-no-transport")
+			} else if ok && builtin.Name() == "new" && isReverseProxy(info.Types[n.Args[0]].Type) {
+				kinds = append(kinds, "reverseproxy-no-transport")
 			}
 		}
 		if fn := calledFunc(info, n); fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == "net/http/httputil" && fn.Name() == "NewSingleHostReverseProxy" {
@@ -291,6 +301,11 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 						kinds = append(kinds, "client-no-transport")
 					}
 				}
+				if isReverseProxy(info.Types[field.Type].Type) {
+					for range field.Names {
+						kinds = append(kinds, "reverseproxy-no-transport")
+					}
+				}
 			}
 		}
 		return kinds
@@ -300,28 +315,46 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 			if isNamed(info.Types[field.Type].Type, "Client") {
 				kinds = append(kinds, "client-by-value")
 			}
+			if isReverseProxy(info.Types[field.Type].Type) {
+				kinds = append(kinds, "reverseproxy-by-value")
+			}
 		}
 		return kinds
 	case *ast.TypeSpec:
 		if isNamed(info.Types[n.Type].Type, "Client") {
 			return []string{"client-by-value"}
 		}
+		if isReverseProxy(info.Types[n.Type].Type) {
+			return []string{"reverseproxy-by-value"}
+		}
 	case *ast.ArrayType:
 		if isNamed(info.Types[n.Elt].Type, "Client") {
 			return []string{"client-by-value"}
+		}
+		if isReverseProxy(info.Types[n.Elt].Type) {
+			return []string{"reverseproxy-by-value"}
 		}
 	case *ast.MapType:
 		if isNamed(info.Types[n.Key].Type, "Client") || isNamed(info.Types[n.Value].Type, "Client") {
 			return []string{"client-by-value"}
 		}
+		if isReverseProxy(info.Types[n.Key].Type) || isReverseProxy(info.Types[n.Value].Type) {
+			return []string{"reverseproxy-by-value"}
+		}
 	case *ast.ChanType:
 		if isNamed(info.Types[n.Value].Type, "Client") {
 			return []string{"client-by-value"}
+		}
+		if isReverseProxy(info.Types[n.Value].Type) {
+			return []string{"reverseproxy-by-value"}
 		}
 	case *ast.ValueSpec:
 		var kinds []string
 		if n.Type != nil && len(n.Values) == 0 && isNamed(info.Types[n.Type].Type, "Client") {
 			kinds = append(kinds, "client-no-transport")
+		}
+		if n.Type != nil && len(n.Values) == 0 && isReverseProxy(info.Types[n.Type].Type) {
+			kinds = append(kinds, "reverseproxy-no-transport")
 		}
 		for _, value := range n.Values {
 			if isClientCopy(info, value) {
@@ -367,6 +400,9 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 				if isNamed(instance.TypeArgs.At(i), "Client") {
 					return []string{"client-instantiate"}
 				}
+				if isReverseProxy(instance.TypeArgs.At(i)) {
+					return []string{"reverseproxy-by-value"}
+				}
 			}
 		}
 		obj := info.Uses[n]
@@ -405,6 +441,12 @@ func writtenField(info *types.Info, expression ast.Expr) string {
 		return ""
 	}
 	field, ok := selection.Obj().(*types.Var)
+	if ok && field.IsField() && field.Pkg() != nil && field.Pkg().Path() == "net/http/httputil" {
+		if field.Name() == "Transport" && field == netHTTPField(field.Pkg(), "ReverseProxy", "Transport") {
+			return "Transport"
+		}
+		return ""
+	}
 	if !ok || !field.IsField() || field.Pkg() == nil || field.Pkg().Path() != "net/http" {
 		return ""
 	}
@@ -455,7 +497,7 @@ func isValueOverwrite(info *types.Info, expression ast.Expr) bool {
 		return false
 	}
 	tv, ok := info.Types[star]
-	return ok && (isNamed(tv.Type, "Client") || isNamed(tv.Type, "Transport"))
+	return ok && (isNamed(tv.Type, "Client") || isNamed(tv.Type, "Transport") || isReverseProxy(tv.Type))
 }
 
 // approvedTransportConstructors are the functions whose result is a non-nil RoundTripper that never uses an
@@ -647,6 +689,9 @@ var forbiddenKinds = map[string]bool{"default-transport-assign": true}
 
 // isNamed: the type is exactly net/http.<name> (not a pointer to it).
 func isNamed(t types.Type, name string) bool { return isNamedIn(t, "net/http", name) }
+
+// isReverseProxy: the type is exactly the non-pointer net/http/httputil.ReverseProxy.
+func isReverseProxy(t types.Type) bool { return isNamedIn(t, "net/http/httputil", "ReverseProxy") }
 
 func isNamedIn(t types.Type, pkgPath, name string) bool {
 	if t == nil {

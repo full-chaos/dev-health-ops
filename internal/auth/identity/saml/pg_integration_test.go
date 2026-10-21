@@ -607,6 +607,7 @@ func TestSAMLSubjectIsScopedByProviderAndIssuer(t *testing.T) {
 	otherIdP := newTestIdP(t)
 	otherIdP.entityID = homeIdP.entityID
 	other := newHarnessWithIdP(t, otherIdP, true)
+	other.withoutJoins()
 	other.ownUsers()
 	before := other.writeCounts()
 	signIn, err := other.consume(other.respond(resp{nameID: nid("home-subject"), email: uniqueEmail("new")}), nil)

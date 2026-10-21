@@ -204,6 +204,60 @@ func TestATestLegFailsOnAnUnweightedSlowPackageOfItsOwnLog(t *testing.T) {
 	}
 }
 
+// A leg whose go test run failed still names the unweighted slow package it saw and prints the row to paste; the leg stays red,
+// and the partial log does not add a coverage complaint.
+func TestAFailedGoTestRunStillPrintsTheUnweightedRow(t *testing.T) {
+	t.Parallel()
+	pkg, key := unweightedPackage(t, 350, 350)
+	out := writeLog(t, "FAIL\t"+pkg+"\t31.2s\n")
+	r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + out}, true, "ci-leg", "test", "350", "350")
+	if r.Err == nil {
+		t.Fatalf("the leg passed although go test failed")
+	}
+	if !strings.Contains(r.Stderr, "\n"+key+"\t31\n") {
+		t.Errorf("the failed leg did not print the row %q:\n%s", key+"\t31", r.Stderr)
+	}
+	if strings.Contains(r.Stderr, "no summary line") {
+		t.Errorf("a failed run's partial log drew a coverage complaint:\n%s", r.Stderr)
+	}
+	bad := writeLog(t, "FAIL\t"+pkg+"\t5s\n")
+	if r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + bad}, true, "ci-leg", "test", "350", "350"); r.Err == nil || strings.Contains(r.Stderr, "unweighted-slow-package") {
+		t.Errorf("a failed run with a fast package: err=%v\n%s", r.Err, r.Stderr)
+	}
+}
+
+// Weights rows are keyed by root-module package, and the weights-table test refuses any other key, so a nested module's package
+// cannot be given a row: the guard names the package and says so instead of printing a row the table would reject.
+func TestASlowNestedModulePackageIsNamedWithoutAnUnacceptableRow(t *testing.T) {
+	t.Parallel()
+	out, errs, err := checkGo(t, nil, "test-shard-plan", "1", fmt.Sprint(shardCount))
+	if err != nil {
+		t.Fatalf("test-shard-plan: %v\n%s", err, errs)
+	}
+	nested := ""
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Split(l, "\t"); len(f) == 3 && f[0] != "." {
+			nested = f[1]
+			break
+		}
+	}
+	if nested == "" {
+		t.Skip("shard 1 holds no nested-module package")
+	}
+	errs, err = unweightedGuard(t, nil, 1, coverLog(t, 1, shardCount, map[string]string{nested: "30.000s"}))
+	if err == nil {
+		t.Fatalf("a nested-module package at 30 s passed the guard")
+	}
+	for _, want := range []string{"nested-module-slow-package: " + nested + " took 30s", "no row can be added", "root-module"} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("the failure lacks %q: %s", want, errs)
+		}
+	}
+	if strings.Contains(errs, "unweighted-slow-package") || strings.Contains(errs, "\t30\n") {
+		t.Errorf("the failure prints a row the weights table would reject: %s", errs)
+	}
+}
+
 // Each package the main test legs measured at 20 s or more (main run 39606646375) has a row: the guard is green on main.
 func TestThePackagesMeasuredHeavyOnMainHaveRows(t *testing.T) {
 	t.Parallel()

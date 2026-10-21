@@ -1,0 +1,20 @@
+# Every refusing site of the Python scripts/auto_tag.py (frozen beside this file) and the Go row that answers it.
+# site<TAB>kind<TAB>refs. site: the trimmed source line, "#N" for the Nth identical line, "#stricter" for a second row of a site. kind case = recorded cases replayed live through the cigate binary, stricter = cases where Go refuses what Python accepted or refused later (D6129), go = a named Go test.
+subprocess.check_output(["git", "describe", "--tags", "--abbrev=0"])	go	TestGitMissingRefuses
+.decode()	go	TestGitOutputNotUTF8Refuses
+except subprocess.CalledProcessError:	case	no-tag-no-package;not-a-git-repository
+with open(path) as f:	case	package-path-is-directory;package-invalid-utf8
+data = json.load(f)	case	package-empty-file;package-byte-order-mark;package-syntax-error;package-extra-data;package-single-quotes;package-raw-control-character-in-string;package-leading-zero-number;package-bad-escape;package-short-unicode-escape;package-integer-4301-digits-elsewhere
+data = json.load(f)#stricter	stricter	package-nested-10001-deep
+return data.get("version")	case	package-top-level-list;package-top-level-string;package-top-level-number;package-top-level-null;package-top-level-true;package-top-level-float
+match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z]+)[\.-]?(\d+))?$", version_str)	stricter	package-version-true;package-version-number;package-version-float;package-version-infinity;package-version-nan;package-version-list;package-version-dict
+int(major),	go	TestParseSemverRefusesMoreThan4300Digits
+int(minor),	go	TestParseSemverRefusesMoreThan4300Digits
+int(patch),	case	package-version-4301-digits
+int(pre_num) if pre_num else None,	go	TestParseSemverRefusesMoreThan4300Digits
+args = parser.parse_args()	case	args-ambiguous-abbreviation;args-ambiguous-abbreviation-equals;args-missing-value;args-value-looks-like-option;args-value-is-help-flag;args-double-dash-as-value;args-double-dash-alone;args-double-dash-then-word;args-positional;args-unknown-option;args-unknown-short-option;args-lone-dash;args-two-extras;args-help-equals-value;args-short-help-equals-value
+print(f"Package.json version: {pkg_ver_str}")	stricter	package-version-lone-surrogate;package-version-trailing-newline;package-version-two-trailing-newlines;package-version-tab-inside;package-version-nul;package-version-next-line-char;package-version-delete-char;package-version-trailing-newline-not-newer
+next_ver_str = f"{major}.{minor}.{patch}-{pre_type}.{pre_num + 1}"	go	TestIncrementedRefusesAnIntegerStrOverTheLimit
+next_ver_str = f"{major}.{minor}.{patch + 1}-{args.pre_release_suffix}.1"	go	TestIncrementedRefusesAnIntegerStrOverTheLimit
+print(f"Next tag determined: {next_tag}")	go	TestInvalidUTF8SuffixPassesStdoutAndRefusesTheOutputFile
+with open(os.environ["GITHUB_OUTPUT"], "a") as f:	case	github-output-is-directory;github-output-parent-missing

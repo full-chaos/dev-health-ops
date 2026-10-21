@@ -164,7 +164,7 @@ func (p ivArgparse) parse(args []string, stdout, stderr io.Writer) (map[string]s
 			args []string
 		}
 		var actions []taken
-		stop := start + 1
+		var stop int
 		for {
 			if opt == "" {
 				extras = append(extras, args[start])

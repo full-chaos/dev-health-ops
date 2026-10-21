@@ -16,8 +16,6 @@ import (
 	"os/exec"
 	"strconv"
 	"time"
-
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // Git runs `git -C repo args...` and returns its stdout; a non-zero exit is an error carrying the stderr text.
@@ -84,7 +82,7 @@ func (p HTTPProber) Probe(host string, port int, method, path string) (int, erro
 	}
 	req.URL = u
 	req.Host = host + ":" + strconv.Itoa(port)
-	client := &http.Client{Transport: httpguard.SharedTransport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err

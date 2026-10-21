@@ -3,6 +3,7 @@ package docstools
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"io"
 	"net"
@@ -100,7 +101,7 @@ func TestHostSmokeRecorderKeepsAWholeLargeHeaderBlock(t *testing.T) {
 func TestHostSmokeTLSConfigPinsSNIRootsAndNoALPN(t *testing.T) {
 	for _, host := range []string{"docs.fullchaos.dev", "127.0.0.1"} {
 		cfg := hsTLSConfig(host)
-		if cfg.ServerName != host || cfg.RootCAs != nil || len(cfg.NextProtos) != 0 || cfg.InsecureSkipVerify {
+		if cfg.ServerName != host || cfg.RootCAs != nil || len(cfg.NextProtos) != 0 || cfg.InsecureSkipVerify || cfg.MinVersion != tls.VersionTLS12 {
 			t.Errorf("%s: ServerName %q RootCAs %v NextProtos %v InsecureSkipVerify %v", host, cfg.ServerName, cfg.RootCAs, cfg.NextProtos, cfg.InsecureSkipVerify)
 		}
 	}

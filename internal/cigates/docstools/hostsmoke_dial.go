@@ -96,7 +96,7 @@ func hsDialPlain(ctx context.Context, network, addr string) (net.Conn, error) {
 // hsTLSConfig is the TLS configuration of every https connection: the system roots (hsRoots nil), the name of the URL
 // host as SNI and for the certificate check (an IP literal is checked against the IP SANs), no ALPN (urllib offers none).
 func hsTLSConfig(host string) *tls.Config {
-	return &tls.Config{ServerName: host, RootCAs: hsRoots}
+	return &tls.Config{ServerName: host, RootCAs: hsRoots, MinVersion: tls.VersionTLS12}
 }
 
 // hsDialTLS dials addr (through an http proxy with CONNECT when the environment names one), runs the TLS handshake with

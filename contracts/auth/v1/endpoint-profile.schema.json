@@ -88,9 +88,10 @@
                 "credential_prefix",
                 "dedicated_header",
                 "jwt_header_alg",
+                "jwt_header_typ",
                 "signature_header"
               ],
-              "description": "How the class is chosen from the request BEFORE any validator runs: the Authorization scheme, a fixed credential prefix, a dedicated header, the `alg` field of the JWT protected header (compared exactly; query-api picks its Bearer verifier this way, so with the edge verifier unconfigured an HS256 token is refused rather than misrouted), or a signature header. Closed on purpose: there is no 'try each validator' value, because validator fan-out is the CHAOS-3271 defect."
+              "description": "How the class is chosen from the request BEFORE any validator runs: the Authorization scheme, a fixed credential prefix, a dedicated header, the `alg` field of the JWT protected header (compared exactly; query-api picks its Bearer verifier this way, so with the edge verifier unconfigured an HS256 token is refused rather than misrouted), the `typ` field of the JWT protected header (in the contract files one lowercase spelling, compared exactly; it separates two classes that share a scheme and an alg, e.g. at+jwt from jwt), or a signature header. Closed on purpose: there is no 'try each validator' value, because validator fan-out is the CHAOS-3271 defect."
             },
             "name": {
               "type": "string",

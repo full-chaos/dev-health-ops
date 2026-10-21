@@ -95,7 +95,7 @@ func invTxMarkers(doc string) (start, stop int, ok bool) {
 }
 
 func invTxGenVerb(_ []string, _, stderr io.Writer) int {
-	root, err := os.Getwd()
+	root, err := docsRoot(invTxDocRel)
 	if err != nil {
 		fmt.Fprintln(stderr, "gen-taxonomy:", err)
 		return 1
@@ -360,7 +360,7 @@ func invTxUnknownExampleKeys(document, source string) []string {
 }
 
 func invTxDriftVerb(_ []string, stdout, stderr io.Writer) int {
-	root, err := os.Getwd()
+	root, err := docsRoot(invTxDocRel)
 	if err != nil {
 		fmt.Fprintln(stderr, "check-investment-drift:", err)
 		return 1

@@ -220,7 +220,7 @@ func (r *gitRepo) git(args ...string) string {
 	if r.err != nil {
 		return ""
 	}
-	res := cmdSpec{dir: r.dir, env: gitEnv}.run("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+	res := cmdSpec{dir: r.dir, env: gitEnv}.run("git", append([]string{"-c", "commit.gpgsign=false", "-c", "maintenance.auto=false"}, args...)...)
 	if res.code != 0 {
 		r.err = fmt.Errorf("git %s: %s%s", strings.Join(args, " "), res.stderr, res.stdout)
 	}

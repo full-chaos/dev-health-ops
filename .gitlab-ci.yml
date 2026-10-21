@@ -22,7 +22,7 @@
 #     tags (docker-images.yml's fan-in-latest); the registry is the GitLab one.
 #   - Image archives for the scan stage are amd64 only (as go-container-security).
 #   - go:arm64-numeric-parity needs an arm64 runner: set GITLAB_ARM64_RUNNER_TAG.
-#   - Go-relevance skip (ci/go_relevance.sh) is not used: go:quality always runs.
+#   - The go-quality plan verdict (cmd/cigate plan-verdict) is not used: go:quality always runs.
 #   - Python lint (ruff) and typecheck (mypy), the Python unit matrix, the
 #     coverage gate and the Python integration tier are gone from GitHub
 #     (#3748, #3761); they are gone here too.
@@ -37,7 +37,6 @@
 #   - Needs a runner that allows privileged dind (docker:27-dind services).
 #
 # Job map (GitHub workflow : job -> GitLab job):
-#   test.yml : tooling-tests                  -> tests:tooling
 #   go-quality.yml : go-quality-leg           -> go:quality (matrix)
 #   go.yml : go-storage-integration           -> go:storage-integration (unsharded)
 #   go.yml : go-container-smoke               -> go:container-smoke (matrix)
@@ -293,8 +292,6 @@ pipeline:validate:
       doc = yaml.load(Path(".gitlab-ci.yml").read_text(), Loader=Loader)
       required_jobs = {
           "governance",
-          "tests:docs",
-          "tests:tooling",
           "docs:guards",
           "docs:inventory-review",
           "go:quality",
@@ -338,45 +335,6 @@ governance:
     PR_BODY: $CI_MERGE_REQUEST_DESCRIPTION
   script:
     - go run -trimpath -mod=readonly ./cmd/cigate governance --base-sha "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --head-sha "$CI_COMMIT_SHA"
-
-# ---------------------------------------------------------------------------
-# test (test.yml: tooling-tests incl. the kept Python tests)
-# ---------------------------------------------------------------------------
-
-tests:tooling:
-  extends: .go_job
-  stage: test
-  timeout: 1h
-  variables:
-    OTEL_ENABLED: "false"
-    HELM_VERSION: "v3.21.4"
-  before_script:
-    - !reference [.go_job, before_script]
-    - !reference [.uv_env, script]
-    - |
-      case "$(uname -m)" in
-        x86_64) helm_arch=amd64 ;;
-        aarch64|arm64) helm_arch=arm64 ;;
-        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-      esac
-      curl -fsSL -o /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz"
-      expected="$(curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz.sha256sum" | awk '{print $1}')"
-      echo "${expected}  /tmp/helm.tgz" | sha256sum -c -
-      tar -xzf /tmp/helm.tgz -C /tmp
-      install -m 0755 "/tmp/linux-${helm_arch}/helm" /usr/local/bin/helm
-  script:
-    - pytest tests/tooling -q -n 4
-    # The Python tests that pin things which stay after the Python source is
-    # deleted: an explicit list, not a negative filter (same as test.yml).
-    - |
-      set -euo pipefail
-      mapfile -t kept < <(grep -v '^[[:space:]]*#' ci/kept_python_tests.txt | grep -v '^[[:space:]]*$')
-      if [ "${#kept[@]}" -lt 40 ]; then
-        echo "ci/kept_python_tests.txt lists only ${#kept[@]} files: a short or empty list would run nothing (or everything)" >&2
-        exit 1
-      fi
-      printf 'kept files: %s\n' "${#kept[@]}"
-      pytest "${kept[@]}" -q -rs -n 4
 
 # ---------------------------------------------------------------------------
 # docs (docs-guards.yml, docs-inventory-review.yml, docs-health-report.yml)

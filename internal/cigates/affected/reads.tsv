@@ -58,6 +58,7 @@ internal/cigates/docsprepare	test	docs-data
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs
+internal/cigates/docstools	code	mkdocs.yml
 internal/cigates/docstools	test	Makefile
 internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci
@@ -78,6 +79,7 @@ internal/cigates/weightsfiles	test	ci
 internal/cigates/workflowpaths	test	.github
 internal/cigates/workflowpaths	test	contracts
 internal/cigates/workflowpaths	test	deploy
+internal/cigates/workflowpaths	test	docs
 internal/cigates/workflowpaths	test	mkdocs.yml
 internal/cigates/workflows	test	.github
 internal/cigates/workflows	test	ci

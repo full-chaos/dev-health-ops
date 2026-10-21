@@ -77,6 +77,7 @@ internal/cigates/scripts	test	.github
 internal/cigates/scripts	test	README.md
 internal/cigates/scripts	test	ci
 internal/cigates/scripts	test	contracts
+internal/cigates/scripts	test	docker
 internal/cigates/scripts	test	docs
 internal/cigates/splitshards	test	ci
 internal/cigates/testshard	test	.github

@@ -10,10 +10,11 @@
 #   This gate closes BOTH gaps.
 #
 # WHAT IT DOES (a LOCAL gate; it runs no Python):
-#   1. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
-#   2. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
+#   1. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
 #      apply the schema to a SCRATCH db with dho and prove it is current. The scratch
 #      db is DROPPED on exit via a trap.
+#   The Go gates (ci/check_go.sh fast, the river compatibility harness) are NOT stages of this
+#   gate: their run_stage lines are commented out in run_declared_stages, so run them separately.
 #
 # *** SAFETY CONTRACT ***
 #   The local container 'dev-health-clickhouse-1' db 'default' holds REAL dev data.
@@ -348,9 +349,9 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 #
 # THROUGHPUT TRADE-OFF: this re-serializes gates across worktrees that a prior fix
 # (commit 3d3ca881b2, the per-worktree scratch db above) deliberately let run
-# concurrently. That trade is not free. Observed, not benchmarked: a full gate run
-# end-to-end is on the order of 15 minutes; the Go fast gate alone is on the
-# order of 180s. With N worktrees contending for the same CH_CONTAINER, the
+# concurrently. That trade is not free. Observed, not benchmarked, and measured when the gate
+# still ran the Go fast gate and the unit suite (neither is a stage now; the figure is unmeasured
+# since): a full gate run end-to-end took on the order of 15 minutes. With N worktrees contending for the same CH_CONTAINER, the
 # worst-case wait for the last one is on the order of (N-1) x that full-run time —
 # an order-of-magnitude figure, not a guarantee.
 #
@@ -639,7 +640,7 @@ trap on_exit EXIT
 # commands (no foreground child running), and gives a defined exit code
 # (130) instead of relying on the default. It does NOT fix -- and cannot, by
 # any trap -- the specific case this was reviewed against: SIGINT sent to
-# ONLY the bash PID (e.g. Python's `Popen.send_signal(SIGINT)`, standard for
+# ONLY the bash PID (e.g. a parent process signalling just that pid, standard for
 # non-terminal automation) while bash is blocked waiting on a foreground
 # external command. That signal still has no effect until the command
 # finishes on its own, with or without this trap. SIGTERM, or a

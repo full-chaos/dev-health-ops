@@ -25,7 +25,8 @@ import (
 // (urllib offers none, so a server cannot move the client to h2) and keeps HTTP/1.1.
 
 const (
-	hsRecCap  = 256 << 10
+	// hsRecCap holds any header block Python accepts (101 lines of at most 65536 bytes, status line included).
+	hsRecCap  = 8 << 20
 	hsMaxLine = 65536
 	hsMaxHdrs = 100
 )
@@ -318,6 +319,9 @@ func hsRawHeaders(raw []byte) (headers []hsHeader, ok bool, err error) {
 			count++
 			if count > hsMaxHdrs {
 				return nil, false, errors.New("got more than 100 headers")
+			}
+			if !more && len(raw) >= hsRecCap {
+				return nil, false, errors.New("header block longer than the recording")
 			}
 			if !more || line == "\r\n" || line == "\n" {
 				break

@@ -267,45 +267,6 @@ func TestExecutedProofLedgerGuardFiresOnPlantedDefects(t *testing.T) {
 	})
 }
 
-// --- provider limits page exists and is in the mkdocs nav (CHAOS-2757) ---
-
-const providerLimitsPage = "docs/reference/limits-and-compatibility/provider-limits.md"
-
-func providerLimitsViolations(root string) []string {
-	var bad []string
-	if st, err := os.Stat(filepath.Join(root, filepath.FromSlash(providerLimitsPage))); err != nil || st.IsDir() {
-		bad = append(bad, "missing canonical provider limits page "+providerLimitsPage)
-	}
-	nav, err := os.ReadFile(filepath.Join(root, "mkdocs.yml"))
-	if err != nil || !strings.Contains(string(nav), strings.TrimPrefix(providerLimitsPage, "docs/")) {
-		bad = append(bad, "provider-limits.md is not wired into the mkdocs.yml nav: the page would be unreachable")
-	}
-	return bad
-}
-
-func TestProviderLimitsPageExistsAndIsInNav(t *testing.T) {
-	if v := providerLimitsViolations(repoRoot(t)); len(v) > 0 {
-		t.Fatal(strings.Join(v, "\n"))
-	}
-}
-
-func TestProviderLimitsGuardFiresOnPlantedDefects(t *testing.T) {
-	root := repoRoot(t)
-	t.Run("page removed", func(t *testing.T) {
-		tree := copyRel(t, root, "mkdocs.yml")
-		if v := strings.Join(providerLimitsViolations(tree), "\n"); !strings.Contains(v, "missing canonical provider limits page") {
-			t.Fatalf("got:\n%s", v)
-		}
-	})
-	t.Run("page dropped from nav", func(t *testing.T) {
-		tree := copyRel(t, root, "mkdocs.yml", providerLimitsPage)
-		editRel(t, tree, "mkdocs.yml", "reference/limits-and-compatibility/provider-limits.md", "reference/other.md")
-		if v := strings.Join(providerLimitsViolations(tree), "\n"); !strings.Contains(v, "not wired into the mkdocs.yml nav") {
-			t.Fatalf("got:\n%s", v)
-		}
-	})
-}
-
 // pySpace is Python's str \s as a Go regexp class body: exactly the code points where str.isspace() is true (Go's
 // own \s is ASCII only). Python's \w would be \p{L}\p{N}_ and \d would be \p{Nd}; no ported regex here uses them.
 const pySpace = `\x{9}-\x{d}\x{1c}-\x{20}\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`

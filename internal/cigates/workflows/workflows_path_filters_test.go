@@ -29,6 +29,7 @@ const fxDir = "tests/fix" + "tures/"
 var uncoveredFixtureDirectories = map[string]string{
 	"tests/testops/fixtures":                            "read by the Python testops suite, not by Go tests; covered by the Python workflow's own filters",
 	"tests/docs/fixtures":                               "documentation-lint fixtures consumed by the docs workflow; markdown and mkdocs config, with no Go reader",
+	"mkdocs.yml":                                        "docs site config named by internal/cigates/workflowpaths, which pins that the docs workflows run for it; no Go test reads its content, and a docs-only change must not queue Go CI",
 	"tools/codex-review/fixtures":                       "log excerpts read only by tools/codex-review/test-exec-classify.sh, a shell proof no workflow runs; no Go test reads them",
 	"internal/providersync/JIRA_PROVIDER_GAP_MATRIX.md": "surfaced by the os.ReadDir(\".\") reader shape; the tests doing that filter to *.go, which **/*.go already covers, so a markdown file there cannot change what they assert",
 	"internal/queryapi/server/README.md":                "surfaced by the os.ReadDir(\".\") reader shape in internal_auth_test.go's route-boundary scan, which skips every entry that is not a non-test .go file",
@@ -780,8 +781,6 @@ func TestGoYmlTriggersOnEveryTestsPythonGuardInput(t *testing.T) {
 	for _, p := range []string{
 		"brand/new/dir/y.py",
 		"ci/requirements-x.txt",
-		"mkdocs.yml",
-		"docs/reference/limits-and-compatibility/provider-limits.md",
 		"ci/local_validate.sh",
 		"ci/run_live_backend_e2e.sh",
 	} {

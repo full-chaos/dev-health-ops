@@ -1,12 +1,17 @@
-package venueoracle
+// Package adminroutes is the one table of the routes admin.Routes serves, and
+// the outermost middleware that answers each of them Cache-Control: no-store.
+// The venue oracle reads the same table for its declared "admin no-store"
+// divergence. Other /api/v1/admin-prefixed packages are not in it.
+package adminroutes
 
-import "strings"
+import (
+	"net/http"
+	"sort"
+)
 
-// adminNoStoreRoutes is the "METHOD pattern" table of internal/apiservice/admin
-// Routes: the only routes the declared "admin no-store" divergence covers. A
-// test in package admin_test keeps it equal to the real route table. Other
-// /api/v1/admin-prefixed packages are not in it.
-var adminNoStoreRoutes = []string{
+// Table is every "METHOD pattern" of admin.Routes. A test in package admin_test
+// keeps it equal to the real route table.
+var Table = []string{
 	"DELETE /api/v1/admin/credentials/{provider}/{name}",
 	"DELETE /api/v1/admin/ip-allowlist/{entry_id}",
 	"DELETE /api/v1/admin/llm-settings",
@@ -83,34 +88,37 @@ var adminNoStoreRoutes = []string{
 	"PUT /api/v1/admin/settings/{category}/{key}",
 }
 
-// AdminNoStoreRoutes returns the table, for the test that pins it to the real
-// admin route table.
-func AdminNoStoreRoutes() []string { return append([]string(nil), adminNoStoreRoutes...) }
+var matcher = func() *http.ServeMux {
+	mux := http.NewServeMux()
+	none := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	for _, entry := range Table {
+		mux.Handle(entry, none)
+	}
+	return mux
+}()
 
-func adminNoStoreRoute(method, path string) bool {
-	if i := strings.IndexByte(path, '?'); i >= 0 {
-		path = path[:i]
-	}
-	segments := strings.Split(path, "/")
-	for _, entry := range adminNoStoreRoutes {
-		routeMethod, pattern, _ := strings.Cut(entry, " ")
-		if routeMethod != method {
-			continue
+// Matches reports whether a request of method and path is served by an admin
+// route, by net/http's own pattern rules.
+func Matches(r *http.Request) bool {
+	_, pattern := matcher.Handler(r)
+	return pattern != ""
+}
+
+// NoStore sets Cache-Control: no-store before next runs on every request that
+// Matches, so a response written by any later layer (scope, origin check,
+// rate limit, body bound, guard, handler) carries it.
+func NoStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if Matches(r) {
+			w.Header().Set("Cache-Control", "no-store")
 		}
-		want := strings.Split(pattern, "/")
-		if len(want) != len(segments) {
-			continue
-		}
-		matched := true
-		for i := range want {
-			if !(strings.HasPrefix(want[i], "{") && strings.HasSuffix(want[i], "}") && segments[i] != "") && want[i] != segments[i] {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return true
-		}
-	}
-	return false
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Sorted returns a sorted copy of Table.
+func Sorted() []string {
+	out := append([]string(nil), Table...)
+	sort.Strings(out)
+	return out
 }

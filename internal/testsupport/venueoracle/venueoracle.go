@@ -30,6 +30,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/adminroutes"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"log/slog"
@@ -574,11 +575,12 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 // intendedNoStore is the declared divergence "admin no-store": every Go admin
 // route answers Cache-Control: no-store, which the frozen Python goldens never
 // carried. It applies only to a route of the admin route table
-// (adminNoStoreRoutes), only when the golden has no cache-control, and only for
+// (adminroutes.Table), only when the golden has no cache-control, and only for
 // exactly "no-store"; any other Go value, a golden that has the header, or an
 // admin-prefixed route of another package still compares.
 func intendedNoStore(request Request, py, gr Response) bool {
-	if !adminNoStoreRoute(request.Method, request.Path) {
+	target, err := url.ParseRequestURI(request.Path)
+	if err != nil || !adminroutes.Matches(&http.Request{Method: request.Method, URL: target}) {
 		return false
 	}
 	if _, has := py.Headers["cache-control"]; has {

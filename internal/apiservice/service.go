@@ -30,6 +30,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/adminroutes"
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
@@ -596,7 +597,7 @@ func NewServer(
 	routes []httpapi.Route,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
-	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
+	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, DecodedPathRouting, adminroutes.NoStore}, scope...)
 	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, pyheaders.SecurityHeaders, pyheaders.NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",

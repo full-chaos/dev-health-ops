@@ -2,7 +2,6 @@ package oidc
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
@@ -40,38 +39,22 @@ func (f *fakeProviders) readCount() int {
 	return f.reads
 }
 
-func (f *fakeProviders) ProviderHead(_ context.Context, id uuid.UUID) (ProviderHead, error) {
-	row := f.read()
-	if row.ID != id {
-		return ProviderHead{}, ErrProviderNotFound
-	}
-	return ProviderHead{ID: row.ID, OrgID: row.OrgID, Protocol: row.Protocol, Status: row.Status}, nil
+func (row storedRow) stored() StoredProvider {
+	return StoredProvider{ID: row.ID, OrgID: row.OrgID, Protocol: row.Protocol, Status: row.Status, Config: row.Config}
 }
 
-func (f *fakeProviders) DefaultProviderHead(_ context.Context, orgID uuid.UUID, protocol string) (ProviderHead, error) {
+func (f *fakeProviders) ProviderRow(_ context.Context, id uuid.UUID) (StoredProvider, error) {
+	row := f.read()
+	if row.ID != id {
+		return StoredProvider{}, ErrProviderNotFound
+	}
+	return row.stored(), nil
+}
+
+func (f *fakeProviders) DefaultProviderRow(_ context.Context, orgID uuid.UUID, protocol string) (StoredProvider, error) {
 	row := f.read()
 	if row.OrgID != orgID || row.Protocol != protocol || row.Status != "active" {
-		return ProviderHead{}, ErrProviderNotFound
+		return StoredProvider{}, ErrProviderNotFound
 	}
-	return ProviderHead{ID: row.ID, OrgID: row.OrgID, Protocol: row.Protocol, Status: row.Status}, nil
-}
-
-func (f *fakeProviders) Provider(_ context.Context, id uuid.UUID) (Provider, error) {
-	row := f.read()
-	if row.ID != id {
-		return Provider{}, ErrProviderNotFound
-	}
-	out := Provider{ID: row.ID, OrgID: row.OrgID, Protocol: row.Protocol, Status: row.Status}
-	var err error
-	if _, oauth := oauthProviderOf(row.Protocol); oauth {
-		if out.OAuth, err = decodeOAuthConfig(row.Config); err == nil {
-			err = checkOAuthBase(row.Protocol, out.OAuth)
-		}
-	} else {
-		out.Config, err = decodeProviderConfig(row.Config)
-	}
-	if err != nil {
-		return Provider{}, fmt.Errorf("%w: config: %w", ErrProviderConfig, err)
-	}
-	return out, nil
+	return row.stored(), nil
 }

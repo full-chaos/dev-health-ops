@@ -401,7 +401,8 @@ func TestOAuthOutcomesRecordedOnce(t *testing.T) {
 	counts := outcomeCounts(t, reader)
 	for key, want := range map[string]int64{
 		"oauth_authorize/denied/not_entitled": 1, "oauth_callback/denied/not_entitled": 1,
-		"oauth_authorize/success/accepted": 2, "oauth_callback/success/accepted": 1,
+		"oauth_authorize/success/accepted": 1, "oauth_authorize_by_type/success/accepted": 1,
+		"oauth_callback/success/accepted": 1,
 	} {
 		if counts[key] != want {
 			t.Errorf("auth.oidc.outcomes %s = %d, want %d (all: %v)", key, counts[key], want, counts)

@@ -193,30 +193,36 @@ func callbackPath(providerID uuid.UUID) string {
 
 func loginNonceCookieName(flowID string) string { return "dho_oidc_login_nonce_" + flowID }
 
-// loadProvider runs the checks go-api runs before any flow work, in its order:
-// 404, entitlement, protocol, status.
-// admit runs the provider checks in one fixed order, before the stored config
-// or any request body is decoded: 404 for an unknown provider, 402 for an
-// organization without the sso_saml entitlement, 400 for another protocol or
-// an inactive provider.
-func (s *Service) admit(ctx context.Context, providerID uuid.UUID, spec protocolSpec) (ProviderHead, *Error) {
-	head, err := s.cfg.Providers.ProviderHead(ctx, providerID)
+// admit reads the provider row once and runs the provider checks on it in
+// go-api's order, before the stored config or any request body is decoded:
+// 404 for an unknown provider, 402 for an organization without the sso_saml
+// entitlement, 400 for another protocol or an inactive provider. The flow
+// then decodes this same row, never a second read.
+func (s *Service) admit(ctx context.Context, providerID uuid.UUID, spec protocolSpec) (StoredProvider, *Error) {
+	row, err := s.cfg.Providers.ProviderRow(ctx, providerID)
 	if errors.Is(err, ErrProviderNotFound) {
-		return ProviderHead{}, deny(http.StatusNotFound, ReasonMalformed, spec.notFound)
+		return StoredProvider{}, deny(http.StatusNotFound, ReasonMalformed, spec.notFound)
 	}
 	if err != nil {
-		return ProviderHead{}, internal(ReasonStoreUnavailable, err)
+		return StoredProvider{}, internal(ReasonStoreUnavailable, err)
 	}
-	if failure := s.entitled(ctx, head.OrgID); failure != nil {
-		return ProviderHead{}, failure
+	if failure := s.entitled(ctx, row.OrgID); failure != nil {
+		return StoredProvider{}, failure
 	}
-	if !spec.accepts(head.Protocol) {
-		return ProviderHead{}, deny(http.StatusBadRequest, ReasonMalformed, spec.wrongProtocol)
+	if failure := spec.check(row); failure != nil {
+		return StoredProvider{}, failure
 	}
-	if head.Status != "active" {
-		return ProviderHead{}, deny(http.StatusBadRequest, ReasonMalformed, spec.inactive)
+	return row, nil
+}
+
+// decodeAdmitted decodes an admitted row; a stored column the flow cannot
+// read is a 500.
+func decodeAdmitted(stored StoredProvider) (Provider, *Error) {
+	row, err := decodeProvider(stored)
+	if err != nil {
+		return Provider{}, internal(ReasonDependency, err)
 	}
-	return head, nil
+	return row, nil
 }
 
 // entitled is the sso_saml entitlement gate for an organization (402).
@@ -244,40 +250,41 @@ var oidcSpec = protocolSpec{
 	notFound: detailProviderAbsent, wrongProtocol: "Provider is not OIDC", inactive: "SSO provider is not active",
 }
 
-func (s *Service) loadProvider(ctx context.Context, providerID uuid.UUID, spec protocolSpec) (Provider, *Error) {
-	head, failure := s.admit(ctx, providerID, spec)
-	if failure != nil {
-		return Provider{}, failure
+// check is the protocol and status part of the provider checks.
+func (spec protocolSpec) check(row StoredProvider) *Error {
+	if !spec.accepts(row.Protocol) {
+		return deny(http.StatusBadRequest, ReasonMalformed, spec.wrongProtocol)
 	}
-	row, err := s.cfg.Providers.Provider(ctx, providerID)
-	switch {
-	case errors.Is(err, ErrProviderNotFound):
-		return Provider{}, deny(http.StatusNotFound, ReasonMalformed, spec.notFound)
-	case errors.Is(err, ErrProviderConfig):
-		return Provider{}, internal(ReasonDependency, err)
-	case err != nil:
-		return Provider{}, internal(ReasonStoreUnavailable, err)
-	case row.OrgID != head.OrgID || row.Protocol != head.Protocol || row.Status != head.Status:
-		// The row changed between the two reads: the checks decided for the old one.
-		return Provider{}, internal(ReasonStoreUnavailable, errors.New("provider row changed during the request"))
+	if row.Status != "active" {
+		return deny(http.StatusBadRequest, ReasonMalformed, spec.inactive)
 	}
-	return row, nil
+	return nil
 }
 
 // Authorize starts a flow: a sealed single-use state, PKCE S256 always, and a
 // per-flow login-nonce cookie that binds the state to this browser.
 func (s *Service) Authorize(ctx context.Context, providerID uuid.UUID, redirectURI string) (AuthorizeResult, error) {
-	result, failure := s.authorize(ctx, providerID, redirectURI)
+	row, failure := s.admit(ctx, providerID, oidcSpec)
 	if failure != nil {
 		s.refused(ctx, routeAuthorize, providerID, failure)
 		return AuthorizeResult{}, failure
 	}
-	s.succeeded(ctx, routeAuthorize, providerID, nil)
+	return s.authorizeAdmitted(ctx, row, redirectURI)
+}
+
+// authorizeAdmitted is Authorize for a row admit already checked.
+func (s *Service) authorizeAdmitted(ctx context.Context, admitted StoredProvider, redirectURI string) (AuthorizeResult, error) {
+	result, failure := s.authorize(ctx, admitted, redirectURI)
+	if failure != nil {
+		s.refused(ctx, routeAuthorize, admitted.ID, failure)
+		return AuthorizeResult{}, failure
+	}
+	s.succeeded(ctx, routeAuthorize, admitted.ID, nil)
 	return result, nil
 }
 
-func (s *Service) authorize(ctx context.Context, providerID uuid.UUID, redirectURI string) (AuthorizeResult, *Error) {
-	row, failure := s.loadProvider(ctx, providerID, oidcSpec)
+func (s *Service) authorize(ctx context.Context, admitted StoredProvider, redirectURI string) (AuthorizeResult, *Error) {
+	row, failure := decodeAdmitted(admitted)
 	if failure != nil {
 		return AuthorizeResult{}, failure
 	}
@@ -351,12 +358,22 @@ type Login struct {
 // Callback completes a flow. The returned cookie, when non-nil, clears the
 // flow's login-nonce cookie and must be sent on success and failure alike.
 func (s *Service) Callback(ctx context.Context, providerID uuid.UUID, in CallbackInput) (Login, *http.Cookie, error) {
-	login, clear, failure := s.callback(ctx, providerID, in)
+	row, failure := s.admit(ctx, providerID, oidcSpec)
 	if failure != nil {
 		s.refused(ctx, routeCallback, providerID, failure)
+		return Login{}, nil, failure
+	}
+	return s.callbackAdmitted(ctx, row, in)
+}
+
+// callbackAdmitted is Callback for a row admit already checked.
+func (s *Service) callbackAdmitted(ctx context.Context, admitted StoredProvider, in CallbackInput) (Login, *http.Cookie, error) {
+	login, clear, failure := s.callback(ctx, admitted, in)
+	if failure != nil {
+		s.refused(ctx, routeCallback, admitted.ID, failure)
 		return Login{}, clear, failure
 	}
-	s.succeeded(ctx, routeCallback, providerID, &login.PrincipalID)
+	s.succeeded(ctx, routeCallback, admitted.ID, &login.PrincipalID)
 	return login, clear, nil
 }
 
@@ -367,8 +384,12 @@ const (
 )
 
 // record counts one outcome. Only succeeded and refused call it, so every
-// outcome of every route is counted and logged exactly once.
+// outcome of every route is counted and logged exactly once. It marks the
+// request's outcomeMark, so a panic after this point is not counted again.
 func (s *Service) record(ctx context.Context, route, outcome string, reason Reason) {
+	if mark, ok := ctx.Value(outcomeMarkKey{}).(*outcomeMark); ok {
+		mark.recorded = true
+	}
 	s.outcomes.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route),
 		attribute.String("outcome", outcome), attribute.String("reason", string(reason))))
 }
@@ -400,8 +421,8 @@ func (s *Service) refused(ctx context.Context, route string, providerID uuid.UUI
 	s.cfg.Logger.Log(ctx, level, "auth oidc: request refused", attrs...)
 }
 
-func (s *Service) callback(ctx context.Context, providerID uuid.UUID, in CallbackInput) (Login, *http.Cookie, *Error) {
-	row, failure := s.loadProvider(ctx, providerID, oidcSpec)
+func (s *Service) callback(ctx context.Context, admitted StoredProvider, in CallbackInput) (Login, *http.Cookie, *Error) {
+	row, failure := decodeAdmitted(admitted)
 	if failure != nil {
 		return Login{}, nil, failure
 	}

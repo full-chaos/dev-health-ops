@@ -13,7 +13,7 @@
 //	transport-nil        an assignment of nil to the Transport field of a net/http.Client
 //	default-transport    any use of net/http.DefaultTransport
 //	default-client       any use of net/http.DefaultClient or the package functions Get, Head, Post, PostForm
-//	env-proxy            any use of net/http.ProxyFromEnvironment, net/http.ProxyURL or httpproxy.FromEnvironment, and a
+//	proxy                any use of net/http.ProxyFromEnvironment, net/http.ProxyURL or httpproxy.FromEnvironment, and a
 //	                     Proxy field of a net/http.Transport set (in a literal or by assignment) to anything but nil
 //
 // Every site needs a row in allow.tsv (file, symbol, kind, count, reason): the transport helpers themselves and the
@@ -173,7 +173,7 @@ func kindsOf(info *types.Info, node ast.Node) []string {
 			}
 		case isNamed(tv.Type, "Transport"):
 			if value, ok := fieldValue(n, "Proxy", -1); ok && !isNil(info, value) {
-				return []string{"env-proxy"}
+				return []string{"proxy"}
 			}
 		}
 	case *ast.CallExpr:
@@ -198,7 +198,7 @@ func kindsOf(info *types.Info, node ast.Node) []string {
 			case selector.Sel.Name == "Transport" && isNamed(owner, "Client") && isNil(info, n.Rhs[i]):
 				kinds = append(kinds, "transport-nil")
 			case selector.Sel.Name == "Proxy" && isNamed(owner, "Transport") && !isNil(info, n.Rhs[i]):
-				kinds = append(kinds, "env-proxy")
+				kinds = append(kinds, "proxy")
 			}
 		}
 		return kinds
@@ -215,11 +215,11 @@ func kindsOf(info *types.Info, node ast.Node) []string {
 			case "DefaultClient", "Get", "Head", "Post", "PostForm":
 				return []string{"default-client"}
 			case "ProxyFromEnvironment", "ProxyURL":
-				return []string{"env-proxy"}
+				return []string{"proxy"}
 			}
 		case "golang.org/x/net/http/httpproxy":
 			if obj.Name() == "FromEnvironment" {
-				return []string{"env-proxy"}
+				return []string{"proxy"}
 			}
 		}
 	}

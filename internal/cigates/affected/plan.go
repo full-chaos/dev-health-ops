@@ -502,7 +502,9 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 	}
 	in := planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, goFilesFull: *goFilesFull,
 		always: alwaysList(), log: stderr}
-	if judgedEvents[*event] && len(changed) > 0 {
+	// A root that does not exist (a synthetic go list) has no code to scan: no tables, so every non-Go path is FULL and
+	// a .go plan is the import closure and always.tsv.
+	if _, statErr := os.Stat(*root); judgedEvents[*event] && len(changed) > 0 && statErr == nil {
 		// The read tables of the head tree and the guard over its code: the tables are planner inputs (a change to them
 		// is FULL), so they are the merge base's whenever they matter.
 		dir := filepath.Join(*root, filepath.FromSlash(plannerDirs[1]))

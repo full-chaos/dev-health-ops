@@ -24,7 +24,7 @@ import (
 var publicReadOracle = map[string][]string{
 	"users": {"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
 		"is_active", "is_verified", "is_superuser", "token_version"},
-	"memberships": {"user_id", "org_id", "role"},
+	"memberships": {"user_id", "org_id", "role", "joined_at", "created_at"},
 	"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
 		"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
 	"organizations":          {"id", "slug", "name", "is_active", "tier"},

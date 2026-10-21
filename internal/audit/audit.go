@@ -72,6 +72,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -119,7 +120,8 @@ func (o Outcome) Valid() bool {
 //
 // Attributes must carry no credential material. The lineage's naming guard
 // does not inspect jsonb contents, so that rule is the writer's to keep and
-// PR 2's allowlist is what will enforce it (G-65).
+// PR 2's allowlist is what will enforce it (G-65). The row's client_ip is the
+// client address bound to the context (internal/auth/clientaddr), or NULL.
 type AuditEvent struct {
 	EventType          string
 	Outcome            Outcome
@@ -129,6 +131,22 @@ type AuditEvent struct {
 	PolicyRevision     *int64
 	Attributes         map[string]any
 	RequestID          *string
+}
+
+func (a AuditEvent) validate() error {
+	switch {
+	case a.EventType == "":
+		return fmt.Errorf("%w: audit event_type is empty", ErrMutationFailed)
+	case !a.Outcome.Valid():
+		return fmt.Errorf("%w: audit outcome %q is outside the permitted set", ErrMutationFailed, a.Outcome)
+	case ValidateAttributes(a.Attributes) != nil:
+		return ValidateAttributes(a.Attributes)
+	case validateEventType(a.EventType) != nil:
+		return validateEventType(a.EventType)
+	case a.RequestID != nil && validateRequestID(*a.RequestID) != nil:
+		return validateRequestID(*a.RequestID)
+	}
+	return nil
 }
 
 // OutboxEvent is one provisioning-event.v1 event (the outbox row is the
@@ -329,8 +347,8 @@ func (e errRow) Scan(...any) error { return e.err }
 // error. The number of state rows it changed is counted by the database, not
 // reported by the callback: the guard trigger of migration 0006 counts every
 // row written to a guarded table other than the audit and outbox tables, and
-// migration 0013's create guard counts every principal or user row a
-// mutation inserts. Zero rolls everything back with ErrNoStateChange.
+// migration 0013's create guard counts every principal, user or (0014)
+// session row a mutation inserts. Zero rolls everything back with ErrNoStateChange.
 //
 // Events lists the provisioning events of the mutation, one or more (one
 // mutation may create a principal, its user and its external identity).
@@ -345,19 +363,16 @@ type Mutation struct {
 }
 
 func (m Mutation) validate() error {
-	switch {
-	case m.Apply == nil:
+	if m.Apply == nil {
 		return fmt.Errorf("%w: no state mutation", ErrMutationFailed)
-	case m.Audit.EventType == "":
-		return fmt.Errorf("%w: audit event_type is empty", ErrMutationFailed)
-	case !m.Audit.Outcome.Valid():
-		return fmt.Errorf("%w: audit outcome %q is outside the permitted set", ErrMutationFailed, m.Audit.Outcome)
-	case ValidateAttributes(m.Audit.Attributes) != nil:
-		return ValidateAttributes(m.Audit.Attributes)
-	case validateEventType(m.Audit.EventType) != nil:
-		return validateEventType(m.Audit.EventType)
-	case m.Audit.RequestID != nil && validateRequestID(*m.Audit.RequestID) != nil:
-		return validateRequestID(*m.Audit.RequestID)
+	}
+	if err := m.Audit.validate(); err != nil {
+		return err
+	}
+	if appendOnlyEventTypes[m.Audit.EventType] {
+		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, m.Audit.EventType)
+	}
+	switch {
 	case len(m.Events) > 0 && m.OffStream != "":
 		return fmt.Errorf("%w: a mutation has outbox events or is off the stream, not both", ErrMutationFailed)
 	case len(m.Events) == 0 && m.OffStream == "":
@@ -527,10 +542,10 @@ func insertAuditEvent(ctx context.Context, tx pgx.Tx, schema authschema.Validate
 	_, err = tx.Exec(ctx, `
 		INSERT INTO `+authschema.Quote(schema)+`.security_audit_events
 		    (event_type, outcome, actor_principal_id, subject_principal_id,
-		     organization_id, policy_revision, attributes, request_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		     organization_id, policy_revision, attributes, request_id, client_ip)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::inet)`,
 		a.EventType, string(a.Outcome), a.ActorPrincipalID, a.SubjectPrincipalID,
-		a.OrganizationID, a.PolicyRevision, attributes, a.RequestID)
+		a.OrganizationID, a.PolicyRevision, attributes, a.RequestID, clientaddr.Text(ctx))
 	if err != nil {
 		return fmt.Errorf("%w: inserting the audit row: %w", ErrMutationFailed, err)
 	}

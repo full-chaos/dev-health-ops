@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/transport-error.v1.schema.json",
+  "title": "Auth Control Plane transport error envelope (v1 wire format)",
+  "description": "The body auth-service's shared HTTP transport (internal/auth/httpapi) writes when it answers before any route runs: 400 (a body that could not be read), 404 (no route), 405 (method not allowed, with Allow), 413 (body over the limit), 429 (the route's rate bucket or the in-flight cap is spent, with Retry-After) and 500 (a recovered panic). A route answers error.v1; this envelope is only the transport's own (acp ruling 2026-10-19 on #4519).\n\nEvery code has ONE fixed message: the text is a compile-time constant per code (httpapi.message), so the body has no slot a path, a dependency error or a request body can reach. The message is therefore one of six fixed texts, never free text. request_id is the server-minted transport id (a UUID; auth-service never reuses a client X-Request-ID), the same value as the X-Request-ID header.",
+  "type": "object",
+  "required": [
+    "error"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "request_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "not_found",
+            "method_not_allowed",
+            "payload_too_large",
+            "rate_limited",
+            "invalid_request",
+            "internal_error"
+          ],
+          "description": "The closed transport code set (httpapi.Code)."
+        },
+        "message": {
+          "enum": [
+            "no route matches this path",
+            "this method is not allowed on this path",
+            "the request body exceeds the configured limit",
+            "too many requests for this route",
+            "the request body could not be read",
+            "the request could not be processed"
+          ],
+          "description": "The fixed text of the code (httpapi.message). The text is one of the six transport texts; which text goes with which code is the transport's constant table, which TestTransportErrorGoldensAreWhatTheTransportWrites pins against the accept fixtures."
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The server-minted transport request id, lowercase UUID text."
+        }
+      },
+      "description": "One transport error."
+    }
+  }
+}

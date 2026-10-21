@@ -277,3 +277,58 @@ func TestWebAuthSecretCannotPointAtTheMintKey(t *testing.T) {
 		t.Fatalf("a distinct web.authSecret must render: %v\n%.300s", err, out)
 	}
 }
+
+// Class rule: nothing that web can mount or read may name the HS256 key's Secret, the shared Secret, or the key
+// JWT_SECRET_KEY: web.authSecret, web.extraEnv secretKeyRef, web and web.localDevelopment secret volumes (plain and
+// projected), and a literal web.env.AUTH_SECRET equal to the key.
+func TestWebCannotReachTheMintKeyThroughAnySelector(t *testing.T) {
+	base := []string{"--set", "web.env.BACKEND_URL=http://x", "--set", "web.authSecret.secretName=web-auth-ok"}
+	ext := []string{"--set", "secrets.create=false", "--set", "secrets.externalSecretName=Shared-EXT", "--set", "hs256Secret.externalSecretName=HS256-Ext"}
+	envJSON := func(name, key string) []string {
+		return []string{"--set-json", `web.extraEnv=[{"name":"X","valueFrom":{"secretKeyRef":{"name":"` + name + `","key":"` + key + `"}}}]`}
+	}
+	volJSON := func(path, body string) []string {
+		return []string{"--set-json", path + `=[{"name":"v","` + body + `}]`}
+	}
+	dev := []string{"--set", "web.localDevelopment.enabled=true", "--set", "web.env.NODE_ENV=development"}
+	cases := map[string][]string{
+		"authSecret external hs256, upper in values":  append(append([]string{}, ext...), "--set", "web.authSecret.secretName=hs256-ext"),
+		"authSecret external shared, upper in values": append(append([]string{}, ext...), "--set", "web.authSecret.secretName=shared-ext"),
+		"extraEnv hs256 Secret":                       envJSON("hs256-dev-health-hs256", "OTHER"),
+		"extraEnv shared Secret, folded":              envJSON(" HS256-Dev-Health-Secrets ", "OTHER"),
+		"extraEnv key JWT_SECRET_KEY":                 envJSON("some-secret", "JWT_SECRET_KEY"),
+		"extraEnv external hs256, upper in values":    append(append([]string{}, ext...), envJSON("hs256-ext", "OTHER")...),
+		"extraEnv external shared, upper in values":   append(append([]string{}, ext...), envJSON("shared-ext", "OTHER")...),
+		"extraVolumes secret hs256":                   volJSON("web.extraVolumes", `secret":{"secretName":"hs256-dev-health-hs256"}`),
+		"extraVolumes secret shared":                  volJSON("web.extraVolumes", `secret":{"secretName":"hs256-dev-health-secrets"}`),
+		"extraVolumes secret item key":                volJSON("web.extraVolumes", `secret":{"secretName":"ok","items":[{"key":"JWT_SECRET_KEY","path":"k"}]}`),
+		"extraVolumes projected hs256":                volJSON("web.extraVolumes", `projected":{"sources":[{"secret":{"name":"hs256-dev-health-hs256"}}]}`),
+		"extraVolumes projected item key":             volJSON("web.extraVolumes", `projected":{"sources":[{"secret":{"name":"ok","items":[{"key":"JWT_SECRET_KEY","path":"k"}]}}]}`),
+		"localDevelopment volumes secret hs256":       append(append([]string{}, dev...), volJSON("web.localDevelopment.extraVolumes", `secret":{"secretName":"hs256-dev-health-hs256"}`)...),
+		"localDevelopment volumes projected shared":   append(append([]string{}, dev...), volJSON("web.localDevelopment.extraVolumes", `projected":{"sources":[{"secret":{"name":"hs256-dev-health-secrets"}}]}`)...),
+		"literal AUTH_SECRET equals the HS256 key":    {"--set", "web.env.AUTH_SECRET=same-value", "--set", "secrets.data.JWT_SECRET_KEY=same-value"},
+		"external projected hs256, upper in values":   append(append([]string{}, ext...), volJSON("web.extraVolumes", `projected":{"sources":[{"secret":{"name":"hs256-ext"}}]}`)...),
+	}
+	for name, args := range cases {
+		out, err := helmOut(t, true, append(append([]string{}, base...), args...)...)
+		if err == nil || !strings.Contains(out, "must not name the HS256 key's Secret") {
+			t.Fatalf("%s: was not refused: err=%v\n%.300s", name, err, out)
+		}
+	}
+	controls := [][]string{
+		envJSON("other-secret", "OTHER"),
+		volJSON("web.extraVolumes", `secret":{"secretName":"other-secret"}`),
+		volJSON("web.extraVolumes", `projected":{"sources":[{"secret":{"name":"other-secret"}}]}`),
+		append(append([]string{}, dev...), volJSON("web.localDevelopment.extraVolumes", `secret":{"secretName":"other-secret"}`)...),
+	}
+	for _, args := range controls {
+		out, err := helmOut(t, true, append(append([]string{}, base...), args...)...)
+		if err != nil {
+			t.Fatalf("a web selector naming another Secret must render: %v\n%.300s", err, out)
+		}
+		web, _ := docByName(t, out, "Deployment", "hs256-dev-health-web")
+		if strings.Contains(web, "envFrom") {
+			t.Fatalf("the web Deployment carries an envFrom:\n%s", web)
+		}
+	}
+}

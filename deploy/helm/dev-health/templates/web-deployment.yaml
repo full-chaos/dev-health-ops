@@ -49,16 +49,13 @@ spec:
             key of its own Secret; web.enabled without either fails the render.
             */}}
             {{- if .Values.web.env.AUTH_SECRET }}
+            {{- if and .Values.secrets.data.JWT_SECRET_KEY (eq (toString .Values.web.env.AUTH_SECRET) (toString .Values.secrets.data.JWT_SECRET_KEY)) }}
+            {{- fail "web.env.AUTH_SECRET must not name the HS256 key's Secret, the shared Secret, or the key JWT_SECRET_KEY (CHAOS-10446): its value equals secrets.data.JWT_SECRET_KEY" }}
+            {{- end }}
             - name: AUTH_SECRET
               value: {{ .Values.web.env.AUTH_SECRET | quote }}
             {{- else if .Values.web.authSecret.secretName }}
-            {{- /* web's session secret is never the HS256 key's Secret, the shared Secret, or the key JWT_SECRET_KEY */}}
-            {{- $webAuthName := lower (trim .Values.web.authSecret.secretName) }}
-            {{- $hs256Name := lower (trim (.Values.hs256Secret.externalSecretName | default (ternary (printf "%s-hs256" (include "dev-health.fullname" .)) "" .Values.secrets.create))) }}
-            {{- $sharedName := lower (trim ((ternary (printf "%s-secrets" (include "dev-health.fullname" .)) (.Values.secrets.externalSecretName | default "") .Values.secrets.create))) }}
-            {{- if or (and $hs256Name (eq $webAuthName $hs256Name)) (and $sharedName (eq $webAuthName $sharedName)) (eq (trim (.Values.web.authSecret.key | default "AUTH_SECRET")) "JWT_SECRET_KEY") }}
-            {{- fail "web.authSecret must not name the HS256 key's Secret, the shared Secret, or the key JWT_SECRET_KEY (CHAOS-10446): web would hold a token-minting key" }}
-            {{- end }}
+            {{- include "dev-health.webSecretGuard" (dict "ctx" . "name" .Values.web.authSecret.secretName "key" (.Values.web.authSecret.key | default "AUTH_SECRET") "what" "web.authSecret") }}
             - name: AUTH_SECRET
               valueFrom:
                 secretKeyRef:
@@ -73,6 +70,11 @@ spec:
             - name: REDIS_URL
               value: {{ include "dev-health.redisURL" . | quote }}
             {{- end }}
+          {{- range .Values.web.extraEnv | default (list) }}
+          {{- with .valueFrom }}{{- with .secretKeyRef }}
+          {{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" .name "key" .key "what" "web.extraEnv secretKeyRef") }}
+          {{- end }}{{- end }}
+          {{- end }}
           {{- with .Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -105,6 +107,16 @@ spec:
       {{- $webVolumes := .Values.web.extraVolumes | default (list) }}
       {{- if .Values.web.localDevelopment.enabled }}
       {{- $webVolumes = concat $webVolumes (.Values.web.localDevelopment.extraVolumes | default (list)) }}
+      {{- end }}
+      {{- range $webVolumes }}
+      {{- with .secret }}
+      {{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" .secretName "key" "" "what" "a web secret volume") }}
+      {{- range .items | default (list) }}{{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" "" "key" .key "what" "a web secret volume item") }}{{- end }}
+      {{- end }}
+      {{- with .projected }}{{- range .sources | default (list) }}{{- with .secret }}
+      {{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" .name "key" "" "what" "a web projected secret volume") }}
+      {{- range .items | default (list) }}{{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" "" "key" .key "what" "a web projected secret volume item") }}{{- end }}
+      {{- end }}{{- end }}{{- end }}
       {{- end }}
       {{- with $webVolumes }}
       volumes:

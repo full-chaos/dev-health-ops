@@ -329,6 +329,9 @@ func TestGitLabCatalogStartsAtTheEvidence(t *testing.T) {
 		api := org + ":gitlab:" + testGitLabNativeProjectID("org/team-a/api")
 		insertEvidenceWorkItem(t, ctx, conn, org, "gitlab:org/team-a/api#1", "gitlab", api, "", catalogEvidenceSecond)
 		insertEvidenceWorkItem(t, ctx, conn, org, "gitlab:org/team-a/api#2", "gitlab", api, "", catalogEvidenceSecond.Add(time.Hour))
+		// No evidence: an item with no time (the epoch), and an item of another provider with the same project id.
+		insertEvidenceWorkItem(t, ctx, conn, org, "gitlab:org/team-a/api#3", "gitlab", api, "", time.Unix(0, 0).UTC())
+		insertEvidenceWorkItem(t, ctx, conn, org, "gh:acme/api#3", "github", api, "", catalogEvidenceFirst)
 		want := catalogEvidenceWant(t, "gitlab grants", grants, func(fact string) (time.Time, bool) {
 			return catalogEvidenceSecond, factKeyOf(fact) == api
 		})

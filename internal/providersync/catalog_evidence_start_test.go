@@ -139,15 +139,20 @@ func TestCatalogEvidenceCarryRetiresTheOldKeyAsAnEmptyInterval(t *testing.T) {
 }
 
 // TestCatalogEvidenceStartOfANewFact: a fact the scope holds no row of starts at
-// min(evidence, the writer's start); a fact it holds keeps the writer's start.
+// min(evidence, the writer's start); a fact it holds any row of (an empty
+// interval too, and a row newer than the run) keeps the writer's start.
 func TestCatalogEvidenceStartOfANewFact(t *testing.T) {
 	at, sync, evidence := catalogTestTime(20), catalogTestTime(10), catalogTestTime(1)
 	emptyAt := catalogTestTime(5)
+	future := at.Add(time.Hour)
 	rows := []catalogEvidenceRow{
 		catalogTestRow("t", "held", sync, nil, sync),
 		catalogTestRow("t", "voided", emptyAt, &emptyAt, emptyAt),
+		// A newer run retracted the fact: only its empty interval, written after this run, is left.
+		catalogTestRow("t", "retracted later", future, &future, future),
 	}
-	evidenceOf := catalogTestEvidence(map[string]time.Time{"held": evidence, "new": evidence, "voided": evidence, "late": catalogTestTime(25)})
+	evidenceOf := catalogTestEvidence(map[string]time.Time{"held": evidence, "new": evidence, "voided": evidence,
+		"retracted later": evidence, "late": catalogTestTime(25)})
 	plan := planCatalogEvidenceCarry(rows, evidenceOf, at)
 	starts := CatalogEvidenceStarts{at: at, known: plan.known, evidence: evidenceOf, usable: true}
 	for _, cell := range []struct {
@@ -155,7 +160,8 @@ func TestCatalogEvidenceStartOfANewFact(t *testing.T) {
 		want time.Time
 	}{
 		{"new", evidence},
-		{"voided", evidence},
+		{"voided", at},
+		{"retracted later", at},
 		{"held", at},
 		{"late", at},
 		{"none", at},

@@ -224,7 +224,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		lookups := NewOwnershipAbsenceLookups(ctx, githubRepoGrantAbsence{client: client, org: orgName})
 		// CHAOS-10521: a grant starts at the repository's earliest pull request.
 		repoStarts := CarryCatalogEvidenceStarts(ctx, adapter.Sink.Conn, ref.OrgID,
-			CatalogEvidenceScope{Table: CatalogEvidenceRepoOwnership, Provider: githubTeamCatalogProvider, Source: githubTeamCatalogSource}, normalizedAt)
+			CatalogEvidenceScope{Table: CatalogEvidenceRepoOwnership, Provider: githubTeamCatalogProvider, Source: githubTeamCatalogSource, KeyPrefix: orgName + "/"}, normalizedAt)
 		repoOwnership := StartCatalogRows(repoStarts, rows.RepoOwnership,
 			func(r githubTeamRepoOwnershipRow) CatalogEvidenceFact {
 				return RepoEvidenceFact(r.TeamID, r.RepoFullName, r.RepoID)

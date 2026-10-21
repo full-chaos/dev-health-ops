@@ -184,7 +184,7 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		})
 		// CHAOS-10521: a membership starts at the member's earliest work item.
 		memberStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
-			CatalogEvidenceScope{Table: CatalogEvidenceMemberships, Provider: linearMembershipWriter.Provider, Source: linearMembershipWriter.Source}, normalizedAt)
+			CatalogEvidenceScope{Table: CatalogEvidenceMemberships, Provider: linearMembershipWriter.Provider, Source: linearMembershipWriter.Source, Lease: collector.Sink.Lease}, normalizedAt)
 		observedMemberships := StartCatalogRows(memberStarts, batch.Rows.Memberships, linearReferenceMembershipRow.evidenceFact,
 			func(r *linearReferenceMembershipRow) *time.Time { return &r.ValidFrom })
 		keptMemberships = StartCatalogRows(memberStarts, keptMemberships, linearReferenceMembershipRow.evidenceFact,
@@ -235,7 +235,7 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		// same fact.
 		// CHAOS-10521: a project link starts at the project's earliest work item.
 		projectStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
-			CatalogEvidenceScope{Table: CatalogEvidenceProjectOwnership, Provider: "linear", Source: "native"}, normalizedAt)
+			CatalogEvidenceScope{Table: CatalogEvidenceProjectOwnership, Provider: "linear", Source: "native", Lease: collector.Sink.Lease}, normalizedAt)
 		freshOwnership := StartCatalogRows(projectStarts, batch.Rows.Ownership,
 			func(r linearReferenceOwnershipRow) CatalogEvidenceFact {
 				return ProjectEvidenceFact(r.TeamID, r.ProjectID)

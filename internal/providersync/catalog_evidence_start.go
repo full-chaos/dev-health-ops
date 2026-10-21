@@ -10,6 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
@@ -39,12 +40,16 @@ const (
 )
 
 // CatalogEvidenceScope is the rows of one writer: a table, a provider and a
-// source, and, for a writer that owns only the rows of its own teams, those
-// teams (nil: every team of the scope).
+// source, narrowed to the rows the writer itself reads: its own teams (TeamIDs;
+// nil: every team), the teams under one group (TeamPrefix: the team id is the
+// prefix without its last "/" or starts with the prefix) or the keys under one
+// owner (KeyPrefix). Lease, when set, is asserted before the carry writes.
 type CatalogEvidenceScope struct {
-	Table            CatalogEvidenceTable
-	Provider, Source string
-	TeamIDs          []string
+	Table                 CatalogEvidenceTable
+	Provider, Source      string
+	TeamIDs               []string
+	TeamPrefix, KeyPrefix string
+	Lease                 providerfoundation.LeaseGuard
 }
 
 // CatalogEvidenceFact names one link of a writer's row: its team, the key column
@@ -62,6 +67,7 @@ const (
 	catalogEvidenceSkipEvidenceRead = "evidence_read_failed"
 	catalogEvidenceSkipWrite        = "carry_write_failed"
 	catalogEvidenceSkipNewerRow     = "row_newer_than_run"
+	catalogEvidenceSkipLease        = "lease_not_held"
 )
 
 // CatalogEvidenceStarts is what one carry learned: the facts the scope already
@@ -107,7 +113,7 @@ func CarryCatalogEvidenceStarts(ctx context.Context, conn driver.Conn, orgID str
 		skipped(catalogEvidenceSkipRowsRead, 0)
 		return CatalogEvidenceStarts{}
 	}
-	evidence, err := spec.readEvidence(ctx, conn, orgID)
+	evidence, err := spec.readEvidence(ctx, conn, orgID, scope.Provider)
 	if err != nil {
 		skipped(catalogEvidenceSkipEvidenceRead, len(rows))
 		return CatalogEvidenceStarts{}
@@ -119,6 +125,12 @@ func CarryCatalogEvidenceStarts(ctx context.Context, conn driver.Conn, orgID str
 	}
 	if len(plan.moves) == 0 {
 		return starts
+	}
+	if scope.Lease != nil {
+		if err := scope.Lease.Assert(ctx); err != nil {
+			skipped(catalogEvidenceSkipLease, len(plan.moves))
+			return starts
+		}
 	}
 	if err := writeCatalogEvidenceCarry(ctx, conn, spec, rows, plan.moves, at); err != nil {
 		skipped(catalogEvidenceSkipWrite, len(plan.moves))
@@ -168,13 +180,15 @@ func planCatalogEvidenceCarry(rows []catalogEvidenceRow, evidence catalogEvidenc
 	var order []string
 	for index, row := range rows {
 		key := catalogEvidenceFactKey(row.Fact.TeamID, row.Fact.Key)
+		// Any stored row, an empty interval too, makes the fact known: a new start is only for a fact the
+		// scope never held, so a stale run cannot reopen a fact a newer run retracted.
+		plan.known[key] = true
 		if row.UpdatedAt.After(at) {
 			newer[key] = true
 		}
 		if row.empty() {
 			continue
 		}
-		plan.known[key] = true
 		current, seen := first[key]
 		if !seen {
 			order = append(order, key)
@@ -306,18 +320,20 @@ func (people catalogPeople) of(fact CatalogEvidenceFact) time.Time {
 // catalogEvidenceSpec is how one table's rows are read and written again.
 type catalogEvidenceSpec struct {
 	table        string
+	keyColumn    string
 	columns      string
 	selectList   string
 	scan         func(driver.Rows) (catalogEvidenceRow, error)
 	validFrom    int
 	validTo      int
 	updatedAt    int
-	readEvidence func(context.Context, driver.Conn, string) (catalogEvidence, error)
+	readEvidence func(ctx context.Context, conn driver.Conn, orgID, provider string) (catalogEvidence, error)
 }
 
 var catalogEvidenceSpecs = map[CatalogEvidenceTable]catalogEvidenceSpec{
 	CatalogEvidenceMemberships: {
 		table:      "team_memberships",
+		keyColumn:  "member_id",
 		columns:    "org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id",
 		selectList: "org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, toString(source), is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id",
 		validFrom:  11, validTo: 12, updatedAt: 13,
@@ -348,6 +364,7 @@ var catalogEvidenceSpecs = map[CatalogEvidenceTable]catalogEvidenceSpec{
 	},
 	CatalogEvidenceProjectOwnership: {
 		table:      "team_project_ownership",
+		keyColumn:  "project_id",
 		columns:    "org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at",
 		selectList: "org_id, provider, team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from, valid_to, updated_at",
 		validFrom:  9, validTo: 10, updatedAt: 11,
@@ -371,6 +388,7 @@ var catalogEvidenceSpecs = map[CatalogEvidenceTable]catalogEvidenceSpec{
 	},
 	CatalogEvidenceRepoOwnership: {
 		table:      "team_repo_ownership",
+		keyColumn:  "repo_full_name",
 		columns:    "org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, share",
 		selectList: "org_id, provider, team_id, repo_id, repo_full_name, toString(match_type), toString(source), is_primary, specificity, priority, valid_from, valid_to, updated_at, share",
 		validFrom:  10, validTo: 11, updatedAt: 12,
@@ -406,6 +424,14 @@ func readCatalogEvidenceRows(ctx context.Context, conn driver.Conn, spec catalog
 	if scope.TeamIDs != nil {
 		query += " AND team_id IN ?"
 		args = append(args, scope.TeamIDs)
+	}
+	if scope.TeamPrefix != "" {
+		query += " AND (team_id = ? OR startsWith(team_id, ?))"
+		args = append(args, strings.TrimSuffix(scope.TeamPrefix, "/"), scope.TeamPrefix)
+	}
+	if scope.KeyPrefix != "" {
+		query += " AND startsWith(" + spec.keyColumn + ", ?)"
+		args = append(args, scope.KeyPrefix)
 	}
 	result, err := conn.Query(ctx, query, args...)
 	if err != nil {
@@ -471,10 +497,15 @@ func catalogEvidenceCarryRows(spec catalogEvidenceSpec, rows []catalogEvidenceRo
 	return out
 }
 
-// readCatalogPeopleEvidence is the earliest work item per person of the org.
-func readCatalogPeopleEvidence(ctx context.Context, conn driver.Conn, orgID string) (catalogEvidence, error) {
+// catalogEvidenceTimed keeps a time after the epoch in the read itself: a zero
+// or epoch created_at is no time, and min() over it would hide a real one.
+const catalogEvidenceTimed = "toUnixTimestamp64Milli(created_at) > 0"
+
+// readCatalogPeopleEvidence is the earliest work item per person of the org, of
+// any provider (the attribution matrix's member rule matches across them).
+func readCatalogPeopleEvidence(ctx context.Context, conn driver.Conn, orgID, _ string) (catalogEvidence, error) {
 	result, err := conn.Query(ctx, `SELECT person, min(created_at)
-FROM (SELECT arrayJoin(arrayConcat([reporter], assignees)) AS person, created_at FROM work_items FINAL WHERE org_id = ?)
+FROM (SELECT arrayJoin(arrayConcat([reporter], assignees)) AS person, created_at FROM work_items FINAL WHERE org_id = ? AND `+catalogEvidenceTimed+`)
 WHERE person != ''
 GROUP BY person`, orgID)
 	if err != nil {
@@ -487,10 +518,11 @@ GROUP BY person`, orgID)
 	return catalogEvidence{people: newCatalogPeople(earliest)}, nil
 }
 
-// readCatalogProjectEvidence is the earliest work item per project id of the org.
-func readCatalogProjectEvidence(ctx context.Context, conn driver.Conn, orgID string) (catalogEvidence, error) {
+// readCatalogProjectEvidence is the earliest work item per project id of the
+// org, of the writer's provider: a project id names a project of one provider.
+func readCatalogProjectEvidence(ctx context.Context, conn driver.Conn, orgID, provider string) (catalogEvidence, error) {
 	result, err := conn.Query(ctx, `SELECT project_id, min(created_at) FROM work_items FINAL
-WHERE org_id = ? AND project_id != '' GROUP BY project_id`, orgID)
+WHERE org_id = ? AND provider = ? AND project_id != '' AND `+catalogEvidenceTimed+` GROUP BY project_id`, orgID, provider)
 	if err != nil {
 		return catalogEvidence{}, err
 	}
@@ -502,13 +534,14 @@ WHERE org_id = ? AND project_id != '' GROUP BY project_id`, orgID)
 }
 
 // readCatalogRepoEvidence is the earliest pull request per repository of the
-// org, by its id and by its name (a row with no repo_id names it by full name).
-func readCatalogRepoEvidence(ctx context.Context, conn driver.Conn, orgID string) (catalogEvidence, error) {
-	result, err := conn.Query(ctx, `SELECT p.repo, p.first, ifNull(r.name, '') FROM (
-  SELECT toString(repo_id) AS repo, min(created_at) AS first FROM git_pull_requests FINAL WHERE org_id = ? GROUP BY repo_id
+// org and of the writer's provider, by its id and by its name (a row with no
+// repo_id names it by full name).
+func readCatalogRepoEvidence(ctx context.Context, conn driver.Conn, orgID, provider string) (catalogEvidence, error) {
+	result, err := conn.Query(ctx, `SELECT p.repo, p.first, r.name FROM (
+  SELECT toString(repo_id) AS repo, min(created_at) AS first FROM git_pull_requests FINAL WHERE org_id = ? AND `+catalogEvidenceTimed+` GROUP BY repo_id
 ) AS p
-LEFT JOIN (SELECT toString(id) AS id, argMax(repo, last_synced) AS name FROM repos WHERE org_id = ? GROUP BY id) AS r ON r.id = p.repo`,
-		orgID, orgID)
+INNER JOIN (SELECT toString(id) AS id, argMax(repo, last_synced) AS name FROM repos WHERE org_id = ? AND provider = ? GROUP BY id) AS r ON r.id = p.repo`,
+		orgID, orgID, provider)
 	if err != nil {
 		return catalogEvidence{}, err
 	}

@@ -859,36 +859,40 @@ project's items by id. Now:
   counting the rows the run found; `OwnershipUnchanged` and `RepoOwnershipUnchanged` say how many of them were not
   written again.
 - **A catalog link starts at its evidence** (CHAOS-10521; `providersync.CarryCatalogEvidenceStarts`,
-  `catalog_evidence_start.go`). No provider gives the time of a team grant or of a membership, so the catalog
-  writers (GitHub team access and memberships, GitLab group projects and memberships, the Jira legacy links, the
-  Atlassian Teams links and memberships, the Linear team projects and memberships) take the start of a link from its
-  earliest evidence: for a repository, its earliest pull request (`git_pull_requests.created_at`, by `repo_id`, else
-  by full name); for a project, its earliest work item (`work_items.created_at` of the same `project_id`); for a
-  member, the earliest work item the member reported or is assigned (the member id after its provider prefix is
-  equal to the person, follows a `:` of it or comes before an `@` of it, the rule of the attribution matrix's
-  membership cell; or an identity facet, raw id or email of the member is equal to it after
-  `NormalizeDerivationIdentity`). `valid_from` = min(evidence, first seen, run): evidence pulls a start earlier,
+  `catalog_evidence_start.go`). No provider gives the time of a team grant or of a membership, so the catalog writers
+  (GitHub team access and memberships, GitLab group projects and memberships, the Jira legacy links, the Atlassian
+  Teams links and memberships, the Linear team projects and memberships) take the start of a link from its earliest
+  evidence: for a repository, its earliest pull request (`git_pull_requests.created_at`, by `repo_id`, else by full
+  name, of a `repos` row of the writer's provider); for a project, its earliest work item (`work_items.created_at` of
+  the same `project_id` and of the writer's provider); for a member, of any provider, the earliest work item the
+  member reported or is assigned (the member id after its provider prefix is equal to the person, follows a `:` of it
+  or comes before an `@` of it, the rule of the attribution matrix's membership cell; or an identity facet, raw id or
+  email of the member is equal to it after `NormalizeDerivationIdentity`). A zero or epoch `created_at` is no evidence
+  and is left out in the read itself. `valid_from` = min(evidence, first seen, run): evidence pulls a start earlier,
   never later, and evidence after the run is no evidence. `valid_from` is a key column of all three tables
   (`team_memberships` (org_id, provider, team_id, member_id, source, valid_from), `team_project_ownership` (org_id,
   provider, project_id, team_id, source, valid_from), `team_repo_ownership` (org_id, provider, repo_full_name,
   team_id, source, valid_from)), so a start that moves is a new row. Before its own read of its open rows, each writer
-  reads every row of its scope (org, provider, source; Atlassian Teams: only the rows of its teams) and the
-  evidence. The FIRST row of each link (open or closed; a closed row keeps its `valid_to`) starts at
-  min(its `valid_from`, evidence): a first row that already starts before the evidence keeps its start, so evidence
-  never moves a start later. A first row that moves is written again at the evidence, and the writer retires the
-  old key as an empty interval (`valid_to = valid_from`, the supersede of the inferred rows, section 0.2), all in one
-  insert (logged `catalog_evidence_start_carried`). The first-seen rule above then gives the
-  fresh row the evidence start and the repeat rule below leaves it out, so the next run writes nothing. A later row of
-  the same link (a member who came back, a grant given again) keeps the start of the run that saw it. A new link (no
-  row in the scope) starts at min(evidence, run). A link with no evidence keeps the start of its earliest row; a new
-  one starts at the run. A failed read or write moves nothing, logs WARN `catalog_evidence_start_skipped` (`reason`
-  `rows_read_failed`, `evidence_read_failed`, `carry_write_failed`, or `row_newer_than_run` for a link a later run
-  wrote) and never fails the sync: a later run moves the start. A start moved back reaches the items on or after it
-  through the backstop (section 0.4j). Tests (real ClickHouse, the real collectors):
-  `TestGitHubCatalogStartsAtTheEvidence`, `TestGitLabCatalogStartsAtTheEvidence`,
-  `TestLinearCatalogStartsAtTheEvidence`, `TestJiraLegacyLinksStartAtTheEvidence` (an open and a closed first row),
-  `TestAtlassianTeamsLinksStartAtTheEvidence` and `TestAFailedEvidenceReadKeepsTheStartAndTheSync`; the decision
-  table `TestCatalogEvidenceCarryMovesTheFirstRowOfAFact`.
+  reads every row of its scope (org, provider, source, narrowed to the rows the writer itself reads: GitHub grants
+  under its GitHub org, GitLab rows of the teams under its root group, Atlassian Teams rows of its teams) and the
+  evidence. The FIRST row of each link (open or closed; a closed row keeps its `valid_to`) starts at min(its
+  `valid_from`, evidence): a first row that already starts before the evidence keeps its start, so evidence never
+  moves a start later. A first row that moves is written again at the evidence, and the writer retires the old key as
+  an empty interval (`valid_to = valid_from`, the supersede of the inferred rows, section 0.2), all in one insert
+  (logged `catalog_evidence_start_carried`), after the writer's lease is asserted (GitLab, Jira, Linear). The
+  first-seen rule above then gives the fresh row the evidence start and the repeat rule below leaves it out, so the
+  next run writes nothing. A later row of the same link (a member who came back, a grant given again) keeps the start
+  of the run that saw it. A new link (no row at all in the scope; an empty interval or a row written after the run
+  counts as a row, so a stale run never reopens a link a later run retracted) starts at min(evidence, run). A link
+  with no evidence keeps the start of its earliest row; a new one starts at the run. A failed read or write moves
+  nothing, logs WARN `catalog_evidence_start_skipped` (`reason` `rows_read_failed`, `evidence_read_failed`,
+  `lease_not_held`, `carry_write_failed`, or `row_newer_than_run` for a link a later run wrote) and never fails the
+  sync: a later run moves the start. A start moved back reaches the items on or after it through the backstop (section
+  0.4j). Tests (real ClickHouse, the real collectors): `TestGitHubCatalogStartsAtTheEvidence`,
+  `TestGitLabCatalogStartsAtTheEvidence`, `TestLinearCatalogStartsAtTheEvidence`,
+  `TestJiraLegacyLinksStartAtTheEvidence` (an open and a closed first row),
+  `TestAtlassianTeamsLinksStartAtTheEvidence` and `TestAFailedEvidenceReadKeepsTheStartAndTheSync`; the decision table
+  `TestCatalogEvidenceCarryMovesTheFirstRowOfAFact`.
 - **A row is closed only through its fact kind, on that kind's own proof** (`providersync.PlanSnapshot`,
   `ownership_snapshot.go`; CHAOS-8886). A writer gives the rule one typed snapshot for each kind of fact its
   table holds (`KindSnapshot`): the kind (`snapshot_kinds.go`: a name, the rows it holds, and what an empty

@@ -31,7 +31,7 @@
       "check": "membership_starts_at_its_evidence",
       "state": "known_red",
       "ticket": "CHAOS-10566",
-      "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
+      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
     },
     {
       "provider": "github",
@@ -57,7 +57,7 @@
       "check": "repository_ownership_starts_at_its_evidence",
       "state": "known_red",
       "ticket": "CHAOS-10566",
-      "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
+      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
     },
     {
       "provider": "github",
@@ -107,7 +107,7 @@
       "check": "owned_history_is_attributed",
       "state": "known_red",
       "ticket": "CHAOS-10566",
-      "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
+      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
     },
     {
       "provider": "github",
@@ -115,7 +115,7 @@
       "check": "every_active_owner_takes_the_item",
       "state": "known_red",
       "ticket": "CHAOS-10566",
-      "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
+      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
     },
     {
       "provider": "github",
@@ -153,7 +153,7 @@
       "check": "membership_starts_at_its_evidence",
       "state": "known_red",
       "ticket": "CHAOS-10566",
-      "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
+      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
     },
     {
       "provider": "gitlab",
@@ -257,7 +257,7 @@
       "check": "project_ownership_starts_at_its_evidence",
       "state": "known_red",
       "ticket": "CHAOS-10566",
-      "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
+      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
     },
     {
       "provider": "jira",
@@ -361,7 +361,7 @@
       "check": "project_ownership_starts_at_its_evidence",
       "state": "known_red",
       "ticket": "CHAOS-10566",
-      "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
+      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
     },
     {
       "provider": "linear",
@@ -393,7 +393,7 @@
       "check": "membership_starts_at_its_evidence",
       "state": "known_red",
       "ticket": "CHAOS-10566",
-      "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
+      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
     },
     {
       "provider": "linear",
@@ -467,7 +467,7 @@
       "check": "project_ownership_starts_at_its_evidence",
       "state": "known_red",
       "ticket": "CHAOS-10566",
-      "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
+      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
     }
   ],
   "not_applicable": [

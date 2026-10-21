@@ -732,7 +732,8 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		})
 		// CHAOS-10521: a membership starts at the member's earliest work item.
 		memberStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
-			CatalogEvidenceScope{Table: CatalogEvidenceMemberships, Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource}, normalizedAt)
+			CatalogEvidenceScope{Table: CatalogEvidenceMemberships, Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource,
+				TeamPrefix: batch.Rows.TeamListing.TeamIDPrefix, Lease: collector.Sink.Lease}, normalizedAt)
 		observedMemberships := StartCatalogRows(memberStarts, batch.Rows.Memberships, gitlabTeamCatalogMembershipRow.evidenceFact,
 			func(r *gitlabTeamCatalogMembershipRow) *time.Time { return &r.ValidFrom })
 		keptMemberships = StartCatalogRows(memberStarts, keptMemberships, gitlabTeamCatalogMembershipRow.evidenceFact,
@@ -782,7 +783,8 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			lookups := NewOwnershipAbsenceLookups(ctx, gitlabGroupProjectAbsence{client: client})
 			// CHAOS-10521: a grant starts at the project's earliest work item.
 			projectStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
-				CatalogEvidenceScope{Table: CatalogEvidenceProjectOwnership, Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource}, normalizedAt)
+				CatalogEvidenceScope{Table: CatalogEvidenceProjectOwnership, Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource,
+					TeamPrefix: batch.Rows.TeamListing.TeamIDPrefix, Lease: collector.Sink.Lease}, normalizedAt)
 			freshOwnership := StartCatalogRows(projectStarts, batch.Rows.Ownership,
 				func(r gitlabTeamCatalogOwnershipRow) CatalogEvidenceFact {
 					return ProjectEvidenceFact(r.TeamID, r.ProjectID)

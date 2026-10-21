@@ -15,7 +15,8 @@ import (
 // item alice reported, an item of project 10001), the next run moves the first
 // row of alice's memberships and of the project link to the evidence and retires
 // the run-time key as an empty interval; bob and carol keep their start. A third
-// run writes nothing. The plant is the first run's state: the same check finds it.
+// run moves nothing: the rows after FINAL are the same, and no project link row is
+// written (a membership writer writes its rows again under the same keys). The plant is the first run's state: the same check finds it.
 func TestAtlassianTeamsLinksStartAtTheEvidence(t *testing.T) {
 	conn := openClickHouse(t)
 	ctx := context.Background()

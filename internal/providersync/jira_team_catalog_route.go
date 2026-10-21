@@ -877,7 +877,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// at each sync would add one more open row for the same fact.
 		// CHAOS-10521: a legacy link starts at the project's earliest work item.
 		legacyStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
-			CatalogEvidenceScope{Table: CatalogEvidenceProjectOwnership, Provider: jiraTeamCatalogProvider, Source: jiraTeamCatalogLegacySource}, normalizedAt)
+			CatalogEvidenceScope{Table: CatalogEvidenceProjectOwnership, Provider: jiraTeamCatalogProvider, Source: jiraTeamCatalogLegacySource, Lease: collector.Sink.Lease}, normalizedAt)
 		for index := range ownership {
 			if ownership[index].Source == jiraTeamCatalogLegacySource {
 				ownership[index].ValidFrom = legacyStarts.Start(ProjectEvidenceFact(ownership[index].TeamID, ownership[index].ProjectID), ownership[index].ValidFrom)

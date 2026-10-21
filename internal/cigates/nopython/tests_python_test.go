@@ -91,45 +91,12 @@ type pyOwnedEntry struct {
 	owner string
 }
 
-const oracleOwner = "#4566 (CHAOS-10365) deletes every .py under internal/"
-
 var pyOwnedEntries = []pyOwnedEntry{
 	{"src/dev_health_ops/", "CHAOS-10375"},
 	{"scripts/", "CHAOS-10386/10387/10388 (docs tooling leaves)"},
 	{"tests/tooling/", "fcs tooling/docs leaves"},
 	{"tests/docs/", "fcs tooling/docs leaves"},
-	{"ci/bigboy/", "#4565/#4563"},
-	// ci/ itself is not a prefix: it would admit any new ci/*.py. Its three files are listed exactly.
-	{"ci/check_go_api_routing_digest", "fcs CHAOS-10367"},
-	{"ci/go_relevance", "fcs CHAOS-10367"},
-	{"ci/venue_oracle_weights", "fcs CHAOS-10367"},
-	{"internal/adminops/testdata/", oracleOwner},
-	{"internal/api/externalingest/testdata/", oracleOwner},
-	{"internal/api/externalurl/testdata/", oracleOwner},
-	{"internal/api/teamsidentity/testdata/", oracleOwner},
-	{"internal/apiservice/admin/testdata/llmreadinessoracle/", oracleOwner},
-	{"internal/apiservice/testdata/", oracleOwner},
-	{"internal/cli/testdata/", oracleOwner},
-	{"internal/fixturesgen/testdata/", oracleOwner},
-	{"internal/jobs/metrics/aigovernance/testdata/", oracleOwner},
-	{"internal/jobs/metrics/aiimpact/testdata/", oracleOwner},
-	{"internal/jobs/metrics/complexity/lizardcc/testdata/", oracleOwner},
-	{"internal/jobs/metrics/complexity/pycc/testdata/", oracleOwner},
-	{"internal/jobs/metrics/complexity/testdata/", oracleOwner},
-	{"internal/jobs/metrics/daily/testdata/", oracleOwner},
-	{"internal/jobs/metrics/remaining/testdata/", oracleOwner},
-	{"internal/providersync/testdata/", oracleOwner},
-	{"internal/pythonparity/testdata/", oracleOwner},
-	{"internal/queryapi/investmentexplain/testdata/", oracleOwner},
-	{"internal/queryapi/people/summaryvenue/testdata/", oracleOwner},
-	{"internal/queryapi/quadrant/testdata/", oracleOwner},
-	{"internal/queryapi/recommendations/testdata/", oracleOwner},
-	{"internal/scheduler/fixed/testdata/", oracleOwner},
-	{"internal/scheduler/sync/testdata/", oracleOwner},
-	{"internal/syncbudget/testdata/", oracleOwner},
-	{"internal/synccli/testdata/", oracleOwner},
-	{"internal/synccoverage/testdata/", oracleOwner},
-	{"internal/syncdispatchruntime/testdata/", oracleOwner},
+	{"ci/bigboy/", "#4565"},
 }
 
 func (e pyOwnedEntry) covers(stem string) bool {

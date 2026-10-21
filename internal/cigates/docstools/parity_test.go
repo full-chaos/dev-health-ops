@@ -61,6 +61,14 @@ func replayCase(t *testing.T, dir string) {
 	seedSymlinks(t, filepath.Join(dir, "symlinks"), work)
 	sub := map[string]string{"{WORK}": work}
 	t.Chdir(work)
+	if raw, err := os.ReadFile(filepath.Join(dir, "cwd")); err == nil {
+		// the case runs from a directory below the work directory (the former scripts found their root from their own path)
+		sub := filepath.Join(work, strings.TrimSpace(string(raw)))
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(sub)
+	}
 	for _, setup := range caseSetups {
 		setup(t, dir, work, sub)
 	}

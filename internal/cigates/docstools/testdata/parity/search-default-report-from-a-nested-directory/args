@@ -1,0 +1,5 @@
+check-docs-search
+--site-dir
+../../site
+--queries
+../../queries.json

@@ -17,12 +17,32 @@ import (
 
 func init() { register("check-docs-facts", dcFactsVerb) }
 
+// dcRepoRoot is the repository root the former scripts took from their own file path (ROOT = parents[1] of the script),
+// whatever the working directory: the nearest directory at or above the working directory that holds go.mod. A working
+// directory outside any module is refused (STRICTER: the script found its root from its path and ran from anywhere).
+func dcRepoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for cur := dir; ; {
+		if fi, err := os.Stat(filepath.Join(cur, "go.mod")); err == nil && fi.Mode().IsRegular() {
+			return cur, nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", fmt.Errorf("repository root (go.mod) not found at or above %s", dir)
+		}
+		cur = parent
+	}
+}
+
 const dcFactsDocRel = "docs/reference/taxonomies/investment.md"
 
 func dcFactsVerb(_ []string, stdout, stderr io.Writer) int {
-	root, err := os.Getwd()
+	root, err := dcRepoRoot()
 	if err != nil {
-		fmt.Fprintln(stderr, "check-docs-facts:", err)
+		fmt.Fprintln(stderr, "ERROR:", err)
 		return 1
 	}
 	docPath := filepath.Join(root, dcFactsDocRel)

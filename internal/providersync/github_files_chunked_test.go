@@ -116,6 +116,11 @@ func (fake *filesChunkFake) Do(request *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 }
 
+// filesRunFixtureBlobs 600,000-byte blobs are 8 prepared chunks of two: more
+// than a bound-2 first attempt and than a crash at write 6, so the resume, crash
+// and pin paths all run. Each blob costs about 1 s under -race: keep it small.
+const filesRunFixtureBlobs = 16
+
 func newFilesChunkFake(t *testing.T, goFiles, goSize, otherFiles int) *filesChunkFake {
 	fake := &filesChunkFake{t: t, head: "tree-1", sizes: map[string]int{}, texts: map[string]string{}, binary: map[string]bool{}, treeStatus: map[string]int{}}
 	paths := make([]string, 0, goFiles+otherFiles)
@@ -175,8 +180,8 @@ func runFilesChunks(
 }
 
 func TestGitHubFilesChunksResumeFromTheStoredCursorUnionEqualsTheFullTreeNoRepeats(t *testing.T) {
-	// 40 blobs of 600,000 bytes: two per 1.5 MiB chunk, 20 data chunks.
-	fake := newFilesChunkFake(t, 40, 600_000, 5)
+	// 20 blobs of 600,000 bytes: two per 1.5 MiB chunk, 10 data chunks.
+	fake := newFilesChunkFake(t, 20, 600_000, 5)
 	first, err := runFilesChunks(t, fake, "", 7)
 	var stopped ChunkContinuationError
 	if !errors.As(err, &stopped) || len(first.emissions) != 7 {
@@ -197,8 +202,8 @@ func TestGitHubFilesChunksResumeFromTheStoredCursorUnionEqualsTheFullTreeNoRepea
 			t.Fatalf("%s has no contents", row.Path)
 		}
 	}
-	if len(seen) != 45 {
-		t.Fatalf("union=%d paths, want 45", len(seen))
+	if len(seen) != 25 {
+		t.Fatalf("union=%d paths, want 25", len(seen))
 	}
 	for path, count := range seen {
 		if count != 1 {
@@ -221,7 +226,7 @@ func TestGitHubFilesChunksResumeFromTheStoredCursorUnionEqualsTheFullTreeNoRepea
 		}
 	}
 	final := second.emissions[len(second.emissions)-1]
-	if !final.Final || final.Batch.Result["files_synced"] != 45 || final.Batch.Result["files_with_contents"] != 40 ||
+	if !final.Final || final.Batch.Result["files_synced"] != 25 || final.Batch.Result["files_with_contents"] != 20 ||
 		final.Batch.Result["inventory_status"] != "complete" {
 		t.Fatalf("final=%+v", final.Batch.Result)
 	}
@@ -521,14 +526,14 @@ func TestGitHubFilesOpsSizedRepositoryConvergesAcrossAttemptsThroughTheChunkedEx
 // A crash after chunk k keeps the rows of chunks <= k (nothing deletes them: the
 // route has no delete path) and the next attempt writes only the rest.
 func TestGitHubFilesPartialRunKeepsItsRowsAndTheNextRunWritesTheRest(t *testing.T) {
-	fake := newFilesChunkFake(t, 60, 600_000, 0)
+	fake := newFilesChunkFake(t, filesRunFixtureBlobs, 600_000, 0)
 	sink := &filesReadbackSink{failFrom: 6}
 	executor, session, descriptor, _ := filesChunkExecutor(t, fake, sink)
 	if _, err := executor.Execute(context.Background(), session, descriptor); err == nil {
 		t.Fatal("the crash must fail the attempt")
 	}
 	kept := len(sink.rows)
-	if kept == 0 || kept >= 60 {
+	if kept == 0 || kept >= filesRunFixtureBlobs {
 		t.Fatalf("rows after the crash=%d, want some but not all", kept)
 	}
 	sink.failFrom = 0
@@ -542,8 +547,8 @@ func TestGitHubFilesPartialRunKeepsItsRowsAndTheNextRunWritesTheRest(t *testing.
 			t.Fatal(err)
 		}
 	}
-	if len(sink.rows) != 60 {
-		t.Fatalf("rows=%d, want 60", len(sink.rows))
+	if len(sink.rows) != filesRunFixtureBlobs {
+		t.Fatalf("rows=%d, want %d", len(sink.rows), filesRunFixtureBlobs)
 	}
 	for path, count := range sink.rows {
 		if count != 1 {
@@ -556,7 +561,7 @@ func TestGitHubFilesPartialRunKeepsItsRowsAndTheNextRunWritesTheRest(t *testing.
 // it: the resumed attempt reads that chunk back (EffectExact) and does not write
 // it again.
 func TestGitHubFilesCrashAfterAChunkWriteIsReadBackNotRewritten(t *testing.T) {
-	fake := newFilesChunkFake(t, 60, 600_000, 0)
+	fake := newFilesChunkFake(t, filesRunFixtureBlobs, 600_000, 0)
 	sink := &filesReadbackSink{failFrom: 6, crashAfterWrite: true}
 	executor, session, descriptor, _ := filesChunkExecutor(t, fake, sink)
 	if _, err := executor.Execute(context.Background(), session, descriptor); err == nil {
@@ -573,8 +578,8 @@ func TestGitHubFilesCrashAfterAChunkWriteIsReadBackNotRewritten(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(sink.rows) != 60 || sink.inspected == 0 {
-		t.Fatalf("rows=%d inspected=%d, want 60 rows and a readback of the crashed chunk", len(sink.rows), sink.inspected)
+	if len(sink.rows) != filesRunFixtureBlobs || sink.inspected == 0 {
+		t.Fatalf("rows=%d inspected=%d, want %d rows and a readback of the crashed chunk", len(sink.rows), sink.inspected, filesRunFixtureBlobs)
 	}
 	for path, count := range sink.rows {
 		if count != 1 {
@@ -633,7 +638,7 @@ func TestGitHubFilesUnitRestartsFromTheHeadWhenThePinnedTreeIsGone(t *testing.T)
 			previous := slog.Default()
 			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			t.Cleanup(func() { slog.SetDefault(previous) })
-			fake := newFilesChunkFake(t, 60, 600_000, 0)
+			fake := newFilesChunkFake(t, filesRunFixtureBlobs, 600_000, 0)
 			sink := &filesReadbackSink{}
 			executor, session, descriptor, store := filesChunkExecutor(t, fake, sink)
 			first := fake.trees["tree-1"]
@@ -642,7 +647,7 @@ func TestGitHubFilesUnitRestartsFromTheHeadWhenThePinnedTreeIsGone(t *testing.T)
 				t.Fatalf("attempt 1 err=%v rows=%d, want a continuation after committed chunks", err, len(sink.rows))
 			}
 			fake.mu.Lock()
-			fake.trees["tree-2"] = append(append([]string(nil), first[:55]...), "src/new.go")
+			fake.trees["tree-2"] = append(append([]string(nil), first[:filesRunFixtureBlobs-4]...), "src/new.go")
 			fake.sizes["src/new.go"] = 100
 			fake.treeStatus["tree-1"] = status
 			fake.head = "tree-2"
@@ -677,13 +682,14 @@ func TestGitHubFilesUnitRestartsFromTheHeadWhenThePinnedTreeIsGone(t *testing.T)
 			if rewritten == 0 {
 				t.Fatal("no path was rewritten under the later instant")
 			}
-			if fmt.Sprint(result.Result["pin_lost"]) != "1" || fmt.Sprint(result.Result["paths_total"]) != "56" ||
-				fmt.Sprint(result.Result["eligible_total"]) != "56" || fmt.Sprint(result.Result["files_synced"]) != "56" ||
-				fmt.Sprint(result.Result["files_with_contents"]) != "56" {
+			newHead := fmt.Sprint(filesRunFixtureBlobs - 3)
+			if fmt.Sprint(result.Result["pin_lost"]) != "1" || fmt.Sprint(result.Result["paths_total"]) != newHead ||
+				fmt.Sprint(result.Result["eligible_total"]) != newHead || fmt.Sprint(result.Result["files_synced"]) != newHead ||
+				fmt.Sprint(result.Result["files_with_contents"]) != newHead {
 				t.Fatalf("result=%v", result.Result)
 			}
 			text := logs.String()
-			for _, want := range []string{"pinned tree is gone", "pin_lost=1", "paths_total=56", "eligible_total=56"} {
+			for _, want := range []string{"pinned tree is gone", "pin_lost=1", "paths_total=" + newHead, "eligible_total=" + newHead} {
 				if !strings.Contains(text, want) {
 					t.Fatalf("log lacks %q", want)
 				}
@@ -697,24 +703,27 @@ func TestGitHubFilesUnitRestartsFromTheHeadWhenThePinnedTreeIsGone(t *testing.T)
 
 // Negative control: a server error or a rate limit on the pinned tree is not a
 // vanished pin. The cursor and the pin stay, and the next attempt finishes the
-// SAME tree.
+// SAME tree. One unit meets every status in turn, so the 600 KB blobs are read
+// once and not once per status.
 func TestGitHubFilesUnitKeepsItsPinOnAServerErrorOfThePinnedTree(t *testing.T) {
+	fake := newFilesChunkFake(t, filesRunFixtureBlobs, 600_000, 0)
+	sink := &filesReadbackSink{}
+	executor, session, descriptor, store := filesChunkExecutor(t, fake, sink)
+	if _, err := executor.Execute(context.Background(), session, withChunkBound(descriptor, 2)); !errors.As(err, new(ChunkContinuationError)) {
+		t.Fatalf("attempt 1: %v", err)
+	}
+	before, err := store.LoadChunkCheckpoint(context.Background(), session.Claim, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.head = "tree-2"
+	fake.trees["tree-2"] = []string{"src/other.go"}
+	fake.mu.Unlock()
 	for _, status := range []int{http.StatusServiceUnavailable, http.StatusInternalServerError, http.StatusTooManyRequests} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			fake := newFilesChunkFake(t, 60, 600_000, 0)
-			sink := &filesReadbackSink{}
-			executor, session, descriptor, store := filesChunkExecutor(t, fake, sink)
-			if _, err := executor.Execute(context.Background(), session, withChunkBound(descriptor, 2)); !errors.As(err, new(ChunkContinuationError)) {
-				t.Fatalf("attempt 1: %v", err)
-			}
-			before, err := store.LoadChunkCheckpoint(context.Background(), session.Claim, time.Now())
-			if err != nil {
-				t.Fatal(err)
-			}
 			fake.mu.Lock()
 			fake.treeStatus["tree-1"] = status
-			fake.head = "tree-2"
-			fake.trees["tree-2"] = []string{"src/other.go"}
 			fake.mu.Unlock()
 			if _, err := executor.Execute(context.Background(), session, descriptor); err == nil || errors.As(err, new(ChunkContinuationError)) {
 				t.Fatalf("a %d on the pinned tree must fail the attempt, got %v", status, err)
@@ -723,31 +732,31 @@ func TestGitHubFilesUnitKeepsItsPinOnAServerErrorOfThePinnedTree(t *testing.T) {
 			if err != nil || after.NextCursor != before.NextCursor || after.PreparedChunks != before.PreparedChunks {
 				t.Fatalf("cursor moved: before=%q after=%q err=%v", before.NextCursor, after.NextCursor, err)
 			}
-			fake.mu.Lock()
-			delete(fake.treeStatus, "tree-1")
-			fake.mu.Unlock()
-			var result CompleteRouteExecutionResult
-			for attempt := 0; ; attempt++ {
-				if attempt > 40 {
-					t.Fatal("no completion")
-				}
-				result, err = executor.Execute(context.Background(), session, descriptor)
-				if err == nil {
-					break
-				}
-				if !errors.As(err, new(ChunkContinuationError)) {
-					t.Fatal(err)
-				}
-			}
-			if fmt.Sprint(result.Result["pin_lost"]) != "0" || len(sink.rows) != 60 {
-				t.Fatalf("pin_lost=%v rows=%d, want the pinned tree finished untouched", result.Result["pin_lost"], len(sink.rows))
-			}
-			for _, call := range fake.graphql {
-				if call.ref != "tree-1" {
-					t.Fatalf("content read at %s", call.ref)
-				}
-			}
 		})
+	}
+	fake.mu.Lock()
+	delete(fake.treeStatus, "tree-1")
+	fake.mu.Unlock()
+	var result CompleteRouteExecutionResult
+	for attempt := 0; ; attempt++ {
+		if attempt > 40 {
+			t.Fatal("no completion")
+		}
+		result, err = executor.Execute(context.Background(), session, descriptor)
+		if err == nil {
+			break
+		}
+		if !errors.As(err, new(ChunkContinuationError)) {
+			t.Fatal(err)
+		}
+	}
+	if fmt.Sprint(result.Result["pin_lost"]) != "0" || len(sink.rows) != filesRunFixtureBlobs {
+		t.Fatalf("pin_lost=%v rows=%d, want the pinned tree finished untouched", result.Result["pin_lost"], len(sink.rows))
+	}
+	for _, call := range fake.graphql {
+		if call.ref != "tree-1" {
+			t.Fatalf("content read at %s", call.ref)
+		}
 	}
 }
 
@@ -832,7 +841,22 @@ func TestGitHubFilesChunkFitsNeverAcceptsWhatTheNanosecondClockStoreRefuses(t *t
 	claim := nativeTestClaim("github", "files")
 	millis := time.Date(2026, 10, 1, 12, 0, 0, 123_000_000, time.UTC)
 	nanos := time.Date(2026, 10, 1, 12, 0, 0, 123_456_789, time.UTC)
-	low, high := 1_000_000, 2_200_000
+	// One build at a probe length guesses the edge (the stored bytes of plain
+	// "x" text grow with its length); the search runs inside a small bracket the
+	// store confirms, else over the whole range.
+	probe, ok := gitHubFilesPreparedChunk(fitsTestEffect(t, 2_000_000), "before", "after")
+	if !ok {
+		t.Fatal("probe chunk not built")
+	}
+	material, err := buildPreparedChunkMaterial(claim, probe, nanos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guess := 2_000_000 + maxChunkPayloadBytes - len(material.payloadRaw) - len(material.ledgerRaw)
+	low, high := guess-32, guess+32
+	if !productionAccepts(claim, fitsTestEffect(t, low), nanos) || productionAccepts(claim, fitsTestEffect(t, high), nanos) {
+		low, high = 1_000_000, 2_200_000
+	}
 	for low+1 < high {
 		middle := (low + high) / 2
 		if productionAccepts(claim, fitsTestEffect(t, middle), nanos) {
@@ -841,16 +865,22 @@ func TestGitHubFilesChunkFitsNeverAcceptsWhatTheNanosecondClockStoreRefuses(t *t
 			high = middle
 		}
 	}
+	// The store (ns clock) accepts every length up to low and refuses every one
+	// above, so only lengths above low can expose the pre-check. The scan stops
+	// where the ms clock refuses too: each 2 MB encode costs ~1 s under -race.
 	window := 0
-	for length := low - 10; length <= low+40; length++ {
-		effect := fitsTestEffect(t, length)
-		if !productionAccepts(claim, effect, nanos) && productionAccepts(claim, effect, millis) {
-			window++
+	for length := low + 1; ; length++ {
+		if length > low+64 {
+			t.Fatalf("the millisecond clock still accepts %d bytes, %d over the nanosecond edge", length, length-low)
 		}
-		if productionAccepts(claim, effect, nanos) != gitHubFilesChunkFits(claim, effect, "before", "after") &&
-			!productionAccepts(claim, effect, nanos) {
+		effect := fitsTestEffect(t, length)
+		if gitHubFilesChunkFits(claim, effect, "before", "after") {
 			t.Fatalf("length %d: the store (ns clock) refuses it and the pre-check accepts it", length)
 		}
+		if !productionAccepts(claim, effect, millis) {
+			break
+		}
+		window++
 	}
 	if window == 0 {
 		t.Fatal("no length is accepted with a millisecond clock and refused with a nanosecond clock: the test cannot fail")

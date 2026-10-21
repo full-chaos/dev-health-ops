@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
-	"strings"
 )
 
 // Authz is a route's authorization level. Every level above Public first
@@ -145,13 +144,25 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 	})
 }
 
-// orglessAuthPrefix is where a signed-in caller with no organization may go:
-// the onboarding, invite and session routes. Every other route needs an
-// organization on the token.
-const orglessAuthPrefix = "/api/v1/auth/"
+// orglessRoutes are the only routes a signed-in caller with no organization may
+// reach: onboarding, invite acceptance and the session routes of that caller.
+// Every other route needs an organization on the token, so a route added later
+// is refused for such a caller until it is listed here.
+var orglessRoutes = map[string]bool{
+	"/api/v1/auth/onboard":                     true,
+	"/api/v1/auth/onboarding/state":            true,
+	"/api/v1/auth/onboarding/skip-integration": true,
+	"/api/v1/auth/accept-invite":               true,
+	"/api/v1/auth/me":                          true,
+	"/api/v1/auth/me/organizations":            true,
+	"/api/v1/auth/switch-org":                  true,
+	"/api/v1/auth/refresh":                     true,
+	"/api/v1/auth/logout":                      true,
+	"/api/v1/auth/change-password":             true,
+}
 
 func orglessMayReach(requestPath string) bool {
-	return strings.HasPrefix(path.Clean(requestPath), orglessAuthPrefix)
+	return orglessRoutes[path.Clean(requestPath)]
 }
 
 // currentUser is get_current_user. It writes the refusal itself.

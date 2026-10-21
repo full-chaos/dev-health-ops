@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
+	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/google/uuid"
 )
@@ -139,11 +140,11 @@ func (interval TeamRepoInterval) ValidAt(at time.Time) bool {
 }
 
 // TeamRepoDonorSet is what the donors of a set of work items are made of, read
-// without an as-of: the donor team(s) of each work item, and every ownership
-// row of the organization that began at or before the read's bound. A work
-// unit takes the ownership valid at its OWN end time, and one run holds units
-// of many end times, so the two parts are read once and each unit selects its
-// donors with DonorsAt.
+// without an as-of: the donor team(s) of each work item, every ownership row of
+// those teams, and the first record of each repository. A work unit takes the
+// ownership valid at its OWN end time (at the first record of its repository
+// when that is later), and one run holds units of many end times, so the parts
+// are read once and each unit selects its donors with DonorsAt.
 //
 // The two parts are kept apart on purpose. Joined, the result has one row per
 // work item, repository and ownership row, which grows with every closed
@@ -153,7 +154,11 @@ type TeamRepoDonorSet struct {
 	TeamsByWorkItem map[string][]string
 	// IntervalsByTeam holds the ownership rows of a team, by repository then start.
 	IntervalsByTeam map[string][]TeamRepoInterval
-	// Rows is the number of rows the two reads returned.
+	// FirstByRepo holds the first record of each repository of the organization (package ownershipwindow): a row is
+	// tested at the later of the instant and the first record of its repository. A repository with no entry has no
+	// record and is tested at the instant.
+	FirstByRepo map[uuid.UUID]time.Time
+	// Rows is the number of rows the reads returned.
 	Rows int
 }
 
@@ -164,7 +169,7 @@ func (set TeamRepoDonorSet) DonorsAt(workItemID string, at time.Time) []TeamRepo
 	seen := map[TeamRepoDonor]int{}
 	for _, team := range set.TeamsByWorkItem[workItemID] {
 		for _, interval := range set.IntervalsByTeam[team] {
-			if !interval.ValidAt(at) {
+			if !interval.ValidAt(ownershipwindow.ClampAsOf(at, set.FirstByRepo[interval.RepoID])) {
 				continue
 			}
 			key := TeamRepoDonor{WorkItemID: workItemID, TeamID: team, RepoID: interval.RepoID}
@@ -219,10 +224,12 @@ ORDER BY work_item_id, team_id`
 
 // teamRepoIntervalsQuery is the second half of teamRepoDonorsQuery with the
 // validity window of each ownership row in the result and the "still open at
-// as_of" test left to the caller: every sync-derived ownership row of the donor
-// teams (the external table donor_teams) that began at or before as_of, joined
-// to this organization's repository catalog by id or, when the row has no id,
-// by provider and name. The rows of a team that is no donor of the run's work
+// instant" test left to the caller: every sync-derived ownership row of the donor
+// teams (the external table donor_teams), joined to this organization's
+// repository catalog by id or, when the row has no id, by provider and name.
+// No row is cut at the run's bound: before the first record of a repository its
+// first owners apply (D5987 option C), so the row that holds at that first
+// record is needed even when it begins after the bound. The rows of a team that is no donor of the run's work
 // items are not read: the read grows with the donor teams' ownership, not with
 // the organization's.
 const teamRepoIntervalsQuery = `
@@ -231,7 +238,6 @@ WITH ownership AS (
     FROM team_repo_ownership FINAL
     WHERE org_id = {org_id:String}
       AND source IN ('native', 'jira_legacy', 'provider_access', 'inferred')
-      AND valid_from <= {as_of:DateTime64(3, 'UTC')}
       AND team_id IN (SELECT team_id FROM donor_teams)
 ),
 scoped_repos AS (
@@ -254,10 +260,13 @@ FROM (
 WHERE repo_id != toUUID('00000000-0000-0000-0000-000000000000')
 ORDER BY team_id, repo_id, valid_from`
 
-// FetchTeamRepoDonorSet reads the donor teams of the work items and the
-// ownership rows that began at or before upTo. For every instant at or before
-// upTo, DonorsAt gives what FetchTeamRepoDonors gives for that instant (held by
-// TestTheDonorSetGivesTheDonorsOfEveryInstant).
+// FetchTeamRepoDonorSet reads the donor teams of the work items, their ownership
+// rows and the first record of each repository of the organization. upTo is the
+// run's bound: a unit asks DonorsAt for an instant at or before it. For every
+// instant at or after the first record of a repository, DonorsAt gives what
+// FetchTeamRepoDonors gives for that instant (held by
+// TestTheDonorSetGivesTheDonorsOfEveryInstant); before it the first owners apply
+// (TestTheDonorSetAppliesTheFirstRecordedOwnersBackward).
 func (reader *Reader) FetchTeamRepoDonorSet(ctx context.Context, workItemIDs []string, organizationID string, upTo time.Time) (TeamRepoDonorSet, error) {
 	set := TeamRepoDonorSet{TeamsByWorkItem: map[string][]string{}, IntervalsByTeam: map[string][]TeamRepoInterval{}}
 	if reader == nil || reader.conn == nil || strings.TrimSpace(organizationID) == "" || upTo.IsZero() {
@@ -301,9 +310,7 @@ func (reader *Reader) FetchTeamRepoDonorSet(ctx context.Context, workItemIDs []s
 	if err != nil {
 		return set, err
 	}
-	intervalRows, err := reader.conn.Query(intervalCtx, teamRepoIntervalsQuery,
-		clickhouse.Named("org_id", organizationID),
-		clickhouse.Named("as_of", upTo.UTC().Format("2006-01-02 15:04:05.000")))
+	intervalRows, err := reader.conn.Query(intervalCtx, teamRepoIntervalsQuery, clickhouse.Named("org_id", organizationID))
 	if err != nil {
 		return set, fmt.Errorf("query team repository intervals: %w", err)
 	}
@@ -320,9 +327,43 @@ func (reader *Reader) FetchTeamRepoDonorSet(ctx context.Context, workItemIDs []s
 	if err := intervalRows.Err(); err != nil {
 		return set, fmt.Errorf("iterate team repository intervals: %w", err)
 	}
+	first, err := reader.readFirstRecords(ctx, ownershipwindow.FirstRecordsQuery(ownershipwindow.Names{Org: "org_id", AsOf: "as_of"}), organizationID)
+	if err != nil {
+		return set, err
+	}
+	set.FirstByRepo = first
 	return set, nil
 }
 
+// readFirstRecords runs a first-record statement of package ownershipwindow (FirstRecordsQuery) and keys its rows by the
+// repository id. A repo_key that is no id (a repository the catalog does not hold) is left out.
+func (reader *Reader) readFirstRecords(ctx context.Context, query, organizationID string) (map[uuid.UUID]time.Time, error) {
+	rows, err := reader.conn.Query(ctx, query, clickhouse.Named("org_id", organizationID))
+	if err != nil {
+		return nil, fmt.Errorf("query first ownership records: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	first := map[uuid.UUID]time.Time{}
+	for rows.Next() {
+		var key string
+		var from time.Time
+		if err := rows.Scan(&key, &from); err != nil {
+			return nil, fmt.Errorf("scan first ownership record: %w", err)
+		}
+		id, err := uuid.Parse(key)
+		if err != nil {
+			continue
+		}
+		first[id] = from
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate first ownership records: %w", err)
+	}
+	return first, nil
+}
+
+// FetchTeamRepoDonors tests the ownership window at the instant alone, with no first-owners-backward clamp (no
+// production caller: the materializer reads FetchTeamRepoDonorSet).
 // FetchTeamRepoDonors reads only the latest primary attribution snapshot and
 // live, sync-derived repository ownership. It never resolves person membership
 // or accepts a manual mapping. linked_issue is excluded because its persisted

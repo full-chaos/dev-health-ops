@@ -1,6 +1,9 @@
 package operational
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -99,7 +102,7 @@ func goldenTexts(t *testing.T, raw []byte) map[string]string {
 }
 
 func TestGoldenTextsAreReadAtEveryDepthAndUnpacked(t *testing.T) {
-	packed := venueoracle.PackBody([]byte("rows from localhost:54321"))
+	packed := packTestBody("rows from localhost:54321")
 	raw, err := json.Marshal(map[string]any{
 		"header":   map[string]any{"test": "T"},
 		"requests": []any{map[string]any{"body": packed}, map[string]any{"body": "plain"}},
@@ -153,4 +156,13 @@ func TestNoVenueGoldenHoldsAnAddress(t *testing.T) {
 			}
 		}
 	}
+}
+
+// packTestBody packs a body the way a golden stores it: gzip, then base64, behind the gzip+base64: prefix.
+func packTestBody(raw string) string {
+	var packed bytes.Buffer
+	writer := gzip.NewWriter(&packed)
+	_, _ = writer.Write([]byte(raw))
+	_ = writer.Close()
+	return "gzip+base64:" + base64.StdEncoding.EncodeToString(packed.Bytes())
 }

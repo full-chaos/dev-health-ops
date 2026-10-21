@@ -10,29 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// fernetExchangeProgram is one cross-runtime exchange, run by the real Python
-// encryption module with the key (and salt, when given) in its environment:
-// it opens the ciphertext the Go cipher made (stdin "go") and seals the
-// plaintext (stdin "plaintext"). Fernet tokens carry a random IV, so the
-// Python ciphertext is the frozen answer the Go cipher then opens; the Go
-// ciphertext is a constant of this file (made once by the Go cipher), so the
-// request does not change from run to run.
-const fernetExchangeProgram = `
-import json, os, sys
-from cryptography.fernet import Fernet
-# Fernet seals with a random IV and the clock; both are pinned so the recording
-# is the same on every run (the token is still the production format, made by
-# the real encrypt_value).
-Fernet.encrypt = lambda self, data: self._encrypt_from_parts(data, 1700000000, bytes(range(16)))
-from dev_health_ops.core.encryption import decrypt_value, encrypt_value
-request = json.load(sys.stdin)
-print(json.dumps({
-    "salt_in_environment": "SETTINGS_ENCRYPTION_SALT" in os.environ,
-    "python_opens_go": decrypt_value(request["go"]),
-    "python_ciphertext": encrypt_value(request["plaintext"]),
-}))
-`
-
 type fernetExchange struct {
 	SaltInEnvironment bool   `json:"salt_in_environment"`
 	PythonOpensGo     string `json:"python_opens_go"`
@@ -49,7 +26,7 @@ func fernetExchangeOf(t *testing.T, golden, key, salt, goCiphertext, plaintext s
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := frozenPython(t, golden, programoracle.Program{Name: "fernet exchange", Text: fernetExchangeProgram, Stdin: stdin, Env: env})[0]
+	out := frozenPython(t, golden, programoracle.Program{Name: "fernet exchange", Stdin: stdin})[0]
 	var got fernetExchange
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &got); err != nil {
 		t.Fatalf("decode the frozen exchange: %v\n%s", err, out)
@@ -154,8 +131,7 @@ func TestFernetCipherMatchesFrozenPythonDefaultSalt(t *testing.T) {
 // too (its route answers 500), so a missing key is a refused write in both
 // planes, never a plaintext or default-key write.
 func TestFernetRefusesWithoutKeyLikePython(t *testing.T) {
-	out := frozenPython(t, "fernet-unconfigured.golden.json", programoracle.Program{Name: "fernet without a key", Text: "from dev_health_ops.core.encryption import encrypt_value\n" +
-		"try:\n    encrypt_value('x')\nexcept Exception as error:\n    print(type(error).__name__ + ': ' + str(error))\n"})[0]
+	out := frozenPython(t, "fernet-unconfigured.golden.json", programoracle.Program{Name: "fernet without a key"})[0]
 	if !strings.Contains(out, "SETTINGS_ENCRYPTION_KEY environment variable is required") {
 		t.Fatalf("Python encrypt_value without a key: output=%s", out)
 	}

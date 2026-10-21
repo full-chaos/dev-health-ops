@@ -1,10 +1,8 @@
 package pyunicodedata_test
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -15,11 +13,8 @@ import (
 // Identity names the interpreter and its Unicode data version.
 // A golden recorded by another producer is refused.
 var unicodeGoldens = programoracle.Set{
-	Package:  "./internal/pythonparity/pyunicodedata/",
 	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
 	Identity: "python 3.14.7\nunicodedata 16.0.0",
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
 		"nfc.golden.json":    "b11baee9ba2ec856fec6e2f87298dd58598091877561b093531f23b91d370b72",
 		"tables.golden.json": "e7188e845e07b6c4c2a4cd07fbc857e501194fd9f10efa0594f3720dc4d28030",
@@ -32,10 +27,5 @@ var unicodeGoldens = programoracle.Set{
 // fails the test; so does a program that exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	return unicodeGoldens.Outputs(t, root, golden, programs...)
+	return unicodeGoldens.Outputs(t, golden, programs...)
 }

@@ -1,29 +1,13 @@
 package remaining
 
 import (
-	"os"
-	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
-
-// pythonIncidentQuery asks the REAL builder for the query, rather than a
-// fixture recording what it once returned. A recorded string is a third copy
-// that rots in step with neither side.
-const pythonIncidentQuery = `
-import os, sys
-from dev_health_ops.metrics.active_incidents import IncidentWindow, active_incidents_query
-sys.stdout.write(active_incidents_query(
-    window=IncidentWindow.RESOLVED,
-    org_id=sys.argv[1],
-    repo_filter=sys.argv[2],
-))
-`
 
 // TestGoIncidentProjectionMatchesLivePythonBuilder is the mandated live-oracle
 // guard for CHAOS-3092 R1 (Option C).
@@ -53,34 +37,27 @@ func TestGoIncidentProjectionMatchesLivePythonBuilder(t *testing.T) {
 	}
 	contracts := []struct {
 		name     string
-		env      string
 		contract OperationalOrderingContract
 	}{
-		{name: "legacy FINAL", env: "1", contract: OperationalOrderingLegacy},
-		{name: "revision ordering", env: "2", contract: OperationalOrderingRevision},
+		{name: "legacy FINAL", contract: OperationalOrderingLegacy},
+		{name: "revision ordering", contract: OperationalOrderingRevision},
 	}
 
-	// One program per (contract, filter): the production builder's output for it. They were executed once
-	// on the last build that carried the Python sources and are frozen in
-	// testdata/golden/dora_incident_sql_oracle.json (recipe in the golden's spec); a frozen run reads them
-	// and runs no Python. Each program's text, arguments and environment are part of its request.
+	// One program per (contract, filter): the production builder's output for it, frozen in
+	// testdata/golden/dora_incident_sql_oracle.json; a frozen run reads them and runs no Python.
 	type run struct{ contract, filter int }
 	var runs []run
 	var programs []programoracle.Program
 	for ci, contract := range contracts {
 		for fi, filter := range filters {
-			repoFilter := repoFilterClause(filter.scope, map[string]any{})
 			programs = append(programs, programoracle.Program{
 				Name: "incident query " + contract.name + "/" + filter.name,
-				Text: "import sys\nsys.argv = ['-c', " + strconv.Quote("{org_id:String}") + ", " + strconv.Quote(repoFilter) + "]\n" + pythonIncidentQuery,
-				Env:  map[string]string{"OPERATIONAL_ORDERING_CONTRACT": contract.env},
 			})
 			runs = append(runs, run{ci, fi})
 		}
 	}
-	spec := rotguard.Spec("testdata/golden/dora_incident_sql_oracle.json", "5ca39260c1f4483927c49ca7e32c1dc111607055cc7101e556b7ed55459e924f",
-		"./internal/jobs/metrics/remaining/", "^TestGoIncidentProjectionMatchesLivePythonBuilder$")
-	answers := programoracle.Run(t, spec, repositoryRootForOracle(t), programs)
+	spec := rotguard.Spec("testdata/golden/dora_incident_sql_oracle.json", "5ca39260c1f4483927c49ca7e32c1dc111607055cc7101e556b7ed55459e924f")
+	answers := programoracle.Run(t, spec, programs)
 
 	for index, ran := range runs {
 		contract, filter, answer := contracts[ran.contract], filters[ran.filter], answers[index]
@@ -147,22 +124,4 @@ var sqlWhitespace = regexp.MustCompile(`\s+`)
 
 func normalizeSQL(query string) string {
 	return strings.TrimSpace(sqlWhitespace.ReplaceAllString(query, " "))
-}
-
-func repositoryRootForOracle(t *testing.T) string {
-	t.Helper()
-	working, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for directory := working; ; {
-		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatalf("no go.mod above %s", working)
-		}
-		directory = parent
-	}
 }

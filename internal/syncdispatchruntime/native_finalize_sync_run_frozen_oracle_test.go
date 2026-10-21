@@ -2,9 +2,6 @@ package syncdispatchruntime
 
 import (
 	"encoding/json"
-	"os"
-	"path"
-	"path/filepath"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
@@ -28,7 +25,7 @@ type finalizeZeroUnitOracle struct {
 }
 
 // TestAggregateRunStatusAndZeroUnitReasonMatchFrozenPython is the CHAOS-4175
-// frozen-Python oracle: it executes testdata/finalize_zero_unit_oracle.py,
+// frozen-Python oracle: it compares a script answer,
 // whose frozen answer (executed once on the pinned build) comes from the REAL, unmodified
 // dev_health_ops.workers.sync_units._aggregate_run_status and
 // ._zero_unit_reason, and diffs Go's aggregateRunStatus/zeroUnitReasonFrom
@@ -38,12 +35,8 @@ type finalizeZeroUnitOracle struct {
 // sibling checks in Finalize deliberately do NOT trim, matching three
 // distinct predicates in the same Python function family.
 func TestAggregateRunStatusAndZeroUnitReasonMatchFrozenPython(t *testing.T) {
-	script, err := os.ReadFile(filepath.Join("testdata", "finalize_zero_unit_oracle.py"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	output := []byte(frozenPython(t, "finalize-zero-unit.golden.json",
-		programoracle.Script("finalize zero unit oracle", path.Join("internal", "syncdispatchruntime", "testdata", "finalize_zero_unit_oracle.py"), string(script), nil))[0])
+		programoracle.Program{Name: "finalize zero unit oracle", Stdin: nil})[0])
 	var want finalizeZeroUnitOracle
 	if err := json.Unmarshal(output, &want); err != nil {
 		t.Fatalf("decode Python zero-unit oracle: %v: %s", err, output)

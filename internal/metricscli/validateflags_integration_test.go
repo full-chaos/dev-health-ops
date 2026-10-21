@@ -10,8 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -226,48 +224,9 @@ func goRunErr(t *testing.T, ch clickHouse, org string, args ...string) (int, str
 // build that still carried the Python CLI.
 const validateFlagsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-// Patched=true replaces the one condition of the Python check that ClickHouse 26.x refuses (last_synced != ”
-// on a DateTime64: the whole Python command fails with code 41); the four string conditions stay as they are
-// and the timestamp is never NULL, so the answer is the one the check meant to give. patched=false is the
-// producer as it ships.
-const (
-	validateFlagsShippedProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	validateFlagsPatchedProgram = "import sys\nfrom dev_health_ops.metrics import ff_validation\n" +
-		"ff_validation._REQUIRED_FLAG_FIELDS = ['provider', 'flag_key', 'environment', 'flag_type']\n" +
-		"from dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-)
-
-// validateFlagsPythonSettings are the variables that shape the producer's answers, as constants: the
-// producer's environment AND part of the golden's request key (a changed value fails the frozen replay).
-// ORG_ID is the scenario's own (in its input) and CLICKHOUSE_URI a per-run value: both are appended by name.
-var validateFlagsPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "TZ": "UTC"}
-
-func pythonRunErr(t *testing.T, producer *venueoracle.Producer, ch clickHouse, org string, patched bool, args ...string) (int, string, string) {
-	t.Helper()
-	program := validateFlagsShippedProgram
-	if patched {
-		program = validateFlagsPatchedProgram
-	}
-	// ORG_ID is the scenario's own and is in the request's input (the key): it is declared with the settings.
-	declared := map[string]string{"ORG_ID": org}
-	for name, value := range validateFlagsPythonSettings {
-		declared[name] = value
-	}
-	command, err := producer.Command(context.Background(), declared, []string{"CLICKHOUSE_URI=" + ch.httpDSN}, append([]string{"-c", program, "metrics", "validate-flags"}, args...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
-	code := 0
-	if exit, ok := err.(*exec.ExitError); ok {
-		code = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run python: %v", err)
-	}
-	return code, stdout.String(), stderr.String()
-}
+// validateFlagsShippedProgram is a field of the golden's request (its stdin digest is part of the golden key). Nothing
+// executes it: no Python runs, the answers are frozen.
+const validateFlagsShippedProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
 
 var scenarios = []struct {
 	org     string
@@ -317,18 +276,11 @@ func maskDates(text string) string { return datePattern.ReplaceAllString(text, "
 // organizations are part of the golden's key. Dates (the drift check prints the days it saw, which move with
 // the clock) are masked in the stored text.
 func TestValidateFlagsAgainstClickHouse(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/validate_flags.json",
 		PythonBuild: validateFlagsPythonBuild,
 		SHA256:      "a4acb8fb91f2bee8498ceb0e99334792d245027421d0c7ee11ddd44011b3ff7e",
-		Recipe: "git worktree add --detach $DIR " + validateFlagsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/metricscli/ -test '^TestValidateFlagsAgainstClickHouse$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	type keyed struct {
 		Org  string   `json:"org"`
@@ -342,32 +294,8 @@ func TestValidateFlagsAgainstClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("validate-flags scenarios", validateFlagsPatchedProgram, input, validateFlagsPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		ch := startClickHouse(t)
-		seed(t, ch)
-		var produced validateFlagsAnswers
-		for _, scenario := range scenarios {
-			if scenario.prepare != nil {
-				scenario.prepare(t, ch)
-			}
-			code, out, stderr := pythonRunErr(t, producer, ch, scenario.org, true, scenario.args...)
-			if !strings.Contains(out, "Feature Flag Pipeline Validation") {
-				t.Fatalf("the producer printed no report for org %q %v: the comparison would measure nothing:\n%s\n%s", scenario.org, scenario.args, out, stderr)
-			}
-			produced.Scenarios = append(produced.Scenarios, goldenScenario{Org: scenario.org, Args: scenario.args, Exit: code, Output: maskDates(out)})
-		}
-		// The named difference is real: the producer as it ships fails on this ClickHouse before printing
-		// anything.
-		code, out, stderr := pythonRunErr(t, producer, ch, orgBad, false)
-		produced.Shipped.Exit, produced.Shipped.HasStdout, produced.Shipped.Refused = code, out != "", strings.Contains(stderr, "Cannot read DateTime")
-		body, err := json.Marshal(produced)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("validate-flags scenarios", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var recorded validateFlagsAnswers
 	if err := json.Unmarshal([]byte(answers[0].Body), &recorded); err != nil {

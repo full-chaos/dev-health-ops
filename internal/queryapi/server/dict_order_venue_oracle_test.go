@@ -3,7 +3,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/json"
@@ -30,102 +29,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// pythonDictOrderProgram runs the REAL Python service behind each case
-// (the service the route called before the route moved to the query-api)
-// on the venue's Python ClickHouse database, and writes its return value
-// as FastAPI does on that route's response_model path: the route's
-// response field validates it and serialize_json writes it with the
-// route's response_model_* settings (fastapi/routing.py
-// serialize_response, dump_json=True). A service that raises is the
-// route's `except Exception: raise HTTPException(503, "Data
-// unavailable")`.
-const pythonDictOrderProgram = `
-import sys
-# The answer is the only thing on stdout: whatever the services (or the libraries they import) print goes to stderr.
-answer_stream, sys.stdout = sys.stdout, sys.stderr
-import asyncio, datetime, json, os, traceback
-from fastapi.routing import APIRoute
-from dev_health_ops.api.main import app
-from dev_health_ops.api.models.filters import MetricFilter
-from dev_health_ops.core.cache import create_cache, epoch_scoped
-from dev_health_ops.api.services.explain import build_explain_response
-from dev_health_ops.api.services.home import build_home_response
-from dev_health_ops.api.services.investment import build_investment_response
-from dev_health_ops.api.services.investment_flow import build_investment_flow_response
-from dev_health_ops.api.services.aggregated_flame import build_aggregated_flame_response
-from dev_health_ops.api.services.people import build_person_summary_response
-from dev_health_ops.api.services.work_units import build_work_unit_investments
-from dev_health_ops.api.services.work_unit_explain import explain_work_unit
-from dev_health_ops.llm import get_provider
-
-routes = {}
-for route in app.routes:
-    if isinstance(route, APIRoute):
-        for method in route.methods:
-            routes[method + " " + route.path] = route
-db_url = os.environ["CLICKHOUSE_URI"]
-home_cache = epoch_scoped(create_cache(ttl_seconds=60))
-explain_cache = epoch_scoped(create_cache(ttl_seconds=120))
-
-async def call(case):
-    kind, org_id, args = case["kind"], case["org_id"], case["args"]
-    if kind == "explain":
-        return await build_explain_response(db_url=db_url, metric=args["metric"], filters=MetricFilter(**args["filters"]), cache=explain_cache, org_id=org_id)
-    if kind == "home":
-        return await build_home_response(db_url=db_url, filters=MetricFilter(**args["filters"]), cache=home_cache, org_id=org_id, semantic_session=None)
-    if kind == "investment":
-        return await build_investment_response(db_url=db_url, filters=MetricFilter(**args["filters"]), org_id=org_id)
-    if kind == "flow":
-        return await build_investment_flow_response(db_url=db_url, filters=MetricFilter(**args["filters"]), flow_mode=args.get("flow_mode"), org_id=org_id)
-    if kind == "aggflame":
-        return await build_aggregated_flame_response(
-            db_url=db_url, org_id=org_id, mode=args["mode"],
-            start_day=datetime.date.fromisoformat(args["start_day"]), end_day=datetime.date.fromisoformat(args["end_day"]),
-            team_id=args.get("team_id"), repo_id=args.get("repo_id"), provider=args.get("provider"), work_scope_id=args.get("work_scope_id"))
-    if kind == "people_summary":
-        return await build_person_summary_response(db_url=db_url, person_id=args["person_id"], range_days=args["range_days"], compare_days=args["compare_days"], org_id=org_id)
-    if kind == "work_units":
-        return await build_work_unit_investments(db_url=db_url, filters=MetricFilter(**args["filters"]), org_id=org_id, limit=args["limit"], include_text=True)
-    if kind == "work_unit_explain":
-        investments = await build_work_unit_investments(db_url=db_url, filters=MetricFilter(**args["filters"]), org_id=org_id, limit=1, include_text=True, work_unit_id=args["work_unit_id"])
-        if not investments:
-            raise LookupError("work unit not found")
-        provider = get_provider("mock", model=None, org_id=org_id)
-        return await explain_work_unit(investment=investments[0], llm_provider="mock", llm_model=None, provider=provider, org_id=org_id, db_url=db_url)
-    raise SystemExit("unknown case kind " + kind)
-
-out = []
-for case in json.loads(sys.stdin.read()):
-    route = routes[case["route"]]
-    try:
-        value = asyncio.run(call(case))
-    except Exception:
-        sys.stderr.write(case["name"] + ": " + traceback.format_exc()[-2000:] + "\n")
-        out.append({"status": 503, "body": '{"detail":"Data unavailable"}'})
-        continue
-    field = route.response_field
-    validated, errors = field.validate(value, {}, loc=("response",))
-    if errors:
-        raise SystemExit(case["route"] + ": " + repr(errors)[:3000])
-    body = field.serialize_json(
-        validated,
-        include=route.response_model_include,
-        exclude=route.response_model_exclude,
-        by_alias=route.response_model_by_alias,
-        exclude_unset=route.response_model_exclude_unset,
-        exclude_defaults=route.response_model_exclude_defaults,
-        exclude_none=route.response_model_exclude_none,
-    )
-    text = body.decode("utf-8")
-    if case["kind"] == "people_summary":
-        # Only the freshness object (it holds sources, the dict under test): the summary's other lists (sections.flow_breakdown,
-        # sections.collaboration) come from a UNION ALL with no ORDER BY in the Python query itself, so their row order is ClickHouse's,
-        # run to run, and a recording of the whole body would differ from the next one. The spark timestamps are CHAOS-6605.
-        text = json.dumps(json.loads(text)["freshness"], separators=(",", ":"), ensure_ascii=False)
-    out.append({"status": 200, "body": text})
-answer_stream.write("RESULT " + json.dumps(out) + "\n")
-`
 
 // dictOrderCase is one route request, answered by the Go handler and by
 // the Python service the route called.
@@ -197,7 +100,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	orgID := stableVenueID("dict-order/org").String()
 	golden := venueoracle.OpenGolden(t, dictOrderGolden(t.Name(), dictOrderPin))
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root),
+		Golden: golden, Root: root,
 		// No route here checks a token; the key is the one the other venue oracles of this package use.
 		JWTKey: oracleJWTKey,
 	})
@@ -208,7 +111,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	// md5 of the identity).
 	identity := "venue-dict-order@example.com"
 	personID := fmt.Sprintf("%x", md5.Sum([]byte(identity)))
-	for _, database := range dictOrderDatabases(venue, golden) {
+	for _, database := range []string{venue.GoClickHouseDB} {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
 		if err != nil {
 			t.Fatal(err)
@@ -223,7 +126,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	// The aggregated-flame case takes explicit dates, so its window is FIXED and its rows are seeded inside it with fixed dates (a work item
 	// completed on 2026-01-03, attributed to team-a): the case compares two non-empty answers, not two empty ones.
 	flameRepo := stableVenueID("dict-order/repo").String()
-	for _, database := range dictOrderDatabases(venue, golden) {
+	for _, database := range []string{venue.GoClickHouseDB} {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
 		if err != nil {
 			t.Fatal(err)
@@ -304,13 +207,6 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			}
 			_ = conn.Close()
 		}
-	}
-	// The Home case compares a world with no Home data. Home reads the
-	// canonical categorization (CHAOS-9195), so the Go side gets the work
-	// units only after that case; the frozen Python run reads its legacy
-	// table, which holds nothing here. Recording seeds the Python database first.
-	if golden.Recording() {
-		seedWorkUnits([]string{venue.PythonClickHouseDB})
 	}
 	goUnitsSeeded := false
 
@@ -562,18 +458,6 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	golden.Finish(t)
 }
 
-// dictOrderDeclared holds the environment entries that shape the Python program's answers. The address of the run's own ClickHouse database is
-// not one of them: it is made for the run and passed as a per-run entry (CLICKHOUSE_URI).
-var dictOrderDeclared = map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test"}
-
-// dictOrderDatabases are the databases a test seeds: the Go plane's always, the Python plane's only while its answers are recorded.
-func dictOrderDatabases(venue *venueoracle.Venue, golden *venueoracle.Golden) []string {
-	if golden.Recording() {
-		return []string{venue.PythonClickHouseDB, venue.GoClickHouseDB}
-	}
-	return []string{venue.GoClickHouseDB}
-}
-
 func runDictOrderPython(t *testing.T, golden *venueoracle.Golden, venue *venueoracle.Venue, root string, cases []dictOrderCase) []dictOrderPythonAnswer {
 	t.Helper()
 	payload, err := json.Marshal(cases)
@@ -582,29 +466,11 @@ func runDictOrderPython(t *testing.T, golden *venueoracle.Golden, venue *venueor
 	}
 	// The launcher form: the harness's own producer starts the program in the closed environment; the address of the run's own Python
 	// ClickHouse database is the one per-run entry, passed as an extra (it is not part of the request's key).
-	request := venueoracle.ProgramRequest("dict order services", pythonDictOrderProgram, payload, dictOrderDeclared)
-	answers := golden.Produce(t, golden.PythonRoot(t, root), []venueoracle.Request{request},
-		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-			command, err := producer.Command(context.Background(), dictOrderDeclared,
-				[]string{"CLICKHOUSE_URI=" + venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB)}, "-c", pythonDictOrderProgram)
-			if err != nil {
-				t.Fatal(err)
-			}
-			command.Dir = producer.Root
-			command.Stdin = bytes.NewReader(payload)
-			var stdout, stderr bytes.Buffer
-			command.Stdout, command.Stderr = &stdout, &stderr
-			if err := command.Run(); err != nil {
-				t.Fatalf("the python program failed: %v\n%s", err, dictOrderWithoutAddress(stderr.String(), venue, t))
-			}
-			return []venueoracle.Response{{Status: 0, Body: stdout.String()}}
-		})
+	request := venueoracle.ProgramRequest("dict order services", payload)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	if answers[0].Status != 0 {
 		t.Fatalf("the python program exited %d when it was recorded", answers[0].Status)
-	}
-	if golden.Recording() && strings.Contains(answers[0].Body, venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB)) {
-		t.Fatal("the recorded answer holds the address of the run's own database: a golden cannot hold a value of one run")
 	}
 	var result []dictOrderPythonAnswer
 	for _, line := range strings.Split(answers[0].Body, "\n") {
@@ -668,11 +534,6 @@ func dictOrderScrub(text string) string {
 		}
 		return "<date>"
 	})
-}
-
-// dictOrderWithoutAddress is text with the run's own database address taken out, for a failure message.
-func dictOrderWithoutAddress(text string, venue *venueoracle.Venue, t *testing.T) string {
-	return strings.ReplaceAll(text, venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB), "<CLICKHOUSE_URI>")
 }
 
 // declaredWorkUnitEffort stands for a work unit's effort on both sides of the work-units comparison (CHAOS-9695,

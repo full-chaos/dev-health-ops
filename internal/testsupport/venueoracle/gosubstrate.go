@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -21,43 +23,66 @@ import (
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
 
-// A frozen venue (Options.Golden set, not recording, or Options.GoOnly) runs
-// no Python: the Python plane's answers come from the golden, so the only
-// Python the venue ran before was its substrate -- the schema, the access
-// tokens and the seed calls. Each is replaced here by the Go production code
-// that already owns it on a deployed build:
+// A venue runs no Python: the Python plane's answers come from the golden, and
+// the substrate the Python plane once built (the schema, the access tokens and
+// the seed calls) comes from the Go production code that owns it on a
+// deployed build:
 //
 //   - the PostgreSQL schema: pgmigrate (`dho migrate postgres upgrade`),
 //     whose baseline is the executed Alembic chain;
 //   - the ClickHouse schema: chmigrate (`dho migrate clickhouse upgrade`);
 //   - the access tokens: edgetoken.Signer, the Go port of
-//     AuthService.create_access_token (pinned byte for byte by
-//     edgetoken's live oracle);
+//     AuthService.create_access_token;
 //   - CallPython: the Go ports in goCallPorts, each the one production code
 //     uses for the same value.
 //
-// The schemas come from the Go migrators while recording too. pgmigrate
-// builds the same schema as the Alembic chain (pgmigrate's
-// TestBaselineIsTheFrozenPythonUpgrade compares them), but not
-// the same physical tables: the chain's history leaves dropped columns in a
-// table's tuples (sync_configurations keeps one), which moves where an
-// updated row lands, so an unordered read after writes returns another
-// order. Recording on the Go-built schema gives the Python plane the layout
-// the replay's Go plane reads, as production does since the Python chain
-// stopped running.
-//
-// A recording run keeps the pinned build's Python for the tokens and the seed
-// calls, so a frozen replay checks the Go minter and the Go ports against
-// it: a token whose claims differ changes the request key and fails naming
-// the request, and a seed value that differs changes the answers or the
-// frozen rows.
+// The goldens were recorded on the Go-built schema too, so the replay's Go
+// plane reads the physical layout the recording's Python plane wrote.
 
-// pythonPlaneLookup is the Python plane's environment as its process sees it:
+// processEnvAtInit is the test process's environment when this package was
+// initialised, before TestMain and before any test ran. A variable that
+// differs from it later was set by test code.
+var processEnvAtInit = envMap(os.Environ())
+
+func envMap(env []string) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, entry := range env {
+		if name, value, found := strings.Cut(entry, "="); found && name != "" {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+// testSetEnv is the variables test code set in the process since this package
+// was initialised (t.Setenv, os.Setenv; TestMain included), as NAME=VALUE in
+// name order.
+func testSetEnv() []string {
+	var out []string
+	for name, value := range envMap(os.Environ()) {
+		if earlier, was := processEnvAtInit[name]; was && earlier == value {
+			continue
+		}
+		out = append(out, name+"="+value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// planeEnv is the Python plane's settings the goldens were recorded under, as
+// far as a Go port reads them: the harness's fixed entries, the test's JWT key
+// (Options.JWTKey) and the test's PythonEnv last (a later entry wins).
+func planeEnv(options Options) []string {
+	return append([]string{"JWT_SECRET_KEY=" + options.JWTKey, "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
+		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test"}, options.PythonEnv...)
+}
+
+// pythonPlaneLookup is the Python plane's environment as the Go ports read it:
 // what test code set in the process, then the venue's own entries, later
-// entries winning (pythonChildEnv).
+// entries winning.
 func (v *Venue) pythonPlaneLookup(name string) (string, bool) {
 	value, found := "", false
-	for _, entry := range v.pythonChildEnv() {
+	for _, entry := range append(testSetEnv(), v.pythonEnv...) {
 		key, rest, ok := strings.Cut(entry, "=")
 		if ok && key == name {
 			value, found = rest, true

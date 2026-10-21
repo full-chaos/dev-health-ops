@@ -2,6 +2,7 @@ package venueoracle
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -385,7 +386,7 @@ func leaf(name string, value any) string {
 }
 
 // project is what the golden stores and compares of one piece of text: its
-// JWTs projected, then the spec's Scrub. A packed body (PackBody) is unpacked,
+// JWTs projected, then the spec's Scrub. A packed body (packBody) is unpacked,
 // projected and packed again, so a token inside it is projected too; one that
 // does not unpack is an error.
 func (g *Golden) project(request, kind, text string) (string, error) {
@@ -398,7 +399,7 @@ func (g *Golden) project(request, kind, text string) (string, error) {
 		if err != nil || projected == raw {
 			return text, err
 		}
-		return PackBody([]byte(projected)), nil
+		return packBody([]byte(projected)), nil
 	}
 	text = g.DigestDeclared(text) // the declared credential constants first: the value stays compared as its digest
 	stageA := ProjectTokens(text)
@@ -440,7 +441,7 @@ func (g *Golden) projectResponseAt(request string, response Response) (Response,
 			// name stays, so a response that lacks or gains it is still seen.
 			out.Headers[name] = volatileHeaderValue
 			if value != volatileHeaderValue {
-				if err := g.noteBlank(request, blankedLeaf{pattern: kind, raw: value}, false); err != nil {
+				if err := g.noteBlank(request, blankedLeaf{pattern: kind, raw: value}); err != nil {
 					return out, err
 				}
 			}
@@ -454,7 +455,7 @@ func (g *Golden) projectResponseAt(request string, response Response) (Response,
 			// already skips this header for such a body.
 			out.Headers[name] = projectedLengthValue
 			if value != projectedLengthValue {
-				if err := g.noteBlank(request, blankedLeaf{pattern: kind, raw: value}, false); err != nil {
+				if err := g.noteBlank(request, blankedLeaf{pattern: kind, raw: value}); err != nil {
 					return out, err
 				}
 			}
@@ -535,4 +536,15 @@ func undecodableErr(request Request, response Response) error {
 		}
 	}
 	return nil
+}
+
+// packBody is raw as a golden stores a large producer output: gzip (no name,
+// no time, so the same output packs to the same text), then base64, behind
+// packedPrefix.
+func packBody(raw []byte) string {
+	var packed bytes.Buffer
+	writer, _ := gzip.NewWriterLevel(&packed, gzip.BestCompression)
+	_, _ = writer.Write(raw)
+	_ = writer.Close()
+	return packedPrefix + base64.StdEncoding.EncodeToString(packed.Bytes())
 }

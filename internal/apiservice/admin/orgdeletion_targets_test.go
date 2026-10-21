@@ -1,29 +1,11 @@
 package admin
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// orgDeletionRepoRoot walks up from this file to the directory holding
-// src/dev_health_ops (this repo's Python source root) -- same walk as
-// venuehelpers_test.go's own repoRoot, duplicated here because that one is
-// integration-tagged and this test deliberately is not: it needs Python to
-// import one module, never a database or container.
-func orgDeletionRepoRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's source file")
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-}
 
 // pythonDeletionTarget is one entry of the introspection script's JSON
 // output below -- the SHAPE of org_deletion.py's predicate for one table,
@@ -52,8 +34,8 @@ type pythonDeletionTarget struct {
 // the actual scoping COLUMN, its UUID-vs-string bind type, or (for an
 // indirect target) the subquery's table/column shape would pass silently
 // as long as it picked a real column on the right table. This version
-// EXECUTES each Python predicate lambda with two distinguishable sentinel
-// values (a fixed uuid.UUID and a non-UUID string) and inspects the
+// The frozen answer was produced by executing each Python predicate lambda with two distinguishable sentinel
+// values (a fixed uuid.UUID and a non-UUID string) and inspecting the
 // resulting SQLAlchemy expression tree directly -- for a direct predicate,
 // the bound column name and whether the bound sentinel it compares against
 // was the uuid.UUID one or the string one; for an indirect (`.in_(select
@@ -69,65 +51,8 @@ func TestOrgDeletionTargetsMatchThePythonList(t *testing.T) {
 		Path:        "testdata/admin/org_deletion_targets.json",
 		PythonBuild: orgDeletionTargetsPythonBuild,
 		SHA256:      "f98db083aff5545c6c00857c406bd08df051e02815f802854a5ebf03618c1733",
-		Recipe: "git worktree add --detach $DIR " + orgDeletionTargetsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestOrgDeletionTargetsMatchThePythonList$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, orgDeletionRepoRoot(t))
-
-	script := `
-import json
-import sys
-import uuid
-sys.path.insert(0, "src")
-from dev_health_ops.api.services import org_deletion
-from sqlalchemy.sql import operators
-
-sentinel_uuid = uuid.UUID(int=1)
-sentinel_str = "sentinel-org-id-string-not-a-uuid"
-
-def describe(target):
-    expr = target.predicate(sentinel_uuid, sentinel_str)
-    if expr.operator is operators.eq:
-        return {
-            "table": target.table,
-            "kind": "direct",
-            "column": expr.left.name,
-            "uuid": expr.right.value == sentinel_uuid,
-        }
-    if expr.operator is operators.in_op:
-        sub = expr.right.element
-        where = sub.whereclause
-        return {
-            "table": target.table,
-            "kind": "via",
-            "column": expr.left.name,
-            "sub_table": sub.get_final_froms()[0].name,
-            "sub_id_column": sub.selected_columns[0].name,
-            "sub_org_column": where.left.name,
-            "sub_org_uuid": where.right.value == sentinel_uuid,
-        }
-    return {"table": target.table, "kind": "unrecognized-operator:" + str(expr.operator)}
-
-out = [describe(t) for t in org_deletion._postgres_targets()]
-print(json.dumps(out))
-`
-	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("org deletion targets", script, nil, nil)},
-		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-			// The harness starts the child in the closed environment: nothing
-			// ambient shapes its answer.
-			cmd, err := producer.Command(context.Background(), nil, nil, "-c", script)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cmd.Dir = producer.Root
-			var stderr bytes.Buffer
-			cmd.Stderr = &stderr
-			output, err := cmd.Output()
-			if err != nil {
-				t.Fatalf("python: %v\n%s", err, stderr.String())
-			}
-			return []venueoracle.Response{{Status: 0, Body: string(output)}}
-		})
+	answers := golden.Produce(t, []venueoracle.Request{venueoracle.ProgramRequest("org deletion targets", nil)})
 	golden.Consumed(t, answers...)
 	output := []byte(answers[0].Body)
 

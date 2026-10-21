@@ -109,17 +109,13 @@ internal/teamid
 internal/teamkeytables
 internal/teamprovider
 internal/testsupport/containers
-internal/testsupport/goldenscan
 internal/testsupport/moduleroot
 internal/testsupport/pydanticecho
-internal/testsupport/pyoracle
-internal/testsupport/recordedfiles
 internal/testsupport/redirectprobe
 internal/testsupport/venueoracle
 internal/workitemcontract
 ~internal/api/externalingest/testdata
 ~internal/api/recordvalidation/testdata
-~internal/apiservice/admin/testdata/llmreadinessoracle
 ~internal/apiservice/customerpush/testdata
 ~internal/auth/passwordpolicy/data
 ~internal/chmigrate/baseline
@@ -128,4 +124,3 @@ internal/workitemcontract
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
-~internal/scheduler/sync/testdata

@@ -10,19 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const pythonValidateBaseURLProgram = `
-import json, sys
-from dev_health_ops.llm.credentials import validate_llm_base_url
-out = []
-for url in json.loads(sys.stdin.read()):
-    try:
-        ok, error = validate_llm_base_url(url)
-        out.append({"ok": ok, "error": error})
-    except ValueError as exc:
-        out.append({"raised": str(exc)})
-print(json.dumps(out))
-`
-
 // validateBaseURLCorpus uses IP literals and names under the reserved
 // .invalid TLD (which never resolve), so both planes decide without the
 // network.
@@ -56,7 +43,7 @@ func TestValidateBaseURLMatchesFrozenPython(t *testing.T) {
 	corpus := validateBaseURLCorpus()
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "validate-base-url.golden.json",
-		programoracle.Program{Name: "validate-base-url", Text: pythonValidateBaseURLProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "validate-base-url", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []map[string]any
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

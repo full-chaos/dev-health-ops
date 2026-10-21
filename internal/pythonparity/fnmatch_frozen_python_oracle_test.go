@@ -1,19 +1,12 @@
 package pythonparity_test
 
 import (
-	_ "embed"
 	"encoding/json"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
-
-// fnMatchOracleProgram is the oracle script, run as an inline program: its
-// text is part of the request the golden is keyed on.
-//
-//go:embed testdata/python_fnmatch_oracle.py
-var fnMatchOracleProgram string
 
 // TestFnMatchMatchesFrozenPython is the oracle: it compares both the match
 // outcome AND the translated expression against what CPython answered,
@@ -30,7 +23,7 @@ func TestFnMatchMatchesFrozenPython(t *testing.T) {
 	}
 
 	output := frozenPython(t, "fnmatch.golden.json",
-		programoracle.Program{Name: "fnmatch", Text: fnMatchOracleProgram, Stdin: encoded})[0]
+		programoracle.Program{Name: "fnmatch", Stdin: encoded})[0]
 
 	var got []struct {
 		Pattern    string `json:"pattern"`

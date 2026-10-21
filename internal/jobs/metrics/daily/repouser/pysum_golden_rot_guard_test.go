@@ -22,12 +22,9 @@ import (
 // again, and no Python runs in a frozen run.
 func TestPysumGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/pysum_rot_guard.json", "ed18bc20ef2267236eb04e763322fd03429d4f3bbc42434930057220fc42adea",
-		"./internal/jobs/metrics/daily/repouser/", "^TestPysumGoldenMatchesLivePython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/pysum_rot_guard.json", "ed18bc20ef2267236eb04e763322fd03429d4f3bbc42434930057220fc42adea")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "pysum golden generator",
-		Path: "tests/fixtures/generate_pysum_golden.py",
-		Args: []string{"--stdout"},
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", "pysum_golden.json"))
@@ -38,11 +35,9 @@ func TestPysumGoldenMatchesLivePython(t *testing.T) {
 		t.Errorf(
 			"the recorded Python render no longer equals the checked-in pysum golden.\n" +
 				"Either tests/fixtures/pysum_golden.json was edited by hand or the generator changed. " +
-				"Regenerate the fixture on the pinned build with\n" +
-				"    python tests/fixtures/generate_pysum_golden.py\n" +
-				"review the diff as a real behaviour change -- if Go should follow, change Go " +
+				"Review the diff as a real behaviour change -- if Go should follow, change Go " +
 				"too and re-verify TestCodeOwnershipGiniMatchesLivePythonBitExact; if it should not, " +
-				"the Python change is the bug -- and record the producer again (the golden's recipe).",
+				"the Python change is the bug -- and record the producer again.",
 		)
 	}
 }

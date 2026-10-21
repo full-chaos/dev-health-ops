@@ -18,20 +18,16 @@ const pythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // another interpreter or another version of one of them is refused.
 const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nhttpx 0.28.1"
 
-// goldenPins pins the SHA-256 of every golden under testdata/golden. The
-// goldenrecord verb writes each digest when it promotes a recording; a new
-// golden starts as "PIN:" + its file name without ".json".
+// goldenPins pins the SHA-256 of every golden under testdata/golden.
 var goldenPins = map[string]string{
 	"list-projects.golden.json": "52421405d15ca951c0198162760ab66f6aa07106faf01a0ff60fab1d241d13aa",
 }
 
 // goldens is the set of this package's frozen Python answers.
 var goldens = programoracle.Set{
-	Package:       "./internal/api/gitlabcode/",
-	Build:         pythonBuild,
-	Identity:      producerIdentity,
-	Distributions: []string{"httpx"},
-	Pins:          goldenPins,
+	Build:    pythonBuild,
+	Identity: producerIdentity,
+	Pins:     goldenPins,
 }
 
 // frozenPython returns the stdout of each program, in order, from the golden
@@ -42,7 +38,7 @@ var goldens = programoracle.Set{
 // exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	return goldens.Outputs(t, repositoryRoot(t), golden, programs...)
+	return goldens.Outputs(t, golden, programs...)
 }
 
 // repositoryRoot is the repository root, from this file's own location.

@@ -245,24 +245,17 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, webhookGoldenSpec(t.Name(), goldenDigest(t.Name())))
 	start := time.Now().UTC()
 	fake := newFakeStripe()
-	pyStripe, goStripe := httptest.NewServer(fake.plane("py")), httptest.NewServer(fake.plane("go"))
-	t.Cleanup(pyStripe.Close)
+	goStripe := httptest.NewServer(fake.plane("go"))
 	t.Cleanup(goStripe.Close)
 	env := webhookEnv()
-	// Checkout and invoice events reach their handlers as plain dicts
-	// (CHAOS-6525); subscription events keep the deployed StripeObject for
-	// SubscriptionService.process_event, and only the router's three
-	// subscription handlers get the dict view.
-	pythonEnv := []string{"VENUE_STRIPE_API_BASE=" + pyStripe.URL,
-		"VENUE_STRIPE_EVENT_AS_DICT=checkout.session.completed,invoice.paid,invoice.payment_failed,invoice.finalized",
-		"VENUE_STRIPE_SUBSCRIPTION_HANDLERS_AS_DICT=1", "VENUE_STRIPE_SESSION_LINE_ITEMS=1", "VENUE_PY_TRACEBACKS=1", "VENUE_PY_LOGGING=1"}
+	var pythonEnv []string
 	for key, value := range env {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			// Org C's tier is managed by hand: Stripe events leave it alone.
@@ -425,13 +418,7 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		if blank {
 			goRows = blankTrialKeys(goRows)
 		}
-		pyRows := golden.CompareRows(t, "rows:"+name, func() string {
-			raw := normalizePython(tables[name](venue.AdminURI(t, venue.SourceDB)))
-			if blank {
-				raw = blankTrialKeys(raw)
-			}
-			return raw
-		}, goRows)
+		pyRows := golden.CompareRows(t, "rows:"+name, goRows)
 		same := pyRows == goRows && pyRows != ""
 		receipt += fmt.Sprintf("%s rows after the events: %s\n", name, venueoracle.Mark(same))
 		if !same {

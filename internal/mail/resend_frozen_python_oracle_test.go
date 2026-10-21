@@ -4,39 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
-
-// resendOracleProgram drives the REAL Python Resend path
-// (ResendEmailProvider in src/dev_health_ops/api/services/email.py, over the
-// installed `resend` SDK). It prints whether the provider raised. Its input
-// is {"spec": the message, "stub_reply": what the stand-in answers}; the
-// address of the stand-in is RESEND_API_URL in its environment.
-const resendOracleProgram = `
-import asyncio, json, sys
-from dev_health_ops.api.services.email import ResendEmailProvider
-
-spec = json.load(sys.stdin)["spec"]
-provider = ResendEmailProvider(api_key=spec["api_key"])
-try:
-    asyncio.run(provider.send_email(
-        from_address=spec["from"], to_address=spec["to"],
-        subject=spec["subject"], html_content=spec["html"]))
-    print(json.dumps({"sent": True}))
-except Exception as error:
-    print(json.dumps({"sent": False, "error": type(error).__name__}))
-`
 
 type resendRequest struct {
 	Method        string
@@ -131,40 +109,16 @@ type resendReply struct {
 	Body        string `json:"body"`
 }
 
-// resendProgram is one run of the Python provider: spec is the message, reply
-// what the stand-in answers. When the golden is recorded, the stand-in is
-// started once for all runs, each run gets its address by name (it is new in
-// every run and is not part of the request), and the recorded answer is the
-// provider's outcome with the request the stand-in received.
-func resendProgram(t *testing.T, name string, spec map[string]any, reply resendReply, stub func() *resendStub) programoracle.Program {
+// resendProgram is one frozen run of the Python provider: spec is the message, reply
+// what the stand-in answered.
+func resendProgram(t *testing.T, name string, spec map[string]any, reply resendReply) programoracle.Program {
 	t.Helper()
 	input, err := json.Marshal(map[string]any{"spec": spec, "stub_reply": reply})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return programoracle.Program{
-		Name: name, Text: resendOracleProgram, Stdin: input,
-		PerRunNames: []string{"RESEND_API_URL"},
-		PerRun: func() map[string]string {
-			server := stub()
-			server.respond(reply.Status, reply.ContentType, reply.Body)
-			return map[string]string{"RESEND_API_URL": server.server.URL}
-		},
-		Answer: func(stdout []byte) ([]byte, error) {
-			// The SDK may log; the outcome is the last line.
-			lines := strings.Split(strings.TrimSpace(string(stdout)), "\n")
-			var answer resendAnswer
-			if err := json.Unmarshal([]byte(lines[len(lines)-1]), &answer); err != nil {
-				return nil, fmt.Errorf("decode the provider's outcome: %w", err)
-			}
-			if request := stub().last; request != nil {
-				answer.Request = &resendRecordedRequest{
-					Method: request.Method, Path: request.Path, Authorization: digestOf(request.Authorization),
-					Accept: request.Accept, UserAgent: request.UserAgent, ContentType: request.ContentType, Body: request.Body,
-				}
-			}
-			return json.Marshal(answer)
-		},
+		Name: name, Stdin: input,
 	}
 }
 
@@ -240,23 +194,14 @@ func TestResendSenderMatchesFrozenPythonResendProvider(t *testing.T) {
 		{"JSON 500 with no statusCode field", 500, "", `{"message":"upstream exploded"}`},
 	}
 
-	// The stand-in of a recording: one server for every Python run, started
-	// only when the golden is recorded.
-	var recording *resendStub
-	recordingStub := func() *resendStub {
-		if recording == nil {
-			recording = newResendStub(t)
-		}
-		return recording
-	}
 	accepted := resendReply{Status: 200, Body: `{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}`}
 	var programs []programoracle.Program
 	for _, c := range requests {
-		programs = append(programs, resendProgram(t, "request: "+c.name, c.spec, accepted, recordingStub))
+		programs = append(programs, resendProgram(t, "request: "+c.name, c.spec, accepted))
 	}
 	for _, reply := range replies {
 		programs = append(programs, resendProgram(t, "outcome: "+reply.name, spec("Hello", "<p>x</p>"),
-			resendReply{Status: reply.status, ContentType: reply.contentType, Body: reply.body}, recordingStub))
+			resendReply{Status: reply.status, ContentType: reply.contentType, Body: reply.body}))
 	}
 	outputs := frozenPython(t, "resend.golden.json", programs...)
 	answers := make([]resendAnswer, len(outputs))

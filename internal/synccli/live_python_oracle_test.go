@@ -1,17 +1,13 @@
 package synccli
 
 import (
-	"bytes"
-	"context"
 	"crypto/sha256"
-	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -19,12 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-//go:embed testdata/sync_target_oracle.py
-var syncTargetOracleProgram string
 
 // Named limitations, each outside the corpus on purpose:
 //   - dev-hops's ROOT-level global flags before the subcommand
@@ -209,11 +201,6 @@ const syncTargetPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // a per-run temporary path, so the producer swaps it for a real file and swaps it back in the answers.
 const syncTargetKeyPlaceholder = "/tmp/dho-sync-target-app-key.pem"
 
-// syncTargetPythonSettings are the variables that shape the producer's answers, as constants: the producer's
-// environment AND part of the golden's request key (a changed value fails the frozen replay). The corpus's own
-// environment (the variables each case sets for the verb) is DATA the Python program applies itself.
-var syncTargetPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-
 // redactSecrets replaces the value of every "token" field of an answer by a digest and a length: an
 // environment credential is never stored in a golden (CHAOS-6735), yet two different tokens still differ.
 func redactSecrets(value any) any {
@@ -247,22 +234,15 @@ func redactSecrets(value any) any {
 // replaced) answered over every corpus command line: the stage that refuses (argparse, preflight, SystemExit)
 // with its exit code or message, or, when the request runs, every argument the processor would have been
 // called with. The answers were executed once on syncTargetPythonBuild and are frozen in
-// testdata/golden/sync_target.json (the recipe regenerates them by execution); the digest of the corpus and of
+// testdata/golden/sync_target.json; the digest of the corpus and of
 // the program are the golden's key. Environment credentials of the corpus are never stored: the key holds the
 // corpus's digest, and the answers hold a digest and a length in place of a token.
 func TestSyncTargetMatchesFrozenPython(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/sync_target.json",
 		PythonBuild: syncTargetPythonBuild,
 		SHA256:      "fb4c6adecbf93c5ba22701dfd3d3eccc1beb28a0a856f7b5bd95be33f29245f9",
-		Recipe: "git worktree add --detach $DIR " + syncTargetPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestSyncTargetMatchesFrozenPython$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	corpus := syncTargetCorpus(syncTargetKeyPlaceholder)
 	input, err := json.Marshal(corpus)
@@ -272,36 +252,8 @@ func TestSyncTargetMatchesFrozenPython(t *testing.T) {
 	keySum := sha256.Sum256(input)
 	// The key names the corpus by its digest (the corpus holds test environment credentials, which a golden
 	// does not store); a changed corpus is another request.
-	request := venueoracle.ProgramRequest("sync target corpus", syncTargetOracleProgram, []byte("corpus sha256 "+hex.EncodeToString(keySum[:])), syncTargetPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		keyFile := filepath.Join(t.TempDir(), "app-key.pem")
-		if err := os.WriteFile(keyFile, []byte("-----BEGIN KEY-----\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		command, err := producer.Command(context.Background(), syncTargetPythonSettings, nil, "-c", syncTargetOracleProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = bytes.NewReader(bytes.ReplaceAll(input, []byte(syncTargetKeyPlaceholder), []byte(keyFile)))
-		output, err := command.Output()
-		if err != nil {
-			var stderr []byte
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				stderr = exitErr.Stderr
-			}
-			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, stderr))
-		}
-		var answered []any
-		if err := json.Unmarshal(bytes.ReplaceAll(output, []byte(keyFile), []byte(syncTargetKeyPlaceholder)), &answered); err != nil {
-			t.Fatalf("decode python answer: %v", err)
-		}
-		body, err := json.Marshal(redactSecrets(answered))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
-	})
+	request := venueoracle.ProgramRequest("sync target corpus", []byte("corpus sha256 "+hex.EncodeToString(keySum[:])))
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var want []map[string]any
 	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &want); err != nil {

@@ -4,8 +4,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
-HARNESS="${ROOT}/tests/compatibility/river/run.sh"
-RECORDER="${ROOT}/tests/compatibility/river/record.sh"
 COMPOSE_FILE="${ROOT}/tests/compatibility/river/compose.compatibility.yml"
 RESULTS="${ROOT}/ci/evidence/go-worker-migration/v1-river-spike/local-harness-results.json"
 
@@ -28,24 +26,9 @@ docker compose version >/dev/null 2>&1 || {
   exit 2
 }
 
-bash -n "${HARNESS}"
-bash -n "${RECORDER}"
 # Pinned version + canonical file set live in one place (CHAOS-4915). This
 # used to be a bare `shellcheck ...` against whatever the runner shipped.
 bash "${ROOT}/ci/shellcheck_pinned.sh"
-# shellcheck disable=SC2016 # This is a literal source-contract assertion.
-grep -F 'if $mode == "direct" or $mode == "session" then' "${HARNESS}" >/dev/null || {
-  printf 'ERROR: direct and session cancellation contracts must remain identical\n' >&2
-  exit 1
-}
-grep -F 'pgbouncer-session-helm-smoke' "${HARNESS}" >/dev/null || {
-  printf 'ERROR: the Helm PgBouncer startup smoke must run in the isolated harness\n' >&2
-  exit 1
-}
-grep -F 'GREENLET_VERSION="3.5.0"' "${HARNESS}" >/dev/null || {
-  printf 'ERROR: the Python async SQLAlchemy greenlet pin must remain preflight-validated\n' >&2
-  exit 1
-}
 docker compose \
   --project-name rivercompat-static-check \
   --file "${COMPOSE_FILE}" \
@@ -116,12 +99,8 @@ jq empty \
 # repo's live toolchain/dependency pins -- that is why .versions.river below
 # is "v0.40.0" while go.mod currently requires v0.44.0, and why .versions.go
 # is "go1.25.9" even after ci/check_go.sh's GO_TOOLCHAIN and go.mod moved to
-# go1.27.2 (CHAOS-4606). record.sh's OUTPUT writes this exact file, and its
-# own GOTOOLCHAIN now tracks go1.27.2 too -- so the NEXT time someone runs
-# record.sh to refresh this evidence for an unrelated reason, every
-# .versions.* value below (go included) must be re-pinned here to match the
-# newly recorded snapshot, the same way the providersync test-count and
-# alembic-head literals get re-pinned when their upstream source changes.
+# go1.27.2 (CHAOS-4606). The harness that recorded it (run.sh/record.sh, which drove a
+# Python riverqueue client) is deleted: the snapshot is frozen evidence now.
 jq -e '
   .schema_version == 1
   and .status == "complete_with_architecture_blocker"

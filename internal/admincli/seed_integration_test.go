@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -24,7 +22,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -38,52 +35,14 @@ func seedGolden(t *testing.T, file, digest string) venueoracle.GoldenSpec {
 		Path:        "testdata/golden/" + file + ".json",
 		PythonBuild: seedPythonBuild,
 		SHA256:      digest,
-		Recipe: "git worktree add --detach $DIR " + seedPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/admincli/ -test '^" + t.Name() + "$' -python-root $DIR",
 	}
 }
-
-// seedProgram runs the producer behind the Python verb the migrate Job runs
-// after the upgrade (`dev-hops admin features seed`): seed_feature_flags_async
-// on a session built the way the verb builds it (an async engine on the DSN,
-// expire_on_commit=False). It prints the number of rows created. The verb's
-// own module (dev_health_ops.api.admin.cli) imports the whole API, a Python
-// closure the Go integration shards do not install; the producer is what
-// writes the rows.
-const seedProgram = `
-import asyncio, sys
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from dev_health_ops.db import normalize_async_postgres_uri
-from dev_health_ops.api.services.licensing import seed_feature_flags_async
-
-async def main():
-    engine = create_async_engine(normalize_async_postgres_uri(sys.argv[1]), pool_pre_ping=True)
-    session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)()
-    try:
-        print(await seed_feature_flags_async(session))
-    finally:
-        await session.close()
-        await engine.dispose()
-
-asyncio.run(main())
-`
-
-// registryProgram prints Python's STANDARD_FEATURES registry.
-const registryProgram = `
-import json
-from dev_health_ops.licensing.registry import STANDARD_FEATURES
-print(json.dumps([[k, n, c.value, t.value, d] for k, n, c, t, d in STANDARD_FEATURES]))
-`
 
 // TestStandardFeaturesMatchThePythonRegistry requires the Go registry to equal Python's,
 // row for row and in order. Python's registry is frozen at seedPythonBuild.
 func TestStandardFeaturesMatchThePythonRegistry(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, seedGolden(t, "standard_features", "c89c402560cb167990aa27390abf1140a8ca0493f8225fa4cc4cb042860cfe83"))
-	root := golden.PythonRoot(t, repoRoot(t))
-	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("standard features", registryProgram, nil, nil)},
-		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-			return []venueoracle.Response{{Body: string(runPython(t, producer, registryProgram))}}
-		})
+	answers := golden.Produce(t, []venueoracle.Request{venueoracle.ProgramRequest("standard features", nil)})
 	golden.Consumed(t, answers...)
 	var rows [][]string
 	if err := json.Unmarshal([]byte(answers[0].Body), &rows); err != nil {
@@ -109,7 +68,6 @@ func TestStandardFeaturesMatchThePythonRegistry(t *testing.T) {
 // frozen in testdata/golden/seed.json.
 func TestSeedMatchesThePythonProducer(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, seedGolden(t, "seed", "3f0d8ace1f261f591224db6c8113d9410791c72e96889d0089a761e631c19b43"))
-	root := golden.PythonRoot(t, repoRoot(t))
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -149,16 +107,8 @@ func TestSeedMatchesThePythonProducer(t *testing.T) {
 
 	for _, pass := range []string{"missing features", "nothing missing"} {
 		before := [2]map[string]string{existingRows(t, ctx, databases[0]), existingRows(t, ctx, databases[1])}
-		// The Python producer runs only while recording; its printed count
-		// and the rows it left are frozen.
-		var pythonWindow [2]time.Time
-		answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("seed: "+pass, seedProgram, nil, nil)},
-			func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-				pythonStarted := time.Now()
-				output := runPython(t, producer, seedProgram, uris[0])
-				pythonWindow = [2]time.Time{pythonStarted, time.Now()}
-				return []venueoracle.Response{{Body: string(output)}}
-			})
+		// The Python producer's printed count and the rows it left are frozen.
+		answers := golden.Produce(t, []venueoracle.Request{venueoracle.ProgramRequest("seed: "+pass, nil)})
 		golden.Consumed(t, answers...)
 		output := answers[0].Body
 		goStarted := time.Now()
@@ -213,10 +163,7 @@ func TestSeedMatchesThePythonProducer(t *testing.T) {
 			}
 		}
 		unchanged(1)
-		pythonRows := strings.Split(golden.InspectRows(t, "python feature rows: "+pass, func() string {
-			unchanged(0)
-			return strings.Join(featureRows(t, ctx, databases[0], wantCreated, pythonWindow), "\n")
-		}), "\n")
+		pythonRows := strings.Split(golden.InspectRows(t, "python feature rows: "+pass), "\n")
 		goRows := featureRows(t, ctx, databases[1], wantCreated, goWindow)
 		// A Go-only feature has no Python row: it must be present exactly
 		// once, then is set aside so the rest compares row for row.
@@ -367,35 +314,6 @@ func sorted(values []string) []string {
 		}
 	}
 	return out
-}
-
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
-
-// runPython runs program with args through the harness's launcher: the pinned
-// interpreter in the closed environment, so nothing ambient shapes the answer.
-// args are the program's own (the address of the run's database).
-func runPython(t *testing.T, producer *venueoracle.Producer, program string, args ...string) []byte {
-	t.Helper()
-	command, err := producer.Command(context.Background(), nil, nil, append([]string{"-c", program}, args...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	output, err := command.Output()
-	if err != nil {
-		var stderr []byte
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = exitErr.Stderr
-		}
-		t.Fatalf("python: %v", pyoracle.RunError(command.Path, err, stderr))
-	}
-	return output
 }
 
 func scratchDatabase(t *testing.T, ctx context.Context, admin *pgx.Conn) string {

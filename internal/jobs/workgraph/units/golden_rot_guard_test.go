@@ -31,12 +31,9 @@ import (
 // than querying ClickHouse), so this runs anywhere the interpreter does.
 func TestWorkgraphComponentsGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/workgraph_components_rot_guard.json", "03f9fcfca79dd1b6a845c488386e3f9ac60b0f670b7cf9fc871c6fda4c320603",
-		"./internal/jobs/workgraph/units/", "^TestWorkgraphComponentsGoldenMatchesLivePython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/workgraph_components_rot_guard.json", "03f9fcfca79dd1b6a845c488386e3f9ac60b0f670b7cf9fc871c6fda4c320603")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "workgraph components golden generator",
-		Path: "tests/fixtures/generate_workgraph_components_python_golden.py",
-		Args: []string{"--stdout"},
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", goldenFixture))
@@ -57,7 +54,7 @@ func TestWorkgraphComponentsGoldenMatchesLivePython(t *testing.T) {
 			"to component grouping or to work_unit_id re-addresses work_unit_investments and\n" +
 			"work_unit_membership, which are written by two different jobs. Port the change into\n" +
 			"internal/jobs/workgraph/units in the SAME change set, or the planes diverge silently." +
-			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again.",
 	)
 }
 
@@ -71,12 +68,9 @@ func TestWorkgraphComponentsGoldenMatchesLivePython(t *testing.T) {
 // NaN words), so it is the last place to rely on a shared marker.
 func TestConfidenceCoercionGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/confidence_coercion_rot_guard.json", "d415002f628fbab23ed593cf445905831f85f90fd3308e64f6fd26b5b2caa033",
-		"./internal/jobs/workgraph/units/", "^TestConfidenceCoercionGoldenMatchesLivePython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/confidence_coercion_rot_guard.json", "d415002f628fbab23ed593cf445905831f85f90fd3308e64f6fd26b5b2caa033")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "confidence coercion golden generator",
-		Path: "tests/fixtures/generate_confidence_coercion_python_golden.py",
-		Args: []string{"--stdout"},
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(
@@ -95,7 +89,7 @@ func TestConfidenceCoercionGoldenMatchesLivePython(t *testing.T) {
 			"    python tests/fixtures/generate_confidence_coercion_python_golden.py\n" +
 			"and treat the diff as a real behaviour change: the coerced confidence decides which\n" +
 			"edges the oversized-component split protects, which decides work_unit_id." +
-			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again.",
 	)
 }
 
@@ -122,12 +116,9 @@ func TestConfidenceCoercionGoldenMatchesLivePython(t *testing.T) {
 // no local cue that the investment port depends on its NaN behaviour.
 func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/investment_quality_rot_guard.json", "14ac5576ae7a172223555a36058f90e3daf1d13acf403988efe8b8297a0c03ef",
-		"./internal/jobs/workgraph/units/", "^TestInvestmentQualityGoldenMatchesLivePython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/investment_quality_rot_guard.json", "14ac5576ae7a172223555a36058f90e3daf1d13acf403988efe8b8297a0c03ef")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "investment quality golden generator",
-		Path: "tests/fixtures/generate_investment_quality_golden.py",
-		Args: []string{"--stdout"},
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(
@@ -155,7 +146,7 @@ func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
 			"     bands are stored categories, so this is a data change.\n" +
 			"  3. evidence._float_value and components._edge_confidence have DIVERGED.\n" +
 			"     The Go port shares one function for both; it must be split." +
-			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again.",
 	)
 }
 
@@ -181,12 +172,9 @@ func TestInvestmentQualityGoldenMatchesLivePython(t *testing.T) {
 // rather than a formatting one.
 func TestMaxComponentNodesGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/max_component_nodes_rot_guard.json", "4ce4c6a2fefffc0d25ae762d1c4f747c130226d737121d6ff92697a17e2c9e2e",
-		"./internal/jobs/workgraph/units/", "^TestMaxComponentNodesGoldenMatchesLivePython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/max_component_nodes_rot_guard.json", "4ce4c6a2fefffc0d25ae762d1c4f747c130226d737121d6ff92697a17e2c9e2e")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "max component nodes golden generator",
-		Path: "tests/fixtures/generate_max_component_nodes_golden.py",
-		Args: []string{"--stdout"},
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(
@@ -210,7 +198,7 @@ func TestMaxComponentNodesGoldenMatchesLivePython(t *testing.T) {
 			"and refused by the other. For INVESTMENT_MAX_COMPONENT_NODES that means one\n" +
 			"plane splits oversized components and the other does not, which mints\n" +
 			"different work_unit_ids for the same graph." +
-			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again.",
 	)
 }
 
@@ -229,12 +217,9 @@ func TestMaxComponentNodesGoldenMatchesLivePython(t *testing.T) {
 // the new one -- green tests, wrong parser.
 func TestDecimalDigitsGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/decimal_digits_rot_guard.json", "f204cdfc890bdaead2e47b5e11fe0729f0aeaa245cd39740fb817e6268575d06",
-		"./internal/jobs/workgraph/units/", "^TestDecimalDigitsGoldenMatchesLivePython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/decimal_digits_rot_guard.json", "f204cdfc890bdaead2e47b5e11fe0729f0aeaa245cd39740fb817e6268575d06")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "decimal digits golden generator",
-		Path: "tests/fixtures/generate_python_decimal_digits_golden.py",
-		Args: []string{"--stdout"},
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(
@@ -460,12 +445,9 @@ func marshalGoldenDocument(t *testing.T, fields map[string]any) []byte {
 // re-date work units.
 func TestTimeBoundsGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRootPath(t)
-	spec := rotguard.Spec("testdata/golden/time_bounds_rot_guard.json", "aa4d13fc9bed1978b7471d3f66b3245f0f82dda163adcd75683bd26a68c4bd05",
-		"./internal/jobs/workgraph/units/", "^TestTimeBoundsGoldenMatchesLivePython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/time_bounds_rot_guard.json", "aa4d13fc9bed1978b7471d3f66b3245f0f82dda163adcd75683bd26a68c4bd05")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "time bounds golden generator",
-		Path: "tests/fixtures/generate_time_bounds_golden.py",
-		Args: []string{"--stdout"},
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(
@@ -485,7 +467,7 @@ func TestTimeBoundsGoldenMatchesLivePython(t *testing.T) {
 			"and read the diff: the per-type fallback chains (completed_at before\n" +
 			"updated_at, merged_at before closed_at, an absent end standing in as the\n" +
 			"start) decide the stored TimeBounds on every work unit." +
-			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again (the golden's recipe).",
+			"\nThe recorded render is of the producer on the pinned build; after a deliberate change record it again.",
 	)
 }
 

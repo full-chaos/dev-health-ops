@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -22,7 +21,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -385,8 +383,6 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, thisFile, _, _ := moduleroot.Caller(0)
-	siteDir := filepath.Join(filepath.Dir(thisFile), "testdata", "provider_stub")
 
 	previousClient, previousLookup := credentialProbeClient, credentialHostLookup
 	credentialProbeClient = &http.Client{Transport: rewriteToStub{target: stubURL},
@@ -406,11 +402,9 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	var ids map[string]string
 	rows := githubRepoSeedRows(pemKey)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey,
-			"VENUE_PROVIDER_STUB_PORT=" + stub.port(),
-			"PYTHONPATH=" + siteDir + ":" + filepath.Join(venueRoot(), "src"),
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed := venueSeed(t, ctx, admin)
@@ -428,9 +422,7 @@ func TestVenueOracleCredentialGitHubRepos(t *testing.T) {
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := githubRepoRequests(venue.Tokens, ids)
 	pythonResponses := golden.Python(t, venue, requests)
-	pythonProvider := strings.Split(golden.InspectRows(t, "python provider requests", func() string {
-		return strings.Join(stub.take(), "\n")
-	}), "\n")
+	pythonProvider := strings.Split(golden.InspectRows(t, "python provider requests"), "\n")
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/credential-github-repos.go-pin.json", SHA256: browsePinSHA256, Ruling: browseRuling})
 	goCalls := map[string][]string{}
 	goStatus := map[string]int{}

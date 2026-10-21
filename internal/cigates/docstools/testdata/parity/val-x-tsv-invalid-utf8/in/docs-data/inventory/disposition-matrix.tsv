@@ -1,0 +1,5 @@
+source_repo	source_path	artifact_type	publication_classification	proposed_disposition	target_section	target_page_type	canonical_owner	source_of_truth	migration_phase	reason	reviewer	target_url
+full-chaos/dev-health-ops	docs/index.md	markdown-page	public-nav	keep	Guide	task	docs	repo	Phase 1	becÿause	rev	/
+full-chaos/dev-health-ops	docs/orphan.md	markdown-page	excluded-internal	retain-internal	Guide	task	docs	repo	Phase 1	because	rev	
+full-chaos/dev-health-ops	scripts/tool.py	markdown-page	supporting-artifact	retain-internal	Guide	task	docs	repo	Phase 1	because	rev	
+full-chaos/dev-health-web	app/page.tsx	markdown-page	public-reference	keep	Guide	task	docs	repo	Phase 1	because	rev	/guide/

@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "{RECORDER}/pyrun.py", line 4, in <module>
+    exec(compile(open(script, encoding="utf-8").read(), script, "exec"), {"__name__": "__main__", "__file__": script})
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 303, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 298, in main
+    validate(args.generated_json, args.inventory_dir, args.ia_dir)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 170, in validate
+    committed = json.loads(committed_json.read_text(encoding="utf-8"))
+                           ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/pathlib/__init__.py", line 787, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'docs-data/inventory/documentation-inventory.json'

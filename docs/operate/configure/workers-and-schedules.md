@@ -7,8 +7,8 @@ source_of_truth:
   - deploy/go-workers/deployment.json
   - contracts/jobs/v1/
   - contracts/sync-dispatch/v1/
-  - src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py
-  - src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py
+  - internal/pgmigrate/baseline/head.json
+  - internal/pgmigrate/baseline/history.json
   - internal/scheduler/sync/transaction.go
   - current worker and synchronization settings
   - docs/contribute/architecture/go-worker-runtime.md
@@ -338,7 +338,7 @@ a bug and re-discover it from scratch.
   `workerHeavy.enabled`, and `beat.enabled` to `true` and `goWorkers.enabled`
   to `false`, with a `PAGERDUTY_WEBHOOK_TRANSPORT` switch defaulting to
   `celery`;
-  `deploy/kubernetes/beat.yaml` and `worker.yaml` were the matching plain
+  `deploy/kubernetes/beat.yaml` (removed with the Python api) and `worker.yaml` were the matching plain
   manifests. Chris's ruling on CHAOS-4195 was delete, not archive (unlike the
   compose surfaces above, which have no equivalent live-vs-checked-in
   divergence to preserve): the Celery Helm templates and Kubernetes manifests
@@ -561,7 +561,7 @@ non-locking `count_expired()` read that used to report `partial` for a
 merely-contended backlog). Go now genuinely emits and drains this cadence.
 CHAOS-4026 (2026-08-21) deleted the now-redundant Celery `ask-dev-retention-sweep`
 Beat entry and its `run_ask_dev_retention_cleanup` task
-(`src/dev_health_ops/workers/ask_dev_retention.py`) as part of the broader
+(`src/dev_health_ops/workers/ask_dev_retention.py`, removed with the Python api; Go owner `internal/jobs/system/retention_postgres.go`) as part of the broader
 Celery-retirement cleanup -- there is no longer a second purger to keep in
 sync with. Its staged v3 contract uses the table-scoped `ask_dev_conversations`
 policy at 05:30 UTC. Its cutoff is the occurrence time because each

@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -81,26 +83,86 @@ var (
 	providersyncListArgs  = []string{"test", "-mod=readonly", "-trimpath", "-race", "-list", ".*", "./internal/providersync"}
 )
 
-// providersyncRaceListing returns the REAL `go test -race -list .* ./internal/providersync` output, produced once per process. It is
-// the race leg's own call, so it reuses the build the leg made of the race test binary instead of compiling it again.
+// providersyncGoEnv is the race leg's go environment for a providersync call (GO_ENV_OFF) plus GOWORK=off.
+func providersyncGoEnv(t *testing.T, goArgs ...string) *exec.Cmd {
+	t.Helper()
+	args := []string{}
+	for _, name := range providersyncListUnset {
+		args = append(args, "-u", name)
+	}
+	cmd := exec.Command("env", append(append(args, "GOWORK=off", "go"), goArgs...)...)
+	cmd.Dir = repoRoot(t)
+	return cmd
+}
+
+// providersyncRealRaceListing runs the race leg's own call (check_go.sh check_providersync_race_shard). It compiles the race test
+// binary, so only the //go:build race oracle calls it: in a race leg that call has already built it.
+func providersyncRealRaceListing(t *testing.T) []byte {
+	t.Helper()
+	out, err := providersyncGoEnv(t, providersyncListArgs...).Output()
+	if err != nil {
+		t.Fatalf("go test -race -list: %v", err)
+	}
+	return out
+}
+
+// providersyncRaceListing returns the race listing the stand-in replays: the Test names of the race build's test files, one per
+// line, produced once per process without compiling anything (the race leg lists ^Test names only; the oracle in
+// providersynclist_race_test.go holds this set equal to the real listing).
 func providersyncRaceListing(t *testing.T) []byte {
 	t.Helper()
 	listReplayOnce.Do(func() {
-		args := []string{}
-		for _, name := range providersyncListUnset {
-			args = append(args, "-u", name)
+		files, err := providersyncRaceTestFiles(t)
+		if err != nil {
+			return
 		}
-		cmd := exec.Command("env", append(append(args, "GOWORK=off", "go"), providersyncListArgs...)...)
-		cmd.Dir = repoRoot(t)
-		out, err := cmd.Output()
-		if err == nil {
-			listReplayData = out
-		}
+		listReplayData = []byte(strings.Join(providersyncTestNames(files), "\n") + "\n")
 	})
 	if len(listReplayData) == 0 {
-		t.Fatal("could not produce the real providersync race listing")
+		t.Fatal("could not derive the providersync race listing")
 	}
 	return listReplayData
+}
+
+// providersyncRaceTestFiles returns path -> text of every test file of the providersync race build (go list -race applies the race tag).
+func providersyncRaceTestFiles(t *testing.T) (map[string]string, error) {
+	t.Helper()
+	out, err := providersyncGoEnv(t, "list", "-mod=readonly", "-trimpath", "-race", "-f",
+		"{{.Dir}}{{range .TestGoFiles}}\n{{.}}{{end}}{{range .XTestGoFiles}}\n{{.}}{{end}}", "./internal/providersync").Output()
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	files := map[string]string{}
+	for _, name := range lines[1:] {
+		b, err := os.ReadFile(filepath.Join(lines[0], name))
+		if err != nil {
+			return nil, err
+		}
+		files[name] = string(b)
+	}
+	return files, nil
+}
+
+// providersyncTestFunc is what go test lists as a test: func Test<not lowercase>...(x *testing.T), the parameters possibly on several lines. TestMain takes *testing.M and is not listed.
+var providersyncTestFunc = regexp.MustCompile(`(?m)^func (Test(?:[^a-z(\s]\w*)?)\(([^)]*)\)`)
+
+// providersyncTestNames returns the sorted, unique test names found in the files' text.
+func providersyncTestNames(files map[string]string) []string {
+	seen := map[string]bool{}
+	for _, text := range files {
+		for _, m := range providersyncTestFunc.FindAllStringSubmatch(text, -1) {
+			if strings.Contains(m[2], "*testing.T") {
+				seen[m[1]] = true
+			}
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 type legRun struct {
@@ -141,7 +203,7 @@ func runCheckGoIn(t *testing.T, root string, extraEnv []string, fail bool, args 
 	env := append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GO_LOG="+log, "FAKE_GO_LIST_LOG="+listLog, "TMPDIR="+filepath.Join(dir, "tmp"),
-		"FAKE_GO_LIST_REPLAY="+replay, "FAKE_GO_LIST_CACHE="+goListCache, "FAKE_GO_LIST_CACHE_ROOT="+repoRoot(t))
+		"GO_TEST_JSON_DIR="+filepath.Join(dir, "json"), "FAKE_GO_LIST_REPLAY="+replay, "FAKE_GO_LIST_CACHE="+goListCache, "FAKE_GO_LIST_CACHE_ROOT="+repoRoot(t))
 	env = append(env, extraEnv...)
 	if fail {
 		env = append(env, "FAKE_GO_FAIL=1")

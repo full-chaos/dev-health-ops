@@ -5,7 +5,6 @@ content_type: workflow-guide
 owner: product-analytics
 source_of_truth:
   - current Code and Complexity product surfaces
-  - docs/user-guide/views/code-hotspots.md
 applicability: current
 lifecycle: active
 ---

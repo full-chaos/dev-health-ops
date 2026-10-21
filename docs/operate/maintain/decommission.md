@@ -3,8 +3,6 @@ page_id: op-decommission
 summary: Remove or replace an environment while preserving required evidence and revoking access.
 content_type: task-guide
 owner: platform-operations
-source_of_truth:
-  - docs/ops/customer-offboarding.md
 applicability: current
 lifecycle: active
 ---

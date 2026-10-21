@@ -124,6 +124,9 @@ var attributeVocabulary = map[string][]string{
 		"principal_enabled", "principal_projected", "principal_provisioned", "email_verified", "password_changed", "password_reset",
 		"identity_linked", "identity_unlinked", "identity_projected", "policy_revision_activated",
 		"entitlement_snapshot_applied", "denied_no_membership", "denied_no_grant", "denied_policy",
+		"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified",
+		"email_collision", "signup_unavailable", "identity_conflict",
+		"provider_already_linked", "expired", "principal_not_found", "malformed",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",

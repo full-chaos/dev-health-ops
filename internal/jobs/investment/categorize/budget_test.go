@@ -151,7 +151,7 @@ func TestBudgetedOpenAIReservationCoversTheWholeRequest(t *testing.T) {
 	if len(encoded) <= len(body.Input)+len(body.Instructions) {
 		t.Fatalf("the test request carries no schema beyond its text (%d bytes)", len(encoded))
 	}
-	want, _ := llmbudget.CostMicroUSD("openai", "gpt-5-mini", "", int64(len(encoded)), body.MaxOutputTokens, 0)
+	want, _ := llmbudget.CostMicroUSD("openai", "gpt-5-mini", "", int64(len(encoded)), body.MaxOutputTokens, 0, 0)
 	if got := store.admits[0].MaxCost; got == nil || *got != *want {
 		t.Fatalf("reserved %v, want the cost of the whole %d-byte request = %d", got, len(encoded), *want)
 	}

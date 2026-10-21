@@ -52,13 +52,13 @@ const (
 
 // Usage is what a provider reported. A nil field is unreported.
 type Usage struct {
-	InputTokens, OutputTokens, CachedInputTokens *int64
+	InputTokens, OutputTokens, CachedInputTokens, CacheCreationInputTokens *int64
 }
 
 // UsageFrom builds a Usage from the int pointers the provider layer carries,
 // with _agent_usage's rule: a completion that consumed no input and no output
 // token did not report its usage, so it is unknown, never a $0 charge.
-func UsageFrom(input, output, cached *int) Usage {
+func UsageFrom(input, output, cached, created *int) Usage {
 	conv := func(v *int) *int64 {
 		if v == nil || *v < 0 {
 			return nil
@@ -66,7 +66,7 @@ func UsageFrom(input, output, cached *int) Usage {
 		out := int64(*v)
 		return &out
 	}
-	usage := Usage{InputTokens: conv(input), OutputTokens: conv(output), CachedInputTokens: conv(cached)}
+	usage := Usage{InputTokens: conv(input), OutputTokens: conv(output), CachedInputTokens: conv(cached), CacheCreationInputTokens: conv(created)}
 	if usage.InputTokens != nil && usage.OutputTokens != nil && *usage.InputTokens == 0 && *usage.OutputTokens == 0 {
 		return Usage{}
 	}
@@ -147,27 +147,34 @@ type Call struct {
 	IdempotencyKey  string
 	MaxInputTokens  int64
 	MaxOutputTokens int64
+	// CacheWrite is true when the request carries a cache marker: the
+	// reservation prices the whole input at the cache-write rate, the most a
+	// cold-cache call can bill.
+	CacheWrite bool
 }
 
 // CostMicroUSD is cost_micro_usd: ceil of the priced token counts, nil when the
-// call is unpriced or the counts are inconsistent.
-func CostMicroUSD(provider, model, baseURL string, input, output, cached int64) (*int64, error) {
-	return CostMicroUSDAt(provider, model, baseURL, input, output, cached, time.Now())
+// call is unpriced or the counts are inconsistent. cached and created are
+// subsets of input: prompt tokens read from, and written to, the provider's
+// cache.
+func CostMicroUSD(provider, model, baseURL string, input, output, cached, created int64) (*int64, error) {
+	return CostMicroUSDAt(provider, model, baseURL, input, output, cached, created, time.Now())
 }
 
 // CostMicroUSDAt is CostMicroUSD for a call made at the moment at, at the
 // rates in effect then.
-func CostMicroUSDAt(provider, model, baseURL string, input, output, cached int64, at time.Time) (*int64, error) {
+func CostMicroUSDAt(provider, model, baseURL string, input, output, cached, created int64, at time.Time) (*int64, error) {
 	price, err := PriceAt(provider, model, baseURL, at)
 	if err != nil || price == nil {
 		return nil, err
 	}
-	if input < 0 || output < 0 || cached < 0 || cached > input {
+	if input < 0 || output < 0 || cached < 0 || created < 0 || cached > input || created > input-cached {
 		return nil, nil
 	}
 	rates := price.Rates
-	numerator := new(big.Int).Mul(big.NewInt(input-cached), big.NewInt(rates.Input))
+	numerator := new(big.Int).Mul(big.NewInt(input-cached-created), big.NewInt(rates.Input))
 	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(cached), big.NewInt(rates.CachedInput)))
+	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(created), big.NewInt(rates.CacheWriteInput)))
 	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(output), big.NewInt(rates.Output)))
 	million := big.NewInt(1_000_000)
 	quotient, remainder := new(big.Int).QuoRem(numerator, million, new(big.Int))
@@ -202,7 +209,12 @@ func (g Guard) RefuseUnderBudget(ctx context.Context) error {
 // open and returns the usage the provider reported.
 func (g Guard) Run(ctx context.Context, call Call, invoke func(context.Context) (Usage, error)) error {
 	now := g.now()
-	maxCost, err := CostMicroUSDAt(g.Provider, g.Model, g.BaseURL, max(call.MaxInputTokens, 0), max(call.MaxOutputTokens, 0), 0, now)
+	maxInput := max(call.MaxInputTokens, 0)
+	var maxCreated int64
+	if call.CacheWrite {
+		maxCreated = maxInput
+	}
+	maxCost, err := CostMicroUSDAt(g.Provider, g.Model, g.BaseURL, maxInput, max(call.MaxOutputTokens, 0), 0, maxCreated, now)
 	if err != nil {
 		return accounting("BYO LLM budget reservation is temporarily unavailable.", err)
 	}
@@ -269,7 +281,11 @@ func (g Guard) settleWithBilled(ctx context.Context, id string, outcome Outcome,
 	defer cancel()
 	request := SettleRequest{ID: id, Outcome: outcome, Usage: usage, Now: g.now()}
 	if outcome != OutcomeVoided && usage.InputTokens != nil && usage.OutputTokens != nil && usage.CachedInputTokens != nil {
-		cost, err := CostMicroUSDAt(g.Provider, g.Model, g.BaseURL, *usage.InputTokens, *usage.OutputTokens, *usage.CachedInputTokens, pricedAt)
+		var created int64
+		if usage.CacheCreationInputTokens != nil {
+			created = *usage.CacheCreationInputTokens
+		}
+		cost, err := CostMicroUSDAt(g.Provider, g.Model, g.BaseURL, *usage.InputTokens, *usage.OutputTokens, *usage.CachedInputTokens, created, pricedAt)
 		if err != nil {
 			return nil, err
 		}

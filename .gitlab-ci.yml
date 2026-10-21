@@ -382,15 +382,13 @@ docs:facts:
       - .build/docs-code-prerequisites.log
 
 docs:inventory-review:
-  extends: .python_job
+  image: $GO_IMAGE
   stage: test
-  before_script:
-    - python -m pip install 'PyYAML==6.0.3'
   script:
     - mkdir -p .build
     - cp docs-data/inventory/documentation-inventory.json .build/documentation-inventory.json
     - |
-      python scripts/validate_docs_inventory_review.py \
+      go run -trimpath -mod=readonly ./cmd/cigate docs validate-inventory-review \
         --generated-json .build/documentation-inventory.json \
         --inventory-dir docs-data/inventory \
         --ia-dir docs-data/ia

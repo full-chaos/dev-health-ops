@@ -135,7 +135,7 @@ Every new Postgres Alembic revision changes the pgmigrate goldens and the api/he
 schema-revisions golden. The recorder runs the real Python Alembic CLI against a container
 Postgres, so it needs Docker: do not run it on a lane host. Push a golden recording build (the
 Alembic scripts of the base plus the new revision), then dispatch the `Golden record` workflow
-(`.github/workflows/golden-record.yml`) with the migration branch as `ref` and the build's full sha
+(`.github/workflows/golden-record.yml`, removed with the Python api) with the migration branch as `ref` and the build's full sha
 as `python_build`. It uploads the changed files as an artifact and pushes nothing: unpack it at the
 repository root, commit, push (CHAOS-10089).
 

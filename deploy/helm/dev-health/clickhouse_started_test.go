@@ -146,35 +146,52 @@ func TestClickHouseConfigdStartsAndAnswersOnThePodAddress(t *testing.T) {
 		}
 	}
 	for _, v := range pod.Volumes {
-		d := hostDir(v.Name)
-		switch {
-		case v.ConfigMap != nil:
-			mk(d, 0o755)
-			for k, c := range cms[v.ConfigMap.Name] {
-				if err := os.WriteFile(filepath.Join(d, k), []byte(c), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-		case v.EmptyDir != nil:
-			mk(d, 0o777)
+		if v.EmptyDir != nil {
+			mk(hostDir(v.Name), 0o777)
 		}
 	}
 	mk(hostDir("clickhouse-data"), 0o777) // the PVC
 
-	volumesOf := func(c k8sContainer) []string {
-		var vs []string
+	// ConfigMap files go in as compose configs (content sent through the API), never as host bind mounts:
+	// on the ARC pool the daemon is a DinD sidecar that cannot see this pod's TempDir, so a bind mount of
+	// a file there arrives as an empty directory (CHAOS-10294).
+	cmByVolume := map[string]map[string]string{}
+	for _, v := range pod.Volumes {
+		if v.ConfigMap != nil {
+			cmByVolume[v.Name] = cms[v.ConfigMap.Name]
+		}
+	}
+	var topConfigs []string
+	volumesOf := func(c k8sContainer) (vols, cfgs []string) {
 		for _, m := range c.VolumeMounts {
-			src := hostDir(m.Name)
-			if m.SubPath != "" {
-				src = filepath.Join(src, m.SubPath)
+			if data, ok := cmByVolume[m.Name]; ok {
+				files := map[string]string{}
+				if m.SubPath != "" {
+					files[m.MountPath] = data[m.SubPath]
+				} else {
+					for k, content := range data {
+						files[m.MountPath+"/"+k] = content
+					}
+				}
+				var targets []string
+				for target := range files {
+					targets = append(targets, target)
+				}
+				sort.Strings(targets)
+				for _, target := range targets {
+					name := fmt.Sprintf("cfg%d", len(topConfigs))
+					topConfigs = append(topConfigs, fmt.Sprintf("  %s:\n    content: %s", name, strings.ReplaceAll(fmt.Sprintf("%q", files[target]), "$", "$$")))
+					cfgs = append(cfgs, fmt.Sprintf("      - source: %s\n        target: %q", name, target))
+				}
+				continue
 			}
-			spec := fmt.Sprintf("      - %s:%s", src, m.MountPath)
+			spec := fmt.Sprintf("      - %s:%s", hostDir(m.Name), m.MountPath)
 			if m.ReadOnly {
 				spec += ":ro"
 			}
-			vs = append(vs, spec)
+			vols = append(vols, spec)
 		}
-		return vs
+		return vols, cfgs
 	}
 	image := main.Image
 	if o := os.Getenv("CHART_STARTED_TEST_IMAGE"); o != "" {
@@ -186,14 +203,22 @@ func TestClickHouseConfigdStartsAndAnswersOnThePodAddress(t *testing.T) {
 	var inits []string
 	for _, ic := range pod.InitContainers {
 		inits = append(inits, ic.Name)
+		vols, cfgs := volumesOf(ic)
 		fmt.Fprintf(&sb, "  %s:\n    image: %s\n    user: \"0\"\n    command: %s\n    volumes:\n%s\n",
-			ic.Name, image, jsonList(ic.Command), strings.Join(volumesOf(ic), "\n"))
+			ic.Name, image, jsonList(ic.Command), strings.Join(vols, "\n"))
+		if len(cfgs) > 0 {
+			sb.WriteString("    configs:\n" + strings.Join(cfgs, "\n") + "\n")
+		}
 	}
 	sb.WriteString("  clickhouse:\n    image: " + image + "\n    environment:\n")
 	for _, e := range main.Env {
 		fmt.Fprintf(&sb, "      %s: %q\n", e.Name, e.Value)
 	}
-	sb.WriteString("    volumes:\n" + strings.Join(volumesOf(main), "\n") + "\n")
+	mainVols, mainCfgs := volumesOf(main)
+	sb.WriteString("    volumes:\n" + strings.Join(mainVols, "\n") + "\n")
+	if len(mainCfgs) > 0 {
+		sb.WriteString("    configs:\n" + strings.Join(mainCfgs, "\n") + "\n")
+	}
 	if len(inits) > 0 {
 		sb.WriteString("    depends_on:\n")
 		sort.Strings(inits)
@@ -205,6 +230,9 @@ func TestClickHouseConfigdStartsAndAnswersOnThePodAddress(t *testing.T) {
 	sb.WriteString("  prober:\n    image: " + image + "\n    profiles: [probe]\n    entrypoint: [\"sh\",\"-c\"]\n" +
 		"    command: ['for i in $$(seq 1 20); do wget -q -T 2 -O /dev/null http://clickhouse:8123/ping && echo PING_OK && exit 0; sleep 2; done; echo PING_FAILED; exit 1']\n")
 
+	if len(topConfigs) > 0 {
+		sb.WriteString("configs:\n" + strings.Join(topConfigs, "\n") + "\n")
+	}
 	compose := filepath.Join(root, "compose.yml")
 	if err := os.WriteFile(compose, []byte(sb.String()), 0o644); err != nil {
 		t.Fatal(err)

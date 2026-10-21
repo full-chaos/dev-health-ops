@@ -5,8 +5,6 @@ content_type: landing
 owner: product-analytics
 source_of_truth:
   - current /metrics?tab=flow product surface
-  - docs/user-guide/views/pr-flow.md
-  - docs/user-guide/views/quadrants.md
 applicability: current
 lifecycle: active
 hide:

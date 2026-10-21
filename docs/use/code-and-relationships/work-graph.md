@@ -6,7 +6,6 @@ owner: product-analytics
 source_of_truth:
   - current /diagnose/work-graph product surface
   - current Work Graph GraphQL and relationship contracts
-  - docs/user-guide/views/work-graph.md
 applicability: current
 lifecycle: active
 ---

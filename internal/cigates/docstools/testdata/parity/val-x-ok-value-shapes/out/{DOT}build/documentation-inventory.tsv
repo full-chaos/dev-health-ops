@@ -1,0 +1,7 @@
+source_repo	source_path	artifact_type	publication_classification	current_url	current_nav_location	content_type	primary_audience	secondary_audiences	product_area	owner	last_meaningful_review	generated	public_today	duplicate_group	known_accuracy_risk	known_usability_risk	build_dependencies	links_in	links_out	notes
+full-chaos/dev-health-ops	docs/index.md	markdown-page	public-nav	https://d.test/	"None | True | 2.0 | [1, 'y'] | {'k': 'v'} | 1e+16 | q""t	n
+r"	100000000000000000000	eng	a | b | c	index.md	1.5		False	True	True	{'a': [1, None]}	[1, 'x']		k1 | k2		"quote "" and	tab and
+newline and  return"
+full-chaos/dev-health-ops	docs/orphan.md	markdown-page	excluded-internal									0.0	0							plain note
+full-chaos/dev-health-ops	scripts/tool.py	markdown-page	supporting-artifact						documentation-system			False	yes							0
+full-chaos/dev-health-ops	external://dev-health-docs.fullchaos.workers.dev	external-gap	gap-unverified						cross-repository-or-runtime			False	False							12.0

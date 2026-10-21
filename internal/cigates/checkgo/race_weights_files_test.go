@@ -304,3 +304,32 @@ func TestRaceWeightsNonASCIIWhiteSpaceIsRefusedUnderEveryAwkAndLocale(t *testing
 		t.Fatal("neither gawk nor mawk is installed")
 	}
 }
+
+// With no tr on PATH the census is refused by name before it reads a file (the ASCII check needs tr).
+func TestRaceWeightsCensusNeedsTrOnPath(t *testing.T) {
+	root := rootOf(t)
+	bin := t.TempDir()
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.Name() == "tr" {
+				continue
+			}
+			if _, err := os.Lstat(filepath.Join(bin, e.Name())); err == nil {
+				continue
+			}
+			_ = os.Symlink(filepath.Join(dir, e.Name()), filepath.Join(bin, e.Name()))
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(bin, "bash")); err != nil {
+		t.Fatal("no bash on PATH")
+	}
+	got := cmdSpec{dir: root, env: inheritedEnv([]string{"PATH"}, "PATH="+bin)}.run(filepath.Join(bin, "bash"), "ci/check_go.sh", "race-weights-rows")
+	const want = "ERROR: race-weights-rows needs tr on PATH (the ASCII check of ci/go_race_weights.d)\n"
+	if got.code != 2 || got.stderr != want {
+		t.Fatalf("exit %d, stderr %q; want exit 2 and %q", got.code, got.stderr, want)
+	}
+}

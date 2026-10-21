@@ -373,7 +373,7 @@ FAKE_GO = r"""#!/usr/bin/env bash
 # Fake `go test`: log the package and -run pattern, write an "executed" proof
 # for each name in the pattern (what venueoracle.Diff does on a real run).
 case "$1" in
-  version) echo "go version go1.27.2 linux/amd64"; exit 0 ;;
+  version) echo "go version go1.27.3 linux/amd64"; exit 0 ;;
   env) echo "${FAKE_GOROOT}"; exit 0 ;;
 esac
 pattern="" ; pkg=""

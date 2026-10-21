@@ -7,7 +7,6 @@ package egressguard
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/netclass"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 )
 
 // AllowEnv names the comma-separated CIDR list of non-public addresses a provider call may still dial (a
@@ -60,7 +60,7 @@ func parseAllow(value string) []netip.Prefix {
 		}
 		prefix, err := netip.ParsePrefix(field)
 		if err != nil {
-			slog.Error("egressguard: "+AllowEnv+" has an entry that is not a CIDR; no non-public address is allowed", "entries", len(strings.Split(value, ",")))
+			synclog.Default().Error(context.Background(), synclog.MsgEgressAllowListInvalid, synclog.Count(synclog.KeyEgressEntries, len(strings.Split(value, ","))))
 			return nil
 		}
 		prefixes = append(prefixes, prefix.Masked())
@@ -100,7 +100,7 @@ func check(addr netip.Addr) error {
 	if !neverAllowed[class] && inAny(addr.WithZone(""), allowList()) {
 		return nil
 	}
-	slog.Warn("egressguard: provider egress refused", "class", class)
+	logRefused(class)
 	return &RefusedError{Class: class}
 }
 
@@ -122,7 +122,7 @@ func guardedDial(inner dialFunc) dialFunc {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
-			slog.Warn("egressguard: provider egress refused", "class", "invalid_address")
+			logRefused("invalid_address")
 			return nil, &RefusedError{Class: "invalid_address"}
 		}
 		addrs, err := lookup(ctx, host)
@@ -158,21 +158,38 @@ func guardedDial(inner dialFunc) dialFunc {
 	}
 }
 
-// refusing answers every request with the refusal: the transport it replaces dials in a way the guard cannot
-// see (its own Dial, DialTLS or DialTLSContext).
-type refusing struct{}
+// refusing answers every request with the refusal: the transport it replaces dials in a way the guard cannot see (its
+// own Dial, DialTLS or DialTLSContext: unsupported_dialer) or is a RoundTripper the guard cannot reach into
+// (unguarded_transport).
+type refusing struct{ class string }
 
-func (refusing) RoundTrip(request *http.Request) (*http.Response, error) {
+func (r refusing) RoundTrip(request *http.Request) (*http.Response, error) {
 	if request.Body != nil {
 		_ = request.Body.Close()
 	}
-	slog.Warn("egressguard: provider egress refused", "class", "unsupported_dialer")
-	return nil, &RefusedError{Class: "unsupported_dialer"}
+	logRefused(r.class)
+	return nil, &RefusedError{Class: r.class}
+}
+
+// Offline is a RoundTripper that opens no network connection (it answers from memory or a recording): the guard has
+// nothing to check and passes it through. Only test support may implement it (TestNoProductionCallOfTheTestSeams).
+type Offline interface {
+	http.RoundTripper
+	EgressOffline()
+}
+
+var unguardedForTest atomic.Bool
+
+// SetUnguardedTransportsForTest lets Wrap pass every RoundTripper it cannot reach into (a test double) through as it
+// is until restore runs; tests only. Production refuses such a transport (fail closed).
+func SetUnguardedTransportsForTest(allow bool) (restore func()) {
+	previous := unguardedForTest.Swap(allow)
+	return func() { unguardedForTest.Store(previous) }
 }
 
 func guardedClone(source *http.Transport) http.RoundTripper {
 	if source.Dial != nil || source.DialTLS != nil || source.DialTLSContext != nil {
-		return refusing{}
+		return refusing{class: "unsupported_dialer"}
 	}
 	inner := dialFunc(source.DialContext)
 	if inner == nil {
@@ -215,8 +232,9 @@ func cloneOf(source *http.Transport) http.RoundTripper {
 // Wrap is rt with the provider egress guard at dial time: every connection, redirect hops included, goes
 // only to an address that is public or inside AllowEnv, and never through a proxy. nil is
 // httpguard.SharedTransport() guarded; an *http.Transport is its guarded clone (Proxy nil); an
-// httpguard.TransportWrapper is rebuilt around its guarded inner transport; any other RoundTripper (a test double that
-// dials nothing) is returned as it is.
+// httpguard.TransportWrapper is rebuilt around its guarded inner transport; an Offline transport is returned as it is;
+// any other RoundTripper is replaced by one that refuses every request (unguarded_transport): the guard cannot see
+// how it connects, so it fails closed.
 func Wrap(rt http.RoundTripper) http.RoundTripper {
 	switch t := rt.(type) {
 	case nil:
@@ -228,8 +246,13 @@ func Wrap(rt http.RoundTripper) http.RoundTripper {
 		return cloneOf(t)
 	case httpguard.TransportWrapper:
 		return t.RewrapTransport(Wrap(t.UnwrapTransport()))
-	default:
+	case Offline:
 		return rt
+	default:
+		if unguardedForTest.Load() {
+			return rt
+		}
+		return refusing{class: "unguarded_transport"}
 	}
 }
 
@@ -240,4 +263,10 @@ func inAny(addr netip.Addr, prefixes []netip.Prefix) bool {
 		}
 	}
 	return false
+}
+
+// logRefused is the one WARN of a refused dial: the class only, never the host, the address or the URL. It goes through
+// synclog, the logger whose values cannot carry free text.
+func logRefused(class string) {
+	synclog.Default().Warn(context.Background(), synclog.MsgEgressRefused, synclog.Text(synclog.KeyEgressClass, synclog.ParseLabel(class)))
 }

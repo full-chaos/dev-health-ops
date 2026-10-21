@@ -40,7 +40,7 @@ func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard
 // future such test gets it automatically, rather than each one repeating
 // its own save/override/restore.
 func TestMain(m *testing.M) {
-	egressallow.Loopback()
+	egressallow.LocalTests()
 	contractRoot = "../../contracts/jobs/v1"
 	// Tests that reach buildDeps with a database configured run in the
 	// development environment (the shared rate-limit store is required only

@@ -95,6 +95,15 @@ type capture struct {
 	request, body             []byte
 }
 
+// UnwrapTransport and RewrapTransport make the recorder an httpguard.TransportWrapper, so the provider egress guard
+// reaches the transport it records.
+func (r *recorder) UnwrapTransport() http.RoundTripper { return r.inner }
+
+func (r *recorder) RewrapTransport(inner http.RoundTripper) http.RoundTripper {
+	r.inner = inner
+	return r
+}
+
 func (r *recorder) RoundTrip(request *http.Request) (*http.Response, error) {
 	var requestBody []byte
 	if request.Body != nil {

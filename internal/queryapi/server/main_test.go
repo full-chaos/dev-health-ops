@@ -18,7 +18,7 @@ import (
 var testMeterReader *sdkmetric.ManualReader
 
 func TestMain(m *testing.M) {
-	egressallow.Loopback()
+	egressallow.LocalTests()
 	testMeterReader = sdkmetric.NewManualReader()
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(testMeterReader)))
 	os.Exit(venueoracle.RunTests(m))

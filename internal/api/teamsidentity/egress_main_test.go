@@ -8,6 +8,6 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	egressallow.Loopback()
+	egressallow.LocalTests()
 	os.Exit(m.Run())
 }

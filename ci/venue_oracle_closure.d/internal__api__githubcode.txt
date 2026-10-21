@@ -34,6 +34,7 @@ internal/storage/clickhouse
 internal/storage/postgres
 internal/storage/river
 internal/storage/roleacl
+internal/syncdispatchruntime/synclog
 internal/testsupport/containers
 internal/testsupport/egressallow
 internal/testsupport/moduleroot

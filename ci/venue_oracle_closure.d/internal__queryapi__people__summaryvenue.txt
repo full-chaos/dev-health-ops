@@ -41,6 +41,7 @@ internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/river
 internal/storage/roleacl
+internal/syncdispatchruntime/synclog
 internal/teamkeytables
 internal/testsupport/containers
 internal/testsupport/moduleroot

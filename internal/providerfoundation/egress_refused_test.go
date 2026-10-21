@@ -34,11 +34,23 @@ func (c countingTransport) RewrapTransport(inner http.RoundTripper) http.RoundTr
 	return countingTransport{inner: inner, trips: c.trips}
 }
 
+// opaqueTransport sends the request with no dial the guard can see (it stands for a decorator that is not a
+// TransportWrapper): the guard must refuse it rather than let it through.
+type opaqueTransport struct{ trips *atomic.Int32 }
+
+var opaqueCalls atomic.Int32
+
+func (o opaqueTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	o.trips.Add(1)
+	return httpguard.SharedTransport().RoundTrip(request)
+}
+
 // A stored provider base URL that is, or resolves to, a non-public address is refused when the sync calls it, for
 // every provider family: the server is never reached, the error is the permanent egress_refused class, and the
 // request is not retried.
 func TestStoredProviderURLThatIsNotPublicIsRefusedForEveryFamily(t *testing.T) {
 	t.Cleanup(egressguard.SetAllowForTest())
+	t.Cleanup(egressguard.SetUnguardedTransportsForTest(false))
 	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
 	defer server.Close()
@@ -70,6 +82,9 @@ func TestStoredProviderURLThatIsNotPublicIsRefusedForEveryFamily(t *testing.T) {
 			client.Transport = countingTransport{inner: client.Transport, trips: trips}
 			return client
 		},
+		"a custom transport the guard cannot reach into": func(trips *atomic.Int32) *http.Client {
+			return &http.Client{Timeout: 5 * time.Second, Transport: countingTransport{inner: opaqueTransport{trips: &opaqueCalls}, trips: trips}}
+		},
 	}
 	retry := RetryPolicy{MaxAttempts: 3, InitialWait: time.Millisecond, MaxWait: time.Millisecond}
 	lease := LeaseGuardFunc(func(context.Context) error { return nil })
@@ -95,6 +110,9 @@ func TestStoredProviderURLThatIsNotPublicIsRefusedForEveryFamily(t *testing.T) {
 				}
 				if hits.Load() != 0 {
 					t.Fatalf("the server received %d requests", hits.Load())
+				}
+				if opaqueCalls.Load() != 0 {
+					t.Fatalf("the transport the guard cannot reach into was called %d times", opaqueCalls.Load())
 				}
 			})
 		}

@@ -372,6 +372,35 @@ type fakeTransport struct{}
 
 func (fakeTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, errors.New("fake") }
 
+type offlineTransport struct{ fakeTransport }
+
+func (offlineTransport) EgressOffline() {}
+
+// recordingTransport is a RoundTripper the guard cannot reach into: it would send the request somewhere unchecked.
+type recordingTransport struct{ calls *atomic.Int32 }
+
+func (r recordingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	r.calls.Add(1)
+	return nil, errors.New("sent unchecked")
+}
+
+// A RoundTripper the guard cannot reach into (not an *http.Transport, a TransportWrapper or Offline) is refused, fail
+// closed: the request never reaches it, whatever URL it names. A test binary may let its doubles through explicitly.
+func TestWrapRefusesATransportItCannotReachInto(t *testing.T) {
+	_ = captureLogs(t)
+	var calls atomic.Int32
+	client := &http.Client{Transport: Wrap(recordingTransport{calls: &calls}), Timeout: 5 * time.Second}
+	err := get(t, client, "http://169.254.169.254/latest/meta-data/")
+	var refused *RefusedError
+	if !errors.As(err, &refused) || refused.Class != "unguarded_transport" || calls.Load() != 0 {
+		t.Fatalf("err=%v calls=%d, want the unguarded_transport refusal and no call", err, calls.Load())
+	}
+	t.Cleanup(SetUnguardedTransportsForTest(true))
+	if _, ok := Wrap(recordingTransport{calls: &calls}).(recordingTransport); !ok {
+		t.Fatal("SetUnguardedTransportsForTest(true) must let a test double through")
+	}
+}
+
 func TestWrapShapes(t *testing.T) {
 	shared := Wrap(nil)
 	if Wrap(httpguard.SharedTransport()) != shared || Wrap((*http.Transport)(nil)) != shared {
@@ -391,8 +420,8 @@ func TestWrapShapes(t *testing.T) {
 	if wrapped.inner != shared {
 		t.Fatal("a TransportWrapper must be rebuilt around the guarded inner transport")
 	}
-	if _, ok := Wrap(fakeTransport{}).(fakeTransport); !ok {
-		t.Fatal("a test double must be returned as it is")
+	if _, ok := Wrap(offlineTransport{}).(offlineTransport); !ok {
+		t.Fatal("an Offline transport must be returned as it is")
 	}
 	custom := httpguard.Transport()
 	custom.DialTLSContext = func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("custom") }
@@ -434,7 +463,8 @@ func TestNoProductionCallOfTheTestSeams(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(content), "SetAllowForTest(") || strings.Contains(string(content), "SetLookupForTest(") {
+		if strings.Contains(string(content), "SetAllowForTest(") || strings.Contains(string(content), "SetLookupForTest(") ||
+			strings.Contains(string(content), "SetUnguardedTransportsForTest(") || strings.Contains(string(content), ") EgressOffline()") {
 			offenders = append(offenders, relative)
 		}
 		return nil

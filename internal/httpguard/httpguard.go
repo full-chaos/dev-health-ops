@@ -11,6 +11,8 @@
 package httpguard
 
 import (
+	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
@@ -90,6 +92,8 @@ func Transport() *http.Transport {
 		return transport
 	}
 	// A dependency replaced http.DefaultTransport with another RoundTripper: net/http's own default settings, no proxy.
+	slog.Warn("httpguard: http.DefaultTransport was replaced by another RoundTripper; the outbound transport uses net/http's default settings with no proxy",
+		"default_transport_type", fmt.Sprintf("%T", http.DefaultTransport))
 	return &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,

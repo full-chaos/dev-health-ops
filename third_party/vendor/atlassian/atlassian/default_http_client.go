@@ -1,6 +1,8 @@
 package atlassian
 
 import (
+	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -17,6 +19,8 @@ var noProxyTransport = func() *http.Transport {
 		transport.Proxy = nil
 		return transport
 	}
+	slog.Warn("atlassian: http.DefaultTransport was replaced by another RoundTripper; the default client uses net/http's default settings with no proxy",
+		"default_transport_type", fmt.Sprintf("%T", http.DefaultTransport))
 	return &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,

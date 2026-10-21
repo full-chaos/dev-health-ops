@@ -287,6 +287,9 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 		return found && strings.EqualFold(markerTransportToken(rest), name)
 	case "jwt_header_alg":
 		return strings.EqualFold(markerTransportToken(shape), name)
+	case "jwt_header_typ":
+		_, rest, found := strings.Cut(shape, "typ ")
+		return found && markerTransportToken(rest) == name
 	case "dedicated_header", "signature_header":
 		return strings.EqualFold(markerTransportToken(head), name)
 	}
@@ -319,6 +322,11 @@ func TestMarkerTransportCompareIsExact(t *testing.T) {
 		{"jwt_header_alg", "EdDSA", "", "eddsa/ed25519 jwt, kid header", true},
 		{"jwt_header_alg", "HS256", "", "xhs256 jwt, type=access", false},
 		{"jwt_header_alg", "HS25", "", "hs256 jwt, type=access", false},
+		{"jwt_header_typ", "at+jwt", "", "eddsa jws, header {alg eddsa, typ at+jwt, kid}", true},
+		{"jwt_header_typ", "jwt", "", "eddsa/ed25519 jwt, header {alg eddsa, typ jwt, kid}", true},
+		{"jwt_header_typ", "jwt", "", "eddsa jws, header {alg eddsa, typ at+jwt, kid}", false},
+		{"jwt_header_typ", "at+jwt", "", "eddsa jws, header {alg eddsa, typ at+jwtx, kid}", false},
+		{"jwt_header_typ", "at+jwt", "", "eddsa jws, at+jwt", false},
 	}
 	for _, c := range cases {
 		got := markerMatchesTransport(c.kind, strings.ToLower(c.name), strings.ToLower(c.head), strings.ToLower(c.shape))
@@ -372,4 +380,152 @@ func TestTokensKeySetEqualsTheAcceptedPinnedClassesInTheSchema(t *testing.T) {
 			t.Errorf("%s: the schema accepted a tokens key set that differs from the accepted pinned classes", name)
 		}
 	}
+}
+
+func TestSelectorGateSeparatesTheEnvelopeAndTheUserTokenByHeaderTyp(t *testing.T) {
+	pair := []any{"effective_principal_envelope", "user_access_token"}
+	registry := realRegistry(t)
+	for _, shared := range [][2]string{{"authorization_scheme", "Bearer"}, {"jwt_header_alg", "EdDSA"}} {
+		profile := multiClassProfile(t, pair, shared[0], shared[1])
+		if err := CheckClassSelector(profile, registry); err == nil {
+			t.Errorf("gate accepted %s/%s, which both classes carry", shared[0], shared[1])
+		}
+	}
+	for _, typ := range []string{"at+jwt", "jwt"} {
+		profile := multiClassProfile(t, pair, "jwt_header_typ", typ)
+		if err := CheckClassSelector(profile, registry); err != nil {
+			t.Errorf("gate refused jwt_header_typ/%s for the envelope vs the user access token: %v", typ, err)
+		}
+	}
+	for _, typ := range []string{"JWT", "AT+JWT", "application/at+jwt"} {
+		profile := multiClassProfile(t, pair, "jwt_header_typ", typ)
+		if err := CheckClassSelector(profile, registry); err == nil {
+			t.Errorf("gate matched jwt_header_typ/%s; a typ marker is compared exactly against its canonical form", typ)
+		}
+	}
+}
+
+func TestTheProfileSchemaAcceptsAJWTHeaderTypSelector(t *testing.T) {
+	root := testRoot(t)
+	profile := loadEndpointAuthProfileFixture(t, "valid-multi-class-envelope-vs-user-token-by-typ.json")
+	if err := Validate(root, EndpointAuthProfileSurface, profile); err != nil {
+		t.Fatalf("the schema refused a jwt_header_typ selector: %v", err)
+	}
+	if err := ValidateEndpointAuthProfile(root, profile); err != nil {
+		t.Fatalf("the profile gate refused the typ-separated pair: %v", err)
+	}
+}
+
+func pinnedProfile(t *testing.T, class, algorithm, tokenType string) map[string]any {
+	t.Helper()
+	profile := loadEndpointAuthProfileFixture(t, "valid-protected-jwt-single-class.json").(map[string]any)
+	profile["accepted_credential_classes"] = []any{class}
+	token := profile["token"].(map[string]any)
+	token["algorithm"] = algorithm
+	token["token_type"] = tokenType
+	return profile
+}
+
+func TestTokenPinGateHoldsEachPinToItsClassMarkers(t *testing.T) {
+	registry := syntheticRegistry(
+		RegistryClass{ClassID: "user_access_token", Markers: []ClassMarker{
+			{Kind: "authorization_scheme", Name: "Bearer"},
+			{Kind: "jwt_header_alg", Name: "EdDSA"},
+			{Kind: "jwt_header_typ", Name: "at+jwt"},
+		}},
+		RegistryClass{ClassID: "ops_access_token_hs256", Markers: []ClassMarker{
+			{Kind: "authorization_scheme", Name: "Bearer"},
+			{Kind: "jwt_header_alg", Name: "HS256"},
+		}},
+	)
+	cases := []struct {
+		name                  string
+		class, algorithm, typ string
+		wantRefusal           string
+	}{
+		{"both pins match", "user_access_token", "EdDSA", "at+jwt", ""},
+		{"typ differs", "user_access_token", "EdDSA", "jwt", `pins token_type "jwt"`},
+		{"typ differs in case only", "user_access_token", "EdDSA", "AT+JWT", `pins token_type "AT+JWT"`},
+		{"alg differs", "user_access_token", "HS256", "at+jwt", `pins algorithm "HS256"`},
+		{"class with no typ marker", "ops_access_token_hs256", "HS256", "jwt", ""},
+		{"class with no typ marker, alg differs", "ops_access_token_hs256", "EdDSA", "jwt", `pins algorithm "EdDSA"`},
+		{"class absent from the registry", "workload_token", "EdDSA", "at+jwt", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := CheckTokenPins(pinnedProfile(t, c.class, c.algorithm, c.typ), registry)
+			if c.wantRefusal == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantRefusal) {
+				t.Fatalf("got %v, want a refusal containing %q", err, c.wantRefusal)
+			}
+		})
+	}
+}
+
+func TestTokenPinGateReadsEveryTokensBlockUnderItsOwnKey(t *testing.T) {
+	registry := realRegistry(t)
+	valid := loadEndpointAuthProfileFixture(t, "valid-multi-class-envelope-vs-user-token-by-typ.json").(map[string]any)
+	if err := CheckTokenPins(valid, registry); err != nil {
+		t.Fatalf("refused the valid typ-separated pair: %v", err)
+	}
+	for _, class := range []string{"effective_principal_envelope", "user_access_token"} {
+		doc := loadEndpointAuthProfileFixture(t, "valid-multi-class-envelope-vs-user-token-by-typ.json").(map[string]any)
+		doc["tokens"].(map[string]any)[class].(map[string]any)["algorithm"] = "HS256"
+		err := CheckTokenPins(doc, registry)
+		if err == nil || !strings.Contains(err.Error(), `class "`+class+`" pins algorithm "HS256"`) {
+			t.Errorf("tokens.%s with algorithm HS256: got %v", class, err)
+		}
+	}
+}
+
+func TestUserAccessTokenTypMarkerIsTheAccessTokenSchemaTyp(t *testing.T) {
+	raw, err := os.ReadFile(SchemaPath(testRoot(t), AccessTokenSurface))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Header struct {
+				Properties struct {
+					Typ struct {
+						Const string `json:"const"`
+					} `json:"typ"`
+					Alg struct {
+						Const string `json:"const"`
+					} `json:"alg"`
+				} `json:"properties"`
+			} `json:"header"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	header := schema.Properties.Header.Properties
+	if header.Typ.Const == "" || header.Alg.Const == "" {
+		t.Fatalf("access-token.v1 header typ/alg const not found (typ %q, alg %q); this test's path into the schema is stale", header.Typ.Const, header.Alg.Const)
+	}
+	class := realRegistry(t)["user_access_token"]
+	// typ is a media type, compared without case on the wire (RFC 7515
+	// section 4.1.9); the contract files carry one lowercase spelling.
+	if got := markerNames(class, "jwt_header_typ"); len(got) != 1 || !strings.EqualFold(got[0], header.Typ.Const) || got[0] != strings.ToLower(got[0]) {
+		t.Errorf("user_access_token jwt_header_typ markers = %v, want exactly one lowercase spelling of %q (access-token.v1 header)", got, header.Typ.Const)
+	}
+	if got := markerNames(class, "jwt_header_alg"); len(got) != 1 || got[0] != header.Alg.Const {
+		t.Errorf("user_access_token jwt_header_alg markers = %v, want exactly [%s] (access-token.v1 header)", got, header.Alg.Const)
+	}
+}
+
+func markerNames(class RegistryClass, kind string) []string {
+	var names []string
+	for _, marker := range class.Markers {
+		if marker.Kind == kind {
+			names = append(names, marker.Name)
+		}
+	}
+	return names
 }

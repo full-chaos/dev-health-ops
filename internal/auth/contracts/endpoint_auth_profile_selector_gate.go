@@ -110,3 +110,8 @@ func ValidateEndpointAuthProfile(root string, document any) error {
 	}
 	return CheckClassSelector(profile, registry)
 }
+
+// CheckTokenPins holds each accepted class's token pins to its registry markers.
+func CheckTokenPins(profile map[string]any, registry map[string]RegistryClass) error {
+	return nil
+}

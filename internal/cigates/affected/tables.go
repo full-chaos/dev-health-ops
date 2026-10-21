@@ -1,0 +1,192 @@
+package affected
+
+import (
+	"bufio"
+	"bytes"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+)
+
+// The declared-read tables of `cigate plan-reads`. classes.tsv names repository path classes (`class<TAB>glob`, a class
+// may hold several globs). reads.tsv says which package reads which class (`package<TAB>scope<TAB>class`): scope test =
+// the package's own tests name it, scope code = its non-test code names it.
+const (
+	classesFile = "classes.tsv"
+	readsFile   = "reads.tsv"
+	scopeTest   = "test"
+	scopeCode   = "code"
+)
+
+type classGlob struct{ class, glob string }
+
+type readRow struct {
+	pkg, scope, class string
+	line              int
+}
+
+type tables struct {
+	globs []classGlob
+	reads []readRow
+}
+
+func readTSV(file string, fields int) ([][]string, []int, error) {
+	raw, err := os.ReadFile(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	var rows [][]string
+	var lines []int
+	sc := bufio.NewScanner(bytes.NewReader(raw))
+	n := 0
+	for sc.Scan() {
+		n++
+		l := sc.Text()
+		if strings.TrimSpace(l) == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		f := strings.Split(l, "\t")
+		if len(f) != fields {
+			return nil, nil, fmt.Errorf("%s:%d: want %d tab-separated fields, got %d", file, n, fields, len(f))
+		}
+		for _, v := range f {
+			if v == "" || strings.TrimSpace(v) != v {
+				return nil, nil, fmt.Errorf("%s:%d: empty or padded field", file, n)
+			}
+		}
+		rows = append(rows, f)
+		lines = append(lines, n)
+	}
+	return rows, lines, sc.Err()
+}
+
+// loadTables reads classes.tsv and reads.tsv from dir. A missing file is an empty table.
+func loadTables(dir string) (*tables, error) {
+	t := &tables{}
+	cls, _, err := readTSV(filepath.Join(dir, classesFile), 2)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{}
+	for _, r := range cls {
+		if err := checkGlob(r[1]); err != nil {
+			return nil, fmt.Errorf("%s: class %s: %w", classesFile, r[0], err)
+		}
+		t.globs = append(t.globs, classGlob{class: r[0], glob: r[1]})
+		known[r[0]] = true
+	}
+	if t.reads, err = loadRows(dir, readsFile, known); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+func loadRows(dir, file string, known map[string]bool) ([]readRow, error) {
+	rows, lines, err := readTSV(filepath.Join(dir, file), 3)
+	if err != nil {
+		return nil, err
+	}
+	var out []readRow
+	seen := map[string]bool{}
+	for i, r := range rows {
+		row := readRow{pkg: r[0], scope: r[1], class: r[2], line: lines[i]}
+		if row.scope != scopeTest && row.scope != scopeCode {
+			return nil, fmt.Errorf("%s:%d: scope %q is neither %s nor %s", file, row.line, row.scope, scopeTest, scopeCode)
+		}
+		if !known[row.class] {
+			return nil, fmt.Errorf("%s:%d: class %q is not in %s", file, row.line, row.class, classesFile)
+		}
+		if path.Clean(row.pkg) != row.pkg || strings.HasPrefix(row.pkg, "/") || strings.HasPrefix(row.pkg, "../") {
+			return nil, fmt.Errorf("%s:%d: package %q is not a clean repository path", file, row.line, row.pkg)
+		}
+		k := row.pkg + "\t" + row.class
+		if seen[k] {
+			return nil, fmt.Errorf("%s:%d: package %s already declares class %s", file, row.line, row.pkg, row.class)
+		}
+		seen[k] = true
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func checkGlob(g string) error {
+	if g == "" || strings.HasPrefix(g, "/") || strings.HasSuffix(g, "/") {
+		return fmt.Errorf("glob %q must be a relative path pattern", g)
+	}
+	for _, seg := range strings.Split(g, "/") {
+		if seg == "**" {
+			continue
+		}
+		if strings.Contains(seg, "**") {
+			return fmt.Errorf("glob %q: ** must be a whole segment", g)
+		}
+		if _, err := path.Match(seg, ""); err != nil {
+			return fmt.Errorf("glob %q: %w", g, err)
+		}
+	}
+	return nil
+}
+
+// globMatch matches a slash path against a glob whose `**` segment matches zero or more segments.
+func globMatch(glob, p string) bool {
+	return matchSegs(strings.Split(glob, "/"), strings.Split(p, "/"))
+}
+
+func matchSegs(g, p []string) bool {
+	for len(g) > 0 {
+		if g[0] == "**" {
+			for i := 0; i <= len(p); i++ {
+				if matchSegs(g[1:], p[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(p) == 0 {
+			return false
+		}
+		if ok, _ := path.Match(g[0], p[0]); !ok {
+			return false
+		}
+		g, p = g[1:], p[1:]
+	}
+	return len(p) == 0
+}
+
+// covers reports whether a read of p (a file, or a directory the reader walks) is covered by one of the classes: a glob
+// that matches p, or a glob X/** with p equal to X or under it.
+func (t *tables) covers(p string, classes map[string]string) bool {
+	for _, g := range t.globs {
+		if _, ok := classes[g.class]; !ok {
+			continue
+		}
+		if globMatch(g.glob, p) {
+			return true
+		}
+		if dir, ok := strings.CutSuffix(g.glob, "/**"); ok && (globMatch(dir, p) || globMatch(dir+"/**", p)) {
+			return true
+		}
+	}
+	return false
+}
+
+// suggest is the anchored class of p's first-level entry, the row that always covers a read of p; "" when p is in no class.
+func (t *tables) suggest(p string) string {
+	first := strings.SplitN(p, "/", 2)[0]
+	for _, g := range t.globs {
+		if strings.HasPrefix(g.glob, "**") {
+			continue
+		}
+		if globMatch(g.glob, p) || globMatch(g.glob, first) || strings.HasPrefix(g.glob, first+"/") {
+			return g.class
+		}
+	}
+	return ""
+}

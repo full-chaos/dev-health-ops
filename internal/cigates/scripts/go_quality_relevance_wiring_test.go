@@ -8,13 +8,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// CHAOS-10174 PR C: Go port of tests/tooling/test_go_quality_relevance_wiring.py. go-quality.yml's relevance step must
-// supply the push-event BASE_SHA fallback and use the NUL-safe diff producer. The scripts' own tests (go_relevant_diff_test.go,
-// internal/relevancedecider) hand BASE_SHA over directly; neither can see a regression in the WORKFLOW's wiring, such as an
-// edit that moves github.event.before out of last position or reverts the producer to a plain `git diff --name-only`.
+// CHAOS-10174 PR C: Go port of tests/tooling/test_go_quality_relevance_wiring.py. go-quality.yml's plan step (job
+// go-quality-plan, the one place the change set is read) must supply the push-event BASE_SHA fallback and use the NUL-safe
+// diff producer. The scripts' own tests (go_relevant_diff_test.go, internal/cigates/affected) hand BASE_SHA over directly;
+// neither can see a regression in the WORKFLOW's wiring, such as an edit that moves github.event.before out of last
+// position or reverts the producer to a plain `git diff --name-only`.
 
 const (
-	goQualityJob         = "go-quality-leg" // the matrix job; `go-quality` is the fan-in that keeps the required context name
+	goQualityJob         = "go-quality-plan" // the plan job; the legs read its verdict, `go-quality` is the fan-in
 	canonicalBaseSHAExpr = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}"
 )
 
@@ -37,23 +38,23 @@ func relevanceWiringDefects(workflow string) []string {
 	}
 	var found []int
 	for i, s := range job.Steps {
-		if s.ID == "relevance" {
+		if s.ID == "plan" {
 			found = append(found, i)
 		}
 	}
 	if len(found) != 1 {
-		return []string{fmt.Sprintf("expected exactly one step with id: relevance in job %q, found %d", goQualityJob, len(found))}
+		return []string{fmt.Sprintf("expected exactly one step with id: plan in job %q, found %d", goQualityJob, len(found))}
 	}
 	step := job.Steps[found[0]]
 	var d []string
 	if got := step.Env["BASE_SHA"]; got != canonicalBaseSHAExpr {
-		d = append(d, fmt.Sprintf("the relevance step's BASE_SHA expression is %q, want exactly %q: a push event must fall back to github.event.before as the LAST alternative", got, canonicalBaseSHAExpr))
+		d = append(d, fmt.Sprintf("the plan step's BASE_SHA expression is %q, want exactly %q: a push event must fall back to github.event.before as the LAST alternative", got, canonicalBaseSHAExpr))
 	}
 	if !strings.Contains(step.Run, "ci/go_relevant_diff.sh") {
-		d = append(d, "the relevance step does not call ci/go_relevant_diff.sh: a plain git diff loses a renamed-out path and a non-ASCII path")
+		d = append(d, "the plan step does not call ci/go_relevant_diff.sh: a plain git diff loses a renamed-out path and a non-ASCII path")
 	}
 	if strings.Contains(step.Run, "git diff --name-only") {
-		d = append(d, "the relevance step still calls a plain `git diff --name-only`, the lossy shape ci/go_relevant_diff.sh replaces")
+		d = append(d, "the plan step still calls a plain `git diff --name-only`, the lossy shape ci/go_relevant_diff.sh replaces")
 	}
 	return d
 }
@@ -61,7 +62,7 @@ func relevanceWiringDefects(workflow string) []string {
 func TestGoQualityRelevanceStepWiring(t *testing.T) {
 	workflow := readText(t, scriptPath(t, ".github/workflows/go-quality.yml"))
 	if d := relevanceWiringDefects(workflow); len(d) > 0 {
-		t.Fatalf("go-quality.yml relevance wiring: %s", strings.Join(d, "; "))
+		t.Fatalf("go-quality.yml plan wiring: %s", strings.Join(d, "; "))
 	}
 	plants := []struct{ name, old, repl, want string }{
 		{"event.before moved out of last position",
@@ -70,8 +71,8 @@ func TestGoQualityRelevanceStepWiring(t *testing.T) {
 		{"push fallback dropped",
 			"github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}",
 			"github.event.pull_request.base.sha || github.event.merge_group.base_sha }}", "BASE_SHA expression"},
-		{"diff producer replaced by a plain git diff", "bash ci/go_relevant_diff.sh > changed.txt", "git diff --name-only > changed.txt", "does not call ci/go_relevant_diff.sh"},
-		{"relevance step id renamed", "id: relevance\n        env:", "id: decide\n        env:", "found 0"},
+		{"diff producer replaced by a plain git diff", `bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"`, `git diff --name-only > "${RUNNER_TEMP}/changed.txt"`, "does not call ci/go_relevant_diff.sh"},
+		{"plan step id renamed", "id: plan\n        env:", "id: decide\n        env:", "found 0"},
 	}
 	for _, pl := range plants {
 		pl := pl

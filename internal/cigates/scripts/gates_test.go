@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates"
+	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 )
 
 func TestGovernance(t *testing.T) {
@@ -141,24 +142,24 @@ func TestAffectedIntegration(t *testing.T) {
 		{"go file in dep", "b/x.go\n", "AFFECTED 2\na\nb\n"},
 		{"go file in leaf", "c/x.go\n", "AFFECTED 1\nc\n"},
 		{"nul separated", "b/x.go\x00", "AFFECTED 2\na\nb\n"},
-		{"testdata of b", "b/testdata/f.json\n", "AFFECTED 2\na\nb\n"},
-		{"embed file", "b/tmpl.txt\n", "AFFECTED 2\na\nb\n"},
-		{"non embed file", "b/readme.md\n", "FULL non-Go file with no owning package input: b/readme.md\n"},
+		{"testdata of b", "b/testdata/f.json\n", "FULL non-Go file: b/testdata/f.json\n"},
+		{"embed file", "b/tmpl.txt\n", "FULL non-Go file: b/tmpl.txt\n"},
+		{"non embed file", "b/readme.md\n", "FULL non-Go file: b/readme.md\n"},
 		{"go.mod", "go.mod\n", "FULL shared change: go.mod\n"},
-		{"ci", "./ci/x.sh\n", "FULL shared change: ci/x.sh\n"},
+		{"ci file", "./ci/x.sh\n", "FULL shared change: ci/x.sh\n"},
 		{"unlisted go", "zz/x.go\n", "FULL Go file outside any listed package: zz/x.go\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
-			rc := cigates.AffectedIntegration([]string{"--changed", write("c.txt", c.changed), "--golist", g, "--keys", k, "--root", root}, &out, &errb)
+			rc := affected.PlanVerdict([]string{"--event", "pull_request", "--changed", write("c.txt", c.changed), "--golist", g, "--keys", k, "--root", root}, &out, &errb)
 			if rc != 0 || out.String() != c.want {
 				t.Fatalf("rc=%d out=%q err=%q want %q", rc, out.String(), errb.String(), c.want)
 			}
 		})
 	}
 	var out, errb bytes.Buffer
-	if rc := cigates.AffectedIntegration([]string{"--changed", write("e.txt", "a/x.go\n"), "--golist", write("e.json", "{}"), "--keys", k, "--root", root}, &out, &errb); rc != 1 {
+	if rc := affected.PlanVerdict([]string{"--event", "pull_request", "--changed", write("e.txt", "a/x.go\n"), "--golist", write("e.json", "{}"), "--keys", k, "--root", root}, &out, &errb); rc != 1 {
 		t.Fatalf("empty go list must fail, rc=%d", rc)
 	}
 }

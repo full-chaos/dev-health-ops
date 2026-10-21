@@ -125,57 +125,38 @@ func TestSAMLRoutesAnswerConflictAndGate(t *testing.T) {
 	}
 }
 
-func TestSAMLClientRequestIDNeverReachesTheAuditActor(t *testing.T) {
+// TestSAMLRoutesRefuseANewAccountWithoutWrites: through the routes and the
+// request id middleware, a sign-in that would need a new account answers 403
+// with the membership detail, issues no session and writes no account,
+// identity, membership or audit row.
+func TestSAMLRoutesRefuseANewAccountWithoutWrites(t *testing.T) {
 	h := newHarness(t, true)
 	h.ownUsers()
 	issuer := &recordingIssuer{}
-	mux := h.mux(issuer)
+	mux := requestid.Middleware(h.mux(issuer))
+	before := h.writeCounts()
+	audits := h.count(`SELECT count(*) FROM auth.security_audit_events`)
 	var buf bytes.Buffer
 	_ = json.NewEncoder(&buf).Encode(map[string]string{"SAMLResponse": h.respond(resp{nameID: nid("new-subject"), email: uniqueEmail("new")})})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/saml/"+h.provider.ID.String()+"/acs", &buf)
 	req.Header.Set("X-Request-ID", "client-chosen-id")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || len(issuer.got) != 1 || !issuer.got[0].Created {
-		t.Fatalf("sign-up %d %s", rec.Code, rec.Body)
+	var body struct {
+		Detail string `json:"detail"`
 	}
-	var rows, fromClient int
-	h.assertProvisionAudit(t, issuer.got[0].PrincipalID, &rows, &fromClient)
-	if rows != 1 || fromClient != 0 {
-		t.Fatalf("provisioning audit rows %d, %d of them carry the client's X-Request-ID", rows, fromClient)
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusForbidden ||
+		body.Detail != "This account is not a member of the provider's organization." || len(issuer.got) != 0 {
+		t.Fatalf("ACS = %d %s sessions %d, want 403 with the membership detail and no session", rec.Code, rec.Body, len(issuer.got))
 	}
-
-	t.Run("with the request id middleware", func(t *testing.T) {
-		issuer := &recordingIssuer{}
-		mux := requestid.Middleware(h.mux(issuer))
-		var buf bytes.Buffer
-		_ = json.NewEncoder(&buf).Encode(map[string]string{"SAMLResponse": h.respond(resp{nameID: nid("new-subject-2"), email: uniqueEmail("new")})})
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/saml/"+h.provider.ID.String()+"/acs", &buf)
-		req.Header.Set("X-Request-ID", "client-chosen-id")
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK || len(issuer.got) != 1 {
-			t.Fatalf("sign-up %d %s", rec.Code, rec.Body)
-		}
-		var audited *string
-		if err := h.db.admin.QueryRow(context.Background(), `SELECT request_id FROM auth.security_audit_events
-WHERE event_type = 'auth.principal.provisioned' AND subject_principal_id = $1`, issuer.got[0].PrincipalID).Scan(&audited); err != nil {
-			t.Fatal(err)
-		}
-		if audited == nil || *audited == "client-chosen-id" || uuid.Validate(*audited) != nil {
-			t.Fatalf("audit request id %v, want the server-minted UUID", audited)
-		}
-		if wire := rec.Header().Get(requestid.Header); wire == "" || !strings.HasPrefix(wire, requestid.WirePrefix) {
-			t.Fatalf("response carries no server request id: %q", wire)
-		}
-	})
-}
-
-func (h *harness) assertProvisionAudit(t *testing.T, principal uuid.UUID, rows, fromClient *int) {
-	t.Helper()
-	if err := h.db.admin.QueryRow(context.Background(), `SELECT count(*), count(*) FILTER (WHERE request_id = 'client-chosen-id')
-FROM auth.security_audit_events WHERE event_type = 'auth.principal.provisioned' AND subject_principal_id = $1`, principal).Scan(rows, fromClient); err != nil {
-		t.Fatal(err)
+	if after := h.writeCounts(); after != before {
+		t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
+	}
+	if n := h.count(`SELECT count(*) FROM auth.security_audit_events`); n != audits {
+		t.Fatalf("audit rows %d -> %d, want no write", audits, n)
+	}
+	if wire := rec.Header().Get(requestid.Header); wire == "" || !strings.HasPrefix(wire, requestid.WirePrefix) {
+		t.Fatalf("response carries no server request id: %q", wire)
 	}
 }
 

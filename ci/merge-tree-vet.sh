@@ -107,7 +107,9 @@ git archive "${tree}" | tar -x -C "${scratch}"
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
   git init -q
   git add -A
-  git -c user.name=merge-tree-vet -c user.email=merge-tree-vet@invalid -c commit.gpgsign=false \
+  # maintenance.auto=false: git >= 2.47 starts `git maintenance run --auto --detach` after a commit, and its repack can
+  # still write inside .git while the EXIT trap removes the scratch tree.
+  git -c user.name=merge-tree-vet -c user.email=merge-tree-vet@invalid -c commit.gpgsign=false -c maintenance.auto=false \
     commit -q -m "merge-tree of ${base_sha} and ${head_sha}"
 )
 

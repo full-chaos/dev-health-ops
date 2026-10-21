@@ -222,6 +222,10 @@ func TestRaceLegsTurnSetupGoCacheOffOnThePool(t *testing.T) {
 		step, _ := s.(map[string]any)
 		if uses, _ := step["uses"].(string); strings.HasPrefix(uses, "actions/setup-go@") {
 			with, _ := step["with"].(map[string]any)
+			// off everywhere (CHAOS-10486: the hosted legs restore their own cache) is off on the pool path too
+			if off, ok := with["cache"].(bool); ok && !off {
+				return
+			}
 			cache, _ := with["cache"].(string)
 			if !strings.Contains(cache, racePoolTerm) {
 				t.Fatalf("setup-go cache must be off on the CI_RACE_RUNNER path, got %q", cache)

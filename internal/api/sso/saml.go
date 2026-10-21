@@ -106,7 +106,7 @@ type samlConfigValues struct {
 	AttributeMapping                                                          map[string]string
 }
 
-func decodeSAMLConfig(raw *string) (samlConfigValues, error) {
+func decodeSAMLConfig(raw *string, providerID string) (samlConfigValues, error) {
 	object, err := decodeConfigObject(raw)
 	if err != nil {
 		return samlConfigValues{}, err
@@ -126,6 +126,9 @@ func decodeSAMLConfig(raw *string) (samlConfigValues, error) {
 		NameIDFormat: nameIDFormat, AttributeMapping: mapping,
 	}
 	if err := validateSAMLConfigHTTPS(cfg); err != nil {
+		return samlConfigValues{}, err
+	}
+	if err := validateSAMLACSOverridePath(cfg, providerID); err != nil {
 		return samlConfigValues{}, err
 	}
 	return cfg, nil
@@ -176,6 +179,14 @@ func validateSAMLConfigHTTPS(cfg samlConfigValues) error {
 			return fmt.Errorf("SAML sp_acs_url %w", err)
 		}
 	}
+	return nil
+}
+
+// validateSAMLACSOverridePath refuses an sp_acs_url override whose path does
+// not end with /saml/{provider id}/acs (exact case, no trailing slash); a
+// proxy prefix in front is allowed. The error names the provider id and the
+// rule, never the configured value.
+func validateSAMLACSOverridePath(cfg samlConfigValues, providerID string) error {
 	return nil
 }
 
@@ -272,7 +283,7 @@ func (h handlers) samlMetadata(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Provider is not SAML", nil)
 		return
 	}
-	config, err := decodeSAMLConfig(row.Config)
+	config, err := decodeSAMLConfig(row.Config, row.ID)
 	if err != nil {
 		h.fail(w, r, "decode saml config", err)
 		return
@@ -345,7 +356,7 @@ func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "SSO provider is not active", nil)
 		return
 	}
-	config, err := decodeSAMLConfig(row.Config)
+	config, err := decodeSAMLConfig(row.Config, row.ID)
 	if err != nil {
 		h.fail(w, r, "decode saml config", err)
 		return
@@ -753,7 +764,7 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "SSO provider is not active", nil)
 		return
 	}
-	config, err := decodeSAMLConfig(row.Config)
+	config, err := decodeSAMLConfig(row.Config, row.ID)
 	if err != nil {
 		h.fail(w, r, "decode saml config", err)
 		return

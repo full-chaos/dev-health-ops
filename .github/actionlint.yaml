@@ -1,0 +1,20 @@
+self-hosted-runner:
+  labels:
+    - oci-arc-runners
+
+# Each ignore matches only the exact message `property "ref" is not defined in object type {}`.
+# The shared self-hosted allowlist condition reads github.event.inputs.ref; these three workflows
+# declare workflow_dispatch with no inputs, so actionlint types inputs as {}. At run time the value
+# is null and null == '' is the intended dispatch-without-ref result. The condition is pinned
+# identically on every routed file by internal/cigates/workflows/workflows_runner_allowlist_test.go:14-19
+# and workflows_go_yml_pins_test.go:15-20, so it is not edited per file.
+paths:
+  .github/workflows/go.yml:
+    ignore:
+      - 'property "ref" is not defined in object type \{\}'
+  .github/workflows/test.yml:
+    ignore:
+      - 'property "ref" is not defined in object type \{\}'
+  .github/workflows/live-e2e.yml:
+    ignore:
+      - 'property "ref" is not defined in object type \{\}'

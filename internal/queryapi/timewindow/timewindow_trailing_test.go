@@ -71,3 +71,37 @@ func TestComputeTrailingWindowOverflowsOnlyBeforeYearOne(t *testing.T) {
 		t.Fatalf("the last day of the range has a trailing window ending yesterday: %v", err)
 	}
 }
+
+// TestComputeTrailingWindowBoundsAtEveryClockTime pins the exact bounds [today-N, today) for N of 1, 7 and 30 at the
+// first second, noon and the last second of a UTC day: the clock time never moves a bound, and today is never inside.
+func TestComputeTrailingWindowBoundsAtEveryClockTime(t *testing.T) {
+	day := date(t, "2026-10-18")
+	for _, offset := range []time.Duration{time.Second, 12 * time.Hour, 24*time.Hour - time.Second} {
+		for _, n := range []int{1, 7, 30} {
+			window, err := Compute(n, n, nil, nil, day.Add(offset))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantStart := day.AddDate(0, 0, -n)
+			if !window.StartDay.Equal(wantStart) || !window.EndDay.Equal(day) {
+				t.Errorf("offset %v N %d: [%v, %v), want [%v, %v)", offset, n, window.StartDay, window.EndDay, wantStart, day)
+			}
+			if !window.CompareStart.Equal(wantStart.AddDate(0, 0, -n)) || !window.CompareEnd.Equal(wantStart) {
+				t.Errorf("offset %v N %d: compare [%v, %v)", offset, n, window.CompareStart, window.CompareEnd)
+			}
+		}
+	}
+}
+
+// TestComputeExplicitEndDateKeepsInclusiveReading pins that a window with an explicit end date is unchanged: the end
+// date's own day is inside it.
+func TestComputeExplicitEndDateKeepsInclusiveReading(t *testing.T) {
+	end := date(t, "2026-10-14")
+	window, err := Compute(7, 7, nil, &end, date(t, "2026-10-18"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !window.StartDay.Equal(date(t, "2026-10-08")) || !window.EndDay.Equal(date(t, "2026-10-15")) {
+		t.Fatalf("window = [%v, %v), want [2026-10-08, 2026-10-15)", window.StartDay, window.EndDay)
+	}
+}

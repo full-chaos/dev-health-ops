@@ -134,7 +134,7 @@ jobs:
       - name: Check freshness inventory
         run: |
           set -o pipefail
-          python scripts/check_freshness_inventory.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness \
             2>&1 | tee .build/docs-freshness-inventory.log
 
       - name: Upload documentation quality evidence

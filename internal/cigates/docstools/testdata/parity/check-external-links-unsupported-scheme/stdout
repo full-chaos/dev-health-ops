@@ -1,0 +1,2 @@
+ERROR: index.html: broken external link https:///nohost: unsupported URL scheme
+ERROR: index.html: broken external link http://user@/x: unsupported URL scheme

@@ -282,7 +282,7 @@ func TestBudgetedSharedProviderReservesAndSettlesEveryAttempt(t *testing.T) {
 		// The reservation covers the whole serialized request as its input
 		// bound: cost = ceil((bytes*250000 + max_output*2000000)/1e6).
 		maxOutput := []int64{2048, 4096}[index]
-		want, err := llmbudget.CostMicroUSD("openai", "gpt-5-mini", "", int64(bodies[index]), maxOutput, 0)
+		want, err := llmbudget.CostMicroUSD("openai", "gpt-5-mini", "", int64(bodies[index]), maxOutput, 0, 0)
 		if err != nil || admit.MaxCost == nil || want == nil || *admit.MaxCost != *want {
 			t.Fatalf("admit %d MaxCost = %v, want %v for %d body bytes and %d output tokens", index, admit.MaxCost, want, bodies[index], maxOutput)
 		}

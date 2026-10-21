@@ -177,29 +177,18 @@ VALUES ($1, $2, $3, 'saml', 'active', $4, $5::json)`, p.ID, p.OrgID, "idp-"+p.ID
 		Providers: pg, Entitlements: allowSSO{}, Flows: pg, Uses: pg, Store: saml.IdentityStore{Identities: d.legacy},
 		BaseURL: func() string { return baseURL },
 	}
-	joins := &recordedJoins{svc: svc, stored: pg, joined: map[uuid.UUID]bool{}}
+	joins := &recordedJoins{stored: pg, joined: map[uuid.UUID]bool{}}
 	svc.Memberships, svc.JIT = joins, joins
 	return &harness{t: t, db: d, idp: idp, provider: loaded, svc: svc}
 }
 
 // recordedJoins is the membership seam of the harness: a join is recorded,
-// not written (memberships stay a go-api write, and a provisioned principal
-// has no public.users row to reference), and Member answers from the record
-// or the stored memberships. ProvisionMember provisions through the service's
-// identity store and records the join only when the account was written.
+// not written (memberships stay a go-api write), and Member answers from the
+// record or the stored memberships.
 type recordedJoins struct {
-	svc    *saml.Service
 	stored saml.Memberships
 	mu     sync.Mutex
 	joined map[uuid.UUID]bool
-}
-
-func (r *recordedJoins) ProvisionMember(ctx context.Context, user saml.NewFederatedUser, p saml.Provider) (uuid.UUID, error) {
-	id, err := r.svc.Store.(saml.IdentityStore).ProvisionFederated(ctx, user)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	return id, r.JoinOnSignIn(ctx, id, p)
 }
 
 func (r *recordedJoins) JoinOnSignIn(_ context.Context, principalID uuid.UUID, _ saml.Provider) error {
@@ -347,8 +336,8 @@ func TestSAMLSolicitedSignIn(t *testing.T) {
 	if signIn.PrincipalID != user || signIn.OrganizationID == nil || *signIn.OrganizationID != h.provider.OrgID {
 		t.Fatalf("sign-in = %+v, want principal %s in org %s", signIn, user, h.provider.OrgID)
 	}
-	if len(signIn.AMR) != 1 || signIn.AMR[0] != saml.AMRFederated || signIn.Created {
-		t.Fatalf("sign-in amr/created = %v/%v", signIn.AMR, signIn.Created)
+	if len(signIn.AMR) != 1 || signIn.AMR[0] != saml.AMRFederated {
+		t.Fatalf("sign-in amr = %v", signIn.AMR)
 	}
 }
 
@@ -615,9 +604,13 @@ func TestSAMLSubjectIsScopedByProviderAndIssuer(t *testing.T) {
 	otherIdP.entityID = homeIdP.entityID
 	other := newHarnessWithIdP(t, otherIdP, true)
 	other.ownUsers()
+	before := other.writeCounts()
 	signIn, err := other.consume(other.respond(resp{nameID: nid("home-subject"), email: uniqueEmail("new")}), nil)
-	if err != nil || signIn.PrincipalID == existing || !signIn.Created {
-		t.Fatalf("another provider row: sign-in %+v err %v, want a new account, never the existing one", signIn, err)
+	if !errors.Is(err, saml.ErrNotOrgMember) || signIn.PrincipalID == existing {
+		t.Fatalf("another provider row: sign-in %+v err %v, want a new-account refusal, never the existing account", signIn, err)
+	}
+	if after := other.writeCounts(); after != before {
+		t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
 	}
 
 	// The same subject from another issuer through the home provider row.
@@ -757,9 +750,13 @@ func TestSAMLAllowedDomainsCompareWithoutCase(t *testing.T) {
 	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = '["Example.COM"]'::json WHERE id = $1`, h.provider.ID); err != nil {
 		t.Fatal(err)
 	}
+	before := h.writeCounts()
 	signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: "new-" + uuid.NewString()[:8] + "@EXAMPLE.com"}), nil)
-	if err != nil || !signIn.Created {
-		t.Fatalf("sign-up %+v err %v, want an account", signIn, err)
+	if !errors.Is(err, saml.ErrNotOrgMember) {
+		t.Fatalf("sign-in %+v err %v, want the domain allowed and the new account refused (ErrNotOrgMember)", signIn, err)
+	}
+	if after := h.writeCounts(); after != before {
+		t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
 	}
 }
 
@@ -827,20 +824,25 @@ func TestSAMLDisabledAccountIsRefused(t *testing.T) {
 	}
 }
 
-func TestSAMLNewAccountNeedsUsersOwnedByAuth(t *testing.T) {
+// TestSAMLNewAccountIsRefusedWithoutWrites: a sign-in that would need a new
+// account is refused with ErrNotOrgMember (membership_required) before and
+// after the users cutover, with the membership seam set, and writes nothing.
+func TestSAMLNewAccountIsRefusedWithoutWrites(t *testing.T) {
 	h := newHarness(t, true)
-	before := h.identityCount()
-	_, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: uniqueEmail("new")}), nil)
-	if !errors.Is(err, saml.ErrSignupNotAvailable) {
-		t.Fatalf("err = %v, want ErrSignupNotAvailable", err)
-	}
-	if h.identityCount() != before {
-		t.Fatal("a refused sign-up wrote an identity")
-	}
-	h.ownUsers()
-	signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: uniqueEmail("new")}), nil)
-	if err != nil || !signIn.Created || signIn.OrganizationID == nil || *signIn.OrganizationID != h.provider.OrgID {
-		t.Fatalf("sign-up: %+v err %v, want a new account in the provider's org", signIn, err)
+	for _, owned := range []bool{false, true} {
+		t.Run(fmt.Sprintf("users owned by auth %v", owned), func(t *testing.T) {
+			if owned {
+				h.ownUsers()
+			}
+			before := h.writeCounts()
+			signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: uniqueEmail("new")}), nil)
+			if !errors.Is(err, saml.ErrNotOrgMember) || saml.OutcomeReason(err) != "membership_required" {
+				t.Fatalf("sign-in %+v err %v, want ErrNotOrgMember (membership_required)", signIn, err)
+			}
+			if after := h.writeCounts(); after != before {
+				t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
+			}
+		})
 	}
 
 	t.Run("auto provisioning disabled", func(t *testing.T) {
@@ -857,7 +859,8 @@ func TestSAMLNewAccountNeedsUsersOwnedByAuth(t *testing.T) {
 // TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites: with no membership
 // seam, a linked account that is not a member of the provider's organization
 // and a new account are refused with ErrNotOrgMember (membership_required)
-// and write nothing; the linked account signs in once it is a member.
+// and write nothing; with a failing seam a new account is refused and writes
+// nothing; the linked account signs in once it is a member.
 func TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites(t *testing.T) {
 	h := newHarness(t, true)
 	h.withoutJoins()
@@ -880,8 +883,8 @@ func TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites(t *testing.T) {
 		defer func() { h.svc.JIT = nil }()
 		before := h.writeCounts()
 		signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: uniqueEmail("free")}), nil)
-		if err == nil {
-			t.Fatalf("sign-in %+v accepted, want a refusal", signIn)
+		if !errors.Is(err, saml.ErrNotOrgMember) {
+			t.Fatalf("sign-in %+v err %v, want ErrNotOrgMember before any join", signIn, err)
 		}
 		if after := h.writeCounts(); after != before {
 			t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
@@ -899,10 +902,6 @@ type failingSeam struct{}
 
 func (failingSeam) JoinOnSignIn(context.Context, uuid.UUID, saml.Provider) error {
 	return errors.New("membership store unavailable")
-}
-
-func (failingSeam) ProvisionMember(context.Context, saml.NewFederatedUser, saml.Provider) (uuid.UUID, error) {
-	return uuid.Nil, errors.New("membership store unavailable")
 }
 
 // TestSAMLAllowedDomainsAreEnforcedOnAMiss: without a linked identity the
@@ -928,8 +927,8 @@ func TestSAMLAllowedDomainsAreEnforcedOnAMiss(t *testing.T) {
 		t.Fatal("a refused sign-up wrote an identity")
 	}
 	signIn, err := h.consume(h.respond(resp{nameID: nid("unlinked-" + uuid.NewString()), email: "u-" + uuid.NewString()[:8] + "@corp.example.com"}), nil)
-	if err != nil || !signIn.Created {
-		t.Fatalf("an allowed domain: sign-in %+v err %v, want a new account", signIn, err)
+	if !errors.Is(err, saml.ErrNotOrgMember) || h.identityCount() != before {
+		t.Fatalf("an allowed domain: sign-in %+v err %v, want the new account refused (ErrNotOrgMember) with no identity written", signIn, err)
 	}
 }
 

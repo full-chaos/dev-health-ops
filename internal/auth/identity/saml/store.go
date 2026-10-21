@@ -89,27 +89,17 @@ type EmailOwner struct {
 	Method      string
 }
 
-// NewFederatedUser is the account ProvisionFederated creates. AuditRequestID
-// is the server-issued request id for the audit actor (nil without one).
-type NewFederatedUser struct {
-	Email          string
-	DisplayName    string
-	Identity       Identity
-	AuditRequestID *string
-}
-
 var (
 	// ErrSignupNotAvailable: new accounts are not created by auth-service until
 	// it owns the users aggregate. The identity store returns it (wrapped or not).
 	ErrSignupNotAvailable = identity.ErrSignupNotAvailable
-	// ErrIdentityTaken: the identity belongs to another principal.
-	ErrIdentityTaken = identity.ErrIdentityTaken
 	// ErrEmailTaken: the email belongs to an existing account.
 	ErrEmailTaken = identity.ErrEmailTaken
 	// ErrInvalidEmailAddress: the asserted email is not an address.
 	ErrInvalidEmailAddress = identity.ErrInvalidEmail
-	// ErrNotOrgMember: the one go-api account carrying the NameID is not a
-	// member of the provider's organization.
+	// ErrNotOrgMember: the account is not a member of the provider's
+	// organization, or the sign-in would need a new account (none is created
+	// on sign-in).
 	ErrNotOrgMember = errors.New("saml: the account is not a member of the provider organization")
 	// ErrIdentityAmbiguous: more than one go-api account, in any
 	// organization, carries the NameID.
@@ -136,15 +126,10 @@ type Memberships interface {
 
 // MembershipJIT is the seam for organization membership on sign-in. go-api
 // owns membership writes until Wave 4; with a nil MembershipJIT no membership
-// is added and a sign-in that needs one is refused before any write.
+// is added and a sign-in that needs one is refused before any write. No
+// account is created on sign-in until an account and its membership can be
+// written in one transaction.
 type MembershipJIT interface {
 	// JoinOnSignIn adds an existing account to the provider's organization.
 	JoinOnSignIn(ctx context.Context, principalID uuid.UUID, p Provider) error
-	// ProvisionMember creates the account (principal, user and identity, as
-	// the identity store's ProvisionFederated does) and its membership in the
-	// provider's organization in one transaction. On any error nothing is
-	// written; on success the account is a member. It returns
-	// ErrSignupNotAvailable, ErrEmailTaken or ErrIdentityTaken as the
-	// identity store does, and ErrNotOrgMember when it refuses the membership.
-	ProvisionMember(ctx context.Context, user NewFederatedUser, p Provider) (uuid.UUID, error)
 }

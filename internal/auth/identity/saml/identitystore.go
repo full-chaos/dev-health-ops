@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
@@ -86,14 +84,4 @@ func (s IdentityStore) PrincipalByEmail(ctx context.Context, email string) (Emai
 		}
 	}
 	return owner, true, nil
-}
-
-// ProvisionFederated creates the account as a self-service sign-up.
-func (s IdentityStore) ProvisionFederated(ctx context.Context, u NewFederatedUser) (uuid.UUID, error) {
-	return s.Identities.ProvisionFederated(ctx, identity.ProvisionRequest{
-		Key:      identity.ExternalKey{Issuer: u.Identity.Issuer, Provider: identity.Provider(u.Identity.Provider), Subject: u.Identity.Subject},
-		Email:    u.Email,
-		FullName: u.DisplayName,
-		Actor:    identity.SelfSignUp(u.AuditRequestID),
-	})
 }

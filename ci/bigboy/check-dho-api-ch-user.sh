@@ -11,7 +11,7 @@
 # 1. FILE (before anything recreates ClickHouse): the host file that compose.bigboy.yml mounts into
 #    users.d must be a regular file, world-readable (clickhouse-server runs as uid 101 in the container and EXITS on a
 #    mounted users.d file it cannot read: a 0600 file owned by the host user takes ClickHouse down), and EQUAL, byte for
-#    byte, to the canonical render. The renderer (ci/bigboy/render-dho-api-ch-users.py, unchanged) runs with a PLACEHOLDER
+#    byte, to the canonical render. The renderer (cigate bigboy render-ch-users, built from this checkout's cmd/cigate) runs with a PLACEHOLDER
 #    password (not a secret); the placeholder's hash is then swapped for the real hash, computed from the creds file by pipe.
 # 2. LIVE: `dho_api_ch` is in system.users of the running ClickHouse container, and it AUTHENTICATES with the password.
 #    Without it go-api's every ClickHouse call fails with code 516 (rev 198, after the CHAOS-7079 recreate lost the user).
@@ -68,10 +68,17 @@ trap 'rm -rf "$canon_dir"' EXIT
 # two files is printed: a mismatch is reported by name only.
 PLACEHOLDER=placeholder-not-a-credential
 placeholder_hash=$(printf %s "$PLACEHOLDER" | sha256sum | cut -d' ' -f1)
-API_CH_PASSWORD="$PLACEHOLDER" python3 "$HERE/render-dho-api-ch-users.py" "$POSTURE" "$canon_dir/placeholder.xml" >/dev/null 2>"$canon_dir/render.err" || { echo "CH_API_USER_FILE_FAIL: the canonical render could not be computed: $(head -c 300 "$canon_dir/render.err")" >&2; exit 1; }
+# CHAOS-10347: the renderer is Go. cigate is built from the checkout these tools come from (BIGBOY_CIGATE: a prebuilt cigate, no build; BIGBOY_CIGATE_SRC overrides the source), into the scratch dir.
+CIGATE_SRC=${BIGBOY_CIGATE_SRC:-$HERE/../..}
+CGBIN=$canon_dir/cigate
+built=0
+if [ -x "${BIGBOY_CIGATE:-}" ]; then CGBIN=$BIGBOY_CIGATE; built=1; else go build -C "$CIGATE_SRC" -buildvcs=false -trimpath -mod=readonly -o "$CGBIN" ./cmd/cigate 2>"$canon_dir/render.err" && built=1; fi
+if [ "$built" != 1 ] || ! API_CH_PASSWORD="$PLACEHOLDER" "$CGBIN" bigboy render-ch-users "$POSTURE" "$canon_dir/placeholder.xml" >/dev/null 2>>"$canon_dir/render.err"; then
+  echo "CH_API_USER_FILE_FAIL: the canonical render could not be computed: $(head -c 300 "$canon_dir/render.err")" >&2; exit 1
+fi
 api_password | sha256sum | cut -d' ' -f1 > "$canon_dir/real.hash"
 awk -v ph="$placeholder_hash" 'NR==FNR { h=$1; next } { gsub(ph, h); print }' "$canon_dir/real.hash" "$canon_dir/placeholder.xml" > "$canon_dir/canonical.xml"
-cmp -s "$FILE" "$canon_dir/canonical.xml" || { echo "CH_API_USER_FILE_MISMATCH: $FILE is not the canonical render of the posture manifest and the API password (a comment, an edit, a malformed grant or a hash for another password all differ); regenerate it with ci/bigboy/render-dho-api-ch-users.py. ClickHouse would load whatever is mounted, and exits on a file it cannot parse" >&2; exit 4; }
+cmp -s "$FILE" "$canon_dir/canonical.xml" || { echo "CH_API_USER_FILE_MISMATCH: $FILE is not the canonical render of the posture manifest and the API password (a comment, an edit, a malformed grant or a hash for another password all differ); regenerate it with cigate bigboy render-ch-users (go run ./cmd/cigate bigboy render-ch-users <authorization.go> <out-file>, API_CH_PASSWORD in the environment). ClickHouse would load whatever is mounted, and exits on a file it cannot parse" >&2; exit 4; }
 echo "ch_api_user_file=ok path=$FILE mode=$mode canonical=yes"
 count=$(cd "$R" && "${DC[@]}" exec -T "$CH" clickhouse-client -q "SELECT count() FROM system.users WHERE name='dho_api_ch'" 2>/dev/null) || count=""
 [ "$count" = "1" ] || { echo "CH_API_USER_LIVE_FAIL: dho_api_ch is not in system.users of service $CH (count=${count:-unreadable}); go-api would fail every ClickHouse call with code 516" >&2; exit 2; }

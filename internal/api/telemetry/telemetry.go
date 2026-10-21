@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // Settings keys (services/telemetry.py).
@@ -47,7 +48,7 @@ var rejected = func() metric.Int64Counter {
 // reports are not sent).
 func Routes(pool *pgxpool.Pool, guard *policy.Guard, auth *policy.Authenticator, endpoint string, logger *slog.Logger) []httpapi.Route {
 	h := handlers{pool: pool, auth: auth, logger: logger, now: time.Now, endpoint: endpoint,
-		client: &http.Client{Timeout: sendTimeout}}
+		client: &http.Client{Timeout: sendTimeout, Transport: httpguard.SharedTransport()}}
 	wrap := func(next http.HandlerFunc) http.Handler {
 		return guard.Wrap(policy.Authenticated, h.withOrg(next))
 	}

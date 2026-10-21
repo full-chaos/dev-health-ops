@@ -1,0 +1,4 @@
+# values.local.yaml (synthetic)
+image:
+  tag: sha-777777777777
+  dho: sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3

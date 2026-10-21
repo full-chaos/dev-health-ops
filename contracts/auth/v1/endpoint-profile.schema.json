@@ -1,5 +1,125 @@
 {
   "$defs": {
+    "accessTokenValidationRules": {
+      "type": "object",
+      "description": "The access_token_validation rules, one definition for the inventory row and the wire profile (each $refs it from its allOf). (1) A route that accepts ops_access_token_hs256 carries access_token_validation with legacy_hs256 true. (2) A route that accepts user_access_token carries access_token_validation. (3) A route that accepts neither access-token class carries none. (4) A route that does not accept ops_access_token_hs256 has legacy_hs256 false, so true always names an accepted HS256 class.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "accepted_credential_classes": {
+                "type": "array",
+                "contains": {
+                  "const": "ops_access_token_hs256"
+                }
+              }
+            },
+            "required": [
+              "accepted_credential_classes"
+            ]
+          },
+          "then": {
+            "required": [
+              "access_token_validation"
+            ],
+            "properties": {
+              "access_token_validation": {
+                "type": "object",
+                "properties": {
+                  "legacy_hs256": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_credential_classes": {
+                "type": "array",
+                "contains": {
+                  "const": "user_access_token"
+                }
+              }
+            },
+            "required": [
+              "accepted_credential_classes"
+            ]
+          },
+          "then": {
+            "required": [
+              "access_token_validation"
+            ],
+            "properties": {
+              "access_token_validation": {}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_credential_classes": {
+                "type": "array",
+                "not": {
+                  "contains": {
+                    "enum": [
+                      "ops_access_token_hs256",
+                      "user_access_token"
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "accepted_credential_classes"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "access_token_validation"
+              ],
+              "properties": {
+                "access_token_validation": {}
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_credential_classes": {
+                "type": "array",
+                "not": {
+                  "contains": {
+                    "const": "ops_access_token_hs256"
+                  }
+                }
+              },
+              "access_token_validation": {}
+            },
+            "required": [
+              "accepted_credential_classes",
+              "access_token_validation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "access_token_validation": {
+                "type": "object",
+                "properties": {
+                  "legacy_hs256": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "anchor": {
       "description": "A repo-relative file:line citation, or null when the fact could not be anchored to source. null MUST be paired with an entry in the row's gaps array explaining why.",
       "oneOf": [
@@ -56,9 +176,26 @@
               "class_disambiguator"
             ]
           }
+        },
+        {
+          "$ref": "#/$defs/accessTokenValidationRules"
         }
       ],
       "properties": {
+        "access_token_validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "legacy_hs256"
+          ],
+          "properties": {
+            "legacy_hs256": {
+              "type": "boolean",
+              "description": "true when the route accepts the legacy HS256 access token (ops_access_token_hs256) on purpose, as a compatibility opt-in; false when it accepts only the platform EdDSA access token (user_access_token). Explicit, no default: a validator never infers the opt-in from the class list alone."
+            }
+          },
+          "description": "How the route validates a bearer access token. REQUIRED when accepted_credential_classes holds an access-token class (ops_access_token_hs256 or user_access_token) and FORBIDDEN otherwise. The accepted access-token classes are the ones in accepted_credential_classes; this object does not repeat them. The rules that tie it to the class list are $defs/accessTokenValidationRules, which the endpoint-auth-profile.v1 wire schema references rather than copies."
+        },
         "accepted_credential_classes": {
           "description": "class_id values from contracts/auth/v1/credential-classes.json this route's intended validator accepts. Empty for a genuinely public route.",
           "items": {
@@ -88,14 +225,15 @@
                 "credential_prefix",
                 "dedicated_header",
                 "jwt_header_alg",
+                "jwt_header_typ",
                 "signature_header"
               ],
-              "description": "How the class is chosen from the request BEFORE any validator runs: the Authorization scheme, a fixed credential prefix, a dedicated header, the `alg` field of the JWT protected header (compared exactly; query-api picks its Bearer verifier this way, so with the edge verifier unconfigured an HS256 token is refused rather than misrouted), or a signature header. Closed on purpose: there is no 'try each validator' value, because validator fan-out is the CHAOS-3271 defect."
+              "description": "How the class is chosen from the request BEFORE any validator runs: the Authorization scheme, a fixed credential prefix, a dedicated header, the `alg` field of the JWT protected header (compared exactly; query-api picks its Bearer verifier this way, so with the edge verifier unconfigured an HS256 token is refused rather than misrouted), the `typ` field of the JWT protected header (in the contract files one lowercase spelling, compared exactly; it separates two classes that share a scheme and an alg, e.g. at+jwt from jwt), or a signature header. Closed on purpose: there is no 'try each validator' value, because validator fan-out is the CHAOS-3271 defect."
             },
             "name": {
               "type": "string",
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-              "description": "The scheme, prefix or header name the selector reads. A name, never a credential value."
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$",
+              "description": "The scheme, prefix, header name, JWT header alg or JWT header typ the selector reads. A name, never a credential value. `+` is allowed for a media-type typ such as at+jwt. Owned here; endpoint-auth-profile.v1 and the credential-class markers reference it."
             }
           },
           "description": "How a route that accepts more than one credential class picks the class from the request head BEFORE any validator runs (TRD section 10). The kind vocabulary is owned here; endpoint-auth-profile.v1 references it. The profile registry gate (CheckClassSelector) joins it with the per-class markers in credential-classes.json. REQUIRED on every row that accepts two or more classes (CHAOS-10199); a row with fewer classes names none."

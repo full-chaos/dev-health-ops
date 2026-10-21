@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "{A}/bump-swap-rewrite-values.py", line 31, in <module>
+    assert old[:12] in t and od in t
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

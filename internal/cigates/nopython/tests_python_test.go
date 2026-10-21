@@ -74,10 +74,8 @@ type pyOwnedEntry struct {
 }
 
 var pyOwnedEntries = []pyOwnedEntry{
-	{"src/dev_health_ops/", "CHAOS-10375"},
 	{"scripts/", "CHAOS-10386/10387/10388 (docs tooling leaves)"},
 	{"tests/tooling/", "fcs tooling/docs leaves"},
-	{"ci/bigboy/", "#4565"},
 }
 
 func (e pyOwnedEntry) covers(stem string) bool {

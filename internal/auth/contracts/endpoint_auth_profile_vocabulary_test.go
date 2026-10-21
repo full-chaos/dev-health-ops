@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,17 +40,19 @@ func TestSharedProfileFieldsAreReferencesNotCopies(t *testing.T) {
 	shared := map[string]string{
 		"classification":                    "../endpoint-profile.schema.json#/$defs/endpointProfile/properties/classification",
 		"class_disambiguator/kind":          "../endpoint-profile.schema.json#/$defs/endpointProfile/properties/class_disambiguator/properties/kind",
+		"class_disambiguator/name":          "../endpoint-profile.schema.json#/$defs/endpointProfile/properties/class_disambiguator/properties/name",
 		"minimum_assurance":                 "principal.v1.schema.json#/properties/authentication/properties/assurance",
 		"action":                            "principal.v1.schema.json#/properties/actor_chain/items/properties/permitted_actions/items",
 		"accepted_credential_classes/items": "principal.v1.schema.json#/properties/credential/properties/class",
+		"access_token_validation":           "../endpoint-profile.schema.json#/$defs/endpointProfile/properties/access_token_validation",
 	}
 	for field, wantRef := range shared {
 		t.Run(field, func(t *testing.T) {
 			var node map[string]any
 			if field == "accepted_credential_classes/items" {
 				node, _ = profileProperty(t, "accepted_credential_classes")["items"].(map[string]any)
-			} else if field == "class_disambiguator/kind" {
-				node, _ = profileProperty(t, "class_disambiguator")["properties"].(map[string]any)["kind"].(map[string]any)
+			} else if kindOrName, found := strings.CutPrefix(field, "class_disambiguator/"); found {
+				node, _ = profileProperty(t, "class_disambiguator")["properties"].(map[string]any)[kindOrName].(map[string]any)
 			} else {
 				node = profileProperty(t, field)
 			}
@@ -175,6 +178,7 @@ func TestProfileCredentialClassVocabularyEqualsTheFrozenSetBothWays(t *testing.T
 		if isPinned[class] {
 			document["token"] = loadEndpointAuthProfileFixture(t, "valid-protected-jwt-single-class.json").(map[string]any)["token"]
 		}
+		withAccessTokenValidation(t, document, class)
 		return Validate(root, EndpointAuthProfileSurface, document) == nil
 	}
 	got := map[string]bool{}
@@ -287,6 +291,7 @@ func TestTheTokenRuleCoversEveryAcceptedClassInBothDirections(t *testing.T) {
 			if withPins {
 				document["token"] = pins
 			}
+			withAccessTokenValidation(t, document, id)
 			err := Validate(root, EndpointAuthProfileSurface, document)
 			if wantOK := withPins == isPinned[id]; (err == nil) != wantOK {
 				t.Errorf("class %q withPins=%v: accepted=%v, want %v (%v)", id, withPins, err == nil, wantOK, err)

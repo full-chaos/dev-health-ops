@@ -3,6 +3,9 @@
     "user_access_token",
     "user_access_token"
   ],
+  "access_token_validation": {
+    "legacy_hs256": false
+  },
   "action": "members.invite",
   "cache_class": "none",
   "class_disambiguator": {

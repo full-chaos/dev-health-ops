@@ -304,7 +304,7 @@ func runSelectStep(t *testing.T, o *otree) (cmdResult, string) {
 		t.Fatalf("expected exactly one select step, found %d", n)
 	}
 	gitDo := func(args ...string) string {
-		res := freeSpec{dir: o.dir, env: gitEnv}.run("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+		res := freeSpec{dir: o.dir, env: gitEnv}.run("git", append([]string{"-c", "commit.gpgsign=false", "-c", "maintenance.auto=false"}, args...)...)
 		if res.code != 0 {
 			t.Fatalf("git %v: %s%s", args, res.stderr, res.stdout)
 		}

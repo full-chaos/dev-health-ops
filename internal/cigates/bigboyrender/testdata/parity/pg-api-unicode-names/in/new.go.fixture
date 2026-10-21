@@ -1,0 +1,13 @@
+package postgres
+
+func apiPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"users", true, true, true},
+			{"café", true, false, true},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"café", "année", "UPDATE"},
+		},
+	}
+}

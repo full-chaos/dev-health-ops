@@ -315,6 +315,7 @@ func sequence(steps ...func(*pgx.Conn)) func(*pgx.Conn) {
 func TestPreflightMatchesTheHookOverTheStateGrid(t *testing.T) {
 	ctx := context.Background()
 	productionEnv(t)
+	t.Setenv(pgmigrate.AuthSchemaEnv, "auth")
 	baseline, current := currentBuild(t)
 	instance, admin := startInstance(t)
 	if len(current.chain) < 2 {
@@ -366,6 +367,11 @@ func TestPreflightMatchesTheHookOverTheStateGrid(t *testing.T) {
 			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
 		{"objects but no alembic_version", stateDatabase(t, admin, instance, execSQL(t, "CREATE TABLE public.not_ours (id int)")),
 			productionSettings, current, pgmigrate.VerdictNeedsManual, pgmigrate.ReasonForeignDatabase},
+		{"the auth lineage under another schema name", stateDatabase(t, admin, instance, sequence(
+			execSQL(t, `CREATE SCHEMA other_auth`),
+			execSQL(t, `CREATE TABLE other_auth.schema_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL)`),
+			execSQL(t, `CREATE TABLE other_auth.things (id integer)`))), productionSettings, current,
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAuthSchemaMismatch},
 		{"alembic_version at the baseline, a table gone", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, nil),
 			execSQL(t, "DROP TABLE public."+baseline.Tables()[len(baseline.Tables())-1]+" CASCADE"))), productionSettings, current,
 			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonSchemaMismatch},

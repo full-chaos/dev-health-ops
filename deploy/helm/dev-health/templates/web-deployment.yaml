@@ -43,22 +43,44 @@ spec:
               value: "::"
             - name: BACKEND_URL
               value: {{ required "web.env.BACKEND_URL is required whenever web.enabled=true (CHAOS-8310): it is the base URL of the backend web's server-side requests go to -- REST (go-api) and /graphql (query-api) are different Go services, so no single in-chart default is correct. Set web.env.BACKEND_URL explicitly for this environment (for example the ingress host that fans out both), or web.enabled=false." .Values.web.env.BACKEND_URL | quote }}
+            {{- /*
+            CHAOS-10446: AUTH_SECRET (the Auth.js session secret) never falls back to
+            JWT_SECRET_KEY, the HS256 access-token key. It is a literal (dev) or one
+            key of its own Secret; web.enabled without either fails the render.
+            */}}
+            {{- if .Values.web.env.AUTH_SECRET }}
+            {{- if and (trim (toString .Values.secrets.data.JWT_SECRET_KEY)) (eq (trim (toString .Values.web.env.AUTH_SECRET)) (trim (toString .Values.secrets.data.JWT_SECRET_KEY))) }}
+            {{- fail "web.env.AUTH_SECRET must not name the HS256 key's Secret, the shared Secret, or the key JWT_SECRET_KEY (CHAOS-10446): its value equals secrets.data.JWT_SECRET_KEY" }}
+            {{- end }}
             - name: AUTH_SECRET
-              {{- if .Values.web.env.AUTH_SECRET }}
               value: {{ .Values.web.env.AUTH_SECRET | quote }}
-              {{- else }}
+            {{- else if .Values.web.authSecret.secretName }}
+            {{- include "dev-health.webSecretGuard" (dict "ctx" . "name" .Values.web.authSecret.secretName "key" (.Values.web.authSecret.key | default "AUTH_SECRET") "what" "web.authSecret") }}
+            - name: AUTH_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "dev-health.secretName" . }}
-                  key: JWT_SECRET_KEY
-                  optional: true
-              {{- end }}
+                  name: {{ .Values.web.authSecret.secretName | quote }}
+                  key: {{ .Values.web.authSecret.key | default "AUTH_SECRET" | quote }}
+            {{- else if or (not .Values.web.localDevelopment.enabled) (eq (.Values.web.env.NODE_ENV | default "production") "production") }}
+            {{- fail "web.authSecret.secretName (or web.env.AUTH_SECRET) is required whenever web.enabled=true (only web.localDevelopment with NODE_ENV other than production may omit it) (CHAOS-10446): web's session secret has its own Secret and never falls back to JWT_SECRET_KEY. This is a required values change: see docs/operate/install/production.md, section \"Required values change: separate Secrets for web and the HS256 key\"." }}
+            {{- end }}
             - name: NODE_ENV
               value: {{ .Values.web.env.NODE_ENV | quote }}
             {{- if .Values.valkey.enabled }}
             - name: REDIS_URL
               value: {{ include "dev-health.redisURL" . | quote }}
             {{- end }}
+          {{- range .Values.web.extraEnv | default (list) }}
+          {{- if has .name (list "AUTH_SECRET" "NEXTAUTH_SECRET" "JWT_SECRET_KEY") }}
+          {{- fail (printf "web.extraEnv must not set %s (CHAOS-10446): web.authSecret and web.env own the names AUTH_SECRET and NEXTAUTH_SECRET, and web never takes JWT_SECRET_KEY" .name) }}
+          {{- end }}
+          {{- if and (hasKey . "value") (trim (toString $.Values.secrets.data.JWT_SECRET_KEY)) (eq (trim (toString .value)) (trim (toString $.Values.secrets.data.JWT_SECRET_KEY))) }}
+          {{- fail (printf "web.extraEnv %s must not hold the HS256 key (CHAOS-10446): its literal value equals secrets.data.JWT_SECRET_KEY" .name) }}
+          {{- end }}
+          {{- with .valueFrom }}{{- with .secretKeyRef }}
+          {{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" .name "key" .key "what" "web.extraEnv secretKeyRef") }}
+          {{- end }}{{- end }}
+          {{- end }}
           {{- with .Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -91,6 +113,19 @@ spec:
       {{- $webVolumes := .Values.web.extraVolumes | default (list) }}
       {{- if .Values.web.localDevelopment.enabled }}
       {{- $webVolumes = concat $webVolumes (.Values.web.localDevelopment.extraVolumes | default (list)) }}
+      {{- end }}
+      {{- range $webVolumes }}
+      {{- with .secret }}
+      {{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" .secretName "key" "" "what" "a web secret volume") }}
+      {{- range .items | default (list) }}{{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" "" "key" .key "what" "a web secret volume item") }}{{- end }}
+      {{- end }}
+      {{- with .csi }}{{- with .nodePublishSecretRef }}
+      {{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" .name "key" "" "what" "a web csi nodePublishSecretRef") }}
+      {{- end }}{{- end }}
+      {{- with .projected }}{{- range .sources | default (list) }}{{- with .secret }}
+      {{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" .name "key" "" "what" "a web projected secret volume") }}
+      {{- range .items | default (list) }}{{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" "" "key" .key "what" "a web projected secret volume item") }}{{- end }}
+      {{- end }}{{- end }}{{- end }}
       {{- end }}
       {{- with $webVolumes }}
       volumes:

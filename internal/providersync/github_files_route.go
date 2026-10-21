@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,9 +35,25 @@ func (doer gitHubFilesCountingDoer) Do(request *http.Request) (*http.Response, e
 
 const (
 	gitHubFileContentMaxBytes = 1_000_000
-	gitHubFileContentMaxFiles = 2_000
 	gitHubFileContentBatch    = 50
+	// gitHubFileChunkMaxBytes bounds the declared blob text of one chunk and of
+	// one GraphQL content request. A chunk (payload plus its effect ledger)
+	// must fit 2 MiB (ck_sync_chunk_payload_bytes): 1.5 MiB of declared text
+	// leaves room for the row fields, and gitHubFilesChunkFits has the last
+	// word when escaping inflates the text. A blob of unknown size counts as
+	// the largest eligible blob.
+	gitHubFileChunkMaxBytes = 1_572_864
+	gitHubFileChunkMaxRows  = 500
 )
+
+// GitHubFilesChunkPolicy is the chunk policy of github/files. MaxSourceItems
+// equals the row bound so one emission is one prepared sub-chunk.
+func GitHubFilesChunkPolicy() ChunkPolicy {
+	policy := DefaultChunkPolicy()
+	policy.MaxSourceItems = gitHubFileChunkMaxRows
+	policy.MaxEffectRows = gitHubFileChunkMaxRows
+	return policy
+}
 
 // ErrGitHubFilesTraversalFailed marks an inventory traversal that could not
 // establish whether the repository is empty. Callers must retry it rather than
@@ -82,7 +99,14 @@ type gitHubTreeEntry struct {
 
 // GitHubFilesRouteHandler resolves the branch at the claim's upper bound,
 // traverses its tree, retains every blob path, and fetches scanner-eligible,
-// <=1MB blob text in 50-path GraphQL batches.
+// <=1MB blob text in size-bounded GraphQL requests.
+//
+// The route is chunked (ChunkedCompleteRouteHandler): one emission is a run of
+// consecutive paths of the sorted blob list whose declared eligible text is at
+// most gitHubFileChunkMaxBytes. The resume cursor pins the tree sha, so one
+// unit reads one snapshot whatever the branch does between attempts, and holds
+// the index of the next path. Memory per attempt is one chunk plus the path
+// list, whatever the repository size (CHAOS-10439).
 //
 // The tree API can report the recursive listing truncated once a repository
 // crosses its entry-count or response-size ceiling. A truncated recursive
@@ -100,58 +124,347 @@ type gitHubTreeEntry struct {
 // truncated=true and recovers through the same non-recursive walk (CHAOS-6268).
 type GitHubFilesRouteHandler struct{ RepoIdentity GitLabRepoIdentityReader }
 
+// githubFilesChunkCursor is the durable position of one files unit.
+type githubFilesChunkCursor struct {
+	Version  int    `json:"v"`
+	TreeRef  string `json:"tree,omitempty"`
+	Ordinal  int    `json:"next"`
+	Rows     int    `json:"rows"`
+	Contents int    `json:"contents"`
+	Oversize int    `json:"oversize"`
+	// Unavailable counts eligible blobs the provider returned no text for
+	// (binary, truncated, absent): they stay without contents.
+	Unavailable int `json:"unavailable"`
+	// PinLost counts restarts after the pinned tree vanished; SyncedAt is the
+	// write instant of rows built after the latest restart.
+	PinLost       int        `json:"pin_lost,omitempty"`
+	SyncedAt      *time.Time `json:"synced_at,omitempty"`
+	PathsTotal    int        `json:"paths_total"`
+	EligibleTotal int        `json:"eligible_total"`
+	Requests      int        `json:"requests"`
+	Chunks        int        `json:"chunks"`
+	Walked        bool       `json:"walked,omitempty"`
+	NoCommit      bool       `json:"no_commit,omitempty"`
+	Done          bool       `json:"done,omitempty"`
+}
+
+func decodeGitHubFilesChunkCursor(raw string) (githubFilesChunkCursor, error) {
+	if raw == "" {
+		return githubFilesChunkCursor{Version: 1}, nil
+	}
+	var cursor githubFilesChunkCursor
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cursor); err != nil || cursor.Version != 1 || cursor.Ordinal < 0 ||
+		cursor.Rows < 0 || cursor.Contents < 0 || cursor.Oversize < 0 || cursor.Unavailable < 0 || cursor.PinLost < 0 || cursor.PathsTotal < 0 || cursor.EligibleTotal < 0 || cursor.Requests < 0 || cursor.Chunks < 0 ||
+		(cursor.TreeRef == "" && !cursor.NoCommit) {
+		return githubFilesChunkCursor{}, ErrInvalidConfiguration
+	}
+	return cursor, nil
+}
+
+func (cursor githubFilesChunkCursor) encode() (string, error) {
+	encoded, err := json.Marshal(cursor)
+	if err != nil || len(encoded) > maxChunkCursorBytes {
+		return "", ErrInvalidConfiguration
+	}
+	return string(encoded), nil
+}
+
+// Collect runs the chunked collection to the end and returns it as one batch.
+// Production uses CollectChunks; this serves one-shot callers and the parity
+// tests.
 func (handler GitHubFilesRouteHandler) Collect(
+	ctx context.Context,
+	claim Claim,
+	credential providerfoundation.Credential,
+	client *providerfoundation.HTTPClient,
+	normalizedAt time.Time,
+) (CompleteRouteBatch, error) {
+	var rows []json.RawMessage
+	var final CompleteRouteBatch
+	err := handler.CollectChunks(ctx, claim, credential, client, normalizedAt, "", func(emission ChunkRouteEmission) error {
+		for _, effect := range emission.Batch.Effects {
+			rows = append(rows, effect.Rows...)
+		}
+		if emission.Final {
+			final = emission.Batch
+		}
+		return nil
+	})
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	effect, err := BuildEffectBatch("git_files", EffectReadbackRequired, rows)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	final.Effects = []EffectBatch{effect}
+	return final, nil
+}
+
+func (handler GitHubFilesRouteHandler) CollectChunks(
 	ctx context.Context,
 	claim Claim,
 	_ providerfoundation.Credential,
 	client *providerfoundation.HTTPClient,
 	normalizedAt time.Time,
-) (CompleteRouteBatch, error) {
+	resumeCursor string,
+	emit func(ChunkRouteEmission) error,
+) error {
 	if ctx == nil || claim.Validate() != nil || claim.Provider != "github" ||
 		claim.Dataset != "files" || client == nil || client.Provider != "github" ||
-		client.BaseURL == nil || normalizedAt.IsZero() {
-		return CompleteRouteBatch{}, ErrInvalidConfiguration
+		client.BaseURL == nil || normalizedAt.IsZero() || emit == nil {
+		return ErrInvalidConfiguration
+	}
+	cursor, err := decodeGitHubFilesChunkCursor(resumeCursor)
+	if err != nil {
+		return err
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	owner, repository, err := splitGitHubRepository(claim.SourceExternalID)
 	if err != nil {
-		return CompleteRouteBatch{}, err
+		return err
 	}
 	requests := 0
 	counted := *client
 	counted.Doer = gitHubFilesCountingDoer{delegate: client.Doer, attempts: &requests}
 	client = &counted
+	baseRequests := cursor.Requests
 	root := providerRelativePath(client, "repos", owner, repository)
 	var repoPayload gitHubRepositoryPayload
 	if err := fetchObjectRoute(ctx, client, githubRepoRoute, root, &repoPayload); err != nil {
-		return CompleteRouteBatch{}, err
+		return err
 	}
 	repoID, err := resolveGitHubRepoID(ctx, handler.RepoIdentity, claim, repoPayload)
 	if err != nil {
-		return CompleteRouteBatch{}, err
+		return err
 	}
-	branch := repoPayload.DefaultBranch
-	if branch == "" {
-		branch = "main"
-	}
-	treeRef, err := gitHubFilesTreeRef(ctx, client, root, branch, claim.BeforeAt)
-	if err != nil {
-		if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
-			return CompleteRouteBatch{}, err
+	before := resumeCursor
+	emitFinal := func(cursor githubFilesChunkCursor) error {
+		cursor.Requests = baseRequests + requests
+		cursor.Done = true
+		after, err := cursor.encode()
+		if err != nil {
+			return err
 		}
-		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, false)
+		batch, err := gitHubFilesFinalBatch(claim, repoPayload.FullName, cursor)
+		if err != nil {
+			return err
+		}
+		return emit(ChunkRouteEmission{Batch: batch, CursorBefore: before, CursorAfter: after, Final: true})
 	}
-	if treeRef == "" {
-		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, false)
+	if cursor.Done || cursor.NoCommit {
+		return emitFinal(cursor)
 	}
-	// The recursive tree listing is read through the shared per-object cap
-	// (fetchObject/nativeMaxObjectBytes). A repository with enough entries
-	// can legitimately produce a response over that cap without GitHub ever
-	// setting its own `truncated` flag -- the cap truncates the body before
-	// that field would even be reached. Treat a cap hit here exactly like
-	// GitHub's own truncated=true: fall back to the same non-recursive walk,
-	// rather than failing the unit over a well-formed response that was
-	// simply too big for the shared cap.
+	pin := func() (bool, error) {
+		branch := repoPayload.DefaultBranch
+		if branch == "" {
+			branch = "main"
+		}
+		treeRef, err := gitHubFilesTreeRef(ctx, client, root, branch, claim.BeforeAt)
+		if err != nil {
+			return false, continueGitHubFilesTraversal(err, repoPayload.FullName)
+		}
+		if treeRef == "" {
+			cursor.NoCommit = true
+			return true, nil
+		}
+		cursor.TreeRef = treeRef
+		return false, nil
+	}
+	resumedPin := cursor.TreeRef != ""
+	if cursor.SyncedAt != nil {
+		normalizedAt = *cursor.SyncedAt
+	}
+	if !resumedPin {
+		if done, err := pin(); err != nil || done {
+			if err != nil {
+				return err
+			}
+			return emitFinal(cursor)
+		}
+	}
+	paths, sizes, walked, err := gitHubFilesInventory(ctx, client, root, cursor.TreeRef, repoPayload.FullName)
+	if err != nil && resumedPin && gitHubFilesPinGone(err) && cursor.PinLost < gitHubFilesMaxRepins {
+		// The tree the cursor pinned no longer exists (its commit was
+		// garbage-collected or force-pushed away), so the cursor can never
+		// advance. Restart from the current head under a later write instant:
+		// rows written for the old tree keep their instant, so the new rows
+		// win the ReplacingMergeTree version for every path they cover.
+		slog.Warn(
+			"github files pinned tree is gone; restarting from the current branch head",
+			"pin_lost", cursor.PinLost+1, "paths_done", cursor.Ordinal,
+		)
+		restart := time.Now().UTC().Truncate(time.Millisecond)
+		if !restart.After(normalizedAt) {
+			restart = normalizedAt.Add(time.Millisecond)
+		}
+		// The lost pin's partial inventory is dropped from the cursor: its
+		// counters do not carry into the result of the new tree. Only the wire
+		// attempts, the restart count and the write instant survive.
+		cursor = githubFilesChunkCursor{
+			Version: 1, Requests: cursor.Requests, PinLost: cursor.PinLost + 1, SyncedAt: &restart,
+		}
+		normalizedAt = restart
+		if done, pinErr := pin(); pinErr != nil || done {
+			if pinErr != nil {
+				return pinErr
+			}
+			return emitFinal(cursor)
+		}
+		paths, sizes, walked, err = gitHubFilesInventory(ctx, client, root, cursor.TreeRef, repoPayload.FullName)
+	}
+	if err != nil {
+		return err
+	}
+	cursor.PathsTotal = len(paths)
+	cursor.EligibleTotal = 0
+	for _, filePath := range paths {
+		if gitHubFileContentEligible(filePath, sizes[filePath]) {
+			cursor.EligibleTotal++
+		}
+	}
+	cursor.Walked = cursor.Walked || walked
+	sort.Strings(paths)
+	if cursor.Ordinal > len(paths) {
+		return ErrInvalidConfiguration
+	}
+	// fetched keeps the text of every blob read in this attempt, by presence, so
+	// a chunk shortened below to fit is not read twice.
+	fetched := map[string]string{}
+	for cursor.Ordinal < len(paths) {
+		end, declared := cursor.Ordinal, 0
+		for end < len(paths) && end-cursor.Ordinal < gitHubFileChunkMaxRows {
+			cost := 0
+			if gitHubFileContentEligible(paths[end], sizes[paths[end]]) {
+				cost = gitHubFileDeclaredBytes(sizes[paths[end]])
+			}
+			if end > cursor.Ordinal && declared+cost > gitHubFileChunkMaxBytes {
+				break
+			}
+			declared += cost
+			end++
+		}
+		var missing []string
+		for _, filePath := range paths[cursor.Ordinal:end] {
+			if _, done := fetched[filePath]; !done {
+				missing = append(missing, filePath)
+			}
+		}
+		contents, err := fetchGitHubFileContents(ctx, client, owner, repository, cursor.TreeRef, missing, sizes)
+		if err != nil {
+			return continueGitHubFilesTraversal(err, repoPayload.FullName)
+		}
+		for filePath, text := range contents {
+			fetched[filePath] = text
+		}
+		// The chunk is sized by its persisted form: the same material the chunk
+		// store builds (payload, effect ledger, cursors) must be accepted. A
+		// chunk that is not is halved; one row that alone is not loses its
+		// contents (counted) so it can never stop the cursor.
+		dropped := map[string]bool{}
+		var (
+			rows   []gitFileRow
+			next   githubFilesChunkCursor
+			effect EffectBatch
+			after  string
+		)
+		for {
+			rows = rows[:0]
+			next = cursor
+			for _, filePath := range paths[cursor.Ordinal:end] {
+				content, present := fetched[filePath]
+				oversize := dropped[filePath]
+				if oversize {
+					content, present = "", false
+					next.Oversize++
+				}
+				row := newGitHubFileRow(claim, repoID, filePath, content, normalizedAt)
+				if present && row.Contents == nil {
+					row.Contents = &content
+				}
+				if err := row.validate(claim); err != nil {
+					return err
+				}
+				if row.Contents != nil {
+					next.Contents++
+				} else if !oversize && gitHubFileContentEligible(filePath, sizes[filePath]) {
+					next.Unavailable++
+				}
+				rows = append(rows, row)
+			}
+			effect, err = effectBatchFromValues("git_files", EffectReadbackRequired, rows)
+			if err != nil {
+				return err
+			}
+			next.Ordinal = end
+			next.Rows += len(rows)
+			next.Chunks++
+			next.Requests = baseRequests + requests
+			after, err = next.encode()
+			if err != nil {
+				return err
+			}
+			if gitHubFilesChunkFits(claim, effect, before, after) {
+				break
+			}
+			if len(rows) > 1 {
+				end = cursor.Ordinal + len(rows)/2
+				continue
+			}
+			if rows[0].Contents == nil {
+				return ErrChunkPolicyExceeded
+			}
+			dropped[rows[0].Path] = true
+		}
+		if next.Oversize > cursor.Oversize {
+			slog.Warn(
+				"github files rows kept without contents: persisted size above one chunk",
+				"skipped", next.Oversize-cursor.Oversize,
+			)
+		}
+		batch := CompleteRouteBatch{Effects: []EffectBatch{effect}}
+		if err := emit(ChunkRouteEmission{Batch: batch, CursorBefore: before, CursorAfter: after}); err != nil {
+			return err
+		}
+		for _, row := range rows {
+			delete(fetched, row.Path)
+		}
+		before, cursor = after, next
+	}
+	return emitFinal(cursor)
+}
+
+// gitHubFilesMaxRepins bounds the restarts of one unit: a repository whose
+// every pinned tree vanishes is failing for another reason.
+const gitHubFilesMaxRepins = 3
+
+// gitHubFilesPinGone reports a provider answer that says the pinned tree
+// object does not exist (404, or 422 for an unresolvable sha). Server errors,
+// rate limits and transport failures are not it: they keep the pin.
+func gitHubFilesPinGone(err error) bool {
+	var providerErr *providerfoundation.ProviderError
+	return errors.As(err, &providerErr) &&
+		(providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusUnprocessableEntity)
+}
+
+// gitHubFileDeclaredBytes is the size a blob is charged against a chunk: its
+// tree size, or the largest eligible size when the tree gave none.
+func gitHubFileDeclaredBytes(size *int) int {
+	if size == nil {
+		return gitHubFileContentMaxBytes
+	}
+	return *size
+}
+
+// gitHubFilesInventory lists every blob of treeRef: the recursive listing, or
+// the directory walk when that listing is truncated or above the object cap.
+func gitHubFilesInventory(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	root, treeRef, fullName string,
+) ([]string, map[string]*int, bool, error) {
 	var tree gitHubTreePayload
 	treeErr := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
 	var tooLarge *providerfoundation.ObjectTooLargeError
@@ -159,105 +472,30 @@ func (handler GitHubFilesRouteHandler) Collect(
 	if treeCapExceeded {
 		slog.Warn(
 			"github files tree response exceeded the shared object cap; falling back to non-recursive walk",
-			"repository", repoPayload.FullName, "path", tooLarge.Path,
+			"repository", fullName, "path", tooLarge.Path,
 			"cap_bytes", tooLarge.CapBytes, "content_length", tooLarge.ContentLength,
 		)
 	} else if treeErr != nil {
-		if err := continueGitHubFilesTraversal(treeErr, repoPayload.FullName); err != nil {
-			return CompleteRouteBatch{}, err
-		}
-		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, false)
+		return nil, nil, false, continueGitHubFilesTraversal(treeErr, fullName)
 	}
-	var paths []string
-	var sizes map[string]*int
-	subtreeWalked := treeCapExceeded || tree.Truncated
-	if subtreeWalked {
-		walkedPaths, walkedSizes, walkErr := gitHubWalkTree(ctx, client, root, treeRef, "")
+	if treeCapExceeded || tree.Truncated {
+		paths, sizes, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", defaultGitHubTreeWalkLimits())
 		if walkErr != nil {
-			err := fmt.Errorf("ref=%s: %w", treeRef, walkErr)
-			if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
-				return CompleteRouteBatch{}, err
-			}
-			return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, subtreeWalked)
+			logGitHubTreeWalkStop(walkErr, stats)
+			return nil, nil, true, continueGitHubFilesTraversal(fmt.Errorf("ref=%s: %w", treeRef, walkErr), fullName)
 		}
-		paths, sizes = walkedPaths, walkedSizes
-	} else {
-		paths = make([]string, 0, len(tree.Tree))
-		sizes = make(map[string]*int, len(tree.Tree))
-		for _, entry := range tree.Tree {
-			if entry.Type != "blob" || entry.Path == "" {
-				continue
-			}
-			paths = append(paths, entry.Path)
-			sizes[entry.Path] = entry.Size
-		}
-	}
-	contents, err := fetchGitHubFileContents(ctx, client, owner, repository, treeRef, paths, sizes)
-	if err != nil {
-		if err := continueGitHubFilesTraversal(err, repoPayload.FullName); err != nil {
-			return CompleteRouteBatch{}, err
-		}
-		return gitHubFilesBatch(claim, repoPayload.FullName, nil, normalizedAt, requests, 0, false, subtreeWalked)
-	}
-	rows := make([]gitFileRow, 0, len(paths))
-	for _, filePath := range paths {
-		row := newGitHubFileRow(claim, repoID, filePath, contents[filePath], normalizedAt)
-		if err := row.validate(claim); err != nil {
-			return CompleteRouteBatch{}, err
-		}
-		rows = append(rows, row)
-	}
-	return gitHubFilesBatch(claim, repoPayload.FullName, rows, normalizedAt, requests, 1, false, subtreeWalked)
-}
-
-// gitHubWalkTree recovers a complete blob inventory when the recursive tree
-// listing reports truncated. It re-fetches the same tree object without
-// recursive=1 and descends into every "tree" entry by its own sha, joining
-// each level's path onto prefix. A subtree that itself reports truncated, or
-// any fetch that fails, aborts the whole walk instead of returning the paths
-// already collected -- a partial walk is exactly the incomplete inventory
-// this recovery exists to avoid.
-func gitHubWalkTree(
-	ctx context.Context,
-	client *providerfoundation.HTTPClient,
-	root, sha, prefix string,
-) ([]string, map[string]*int, error) {
-	var tree gitHubTreePayload
-	if err := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(sha), &tree); err != nil {
-		return nil, nil, fmt.Errorf("path=%q: %w", prefix, err)
-	}
-	if tree.Truncated {
-		return nil, nil, fmt.Errorf("path=%q: %w", prefix, ErrGitHubFilesSubtreeTruncated)
+		return paths, sizes, true, nil
 	}
 	paths := make([]string, 0, len(tree.Tree))
 	sizes := make(map[string]*int, len(tree.Tree))
 	for _, entry := range tree.Tree {
-		if entry.Path == "" {
+		if entry.Type != "blob" || entry.Path == "" {
 			continue
 		}
-		fullPath := entry.Path
-		if prefix != "" {
-			fullPath = prefix + "/" + entry.Path
-		}
-		switch entry.Type {
-		case "blob":
-			paths = append(paths, fullPath)
-			sizes[fullPath] = entry.Size
-		case "tree":
-			if entry.SHA == "" {
-				return nil, nil, fmt.Errorf("path=%q: %w", fullPath, providerfoundation.ErrNormalizationInvalid)
-			}
-			childPaths, childSizes, err := gitHubWalkTree(ctx, client, root, entry.SHA, fullPath)
-			if err != nil {
-				return nil, nil, err
-			}
-			paths = append(paths, childPaths...)
-			for childPath, size := range childSizes {
-				sizes[childPath] = size
-			}
-		}
+		paths = append(paths, entry.Path)
+		sizes[entry.Path] = entry.Size
 	}
-	return paths, sizes, nil
+	return paths, sizes, false, nil
 }
 
 func continueGitHubFilesTraversal(err error, repository string) error {
@@ -306,39 +544,39 @@ func gitHubFilesTreeRef(
 	return branchPayload.Commit.SHA, nil
 }
 
-func gitHubFilesBatch(
-	claim Claim,
-	fullName string,
-	rows []gitFileRow,
-	normalizedAt time.Time,
-	requests, pages int,
-	capReached bool,
-	subtreeWalked bool,
-) (CompleteRouteBatch, error) {
-	effect, err := effectBatchFromValues("git_files", EffectReadbackRequired, rows)
+func gitHubFilesFinalBatch(claim Claim, fullName string, cursor githubFilesChunkCursor) (CompleteRouteBatch, error) {
+	effect, err := effectBatchFromValues("git_files", EffectReadbackRequired, []gitFileRow(nil))
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
 	inventoryStatus := "complete"
-	if len(rows) == 0 {
+	pages := 1
+	if cursor.Rows == 0 {
 		inventoryStatus = "empty"
-		if pages == 0 {
-			inventoryStatus = "no_commit_at_bound"
+		if cursor.NoCommit {
+			inventoryStatus, pages = "no_commit_at_bound", 0
 		}
 	}
 	slog.Info(
-		"github files inventory", "repository", fullName, "entries", len(rows),
-		"subtree_walk", subtreeWalked, "inventory_status", inventoryStatus,
+		"github files inventory", "repository", fullName, "entries", cursor.Rows,
+		"subtree_walk", cursor.Walked, "inventory_status", inventoryStatus,
+		"chunks", cursor.Chunks, "with_contents", cursor.Contents, "contents_oversize", cursor.Oversize,
+		"contents_unavailable", cursor.Unavailable,
+		"paths_total", cursor.PathsTotal, "eligible_total", cursor.EligibleTotal, "pin_lost", cursor.PinLost,
 	)
 	return CompleteRouteBatch{
 		Effects: []EffectBatch{effect},
 		Result: map[string]any{
-			"files_synced": len(rows), "inventory_status": inventoryStatus, "repo": fullName,
+			"files_synced": cursor.Rows, "inventory_status": inventoryStatus, "repo": fullName,
+			"files_with_contents": cursor.Contents, "contents_oversize": cursor.Oversize,
+			"contents_unavailable": cursor.Unavailable, "paths_total": cursor.PathsTotal,
+			"eligible_total": cursor.EligibleTotal, "pin_lost": cursor.PinLost,
+			"content_chunks": cursor.Chunks,
 		},
 		Watermark: claim.BeforeAt,
 		Evidence: FetchEvidence{
-			Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests,
-			Pages: pages, Records: len(rows), CapReached: capReached,
+			Provider: claim.Provider, Dataset: claim.Dataset, Requests: cursor.Requests,
+			Pages: pages, Records: cursor.Rows,
 		},
 	}, nil
 }
@@ -350,20 +588,28 @@ func fetchGitHubFileContents(
 	paths []string,
 	sizes map[string]*int,
 ) (map[string]string, error) {
-	scannable := make([]string, 0, min(len(paths), gitHubFileContentMaxFiles))
+	scannable := make([]string, 0, len(paths))
 	for _, filePath := range paths {
-		if !gitHubFileContentEligible(filePath, sizes[filePath]) {
-			continue
-		}
-		scannable = append(scannable, filePath)
-		if len(scannable) >= gitHubFileContentMaxFiles {
-			break
+		if gitHubFileContentEligible(filePath, sizes[filePath]) {
+			scannable = append(scannable, filePath)
 		}
 	}
 	contents := make(map[string]string)
-	for start := 0; start < len(scannable); start += gitHubFileContentBatch {
-		end := min(start+gitHubFileContentBatch, len(scannable))
+	for start := 0; start < len(scannable); {
+		// A request holds at most gitHubFileContentBatch blobs and, by their
+		// declared sizes, at most gitHubFileChunkMaxBytes of text (one blob
+		// always fits), far below the response cap.
+		end, declared := start, 0
+		for end < len(scannable) && end-start < gitHubFileContentBatch {
+			cost := gitHubFileDeclaredBytes(sizes[scannable[end]])
+			if end > start && declared+cost > gitHubFileChunkMaxBytes {
+				break
+			}
+			declared += cost
+			end++
+		}
 		chunk := scannable[start:end]
+		start = end
 		body, err := json.Marshal(map[string]any{
 			"query":     gitHubBlobTextsQuery(ref, chunk),
 			"variables": map[string]string{"owner": owner, "repo": repository},
@@ -466,3 +712,38 @@ func (row gitFileRow) validate(claim Claim) error {
 }
 
 var _ CompleteRouteHandler = GitHubFilesRouteHandler{}
+
+// gitHubFilesWidestInstant is the longest RFC3339Nano instant (nine fractional
+// digits). The executor stamps the chunk ledger with its own nanosecond clock
+// while a route only knows a millisecond instant, so the pre-check runs on the
+// widest encoding: it is never smaller than what production measures.
+var gitHubFilesWidestInstant = time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC)
+
+// gitHubFilesPreparedChunk is the one prepared chunk the executor builds for a
+// non-final emission: the same split, the same cursor stamping and the same
+// payload sizing it uses. ok is false when the split yields more than one.
+func gitHubFilesPreparedChunk(effect EffectBatch, before, after string) (PreparedProviderChunk, bool) {
+	chunks, err := splitCompleteRouteBatch(CompleteRouteBatch{Effects: []EffectBatch{effect}}, ShadowComparison{}, GitHubFilesChunkPolicy())
+	if err != nil || len(chunks) != 1 {
+		return PreparedProviderChunk{}, false
+	}
+	resetEmissionChunks(chunks, ChunkRouteEmission{CursorBefore: before, CursorAfter: after})
+	if sizeEmissionChunks(chunks) != nil {
+		return PreparedProviderChunk{}, false
+	}
+	chunks[0].Ordinal = 99999
+	chunks[0].ManifestDigest = preparedChunkDigest(chunks[0])
+	return chunks[0], true
+}
+
+// gitHubFilesChunkFits runs the chunk store's own material builder and
+// validation on that chunk, with the widest clock. No estimate: what the store
+// would refuse is refused here first.
+func gitHubFilesChunkFits(claim Claim, effect EffectBatch, before, after string) bool {
+	chunk, ok := gitHubFilesPreparedChunk(effect, before, after)
+	if !ok {
+		return false
+	}
+	_, err := buildPreparedChunkMaterial(claim, chunk, gitHubFilesWidestInstant)
+	return err == nil
+}

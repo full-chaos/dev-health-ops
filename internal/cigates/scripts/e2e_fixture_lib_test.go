@@ -59,7 +59,7 @@ source "` + filepath.Join(root, "ci/lib/e2e_fixture.sh") + `"
 generate_auth_token
 `
 	env := append(inheritedEnv([]string{"PATH"}),
-		"PATH="+bin+":/usr/bin:/bin",
+		"PATH="+bin+":"+withShims("/usr/bin:/bin"),
 		"STUB_STATE="+state, "BIN_DIR="+bin,
 		"POSTGRES_HOST=h", "POSTGRES_PORT=1", "POSTGRES_SUPERUSER=u", "POSTGRES_SUPERUSER_PASSWORD=p", "POSTGRES_DB=d",
 		"POSTGRES_URI=postgresql+asyncpg://u:p@h:1/d", "E2E_ORG_ID=11111111-2222-4333-8444-555555555555",

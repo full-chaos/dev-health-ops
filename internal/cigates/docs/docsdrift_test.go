@@ -68,17 +68,31 @@ func docsDriftGuard(d docTree) []string {
 	if !goSetup {
 		out = append(out, docsDriftJob+" must set up Go")
 	}
-	var runs []string
-	for _, s := range steps {
-		runs = append(runs, asString(s["run"]))
+	for _, scope := range []struct {
+		name string
+		m    map[string]any
+	}{{"the workflow", wf}, {docsDriftJob, job}} {
+		for _, key := range []string{"env", "defaults"} {
+			if _, ok := scope.m[key]; ok {
+				out = append(out, scope.name+" must not set "+key+": it could change what the checks run")
+			}
+		}
 	}
 	for _, want := range docsDriftSteps {
 		ran := false
-		for _, run := range runs {
-			ran = ran || runsCommand(run, want.command, want.args)
+		for _, s := range steps {
+			if strings.TrimSpace(asString(s["run"])) != want.command+" "+want.args {
+				continue
+			}
+			ran = true
+			for _, key := range []string{"env", "shell", "working-directory"} {
+				if _, ok := s[key]; ok {
+					out = append(out, fmt.Sprintf("the step %q must not set %s", want.args, key))
+				}
+			}
 		}
 		if !ran {
-			out = append(out, fmt.Sprintf("%s runs no step with the command %q and %q (a step that echoes or replaces it is refused)", docsDriftJob, want.command, want.args))
+			out = append(out, fmt.Sprintf("%s runs no step with the command %q and %q (the step run must be exactly that one command line: an echo, a mask, a conditional or an extra flag is refused)", docsDriftJob, want.command, want.args))
 		}
 	}
 	return out
@@ -102,6 +116,21 @@ func TestDocsDriftWorkflowRunsTheDocsPageGuards(t *testing.T) {
 			plantCase{"the step `" + line + "` sets continue-on-error", func(t *testing.T, d docTree) docTree {
 				return d.edit(t, docsDriftPath, "        run: "+line, "        continue-on-error: true\n        run: "+line)
 			}, "must not set continue-on-error"},
+			plantCase{"the step `" + line + "` is masked by || echo", func(t *testing.T, d docTree) docTree {
+				return d.edit(t, docsDriftPath, "run: "+line, "run: "+line+" || echo ignored")
+			}, "runs no step with the command"},
+			plantCase{"the step `" + line + "` sits in a false shell conditional", func(t *testing.T, d docTree) docTree {
+				return d.edit(t, docsDriftPath, "run: "+line, "run: |\n          if false; then\n            "+line+"\n          fi")
+			}, "runs no step with the command"},
+			plantCase{"the step `" + line + "` gets -run '^$'", func(t *testing.T, d docTree) docTree {
+				return d.edit(t, docsDriftPath, "run: "+line, "run: "+line+" -run '^$'")
+			}, "runs no step with the command"},
+			plantCase{"the step `" + line + "` sets GOFLAGS", func(t *testing.T, d docTree) docTree {
+				return d.edit(t, docsDriftPath, "        run: "+line, "        env:\n          GOFLAGS: -run=^$\n        run: "+line)
+			}, "must not set env"},
+			plantCase{"the step `" + line + "` sets a shell", func(t *testing.T, d docTree) docTree {
+				return d.edit(t, docsDriftPath, "        run: "+line, "        shell: bash {0}\n        run: "+line)
+			}, "must not set shell"},
 		)
 	}
 	for _, event := range []string{"push", "pull_request"} {
@@ -126,6 +155,9 @@ func TestDocsDriftWorkflowRunsTheDocsPageGuards(t *testing.T) {
 		plantCase{"the job carries an if", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsDriftPath, "  docs-drift:\n    name: docs-drift\n", "  docs-drift:\n    name: docs-drift\n    if: false\n")
 		}, "must not carry an if"},
+		plantCase{"the job sets env", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsDriftPath, "  docs-drift:\n    name: docs-drift\n", "  docs-drift:\n    name: docs-drift\n    env:\n      GOFLAGS: -run=^$\n")
+		}, "must not set env"},
 		plantCase{"Python is installed", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsDriftPath, "      - name: Set up Go\n", "      - uses: actions/setup-python@v6\n      - name: Set up Go\n")
 		}, "must install no Python"},

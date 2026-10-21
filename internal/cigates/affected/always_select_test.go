@@ -37,6 +37,12 @@ var (
 	realPlanDir string
 )
 
+func removeRealPlanDir() {
+	if realPlanDir != "" {
+		_ = os.RemoveAll(realPlanDir)
+	}
+}
+
 // realPlan runs the integration plan verdict over the real module, as go.yml's plan step does.
 func realPlan(t *testing.T, changed string) []string {
 	t.Helper()

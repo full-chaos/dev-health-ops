@@ -26,11 +26,10 @@ var (
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	for _, dir := range []string{cigateDir, realPlanDir} {
-		if dir != "" {
-			_ = os.RemoveAll(dir)
-		}
+	if cigateDir != "" {
+		_ = os.RemoveAll(cigateDir)
 	}
+	removeRealPlanDir()
 	os.Exit(code)
 }
 

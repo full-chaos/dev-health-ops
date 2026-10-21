@@ -70,7 +70,7 @@ func TestIntegrationPlanJobRunsThePlanVerdict(t *testing.T) {
 	if !ok {
 		t.Fatal("go.yml has no go-storage-integration-plan job")
 	}
-	s, ok := stepRunning(plan, "cigate plan-verdict")
+	s, ok := stepRunning(plan, "plan-verdict")
 	if !ok {
 		t.Fatal("go-storage-integration-plan runs no `cigate plan-verdict`")
 	}
@@ -96,7 +96,7 @@ func TestGoQualityLegsRunThePlanVerdict(t *testing.T) {
 	if !ok {
 		t.Fatal("go-quality.yml has no go-quality-plan job")
 	}
-	s, ok := stepRunning(plan, "cigate plan-verdict")
+	s, ok := stepRunning(plan, "plan-verdict")
 	if !ok {
 		t.Fatal("go-quality-plan runs no `cigate plan-verdict`")
 	}

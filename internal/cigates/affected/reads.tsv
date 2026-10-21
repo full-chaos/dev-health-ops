@@ -5,6 +5,7 @@ cmd/dev-health-migration-matrix	code	docs
 cmd/dho	test	compose.yml
 cmd/gqlgen-guard	test	contracts
 deploy/helm/dev-health	test	compose.yml
+deploy/helm/dev-health	test	docs
 internal/api/webhookintake	test	contracts
 internal/apiservice	code	contracts
 internal/apiservice	test	ci
@@ -49,10 +50,12 @@ internal/cigates/chartgates	test	deploy
 internal/cigates/chartgates	test	docker
 internal/cigates/chartgates	test	docs
 internal/cigates/checkgo	test	ci
+internal/cigates/docsprepare	test	docs-data
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs
 internal/cigates/docstools	test	Makefile
+internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci
 internal/cigates/nopython	test	ci
 internal/cigates/proofteardown	test	ci
@@ -62,9 +65,12 @@ internal/cigates/routing	test	deploy
 internal/cigates/scripts	test	.github
 internal/cigates/scripts	test	README.md
 internal/cigates/scripts	test	ci
+internal/cigates/scripts	test	contracts
 internal/cigates/scripts	test	docs
+internal/cigates/splitshards	test	ci
 internal/cigates/testshard	test	.github
 internal/cigates/testshard	test	ci
+internal/cigates/weightsfiles	test	ci
 internal/cigates/workflowpaths	test	.github
 internal/cigates/workflowpaths	test	contracts
 internal/cigates/workflowpaths	test	deploy

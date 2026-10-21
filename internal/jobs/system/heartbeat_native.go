@@ -75,6 +75,7 @@ func NewNativeHeartbeatDispatcher(
 	if httpClient == nil {
 		httpClient = &http.Client{Transport: httpguard.SharedTransport()}
 	}
+	httpClient = httpguard.WithTransport(httpClient)
 	if strings.TrimSpace(instanceID) == "" {
 		instanceID = "unknown"
 	}

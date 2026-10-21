@@ -84,3 +84,15 @@ func TestTransportSurvivesAReplacedDefaultTransport(t *testing.T) {
 		t.Fatalf("Transport() over a replaced DefaultTransport = %+v, want net/http's default settings with no proxy", transport)
 	}
 }
+
+func TestWithTransportGivesASuppliedClientWithoutATransportNoEnvironmentProxy(t *testing.T) {
+	proxycapture.Check(t, func(ctx context.Context) { sendCanary(ctx, WithTransport(&http.Client{})) }).AssertNothingReached(t)
+	supplied := &http.Client{}
+	if WithTransport(supplied).Transport == nil || supplied.Transport != nil {
+		t.Fatal("WithTransport must give its copy a transport and leave the supplied client unchanged")
+	}
+	own := &http.Client{Transport: &http.Transport{}}
+	if WithTransport(own) != own || WithTransport(nil) != nil {
+		t.Fatal("WithTransport must return a client that has a transport, and nil, unchanged")
+	}
+}

@@ -23,6 +23,8 @@
 //	transport-address    &c.Transport for a net/http.Client c: a write through the pointer is invisible to every other rule
 //	client-copy          a copy of a supplied net/http.Client (`*client`): the copy keeps a nil Transport unless the
 //	                     code gives it one, so every copy needs a row naming where its transport comes from
+//	client-parameter     a parameter of type *net/http.Client or net/http.Client: the constructor sweep. Every function that
+//	                     takes a supplied client is listed with where that client gets its transport, so a new one fails
 //	client-instantiate   a generic function or type instantiated with the non-pointer net/http.Client (zero[http.Client]())
 //	default-transport    any use of net/http.DefaultTransport
 //	default-transport-assign  an assignment to net/http.DefaultTransport: FORBIDDEN, no allow row admits it (the transport
@@ -211,6 +213,19 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 		}
 	case *ast.FuncType:
 		var kinds []string
+		if n.Params != nil {
+			for _, field := range n.Params.List {
+				if t := info.Types[field.Type].Type; isNamed(t, "Client") || isNamed(derefPointer(t), "Client") {
+					names := len(field.Names)
+					if names == 0 {
+						names = 1
+					}
+					for i := 0; i < names; i++ {
+						kinds = append(kinds, "client-parameter")
+					}
+				}
+			}
+		}
 		if n.Results != nil {
 			for _, field := range n.Results.List {
 				if isNamed(info.Types[field.Type].Type, "Client") {

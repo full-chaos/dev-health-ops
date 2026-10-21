@@ -21,8 +21,6 @@ func Own() *http.Client {
 	return &http.Client{Transport: roundTripper{next: transport}, Timeout: time.Second}
 }
 
-func Pointer(client *http.Client) *http.Client { return client }
-
 func Unkeyed() http.Client { return http.Client{&http.Transport{}, nil, nil, 0} }
 
 func Cloned() *http.Client {

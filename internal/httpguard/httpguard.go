@@ -26,6 +26,18 @@ func refuseRedirects(req *http.Request, via []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
+// WithTransport is client unchanged when it has a Transport, else a copy with SharedTransport(): a supplied client with
+// a nil Transport would dial through http.DefaultTransport and so through an environment proxy. A nil client stays nil;
+// the caller's client is never modified.
+func WithTransport(client *http.Client) *http.Client {
+	if client == nil || client.Transport != nil {
+		return client
+	}
+	copied := *client
+	copied.Transport = SharedTransport()
+	return &copied
+}
+
 // NoRedirects is the client with its redirect policy replaced by "answer the 3xx, follow nothing" (a nil client stays
 // nil). A followed redirect carries the credential to wherever the server sends it: Go drops only Authorization and
 // Cookie when the host changes, not a custom header such as PRIVATE-TOKEN, and keeps Authorization for a subdomain of

@@ -14,6 +14,7 @@ var docsRootVerbs = []struct {
 	files []string
 	want  string
 }{
+	{"check-candidate-facts", []string{"docs/reference/taxonomies/investment.md"}, "Canonical fact drift check passed"},
 	{"gen-taxonomy", []string{"docs/reference/taxonomies/investment.md"}, ""},
 	{"check-investment-drift", []string{"docs/reference/taxonomies/investment.md"}, "Investment docs drift check passed"},
 	{"gen-queue-mapping", []string{"docs/contribute/architecture/go-worker-runtime.md", "deploy/go-workers/deployment.json", "contracts/jobs/v1/registry.json", "contracts/jobs/v1/migration-state.json"}, ""},
@@ -105,6 +106,48 @@ func TestDocsVerbsOutsideAnyTreeStillRefuse(t *testing.T) {
 			if code != 1 || stdout == "" && stderr == "" {
 				t.Errorf("%s: exit %d, stdout %q, stderr %q; want a refusal", v.verb, code, stdout, stderr)
 			}
+		})
+	}
+}
+
+// A directory that carries the anchor's name is not the anchor: the walk continues upward to the real file.
+func TestDocsVerbsSkipADirectoryNamedLikeTheAnchor(t *testing.T) {
+	for _, v := range docsRootVerbs {
+		t.Run(v.verb, func(t *testing.T) {
+			root := docsRootTree(t, v.files)
+			nested := filepath.Join(root, "ci", "deep")
+			for _, rel := range v.files {
+				if err := os.MkdirAll(filepath.Join(nested, filepath.FromSlash(rel)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Chdir(nested)
+			wantDocsVerbPass(t, v.verb, v.want)
+		})
+	}
+}
+
+// A symlink to a regular file is an anchor.
+func TestDocsVerbsAcceptASymlinkedAnchorFile(t *testing.T) {
+	for _, v := range docsRootVerbs {
+		t.Run(v.verb, func(t *testing.T) {
+			real := docsRootTree(t, v.files)
+			root := t.TempDir()
+			for _, rel := range v.files {
+				dst := filepath.Join(root, filepath.FromSlash(rel))
+				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(real, filepath.FromSlash(rel)), dst); err != nil {
+					t.Fatal(err)
+				}
+			}
+			nested := filepath.Join(root, "ci", "deep")
+			if err := os.MkdirAll(nested, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(nested)
+			wantDocsVerbPass(t, v.verb, v.want)
 		})
 	}
 }

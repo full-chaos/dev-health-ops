@@ -16,7 +16,7 @@ import (
 // compensated-sum() fix. Unlike CodeOwnershipGini's golden (repouser
 // package), whose real-world integer inputs make the defect currently
 // unreachable, these ARE the reachable site: `success_rate` is a fractional
-// ratio in [0,1], and the corpus (tests/fixtures/generate_pysum_golden.py)
+// ratio in [0,1], and the corpus (generate_pysum_golden (generator deleted, golden frozen))
 // deliberately includes >= 60 pseudo-random 3-8 element trials, 11 of which
 // are independently verified (by this test file's own generator sanity
 // check, run once at generation time) to diverge between naive and

@@ -1,6 +1,6 @@
 # Keep both build and runtime images immutable. Updating either digest is an
 # explicit dependency change reviewed alongside the Go toolchain pin.
-ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d"
+ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd"
 ARG GO_RUNTIME_IMAGE="gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35"
 
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS build

@@ -131,6 +131,45 @@ Secret name — either the one we create or an external one
 {{- end }}
 
 {{/*
+CHAOS-10446: the Secret that holds JWT_SECRET_KEY, the HS256 access-token key. It is
+its own Secret so the shared Secret the worker groups envFrom never carries it.
+hs256Secret.externalSecretName names an operator-managed one; otherwise the chart
+creates <fullname>-hs256 (secrets.create). Only go-api reads it through the chart.
+*/}}
+{{- define "dev-health.hs256SecretName" -}}
+{{- if .Values.hs256Secret.externalSecretName }}
+{{- if eq (lower (trim .Values.hs256Secret.externalSecretName)) (lower (trim (include "dev-health.secretName" .))) }}
+{{- fail "hs256Secret.externalSecretName must differ from the shared Secret name (CHAOS-10446): the worker groups envFrom the shared Secret, so the HS256 key would reach them" }}
+{{- end }}
+{{- .Values.hs256Secret.externalSecretName }}
+{{- else if .Values.secrets.create }}
+{{- include "dev-health.fullname" . }}-hs256
+{{- else }}
+{{- fail "hs256Secret.externalSecretName is required when secrets.create is false (CHAOS-10446): JWT_SECRET_KEY lives in its own Secret, not in secrets.externalSecretName" }}
+{{- end }}
+{{- end }}
+
+{{/*
+CHAOS-10446: one guard for every web selector. args: dict "ctx" <root> "name" <Secret name> "key" <Secret key> "what" <where> ["sharedOk" true].
+Fails when the name (trim + case-fold) is the HS256 key's Secret or the shared Secret, or the key is JWT_SECRET_KEY.
+sharedOk (single keys only, web.extraEnv secretKeyRef): the shared Secret is allowed for keys other than JWT_SECRET_KEY.
+*/}}
+{{- define "dev-health.webSecretGuard" -}}
+{{- $ctx := .ctx -}}
+{{- $n := lower (trim (.name | default "")) -}}
+{{- $hs := lower (trim ($ctx.Values.hs256Secret.externalSecretName | default (ternary (printf "%s-hs256" (include "dev-health.fullname" $ctx)) "" $ctx.Values.secrets.create))) -}}
+{{- $sh := lower (trim (ternary (printf "%s-secrets" (include "dev-health.fullname" $ctx)) ($ctx.Values.secrets.externalSecretName | default "") $ctx.Values.secrets.create)) -}}
+{{- $sharedOk := .sharedOk | default false -}}
+{{- if $sharedOk -}}
+{{- if or (and $n $hs (eq $n $hs)) (eq (trim (.key | default "")) "JWT_SECRET_KEY") -}}
+{{- fail (printf "%s must not name the HS256 key's Secret or the key JWT_SECRET_KEY (CHAOS-10446): web would hold a token-minting key; other keys of the shared Secret are allowed" .what) -}}
+{{- end -}}
+{{- else if or (and $n $hs (eq $n $hs)) (and $n $sh (eq $n $sh)) (eq (trim (.key | default "")) "JWT_SECRET_KEY") -}}
+{{- fail (printf "%s must not name the HS256 key's Secret, the shared Secret, or the key JWT_SECRET_KEY (CHAOS-10446): web would hold a token-minting key" .what) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 ConfigMap name
 */}}
 {{- define "dev-health.configMapName" -}}
@@ -325,7 +364,7 @@ Secret.
 */}}
 {{- define "dev-health.secretData" -}}
 {{- range $key, $value := .Values.secrets.data }}
-{{- if $value }}
+{{- if and $value (ne $key "JWT_SECRET_KEY") }}
 {{ $key }}: {{ $value | quote }}
 {{- end }}
 {{- end }}

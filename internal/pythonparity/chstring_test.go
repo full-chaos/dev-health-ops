@@ -22,8 +22,7 @@ func loadDecodeGolden(t *testing.T) []decodeCase {
 		"../../tests/fixtures/clickhouse_string_decode_python_golden.json",
 	))
 	if err != nil {
-		t.Fatalf("read decode golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_clickhouse_string_decode_golden.py)", err)
+		t.Fatalf("read decode golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden struct {
 		Cases []decodeCase `json:"cases"`

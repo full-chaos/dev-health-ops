@@ -68,12 +68,17 @@ spec:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.goApi.podAnnotations }}
-      annotations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 8 }}
+      annotations:
+        {{- /*
+        CHAOS-10446: env from a Secret never restarts a pod, so a changed chart-created hs256 Secret
+        rolls go-api through this hash. With an external hs256 Secret the include renders nothing:
+        the hash is constant, and the operator rolls go-api by hand after changing that Secret.
+        */}}
+        {{- /* merge: the first dict wins, so the chart's checksum beats a user annotation of the same name */}}
+        {{- $annotations := merge (dict "checksum/hs256" (include (print $.Template.BasePath "/hs256-secret.yaml") . | sha256sum)) (deepCopy (.Values.goApi.podAnnotations | default (dict))) }}
+        {{- toYaml $annotations | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
@@ -117,13 +122,13 @@ spec:
             them `dho api` refuses to start, and a missing Secret key shows
             as CreateContainerConfigError on the Pod instead of a crash loop.
             API_DATABASE_URI is the api role's own DSN (API_DATABASE_ROLE,
-            default devhealth_api); JWT_SECRET_KEY is the access-token key the
-            Python api and web already read.
+            default devhealth_api); JWT_SECRET_KEY is the HS256 access-token key, read
+            from its own Secret (dev-health.hs256SecretName), not the shared one.
             */}}
             - name: API_DATABASE_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: API_DATABASE_URI}}
             - name: JWT_SECRET_KEY
-              valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: JWT_SECRET_KEY}}
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.hs256SecretName" . }}, key: JWT_SECRET_KEY}}
             {{- if .Values.authService.enabled }}
             {{- /* The auth schema the sid check reads auth-service sessions in. */}}
             - name: AUTH_DATABASE_SCHEMA

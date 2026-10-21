@@ -217,6 +217,9 @@
       }
     },
     "schemas": {
+      "AccessToken": {
+        "$ref": "../jsonschema/access-token.v1.schema.json"
+      },
       "AuditEvent": {
         "$ref": "../jsonschema/audit-event.v1.schema.json"
       },

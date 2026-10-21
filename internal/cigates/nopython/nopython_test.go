@@ -127,7 +127,7 @@ var scriptPython = regexp.MustCompile(`(^|[^\p{L}\p{N}_.-])(?:[^\s'"\x60;|&<>()=
 // shellPythonPending is the closed list of tracked shell scripts that still name Python, each owned by an open
 // change that removes it. An entry goes when its owner merges; a new entry needs a ruling.
 var shellPythonPending = map[string]string{
-	"ci/local_validate.sh": "#4567 and the pytest/uv removal leaves",
+	"ci/local_validate.sh": "CHAOS-10180 (K1 deletes the pytest gate, uv setup and Python installs)",
 	"ci/run_tests.sh":      "CHAOS-10413 (strip its uv/pytest tiers)",
 }
 

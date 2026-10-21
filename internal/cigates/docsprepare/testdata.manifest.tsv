@@ -1,0 +1,11 @@
+# Every file under internal/cigates/docsprepare/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: 084ddf46f7566a321a8be90dbc140899515042fa948de2fc44bbf2d07bb8b0c6 (8 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+4168d0dd04320e924318c78f26eebe557537314219d1688a8d300bbba64495bd	python-recorded	preview.headers
+b37ef7cae73e5cd3450d670f80dd0ff1cebf588418533d0b2c89c9f75701007a	python-recorded	preview.manifest
+1e6b71e4c66b592eb75e7177731aaf1a2ee82e8708cca4006dbad213725fce42	python-recorded	preview.redirects
+331ea9090db0c9f6f597bd9840fd5b171830f6e0b3ba1cb24dfa91f0c95aedc1	python-recorded	preview.robots
+3cbde2cb2b5d0618e4f2591a93b429e719607128887f2fa40dce71c648cc9b4b	python-recorded	production.headers
+e6e0b82859fbe95e493ca9c10c3d0f9d66c0b6e58f4054f9e50b6cadf460e4b6	python-recorded	production.manifest
+1e6b71e4c66b592eb75e7177731aaf1a2ee82e8708cca4006dbad213725fce42	python-recorded	production.redirects
+0cadf83f16a307f5388ac6d51bc5c32ee9eec5ddca75a93e9b923989238b6c5b	python-recorded	production.robots

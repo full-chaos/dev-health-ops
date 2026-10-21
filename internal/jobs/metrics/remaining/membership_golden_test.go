@@ -13,7 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
-// membershipGoldenPayload mirrors tests/fixtures/generate_membership_backfill_golden.py's
+// membershipGoldenPayload mirrors generate_membership_backfill_golden (generator deleted, golden frozen)'s
 // JSON shape exactly. Field types match the encoder's own output, not a
 // convenient reinterpretation of it.
 type membershipGoldenPayload struct {
@@ -97,12 +97,12 @@ func membershipRepoRoot(t *testing.T) string {
 
 // TestComputeOrgMatchesLivePythonBackfillMemberships is the byte-parity
 // oracle for CHAOS-4282: the golden JSON was captured from the REAL Python
-// backfill_memberships (tests/fixtures/generate_membership_backfill_golden.py),
+// backfill_memberships (generate_membership_backfill_golden (generator deleted, golden frozen)),
 // driven through an injected fake sink rather than a live database -- the
 // same "live producer, faked I/O boundary" shape this repo already uses for
 // the capacity forecast golden. Regenerate with:
 //
-//	PYTHONPATH=src python3 tests/fixtures/generate_membership_backfill_golden.py
+//	(frozen golden; generator generate_membership_backfill_golden deleted)
 //
 // and verify staleness first with the script's own --check mode before
 // trusting a manual diff.

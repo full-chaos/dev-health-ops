@@ -6214,7 +6214,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/check_docs_candidate_facts.py",
+      "source_path": "internal/cigates/docstools/candidatefacts.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],
@@ -6444,7 +6444,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/prepare_docs_cloudflare.py",
+      "source_path": "internal/cigates/docsprepare/docsprepare.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],

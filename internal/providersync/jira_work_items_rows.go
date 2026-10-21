@@ -223,7 +223,7 @@ func (s jiraIssueSource) EpicID() workItemRef {
 	}
 	parentFields, _ := jiraMapValue(parent["fields"])
 	issueType, _ := jiraMapValue(parentFields["issuetype"])
-	if level := jiraFloat(issueType["hierarchyLevel"]); level == nil || *level != jiraEpicHierarchyLevel {
+	if !jiraIsEpicLevel(issueType["hierarchyLevel"]) {
 		return workItemRefAbsent()
 	}
 	return workItemRefKey(stringFrom(parent["key"]))
@@ -231,6 +231,25 @@ func (s jiraIssueSource) EpicID() workItemRef {
 
 // jiraEpicHierarchyLevel is the issuetype.hierarchyLevel of an epic.
 const jiraEpicHierarchyLevel = 1
+
+// jiraIsEpicLevel reports whether a hierarchyLevel value is the number 1. A string is no number, even a numeric one.
+func jiraIsEpicLevel(value any) bool {
+	switch level := value.(type) {
+	case json.Number:
+		parsed, err := level.Float64()
+		return err == nil && parsed == jiraEpicHierarchyLevel
+	case float64:
+		return level == jiraEpicHierarchyLevel
+	case float32:
+		return level == jiraEpicHierarchyLevel
+	case int:
+		return level == jiraEpicHierarchyLevel
+	case int64:
+		return level == jiraEpicHierarchyLevel
+	default:
+		return false
+	}
+}
 
 // jiraIssueProjectMoves is jiraProjectMoveItems' entry point for a raw issue
 // payload, mirroring normalizeJiraWorkItem's own changelog/createdAt

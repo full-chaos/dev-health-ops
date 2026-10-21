@@ -73,6 +73,7 @@ func TestJiraEpicIDFromAnEpicLevelParent(t *testing.T) {
 		{"a subtask parent (level 0) is no epic", nil, nil, jiraParentOf("OPS-7", json.Number("0")), "", "jira:OPS-7"},
 		{"an initiative parent (level 2) is no epic", nil, nil, jiraParentOf("OPS-7", json.Number("2")), "", "jira:OPS-7"},
 		{"a parent without a level is no epic", nil, nil, jiraParentOf("OPS-7", nil), "", "jira:OPS-7"},
+		{"a numeric string level is no number, so no epic", nil, nil, jiraParentOf("OPS-7", "1"), "", "jira:OPS-7"},
 		{"a level that is no number is no epic", nil, nil, jiraParentOf("OPS-7", "epic"), "", "jira:OPS-7"},
 		{"an Epic-level parent without a key gives nothing", nil, nil, jiraParentOf("", json.Number("1")), "", ""},
 		{"no parent", nil, nil, nil, "", ""},

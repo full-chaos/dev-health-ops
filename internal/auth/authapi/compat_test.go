@@ -921,6 +921,35 @@ func TestAKnownSocialPrincipalsRefusalNamesIt(t *testing.T) {
 	}
 }
 
+// A refusal that names an existing account (the email's holder, a linked
+// provider's user) signs nobody in: no session, no cookie, no token.
+func TestASocialRefusalNamingAnExistingAccountStartsNoSession(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"email of another account": &social.ConflictError{ExistingMethod: "password"},
+		"provider already linked":  social.ErrProviderLinked,
+		"identity conflict":        identity.ErrIdentityConflict,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, fake := newSocialFixture(t)
+			fake.result, fake.err = social.ExchangeResult{PrincipalID: f.principal}, refusal
+			response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"tok"}`, nil)
+			if response.Code != http.StatusConflict {
+				t.Fatalf("status %d, want 409: %s", response.Code, response.Body)
+			}
+			if len(f.sessions.created) != 0 {
+				t.Fatalf("the refusal started a session for %s", f.sessions.created[0].principal)
+			}
+			if cookies := response.Header().Values("Set-Cookie"); len(cookies) != 0 {
+				t.Fatalf("the refusal set cookies %q", cookies)
+			}
+			body := decodeObject(t, response.Body.Bytes())
+			if _, issued := body["access_token"]; issued {
+				t.Fatalf("the refusal answered a token: %s", response.Body)
+			}
+		})
+	}
+}
+
 // Every 4xx answer of a sign-in route, a refused body included, writes its
 // auth.login.failed row; the provider is named only when it parsed.
 func TestARefusedSignInBodyIsAudited(t *testing.T) {

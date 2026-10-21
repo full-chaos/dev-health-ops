@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"context"
+	"net/http"
 	"sort"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ type mountedRoute struct {
 	Listener string // api, internal, billing-edge
 	Method   string
 	Pattern  string
+	Handler  http.Handler
 }
 
 func (r mountedRoute) key() string { return r.Method + " " + r.Pattern + "@" + r.Listener }
@@ -56,13 +58,13 @@ func mountedRoutes(t *testing.T) []mountedRoute {
 	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
 	var out []mountedRoute
 	for _, route := range Routes(deps, quietLogger()) {
-		out = append(out, mountedRoute{"api", route.Method, route.Pattern})
+		out = append(out, mountedRoute{"api", route.Method, route.Pattern, route.Handler})
 	}
 	for _, route := range InternalRoutes(deps, quietLogger()) {
-		out = append(out, mountedRoute{"internal", route.Method, route.Pattern})
+		out = append(out, mountedRoute{"internal", route.Method, route.Pattern, route.Handler})
 	}
 	for _, route := range billing.EdgeRoutes(billing.Deps{Pool: pool, Logger: quietLogger()}) {
-		out = append(out, mountedRoute{"billing-edge", route.Method, route.Pattern})
+		out = append(out, mountedRoute{"billing-edge", route.Method, route.Pattern, route.Handler})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].key() < out[j].key() })
 	return out

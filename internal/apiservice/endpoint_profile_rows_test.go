@@ -2,6 +2,8 @@ package apiservice
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -97,9 +99,9 @@ func TestEveryMountedRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T) {
 
 func TestTheRowGateFlagsAPlantedRouteAndAPlantedStaleRow(t *testing.T) {
 	mounted := []mountedRoute{
-		{"api", "GET", "/api/v1/a"},
-		{"api", "POST", "/api/v1/planted-without-a-row"},
-		{"internal", "GET", "/api/v1/b"},
+		{Listener: "api", Method: "GET", Pattern: "/api/v1/a"},
+		{Listener: "api", Method: "POST", Pattern: "/api/v1/planted-without-a-row"},
+		{Listener: "internal", Method: "GET", Pattern: "/api/v1/b"},
 	}
 	keys := []string{"GET /api/v1/a@api", "GET /api/v1/b@internal", "GET /api/v1/removed@api", "GET /api/v1/b@api"}
 	missing, stale := rowGateProblems(mounted, keys)
@@ -242,5 +244,61 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 	}
 	if checked < 200 {
 		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
+	}
+}
+
+// dispatchProbeValues give the wildcard values of the routes whose segment
+// selects the handler; any other value is a 405 responder. The handler is
+// called without a mux, so the values are set on the request.
+var dispatchProbeValues = map[string]map[string]string{
+	"POST /api/v1/admin/ip-allowlist/{entry_id}": {"entry_id": "check"},
+	"POST /api/v1/admin/teams/{team_id}":         {"team_id": "import"},
+	"PATCH /api/v1/auth/oauth/{first}/{second}":  {"first": "providers", "second": "x"},
+}
+
+// TestEveryGuardedRowRefusesAnAnonymousCaller is the behavioural half of the
+// row/guard agreement: each route a row says is behind a policy guard
+// (Admin, AdminOrg, Authenticated, Superuser) answers 401 to a request with no
+// credential, through the real mounted handler. A row that claims a guard the
+// route does not run fails here whatever the source scan says.
+func TestEveryGuardedRowRefusesAnAnonymousCaller(t *testing.T) {
+	byKey := map[string]map[string]any{}
+	for _, row := range loadGoAPIRows(t) {
+		byKey[rowKey(t, row)] = row
+	}
+	params := regexp.MustCompile(`\{([^}]*)\}`)
+	checked := 0
+	for _, route := range mountedRoutes(t) {
+		row := byKey[route.key()]
+		validator, _ := row["primary_validator"].(map[string]any)
+		description, _ := validator["description"].(string)
+		if row == nil || !strings.HasPrefix(description, "policy.") || strings.HasPrefix(description, "policy.Optional:") {
+			continue
+		}
+		values := dispatchProbeValues[route.Method+" "+route.Pattern]
+		target := params.ReplaceAllStringFunc(route.Pattern, func(match string) string {
+			if value, ok := values[match[1:len(match)-1]]; ok {
+				return value
+			}
+			return "x"
+		})
+		request := httptest.NewRequest(route.Method, target, strings.NewReader(`{}`))
+		request.Header.Set("Content-Type", "application/json")
+		for _, match := range params.FindAllStringSubmatch(route.Pattern, -1) {
+			value := "x"
+			if v, ok := values[match[1]]; ok {
+				value = v
+			}
+			request.SetPathValue(match[1], value)
+		}
+		recorder := httptest.NewRecorder()
+		route.Handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Errorf("%s: a row behind %s answered %d to an anonymous request, want 401: %s", route.key(), strings.SplitN(description, ":", 2)[0], recorder.Code, recorder.Body.String())
+		}
+		checked++
+	}
+	if checked < 150 {
+		t.Fatalf("only %d guarded rows were probed", checked)
 	}
 }

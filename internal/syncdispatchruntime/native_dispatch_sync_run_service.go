@@ -655,7 +655,11 @@ WHERE id = $1::uuid`,
 		// allow-list, which is precisely what leaves a unit dispatchable rather
 		// than claiming it. Same rule, same helper, as the riverQueued > 0 arm.
 		armAt := service.nowUTC()
-		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAt(counts.nextDeferredAt, armAt), armAt)
+		// CHAOS-8459: this pass claimed nothing, so the run is waiting on a
+		// cap or a long unit; the re-arm backs off with the idle time and a
+		// unit end wakes the pass at once (CHAOS-10013).
+		backoff, backoffAttrs := rearmBackoff(ctx, service.pool, service.logger, run.id, armAt)
+		scheduleRedispatch(ctx, service.pool, service.logger, run.id, dueNowRearmAtAfter(counts.nextDeferredAt, armAt, backoff), armAt, backoffAttrs...)
 		service.logger.Info(ctx, synclog.MsgDispatchSyncRunNoop, synclog.Run(synclog.ParseID(run.id)), synclog.Count(synclog.KeyQueuedUnits, 0), synclog.Count(synclog.KeyPendingUnits, counts.dispatchable))
 		return nil
 	}

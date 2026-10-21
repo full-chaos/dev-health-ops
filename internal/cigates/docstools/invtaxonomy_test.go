@@ -3,6 +3,7 @@ package docstools_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -119,21 +120,56 @@ func TestInvestmentGuardsFailWhenTheRegistryMapsCustomerToRisk(t *testing.T) {
 	}
 }
 
-func TestCanonicalPublicTaxonomyDocumentsCurrentVocabulary(t *testing.T) {
-	content := strings.ToLower(mustRead(t, filepath.Join(repoRoot(t), invTxDoc)))
-	raw := mustRead(t, filepath.Join(repoRoot(t), invTxDoc))
+// taxonomyPageDefects is every defect of the investment taxonomy page text: a missing vocabulary statement, a missing
+// source reference or an undocumented theme key.
+func taxonomyPageDefects(raw string) []string {
+	var out []string
+	content := strings.ToLower(raw)
 	for _, want := range []string{"canonical", "not workspace-configurable", "must not define a competing vocabulary"} {
 		if !strings.Contains(content, want) {
-			t.Errorf("canonical taxonomy page must contain %q", want)
+			out = append(out, "canonical taxonomy page must contain "+want)
 		}
 	}
 	if !strings.Contains(raw, "internal/jobs/workgraph/units/taxonomy.go") {
-		t.Errorf("canonical taxonomy page must reference the canonical source")
+		out = append(out, "canonical taxonomy page must reference the canonical source")
 	}
 	for _, theme := range units.SortedThemes {
 		if !strings.Contains(raw, "`"+theme+"`") {
-			t.Errorf("theme key %q is not documented in the canonical taxonomy page", theme)
+			out = append(out, "theme key "+theme+" is not documented in the canonical taxonomy page")
 		}
+	}
+	return out
+}
+
+// plant returns doc with every case-insensitive occurrence of old replaced by repl; a plant that changes nothing is a
+// test error, because it would prove nothing.
+func plant(t *testing.T, doc, old, repl string) string {
+	t.Helper()
+	planted := regexp.MustCompile("(?i)"+regexp.QuoteMeta(old)).ReplaceAllLiteralString(doc, repl)
+	if planted == doc {
+		t.Fatalf("the plant of %q changed nothing: the page changed, re-derive the plant", old)
+	}
+	return planted
+}
+
+func TestCanonicalPublicTaxonomyDocumentsCurrentVocabulary(t *testing.T) {
+	raw := mustRead(t, filepath.Join(repoRoot(t), invTxDoc))
+	if got := taxonomyPageDefects(raw); len(got) > 0 {
+		t.Fatalf("the real taxonomy page has defects: %q", got)
+	}
+	for _, c := range []struct{ name, old, repl, want string }{
+		{"the canonical statement is removed", "canonical", "standard", "must contain canonical"},
+		{"the workspace statement is changed", "not workspace-configurable", "workspace-configurable", "must contain not workspace-configurable"},
+		{"the competing vocabulary rule is changed", "must not define a competing vocabulary", "may define a vocabulary", "must contain must not define a competing vocabulary"},
+		{"the source reference is changed", "internal/jobs/workgraph/units/taxonomy.go", "the registry", "must reference the canonical source"},
+		{"a theme key loses its backticks", "`risk`", "risk", "theme key risk is not documented"},
+	} {
+		t.Run("plant/"+c.name, func(t *testing.T) {
+			got := strings.Join(taxonomyPageDefects(plant(t, raw, c.old, c.repl)), "\n")
+			if !strings.Contains(got, c.want) {
+				t.Fatalf("planted defect %q: defects %q do not mention %q", c.name, got, c.want)
+			}
+		})
 	}
 }
 
@@ -212,20 +248,48 @@ func TestQueueMapGuardsFailOnAStaleLineInTheBlock(t *testing.T) {
 	}
 }
 
-func TestGoWorkerRuntimeDoesNotEnshrineWorkerEnabledSwitches(t *testing.T) {
-	doc := mustRead(t, filepath.Join(repoRoot(t), qmRealDoc))
+// workerRuntimePageDefects is every defect of the go-worker-runtime page text: the WORKER_*_ENABLED surface must be
+// described as deleted, never as in flight, and both replacement planes must be named.
+func workerRuntimePageDefects(doc string) []string {
+	var out []string
 	if !strings.Contains(doc, "CHAOS-4054") {
-		t.Error("go-worker-runtime.md must reference the CHAOS-4054 two-plane decision record")
+		out = append(out, "go-worker-runtime.md must reference the CHAOS-4054 two-plane decision record")
 	}
 	if !strings.Contains(doc, "are **deleted**") && !strings.Contains(doc, "surface is deleted") {
-		t.Error("go-worker-runtime.md must state that the WORKER_*_ENABLED surface is deleted")
+		out = append(out, "go-worker-runtime.md must state that the WORKER_*_ENABLED surface is deleted")
 	}
 	for _, phrase := range []string{"being retired", "is dying", "on its way out"} {
 		if strings.Contains(doc, phrase) {
-			t.Errorf("go-worker-runtime.md still describes the route-switch surface as in-flight (%q)", phrase)
+			out = append(out, "go-worker-runtime.md still describes the route-switch surface as in-flight ("+phrase+")")
 		}
 	}
 	if !strings.Contains(doc, "IntegrationDataset.is_enabled") || !strings.Contains(doc, "-Q") {
-		t.Error("go-worker-runtime.md must name both replacement planes: IntegrationDataset.is_enabled and -Q topology")
+		out = append(out, "go-worker-runtime.md must name both replacement planes: IntegrationDataset.is_enabled and -Q topology")
+	}
+	return out
+}
+
+func TestGoWorkerRuntimeDoesNotEnshrineWorkerEnabledSwitches(t *testing.T) {
+	doc := mustRead(t, filepath.Join(repoRoot(t), qmRealDoc))
+	if got := workerRuntimePageDefects(doc); len(got) > 0 {
+		t.Fatalf("the real go-worker-runtime page has defects: %q", got)
+	}
+	for _, c := range []struct{ name, old, repl, want string }{
+		{"the decision record reference is removed", "CHAOS-4054", "the decision record", "must reference the CHAOS-4054"},
+		{"the deleted statement is changed", "are **deleted**", "are **dying**", "must state that the WORKER_*_ENABLED surface is deleted"},
+		{"the in-flight wording returns", "IntegrationDataset.is_enabled", "IntegrationDataset.is_enabled (being retired)", "route-switch surface as in-flight (being retired)"},
+		{"the intent plane is no longer named", "IntegrationDataset.is_enabled", "the dataset flag", "must name both replacement planes"},
+		{"the serving plane is no longer named", "-Q", "-X", "must name both replacement planes"},
+	} {
+		t.Run("plant/"+c.name, func(t *testing.T) {
+			planted := plant(t, doc, c.old, c.repl)
+			if c.old == "are **deleted**" {
+				planted = strings.ReplaceAll(planted, "surface is deleted", "surface is gone")
+			}
+			got := strings.Join(workerRuntimePageDefects(planted), "\n")
+			if !strings.Contains(got, c.want) {
+				t.Fatalf("planted defect %q: defects %q do not mention %q", c.name, got, c.want)
+			}
+		})
 	}
 }

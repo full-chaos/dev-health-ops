@@ -1,0 +1,1 @@
+{"queries": [{"query": "install", "expected": "guide/install/index.html", "max_rank": 3}, {"query": "install", "expected": "https://example.org/guide/install/#x"}, {"query": "install", "expected": "guide//install"}]}

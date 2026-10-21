@@ -1,0 +1,7 @@
+check-docs-search
+--site-dir
+site
+--queries
+missing.json
+--report
+report.tsv

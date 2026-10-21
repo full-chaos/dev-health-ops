@@ -17,8 +17,8 @@ import (
 )
 
 // The admin no-store route table (httpapi.AdminRoutes) is bound to the mux the api really serves: through NewServer and the
-// full route table of Routes, the mux routes every table entry to that entry (it answers no-store), every route of
-// admin.Routes answers no-store, and no other route does (the other /api/v1/admin-prefixed packages included).
+// full route table of Routes, the mux routes every table entry to that entry (it answers no-store), every route mounted
+// under /api/v1/admin (any package) answers no-store, and no other route does.
 
 var routeParam = regexp.MustCompile(`\{[^}]*\}`)
 
@@ -37,7 +37,7 @@ func adminBindingViolations(t *testing.T, table []string, extra ...httpapi.Route
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	routes := append(Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger())}, quietLogger()), extra...)
+	routes := append(Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}}, quietLogger()), extra...)
 	server, err := NewServer(apiTestConfig(), quietLogger(), routes)
 	if err != nil {
 		t.Fatal(err)
@@ -71,13 +71,22 @@ func adminBindingViolations(t *testing.T, table []string, extra ...httpapi.Route
 		}
 	}
 	adminRoute := map[string]bool{}
-	for _, route := range admin.Routes(admin.Deps{Guard: policy.NewGuard(nil, nil)}) {
-		adminRoute[route.Method+" "+route.Pattern] = true
+	for _, route := range routes[:len(routes)-len(extra)] {
+		if route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/") {
+			adminRoute[route.Method+" "+route.Pattern] = true
+		}
 	}
 	mounted, noStore := 0, 0
-	for _, route := range routes {
+	for index, route := range routes {
 		key := route.Method + " " + route.Pattern
 		response := ask(route.Method, route.Pattern)
+		if index >= len(routes)-len(extra) && strings.HasPrefix(route.Pattern, adminPrefix+"/") {
+			// a deliberate unlisted admin-prefixed sibling: the mux must route its requests to it, not to a table wildcard
+			if got := response != nil && response.Header().Get("Cache-Control") == "no-store"; got {
+				add("extra route %q answers Cache-Control: no-store; the table wildcard took it", key)
+			}
+			continue
+		}
 		got := response != nil && response.Header().Get("Cache-Control") == "no-store"
 		if got {
 			noStore++
@@ -88,14 +97,14 @@ func adminBindingViolations(t *testing.T, table []string, extra ...httpapi.Route
 				add("admin route %q: answers without Cache-Control: no-store (not in the table the mux reads)", key)
 			}
 		} else if got {
-			add("route %q of another package answers Cache-Control: no-store", key)
+			add("route %q outside %s answers Cache-Control: no-store", key, adminPrefix)
 		}
 	}
 	if mounted != len(adminRoute) {
-		add("%d of the %d routes of admin.Routes are mounted by Routes", mounted, len(adminRoute))
+		add("%d of the %d admin-prefixed routes are mounted by Routes", mounted, len(adminRoute))
 	}
 	if noStore != len(adminRoute) {
-		add("%d routes of the real table answer no-store, admin.Routes has %d", noStore, len(adminRoute))
+		add("%d routes answer no-store, %d are mounted under %s", noStore, len(adminRoute), adminPrefix)
 	}
 	return out
 }
@@ -133,14 +142,15 @@ func TestAdminNoStoreBindingPlantedTablesAreCaught(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		table []string
+		extra []httpapi.Route
 		want  string
 	}{
-		{"an entry the mux does not serve", append(append([]string(nil), real...), "GET /api/v1/admin/zz-no-such-route"), `"GET /api/v1/admin/zz-no-such-route": the real mux does not route it to a table pattern`},
-		{"an admin route missing from the table", withoutOne, `admin route "` + dropped + `": answers without Cache-Control: no-store`},
-		{"another package's admin-prefixed route in the table", append(append([]string(nil), real...), "GET /api/v1/admin/sync-configs"), `route "GET /api/v1/admin/sync-configs" of another package answers Cache-Control: no-store`},
+		{"an entry the mux does not serve", append(append([]string(nil), real...), "GET /api/v1/admin/zz-no-such-route"), nil, `"GET /api/v1/admin/zz-no-such-route": the real mux does not route it to a table pattern`},
+		{"an admin route missing from the table", withoutOne, nil, `admin route "` + dropped + `": answers without Cache-Control: no-store`},
+		{"a route outside the admin prefix in the table", append(append([]string(nil), real...), "GET /api/v1/zz-outside"), []httpapi.Route{stubRoute(http.MethodGet, "/api/v1/zz-outside", http.StatusOK)}, `route "GET /api/v1/zz-outside" outside /api/v1/admin answers Cache-Control: no-store`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := adminBindingViolations(t, c.table)
+			got := adminBindingViolations(t, c.table, c.extra...)
 			if !strings.Contains(strings.Join(got, "\n"), c.want) {
 				t.Fatalf("planted table not caught as %q; got:\n%s", c.want, strings.Join(got, "\n"))
 			}
@@ -162,9 +172,13 @@ func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	checked := 0
+	adminRoute := map[string]bool{}
+	for _, route := range admin.Routes(admin.Deps{Guard: policy.NewGuard(nil, nil)}) {
+		adminRoute[route.Method+" "+route.Pattern] = true
+	}
 	for _, entry := range httpapi.AdminRoutes {
 		method, pattern, _ := strings.Cut(entry, " ")
-		if method != http.MethodGet {
+		if method != http.MethodGet || !adminRoute[entry] {
 			continue
 		}
 		checked++

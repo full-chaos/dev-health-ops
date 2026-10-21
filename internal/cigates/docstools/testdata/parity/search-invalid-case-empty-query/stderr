@@ -1,0 +1,1 @@
+ERROR: invalid search case: {'query': '   ', 'expected': '/x/'}

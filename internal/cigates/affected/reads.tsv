@@ -64,6 +64,7 @@ internal/cigates/docstools	code	docs
 internal/cigates/docstools	code	mkdocs.yml
 internal/cigates/docstools	test	.github
 internal/cigates/docstools	test	Makefile
+internal/cigates/docstools	test	ci
 internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci
 internal/cigates/nopython	test	ci
@@ -76,6 +77,7 @@ internal/cigates/scripts	test	.github
 internal/cigates/scripts	test	README.md
 internal/cigates/scripts	test	ci
 internal/cigates/scripts	test	contracts
+internal/cigates/scripts	test	docker
 internal/cigates/scripts	test	docs
 internal/cigates/splitshards	test	ci
 internal/cigates/testshard	test	.github
@@ -134,8 +136,6 @@ internal/jobs/investment	test	compose.yml
 internal/jobs/investment	test	deploy
 internal/jobs/investment	test	docs
 internal/jobs/metrics/complexity	test	README.md
-internal/jobs/metrics/complexity/lizardcc	test	uv.lock
-internal/jobs/metrics/complexity/pycc	test	uv.lock
 internal/jobs/metrics/daily	test	contracts
 internal/jobs/metrics/remaining	test	contracts
 internal/jobs/report	test	contracts

@@ -1,0 +1,1 @@
+{"queries": [{"query": "alpha", "expected": "a"}, {"query": "beta", "expected": "/b/"}, {"query": "gamma", "expected": "/c/d/e"}, {"query": "delta", "expected": "/f/g.html"}, {"query": "eps", "expected": "h.md"}, {"query": "zeta", "expected": "x"}, {"query": "eta", "expected": "/i/./j"}, {"query": "theta", "expected": "/k../"}]}

@@ -1,0 +1,5 @@
+{
+"queries": [
+{"query": "install", "expected": "/guide/install/"}
+]
+}

@@ -45,7 +45,7 @@ type cutOpsEnv struct {
 	log, bin string
 }
 
-// git fetch is answered locally: no network; python3 stands in for the retired posture helpers.
+// git fetch is answered locally: no network. BIGBOY_CIGATE is a recording wrapper around the prebuilt cigate (CUT_CIGATE_FAIL makes one verb fail).
 func cutOpsTools(g *guard, opsRepo string) cutOpsEnv {
 	work := cutTemp(g, "ops-tools")
 	bin := cutMkdir(g, work, "bin")
@@ -58,11 +58,11 @@ func cutOpsTools(g *guard, opsRepo string) cutOpsEnv {
 for a in "$@"; do [ "$a" = fetch ] && exit 0; done
 exec %q "$@"
 `, log, realGit))
-	cutStub(g, bin, "python3", fmt.Sprintf(`printf 'python3\036%%s\036%%s\n' "$1" "${BIGBOY_OPS_REPO-}" >> %q
-if [ -n "${CUT_PY_FAIL-}" ] && [[ $1 == *"$CUT_PY_FAIL"* ]]; then echo "unparsable posture manifest"; exit 1; fi
-exit 0
-`, log))
-	env := []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + work, "GIT_CONFIG_NOSYSTEM=1"}
+	cutStub(g, bin, "cigate", fmt.Sprintf(`printf 'cigate\036%%s\036%%s\n' "$*" "${BIGBOY_OPS_REPO-}" >> %q
+if [ -n "${CUT_CIGATE_FAIL-}" ] && [[ "$*" == *"$CUT_CIGATE_FAIL"* ]]; then echo "unparsable posture manifest"; exit 1; fi
+exec %q "$@"
+`, log, prebuiltCigate))
+	env := []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + work, "GIT_CONFIG_NOSYSTEM=1", "BIGBOY_CIGATE=" + filepath.Join(bin, "cigate")}
 	if opsRepo != "" {
 		env = append(env, "BIGBOY_OPS_REPO="+opsRepo)
 	}
@@ -114,18 +114,23 @@ func cutCheckContentsReadsGivenClone(g *guard) {
 	g.expect(r.code == 0, "cut-contents.sh failed rc=%d: %s %s", r.code, r.stdout, r.stderr)
 	g.expect(strings.Contains(r.stdout, "commits in range: 1"), "the range was not read from the given clone: %s", r.stdout)
 	cutGitOnlyIn(g, e, repo)
+	seen := map[string]bool{}
 	for _, c := range e.calls() {
-		if c.kind == "python3" {
-			g.expect(c.where == repo, "the posture helper %s got BIGBOY_OPS_REPO=%q, want %q", c.args[0], c.where, repo)
+		if c.kind == "cigate" {
+			g.expect(c.where == repo, "cigate %s got BIGBOY_OPS_REPO=%q, want %q", c.args[0], c.where, repo)
+			seen[c.args[0]] = true
 		}
+	}
+	for _, verb := range []string{"api", "domain"} {
+		g.expect(seen["bigboy pg-posture "+verb+" "+old+" "+new+" "+filepath.Join(g.tmp, "pg-expect.txt")], "cut-contents.sh did not run `cigate bigboy pg-posture %s OLD NEW OUT`: %v", verb, seen)
 	}
 }
 
 func cutCheckContentsFailsOnHelperFailure(g *guard) {
 	repo, old, new := cutOpsClone(g, "opsclone")
-	for _, helper := range []string{"cut-contents-pg-api-posture.py", "cut-contents-pg-domain-posture.py"} {
+	for _, helper := range []string{"pg-posture api", "pg-posture domain"} {
 		e := cutOpsTools(g, repo)
-		r := cutExec(g, g.tmp, append(e.env, "CUT_PY_FAIL="+helper), "bash", g.path(cutContents), old, new, filepath.Join(g.tmp, "o.txt"))
+		r := cutExec(g, g.tmp, append(e.env, "CUT_CIGATE_FAIL="+helper), "bash", g.path(cutContents), old, new, filepath.Join(g.tmp, "o.txt"))
 		g.expect(strings.Contains(r.stdout, "unparsable"), "%s: the helper's verdict is not printed: %s", helper, r.stdout)
 		g.expect(r.code != 0, "%s failed but cut-contents.sh exited 0", helper)
 	}
@@ -204,13 +209,13 @@ func TestCutOpsRepoParamPlanted(t *testing.T) {
 		},
 		{
 			name: "api helper failure swallowed", copy: cc, check: cutCheckContentsFailsOnHelperFailure,
-			mutate: mut(cutContents, `cut-contents-pg-api-posture.py" "$OLD" "$NEW" "$OUTF" || rc=1`, `cut-contents-pg-api-posture.py" "$OLD" "$NEW" "$OUTF" || true`),
-			want:   "cut-contents-pg-api-posture.py failed but cut-contents.sh exited 0",
+			mutate: mut(cutContents, `pg-posture api "$OLD" "$NEW" "$OUTF" || rc=1`, `pg-posture api "$OLD" "$NEW" "$OUTF" || true`),
+			want:   "pg-posture api failed but cut-contents.sh exited 0",
 		},
 		{
 			name: "domain helper failure swallowed", copy: cc, check: cutCheckContentsFailsOnHelperFailure,
-			mutate: mut(cutContents, `cut-contents-pg-domain-posture.py" "$OLD" "$NEW" "$OUTF" || rc=1`, `cut-contents-pg-domain-posture.py" "$OLD" "$NEW" "$OUTF" || true`),
-			want:   "cut-contents-pg-domain-posture.py failed but cut-contents.sh exited 0",
+			mutate: mut(cutContents, `pg-posture domain "$OLD" "$NEW" "$OUTF" || rc=1`, `pg-posture domain "$OLD" "$NEW" "$OUTF" || true`),
+			want:   "pg-posture domain failed but cut-contents.sh exited 0",
 		},
 		{
 			name: "grants manifest read without -C", copy: gc, check: cutCheckGrantsReadsGivenClone,

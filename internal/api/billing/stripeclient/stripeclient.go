@@ -46,7 +46,7 @@ func New(options Options) *Provider {
 	if options.Key == "" {
 		return &Provider{}
 	}
-	client := &http.Client{Timeout: 80 * time.Second}
+	client := &http.Client{Timeout: 80 * time.Second, Transport: httpguard.SharedTransport()}
 	if options.HTTPClient != nil {
 		client = options.HTTPClient
 	}
@@ -54,7 +54,7 @@ func New(options Options) *Provider {
 	client = httpguard.NoRedirects(client)
 	base := client.Transport
 	if base == nil {
-		base = http.DefaultTransport
+		base = httpguard.SharedTransport()
 	}
 	client.Transport = pythonIdempotency{base: base}
 	config := &stripe.BackendConfig{

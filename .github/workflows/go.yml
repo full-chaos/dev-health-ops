@@ -147,8 +147,8 @@ on:
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
-      - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
+      - 'internal/cigates/outboundtransport/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/check_go_containers.sh'
@@ -366,8 +366,8 @@ on:
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
-      - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
+      - 'internal/cigates/outboundtransport/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/check_go_containers.sh'
@@ -1185,6 +1185,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          # CHAOS-10486: no setup-go cache here. Its key is shared by every workflow, and a job that compiles little or
+          # nothing saved it first and left the heavy jobs an empty entry.
+          cache: false
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
         with:

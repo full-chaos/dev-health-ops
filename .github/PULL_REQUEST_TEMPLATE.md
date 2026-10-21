@@ -6,7 +6,7 @@
 ## Checklist
 
 - [ ] I added/updated tests, or provided required governance evidence below.
-- [ ] I ran relevant local validation (minimum: `./ci/run_tests.sh unit` for `src/` changes).
+- [ ] I ran relevant local validation (minimum: `./ci/check_go.sh fast` for code changes).
 - [ ] I documented risk and rollback considerations.
 - [ ] I called out breaking changes, migrations, or config impacts (or wrote `none`).
 

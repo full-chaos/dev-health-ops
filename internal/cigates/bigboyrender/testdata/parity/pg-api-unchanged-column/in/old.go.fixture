@@ -1,0 +1,14 @@
+package postgres
+
+func apiPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"users", true, true, true},
+			{"billing_audit_log", true, false, true},
+			{"settings", false, true, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"billing_audit_log", "actor_id", "UPDATE"},
+		},
+	}
+}

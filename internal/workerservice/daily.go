@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
@@ -1470,12 +1471,7 @@ func dailyNativeFamilyRegistrations(
 }
 
 func contractDeadlineHTTPClient(connectTimeout time.Duration) *http.Client {
-	transport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		transport = &http.Transport{}
-	} else {
-		transport = transport.Clone()
-	}
+	transport := httpguard.Transport()
 	dialer := &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}
 	transport.DialContext = dialer.DialContext
 	transport.TLSHandshakeTimeout = connectTimeout

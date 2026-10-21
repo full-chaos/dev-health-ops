@@ -36,6 +36,10 @@
     {
       "file": "valid-multi-class-envelope-vs-ops-token.json",
       "why": "Two signed classes with different algorithms: `tokens` states each class's pins, keyed by class id (CHAOS-10173). The positive half of the exactly-one-of rule."
+    },
+    {
+      "file": "valid-multi-class-envelope-vs-user-token-by-typ.json",
+      "why": "The envelope and the user access token share Bearer and alg EdDSA; only the JWS typ separates them, so the selector is jwt_header_typ/jwt (the envelope's). Each class pins its own typ."
     }
   ],
   "reject": [
@@ -344,6 +348,24 @@
       "expect_instance_location": "/tokens/ops_access_token_hs256/algorithm",
       "expect_keyword": "const",
       "why": "The multi-class shape of the HS256 pin rule: the HS256 class's entry in tokens names algorithm HS256, so the legacy token is never pinned to another verifier."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "invalid-user-access-token-pins-the-envelope-typ.json",
+      "why": "Schema-valid, refused by the profile gate: the route accepts user_access_token but pins typ jwt, the envelope's typ, not the class marker at+jwt."
+    },
+    {
+      "file": "invalid-envelope-pins-the-access-token-typ.json",
+      "why": "The mirror case: the route accepts effective_principal_envelope but pins typ at+jwt, not the class marker jwt."
+    },
+    {
+      "file": "invalid-tokens-envelope-and-user-token-typs-swapped.json",
+      "why": "The per-class tokens form: each class pins the other class's typ. The gate holds every block to its own key's class."
+    },
+    {
+      "file": "invalid-user-access-token-pins-hs256.json",
+      "why": "The same join for alg: the route accepts user_access_token but pins algorithm HS256, not the class marker EdDSA."
     }
   ]
 }

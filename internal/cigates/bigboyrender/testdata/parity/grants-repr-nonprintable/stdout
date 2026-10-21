@@ -1,0 +1,2 @@
+bigboy_grants_check expected=1 actual=8 missing=[('SELECT', 'u')] extra=[('SELECT', 'ab'), ('SELECT', 'a\x80b'), ('SELECT', 'a\xa0b'), ('SELECT', 'a\xadb'), ('SELECT', 'a\u088fb'), ('SELECT', 'a\u200bb'), ('SELECT', 'a\U000e0001b'), ('SELECT', 'a\U0010ffffb')]
+GRANTS_CHECK_FAIL

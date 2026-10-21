@@ -1,0 +1,4 @@
+# values.local.yaml (synthetic)
+image:
+  tag: sha-aaaaaaaaaaaa
+  dho: sha256:9999999999999999999999999999999999999999999999999999999999999999

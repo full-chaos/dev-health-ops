@@ -1,0 +1,16 @@
+package clickhouse
+
+// func APIPosture is quoted here in comments: password="leaked" clickhouse://u:p@h/db
+func APIPosture(database string) Posture {
+	return Posture{RequiredTables: []TableGrant{
+		{Database: database, Table: "teams", AllowInsert: true, AllowSelect: true, AllowDelete: true},
+		// marker-comment: <password>plain</password> Table: "hidden"
+		{Database: database, Table: "team_sync_policies", AllowSelect: true},
+		{Database: database, Table: "team_memberships", AllowInsert: true},
+		{Database: database, Table: "no_privileges"},
+	}}
+}
+
+func other() {
+	_ = TableGrant{Database: database, Table: "outside", AllowSelect: true}
+}

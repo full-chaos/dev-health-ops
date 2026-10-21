@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "{A}/cut-contents-pg-api-posture.py", line 18, in <module>
+    delta(
+  File "{A}/pg_posture_expect.py", line 93, in delta
+    before, after = load(old, gofile, func), load(new, gofile, func)
+                    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "{A}/pg_posture_expect.py", line 48, in load
+    ).decode()
+      ^^^^^^^^
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 152: invalid start byte

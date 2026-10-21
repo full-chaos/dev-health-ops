@@ -144,6 +144,9 @@ func newOpenAICompatibleReadinessProber(doer providerfoundation.HTTPDoer) *openA
 // given transport (production: the SSRF-guarded one; a test against a
 // loopback server passes a plain one).
 func newReadinessHTTPClient(transport http.RoundTripper) *http.Client {
+	if transport == nil {
+		transport = externalurl.GuardedTransport()
+	}
 	return &http.Client{
 		// Codex r3 hardening-table audit (D3016, CHAOS-6976): matches
 		// Python's make_hardened_async_httpx2_client's timeout=60.0

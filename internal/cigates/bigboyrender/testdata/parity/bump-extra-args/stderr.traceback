@@ -1,0 +1,1 @@
+usage: cigate bigboy bump-swap-values <old-sha> <new-sha> <o7> <s7> <old-operator-digest> <new-operator-digest> <old-dho-digest> <new-dho-digest> <dho-arm-child-digest>

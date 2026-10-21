@@ -363,15 +363,18 @@ func dcSearchVerb(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return dcFail(stderr, err)
 	}
-	defer out.Close()
-	if _, err := out.WriteString(dcCSVRow([]string{"query", "expected", "rank", "max_rank", "top_result", "status"})); err != nil {
+	failClose := func(err error) int {
+		_ = out.Close()
 		return dcFail(stderr, err)
+	}
+	if _, err := out.WriteString(dcCSVRow([]string{"query", "expected", "rank", "max_rank", "top_result", "status"})); err != nil {
+		return failClose(err)
 	}
 	var failures []string
 	for _, c := range cases {
 		ranked, err := dcRank(c.query, docs)
 		if err != nil {
-			return dcFail(stderr, err)
+			return failClose(err)
 		}
 		rank := 0
 		for i, r := range ranked {
@@ -393,7 +396,7 @@ func dcSearchVerb(args []string, stdout, stderr io.Writer) int {
 			rankText = fmt.Sprint(rank)
 		}
 		if _, err := out.WriteString(dcCSVRow([]string{c.query, c.expected, rankText, c.maxRank.String(), top, status})); err != nil {
-			return dcFail(stderr, err)
+			return failClose(err)
 		}
 		if !passed {
 			failures = append(failures, fmt.Sprintf("%s: expected %s at rank <= %s, found %s; top=%s", a1Repr(c.query), c.expected, c.maxRank, rankText, top))

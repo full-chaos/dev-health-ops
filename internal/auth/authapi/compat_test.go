@@ -1028,3 +1028,28 @@ func TestTheBucket429WritesNoRowAndTheLockout429WritesOne(t *testing.T) {
 		t.Fatalf("lockout 429: status %d, audit rows %+v, want 429 and one account_locked row", response.Code, f.appended)
 	}
 }
+
+// An unverified local sign-in's refusal row is under the user's own first
+// membership, as go-api's unverified branch writes it, whatever organization
+// the request names.
+func TestAnUnverifiedSignInIsAuditedUnderTheUsersOwnMembership(t *testing.T) {
+	f := newCompatFixture(t)
+	provider := "local"
+	user := f.loginUsers.byEmail[compatEmail]
+	user.IsVerified, user.AuthProvider = false, &provider
+	response := f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, f.orgD.String()), nil)
+	if response.Code != http.StatusOK || len(f.appended) != 1 {
+		t.Fatalf("status %d, %d audit rows", response.Code, len(f.appended))
+	}
+	if org := f.appended[0].OrganizationID; org == nil || *org != f.orgB.String() {
+		t.Fatalf("audit organization %v, want the user's first membership %s, not the requested %s", org, f.orgB, f.orgD)
+	}
+	f = newCompatFixture(t)
+	user = f.loginUsers.byEmail[compatEmail]
+	user.IsVerified, user.AuthProvider = false, &provider
+	delete(f.users.memberships, f.principal)
+	f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, f.orgD.String()), nil)
+	if org := f.appended[0].OrganizationID; org == nil || *org != f.orgD.String() {
+		t.Fatalf("without a membership the audit organization is %v, want the requested %s", org, f.orgD)
+	}
+}

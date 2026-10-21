@@ -6,6 +6,16 @@
   "removed_kids": [
     "auth-example-2026-04"
   ],
+  "removed_public_keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "use": "sig",
+      "kid": "auth-example-2026-04",
+      "x": "NqumOpoFXmvP4dw3IEH3k0taDNZ4Ytb37_imTz7XgKQ"
+    }
+  ],
   "decision_order": [
     "contract",
     "unknown_kid",
@@ -187,7 +197,7 @@
       "verify_as_audience": "dev-health-api",
       "expect": "reject",
       "reason": "unknown_kid",
-      "why": "A kid that was published and has been removed from the set."
+      "why": "Valid claims signed by a key that was published and has been removed from the set; a verifier that still holds that key (a stale cache) must refuse it."
     },
     {
       "file": "invalid-kid-unknown.json",

@@ -25,6 +25,9 @@ func Check(root string, c *Corpus, v Vector, now int64, audience string) (Decisi
 	return check(root, c, v, now, audience, "")
 }
 
+// skipRemoved names the broken reader that ignores the manifest's removed kids.
+const skipRemoved = "removed_kids"
+
 // check is Check with one decision skipped (skip is a Reason, "" for none): a
 // deliberately broken reader, so a test can prove the corpus fails it.
 func check(root string, c *Corpus, v Vector, now int64, audience, skip string) (Decision, error) {
@@ -50,6 +53,13 @@ func check(root string, c *Corpus, v Vector, now int64, audience, skip string) (
 	}
 	if err := json.Unmarshal([]byte(v.PayloadJSON), &claims); err != nil {
 		return Decision{}, err
+	}
+	if skip != skipRemoved {
+		for _, removed := range c.Manifest.RemovedKids {
+			if removed == header.Kid {
+				return Decision{Reason: ReasonUnknownKid}, nil
+			}
+		}
 	}
 	keys, err := c.Jwks.PublicKeys()
 	if err != nil {

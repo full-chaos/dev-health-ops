@@ -73,6 +73,7 @@ type Manifest struct {
 	Issuer        string   `json:"issuer"`
 	LeewaySeconds int64    `json:"leeway_seconds"`
 	RemovedKids   []string `json:"removed_kids"`
+	RemovedKeys   []JwkKey `json:"removed_public_keys"`
 	ReasonOrder   []string `json:"decision_order"`
 	Vectors       []Entry  `json:"vectors"`
 }

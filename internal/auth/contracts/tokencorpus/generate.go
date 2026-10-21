@@ -125,6 +125,10 @@ func Generate(random io.Reader) (*Corpus, error) {
 	if err != nil {
 		return nil, err
 	}
+	removedPub, removedKey, err := newKey()
+	if err != nil {
+		return nil, err
+	}
 	hs256 := func(secret []byte) signer {
 		return func(input []byte) []byte {
 			mac := hmac.New(sha256.New, secret)
@@ -237,8 +241,8 @@ func Generate(random io.Reader) (*Corpus, error) {
 
 	b.add("invalid-kid-unknown", headerText("EdDSA", "at+jwt", KidUnknown), api.text(), edSigner(strangerKey),
 		reject(now, AudienceAPI, ReasonUnknownKid, "A kid that was never published."))
-	b.add("invalid-kid-removed", headerText("EdDSA", "at+jwt", KidRemoved), api.text(), edSigner(strangerKey),
-		reject(now, AudienceAPI, ReasonUnknownKid, "A kid that was published and has been removed from the set."))
+	b.add("invalid-kid-removed", headerText("EdDSA", "at+jwt", KidRemoved), api.text(), edSigner(removedKey),
+		reject(now, AudienceAPI, ReasonUnknownKid, "Valid claims signed by a key that was published and has been removed from the set; a verifier that still holds that key (a stale cache) must refuse it."))
 	b.add("invalid-signature-wrong-key", good, api.text(), edSigner(strangerKey),
 		reject(now, AudienceAPI, ReasonSignature, "The active kid, signed by a key outside the set."))
 	b.add("invalid-signature-wrong-published-key", good, api.text(), edSigner(overlapKey),
@@ -266,6 +270,7 @@ func Generate(random io.Reader) (*Corpus, error) {
 			Issuer:        Issuer,
 			LeewaySeconds: 0,
 			RemovedKids:   []string{KidRemoved},
+			RemovedKeys:   []JwkKey{{Kty: "OKP", Crv: "Ed25519", Alg: "EdDSA", Use: "sig", Kid: KidRemoved, X: x(removedPub)}},
 			ReasonOrder:   []string{ReasonContract, ReasonUnknownKid, ReasonSignature, ReasonIssuer, ReasonAudience, ReasonNotYetValid, ReasonExpired},
 			Vectors:       b.entries,
 		},

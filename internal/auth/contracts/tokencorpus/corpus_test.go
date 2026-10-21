@@ -3,9 +3,12 @@ package tokencorpus
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -107,13 +110,24 @@ func TestGeneratorIsDeterministicExceptForKeys(t *testing.T) {
 	other := render(t, mustGenerate(t, "b"))
 	for name, body := range first {
 		same := bytes.Equal(body, other[name])
-		keyDependent := name == "jwks.json" || (strings.HasPrefix(name, "vectors"+string(filepath.Separator)) && !strings.Contains(string(body), `"signature_hex": ""`))
+		keyDependent := name == "jwks.json" || name == "manifest.json" || (strings.HasPrefix(name, "vectors"+string(filepath.Separator)) && !strings.Contains(string(body), `"signature_hex": ""`))
 		if same && name == "jwks.json" {
 			t.Errorf("%s did not change with the keys", name)
 		}
 		if !same && !keyDependent {
 			t.Errorf("%s changed with the keys but is not key material", name)
 		}
+	}
+	var ma, mb Manifest
+	if err := json.Unmarshal(first["manifest.json"], &ma); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(other["manifest.json"], &mb); err != nil {
+		t.Fatal(err)
+	}
+	ma.RemovedKeys, mb.RemovedKeys = nil, nil
+	if !reflect.DeepEqual(ma, mb) {
+		t.Error("manifest.json changed with the keys beyond the removed public key")
 	}
 	for name := range first {
 		if !strings.HasPrefix(name, "vectors"+string(filepath.Separator)) {
@@ -236,6 +250,22 @@ func TestCommittedJwksIsPublicOnlyAndValidatesAgainstTheContract(t *testing.T) {
 	}
 }
 
+var compactShape = regexp.MustCompile(`[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`)
+
+func TestCompactShapeGuardSeesAHeaderThatDoesNotStartWithEyJ(t *testing.T) {
+	enc := base64.RawURLEncoding
+	header := enc.EncodeToString([]byte(` {"alg":"EdDSA","typ":"at+jwt","kid":"` + KidActive + `"}`))
+	token := header + "." + enc.EncodeToString([]byte(`{"scope":"api:access"}`)) + "." + enc.EncodeToString(make([]byte, 64))
+	if strings.HasPrefix(token, "eyJ") || !compactShape.MatchString(token) {
+		t.Fatalf("control token %q: want a non-eyJ compact shape the guard matches", token[:12])
+	}
+	for _, text := range []string{Issuer, "auth.example.test", "go run ./internal/auth/contracts/tokencorpus/gen"} {
+		if compactShape.MatchString(text) {
+			t.Errorf("guard fires on %q", text)
+		}
+	}
+}
+
 func TestNoPrivateKeyOrCompactTokenIsCommitted(t *testing.T) {
 	root := testRoot(t)
 	err := filepath.WalkDir(filepath.Join(root, Dir), func(path string, e os.DirEntry, err error) error {
@@ -250,8 +280,8 @@ func TestNoPrivateKeyOrCompactTokenIsCommitted(t *testing.T) {
 		if strings.Contains(text, "PRIVATE KEY") || strings.Contains(text, `"d":`) {
 			t.Errorf("%s carries private key material", path)
 		}
-		if strings.Contains(text, `"eyJ`) || strings.Contains(text, "eyJhbGci") {
-			t.Errorf("%s carries a compact JWS shape", path)
+		if compactShape.MatchString(text) {
+			t.Errorf("%s carries three dot-joined base64url segments", path)
 		}
 		return nil
 	})
@@ -282,5 +312,33 @@ func TestTheCorpusFailsAReaderThatSkipsADecision(t *testing.T) {
 				t.Fatalf("a reader that skips %s passed every vector", skip)
 			}
 		})
+	}
+}
+
+// A verifier that still holds a removed key (a stale cache) must refuse its
+// tokens: the corpus carries the removed public key so a harness can plant it.
+func TestRemovedKeyIsRefusedEvenWhenAStaleCacheStillHoldsIt(t *testing.T) {
+	root := testRoot(t)
+	c, err := Load(filepath.Join(root, Dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Manifest.RemovedKeys) == 0 {
+		t.Fatal("the manifest carries no removed public key")
+	}
+	stale := *c
+	stale.Jwks = Jwks{Keys: append(append([]JwkKey{}, c.Jwks.Keys...), c.Manifest.RemovedKeys...)}
+	if err := VerifyAll(root, &stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyAll(root, &stale, skipRemoved); err == nil {
+		t.Fatal("a reader that ignores removed kids passed a stale cache")
+	}
+	for _, k := range c.Jwks.Keys {
+		for _, removed := range c.Manifest.RemovedKeys {
+			if k.Kid == removed.Kid {
+				t.Fatalf("removed kid %s is still in jwks.json", k.Kid)
+			}
+		}
 	}
 }

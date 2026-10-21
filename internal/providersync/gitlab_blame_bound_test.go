@@ -177,3 +177,17 @@ func TestGitLabBlameEarlyStopCarriesTheRemainingPathsToTheNextRunsWithoutLossOrR
 		}
 	}
 }
+
+// A file above the row bound is refused from its line count alone: none of its
+// rows is built or marshalled (r1 P2: a 2 MiB response of empty lines is ~700,000
+// rows and 1.2 GB of transient allocation before the old check).
+func TestGitLabBlameRefusesAFileAboveTheRowBoundBeforeBuildingAnyRow(t *testing.T) {
+	built, materialised := 0, 0
+	limits := defaultGitLabBlameLimits()
+	limits.maxRows = 3 // each fixture file has 2 lines: the second file would make 4
+	limits.rowsBuilt, limits.rowsMaterialised = &built, &materialised
+	batch, _ := runGitLabBlameBound(t, 3, staticGitLabBlameCoverage{}, &limits)
+	if built != 2 || materialised != 2 || len(batch.Effects[0].Rows) != 2 || batch.Result["remaining_paths"] != 2 {
+		t.Fatalf("built=%d materialised=%d rows=%d result=%v: only the first file may ever be built", built, materialised, len(batch.Effects[0].Rows), batch.Result)
+	}
+}

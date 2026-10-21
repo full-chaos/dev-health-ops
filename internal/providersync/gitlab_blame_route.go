@@ -59,6 +59,8 @@ type gitLabBlameLimits struct {
 	maxPayloadBytes int
 	// rowsBuilt counts rows kept in the batch; tests assert a refused file adds none.
 	rowsBuilt *int
+	// rowsMaterialised counts every row built and marshalled, kept or not.
+	rowsMaterialised *int
 }
 
 func defaultGitLabBlameLimits() gitLabBlameLimits {
@@ -290,29 +292,41 @@ func collectGitLabBlame(
 		// measured by the exact encoding the write step stores. A file that would
 		// cross a bound is not added: stricter than the Python producer, which
 		// had no row cap and failed the whole write instead.
-		fileRows := make([]gitBlameRow, 0)
-		var fileBytes int64
+		// The row bound is known from the line count alone: a file that would
+		// cross it is refused BEFORE any of its rows is built or marshalled (a
+		// 2 MiB response of empty lines is ~700,000 rows).
+		fileLines := 0
 		for _, blameRange := range ranges {
-			for lineNo, line := range blameRange.Lines {
-				row := newGitLabBlameRow(claim, repoID, filePath,
-					uint32(blameRange.StartingLine+lineNo), blameRange, line, normalizedAt)
-				if err := validateGitLabBlameRow(row, claim); err != nil {
-					return CompleteRouteBatch{}, err
-				}
-				encoded, marshalErr := json.Marshal(row)
-				if marshalErr != nil {
-					return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
-				}
-				fileBytes += int64(len(encoded))
-				fileRows = append(fileRows, row)
-			}
+			fileLines += len(blameRange.Lines)
 		}
 		stop := ""
-		switch {
-		case len(rows)+len(fileRows) > limits.maxRows:
+		var fileRows []gitBlameRow
+		var fileBytes int64
+		if len(rows)+fileLines > limits.maxRows {
 			stop = "rows"
-		case usedBytes+fileBytes > int64(limits.maxPayloadBytes):
-			stop = "bytes"
+		} else {
+			fileRows = make([]gitBlameRow, 0, fileLines)
+			for _, blameRange := range ranges {
+				for lineNo, line := range blameRange.Lines {
+					row := newGitLabBlameRow(claim, repoID, filePath,
+						uint32(blameRange.StartingLine+lineNo), blameRange, line, normalizedAt)
+					if err := validateGitLabBlameRow(row, claim); err != nil {
+						return CompleteRouteBatch{}, err
+					}
+					encoded, marshalErr := json.Marshal(row)
+					if marshalErr != nil {
+						return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+					}
+					fileBytes += int64(len(encoded))
+					fileRows = append(fileRows, row)
+					if limits.rowsMaterialised != nil {
+						*limits.rowsMaterialised++
+					}
+				}
+			}
+			if usedBytes+fileBytes > int64(limits.maxPayloadBytes) {
+				stop = "bytes"
+			}
 		}
 		if stop != "" {
 			if len(rows) == 0 {
@@ -320,7 +334,7 @@ func collectGitLabBlame(
 				// path failure and never blocks the unit.
 				slog.Warn(
 					"gitlab blame file above the write bound kept retryable without rows",
-					"class", stop, "lines", len(fileRows), "encoded_bytes", fileBytes,
+					"class", stop, "lines", fileLines, "encoded_bytes", fileBytes,
 					"max_rows", limits.maxRows, "max_payload_bytes", limits.maxPayloadBytes,
 				)
 				retryableFailures++

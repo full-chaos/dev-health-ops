@@ -40,7 +40,10 @@ func TransportClass(err error) string {
 	var hostnameErr x509.HostnameError
 	var certificateErr x509.CertificateInvalidError
 	var timeout interface{ Timeout() bool }
+	var egressRefused interface{ EgressRefusedClass() string }
 	switch {
+	case chainAs(chain, &egressRefused):
+		return "egress_refused"
 	case chainIs(chain, context.Canceled):
 		return "canceled"
 	case chainIs(chain, context.DeadlineExceeded):

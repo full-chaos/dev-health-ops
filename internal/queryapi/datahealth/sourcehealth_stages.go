@@ -19,6 +19,7 @@ var sourceHealthStages = map[string]bool{
 	"dispatch_denied":                  true,
 	"duplicate_natural_key":            true,
 	"effect_recovery_ambiguous":        true,
+	"egress_refused":                   true,
 	"feature_disabled":                 true,
 	"github_files_inventory_failed":    true,
 	"github_tests_artifact_oversized":  true,

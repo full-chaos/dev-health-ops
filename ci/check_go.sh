@@ -725,6 +725,8 @@ check_race_weights_rows() {
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race weights directory missing: ${GO_RACE_WEIGHTS_DIR}"
   # Rule 0: every file is UTF-8 text without a NUL byte, so grep and every awk, in every locale, read the same rows. One pass over all
   # files (tail separates them with ASCII header lines, so no sequence spans two files); a file is named only when that pass fails.
+  command -v tr >/dev/null 2>&1 && command -v iconv >/dev/null 2>&1 \
+    || die "race-weights-rows needs tr and iconv on PATH (the UTF-8 text check of ci/go_race_weights.d)"
   if ! check_race_weights_text "${GO_RACE_WEIGHTS_DIR}"/*.tsv; then
     for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
       check_race_weights_text "${f}" \

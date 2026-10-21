@@ -428,6 +428,15 @@ VALUES ($1, $2, $3, $4)`, uuid.New(), userID, orgID, role); err != nil {
 	}
 }
 
+// seedOIDCMember seeds a go-api account of this subject as a member of the
+// provider's organization, so its sign-in is a membership hit.
+func (h *harness) seedOIDCMember(t *testing.T, subject, email string) uuid.UUID {
+	t.Helper()
+	user := h.seedPublicUser(t, email, "oidc", subject)
+	h.seedMembership(t, user, h.orgID, "member")
+	return user
+}
+
 // link creates a go-api account, projects it and links key to it, through
 // the identity store's explicit audited link.
 func (h *harness) link(t *testing.T, key ExternalKey, email string) uuid.UUID {

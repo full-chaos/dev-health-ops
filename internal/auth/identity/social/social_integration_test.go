@@ -60,8 +60,9 @@ func TestProviderEmailCollisionIsAConflict(t *testing.T) {
 			before := e.state(t, ctx)
 			res, err := svc.Exchange(ctx, GitHub, token, nil)
 			wantConflict(t, err, want)
-			if res.PrincipalID == holder {
-				t.Fatal("signed in to the existing account")
+			// A collision is refused and names the account that holds the email.
+			if res.PrincipalID != holder {
+				t.Fatalf("the collision names %v, want the account that holds the email %v", res.PrincipalID, holder)
 			}
 			e.unchanged(t, ctx, before)
 		})
@@ -92,8 +93,9 @@ func TestProviderEmailCollisionIsAConflict(t *testing.T) {
 			before := e.state(t, ctx)
 			res, err := svc.Exchange(ctx, Google, token, nil)
 			wantConflict(t, err, method("local", ""))
-			if res.PrincipalID == holder {
-				t.Fatal("signed in to the existing account")
+			// A collision is refused and names the account that holds the email.
+			if res.PrincipalID != holder {
+				t.Fatalf("the collision names %v, want the account that holds the email %v", res.PrincipalID, holder)
 			}
 			e.unchanged(t, ctx, before)
 		})
@@ -109,8 +111,9 @@ func TestProviderEmailCollisionIsAConflict(t *testing.T) {
 			before := e.state(t, ctx)
 			res, err := svc.Exchange(ctx, GitHub, token, nil)
 			wantConflict(t, err, method("github", ""))
-			if res.PrincipalID == holder {
-				t.Fatal("signed in to the existing account")
+			// A collision is refused and names the account that holds the email.
+			if res.PrincipalID != holder {
+				t.Fatalf("the collision names %v, want the account that holds the email %v", res.PrincipalID, holder)
 			}
 			e.unchanged(t, ctx, before)
 			if owner, ok := e.identityOwner(t, ctx, github(subject)); ok {
@@ -165,8 +168,9 @@ func TestProviderEmailCollisionIsAConflict(t *testing.T) {
 				before := e.state(t, ctx)
 				res, err := owned.Exchange(ctx, GitHub, token, nil)
 				wantConflict(t, err, c.want)
-				if res.PrincipalID == holder {
-					t.Fatal("signed in to the existing account")
+				// A collision is refused and names the account that holds the email.
+				if res.PrincipalID != holder {
+					t.Fatalf("the collision names %v, want the account that holds the email %v", res.PrincipalID, holder)
 				}
 				e.unchanged(t, ctx, before)
 			})

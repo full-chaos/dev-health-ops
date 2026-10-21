@@ -599,7 +599,7 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 	if body.DateRange != nil {
 		filtersForCacheKey = map[string]any{
 			"filters":    filtersForCacheKey,
-			"date_range": []string{body.DateRange.StartDate.Format("2006-01-02"), body.DateRange.EndDate.Format("2006-01-02")},
+			"date_range": []any{body.DateRange.StartDate.Format("2006-01-02"), body.DateRange.EndDate.Format("2006-01-02")},
 		}
 	}
 

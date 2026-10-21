@@ -92,7 +92,8 @@ type Identity struct {
 // stored in public.users: exactly one matching user is projected and the key
 // is linked to it under audit.Commit (reason identity_projected). found is
 // false when nothing matches; a disabled principal is found with DisabledAt
-// set.
+// set. A legacy user that holds another identity at the key's provider is
+// ErrProviderAlreadyLinked with that user's ID.
 func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider Provider, subject string, legacy *LegacyMatch) (Principal, bool, error) {
 	key := ExternalKey{Issuer: issuer, Provider: provider, Subject: subject}
 	if err := key.Validate(); err != nil {
@@ -110,6 +111,10 @@ func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider P
 		return Principal{}, false, err
 	}
 	if err := s.projectIdentity(ctx, key, userID); err != nil {
+		if errors.Is(err, ErrProviderAlreadyLinked) {
+			// The refusal concerns the projected user: name it.
+			return Principal{ID: userID}, false, err
+		}
 		return Principal{}, false, err
 	}
 	return s.principalByKey(ctx, key)

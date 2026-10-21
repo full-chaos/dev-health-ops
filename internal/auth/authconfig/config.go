@@ -36,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -79,7 +80,32 @@ const (
 	// no padding) that derives a rotated refresh credential (CHAOS-10207
 	// ruling Q-B1-1). Secret: environment or _FILE only.
 	EnvSessionSuccessorKey = "AUTH_SESSION_SUCCESSOR_KEY"
+	// EnvLoginLockoutKey is the 32-byte login lockout key (base64url, no
+	// padding): the HMAC key of the lockout identifier (local.Config). Set,
+	// with the session secrets, it mounts the login route. Secret.
+	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
+	// EnvCompatRoutes mounts go-api's /api/v1/auth/{refresh,logout,
+	// social-login} (and login, with the lockout key) beside the session
+	// routes: true or false, default false.
+	EnvCompatRoutes = "AUTH_SERVICE_COMPAT_ROUTES"
+	// EnvTrustedProxies lists the proxies whose X-Forwarded-For names the
+	// client (internal/auth/clientaddr).
+	EnvTrustedProxies = clientaddr.Env
 )
+
+// SocialProviders are the social sign-in providers, in go-api's
+// SOCIAL_<PROVIDER>_CLIENT_ID / _CLIENT_SECRET naming.
+var SocialProviders = []string{"github", "gitlab", "google"}
+
+// SocialClientIDEnv and SocialClientSecretEnv are go-api's social client
+// settings for provider.
+func SocialClientIDEnv(provider string) string {
+	return "SOCIAL_" + strings.ToUpper(provider) + "_CLIENT_ID"
+}
+
+func SocialClientSecretEnv(provider string) string {
+	return "SOCIAL_" + strings.ToUpper(provider) + "_CLIENT_SECRET"
+}
 
 const (
 	defaultAPIAddress             = ":8095"
@@ -100,6 +126,7 @@ const (
 	// signer's floor, counted in characters.
 	minAccessTokenSecretLength = 32
 	sessionSuccessorKeyBytes   = 32
+	loginLockoutKeyBytes       = 32
 
 	minShutdownTimeout        = 500 * time.Millisecond
 	maxShutdownTimeout        = 10 * time.Minute
@@ -151,6 +178,13 @@ type Config struct {
 	// route. Setting one secret without the other is a configuration error.
 	Session SessionTokens
 
+	// TrustedProxies are the peers whose X-Forwarded-For names the client.
+	TrustedProxies clientaddr.Trust
+
+	// Social is each social provider's OAuth client, keyed by provider. A
+	// provider without both values answers go-api's 503.
+	Social map[string]SocialClient
+
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
 	// configured that way is invisible in `docker compose config`, so the
@@ -166,6 +200,17 @@ type SessionTokens struct {
 	AccessIssuer   string
 	AccessAudience string
 	SuccessorKey   secrets.Value
+	// CompatRoutes mounts go-api's compatibility routes (EnvCompatRoutes).
+	CompatRoutes bool
+	// LoginEnabled is set with LockoutKey: the login route is mounted.
+	LoginEnabled bool
+	LockoutKey   secrets.Value
+}
+
+// SocialClient is this service's OAuth client at one social provider.
+type SocialClient struct {
+	ID     string
+	Secret secrets.Value
 }
 
 // RateLimit is the token-bucket shape applied per route bucket.
@@ -198,6 +243,9 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("signing_keyset_configured", c.SigningKeySetPath != ""),
 		slog.String("signing_key_id", c.SigningKeyID),
 		slog.Bool("api_routes_enabled", c.Session.Enabled),
+		slog.Bool("compat_routes_enabled", c.Session.CompatRoutes),
+		slog.Bool("login_route_enabled", c.Session.LoginEnabled),
+		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
 	}
@@ -320,7 +368,26 @@ func Load(spec Spec) (Config, error) {
 	if cfg.Session, err = sessionTokens(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
+		return Config{}, err
+	}
+	if cfg.Social, err = socialClients(lookup); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// socialClients resolves each provider's client id and secret.
+func socialClients(lookup secrets.LookupEnv) (map[string]SocialClient, error) {
+	out := make(map[string]SocialClient, len(SocialProviders))
+	for _, provider := range SocialProviders {
+		secret, _, err := secrets.ResolveSecret(SocialClientSecretEnv(provider), lookup)
+		if err != nil {
+			return nil, err
+		}
+		out[provider] = SocialClient{ID: strings.TrimSpace(valueOf(lookup, SocialClientIDEnv(provider))), Secret: secret}
+	}
+	return out, nil
 }
 
 // sessionTokens resolves the session routes' settings. The two secrets come
@@ -345,7 +412,24 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			EnvAccessTokenSecret, EnvSessionSuccessorKey,
 		)
 	}
-	if !hasAccess {
+	compat := false
+	if raw := strings.TrimSpace(valueOf(lookup, EnvCompatRoutes)); raw != "" {
+		if compat, err = strconv.ParseBool(raw); err != nil {
+			return SessionTokens{}, fmt.Errorf("%s must be true or false", EnvCompatRoutes)
+		}
+	}
+	_, hasLockout, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
+	switch {
+	case compat && !hasAccess:
+		return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
+			EnvCompatRoutes, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+	case hasLockout && !compat:
+		return SessionTokens{}, fmt.Errorf("%s mounts login, which is a compatibility route: it needs %s=true",
+			EnvLoginLockoutKey, EnvCompatRoutes)
+	case !hasAccess:
 		return out, nil
 	}
 	if len([]rune(access.Reveal())) < minAccessTokenSecretLength {
@@ -358,7 +442,20 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			"%s must be %d bytes, base64url without padding", EnvSessionSuccessorKey, sessionSuccessorKeyBytes,
 		)
 	}
-	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
+	out.Enabled, out.AccessSecret, out.SuccessorKey, out.CompatRoutes = true, access, successor, compat
+	lockout, _, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
+	if !hasLockout {
+		return out, nil
+	}
+	if raw, decodeErr := base64.RawURLEncoding.DecodeString(lockout.Reveal()); decodeErr != nil || len(raw) != loginLockoutKeyBytes {
+		return SessionTokens{}, fmt.Errorf(
+			"%s must be %d bytes, base64url without padding", EnvLoginLockoutKey, loginLockoutKeyBytes,
+		)
+	}
+	out.LoginEnabled, out.LockoutKey = true, lockout
 	return out, nil
 }
 

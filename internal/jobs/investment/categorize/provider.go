@@ -9,6 +9,8 @@ type CompletionResult struct {
 	OutputTokens      *int
 	Model             string
 	CachedInputTokens *int
+	// CacheCreationInputTokens is the prompt tokens the provider wrote to its cache.
+	CacheCreationInputTokens *int
 	// FormatPath and FormatReason say how the JSON answer was asked for, for logs.
 	FormatPath   string
 	FormatReason string

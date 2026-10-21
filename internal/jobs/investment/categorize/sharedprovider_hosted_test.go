@@ -63,7 +63,7 @@ func TestBudgetedHostedProvidersSettleAtTheListPrice(t *testing.T) {
 			}
 			// The reservation is the list price now of the whole request body
 			// as input and the provider's 4096-token output floor.
-			wantReserved, err := llmbudget.CostMicroUSDAt(string(c.kind), c.model, "", bodyBytes, 4096, 0, time.Now())
+			wantReserved, err := llmbudget.CostMicroUSDAt(string(c.kind), c.model, "", bodyBytes, 4096, 0, 0, time.Now())
 			if err != nil || wantReserved == nil || *store.admits[0].MaxCost != *wantReserved || *wantReserved < c.wantCost {
 				t.Fatalf("reserved %d, want %v for %d body bytes and 4096 output tokens (billed %d)", *store.admits[0].MaxCost, wantReserved, bodyBytes, c.wantCost)
 			}

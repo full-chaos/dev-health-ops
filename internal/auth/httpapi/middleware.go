@@ -350,8 +350,16 @@ func NewBucket(perSecond float64, burst int, now func() time.Time) *Bucket {
 	}
 }
 
-// Allow consumes one token, refilling first for the time elapsed since the
-// last call.
+// Allow reports whether take spent a token; the wait take computes for a
+// refusal is dropped (RateLimitWith uses it for Retry-After).
+func (b *Bucket) Allow() bool {
+	ok, _ := b.take()
+	return ok
+}
+
+// take refills the bucket for the time elapsed since the last call, then
+// spends one token when there is one; otherwise it reports how long until the
+// next one is.
 //
 // Elapsed time is clamped at zero: a clock that moves backwards (a manual
 // step, an NTP correction, or a test injecting a fixed instant) must not
@@ -359,13 +367,6 @@ func NewBucket(perSecond float64, burst int, now func() time.Time) *Bucket {
 // an unbounded period. time.Time.Sub uses the monotonic reading when both
 // values carry one, so this is a guard against the cases where it cannot,
 // not a claim that wall-clock jumps are the normal path.
-func (b *Bucket) Allow() bool {
-	ok, _ := b.take()
-	return ok
-}
-
-// take spends a token when one is there; otherwise it reports how long until
-// the next one is.
 func (b *Bucket) take() (bool, time.Duration) {
 	if b == nil {
 		return true, 0

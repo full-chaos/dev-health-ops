@@ -117,8 +117,16 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 // auth-service owns sessions, built from AUTH_SESSION_ISSUE_TOKEN; nil when
 // go-api owns them. Sessions on without a usable token is a start-up error:
 // every sign-in would answer 503.
-func sessionIssuer(AuthProxyConfig, func(string) (string, bool)) (sessionissue.Issuer, error) {
-	return nil, nil
+func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool)) (sessionissue.Issuer, error) {
+	if !cfg.Enabled(AuthSessions) {
+		return nil, nil
+	}
+	token, _ := lookup(sessionissue.EnvToken)
+	client, err := sessionissue.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%s is on: %w", AuthProxyFlagEnv(AuthSessions), err)
+	}
+	return client, nil
 }
 
 // logAuthProxyRouting states, at Info, the routing go-api starts with: each

@@ -11,6 +11,7 @@
 package session
 
 import (
+	"errors"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
 	"net/http"
@@ -171,6 +172,10 @@ func (h handlers) fail(w http.ResponseWriter, r *http.Request, step string, err 
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
 	h.Logger.ErrorContext(r.Context(), "api session route failed", attrs...)
+	if errors.Is(err, sessionissue.ErrUnavailable) {
+		refuse(w, http.StatusServiceUnavailable, sessionissue.UnavailableText)
+		return
+	}
 	policy.WriteInternal(w)
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
@@ -88,6 +89,23 @@ func (h handlers) storeRefresh(ctx context.Context, tx pgx.Tx, r *http.Request, 
 	}, hashToken(jti), now)
 }
 
+// amr of the sessions go-api's routes ask auth-service for: a password
+// sign-in (or a re-issue to a user who signed in with one), and a federated
+// one.
+var (
+	amrPassword  = []string{"pwd"}
+	amrFederated = []string{"fed"}
+)
+
+// issueSession takes the pair from auth-service's issue route.
+func (h handlers) issueSession(ctx context.Context, r *http.Request, userID uuid.UUID, orgID *uuid.UUID, amr []string) (tokenPair, error) {
+	pair, err := h.Issuer.Issue(ctx, r, sessionissue.Request{PrincipalID: userID, OrganizationID: orgID, AMR: amr})
+	if err != nil {
+		return tokenPair{}, err
+	}
+	return tokenPair{access: pair.Access, refresh: pair.Refresh}, nil
+}
+
 // issueMembershipTokens is _issue_membership_tokens.
 func (h handlers) issueMembershipTokens(ctx context.Context, tx pgx.Tx, r *http.Request, user *userRow, membership *membershipRow) (tokenPair, error) {
 	orgID, role := "", "member"
@@ -96,6 +114,9 @@ func (h handlers) issueMembershipTokens(ctx context.Context, tx pgx.Tx, r *http.
 		orgID, role = membership.OrgID.String(), roleText(membership.Role)
 		id := membership.OrgID
 		orgUUID = &id
+	}
+	if h.Issuer != nil {
+		return h.issueSession(ctx, r, user.ID, orgUUID, amrPassword)
 	}
 	now := h.Now()
 	pair, jti, family, err := h.mintPair(user, orgID, role, now)

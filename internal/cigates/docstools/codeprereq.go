@@ -4,15 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
-
-	"gopkg.in/yaml.v3"
+	"unicode"
+	"unicode/utf8"
 )
 
 // check-code-prerequisites: a docs page listed in docs/code-prerequisite-scope.yml that has a fenced code sample setting
@@ -32,9 +31,7 @@ const (
 
 var (
 	codePrereqFenceRe = regexp.MustCompile("(?s)```[a-zA-Z]*\n(.*?)```")
-	// Python \b: a word character is a Unicode letter, number or underscore.
-	codePrereqCredentialRe = regexp.MustCompile(`(?:^|[^\p{L}\p{N}_])(?:CLICKHOUSE_URI|POSTGRES_URI)=`)
-	codePrereqLinkRe       = regexp.MustCompile(`\]\([^)]*getting-started\.md[^)]*\)`)
+	codePrereqLinkRe  = regexp.MustCompile(`\]\([^)]*getting-started\.md[^)]*\)`)
 )
 
 func codePrereqVerb(args []string, stdout, stderr io.Writer) int {
@@ -87,7 +84,7 @@ func codePrereqVerb(args []string, stdout, stderr io.Writer) int {
 
 func codePrereqHasCredentialedSample(text string) bool {
 	for _, m := range codePrereqFenceRe.FindAllStringSubmatch(text, -1) {
-		if codePrereqCredentialRe.MatchString(m[1]) {
+		if codePrereqHasCredential(m[1]) {
 			return true
 		}
 	}
@@ -251,45 +248,47 @@ const (
 	scopeNotList
 )
 
-// codePrereqScopeItems is yaml.safe_load(text) or []: the list of strings, or why it is not one.
+// codePrereqScopeItems reads the scope file. It accepts only an empty file, or a block sequence at column 0 of plain,
+// single-quoted or double-quoted scalars, with whole-line # comments and blank lines. Everything else is refused as a
+// load error (scopeYAMLError): this is stricter than PyYAML safe_load, which also accepts tags, anchors, aliases, merge
+// keys, flow collections, block scalars, several scalar styles and escapes. An item the PyYAML 1.1 resolvers read as a
+// non-string (yes, 5, 1.5, a date, an empty item) is scopeNotList, as in Python.
 func codePrereqScopeItems(text string) ([]string, int) {
-	dec := yaml.NewDecoder(strings.NewReader(text))
-	var doc yaml.Node
-	if err := dec.Decode(&doc); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, scopeOK
-		}
-		return nil, scopeYAMLError
-	}
-	var extra yaml.Node
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		return nil, scopeYAMLError
-	}
-	root := codePrereqResolve(doc.Content[0])
-	falsy, class := codePrereqFalsy(root)
-	if class == scopeYAMLError {
-		return nil, scopeYAMLError
-	}
-	if falsy {
-		return nil, scopeOK
-	}
-	if root.Kind != yaml.SequenceNode {
-		if codePrereqHasUnsafeTag(root) {
+	for _, r := range text {
+		if (r < 0x20 && r != '\n') || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029 || r == 0xfeff || r == 0xfffe || r == 0xffff {
 			return nil, scopeYAMLError
 		}
-		return nil, scopeNotList
-	}
-	if codePrereqHasUnsafeTag(root) {
-		return nil, scopeYAMLError
 	}
 	var items []string
 	notList := false
-	for _, n := range root.Content {
-		n = codePrereqResolve(n)
-		if n.Kind == yaml.ScalarNode && codePrereqIsString(n) {
-			items = append(items, n.Value)
-		} else {
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		if trimmed == "" || trimmed[0] == '#' {
+			continue
+		}
+		if line[0] == ' ' {
+			return nil, scopeYAMLError
+		}
+		if line == "-" {
 			notList = true
+			continue
+		}
+		if !strings.HasPrefix(line, "- ") {
+			return nil, scopeYAMLError
+		}
+		rest := strings.TrimRight(strings.TrimLeft(line[2:], " "), " ")
+		if rest == "" {
+			notList = true
+			continue
+		}
+		value, kind := codePrereqItem(rest)
+		switch kind {
+		case scopeYAMLError:
+			return nil, scopeYAMLError
+		case scopeNotList:
+			notList = true
+		default:
+			items = append(items, value)
 		}
 	}
 	if notList {
@@ -298,135 +297,37 @@ func codePrereqScopeItems(text string) ([]string, int) {
 	return items, scopeOK
 }
 
-func codePrereqResolve(n *yaml.Node) *yaml.Node {
-	for n.Kind == yaml.AliasNode {
-		n = n.Alias
+// codePrereqItem parses one non-empty item text of a block sequence line.
+func codePrereqItem(rest string) (string, int) {
+	switch rest[0] {
+	case '\'':
+		inner, ok := strings.CutSuffix(rest[1:], "'")
+		if !ok || len(rest) < 2 || strings.Contains(strings.ReplaceAll(inner, "''", ""), "'") {
+			return "", scopeYAMLError
+		}
+		return strings.ReplaceAll(inner, "''", "'"), scopeOK
+	case '"':
+		inner, ok := strings.CutSuffix(rest[1:], "\"")
+		if !ok || len(rest) < 2 || strings.ContainsAny(inner, "\"\\") {
+			return "", scopeYAMLError
+		}
+		return inner, scopeOK
+	case ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '%', '@', '`', '?', ':':
+		return "", scopeYAMLError
 	}
-	return n
+	if strings.HasPrefix(rest, "- ") || rest == "-" || strings.Contains(rest, ": ") || strings.HasSuffix(rest, ":") || strings.Contains(rest, " #") {
+		return "", scopeYAMLError
+	}
+	if rest == "<<" || rest == "=" {
+		return "", scopeYAMLError
+	}
+	if pyBoolRe.MatchString(rest) || pyFloatRe.MatchString(rest) || pyIntRe.MatchString(rest) || pyNullRe.MatchString(rest) || pyTimeRe.MatchString(rest) {
+		return "", scopeNotList
+	}
+	return rest, scopeOK
 }
 
-var codePrereqSafeTags = map[string]bool{
-	"!!str": true, "!!int": true, "!!float": true, "!!bool": true, "!!null": true, "!!timestamp": true, "!!binary": true,
-	"!!seq": true, "!!map": true, "!!set": true, "!!omap": true, "!!pairs": true,
-}
-
-// codePrereqHasUnsafeTag reports a node yaml.safe_load refuses: a custom or !!python tag, a safe tag on a node of the
-// wrong kind (a mapping tag on a sequence), and a plain scalar the safe constructors have no constructor for ("<<", "=").
-// Aliases may form a cycle, so each node is visited once.
-func codePrereqHasUnsafeTag(n *yaml.Node) bool {
-	return codePrereqUnsafe(n, map[*yaml.Node]bool{})
-}
-
-func codePrereqUnsafe(n *yaml.Node, seen map[*yaml.Node]bool) bool {
-	n = codePrereqResolve(n)
-	if seen[n] {
-		return false
-	}
-	seen[n] = true
-	if n.Style&yaml.TaggedStyle != 0 {
-		if !codePrereqSafeTags[n.Tag] || !codePrereqTagFitsKind(n) {
-			return true
-		}
-	}
-	if n.Kind == yaml.ScalarNode && n.Style&yaml.TaggedStyle == 0 && codePrereqPlain(n) && (n.Value == "<<" || n.Value == "=") {
-		return true
-	}
-	if n.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			k, v := n.Content[i], n.Content[i+1]
-			if codePrereqIsMergeKey(k) {
-				if !codePrereqMergeable(v) || codePrereqUnsafe(v, seen) {
-					return true
-				}
-				continue
-			}
-			if codePrereqResolve(k).Kind != yaml.ScalarNode || codePrereqUnsafe(k, seen) || codePrereqUnsafe(v, seen) {
-				return true
-			}
-		}
-		return false
-	}
-	for _, c := range n.Content {
-		if codePrereqUnsafe(c, seen) {
-			return true
-		}
-	}
-	return false
-}
-
-func codePrereqIsMergeKey(k *yaml.Node) bool {
-	k = codePrereqResolve(k)
-	return k.Kind == yaml.ScalarNode && k.Value == "<<" && codePrereqPlain(k) && k.Style&yaml.TaggedStyle == 0
-}
-
-// codePrereqMergeable is flatten_mapping's test of a merge value: a mapping, or a sequence of mappings.
-func codePrereqMergeable(v *yaml.Node) bool {
-	v = codePrereqResolve(v)
-	if v.Kind == yaml.MappingNode {
-		return true
-	}
-	if v.Kind != yaml.SequenceNode {
-		return false
-	}
-	for _, c := range v.Content {
-		if codePrereqResolve(c).Kind != yaml.MappingNode {
-			return false
-		}
-	}
-	return true
-}
-
-// codePrereqMappingEmpty is whether the constructed dict has no key: merge keys contribute the keys of their mappings.
-func codePrereqMappingEmpty(n *yaml.Node, depth int) bool {
-	n = codePrereqResolve(n)
-	if depth > 64 {
-		return false
-	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		if !codePrereqIsMergeKey(n.Content[i]) {
-			return false
-		}
-		v := codePrereqResolve(n.Content[i+1])
-		parts := []*yaml.Node{v}
-		if v.Kind == yaml.SequenceNode {
-			parts = v.Content
-		}
-		for _, p := range parts {
-			if !codePrereqMappingEmpty(p, depth+1) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// codePrereqTagFitsKind is the node-kind check of the PyYAML safe constructors for an explicit tag.
-func codePrereqTagFitsKind(n *yaml.Node) bool {
-	switch n.Tag {
-	case "!!seq":
-		return n.Kind == yaml.SequenceNode
-	case "!!map", "!!set":
-		return n.Kind == yaml.MappingNode
-	case "!!omap", "!!pairs":
-		if n.Kind != yaml.SequenceNode {
-			return false
-		}
-		for _, c := range n.Content {
-			c = codePrereqResolve(c)
-			if c.Kind != yaml.MappingNode || len(c.Content) != 2 {
-				return false
-			}
-		}
-		return true
-	}
-	return n.Kind == yaml.ScalarNode
-}
-
-func codePrereqPlain(n *yaml.Node) bool {
-	return n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) == 0
-}
-
-// PyYAML 1.1 implicit resolvers of the safe loader.
+// PyYAML 1.1 implicit resolvers of the safe loader: a plain scalar they match is not a str.
 var (
 	pyBoolRe  = regexp.MustCompile(`^(?:yes|Yes|YES|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)$`)
 	pyFloatRe = regexp.MustCompile(`^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?|\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$`)
@@ -435,105 +336,36 @@ var (
 	pyTimeRe  = regexp.MustCompile(`^(?:[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]|[0-9][0-9][0-9][0-9]-[0-9][0-9]?-[0-9][0-9]?(?:[Tt]|[ \t]+)[0-9][0-9]?:[0-9][0-9]:[0-9][0-9](?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9][0-9]?(?::[0-9][0-9])?))?)$`)
 )
 
-// codePrereqIsString is true when the safe loader constructs a str for the scalar.
-func codePrereqIsString(n *yaml.Node) bool {
-	if n.Style&yaml.TaggedStyle != 0 {
-		return n.Tag == "!!str"
-	}
-	if !codePrereqPlain(n) {
-		return true
-	}
-	v := n.Value
-	return !(pyBoolRe.MatchString(v) || pyFloatRe.MatchString(v) || pyIntRe.MatchString(v) || pyNullRe.MatchString(v) || pyTimeRe.MatchString(v))
-}
-
-// codePrereqFalsy is `value or []`: whether the loaded root is falsy. class is scopeYAMLError when the root cannot be
-// loaded at all.
-func codePrereqFalsy(n *yaml.Node) (bool, int) {
-	if codePrereqHasUnsafeTag(n) {
-		return false, scopeYAMLError
-	}
-	switch n.Kind {
-	case yaml.SequenceNode:
-		return len(n.Content) == 0, scopeOK
-	case yaml.MappingNode:
-		return codePrereqMappingEmpty(n, 0), scopeOK
-	case yaml.ScalarNode:
-		return codePrereqScalarFalsy(n), scopeOK
-	}
-	return false, scopeOK
-}
-
-func codePrereqScalarFalsy(n *yaml.Node) bool {
-	v := n.Value
-	tag := ""
-	if n.Style&yaml.TaggedStyle != 0 {
-		tag = n.Tag
-	} else if codePrereqPlain(n) {
-		switch {
-		case pyNullRe.MatchString(v):
-			tag = "!!null"
-		case pyBoolRe.MatchString(v):
-			tag = "!!bool"
-		case pyIntRe.MatchString(v):
-			tag = "!!int"
-		case pyFloatRe.MatchString(v):
-			tag = "!!float"
-		}
-	}
-	switch tag {
-	case "":
-		return v == ""
-	case "!!str":
-		return v == ""
-	case "!!null":
-		return true
-	case "!!binary":
-		return strings.TrimSpace(v) == ""
-	case "!!bool":
-		low := strings.ToLower(v)
-		return low == "no" || low == "false" || low == "off"
-	case "!!int":
-		return codePrereqIntZero(v)
-	case "!!float":
-		return codePrereqFloatZero(v)
-	}
-	return false
-}
-
-func codePrereqIntZero(v string) bool {
-	s := strings.ReplaceAll(v, "_", "")
-	s = strings.TrimLeft(s, "+-")
-	if strings.Contains(s, ":") {
+// codePrereqIsWord is Python's \w for the \b of the credential pattern.
+func codePrereqIsWord(r rune) bool {
+	if !(unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_') {
 		return false
 	}
-	base := 10
-	switch {
-	case strings.HasPrefix(s, "0b"):
-		s, base = s[2:], 2
-	case strings.HasPrefix(s, "0x"):
-		s, base = s[2:], 16
-	case len(s) > 1 && s[0] == '0':
-		s, base = s[1:], 8
+	for _, rg := range codePrereqGoOnlyWord {
+		if r >= rg[0] && r <= rg[1] {
+			return false
+		}
 	}
-	z, ok := new(big.Int).SetString(s, base)
-	return ok && z.Sign() == 0
+	return true
 }
 
-func codePrereqFloatZero(v string) bool {
-	s := strings.ReplaceAll(v, "_", "")
-	s = strings.TrimLeft(s, "+-")
-	if strings.Contains(s, ":") {
-		total := 0.0
-		for _, part := range strings.Split(s, ":") {
-			f, err := strconv.ParseFloat(part, 64)
-			if err != nil {
-				return false
+// codePrereqHasCredential is CREDENTIAL_ENV_RE.search: NAME= at a word boundary, for CLICKHOUSE_URI and POSTGRES_URI.
+func codePrereqHasCredential(block string) bool {
+	for _, name := range []string{"CLICKHOUSE_URI=", "POSTGRES_URI="} {
+		for off := 0; ; {
+			i := strings.Index(block[off:], name)
+			if i < 0 {
+				break
 			}
-			total = total*60 + f
+			at := off + i
+			if at == 0 {
+				return true
+			}
+			if r, _ := utf8.DecodeLastRuneInString(block[:at]); !codePrereqIsWord(r) {
+				return true
+			}
+			off = at + 1
 		}
-		return total == 0
 	}
-	f, err := strconv.ParseFloat(s, 64)
-	return err == nil && f == 0
+	return false
 }

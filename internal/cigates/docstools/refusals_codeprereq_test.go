@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/cigates/docstools"
 )
 
 // The refusal inventory of check-code-prerequisites, built like the one of check-candidate-facts: every refusing site of
@@ -143,5 +146,60 @@ func TestCodePrerequisitesRefusesAbbreviatedOptions(t *testing.T) {
 		if code != 2 || stdout != "" || !strings.Contains(stderr, "unrecognized arguments: "+arg) || strings.Count(stderr, "\n") != 1 {
 			t.Errorf("%s: exit %d, stdout %q, stderr %q; want exit 2 and one unrecognized-arguments line", arg, code, stdout, stderr)
 		}
+	}
+}
+
+// The scope reader accepts a narrow grammar (an empty file, or a block sequence of plain or quoted scalars with
+// whole-line comments); PyYAML accepts more. testdata/stricter-scope holds scope files Python loads (python-rc and
+// python-stdout record its answer) that the Go verb refuses with the one load-error line and exit code 1.
+func TestCodePrerequisitesIsStricterThanPython(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("testdata", "stricter-scope"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) < 10 {
+		t.Fatalf("no stricter-scope cases under %s: %v", root, err)
+	}
+	for _, entry := range entries {
+		dir := filepath.Join(root, entry.Name())
+		t.Run(entry.Name(), func(t *testing.T) {
+			if strings.TrimSpace(mustRead(t, filepath.Join(dir, "python-rc"))) == "1" && mustRead(t, filepath.Join(dir, "python-stdout")) == "" {
+				t.Fatal("Python refused this input too: it belongs under parity, not stricter-scope")
+			}
+			work := t.TempDir()
+			in := filepath.Join(dir, "in")
+			_ = filepath.Walk(in, func(path string, info os.FileInfo, err error) error {
+				if err == nil && info.Mode().IsRegular() {
+					rel, _ := filepath.Rel(in, path)
+					writeTree(t, filepath.Join(work, rel), mustRead(t, path), 0o644)
+				}
+				return nil
+			})
+			t.Chdir(work)
+			code, stdout, stderr := runDocs("check-code-prerequisites")
+			want := strings.ReplaceAll(mustRead(t, filepath.Join(dir, "stderr.traceback")), "{WORK}", work)
+			if code != 1 || stdout != "" || stderr != want {
+				t.Errorf("exit %d, stdout %q, stderr %q; want exit 1, no stdout, stderr %q", code, stdout, stderr, want)
+			}
+		})
+	}
+}
+
+func TestCodePrerequisitesUnicodeTableMatchesGo(t *testing.T) {
+	if unicode.Version != docstools.CodePrereqUnicodeGoVersion {
+		t.Fatalf("Go unicode.Version is %s, the word table of check-code-prerequisites was generated for %s: generate it again (testdata/README.md, \"Unicode word table\")", unicode.Version, docstools.CodePrereqUnicodeGoVersion)
+	}
+	n := 0
+	for _, rg := range docstools.CodePrereqGoOnlyWord {
+		for r := rg[0]; r <= rg[1]; r++ {
+			n++
+			if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
+				t.Errorf("U+%04X is in the table but is no Go word character", r)
+			}
+		}
+	}
+	if n != docstools.CodePrereqUnicodeGoOnly {
+		t.Errorf("the table holds %d code points, the header says %d", n, docstools.CodePrereqUnicodeGoOnly)
 	}
 }

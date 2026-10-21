@@ -27,20 +27,18 @@ Use it for changes to:
 - browser-side OAuth callback handling;
 - help links and documentation entry points.
 
-## `dev-health-ops`: Python platform
+## `dev-health-ops`: Go platform
 
-Python code under `src/dev_health_ops/` owns:
+The platform is Go (`cmd/` and `internal/`); the Python under `src/dev_health_ops/` is gone. Go code owns:
 
-- licensing and credentials models;
-- providers, discovery, pagination, normalization, and sync planning;
+- the api (`dho api`), the GraphQL query plane (`dho query-api`), authentication and authorization, and the `dho` CLI;
+- providers, discovery, pagination, normalization, and sync planning (`internal/providerfoundation`, `internal/providersync`);
 - Customer Push and webhook ingestion;
-- PostgreSQL and ClickHouse models, queries, migrations, and sinks;
-- metrics, Work Graph, Investment, reports, and fixtures;
-- sync-dispatch and worker job contracts, and the queue/route registry the Go workers read.
+- PostgreSQL and ClickHouse stores, queries, migrations, and sinks;
+- metrics, Work Graph, Investment, reports, and fixtures (`internal/jobs`);
+- sync-dispatch and worker job contracts, and the queue/route registry the workers read.
 
-The api (`dho api`), the GraphQL query plane (`dho query-api`), authentication and authorization, and the `dho` CLI are Go (`cmd/` and `internal/`).
-
-New provider work belongs under `src/dev_health_ops/providers/<provider>/`. Legacy code under `connectors/` is not the destination for new provider implementations except compatibility shims.
+New provider work belongs in the Go provider packages (`internal/providerfoundation` for the shared client and budget foundation, `internal/providersync` for the provider sync routes).
 
 ## `dev-health-ops`: Go worker foundations
 

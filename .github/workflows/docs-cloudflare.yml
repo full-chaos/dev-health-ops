@@ -13,7 +13,6 @@ on:
       - 'scripts/check_built_site_links.py'
       - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
-      - 'scripts/check_docs_candidate_facts.py'
       - 'scripts/prepare_docs_cloudflare.py'
       - 'scripts/read_wrangler_output.py'
       - 'scripts/check_docs_cloudflare_host.py'
@@ -68,6 +67,12 @@ jobs:
 
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
 
       - name: Build and prepare validated preview assets
         run: |

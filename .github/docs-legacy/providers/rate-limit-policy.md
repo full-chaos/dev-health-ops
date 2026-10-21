@@ -162,8 +162,8 @@ The dispatch budget guard reserves against
 `provider:org_id:host:credential_fingerprint:dimension:route_family` buckets and
 defers units that would exceed `SYNC_BUDGET_BUCKET_LIMITS`. The per-provider
 route families below are the authoritative catalog; the estimators are the
-source of truth and
-`tests/test_rate_limit_policy_doc.py::test_documented_route_families_match_estimators`
+source of truth. The Python drift test that checked this page against the
+estimators (`tests/test_rate_limit_policy_doc.py`) is deleted; no guard now
 fails if code emits a family this page does not document.
 
 ### Actual-vs-estimated calibration (CHAOS-2759)
@@ -406,8 +406,8 @@ reaches a DB column." `tests/test_error_sanitize_guard.py` AST-walks the
 worker/sync modules that own these columns and fails if any raw
 `str(exc)`-shaped call or bare `f"...{exc}"` interpolation exists outside a
 `logger.*(...)` call (diagnostic logs are a separate risk surface, out of
-this ticket's scope) — mirroring the doc-drift-guard precedent in
-`tests/test_rate_limit_policy_doc.py` (CHAOS-2757). Two internal
+this ticket's scope) — mirroring the doc-drift-guard precedent of the
+(now deleted) `tests/test_rate_limit_policy_doc.py` (CHAOS-2757). Two internal
 classification helpers (`_classify_error` in `workers/sync_units.py`,
 `_is_retryable_discovery_error` in `workers/reference_discovery.py`) are
 exempted: they lowercase `str(exc)` only to pattern-match it against a fixed,

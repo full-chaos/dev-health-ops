@@ -102,8 +102,7 @@ func loadInsertionOrderGolden(t *testing.T) insertionOrderGolden {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Clean(insertionOrderGoldenPath))
 	if err != nil {
-		t.Fatalf("read golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_python_json_insertion_order_golden.py)", err)
+		t.Fatalf("read golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden insertionOrderGolden
 	if err := json.Unmarshal(raw, &golden); err != nil {
@@ -184,8 +183,7 @@ func TestInsertionOrderCorpusCoversBothSides(t *testing.T) {
 	}
 	if len(missingPython) > 0 {
 		t.Errorf("%d Go input(s) have no CPython expectation, so nothing pins "+
-			"their bytes: %v\n  regenerate: uv run python "+
-			"tests/fixtures/generate_python_json_insertion_order_golden.py",
+			"their bytes: %v\n  the golden is frozen, its generator is deleted",
 			len(missingPython), missingPython)
 	}
 }

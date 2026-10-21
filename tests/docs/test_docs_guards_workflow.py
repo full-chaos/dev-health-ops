@@ -24,7 +24,6 @@ STREAMED_CHECK_STEPS = (
     "Check rendered links, anchors, and assets",
     "Check task-based search acceptance",
     "Check structural accessibility invariants",
-    "Check objective documentation facts",
 )
 
 
@@ -150,9 +149,6 @@ def test_reader_critical_checks_invoke_the_canonical_scripts() -> None:
 
     accessibility = run_by_name[STREAMED_CHECK_STEPS[4]]
     assert "check_docs_candidate_accessibility.py" in accessibility
-
-    facts = run_by_name[STREAMED_CHECK_STEPS[5]]
-    assert "check_docs_candidate_facts.py" in facts
 
 
 def test_streamed_docs_checks_propagate_checker_failures() -> None:

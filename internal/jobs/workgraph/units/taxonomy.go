@@ -25,7 +25,7 @@ import (
 //
 // The lists are transcribed rather than generated because they are the
 // definition of the taxonomy, not a derived table -- there is no upstream to
-// generate them from. tests/fixtures/generate_investment_taxonomy_golden.py
+// generate them from. generate_investment_taxonomy_golden (generator deleted, golden frozen)
 // imports the reference registry and the golden test compares against it, so a
 // divergence fails rather than drifts.
 

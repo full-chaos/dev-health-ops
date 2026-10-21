@@ -25,7 +25,7 @@ func loadIsCloseGolden(t *testing.T) []iscloseCase {
 	))
 	if err != nil {
 		t.Fatalf("read isclose golden: %v (regenerate with: PYTHONPATH=src python "+
-			"tests/fixtures/generate_python_isclose_golden.py)", err)
+			"generate_python_isclose_golden (generator deleted, golden frozen))", err)
 	}
 	var golden struct {
 		Cases []iscloseCase `json:"cases"`

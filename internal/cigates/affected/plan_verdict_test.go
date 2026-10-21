@@ -537,3 +537,32 @@ func TestDeletedDeciderCasesArePlanned(t *testing.T) {
 		{name: "empty_change_set", extra: q, changed: nil, want: "FULL empty change set*"},
 	})
 }
+
+// A failing guard names the table file and prints each row to add as an exact TSV line, ready to paste; a test-only row
+// that non-test code outgrew is printed as the code row that replaces it.
+func TestPlanReadsPrintsTheRowsToPaste(t *testing.T) {
+	res := planReads(t, readsFixture(t, map[string]string{
+		"p/p_test.go":                         plantedLiteralReader,
+		"q/q_test.go":                         plantedLiteralReader,
+		"r/r.go":                              plantedCodeReader,
+		"internal/cigates/affected/reads.tsv": "r\ttest\tcontracts\n",
+	}))
+	if res.code != 1 {
+		t.Fatalf("plan-reads exited %d, want 1:\n%s", res.code, res.stdout+res.stderr)
+	}
+	lines := map[string]bool{}
+	for _, l := range strings.Split(res.stdout, "\n") {
+		lines[l] = true
+	}
+	for _, want := range []string{
+		"add these rows to internal/cigates/affected/reads.tsv:",
+		"p\ttest\tdocs",
+		"q\ttest\tdocs",
+		"replace these rows in internal/cigates/affected/reads.tsv:",
+		"r\ttest\tcontracts -> r\tcode\tcontracts",
+	} {
+		if !lines[want] {
+			t.Errorf("plan-reads output has no line %q:\n%s", want, res.stdout)
+		}
+	}
+}

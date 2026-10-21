@@ -125,6 +125,16 @@ func TestIssueSessionRefusesAndCreatesNothing(t *testing.T) {
 			return strings.Replace(issueBody(f.principal, "", "pwd"), `["pwd"]`, `[]`, 1)
 		}, status: http.StatusUnauthorized, reason: "malformed"},
 		"two documents": {body: func(f *compatFixture) string { return issueBody(f.principal, "", "pwd") + "{}" }, status: http.StatusUnauthorized, reason: "malformed"},
+		"duplicate member": {body: func(f *compatFixture) string {
+			return `{"principal_id":"` + f.principal.String() + `","organization_id":null,"amr":["pwd"],"amr":["fed"]}`
+		}, status: http.StatusUnauthorized, reason: "malformed"},
+		"duplicate principal": {body: func(f *compatFixture) string {
+			return `{"principal_id":"` + stranger.String() + `","principal_id":"` + f.principal.String() + `","organization_id":null,"amr":["pwd"]}`
+		}, status: http.StatusUnauthorized, reason: "malformed"},
+		"unknown amr": {body: func(f *compatFixture) string { return issueBody(f.principal, "", "password") }, status: http.StatusUnauthorized, reason: "malformed"},
+		"repeated amr": {body: func(f *compatFixture) string {
+			return strings.Replace(issueBody(f.principal, "", "pwd"), `["pwd"]`, `["pwd","pwd"]`, 1)
+		}, status: http.StatusUnauthorized, reason: "malformed"},
 	} {
 		f := newCompatFixture(t)
 		if tc.mutate != nil {
@@ -142,6 +152,9 @@ func TestIssueSessionRefusesAndCreatesNothing(t *testing.T) {
 		expectError(t, response, tc.status, tc.reason)
 		if len(f.sessions.created) != 0 {
 			t.Fatalf("%s: a refused issue created %d sessions", name, len(f.sessions.created))
+		}
+		if tc.status == http.StatusUnauthorized && (len(f.projector.userCalls) != 0 || len(f.projector.orgCalls) != 0) {
+			t.Fatalf("%s: a refused request projected users %v orgs %v", name, f.projector.userCalls, f.projector.orgCalls)
 		}
 	}
 }

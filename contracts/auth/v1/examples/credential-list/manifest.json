@@ -141,6 +141,15 @@
       "file": "client-rejected-page-follows-the-last-page.json",
       "after": "valid-last-page.json",
       "why": "A page after one that carried no next_cursor: no page follows the last page."
+    },
+    {
+      "file": "client-rejected-repeated-id-with-later-created-at-in-page.json",
+      "why": "The same id twice with a later created_at on the second copy: strictly increasing order alone does not catch a repeat."
+    },
+    {
+      "file": "client-rejected-page-repeats-an-earlier-id-with-later-created-at.json",
+      "after": "valid-first-page.json",
+      "why": "The next page repeats an id of the previous page with a later created_at: the seam order check alone passes it."
     }
   ]
 }

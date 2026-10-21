@@ -79,8 +79,16 @@ func listOrderBefore(a, b CredentialBody) bool {
 }
 
 // checkPageOrder refuses a page whose items are not strictly increasing in
-// list order; a repeated id is never strictly increasing.
+// list order and no id appears twice (a repeat with a later created_at is still
+// in order, so the ids are checked on their own).
 func (l CredentialList) checkPageOrder() error {
+	seen := map[string]int{}
+	for index, item := range l.Items {
+		if first, repeated := seen[item.ID]; repeated {
+			return fmt.Errorf("%s: items[%d] repeats the id %s of items[%d]", CredentialListSurface, index, item.ID, first)
+		}
+		seen[item.ID] = index
+	}
 	for index := 1; index < len(l.Items); index++ {
 		if !listOrderBefore(l.Items[index-1], l.Items[index]) {
 			return fmt.Errorf("%s: items[%d] (%s) does not follow items[%d] (%s) in created_at, id order",
@@ -92,7 +100,7 @@ func (l CredentialList) checkPageOrder() error {
 
 // CheckCredentialPage refuses a page that cannot follow prev: prev carried no
 // next_cursor, or next starts at or before prev's last item in list order
-// (which also covers a repeated id at the seam). Each page is first checked on
+// and a next page that repeats an id of prev. Each page is first checked on
 // its own by ParseCredentialList.
 func CheckCredentialPage(prev, next CredentialList) error {
 	if prev.NextCursor == nil {
@@ -100,6 +108,15 @@ func CheckCredentialPage(prev, next CredentialList) error {
 	}
 	if len(prev.Items) == 0 || len(next.Items) == 0 {
 		return nil
+	}
+	onPrev := map[string]bool{}
+	for _, item := range prev.Items {
+		onPrev[item.ID] = true
+	}
+	for index, item := range next.Items {
+		if onPrev[item.ID] {
+			return fmt.Errorf("%s: the next page's items[%d] repeats the id %s of the previous page", CredentialListSurface, index, item.ID)
+		}
 	}
 	last := prev.Items[len(prev.Items)-1]
 	if first := next.Items[0]; !listOrderBefore(last, first) {

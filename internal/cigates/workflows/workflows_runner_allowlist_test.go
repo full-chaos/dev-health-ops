@@ -201,6 +201,10 @@ func runnerAllowlistViolations(t *testing.T, root string) []string {
 				break
 			}
 		}
+		if off, ok := cache.(bool); ok && !off && name == "go-quality.yml" {
+			// CHAOS-10486: off on every runner; the GitHub-hosted legs restore their own per-leg cache instead
+			continue
+		}
 		if cache == nil {
 			add("%s:%s: no actions/setup-go step with a cache input found", name, jn)
 		} else if want := map[bool]string{true: goQualityCacheNegation, false: cacheNegation}[name == "go-quality.yml"]; str(cache) != want {

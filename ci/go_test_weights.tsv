@@ -36,7 +36,6 @@ internal/pythonparity	36
 internal/pythonparity/emailvalidator	44
 internal/pythonparity/pyidna	40
 internal/queryapiservice	26
-internal/relevancedecider	23
 internal/storedversion	33
 internal/streamrunnerservice	20
 internal/synccli	71

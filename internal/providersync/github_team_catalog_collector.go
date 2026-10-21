@@ -222,8 +222,16 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		// A grant that a listing of more than one response does not hold is
 		// closed only on GitHub's own answer for that grant.
 		lookups := NewOwnershipAbsenceLookups(ctx, githubRepoGrantAbsence{client: client, org: orgName})
+		// CHAOS-10521: a grant starts at the repository's earliest pull request.
+		repoStarts := CarryCatalogEvidenceStarts(ctx, adapter.Sink.Conn, ref.OrgID,
+			CatalogEvidenceScope{Table: CatalogEvidenceRepoOwnership, Provider: githubTeamCatalogProvider, Source: githubTeamCatalogSource}, normalizedAt)
+		repoOwnership := StartCatalogRows(repoStarts, rows.RepoOwnership,
+			func(r githubTeamRepoOwnershipRow) CatalogEvidenceFact {
+				return RepoEvidenceFact(r.TeamID, r.RepoFullName, r.RepoID)
+			},
+			func(r *githubTeamRepoOwnershipRow) *time.Time { return &r.ValidFrom })
 		written, plan, err := adapter.Sink.SnapshotTeamRepoOwnership(
-			ctx, ref.OrgID, orgName, rows.RepoOwnership, decision.read, decision.snapshot(GitHubTeamRepoGrantKind, githubTeamRepositoriesWalk, lookups.Answer), normalizedAt,
+			ctx, ref.OrgID, orgName, repoOwnership, decision.read, decision.snapshot(GitHubTeamRepoGrantKind, githubTeamRepositoriesWalk, lookups.Answer), normalizedAt,
 		)
 		if err != nil {
 			return result, err
@@ -256,8 +264,15 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 			unproven: rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
 			dropped: droppedMembershipTeams, teamListing: rows.TeamListing, teamLookups: teamLookups,
 		})
+		// CHAOS-10521: a membership starts at the member's earliest work item.
+		memberStarts := CarryCatalogEvidenceStarts(ctx, adapter.Sink.Conn, ref.OrgID,
+			CatalogEvidenceScope{Table: CatalogEvidenceMemberships, Provider: githubTeamCatalogProvider, Source: githubTeamCatalogSource}, normalizedAt)
+		observedMemberships := StartCatalogRows(memberStarts, rows.Memberships, githubMembershipRow.evidenceFact,
+			func(r *githubMembershipRow) *time.Time { return &r.ValidFrom })
+		keptMemberships = StartCatalogRows(memberStarts, keptMemberships, githubMembershipRow.evidenceFact,
+			func(r *githubMembershipRow) *time.Time { return &r.ValidFrom })
 		membershipRows, membershipOutcome, snapshotErr := githubMembershipWriter.Snapshot(
-			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
+			ctx, adapter.Sink.Conn, ref.OrgID, observedMemberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
 			decision.membershipProver(rows.MembershipAbsence), decision.membershipSnapshot(GitHubTeamMembershipKind))
 		if snapshotErr != nil {
 			return result, snapshotErr

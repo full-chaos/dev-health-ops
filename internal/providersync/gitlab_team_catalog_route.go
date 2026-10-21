@@ -730,8 +730,15 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			unproven: batch.Rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
 			dropped: droppedMembershipTeams, teamListing: batch.Rows.TeamListing, teamLookups: teamLookups,
 		})
+		// CHAOS-10521: a membership starts at the member's earliest work item.
+		memberStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
+			CatalogEvidenceScope{Table: CatalogEvidenceMemberships, Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource}, normalizedAt)
+		observedMemberships := StartCatalogRows(memberStarts, batch.Rows.Memberships, gitlabTeamCatalogMembershipRow.evidenceFact,
+			func(r *gitlabTeamCatalogMembershipRow) *time.Time { return &r.ValidFrom })
+		keptMemberships = StartCatalogRows(memberStarts, keptMemberships, gitlabTeamCatalogMembershipRow.evidenceFact,
+			func(r *gitlabTeamCatalogMembershipRow) *time.Time { return &r.ValidFrom })
 		membershipRows, membershipOutcome, reuseErr := gitlabMembershipWriter.Snapshot(
-			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
+			ctx, collector.Sink.Conn, ref.OrgID, observedMemberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
 			decision.membershipProver(batch.Rows.MembershipAbsence), decision.membershipSnapshot(GitLabTeamMembershipKind))
 		if reuseErr != nil {
 			return result, reuseErr
@@ -773,8 +780,16 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			// A grant that a listing of more than one response does not hold
 			// is closed only on GitLab's own answer for that project.
 			lookups := NewOwnershipAbsenceLookups(ctx, gitlabGroupProjectAbsence{client: client})
+			// CHAOS-10521: a grant starts at the project's earliest work item.
+			projectStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
+				CatalogEvidenceScope{Table: CatalogEvidenceProjectOwnership, Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource}, normalizedAt)
+			freshOwnership := StartCatalogRows(projectStarts, batch.Rows.Ownership,
+				func(r gitlabTeamCatalogOwnershipRow) CatalogEvidenceFact {
+					return ProjectEvidenceFact(r.TeamID, r.ProjectID)
+				},
+				func(r *gitlabTeamCatalogOwnershipRow) *time.Time { return &r.ValidFrom })
 			ownershipRows, plan, snapshotErr := collector.Sink.SnapshotOwnership(
-				ctx, ref.OrgID, batch.Rows.Ownership, decision.read, decision.snapshot(GitLabGroupProjectGrantKind, gitlabGroupProjectsWalk, lookups.Answer), normalizedAt)
+				ctx, ref.OrgID, freshOwnership, decision.read, decision.snapshot(GitLabGroupProjectGrantKind, gitlabGroupProjectsWalk, lookups.Answer), normalizedAt)
 			if snapshotErr != nil {
 				return result, snapshotErr
 			}

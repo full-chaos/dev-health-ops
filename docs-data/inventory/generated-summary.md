@@ -2,7 +2,7 @@
 
 Generated deterministically by `scripts/docs_inventory_review.py`.
 
-- Inventory rows: **220**
+- Inventory rows: **221**
 - Current-site Markdown pages: **176**
 - Prototype pages: **0**
 - Pages treated as public today: **176**
@@ -15,7 +15,7 @@ Generated deterministically by `scripts/docs_inventory_review.py`.
 - `external-entry-point`: 2
 - `gap-unverified`: 1
 - `public-nav`: 176
-- `supporting-artifact`: 28
+- `supporting-artifact`: 29
 
 ## Artifact types
 
@@ -25,7 +25,7 @@ Generated deterministically by `scripts/docs_inventory_review.py`.
 - `markdown-page`: 176
 - `publication-configuration`: 1
 - `repository-entry-point`: 2
-- `tooling`: 19
+- `tooling`: 20
 - `visual-asset`: 1
 - `workflow`: 4
 

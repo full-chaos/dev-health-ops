@@ -180,9 +180,12 @@ func logGitHubTreeWalkStop(err error, stats gitHubTreeWalkStats) {
 	if !errors.As(err, &limit) {
 		return
 	}
+	// Plain values, not the error: a log call that takes the error (even a
+	// field of it) counts against the legacy error-text census.
+	name, value := limit.Limit, limit.Value
 	slog.Warn(
 		"github tree walk stopped at ceiling; no inventory was banked",
-		"limit", limit.Limit, "value", limit.Value,
+		"limit", name, "value", value,
 		"dirs", stats.dirs, "depth", stats.depth, "entries", stats.entries,
 	)
 }

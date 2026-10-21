@@ -353,3 +353,22 @@ func TestSignAndCheckRefuseASetThatTurnsInvalidAfterTheSnapshot(t *testing.T) {
 		t.Fatal("Check passed while the current set has two active keys")
 	}
 }
+
+// TestSignAndCheckRefuseASetThatGainsAnUncustodiedKey: after the snapshot the
+// manifest names a pending key whose file is missing; Sign and Check fail
+// closed.
+func TestSignAndCheckRefuseASetThatGainsAnUncustodiedKey(t *testing.T) {
+	dir := t.TempDir()
+	writeKey(t, dir, "a")
+	signer := NewFileSigner(FileConfig{KeySetPath: writeSet(t, dir, "a", "active")})
+	afterSnapshot = func() { writeSet(t, dir, "a", "active", "missing", "pending") }
+	t.Cleanup(func() { afterSnapshot = nil })
+	ctx := context.Background()
+	if compact, _, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err == nil {
+		t.Fatalf("Sign returned a token (%d bytes) while the current set has a key with no custodied file", len(compact))
+	}
+	writeSet(t, dir, "a", "active")
+	if err := signer.Check(ctx); err == nil {
+		t.Fatal("Check passed while the current set has a key with no custodied file")
+	}
+}

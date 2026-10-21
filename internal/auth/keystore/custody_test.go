@@ -383,3 +383,31 @@ func TestFileCustodySignsOnlyFromASetWithOneActiveKey(t *testing.T) {
 		t.Fatalf("a's signature (%x) was returned after the set gained a second active key", signature)
 	}
 }
+
+// TestFileCustodySignsOnlyFromASetWhoseEveryKeyIsCustodied: a manifest entry
+// in any state whose key file fails the file contract makes the set invalid,
+// so the active key does not sign from it, read before or after the signature.
+func TestFileCustodySignsOnlyFromASetWhoseEveryKeyIsCustodied(t *testing.T) {
+	ctx := context.Background()
+	for _, state := range []string{"pending", "retiring", "retired", "compromised"} {
+		t.Run(state, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKeyFile(t, dir, "a.pem")
+			custody := NewFileCustody(writeManifest(t, dir, entries("a", "active", "missing", state)))
+			if _, err := custody.Keys(ctx); err == nil {
+				t.Fatal("Keys accepted a set with a missing key file")
+			}
+			if signature, err := custody.Sign(ctx, "a", []byte("m")); err == nil {
+				t.Fatalf("a signed (%x) from a set whose %s key file is missing", signature, state)
+			}
+		})
+	}
+	dir := t.TempDir()
+	writeKeyFile(t, dir, "a.pem")
+	custody := NewFileCustody(writeManifest(t, dir, entries("a", "active")))
+	afterSign = func() { writeManifest(t, dir, entries("a", "active", "missing", "pending")) }
+	t.Cleanup(func() { afterSign = nil })
+	if signature, err := custody.Sign(ctx, "a", []byte("m")); err == nil {
+		t.Fatalf("a's signature (%x) was returned after the set gained an uncustodied key", signature)
+	}
+}

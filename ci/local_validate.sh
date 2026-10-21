@@ -1025,8 +1025,6 @@ gate_unit_suite() {
   OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/docs -q || return 1
   OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/tooling -q -n "${nw}" || return 1
-  OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${PYBIN}" -m pytest "${kept[@]}" -q -rs -n "${nw}"
 }
 

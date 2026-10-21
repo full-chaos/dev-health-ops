@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,10 +121,23 @@ func readProviderLimitsInventory(t *testing.T) []providerLimitsRefusal {
 }
 
 var (
+	cigateDir  string
 	cigateOnce sync.Once
 	cigateBin  string
 	cigateErr  error
 )
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "cigate-docs-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	cigateDir = dir
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 // liveCigate builds cmd/cigate once, so the inventory runs the CLI a workflow runs.
 func liveCigate(t *testing.T) string {
@@ -134,12 +148,7 @@ func liveCigate(t *testing.T) string {
 			cigateErr = err
 			return
 		}
-		dir, err := os.MkdirTemp("", "cigate-docs-")
-		if err != nil {
-			cigateErr = err
-			return
-		}
-		cigateBin = filepath.Join(dir, "cigate")
+		cigateBin = filepath.Join(cigateDir, "cigate")
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", cigateBin, "./cmd/cigate")
 		cmd.Dir = root
 		if out, err := cmd.CombinedOutput(); err != nil {

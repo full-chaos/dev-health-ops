@@ -44,13 +44,23 @@ var (
 	listReplayData []byte
 )
 
+// providersyncListUnset and providersyncListArgs are the race leg's providersync listing call: the variables it unsets (GO_ENV_OFF)
+// and its go arguments.
+var (
+	providersyncListUnset = []string{}
+	providersyncListArgs  = []string{"test", "-mod=readonly", "-race", "-list", ".*", "./internal/providersync"}
+)
+
 // providersyncRaceListing returns the REAL `go test -race -list .* ./internal/providersync` output, produced once per process.
 func providersyncRaceListing(t *testing.T) []byte {
 	t.Helper()
 	listReplayOnce.Do(func() {
-		cmd := exec.Command("go", "test", "-mod=readonly", "-race", "-list", ".*", "./internal/providersync")
+		args := []string{}
+		for _, name := range providersyncListUnset {
+			args = append(args, "-u", name)
+		}
+		cmd := exec.Command("env", append(append(args, "GOWORK=off", "go"), providersyncListArgs...)...)
 		cmd.Dir = repoRoot(t)
-		cmd.Env = append(os.Environ(), "GOWORK=off")
 		out, err := cmd.Output()
 		if err == nil {
 			listReplayData = out

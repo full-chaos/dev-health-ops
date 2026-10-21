@@ -69,6 +69,14 @@ func TestRaceWeightsFiles(t *testing.T) {
 		{"a file whose name is not its package", func(d string) { write(d, "internal__other.tsv", "internal/zz-other\t1\n") }, true, []string{"internal__other.tsv", "internal__zz-other.tsv"}},
 		{"a file with two rows", func(d string) { write(d, victimFile, string(victimRow)+"cmd/dho\t5\n") }, true, []string{victimFile, "exactly one row"}},
 		{"a row with no weight", func(d string) { write(d, victimFile, victim+"\n") }, true, []string{victimFile, "weight"}},
+		{"an empty file", func(d string) { write(d, victimFile, "") }, true, []string{victimFile, "exactly one row"}},
+		{"a file of comments and blank lines only", func(d string) { write(d, victimFile, "# note\n\n \t\n") }, true, []string{victimFile, "exactly one row"}},
+		{"an empty weight", func(d string) { write(d, victimFile, victim+"\t\n") }, true, []string{victimFile, "the weight '' is not a whole number"}},
+		{"a decimal weight", func(d string) { write(d, victimFile, victim+"\t3.5\n") }, true, []string{victimFile, "the weight '3.5' is not a whole number"}},
+		{"a negative weight", func(d string) { write(d, victimFile, victim+"\t-3\n") }, true, []string{victimFile, "the weight '-3' is not a whole number"}},
+		{"a weight in Arabic-Indic digits", func(d string) { write(d, victimFile, victim+"\t\u0663\n") }, true, []string{victimFile, "the weight '\u0663' is not a whole number"}},
+		{"a weight with a no-break space", func(d string) { write(d, victimFile, victim+"\t3\u00a0\n") }, true, []string{victimFile, "is not a whole number"}},
+		{"a row that ends in a carriage return", func(d string) { write(d, victimFile, victim+"\t3\r\n") }, true, []string{victimFile, "is not a whole number"}},
 		{"the real directory with a comment and a blank line in a file is accepted", func(d string) { write(d, victimFile, "# note\n\n"+string(victimRow)) }, false, []string{"race-weights-rows:"}},
 	}
 	for _, c := range cases {

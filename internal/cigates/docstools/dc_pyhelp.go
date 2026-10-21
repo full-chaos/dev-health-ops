@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"unicode/utf8"
 
-	"golang.org/x/text/unicode/norm"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 )
 
 // Helpers shared by the ported docs candidate checks. Each one is a Python standard-library call the former scripts
@@ -253,7 +253,7 @@ func dcCheckNetloc(netloc string) error {
 	for _, c := range []string{"@", ":", "#", "?"} {
 		n = strings.ReplaceAll(n, c, "")
 	}
-	normal := norm.NFKC.String(n)
+	normal := string(pyunicodedata.NFKC([]rune(n)))
 	if n == normal {
 		return nil
 	}

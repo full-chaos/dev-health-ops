@@ -45,10 +45,68 @@ type CredentialEntry struct {
 	CredentialBody
 }
 
-// CredentialList is the response of GET /v1/credentials.
+// The page-size bounds of GET /v1/credentials: a request's limit is 1 to
+// CredentialListMaxPageSize and a larger one is refused, never clamped.
+const (
+	CredentialListDefaultPageSize = 50
+	CredentialListMaxPageSize     = 100
+)
+
+// CheckCredentialListLimit refuses a requested page size outside 1..100.
+func CheckCredentialListLimit(limit int) error {
+	if limit < 1 || limit > CredentialListMaxPageSize {
+		return fmt.Errorf("%s: limit %d is outside 1..%d", CredentialListSurface, limit, CredentialListMaxPageSize)
+	}
+	return nil
+}
+
+// CredentialList is one page of the response of GET /v1/credentials. Items are
+// in created_at, id ascending order; NextCursor is opaque and absent on the
+// last page.
 type CredentialList struct {
 	SchemaVersion string           `json:"schema_version"`
 	Items         []CredentialBody `json:"items"`
+	NextCursor    *string          `json:"next_cursor,omitempty"`
+}
+
+// listOrderBefore reports whether a sorts strictly before b: created_at
+// ascending, then id ascending.
+func listOrderBefore(a, b CredentialBody) bool {
+	if !a.CreatedAt.Time.Equal(b.CreatedAt.Time) {
+		return a.CreatedAt.Time.Before(b.CreatedAt.Time)
+	}
+	return a.ID < b.ID
+}
+
+// checkPageOrder refuses a page whose items are not strictly increasing in
+// list order; a repeated id is never strictly increasing.
+func (l CredentialList) checkPageOrder() error {
+	for index := 1; index < len(l.Items); index++ {
+		if !listOrderBefore(l.Items[index-1], l.Items[index]) {
+			return fmt.Errorf("%s: items[%d] (%s) does not follow items[%d] (%s) in created_at, id order",
+				CredentialListSurface, index, l.Items[index].ID, index-1, l.Items[index-1].ID)
+		}
+	}
+	return nil
+}
+
+// CheckCredentialPage refuses a page that cannot follow prev: prev carried no
+// next_cursor, or next starts at or before prev's last item in list order
+// (which also covers a repeated id at the seam). Each page is first checked on
+// its own by ParseCredentialList.
+func CheckCredentialPage(prev, next CredentialList) error {
+	if prev.NextCursor == nil {
+		return fmt.Errorf("%s: no page follows a page without next_cursor", CredentialListSurface)
+	}
+	if len(prev.Items) == 0 || len(next.Items) == 0 {
+		return nil
+	}
+	last := prev.Items[len(prev.Items)-1]
+	if first := next.Items[0]; !listOrderBefore(last, first) {
+		return fmt.Errorf("%s: the next page starts at %s, which does not follow the previous page's last item %s",
+			CredentialListSurface, first.ID, last.ID)
+	}
+	return nil
 }
 
 // CredentialReceipt is the response of issue and rotate: the only credential
@@ -139,6 +197,12 @@ func ParseCredentialList(root string, raw []byte, now time.Time) (CredentialList
 	var list CredentialList
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return CredentialList{}, fmt.Errorf("%s: decoding validated document: %w", CredentialListSurface, err)
+	}
+	if list.NextCursor != nil && len(list.Items) == 0 {
+		return CredentialList{}, fmt.Errorf("%s: next_cursor on a page with no items", CredentialListSurface)
+	}
+	if err := list.checkPageOrder(); err != nil {
+		return CredentialList{}, err
 	}
 	at := nowOr(now)
 	for index, item := range list.Items {

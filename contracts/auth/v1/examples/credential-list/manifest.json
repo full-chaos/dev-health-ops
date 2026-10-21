@@ -8,6 +8,22 @@
     {
       "file": "valid-empty.json",
       "why": "No credentials is a valid list, not an error."
+    },
+    {
+      "file": "valid-first-page.json",
+      "why": "A first page: items in (created_at, id) order and an opaque next_cursor."
+    },
+    {
+      "file": "valid-middle-page.json",
+      "why": "A middle page: it starts after the first page ends and carries a cursor of its own."
+    },
+    {
+      "file": "valid-last-page.json",
+      "why": "The last page: next_cursor is ABSENT. Absent is the only form of 'no more pages'."
+    },
+    {
+      "file": "valid-hundred-items.json",
+      "why": "The page-size cap: exactly 100 items."
     }
   ],
   "reject": [
@@ -52,6 +68,42 @@
       "expect_instance_location": "/items/1/revoked_reason",
       "expect_keyword": "enum",
       "why": "Same closed vocabulary as credential-entry."
+    },
+    {
+      "file": "invalid-next-cursor-empty.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "minLength",
+      "why": "An empty cursor: the last page has no next_cursor, an empty one says nothing."
+    },
+    {
+      "file": "invalid-next-cursor-null.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "type",
+      "why": "null is not 'absent': the last page omits the member."
+    },
+    {
+      "file": "invalid-next-cursor-not-string.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "type",
+      "why": "A cursor is a string."
+    },
+    {
+      "file": "invalid-next-cursor-too-long.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "maxLength",
+      "why": "513 characters: over the 512 bound."
+    },
+    {
+      "file": "invalid-next-cursor-bad-alphabet.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "pattern",
+      "why": "A space and a slash: the cursor alphabet is A-Z a-z 0-9 _ and -."
+    },
+    {
+      "file": "invalid-over-100-items.json",
+      "expect_instance_location": "/items",
+      "expect_keyword": "maxItems",
+      "why": "101 items: over the page-size cap."
     }
   ],
   "reject_by_client": [
@@ -62,6 +114,33 @@
     {
       "file": "client-rejected-item-self-parent.json",
       "why": "An item that is its own rotation parent."
+    },
+    {
+      "file": "client-rejected-next-cursor-with-no-items.json",
+      "why": "A cursor with an empty page: there is nothing to continue from."
+    },
+    {
+      "file": "client-rejected-items-out-of-order.json",
+      "why": "A page whose items are not in created_at, id order: a cursor over that order would skip or repeat items."
+    },
+    {
+      "file": "client-rejected-repeated-id-in-page.json",
+      "why": "The same credential twice in one page."
+    },
+    {
+      "file": "client-rejected-page-starts-before-the-previous-page-ends.json",
+      "after": "valid-first-page.json",
+      "why": "The next page begins before the previous page's last item in (created_at, id) order."
+    },
+    {
+      "file": "client-rejected-page-repeats-an-id-of-the-previous-page.json",
+      "after": "valid-first-page.json",
+      "why": "The next page repeats the previous page's last credential."
+    },
+    {
+      "file": "client-rejected-page-follows-the-last-page.json",
+      "after": "valid-last-page.json",
+      "why": "A page after one that carried no next_cursor: no page follows the last page."
     }
   ]
 }

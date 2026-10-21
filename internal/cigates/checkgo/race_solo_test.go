@@ -179,6 +179,7 @@ case " $* " in *" -list "*)
   exit 0 ;;
 esac
 printf '%%s\t%%s\n' "$PWD" "$*" >> "${FAKE_GO_LOG}"
+case " $* " in *" -json "*) printf '{"Action":"pass","Package":"p","Test":"TestFake","Elapsed":0.01}\n' ;; esac
 exit 0
 `
 

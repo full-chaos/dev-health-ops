@@ -25,8 +25,7 @@ func loadDecimalDigitsGolden(t *testing.T) decimalDigitsGolden {
 	)
 	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		t.Fatalf("read decimal-digits golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_python_decimal_digits_golden.py)", err)
+		t.Fatalf("read decimal-digits golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden decimalDigitsGolden
 	if err := json.Unmarshal(raw, &golden); err != nil {
@@ -113,8 +112,8 @@ func TestDecimalSetMatchesTheInterpreterAndNotGoTables(t *testing.T) {
 		t.Errorf("the port's decimal set differs from the interpreter's\n"+
 			"  accepted by the port, refused by Python: %d %v\n"+
 			"  accepted by Python, refused by the port: %d %v\n"+
-			"regenerate pythonDecimalRuns with "+
-			"tests/fixtures/generate_python_decimal_digits_golden.py",
+			"pythonDecimalRuns is frozen: "+
+			"generate_python_decimal_digits_golden (generator deleted, golden frozen)",
 			len(portOnly), truncateRunes(portOnly),
 			len(pythonOnly), truncateRunes(pythonOnly))
 	}

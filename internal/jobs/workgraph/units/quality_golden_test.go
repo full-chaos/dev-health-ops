@@ -125,8 +125,7 @@ func loadQualityGolden(t *testing.T) qualityGolden {
 	)
 	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		t.Fatalf("read quality golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_investment_quality_golden.py)", err)
+		t.Fatalf("read quality golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden qualityGolden
 	if err := json.Unmarshal(raw, &golden); err != nil {

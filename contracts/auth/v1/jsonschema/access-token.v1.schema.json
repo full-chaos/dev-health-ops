@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/access-token.v1.schema.json",
+  "title": "Auth Control Plane user access token (v1 wire format)",
+  "description": "The user access token the auth-service signs (credential class `user_access_token`, TRD section 11): a compact JWS whose protected header and payload, decoded, are the two members of this document. The signature is not part of the document; a verifier checks it with the issuer's jwks.v1 key named by `kid` BEFORE it reads the claims.\n\nWHAT A SCHEMA CAN SAY. The header is exactly {alg EdDSA, typ at+jwt, kid}: no symmetric algorithm, no `none`, and no member that moves key selection out of the verifier's hands (jku, jwk, x5u, x5c, crit). The claims are a closed set: identity and session only. role, email, username, full_name, is_superuser, tv and the HS256 token's `type` are not in it; authorization is checked live per request. `aud` is one string, never an array. `scope` is a closed vocabulary bound to the audience.\n\nWHAT IT CANNOT SAY, AND THE CLIENT RULES THAT CLOSE IT. JSON Schema cannot compare two members, so internal/auth/contracts ParseAccessToken holds these rules, pinned by the manifest's `reject_by_client` fixtures, which are valid against this schema on purpose:\n  1. iat <= nbf < exp.\n  2. exp - iat is at most the HS256-compat ceiling, AccessTokenLifetimeCeiling in internal/auth/contracts.\n  3. A duplicate member in the header or the claims is refused, before any other check.\n  4. iat, nbf and exp are integer tokens; a decimal form is refused.",
+  "type": "object",
+  "required": [
+    "header",
+    "claims"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "header": {
+      "type": "object",
+      "description": "The JWS protected header. Closed: a verifier never reads a key, key URL or certificate from the token.",
+      "required": [
+        "alg",
+        "typ",
+        "kid"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "alg": {
+          "const": "EdDSA",
+          "description": "Ed25519 only (ACP-ADR-01). A verifier fixes this before it resolves a key."
+        },
+        "typ": {
+          "const": "at+jwt",
+          "description": "RFC 9068 access-token type. It separates this token from an ID token, a workload token and the HS256 token, which carries typ JWT."
+        },
+        "kid": {
+          "$ref": "jwks.v1.schema.json#/properties/keys/items/properties/kid"
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "description": "The JWT claims. Closed to identity and session: nothing in it grants a permission.",
+      "required": [
+        "iss",
+        "aud",
+        "sub",
+        "principal_type",
+        "sid",
+        "jti",
+        "iat",
+        "nbf",
+        "exp",
+        "scope"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "iss": {
+          "$ref": "discovery.v1.schema.json#/properties/issuer"
+        },
+        "aud": {
+          "type": "string",
+          "enum": [
+            "dev-health-api",
+            "auth-service"
+          ],
+          "description": "Exactly one audience. dev-health-api is go-api and query-api (REST and /query); auth-service is its own session routes. contracts/auth/v1/vocabulary/audiences.json lists every audience and the class that may carry it."
+        },
+        "sub": {
+          "$ref": "principal.v1.schema.json#/properties/principal_id"
+        },
+        "principal_type": {
+          "const": "human",
+          "description": "A user access token names a human principal. Workload tokens are another class."
+        },
+        "sid": {
+          "$ref": "session.v1.schema.json#/properties/session_id"
+        },
+        "jti": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22,64}$",
+          "description": "Unique token id."
+        },
+        "iat": {
+          "$ref": "#/$defs/numericDate"
+        },
+        "nbf": {
+          "$ref": "#/$defs/numericDate"
+        },
+        "exp": {
+          "$ref": "#/$defs/numericDate"
+        },
+        "org_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The organization the session acts in, as a lowercase UUID. Absent means no organization; there is no null form. A relying party re-checks membership; this claim is context, not proof."
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "api:access",
+            "auth:session"
+          ],
+          "description": "Coarse scope, bound to the audience: api:access with dev-health-api, auth:session with auth-service. Closed: an unknown scope is refused."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "aud": {
+                "const": "dev-health-api"
+              }
+            },
+            "required": [
+              "aud"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": "api:access"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "aud": {
+                "const": "auth-service"
+              }
+            },
+            "required": [
+              "aud"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": "auth:session"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "numericDate": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 253402300799,
+      "description": "Seconds since the epoch (RFC 7519 NumericDate), no later than 9999-12-31T23:59:59Z."
+    }
+  }
+}

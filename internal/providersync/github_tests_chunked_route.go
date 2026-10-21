@@ -1543,7 +1543,12 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.Expired {
 							continue
 						}
-						archive, _, notFound, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
+						var archive []byte
+						notFound := false
+						downloadErr := artifact.declaredOversize(maxArtifactBytes)
+						if downloadErr == nil {
+							archive, _, notFound, downloadErr = downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
+						}
 						cursor.Requests = invocationBaseRequests + requests
 						if downloadErr != nil {
 							// An artifact whose bytes could never be

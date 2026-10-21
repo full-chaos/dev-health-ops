@@ -1,6 +1,7 @@
 package workflowpaths_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -200,30 +201,62 @@ func TestDocsGuardsCodePathStaysRed(t *testing.T) {
 	}
 }
 
-// docs-drift.yml carries the docs drift checks with the code paths their inputs live in; its list is pinned.
-func TestDocsDriftWorkflowPathsArePinned(t *testing.T) {
-	want := []string{
-		"docs/**",
-		"internal/jobs/workgraph/units/taxonomy.go",
-		"deploy/go-workers/deployment.json",
-		"contracts/jobs/v1/registry.json",
-		"contracts/jobs/v1/migration-state.json",
-		"internal/cigates/docstools/**",
-		"cmd/cigate/**",
-		"go.mod",
-		"go.sum",
-		".github/workflows/docs-drift.yml",
-	}
-	wf := loadWorkflowMap(t, "docs-drift.yml")
+var docsDriftPaths = []string{
+	"docs/**",
+	"mkdocs.yml",
+	"docs/reference/limits-and-compatibility/provider-limits.md",
+	"internal/jobs/workgraph/units/taxonomy.go",
+	"deploy/go-workers/deployment.json",
+	"contracts/jobs/v1/registry.json",
+	"contracts/jobs/v1/migration-state.json",
+	"internal/cigates/docstools/**",
+	"cmd/cigate/**",
+	"go.mod",
+	"go.sum",
+	".github/workflows/docs-drift.yml",
+}
+
+// docsDriftPathProblems compares each event's path list of a docs-drift workflow with the pinned list.
+func docsDriftPathProblems(t *testing.T, wf map[string]any) []string {
+	t.Helper()
+	var problems []string
 	for _, event := range []string{"push", "pull_request"} {
 		trig := triggerMap(t, wf, event)
 		if trig == nil {
-			t.Errorf("docs-drift.yml: no %s trigger", event)
+			problems = append(problems, "docs-drift.yml: no "+event+" trigger")
 			continue
 		}
-		if got := stringList(t, trig["paths"]); !reflect.DeepEqual(got, want) {
-			t.Errorf("docs-drift.yml %s paths = %q, want %q", event, got, want)
+		if got := stringList(t, trig["paths"]); !reflect.DeepEqual(got, docsDriftPaths) {
+			problems = append(problems, fmt.Sprintf("docs-drift.yml %s paths = %q, want %q", event, got, docsDriftPaths))
 		}
+	}
+	return problems
+}
+
+// docs-drift.yml carries the docs drift checks and the provider-limits nav check with the paths their inputs live
+// in (mkdocs.yml and the page are docs paths go.yml must not list); its list is pinned.
+func TestDocsDriftWorkflowPathsArePinned(t *testing.T) {
+	for _, problem := range docsDriftPathProblems(t, loadWorkflowMap(t, "docs-drift.yml")) {
+		t.Error(problem)
+	}
+}
+
+// Planted: dropping the mkdocs.yml row from docs-drift.yml must fail the pin for both events.
+func TestDocsDriftPinFailsWithoutMkdocs(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "docs-drift.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const row = "      - 'mkdocs.yml'\n"
+	if strings.Count(string(raw), row) != 2 {
+		t.Fatal("docs-drift.yml no longer lists mkdocs.yml once per event; the plant cannot land")
+	}
+	var wf map[string]any
+	if err := yaml.Unmarshal([]byte(strings.ReplaceAll(string(raw), row, "")), &wf); err != nil {
+		t.Fatal(err)
+	}
+	if problems := docsDriftPathProblems(t, wf); len(problems) != 2 {
+		t.Fatalf("pin passed a docs-drift.yml without mkdocs.yml: %q", problems)
 	}
 }
 

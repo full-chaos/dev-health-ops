@@ -27,10 +27,9 @@ import (
 const fxDir = "tests/fix" + "tures/"
 
 var uncoveredFixtureDirectories = map[string]string{
-	"tests/testops/fixtures":                            "read by the Python testops suite, not by Go tests; covered by the Python workflow's own filters",
-	"tests/docs/fixtures":                               "documentation-lint fixtures consumed by the docs workflow; markdown and mkdocs config, with no Go reader",
-	"mkdocs.yml":                                        "docs site config named by internal/cigates/workflowpaths, which pins that the docs workflows run for it; no Go test reads its content, and a docs-only change must not queue Go CI",
-	"tools/codex-review/fixtures":                       "log excerpts read only by tools/codex-review/test-exec-classify.sh, a shell proof no workflow runs; no Go test reads them",
+	"tests/testops/fixtures":      "read by the Python testops suite, not by Go tests; covered by the Python workflow's own filters",
+	"mkdocs.yml":                  "docs site config named by internal/cigates/workflowpaths, which pins that the docs workflows run for it; no Go test reads its content, and a docs-only change must not queue Go CI",
+	"tools/codex-review/fixtures": "log excerpts read only by tools/codex-review/test-exec-classify.sh, a shell proof no workflow runs; no Go test reads them",
 	"internal/providersync/JIRA_PROVIDER_GAP_MATRIX.md": "surfaced by the os.ReadDir(\".\") reader shape; the tests doing that filter to *.go, which **/*.go already covers, so a markdown file there cannot change what they assert",
 	"internal/queryapi/server/README.md":                "surfaced by the os.ReadDir(\".\") reader shape in internal_auth_test.go's route-boundary scan, which skips every entry that is not a non-test .go file",
 }
@@ -533,6 +532,26 @@ func TestEmptyTrackedListForTheRepoRootFailsLoudly(t *testing.T) {
 
 // ---- helper tests: the glob translator and the resolver, one case per shape the oracle claims ---------------------
 
+// A .py file at any depth under tests/ is scanned by the nopython guard, so go.yml must run on it in both events.
+func TestGoYmlTriggersOnNestedTestsPython(t *testing.T) {
+	root := repoRoot(t)
+	for _, event := range []string{"pull_request", "push"} {
+		matched := false
+		for _, pat := range goPaths(t, root, event) {
+			re, err := githubGlobToRegexp(pat)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if re.MatchString("tests/new_nested/test_planted.py") {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("go.yml %s.paths does not match a nested tests/new_nested/test_planted.py, so the nopython guard would be skipped", event)
+		}
+	}
+}
+
 func TestGlobTranslatorMatchesGithubSemantics(t *testing.T) {
 	cases := []struct {
 		pattern, path string
@@ -550,6 +569,10 @@ func TestGlobTranslatorMatchesGithubSemantics(t *testing.T) {
 		{"docs/**", "docs/a/b.md", true},
 		{"**/*.go", "internal/newline\ndirectory/module.go", true},
 		{"**/*.go", "internal/\n/module.go", true},
+		{"tests/**/*.py", "tests/new_nested/test_planted.py", true},
+		{"tests/**/*.py", "tests/x.py", true},
+		{"tests/**/*.py", "tests/docs/fixtures/a.md", false},
+		{"tests/**/*.py", "tests/testops/fixtures/a.xml", false},
 	}
 	for _, c := range cases {
 		re, err := githubGlobToRegexp(c.pattern)
@@ -755,4 +778,24 @@ func TestGoCommentsAreNotPathReferences(t *testing.T) {
 func TestComputedJoinUnderACoveredDirectoryIsNotReported(t *testing.T) {
 	root := miniRepo(t, miniFiles(map[string]string{"internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"tests\", \"fixtures\", name)"}, miniGoYml))
 	expectNoViolations(t, pathFilterViolations(t, root, map[string]string{}))
+}
+
+// Every input KIND the CHAOS-10376 guards read must be Go-relevant in both events: a change confined to one of them
+// would otherwise be judged non-Go and the guard that reads it would never run.
+func TestGoYmlTriggersOnEveryTestsPythonGuardInput(t *testing.T) {
+	root := repoRoot(t)
+	for _, p := range []string{
+		"brand/new/dir/y.py",
+		"ci/requirements-x.txt",
+		"ci/local_validate.sh",
+		"ci/run_live_backend_e2e.sh",
+	} {
+		for _, event := range []string{"push", "pull_request"} {
+			t.Run(event+"/"+p, func(t *testing.T) {
+				if !matchesAny(t, p, goPaths(t, root, event)) {
+					t.Errorf("go.yml %s.paths does not match %s, so a change confined to it is judged non-Go and its guard is skipped", event, p)
+				}
+			})
+		}
+	}
 }

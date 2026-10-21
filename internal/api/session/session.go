@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
@@ -63,6 +64,10 @@ type Deps struct {
 	// Inner, when set, replaces each route's innermost handler; the guard,
 	// validator and rate limiter in front of it stay. nil serves local.
 	Inner func(pattern string, local http.Handler) http.Handler
+	// Issuer, set when auth-service owns sessions (AUTH_PROXY_SESSIONS),
+	// issues every token pair these routes hand out; go-api then mints none
+	// and writes no refresh_tokens row. nil mints in go-api.
+	Issuer sessionissue.Issuer
 }
 
 type handlers struct {

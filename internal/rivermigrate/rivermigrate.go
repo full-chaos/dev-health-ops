@@ -125,6 +125,7 @@ func Execute(
 			"  DEV_HEALTH_MIGRATION_PG_DB           component form: database name (default postgres)\n"+
 			"  RIVER_DOMAIN_DATABASE_ROLE, RIVER_QUEUE_DATABASE_ROLE, RIVER_COORDINATOR_DATABASE_ROLE (optional)\n"+
 			"  RIVER_DATABASE_SCHEMA (optional)\n"+
+			"  AUTH_PROXY_SESSIONS (optional, go-api's flag: true revokes the api role's refresh_tokens INSERT and UPDATE)\n"+
 			"MIGRATION_DATABASE_URI and the DEV_HEALTH_MIGRATION_PG_* component form are mutually exclusive; set exactly one.\n")
 	}
 	if err := flags.Parse(args); err != nil {
@@ -210,7 +211,12 @@ func Execute(
 	if value, present := lookup("API_DATABASE_ROLE"); present && strings.TrimSpace(value) != "" {
 		apiRole = value
 	}
-	apiTableGrants, apiColumnGrants, apiSequences := postureGrants(postgresstore.APIPosture())
+	sessionsOwnedByAuth, err := authProxySessions(lookup)
+	if err != nil {
+		config.WriteConfigError(stderr, err)
+		return 1
+	}
+	apiTableGrants, apiColumnGrants, apiSequences := postureGrants(postgresstore.APIPosture(sessionsOwnedByAuth))
 	queryAPIRole, queryAPIGrants, queryAPIColumnGrants := queryAPILeg(lookup)
 	// CHAOS-5437: postureManifestDigest is the SAME value every go-* runtime
 	// binary recomputes at startup (postgres.PostureManifestDigest()) --
@@ -471,6 +477,17 @@ func coordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant, []s
 // nothing changes. When it names a role that exists, the migration applies the
 // full manifest postgres.QueryAPIPosture() declares (REVOKE ALL then GRANT) --
 // see riverstore.MigrationOptions.QueryAPIRole for what it refuses.
+// envAuthProxySessions is go-api's AUTH_PROXY_SESSIONS. The api role's
+// refresh_tokens grants follow it (postgres.APIPosture), so this job and
+// go-api must read the same value.
+const envAuthProxySessions = "AUTH_PROXY_SESSIONS"
+
+// authProxySessions reads AUTH_PROXY_SESSIONS as go-api does: unset or empty
+// is off, anything strconv.ParseBool refuses is an error.
+func authProxySessions(func(string) (string, bool)) (bool, error) {
+	return false, nil
+}
+
 func queryAPILeg(lookup func(string) (string, bool)) (string, []riverstore.TableGrant, []riverstore.ColumnGrant) {
 	value, _ := lookup("QUERY_API_DATABASE_ROLE")
 	if strings.TrimSpace(value) == "" {

@@ -32,20 +32,57 @@ type Window struct {
 	StartDay, EndDay, CompareStart, CompareEnd time.Time
 }
 
-// Compute is the report window of every ops reader. It is ComputeReference with one declared divergence from the
-// Python reference (D6083): a trailing window, one with no end date, ends YESTERDAY: [today-N, today). A window that
-// included today would change as the day's data lands and would invalidate every explanation cached on it all day.
-// The window of no end date is exactly the reference window of an explicit end date of yesterday; an explicit end
-// date keeps the reference's inclusive reading.
+// Compute is the report window of every ops reader. It is ComputeReference with the declared divergence from the
+// Python reference of D6083 and D6101: the end date is inclusive and never later than yesterday. A trailing window, one
+// with no end date, is [today-N, today); an end date of today (or later) is the same window; an end date of an earlier
+// day counts that day. A window that included today would change as the day's data lands and would invalidate every
+// explanation cached on it all day.
 func Compute(rangeDays, compareDays int, startDate, endDate *time.Time, today time.Time) (Window, error) {
-	if endDate == nil {
-		yesterday, err := addDays(midnight(today), -1)
-		if err != nil {
+	// A window Python's date arithmetic cannot hold is refused as it was, even when the end is then clipped to
+	// yesterday: this port never accepts what the reference refused.
+	if endDate != nil {
+		if _, err := ComputeReference(rangeDays, compareDays, startDate, endDate, today); err != nil {
 			return Window{}, err
 		}
-		endDate = &yesterday
 	}
-	return ComputeReference(rangeDays, compareDays, startDate, endDate, today)
+	last := today
+	if endDate != nil {
+		last = *endDate
+	}
+	last, err := ClipLastDay(last, today)
+	if err != nil {
+		return Window{}, err
+	}
+	return ComputeReference(rangeDays, compareDays, startDate, &last, today)
+}
+
+// LastFinalDay is the newest day a window can hold: yesterday. A day that is not over is never in a window, whether the
+// window names no end or names that day (D6083, D6101).
+func LastFinalDay(today time.Time) (time.Time, error) {
+	return addDays(midnight(today), -1)
+}
+
+// ClipLastDay is the last day named by a window, kept to the last final day: an end of today or later is yesterday.
+func ClipLastDay(last, today time.Time) (time.Time, error) {
+	final, err := LastFinalDay(today)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if midnight(last).After(final) {
+		return final, nil
+	}
+	return midnight(last), nil
+}
+
+// ExclusiveEnd is the end, exclusive, of the window whose last named day is last (inclusive): the day after the last day,
+// which is never later than today. It is the one end every reader binds: ComputeReference's end_day, the work-unit
+// reads' `to_ts < end` and the daily reads' `day < end`.
+func ExclusiveEnd(last, today time.Time) (time.Time, error) {
+	clipped, err := ClipLastDay(last, today)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return addDays(clipped, 1)
 }
 
 // ComputeReference is time_window: range_days and compare_days are raised to at

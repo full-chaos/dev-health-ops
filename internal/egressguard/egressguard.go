@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -260,7 +261,12 @@ func Wrap(rt http.RoundTripper) http.RoundTripper {
 		}
 		return cloneOf(t)
 	case httpguard.TransportWrapper:
-		return t.RewrapTransport(Wrap(t.UnwrapTransport()))
+		rebuilt := t.RewrapTransport(Wrap(t.UnwrapTransport()))
+		if isNilTransport(rebuilt) {
+			// An http.Client would fall back to http.DefaultTransport (unguarded, environment proxy): fail closed.
+			return refusing{class: "unguarded_transport"}
+		}
+		return rebuilt
 	case Offline:
 		return rt
 	default:
@@ -284,4 +290,17 @@ func inAny(addr netip.Addr, prefixes []netip.Prefix) bool {
 // synclog, the logger whose values cannot carry free text.
 func logRefused(class string) {
 	synclog.Default().Warn(context.Background(), synclog.MsgEgressRefused, synclog.Text(synclog.KeyEgressClass, synclog.ParseLabel(class)))
+}
+
+// isNilTransport is a nil RoundTripper, also a typed nil pointer inside the interface.
+func isNilTransport(rt http.RoundTripper) bool {
+	if rt == nil {
+		return true
+	}
+	value := reflect.ValueOf(rt)
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Interface, reflect.Chan:
+		return value.IsNil()
+	}
+	return false
 }

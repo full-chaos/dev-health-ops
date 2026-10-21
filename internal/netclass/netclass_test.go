@@ -13,6 +13,7 @@ func TestEveryMetadataFormIsTheMetadataClass(t *testing.T) {
 		"::ffff:169.254.169.254", "::ffff:100.100.100.200",
 		"64:ff9b::a9fe:a9fe", "64:ff9b::6464:64c8", "64:ff9b:1::a9fe:a9fe", "64:ff9b:1:ffff::6464:64c8",
 		"2002:a9fe:a9fe::", "2002:6464:64c8::1",
+		"::a9fe:a9fe", "::ffff:0:a9fe:a9fe", "::6464:64c8",
 		"fd20:ce::254", "fd00:c1::a9fe:a9fe", "fd12:3456:789a::a9fe:a9fe", "fc00::a9fe:a9fe", "168.63.129.16", "64:ff9b::a83f:8110",
 	} {
 		if got := BlockedAddressClass(netip.MustParseAddr(address)); got != "metadata" {

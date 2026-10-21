@@ -139,11 +139,13 @@ var (
 	nat64LocalUse  = netip.MustParsePrefix("64:ff9b:1::/48")
 	sixToFour      = netip.MustParsePrefix("2002::/16")
 	teredo         = netip.MustParsePrefix("2001::/32")
+	ipv4Compatible = netip.MustParsePrefix("::/96")
+	ipv4Translated = netip.MustParsePrefix("::ffff:0:0:0/96")
 )
 
 // embeddedIPv4 is every IPv4 address an IPv6 translation address can carry: NAT64 well-known /96 (RFC 6052), the
 // local-use prefix 64:ff9b:1::/48 at every RFC 6052 length it allows (/48, /56, /64, /96; RFC 8215), and 6to4 (RFC
-// 3056) and Teredo (RFC 4380). Every candidate is returned, so the strictest reading wins.
+// 3056), Teredo (RFC 4380), and the IPv4-compatible (::/96) and IPv4-translated (::ffff:0:0:0/96) forms. Every candidate is returned, so the strictest reading wins.
 // TranslationTargets is every IPv4 address a translation address (NAT64, 6to4, Teredo) can reach, nil for any other
 // address. A 0.0.0.0 candidate is the zero fill of another length's position while some other candidate carries bits,
 // and is dropped; when every candidate is 0.0.0.0 the address embeds the unspecified address itself (64:ff9b::, 2002::)
@@ -175,6 +177,10 @@ func embeddedIPv4(addr netip.Addr) []netip.Addr {
 		return []netip.Addr{at(6, 7, 9, 10), at(7, 9, 10, 11), at(9, 10, 11, 12), at(12, 13, 14, 15)}
 	case sixToFour.Contains(addr):
 		return []netip.Addr{at(2, 3, 4, 5)}
+	case ipv4Compatible.Contains(addr) && b[12] != 0: // RFC 4291 IPv4-compatible (deprecated); ::, ::1 and ::0.x.x.x are not
+		return []netip.Addr{at(12, 13, 14, 15)}
+	case ipv4Translated.Contains(addr): // RFC 2765 IPv4-translated
+		return []netip.Addr{at(12, 13, 14, 15)}
 	case teredo.Contains(addr): // RFC 4380: the server, and the client stored inverted
 		return []netip.Addr{at(4, 5, 6, 7), netip.AddrFrom4([4]byte{^b[12], ^b[13], ^b[14], ^b[15]})}
 	}

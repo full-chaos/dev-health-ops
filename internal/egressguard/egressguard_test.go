@@ -208,6 +208,24 @@ func TestCheckDecidesATranslationAddressOnItsEmbeddedIPv4(t *testing.T) {
 }
 
 // The IPv6 and the less common metadata endpoints are never admitted, even with an allow list for their range.
+// The IPv4-compatible (::/96) and IPv4-translated (::ffff:0:0:0/96) forms of a metadata address are metadata even with
+// every IPv6 address allowed.
+func TestCheckNeverAdmitsTheIPv4CompatibleAndTranslatedMetadataForms(t *testing.T) {
+	allowOnly(t, "::/0")
+	_ = captureLogs(t)
+	for _, address := range []string{"::a9fe:a9fe", "::ffff:0:a9fe:a9fe"} {
+		var refused *RefusedError
+		if err := check(netip.MustParseAddr(address)); !errors.As(err, &refused) || refused.Class != "metadata" {
+			t.Errorf("check(%s) = %v, want the metadata refusal", address, err)
+		}
+	}
+	for _, address := range []string{"::a00:1", "::ffff:0:7f00:1"} {
+		if err := check(netip.MustParseAddr(address)); err == nil {
+			t.Errorf("check(%s) was admitted: an allow list for ::/0 must not admit an embedded non-public IPv4", address)
+		}
+	}
+}
+
 func TestCheckNeverAdmitsTheIPv6AndWireServerMetadataEndpoints(t *testing.T) {
 	allowOnly(t, "fd00::/8", "fc00::/7", "168.63.0.0/16")
 	_ = captureLogs(t)
@@ -565,5 +583,39 @@ func TestTheSeamScanFindsPlantedOffenders(t *testing.T) {
 	want := []string{filepath.Join("internal", "a", "a.go"), filepath.Join("internal", "b", "b.go"), filepath.Join("internal", "c", "c.go")}
 	if strings.Join(offenders, ",") != strings.Join(want, ",") || scanned != 4 {
 		t.Fatalf("offenders=%v scanned=%d, want %v and 4", offenders, scanned, want)
+	}
+}
+
+// nilRewrapTransport is a TransportWrapper whose rebuild returns nil (or a typed nil): an http.Client would then fall
+// back to http.DefaultTransport, unguarded and with the environment proxy.
+type nilRewrapTransport struct{ typed bool }
+
+func (nilRewrapTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("not used")
+}
+func (nilRewrapTransport) UnwrapTransport() http.RoundTripper { return nil }
+func (w nilRewrapTransport) RewrapTransport(http.RoundTripper) http.RoundTripper {
+	if w.typed {
+		var transport *http.Transport
+		return transport
+	}
+	return nil
+}
+
+func TestWrapRefusesAWrapperWhoseRebuildReturnsNil(t *testing.T) {
+	allowOnly(t)
+	_ = captureLogs(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer server.Close()
+	for _, typed := range []bool{false, true} {
+		rt := Wrap(nilRewrapTransport{typed: typed})
+		if rt == nil {
+			t.Fatalf("typed=%v: Wrap returned nil (an http.Client would use http.DefaultTransport)", typed)
+		}
+		client := &http.Client{Transport: rt, Timeout: 5 * time.Second}
+		var refused *RefusedError
+		if err := get(t, client, server.URL); !errors.As(err, &refused) || refused.Class != "unguarded_transport" {
+			t.Fatalf("typed=%v: GET = %v, want the unguarded_transport refusal", typed, err)
+		}
 	}
 }

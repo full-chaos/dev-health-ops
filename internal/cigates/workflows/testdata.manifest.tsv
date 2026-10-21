@@ -1,0 +1,5 @@
+# Every file under internal/cigates/workflows/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+042233af28ce74478656b011175190df6445e829c04075a58165dded4947ff8b	hand-written	fanin_docker_shim.sh
+ae1843103a07dd7778573a2da6dfa28d382701f1401bf75fb7d63c5d99efd48c	hand-written	fanin_git_shim.sh

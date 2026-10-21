@@ -199,7 +199,7 @@ func checkInviteToken(t *testing.T, label, token, id, secret, storedHash string)
 func TestCreateOrgInviteVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("invites", t.Name(), "1b2b8dd73ec893c3c7970f0b453c0bd1622f8c46b533f8fd41a1876eb73b5e8f"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("inv")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-invites-flow-32-bytes!"
 
@@ -342,25 +342,9 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
 
 	// Every plane's mail, in the order sent. What each plane sent is compared
 	// below by RECIPIENT, never assumed to be one per 201. The Python plane's
-	// mail is captured while recording and frozen with its answers.
-	// The token of an invite is another one in every run: it is checked on the
-	// raw mail while recording (inviteTokenChecks below) and never frozen.
-	var pythonMails, rawPythonMails []decodedInviteMail
-	pythonMailText := golden.InspectRows(t, "python invite mails", func() string {
-		captured := sink.Drain(t)
-		mails := make([]decodedInviteMail, 0, len(captured))
-		for _, message := range captured {
-			decoded := decodeInviteMail(t, smtpcapture.Normalize(message))
-			rawPythonMails = append(rawPythonMails, decoded)
-			decoded.Token = ""
-			mails = append(mails, decoded)
-		}
-		raw, err := json.Marshal(mails)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(raw)
-	})
+	// mail is frozen with its answers.
+	var pythonMails []decodedInviteMail
+	pythonMailText := golden.InspectRows(t, "python invite mails")
 	if err := json.Unmarshal([]byte(pythonMailText), &pythonMails); err != nil {
 		t.Fatalf("python invite mails %q: %v", pythonMailText, err)
 	}
@@ -423,9 +407,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
 	// would accept. Each plane is checked on its own raw values; the outcome,
 	// invite by invite, is what the golden holds and what is compared.
 	goTokenChecks := inviteTokenChecks(t, ctx, "go", venue.AdminURI(t, venue.GoDB), goResponses, goMails, jwtKey)
-	pythonTokenChecks := golden.CompareRows(t, "invite token checks", func() string {
-		return inviteTokenChecks(t, ctx, "python", venue.AdminURI(t, venue.SourceDB), python, rawPythonMails, jwtKey)
-	}, goTokenChecks)
+	pythonTokenChecks := golden.CompareRows(t, "invite token checks", goTokenChecks)
 	if !strings.Contains(pythonTokenChecks, "|mailed|the token is _build_token(invite id)") {
 		t.Errorf("no invite of the Python plane was mailed with a checked token:\n%s", pythonTokenChecks)
 	}
@@ -435,16 +417,12 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
   round(extract(epoch from (expires_at - created_at)) / 3600)::text, coalesce(accepted_at::text, '<null>')), E'\x1e' ORDER BY email, org_id), '')
 FROM org_invites`
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), rowsQuery)
-	golden.CompareRows(t, "org_invites rows", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), rowsQuery)
-	}, goRows)
+	golden.CompareRows(t, "org_invites rows", goRows)
 	auditQuery := `SELECT coalesce(string_agg(concat_ws('|', org_id::text, user_id::text, action, resource_type, description, status,
   coalesce(error_message, '<null>')), E'\x1e' ORDER BY changes::text, org_id), '')
 FROM audit_logs WHERE action = 'member_invited'`
 	goAudit := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), auditQuery)
-	pythonAudit := golden.CompareRows(t, "member_invited audit rows", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), auditQuery)
-	}, goAudit)
+	pythonAudit := golden.CompareRows(t, "member_invited audit rows", goAudit)
 	if pythonAudit == "" {
 		t.Error("no member_invited audit rows on either plane: the comparison compared nothing")
 	}

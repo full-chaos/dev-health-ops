@@ -1,7 +1,6 @@
 package sync
 
 import (
-	_ "embed"
 	"encoding/json"
 	"testing"
 
@@ -29,12 +28,6 @@ var goFeatureDecisionReasons = map[string]FeatureDecisionReason{
 	"TIER_REQUIRED":               FeatureDecisionReasonTierRequired,
 }
 
-// featureDecisionReasonScript prints {member name: value} for every member of
-// the FeatureDecisionReason StrEnum of the build it is executed on.
-//
-//go:embed testdata/python_feature_decision_reason_oracle.py
-var featureDecisionReasonScript string
-
 // TestFeatureDecisionReasonMatchesFrozenPythonEnum pins the closed vocabulary:
 // every member Python's real FeatureDecisionReason StrEnum declared must
 // have a Go constant with the IDENTICAL string value, and Go must declare
@@ -43,8 +36,7 @@ var featureDecisionReasonScript string
 // in a real CanonicalIncidentFeatureDisabledError message, or missing one
 // that can.
 func TestFeatureDecisionReasonMatchesFrozenPythonEnum(t *testing.T) {
-	output := frozenPython(t, "feature-decision-reason.golden.json", programoracle.Script("feature decision reasons",
-		"internal/scheduler/sync/testdata/python_feature_decision_reason_oracle.py", featureDecisionReasonScript, nil))[0]
+	output := frozenPython(t, "feature-decision-reason.golden.json", programoracle.Program{Name: "feature decision reasons", Stdin: nil})[0]
 	var pythonReasons map[string]string
 	if err := json.Unmarshal([]byte(output), &pythonReasons); err != nil {
 		t.Fatalf("decode the frozen Python feature-decision-reason answer: %v\n%s", err, output)

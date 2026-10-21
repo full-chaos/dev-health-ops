@@ -817,17 +817,16 @@ func TestIdentityBySubjectSSOLegacyNeedsTheProviderOrgAndMembership(t *testing.T
 	stranger := e.seedLegacy(t, ctx, uniqueEmail("out"), "oidc", outsider, false)
 	e.seedMembership(t, ctx, stranger, otherOrg)
 
-	for name, c := range map[string]struct {
-		subject string
-		legacy  *LegacyMatch
-	}{
-		"no membership in the provider org": {outsider, &LegacyMatch{AuthProvider: "oidc", MembershipOrg: &org}},
-		"org is not the provider row's org": {outsider, &LegacyMatch{AuthProvider: "oidc", MembershipOrg: &otherOrg}},
-		"another protocol":                  {member, &LegacyMatch{AuthProvider: "saml", MembershipOrg: &org}},
+	for name, legacy := range map[string]*LegacyMatch{
+		"no membership in the provider org": {AuthProvider: "oidc", MembershipOrg: &org},
+		"org is not the provider row's org": {AuthProvider: "oidc", MembershipOrg: &otherOrg},
 	} {
-		if _, found, err := e.store.IdentityBySubject(ctx, issuer, provider, c.subject, c.legacy); err != nil || found {
-			t.Errorf("%s: found %v, %v; want a miss", name, found, err)
+		if _, found, err := e.store.IdentityBySubject(ctx, issuer, provider, outsider, legacy); !errors.Is(err, ErrLegacyNotMember) || found {
+			t.Errorf("%s: found %v, %v; want ErrLegacyNotMember", name, found, err)
 		}
+	}
+	if _, found, err := e.store.IdentityBySubject(ctx, issuer, provider, member, &LegacyMatch{AuthProvider: "saml", MembershipOrg: &org}); err != nil || found {
+		t.Errorf("another protocol: found %v, %v; want a miss", found, err)
 	}
 	if _, _, err := e.store.IdentityBySubject(ctx, issuer, provider, member, &LegacyMatch{AuthProvider: "oidc"}); !errors.Is(err, ErrInvalidLegacyMatch) {
 		t.Fatalf("SSO without an org = %v, want ErrInvalidLegacyMatch", err)
@@ -840,6 +839,30 @@ func TestIdentityBySubjectSSOLegacyNeedsTheProviderOrgAndMembership(t *testing.T
 	other := e.seedSSOProvider(t, ctx, org, "oidc")
 	if _, found, err := e.store.IdentityBySubject(ctx, issuer, other, member, nil); err != nil || found {
 		t.Fatalf("another provider row matched: %v, %v", found, err)
+	}
+}
+
+// TestIdentityBySubjectSSOLegacyCountsTheSubjectInEveryOrg: one stored
+// subject is unique across all organizations; a second account carrying it in
+// any organization is ErrMultipleUsers, never the provider org's account.
+func TestIdentityBySubjectSSOLegacyCountsTheSubjectInEveryOrg(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, otherOrg := e.seedOrg(t, ctx), e.seedOrg(t, ctx)
+	provider := e.seedSSOProvider(t, ctx, org, "oidc")
+	issuer := "https://idp.example.com/realms/" + uuid.NewString()[:8]
+
+	subject := "two-orgs-" + uuid.NewString()
+	inOrg := e.seedLegacy(t, ctx, uniqueEmail("in-org"), "oidc", subject, false)
+	e.seedMembership(t, ctx, inOrg, org)
+	elsewhere := e.seedLegacy(t, ctx, uniqueEmail("other-org"), "oidc", subject, false)
+	e.seedMembership(t, ctx, elsewhere, otherOrg)
+
+	if p, found, err := e.store.IdentityBySubject(ctx, issuer, provider, subject, &LegacyMatch{AuthProvider: "oidc", MembershipOrg: &org}); !errors.Is(err, ErrMultipleUsers) || found {
+		t.Fatalf("subject in two orgs = %+v, %v, %v; want ErrMultipleUsers", p, found, err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE subject = $1`, subject); n != 0 {
+		t.Fatalf("identity rows = %d, want none", n)
 	}
 }
 
@@ -980,7 +1003,10 @@ func TestRaceUnlinksNeverRemoveTheLastSignInMethod(t *testing.T) {
 	e.project(t, ctx, user)
 	keys := make([]ExternalKey, 6)
 	for i := range keys {
-		keys[i] = googleKey(fmt.Sprintf("unrace-%d-%s", i, uuid.NewString()))
+		// One identity per provider per principal: each key is its own SSO
+		// provider row.
+		keys[i] = ExternalKey{Issuer: "https://idp.example.com", Provider: Provider(uuid.NewString()),
+			Subject: fmt.Sprintf("unrace-%d-%s", i, uuid.NewString())}
 		if _, err := e.store.LinkIdentity(ctx, keys[i], user, Actor{}); err != nil {
 			t.Fatal(err)
 		}
@@ -1536,5 +1562,27 @@ FROM auth.auth_outbox_events WHERE id > $1 ORDER BY id`, since)
 	}
 	if n < 10 {
 		t.Fatalf("the scenario wrote %d outbox rows; expected every producer to write", n)
+	}
+}
+
+// A legacy subject whose user already holds another identity at the provider
+// is refused (ErrProviderAlreadyLinked) and the refusal names that user's
+// principal, so the sign-in's refusal row can name it.
+func TestIdentityBySubjectNamesThePrincipalOfAProviderAlreadyLinkedRefusal(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	first := "gl-" + uuid.NewString()
+	user := e.seedLegacy(t, ctx, uniqueEmail("gl-linked"), "gitlab", first, false)
+	issuer, _ := SocialIssuer(ProviderGitLab)
+	if _, found, err := e.store.IdentityBySubject(ctx, issuer, ProviderGitLab, first, socialLegacy(ProviderGitLab)); err != nil || !found {
+		t.Fatalf("first projection: %v, %v", found, err)
+	}
+	second := "gl-" + uuid.NewString()
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET auth_provider_id = $2 WHERE id = $1`, user, second); err != nil {
+		t.Fatal(err)
+	}
+	p, found, err := e.store.IdentityBySubject(ctx, issuer, ProviderGitLab, second, socialLegacy(ProviderGitLab))
+	if !errors.Is(err, ErrProviderAlreadyLinked) || found || p.ID != user {
+		t.Fatalf("second subject = %+v, %v, %v; want ErrProviderAlreadyLinked naming %v", p, found, err, user)
 	}
 }

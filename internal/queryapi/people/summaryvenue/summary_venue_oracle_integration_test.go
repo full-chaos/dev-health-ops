@@ -6,10 +6,8 @@ import (
 	"context"
 	"crypto/md5"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +62,7 @@ func runPeopleSummaryVenue(t *testing.T, goldenName string) {
 	seedClickHouse(t, ctx, venue)
 
 	personID := fmt.Sprintf("%x", md5.Sum([]byte(venueIdentity)))
-	pythonBody := runPythonSummary(t, root, golden, venue, personID)
+	pythonBody := runPythonSummary(t, golden)
 
 	zero := uint64(0)
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{
@@ -125,7 +123,7 @@ var timestampFragment = regexp.MustCompile(`"last_ingested_at":[^,}]*|"spark":\[
 
 func timestampFragments(body string) []string { return timestampFragment.FindAllString(body, -1) }
 
-// seedClickHouse writes the same rows into BOTH planes' databases.
+// seedClickHouse writes the rows into the Go plane's database.
 func seedClickHouse(t *testing.T, ctx context.Context, venue *venueoracle.Venue) {
 	t.Helper()
 	repo := venueoracle.StableUUID("people summary: repository")
@@ -141,7 +139,7 @@ VALUES ('%s', '2026-09-23', '2026-09-24 12:00:00', '%s')`, repo, venueOrg))
 	// reader taking the min or the first row reads 2026-09-20 here and not 2026-09-24.
 	statements = append(statements, fmt.Sprintf(`INSERT INTO repo_metrics_daily (repo_id, day, computed_at, org_id)
 VALUES ('%s', '2026-09-22', '2026-09-20 08:00:00', '%s')`, venueoracle.StableUUID("people summary: older repository"), venueOrg))
-	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
+	for _, database := range []string{venue.GoClickHouseDB} {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
 		if err != nil {
 			t.Fatalf("seed clickhouse %s: %v", database, err)
@@ -156,31 +154,10 @@ VALUES ('%s', '2026-09-22', '2026-09-20 08:00:00', '%s')`, venueoracle.StableUUI
 	}
 }
 
-// pythonSummaryEnv names the variable that hands the producer the ClickHouse
-// address of the Python plane's database of this run. The address is new in
-// every run, so it is not part of a request.
-const pythonSummaryEnv = "ORACLE_CLICKHOUSE_URL"
-
-// runPythonSummary runs the producer script, with the Python plane's ClickHouse
-// database when the golden is recorded, and returns the body it printed.
-func runPythonSummary(t *testing.T, root string, golden *venueoracle.Golden, venue *venueoracle.Venue, personID string) string {
+// runPythonSummary returns the body the frozen Python producer printed for the person.
+func runPythonSummary(t *testing.T, golden *venueoracle.Golden) string {
 	t.Helper()
-	script, err := os.ReadFile(filepath.Join("testdata", "summary_producer.py"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	program := programoracle.Script("people summary producer", "internal/queryapi/people/summaryvenue/testdata/summary_producer.py", string(script), nil)
-	// The producer takes one JSON argument; the database address in it is the
-	// run's, read from the environment, and every other field is the request.
-	arguments := fmt.Sprintf(`{"person_id":%q,"org_id":%q,"range_days":14,"compare_days":14,"today":%q}`, personID, venueOrg, venueToday)
-	program.Text = "import json, os, sys\nargs = json.loads(" + strconv.Quote(arguments) + ")\nargs[\"db_url\"] = os.environ[\"" + pythonSummaryEnv + "\"]\n" +
-		"sys.argv = [sys.argv[0], json.dumps(args)]\n" + program.Text
-	program.Env = map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test", "IDENTITY_MAPPING_PATH": "/nonexistent/identity-mapping.yaml"}
-	program.PerRun = func() map[string]string {
-		return map[string]string{pythonSummaryEnv: venue.AdminClickHouseHTTPURI(t, venue.PythonClickHouseDB)}
-	}
-	program.PerRunNames = []string{pythonSummaryEnv}
-	answer := programoracle.Produce(t, golden, root, []programoracle.Program{program})[0]
+	answer := programoracle.Produce(t, golden, []programoracle.Program{{Name: "people summary producer"}})[0]
 	if answer.ExitCode != 0 {
 		t.Fatalf("the python producer exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)
 	}

@@ -365,26 +365,17 @@ func TestManualTriggerVenueOracleFrozen(t *testing.T) {
 		Path:        "testdata/manual_trigger_oracle.golden.json",
 		PythonBuild: manualGoldenBuild,
 		SHA256:      "cb44fb63a7aa9846fe03a6c104ca171972adb29d32140177b2c64bae3cb7262b",
-		Recipe:      "DEV_HEALTH_VENUE_ORACLES=1 go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/syncadmin/ -test '^TestManualTriggerVenueOracleFrozen$' -python-root <clean worktree at " + manualGoldenBuild + ">",
 	})
 	runManualTriggerOracle(t, golden)
 }
 
-// runManualTriggerOracle runs the oracle: with a nil golden the Python plane is
-// served live beside the Go plane; with a golden its answers are the recorded
-// ones (or, recording, served live and written).
+// runManualTriggerOracle runs the oracle against the golden: the Python plane's
+// answers are the frozen ones.
 func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 	ctx := context.Background()
 	root := repoRoot(t)
-	if golden != nil {
-		root = golden.PythonRoot(t, root)
-	}
-	livePython := golden == nil || golden.Recording()
 	servePython := func(venue *venueoracle.Venue, requests []venueoracle.Request) []venueoracle.Response {
-		if golden != nil {
-			return golden.Python(t, venue, requests)
-		}
-		return venue.ServePython(t, requests)
+		return golden.Python(t, venue, requests)
 	}
 	const jwtKey = "venue-oracle-test-secret-key-for-manual-trigger!"
 	v := newManualIDs(manualRequestNames())
@@ -395,8 +386,6 @@ func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + manualVenueKey,
-			"VENUE_PINNED_NOW=" + manualPinned,
-			"VENUE_PINNED_NOW_MODULES=dev_health_ops.sync.execution_trigger,dev_health_ops.sync.planner,dev_health_ops.sync.watermarks,dev_health_ops.models.integrations",
 			"SYNC_MANUAL_TRIGGER_AWAIT_SECONDS=6",
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
@@ -427,9 +416,6 @@ func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 	}
 	var goScheduler *pgxpool.Pool
 	planes := []string{venue.GoDB}
-	if livePython {
-		planes = []string{venue.SourceDB, venue.GoDB}
-	}
 	for _, database := range planes {
 		pool, err := pgxpool.New(ctx, venue.AdminURI(t, database))
 		if err != nil {
@@ -497,9 +483,7 @@ func runManualTriggerOracle(t *testing.T, golden *venueoracle.Golden) {
 	// in process (202), the hand-off refuses it (409) and writes nothing.
 	diverging := divergingRequests(venue, v)
 	pythonDiverging := servePython(venue, diverging)
-	if golden != nil {
-		golden.Consumed(t, pythonDiverging...)
-	}
+	golden.Consumed(t, pythonDiverging...)
 	for index, request := range diverging {
 		goResponse := venueoracle.Do(t, base, request)
 		if pythonDiverging[index].Status != 202 {
@@ -538,9 +522,7 @@ WHERE c.id = ANY($1::uuid[])`, []uuid.UUID{v.cfg["t-legacy-unmanaged"].id, v.cfg
 		pool.Close()
 	}
 	compareManualRows(t, ctx, venue, golden)
-	if golden != nil {
-		golden.Finish(t)
-	}
+	golden.Finish(t)
 }
 
 func compareManualRows(t *testing.T, ctx context.Context, venue *venueoracle.Venue, golden *venueoracle.Golden) {
@@ -565,17 +547,7 @@ WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 30},
 	}
 	for _, table := range compare {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		var pythonRows string
-		if golden != nil {
-			pythonRows = golden.CompareRows(t, table.name, func() string {
-				return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
-			}, goRows)
-		} else {
-			pythonRows = venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
-			if pythonRows != goRows {
-				t.Errorf("%s differ\n python:\n%.5000s\n go:\n%.5000s", table.name, pythonRows, goRows)
-			}
-		}
+		pythonRows := golden.CompareRows(t, table.name, goRows)
 		if strings.Count(pythonRows, " | ") < table.minSeparators {
 			t.Errorf("%s: too few rows compared:\n%s", table.name, pythonRows)
 		}

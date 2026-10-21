@@ -93,9 +93,9 @@ func TestFixturescliSharesTheRaceSplit(t *testing.T) {
 	if _, ok := soloRows(t, solo)["internal/fixturescli"]; ok {
 		t.Fatalf("ci/go_race_solo.tsv still pins internal/fixturescli: its race time no longer depends on its co-tenants")
 	}
-	weightsPath := filepath.Join(root, "ci", "go_race_weights.tsv")
+	weightsPath := mergedWeights(t, root)
 	if _, ok := soloRows(t, weightsPath)["internal/fixturescli"]; !ok {
-		t.Fatalf("ci/go_race_weights.tsv has no internal/fixturescli row")
+		t.Fatalf("ci/go_race_weights.d has no internal/fixturescli file")
 	}
 	mod, pkgs := raceModulePackages(t, root)
 	target := mod + "/internal/fixturescli"
@@ -108,21 +108,21 @@ func TestFixturescliSharesTheRaceSplit(t *testing.T) {
 			shared = append(shared, shardAwk(t, root, mod, pkgs, k, count, weightsPath, solo, "")...)
 			alone = append(alone, shardAwk(t, root, mod, pkgs, k, count, weightsPath, solo, "solo")...)
 		}
-		if len(alone) != 0 {
-			t.Fatalf("count %d: solo parts %v, want none", count, alone)
+		if contains(alone, target) {
+			t.Fatalf("count %d: solo parts %v hold %s, want it in the shared split", count, alone, target)
 		}
 		if !contains(shared, target) {
 			t.Fatalf("count %d: %s is not in a shared split", count, target)
 		}
-		if !sameMultiset(shared, pkgs) {
-			t.Fatalf("count %d: the shared split is not a partition of the package list", count)
+		if !sameMultiset(append(append([]string{}, shared...), alone...), pkgs) {
+			t.Fatalf("count %d: the shared and solo parts are not a partition of the package list", count)
 		}
 	}
 }
 
 func TestRaceShardWithoutASoloFileSplitsEveryPackageAsBefore(t *testing.T) {
 	root := repoRoot(t)
-	weights := filepath.Join(root, "ci", "go_race_weights.tsv")
+	weights := mergedWeights(t, root)
 	mod, pkgs := raceModulePackages(t, root)
 	missing := filepath.Join(t.TempDir(), "none.tsv")
 	for _, count := range []int{2, 3} {
@@ -179,6 +179,7 @@ case " $* " in *" -list "*)
   exit 0 ;;
 esac
 printf '%%s\t%%s\n' "$PWD" "$*" >> "${FAKE_GO_LOG}"
+case " $* " in *" -json "*) printf '{"Action":"pass","Package":"p","Test":"TestFake","Elapsed":0.01}\n' ;; esac
 exit 0
 `
 
@@ -294,7 +295,7 @@ func TestRaceSoloCensusNamesEachDefect(t *testing.T) {
 		t.Fatalf("a comments-only solo file fails the census: %v\n%s", err, errs)
 	}
 	for _, c := range []struct{ name, text, want string }{
-		{"no weights row", "internal/zz-no-weights-row\treason\n", "no row in ci/go_race_weights.tsv"},
+		{"no weights row", "internal/zz-no-weights-row\treason\n", "no file in ci/go_race_weights.d"},
 		{"listed twice", "internal/fixturescli\ta\ninternal/fixturescli\tb\n", "twice"},
 		{"unsorted", "internal/storage/clickhouse\ta\ninternal/fixturescli\tb\n", "not sorted"},
 		{"providersync", "internal/providersync\ta\n", "cannot be solo"},

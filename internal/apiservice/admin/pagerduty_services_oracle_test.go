@@ -254,7 +254,7 @@ func TestPagerDutyServicesWithoutOAuthAppVenueOracle(t *testing.T) {
 func runPagerDutyServicesOracle(t *testing.T, mode, digest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("services_"+mode, t.Name(), digest))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-services-32-b"
 
 	fake := &fakeServicesPagerDuty{attempts: map[string]int{}}
@@ -365,8 +365,6 @@ func runPagerDutyServicesOracle(t *testing.T, mode, digest string) {
 	pythonEnv := []string{
 		"PAGER_DUTY_SECRET=" + pagerDutyServicesVenueSecret,
 		"SETTINGS_ENCRYPTION_KEY=" + pagerDutyServicesVenueEncryptionKey,
-		"VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE=" + upstream.URL + "/token",
-		"VENUE_PAGERDUTY_API_BASE_OVERRIDE=" + upstream.URL,
 	}
 	clientID := ""
 	if mode == "full" {
@@ -565,7 +563,7 @@ VALUES ($1, 'pagerduty', 'oa-corrupt', 'garbage-not-fernet', 1, now(), now(), 'b
 	python := golden.Python(t, venue, requests)
 	// What the Python plane sent upstream is part of what its executed build
 	// answered: frozen with the golden, compared with the Go plane's calls.
-	pythonCallsText := golden.InspectRows(t, "upstream calls of the Python plane", func() string { return strings.Join(fake.take(), "\n") })
+	pythonCallsText := golden.InspectRows(t, "upstream calls of the Python plane")
 	fake.reset()
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
@@ -589,9 +587,7 @@ VALUES ($1, 'pagerduty', 'oa-corrupt', 'garbage-not-fernet', 1, now(), now(), 'b
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		golden.CompareRows(t, name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, goRows)
+		golden.CompareRows(t, name, goRows)
 	}
 	compare("provider_oauth_credentials metadata", `SELECT org_id, credential_name, version, has_refresh_token, granted_scopes::text, binding_id,
 	CASE WHEN expires_at < '2001-01-01'::timestamptz THEN 'seeded expiry kept' ELSE (round(EXTRACT(EPOCH FROM (expires_at - updated_at)) / 10) * 10)::text END
@@ -656,6 +652,6 @@ FROM provider_oauth_credentials ORDER BY org_id, credential_name`)
 		return out
 	}
 	goTokens := strings.Join(opened(venue.GoDB), "\n")
-	golden.CompareRows(t, "stored OAuth tokens opened", func() string { return strings.Join(opened(venue.SourceDB), "\n") }, goTokens)
+	golden.CompareRows(t, "stored OAuth tokens opened", goTokens)
 	golden.Finish(t)
 }

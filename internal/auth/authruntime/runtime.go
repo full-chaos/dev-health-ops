@@ -8,7 +8,7 @@
 // mains are worth the small indirection -- and for why that note is not a
 // licence to build a plugin host here.
 //
-// It wires interfaces: keystore.Source for signing-key custody,
+// It wires interfaces: token.Signer over signing-key custody,
 // authstore.Prober for storage, httpapi.Route for transport. The domain
 // packages plug in at this one site: the session routes (internal/auth/authapi
 // over internal/auth/session) mount here when their secrets are configured.
@@ -33,17 +33,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authstore"
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
-	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/token"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -65,12 +70,14 @@ type IO struct {
 // 1 MiB default body limit that bounds buffering near 64 MiB.
 const maxInFlightRequests = 64
 
-// sessionRoutes is the service's mounted route set: the session routes
-// (CHAOS-10228) when cfg.Session is enabled, and nothing otherwise. Without
-// the session secrets the service stays as CHAOS-4881 built it, dormant: every
-// path receives the 404 envelope and no token is issued. No deployed stack
-// sets those secrets yet; prod enablement is a separate decision (CHAOS-3275
-// D1).
+// sessionRoutes is the service's mounted route set when cfg.Session is
+// enabled, and nothing otherwise: the session routes (CHAOS-10228) and, with
+// AUTH_SERVICE_COMPAT_ROUTES=true, go-api's compatibility refresh, logout and
+// social-login, and login when the lockout key is set too. Without the session
+// secrets the service stays as CHAOS-4881 built it, dormant: every path
+// receives the 404 envelope and no token is issued. No deployed stack sets
+// those secrets yet, and go-api routes to these only behind its AUTH_PROXY_*
+// flags, all off; prod enablement is a separate decision (CHAOS-3275 D1).
 func sessionRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 ) ([]httpapi.Route, error) {
@@ -88,9 +95,61 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
-	return authapi.Routes(authapi.Deps{
+	routes, err := authapi.Routes(authapi.Deps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
 	})
+	if err != nil || !cfg.Session.CompatRoutes {
+		return routes, err
+	}
+	compat, err := compatRoutes(cfg, logger, pool, schema, sessions, issuer)
+	if err != nil {
+		return nil, err
+	}
+	return append(routes, compat...), nil
+}
+
+// compatRoutes builds go-api's compatibility routes over the identity store,
+// the social provider client and the append-only audit writer.
+func compatRoutes(
+	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	sessions *session.Store, issuer *authapi.Issuer,
+) ([]httpapi.Route, error) {
+	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger})
+	if err != nil {
+		return nil, err
+	}
+	clients := make(map[social.Provider]social.ClientCredentials, len(authconfig.SocialProviders))
+	for _, name := range authconfig.SocialProviders {
+		provider, ok := social.ParseProvider(name)
+		if !ok {
+			return nil, fmt.Errorf("authruntime: unknown social provider %q", name)
+		}
+		client := cfg.Social[name]
+		clients[provider] = social.NewClientCredentials(client.ID, client.Secret.Reveal())
+	}
+	socialService, err := social.New(social.Config{
+		Store:     identities,
+		Providers: &social.ProviderClient{HTTP: &http.Client{Transport: httpguard.Transport()}, Endpoints: social.DefaultEndpoints, Clients: clients},
+		Logger:    logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	deps := authapi.CompatDeps{
+		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+		Projector: identities, Social: socialService,
+		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
+			return audit.Append(ctx, pool, schema, event)
+		},
+	}
+	if cfg.Session.LoginEnabled {
+		deps.Login = &authapi.LoginConfig{
+			Users:      local.IdentityUsers{Store: identities},
+			Attempts:   local.NewPGAttempts(pool, schema),
+			LockoutKey: contracts.NewSecretString(cfg.Session.LockoutKey.Reveal()),
+		}
+	}
+	return authapi.CompatRoutes(deps)
 }
 
 // Main runs the command and exits with its status.
@@ -258,10 +317,13 @@ func configureWithRoutes(
 		}
 	}
 
-	var signingKey keystore.Source = keystore.FileSource{
-		Path:  cfg.SigningKeyPath,
-		KeyID: cfg.SigningKeyID,
-	}
+	// The token signer is built here and proved by readiness; nothing issues
+	// with it yet.
+	signer := token.NewFileSigner(token.FileConfig{
+		KeySetPath: cfg.SigningKeySetPath,
+		KeyPath:    cfg.SigningKeyPath,
+		KeyID:      cfg.SigningKeyID,
+	})
 
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
 	// Both checks are REQUIRED, so readiness fails closed on either. The
@@ -287,12 +349,12 @@ func configureWithRoutes(
 		return nil, err
 	}
 	if err := registry.RegisterRequired(CheckSigningKey, func(ctx context.Context) error {
-		if _, describeErr := signingKey.Describe(ctx); describeErr != nil {
+		if checkErr := signer.Check(ctx); checkErr != nil {
 			logger.ErrorContext(
 				ctx, "readiness check failed",
-				"check", CheckSigningKey, "reason", keystore.ReasonOf(describeErr),
+				"check", CheckSigningKey, "reason", token.ReasonOf(checkErr),
 			)
-			return describeErr
+			return checkErr
 		}
 		return nil
 	}); err != nil {
@@ -499,11 +561,16 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		MaxInFlight:    maxInFlightRequests,
 		// The server-minted request id (internal/auth/requestid) wraps the
 		// whole mux, so the transport's own refusals (404, 405, 413, 429)
-		// carry X-Auth-Request-ID as route answers do.
-		Middleware: []func(http.Handler) http.Handler{requestid.Middleware},
+		// carry X-Auth-Request-ID as route answers do. The client address
+		// (every audit row and session) and the user agent (every session)
+		// are bound by internal/auth/clientaddr.
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies)},
 		// The transport id is always minted here, never a client's
 		// X-Request-ID: it reaches every log line and envelope.
 		AcceptRequestID: func(string) bool { return false },
+		// A GET route does not also answer HEAD: every method the API serves
+		// is one its endpoint profile names.
+		ExplicitHead: true,
 	}
 }
 

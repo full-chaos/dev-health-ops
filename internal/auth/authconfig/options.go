@@ -132,6 +132,11 @@ var optionRegistry = []Option{
 		Usage: "instantaneous burst allowance per route bucket",
 	},
 	{
+		Flag: "trusted-proxies", Env: EnvTrustedProxies, Kind: KindString, Group: GroupHTTP,
+		Usage: "comma-separated IP addresses and strict CIDR networks of the proxies whose single " +
+			"X-Forwarded-For value names the client (the go-api proxy); \"*\" and hostnames are refused; empty trusts none",
+	},
+	{
 		Env: EnvDatabaseURI, Kind: KindString, Secret: true, Group: GroupDatabase,
 		Usage: "PostgreSQL DSN for the auth-owned schema; " + EnvDatabaseURI +
 			"_FILE reads it from a mounted file instead (the two are mutually exclusive)",
@@ -163,6 +168,12 @@ var optionRegistry = []Option{
 		Usage: "JWKS `kid` for the configured signing key (ACP-ADR-02 §5)",
 	},
 	{
+		Flag: "signing-keyset-file", Env: EnvSigningKeySetFile, Kind: KindString,
+		Group: GroupKeys,
+		Usage: "path to a key-set manifest (kid, rotation state and key file per key) in place of " +
+			EnvSigningKeyFile + " and " + EnvSigningKeyID,
+	},
+	{
 		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
 			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Set together with " +
@@ -182,6 +193,40 @@ var optionRegistry = []Option{
 		Flag: "jwt-audience", Env: EnvAccessTokenAudience, Kind: KindString,
 		Default: defaultAccessTokenAudience, Group: GroupSession,
 		Usage: "aud of the compatibility access token (go-api's JWT_AUDIENCE)",
+	},
+	{
+		Flag: "compat-routes", Env: EnvCompatRoutes, Kind: KindString, Default: "false", Group: GroupSession,
+		Usage: "true mounts go-api's POST /api/v1/auth/refresh, /logout and /social-login (and /login with " +
+			EnvLoginLockoutKey + ") beside the session routes; needs the session secrets",
+	},
+	{
+		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "32-byte login lockout key, base64url without padding; " + EnvLoginLockoutKey +
+			"_FILE reads it from a mounted file instead. With " + EnvCompatRoutes + "=true it mounts POST /api/v1/auth/login",
+	},
+	{
+		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,
+		Usage: "GitHub OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
+	},
+	{
+		Env: "SOCIAL_GITHUB_CLIENT_SECRET", Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "GitHub OAuth client secret; SOCIAL_GITHUB_CLIENT_SECRET_FILE reads it from a mounted file instead",
+	},
+	{
+		Flag: "social-gitlab-client-id", Env: "SOCIAL_GITLAB_CLIENT_ID", Kind: KindString, Group: GroupSession,
+		Usage: "GitLab OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
+	},
+	{
+		Env: "SOCIAL_GITLAB_CLIENT_SECRET", Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "GitLab OAuth client secret; SOCIAL_GITLAB_CLIENT_SECRET_FILE reads it from a mounted file instead",
+	},
+	{
+		Flag: "social-google-client-id", Env: "SOCIAL_GOOGLE_CLIENT_ID", Kind: KindString, Group: GroupSession,
+		Usage: "Google OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
+	},
+	{
+		Env: "SOCIAL_GOOGLE_CLIENT_SECRET", Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "Google OAuth client secret; SOCIAL_GOOGLE_CLIENT_SECRET_FILE reads it from a mounted file instead",
 	},
 }
 

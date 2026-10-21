@@ -1,0 +1,4 @@
+func APIPosture(d string) {
+	{Database: database, Table: "t࢏", AllowSelect: true},
+	{Database: database, Table: "ok", AllowSelect: true},
+}

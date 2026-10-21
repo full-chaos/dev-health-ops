@@ -9,19 +9,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const pythonRegistryProgram = `
-import json
-from dev_health_ops.licensing.registry import get_features_for_tier, EXPLICIT_PURCHASE_FEATURES, CANONICAL_INCIDENT_INGESTION_FEATURE
-from dev_health_ops.licensing.types import DEFAULT_LIMITS, LicenseTier
-out = {"features": {}, "limits": {}}
-for tier in LicenseTier:
-    out["features"][tier.value] = [[k, v] for k, v in get_features_for_tier(tier).items()]
-    limits = DEFAULT_LIMITS[tier]
-    out["limits"][tier.value] = [limits.users, limits.repos, limits.api_rate]
-out["decision_keys"] = sorted(EXPLICIT_PURCHASE_FEATURES | {CANONICAL_INCIDENT_INGESTION_FEATURE, "customer_push_ingest"})
-print(json.dumps(out))
-`
-
 // goOnlyDecisionKeys are decision keys added after the frozen Python build: its
 // api tree is deleted, so no newer Python build can record them, and the Go
 // registry is their only source. They are not in the tier feature registry, so
@@ -32,7 +19,7 @@ var goOnlyDecisionKeys = map[string]bool{"acr_service_model": true, "platform_mo
 // TestTierFeaturesMatchFrozenPython holds the Go registry, limits and
 // decision keys to the frozen Python ones, value and order.
 func TestTierFeaturesMatchFrozenPython(t *testing.T) {
-	output := frozenPython(t, "tier-registry.golden.json", programoracle.Program{Name: "tier registry", Text: pythonRegistryProgram})[0]
+	output := frozenPython(t, "tier-registry.golden.json", programoracle.Program{Name: "tier registry"})[0]
 	var want struct {
 		Features     map[string][][2]any
 		Limits       map[string][3]int64

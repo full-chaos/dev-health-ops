@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
@@ -52,7 +50,7 @@ type verdict struct {
 func runGate(t *testing.T, env map[string]string) verdict {
 	t.Helper()
 	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "aggregate_gate_results.sh"))
-	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin"}
+	cmd.Env = []string{"PATH=" + withShims("/usr/bin:/bin:/usr/local/bin")}
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -137,8 +135,7 @@ func TestGateVerdictLegacyMatrix(t *testing.T) {
 	}
 }
 
-// currentMatrix is the shape test.yml ships (docs-tests unconditional, tooling-tests path-filtered):
-// job1 = docs-tests, job2 = tooling-tests.
+// currentMatrix is the shape test.yml ships (chart-started path-filtered, the one gated job): job2 = chart-started; job1 is unused and always success.
 var currentMatrix = []twoJobRow{
 	{"normal-pr", "pull_request", "success", "true", "success", "success", pass},
 	{"docs-only-pr-tooling-path-skipped", "pull_request", "success", "false", "success", "skipped", pass},
@@ -146,9 +143,6 @@ var currentMatrix = []twoJobRow{
 	{"selected-then-skipped", "pull_request", "success", "true", "success", "skipped", fail},
 	{"selected-then-cancelled", "pull_request", "success", "true", "success", "cancelled", fail},
 	{"selected-then-failed", "pull_request", "success", "true", "success", "failure", fail},
-	{"path-skipped-but-docs-failed", "pull_request", "success", "false", "failure", "skipped", fail},
-	{"docs-skipped-is-never-legitimate", "pull_request", "success", "false", "skipped", "skipped", fail},
-	{"docs-cancelled-is-unmeasured", "pull_request", "success", "false", "cancelled", "skipped", fail},
 	{"path-skipped-then-failed", "pull_request", "success", "false", "success", "failure", fail},
 	{"undecided-code-cannot-explain-a-skip", "pull_request", "success", "", "success", "skipped", fail},
 	{"garbage-code-cannot-explain-a-skip", "push", "success", "neutral", "success", "skipped", fail},
@@ -169,8 +163,7 @@ func TestGateVerdictCurrentTestWorkflowShape(t *testing.T) {
 		t.Run(r.id, func(t *testing.T) {
 			v := runGate(t, map[string]string{
 				"GATE_NAME": "test", "EVENT_NAME": r.event, "CHANGES_RESULT": r.changes, "CHANGES_CODE": r.code,
-				"GATED_JOB_1": "docs-tests|unconditional|" + r.job1,
-				"GATED_JOB_2": "tooling-tests|path-filtered|" + r.job2,
+				"GATED_JOB_1": "chart-started|path-filtered|" + r.job2,
 			})
 			assertVerdict(t, "test", v, r.want, fmt.Sprintf("%s/%s/code=%q/%s/%s", r.id, r.changes, r.code, r.job1, r.job2))
 		})
@@ -474,11 +467,10 @@ type gateSpec struct {
 	hasSelector      bool
 }
 
-// The policies the workflows actually pass to the script; docs-tests stays unconditional (CHAOS-3514), tooling-tests
-// is path-filtered (CHAOS-10174 PR A).
+// The policies the workflows actually pass to the script; chart-started is path-filtered (CHAOS-10174 PR A).
 var gates = []gateSpec{{
 	path: ".github/workflows/test.yml", gate: "test", step: "Aggregate test results",
-	gated:       [][2]string{{"docs-tests", "unconditional"}, {"tooling-tests", "path-filtered"}},
+	gated:       [][2]string{{"chart-started", "path-filtered"}},
 	hasSelector: true,
 }}
 
@@ -614,133 +606,17 @@ func TestAWorkflowGatesOnChangesToItself(t *testing.T) {
 	}
 }
 
-var pipInstall = regexp.MustCompile(`pip install -r\s+(\S+)`)
-var uvSync = regexp.MustCompile(`\buv sync\b`)
-
-func TestPathsFilterCoversEveryFileTheGatedJobsInstall(t *testing.T) {
-	for _, g := range gates {
-		wf := loadWorkflow(t, g.path)
-		patterns := codePatterns(t, wf)
-		installed := map[string]bool{}
-		for _, p := range g.gated {
-			for _, s := range job(t, wf, p[0]).Steps {
-				for _, m := range pipInstall.FindAllStringSubmatch(s.Run, -1) {
-					installed[m[1]] = true
-				}
-				if uvSync.MatchString(s.Run) {
-					installed["pyproject.toml"], installed["uv.lock"] = true, true
-				}
-			}
-		}
-		if len(installed) == 0 {
-			t.Fatalf("no dependency manifest install found in %s: the guard measured nothing", g.path)
-		}
-		var uncovered []string
-		for name := range installed {
-			if !isCovered(name, patterns) {
-				uncovered = append(uncovered, name)
-			}
-		}
-		sort.Strings(uncovered)
-		if len(uncovered) > 0 {
-			t.Fatalf("%s's gated jobs install %v but its `code` filter does not select them; patterns: %v", g.path, uncovered, patterns)
-		}
-	}
-}
-
 func TestPathsFilterCoversLefthookYml(t *testing.T) {
 	if patterns := codePatterns(t, loadWorkflow(t, ".github/workflows/test.yml")); !isCovered("lefthook.yml", patterns) {
 		t.Fatal("test.yml's path filter has no lefthook.yml entry: a lefthook.yml-only change would skip the guards")
 	}
 }
 
-func trackedFiles(t *testing.T) []string {
-	t.Helper()
-	cmd := exec.Command("git", "ls-files")
-	cmd.Dir = repoRoot(t)
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git ls-files: %v", err)
-	}
-	var files []string
-	for _, l := range strings.Split(string(out), "\n") {
-		if l != "" {
-			files = append(files, l)
-		}
-	}
-	return files
-}
-
-// CHAOS-6930: a PR that only touches a directory the tooling suite reads must run it. The directories are derived from
-// the tracked fixtures, not listed.
-func TestPathsFilterSelectsEveryDirectoryTheToolingSuiteReads(t *testing.T) {
+func TestPathsFilterCoversTheChartTheStartedChartJobTests(t *testing.T) {
 	patterns := codePatterns(t, loadWorkflow(t, ".github/workflows/test.yml"))
-	fixtureDirs := map[string]string{}
-	for _, f := range trackedFiles(t) {
-		parts := strings.Split(f, "/")
-		if len(parts) < 2 || strings.HasSuffix(f, ".go") {
-			continue
+	for _, f := range []string{"deploy/helm/dev-health/templates/clickhouse-configd.yaml", "deploy/helm/dev-health/clickhouse_started_test.go"} {
+		if !isCovered(f, patterns) {
+			t.Fatalf("test.yml's path filter %v does not select %s: a chart-only change would take the authorized skip of chart-started and the required `test` check would pass without starting the chart", patterns, f)
 		}
-		for _, seg := range parts[:len(parts)-1] {
-			if seg == "fixtures" || seg == "testdata" {
-				if _, ok := fixtureDirs[parts[0]]; !ok {
-					fixtureDirs[parts[0]] = f
-				}
-				break
-			}
-		}
-	}
-	if len(fixtureDirs) < 3 {
-		t.Fatalf("only %d directories hold fixtures: the derivation measured nothing", len(fixtureDirs))
-	}
-	var uncovered []string
-	for dir, example := range fixtureDirs {
-		if !isCovered(example, patterns) {
-			uncovered = append(uncovered, dir+" (e.g. "+example+")")
-		}
-	}
-	sort.Strings(uncovered)
-	if len(uncovered) > 0 {
-		t.Fatalf("the `code` filter of test.yml does not select %v; patterns: %v", uncovered, patterns)
-	}
-	for _, named := range []string{"tools/x", "ci/x", "tests/tooling/x", ".github/workflows/x"} {
-		if !isCovered(named, patterns) {
-			t.Fatalf("the `code` filter does not select %s", named)
-		}
-	}
-}
-
-// CHAOS-3514 docs guards.
-func TestDocsTestsJobCannotBeDeselected(t *testing.T) {
-	if job(t, loadWorkflow(t, ".github/workflows/test.yml"), "docs-tests").If != nil {
-		t.Fatal("docs-tests carries an `if:` but is registered `unconditional` with the aggregator")
-	}
-}
-
-func docsRuns(t *testing.T) string {
-	var runs []string
-	for _, s := range job(t, loadWorkflow(t, ".github/workflows/test.yml"), "docs-tests").Steps {
-		runs = append(runs, s.Run)
-	}
-	return strings.Join(runs, " ")
-}
-
-func TestDocsTestsJobRunsTheWholeDocsSuite(t *testing.T) {
-	runs := docsRuns(t)
-	if !strings.Contains(runs, "pytest tests/docs") {
-		t.Fatalf("docs-tests no longer invokes `pytest tests/docs`; ran %q", runs)
-	}
-	if regexp.MustCompile(`pytest tests/docs/\S`).MatchString(runs) {
-		t.Fatalf("docs-tests runs only part of tests/docs: %q", runs)
-	}
-}
-
-func TestDocsTestsInstallsWhatTheDocsSuiteImports(t *testing.T) {
-	runs := docsRuns(t)
-	if !strings.Contains(runs, "uv sync --frozen --all-extras --dev") {
-		t.Fatal("docs-tests must install the dev environment from uv.lock")
-	}
-	if !strings.Contains(runs, "requirements-docs.txt") {
-		t.Fatal("docs-tests must install requirements-docs.txt")
 	}
 }

@@ -12,7 +12,7 @@
 // (entity_id, sso_url, sp_acs_url, certificate) and the signed assertion's
 // own claims. The one real reason this family is unusable in a real
 // Python deployment today is a missing OPTIONAL dependency: signxml is
-// declared under pyproject.toml's "enterprise-sso" extra, which the
+// declared under the last pyproject.toml's "enterprise-sso" extra, which the
 // deployed image does not install, so _validate_saml_signature's
 // importlib.import_module("signxml") always raises ImportError in
 // production. That is a deployment gap, not a code gap, and it does not
@@ -106,7 +106,7 @@ type samlConfigValues struct {
 	AttributeMapping                                                          map[string]string
 }
 
-func decodeSAMLConfig(raw *string) (samlConfigValues, error) {
+func decodeSAMLConfig(raw *string, providerID string) (samlConfigValues, error) {
 	object, err := decodeConfigObject(raw)
 	if err != nil {
 		return samlConfigValues{}, err
@@ -124,6 +124,9 @@ func decodeSAMLConfig(raw *string) (samlConfigValues, error) {
 		SLOURL: objString(object, "slo_url"), Certificate: objString(object, "certificate"),
 		SPEntityID: objString(object, "sp_entity_id"), SPACSURL: objString(object, "sp_acs_url"),
 		NameIDFormat: nameIDFormat, AttributeMapping: mapping,
+	}
+	if err := validateSAMLACSOverridePath(cfg, providerID); err != nil {
+		return samlConfigValues{}, err
 	}
 	if err := validateSAMLConfigHTTPS(cfg); err != nil {
 		return samlConfigValues{}, err
@@ -175,6 +178,25 @@ func validateSAMLConfigHTTPS(cfg samlConfigValues) error {
 		if err := validateHTTPSOrLoopback(cfg.SPACSURL); err != nil {
 			return fmt.Errorf("SAML sp_acs_url %w", err)
 		}
+	}
+	return nil
+}
+
+// validateSAMLACSOverridePath refuses an sp_acs_url override whose path is not
+// exactly /api/v1/auth/saml/{provider id}/acs, the served ACS route (exact
+// case, no trailing slash, no prefix), both decoded and as written (an escaped
+// separator does not match the route). A value url.Parse refuses is refused
+// with the same reason. The error names the provider id and the rule, never the
+// configured value. It runs before the scheme check so a malformed value logs
+// the path rule.
+func validateSAMLACSOverridePath(cfg samlConfigValues, providerID string) error {
+	if cfg.SPACSURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(cfg.SPACSURL)
+	route := "/api/v1/auth/saml/" + providerID + "/acs"
+	if err != nil || parsed.Path != route || parsed.EscapedPath() != route {
+		return fmt.Errorf("SAML sp_acs_url must be /api/v1/auth/saml/%s/acs of this provider", providerID)
 	}
 	return nil
 }
@@ -272,7 +294,7 @@ func (h handlers) samlMetadata(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Provider is not SAML", nil)
 		return
 	}
-	config, err := decodeSAMLConfig(row.Config)
+	config, err := decodeSAMLConfig(row.Config, row.ID)
 	if err != nil {
 		h.fail(w, r, "decode saml config", err)
 		return
@@ -345,7 +367,7 @@ func (h handlers) initiateSAMLAuth(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "SSO provider is not active", nil)
 		return
 	}
-	config, err := decodeSAMLConfig(row.Config)
+	config, err := decodeSAMLConfig(row.Config, row.ID)
 	if err != nil {
 		h.fail(w, r, "decode saml config", err)
 		return
@@ -753,7 +775,7 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "SSO provider is not active", nil)
 		return
 	}
-	config, err := decodeSAMLConfig(row.Config)
+	config, err := decodeSAMLConfig(row.Config, row.ID)
 	if err != nil {
 		h.fail(w, r, "decode saml config", err)
 		return

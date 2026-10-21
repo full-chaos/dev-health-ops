@@ -29,20 +29,6 @@ var uuidCorpus = []string{
 	strings.Repeat("0", 8) + "_" + strings.Repeat("0", 23), "{{" + canonicalUUID + "}}", "urn:uuid:{" + canonicalUUID + "}",
 }
 
-const pythonUUIDProgram = `
-import json, sys, uuid
-from pydantic import TypeAdapter, ValidationError
-ta = TypeAdapter(uuid.UUID)
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        out.append({"ok": str(ta.validate_python(text))})
-    except ValidationError as exc:
-        err = exc.errors()[0]
-        out.append({"type": err["type"], "msg": err["msg"], "ctx": json.dumps(err.get("ctx"))})
-print(json.dumps(out))
-`
-
 // fuzzUUIDs mutates the canonical forms over the characters the grammar
 // cares about, so a rule the corpus does not name still meets pydantic.
 func fuzzUUIDs() []string {
@@ -75,7 +61,7 @@ func TestQueryUUIDMatchesFrozenPydantic(t *testing.T) {
 	corpus := append(append([]string(nil), uuidCorpus...), fuzzUUIDs()...)
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "query-uuid.golden.json",
-		programoracle.Program{Name: "query-uuid", Text: pythonUUIDProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "query-uuid", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct{ OK, Type, Msg, Ctx string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

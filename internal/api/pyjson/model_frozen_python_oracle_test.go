@@ -14,39 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonModelProgram answers, per decoded corpus document: its
-// pydantic-core dump_json (FastAPI's response_model fast path, through a
-// TypeAdapter of Any), and Python's repr(), str() and bool() of it. Then,
-// per random 64-bit pattern read as a double, the dump_json of that float.
-const pythonModelProgram = `
-import json, struct, sys
-from typing import Any
-from pydantic import TypeAdapter
-adapter = TypeAdapter(Any)
-payload = json.loads(sys.stdin.read())
-out = {"docs": [], "floats": []}
-for text in payload["docs"]:
-    try:
-        value = json.loads(text)
-    except ValueError:
-        # JSONDecodeError, or an integer literal past the int digit limit.
-        out["docs"].append(None)
-        continue
-    try:
-        dumped = adapter.dump_json(value).decode()
-    except Exception as exc:
-        dumped = "error:" + type(exc).__name__
-    try:
-        shown = [repr(value), str(value)]
-    except Exception as exc:
-        shown = ["error", "error"]
-    out["docs"].append([dumped, shown[0], shown[1], bool(value)])
-for bits in payload["floats"]:
-    value = struct.unpack(">d", bytes.fromhex(bits))[0]
-    out["floats"].append(adapter.dump_json(value).decode())
-print(json.dumps(out))
-`
-
 // TestMarshalModelAndReprMatchFrozenPydantic pins MarshalModel against
 // pydantic-core's dump_json, and Repr/Str/Truthy against Python's
 // repr()/str()/bool(), over the shared corpus and 20,000 random doubles
@@ -72,7 +39,7 @@ func TestMarshalModelAndReprMatchFrozenPydantic(t *testing.T) {
 		`{"a":1e-5,"b":1e-7,"c":[2.5e-08,1e+16,1e22]}`, `""`, `"x"`, `0`, `7`, `0.0`, `-0.5`, `[]`, `[0]`, `{}`,
 		`{"k":null}`, `false`, `null`, `"it's \"q\""`, `["it's \"q\""]`)
 	input, _ := json.Marshal(map[string]any{"docs": docs, "floats": bits})
-	output := frozenPython(t, "model.golden.json", programoracle.Program{Name: "pydantic dump_json and repr", Text: pythonModelProgram, Stdin: input})[0]
+	output := frozenPython(t, "model.golden.json", programoracle.Program{Name: "pydantic dump_json and repr", Stdin: input})[0]
 	var want struct {
 		Docs   [][]any  `json:"docs"`
 		Floats []string `json:"floats"`

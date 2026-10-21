@@ -13,8 +13,7 @@ import (
 
 // CHAOS-10174 PR C: Go half of tests/tooling/test_tmp_dirs_removed.py (CHAOS-7185). A Go _test.go file that calls
 // os.MkdirTemp must also call os.RemoveAll in code: a comment or a string that names it does not count. Tests built a
-// ~100 MB binary into a MkdirTemp directory per run and never removed it. The Python half (pytest mkdtemp scan) stays in
-// tests/tooling until the pytest steps go (CHAOS-10180).
+// ~100 MB binary into a MkdirTemp directory per run and never removed it.
 
 var goTempScanSkipDirs = map[string]bool{"web": true, "node_modules": true, ".git": true, ".venv": true, "vendor": true}
 

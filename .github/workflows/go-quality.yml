@@ -23,13 +23,16 @@
 # a fan-in job that KEEPS the required context name `go-quality`, so no
 # branch-protection edit is needed. The fan-in is `unconditional`: a leg that is
 # skipped, cancelled or missing from the result FAILS the gate (a measurement
-# that did not happen must not read green). tests/tooling/test_go_quality_legs.py
+# that did not happen must not read green). internal/cigates/workflows/workflows_quality_legs_test.go
 # pins that the legs together run exactly the steps of `ci`.
 #
-# The pattern list is NOT restated here. ci/go_relevance.sh reads go.yml's own
-# `on.pull_request.paths`, so there is one list and it cannot drift -- which also
-# guarantees the invariant that matters: anything Go-relevant enough to run the
-# storage shards is Go-relevant enough to run go-quality.
+# ONE PLAN VERDICT (go-quality-plan). `cmd/cigate plan-verdict --go-files-full`, the
+# program go.yml's integration plan job runs, judges the change set once. Here it is
+# FULL for every change set (with --go-files-full a .go file is FULL, and any other path
+# is FULL), for any push to main, merge group, schedule or manual run, and for any failure
+# of the plan: every package runs. A NONE verdict would skip the test and race legs, and
+# an AFFECTED one would run only its packages; no change set plans either today. The
+# static leg and the fan-in always run and report.
 name: Go quality
 
 on:
@@ -58,8 +61,71 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
+  go-quality-plan:
+    name: go-quality-plan
+    # Same ARC routing as the fan-in below.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    outputs:
+      verdict: ${{ steps.plan.outputs.verdict }}
+      selection: ${{ steps.plan.outputs.selection }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The diff needs the base commit; the default depth-1 checkout cannot see it.
+          fetch-depth: 0
+
+      - name: Configure self-hosted Go cache paths
+        if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
+        run: |
+          echo "GOMODCACHE=/mnt/go-cache/mod" >> "${GITHUB_ENV}"
+          echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+          cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
+
+      # Fails OPEN: an unresolvable range (ci/go_relevant_diff.sh refuses the all-zeros sentinel and a
+      # non-ancestor BASE_SHA rather than guess), a failed go list or a failed plan program is FULL.
+      # The cigate binary is built from the merge base, so a pull request cannot change that binary; this step's
+      # text, ci/go_relevant_diff.sh and go list still run from the PR tree.
+      - name: Plan the change set (NONE / AFFECTED / FULL)
+        id: plan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          out="${RUNNER_TEMP}/go-quality-plan.txt"
+          full() { printf 'FULL %s\n' "$1" > "${out}"; echo "::warning title=GO-QUALITY PLAN FELL BACK TO EVERY PACKAGE::$1"; }
+          if ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
+            full "could not compute the changed-file list"
+          elif ! modpath="$(go list -m)" || ! go list -mod=readonly ./... > "${RUNNER_TEMP}/packages.txt"; then
+            full "go list failed"
+          elif ! go list -mod=readonly -test -json ./... > "${RUNNER_TEMP}/golist.json"; then
+            full "go list -test failed"
+          else
+            sed -e "s#^${modpath}/##" -e "s#^${modpath}\$#.#" "${RUNNER_TEMP}/packages.txt" > "${RUNNER_TEMP}/keys.txt"
+            if ! mb="$(git merge-base "${BASE_SHA}" HEAD)" \
+              || ! git worktree add --detach "${RUNNER_TEMP}/planbase" "${mb}" \
+              || ! go -C "${RUNNER_TEMP}/planbase" build -trimpath -mod=readonly -o "${RUNNER_TEMP}/cigate-base" ./cmd/cigate; then
+              full "could not build the planner at the merge base"
+            elif ! "${RUNNER_TEMP}/cigate-base" plan-verdict --event "${EVENT_NAME}" --go-files-full \
+              --changed "${RUNNER_TEMP}/changed.txt" --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
+              --root "${GITHUB_WORKSPACE}" --base "${BASE_SHA}" > "${out}"; then
+              full "plan program failed"
+            fi
+          fi
+          cat "${out}"
+          printf 'verdict=%s\n' "$(head -n 1 "${out}" | cut -d' ' -f1)" >> "${GITHUB_OUTPUT}"
+          { echo 'selection<<GO_QUALITY_PLAN_EOF'; cat "${out}"; echo 'GO_QUALITY_PLAN_EOF'; } >> "${GITHUB_OUTPUT}"
+
   go-quality-leg:
     name: go-quality-leg (${{ matrix.name }})
+    needs: [go-quality-plan]
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
@@ -71,8 +137,15 @@ jobs:
           # entries (the tooling test pins it).
           - name: static
             args: static
-          - name: test
-            args: test
+          # CHAOS-10355: three weighted test shards (ci/go_test_weights.tsv). The single test leg took 19.6-28.5 min of the 30 min
+          # cap. test COUNT below MUST equal the number of test entries (internal/cigates/testshard pins it). The legs are
+          # not required status contexts (the ruleset requires the `go-quality` aggregate).
+          - name: test-1-of-3
+            args: test 1 3
+          - name: test-2-of-3
+            args: test 2 3
+          - name: test-3-of-3
+            args: test 3 3
           # CHAOS-8135: three race legs. Two legs held ~5k s of race CPU, two
           # 400-600 s packages per leg, and a leg's packages slow each other
           # (providersync 340-601 s, goapiproof 346-600 s): race-2 crossed the
@@ -136,20 +209,15 @@ jobs:
         # bash + git only, so it runs on either leg before anything installs.
         run: bash ci/check_migration_matrix.sh stamp
 
-      - name: Decide whether this change set is Go-relevant
+      - name: Decide whether this leg runs, and on which packages
         id: relevance
         env:
-          # `github.event.before` is the push event's own pre-push sha --
-          # without it, a multi-commit push to main left BASE_SHA empty and
-          # fell back to HEAD^...HEAD, which only ever sees the LAST commit
-          # of the push, silently dropping every earlier one from the range
-          # (ci/go_relevant_diff.sh refuses rather than guess when this value
-          # is the all-zeros sentinel or no longer an ancestor of HEAD, which
-          # routes into the fail-open branch below).
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           # CHAOS-9949: a heavy (race) leg of a draft PR without the ci:full label reports success without running, through the same
-          # relevant=false path as a change set with no Go-relevant paths. It runs once the PR is ready for review.
+          # relevant=false path as a NONE plan. It runs once the PR is ready for review.
           DRAFT_SKIP: ${{ matrix.heavy && github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
+          LEG: ${{ matrix.name }}
+          PLAN_VERDICT: ${{ needs.go-quality-plan.outputs.verdict }}
+          PLAN_SELECTION: ${{ needs.go-quality-plan.outputs.selection }}
         run: |
           set -euo pipefail
           if [ "${DRAFT_SKIP}" = "true" ]; then
@@ -157,25 +225,34 @@ jobs:
             printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          bash ci/go_relevant_diff.sh > changed.txt || {
-            # Fails OPEN, not closed: relevant=true runs the real gate rather
-            # than silently skipping it. An unresolvable range (or the
-            # all-zeros sentinel / non-ancestor BASE_SHA the script now
-            # refuses) is exactly the case where guessing would be wrong.
-            echo "could not resolve the diff range; failing open to relevant=true"
+          printf 'plan verdict: %s\n' "${PLAN_SELECTION}"
+          if [ "${LEG}" = "static" ]; then
+            echo "the static leg runs on every change set"
             printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
-          }
-          bash ci/go_relevance.sh < changed.txt | tee relevance.out
-          grep -E '^relevant=(true|false)$' relevance.out >> "${GITHUB_OUTPUT}"
+          fi
+          case "${PLAN_VERDICT}" in
+            NONE)
+              echo "plan verdict NONE: this leg is skipped"
+              printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
+              ;;
+            AFFECTED)
+              printf '%s\n' "${PLAN_SELECTION}" > "${RUNNER_TEMP}/go-quality-selection.txt"
+              echo "GO_QUALITY_SELECTION_FILE=${RUNNER_TEMP}/go-quality-selection.txt" >> "${GITHUB_ENV}"
+              printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo "plan verdict ${PLAN_VERDICT:-missing}: every package runs"
+              printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+              ;;
+          esac
 
       - name: Report that the gate was skipped, and why
         if: steps.relevance.outputs.relevant != 'true'
         run: |
-          echo "skipped: no Go-relevant paths in this change set."
-          echo "Relevance is decided by ci/go_relevance.sh against go.yml's own"
-          echo "on.pull_request.paths list. This job still REPORTS, so the required"
-          echo "check is satisfied honestly rather than by a second workflow."
+          echo "skipped: the go-quality-plan verdict is NONE (or this is a draft's heavy leg)."
+          echo "The verdict comes from cmd/cigate plan-verdict. This job still REPORTS, so the"
+          echo "required check is satisfied honestly rather than by a second workflow."
 
       - name: Configure self-hosted Go cache paths
         # CHAOS-4906: the oci-arc-runners pool exports GOMODCACHE/GOCACHE to a
@@ -188,21 +265,43 @@ jobs:
           echo "GOCACHE=/mnt/go-cache/build" >> "${GITHUB_ENV}"
 
       - name: Set up Go
+        id: setup-go
         if: steps.relevance.outputs.relevant == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
-          # `false` on the self-hosted leg: setup-go's own cache defaults to
-          # `true`, which would restore/save a GitHub Actions cache tarball
-          # into the pool's persistent, concurrently-shared hostPath above --
-          # a corruption risk against other jobs reading/writing it at the
-          # same time (same reasoning as go.yml's self-hosted legs).
-          cache: ${{ !((vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) || (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops')) }}
+          # CHAOS-10486: never setup-go's own cache. Its key (setup-go-<os>-<arch>-go-<version>-<go.sum hash>) is shared by
+          # every workflow's setup-go, and the first job to finish on main saves it: a job that compiles nothing saved 7 KB,
+          # and every hosted leg then "hit" that empty entry, compiled everything cold and never saved. The hosted legs
+          # restore this workflow's own per-leg cache below; the self-hosted legs keep the pool's shared hostPath.
+          cache: false
+
+      - name: Restore this leg's Go build and module cache (GitHub-hosted legs)
+        # CHAOS-10486: one cache per leg, keyed on the leg, the runner, the Go version and go.sum; a pull request restores
+        # what main saved (the newest entry of the leg when go.sum moved). Saved only by a push to main, below.
+        # The segment after go-quality- is the layout of the cached directory (v1 was built into /tmp, so it held little):
+        # bump it whenever that layout changes, because a key is immutable and the save runs only on a key miss.
+        id: go-cache
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
+
+      - name: Build into the restored Go cache (GitHub-hosted legs)
+        # CHAOS-10486: check_go.sh builds into DEV_HEALTH_GO_CACHE, else an inherited or configured GOCACHE, else
+        # /tmp/dev-health-go-build-cache. A hosted runner's GOCACHE is the unset default, so the cache restored above was
+        # never read. An expanded absolute path (a literal ~ is not expanded by the shell). The pool legs keep their hostPath.
+        if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
+        run: echo "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build" >> "${GITHUB_ENV}"
 
       - name: Set up Helm
         # internal/cigates/chartgates renders the chart with `helm template` in the test and race legs; the
-        # oci-arc-runners image ships no helm (same pin as test.yml's tooling-tests job). A missing helm fails
+        # oci-arc-runners image ships no helm. A missing helm fails
         # those guards, it never skips them.
         if: steps.relevance.outputs.relevant == 'true'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -296,6 +395,20 @@ jobs:
         # Each stage of the leg prints UTC start/done stamps (`==> stage ...`).
         run: bash ci/check_go.sh ci-leg ${{ matrix.args }}
 
+      - name: Save this leg's Go build and module cache (main pushes, GitHub-hosted legs)
+        # CHAOS-10486: only a push to main saves, and only on a key miss (a key is immutable); a failed leg still saves,
+        # because its compiled packages are as valid as a passing leg's (the build cache is content-addressed) and a leg
+        # that fails on a timeout is the one that most needs a warm start. A cancelled leg does not save.
+        if: >-
+          !cancelled() && steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
+          && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
       - name: Install pinned shellcheck
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         # CHAOS-4915. Installed, not assumed: the runner image ships its own
@@ -366,7 +479,7 @@ jobs:
     # skip, a cancelled run leaves the REQUIRED check skipped, and branch
     # protection counts a skipped required check as satisfied.
     if: always()
-    needs: [go-quality-leg]
+    needs: [go-quality-plan, go-quality-leg]
     # Same ARC routing as the legs above.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     steps:
@@ -382,6 +495,8 @@ jobs:
           # of a matrix job is `success` only when EVERY leg succeeded.
           GATE_HAS_SELECTOR: "false"
           GATED_JOB_1: go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}
+          # The plan job must have run: a skipped or failed plan skips every leg.
+          GATED_JOB_2: go-quality-plan|unconditional|${{ needs.go-quality-plan.result }}
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh

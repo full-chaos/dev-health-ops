@@ -157,7 +157,7 @@ func llmEnv(noKey bool) map[string]string {
 	return env
 }
 
-func llmSession(t *testing.T, python bool) []llmResult {
+func llmSession(t *testing.T) []llmResult {
 	t.Helper()
 	db := startDatabase(t)
 	db.reset(t)
@@ -178,20 +178,7 @@ func llmSession(t *testing.T, python bool) []llmResult {
 		}
 		var code int
 		var stdout string
-		if python {
-			var global, rest []string
-			for index := 0; index < len(s.args); index++ {
-				if s.args[index] == "--org" && index+1 < len(s.args) {
-					global = []string{"--org", s.args[index+1]}
-					index++
-					continue
-				}
-				rest = append(rest, s.args[index])
-			}
-			code, stdout = pythonVerbFull(t, db, llmEnv(s.noKey), global, rest)
-		} else {
-			code, stdout = goVerbEnv(t, db, llmEnv(s.noKey), s.args)
-		}
+		code, stdout = goVerbEnv(t, db, llmEnv(s.noKey), s.args)
 		out = append(out, llmResult{Args: shownArgs(s.args), Exit: code, Stdout: stdout, State: db.llmState(t)})
 	}
 	return out
@@ -218,10 +205,9 @@ func compareLLM(t *testing.T, got, want []llmResult, wantName string) {
 
 // TestLLMSettingsMatchTheFrozenPythonOutput runs the script and compares every step (exit, stdout, the
 // settings rows left) with what the REAL `dev-hops admin llm-settings` verbs did. The answers were executed
-// once on adminPythonBuild and are frozen in testdata/golden/llmsettings.json (the recipe regenerates them by
-// execution); the script is part of the golden's key (the API keys by name and digest, never by value).
+// once on adminPythonBuild and are frozen in testdata/golden/llmsettings.json; the script is part of the golden's key (the API keys by name and digest, never by value).
 func TestLLMSettingsMatchTheFrozenPythonOutput(t *testing.T) {
-	golden, root := adminGolden(t, "llmsettings", "22b5e4dda3bf3b7639b31eb6f0e606b305f7067647a948e128869eadcaae8742", "TestLLMSettingsMatchTheFrozenPythonOutput")
+	golden := adminGolden(t, "llmsettings", "22b5e4dda3bf3b7639b31eb6f0e606b305f7067647a948e128869eadcaae8742")
 	digest := func(text string) string {
 		sum := sha256.Sum256([]byte(text))
 		return hex.EncodeToString(sum[:8])
@@ -238,12 +224,12 @@ func TestLLMSettingsMatchTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := adminProduce(t, golden, root, "llm-settings script", input, func() any { return llmSession(t, true) })
+	raw := adminProduce(t, golden, "llm-settings script", input)
 	var frozen []llmResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
 	}
-	compareLLM(t, llmSession(t, false), frozen, "frozen Python")
+	compareLLM(t, llmSession(t), frozen, "frozen Python")
 	// A script that stored nothing, or refused nothing, passes for any implementation.
 	stored, refused := 0, 0
 	for _, item := range frozen {

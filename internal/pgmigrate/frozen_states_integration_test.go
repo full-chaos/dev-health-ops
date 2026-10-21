@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -27,41 +25,6 @@ import (
 // (heads, table set, row counts) BEFORE anything else runs on it: an empty or truncated dump fails there.
 //
 // A state is named by its revisions ("0138+0066", "head"); the era states by their own names.
-
-// statesUpgradeProgram is the Python upgrade the migrate Job runs (_run_upgrade), once per revision named in argv.
-// The database address goes by environment (DATABASE_URI), never argv.
-const statesUpgradeProgram = `
-import argparse, os, sys
-from dev_health_ops.db import normalize_async_postgres_uri
-from dev_health_ops.migrate import _run_upgrade
-uri = normalize_async_postgres_uri(os.environ["DATABASE_URI"])
-for revision in sys.argv[1:]:
-    code = _run_upgrade(argparse.Namespace(db=uri, revision=revision))
-    if code:
-        sys.exit(code)
-`
-
-// statesEraProgram builds a database as an older release left it: Alembic upgraded to argv[1] on the
-// application branch, plus the cutover branch (0066).
-const statesEraProgram = `
-import os, sys
-from alembic import command
-from dev_health_ops.db import normalize_async_postgres_uri
-from dev_health_ops.migrate import _make_alembic_config
-
-cfg = _make_alembic_config(normalize_async_postgres_uri(os.environ["DATABASE_URI"]))
-command.upgrade(cfg, sys.argv[1])
-command.upgrade(cfg, "0066")
-`
-
-// statesPythonSettings are the variables that shape the producer's answers, as constants: the producer's
-// environment AND part of the golden's request key (a changed value fails the frozen replay).
-var statesPythonSettings = map[string]string{
-	"PYTHONHASHSEED":                        "0",
-	"OTEL_ENABLED":                          "false",
-	"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1",
-	"RIVER_DATABASE_SCHEMA":                 "river",
-}
 
 // stateSpec names one state to build. Kind "upgrade" runs statesUpgradeProgram over Revisions; "era" runs
 // statesEraProgram to Revisions[0]; "era-head" is the era state of Revisions[0] upgraded to the head by the real
@@ -130,113 +93,21 @@ func serverMajor(t *testing.T, ctx context.Context, conn *pgx.Conn) int {
 	return version / 10000
 }
 
-// pythonState runs the Python program of a spec against a scratch database and returns the database. extra
-// carries the database address by name; the child runs in the closed environment of the producer.
-func runStatesProgram(t *testing.T, ctx context.Context, producer *venueoracle.Producer, uri, program string, args ...string) {
-	t.Helper()
-	command, err := producer.Command(ctx, statesPythonSettings, []string{"DATABASE_URI=" + uri}, append([]string{"-c", program}, args...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("the Python program for %v failed: %v", args, pyoracle.RunError(command.Path, err, output))
-	}
-}
-
-// produceStates builds every state with the REAL Python, on one scratch Postgres, and returns what it left.
-func produceStates(t *testing.T, producer *venueoracle.Producer, specs []stateSpec) frozenStates {
-	t.Helper()
-	ctx := context.Background()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-	if instance.Container == nil {
-		t.Fatal("the states are dumped with the server's own pg_dump and need a container instance, not a remote DSN")
-	}
-	admin := connect(t, instance.URI)
-	out := frozenStates{PostgresImage: containers.PostgresImage, PostgresMajor: serverMajor(t, ctx, admin)}
-	eras := map[string]string{}
-	eraWindows := map[string]window{}
-	for _, spec := range specs {
-		database := scratchDatabase(t, admin)
-		uri := databaseURI(t, instance.URI, database)
-		var captured pgmigrate.Baseline
-		switch spec.Kind {
-		case "upgrade":
-			started := time.Now()
-			runStatesProgram(t, ctx, producer, uri, statesUpgradeProgram, spec.Revisions...)
-			captured = stabilized(capture(t, ctx, instance, database, window{started, time.Now()}))
-		case "era":
-			started := time.Now()
-			runStatesProgram(t, ctx, producer, uri, statesEraProgram, spec.Revisions[0])
-			eraWindows[spec.Revisions[0]] = window{started, time.Now()}
-			// the era's own seed rows keep a stamp that is the same in every recording (a literal, not now()): both the
-			// era and its upgrade carry them, the hook oracle compares them as literals, and a hook that rewrote one
-			// would show. The recording's own timestamps would differ between two runs.
-			captured = stabilized(eraStamped(capture(t, ctx, instance, database, window{}), eraWindows[spec.Revisions[0]]))
-			eras[spec.Revisions[0]] = database
-		case "era-head":
-			eraDatabase, ok := eras[spec.Revisions[0]]
-			if !ok {
-				t.Fatalf("era-head %s: its era state is not built before it", spec.Revisions[0])
-			}
-			if _, err := admin.Exec(ctx, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '"+eraDatabase+"' AND pid <> pg_backend_pid()"); err != nil {
-				t.Fatal(err)
-			}
-			fork := scratchDatabaseName(t)
-			if _, err := admin.Exec(ctx, "CREATE DATABASE "+fork+" TEMPLATE "+eraDatabase); err != nil {
-				t.Fatalf("fork the era database: %v", err)
-			}
-			t.Cleanup(func() { _, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+fork+" WITH (FORCE)") })
-			database = fork
-			uri = databaseURI(t, instance.URI, fork)
-			// the era's seed rows are older than the window by construction (they were stamped before the fork)
-			time.Sleep(3 * time.Second)
-			started := time.Now()
-			runStatesProgram(t, ctx, producer, uri, statesUpgradeProgram, "head")
-			raw := eraStamped(capture(t, ctx, instance, database, window{}), eraWindows[spec.Revisions[0]])
-			raw.Data = window{started, time.Now()}.replaceWithNow(raw.Data)
-			captured = stabilized(raw)
-		default:
-			t.Fatalf("unknown state kind %q", spec.Kind)
-		}
-		captured.Cutover, captured.RiverSchema = productionSettings.Cutover, productionSettings.RiverSchema
-		out.States = append(out.States, frozenState{Name: spec.name(), Capture: captured, Tables: tableCounts(t, ctx, connect(t, uri))})
-	}
-	return out
-}
-
-// openStatesGolden is the one entry of a frozen test: it opens the golden at path, records the states of specs
-// (only while recording: the closure is the only place Python starts) and returns what it holds.
+// openStatesGolden is the one entry of a frozen test: it opens the golden at path and returns the states of specs
+// it holds.
 func openStatesGolden(t *testing.T, path, sha256, test string, specs []stateSpec) (*venueoracle.Golden, frozenStates) {
 	t.Helper()
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        path,
 		PythonBuild: statesPythonBuild,
 		SHA256:      sha256,
-		Recipe: "git worktree add --detach $DIR " + statesPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^" + test + "$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 	input, err := json.Marshal(map[string]any{"specs": specs, "image": containers.PostgresImage})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("pgmigrate states", statesUpgradeProgram+"\n#era\n"+statesEraProgram, input, statesPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		requireAlembicStamp(t, producer.Root)
-		body, err := json.Marshal(produceStates(t, producer, specs))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
-	})
+	request := venueoracle.ProgramRequest("pgmigrate states", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen frozenStates
 	decoder := json.NewDecoder(strings.NewReader(venueoracle.UnpackBody(t, answers[0].Body)))
@@ -339,22 +210,4 @@ func countsDiff(want, got map[string]int) string {
 	}
 	sort.Strings(problems)
 	return strings.Join(problems, "; ")
-}
-
-// eraStampLiteral is the stamp the era's seed rows carry in the golden, in place of the minute the recording ran.
-const eraStampLiteral = "'2000-01-01 00:00:00'"
-
-// eraStamped replaces the era build's own timestamps (inside its window) by eraStampLiteral.
-func eraStamped(c pgmigrate.Baseline, eraWindow window) pgmigrate.Baseline {
-	c.Data = eraWindow.replaceWith(c.Data, eraStampLiteral)
-	return c
-}
-
-// stabilized replaces every random id the Python upgrade minted (the randomIDColumns) by a fixed uuid, so two
-// recordings are byte-identical; the same value stays the same value, so a foreign key still points at its row.
-func stabilized(c pgmigrate.Baseline) pgmigrate.Baseline {
-	c.Data = mapRandomIDs(c.Data, func(n int) string {
-		return "'" + venueoracle.StableUUID(fmt.Sprintf("pgmigrate-random-id-%d", n)) + "'"
-	})
-	return c
 }

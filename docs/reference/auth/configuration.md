@@ -51,8 +51,9 @@ and `/readyz` fails closed, naming the check. See the
 | `--database-schema` | `AUTH_DATABASE_SCHEMA` | `auth` | Lowercase unquoted identifier `[a-z][a-z0-9_]*`, at most 63 characters. |
 | `--database-max-conns` | `AUTH_DATABASE_MAX_CONNS` | `8` | 1 to 256, per replica. |
 | `--database-connect-timeout` | `AUTH_DATABASE_CONNECT_TIMEOUT` | `5s` | 100ms to 1m. |
-| `--signing-key-file` | `AUTH_SIGNING_KEY_FILE` | required | Path to the Ed25519 PKCS#8 PEM. |
-| `--signing-key-id` | `AUTH_SIGNING_KEY_ID` | required | The JWKS `kid`: letters, digits, `-`, `_`, `.`, at most 64. |
+| `--signing-key-file` | `AUTH_SIGNING_KEY_FILE` | required (or the key set) | Path to the Ed25519 PKCS#8 PEM. |
+| `--signing-key-id` | `AUTH_SIGNING_KEY_ID` | required (or the key set) | The JWKS `kid`: letters, digits, `-`, `_`, `.`, at most 64. |
+| `--signing-keyset-file` | `AUTH_SIGNING_KEYSET_FILE` | unset | Path to a key-set manifest, in place of the two settings above (setting both forms fails startup). |
 | (none, secret) | `AUTH_JWT_SECRET_KEY` or `AUTH_JWT_SECRET_KEY_FILE` | unset | HS256 key of the compatibility access token: the same value as go-api's `JWT_SECRET_KEY`, at least 32 characters. Set together with `AUTH_SESSION_SUCCESSOR_KEY`; with neither, no session route is mounted; with one, startup fails. |
 | (none, secret) | `AUTH_SESSION_SUCCESSOR_KEY` or `AUTH_SESSION_SUCCESSOR_KEY_FILE` | unset | 32 bytes, base64url without padding. Derives the rotated refresh credential that a 30 s grace replay returns again. |
 | `--jwt-issuer` | `AUTH_JWT_ISSUER` | `dev-health-ops` | `iss` of the access token; must equal go-api's `JWT_ISSUER`. |
@@ -69,6 +70,7 @@ Durations take Go syntax (`30s`, `5m`).
 | | `AUTH_MIGRATION_DATABASE_URI` or `AUTH_MIGRATION_DATABASE_URI_FILE` | Required. The **migration** login's DSN. Must not authenticate as the runtime role. |
 | | `AUTH_RUNTIME_DATABASE_ROLE` | Required to apply (not for `--check`). The login to grant the runtime privileges to. |
 | | `AUTH_DATABASE_SCHEMA` | Default `auth`. |
+| | `AUTH_SESSION_READER_ROLES` | Optional, comma-separated. The logins of go-api and query-api: each is granted exactly `SELECT (id, principal_id, revoked_at)` on the auth schema's `sessions` and `USAGE` on the schema, nothing else. With none, go-api and query-api cannot read the session, so every request with an access token auth-service issued fails (an error naming the missing grant, never a pass). Each role must exist. |
 | `--check` | | Report the lineage position without issuing DDL. |
 | `--version` | | Print build metadata. |
 
@@ -85,10 +87,24 @@ The run is bounded to five minutes. See
 - **The signing key is a file only.** `AUTH_SIGNING_KEY_FILE` is the path itself
   (there is no `AUTH_SIGNING_KEY_FILE_FILE`). A direct-value **`AUTH_SIGNING_KEY`
   is rejected at load** (ACP-ADR-02 section 4), not ignored.
+- **The key set.** `AUTH_SIGNING_KEYSET_FILE` names a JSON manifest,
+  `{"keys": [{"kid": "auth-2026-10", "state": "active", "file": "auth-2026-10.pem"}]}`.
+  `state` is one of `pending`, `active`, `retiring`, `retired`, `compromised`;
+  exactly one key is `active` and signs; `pending`, `active` and `retiring` keys
+  are published. `file` is a bare name in the manifest's own directory. The
+  manifest is closed (an unknown member is refused) and follows the key file
+  contract below (at most 16 KiB). It is re-read on every use, so replacing it
+  by an atomic rename rotates the set with no restart; give a new key a new
+  file. A kid the process has seen `compromised` never signs again in that
+  process. The single key form is a one-key set whose key is `active`.
+  The Helm chart stages one key and renders the single key form; it refuses
+  `AUTH_SIGNING_KEYSET_FILE` in `authService.extraEnv`. Key-set staging in the
+  chart comes with the rotation state machine (CHAOS-10449).
 - **The key file contract**, checked live on every readiness request: a regular
   file opened with `O_NOFOLLOW` (a symlink is refused), at most 8 KiB, mode with
   **no group or world bit** (`0600` or tighter), exactly one `PRIVATE KEY` PEM
-  block that parses as an Ed25519 PKCS#8 key. On Kubernetes this needs the key
+  block that parses as an Ed25519 PKCS#8 key. Readiness also signs a probe with
+  the active key and verifies it under the published public key. On Kubernetes this needs the key
   staging described in [deployment](../../contribute/architecture/auth-control-plane-deployment.md).
 - **Redaction.** DSNs and their passwords are registered with the redactor;
   configuration errors that could quote a value pass through it before they are

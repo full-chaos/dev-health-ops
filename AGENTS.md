@@ -14,7 +14,7 @@ Backend: ingest → metrics → API → jobs. The versioned platform contract (W
 | LLM categorization contract | [`.github/docs-legacy/llm/categorization-contract.md`](.github/docs-legacy/llm/categorization-contract.md) |
 | API surface | [`docs/reference/graphql/index.md`](docs/reference/graphql/index.md), [`.github/docs-legacy/api/view-mapping.md`](.github/docs-legacy/api/view-mapping.md) |
 | CLI & workers | [`docs/reference/cli/index.md`](docs/reference/cli/index.md), [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md) |
-| How to run / test tiers | [`README.md`](README.md), [`ci/run_tests.sh`](ci/run_tests.sh) |
+| How to run / test tiers | [`README.md`](README.md), [`ci/check_go.sh`](ci/check_go.sh), [`ci/run_tests.sh`](ci/run_tests.sh) (live-e2e) |
 
 ## Source layout (`src/dev_health_ops/`)
 
@@ -91,7 +91,7 @@ dho workers metrics daily-start --org <org-id> --day <YYYY-MM-DD> --reason <code
 
 - The api is Go (`dho api`, `dho query-api`): its tests are Go tests under `internal/`. There is no Python api test tree.
 - The GraphQL schema pin `contracts/graphql/v1/schema.graphql` is consumed by web CI for drift detection.
-- **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-commit` ruff format+fix; `pre-push` `ruff format --check` + `ruff check` (no mypy: CI retired it, CHAOS-8616). Fix code, don't add ignores/config exclusions.
+- **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-push` runs the pinned shellcheck. Fix code, do not add ignores or config exclusions.
 - **Mutation testing has no shared harness — do not write one.** `scripts/mutation_harness.py`, its ~8k lines of meta-tests, and its 98 checked-in plan JSONs were removed under CHAOS-3875: no GitHub workflow ever ran them, only `ci/local_validate.sh`'s `verify` stage touched the harness at all, and the plans had to be re-anchored by hand on every refactor of the files they pinned. The durable lesson from the 2026-07-26 incident survives the tool: three ad-hoc per-lane harnesses produced false results, all the same shape — the harness could not detect its own failure. One left `if false && (guard)` on disk while reporting a restore it had "verified" with `go build`; one used `git checkout` to restore and silently reverted unrelated uncommitted edits; one waited on `pgrep -qf "m22.sh"`, matched its own command line, and hung. **Never verify a restore with a build or a git check** (`go build`/`go vet` pass on `if false && …`; `git diff` calls an *untracked* file clean whatever it contains), and **mutate compound predicates clause by clause** — a wholesale mutation reported KILLED on a condition holding a wrong, unasserted clause. If you need a one-off kill proof, run it by hand, restore by content digest, and keep it out of the tree.
 
 ## Worktrees and branches
@@ -101,8 +101,6 @@ Agents keep creating branches that track `origin/main`, then a bare `git push` p
 ```bash
 git worktree add --no-track -b <branch> <path> origin/main
 cd <path>
-UV_CACHE_DIR="$(git rev-parse --show-toplevel)/.uv-cache" SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \
-  uv sync --all-extras --dev --no-install-project
 # or, without a worktree: git switch -c <branch> --no-track origin/main
 git push -u origin HEAD:<branch>
 ```
@@ -111,8 +109,6 @@ git push -u origin HEAD:<branch>
 - Push with an explicit refspec, `HEAD:<branch>` (or `-u origin HEAD:<branch>` the first time) — never a bare `git push`.
 - Verify before the *first* push: `git for-each-ref --format='%(refname:short) -> %(upstream:short)' refs/heads/<branch>` must print nothing after `->`. After `git push -u` sets the upstream, the same command legitimately prints `origin/<branch>` — the check that matters from then on is that it never prints `origin/main`.
 - **`dev-health-go` trap:** that repo sets `push.default=upstream`. A tracked branch plus a bare `git push` pushes `main` there even faster than elsewhere — the same `--no-track` + explicit-refspec recipe is mandatory, no exceptions.
-- **Always set `UV_CACHE_DIR` per worktree (CHAOS-4411).** uv's default cache is `~/.cache/uv`, shared machine-wide; concurrent `uv sync` runs from different worktrees serialize on `~/.cache/uv/.lock` (and the editable sdist build lock under it), which has cost lanes 30+ minute waits. Each worktree already gets its own `.venv` — give it its own cache dir too. `.uv-cache/` is gitignored. Cost: no cross-worktree cache sharing, more disk per worktree.
-- **`--no-install-project` is required too (CHAOS-4181 / CHAOS-4407).** setuptools_scm's git file finder shells out to `git check-attr -z --stdin export-ignore` while building the editable install of `dev-health-ops` itself; the pipe deadlocks forever (0% CPU, not slow) once this repo's file list fills the 64KB buffer — every linked worktree hits it, `SETUPTOOLS_SCM_PRETEND_VERSION` does NOT avoid it (the file-listing call runs regardless of the version env var). `--no-install-project` skips that build entirely — the 158 third-party deps still install, and `pytest.ini`'s `pythonpath = src` resolves test imports without the local package being installed. The ClickHouse-dependent stages of `ci/local_validate.sh` do not need the project installed: they build `dho` from this tree (`go build ./cmd/dho`) as the ClickHouse migrator, and need a ClickHouse and a Go toolchain. Run them there or via CI, or use `SKIP_CLICKHOUSE=1 bash ci/local_validate.sh` for the pure-Python stages only.
 
 ### Cluster-isolated lanes (CHAOS-4428)
 
@@ -138,12 +134,7 @@ cluster, they do not apply to you:
   `CH_TRANSPORT=http` with `CH_HOST`/`CH_HTTP_PORT` pointed at the lane's
   ClickHouse (`CH_HTTP_SCHEME=https` for a TLS endpoint), and a lane-scoped
   `CH_CONTAINER` as the lock key. `CH_HTTP_SCHEME` steers only this script's
-  own `curl` legs; the Python legs reach ClickHouse through
-  clickhouse-connect, which decides TLS from the **port** (443/8443) and
-  ignores the scheme in the DSN — so a TLS endpoint on any other port gets a
-  plaintext connection from those legs while `curl` speaks TLS, and the two
-  halves of one gate run disagree about the transport. Terminate TLS on
-  443/8443 for a lane, or keep the lane plaintext. Tracked in CHAOS-4469. The migration stage runs `dho migrate clickhouse` (built on demand into `.build/dho`, or `DHO=<path>`), which speaks the **native** protocol: set `CH_NATIVE_PORT` (default 9000) to the lane's native port; `CH_HTTP_SCHEME=https` is refused by the probe (there is no TLS native leg), so a lane needs a plaintext endpoint or `SKIP_CLICKHOUSE=1`. Point `DEV_HEALTH_POSTGRES_TEST_URI` at the
+  own `curl` legs. The migration stage runs `dho migrate clickhouse` (built on demand into `.build/dho`, or `DHO=<path>`), which speaks the **native** protocol: set `CH_NATIVE_PORT` (default 9000) to the lane's native port; `CH_HTTP_SCHEME=https` is refused by the probe (there is no TLS native leg), so a lane needs a plaintext endpoint. Point `DEV_HEALTH_POSTGRES_TEST_URI` at the
   lane's Postgres using the **asyncpg** dialect (`postgresql+asyncpg://`), and
   at a **scratch** database — several opt-in tests assume an empty
   `worker_job_outbox` and fail against a `backups/`-restored one.
@@ -204,38 +195,19 @@ Operational health is a SEPARATE claim; its Python comparator was retired
 ## Pre-push validation gate (REQUIRED for every ops change)
 
 Before pushing ANY change to `dev-health-ops`, run the standing local gate from the
-worktree root using the worktree's `.venv`:
+worktree root:
 
 ```bash
 bash ci/local_validate.sh
 ```
 
-It mirrors the PR-time CI gates of the ops repo and MUST be green before `git push`:
+It is a LOCAL gate and runs no Python. It MUST be green before `git push`:
 
-1. `ruff format --check .` and `ruff check .` (local only; CI no longer runs ruff)
-2. The **hosted** Python test selection, the same files the hosted `test` check runs after
-   CHAOS-8352 removed the Python unit matrix: `tests/docs`, `tests/tooling` (`-n 4`) and the
-   explicit list in `ci/kept_python_tests.txt` (read from that file, never copied), with the
-   local socks5h proxy neutralized. **Do not run the whole `tests/` dir**: it still holds
-   tests of the deleted Python api tree and is red by construction (CHAOS-8692). A new file
-   is covered only when it is added to `ci/kept_python_tests.txt` on purpose.
-   Tests that call
-   `get_clickhouse_uri()` and need a reachable, migrated ClickHouse — the gate provisions
-   an isolated **scratch db**, migrates it, and points `CLICKHOUSE_URI` at it before
-   running the suite, exactly as CI provides one (a locked dev `default` user makes them
-   false-red otherwise). Without docker AND without `SKIP_CLICKHOUSE=1`, the gate now
-   hard-fails before the unit suite ever runs at all (see CHAOS-3571 below) — the
-   module-deselect behavior only fires under the explicit `SKIP_CLICKHOUSE=1` opt-out,
-   where the pure-Python guards still run but that one CH-dependent module is skipped.
-3. A **live-ClickHouse argMax proof** that CI's unit/ci tiers never run: after migrating
-   the scratch db, it builds a real `ClickHouseDataLoader` and `await`s
-   `load_team_attribution_context`, forcing the real engine to parse + EXECUTE every
-   `argMax(…, (updated_at, valid_from))` / `GROUP BY` block. The mock-based unit test
-   only string-matches `argMax`; only a live engine catches a tuple-arg / column /
-   unescaped-`%` mistake. (The broader seeded `pytest -m clickhouse` suite —
-   flow-matrix-live, recommendations, resolver EXPLAIN — needs `dho fixtures
-   generate` (a frozen parameter set) and is a separate opt-in run, not part of this gate; CI does not run it either.)
-4. A **host-wide single-flight lock** (CHAOS-3403): the gate serializes across every
+1. A ClickHouse stage that CI's unit tiers never run: it provisions an isolated **scratch db**,
+   migrates it with `dho migrate clickhouse` (built on demand from this tree) and proves
+   the migration status is current. The Go gates themselves run through `ci/check_go.sh`
+   and the dedicated Go CI, not through this script.
+2. A **host-wide single-flight lock** (CHAOS-3403): the gate serializes across every
    worktree on the host, since all worktrees share one ClickHouse container and one
    host's CPU/RAM. A run that finds the lock already held blocks, waiting up to
    `LOCK_WAIT_SECS` (default 1800s = 30 minutes), then fails with an actionable
@@ -252,22 +224,18 @@ default to `…/default` for any `-m clickhouse` run, migrate, or `ensure_schema
 call. If you must run CH tests by hand, always export the scratch DSN first and unset
 it after.
 
-**CHAOS-3571 (stage manifest — reversed a prior statement in this doc):** without
-`SKIP_CLICKHOUSE=1`, the gate no longer "cleanly SKIPs" when docker / the CH
+**CHAOS-3571 (stage manifest):** the gate never "cleanly SKIPs" when docker / the CH
 container is unavailable — that exact behavior let a FAILED docker probe read as
-"container not running" and silently drop 3 of 8 stages while still printing
-`GATE PASSED`. Every reason the CH stages might not run (docker missing, the probe
-itself failing/timing out, the container confirmed absent, a missing `dho` binary)
-is now a **hard failure** with a message naming the true mechanism. The **only**
-sanctioned way to run without the CH-dependent stages is the explicit, logged
-`SKIP_CLICKHOUSE=1` opt-out — a caller decision made up front, not a runtime probe
-result the gate trusts on its own. A machine-readable `GATE_STAGE_MANIFEST …` log
-line carries the literal `declared=<N> executed=<N>` counts plus the exact stage
-ids that ran, and the verdict line carries the same information formatted as
-`[executed/declared: ids]` (`GATE PASSED. [8/8: lint_format,…,ch_argmax_proof] safe
-to push.`, or `[4/4: …]` under `SKIP_CLICKHOUSE=1`), and a self-check fails the
-gate on any declared-but-not-executed gap even if every stage that did run passed.
-See the "STAGE MANIFEST" header comment in `ci/local_validate.sh` and
-`tests/tooling/test_local_validate_stage_manifest.py`.
+"container not running" and silently drop stages while still printing `GATE PASSED`.
+Every reason the CH stages might not run (docker missing, the probe itself
+failing/timing out, the container confirmed absent, a missing `dho` binary) is a
+**hard failure** with a message naming the true mechanism. `SKIP_CLICKHOUSE=1` is
+refused: the CH stages are the only stages the gate has, so a skip would declare
+nothing and still pass. A machine-readable `GATE_STAGE_MANIFEST …` log line carries
+the literal `declared=<N> executed=<N>` counts plus the exact stage ids that ran, the
+verdict line carries the same information (`GATE PASSED. [3/3:
+ch_probe,ch_scratch_create,ch_migrate] safe to push.`), and a self-check fails the gate
+on any declared-but-not-executed gap even if every stage that did run passed. See the
+"STAGE MANIFEST" header comment in `ci/local_validate.sh`.
 
 Do not push if `ci/local_validate.sh` prints `GATE FAILED`.

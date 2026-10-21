@@ -6,8 +6,6 @@ owner: product-analytics
 source_of_truth:
   - internal/queryapi/investment/response.go
   - internal/queryapi/investment/reader.go
-  - src/components/work/investment/charts/InvestmentMixSection.tsx
-  - docs/user-guide/journeys/investment-view.md
 applicability: current
 lifecycle: active
 ---

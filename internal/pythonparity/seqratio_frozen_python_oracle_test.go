@@ -10,12 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const pythonSequenceRatioProgram = `
-import difflib, json, sys
-pairs = json.loads(sys.stdin.read())
-print(json.dumps([difflib.SequenceMatcher(a=a, b=b).ratio() for a, b in pairs]))
-`
-
 // sequenceRatioCorpus mixes hand-picked names, the autojunk boundary (b of
 // 199/200/201 code points with a popular element), and seeded random pairs
 // over tiny alphabets, where ties between equal-length matches decide the
@@ -59,7 +53,7 @@ func TestSequenceRatioMatchesFrozenPython(t *testing.T) {
 	corpus := sequenceRatioCorpus()
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "seqratio.golden.json",
-		programoracle.Program{Name: "sequence ratio", Text: pythonSequenceRatioProgram, Stdin: input})[0]
+		programoracle.Program{Name: "sequence ratio", Stdin: input})[0]
 	decoder := json.NewDecoder(strings.NewReader(output))
 	decoder.UseNumber()
 	var want []json.Number

@@ -1,30 +1,25 @@
 // Package keystore implements signing-key custody for the Auth Control Plane.
 //
-// ACP-ADR-02 (Accepted 2026-09-02) fixes three things this package implements:
+// ACP-ADR-02 (Accepted 2026-09-02) fixes four things this package implements:
 //
+//   - §1 custody exposes sign and public-key operations only (Custody). The
+//     private key is parsed inside a call and never leaves the package; no
+//     caller outside internal/token may import it (internal/token's
+//     import-boundary test enforces that).
 //   - §3 the file-based custody contract, promoted from web/acr to a platform
 //     requirement: O_NOFOLLOW, a regular file, a bounded size, mode with no
 //     group or world bits, and a check that the parsed key really is the
-//     expected algorithm.
+//     expected algorithm. It applies to every key file and to the key-set
+//     manifest.
 //   - §4 direct-value secret environment variables are prohibited for signing
 //     material. That prohibition is enforced one layer up, in authconfig,
 //     which rejects AUTH_SIGNING_KEY outright.
 //   - §5 every key carries a `kid` and a JWKS entry from day one, so that
 //     rotation overlap is representable before it is needed.
 //
-// # What this package deliberately does NOT do in Wave 1
-//
-// It does not sign. CHAOS-4881 builds the service DORMANT and must not issue
-// production tokens, so Describe parses the private key only to PROVE the
-// configured custody is sound, derives the public half, and then drops the
-// private material rather than retaining it in process memory. A process that
-// never signs has no reason to hold a minting key for the lifetime of the
-// process, and the readiness check this serves needs only the proof.
-//
-// internal/token adds a Signer to this package when there is something to
-// sign (ACP-ADR-02 §1: no caller outside internal/token may reach keystore).
-// Adding it is an additive change to this file; nothing here has to be
-// reshaped for it.
+// Two file adapters implement Custody: FileSource, one key that is always
+// active, and FileCustody, a key set named by a manifest. A KMS adapter (§2)
+// implements the same interface; no vendor is chosen yet.
 package keystore
 
 import (
@@ -133,7 +128,10 @@ type FileSource struct {
 	KeyID string
 }
 
-var _ Source = FileSource{}
+var (
+	_ Source  = FileSource{}
+	_ Custody = FileSource{}
+)
 
 // Describe re-reads and re-validates the key file on every call.
 //
@@ -154,7 +152,7 @@ func (s FileSource) Describe(ctx context.Context) (Metadata, error) {
 		return Metadata{}, failure(ReasonKeyIDUnconfigured, nil)
 	}
 
-	pemBytes, err := readCustodiedFile(s.Path)
+	pemBytes, err := readCustodiedFile(s.Path, MaxKeyFileBytes)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -165,8 +163,8 @@ func (s FileSource) Describe(ctx context.Context) (Metadata, error) {
 	return Metadata{KeyID: s.KeyID, Algorithm: Algorithm, PublicKey: public}, nil
 }
 
-// readCustodiedFile applies the whole ACP-ADR-02 §3 file contract and returns
-// the file's bytes.
+// readCustodiedFile applies the whole ACP-ADR-02 §3 file contract, with size
+// bound limit, and returns the file's bytes.
 //
 // Order matters: the descriptor is obtained first (with O_NOFOLLOW), and every
 // check afterwards runs against that descriptor via fstat(2), so a path
@@ -174,7 +172,7 @@ func (s FileSource) Describe(ctx context.Context) (Metadata, error) {
 // bound is enforced twice -- against the fstat size, and against the bytes
 // actually read through an io.LimitReader -- so a file grown between the two
 // still cannot exceed the bound.
-func readCustodiedFile(path string) ([]byte, error) {
+func readCustodiedFile(path string, limit int64) ([]byte, error) {
 	file, err := openNoFollow(path)
 	if err != nil {
 		return nil, failure(ReasonUnreadable, err)
@@ -193,26 +191,42 @@ func readCustodiedFile(path string) ([]byte, error) {
 	if info.Mode().Perm()&os.FileMode(0o077) != 0 {
 		return nil, failure(ReasonPermissiveMode, nil)
 	}
-	if info.Size() > MaxKeyFileBytes {
+	if info.Size() > limit {
 		return nil, failure(ReasonTooLarge, nil)
 	}
 
-	contents, err := io.ReadAll(io.LimitReader(file, MaxKeyFileBytes+1))
+	contents, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, failure(ReasonUnreadable, err)
 	}
-	if int64(len(contents)) > MaxKeyFileBytes {
+	if int64(len(contents)) > limit {
 		return nil, failure(ReasonTooLarge, nil)
 	}
 	return contents, nil
 }
 
 // parseEd25519Public decodes the PEM, parses the PKCS#8 key, asserts it really
-// is Ed25519, and returns only the public half.
-//
-// The private key is intentionally not returned and not stored anywhere. See
-// the package doc: Wave 1 is dormant and nothing signs, so nothing keeps
-// minting material resident.
+// is Ed25519, and returns only the public half. The private key is not stored
+// anywhere: a signature re-reads the file (see Sign).
+func parseEd25519Public(pemBytes []byte) (ed25519.PublicKey, error) {
+	private, err := parseEd25519Private(pemBytes)
+	if err != nil {
+		return nil, err
+	}
+	public, ok := private.Public().(ed25519.PublicKey)
+	if !ok {
+		return nil, failure(ReasonWrongAlgorithm, nil)
+	}
+	// Copy the public half out before the private slice goes out of scope; the
+	// two share no backing array after this, so nothing downstream can reach
+	// the seed through the public key's capacity.
+	out := make(ed25519.PublicKey, len(public))
+	copy(out, public)
+	return out, nil
+}
+
+// parseEd25519Private applies the PEM and algorithm checks and returns the
+// private key. It is unexported on purpose: the key stays inside this package.
 //
 // Two refusals here are about AMBIGUITY rather than malformation, and both are
 // deliberate. A file whose first block is not labelled "PRIVATE KEY" is
@@ -223,7 +237,7 @@ func readCustodiedFile(path string) ([]byte, error) {
 // over would get the old one with no signal. Under ACP-ADR-02 §5 rotation is
 // represented by a second kid and a second JWKS entry, never by a second block
 // in one file.
-func parseEd25519Public(pemBytes []byte) (ed25519.PublicKey, error) {
+func parseEd25519Private(pemBytes []byte) (ed25519.PrivateKey, error) {
 	block, rest := pem.Decode(pemBytes)
 	if block == nil {
 		return nil, failure(ReasonNotPEM, nil)
@@ -247,14 +261,5 @@ func parseEd25519Public(pemBytes []byte) (ed25519.PublicKey, error) {
 	if len(private) != ed25519.PrivateKeySize {
 		return nil, failure(ReasonWrongAlgorithm, nil)
 	}
-	public, ok := private.Public().(ed25519.PublicKey)
-	if !ok {
-		return nil, failure(ReasonWrongAlgorithm, nil)
-	}
-	// Copy the public half out before the private slice goes out of scope; the
-	// two share no backing array after this, so nothing downstream can reach
-	// the seed through the public key's capacity.
-	out := make(ed25519.PublicKey, len(public))
-	copy(out, public)
-	return out, nil
+	return private, nil
 }

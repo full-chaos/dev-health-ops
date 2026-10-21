@@ -11,10 +11,12 @@ internal/atlassianteams
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
+internal/auth/sessionid
 internal/cacheinvalidation
 internal/chmigrate
 internal/cli
 internal/deploymentcontract
+internal/egressguard
 internal/externalrecompute
 internal/httpguard
 internal/identityalias
@@ -77,6 +79,7 @@ internal/jobs/workgraph/textrefs
 internal/jobs/workgraph/units
 internal/llmbudget
 internal/mail
+internal/netclass
 internal/operationalordering
 internal/pgmigrate
 internal/platform/config
@@ -138,17 +141,16 @@ internal/teamprovider
 internal/teamresolve
 internal/testsupport/chschema
 internal/testsupport/containers
+internal/testsupport/egressallow
 internal/testsupport/fakehttp
-internal/testsupport/goldenscan
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/poolpg
 internal/testsupport/programoracle
 internal/testsupport/providersyncschema
+internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
-internal/testsupport/pyoracle
-internal/testsupport/recordedfiles
 internal/testsupport/venueoracle
 internal/workitemcontract
 third_party/vendor/atlassian/atlassian
@@ -163,5 +165,4 @@ third_party/vendor/atlassian/atlassian/graph/mappers
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
-~internal/scheduler/sync/testdata
 ~internal/testsupport/chschema/testdata

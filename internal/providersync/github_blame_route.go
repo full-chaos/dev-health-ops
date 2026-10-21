@@ -402,7 +402,7 @@ func collectGitHubBlame(
 			// overflow, on any platform word size.
 			lines := int64(blameRange.EndingLine) - int64(blameRange.StartingLine) + 1
 			fileLines += lines
-			fileBytes += lines * int64(len(encoded))
+			fileBytes += gitHubBlameRangeEncodedBytes(len(encoded), blameRange.StartingLine, blameRange.EndingLine)
 			if recoveryGeneration == "" {
 				if int64(len(rows))+fileLines > int64(limits.maxRows) || usedBytes+fileBytes > int64(limits.maxPayloadBytes) {
 					overBound = true
@@ -427,6 +427,11 @@ func collectGitHubBlame(
 			if len(rows) == 0 {
 				// One file alone exceeds the write contract: it stays retryable
 				// and rotates behind other paths instead of blocking the unit.
+				slog.Warn(
+					"github blame file above the write bound kept retryable without rows; counts are those observed when the bound was crossed",
+					"observed_lines", fileLines, "observed_encoded_bytes", fileBytes,
+					"max_rows", limits.maxRows, "max_payload_bytes", limits.maxPayloadBytes,
+				)
 				progressRows = append(progressRows, newGitHubBlamePathProgressRow(
 					claim, repoID, treeRef, filePath, gitHubBlameOutcomeRetryableError,
 					normalizedAt,
@@ -507,9 +512,10 @@ func gitHubBlameInventory(
 		return paths, nil
 	}
 	before := *requests
-	paths, _, walkErr := gitHubWalkTree(ctx, client, root, treeRef, "")
+	paths, _, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", defaultGitHubTreeWalkLimits())
 	walkRequests := *requests - before
 	if walkErr != nil {
+		logGitHubTreeWalkStop(walkErr, stats)
 		walkClass := ""
 		switch {
 		case errors.As(walkErr, &tooLarge):
@@ -725,6 +731,40 @@ func fetchGitHubBlame(
 		return nil, providerfoundation.ResponseInvalid(response, providerfoundation.ReasonBodyDecode)
 	}
 	return envelope.Data.Repository.Object.Blame.Ranges, nil
+}
+
+// gitHubBlameRangeEncodedBytes is the exact encoded size of every row of one
+// range. Only line_no differs between the rows of a range (a blame row carries
+// no line text), and its width grows with the digits of the line number, so the
+// first row's size times the line count is too small for a range that crosses
+// a power of ten (1..100,000 was 388,895 bytes short).
+func gitHubBlameRangeEncodedBytes(firstRowBytes int, start, end uint32) int64 {
+	lines := int64(end) - int64(start) + 1
+	return lines*(int64(firstRowBytes)-decimalDigits(start)) + sumDecimalDigits(start, end)
+}
+
+func decimalDigits(value uint32) int64 {
+	digits := int64(1)
+	for value >= 10 {
+		value /= 10
+		digits++
+	}
+	return digits
+}
+
+// sumDecimalDigits is the total digit count of every integer in [start, end].
+func sumDecimalDigits(start, end uint32) int64 {
+	var total int64
+	low := int64(1)
+	for width := int64(1); width <= 10; width++ {
+		high := low*10 - 1
+		from, to := max(int64(start), low), min(int64(end), high)
+		if from <= to {
+			total += (to - from + 1) * width
+		}
+		low *= 10
+	}
+	return total
 }
 
 func newGitHubBlameRow(

@@ -1,0 +1,6 @@
+query	expected	rank	max_rank	top_result	status
+study carry	/z/	1	1	/z/	pass
+walk	/z/	1	1	/z/	pass
+church	/z/	1	1	/z/	pass
+bus	/z/	1	1	/z/	pass
+studi	/z/	1	1	/z/	pass

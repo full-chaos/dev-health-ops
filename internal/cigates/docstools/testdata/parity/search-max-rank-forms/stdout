@@ -1,0 +1,3 @@
+ERROR: 'install': expected /guide/install/ at rank <= -3, found 1; top=/guide/install/
+ERROR: 'install': expected /guide/install/ at rank <= 0, found 1; top=/guide/install/
+Search acceptance failed; report: report.tsv

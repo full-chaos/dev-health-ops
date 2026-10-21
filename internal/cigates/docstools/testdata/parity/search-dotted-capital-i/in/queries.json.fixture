@@ -1,0 +1,1 @@
+{"queries": [{"query": "İstanbul", "expected": "/tr/", "max_rank": 1}, {"query": "istanbul", "expected": "/en/"}]}

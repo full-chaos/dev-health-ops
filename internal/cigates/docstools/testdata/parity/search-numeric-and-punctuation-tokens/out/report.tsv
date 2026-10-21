@@ -1,0 +1,4 @@
+query	expected	rank	max_rank	top_result	status
+v1.2.3-rc1	/v/	1	1	/v/	pass
+foo_bar/baz.qux	/v/	1	5	/v/	pass
+a-b-c	/v/	1	5	/v/	pass

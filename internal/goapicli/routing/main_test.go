@@ -259,7 +259,7 @@ func TestAnUnclassifiedErrorIsARefusalAndOnlyErrInternalCrashes(t *testing.T) {
 // The pin file is read at test time rather than hardcoded, so an SDL
 // change that legitimately moves the digest updates one place
 // (contracts/graphql/v1/schema-digest.json, itself gated by
-// ci/check_go_api_routing_digest.py) instead of two.
+// TestSchemaDigestPinMatchesTheSDLAndIsInTheHistoryTable) instead of two.
 func TestLocalSchemaDigestMatchesTheRepositoryPin(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "graphql", "v1", "schema-digest.json"))
 	if err != nil {

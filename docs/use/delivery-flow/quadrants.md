@@ -5,7 +5,6 @@ content_type: workflow-guide
 owner: product-analytics
 source_of_truth:
   - current Quadrants product surface and zone calculations
-  - docs/user-guide/views/quadrants.md
 applicability: current
 lifecycle: active
 ---

@@ -1,8 +1,0 @@
-version: 1
-
-# Simple team dimension for Grafana filtering.
-#
-# `members` should list canonical identities (preferred) or aliases.
-# Canonicalization is applied via the identity resolver first.
-teams: []
-

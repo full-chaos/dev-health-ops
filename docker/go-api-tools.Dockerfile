@@ -22,7 +22,7 @@
 # `kubectl exec` or to read the baked-in documents dump / operation
 # catalog off disk with a plain path. Both image digests stay pinned so
 # an update is an explicit, reviewed dependency change.
-ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d"
+ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd"
 ARG TOOLS_RUNTIME_IMAGE="mirror.gcr.io/library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
 
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS build
@@ -120,8 +120,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Same non-root numeric-friendly convention as docker/Dockerfile's runtime
-# stage: a real user, not root, but one a Kubernetes securityContext can
+# Same non-root numeric-friendly convention as the other Go images: a real user, not root, but one a Kubernetes securityContext can
 # still pin by uid.
 RUN groupadd --gid 10001 toolsuser \
  && useradd --uid 10001 --gid 10001 --create-home --shell /bin/bash toolsuser

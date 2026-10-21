@@ -11,9 +11,9 @@ Reader-facing documentation guidance lives under
 
 | Path | Consumed by |
 | --- | --- |
-| `ia/*.tsv` | `scripts/validate_docs_ia_v2.py`, `scripts/validate_docs_v2_publication.py`, `scripts/validate_docs_inventory_review.py`, `tests/docs/test_docs_ia_v2.py`, `tests/docs/test_built_site_links.py` |
+| `ia/*.tsv` | `scripts/validate_docs_v2_publication.py`, `cigate docs validate-inventory-review` |
 | `redirects.tsv` | `scripts/validate_docs_v2_publication.py`, `scripts/build_docs_cloudflare.py`, `.github/workflows/docs-cloudflare.yml` |
-| `search-acceptance.json` | `scripts/check_docs_candidate_search.py` via `.github/workflows/docs-guards.yml`, `scripts/build_docs_cloudflare.py` |
-| `inventory/` | `scripts/docs_inventory_review.py`, `scripts/validate_docs_inventory_review.py`, `.github/workflows/docs-inventory-review.yml` |
+| `search-acceptance.json` | `cigate docs check-docs-search` (`internal/cigates/docstools`) via `.github/workflows/docs-guards.yml`, `scripts/build_docs_cloudflare.py` |
+| `inventory/` | `cigate docs validate-inventory-review` via `.github/workflows/docs-inventory-review.yml` (a frozen Phase 1 snapshot: its generator is deleted) |
 | `freshness-inventory.yml` | `scripts/check_freshness_inventory.py` (`make docs:check-freshness`) |
 | `external-link-allowlist.yml` | `scripts/check_external_links.py` (`make docs:check-external-links`, `.github/workflows/docs-health-report.yml`) |

@@ -1,0 +1,3 @@
+query	expected	rank	max_rank	top_result	status
+queues	/reference/api/	missing	1	/guide/config/	fail
+nothing matches xyzzy	/guide/install/	2	5	/guide/config/	pass

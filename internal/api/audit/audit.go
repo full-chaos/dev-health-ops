@@ -39,6 +39,7 @@ const (
 	ActionSSOLogin           Action = "sso_login"
 	ActionFeatureEnabled     Action = "feature_enabled"
 	ActionFeatureDisabled    Action = "feature_disabled"
+	ActionSettingsUpdated    Action = "settings_updated"
 )
 
 // ResourceType is models/audit.py AuditResourceType's value.
@@ -51,6 +52,7 @@ const (
 	ResourceOrganization ResourceType = "organization"
 	ResourceSSOProvider  ResourceType = "sso_provider"
 	ResourceFeatureFlag  ResourceType = "feature_flag"
+	ResourceSetting      ResourceType = "setting"
 )
 
 // Entry is one audit_logs row, in the column order and nullability of

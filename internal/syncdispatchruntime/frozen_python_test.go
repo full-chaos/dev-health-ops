@@ -28,7 +28,6 @@ var goldenPins = map[string]string{
 
 // goldens is the set of this package's frozen Python answers.
 var goldens = programoracle.Set{
-	Package:  "./internal/syncdispatchruntime/",
 	Build:    pythonBuild,
 	Identity: producerIdentity,
 	Pins:     goldenPins,
@@ -42,7 +41,7 @@ var goldens = programoracle.Set{
 // exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	return goldens.Outputs(t, repositoryRoot(t), golden, programs...)
+	return goldens.Outputs(t, golden, programs...)
 }
 
 // repositoryRoot is the repository root, from this file's own location.

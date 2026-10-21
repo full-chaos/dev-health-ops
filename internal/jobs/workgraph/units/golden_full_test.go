@@ -32,7 +32,7 @@ type goldenEdgesDocument struct {
 }
 
 // goldenDocument mirrors the shape
-// tests/fixtures/generate_workgraph_components_python_golden.py renders.
+// generate_workgraph_components_python_golden (generator deleted, golden frozen) renders.
 type goldenDocument struct {
 	Components        []goldenComponent `json:"components"`
 	MaxComponentNodes int               `json:"max_component_nodes"`

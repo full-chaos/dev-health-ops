@@ -1,12 +1,10 @@
 package providersync
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,29 +14,17 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/oraclecompare"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// scriptOracle is one run of an oracle that is not a generic pair: a Python
-// script of this package's testdata (or an inline program) executed over the
-// production sources it names, with an input of the test's own.
+// scriptOracle is one frozen run of an oracle that is not a generic pair: the
+// name of the oracle and the input of the test's own.
 type scriptOracle struct {
 	// name identifies the oracle: the request name and the first part of the
 	// golden's file name. It must be one of scriptOracleNames.
 	name string
-	// script is the script, relative to the package directory. It is run as
-	// `python <script> <sources...> [<input file>]`. Empty when program is set.
-	script string
-	// program is an inline program, run as `python -c <program>`.
-	program string
-	// sources are the production files handed to the script as arguments,
-	// relative to the repository root.
-	sources []string
-	// input is sent on stdin, or written to a file whose path is the last
-	// argument when inputFile is set.
-	input     []byte
-	inputFile bool
+	// input is the request's stdin; its digest is part of the golden's key.
+	input []byte
 }
 
 // scriptOracleNames are the script oracles this package freezes. Each has at
@@ -55,24 +41,17 @@ var scriptOracleNames = []string{
 // scriptOracleGoldenDir holds one golden per run of a script oracle.
 const scriptOracleGoldenDir = "testdata/script_golden"
 
-// embeddedScriptOracleSources holds the script oracles' own sources and their
-// goldens, for the same two reasons embeddedOracleSources holds the pairs': the
-// scripts are part of the identity of the producer a golden is keyed on, and
-// the goldens are read from disk at run time, so both must be part of the test
-// binary's content.
+// embeddedScriptOracleSources holds the script oracles' goldens. They are read
+// from disk at run time, so they must be part of the test binary's content.
 //
-//go:embed testdata/python_github_prs_normalization_oracle.py testdata/python_launchdarkly_normalization_oracle.py testdata/python_provider_budget_oracle.py testdata/python_work_item_sink_oracle.py testdata/script_golden/*.json
+//go:embed testdata/script_golden/*.json
 var embeddedScriptOracleSources embed.FS
 
 // frozenScriptAnswer returns what the script oracle printed on stdout.
 //
-// Frozen (every run but a recording): the answer comes from the oracle's
-// golden for this test. No Python runs. A golden that is missing, changed,
-// recorded for another input, from another script or other harness sources, or
-// for other production source arguments fails the test.
-//
-// Recording (the goldenrecord verb): the script of the pinned checkout is
-// executed over the pinned checkout's production sources.
+// The answer comes from the oracle's golden for this test. No Python runs. A
+// golden that is missing, changed or recorded for another input fails the
+// test.
 //
 // The answer is the producer's exact stdout. A caller that decodes it must not
 // send a JSON number through float64: decode into exact integer fields, or
@@ -81,47 +60,25 @@ func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 	t.Helper()
 	_, currentFile, _, _ := moduleroot.Caller(0)
 	packageDir := filepath.Dir(currentFile)
-	repoRoot := filepath.Dir(filepath.Dir(packageDir))
 	oraclecompare.AssertSourcesUnchangedSinceBuild(t, embeddedScriptOracleSources, packageDir)
 	assertOracleSourcesUnchangedSinceBuild(t)
 
-	if err := oracle.producerErr(); err != nil {
-		t.Fatal(err)
-	}
 	name := scriptOracleGoldenName(oracle.name, t.Name())
 	if err := claimOraclePairGolden(&oraclePairGoldensOpened, name, t, oracle.name, t.Name()); err != nil {
 		t.Fatal(err)
 	}
-	recipe := fmt.Sprintf("script oracle %s: git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); "+
-		"then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ "+
-		"-test '^%s$' -python-root $DIR", oracle.name, oraclePairPythonBuild, strings.SplitN(t.Name(), "/", 2)[0])
 	pin, pinned := oracleScriptGoldenPins[name]
 	if !pinned {
-		t.Fatalf("script oracle %q in test %s has no frozen golden: oracleScriptGoldenPins names no %s. "+
-			"A frozen oracle never runs Python and never skips. Add the entry with the value %q, then record: %s",
-			oracle.name, t.Name(), name, "PIN:"+strings.TrimSuffix(name, ".json"), recipe)
+		t.Fatalf("script oracle %q in test %s has no frozen golden: oracleScriptGoldenPins names no %s", oracle.name, t.Name(), name)
 	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        filepath.Join(scriptOracleGoldenDir, name),
 		PythonBuild: oraclePairPythonBuild,
 		SHA256:      pin,
-		Recipe:      recipe,
 		Scrub:       scriptPerRunScrub(oracle.name),
 	})
-	root := golden.PythonRoot(t, repoRoot)
-
-	harness := oracleHarnessManifest(t, packageDir, oraclePairPythonBuild)
-	program := scriptOracleProgram(t, oracle, harness)
-	keyed, passed := oraclePairEnvironment(t, oracle.name)
-	request := venueoracle.ProgramRequest(oracle.name, program, oracle.input, keyed)
-	answers := golden.Produce(t, root, []venueoracle.Request{request},
-		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-			output := runPinnedScriptOracle(t, producer, root, harness, oracle, passed)
-			if len(output) > oraclePairPackAbove {
-				return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
-			}
-			return []venueoracle.Response{{Status: 0, Body: string(output)}}
-		})
+	request := venueoracle.ProgramRequest(oracle.name, oracle.input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	output := []byte(oraclePairAnswerText(t, answers[0].Body))
 	if err := scriptPerRunErr(oracle.name, output); err != nil {
@@ -130,36 +87,6 @@ func frozenScriptAnswer(t *testing.T, oracle scriptOracle) []byte {
 	golden.SkipDiff(t)
 	golden.Finish(t)
 	return output
-}
-
-// producerErr is an error unless the oracle names exactly one producer: a
-// script or an inline program. With both set, one of them would run and the
-// other would only look like part of the request.
-func (oracle scriptOracle) producerErr() error {
-	if (oracle.script == "") == (oracle.program == "") {
-		return fmt.Errorf("script oracle %q: set exactly one of script and program", oracle.name)
-	}
-	return nil
-}
-
-// TestAScriptOracleNamesExactlyOneProducer pins producerErr.
-func TestAScriptOracleNamesExactlyOneProducer(t *testing.T) {
-	for _, oracle := range []scriptOracle{
-		{name: "none"},
-		{name: "both", script: "testdata/python_work_item_sink_oracle.py", program: "print(1)"},
-	} {
-		if err := oracle.producerErr(); err == nil {
-			t.Errorf("oracle %q was accepted", oracle.name)
-		}
-	}
-	for _, oracle := range []scriptOracle{
-		{name: "script", script: "testdata/python_work_item_sink_oracle.py"},
-		{name: "program", program: "print(1)"},
-	} {
-		if err := oracle.producerErr(); err != nil {
-			t.Errorf("oracle %q was refused: %v", oracle.name, err)
-		}
-	}
 }
 
 func knownScriptOracle(name string) bool {
@@ -175,84 +102,6 @@ func knownScriptOracle(name string) bool {
 // test that asks, so a golden belongs to one test.
 func scriptOracleGoldenName(oracleName, testName string) string {
 	return "script." + oraclePairGoldenName(oracleName, testName)
-}
-
-// scriptOracleProgram is the identity of the producer of one run: the script
-// (or the inline program) by digest, the production source arguments by path
-// (their content is part of the pinned build's source digest in the golden's
-// header), how the input reaches it, and the harness the scripts import.
-func scriptOracleProgram(t *testing.T, oracle scriptOracle, harness string) string {
-	t.Helper()
-	var text strings.Builder
-	if oracle.script != "" {
-		raw, err := embeddedScriptOracleSources.ReadFile(oracle.script)
-		if err != nil {
-			t.Fatalf("script oracle %q: %s is not an embedded script source (add it to embeddedScriptOracleSources): %v", oracle.name, oracle.script, err)
-		}
-		text.WriteString("script " + manifestLine(oracle.script, raw) + "\n")
-	} else {
-		text.WriteString("program " + manifestLine("-c", []byte(oracle.program)) + "\n")
-	}
-	for _, source := range oracle.sources {
-		text.WriteString("argument " + source + "\n")
-	}
-	if oracle.inputFile {
-		text.WriteString("input file\n")
-	} else {
-		text.WriteString("input stdin\n")
-	}
-	text.WriteString(harness)
-	return text.String()
-}
-
-// runPinnedScriptOracle executes the oracle from the pinned checkout at root
-// and returns its stdout.
-func runPinnedScriptOracle(t *testing.T, producer *venueoracle.Producer, root, harness string, oracle scriptOracle, passed []string) []byte {
-	t.Helper()
-	pinnedPackage := filepath.Join(root, "internal", "providersync")
-	assertPinnedHarness(t, oracle.name, root, harness)
-	producer.RequireDeployed()
-	requirePinnedSources(t, oracle.name, producer, root, passed)
-
-	var arguments []string
-	if oracle.script != "" {
-		want, err := embeddedScriptOracleSources.ReadFile(oracle.script)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pinnedScript := filepath.Join(pinnedPackage, filepath.FromSlash(oracle.script))
-		got, err := os.ReadFile(pinnedScript)
-		if err != nil || !bytes.Equal(got, want) {
-			t.Fatalf("recording script oracle %q: %s of the pinned checkout %s is not the script this checkout holds (%v)", oracle.name, oracle.script, root, err)
-		}
-		arguments = append(arguments, pinnedScript)
-	} else {
-		arguments = append(arguments, "-c", oracle.program)
-	}
-	for _, source := range oracle.sources {
-		path := filepath.Join(root, filepath.FromSlash(source))
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("recording script oracle %q: production source %s: %v", oracle.name, source, err)
-		}
-		arguments = append(arguments, path)
-	}
-	command := pinnedCommand(t, producer, passed, arguments...)
-	if oracle.inputFile {
-		inputFile := filepath.Join(t.TempDir(), "oracle-input.json")
-		if err := os.WriteFile(inputFile, oracle.input, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		command.Args = append(command.Args, inputFile)
-	} else {
-		command.Stdin = bytes.NewReader(oracle.input)
-	}
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("recording script oracle %q: %v", oracle.name, pyoracle.RunError(command.Args[0], err, stderr.Bytes()))
-	}
-	return output
 }
 
 var scriptGoldenTestFunction = regexp.MustCompile(`(?m)^func (Test\w+)\(`)

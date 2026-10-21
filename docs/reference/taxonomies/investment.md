@@ -4,8 +4,7 @@ summary: Canonical Investment theme and subcategory keys.
 content_type: generated-reference
 owner: product-analytics
 source_of_truth:
-  - src/dev_health_ops/investment_taxonomy.py
-  - src/dev_health_ops/core/taxonomy.py
+  - internal/jobs/workgraph/units/taxonomy.go
 applicability: current
 lifecycle: active
 ---
@@ -38,53 +37,53 @@ A subcategory key always maps to the theme before the first `.`. Documentation, 
 
 ## Source
 
-This page follows `src/dev_health_ops/investment_taxonomy.py`. Taxonomy drift checks should compare the rendered keys with that registry.
+This page follows `internal/jobs/workgraph/units/taxonomy.go`. Taxonomy drift checks should compare the rendered keys with that registry.
 
 ## Generated keys
 
-The block below is generated from `src/dev_health_ops/investment_taxonomy.py`; run `make docs:generate-taxonomy` after changing the registry. Do not edit it by hand.
+The block below is generated from `internal/jobs/workgraph/units/taxonomy.go`; run `make docs:generate-taxonomy` after changing the registry. Do not edit it by hand.
 
 <!-- BEGIN GENERATED TAXONOMY -->
 ```text
 # THEMES
 feature_delivery
-operational
 maintenance
+operational
 quality
 risk
 
 # SUBCATEGORIES (theme.subcategory)
 feature_delivery.customer
-feature_delivery.roadmap
 feature_delivery.enablement
+feature_delivery.roadmap
+maintenance.debt
+maintenance.refactor
+maintenance.upgrade
 operational.incident_response
 operational.on_call
 operational.support
-maintenance.refactor
-maintenance.upgrade
-maintenance.debt
-quality.testing
 quality.bugfix
 quality.reliability
-risk.security
+quality.testing
 risk.compliance
+risk.security
 risk.vulnerability
 
 # SUBCATEGORY_TO_THEME
 feature_delivery.customer -> feature_delivery
-feature_delivery.roadmap -> feature_delivery
 feature_delivery.enablement -> feature_delivery
+feature_delivery.roadmap -> feature_delivery
+maintenance.debt -> maintenance
+maintenance.refactor -> maintenance
+maintenance.upgrade -> maintenance
 operational.incident_response -> operational
 operational.on_call -> operational
 operational.support -> operational
-maintenance.refactor -> maintenance
-maintenance.upgrade -> maintenance
-maintenance.debt -> maintenance
-quality.testing -> quality
 quality.bugfix -> quality
 quality.reliability -> quality
-risk.security -> risk
+quality.testing -> quality
 risk.compliance -> risk
+risk.security -> risk
 risk.vulnerability -> risk
 ```
 <!-- END GENERATED TAXONOMY -->

@@ -27,6 +27,7 @@ func (e errInviteRefused) Error() string { return e.message }
 type pendingInvite struct {
 	ID          uuid.UUID
 	OrgID       uuid.UUID
+	Email       string
 	Role        string
 	InvitedByID *uuid.UUID
 	ExpiresAt   time.Time
@@ -43,8 +44,8 @@ func (h handlers) validateInvite(ctx context.Context, tx pgx.Tx, token string, n
 	}
 	var invite pendingInvite
 	var status string
-	err = tx.QueryRow(ctx, `SELECT id, org_id, role, invited_by_id, status, expires_at FROM org_invites WHERE token_hash = $1::text`,
-		signedtoken.Hash(token)).Scan(&invite.ID, &invite.OrgID, &invite.Role, &invite.InvitedByID, &status, &invite.ExpiresAt)
+	err = tx.QueryRow(ctx, `SELECT id, org_id, email, role, invited_by_id, status, expires_at FROM org_invites WHERE token_hash = $1::text`,
+		signedtoken.Hash(token)).Scan(&invite.ID, &invite.OrgID, &invite.Email, &invite.Role, &invite.InvitedByID, &status, &invite.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -55,6 +56,24 @@ func (h handlers) validateInvite(ctx context.Context, tx pgx.Tx, token string, n
 		return nil, nil
 	}
 	return &invite, nil
+}
+
+const (
+	reasonInviteEmailMismatch   = "invite_email_mismatch"
+	reasonInviteEmailUnverified = "invite_email_unverified"
+)
+
+// inviteEmailRefusal is the named reason an invite cannot be accepted by
+// user, or "" when the user's verified email equals the invite's email after
+// the same trim and lowercase the invite is created with.
+func inviteEmailRefusal(invite *pendingInvite, user *userRow) string {
+	if !user.IsVerified {
+		return reasonInviteEmailUnverified
+	}
+	if pythonparity.Lower(pythonparity.Strip(user.Email)) != pythonparity.Lower(pythonparity.Strip(invite.Email)) {
+		return reasonInviteEmailMismatch
+	}
+	return ""
 }
 
 // acceptInvite is services/invites.py accept_invite (its status and expiry
@@ -120,6 +139,10 @@ func (h handlers) joinByInvite(w http.ResponseWriter, r *http.Request, tx pgx.Tx
 	}
 	if invite == nil {
 		refuse(w, http.StatusBadRequest, "Invalid or expired invite")
+		return nil, "", false
+	}
+	if reason := inviteEmailRefusal(invite, user); reason != "" {
+		refuse(w, http.StatusForbidden, reason)
 		return nil, "", false
 	}
 	orgName, found, err := organizationName(ctx, tx, invite.OrgID)

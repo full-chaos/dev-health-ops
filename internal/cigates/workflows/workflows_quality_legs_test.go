@@ -14,8 +14,8 @@ import (
 // go-quality runs as parallel legs whose union is exactly `check_go.sh ci` (race in its sharded form), the matrix
 // carries exactly the legs the script knows, the fan-in keeps the required context `go-quality` and judges the legs
 // `unconditional`, and the static-only steps run only on the static leg. The tests that EXECUTE check_go.sh against a
-// stand-in go, the weights table versus `go list`, the race-excluded test census and the -trimpath derivation are
-// MOVED-TO-C and stay in Python until PR-C replaces them.
+// stand-in go, the weights table versus `go list`, the race-excluded test census and the -trimpath derivation live in
+// internal/cigates/testshard.
 
 // the command must start a line of a step's run: an echo of the same words runs nothing
 var legRunRe = regexp.MustCompile(`(?m)^\s*bash ci/check_go\.sh ci-leg \$\{\{ matrix\.args \}\}\s*$`)
@@ -67,6 +67,9 @@ func qualityLegViolations(t *testing.T, root string) []string {
 			if s == "check_race_shard" {
 				s = "check_race"
 			}
+			if s == "check_test_shard" {
+				s = "check_test"
+			}
 			legSteps = append(legSteps, s)
 		}
 		if len(ciSteps) == 0 {
@@ -106,14 +109,16 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	for _, a := range args {
 		if strings.HasPrefix(a, "race ") {
 			races = append(races, a)
+		} else if strings.HasPrefix(a, "test ") {
+			// the test shards are pinned by internal/cigates/testshard
 		} else {
 			nonRace = append(nonRace, a)
 		}
 	}
 	sort.Strings(nonRace)
 	sort.Strings(races)
-	if !reflect.DeepEqual(nonRace, []string{"static", "test"}) {
-		add("the non-race legs must be exactly static and test, got %v", nonRace)
+	if !reflect.DeepEqual(nonRace, []string{"static"}) {
+		add("the legs that are neither race nor test shards must be exactly static, got %v", nonRace)
 	}
 	want := make([]string, len(races))
 	for k := range races {
@@ -150,8 +155,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	if strings.ReplaceAll(str(fan["if"]), " ", "") != "always()" {
 		add("the fan-in must be always(): under any condition that lets it skip, a cancelled run leaves the REQUIRED check skipped (got %q)", str(fan["if"]))
 	}
-	if !reflect.DeepEqual(needsList(fan), []string{"go-quality-leg"}) {
-		add("the fan-in must need exactly go-quality-leg, got %v", needsList(fan))
+	if !reflect.DeepEqual(needsList(fan), []string{"go-quality-plan", "go-quality-leg"}) {
+		add("the fan-in must need exactly go-quality-plan and go-quality-leg, got %v", needsList(fan))
 	}
 	var env yamlMap
 	for _, s := range stepsOf(fan) {
@@ -172,8 +177,11 @@ func qualityLegViolations(t *testing.T, root string) []string {
 		if got := str(env["GATED_JOB_1"]); got != "go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}" {
 			add("the fan-in must judge the legs `unconditional` so a skipped, cancelled or missing leg fails the gate; got %q", got)
 		}
-		if _, has := env["GATED_JOB_2"]; has {
-			add("the fan-in must not carry a GATED_JOB_2")
+		if got := str(env["GATED_JOB_2"]); got != "go-quality-plan|unconditional|${{ needs.go-quality-plan.result }}" {
+			add("the fan-in must judge the plan job `unconditional`: a skipped or failed plan skips every leg; got %q", got)
+		}
+		if _, has := env["GATED_JOB_3"]; has {
+			add("the fan-in must not carry a GATED_JOB_3")
 		}
 	}
 
@@ -186,8 +194,8 @@ func qualityLegViolations(t *testing.T, root string) []string {
 		}
 	}
 
-	if !strings.Contains(func() string { b, _ := caseBlock(script, "check_test() {", "\n}\n"); return b }(), "check_race_excluded_ran") {
-		add("check_test no longer runs check_race_excluded_ran: tests compiled out of the race leg would run nowhere")
+	if !strings.Contains(func() string { b, _ := caseBlock(script, "check_test_shard() {", "\n}\n"); return b }(), "check_race_excluded_ran") {
+		add("check_test_shard no longer runs check_race_excluded_ran: tests compiled out of the race leg would run nowhere")
 	}
 	var goEnvOff string
 	for _, line := range strings.Split(script, "\n") {
@@ -216,15 +224,17 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 		want []string
 	}{
 		{"a leg drops the ratchets stage", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", ""}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},
-		{"a stage runs in two legs", []mutation{{cg, "      ci_leg_stage test check_test\n", "      ci_leg_stage test check_test\n      ci_leg_stage vet2 check_vet\n"}}, []string{"runs in two legs", "check_vet"}},
+		{"a stage runs in two legs", []mutation{{cg, "      ci_leg_stage \"test ${2:-}/${3:-}\" check_test_shard \"${2:-}\" \"${3:-}\"\n", "      ci_leg_stage \"test ${2:-}/${3:-}\" check_test_shard \"${2:-}\" \"${3:-}\"\n      ci_leg_stage vet2 check_vet\n"}}, []string{"runs in two legs", "check_vet"}},
 		{"a race entry goes missing from the matrix", []mutation{{wf, "args: race 2 3", "args: race 4 3"}}, []string{"not 1..N of N"}},
 		{"fail-fast comes back on", []mutation{{wf, "fail-fast: false", "fail-fast: true"}}, []string{"fail-fast must be false"}},
 		{"the fan-in can skip", []mutation{{wf, "\n    if: always()\n", "\n    if: success()\n"}}, []string{"fan-in must be always()"}},
 		{"the pool timeout grows past 45", []mutation{{wf, "&& 45 || 30 }}", "&& 90 || 30 }}"}}, []string{"timeout-minutes must be <= 30"}},
 		{"the fan-in stops judging the legs unconditional", []mutation{{wf, "go-quality-leg|unconditional|", "go-quality-leg|path-filtered|"}}, []string{"unconditional"}},
+		{"the fan-in stops judging the plan job unconditional", []mutation{{wf, "go-quality-plan|unconditional|", "go-quality-plan|path-filtered|"}}, []string{"judge the plan job"}},
+		{"the fan-in stops needing the plan job", []mutation{{wf, "needs: [go-quality-plan, go-quality-leg]", "needs: [go-quality-leg]"}}, []string{"must need exactly go-quality-plan and go-quality-leg"}},
 		{"the leg step echoes the command instead of running it", []mutation{{wf, "run: bash ci/check_go.sh ci-leg ${{ matrix.args }}", `run: echo "ci-leg ${{ matrix.args }}"`}}, []string{"no go-quality-leg step runs"}},
 		{"a leg stage survives only in a comment", []mutation{{cg, "      ci_leg_stage ratchets check_ratchets\n", "      # ci_leg_stage ratchets check_ratchets\n"}}, []string{"differ from `check_go.sh ci`", "check_ratchets"}},
-		{"check_test keeps the race-excluded proof only in a comment", []mutation{{cg, "\n  check_race_excluded_ran\n", "\n  # check_race_excluded_ran\n"}}, []string{"no longer runs check_race_excluded_ran"}},
+		{"check_test_shard keeps the race-excluded proof only in a comment", []mutation{{cg, "\n  check_race_excluded_ran \"${shard}\" \"${count}\"\n", "\n  # check_race_excluded_ran \"${shard}\" \"${count}\"\n"}}, []string{"no longer runs check_race_excluded_ran"}},
 		{"the GOFLAGS scrub is dropped", []mutation{{cg, "-u GOFLAGS ", ""}}, []string{"GOFLAGS scrub"}},
 	}
 	for _, c := range cases {

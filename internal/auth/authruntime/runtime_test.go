@@ -234,6 +234,32 @@ func awaitResponse(t *testing.T, client *http.Client, url string) *http.Response
 	return nil
 }
 
+// awaitSettledReadiness polls /readyz until its answer is no longer the
+// startup-only {"runtime"} failure, so a test reads the dependency checks
+// rather than the instant before readiness opens.
+func awaitSettledReadiness(t *testing.T, client *http.Client, url string) *http.Response {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		response := awaitResponse(t, client, url)
+		raw, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatalf("read %s body: %v", url, err)
+		}
+		var readiness struct {
+			FailedChecks []string `json:"failed_checks"`
+		}
+		if json.Unmarshal(raw, &readiness) != nil || !slices.Equal(readiness.FailedChecks, []string{"runtime"}) {
+			response.Body = io.NopCloser(bytes.NewReader(raw))
+			return response
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("%s still reports only the runtime check within 20s", url)
+	return nil
+}
+
 // TestReadinessFailsClosedOnBrokenDatabaseAndSigningKey is CHAOS-4881's
 // executed negative proof, run as a test so CI re-runs it on every change
 // rather than trusting a transcript pasted once.
@@ -253,7 +279,7 @@ func TestReadinessFailsClosedOnBrokenDatabaseAndSigningKey(t *testing.T) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	defer client.CloseIdleConnections()
 
-	response := awaitResponse(t, client, "http://"+operatorAddress+"/readyz")
+	response := awaitSettledReadiness(t, client, "http://"+operatorAddress+"/readyz")
 	body, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil {
@@ -708,25 +734,39 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		t.Fatalf("without the session secrets: %d route(s), err %v; want none", len(dormant), err)
 	}
 
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(sessionEnvironment(map[string]string{
-		authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
-		authconfig.EnvSigningKeyFile: "/nonexistent",
-		authconfig.EnvSigningKeyID:   "routes-test",
-	}))})
-	if err != nil {
-		t.Fatalf("load config: %v", err)
+	load := func(env func(map[string]string) map[string]string) authconfig.Config {
+		cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env(map[string]string{
+			authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
+			authconfig.EnvSigningKeyFile: "/nonexistent",
+			authconfig.EnvSigningKeyID:   "routes-test",
+		}))})
+		if err != nil {
+			t.Fatalf("load config: %v", err)
+		}
+		return cfg
 	}
-	mounted, err := sessionRoutes(cfg, logger, pool, schema)
-	if err != nil {
-		t.Fatalf("sessionRoutes: %v", err)
+	mountedBy := func(cfg authconfig.Config) string {
+		mounted, err := sessionRoutes(cfg, logger, pool, schema)
+		if err != nil {
+			t.Fatalf("sessionRoutes: %v", err)
+		}
+		var got []string
+		for _, route := range mounted {
+			got = append(got, route.Method+" "+route.Pattern)
+		}
+		return strings.Join(got, ",")
 	}
-	var got []string
-	for _, route := range mounted {
-		got = append(got, route.Method+" "+route.Pattern)
+	sessionOnly := "POST /v1/token/refresh,GET /v1/sessions/current,POST /v1/sessions/revoke,POST /v1/sessions/revoke-all"
+	if got := mountedBy(load(sessionEnvironment)); got != sessionOnly {
+		t.Fatalf("with the session secrets: mounted %s, want %s", got, sessionOnly)
 	}
-	want := []string{"POST /v1/token/refresh", "GET /v1/sessions/current", "POST /v1/sessions/revoke", "POST /v1/sessions/revoke-all"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("mounted %v, want %v", got, want)
+	compat := load(compatEnvironment)
+	if got, want := mountedBy(compat), sessionOnly+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /api/v1/auth/social-login"; got != want {
+		t.Fatalf("with the compat routes: mounted %s, want %s", got, want)
+	}
+	compat.Session.LoginEnabled = false
+	if got, want := mountedBy(compat), sessionOnly+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/social-login"; got != want {
+		t.Fatalf("without the lockout key: mounted %s, want %s", got, want)
 	}
 }
 

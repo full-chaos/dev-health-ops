@@ -1,0 +1,1 @@
+{"queries": [1, null, "x", {"query": "zed", "expected": "/z/"}], "queries": [7, {"query": "zed", "expected": "z"}, [], {"query": "zed", "expected": "/z/", "extra": 1}]}

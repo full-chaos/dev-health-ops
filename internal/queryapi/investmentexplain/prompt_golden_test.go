@@ -100,7 +100,7 @@ func TestBuildPromptMatchesPythonGolden(t *testing.T) {
 		t.Fatalf("glob goldens: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no build_prompt__*.json goldens found -- run generate_build_prompt_golden.py")
+		t.Fatal("no build_prompt__*.json goldens found")
 	}
 
 	for _, path := range files {
@@ -118,7 +118,7 @@ func TestBuildPromptMatchesPythonGolden(t *testing.T) {
 			if golden.BasePrompt != LoadPrompt() {
 				t.Fatalf("golden's captured base_prompt no longer matches LoadPrompt() -- "+
 					"prompts/investment_mix_explain_prompt.txt and the Python source have "+
-					"diverged, or the golden is stale; re-run generate_build_prompt_golden.py"+
+					"diverged"+
 					"\n--- golden ---\n%s\n--- LoadPrompt() ---\n%s", golden.BasePrompt, LoadPrompt())
 			}
 
@@ -139,29 +139,5 @@ func TestBuildPromptMatchesPythonGolden(t *testing.T) {
 				t.Fatalf("case %q mismatch:\n--- want (python) ---\n%s\n--- got (go) ---\n%s", golden.Case, golden.Rendered, got)
 			}
 		})
-	}
-}
-
-func TestPromptTextMatchesPythonSource(t *testing.T) {
-	// See prompt.go's promptText doc comment: this file is a byte-for-byte
-	// copy of src/dev_health_ops/llm/prompts/investment_mix_explain_prompt.txt,
-	// embedded rather than read at runtime. TestBuildPromptMatchesPythonGolden
-	// already checks the copy against a frozen golden capture, but that
-	// golden goes stale the moment someone edits the Python source without
-	// re-running the generator -- this test reads the Python source
-	// directly, so it catches that drift even when nobody remembers to
-	// regenerate.
-	repoRoot, err := repositoryRoot()
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
-	pythonPath := filepath.Join(repoRoot, "src", "dev_health_ops", "llm", "prompts", "investment_mix_explain_prompt.txt")
-	pythonSource, err := os.ReadFile(pythonPath)
-	if err != nil {
-		t.Fatalf("read python source %s: %v", pythonPath, err)
-	}
-	if string(pythonSource) != LoadPrompt() {
-		t.Fatalf("embedded prompts/investment_mix_explain_prompt.txt no longer matches %s -- "+
-			"re-copy the file", pythonPath)
 	}
 }

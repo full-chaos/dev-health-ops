@@ -1,0 +1,10 @@
+package postgres
+
+func apiPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"users", true, true, true},
+		},
+		RequiredSequences : nil,
+	}
+}

@@ -21,7 +21,7 @@ Every `strconv.ParseFloat`/`ParseInt`/`Atoi` call site in non-test `.go`
 files is listed below (`rg -n 'strconv\.(ParseFloat|ParseInt|Atoi)\(' --type go
 -g '!*_test.go'`, full repo). Each gets a first-pass classification by
 package/context, **not** a verified per-site diff against the Python source
-the way `generate_fma_golden.py`'s corpus was — that verification is exactly
+the way `generate_fma_golden (generator deleted, golden frozen)`'s corpus was — that verification is exactly
 the follow-up work this inventory is scoping, not doing.
 
 - **PARITY?** -- the call site's package name or immediate context suggests
@@ -60,6 +60,7 @@ real ones"). Treat PARITY? rows as "check this first", not "this is broken".
 | `internal/providersync/jira_work_items_rows.go:826` | INFRA | Jira API field, provider-native |
 | `internal/providersync/status_mapping_pyyaml.go:225` | PARITY? | filename says it ports PyYAML's number grammar directly -- check against PyYAML's (not CPython `float()`'s) actual float-parsing rules, which are YAML-1.1-spec-shaped, not the same grammar lane-4441 measured |
 | `internal/providersync/status_mapping_pyyaml.go:236` | PARITY? | same file/function family as :225 |
+| `internal/cigates/releasetag/pyjson.go:310` | INFRA | only asks whether a JSON float literal, already checked against Python's JSON number grammar (ASCII digits, `.`, `e`), is zero (`float("1e-999")` is `0.0` in both); no Unicode, space or hex input can reach it |
 
 ## ParseInt
 

@@ -31,69 +31,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonResponseModelProgram reads the FastAPI app. Its input is {"mode",
-// "input"}. "table" prints
-// every APIRoute's response_model flag (fastapi/routing.py use_dump_json)
-// and, for the keys on stdin, the response field's validation JSON schema.
-// "render" validates each [key, JSON data] pair with the route's response
-// field and writes it as FastAPI does on the response_model path:
-// field.serialize_json with the route's response_model_* settings
-// (fastapi/routing.py serialize_response, dump_json=True).
-const pythonResponseModelProgram = `
-import base64, contextlib, json, sys
-from fastapi.routing import APIRoute
-from fastapi.datastructures import DefaultPlaceholder
-from pydantic import TypeAdapter
-# The app logs a line with the time of the run while it is imported: it goes
-# to stderr, so the answer is the RESULT line alone.
-with contextlib.redirect_stdout(sys.stderr):
-    from dev_health_ops.api.main import app
-routes = {}
-for route in app.routes:
-    if isinstance(route, APIRoute):
-        for method in route.methods:
-            routes[(method, route.path)] = route
-spec = json.loads(sys.stdin.read())
-mode, request = spec["mode"], spec["input"]
-SENTINELS = {"\u0000NaN": float("nan"), "\u0000Infinity": float("inf"), "\u0000-Infinity": float("-inf")}
-if mode == "table":
-    table = [[m, p, r.response_field is not None and isinstance(r.response_class, DefaultPlaceholder)] for (m, p), r in routes.items()]
-    schemas = {}
-    for key in request:
-        route = routes.get(tuple(key.split(" ", 1)))
-        if route is not None and route.response_field is not None:
-            schemas[key] = TypeAdapter(route.response_field.field_info.annotation).json_schema(mode="validation")
-    print("RESULT " + json.dumps({"routes": table, "schemas": schemas}))
-else:
-    out = []
-    for key, data in request:
-        route = routes[tuple(key.split(" ", 1))]
-        field = route.response_field
-        def restore(item):
-            if isinstance(item, str) and item in SENTINELS:
-                return SENTINELS[item]
-            if isinstance(item, list):
-                return [restore(x) for x in item]
-            if isinstance(item, dict):
-                return {k: restore(v) for k, v in item.items()}
-            return item
-        value, errors = field.validate(restore(json.loads(data)), {}, loc=("response",))
-        if errors:
-            out.append({"error": repr(errors)[:3000]})
-            continue
-        body = field.serialize_json(
-            value,
-            include=route.response_model_include,
-            exclude=route.response_model_exclude,
-            by_alias=route.response_model_by_alias,
-            exclude_unset=route.response_model_exclude_unset,
-            exclude_defaults=route.response_model_exclude_defaults,
-            exclude_none=route.response_model_exclude_none,
-        )
-        out.append({"body": base64.b64encode(body).decode()})
-    print("RESULT " + json.dumps(out))
-`
-
 // responseModelOracleRoute is one response_model route's Go response type
 // and how the production code writes it.
 type responseModelOracleRoute struct {
@@ -947,7 +884,7 @@ func TestQueryAPIResponseModelsMatchFrozenPython(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		output := frozenHomeResponseModelPython(t, "query-response-models-"+mode+".golden.json", programoracle.Program{Name: "response models " + mode, Text: pythonResponseModelProgram, Stdin: payload})[0]
+		output := frozenHomeResponseModelPython(t, "query-response-models-"+mode+".golden.json", programoracle.Program{Name: "response models " + mode, Stdin: payload})[0]
 		for _, line := range strings.Split(output, "\n") {
 			if rest, ok := strings.CutPrefix(line, "RESULT "); ok {
 				return json.RawMessage(rest)

@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,27 +71,15 @@ func TestClickHouseRepositoryDiscovererUsesPythonLatestRowQueryWithTenantFence(t
 	}
 }
 
-// TestPythonDiscoverReposOracle executes the production Python selector, not a
-// copied fixture, and compares its repository identities with the Go adapter.
+// TestPythonDiscoverReposOracle replays the frozen production Python selector answer and compares its repository identities with the Go adapter.
 // It prevents an apparently equivalent Go query from drifting in grouping,
 // tenant binding, or row-selection semantics while both implementations exist.
 func TestPythonDiscoverReposOracle(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The script was executed once on the last build that carried the Python sources and its stdout is
-	// frozen in testdata/golden/daily_discover_repos_oracle.json (recipe in the golden's spec); a frozen
-	// run reads it and runs no Python. The script's text is part of the request.
-	const scriptPath = "internal/jobs/metrics/daily/testdata/python_daily_discover_oracle.py"
-	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scriptPath)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec := rotguard.Spec("testdata/golden/daily_discover_repos_oracle.json", "856b8850efef4a090ee9ebfd4a60e915bd9e2e18b4466a2ec622c7e6beabc9aa",
-		"./internal/jobs/metrics/daily/", "^TestPythonDiscoverReposOracle$")
-	answers := programoracle.Run(t, spec, root, []programoracle.Program{
-		programoracle.Script("daily discover repos oracle", scriptPath, string(source), nil),
+	// The stdout of the production Python selector is frozen in
+	// testdata/golden/daily_discover_repos_oracle.json; a frozen run reads it and runs no Python.
+	spec := rotguard.Spec("testdata/golden/daily_discover_repos_oracle.json", "856b8850efef4a090ee9ebfd4a60e915bd9e2e18b4466a2ec622c7e6beabc9aa")
+	answers := programoracle.Run(t, spec, []programoracle.Program{
+		{Name: "daily discover repos oracle"},
 	})
 	output := []byte(answers[0].Stdout)
 	if answers[0].ExitCode != 0 {

@@ -152,16 +152,15 @@ func TestClickHouseRepositoryDiscovererSaysTheRepositoriesItCannotDiscover(t *te
 // the count until its context ends, as a scan that takes too long does.
 type blockingConnection struct {
 	scriptedConnection
-	waited time.Duration
+	entered bool
 }
 
 func (connection *blockingConnection) Query(ctx context.Context, query string, arguments ...any) (driver.Rows, error) {
 	if query != notDiscoveredRepositoriesSQL {
 		return connection.scriptedConnection.Query(ctx, query, arguments...)
 	}
-	started := time.Now()
+	connection.entered = true
 	<-ctx.Done()
-	connection.waited = time.Since(started)
 	return nil, ctx.Err()
 }
 
@@ -177,7 +176,8 @@ func TestTheReportOfRepositoriesNotDiscoveredIsBoundedInTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	discoverer.reportTimeout = 50 * time.Millisecond
+	const reportTimeout = 50 * time.Millisecond
+	discoverer.reportTimeout = reportTimeout
 	var captured bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -194,8 +194,11 @@ func TestTheReportOfRepositoriesNotDiscoveredIsBoundedInTime(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the report did not return: the count has no bound in time")
 	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second || connection.waited < 40*time.Millisecond {
-		t.Fatalf("the report took %s and the count waited %s; want the count held for its 50ms and then given up", elapsed, connection.waited)
+	// The deadline starts inside the report, after started, so a count held for
+	// its time makes the report last at least that long on any host load; a
+	// clock started by the stub can read less under load although the bound held.
+	if elapsed := time.Since(started); elapsed < reportTimeout || elapsed >= 2*time.Second || !connection.entered {
+		t.Fatalf("the report took %s and the count was reached: %t; want the count held for its %s and then given up", elapsed, connection.entered, reportTimeout)
 	}
 	var record map[string]any
 	if err := json.Unmarshal(bytes.TrimSpace(captured.Bytes()), &record); err != nil {

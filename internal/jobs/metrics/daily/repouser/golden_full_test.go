@@ -299,7 +299,7 @@ func sortGoldenCommitMetrics(rows []goldenCommitMetric) {
 }
 
 // repositoryRootPath walks up from this package to the checkout root (the
-// directory containing go.mod), matching golden_rot_guard_test.go's helper
+// directory containing go.mod), matching the helper of the deleted golden_rot_guard_test.go
 // but returning a plain path (no *testing.T requirement beyond Fatal).
 func repositoryRootPath(t *testing.T) string {
 	t.Helper()

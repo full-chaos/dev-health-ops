@@ -4,7 +4,6 @@ summary: Use rate, queue, budget, feature, and retry controls without creating h
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
-  - docs/architecture/launchdarkly-sync-budgeting.md
   - current synchronization budget and queue controls
 applicability: current
 lifecycle: active

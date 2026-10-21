@@ -50,6 +50,10 @@ type Route struct {
 	// wildcard route that dispatches a literal path itself (a Python
 	// route of its own) reports that path's answer.
 	ResponseModelFor func(*http.Request) bool
+	// ErrorWriter, when set, renders this route's transport refusals (its
+	// body bound, rate limit, in-flight cap and recovered panic) instead of
+	// the server's.
+	ErrorWriter ErrorWriter
 }
 
 // RouteWriter is implemented by the writer every registered route's
@@ -183,6 +187,9 @@ type ServerOptions struct {
 	// for transport concerns every response carries (security headers, CORS);
 	// per-route policy belongs on the Route.
 	Middleware []func(http.Handler) http.Handler
+	// NoStore, when set, is bound to this server's own mux so its Middleware
+	// decides from the router that serves the request. See NoStoreRoutes.
+	NoStore *NoStoreRoutes
 	// AcceptRequestID decides whether an inbound X-Request-ID is reused. Nil
 	// means this package's own narrow rule (acceptableRequestID).
 	AcceptRequestID func(string) bool
@@ -440,6 +447,9 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		notFound(w, r)
 	}))
 
+	if options.NoStore != nil {
+		options.NoStore.bind(mux, options.StrictPaths, redirector)
+	}
 	// RequestID is outermost so every response -- including the 404 and 405
 	// envelopes above, which never reach a route chain -- carries a
 	// correlation id. The outer Recover covers the mux itself and those two
@@ -481,6 +491,9 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 // route's own panic recovery closest to the handler so the log line names the
 // real pattern.
 func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) http.Handler {
+	if route.ErrorWriter != nil {
+		write = route.ErrorWriter
+	}
 	perSecond := route.RateLimitPerSecond
 	if perSecond <= 0 {
 		perSecond = options.RateLimit
@@ -627,25 +640,35 @@ func (discard) Write(p []byte) (int, error) { return len(p), nil }
 // does in Starlette; the decoded path is unchanged.
 func strictPaths(next http.Handler, notFound http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		escaped := r.URL.EscapedPath()
-		if r.RequestURI == "*" || !strings.HasPrefix(escaped, "/") {
+		target, ok := strictTarget(r)
+		if !ok {
 			notFound(w, r)
 			return
 		}
-		if canonicalPath(escaped) != escaped {
-			protected := escapeDotSegments(escaped)
-			if canonicalPath(protected) != protected {
-				notFound(w, r)
-				return
-			}
-			rewritten := r.Clone(r.Context())
-			url := *r.URL
-			url.RawPath = protected
-			rewritten.URL = &url
-			r = rewritten
-		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, target)
 	})
+}
+
+// strictTarget is strictPaths' decision for one request: the request the mux
+// routes (the dot-segment-protected clone when one is needed), or false when
+// the target is a not-found.
+func strictTarget(r *http.Request) (*http.Request, bool) {
+	escaped := r.URL.EscapedPath()
+	if r.RequestURI == "*" || !strings.HasPrefix(escaped, "/") {
+		return nil, false
+	}
+	if canonicalPath(escaped) != escaped {
+		protected := escapeDotSegments(escaped)
+		if canonicalPath(protected) != protected {
+			return nil, false
+		}
+		rewritten := r.Clone(r.Context())
+		url := *r.URL
+		url.RawPath = protected
+		rewritten.URL = &url
+		return rewritten, true
+	}
+	return r, true
 }
 
 // canonicalPath is net/http's cleanPath: path.Clean, keeping a trailing

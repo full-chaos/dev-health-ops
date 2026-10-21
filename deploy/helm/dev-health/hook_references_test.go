@@ -116,7 +116,7 @@ func references(spec map[string]any) []hookKey {
 
 func TestHookResourcesReferenceOnlyObjectsThatExistWhenTheHookRuns(t *testing.T) {
 	renders := map[string][]string{
-		"defaults":           {"--set", "web.env.BACKEND_URL=http://x"},
+		"defaults":           {"--set", "web.env.BACKEND_URL=http://x", "--set", "web.authSecret.secretName=web-auth-placeholder"},
 		"auth enabled":       authBase,
 		"auth, create creds": append(append([]string{}, authBase...), "--set", "secrets.create=true"),
 	}

@@ -25,7 +25,7 @@ repo, so drift is caught here, at the source, not only downstream.
 3. Update `schema-digest.json` and the schema-digest history row (the
    digest is the sha256 of this file's raw bytes; see
    `docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md`,
-   "When the schema digest moves"). `ci/check_go_api_routing_digest.py`
+   "When the schema digest moves"). `TestSchemaDigestPinMatchesTheSDLAndIsInTheHistoryTable` (internal/goapicli/routing)
    fails until you do.
 
 Review the diff -- this file is a contract, not a build artifact.

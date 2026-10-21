@@ -2,8 +2,6 @@ package textrefs
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
@@ -41,36 +39,7 @@ import (
 func TestEveryRuneMatchesLivePythonCharacterClasses(t *testing.T) {
 	// Range-encoded so the transfer stays small: \w alone is ~143k code points,
 	// and a naive list would dominate the test's runtime for no benefit.
-	const derive = `
-import json, re, sys, unicodedata
-
-def ranges(pred):
-    out, start, prev = [], None, None
-    for cp in range(0x110000):
-        if pred(chr(cp)):
-            if start is None:
-                start = cp
-            prev = cp
-        elif start is not None:
-            out.append([start, prev]); start = None
-    if start is not None:
-        out.append([start, prev])
-    return out
-
-print(json.dumps({
-    "space": ranges(lambda c: bool(re.match(r"\s", c))),
-    "word":  ranges(lambda c: bool(re.match(r"\w", c))),
-    "digit": ranges(lambda c: bool(re.match(r"\d", c))),
-    # The UNASSIGNED set. The go-only residue must be a SUBSET of this: a rune
-    # Go accepts and Python does not is tolerable ONLY when Python has no such
-    # code point yet. If Python knows the rune and still excludes it from the
-    # class, that is a semantic disagreement and a defect.
-    "unassigned": ranges(lambda c: unicodedata.category(c) == "Cn"),
-    "unicode": unicodedata.unidata_version,
-    "python": sys.version.split()[0],
-}))
-`
-	output := []byte(textrefsProgram(t, "charclass_allrunes", "TestEveryRuneMatchesLivePythonCharacterClasses", "character classes", derive))
+	output := []byte(textrefsProgram(t, "charclass_allrunes", "character classes"))
 
 	var derived struct {
 		Space      [][2]rune `json:"space"`
@@ -185,43 +154,19 @@ print(json.dumps({
 	}
 }
 
-// textrefsRepositoryRoot walks up to the module root, for callers that need
-// it only to locate the checked-out virtualenv.
-func textrefsRepositoryRoot(t *testing.T) string {
+// textrefsProgram returns the frozen stdout of the named program. Its derivation is frozen in
+// testdata/golden/<slug>.json; a frozen run reads the recorded stdout and starts no Python.
+func textrefsProgram(t *testing.T, slug, name string) string {
 	t.Helper()
-	working, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for directory := working; ; {
-		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("could not find repository root (no go.mod found)")
-		}
-		directory = parent
-	}
-}
-
-// textrefsProgram returns the stdout of the inline Python program `text` (run as `python3 -c`). The
-// derivations of this package were executed once on the last build that carried the Python sources and
-// are frozen in testdata/golden/<slug>.json (recipe in the golden's spec); a frozen run reads the recorded
-// stdout and starts no Python. The program's text is part of the request, so a changed derivation is
-// refused until it is recorded again.
-func textrefsProgram(t *testing.T, slug, test, name, text string) string {
-	t.Helper()
-	spec := rotguard.Spec("testdata/golden/"+slug+".json", textrefsGoldenPins[slug], "./internal/jobs/workgraph/textrefs/", "^"+test+"$")
-	answers := programoracle.Run(t, spec, textrefsRepositoryRoot(t), []programoracle.Program{{Name: name, Text: text}})
+	spec := rotguard.Spec("testdata/golden/"+slug+".json", textrefsGoldenPins[slug])
+	answers := programoracle.Run(t, spec, []programoracle.Program{{Name: name}})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the %s program exited %d (stdout %q)", name, answers[0].ExitCode, answers[0].Stdout)
 	}
 	return answers[0].Stdout
 }
 
-// textrefsGoldenPins holds the digest each golden of this package is pinned to (a placeholder until the
-// goldenrecord verb records the golden and replaces it).
+// textrefsGoldenPins holds the digest each golden of this package is pinned to .
 var textrefsGoldenPins = map[string]string{
 	"charclass_allrunes": "cbbe880e74b9760a7d3d94a42e5c7d890f1d60cc690cf49fe8ce8f2d1a104a9b",
 	"number_allrunes":    "cbc02a173b461b9b55855653a9231873214e510983bf6e1bddbbac5e010b28bd",

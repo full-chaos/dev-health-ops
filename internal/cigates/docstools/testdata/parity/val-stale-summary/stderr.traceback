@@ -1,0 +1,1 @@
+ValueError: Committed snapshot is stale: docs-data/inventory/generated-summary.md. Regenerate the inventory and review the resulting diff.

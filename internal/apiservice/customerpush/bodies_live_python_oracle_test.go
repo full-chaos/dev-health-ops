@@ -1,13 +1,11 @@
 package customerpush
 
 import (
-	"context"
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"maps"
 	"math/rand"
 	"net/http/httptest"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -15,33 +13,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// The three request models the write routes take, each behind a FastAPI
-// route that echoes the validated model, so the oracle sees FastAPI's own
-// decode, 422 and dump.
-const pythonBodiesProgram = `
-import json, sys
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from dev_health_ops.api.admin.schemas.customer_push import IngestSourceCreate, IngestSourcePatch, IngestTokenCreate
-app = FastAPI()
-@app.post("/create")
-def create(p: IngestSourceCreate): return p.model_dump(mode="json")
-@app.post("/patch")
-def patch(p: IngestSourcePatch): return p.model_dump(mode="json")
-@app.post("/token")
-def token(p: IngestTokenCreate): return p.model_dump(mode="json")
-client = TestClient(app, raise_server_exceptions=False)
-out = []
-for model, body in json.loads(sys.stdin.read()):
-    r = client.post("/" + model, content=body.encode("utf-8"), headers={"content-type": "application/json"})
-    out.append([r.status_code, r.text])
-print(json.dumps(out))
-`
 
 func bodyFields() map[string][]string {
 	strs := []string{`"github"`, `"GitHub"`, `""`, `" "`, `"  acme/api  "`, `"x"`, `"é"`, `null`, `1`, `1.5`, `true`, `[]`, `{}`, `["a"]`}
@@ -208,28 +181,14 @@ func goBodyAnswer(model, body string) (int, string) {
 	return answer(200, dump)
 }
 
-// TestCustomerPushBodiesMatchLiveFastAPI compares the write routes' body
+// TestCustomerPushBodiesMatchFrozenFastAPI compares the write routes' body
 // validation with FastAPI's on the real request models.
 func TestCustomerPushBodiesMatchFrozenFastAPI(t *testing.T) {
 	frozen := venueoracle.OpenGolden(t, programGolden("bodies", t.Name(), "8621a3713da2931fd05bb40ab28b8c1a3ec3213c2fd73c3a3e6d6724cc79ac50"))
-	_, file, _, _ := moduleroot.Caller(0)
-	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	corpus := bodiesCorpus()
 	input, _ := json.Marshal(corpus)
-	request := venueoracle.ProgramRequest("request model corpus", pythonBodiesProgram, input, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		command, err := producer.Command(context.Background(), producerEnv, nil, "-c", pythonBodiesProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = strings.NewReader(string(input))
-		output, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
-		}
-		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
-	})
+	request := venueoracle.ProgramRequest("request model corpus", input)
+	answers := frozen.Produce(t, []venueoracle.Request{request})
 	frozen.Consumed(t, answers...)
 	output := []byte(answers[0].Body)
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")

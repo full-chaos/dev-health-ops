@@ -60,12 +60,6 @@ go build -o dho ./cmd/dho
 ./dho help
 ```
 
-For Python development from this repository:
-
-```bash
-pip install -r requirements.txt
-```
-
 ## Database model
 
 Dev Health Ops uses two databases with different responsibilities:
@@ -200,35 +194,23 @@ the coexistence boundary.
 Canonical local test commands:
 
 ```bash
-make test:unit
-make test:integration
-make test:e2e
+make go:check-fast
+make go:check
 make test:live-e2e
-make test:ci
 ```
 
-All tiers route through one entrypoint:
-
-```bash
-./ci/run_tests.sh <unit|integration|e2e|live-e2e|ci>
-```
+The Go checks run through `ci/check_go.sh`; the live backend e2e harness runs
+through `./ci/run_tests.sh live-e2e`.
 
 Notes:
 
-- `integration` is token-aware and skips provider tests cleanly when credentials
-  are unavailable.
 - `live-e2e` starts a live backend harness, generates deterministic ClickHouse
   fixtures, waits for API readiness, and asserts `/health`, `/api/v1/meta`, and
   `/api/v1/home`.
-- `ci` blocks on `flake8` and coverage-gated unit tests. `black`, `isort`, and
-  `mypy` are advisory by default; set `STRICT_QUALITY_GATES=1` to make them
-  blocking.
-- JUnit XML paths are stable under `test-results/junit/` and can be overridden
-  with `TEST_RESULTS_DIR` / `JUNIT_XML_*` variables.
 
 ## Container images
 
-CI no longer builds or publishes the Python API image (`dev-hops-api`, from `docker/Dockerfile`; CHAOS-7674). The root compose stack does not run it (CHAOS-8361): a router on host port 8000 sends each request to the Go api or the Go query-api. The last published image stays in the registry for the bigboy test host until that stack moves to Go; the Python API source is removed. The Go images (`dev-health-go-*`) are the published images; run CLI jobs with `dho`.
+The Python API image (`dev-hops-api`) is retired: CI neither builds nor publishes it (CHAOS-7674), the Dockerfile and the Python API source are removed, and the root compose stack does not run it (CHAOS-8361): a router on host port 8000 sends each request to the Go api or the Go query-api. The last published image stays in the registry. The Go images (`dev-health-go-*`) are the published images; run CLI jobs with `dho`.
 
 ## Key docs
 

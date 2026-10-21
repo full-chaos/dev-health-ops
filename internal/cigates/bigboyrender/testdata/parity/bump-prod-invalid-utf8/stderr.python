@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "{A}/bump-swap-rewrite-values.py", line 15, in <module>
+    s = f.read()
+        ^^^^^^^^
+  File "<frozen codecs>", line 322, in decode
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 506: invalid start byte

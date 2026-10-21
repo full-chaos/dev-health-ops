@@ -1,0 +1,3 @@
+# seed
+devhealth_api settings SELECT,UPDATE
+devhealth_api billing_audit_log.actor_id UPDATE

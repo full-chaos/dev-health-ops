@@ -4,20 +4,16 @@ summary: Implement a provider under the canonical provider package boundary with
 content_type: task-guide
 owner: engineering
 source_of_truth:
-  - src/dev_health_ops/providers/base.py
-  - src/dev_health_ops/providers/_base.py
-  - src/dev_health_ops/providers/registry.py
-  - docs/architecture/adr-001-canonical-provider-pattern.md
+  - internal/providerfoundation/clients.go
+  - internal/providersync/capability_matrix.go
 applicability: current
 lifecycle: active
 ---
 
 # Build a provider integration
 
-New provider code belongs under `src/dev_health_ops/providers/<provider>/`. The provider package is the boundary between an external system and Dev Health's canonical records: it owns authentication, transport, discovery, pagination, rate behavior, and normalization before data reaches processors or storage.
+New provider code belongs in the Go provider packages (`internal/providerfoundation` and `internal/providersync`). The provider package is the boundary between an external system and Dev Health's canonical records: it owns authentication, transport, discovery, pagination, rate behavior, and normalization before data reaches processors or storage.
 {: .fc-page-lede }
-
-Do not add a new implementation to the legacy `src/dev_health_ops/connectors/` package. The GitHub and GitLab connector modules there remain compatibility surfaces for existing ingestion paths; new provider work uses the canonical provider contracts.
 
 ## Understand the provider boundary
 
@@ -33,20 +29,19 @@ Processors should not need to understand raw provider payloads. Storage should n
 
 The repository currently supports two related provider seams:
 
-- `Provider` and `ProviderWithClient` in `src/dev_health_ops/providers/base.py` for provider packages that return typed domain batches and benefit from an injectable client.
-- `BasePipelineAdapter` and related TestOps contracts in `src/dev_health_ops/providers/_base.py` for async, REST-heavy pipeline and job APIs.
+- `CompleteRouteHandler` (`Collect`) in `internal/providersync/complete_route.go` for providers that return a complete, typed set of records for one claim.
+- `DatasetHandler` (`Fetch`) in `internal/providersync/native_rest.go` for REST-heavy datasets that page through a provider API with an injected `providerfoundation.HTTPClient`.
 
 Choose the seam that matches the data family and existing neighboring providers. Do not introduce a third base pattern merely because an external API has different naming.
 
 ## Recommended package layout
 
 ```text
-src/dev_health_ops/providers/<provider>/
-├── __init__.py
-├── client.py            # authentication, requests, pagination, provider errors
-├── provider.py          # capabilities, discovery, batching, orchestration boundary
-├── normalize.py         # raw provider payload → canonical models or rows
-└── testops_pipeline.py  # only when the provider exposes pipeline/job telemetry
+internal/providersync/
+├── <provider>_<dataset>_route.go            # one route per dataset: fetch, batching, orchestration boundary
+├── <provider>_<dataset>_effects_clickhouse.go  # canonical rows written for that dataset
+└── <provider>_<dataset>_route_test.go       # tests with a fake HTTPDoer and testdata golden files
+internal/providerfoundation/                 # shared transport: http.go, clients.go, normalization.go, budget.go, pagination.go, sinks.go
 ```
 
 Small providers can combine files, but the transport and normalization responsibilities should remain separable and testable.
@@ -76,7 +71,7 @@ Keep provider authentication and HTTP or SDK behavior inside the provider packag
 - parse provider-specific errors into a small typed error surface;
 - expose pagination or cursor iteration explicitly;
 - surface rate-limit information when the provider supplies it;
-- accept an injectable SDK client or `httpx` transport so tests do not require the network;
+- accept an injectable `providerfoundation.HTTPDoer` (`internal/providerfoundation/http.go`) so tests do not require the network;
 - preserve provider identifiers and source timestamps for reconciliation.
 
 Use existing SDKs where they materially reduce risk, but avoid leaking SDK objects beyond the client boundary.
@@ -91,7 +86,7 @@ When discovery is partial because of permissions or rate limits, return an obser
 
 ## 4. Normalize into canonical contracts
 
-Place substantial mapping logic in `normalize.py`. Normalization should:
+Place substantial mapping logic in the shared normalization helpers (`internal/providerfoundation/normalization.go`) or in the provider's route file. Normalization should:
 
 - map provider identifiers into canonical identity fields;
 - convert timestamps to the platform's expected timezone and precision;
@@ -131,7 +126,7 @@ Emit enough telemetry to explain whether a sync is progressing, waiting on a pro
 
 ## 7. Register the provider
 
-Add the provider through the lazy registry in `src/dev_health_ops/providers/registry.py` and expose its capabilities without importing optional provider dependencies eagerly. Keep compatibility aliases separate from the canonical implementation.
+Add the provider's routes to the execution registry (`internal/providersync/execution_registry.go`) and declare its capabilities (`internal/providersync/capabilities.go`) and its row in `contracts/provider-matrix/v1/matrix.json`. Admission is checked by `internal/providerfamilycontract/contract.go`. Keep compatibility aliases separate from the canonical implementation.
 
 Document the configuration and permission requirements under the appropriate administration or integration page so an operator does not need to read provider code to connect it.
 
@@ -142,9 +137,9 @@ Use layered tests:
 | Layer | What to prove |
 | --- | --- |
 | Normalization unit tests | Representative payloads map to exact canonical records, enums, identifiers, and timestamps. |
-| Client tests | Authentication headers, pagination, provider errors, and rate-limit handling work through an injected fake or `httpx.MockTransport`. |
+| Client tests | Authentication headers, pagination, provider errors, and rate-limit handling work through an injected fake `HTTPDoer`. |
 | Provider batch tests | Discovery, batching, cursor advancement, partial failure, and idempotent replay behave as documented. |
-| Registry tests | The provider loads lazily and reports the correct capabilities. |
+| Registry tests | The provider's routes are registered and report the correct capabilities (see `internal/providersync/testdata/golden/capabilities-registry.golden.json`). |
 | Live-like tests | A restricted test credential exercises permissions, rate limits, pagination, replay, and deletion without production data. |
 
 Include fixtures for empty pages, duplicate records, out-of-order timestamps, permission gaps, throttling, malformed payloads, and a retry after partial progress.
@@ -153,7 +148,7 @@ Include fixtures for empty pages, duplicate records, out-of-order timestamps, pe
 
 Before requesting review, confirm:
 
-- the code lives under `providers/<provider>/`;
+- the code lives in `internal/providersync/` with shared transport in `internal/providerfoundation/`;
 - raw payloads do not escape the provider boundary;
 - normalization has exact unit tests;
 - pagination, backfill, and cursor ownership are documented;

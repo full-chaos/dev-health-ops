@@ -167,8 +167,8 @@ func TestDirectAdapterProjectionsMatchTheFrozenPythonSink(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenScriptAnswer(t, scriptOracle{
-		name: "work-item-sink", script: "testdata/python_work_item_sink_oracle.py",
-		input: encoded, inputFile: true,
+		name:  "work-item-sink",
+		input: encoded,
 	})
 	var decoded struct {
 		Cases []struct {

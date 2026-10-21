@@ -3,14 +3,10 @@ package providersync
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -18,34 +14,17 @@ import (
 // the pinned build, read by its own supported_datasets, executed once and frozen. The producer is the
 // standard library and dev_health_ops.sync.datasets only. A golden recorded by another producer is refused.
 var capabilityGoldens = programoracle.Set{
-	Package:  "./internal/providersync/",
 	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
 	Identity: "python 3.14.7\nunicodedata 16.0.0",
-	// The goldenrecord verb writes each digest when it promotes a recording; a new golden starts as
-	// "PIN:" + its file name without ".json".
 	Pins: map[string]string{
 		"capabilities-registry.golden.json": "b5a505262fb16113e7fe3bcd7ad2b37e68db4dddfd5acdcb11a0a0d9b64b14d4",
 	},
 }
 
 // TestCapabilitiesMatchFrozenPythonProviderRegistry compares the Go capability registry with the frozen
-// answer of the Python registry (testdata/python_registry_oracle.py on src/dev_health_ops/sync/datasets.py of
-// the pinned build).
+// answer of the Python registry of the pinned build.
 func TestCapabilitiesMatchFrozenPythonProviderRegistry(t *testing.T) {
-	_, currentFile, _, _ := moduleroot.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-	root := filepath.Clean(filepath.Join(packageDir, "..", ".."))
-	script, err := os.ReadFile(filepath.Join(packageDir, "testdata", "python_registry_oracle.py"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The program runs in the pinned checkout: the datasets module is read from there.
-	const future = "from __future__ import annotations\n"
-	if !strings.Contains(string(script), future) {
-		t.Fatal("the registry oracle no longer starts with its __future__ import: place the argument line after it")
-	}
-	program := strings.Replace(string(script), future, future+"import sys as _argument_holder\n_argument_holder.argv = ['python_registry_oracle', 'src/dev_health_ops/sync/datasets.py']\n", 1)
-	output := []byte(capabilityGoldens.Outputs(t, root, "capabilities-registry.golden.json", programoracle.Program{Name: "dataset registry", Text: program})[0])
+	output := []byte(capabilityGoldens.Outputs(t, "capabilities-registry.golden.json", programoracle.Program{Name: "dataset registry"})[0])
 	var want map[string][]registryEntry
 	if err := json.Unmarshal(output, &want); err != nil {
 		t.Fatalf("decode Python registry oracle: %v: %s", err, output)

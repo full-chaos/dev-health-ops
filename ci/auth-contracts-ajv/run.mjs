@@ -33,11 +33,13 @@ const MUST_REJECT = { reject: true, narrower_than_consumer: true, go_schema_gap:
 // lose one, and any list group a manifest does carry must be non-empty.
 const REQUIRED_GROUPS = {
   jwks: ["accept", "reject", "reject_by_client", "narrower_than_consumer"],
-  // No client-only rule on this surface: it has no integer fields and no cross-document check, so there is nothing for reject_by_client to hold.
-  "endpoint-auth-profile": ["accept", "reject"],
+  // reject_by_client here holds the profile gate's join of token pins to the credential-class markers: schema-valid, gate-refused.
+  "endpoint-auth-profile": ["accept", "reject", "reject_by_client"],
   // Request surfaces carry no client-only rule; the decision and batch response corpora do.
   authorization_request: ["accept", "reject"],
   authorization_batch_request: ["accept", "reject"],
+  // The transport envelope has no field a schema cannot check, so no client-only rule.
+  "transport-error": ["accept", "reject"],
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
@@ -93,6 +95,18 @@ const APPROVED_AUDIT = [
   "denied_no_membership",
   "denied_no_grant",
   "denied_policy",
+  "accepted",
+  "invalid_credentials",
+  "account_locked",
+  "principal_deactivated",
+  "email_unverified",
+  "email_collision",
+  "signup_unavailable",
+  "identity_conflict",
+  "provider_already_linked",
+  "expired",
+  "principal_not_found",
+  "malformed",
 ];
 const NOT_IN_THE_VOCABULARY = [
   "secret_0123456789abcdef0123",

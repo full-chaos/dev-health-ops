@@ -207,7 +207,7 @@ func measureRefunds(t *testing.T, ctx context.Context, uri string) {
 func refundMetadata(t *testing.T, ctx context.Context, golden *venueoracle.Golden, pythonURI, goURI string) string {
 	t.Helper()
 	const kept = `SELECT count(*) FILTER (WHERE metadata::text <> '{}')::text || ' of ' || count(*)::text FROM refunds WHERE stripe_refund_id LIKE 're_evt_%'`
-	python := golden.InspectRows(t, "refund_metadata_kept", func() string { return tableRows(t, ctx, pythonURI, kept) })
+	python := golden.InspectRows(t, "refund_metadata_kept")
 	goPlane := tableRows(t, ctx, goURI, kept)
 	if python != "0 of 5" {
 		t.Errorf("python kept metadata on event-written refunds (%s): the divergence is gone, compare the column", python)

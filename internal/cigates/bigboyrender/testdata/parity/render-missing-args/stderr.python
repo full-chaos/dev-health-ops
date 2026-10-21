@@ -1,0 +1,1 @@
+usage: render-dho-api-ch-users.py <authorization.go> <out-file>

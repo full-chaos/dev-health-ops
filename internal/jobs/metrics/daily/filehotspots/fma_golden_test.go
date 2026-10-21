@@ -26,15 +26,13 @@ import (
 //
 // CHAOS-5234/CHAOS-3092 (2026-09-06): this case used to live inside the
 // shared fma_golden.json alongside release_confidence/percentile_float/
-// percentile_int, which are all STILL live-Python-backed. compute_file_hotspots
+// percentile_int, which were all live-Python-backed at the time. compute_file_hotspots
 // was deleted (file_hotspots is fully native now, no straddle), so this case
 // was split out into its own frozen file -- byte-identical payload, extracted
 // verbatim, nothing recomputed -- rather than either (a) leaving a dead key in
-// fma_golden.json that generate_fma_golden.py can no longer reproduce (which
-// broke internal/jobs/workgraph/units's generic
-// TestEveryDiscoverableCorpusStillMatchesLivePython, a whole-document
-// byte-for-byte auto-discovery guard with no per-key exception mechanism), or
-// (b) teaching that shared, actively-maintained guard a one-off exception.
+// fma_golden.json that generate_fma_golden (generator deleted, golden frozen) can no longer reproduce (which
+// broke the then-live whole-document byte-for-byte auto-discovery guard, since deleted, that had no per-key
+// exception mechanism), or (b) teaching that shared guard a one-off exception.
 // There is no generator for this file any more -- it is frozen exactly the
 // way tests/fixtures/file_hotspots_python_golden.json and its CHAOS-4277
 // siblings are (their own generators were deleted whole-file in the same PR):
@@ -98,7 +96,7 @@ func TestComputeFileHotspotsScoreMatchesLivePythonBitExact(t *testing.T) {
 	_ = computedAt
 }
 
-// syntheticWindowStats mirrors generate_fma_golden.py's
+// syntheticWindowStats mirrors generate_fma_golden (generator deleted, golden frozen)'s
 // _synthetic_window_stats: one file, exactly `contributors` distinct authors
 // and `commitsCount` distinct commits, with the full churn attributed to the
 // first row (additions only) -- so ComputeFileHotspots's own aggregation

@@ -1,0 +1,1 @@
+<!doctype html><html><head></head><body><a href="b.html?x=1#f">1</a><a href="b.html?x=1#g">2</a><a href="b.html?#f">3</a></body></html>

@@ -66,6 +66,9 @@ var (
 	// ErrMaterializerUnavailable identifies a missing or unusable materializer.
 	ErrMaterializerUnavailable = errors.New("scheduled sync materializer is unavailable")
 	// ErrOccurrenceReconcilerUnavailable identifies an unusable reconciler.
+	// ErrReconcileBudgetEnded marks a Reconcile that stopped because the caller's
+	// own context ended, never a failed failure-record write.
+	ErrReconcileBudgetEnded            = errors.New("scheduled sync occurrence reconcile budget ended")
 	ErrOccurrenceReconcilerUnavailable = errors.New("scheduled sync occurrence reconciler is unavailable")
 )
 
@@ -184,6 +187,35 @@ type OccurrenceReconciler struct {
 	// initialBackfill mints the one backfill of a configuration's first
 	// successful sync (CHAOS-2275); nil until WithInitialBackfill.
 	initialBackfill *initialBackfillEnqueuer
+	// beginTx overrides pool.Begin; tests only.
+	beginTx func(context.Context) (pgx.Tx, error)
+}
+
+func (reconciler *OccurrenceReconciler) begin(ctx context.Context) (pgx.Tx, error) {
+	if reconciler.beginTx != nil {
+		return reconciler.beginTx(ctx)
+	}
+	return reconciler.pool.Begin(ctx)
+}
+
+// failureWriteTimeout bounds a recorded failure that must outlive the step
+// context that just ended.
+const failureWriteTimeout = 5 * time.Second
+
+// errFailureRecordWrite marks an error from the detached deferral or
+// quarantine write, so its own timeout is never read as the step budget ending.
+var errFailureRecordWrite = errors.New("record occurrence failure")
+
+// budgetEnd marks err as the step budget ending when ctx itself ended and err
+// is that ctx error, not a failed failure-record write.
+func budgetEnd(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) && !errors.Is(err, errFailureRecordWrite) {
+		return fmt.Errorf("%w: %w", ErrReconcileBudgetEnded, err)
+	}
+	return err
 }
 
 // WithInitialBackfill makes each Reconcile window also enqueue the initial
@@ -343,16 +375,16 @@ func (reconciler *OccurrenceReconciler) Reconcile(
 
 	keys, err := reconciler.dueOccurrenceKeys(ctx, now, limit)
 	if err != nil {
-		return OccurrenceReconcileResult{}, err
+		return OccurrenceReconcileResult{}, budgetEnd(ctx, err)
 	}
 	result := OccurrenceReconcileResult{Scanned: len(keys)}
 	for _, key := range keys {
 		if err := ctx.Err(); err != nil {
-			return result, err
+			return result, budgetEnd(ctx, err)
 		}
 		outcome, err := reconciler.reconcileOne(ctx, now, key)
 		if err != nil {
-			return result, err
+			return result, budgetEnd(ctx, err)
 		}
 		switch outcome {
 		case OccurrenceReconcileCompleted:
@@ -404,7 +436,7 @@ func (reconciler *OccurrenceReconciler) reconcileOne(
 	now time.Time,
 	key string,
 ) (string, error) {
-	tx, err := reconciler.pool.Begin(ctx)
+	tx, err := reconciler.begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin occurrence reconcile transaction: %w", err)
 	}
@@ -461,26 +493,7 @@ func (reconciler *OccurrenceReconciler) reconcileOne(
 		_ = tx.Rollback(rollbackCtx)
 		cancel()
 		committed = true
-		// Codex review (gate round 6, P2): ErrInvalidPlan describes a
-		// deterministic failure of THIS occurrence's own data (an
-		// unsupported mode, a unit-cap overflow, a malformed manual
-		// selector) -- every one of these produces the identical error on
-		// every future attempt, so deferOccurrence's retry-with-backoff
-		// (60s/120s/240s/480s before quarantine on attempt 5, ~15 minutes)
-		// only delays reaching the exact same terminal state fork 2
-		// already requires ("Go-plan-failure surfaced... never silent
-		// pending"). For a malformed source_id/dataset_key, Python rejects
-		// the equivalent request synchronously (planner.py's _coerce_uuid);
-		// quarantining immediately here closes most of that latency gap
-		// for every ErrInvalidPlan case, not just this one.
-		if errors.Is(materializeErr, ErrInvalidPlan) {
-			return reconciler.quarantineInvalidPlan(ctx, now, occurrence)
-		}
-		code := OccurrenceErrorPlannerError
-		if errors.Is(materializeErr, ErrOccurrenceIneligible) {
-			code = OccurrenceErrorIneligible
-		}
-		return reconciler.deferOccurrence(ctx, now, occurrence, code)
+		return reconciler.recordMaterializeFailure(ctx, now, occurrence, materializeErr)
 	}
 	if plan.JobRunID == "" || plan.SyncRunID == "" {
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -520,6 +533,40 @@ type materializedRecorder interface {
 	RecordMaterialized(plannedUnits int)
 }
 
+// recordMaterializeFailure records a failed plan in a fresh transaction after
+// the caller rolled back the planner's own. A context error is the step
+// budget ending, not a planner fault: it consumes no attempt, so a midnight
+// burst cannot walk healthy occurrences toward quarantine.
+func (reconciler *OccurrenceReconciler) recordMaterializeFailure(
+	ctx context.Context,
+	now time.Time,
+	occurrence PendingOccurrence,
+	materializeErr error,
+) (string, error) {
+	if errors.Is(materializeErr, context.DeadlineExceeded) || errors.Is(materializeErr, context.Canceled) {
+		return "", fmt.Errorf("materialize occurrence: %w", materializeErr)
+	}
+	// Codex review (gate round 6, P2): ErrInvalidPlan describes a
+	// deterministic failure of THIS occurrence's own data, so every future
+	// attempt fails identically; retry-with-backoff only delays the terminal
+	// state. Quarantine immediately.
+	if errors.Is(materializeErr, ErrInvalidPlan) {
+		return reconciler.quarantineInvalidPlan(ctx, now, occurrence)
+	}
+	code := OccurrenceErrorPlannerError
+	if errors.Is(materializeErr, ErrOccurrenceIneligible) {
+		code = OccurrenceErrorIneligible
+	}
+	return reconciler.deferOccurrence(ctx, now, occurrence, code)
+}
+
+func markRecordWrite(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", errFailureRecordWrite, err)
+}
+
 // deferOccurrence records a bounded retry or the terminal quarantine in its own
 // transaction.
 func (reconciler *OccurrenceReconciler) deferOccurrence(
@@ -527,7 +574,10 @@ func (reconciler *OccurrenceReconciler) deferOccurrence(
 	now time.Time,
 	occurrence PendingOccurrence,
 	code string,
-) (string, error) {
+) (_ string, writeErr error) {
+	defer func() { writeErr = markRecordWrite(writeErr) }()
+	ctx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), failureWriteTimeout)
+	defer cancelWrite()
 	attempt := occurrence.AttemptCount + 1
 	exhausted := attempt >= occurrenceReconcileMaxAttempts
 	status, recordedCode := OccurrenceReconcileRetry, code
@@ -539,7 +589,7 @@ func (reconciler *OccurrenceReconciler) deferOccurrence(
 		nextAttempt = &next
 	}
 
-	tx, err := reconciler.pool.Begin(ctx)
+	tx, err := reconciler.begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin occurrence deferral transaction: %w", err)
 	}
@@ -593,8 +643,11 @@ func (reconciler *OccurrenceReconciler) deferOccurrence(
 // retry could accomplish.
 func (reconciler *OccurrenceReconciler) quarantineInvalidPlan(
 	ctx context.Context, now time.Time, occurrence PendingOccurrence,
-) (string, error) {
-	tx, err := reconciler.pool.Begin(ctx)
+) (_ string, writeErr error) {
+	defer func() { writeErr = markRecordWrite(writeErr) }()
+	ctx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), failureWriteTimeout)
+	defer cancelWrite()
+	tx, err := reconciler.begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin invalid-plan quarantine transaction: %w", err)
 	}

@@ -9,13 +9,14 @@ import (
 // OAuthAuthorizeHandler serves POST /api/v1/auth/oauth/{provider_id}/authorize.
 // The body (redirect_uri) is read for its shape only, as in go-api.
 func (s *Service) OAuthAuthorizeHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.guarded(routeOAuthAuthorize, func(w http.ResponseWriter, r *http.Request) {
 		providerID, failure := providerIDFrom(r)
 		if failure != nil {
 			s.reject(w, r, routeOAuthAuthorize, providerID, failure)
 			return
 		}
-		if _, failure := s.admit(r.Context(), providerID, oauthSpec); failure != nil {
+		row, failure := s.admit(r.Context(), providerID, oauthSpec)
+		if failure != nil {
 			s.reject(w, r, routeOAuthAuthorize, providerID, failure)
 			return
 		}
@@ -28,7 +29,7 @@ func (s *Service) OAuthAuthorizeHandler() http.Handler {
 			s.reject(w, r, routeOAuthAuthorize, providerID, deny(http.StatusUnprocessableEntity, ReasonMalformed, errs))
 			return
 		}
-		result, err := s.AuthorizeOAuth(r.Context(), providerID)
+		result, err := s.authorizeOAuthAdmitted(r.Context(), row)
 		writeAuthorize(s, w, result, err)
 	})
 }
@@ -37,21 +38,21 @@ func (s *Service) OAuthAuthorizeHandler() http.Handler {
 // /api/v1/auth/oauth/{provider_type}/authorize?org_id=...: the type is checked,
 // then the org_id query, then the entitlement gate, then the row lookup.
 func (s *Service) OAuthAuthorizeByTypeHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.guarded(routeOAuthAuthorizeByType, func(w http.ResponseWriter, r *http.Request) {
 		providerType := r.PathValue("provider_type")
 		if _, ok := oauthProtocolForType(providerType); !ok {
-			s.reject(w, r, routeOAuthAuthorize, uuid.Nil, deny(http.StatusBadRequest, ReasonMalformed, "Invalid OAuth provider type"))
+			s.reject(w, r, routeOAuthAuthorizeByType, uuid.Nil, deny(http.StatusBadRequest, ReasonMalformed, "Invalid OAuth provider type"))
 			return
 		}
 		values := r.URL.Query()["org_id"]
 		if len(values) == 0 {
-			s.reject(w, r, routeOAuthAuthorize, uuid.Nil, deny(http.StatusUnprocessableEntity, ReasonMalformed,
+			s.reject(w, r, routeOAuthAuthorizeByType, uuid.Nil, deny(http.StatusUnprocessableEntity, ReasonMalformed,
 				[]fieldError{{Type: "missing", Loc: []string{"query", "org_id"}, Msg: "Field required"}}))
 			return
 		}
 		orgID, err := uuid.Parse(values[len(values)-1])
 		if err != nil {
-			s.reject(w, r, routeOAuthAuthorize, uuid.Nil, deny(http.StatusUnprocessableEntity, ReasonMalformed,
+			s.reject(w, r, routeOAuthAuthorizeByType, uuid.Nil, deny(http.StatusUnprocessableEntity, ReasonMalformed,
 				[]fieldError{{Type: "uuid_parsing", Loc: []string{"query", "org_id"}, Msg: "Input should be a valid UUID"}}))
 			return
 		}
@@ -62,13 +63,14 @@ func (s *Service) OAuthAuthorizeByTypeHandler() http.Handler {
 
 // OAuthCallbackHandler serves POST /api/v1/auth/oauth/{provider_id}/callback.
 func (s *Service) OAuthCallbackHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.guarded(routeOAuthCallback, func(w http.ResponseWriter, r *http.Request) {
 		providerID, failure := providerIDFrom(r)
 		if failure != nil {
 			s.reject(w, r, routeOAuthCallback, providerID, failure)
 			return
 		}
-		if _, failure := s.admit(r.Context(), providerID, oauthSpec); failure != nil {
+		row, failure := s.admit(r.Context(), providerID, oauthSpec)
+		if failure != nil {
 			s.reject(w, r, routeOAuthCallback, providerID, failure)
 			return
 		}
@@ -82,7 +84,7 @@ func (s *Service) OAuthCallbackHandler() http.Handler {
 			s.reject(w, r, routeOAuthCallback, providerID, deny(http.StatusUnprocessableEntity, ReasonMalformed, errs))
 			return
 		}
-		login, clear, err := s.CallbackOAuth(r.Context(), providerID, callbackInput(r, body))
+		login, clear, err := s.callbackOAuthAdmitted(r.Context(), row, callbackInput(r, body))
 		s.writeLogin(w, login, clear, err)
 	})
 }

@@ -24,7 +24,6 @@ import (
 
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
@@ -751,34 +750,6 @@ func TestProviderChecksPrecedeConfigDecode(t *testing.T) {
 			}
 		})
 	}
-}
-
-// outcomeCounts reads auth.oidc.outcomes by its route, outcome and reason labels.
-func outcomeCounts(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
-	t.Helper()
-	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatal(err)
-	}
-	out := map[string]int64{}
-	for _, scope := range rm.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			if m.Name != "auth.oidc.outcomes" {
-				continue
-			}
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok {
-				t.Fatalf("auth.oidc.outcomes is %T", m.Data)
-			}
-			for _, dp := range sum.DataPoints {
-				route, _ := dp.Attributes.Value("route")
-				outcome, _ := dp.Attributes.Value("outcome")
-				reason, _ := dp.Attributes.Value("reason")
-				out[route.AsString()+"/"+outcome.AsString()+"/"+reason.AsString()] += dp.Value
-			}
-		}
-	}
-	return out
 }
 
 func TestEveryOutcomeIsRecordedOnce(t *testing.T) {

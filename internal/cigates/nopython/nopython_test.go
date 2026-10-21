@@ -127,11 +127,7 @@ var scriptPython = regexp.MustCompile(`(^|[^\p{L}\p{N}_.-])(?:[^\s'"\x60;|&<>()=
 // shellPythonPending is the closed list of tracked shell scripts that still name Python, each owned by an open
 // change that removes it. An entry goes when its owner merges; a new entry needs a ruling.
 var shellPythonPending = map[string]string{
-	"ci/bigboy/bigboy-grants-check.sh":   "#4565 ports its helper to Go",
-	"ci/bigboy/bump-swap.sh":             "#4565 ports its helper to Go",
-	"ci/bigboy/check-dho-api-ch-user.sh": "#4565 ports its helper to Go",
-	"ci/bigboy/cut-contents.sh":          "#4565 ports its helpers to Go",
-	"ci/local_validate.sh":               "CHAOS-10180 (K1 deletes the pytest gate, uv setup and Python installs)",
+	"ci/local_validate.sh": "CHAOS-10180 (K1 deletes the pytest gate, uv setup and Python installs)",
 }
 
 // shellPythonData reads testdata/shell_python_data_lines.tsv: lines that name Python as data and run none.

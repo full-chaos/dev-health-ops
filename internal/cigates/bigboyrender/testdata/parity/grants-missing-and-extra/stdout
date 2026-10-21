@@ -1,0 +1,2 @@
+bigboy_grants_check expected=30 actual=31 missing=[('SELECT', 'teams')] extra=[('INSERT', 'zz_extra'), ('SELECT', "it's_extra")]
+GRANTS_CHECK_FAIL

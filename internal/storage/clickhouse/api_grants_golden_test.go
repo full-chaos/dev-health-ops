@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The bigboy users.d declaration of dho_api_ch (ci/bigboy/render-dho-api-ch-users.py) is rendered by
+// The bigboy users.d declaration of dho_api_ch (`cigate bigboy render-ch-users`) is rendered by
 // Python from this same manifest. Two implementations of one grant list drift unless one file pins both:
 // this test pins GrantStatements(APIPosture) to testdata/api_grants.golden and the Python renderer's
 // test (internal/cigates/bigboy/compose_ch_users_test.go) pins its output to the SAME file.

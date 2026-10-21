@@ -1,0 +1,4 @@
+grants-compare
+{FILE:actual.tsv}
+{FILE:authorization.go}
+extra

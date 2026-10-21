@@ -1,5 +1,125 @@
 {
   "$defs": {
+    "accessTokenValidationRules": {
+      "type": "object",
+      "description": "The access_token_validation rules, one definition for the inventory row and the wire profile (each $refs it from its allOf). (1) A route that accepts ops_access_token_hs256 carries access_token_validation with legacy_hs256 true. (2) A route that accepts user_access_token carries access_token_validation. (3) A route that accepts neither access-token class carries none. (4) A route that does not accept ops_access_token_hs256 has legacy_hs256 false, so true always names an accepted HS256 class.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "accepted_credential_classes": {
+                "type": "array",
+                "contains": {
+                  "const": "ops_access_token_hs256"
+                }
+              }
+            },
+            "required": [
+              "accepted_credential_classes"
+            ]
+          },
+          "then": {
+            "required": [
+              "access_token_validation"
+            ],
+            "properties": {
+              "access_token_validation": {
+                "type": "object",
+                "properties": {
+                  "legacy_hs256": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_credential_classes": {
+                "type": "array",
+                "contains": {
+                  "const": "user_access_token"
+                }
+              }
+            },
+            "required": [
+              "accepted_credential_classes"
+            ]
+          },
+          "then": {
+            "required": [
+              "access_token_validation"
+            ],
+            "properties": {
+              "access_token_validation": {}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_credential_classes": {
+                "type": "array",
+                "not": {
+                  "contains": {
+                    "enum": [
+                      "ops_access_token_hs256",
+                      "user_access_token"
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "accepted_credential_classes"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "access_token_validation"
+              ],
+              "properties": {
+                "access_token_validation": {}
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_credential_classes": {
+                "type": "array",
+                "not": {
+                  "contains": {
+                    "const": "ops_access_token_hs256"
+                  }
+                }
+              },
+              "access_token_validation": {}
+            },
+            "required": [
+              "accepted_credential_classes",
+              "access_token_validation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "access_token_validation": {
+                "type": "object",
+                "properties": {
+                  "legacy_hs256": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "anchor": {
       "description": "A repo-relative file:line citation, or null when the fact could not be anchored to source. null MUST be paired with an entry in the row's gaps array explaining why.",
       "oneOf": [
@@ -56,9 +176,26 @@
               "class_disambiguator"
             ]
           }
+        },
+        {
+          "$ref": "#/$defs/accessTokenValidationRules"
         }
       ],
       "properties": {
+        "access_token_validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "legacy_hs256"
+          ],
+          "properties": {
+            "legacy_hs256": {
+              "type": "boolean",
+              "description": "true when the route accepts the legacy HS256 access token (ops_access_token_hs256) on purpose, as a compatibility opt-in; false when it accepts only the platform EdDSA access token (user_access_token). Explicit, no default: a validator never infers the opt-in from the class list alone."
+            }
+          },
+          "description": "How the route validates a bearer access token. REQUIRED when accepted_credential_classes holds an access-token class (ops_access_token_hs256 or user_access_token) and FORBIDDEN otherwise. The accepted access-token classes are the ones in accepted_credential_classes; this object does not repeat them. The rules that tie it to the class list are $defs/accessTokenValidationRules, which the endpoint-auth-profile.v1 wire schema references rather than copies."
+        },
         "accepted_credential_classes": {
           "description": "class_id values from contracts/auth/v1/credential-classes.json this route's intended validator accepts. Empty for a genuinely public route.",
           "items": {

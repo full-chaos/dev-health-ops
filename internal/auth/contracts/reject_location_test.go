@@ -70,35 +70,43 @@ func locationSchema(t *testing.T, root, surface string) *santhosh.Schema {
 // "/", the form the manifests declare.
 func pointer(location []string) string { return "/" + strings.Join(location, "/") }
 
-// objectsWithKey lists the pointer of every object in document that has a
-// member named name.
-func objectsWithKey(document any, name string) []string {
-	var out []string
-	var walk func(node any, at []string)
-	walk = func(node any, at []string) {
-		switch value := node.(type) {
-		case map[string]any:
-			if _, ok := value[name]; ok {
-				out = append(out, pointer(at))
+// propertyNamesLocation derives where a propertyNames violation sits from the
+// schema path of the violation. The validator reports such a violation at the
+// property name's own (empty) location, so the object holding the name is the
+// instance reached by the `properties/<name>` steps in front of `propertyNames`
+// on the schema path; structural keywords on the path (allOf, then, $ref, ...)
+// do not move the instance. A path step this cannot place is an error, never a
+// guess.
+func propertyNamesLocation(keywordLocation string) ([]string, error) {
+	tokens := strings.Split(strings.TrimPrefix(keywordLocation, "/"), "/")
+	var at []string
+	for i := 0; i < len(tokens); i++ {
+		switch token := tokens[i]; token {
+		case "propertyNames":
+			return at, nil
+		case "properties":
+			if i+1 >= len(tokens) {
+				return nil, fmt.Errorf("schema path %q ends after properties", keywordLocation)
 			}
-			for key, child := range value {
-				walk(child, append(append([]string(nil), at...), key))
-			}
-		case []any:
-			for index, child := range value {
-				walk(child, append(append([]string(nil), at...), fmt.Sprint(index)))
-			}
+			i++
+			at = append(at, strings.NewReplacer("~1", "/", "~0", "~").Replace(tokens[i]))
+		case "allOf", "anyOf", "oneOf", "$defs", "definitions":
+			i++
+		case "if", "then", "else", "$ref", "$dynamicRef", "not", "":
+		default:
+			return nil, fmt.Errorf("cannot place schema path step %q of %q on the instance", token, keywordLocation)
 		}
 	}
-	walk(document, nil)
-	sort.Strings(out)
-	return out
+	return nil, fmt.Errorf("schema path %q has no propertyNames step", keywordLocation)
 }
 
-// rejectLeaves returns every violation of document as "keyword@pointer". A
-// violation of propertyNames is reported at the object that holds the offending
-// member: the validator reports the member name's own (empty) location, so the
-// object is found by the member name.
+// rejectLeaves returns every violation of document as "keyword@pointer". The
+// error tree gives the keyword (the `not` keyword is named explicitly) and the
+// instance location of every violation except one under propertyNames, whose
+// location the validator reports as the property name's own empty location;
+// those come from the detailed output instead: the keyword is the last step of
+// the schema path and the location is propertyNamesLocation's. The document
+// root is "/".
 func rejectLeaves(t *testing.T, root, surface string, document any) []string {
 	t.Helper()
 	err := locationSchema(t, root, surface).Validate(document)
@@ -110,14 +118,14 @@ func rejectLeaves(t *testing.T, root, surface string, document any) []string {
 		t.Fatalf("%s: validation failed without a location: %v", surface, err)
 	}
 	var out []string
-	var walk func(node *santhosh.ValidationError, propertyName string)
-	walk = func(node *santhosh.ValidationError, propertyName string) {
-		if names, isNames := node.ErrorKind.(*kind.PropertyNames); isNames {
-			propertyName = names.Property
+	var walk func(node *santhosh.ValidationError)
+	walk = func(node *santhosh.ValidationError) {
+		if _, isNames := node.ErrorKind.(*kind.PropertyNames); isNames {
+			return
 		}
 		if len(node.Causes) > 0 {
 			for _, cause := range node.Causes {
-				walk(cause, propertyName)
+				walk(cause)
 			}
 			return
 		}
@@ -128,15 +136,29 @@ func rejectLeaves(t *testing.T, root, surface string, document any) []string {
 		if _, isNot := node.ErrorKind.(*kind.Not); isNot {
 			keyword = "not"
 		}
-		if propertyName != "" {
-			for _, at := range objectsWithKey(document, propertyName) {
-				out = append(out, keyword+"@"+at)
+		out = append(out, keyword+"@"+pointer(node.InstanceLocation))
+	}
+	walk(validation)
+	var names func(unit santhosh.OutputUnit)
+	names = func(unit santhosh.OutputUnit) {
+		if len(unit.Errors) > 0 {
+			for _, child := range unit.Errors {
+				names(child)
 			}
 			return
 		}
-		out = append(out, keyword+"@"+pointer(node.InstanceLocation))
+		if !strings.Contains(unit.KeywordLocation, "/propertyNames/") {
+			return
+		}
+		at, err := propertyNamesLocation(unit.KeywordLocation)
+		if err != nil {
+			t.Fatalf("%s: %v", surface, err)
+		}
+		steps := strings.Split(unit.KeywordLocation, "/")
+		out = append(out, steps[len(steps)-1]+"@"+pointer(at))
 	}
-	walk(validation, "")
+	names(*validation.DetailedOutput())
+	sort.Strings(out)
 	return out
 }
 
@@ -242,5 +264,43 @@ func TestARejectFixtureAtTheWrongLocationFails(t *testing.T) {
 		if declaredViolation(leaves, declared[0], declared[1]) == nil {
 			t.Errorf("%s: %v was accepted for violations %v", name, declared, leaves)
 		}
+	}
+}
+
+// TestPropertyNamesViolationsAreLocatedByTheirSchemaPath: the object a
+// propertyNames violation sits at comes from the schema path, so an empty
+// member name does not read as the document root and a second object that holds
+// the same member name elsewhere is not mistaken for the violating one.
+func TestPropertyNamesViolationsAreLocatedByTheirSchemaPath(t *testing.T) {
+	root := testRoot(t)
+	raw, err := os.ReadFile(ContractsDir(root) + "/examples/provisioning-event/invalid-change-arbitrary-key.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := decodeFixture(t, raw).(map[string]any)
+	change := fixture["payload"].(map[string]any)["change"].(map[string]any)
+	offending := ""
+	for name := range change {
+		offending = name
+	}
+	delete(change, offending)
+	change[""] = "x"
+	leaves := rejectLeaves(t, root, "provisioning-event.v1", fixture)
+	if err := declaredViolation(leaves, "enum", "/payload/change"); err != nil {
+		t.Fatalf("an empty member name is not placed at its object: %v", err)
+	}
+	if declaredViolation(leaves, "enum", "/") == nil {
+		t.Fatalf("an empty member name was accepted at the document root: %v", leaves)
+	}
+
+	change[offending] = "x"
+	delete(change, "")
+	fixture["payload"].(map[string]any)["decoy"] = map[string]any{offending: "x"}
+	leaves = rejectLeaves(t, root, "provisioning-event.v1", fixture)
+	if declaredViolation(leaves, "enum", "/payload/decoy") == nil {
+		t.Fatalf("an object that merely holds the same member name was accepted: %v", leaves)
+	}
+	if err := declaredViolation(leaves, "enum", "/payload/change"); err != nil {
+		t.Fatalf("the violating object is not reported: %v", err)
 	}
 }

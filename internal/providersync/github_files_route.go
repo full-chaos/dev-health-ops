@@ -136,12 +136,18 @@ type githubFilesChunkCursor struct {
 	Oversize int    `json:"oversize"`
 	// Unavailable counts eligible blobs the provider returned no text for
 	// (binary, truncated, absent): they stay without contents.
-	Unavailable int  `json:"unavailable"`
-	Requests    int  `json:"requests"`
-	Chunks      int  `json:"chunks"`
-	Walked      bool `json:"walked,omitempty"`
-	NoCommit    bool `json:"no_commit,omitempty"`
-	Done        bool `json:"done,omitempty"`
+	Unavailable int `json:"unavailable"`
+	// Repinned counts restarts after the pinned tree vanished; SyncedAt is the
+	// write instant of rows built after the latest restart.
+	Repinned      int        `json:"repinned,omitempty"`
+	SyncedAt      *time.Time `json:"synced_at,omitempty"`
+	PathsTotal    int        `json:"paths_total"`
+	EligibleTotal int        `json:"eligible_total"`
+	Requests      int        `json:"requests"`
+	Chunks        int        `json:"chunks"`
+	Walked        bool       `json:"walked,omitempty"`
+	NoCommit      bool       `json:"no_commit,omitempty"`
+	Done          bool       `json:"done,omitempty"`
 }
 
 func decodeGitHubFilesChunkCursor(raw string) (githubFilesChunkCursor, error) {
@@ -152,7 +158,7 @@ func decodeGitHubFilesChunkCursor(raw string) (githubFilesChunkCursor, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cursor); err != nil || cursor.Version != 1 || cursor.Ordinal < 0 ||
-		cursor.Rows < 0 || cursor.Contents < 0 || cursor.Oversize < 0 || cursor.Unavailable < 0 || cursor.Requests < 0 || cursor.Chunks < 0 ||
+		cursor.Rows < 0 || cursor.Contents < 0 || cursor.Oversize < 0 || cursor.Unavailable < 0 || cursor.Repinned < 0 || cursor.PathsTotal < 0 || cursor.EligibleTotal < 0 || cursor.Requests < 0 || cursor.Chunks < 0 ||
 		(cursor.TreeRef == "" && !cursor.NoCommit) {
 		return githubFilesChunkCursor{}, ErrInvalidConfiguration
 	}
@@ -253,24 +259,72 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 	if cursor.Done || cursor.NoCommit {
 		return emitFinal(cursor)
 	}
-	if cursor.TreeRef == "" {
+	pin := func() (bool, error) {
 		branch := repoPayload.DefaultBranch
 		if branch == "" {
 			branch = "main"
 		}
 		treeRef, err := gitHubFilesTreeRef(ctx, client, root, branch, claim.BeforeAt)
 		if err != nil {
-			return continueGitHubFilesTraversal(err, repoPayload.FullName)
+			return false, continueGitHubFilesTraversal(err, repoPayload.FullName)
 		}
 		if treeRef == "" {
 			cursor.NoCommit = true
-			return emitFinal(cursor)
+			return true, nil
 		}
 		cursor.TreeRef = treeRef
+		return false, nil
+	}
+	resumedPin := cursor.TreeRef != ""
+	if cursor.SyncedAt != nil {
+		normalizedAt = *cursor.SyncedAt
+	}
+	if !resumedPin {
+		if done, err := pin(); err != nil || done {
+			if err != nil {
+				return err
+			}
+			return emitFinal(cursor)
+		}
 	}
 	paths, sizes, walked, err := gitHubFilesInventory(ctx, client, root, cursor.TreeRef, repoPayload.FullName)
+	if err != nil && resumedPin && gitHubFilesPinGone(err) && cursor.Repinned < gitHubFilesMaxRepins {
+		// The tree the cursor pinned no longer exists (its commit was
+		// garbage-collected or force-pushed away), so the cursor can never
+		// advance. Restart from the current head under a later write instant:
+		// rows written for the old tree keep their instant, so the new rows
+		// win the ReplacingMergeTree version for every path they cover.
+		slog.Warn(
+			"github files pinned tree is gone; restarting from the current branch head",
+			"repinned", cursor.Repinned+1, "paths_done", cursor.Ordinal,
+		)
+		restart := time.Now().UTC().Truncate(time.Millisecond)
+		if !restart.After(normalizedAt) {
+			restart = normalizedAt.Add(time.Millisecond)
+		}
+		cursor = githubFilesChunkCursor{
+			Version: 1, Rows: cursor.Rows, Contents: cursor.Contents, Oversize: cursor.Oversize,
+			Unavailable: cursor.Unavailable, Requests: cursor.Requests, Chunks: cursor.Chunks,
+			Repinned: cursor.Repinned + 1, SyncedAt: &restart,
+		}
+		normalizedAt = restart
+		if done, pinErr := pin(); pinErr != nil || done {
+			if pinErr != nil {
+				return pinErr
+			}
+			return emitFinal(cursor)
+		}
+		paths, sizes, walked, err = gitHubFilesInventory(ctx, client, root, cursor.TreeRef, repoPayload.FullName)
+	}
 	if err != nil {
 		return err
+	}
+	cursor.PathsTotal = len(paths)
+	cursor.EligibleTotal = 0
+	for _, filePath := range paths {
+		if gitHubFileContentEligible(filePath, sizes[filePath]) {
+			cursor.EligibleTotal++
+		}
 	}
 	cursor.Walked = cursor.Walked || walked
 	sort.Strings(paths)
@@ -347,6 +401,19 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 		before, cursor = after, next
 	}
 	return emitFinal(cursor)
+}
+
+// gitHubFilesMaxRepins bounds the restarts of one unit: a repository whose
+// every pinned tree vanishes is failing for another reason.
+const gitHubFilesMaxRepins = 3
+
+// gitHubFilesPinGone reports a provider answer that says the pinned tree
+// object does not exist (404, or 422 for an unresolvable sha). Server errors,
+// rate limits and transport failures are not it: they keep the pin.
+func gitHubFilesPinGone(err error) bool {
+	var providerErr *providerfoundation.ProviderError
+	return errors.As(err, &providerErr) &&
+		(providerErr.StatusCode == http.StatusNotFound || providerErr.StatusCode == http.StatusUnprocessableEntity)
 }
 
 // gitHubFileDeclaredBytes is the size a blob is charged against a chunk: its
@@ -511,14 +578,16 @@ func gitHubFilesFinalBatch(claim Claim, fullName string, cursor githubFilesChunk
 		"subtree_walk", cursor.Walked, "inventory_status", inventoryStatus,
 		"chunks", cursor.Chunks, "with_contents", cursor.Contents, "contents_oversize", cursor.Oversize,
 		"contents_unavailable", cursor.Unavailable,
+		"paths_total", cursor.PathsTotal, "eligible_total", cursor.EligibleTotal, "repinned", cursor.Repinned,
 	)
 	return CompleteRouteBatch{
 		Effects: []EffectBatch{effect},
 		Result: map[string]any{
 			"files_synced": cursor.Rows, "inventory_status": inventoryStatus, "repo": fullName,
 			"files_with_contents": cursor.Contents, "contents_oversize": cursor.Oversize,
-			"contents_unavailable": cursor.Unavailable,
-			"content_chunks":       cursor.Chunks,
+			"contents_unavailable": cursor.Unavailable, "paths_total": cursor.PathsTotal,
+			"eligible_total": cursor.EligibleTotal, "repinned": cursor.Repinned,
+			"content_chunks": cursor.Chunks,
 		},
 		Watermark: claim.BeforeAt,
 		Evidence: FetchEvidence{

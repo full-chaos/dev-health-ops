@@ -31,6 +31,8 @@ type filesChunkFake struct {
 
 	texts  map[string]string
 	binary map[string]bool
+	// treeStatus answers a tree read of that sha with a bare status instead.
+	treeStatus map[string]int
 
 	graphql  []filesChunkRequest
 	treeGets []string
@@ -54,6 +56,9 @@ func (fake *filesChunkFake) Do(request *http.Request) (*http.Response, error) {
 		body = `[{"sha":"` + fake.head + `"}]`
 	case strings.HasPrefix(request.URL.Path, "/repos/acme/api/git/trees/"):
 		sha := strings.TrimPrefix(request.URL.Path, "/repos/acme/api/git/trees/")
+		if status, forced := fake.treeStatus[sha]; forced {
+			return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"message":"forced"}`)), Request: request}, nil
+		}
 		paths, ok := fake.trees[sha]
 		if !ok {
 			return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"message":"Not Found"}`)), Request: request}, nil
@@ -112,7 +117,7 @@ func (fake *filesChunkFake) Do(request *http.Request) (*http.Response, error) {
 }
 
 func newFilesChunkFake(t *testing.T, goFiles, goSize, otherFiles int) *filesChunkFake {
-	fake := &filesChunkFake{t: t, head: "tree-1", sizes: map[string]int{}, texts: map[string]string{}, binary: map[string]bool{}}
+	fake := &filesChunkFake{t: t, head: "tree-1", sizes: map[string]int{}, texts: map[string]string{}, binary: map[string]bool{}, treeStatus: map[string]int{}}
 	paths := make([]string, 0, goFiles+otherFiles)
 	for index := 0; index < goFiles; index++ {
 		path := fmt.Sprintf("src/pkg%03d/f%05d.go", index%97, index)
@@ -375,6 +380,7 @@ func TestGitHubFilesRouteIsChunkedWithItsOwnPolicyAndNotPreparedSnapshot(t *test
 type filesReadbackSink struct {
 	mu        sync.Mutex
 	rows      map[string]int
+	versions  map[string][]time.Time
 	inspected int
 	failFrom  int
 	writes    int
@@ -400,6 +406,10 @@ func (sink *filesReadbackSink) WriteEffect(_ context.Context, _ Claim, batch Eff
 			return err
 		}
 		sink.rows[row.Path]++
+		if sink.versions == nil {
+			sink.versions = map[string][]time.Time{}
+		}
+		sink.versions[row.Path] = append(sink.versions[row.Path], row.LastSynced)
 	}
 	if crash {
 		return errors.New("simulated crash after the write")
@@ -603,5 +613,137 @@ func TestGitHubFilesChunkKeepsAnEmptyFileAsEmptyContentsAndCountsUnavailableOnes
 	final := run.emissions[len(run.emissions)-1].Batch.Result
 	if final["files_with_contents"] != 2 || final["contents_unavailable"] != 1 {
 		t.Fatalf("result=%v, want 2 with contents (empty + regular) and 1 unavailable (binary)", final)
+	}
+}
+
+func withChunkBound(descriptor CompleteRouteDescriptor, chunks int) CompleteRouteDescriptor {
+	descriptor.ChunkPolicy.MaxChunksPerAttempt = chunks
+	return descriptor
+}
+
+// The pinned tree is gone when a unit resumes (its commit was garbage-collected
+// or force-pushed away): the cursor could never advance. The unit restarts from
+// the current head under a later write instant, counts it, and completes.
+func TestGitHubFilesUnitRestartsFromTheHeadWhenThePinnedTreeIsGone(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusUnprocessableEntity} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			fake := newFilesChunkFake(t, 60, 600_000, 0)
+			sink := &filesReadbackSink{}
+			executor, session, descriptor, store := filesChunkExecutor(t, fake, sink)
+			first := fake.trees["tree-1"]
+			_, err := executor.Execute(context.Background(), session, withChunkBound(descriptor, 2))
+			if !errors.As(err, new(ChunkContinuationError)) || len(sink.rows) == 0 {
+				t.Fatalf("attempt 1 err=%v rows=%d, want a continuation after committed chunks", err, len(sink.rows))
+			}
+			fake.mu.Lock()
+			fake.trees["tree-2"] = append(append([]string(nil), first[:55]...), "src/new.go")
+			fake.sizes["src/new.go"] = 100
+			fake.treeStatus["tree-1"] = status
+			fake.head = "tree-2"
+			fake.mu.Unlock()
+			var result CompleteRouteExecutionResult
+			for attempt := 0; ; attempt++ {
+				if attempt > 40 {
+					t.Fatal("the unit does not complete")
+				}
+				result, err = executor.Execute(context.Background(), session, descriptor)
+				if err == nil {
+					break
+				}
+				if !errors.As(err, new(ChunkContinuationError)) {
+					t.Fatalf("attempt %d: %v", attempt+2, err)
+				}
+			}
+			for _, path := range fake.trees["tree-2"] {
+				if sink.rows[path] == 0 {
+					t.Fatalf("%s of the new head was never written", path)
+				}
+			}
+			rewritten := 0
+			for path, versions := range sink.versions {
+				if len(versions) == 2 {
+					rewritten++
+					if !versions[1].After(versions[0]) {
+						t.Fatalf("%s rewritten at %s, not after %s", path, versions[1], versions[0])
+					}
+				}
+			}
+			if rewritten == 0 {
+				t.Fatal("no path was rewritten under the later instant")
+			}
+			if fmt.Sprint(result.Result["repinned"]) != "1" || fmt.Sprint(result.Result["paths_total"]) != "56" ||
+				fmt.Sprint(result.Result["eligible_total"]) != "56" {
+				t.Fatalf("result=%v", result.Result)
+			}
+			text := logs.String()
+			for _, want := range []string{"pinned tree is gone", "repinned=1", "paths_total=56", "eligible_total=56"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("log lacks %q", want)
+				}
+			}
+			if checkpoint, err := store.LoadChunkCheckpoint(context.Background(), session.Claim, time.Now()); err != nil || !checkpoint.InventoryComplete {
+				t.Fatalf("checkpoint=%+v err=%v", checkpoint, err)
+			}
+		})
+	}
+}
+
+// Negative control: a server error or a rate limit on the pinned tree is not a
+// vanished pin. The cursor and the pin stay, and the next attempt finishes the
+// SAME tree.
+func TestGitHubFilesUnitKeepsItsPinOnAServerErrorOfThePinnedTree(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusInternalServerError} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			fake := newFilesChunkFake(t, 60, 600_000, 0)
+			sink := &filesReadbackSink{}
+			executor, session, descriptor, store := filesChunkExecutor(t, fake, sink)
+			if _, err := executor.Execute(context.Background(), session, withChunkBound(descriptor, 2)); !errors.As(err, new(ChunkContinuationError)) {
+				t.Fatalf("attempt 1: %v", err)
+			}
+			before, err := store.LoadChunkCheckpoint(context.Background(), session.Claim, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake.mu.Lock()
+			fake.treeStatus["tree-1"] = status
+			fake.head = "tree-2"
+			fake.trees["tree-2"] = []string{"src/other.go"}
+			fake.mu.Unlock()
+			if _, err := executor.Execute(context.Background(), session, descriptor); err == nil || errors.As(err, new(ChunkContinuationError)) {
+				t.Fatalf("a %d on the pinned tree must fail the attempt, got %v", status, err)
+			}
+			after, err := store.LoadChunkCheckpoint(context.Background(), session.Claim, time.Now())
+			if err != nil || after.NextCursor != before.NextCursor || after.PreparedChunks != before.PreparedChunks {
+				t.Fatalf("cursor moved: before=%q after=%q err=%v", before.NextCursor, after.NextCursor, err)
+			}
+			fake.mu.Lock()
+			delete(fake.treeStatus, "tree-1")
+			fake.mu.Unlock()
+			var result CompleteRouteExecutionResult
+			for attempt := 0; ; attempt++ {
+				if attempt > 40 {
+					t.Fatal("no completion")
+				}
+				result, err = executor.Execute(context.Background(), session, descriptor)
+				if err == nil {
+					break
+				}
+				if !errors.As(err, new(ChunkContinuationError)) {
+					t.Fatal(err)
+				}
+			}
+			if fmt.Sprint(result.Result["repinned"]) != "0" || len(sink.rows) != 60 {
+				t.Fatalf("repinned=%v rows=%d, want the pinned tree finished untouched", result.Result["repinned"], len(sink.rows))
+			}
+			for _, call := range fake.graphql {
+				if call.ref != "tree-1" {
+					t.Fatalf("content read at %s", call.ref)
+				}
+			}
+		})
 	}
 }

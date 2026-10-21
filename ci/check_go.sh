@@ -3983,6 +3983,7 @@ case "${1:-all}" in
     check_integration_vet
     plan_integration_shards
     plan_providersync_test_shards
+    check_plan_reads
     check_multi_replica_workers
     ;;
   ci)
@@ -4020,6 +4021,7 @@ case "${1:-all}" in
     check_race_weights_rows
     check_integration_vet
     check_integration
+    check_plan_reads
     check_multi_replica_workers
     ;;
   -h|--help|help)

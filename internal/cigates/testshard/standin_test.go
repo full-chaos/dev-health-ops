@@ -46,7 +46,11 @@ case " $* " in *" -list "*)
 esac
 printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
 # FAKE_GO_TEST_STDOUT: what a go test call prints (a canned go test log, e.g. the "ok" summary lines of the packages it ran).
-[ -z "${FAKE_GO_TEST_STDOUT:-}" ] || cat "${FAKE_GO_TEST_STDOUT}"
+if [ -n "${FAKE_GO_TEST_STDOUT:-}" ]; then cat "${FAKE_GO_TEST_STDOUT}"
+else
+  # Default: a passing plain run prints one summary line per package argument, so the leg's unweighted guard sees coverage.
+  case " $* " in *" -race "*|*" -json "*) ;; *) for a in "$@"; do case "$a" in -*|test) ;; *) printf 'ok  \t%%s\t0.01s\n' "$a" ;; esac; done ;; esac
+fi
 case " $* " in *" -json "*) printf '{"Time":"2026-01-01T00:00:00Z","Action":"pass","Package":"p","Test":"TestFake","Elapsed":0.01}\n' ;; esac
 [ -z "${FAKE_GO_FAIL:-}" ] || exit 1
 # FAKE_GO_FAIL_ONLY fails exactly one of the two race calls of a leg: "providersync" or "packages".

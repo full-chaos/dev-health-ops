@@ -1,7 +1,7 @@
 # Every file under internal/cigates/docstools/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 7c2d7c1fef743ede036775f3ac4558b1a90cace5ae13d09be9d784e083646552 (1090 files)
+# python-recorded set: 22e231c1d1dfd0a58b2dfbba68a9550bf687856b2f6066b0b9e03c4fda7ddc1c (1090 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-facdf0d927e7fdf96c901496d636ddf5256aae2692737ce1a7a620ad725a3166	hand-written	README.md
+49971b8f35ba64e30f7f21d4dddb0fec511666b4110a9288f825e85b78f85df4	hand-written	README.md
 0f0c4bf5e5009999b6d5f6b87f7ae119b583442f6db3bd29b65fce0962828459	python-recorded	helpers/csvrow.jsonl
 8a60eb01e931bad342ff81c6dddd74815dff950d12ca32050c15948136d71e8b	python-recorded	helpers/floatrepr.jsonl
 63d9592b29908345ca774d94c71f9c09b6a72962c7fa72b9203803208dbeabb6	python-recorded	helpers/jsonloads.jsonl
@@ -794,14 +794,6 @@ fe350efa4c94dbf7068c0f785d93af782518c7317b00e21b3efb6e882d479551	hand-written	pa
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/genqm-unknown-queue/rc
 16bbce75d16c2a579f81d8da74e2909ab49251c25223ec5a1644ae3a2ae9ae69	python-recorded	parity/genqm-unknown-queue/stderr
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/genqm-unknown-queue/stdout
-9f17bcbbd6506ecb9ef09e6f5f66d70040c9eecc05592c244a3dc455a185efb3	python-recorded	parity/links-absolute-logical-site-dir/args
-935df74f332d455b96dd47de3e4e98dfe78c041a52c0ab6d3b1d4c51cbf03da4	python-recorded	parity/links-absolute-logical-site-dir/cwd
-1fd95d17d5cca31e6606f20665a4788a10a4a64e6fba32bcf37d96ab2d773d3c	python-recorded	parity/links-absolute-logical-site-dir/in/P/work/site/b.html.fixture
-07c04b304b1499ad3a3ab4d847c4cef47a58ea7bc1b233de828cbbbb68a7891b	python-recorded	parity/links-absolute-logical-site-dir/in/P/work/site/index.html.fixture
-4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-absolute-logical-site-dir/rc
-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-absolute-logical-site-dir/stderr
-ae28c2a5293285f0a62743af3917e4b4720e85e5942508737cc36f5e37b58c5b	python-recorded	parity/links-absolute-logical-site-dir/stdout
-93b54c69c19f29a054cab1b1c190717fc3bb6e1d483b2ab1ab977d9c17cc2710	python-recorded	parity/links-absolute-logical-site-dir/symlinks
 2a437b65d3934443368e0a05e8da74c54d4a5d2cae400dcedece137e09e9d2ec	python-recorded	parity/links-absolute-path-is-skipped/args
 34fb7fc9d01cdb168ffcd263c7db2318e77656378a26632591e426a9cde0d69c	python-recorded	parity/links-absolute-path-is-skipped/in/site/index.html.fixture
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/links-absolute-path-is-skipped/rc
@@ -827,6 +819,14 @@ d14f49a2c0c285933c3c64248cb772c1282064b59fcfa97f87c35f3d76f8540c	python-recorded
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/stderr
 ae28c2a5293285f0a62743af3917e4b4720e85e5942508737cc36f5e37b58c5b	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/stdout
 6563f0325669e62c40cd845b0df1c57737c4bf6a1458a627bcb10877fea3630f	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/symlinks
+9f17bcbbd6506ecb9ef09e6f5f66d70040c9eecc05592c244a3dc455a185efb3	python-recorded	parity/links-absolute-site-dir-through-a-link-with-anchors/args
+935df74f332d455b96dd47de3e4e98dfe78c041a52c0ab6d3b1d4c51cbf03da4	python-recorded	parity/links-absolute-site-dir-through-a-link-with-anchors/cwd
+1fd95d17d5cca31e6606f20665a4788a10a4a64e6fba32bcf37d96ab2d773d3c	python-recorded	parity/links-absolute-site-dir-through-a-link-with-anchors/in/P/work/site/b.html.fixture
+07c04b304b1499ad3a3ab4d847c4cef47a58ea7bc1b233de828cbbbb68a7891b	python-recorded	parity/links-absolute-site-dir-through-a-link-with-anchors/in/P/work/site/index.html.fixture
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-absolute-site-dir-through-a-link-with-anchors/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-absolute-site-dir-through-a-link-with-anchors/stderr
+ae28c2a5293285f0a62743af3917e4b4720e85e5942508737cc36f5e37b58c5b	python-recorded	parity/links-absolute-site-dir-through-a-link-with-anchors/stdout
+93b54c69c19f29a054cab1b1c190717fc3bb6e1d483b2ab1ab977d9c17cc2710	python-recorded	parity/links-absolute-site-dir-through-a-link-with-anchors/symlinks
 2a437b65d3934443368e0a05e8da74c54d4a5d2cae400dcedece137e09e9d2ec	python-recorded	parity/links-anchor-on-non-html/args
 5cf1675d8caa0c028702f26479410586949e63fe067f1838093ccf5fef85fc10	python-recorded	parity/links-anchor-on-non-html/in/site/index.html.fixture
 5f546eb4606b5c2b7d2a449a5cc2bbb477ed5a246c7051ce871b12f2dbfc8419	python-recorded	parity/links-anchor-on-non-html/in/site/x.css.fixture
@@ -1032,14 +1032,14 @@ d8795607f51cb330c264eda6f3633d8e0260c35b798f80aa4e7c22d5ca95f52b	python-recorded
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-same-page-anchor-relative-site-dir/stderr
 3494c5f1e6eed8b1ecfbb38ec94249cc40dc21a8c84f2e4b3d0892011b7a7c13	python-recorded	parity/links-same-page-anchor-relative-site-dir/stdout
 e576c4c1b1412c654db9849d08c58a17ccaada785e097b70bc8c2a8f0f800223	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/args
-7ed95ec1ac4f3baf7e67db0ec8cf0f14acaff0d103ac8d3c79bcd2d0362012f4	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/cwd
-1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/in/P/site/index.html.fixture
-c43ff44a809a9bd2d3396432e5e61fd584dd654ac7e2e3a4fa8e783988187bc4	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/in/P/site/m.html.fixture
-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/in/P/work/sub/.keep.fixture
+23d1866b7588ab7afa8bf77ad9207d70d76647742427071923566c7cdd407037	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/cwd
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/in/P/a/b/sub/.keep.fixture
+1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/in/P/a/site/index.html.fixture
+c43ff44a809a9bd2d3396432e5e61fd584dd654ac7e2e3a4fa8e783988187bc4	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/in/P/a/site/m.html.fixture
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/stderr
 3494c5f1e6eed8b1ecfbb38ec94249cc40dc21a8c84f2e4b3d0892011b7a7c13	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/stdout
-93b54c69c19f29a054cab1b1c190717fc3bb6e1d483b2ab1ab977d9c17cc2710	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/symlinks
+d7a490920e0b817b71c518bc0252b0aea219e91541346c64e9eae6108c57a010	python-recorded	parity/links-site-dir-across-a-link-from-a-logical-cwd/symlinks
 083c11a9a81a4d80739b1a751e9f86eef769a36a3ea46a884926383b4840f895	python-recorded	parity/links-site-dir-dot-slash-trailing/args
 1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-site-dir-dot-slash-trailing/in/site/index.html.fixture
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-site-dir-dot-slash-trailing/rc

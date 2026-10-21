@@ -27,6 +27,11 @@ func TestBlockedAddressClassTable(t *testing.T) {
 		"0.0.0.0": "unspecified", "::": "unspecified", "240.0.0.1": "reserved", "100.64.0.1": "shared_address",
 		"100.127.255.254": "shared_address", "64:ff9b::a00:1": "private", "2002:a00:1::": "private", "64:ff9b::7f00:1": "loopback", "64:ff9b::a9fe:101": "link_local",
 		"64:ff9b::e000:1": "multicast", "2002:808:808::": "reserved", "64:ff9b::808:808": "reserved", "64:ff9b:1::808:808": "reserved",
+		"64:ff9b::": "unspecified", "64:ff9b:1::": "unspecified", "2002::": "unspecified", "64:ff9b::1": "reserved",
+		// local-use NAT64 whose /64 reading is private and /96 reading link-local: the stricter class wins
+		"64:ff9b:1:0:a:0:a9fe:101": "link_local",
+		// Teredo: the server (bits 32-63) and the client (the last 32 bits, inverted) are both embedded IPv4 targets
+		"2001:0:a9fe:a9fe::": "metadata", "2001:0:808:808::5601:5601": "metadata", "2001:0:808:808::f7f7:f7f7": "reserved",
 		"93.184.216.34": "", "8.8.8.8": "", "2606:2800:220:1::1": "", "100.128.0.1": "",
 	} {
 		if got := BlockedAddressClass(netip.MustParseAddr(address)); got != want {

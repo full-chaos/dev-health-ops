@@ -167,6 +167,12 @@ func TestCheckNeverAdmitsAMetadataAddressInsideAnAllowedRange(t *testing.T) {
 			t.Errorf("check(%s) = %v, want the metadata refusal", address, err)
 		}
 	}
+	for _, address := range []string{"64:ff9b::", "64:ff9b:1::", "2002::"} {
+		var refused *RefusedError
+		if err := check(netip.MustParseAddr(address)); !errors.As(err, &refused) || refused.Class != "unspecified" {
+			t.Errorf("check(%s) = %v, want the unspecified refusal (it embeds 0.0.0.0)", address, err)
+		}
+	}
 	if err := check(netip.MustParseAddr("100.64.0.1")); err != nil {
 		t.Errorf("an allowed shared address was refused: %v", err)
 	}

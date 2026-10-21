@@ -70,21 +70,28 @@ func BlockedAddressClass(addr netip.Addr) string {
 	if metadataAddrs[addr] {
 		return "metadata"
 	}
-	// A translation address (NAT64, 6to4) reaches the IPv4 address it embeds: it takes that address's class, so an
-	// allow list for the IPv6 range never admits what the IPv4 address itself would not be admitted as.
+	// A translation address (NAT64, 6to4, Teredo) reaches the IPv4 address it embeds: it takes the strictest class of the
+	// addresses it can carry, so an allow list for the IPv6 range never admits what the IPv4 address would not be.
 	embedded := embeddedIPv4(addr)
+	// A 0.0.0.0 candidate is the zero fill of another length's position while some other candidate carries bits; when
+	// every candidate is 0.0.0.0 the address embeds the unspecified address itself (64:ff9b::, 2002::).
+	zeroFill := false
 	for _, candidate := range embedded {
-		if metadataAddrs[candidate] {
-			return "metadata"
+		if !candidate.IsUnspecified() {
+			zeroFill = true
 		}
 	}
+	strictest := ""
 	for _, candidate := range embedded {
-		if candidate.IsUnspecified() {
-			continue // the zero fill of a candidate position, not an embedded target
+		if zeroFill && candidate.IsUnspecified() {
+			continue
 		}
-		if class := BlockedAddressClass(candidate); class != "" {
-			return class
+		if class := BlockedAddressClass(candidate); class != "" && (strictest == "" || classRank[class] < classRank[strictest]) {
+			strictest = class
 		}
+	}
+	if strictest != "" {
+		return strictest
 	}
 	switch {
 	case addr.IsUnspecified():
@@ -117,15 +124,20 @@ var metadataAddrs = map[netip.Addr]bool{
 	netip.MustParseAddr("fd00:ec2::254"): true, netip.MustParseAddr("fd00:ec2::23"): true,
 }
 
+// classRank orders the classes from the strictest (never admitted by any allow list) down.
+var classRank = map[string]int{"metadata": 0, "link_local": 1, "multicast": 2, "unspecified": 3, "loopback": 4,
+	"private": 5, "unique_local": 6, "shared_address": 7, "reserved": 8}
+
 var (
 	nat64WellKnown = netip.MustParsePrefix("64:ff9b::/96")
 	nat64LocalUse  = netip.MustParsePrefix("64:ff9b:1::/48")
 	sixToFour      = netip.MustParsePrefix("2002::/16")
+	teredo         = netip.MustParsePrefix("2001::/32")
 )
 
 // embeddedIPv4 is every IPv4 address an IPv6 translation address can carry: NAT64 well-known /96 (RFC 6052), the
 // local-use prefix 64:ff9b:1::/48 at every RFC 6052 length it allows (/48, /56, /64, /96; RFC 8215), and 6to4 (RFC
-// 3056). Every candidate is returned, so the strictest reading wins.
+// 3056) and Teredo (RFC 4380). Every candidate is returned, so the strictest reading wins.
 func embeddedIPv4(addr netip.Addr) []netip.Addr {
 	if !addr.Is6() {
 		return nil
@@ -139,6 +151,8 @@ func embeddedIPv4(addr netip.Addr) []netip.Addr {
 		return []netip.Addr{at(6, 7, 9, 10), at(7, 9, 10, 11), at(9, 10, 11, 12), at(12, 13, 14, 15)}
 	case sixToFour.Contains(addr):
 		return []netip.Addr{at(2, 3, 4, 5)}
+	case teredo.Contains(addr): // RFC 4380: the server, and the client stored inverted
+		return []netip.Addr{at(4, 5, 6, 7), netip.AddrFrom4([4]byte{^b[12], ^b[13], ^b[14], ^b[15]})}
 	}
 	return nil
 }

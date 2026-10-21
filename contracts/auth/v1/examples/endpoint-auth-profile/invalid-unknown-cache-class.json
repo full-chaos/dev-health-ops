@@ -2,6 +2,9 @@
   "accepted_credential_classes": [
     "user_access_token"
   ],
+  "access_token_validation": {
+    "legacy_hs256": false
+  },
   "action": "members.invite",
   "cache_class": "five_minutes",
   "classification": "protected",

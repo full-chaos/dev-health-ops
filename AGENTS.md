@@ -214,7 +214,7 @@ It mirrors the PR-time CI gates of the ops repo and MUST be green before `git pu
 
 1. `ruff format --check .` and `ruff check .` (local only; CI no longer runs ruff)
 2. The **hosted** Python test selection, the same files the hosted `test` check runs after
-   CHAOS-8352 removed the Python unit matrix: `tests/docs`, `tests/tooling` (`-n 4`) and the
+   CHAOS-8352 removed the Python unit matrix: `tests/tooling` (`-n 4`) and the
    explicit list in `ci/kept_python_tests.txt` (read from that file, never copied), with the
    local socks5h proxy neutralized. **Do not run the whole `tests/` dir**: it still holds
    tests of the deleted Python api tree and is red by construction (CHAOS-8692). A new file

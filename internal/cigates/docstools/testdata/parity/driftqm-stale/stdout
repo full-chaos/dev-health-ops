@@ -1,0 +1,1 @@
+ERROR: generated queue-map block in docs/contribute/architecture/go-worker-runtime.md is stale. Run 'cigate docs gen-queue-mapping' and commit the result.

@@ -138,7 +138,7 @@ func (g *guard) helm(env []string, args ...string) render {
 // tpl runs `helm template <release> <chart> <args>` with the placeholder web BACKEND_URL the suite always
 // gave it (web.env.BACKEND_URL is required while web.enabled, the chart default).
 func (g *guard) tpl(release string, args ...string) render {
-	full := []string{"template", "--set", "web.env.BACKEND_URL=" + backendURL, release, g.path(chartRel)}
+	full := []string{"template", "--set", "web.env.BACKEND_URL=" + backendURL, "--set", "web.authSecret.secretName=web-auth-placeholder", release, g.path(chartRel)}
 	return g.helm(nil, append(full, args...)...)
 }
 

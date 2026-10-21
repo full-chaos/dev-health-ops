@@ -1034,6 +1034,8 @@ var metricUnitFailureReasonVocabulary = map[string]struct{}{
 	"response_too_large": {},
 	"result_too_large":   {},
 	"time_limit":         {},
+	// CHAOS-8829: a GitHub tree walk a ceiling stopped, or a truncated directory.
+	"tree_walk_limit": {},
 }
 
 // MetricUnitFailureReasonLabel bounds a unit failure category label.

@@ -622,6 +622,49 @@ func TestSAMLLegacyAccountSignsInBySubject(t *testing.T) {
 	})
 }
 
+// TestSAMLNameIDInTwoOrganizationsIsRefusedWithoutWrites: two go-api accounts
+// in two organizations carry one NameID. With auto-provisioning on, the
+// sign-in is refused and writes no account, membership or identity.
+func TestSAMLNameIDInTwoOrganizationsIsRefusedWithoutWrites(t *testing.T) {
+	h := newHarness(t, true)
+	ctx := context.Background()
+	if _, err := h.db.admin.Exec(ctx, `UPDATE public.sso_providers SET auto_provision_users = true WHERE id = $1`, h.provider.ID); err != nil {
+		t.Fatal(err)
+	}
+	otherOrg := uuid.New()
+	if _, err := h.db.admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'saml-test')`, otherOrg, "org-"+otherOrg.String()); err != nil {
+		t.Fatal(err)
+	}
+	shared := "two-orgs-" + uuid.NewString()
+	inOrgEmail := uniqueEmail("in-org")
+	h.member(h.goAPIUser(inOrgEmail, "saml", &shared, false))
+	elsewhere := h.goAPIUser(uniqueEmail("other-org"), "saml", &shared, false)
+	if _, err := h.db.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'member')`, uuid.New(), elsewhere, otherOrg); err != nil {
+		t.Fatal(err)
+	}
+	counts := func() [5]int {
+		return [5]int{
+			h.count(`SELECT count(*) FROM public.users`),
+			h.count(`SELECT count(*) FROM public.memberships`),
+			h.count(`SELECT count(*) FROM auth.principals`),
+			h.count(`SELECT count(*) FROM auth.users`),
+			h.identityCount(),
+		}
+	}
+	for name, email := range map[string]string{"a new email": uniqueEmail("asserted"), "the in-org account's email": inOrgEmail} {
+		t.Run(name, func(t *testing.T) {
+			before := counts()
+			signIn, err := h.consume(h.respond(resp{nameID: nid(shared), email: email}), nil)
+			if err == nil {
+				t.Fatalf("sign-in %+v accepted, want a refusal", signIn)
+			}
+			if after := counts(); after != before {
+				t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
+			}
+		})
+	}
+}
+
 // TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail: on a key hit the stored
 // account signs in; the assertion's email is neither required nor compared.
 func TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail(t *testing.T) {
@@ -690,11 +733,12 @@ func TestSAMLResponseIsBoundToTheRowOfItsRoute(t *testing.T) {
 	}
 }
 
-// TestSAMLPrefixedACSOverrideSignsIn: an override that puts a proxy prefix in
-// front of /saml/{row id}/acs is this row's ACS URL and signs in.
-func TestSAMLPrefixedACSOverrideSignsIn(t *testing.T) {
+// TestSAMLPrefixedACSOverrideIsRefused: an override that puts a proxy prefix in
+// front of /api/v1/auth/saml/{row id}/acs is not the served route; the row is
+// refused at load.
+func TestSAMLPrefixedACSOverrideIsRefused(t *testing.T) {
 	h := newHarness(t, true)
-	user := h.linkedUser(uniqueEmail("u"), "user-1")
+	h.linkedUser(uniqueEmail("u"), "user-1")
 	acs := "https://proxy.example.com/edge/api/v1/auth/saml/" + h.provider.ID.String() + "/acs"
 	config := fmt.Sprintf(`{"entity_id": %q, "sso_url": "https://idp.example.test/sso", "certificate": %q, "sp_acs_url": %q}`, h.idp.entityID, encodeCert(h.idp), acs)
 	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET config = $2::json WHERE id = $1`, h.provider.ID, config); err != nil {
@@ -702,9 +746,8 @@ func TestSAMLPrefixedACSOverrideSignsIn(t *testing.T) {
 	}
 	posted := b64(h.idp.response(t, resp{nameID: nid("user-1"), email: "a@example.com", destination: strp(acs), recipient: strp(acs),
 		audiences: [][]string{{h.provider.SPEntityID(baseURL)}}}))
-	signIn, err := h.svc.Consume(context.Background(), h.provider.ID, posted, nil)
-	if err != nil || signIn.PrincipalID != user {
-		t.Fatalf("prefixed override: sign-in %+v err %v", signIn, err)
+	if _, err := h.svc.Consume(context.Background(), h.provider.ID, posted, nil); !errors.Is(err, saml.ErrConfig) {
+		t.Fatalf("prefixed override: err = %v, want ErrConfig", err)
 	}
 }
 

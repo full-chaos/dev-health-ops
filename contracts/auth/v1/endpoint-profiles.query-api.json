@@ -23,6 +23,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -63,6 +66,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -103,6 +109,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -143,6 +152,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -183,6 +195,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -223,6 +238,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -263,6 +281,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -303,6 +324,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -343,6 +367,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -383,6 +410,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -423,6 +453,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -463,6 +496,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -503,6 +539,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -543,6 +582,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -583,6 +625,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -623,6 +668,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -679,6 +727,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -719,6 +770,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -759,6 +813,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -799,6 +856,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -839,6 +899,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -879,6 +942,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -919,6 +985,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -959,6 +1028,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -999,6 +1071,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1039,6 +1114,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1079,6 +1157,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1119,6 +1200,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1159,6 +1243,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1233,6 +1320,9 @@
       "accepted_credential_classes": [
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -1268,6 +1358,9 @@
       "accepted_credential_classes": [
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "classification": "protected",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces."
@@ -1352,6 +1445,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1421,6 +1517,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1462,6 +1561,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"
@@ -1503,6 +1605,9 @@
         "effective_principal_envelope",
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "HS256"

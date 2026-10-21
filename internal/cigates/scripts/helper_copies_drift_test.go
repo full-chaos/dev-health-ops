@@ -48,6 +48,16 @@ func readTree(t *testing.T, root string) map[string]string {
 
 func copyDefects(files map[string]string) []string {
 	var out []string
+	// every file's function declarations are cut once: the comparison below reads each file many times
+	cutDecls := map[string][][]string{}
+	declsOf := func(rel string) [][]string {
+		if d, ok := cutDecls[rel]; ok {
+			return d
+		}
+		d := funcDecl.FindAllStringSubmatch(files[rel], -1)
+		cutDecls[rel] = d
+		return d
+	}
 	var rels []string
 	for rel := range files {
 		rels = append(rels, rel)
@@ -77,13 +87,13 @@ func copyDefects(files map[string]string) []string {
 			if filepath.Base(rel) != name {
 				continue
 			}
-			for _, m := range funcDecl.FindAllStringSubmatch(files[rel], -1) {
+			for _, m := range declsOf(rel) {
 				found, same := false, false
 				for _, other := range rels {
 					if other == rel || filepath.Base(other) == name {
 						continue
 					}
-					for _, om := range funcDecl.FindAllStringSubmatch(files[other], -1) {
+					for _, om := range declsOf(other) {
 						if om[1] == m[1] {
 							found = true
 							same = same || om[0] == m[0]

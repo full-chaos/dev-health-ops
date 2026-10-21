@@ -25,8 +25,7 @@ import (
 // already has that concept and a second name for one thing is how a closed
 // vocabulary stops being closed.
 var waveOnePlatformCredentialClasses = map[string]string{
-	"user_access_token": "TRD section 11, User access token: EdDSA JWS replacing ops_access_token_hs256.",
-	"workload_token":    "TRD section 11, Workload token: EdDSA JWS, exact audience, obtained by federation or bootstrap exchange.",
+	"workload_token": "TRD section 11, Workload token: EdDSA JWS, exact audience, obtained by federation or bootstrap exchange.",
 }
 
 func frozenCredentialClassIDs(t *testing.T) map[string]bool {

@@ -10,7 +10,7 @@ import (
 )
 
 // The provider limits page is the catalog the sync budget's route families are documented in; it must exist and be
-// reachable from the mkdocs nav. Run from the repository root.
+// reachable from the mkdocs nav. Run from any directory inside the repository.
 const providerLimitsPage = "docs/reference/limits-and-compatibility/provider-limits.md"
 
 func init() {
@@ -40,7 +40,7 @@ func providerLimitsVerb(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: cigate docs check-provider-limits")
 		return 2
 	}
-	root, err := os.Getwd()
+	root, err := docsRoot("mkdocs.yml")
 	if err != nil {
 		fmt.Fprintln(stderr, "check-provider-limits:", err)
 		return 1

@@ -69,3 +69,6 @@ jobs:
 
       - name: Check the provider limits page exists and is in the mkdocs nav
         run: go run -trimpath -mod=readonly ./cmd/cigate docs check-provider-limits
+
+      - name: Run the docs page guards of the docstools package
+        run: go test -mod=readonly -trimpath -count=1 ./internal/cigates/docstools/...

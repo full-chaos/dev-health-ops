@@ -1,7 +1,8 @@
 // Command cigate runs the repository's CI gate programs.
 //
 //	cigate governance [flags]            PR test-evidence / risk-notes gate
-//	cigate affected-integration [flags]  integration packages a change can affect
+//	cigate plan-verdict [flags]          NONE / AFFECTED / FULL plan of a change set
+//	cigate plan-reads [flags]            guard of the declared-read table of the plan
 //	cigate govulncheck                   gate govulncheck JSON on stdin
 //	cigate scope-candidates <module>     auth scope candidates from go list JSON on stdin
 //	cigate metrics-proof [flags]         metrics.daily executed-proof readback against ClickHouse
@@ -19,6 +20,7 @@ import (
 	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates"
+	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/bigboyrender"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/docsprepare"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/docstools"
@@ -32,14 +34,16 @@ func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: cigate governance|affected-integration|govulncheck|scope-candidates|metrics-proof|bigboy|docs|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e [args]")
+		fmt.Fprintln(os.Stderr, "usage: cigate governance|plan-verdict|plan-reads|govulncheck|scope-candidates|metrics-proof|bigboy|docs|docs-prepare|plane-split-router|query-api-flags|route-coverage|web-env-parity|live-e2e [args]")
 		return 2
 	}
 	switch args[0] {
 	case "governance":
 		return cigates.Governance(args[1:], os.Stdout)
-	case "affected-integration":
-		return cigates.AffectedIntegration(args[1:], os.Stdout, os.Stderr)
+	case "plan-verdict":
+		return affected.PlanVerdict(args[1:], os.Stdout, os.Stderr)
+	case "plan-reads":
+		return affected.PlanReads(args[1:], os.Stdout, os.Stderr)
 	case "govulncheck":
 		return cigates.AuthGovulncheck(os.Stdin, os.Stdout, os.Stderr)
 	case "docs-prepare":

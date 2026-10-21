@@ -19,8 +19,8 @@ import (
 func TestTheExpressionIsStartedAtFewPositionsBesideALongRun(t *testing.T) {
 	text := `"git_blame": "author_email=fixture@example.com` + "\x1f" + `content=` + strings.Repeat("x", 1<<20) + `"`
 	spans, starts := matchSpansCounting(text)
-	if starts > 1000 {
-		t.Fatalf("the expression was started at %d positions over a %d-byte leaf (%d match(es)); want at most 1000", starts, len(text), len(spans))
+	if starts == 0 || starts > 1000 {
+		t.Fatalf("the expression was started at %d positions over a %d-byte leaf (%d match(es)); want 1 to 1000 (its keyword is followed by a separator)", starts, len(text), len(spans))
 	}
 }
 

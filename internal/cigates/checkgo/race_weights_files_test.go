@@ -77,6 +77,10 @@ func TestRaceWeightsFiles(t *testing.T) {
 		{"a weight in Arabic-Indic digits", func(d string) { write(d, victimFile, victim+"\t\u0663\n") }, true, []string{victimFile, "the weight '\u0663' is not a whole number"}},
 		{"a weight with a no-break space", func(d string) { write(d, victimFile, victim+"\t3\u00a0\n") }, true, []string{victimFile, "is not a whole number"}},
 		{"a row that ends in a carriage return", func(d string) { write(d, victimFile, victim+"\t3\r\n") }, true, []string{victimFile, "is not a whole number"}},
+		{"a NUL byte", func(d string) { write(d, victimFile, victim+"\t3\x00\n") }, true, []string{victimFile, "is not text"}},
+		{"a byte that is not UTF-8", func(d string) { write(d, victimFile, victim+"\t3\xff\n") }, true, []string{victimFile, "is not text"}},
+		{"a UTF-8 sequence cut at the end of the file", func(d string) { write(d, victimFile, victim+"\t3\xc3") }, true, []string{victimFile, "is not text"}},
+		{"an overlong UTF-8 sequence", func(d string) { write(d, victimFile, victim+"\t3\xc0\xaf\n") }, true, []string{victimFile, "is not text"}},
 		{"the real directory with a comment and a blank line in a file is accepted", func(d string) { write(d, victimFile, "# note\n\n"+string(victimRow)) }, false, []string{"race-weights-rows:"}},
 	}
 	for _, c := range cases {

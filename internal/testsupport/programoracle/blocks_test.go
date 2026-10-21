@@ -5,26 +5,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// blockLinesProgram writes 2500 canonical lines (three blocks, the last one
-// short) with both field kinds: a code point list, and a string that holds an
-// astral code point, an escaped surrogate pair and a lone surrogate.
-const blockLinesProgram = BlocksPython + `
-lines = []
-for n in range(2500):
-    lines.append(code_points([n, n * 7 % 0x110000]) + "|" + text("\u00e9" + chr(0x1F600) + "\ud83d\ude00" + "\ud800" + str(n)))
-print(json.dumps(block_digests(lines)))
-`
-
-// blockLine is the Go half of blockLinesProgram's line n. A JSON reader gives
+// blockLine is the Go half of the frozen program's line n. A JSON reader gives
 // the escaped pair as U+1F600 and the lone surrogate as U+FFFD.
 func blockLine(dst []byte, n int) []byte {
 	dst = AppendCodePoints(dst, []rune{rune(n), rune(n * 7 % 0x110000)})
@@ -41,16 +29,12 @@ func fixedLines(lines []string) func(dst []byte, index int) []byte {
 // the Go half here over the same answers: no block differs. One changed
 // answer makes exactly its block differ.
 func TestTheGoHalfOfTheBlockDigestsIsThePythonHalf(t *testing.T) {
-	_, file, _, _ := moduleroot.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/blocks.golden.json",
 		PythonBuild: runGoldenPythonBuild,
 		SHA256:      "222ea6b4f17e7a0676502feb6a851084e9ef21a933cc63db87c24669ddb8721a",
-		Recipe: "git worktree add --detach $DIR " + runGoldenPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/testsupport/programoracle/ -test '^TestTheGoHalfOfTheBlockDigestsIsThePythonHalf$' -python-root $DIR",
 	}
-	answers := Run(t, spec, root, []Program{{Name: "block digests", Text: blockLinesProgram}})
+	answers := Run(t, spec, []Program{{Name: "block digests"}})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the program exited %d: %q", answers[0].ExitCode, answers[0].Stdout)
 	}
@@ -198,14 +182,6 @@ func TestTheCanonicalFieldsAreUnambiguous(t *testing.T) {
 	}
 	if got := string(AppendText(nil, "a\xff")); got != "invalid-utf8:61ff" {
 		t.Errorf("AppendText of invalid UTF-8 = %q", got)
-	}
-}
-
-// TestTheProgramHalfHashesBlocksOfBlockLines pins the one number the two
-// halves share: the Python half's block size is BlockLines.
-func TestTheProgramHalfHashesBlocksOfBlockLines(t *testing.T) {
-	if want := fmt.Sprintf("\nBLOCK_LINES = %d\n", BlockLines); !strings.Contains(BlocksPython, want) {
-		t.Fatalf("BlocksPython does not hold %q", want)
 	}
 }
 

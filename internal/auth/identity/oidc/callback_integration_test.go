@@ -24,7 +24,6 @@ import (
 
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
@@ -238,7 +237,19 @@ func TestExistingSSOAccountNeedsProviderOrgMembership(t *testing.T) {
 		before := h.snapshot(t)
 		s := h.start(t)
 		_, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-elsewhere", uniqueEmail("asserted"))))
-		wantDenied(t, failure, http.StatusForbidden, ReasonSignupUnavailable)
+		wantDenied(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+		wantUnchanged(t, h, before)
+	})
+	t.Run("two organizations carry the subject", func(t *testing.T) {
+		h := newHarness(t, harnessOpts{signup: false})
+		inOrg := h.seedPublicUser(t, uniqueEmail("in-org"), "oidc", "sub-two-orgs")
+		h.seedMembership(t, inOrg, h.orgID, "member")
+		elsewhere := h.seedPublicUser(t, uniqueEmail("other-org"), "oidc", "sub-two-orgs")
+		h.seedMembership(t, elsewhere, h.seedOrg(t), "member")
+		before := h.snapshot(t)
+		s := h.start(t)
+		_, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-two-orgs", uniqueEmail("asserted"))))
+		wantDenied(t, failure, http.StatusConflict, ReasonIdentityConflict)
 		wantUnchanged(t, h, before)
 	})
 	t.Run("two accounts carry the subject", func(t *testing.T) {
@@ -250,7 +261,7 @@ func TestExistingSSOAccountNeedsProviderOrgMembership(t *testing.T) {
 		before := h.snapshot(t)
 		s := h.start(t)
 		_, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-twin", uniqueEmail("asserted"))))
-		wantDenied(t, failure, http.StatusForbidden, ReasonSignupUnavailable)
+		wantDenied(t, failure, http.StatusConflict, ReasonIdentityConflict)
 		wantUnchanged(t, h, before)
 	})
 }
@@ -741,34 +752,6 @@ func TestProviderChecksPrecedeConfigDecode(t *testing.T) {
 	}
 }
 
-// outcomeCounts reads auth.oidc.outcomes by its route, outcome and reason labels.
-func outcomeCounts(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
-	t.Helper()
-	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatal(err)
-	}
-	out := map[string]int64{}
-	for _, scope := range rm.ScopeMetrics {
-		for _, m := range scope.Metrics {
-			if m.Name != "auth.oidc.outcomes" {
-				continue
-			}
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok {
-				t.Fatalf("auth.oidc.outcomes is %T", m.Data)
-			}
-			for _, dp := range sum.DataPoints {
-				route, _ := dp.Attributes.Value("route")
-				outcome, _ := dp.Attributes.Value("outcome")
-				reason, _ := dp.Attributes.Value("reason")
-				out[route.AsString()+"/"+outcome.AsString()+"/"+reason.AsString()] += dp.Value
-			}
-		}
-	}
-	return out
-}
-
 func TestEveryOutcomeIsRecordedOnce(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: true})
 	reader := sdkmetric.NewManualReader()
@@ -813,5 +796,25 @@ func TestEveryOutcomeIsRecordedOnce(t *testing.T) {
 	}
 	if n := strings.Count(logged.String(), "reason=not_entitled"); n != 2 {
 		t.Errorf("refusal log lines with reason=not_entitled = %d, want 2:\n%s", n, logged.String())
+	}
+	wantOneLogLinePerOutcome(t, logged.String(), counts)
+}
+
+// wantOneLogLinePerOutcome holds every counted outcome (route/outcome/reason)
+// to exactly as many log lines naming it, and no outcome log line to be
+// uncounted: success and refusal alike.
+func wantOneLogLinePerOutcome(t *testing.T, logged string, counts map[string]int64) {
+	t.Helper()
+	var total int64
+	for key, n := range counts {
+		total += n
+		parts := strings.SplitN(key, "/", 3)
+		needle := "route=" + parts[0] + " outcome=" + parts[1] + " reason=" + parts[2]
+		if got := int64(strings.Count(logged, needle)); got != n {
+			t.Errorf("log lines %q = %d, want %d (the counted outcomes):\n%s", needle, got, n, logged)
+		}
+	}
+	if lines := int64(strings.Count(logged, " outcome=")); lines != total {
+		t.Errorf("outcome log lines = %d, counted outcomes = %d:\n%s", lines, total, logged)
 	}
 }

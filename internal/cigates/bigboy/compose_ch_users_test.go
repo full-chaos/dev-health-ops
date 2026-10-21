@@ -439,11 +439,15 @@ func composeCutRunReal(g *guard, o composeCutOpts) composeCutRun {
 	composeWrite(g, filepath.Join(stub, "gh"), "#!/usr/bin/env bash\necho "+strings.Repeat("c", 40)+"\n", 0o755)
 	// The cut waits 45 s for go-api after `up`; nothing asserted here depends on the wait.
 	composeWrite(g, filepath.Join(stub, "sleep"), "#!/usr/bin/env bash\nexit 0\n", 0o755)
-	python := "exit 0\n"
+	composeWrite(g, filepath.Join(stub, "python3"), "#!/usr/bin/env bash\nexit 0\n", 0o755)
 	if o.fakeGenerator {
-		python = fmt.Sprintf("case \"$1\" in */generate-plane-split-router.py) shift; printf '%%s\\n' \"$@\" > %q; exit 1 ;; esac\nexit 0\n", filepath.Join(dir, "generator-args.log"))
+		// The cut builds cigate with go; this go writes a cigate whose plane-split-router logs its arguments and fails.
+		composeWrite(g, filepath.Join(stub, "go"), "#!/usr/bin/env bash\n"+
+			"while [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\n"+
+			"cat > \"$out\" <<'CIGATE'\n#!/usr/bin/env bash\n"+
+			"case \"$1\" in plane-split-router) shift; printf '%s\\n' \"$@\" > '"+filepath.Join(dir, "generator-args.log")+"'; exit 1 ;; esac\nexit 0\nCIGATE\n"+
+			"chmod +x \"$out\"\n", 0o755)
 	}
-	composeWrite(g, filepath.Join(stub, "python3"), "#!/usr/bin/env bash\n"+python, 0o755)
 	opsRepo := o.opsRepo
 	if opsRepo == "" {
 		opsRepo = g.root

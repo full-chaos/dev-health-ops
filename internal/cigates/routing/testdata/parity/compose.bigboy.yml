@@ -1,0 +1,11 @@
+# Synthetic compose overlay for the recorded web-env-parity pair.
+services:
+  web:
+    build: !reset null
+    environment:
+      - BACKEND_URL=http://traefik:3000
+      - AUTH_URL=https://www.commanderkeen.dev
+      - TRUST_PROXY=false
+  query-api:
+    ports: !override
+      - "8091:8090"

@@ -362,6 +362,10 @@ func requirePreparedRouteSnapshotEOF(decoder *json.Decoder) error {
 // against exactly what the route declares it emits.
 func preparedManifestRouteDestinations(provider, dataset string) ([]string, bool) {
 	switch {
+	// github/files recovers by chunked checkpoints (a prepared snapshot holds
+	// one batch, and a files unit is many chunks).
+	case provider == "github" && dataset == "files":
+		return nil, false
 	case provider == "github" && dataset == "work-items",
 		(provider == "github" || provider == "gitlab") && dataset == "deployments",
 		(provider == "github" || provider == "gitlab") && dataset == "prs",

@@ -29,7 +29,7 @@ var pythonDriverText = regexp.MustCompile(`"error":"[^"]*sentinel retention dele
 func TestRetentionRoutesVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, governanceGolden("retention", "TestRetentionRoutesVenueOracle", "de6a34074ae06da8e8b928e79191d38d1a1b90831981fa7ada074a481780ba3d"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("ret")
 	const jwtKey = "venue-oracle-test-secret-key-for-retention-flow-32-bytes!"
 
@@ -388,9 +388,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		source := golden.CompareRows(t, name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, goRows)
+		source := golden.CompareRows(t, name, goRows)
 		if source == "" {
 			t.Errorf("%s: the query matched no rows on the Python plane; the comparison proves nothing", name)
 		}

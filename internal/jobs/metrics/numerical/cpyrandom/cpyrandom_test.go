@@ -10,11 +10,10 @@ import (
 )
 
 // The golden vectors are captured FROM the live CPython random module by
-// tests/fixtures/generate_cpython_random_golden.py. They are compared here
-// without an interpreter so this runs in the ordinary unit suite; the live-
-// oracle lane separately re-derives them from CPython and fails if the
-// recording has gone stale, which is the pairing the frozen numerical golden
-// lacked before it was guarded.
+// generate_cpython_random_golden (generator deleted, golden frozen). They are compared here
+// without an interpreter so this runs in the ordinary unit suite. Nothing
+// re-derives them from CPython any more: the live rot guard is deleted and the
+// frozen recording is the only reference.
 type goldenDocument struct {
 	PythonVersion string       `json:"python_version"`
 	Cases         []goldenCase `json:"cases"`

@@ -1,0 +1,4 @@
+ERROR: B.md JSON example #1 unknown themes keys: ['u3']
+ERROR: a.md JSON example #1 unknown themes keys: ['u2']
+ERROR: b/z.md JSON example #1 unknown themes keys: ['u1']
+ERROR: b.md JSON example #1 unknown themes keys: ['u4']

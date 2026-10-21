@@ -50,7 +50,7 @@ func TestSavedReportWriteProofBaselinesVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("saved-report-write-proof", t.Name(), "527a21c98dc994c6d1821cc0b50f8bbc358908918651dbe5c725535974e9306d"))
 	user := stableVenueID("saved-report-write-proof/user")
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root), JWTKey: oracleJWTKey,
+		Golden: golden, Root: root, JWTKey: oracleJWTKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			for _, statement := range []struct {
 				sql  string
@@ -78,17 +78,6 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), oracleOrgA
 		t.Fatal(err)
 	}
 	t.Cleanup(goDB.Close)
-	// The Python plane exists only while recording: its database, its answers and the effects of
-	// each case are produced then and frozen (the golden's rows hold them per case).
-	var pythonDB *pgxpool.Pool
-	if golden.Recording() {
-		var err error
-		pythonDB, err = pgxpool.New(ctx, venue.AdminURI(t, venue.SourceDB))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(pythonDB.Close)
-	}
 	goHandler, closeGo := startGoMutationServer(t, ctx, venue)
 	defer closeGo()
 
@@ -102,19 +91,6 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), oracleOrgA
 	golden.Consumed(t, warmUp...)
 
 	docs := oracleDocuments()
-	pythonPoster := func(name string) writeproof.Poster {
-		return func(_ context.Context, document, variables string) (writeproof.Response, error) {
-			body := `{"query": ` + jsonString(document) + `, "variables": ` + variables + `}`
-			// While recording only: the case's digest is computed on the Python plane's own answer, as the
-			// plane gave it; the golden freezes the digest (CompareRows below), not the HTTP answer.
-			answer := venue.ServePython(t, []venueoracle.Request{{
-				Name: name, Method: "POST", Path: "/graphql",
-				Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["a"], "Content-Type": "application/json"},
-				Body:    venueoracle.B64(body),
-			}})[0]
-			return writeproof.Response{Status: answer.Status, Body: []byte(answer.Body), Build: "python", WireAttempts: 1}, nil
-		}
-	}
 	goPoster := func(_ context.Context, document, variables string) (writeproof.Response, error) {
 		body := `{"query": ` + jsonString(document) + `, "variables": ` + variables + `}`
 		request := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader([]byte(body)))
@@ -153,23 +129,9 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), oracleOrgA
 			t.Errorf("%s: the go plane's answer is not the one the case was written for: %s", c.Name, problem)
 		}
 		goEffects, _ := goResult.Effects.Canonical()
-		// The Python plane's digest and effects of this case: executed while recording (the same
-		// writeproof.Execute on its own database, under its own run tag, with its checks), frozen after.
-		// The digest is what the case's baseline holds, and what the planes are required to agree on.
-		pythonSummary := golden.CompareRows(t, "write proof "+c.Name, func() string {
-			pythonRun := writeproof.RunTag("wporaclepy" + strings.ReplaceAll(c.Name, "saved-report-", ""))
-			pythonResult, pythonErr := writeproof.Execute(ctx, pythonDB, oracleOrgA, c, pythonRun, docs[c.Operation], pythonPoster(c.Name))
-			if pythonErr != nil {
-				t.Fatalf("%s: execute failed on the Python plane: %v", c.Name, pythonErr)
-			}
-			if pythonResult.TerminalState == writeproof.StateProofFailed {
-				t.Errorf("%s: the python plane did not produce a usable observation: %s", c.Name, pythonResult.Detail)
-			}
-			if problem := answerProblem(c, pythonResult); problem != "" {
-				t.Errorf("%s: the python plane's answer is not the one the case was written for: %s", c.Name, problem)
-			}
-			return pythonResult.Digest
-		}, goResult.Digest)
+		// The Python plane's digest of this case is frozen in the golden. It is what the case's baseline
+		// holds, and what the planes are required to agree on.
+		pythonSummary := golden.CompareRows(t, "write proof "+c.Name, goResult.Digest)
 		if pythonSummary != goResult.Digest {
 			// The planes persisted different effects; CompareRows has failed the test with both digests.
 			pythonEffects := "(the Python plane's effects are not frozen: only its digest is)"

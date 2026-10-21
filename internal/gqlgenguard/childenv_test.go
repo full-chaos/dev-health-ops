@@ -60,7 +60,7 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 		{shape: "GOTOOLCHAIN=go1.99.0 (not inherited: local)", env: set("GOTOOLCHAIN", "go1.99.0")},
 		{shape: "GOWORK=<a workspace> (not inherited: off)", env: func(t *testing.T, f *fixture) map[string]string {
 			w := filepath.Join(t.TempDir(), "go.work")
-			if err := os.WriteFile(w, []byte("go 1.27.2\n\nuse "+f.dir+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(w, []byte("go 1.27.3\n\nuse "+f.dir+"\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			return map[string]string{"GOWORK": w}
@@ -428,7 +428,7 @@ func TestTheGuardsOwnInputsAreInBothParsedPathLists(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(readRepoFile(t, ".github/workflows/go.yml")), &wf); err != nil {
 		t.Fatalf("parse go.yml: %v", err)
 	}
-	for _, want := range []string{"**/*.go", "internal/queryapi/gqlgen.yml", "contracts/**", ".github/workflows/go-quality.yml", ".github/workflows/go.yml", "**/go.mod", "**/go.sum", "ci/go_relevance.py"} {
+	for _, want := range []string{"**/*.go", "internal/queryapi/gqlgen.yml", "contracts/**", ".github/workflows/go-quality.yml", ".github/workflows/go.yml", "**/go.mod", "**/go.sum", "ci/go_relevance.sh"} {
 		for event, list := range map[string][]string{"push": wf.On.Push.Paths, "pull_request": wf.On.PullRequest.Paths} {
 			found := false
 			for _, p := range list {

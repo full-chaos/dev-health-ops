@@ -14,30 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonSignatureProgram classifies each [payload b64, header b64] with the
-// real stripe-python WebhookSignature.verify_header (default tolerance):
-// "ok", "sig" (SignatureVerificationError) or "crash" (any other
-// exception). The header bytes reach it latin-1 decoded, as Starlette
-// hands them over.
-const pythonSignatureProgram = `
-import base64, json, sys, time
-from stripe import SignatureVerificationError
-from stripe._webhook import WebhookSignature, Webhook
-cases = json.loads(sys.stdin.read())
-out = []
-for payload, header, now in cases["cases"]:
-    # Both planes judge the tolerance of a case at the same instant.
-    time.time = lambda now=now: now
-    try:
-        WebhookSignature.verify_header(base64.b64decode(payload), base64.b64decode(header).decode("latin-1"), cases["secret"], Webhook.DEFAULT_TOLERANCE)
-        out.append("ok")
-    except SignatureVerificationError:
-        out.append("sig")
-    except Exception as exc:
-        out.append("crash:" + type(exc).__name__)
-print(json.dumps(out))
-`
-
 func sign(secret, timestamp string, payload []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(timestamp + "."))
@@ -127,7 +103,7 @@ func TestStripeSignatureMatchesFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenPython(t, "stripe-signature.golden.json", programoracle.Program{
-		Name: "stripe signature", Text: pythonSignatureProgram, Stdin: input,
+		Name: "stripe signature", Stdin: input,
 	})[0]
 	var want []string
 	if err := json.Unmarshal([]byte(output), &want); err != nil {

@@ -15,8 +15,9 @@
 # packages take no part in the longest-processing-time split, because their
 # measured time depends on what runs beside them (internal/fixturescli: 10.7 s
 # with idle co-tenants, 600 s with heavy ones) and no weight can place a package
-# away from every heavy neighbour. Each solo package is handed, after the split,
-# to the then-lightest shard, and `part=solo` prints exactly those packages of the
+# away from every heavy neighbour. Each solo package is placed FIRST, on the then-lightest
+# shard (its weight pre-loads that shard, so the split of the other packages leaves it less),
+# and `part=solo` prints exactly those packages of the
 # shard while the default part prints the rest. The caller runs the solo
 # packages in their own `go test` invocation once the shard's other packages
 # have finished, so nothing else of the leg runs beside them. Without `solo`,
@@ -68,13 +69,18 @@ END {
   for (pass = 1; pass <= 2; pass++) {
     for (i = 1; i <= n; i++) {
       k = order[i]
-      if (soloPkg[k] != (pass == 2)) continue
+      if (soloPkg[k] != (pass == 1)) continue
       best = 1
       for (s = 2; s <= count; s++) if (load[s] < load[best]) best = s
       load[best] += weight[k]
       if (best == shard) keep[k] = 1
     }
   }
-  # print in input order so the package order handed to go test is stable
-  for (k = 1; k <= n; k++) if ((k in keep) && ((part == "solo") == (soloPkg[k] == 1))) print path[k]
+  # print in weight-descending order (the order of the split, ties by path): go test starts packages in the order given, so the
+  # longest ones start first and no heavy package starts late and ends the leg alone. The order is a pure function of
+  # (input, weights, count), so it is stable.
+  for (i = 1; i <= n; i++) {
+    k = order[i]
+    if ((k in keep) && ((part == "solo") == (soloPkg[k] == 1))) print path[k]
+  }
 }

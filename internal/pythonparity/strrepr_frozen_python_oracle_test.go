@@ -9,20 +9,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const pythonStrReprProgram = `
-import json, sys
-texts = json.loads(sys.stdin.read())
-ranges, start = [], None
-for cp in range(sys.maxunicode + 2):
-    nonprintable = cp <= sys.maxunicode and not chr(cp).isprintable()
-    if nonprintable and start is None:
-        start = cp
-    elif not nonprintable and start is not None:
-        ranges.append([start, cp - 1])
-        start = None
-print(json.dumps({"repr": [repr(t) for t in texts], "nonprintable_ranges": ranges}))
-`
-
 // TestStrReprMatchesFrozenPython compares IsPrintable with what
 // str.isprintable() answered for every code point (surrogates included), and
 // StrRepr with what repr() answered for a corpus of quoting and escape cases,
@@ -34,7 +20,7 @@ func TestStrReprMatchesFrozenPython(t *testing.T) {
 	}
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "strrepr.golden.json",
-		programoracle.Program{Name: "str repr", Text: pythonStrReprProgram, Stdin: input})[0]
+		programoracle.Program{Name: "str repr", Stdin: input})[0]
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var want struct {
 		Repr               []string

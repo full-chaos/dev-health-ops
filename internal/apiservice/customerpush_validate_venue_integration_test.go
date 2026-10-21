@@ -100,7 +100,7 @@ func TestVenueOracleCustomerPushValidate(t *testing.T) {
 	t.Setenv("EXTERNAL_INGEST_MAX_BODY_BYTES", "6000")
 	var seed customerPushWriteFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"EXTERNAL_INGEST_MAX_RECORDS=3", "EXTERNAL_INGEST_MAX_BODY_BYTES=6000"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = customerPushWriteSeed(t, ctx, admin)

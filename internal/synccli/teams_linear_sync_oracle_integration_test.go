@@ -20,11 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-//go:embed testdata/teams_sync_oracle_linear.py
-var teamsSyncOracleLinearProgram string
 
 // fakeLinear is the one Linear GraphQL endpoint both planes read: python's
 // LinearClient (repointed at this server via LINEAR_API_URL, which its module
@@ -211,14 +207,8 @@ func (o *teamsOracle) runLinear(fake *fakeLinear, orgID, token string, sc *linea
 	o.truncateAll()
 	viaEnv := strings.HasPrefix(token, "env:")
 	token = strings.TrimPrefix(token, "env:")
-	argv := []string{"--org", orgID, "sync", "teams", "--provider", "linear"}
-	pythonEnv := map[string]string{"CLICKHOUSE_URI": o.pythonHTTPDSN, "LINEAR_API_KEY": token}
-	argv = append(argv, extra...)
-	o.python(sc.name, map[string]any{"argv": argv, "env": pythonEnv, "linear_base": fake.base()})
+	o.python(sc.name)
 	run := linearRun{pythonStage: o.cur.Stage, pythonCode: o.cur.Code}
-	if o.recording {
-		return run // the recording asks Python only: the Go plane runs in the comparison
-	}
 	run.goCode, run.goStdout, run.goStderr = o.runGoLinear(fake, orgID, token, viaEnv, extra...)
 	return run
 }
@@ -634,16 +624,7 @@ func linearCorpusKey() []byte {
 // and, column by column, the `teams` rows it wrote. Executed once on teamsPythonBuild and frozen in
 // testdata/golden/teams_linear.json.
 func TestSyncTeamsLinearMatchesFrozenPython(t *testing.T) {
-	frozen, golden := openTeamsGolden(t, "linear", "TestSyncTeamsLinearMatchesFrozenPython", "748704d189fd6ceb08ba5b0b3ae36d5089d52592b514e3a81f2aad54554895f3", teamsSyncOracleLinearProgram, linearCorpusKey(),
-		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
-			o := newTeamsOracle(t)
-			o.startPython(producer, teamsSyncOracleLinearProgram)
-			fake := newFakeLinear(t)
-			for _, sc := range linearScenarios() {
-				o.arrangeAndRunLinear(sc, fake)
-			}
-			return o.recorded
-		})
+	frozen, golden := openTeamsGolden(t, "linear", "748704d189fd6ceb08ba5b0b3ae36d5089d52592b514e3a81f2aad54554895f3", linearCorpusKey())
 	o := newTeamsOracle(t)
 	o.frozen = frozen
 	fake := newFakeLinear(t)

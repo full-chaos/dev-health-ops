@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -30,6 +31,7 @@ var AuthOutcomeReasonCodes = []string{
 	"email_unverified", "email_collision", "signup_unavailable", "provider_already_linked",
 	"identity_conflict", "rate_limited",
 	"replayed", "nonce_mismatch", "provisioning_disabled", "domain_not_allowed", "not_entitled",
+	"membership_required",
 	"store_unavailable", "dependency_unavailable",
 }
 
@@ -121,31 +123,41 @@ type AuthOutcome struct {
 }
 
 // credentialCarryingSurfaces are the surfaces whose documents carry credentials.
-var credentialCarryingSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true}
+var credentialCarryingSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true, AccessTokenSurface: true}
 
 // decodeWire runs the shared order: duplicate members, schema, then decode.
 // Validation sees the decoded JSON value, not dest, so a field dest does not
 // declare still reaches additionalProperties:false.
 func decodeWire(root, surface string, raw []byte, dest any) error {
 	if err := refuseDuplicateMembersIn(surface, raw); err != nil {
-		return err
+		var duplicate *duplicateMemberError
+		if errors.As(err, &duplicate) {
+			return wireRefusal(surface, StageDuplicateMember, err)
+		}
+		return wireRefusal(surface, StageSyntax, err)
 	}
 	var document any
 	if err := json.Unmarshal(raw, &document); err != nil {
-		return fmt.Errorf("%s: document is not valid JSON: %w", surface, err)
+		return wireRefusal(surface, StageSyntax, fmt.Errorf("%s: document is not valid JSON: %w", surface, err))
 	}
 	if err := Validate(root, surface, document); err != nil {
-		if credentialCarryingSurfaces[surface] {
-			// The validator's message repeats the rejected value; on these
-			// surfaces that value is a credential.
-			return fmt.Errorf("%s: document does not satisfy the schema (violation text withheld: this surface carries credentials)", surface)
-		}
-		return err
+		return wireRefusal(surface, StageSchema, err)
 	}
 	if err := json.Unmarshal(raw, dest); err != nil {
-		return fmt.Errorf("%s: decoding validated document: %w", surface, err)
+		return wireRefusal(surface, StageDecode, fmt.Errorf("%s: decoding validated document: %w", surface, err))
 	}
 	return nil
+}
+
+// wireRefusal returns the detailed error on an ordinary surface. On a
+// credential-carrying one every stage's text can repeat input (a value the
+// validator rejected, a number the decoder could not hold, a member name), so
+// it returns the stage only.
+func wireRefusal(surface, stage string, detailed error) error {
+	if credentialCarryingSurfaces[surface] {
+		return &CredentialRefusal{Surface: surface, Stage: stage}
+	}
+	return detailed
 }
 
 func inRange(surface, field string, t Timestamp) error {
@@ -193,7 +205,7 @@ func (s *Session) Live(now time.Time) bool {
 func ParseRefreshRequest(root string, raw []byte) (*RefreshRequest, error) {
 	var r RefreshRequest
 	if err := decodeWire(root, RefreshRequestSurface, raw, &r); err != nil {
-		return nil, err
+		return nil, refuseCredential(RefreshRequestSurface, err)
 	}
 	return &r, nil
 }
@@ -203,7 +215,7 @@ func ParseRefreshRequest(root string, raw []byte) (*RefreshRequest, error) {
 func ParseRefreshResponse(root string, raw []byte) (*RefreshResponse, error) {
 	var r RefreshResponse
 	if err := decodeWire(root, RefreshResponseSurface, raw, &r); err != nil {
-		return nil, err
+		return nil, refuseCredential(RefreshResponseSurface, err)
 	}
 	return &r, nil
 }

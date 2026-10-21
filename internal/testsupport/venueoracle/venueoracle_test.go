@@ -1,8 +1,6 @@
 package venueoracle
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -73,51 +71,34 @@ func TestCompareDecisionTable(t *testing.T) {
 	}
 }
 
-func TestInterpreterDirNeedsAnExecutablePython3(t *testing.T) {
-	write := func(dir, name string, mode os.FileMode) string {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), mode); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	root := t.TempDir()
-	venv := filepath.Join(root, "venv", "bin")
-	python3 := write(venv, "python3", 0o755)
-	python := filepath.Join(venv, "python")
-	if err := os.Symlink(python3, python); err != nil {
-		t.Fatal(err)
-	}
-	noPython3 := write(filepath.Join(root, "bare"), "python3.12", 0o755)
-	notExec := filepath.Join(root, "noexec")
-	write(notExec, "python3", 0o644)
-	dirPython3 := filepath.Join(root, "dir")
-	if err := os.MkdirAll(filepath.Join(dirPython3, "python3"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name, path, want string
+func TestAdminNoStoreIsAnIntendedDivergenceOnlyWhenTheGoldenLacksIt(t *testing.T) {
+	request := Request{Method: "GET", Path: "/api/v1/admin/llm-settings/models"}
+	python := func(headers map[string]string) Response { return Response{Status: 200, Headers: headers, Body: "{}"} }
+	cases := []struct {
+		name    string
+		request Request
+		py      map[string]string
+		gr      map[string]string
+		same    bool
 	}{
-		{"venv python symlink", python, venv},
-		{"venv python3", python3, venv},
-		{"no python3 beside it", noPython3, ""},
-		{"python3 not executable", filepath.Join(notExec, "python"), ""},
-		{"python3 is a directory", filepath.Join(dirPython3, "python"), ""},
-		{"unknown bare name", "no-such-interpreter-venue", ""},
-	} {
+		{"golden lacks it, go sends no-store", request, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+		{"go sends another value", request, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-cache"}, false},
+		{"go sends no-store, with a suffix", request, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store, private"}, false},
+		{"golden has it, values match", request, map[string]string{"a": "1", "cache-control": "no-store"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+		{"golden has it, values differ", request, map[string]string{"a": "1", "cache-control": "public"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"admin-prefixed route of another package", Request{Method: "GET", Path: "/api/v1/admin/credentials"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"admin route with a path parameter", Request{Method: "GET", Path: "/api/v1/admin/integrations/pagerduty/webhook-bindings/abc"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+		{"admin route, wrong method", Request{Method: "PATCH", Path: "/api/v1/admin/llm-settings/models"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"encoded slash that decodes to an admin route", Request{Method: "GET", Path: "/api%2Fv1/admin/llm-settings/models"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+		{"encoded slash inside a parameter is a 404, not exempt", Request{Method: "GET", Path: "/api/v1/admin/users/a%2Fb"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"dot segment fills a parameter", Request{Method: "GET", Path: "/api/v1/admin/users/.."}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+		{"outside admin scope", Request{Method: "GET", Path: "/api/v1/other"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := interpreterDir(tc.path)
-			if tc.want == "" {
-				if err == nil {
-					t.Fatalf("interpreterDir(%q) = %q, want an error", tc.path, got)
-				}
-				return
-			}
-			if err != nil || got != tc.want {
-				t.Fatalf("interpreterDir(%q) = %q, %v; want %q", tc.path, got, err, tc.want)
+			same, _, _, _ := Compare(tc.request, python(tc.py), Response{Status: 200, Headers: tc.gr, Body: "{}"}, DiffOptions{})
+			if same != tc.same {
+				t.Fatalf("same = %v, want %v", same, tc.same)
 			}
 		})
 	}

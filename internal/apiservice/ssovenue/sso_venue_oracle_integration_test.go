@@ -120,7 +120,7 @@ var updatedAtPattern = regexp.MustCompile(`"updated_at":"[^"]*"`)
 func TestSSORoutesVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("s-s-o-routes-venue-oracle", t.Name(), "a66dead8a13b12e7c3f28c6f8ad484f9af72d001989145992f7b7a19961c3f09"))
 	ctx := context.Background()
-	venue := venueoracle.Start(t, ctx, venueoracle.Options{Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: jwtKey,
+	venue := venueoracle.Start(t, ctx, venueoracle.Options{Golden: golden, Root: venueRoot(), JWTKey: jwtKey,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Seed: seed})
 	tok := venue.Tokens
 	req := func(name, method, path, bearer, body string) venueoracle.Request {
@@ -245,9 +245,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		config::text, coalesce(encrypted_secrets::text, '<null>'), coalesce(allowed_domains::text, '<null>'),
 		created_at, updated_at > created_at FROM sso_providers ORDER BY id`
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), rows)
-	pyRows := golden.CompareRows(t, "sso_providers", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), rows)
-	}, goRows)
+	pyRows := golden.CompareRows(t, "sso_providers", goRows)
 	same := pyRows == goRows && pyRows != ""
 	receipt += "sso_providers rows after the requests: " + venueoracle.Mark(same) + "\n"
 	if pyRows == "" {

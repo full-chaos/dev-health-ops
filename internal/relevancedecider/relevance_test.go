@@ -2,7 +2,7 @@
 // set is Go-relevant, to the answers of the decider it replaced (ci/go_relevance.py, CHAOS-4834).
 //
 // The old decider is Python. Its answers over a fixed set of changed-file lists were recorded once, on the last build
-// that carried it, and are frozen in testdata/golden/go_relevance_cases.json (recipe in the golden's spec); a frozen run
+// that carried it, and are frozen in testdata/golden/go_relevance_cases.json; a frozen run
 // needs no Python. Each case is a list of changed paths in the producer's format (NUL-terminated, as
 // `git diff -z --no-renames` writes them, or one per line), judged against a pinned snapshot of go.yml's path filter
 // (testdata/go_workflow_fixture.yml) so an answer does not move when go.yml does.
@@ -63,42 +63,6 @@ var refusals = []refusalCase{
 	{"a lone opening bracket in a pattern", "on:\n  pull_request:\n    paths:\n      - 'internal/a[.go'\n"},
 	{"a non-list line inside the paths list", "on:\n  pull_request:\n    paths:\n      - 'a'\n      notalist: x\n"},
 }
-
-// pythonProgram runs the old decider over the cases and the refusal workflows. It imports the real ci/go_relevance.py
-// from the pinned checkout, points it at the pinned workflow snapshot and calls its own main() with the case's stdin.
-const pythonProgram = `
-import contextlib, importlib.util, io, json, pathlib, sys, tempfile
-request = json.loads(sys.stdin.read())
-spec = importlib.util.spec_from_file_location("go_relevance", "ci/go_relevance.py")
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-directory = pathlib.Path(tempfile.mkdtemp())
-
-def run(workflow_text, raw):
-    path = directory / "workflow.yml"
-    path.write_text(workflow_text, encoding="utf-8")
-    module.GO_WORKFLOW = path
-    stdout, failed = io.StringIO(), False
-    sys.stdin = io.StringIO(raw)
-    try:
-        with contextlib.redirect_stdout(stdout):
-            code = module.main()
-        failed = code != 0
-    except (SystemExit, Exception):
-        # A refusal is any non-zero exit: Python's own traceback (a workflow with no
-        # pull_request.paths raises KeyError) exits 1 the same as an explicit refusal.
-        failed = True
-    return {"stdout": stdout.getvalue(), "failed": failed}
-
-answers = {"cases": {}, "refusals": {}}
-for case in request["cases"]:
-    sep = "\0" if case["format"] == "nul" else "\n"
-    raw = case.get("raw", "") if case["format"] == "raw" else "".join(path + sep for path in case["paths"])
-    answers["cases"][case["name"]] = run(case.get("workflow") or request["workflow"], raw)
-for refusal in request["refusals"]:
-    answers["refusals"][refusal["name"]] = run(refusal["yaml"], "internal/a.go\n")["failed"]
-print(json.dumps(answers, sort_keys=True, ensure_ascii=True))
-`
 
 type recorded struct {
 	Cases map[string]struct {
@@ -166,9 +130,8 @@ func TestDeciderAnswersAsTheRecordedPythonDid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec("testdata/golden/go_relevance_cases.json", "d65482a8568f5e0fe6b6aa92f6729f099e866391c7202f6eecf6ea26f1e3fb57",
-		"./internal/relevancedecider/", "^TestDeciderAnswersAsTheRecordedPythonDid$")
-	answers := programoracle.Run(t, spec, root(t), []programoracle.Program{{Name: "go_relevance.py over the corpus", Text: pythonProgram, Stdin: request}})
+	spec := rotguard.Spec("testdata/golden/go_relevance_cases.json", "d65482a8568f5e0fe6b6aa92f6729f099e866391c7202f6eecf6ea26f1e3fb57")
+	answers := programoracle.Run(t, spec, []programoracle.Program{{Name: "go_relevance.py over the corpus", Stdin: request}})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the recorded Python run exited %d (stdout %q)", answers[0].ExitCode, answers[0].Stdout)
 	}

@@ -10,22 +10,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
-// runComplexityOracle returns the stdout of one oracle script of this package's testdata fed `stdin`. The
-// script was executed once on the last build that carried the Python sources and its stdout is frozen in
-// the golden at goldenPath (recipe in the golden's spec); a frozen run reads it and runs no Python. The
-// script's text and its stdin are part of the request, so a changed script or corpus is refused until it is
-// recorded again.
-func runComplexityOracle(t *testing.T, goldenPath, testPattern, name, script string, stdin []byte) []byte {
+// runComplexityOracle returns the frozen stdout of one oracle program fed `stdin`. The stdout is frozen in
+// the golden at goldenPath; a frozen run reads it and runs no Python. The stdin is part of the request.
+func runComplexityOracle(t *testing.T, goldenPath, name string, stdin []byte) []byte {
 	t.Helper()
-	root := complexityRepositoryRoot(t)
-	scriptPath := "internal/jobs/metrics/complexity/testdata/" + script
-	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scriptPath)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec := rotguard.Spec(goldenPath, complexityGoldenPins[filepath.Base(goldenPath)], "./internal/jobs/metrics/complexity/", testPattern)
-	answers := programoracle.Run(t, spec, root, []programoracle.Program{
-		programoracle.Script(name, scriptPath, string(source), stdin),
+	spec := rotguard.Spec(goldenPath, complexityGoldenPins[filepath.Base(goldenPath)])
+	answers := programoracle.Run(t, spec, []programoracle.Program{
+		{Name: name, Stdin: stdin},
 	})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the %s exited %d (stdout %q)", name, answers[0].ExitCode, answers[0].Stdout)
@@ -102,8 +93,8 @@ func TestShouldProcessMatchesLivePython(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode paths: %v", err)
 	}
-	output := runComplexityOracle(t, "testdata/golden/should_process_oracle.json", "^TestShouldProcessMatchesLivePython$",
-		"should process oracle", "python_should_process_oracle.py", encoded)
+	output := runComplexityOracle(t, "testdata/golden/should_process_oracle.json",
+		"should process oracle", encoded)
 
 	var oracle struct {
 		ConfigPath        string   `json:"config_path"`
@@ -218,26 +209,6 @@ func TestShouldProcessExcludeWinsOverInclude(t *testing.T) {
 	}
 	if config.ShouldProcess("src/tests/test_app.py") {
 		t.Errorf("exclude must win over include")
-	}
-}
-
-// complexityRepositoryRoot walks up to the module root, so the resolved
-// interpreter can find the checked-out virtualenv.
-func complexityRepositoryRoot(t *testing.T) string {
-	t.Helper()
-	working, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for directory := working; ; {
-		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("could not find repository root (no go.mod found)")
-		}
-		directory = parent
 	}
 }
 

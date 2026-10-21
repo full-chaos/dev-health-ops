@@ -66,7 +66,7 @@ func TestRefundEventSettledGrid(t *testing.T) {
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			for _, c := range cells {
@@ -136,7 +136,7 @@ func TestRefundEventSettledGrid(t *testing.T) {
 	}
 	python := golden.Python(t, venue, requests)
 
-	goURI, pyURI := venue.AdminURI(t, venue.GoDB), venue.AdminURI(t, venue.SourceDB)
+	goURI := venue.AdminURI(t, venue.GoDB)
 	cellOutcome := func(pool *pgxpool.Pool, c cell) string {
 		var status, failure string
 		var rows int
@@ -153,18 +153,7 @@ func TestRefundEventSettledGrid(t *testing.T) {
 		defer pool.Close()
 		return cellOutcome(pool, c)
 	}
-	pyOutcomeText := golden.InspectRows(t, "python_outcomes", func() string {
-		pool, err := pgxpool.New(ctx, pyURI)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer pool.Close()
-		lines := make([]string, len(cells))
-		for index, c := range cells {
-			lines[index] = cellOutcome(pool, c)
-		}
-		return strings.Join(lines, "\n")
-	})
+	pyOutcomeText := golden.InspectRows(t, "python_outcomes")
 	pyOutcome := strings.Split(pyOutcomeText, "\n")
 	if len(pyOutcome) != len(cells) {
 		t.Fatalf("python outcomes: %d lines, want %d (one per cell)", len(pyOutcome), len(cells))

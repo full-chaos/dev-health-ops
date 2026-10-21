@@ -14,26 +14,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// tablesProgram dumps the idna package's data. Intranges become
+// tablesDump holds the frozen dump of the idna package's data. Intranges become
 // half-open [start, end) pairs.
-const tablesProgram = `
-import json, idna, idna.idnadata as d, idna.uts46data as u
-
-def pairs(ranges):
-    return [[r >> 32, r & 0xFFFFFFFF] for r in ranges]
-
-print(json.dumps({
-    "version": idna.__version__,
-    "data_version": d.__version__,
-    "starts": list(u.uts46_starts),
-    "statuses": "".join(chr(s) for s in u.uts46_statuses),
-    "replacements": list(u.uts46_replacements),
-    "classes": {k: pairs(v) for k, v in d.codepoint_classes.items()},
-    "scripts": {k: pairs(d.scripts[k]) for k in ("Greek", "Hebrew", "Hiragana", "Katakana", "Han")},
-    "joining": [[k, pairs(v)] for k, v in d.joining_types.items()],
-}, ensure_ascii=True))
-`
-
 type tablesDump struct {
 	Version      string               `json:"version"`
 	DataVersion  string               `json:"data_version"`
@@ -52,7 +34,7 @@ func TestIDNATablesMatchFrozenPython(t *testing.T) {
 	regenerate := os.Getenv("DEV_HEALTH_REGENERATE_TABLES") == "1"
 	_, file, _, _ := moduleroot.Caller(0)
 	directory := filepath.Dir(file)
-	output := frozenPython(t, "tables.golden.json", programoracle.Program{Name: "tables", Text: tablesProgram})[0]
+	output := frozenPython(t, "tables.golden.json", programoracle.Program{Name: "tables"})[0]
 	var dump tablesDump
 	if err := json.Unmarshal([]byte(output), &dump); err != nil {
 		t.Fatalf("decode: %v", err)

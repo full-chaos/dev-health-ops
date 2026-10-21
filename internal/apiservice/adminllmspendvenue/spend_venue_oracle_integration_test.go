@@ -266,7 +266,7 @@ var spendBase = time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
 func runSpendVenue(t *testing.T, zone, mode, digest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, goldenSpec("spend_"+mode, t.Name(), digest))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("spend-" + mode)
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-spend-32-bytes!"
 	cases := scenarios()

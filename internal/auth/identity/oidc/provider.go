@@ -20,7 +20,8 @@ type Provider struct {
 	Protocol         string
 	Status           string
 	AutoProvision    bool
-	Config           ProviderConfig
+	Config           ProviderConfig // an OIDC row
+	OAuth            OAuthConfig    // an OAuth row
 	AllowedDomains   []string
 	EncryptedSecrets string // the raw JSON column; "" when NULL
 }
@@ -36,21 +37,26 @@ var defaultScopes = []string{"openid", "profile", "email"}
 
 var errProviderShape = errors.New("oidc: stored provider column has the wrong JSON shape")
 
-// ProviderSource loads a provider by id. A missing row is ErrProviderNotFound.
+// ProviderSource reads one provider row in one statement, its stored columns
+// undecoded, so a request checks and decodes one version of the row. A
+// missing row is ErrProviderNotFound.
 //
-// ProviderHead reads only the row's organization, protocol and status, so the
-// entitlement gate and the protocol and status checks run before anything
-// stored is decoded. Provider reads and decodes the whole row; a stored column
-// it cannot read is ErrProviderConfig.
+// DefaultProviderRow picks an organization's active row of one protocol: the
+// default row first, then the oldest.
 type ProviderSource interface {
-	ProviderHead(ctx context.Context, id uuid.UUID) (ProviderHead, error)
-	Provider(ctx context.Context, id uuid.UUID) (Provider, error)
+	ProviderRow(ctx context.Context, id uuid.UUID) (StoredProvider, error)
+	DefaultProviderRow(ctx context.Context, orgID uuid.UUID, protocol string) (StoredProvider, error)
 }
 
-// ProviderHead is the part of a provider row read before any decode.
-type ProviderHead struct {
-	ID, OrgID        uuid.UUID
-	Protocol, Status string
+// StoredProvider is one public.sso_providers row as read: the head the
+// provider checks use, and the stored JSON columns as text, decoded only by
+// decodeProvider after the checks pass. A NULL column is nil.
+type StoredProvider struct {
+	ID, OrgID                        uuid.UUID
+	Protocol, Status                 string
+	AutoProvision                    bool
+	Config                           string
+	AllowedDomains, EncryptedSecrets *string
 }
 
 // ErrProviderNotFound reports an unknown provider id.
@@ -63,42 +69,56 @@ var ErrProviderConfig = errors.New("oidc: stored provider configuration is malfo
 // on the columns below and nothing else.
 type PGProviders struct{ Pool *pgxpool.Pool }
 
-func (p PGProviders) ProviderHead(ctx context.Context, id uuid.UUID) (ProviderHead, error) {
-	var head ProviderHead
-	err := p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status FROM public.sso_providers WHERE id = $1`, id).
-		Scan(&head.ID, &head.OrgID, &head.Protocol, &head.Status)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ProviderHead{}, ErrProviderNotFound
-	}
-	return head, err
+func (p PGProviders) ProviderRow(ctx context.Context, id uuid.UUID) (StoredProvider, error) {
+	return scanStoredProvider(p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status, auto_provision_users, config::text,
+	allowed_domains::text, encrypted_secrets::text
+FROM public.sso_providers WHERE id = $1`, id))
 }
 
-func (p PGProviders) Provider(ctx context.Context, id uuid.UUID) (Provider, error) {
-	var (
-		row                     Provider
-		config                  string
-		allowedDomains, secrets *string
-	)
-	err := p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status, auto_provision_users, config::text,
+func (p PGProviders) DefaultProviderRow(ctx context.Context, orgID uuid.UUID, protocol string) (StoredProvider, error) {
+	return scanStoredProvider(p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status, auto_provision_users, config::text,
 	allowed_domains::text, encrypted_secrets::text
-FROM public.sso_providers WHERE id = $1`, id).Scan(&row.ID, &row.OrgID, &row.Protocol, &row.Status,
-		&row.AutoProvision, &config, &allowedDomains, &secrets)
+FROM public.sso_providers
+WHERE org_id = $1 AND protocol = $2 AND status = 'active'
+ORDER BY is_default DESC, created_at, id LIMIT 1`, orgID, protocol))
+}
+
+func scanStoredProvider(r pgx.Row) (StoredProvider, error) {
+	var row StoredProvider
+	err := r.Scan(&row.ID, &row.OrgID, &row.Protocol, &row.Status, &row.AutoProvision, &row.Config,
+		&row.AllowedDomains, &row.EncryptedSecrets)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Provider{}, ErrProviderNotFound
+		return StoredProvider{}, ErrProviderNotFound
 	}
 	if err != nil {
-		return Provider{}, err
+		return StoredProvider{}, err
 	}
-	if row.Config, err = decodeProviderConfig(config); err != nil {
+	return row, nil
+}
+
+// decodeProvider decodes a stored row's JSON columns; a column it cannot read
+// is ErrProviderConfig.
+func decodeProvider(stored StoredProvider) (Provider, error) {
+	row := Provider{ID: stored.ID, OrgID: stored.OrgID, Protocol: stored.Protocol, Status: stored.Status,
+		AutoProvision: stored.AutoProvision}
+	var err error
+	if _, oauth := oauthProviderOf(row.Protocol); oauth {
+		if row.OAuth, err = decodeOAuthConfig(stored.Config); err == nil {
+			err = checkOAuthBase(row.Protocol, row.OAuth)
+		}
+	} else {
+		row.Config, err = decodeProviderConfig(stored.Config)
+	}
+	if err != nil {
 		return Provider{}, fmt.Errorf("%w: config: %w", ErrProviderConfig, err)
 	}
-	if allowedDomains != nil {
-		if row.AllowedDomains, err = decodeAllowedDomains(*allowedDomains); err != nil {
+	if stored.AllowedDomains != nil {
+		if row.AllowedDomains, err = decodeAllowedDomains(*stored.AllowedDomains); err != nil {
 			return Provider{}, fmt.Errorf("%w: allowed_domains: %w", ErrProviderConfig, err)
 		}
 	}
-	if secrets != nil {
-		row.EncryptedSecrets = *secrets
+	if stored.EncryptedSecrets != nil {
+		row.EncryptedSecrets = *stored.EncryptedSecrets
 	}
 	return row, nil
 }

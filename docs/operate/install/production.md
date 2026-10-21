@@ -98,6 +98,15 @@ kubectl -n dev-health logs job/<migrate-job-name>
 
 If a hook Job fails, correct the database, credential, role, or schema problem and run the upgrade again; the workloads keep running the previous revision until the hooks succeed.
 
+## Required values change: separate Secrets for web and the HS256 key
+
+This is a required values change; an existing values file that renders today stops rendering until it is made.
+
+- **web** gets its own session secret. Set `web.authSecret.secretName` (and `web.authSecret.key`, default `AUTH_SECRET`) to a Secret that holds a fresh random value, or `web.env.AUTH_SECRET` for a development install. The chart no longer falls back to `JWT_SECRET_KEY`, and the render fails without one. A new value signs every web user out once.
+- **The HS256 access-token key** (`JWT_SECRET_KEY`) lives in its own Secret that only go-api (and query-api, through your values) reads. With `secrets.create: true` the chart creates `<release>-hs256`. With `secrets.create: false` set `hs256Secret.externalSecretName` to a Secret that holds `JWT_SECRET_KEY` as a byte-identical copy of the current value (go-api also signs invite, verify and reset links with it, so do not rotate it). It must not be the shared Secret's name.
+- **Order:** create both Secrets first, then ship the values change together with the chart revision in one roll. A chart revision without the values change fails to render; a values change without the Secrets leaves the new web and go-api pods unable to start while the old pods keep serving.
+- **Existing Secret changes need a restart:** the chart cannot hash an external Secret, so after you change `secrets.externalSecretName` or `hs256Secret.externalSecretName` content, restart every Deployment that reads it. Removing `JWT_SECRET_KEY` from the shared Secret rolls nothing by itself.
+
 ## Verify the deployed revision
 
 Before enabling provider synchronization or directing user traffic, verify:

@@ -12,7 +12,7 @@ import (
 
 // CHAOS-10174 PR C: Go port of tests/tooling/test_go_relevant_diff.py. ci/go_relevant_diff.sh is the diff-range
 // producer the Go-relevance decider consumes; a wrong range yields a plausible, non-empty, WRONG file list.
-// The three matcher tests of the Python file drove ci/go_relevance.py, which no workflow calls any more; the live
+// The three matcher tests of the Python file drove the Python decider, which is deleted; the live
 // decider is ci/go_relevance.sh (internal/relevancedecider pins its decisions), so the same stdin-format contract is
 // executed against it here.
 
@@ -41,7 +41,7 @@ func runDiff(script string, r *gitRepo, head string, env ...string) (cmdResult, 
 	if r.err != nil {
 		return cmdResult{}, r.err
 	}
-	return cmdSpec{dir: r.dir, env: append([]string{basePath}, env...)}.run("bash", script), nil
+	return cmdSpec{dir: r.dir, env: append([]string{shimBasePath()}, env...)}.run("bash", script), nil
 }
 
 func diffNames(script string, r *gitRepo, head, base string) ([]string, error) {
@@ -190,7 +190,7 @@ func TestGoRelevantDiffScript(t *testing.T) {
 
 func relevanceMatcherScenarios(workflow string) []scenario {
 	run := func(script string, stdin []byte) cmdResult {
-		return cmdSpec{env: []string{basePath, "GO_WORKFLOW=" + workflow}, stdin: stdin}.run("bash", script)
+		return cmdSpec{env: []string{shimBasePath(), "GO_WORKFLOW=" + workflow}, stdin: stdin}.run("bash", script)
 	}
 	return []scenario{
 		{"a_rename_out_of_a_relevant_path_stays_relevant", func(script, work string) error {
@@ -264,7 +264,7 @@ func TestGoRelevanceCountsYamlWorkflows(t *testing.T) {
 		if err := os.WriteFile(dst, []byte(body), 0o644); err != nil {
 			return "", err
 		}
-		res := cmdSpec{env: []string{basePath, "GO_WORKFLOW=" + dst}, stdin: []byte(".github/workflows/only-changed.yaml\x00")}.run("bash", script)
+		res := cmdSpec{env: []string{shimBasePath(), "GO_WORKFLOW=" + dst}, stdin: []byte(".github/workflows/only-changed.yaml\x00")}.run("bash", script)
 		if res.code != 0 {
 			return "", fmt.Errorf("go_relevance.sh exited %d: %s", res.code, res.stderr)
 		}

@@ -38,12 +38,18 @@ func PublicReadColumns() []ColumnGrant {
 		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at"}},
 		{Table: "sso_providers", Columns: []string{
 			"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
-			"config", "allowed_domains", "encrypted_secrets",
+			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at",
 		}},
 		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier"}},
 		{Table: "saml_assertion_replays", Columns: []string{"provider_id", "assertion_id", "expires_at"}},
 		{Table: "org_licenses", Columns: []string{"org_id", "tier", "features_override"}},
 	}
+}
+
+// SessionReaderColumns is what a session reader role may SELECT in the auth
+// schema: column-level, on the sessions table only.
+func SessionReaderColumns() ColumnGrant {
+	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
 }
 
 // rowQuerier1 is the slice of a connection the relation lookup needs.

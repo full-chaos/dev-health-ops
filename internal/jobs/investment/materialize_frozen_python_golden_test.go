@@ -1,19 +1,10 @@
 package investment
 
 // The differential oracle for the investment.materialize ORCHESTRATION
-// (CHAOS-4441). See tests/fixtures/generate_investment_materialize_python_golden.py
-// for what it covers and why those four decisions are the ones worth pinning.
-//
-// Two tests, deliberately separate:
-//
-//   - TestMaterializeOrchestrationMatchesFrozenPythonGolden compares the Go
-//     plane against the CHECKED-IN golden. Runs everywhere, needs no Python.
-//   - TestFrozenPythonGoldenStillMatchesFrozenPython byte-compares the checked-in
-//     file with the frozen answer of the generator (executed once on the pinned
-//     build). It stops the checked-in file from being edited by hand.
-//
-// A single test doing both would be weaker than either: it would either need
-// Python everywhere, or never notice the reference changing.
+// (CHAOS-4441). The golden is frozen: its generator was deleted with the
+// Python tree, and its bytes are pinned by tests/fixtures.manifest.tsv.
+// TestMaterializeOrchestrationMatchesFrozenPythonGolden compares the Go plane
+// against the CHECKED-IN golden. It needs no Python.
 
 import (
 	"encoding/json"
@@ -24,13 +15,9 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const (
-	investmentGoldenFixture   = "tests/fixtures/investment_materialize_python_golden.json"
-	investmentGoldenGenerator = "tests/fixtures/generate_investment_materialize_python_golden.py"
-)
+const investmentGoldenFixture = "tests/fixtures/investment_materialize_python_golden.json"
 
 type investmentGolden struct {
 	MinEvidenceChars int `json:"min_evidence_chars"`
@@ -70,7 +57,7 @@ func loadInvestmentGolden(t *testing.T) investmentGolden {
 	path := filepath.Join(repoRootFromInvestment(t), investmentGoldenFixture)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reading %s: %v -- regenerate with `python %s`", path, err, investmentGoldenGenerator)
+		t.Fatalf("reading %s: %v -- the golden is frozen, its generator is deleted", path, err)
 	}
 	var golden investmentGolden
 	if err := json.Unmarshal(raw, &golden); err != nil {
@@ -207,32 +194,5 @@ func assertAuditJSONRoundTrips(t *testing.T, encoded, status string) {
 	}
 	if rendered != encoded {
 		t.Errorf("audit JSON: got %q, want %q", rendered, encoded)
-	}
-}
-
-// TestFrozenPythonGoldenStillMatchesFrozenPython compares the frozen answer of
-// the generator (executed once on the pinned build, --stdout) with the
-// checked-in file byte for byte: the file is what the Python reference
-// produced, not an edit of it.
-func TestFrozenPythonGoldenStillMatchesFrozenPython(t *testing.T) {
-	repoRoot := repoRootFromInvestment(t)
-	generator, err := os.ReadFile(filepath.Join(repoRoot, investmentGoldenGenerator))
-	if err != nil {
-		t.Fatalf("reading %s: %v", investmentGoldenGenerator, err)
-	}
-	program := programoracle.Script("investment materialize golden generator", investmentGoldenGenerator, string(generator), nil)
-	program.Text = "import sys\nsys.argv = [sys.argv[0], \"--stdout\"]\n" + program.Text
-	rendered := frozenPython(t, "generator.golden.json", program)[0]
-
-	frozen, err := os.ReadFile(filepath.Join(repoRoot, investmentGoldenFixture))
-	if err != nil {
-		t.Fatalf("reading %s: %v", investmentGoldenFixture, err)
-	}
-	if string(frozen) != rendered {
-		t.Fatalf(
-			"%s is not what the frozen answer of %s says -- the file was edited or the golden is stale. "+
-				"Regenerate it from the pinned build and re-record the golden",
-			investmentGoldenFixture, investmentGoldenGenerator,
-		)
 	}
 }

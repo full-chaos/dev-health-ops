@@ -74,18 +74,18 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 	schemaDigest := digest.Schema(schemav1.SDL)
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root), JWTKey: edgeOracleJWTKey,
+		Golden: golden, Root: root, JWTKey: edgeOracleJWTKey,
 		Seed: edgeSeed(users, docs, schemaDigest),
 	})
 	operatingReviewFixtureHasNoRows(t, ctx, venue.AdminClickHouseURI(t, venue.GoClickHouseDB))
-	settings, goBase, pythonEnv, leaveRoot := startEdgePlane(t, ctx, venue, root)
+	settings, goBase, leaveRoot := startEdgePlane(t, ctx, venue, root)
 	suite := edgeOracleCases(t, docs, users, venue, func(key string, user edgeUser, expired bool) string {
 		return edgeFixedToken(t, key, user, expired)
 	}, edgeFixedToken(t, edgeOracleJWTKey, users[0], false))
 	query, mutation, queryBody, member := suite.query, suite.mutation, suite.queryBody, suite.member
 
 	run := func(cs []edgeCase, normalize func(venueoracle.Request, string) string) {
-		python := golden.PythonWithEnv(t, venue, pythonEnv, edgeRequests(cs))
+		python := golden.Python(t, venue, edgeRequests(cs))
 		edgeCompare(t, goBase, cs, python, normalize, golden)
 	}
 	clock := regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
@@ -141,8 +141,7 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = deadPublic.Shutdown(context.Background()) })
 	deadRequests := []venueoracle.Request{edgePost("Postgres unreachable", member, queryBody, nil)}
-	deadPython := golden.PythonWithEnv(t, venue, append(append([]string(nil), pythonEnv...),
-		"POSTGRES_URI=postgresql+asyncpg://nobody:nothing@127.0.0.1:1/none"), deadRequests)
+	deadPython := golden.Python(t, venue, deadRequests)
 	t.Log("\n" + venueoracle.Diff(t, "http://"+deadPublic.Address(), deadRequests, deadPython, venueoracle.DiffOptions{Golden: golden}))
 
 	leaveRoot() // the golden's file path is relative to the package directory

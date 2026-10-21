@@ -1,0 +1,311 @@
+{
+  "description": "The golden corpus for the access-token.v1 wire contract (the decoded header and claims of a user access token). This manifest is the SINGLE inventory: every runner reads THIS file over THESE fixtures (G-70). `reject_by_client` documents are valid against the schema and refused by ParseAccessToken, because they need a comparison JSON Schema cannot make.",
+  "accept": [
+    {
+      "file": "valid-api.json",
+      "why": "The ordinary token for go-api and query-api: audience dev-health-api, scope api:access, an organization, ten minutes."
+    },
+    {
+      "file": "valid-api-no-organization.json",
+      "why": "No org_id: the session acts in no organization. Absent is the only form of 'none'."
+    },
+    {
+      "file": "valid-auth-service.json",
+      "why": "The token for auth-service's own session routes: audience auth-service, scope auth:session."
+    },
+    {
+      "file": "valid-lifetime-at-the-ceiling.json",
+      "why": "exp - iat equals the HS256-compat ceiling (3600 s): the longest lifetime the client accepts."
+    },
+    {
+      "file": "valid-nbf-after-iat.json",
+      "why": "nbf later than iat and before exp."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-header-alg-hs256.json",
+      "expect_instance_location": "/header/alg",
+      "expect_keyword": "const",
+      "why": "HS256: a symmetric algorithm is never this token's."
+    },
+    {
+      "file": "invalid-header-alg-none.json",
+      "expect_instance_location": "/header/alg",
+      "expect_keyword": "const",
+      "why": "alg none: an unsigned token."
+    },
+    {
+      "file": "invalid-header-typ-jwt.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ JWT is the HS256 token's type, not an access token's."
+    },
+    {
+      "file": "invalid-header-kid-absent.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "required",
+      "why": "No kid: the verifier could not name the key."
+    },
+    {
+      "file": "invalid-header-kid-empty.json",
+      "expect_instance_location": "/header/kid",
+      "expect_keyword": "pattern",
+      "why": "Empty kid."
+    },
+    {
+      "file": "invalid-header-jku.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "jku: a key URL from the token; the verifier takes keys from its configured issuer only."
+    },
+    {
+      "file": "invalid-header-jwk.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "jwk: an embedded key; never trusted."
+    },
+    {
+      "file": "invalid-header-x5u.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "x5u: a certificate URL from the token."
+    },
+    {
+      "file": "invalid-header-crit.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "crit: an extension the verifier would have to understand."
+    },
+    {
+      "file": "invalid-aud-array.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "type",
+      "why": "aud as an array: one token, one audience."
+    },
+    {
+      "file": "invalid-aud-unknown.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "enum",
+      "why": "An audience the vocabulary does not name."
+    },
+    {
+      "file": "invalid-aud-query-api.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "enum",
+      "why": "query-api is the effective-principal envelope's audience, not a user token's."
+    },
+    {
+      "file": "invalid-scope-unknown.json",
+      "expect_instance_location": "/claims/scope",
+      "expect_keyword": "const",
+      "why": "A scope outside the closed vocabulary."
+    },
+    {
+      "file": "invalid-scope-of-the-other-audience.json",
+      "expect_instance_location": "/claims/scope",
+      "expect_keyword": "const",
+      "why": "auth:session with audience dev-health-api: the scope belongs to the other audience."
+    },
+    {
+      "file": "invalid-scope-list.json",
+      "expect_instance_location": "/claims/scope",
+      "expect_keyword": "const",
+      "why": "Two scopes in one string: v1 carries exactly one."
+    },
+    {
+      "file": "invalid-sub-bare-uuid.json",
+      "expect_instance_location": "/claims/sub",
+      "expect_keyword": "pattern",
+      "why": "sub as a bare UUID; the wire form is principal.v1's prn_ id."
+    },
+    {
+      "file": "invalid-sub-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "No sub."
+    },
+    {
+      "file": "invalid-sid-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "No sid: every user access token belongs to a session."
+    },
+    {
+      "file": "invalid-sid-bare-uuid.json",
+      "expect_instance_location": "/claims/sid",
+      "expect_keyword": "pattern",
+      "why": "sid as a bare UUID; the wire form is session.v1's ses_ id."
+    },
+    {
+      "file": "invalid-principal-type-workload.json",
+      "expect_instance_location": "/claims/principal_type",
+      "expect_keyword": "const",
+      "why": "A workload principal in a user access token."
+    },
+    {
+      "file": "invalid-jti-short.json",
+      "expect_instance_location": "/claims/jti",
+      "expect_keyword": "pattern",
+      "why": "A jti shorter than 22 characters."
+    },
+    {
+      "file": "invalid-iss-http.json",
+      "expect_instance_location": "/claims/iss",
+      "expect_keyword": "pattern",
+      "why": "Plain http issuer."
+    },
+    {
+      "file": "invalid-org-id-null.json",
+      "expect_instance_location": "/claims/org_id",
+      "expect_keyword": "type",
+      "why": "org_id null: 'no organization' is the absent claim, never null."
+    },
+    {
+      "file": "invalid-org-id-uppercase.json",
+      "expect_instance_location": "/claims/org_id",
+      "expect_keyword": "pattern",
+      "why": "An uppercase UUID: one spelling per organization."
+    },
+    {
+      "file": "invalid-iat-zero.json",
+      "expect_instance_location": "/claims/iat",
+      "expect_keyword": "minimum",
+      "why": "iat 0."
+    },
+    {
+      "file": "invalid-exp-after-9999.json",
+      "expect_instance_location": "/claims/exp",
+      "expect_keyword": "maximum",
+      "why": "exp after 9999-12-31."
+    },
+    {
+      "file": "invalid-exp-string.json",
+      "expect_instance_location": "/claims/exp",
+      "expect_keyword": "type",
+      "why": "exp as a string."
+    },
+    {
+      "file": "invalid-nbf-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "No nbf."
+    },
+    {
+      "file": "invalid-claim-role.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "role: not in the claim set; authorization is checked live per request."
+    },
+    {
+      "file": "invalid-claim-email.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "email: not in the claim set; authorization is checked live per request."
+    },
+    {
+      "file": "invalid-claim-username.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "username: not in the claim set; authorization is checked live per request."
+    },
+    {
+      "file": "invalid-claim-full-name.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "full_name: not in the claim set; authorization is checked live per request."
+    },
+    {
+      "file": "invalid-claim-is-superuser.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "is_superuser: not in the claim set; authorization is checked live per request."
+    },
+    {
+      "file": "invalid-claim-tv.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "tv: not in the claim set; authorization is checked live per request."
+    },
+    {
+      "file": "invalid-claim-type.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "type: not in the claim set; authorization is checked live per request."
+    },
+    {
+      "file": "invalid-kid-trailing-newline.json",
+      "expect_instance_location": "/header/kid",
+      "expect_keyword": "pattern",
+      "why": "kid ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-iss-trailing-newline.json",
+      "expect_instance_location": "/claims/iss",
+      "expect_keyword": "pattern",
+      "why": "iss ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-sub-trailing-newline.json",
+      "expect_instance_location": "/claims/sub",
+      "expect_keyword": "pattern",
+      "why": "sub ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-sid-trailing-newline.json",
+      "expect_instance_location": "/claims/sid",
+      "expect_keyword": "pattern",
+      "why": "sid ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-jti-trailing-newline.json",
+      "expect_instance_location": "/claims/jti",
+      "expect_keyword": "pattern",
+      "why": "jti ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-org-id-trailing-newline.json",
+      "expect_instance_location": "/claims/org_id",
+      "expect_keyword": "pattern",
+      "why": "org_id ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-top-level-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "A third top-level member: the document is the header and the claims only."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-lifetime-over-the-ceiling.json",
+      "why": "exp - iat is one second over the HS256-compat ceiling."
+    },
+    {
+      "file": "client-rejected-exp-equals-nbf.json",
+      "why": "nbf equals exp: the token is never valid."
+    },
+    {
+      "file": "client-rejected-nbf-before-iat.json",
+      "why": "nbf before iat."
+    },
+    {
+      "file": "client-rejected-exp-before-iat.json",
+      "why": "exp before iat."
+    },
+    {
+      "file": "client-rejected-duplicate-claim-aud.json",
+      "duplicate_member": true,
+      "why": "Two aud members; the second, which a last-wins decoder keeps, is the other audience."
+    },
+    {
+      "file": "client-rejected-duplicate-header-alg.json",
+      "duplicate_member": true,
+      "why": "Two alg members in the header."
+    },
+    {
+      "file": "client-rejected-exp-decimal-form.json",
+      "why": "exp written 1760000600.0: the same number, but not an integer token."
+    }
+  ]
+}

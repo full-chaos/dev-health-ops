@@ -33,7 +33,7 @@ const pagerDutyBindingsVenueEncryptionKey = "venue-pd-bindings-fernet-key-32-byt
 func TestPagerDutyWebhookBindingsVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("bindings", "TestPagerDutyWebhookBindingsVenueOracle", "f37e54df955700a2096f721b60935f87e8967c753a783a83221f42a60e041dac"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-bindings-32-b"
 
 	ids := map[string]uuid.UUID{}
@@ -306,9 +306,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		golden.CompareRows(t, name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, goRows)
+		golden.CompareRows(t, name, goRows)
 	}
 	// Seeded rows keep their ids; a created row is told apart by its
 	// subscription id. Timestamps are compared as relations, not values.
@@ -355,7 +353,7 @@ FROM pagerduty_webhook_bindings ORDER BY org_id, integration_source_id, provider
 		return strings.Join(lines, "\n")
 	}
 	goSecrets := opened(venue.GoDB)
-	pythonSecrets := golden.CompareRows(t, "stored signing secrets opened", func() string { return opened(venue.SourceDB) }, goSecrets)
+	pythonSecrets := golden.CompareRows(t, "stored signing secrets opened", goSecrets)
 	if strings.Count(pythonSecrets, "\n") < 2 {
 		t.Errorf("only %q secrets were stored by the Python plane", pythonSecrets)
 	}
@@ -403,7 +401,7 @@ FROM pagerduty_webhook_bindings ORDER BY org_id, integration_source_id, provider
 	if pythonForeign[0].Status != 200 {
 		t.Fatalf("python activate: status %d", pythonForeign[0].Status)
 	}
-	if got := golden.InspectRows(t, "python status of the foreign-organisation row", func() string { return statusOf(venue.SourceDB, S("B-crossorg-S19")) }); got != "inactive" {
+	if got := golden.InspectRows(t, "python status of the foreign-organisation row"); got != "inactive" {
 		t.Errorf("python plane left the foreign row %q; the named divergence expects it to swap it (inactive)", got)
 	}
 	if status, _ := goSend(foreign); status != 200 {

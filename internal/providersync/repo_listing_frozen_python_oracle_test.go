@@ -3,7 +3,6 @@ package providersync
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
@@ -17,9 +16,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
-
-//go:embed testdata/repo_listing_oracle.py
-var repoListingOracleProgram string
 
 // listingScriptEntry is one canned provider answer, keyed by the request's canonical
 // URI: escaped path, then the query sorted by key.
@@ -155,7 +151,7 @@ func TestRepoListingMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenScriptAnswer(t, scriptOracle{name: "repo-listing", program: repoListingOracleProgram, input: input})
+	output := frozenScriptAnswer(t, scriptOracle{name: "repo-listing", input: input})
 	want, err := decodeListingOutcomes(output)
 	if err != nil {
 		t.Fatalf("decode python answer: %v", err)

@@ -15,82 +15,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// tablesProgram dumps, from the interpreter, every unicodedata answer this
+// tablesDump holds the frozen interpreter answers: every unicodedata answer this
 // package freezes. Runs are [start, value] pairs over 0..0x10FFFF.
-const tablesProgram = `
-import json, re, sys, unicodedata
-
-def runs(fn):
-    out, prev = [], object()
-    for cp in range(0x110000):
-        value = fn(chr(cp))
-        if value != prev:
-            out.append([cp, value])
-            prev = value
-    return out
-
-def ranges(pred):
-    out, start = [], None
-    for cp in range(0x110001):
-        hit = cp < 0x110000 and pred(chr(cp))
-        if hit and start is None:
-            start = cp
-        elif not hit and start is not None:
-            out.append([start, cp - 1])
-            start = None
-    return out
-
-word = re.compile(r"\w")
-u32 = unicodedata.ucd_3_2_0
-
-def overrides32():
-    out = []
-    for cp in range(0x110000):
-        c = chr(cp)
-        if 0xD800 <= cp <= 0xDFFF or u32.category(c) == "Cn":
-            continue
-        old = u32.normalize("NFKD", c)
-        if old != unicodedata.normalize("NFKD", c):
-            out.append([cp, [ord(x) for x in old]])
-    return out
-
-def decompositions(module, compat):
-    out = []
-    for cp in range(0x110000):
-        d = module.decomposition(chr(cp))
-        if not d:
-            continue
-        tagged = d.startswith("<")
-        if tagged != compat:
-            continue
-        parts = d.split()[1:] if tagged else d.split()
-        out.append([cp, [int(x, 16) for x in parts]])
-    return out
-
-print(json.dumps({
-    "version": unicodedata.unidata_version,
-    "python": sys.version.split()[0],
-    "category": runs(unicodedata.category),
-    "bidirectional": runs(unicodedata.bidirectional),
-    "combining": runs(unicodedata.combining),
-    "no_name": ranges(lambda c: not unicodedata.name(c, "")),
-    "names": [[ord(c), unicodedata.name(c)] for c in map(chr, range(0x110000))
-              if unicodedata.category(c)[0] in "MZC" and unicodedata.name(c, "")],
-    "full_stop": [cp for cp in range(0x110000) if "002E" in unicodedata.decomposition(chr(cp)).split(" ")],
-    "word": ranges(lambda c: word.match(c) is not None),
-    "canonical": [[cp, [int(x, 16) for x in d.split()]]
-                  for cp, d in ((cp, unicodedata.decomposition(chr(cp))) for cp in range(0x110000))
-                  if d and not d.startswith("<")],
-    "composites": [[int(d.split()[0], 16), int(d.split()[1], 16), cp]
-                   for cp, d in ((cp, unicodedata.decomposition(chr(cp))) for cp in range(0x110000))
-                   if d and not d.startswith("<") and len(d.split()) == 2
-                   and unicodedata.normalize("NFC", chr(int(d.split()[0], 16)) + chr(int(d.split()[1], 16))) == chr(cp)],
-    "compat": decompositions(unicodedata, True),
-    "unassigned32": ranges(lambda c: u32.category(c) == "Cn"),
-    "decomp32": overrides32(),
-}))
-`
-
 type tablesDump struct {
 	Version       string               `json:"version"`
 	Python        string               `json:"python"`
@@ -115,7 +41,7 @@ func TestUnicodeDataTablesMatchFrozenPython(t *testing.T) {
 	regenerate := os.Getenv("DEV_HEALTH_REGENERATE_TABLES") == "1"
 	_, file, _, _ := moduleroot.Caller(0)
 	directory := filepath.Dir(file)
-	output := frozenPython(t, "tables.golden.json", programoracle.Program{Name: "tables", Text: tablesProgram})[0]
+	output := frozenPython(t, "tables.golden.json", programoracle.Program{Name: "tables"})[0]
 	var dump tablesDump
 	if err := json.Unmarshal([]byte(output), &dump); err != nil {
 		t.Fatalf("decode: %v", err)

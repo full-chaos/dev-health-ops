@@ -145,6 +145,10 @@
       "why": "Closed vocabulary member `not_entitled`."
     },
     {
+      "file": "valid-reason-membership-required.json",
+      "why": "Closed vocabulary member `membership_required`."
+    },
+    {
       "file": "valid-reason-rate-limited.json",
       "why": "Closed vocabulary member `rate_limited`."
     },

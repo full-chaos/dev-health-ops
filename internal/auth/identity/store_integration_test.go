@@ -817,17 +817,16 @@ func TestIdentityBySubjectSSOLegacyNeedsTheProviderOrgAndMembership(t *testing.T
 	stranger := e.seedLegacy(t, ctx, uniqueEmail("out"), "oidc", outsider, false)
 	e.seedMembership(t, ctx, stranger, otherOrg)
 
-	for name, c := range map[string]struct {
-		subject string
-		legacy  *LegacyMatch
-	}{
-		"no membership in the provider org": {outsider, &LegacyMatch{AuthProvider: "oidc", MembershipOrg: &org}},
-		"org is not the provider row's org": {outsider, &LegacyMatch{AuthProvider: "oidc", MembershipOrg: &otherOrg}},
-		"another protocol":                  {member, &LegacyMatch{AuthProvider: "saml", MembershipOrg: &org}},
+	for name, legacy := range map[string]*LegacyMatch{
+		"no membership in the provider org": {AuthProvider: "oidc", MembershipOrg: &org},
+		"org is not the provider row's org": {AuthProvider: "oidc", MembershipOrg: &otherOrg},
 	} {
-		if _, found, err := e.store.IdentityBySubject(ctx, issuer, provider, c.subject, c.legacy); err != nil || found {
-			t.Errorf("%s: found %v, %v; want a miss", name, found, err)
+		if _, found, err := e.store.IdentityBySubject(ctx, issuer, provider, outsider, legacy); !errors.Is(err, ErrLegacyNotMember) || found {
+			t.Errorf("%s: found %v, %v; want ErrLegacyNotMember", name, found, err)
 		}
+	}
+	if _, found, err := e.store.IdentityBySubject(ctx, issuer, provider, member, &LegacyMatch{AuthProvider: "saml", MembershipOrg: &org}); err != nil || found {
+		t.Errorf("another protocol: found %v, %v; want a miss", found, err)
 	}
 	if _, _, err := e.store.IdentityBySubject(ctx, issuer, provider, member, &LegacyMatch{AuthProvider: "oidc"}); !errors.Is(err, ErrInvalidLegacyMatch) {
 		t.Fatalf("SSO without an org = %v, want ErrInvalidLegacyMatch", err)
@@ -840,6 +839,30 @@ func TestIdentityBySubjectSSOLegacyNeedsTheProviderOrgAndMembership(t *testing.T
 	other := e.seedSSOProvider(t, ctx, org, "oidc")
 	if _, found, err := e.store.IdentityBySubject(ctx, issuer, other, member, nil); err != nil || found {
 		t.Fatalf("another provider row matched: %v, %v", found, err)
+	}
+}
+
+// TestIdentityBySubjectSSOLegacyCountsTheSubjectInEveryOrg: one stored
+// subject is unique across all organizations; a second account carrying it in
+// any organization is ErrMultipleUsers, never the provider org's account.
+func TestIdentityBySubjectSSOLegacyCountsTheSubjectInEveryOrg(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, otherOrg := e.seedOrg(t, ctx), e.seedOrg(t, ctx)
+	provider := e.seedSSOProvider(t, ctx, org, "oidc")
+	issuer := "https://idp.example.com/realms/" + uuid.NewString()[:8]
+
+	subject := "two-orgs-" + uuid.NewString()
+	inOrg := e.seedLegacy(t, ctx, uniqueEmail("in-org"), "oidc", subject, false)
+	e.seedMembership(t, ctx, inOrg, org)
+	elsewhere := e.seedLegacy(t, ctx, uniqueEmail("other-org"), "oidc", subject, false)
+	e.seedMembership(t, ctx, elsewhere, otherOrg)
+
+	if p, found, err := e.store.IdentityBySubject(ctx, issuer, provider, subject, &LegacyMatch{AuthProvider: "oidc", MembershipOrg: &org}); !errors.Is(err, ErrMultipleUsers) || found {
+		t.Fatalf("subject in two orgs = %+v, %v, %v; want ErrMultipleUsers", p, found, err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE subject = $1`, subject); n != 0 {
+		t.Fatalf("identity rows = %d, want none", n)
 	}
 }
 

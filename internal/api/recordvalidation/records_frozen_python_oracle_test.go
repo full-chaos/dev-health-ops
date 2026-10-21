@@ -7,61 +7,13 @@ import (
 	"math/big"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// pythonRecordModelsProgram generates testdata/record_models.json from the
-// models' pydantic core schemas.
-const pythonRecordModelsProgram = `
-import json
-from dev_health_ops.api.external_ingest.schemas import RECORD_KIND_MODELS, OPERATIONAL_RECORD_KINDS
-KEEP = {"type", "min_length", "max_length", "ge", "le", "gt", "lt", "multiple_of", "expected", "strict", "allow_inf_nan"}
-def node(s):
-    t = s["type"]
-    out = {k: v for k, v in s.items() if k in KEEP}
-    for key in ("schema", "items_schema", "values_schema", "keys_schema"):
-        if key in s:
-            out[key] = node(s[key])
-    if t == "union":
-        out["choices"] = [node(c if isinstance(c, dict) else c[0]) for c in s["choices"]]
-        out["mode"] = s.get("mode", "smart")
-    return out
-def model(cls):
-    core = cls.__pydantic_core_schema__
-    config = core.get("config", {})
-    fields = []
-    for name, f in core["schema"]["fields"].items():
-        schema = f["schema"]
-        has_default = schema["type"] == "default"
-        if has_default:
-            schema = schema["schema"]
-        fields.append({"name": name, "alias": f.get("validation_alias"), "has_default": has_default, "schema": node(schema)})
-    return {"extra": config.get("extra_fields_behavior", "ignore"),
-            "populate_by_name": bool(config.get("validate_by_name", config.get("populate_by_name", False))),
-            "fields": fields}
-print(json.dumps({"kinds": {kind: model(cls) for kind, cls in RECORD_KIND_MODELS.items()},
-                  "operational": sorted(OPERATIONAL_RECORD_KINDS)}, indent=1))
-`
-
-// pythonValidateRecordsProgram runs validate_records on each case (a list
-// of [kind, payload JSON text]) as one record of its own batch.
-const pythonValidateRecordsProgram = `
-import json, sys
-from dev_health_ops.api.external_ingest.schemas import RecordEnvelope
-from dev_health_ops.external_ingest.validate import validate_records
-out = []
-for kind, payload in json.loads(sys.stdin.read()):
-    record = RecordEnvelope.model_validate({"kind": kind, "externalId": "x", "payload": json.loads(payload)})
-    out.append([item.model_dump() for item in validate_records([record])])
-print(json.dumps(out))
-`
 
 func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 
@@ -71,12 +23,8 @@ func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 // that build and pydantic under them, so Identity names those distributions.
 // A golden recorded by another producer is refused.
 var recordGoldens = programoracle.Set{
-	Package:       "./internal/api/recordvalidation/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3.0\npydantic 2.13.5\npydantic-core 2.46.5",
-	Distributions: []string{"email-validator", "pydantic", "pydantic-core"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3.0\npydantic 2.13.5\npydantic-core 2.46.5",
 	Pins: map[string]string{
 		"record-models.golden.json":     "c485a4e261d3e4ef00f7fd2e854807e6acd3709d1508d5433435eaec8ebebaca",
 		"record-validation.golden.json": "d34a28ade209aa14e61e1bb1ba729064eacd37a48ef40d846672157ad569b613",
@@ -87,19 +35,14 @@ var recordGoldens = programoracle.Set{
 // of the running test. No Python runs.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	return recordGoldens.Outputs(t, root, golden, programs...)
+	return recordGoldens.Outputs(t, golden, programs...)
 }
 
 // TestRecordModelsMatchFrozenPython compares the model spec the validator runs
 // on (testdata/record_models.json, embedded) with the frozen spec the real
 // models' pydantic core schemas give, key order included.
 func TestRecordModelsMatchFrozenPython(t *testing.T) {
-	output := frozenPython(t, "record-models.golden.json", programoracle.Program{Name: "record models", Text: pythonRecordModelsProgram})[0]
+	output := frozenPython(t, "record-models.golden.json", programoracle.Program{Name: "record models"})[0]
 	live, err := pyjson.Decode([]byte(output))
 	if err != nil {
 		t.Fatal(err)
@@ -335,7 +278,7 @@ func TestRecordValidationMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "record-validation.golden.json", programoracle.Program{Name: "validate records", Text: pythonValidateRecordsProgram, Stdin: input})[0]
+	output := frozenPython(t, "record-validation.golden.json", programoracle.Program{Name: "validate records", Stdin: input})[0]
 	var want []json.RawMessage
 	if err := json.Unmarshal([]byte(output), &want); err != nil {
 		t.Fatalf("decode: %v", err)

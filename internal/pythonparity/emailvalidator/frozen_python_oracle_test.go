@@ -15,31 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// oracleProgram runs pydantic's own validate_email (the function EmailStr
-// calls) over every input. Inputs travel as code point lists, so a lone
-// surrogate survives the trip. Its 2.6 million answers are frozen as block
-// digests, one canonical line per answer: verdict|address|reason, "1" or
-// "0", the normalized address as a code point list, and the reason as a text
-// field.
-const oracleProgram = programoracle.BlocksPython + `
-import sys
-from pydantic_core import PydanticCustomError
-from pydantic.networks import validate_email
-
-lines = []
-for cps in json.load(sys.stdin):
-    cps = cps or []
-    value = "".join(map(chr, cps))
-    try:
-        _, email = validate_email(value)
-        lines.append("1|" + code_points(map(ord, email)) + "|")
-    except PydanticCustomError as exc:
-        if exc.type != "value_error" or exc.message_template != "value is not a valid email address: {reason}":
-            raise
-        lines.append("0||" + text(exc.context["reason"]))
-print(json.dumps(block_digests(lines)))
-`
-
 type verdict struct {
 	OK     bool   `json:"ok"`
 	Email  []rune `json:"email"`
@@ -160,8 +135,8 @@ func TestValidateEmailMatchesFrozenPydantic(t *testing.T) {
 	}
 	calls, callsPayload := dotAtomCalls(t)
 	outputs := frozenPython(t, "validate-email.golden.json",
-		programoracle.Program{Name: "validate_email", Text: oracleProgram, Stdin: payload},
-		programoracle.Program{Name: "check_dot_atom", Text: dotAtomProgram, Stdin: callsPayload})
+		programoracle.Program{Name: "validate_email", Stdin: payload},
+		programoracle.Program{Name: "check_dot_atom", Stdin: callsPayload})
 	// The verdicts here. The block digests prove each is pydantic's, so the
 	// slice cut for the golden below is a slice of pydantic's verdicts.
 	want := make([]verdict, len(corpus))
@@ -305,20 +280,6 @@ func describe(v verdict) string {
 	}
 	return fmt.Sprintf("refused %q", v.Reason)
 }
-
-const dotAtomProgram = `
-import json, sys
-from email_validator.syntax import check_dot_atom
-from email_validator.exceptions import EmailSyntaxError
-out = []
-for call in json.load(sys.stdin):
-    try:
-        check_dot_atom("".join(map(chr, call["label"] or [])), "start {}", "end {}", call["hostname"])
-        out.append("")
-    except EmailSyntaxError as exc:
-        out.append(str(exc))
-json.dump(out, sys.stdout)
-`
 
 type dotAtomCall struct {
 	Label    []rune `json:"label"`

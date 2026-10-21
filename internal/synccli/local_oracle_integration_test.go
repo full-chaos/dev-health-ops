@@ -3,13 +3,11 @@
 package synccli
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -19,8 +17,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	_ "embed"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
@@ -32,9 +28,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-//go:embed testdata/local_sync_oracle.py
-var localSyncOracleProgram string
 
 // The tables `sync git|prs|blame --provider local` writes. Compared columns come from
 // the real table schema (system.columns), never a hand list; the only ones left
@@ -746,7 +739,6 @@ type localOracle struct {
 	admin                driver.Conn
 	pythonDatabase, goDB string
 	httpDSN, goDSN       string
-	ask                  func(map[string]any) map[string]any
 }
 
 func newLocalOracle(t *testing.T) *localOracle {
@@ -791,56 +783,6 @@ func newLocalOracle(t *testing.T) *localOracle {
 	goURL := *nativeURL
 	goURL.Path = "/" + goDatabase
 	return &localOracle{t: t, ctx: ctx, admin: admin, pythonDatabase: pythonDatabase, goDB: goDatabase, httpDSN: httpDSN, goDSN: goURL.String()}
-}
-
-// localPythonSettings are the constants of the producer's environment: the closed environment AND part of the
-// golden's request key. The per-scenario variables are passed in each request.
-var localPythonSettings = map[string]string{
-	"PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1",
-	"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
-}
-
-// startPython starts the real Python verb in a long-lived child with a closed environment (the producer only).
-func (o *localOracle) startPython(producer *venueoracle.Producer) {
-	t := o.t
-	t.Helper()
-	producer.RequireDeployed()
-	// The launcher's closed environment: its fixed set and the declared constants (localPythonSettings, in the
-	// golden's key); nothing of the test process's environment.
-	command, err := producer.Command(context.Background(), localPythonSettings, nil, "-c", localSyncOracleProgram)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stderr strings.Builder
-	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = stdin.Close(); _ = command.Wait() })
-	reader := bufio.NewReaderSize(stdout, 1<<20)
-	o.ask = func(request map[string]any) map[string]any {
-		raw, _ := json.Marshal(request)
-		if _, err := io.WriteString(stdin, string(raw)+"\n"); err != nil {
-			t.Fatalf("python stdin: %v", err)
-		}
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			t.Fatalf("python answer: %v\n%s", err, stderr.String())
-		}
-		var answer map[string]any
-		if err := json.Unmarshal(line, &answer); err != nil {
-			t.Fatalf("python answer %q: %v", line, err)
-		}
-		return answer
-	}
 }
 
 func (o *localOracle) truncate() {
@@ -1027,26 +969,6 @@ func localCorpusKey() []byte {
 	return []byte("local corpus sha256 " + hex.EncodeToString(sum[:]))
 }
 
-// produceLocal runs every scenario against the REAL Python verb and records how each run ended and what it wrote.
-func produceLocal(t *testing.T, producer *venueoracle.Producer) []localRecorded {
-	t.Helper()
-	oracle := newLocalOracle(t)
-	oracle.startPython(producer)
-	var recorded []localRecorded
-	for _, scenario := range append(localScenarios(), generatedScenarios()...) {
-		f := newFixture(t, localFixtureName(scenario))
-		scenario.build(f)
-		for _, target := range localTargets(scenario) {
-			run := prepareLocalRun(t, oracle, scenario, f, target)
-			pyArgs := append(append([]string{target}, run.base...), "--analytics-db", oracle.httpDSN)
-			want := oracle.ask(map[string]any{"args": pyArgs, "env": run.env})
-			recorded = append(recorded, localRecorded{scenario.name, target, fmt.Sprint(want["stage"].(map[string]any)["v"]),
-				normalizeRepoIDs(tablesSnapshot(oracle.ctx, t, oracle.admin, oracle.pythonDatabase), run.repoIDs)})
-		}
-	}
-	return recorded
-}
-
 const localPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
 // TestLocalSyncMatchesFrozenPython compares `dho sync git|prs|blame --provider local` with what the REAL
@@ -1055,26 +977,13 @@ const localPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // executed once on localPythonBuild and are frozen in testdata/golden/local_sync.json (the recipe regenerates
 // them by execution); the scenarios, targets and arguments are the golden's key.
 func TestLocalSyncMatchesFrozenPython(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/local_sync.json",
 		PythonBuild: localPythonBuild,
 		SHA256:      "09156a39df42b7ea93aff4cab1f005fe285b4d5687bf96dd7829e679462be68a",
-		Recipe: "git worktree add --detach $DIR " + localPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestLocalSyncMatchesFrozenPython$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
-	request := venueoracle.ProgramRequest("local sync corpus", localSyncOracleProgram, localCorpusKey(), localPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		body, err := json.Marshal(produceLocal(t, producer))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
-	})
+	request := venueoracle.ProgramRequest("local sync corpus", localCorpusKey())
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen []localRecorded
 	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &frozen); err != nil {
@@ -1266,35 +1175,13 @@ func rerunFixture(ctx context.Context, t *testing.T) (*fixture, string) {
 // (decided: the invariant wins, D2598); the test pins both sides so it cannot drift: Python's side is
 // frozen in testdata/golden/local_rerun.json, the port's is run.
 func TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/local_rerun.json",
 		PythonBuild: localPythonBuild,
 		SHA256:      "bb0224d28b4ff52079d76762425c05d3fff2eb3a8e7ff7517ccf30f8915f25b0",
-		Recipe: "git worktree add --detach $DIR " + localPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestLocalSyncRerunKeepsHeldColumnsUnlikePythonFrozen$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
-	request := venueoracle.ProgramRequest("local sync rerun over a held row", localSyncOracleProgram, []byte("held pull request 5; prs rerun"), localPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		oracle := newLocalOracle(t)
-		oracle.startPython(producer)
-		f, id := rerunFixture(oracle.ctx, t)
-		seedHeldPullRequest(oracle.ctx, t, oracle, oracle.pythonDatabase, id)
-		base := []string{"--provider", "local", "--repo-path", f.dir, "--org", "oracle-org"}
-		want := oracle.ask(map[string]any{"args": append(append([]string{"prs"}, base...), "--analytics-db", oracle.httpDSN)})
-		if fmt.Sprint(want["stage"].(map[string]any)["v"]) != "ok" {
-			t.Fatalf("python did not finish: %v", want)
-		}
-		body, err := json.Marshal(readHeldPullRequest(oracle.ctx, t, oracle, oracle.pythonDatabase))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
-	})
+	request := venueoracle.ProgramRequest("local sync rerun over a held row", []byte("held pull request 5; prs rerun"))
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var py rerunRow
 	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &py); err != nil {

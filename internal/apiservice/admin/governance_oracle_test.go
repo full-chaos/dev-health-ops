@@ -23,7 +23,7 @@ import (
 func TestGovernanceRoutesVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, governanceGolden("governance", "TestGovernanceRoutesVenueOracle", "686d3bae4e71ab6b655b2d57dc647f86b8d907bfef485292a0a7dc151b0ecbcf"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("gov")
 	const jwtKey = "venue-oracle-test-secret-key-for-governance-flow-32-bytes!!"
 
@@ -491,9 +491,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		source := golden.CompareRows(t, name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, goRows)
+		source := golden.CompareRows(t, name, goRows)
 		if source == "" {
 			t.Errorf("%s: the query matched no rows on the Python plane; the comparison proves nothing", name)
 		}

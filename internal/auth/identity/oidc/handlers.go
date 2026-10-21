@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -118,6 +119,49 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, *Error) {
 	return data, nil
 }
 
+// outcomeMark is one handler request's panic state: whether its outcome was
+// counted, and the provider row it selected.
+type outcomeMark struct {
+	recorded   bool
+	providerID uuid.UUID
+}
+
+type outcomeMarkKey struct{}
+
+// selected notes the provider row a request selected, for its panic log line.
+func selected(ctx context.Context, providerID uuid.UUID) {
+	if mark, ok := ctx.Value(outcomeMarkKey{}).(*outcomeMark); ok {
+		mark.providerID = providerID
+	}
+}
+
+var errHandlerPanic = errors.New("oidc: handler panicked")
+
+// guarded serves route and counts a panic that ends the request before its
+// outcome is counted: route/error/dependency_unavailable, one log line with
+// no panic value. The panic then goes on to the shared recovery middleware,
+// which writes the 500. http.ErrAbortHandler is a deliberate abort and is not
+// counted.
+func (s *Service) guarded(route string, serve http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mark := &outcomeMark{}
+		mark.providerID, _ = uuid.Parse(r.PathValue("provider_id"))
+		ctx := context.WithValue(r.Context(), outcomeMarkKey{}, mark)
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+			abort, _ := recovered.(error)
+			if !mark.recorded && !errors.Is(abort, http.ErrAbortHandler) {
+				s.refused(ctx, route, mark.providerID, internal(ReasonDependency, errHandlerPanic))
+			}
+			panic(recovered)
+		}()
+		serve(w, r.WithContext(ctx))
+	})
+}
+
 // reject records a refusal of route once and writes its response.
 func (s *Service) reject(w http.ResponseWriter, r *http.Request, route string, providerID uuid.UUID, failure *Error) {
 	s.refused(r.Context(), route, providerID, failure)
@@ -159,13 +203,14 @@ func providerIDFrom(r *http.Request) (uuid.UUID, *Error) {
 
 // AuthorizeHandler serves POST /api/v1/auth/oidc/{provider_id}/authorize.
 func (s *Service) AuthorizeHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.guarded(routeAuthorize, func(w http.ResponseWriter, r *http.Request) {
 		providerID, failure := providerIDFrom(r)
 		if failure != nil {
 			s.reject(w, r, routeAuthorize, providerID, failure)
 			return
 		}
-		if _, failure := s.admit(r.Context(), providerID); failure != nil {
+		row, failure := s.admit(r.Context(), providerID, oidcSpec)
+		if failure != nil {
 			s.reject(w, r, routeAuthorize, providerID, failure)
 			return
 		}
@@ -179,25 +224,21 @@ func (s *Service) AuthorizeHandler() http.Handler {
 			s.reject(w, r, routeAuthorize, providerID, deny(http.StatusUnprocessableEntity, ReasonMalformed, errs))
 			return
 		}
-		result, err := s.Authorize(r.Context(), providerID, body.RedirectURI)
-		if err != nil {
-			s.writeError(w, err)
-			return
-		}
-		http.SetCookie(w, result.Cookie)
-		writeJSON(w, http.StatusOK, map[string]any{"authorization_url": result.AuthorizationURL, "state": result.State})
+		result, err := s.authorizeAdmitted(r.Context(), row, body.RedirectURI)
+		writeAuthorize(s, w, result, err)
 	})
 }
 
 // CallbackHandler serves POST /api/v1/auth/oidc/{provider_id}/callback.
 func (s *Service) CallbackHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.guarded(routeCallback, func(w http.ResponseWriter, r *http.Request) {
 		providerID, failure := providerIDFrom(r)
 		if failure != nil {
 			s.reject(w, r, routeCallback, providerID, failure)
 			return
 		}
-		if _, failure := s.admit(r.Context(), providerID); failure != nil {
+		row, failure := s.admit(r.Context(), providerID, oidcSpec)
+		if failure != nil {
 			s.reject(w, r, routeCallback, providerID, failure)
 			return
 		}
@@ -211,31 +252,41 @@ func (s *Service) CallbackHandler() http.Handler {
 			s.reject(w, r, routeCallback, providerID, deny(http.StatusUnprocessableEntity, ReasonMalformed, errs))
 			return
 		}
-		login, clear, err := s.Callback(r.Context(), providerID, CallbackInput{
-			Code: body.Code, State: body.State, RequestID: requestid.Audit(r.Context()),
-			Cookie: func(name string) (string, bool) {
-				c, err := r.Cookie(name)
-				if err != nil {
-					return "", false
-				}
-				return c.Value, true
-			},
-		})
-		if clear != nil {
-			http.SetCookie(w, clear)
-		}
-		if err != nil {
-			s.writeError(w, err)
-			return
-		}
-		orgID := ""
-		if login.OrgID != nil {
-			orgID = login.OrgID.String()
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"access_token": login.Tokens.AccessToken, "refresh_token": login.Tokens.RefreshToken,
-			"token_type": "bearer", "expires_in": login.Tokens.ExpiresIn,
-			"user_id": login.PrincipalID.String(), "email": login.Email, "org_id": orgID, "role": login.Role,
-		})
+		login, clear, err := s.callbackAdmitted(r.Context(), row, callbackInput(r, body))
+		s.writeLogin(w, login, clear, err)
+	})
+}
+
+func callbackInput(r *http.Request, body callbackBody) CallbackInput {
+	return CallbackInput{
+		Code: body.Code, State: body.State, RequestID: requestid.Audit(r.Context()),
+		Cookie: func(name string) (string, bool) {
+			c, err := r.Cookie(name)
+			if err != nil {
+				return "", false
+			}
+			return c.Value, true
+		},
+	}
+}
+
+// writeLogin answers a callback: the clearing cookie first, then the error or
+// the login response.
+func (s *Service) writeLogin(w http.ResponseWriter, login Login, clear *http.Cookie, err error) {
+	if clear != nil {
+		http.SetCookie(w, clear)
+	}
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	orgID := ""
+	if login.OrgID != nil {
+		orgID = login.OrgID.String()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"access_token": login.Tokens.AccessToken, "refresh_token": login.Tokens.RefreshToken,
+		"token_type": "bearer", "expires_in": login.Tokens.ExpiresIn,
+		"user_id": login.PrincipalID.String(), "email": login.Email, "org_id": orgID, "role": login.Role,
 	})
 }

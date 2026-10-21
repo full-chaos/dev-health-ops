@@ -10,20 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const pythonLimitProgram = `
-import json, sys
-from limits import parse_many
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        items = parse_many(text)
-    except ValueError:
-        out.append(None)
-        continue
-    out.append([[item.amount, item.get_expiry()] for item in items])
-print(json.dumps(out))
-`
-
 // TestParseLimitMatchesFrozenPython compares ParseLimit with limits.parse_many,
 // the parser slowapi applies to a limit string. Where Go accepts, Python
 // must yield exactly that one limit; where Go refuses, Python must refuse or
@@ -58,7 +44,7 @@ func TestParseLimitMatchesFrozenPython(t *testing.T) {
 	}
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "parse-limit.golden.json",
-		programoracle.Program{Name: "parse-limit", Text: pythonLimitProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "parse-limit", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want [][][2]float64
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

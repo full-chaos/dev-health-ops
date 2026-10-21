@@ -373,9 +373,7 @@ func TestTablesAfterThePythonFreezeLeaveADeleteOrgBodyOnlyAtCountZero(t *testing
 	}
 }
 
-// repoRoot walks up from THIS file to the directory holding src/dev_health_ops
-// (this repo's Python source root), matching internal/testsupport/chschema's
-// own repoRoot helper.
+// repoRoot walks up from THIS file to the directory holding go.mod (the repo root).
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := moduleroot.Caller(0)
@@ -384,12 +382,12 @@ func repoRoot(t *testing.T) string {
 	}
 	directory := filepath.Dir(file)
 	for {
-		if info, statErr := os.Stat(filepath.Join(directory, "src", "dev_health_ops")); statErr == nil && info.IsDir() {
+		if info, statErr := os.Stat(filepath.Join(directory, "go.mod")); statErr == nil && !info.IsDir() {
 			return directory
 		}
 		parent := filepath.Dir(directory)
 		if parent == directory {
-			t.Fatalf("no src/dev_health_ops above %s", file)
+			t.Fatalf("no go.mod above %s", file)
 		}
 		directory = parent
 	}
@@ -417,9 +415,7 @@ func compareAuditJSONWithSpacingGapGoFiltered(t *testing.T, ctx context.Context,
 FROM audit_logs WHERE %s%s`, column, where, goOnly)
 		// The Python plane's rows: read from its database while recording, frozen
 		// otherwise (the spacing gap is compared here, not byte for byte).
-		python := golden.InspectRows(t, "audit_logs."+column+" JSON text where "+where, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		})
+		python := golden.InspectRows(t, "audit_logs."+column+" JSON text where "+where)
 		goText := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
 		venueoracle.CompareJSONSpacingGap(t, "audit_logs."+column, splitRows(python), splitRows(goText))
 	}

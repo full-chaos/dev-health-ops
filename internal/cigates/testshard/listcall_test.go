@@ -128,6 +128,7 @@ func TestTheStandInGoListCacheKeysOnDirectoryEnvironmentAndArguments(t *testing.
 		{"other GOWORK", root, []string{"GOWORK=on"}, []string{"-m"}},
 		{"other GO111MODULE", root, []string{"GO111MODULE=off"}, []string{"-m"}},
 		{"another variable of the environment", root, []string{"GOTOOLCHAIN=local"}, []string{"-m"}},
+		{"another PATH", root, []string{"PATH=" + other + string(os.PathListSeparator) + os.Getenv("PATH")}, []string{"-m"}},
 	} {
 		before := count()
 		out, _ := list(c.cwd, c.env, c.args...)
@@ -135,6 +136,31 @@ func TestTheStandInGoListCacheKeysOnDirectoryEnvironmentAndArguments(t *testing.
 			t.Errorf("%s: served from another call's cache entry (%q)", c.name, out)
 		}
 		seen[out] = true
+	}
+	// the stand-in's own directory at the head of PATH (a per-test directory) is not part of the key: a second stand-in in another
+	// directory, with its own directory at the head of PATH, is served the first one's entry
+	second := filepath.Join(dir, "second")
+	if err := os.MkdirAll(second, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "go"), []byte(fmt.Sprintf(standInGo, fakeGo)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	headed := func(bin string) (string, int) {
+		t.Helper()
+		cmd := exec.Command(filepath.Join(bin, "go"), "list", "-json")
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "FAKE_GO_LIST_CACHE="+cache, "FAKE_GO_LIST_CACHE_ROOT="+root, "PWD="+root, "GOFLAGS=", "GOWORK=off",
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out), count()
+	}
+	firstOut, n := headed(dir)
+	if secondOut, m := headed(second); secondOut != firstOut || m != n {
+		t.Errorf("a stand-in in another directory missed the entry of the same call (%d real call(s) after it, want %d)", m, n)
 	}
 	before := count()
 	list(other, nil, "-m")

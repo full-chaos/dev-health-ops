@@ -17,10 +17,12 @@ import (
 const standInGo = `#!/usr/bin/env bash
 # Stand-in go: go test records "<args>" and succeeds (or fails when FAKE_GO_FAIL is set); every other subcommand is the real go.
 # A go list run in the real tree (FAKE_GO_LIST_CACHE_ROOT, which no test changes) is the real go's output, kept per directory,
-# arguments and go environment for the test process (FAKE_GO_LIST_CACHE): a check_go.sh run lists the packages several times.
+# arguments and whole environment for the test process (FAKE_GO_LIST_CACHE): a check_go.sh run lists the packages several times.
+# Left out of the key: the shell's own _, SHLVL and OLDPWD, the per-test TMPDIR and FAKE_GO_* paths of this harness, and the
+# per-test directory of this stand-in at the head of PATH (the rest of PATH is kept).
 if [ "$1" = "list" ] && [ -n "${FAKE_GO_LIST_CACHE:-}" ]; then
   case "${PWD}/" in "${FAKE_GO_LIST_CACHE_ROOT}"/*)
-    key="$(printf '%%s\0' "${PWD}" "${GOFLAGS:-}" "${GOWORK:-}" "${GOEXPERIMENT:-}" "${GOOS:-}" "${GOARCH:-}" "${CGO_ENABLED:-}" "$@" | sha256sum | cut -c1-64)"
+    key="$({ printf '%%s\0' "${PWD}" "$@" "PATH=${PATH#"${0%%/*}:"}"; env -0 | grep -zv '^\(_\|SHLVL\|OLDPWD\|TMPDIR\|PATH\|FAKE_GO_[A-Z_]*\)=' | LC_ALL=C sort -z; } | sha256sum | cut -c1-64)"
     if [ -f "${FAKE_GO_LIST_CACHE}/${key}" ]; then cat "${FAKE_GO_LIST_CACHE}/${key}"; exit 0; fi
     tmp="$(mktemp "${FAKE_GO_LIST_CACHE}/.${key}.XXXXXX")" || exit 1
     "%[1]s" "$@" > "${tmp}"; rc=$?

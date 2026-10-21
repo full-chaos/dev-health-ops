@@ -44,6 +44,7 @@ internal/cigates/bigboy	harness_test.go	unexpressed	-
 internal/cigates/bigboy	repin_old8_guard_test.go	unexpressed	-
 internal/cigates/bigboy	repin_support_test.go	unexpressed	-
 internal/cigates/bigboyrender	guards_test.go	unexpressed	-
+internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testdata/parity	dir
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-
 internal/cigates/chartgates	helpers_test.go	unexpressed	-
 internal/cigates/checkgo	support_test.go	unexpressed	-
@@ -154,7 +155,7 @@ internal/operationalordering	finalreads_test.go	unexpressed	-
 internal/operationalordering	one_resolver_test.go	.	tree
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree
 internal/platform/config	route_switch_absence_test.go	unexpressed	-
-internal/platform/secrets	declared_fields_test.go	unexpressed	-
+internal/platform/secrets	declared_fields_test.go	internal	tree
 internal/platform/secrets	envreads_test.go	.	tree
 internal/processreadiness	readiness_timeout_test.go	internal/processreadiness	dir
 internal/providerfoundation	classify_call_sites_test.go	unexpressed	-
@@ -234,8 +235,8 @@ internal/storedversion	writers_test.go	unexpressed	-
 internal/streamhandlers	stored_version_invariant_test.go	unexpressed	-
 internal/streamrunnerservice	readiness_timeout_test.go	internal/streamrunnerservice	dir
 internal/synccli	print_sites_test.go	internal/synccli	dir
+internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime	dir
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime/synclog	dir
-internal/syncdispatchruntime	log_error_text_test.go	unexpressed	-
 internal/syncdispatchruntime	post_sync_failure_test.go	internal/syncdispatchruntime	dir
 internal/synchandoff	trigger_writer_census_test.go	.	tree
 internal/syncreconciler	no_celery_test.go	unexpressed	-

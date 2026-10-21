@@ -295,10 +295,9 @@ func TestWebCannotReachTheMintKeyThroughAnySelector(t *testing.T) {
 		"authSecret external hs256, upper in values":  append(append([]string{}, ext...), "--set", "web.authSecret.secretName=hs256-ext"),
 		"authSecret external shared, upper in values": append(append([]string{}, ext...), "--set", "web.authSecret.secretName=shared-ext"),
 		"extraEnv hs256 Secret":                       envJSON("hs256-dev-health-hs256", "OTHER"),
-		"extraEnv shared Secret, folded":              envJSON(" HS256-Dev-Health-Secrets ", "OTHER"),
 		"extraEnv key JWT_SECRET_KEY":                 envJSON("some-secret", "JWT_SECRET_KEY"),
 		"extraEnv external hs256, upper in values":    append(append([]string{}, ext...), envJSON("hs256-ext", "OTHER")...),
-		"extraEnv external shared, upper in values":   append(append([]string{}, ext...), envJSON("shared-ext", "OTHER")...),
+		"extraEnv external shared JWT key, upper":     append(append([]string{}, ext...), envJSON("shared-ext", "JWT_SECRET_KEY")...),
 		"extraVolumes secret hs256":                   volJSON("web.extraVolumes", `secret":{"secretName":"hs256-dev-health-hs256"}`),
 		"extraVolumes secret shared":                  volJSON("web.extraVolumes", `secret":{"secretName":"hs256-dev-health-secrets"}`),
 		"extraVolumes secret item key":                volJSON("web.extraVolumes", `secret":{"secretName":"ok","items":[{"key":"JWT_SECRET_KEY","path":"k"}]}`),
@@ -317,6 +316,8 @@ func TestWebCannotReachTheMintKeyThroughAnySelector(t *testing.T) {
 	}
 	controls := [][]string{
 		envJSON("other-secret", "OTHER"),
+		envJSON(" HS256-Dev-Health-Secrets ", "OTHER"),
+		append(append([]string{}, ext...), envJSON("shared-ext", "OTHER")...),
 		volJSON("web.extraVolumes", `secret":{"secretName":"other-secret"}`),
 		volJSON("web.extraVolumes", `projected":{"sources":[{"secret":{"name":"other-secret"}}]}`),
 		append(append([]string{}, dev...), volJSON("web.localDevelopment.extraVolumes", `secret":{"secretName":"other-secret"}`)...),
@@ -358,5 +359,52 @@ func TestWebLiteralsAndOwnedNamesCannotCarryTheMintKey(t *testing.T) {
 	out, err := helmOut(t, true, append(append([]string{}, base...), extra(`{"name":"X","value":"unrelated"}`)...)...)
 	if err != nil {
 		t.Fatalf("an unrelated literal extraEnv must render: %v\n%.300s", err, out)
+	}
+}
+
+// Production web reads OAuth client keys from the shared Secret through web.extraEnv secretKeyRef: that must render.
+// The mint key stays refused on ANY Secret.
+func TestWebExtraEnvMayReadOtherKeysOfTheSharedSecret(t *testing.T) {
+	base := []string{"--set", "web.env.BACKEND_URL=http://x", "--set", "web.authSecret.secretName=web-auth-ok", "--set", "secrets.create=false", "--set", "secrets.externalSecretName=dev-health-ops", "--set", "hs256Secret.externalSecretName=dev-health-hs256"}
+	entry := func(name, key string) []string {
+		return []string{"--set-json", `web.extraEnv=[{"name":"X","valueFrom":{"secretKeyRef":{"name":"` + name + `","key":"` + key + `","optional":true}}}]`}
+	}
+	out, err := helmOut(t, true, append(append([]string{}, base...), entry("dev-health-ops", "GITHUB_APP_CLIENT_ID")...)...)
+	if err != nil {
+		t.Fatalf("a prod-shaped web.extraEnv key of the shared Secret must render: %v\n%.400s", err, out)
+	}
+	for name, args := range map[string][]string{
+		"JWT_SECRET_KEY of the shared Secret": entry("dev-health-ops", "JWT_SECRET_KEY"),
+		"JWT_SECRET_KEY of another Secret":    entry("other-secret", "JWT_SECRET_KEY"),
+		"any key of the hs256 Secret":         entry("dev-health-hs256", "OTHER"),
+	} {
+		out, err := helmOut(t, true, append(append([]string{}, base...), args...)...)
+		if err == nil || !strings.Contains(out, "must not name the HS256 key's Secret") {
+			t.Fatalf("%s: was not refused: err=%v\n%.300s", name, err, out)
+		}
+	}
+}
+
+// The four OAuth keys production web reads from the shared Secret render, together, in one extraEnv.
+func TestProdShapedWebExtraEnvOAuthKeysRender(t *testing.T) {
+	keys := []string{"GITHUB_APP_CLIENT_ID", "GITHUB_APP_CLIENT_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"}
+	var entries []string
+	for _, key := range keys {
+		entries = append(entries, `{"name":"`+key+`","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"`+key+`","optional":true}}}`)
+	}
+	out, err := helmOut(t, true, "--set", "web.env.BACKEND_URL=http://x", "--set", "web.authSecret.secretName=dev-health-web-auth",
+		"--set", "secrets.create=false", "--set", "secrets.externalSecretName=dev-health-ops", "--set", "hs256Secret.externalSecretName=dev-health-hs256",
+		"--set-json", "web.extraEnv=["+strings.Join(entries, ",")+"]")
+	if err != nil {
+		t.Fatalf("the prod OAuth refs must render: %v\n%.400s", err, out)
+	}
+	web, _ := docByName(t, out, "Deployment", "hs256-dev-health-web")
+	for _, key := range keys {
+		if !strings.Contains(web, "key: "+key) {
+			t.Fatalf("the web Deployment lacks %s:\n%s", key, web)
+		}
+	}
+	if strings.Contains(web, "JWT_SECRET_KEY") || strings.Contains(web, "dev-health-hs256") {
+		t.Fatalf("web names the mint key or its Secret:\n%s", web)
 	}
 }

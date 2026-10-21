@@ -2,6 +2,9 @@
   "accepted_credential_classes": [
     "ops_access_token_hs256"
   ],
+  "access_token_validation": {
+    "legacy_hs256": true
+  },
   "action": "members.invite",
   "cache_class": "none",
   "classification": "protected",

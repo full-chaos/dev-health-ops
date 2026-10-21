@@ -159,7 +159,7 @@ func NewSenderFromEnv(client *http.Client) (Sender, error) {
 				"EMAIL_API_KEY (or RESEND_API_KEY) is required when EMAIL_PROVIDER=resend")
 		}
 		if client == nil {
-			client = &http.Client{Timeout: 30 * time.Second}
+			client = &http.Client{Timeout: 30 * time.Second, Transport: httpguard.SharedTransport()}
 		}
 		return &resendSender{from: from, apiKey: key, client: client}, nil
 	case "smtp":

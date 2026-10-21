@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -208,7 +209,10 @@ type ingestClient struct {
 func newIngestClient() *ingestClient { return newIngestClientWithReadTimeout(requestTimeout) }
 
 func newIngestClientWithReadTimeout(readTimeout time.Duration) *ingestClient {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// dho push runs on the customer's machine and honours HTTP_PROXY/HTTPS_PROXY/NO_PROXY on purpose, as the Python
+	// httpx client it ports did (trust_env).
+	transport := httpguard.Transport()
+	transport.Proxy = http.ProxyFromEnvironment
 	transport.DialContext = (&net.Dialer{Timeout: requestTimeout}).DialContext
 	transport.TLSHandshakeTimeout = requestTimeout
 	transport.ResponseHeaderTimeout = readTimeout

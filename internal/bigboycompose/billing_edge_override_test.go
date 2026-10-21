@@ -142,13 +142,9 @@ func TestTheThreeValuesAreNameOnlyPassThrough(t *testing.T) {
 	}
 }
 
-func TestThePythonBillingEdgeServiceIsRetiredByProfile(t *testing.T) {
-	edge, ok := load(t).Services["billing-edge"]
-	if !ok {
-		t.Fatal("the override does not retire billing-edge")
-	}
-	if !reflect.DeepEqual(edge.Profiles, []string{"retired-billing-edge"}) {
-		t.Fatalf("billing-edge profiles = %v, want exactly [retired-billing-edge]", edge.Profiles)
+func TestThePythonBillingEdgeServiceIsGone(t *testing.T) {
+	if _, ok := load(t).Services["billing-edge"]; ok {
+		t.Fatal("compose.bigboy.yml defines the Python billing-edge service again")
 	}
 	entries, err := os.ReadDir(toolsDir(t))
 	if err != nil {

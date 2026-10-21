@@ -53,7 +53,7 @@ func loadSchemaGolden(t *testing.T) schemaGoldenDocument {
 	return doc
 }
 
-// schemaSourceTexts/schemaHandleMap mirror generate_llm_schema_python_golden.py's
+// schemaSourceTexts/schemaHandleMap mirror generate_llm_schema_python_golden (generator deleted, golden frozen)'s
 // SOURCE_TEXTS/HANDLE_MAP exactly -- every validate_case in the golden was
 // produced against this fixed context.
 func schemaSourceTexts() map[string]map[string]string {

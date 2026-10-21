@@ -518,3 +518,63 @@ func TestTerminalFailureWriteIgnoresAnExpiredWorkContext(t *testing.T) {
 		t.Fatalf("write ctx err=%v bounded=%v class=%q", repository.writeCtxErr, repository.writeHadLimit, repository.causeClass)
 	}
 }
+
+// A GitHub tree walk a ceiling stopped (or a directory the provider reports
+// truncated) is the same tree on every attempt: it ends on the first attempt
+// under its own class with the limit and its value as the stored detail.
+func TestTreeWalkLimitIsTerminalOnTheFirstAttemptWithItsClass(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name         string
+		err          error
+		category     string
+		wantLimit    string
+		wantRows     int
+		wantTerminal bool
+	}{
+		{"directories", fmt.Errorf("%w: %w", providersync.ErrGitHubFilesTraversalFailed,
+			&providersync.GitHubTreeWalkLimitError{Limit: providersync.GitHubTreeWalkLimitDirs, Value: 5000}),
+			TreeWalkLimitCategory, "dirs", 5000, true},
+		{"cycle", fmt.Errorf("%w: %w", providersync.ErrGitHubBlameTraversalFailed,
+			&providersync.GitHubTreeWalkLimitError{Limit: providersync.GitHubTreeWalkLimitCycle, Value: 3}),
+			TreeWalkLimitCategory, "cycle", 3, true},
+		{"truncated directory", fmt.Errorf("%w: %w", providersync.ErrGitHubFilesTraversalFailed,
+			providersync.ErrGitHubFilesSubtreeTruncated),
+			TreeWalkLimitCategory, "", 0, true},
+		{"time", fmt.Errorf("%w: %w", providersync.ErrGitHubFilesTraversalFailed,
+			&providersync.GitHubTreeWalkLimitError{Limit: providersync.GitHubTreeWalkLimitTime, Value: 720}),
+			TimeLimitCategory, "time", 720, true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			repository := &classRepository{memoryUnitRepository: newMemoryUnitRepository(githubFilesUnit())}
+			var builds atomic.Int32
+			logs := captureWarnings(t)
+			handler := &Handler{
+				Repository: repository, LeaseDuration: time.Minute, Heartbeat: 10 * time.Second,
+				Now: func() time.Time { return now },
+				BuildExecutor: githubRouteExecutor(now, collectErrorHandler{err: testCase.err},
+					doerFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected") }), &builds),
+			}
+			execution := providerExecution(repository.unit, now, 1)
+			execution.Definition.MaxAttempts = 5
+
+			if err := handler.Work(context.Background(), execution); err == nil {
+				t.Fatal("Work() = nil, want the terminal error")
+			}
+			if builds.Load() != 1 || repository.status != "failed" || repository.releaseCalls != 0 ||
+				repository.lastFailCategory != testCase.category || repository.causeClass != testCase.category {
+				t.Fatalf("executions=%d status=%s releases=%d category=%q class=%q, want one execution, failed, %s",
+					builds.Load(), repository.status, repository.releaseCalls,
+					repository.lastFailCategory, repository.causeClass, testCase.category)
+			}
+			assertOneSafeWarning(t, logs.String(), testCase.category)
+			if testCase.wantLimit != "" {
+				want := providersync.CauseDetail{Limit: testCase.wantLimit, Rows: testCase.wantRows}
+				if repository.detail == nil || *repository.detail != want {
+					t.Fatalf("stored detail=%+v, want %+v", repository.detail, want)
+				}
+			}
+		})
+	}
+}

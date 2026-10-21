@@ -427,6 +427,11 @@ func collectGitHubBlame(
 			if len(rows) == 0 {
 				// One file alone exceeds the write contract: it stays retryable
 				// and rotates behind other paths instead of blocking the unit.
+				slog.Warn(
+					"github blame file above the write bound kept retryable without rows",
+					"lines", fileLines, "encoded_bytes", fileBytes,
+					"max_rows", limits.maxRows, "max_payload_bytes", limits.maxPayloadBytes,
+				)
 				progressRows = append(progressRows, newGitHubBlamePathProgressRow(
 					claim, repoID, treeRef, filePath, gitHubBlameOutcomeRetryableError,
 					normalizedAt,
@@ -507,9 +512,10 @@ func gitHubBlameInventory(
 		return paths, nil
 	}
 	before := *requests
-	paths, _, walkErr := gitHubWalkTree(ctx, client, root, treeRef, "")
+	paths, _, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", defaultGitHubTreeWalkLimits())
 	walkRequests := *requests - before
 	if walkErr != nil {
+		logGitHubTreeWalkStop(walkErr, stats)
 		walkClass := ""
 		switch {
 		case errors.As(walkErr, &tooLarge):

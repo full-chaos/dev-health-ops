@@ -252,7 +252,7 @@ func TestHelperRealpathMatchesPython(t *testing.T) {
 	}
 }
 
-const dcPathOpRows = 119
+const dcPathOpRows = 125
 
 // The string forms the ported checks use for paths, against pathlib's (str, parent, suffix, "/", relative_to): the table
 // of "path string -> Python result" that guards the class of finding "Go cleaned a path that Python keeps". Unique row

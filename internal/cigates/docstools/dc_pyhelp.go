@@ -387,6 +387,9 @@ func dcJoin(parent, child string) string {
 	if strings.HasPrefix(child, "/") || parent == "" {
 		return a1PathStr(child)
 	}
+	if strings.HasSuffix(parent, "/") {
+		return a1PathStr(parent + child)
+	}
 	return a1PathStr(parent + "/" + child)
 }
 

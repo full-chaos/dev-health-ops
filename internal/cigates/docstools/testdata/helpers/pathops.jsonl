@@ -103,6 +103,12 @@
 {"name": "join-12", "op": "join", "in": ["a", ".."], "out": "a/.."}
 {"name": "join-13", "op": "join", "in": ["//x", "y"], "out": "//x/y"}
 {"name": "join-14", "op": "join", "in": ["a/b", "./c//d"], "out": "a/b/c/d"}
+{"name": "join-15", "op": "join", "in": ["/", "x"], "out": "/x"}
+{"name": "join-16", "op": "join", "in": ["//", "x"], "out": "//x"}
+{"name": "join-17", "op": "join", "in": ["///", "x"], "out": "/x"}
+{"name": "join-18", "op": "join", "in": ["/", ""], "out": "/"}
+{"name": "join-19", "op": "join", "in": ["//", ".."], "out": "//.."}
+{"name": "join-20", "op": "join", "in": ["/a/", "b"], "out": "/a/b"}
 {"name": "relative-to-0", "op": "relative_to", "in": ["a/b", "a"], "out": true}
 {"name": "relative-to-1", "op": "relative_to", "in": ["a", "a/b"], "out": false}
 {"name": "relative-to-2", "op": "relative_to", "in": ["/a/b", "/a"], "out": true}

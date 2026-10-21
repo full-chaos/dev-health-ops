@@ -109,7 +109,7 @@ func pubRefusalTable() []pubRow {
 		{name: "front matter page_id with 4301 digits", ref: "P154 str(int): ValueError Exceeds the limit (4300 digits)", files: pubFM("page_id: 1" + strings.Repeat("0", 4300)), rc: 1, err: "ValueError: Exceeds the limit (4300 digits) for integer string conversion"},
 		// ---- reading files
 		{name: "mkdocs missing", ref: "P27 read_text: FileNotFoundError", files: map[string]string{"docs/index.md": "x"}, rc: 1, err: "FileNotFoundError: [Errno 2] No such file or directory:"},
-		{name: "mkdocs is a directory", ref: "P27 read_text: IsADirectoryError", files: map[string]string{"mkdocs.yml/x": "y"}, rc: 1, err: "IsADirectoryError: [Errno 21] Is a directory:"},
+		{name: "mkdocs is a directory", ref: "P27 read_text: IsADirectoryError", files: map[string]string{"mkdocs.yml" + "/x": "y"}, rc: 1, err: "IsADirectoryError: [Errno 21] Is a directory:"},
 		{name: "mkdocs not UTF-8", ref: "P27 read_text(encoding=utf-8): UnicodeDecodeError", files: pubMk("a: \xff\n"), rc: 1, err: "UnicodeDecodeError:"},
 		{name: "page not UTF-8", ref: "P32,179 read_text: UnicodeDecodeError", files: pubPage("\xff"), rc: 1, err: "UnicodeDecodeError:"},
 		{name: "off-nav page is a directory", ref: "P179 read_text of a directory named *.md: IsADirectoryError", files: pubWith(map[string]string{"docs/dir.md/x": "y"}), rc: 1, err: "IsADirectoryError: [Errno 21] Is a directory:"},

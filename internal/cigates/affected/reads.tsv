@@ -1,5 +1,8 @@
 # package	scope	class
 cmd/cigate	test	compose.yml
+cmd/cigate	test	docs
+cmd/cigate	test	docs-data
+cmd/cigate	test	mkdocs.yml
 cmd/dev-health-migration-matrix	code	contracts
 cmd/dev-health-migration-matrix	code	docs
 cmd/dho	test	compose.yml

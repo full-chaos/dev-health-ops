@@ -26,7 +26,9 @@ func TestOAuthPKCEIsSentAndCheckedForEveryProvider(t *testing.T) {
 			if s.challenge == "" || s.query.Get("code_challenge_method") != "S256" {
 				t.Fatalf("authorize carried no S256 challenge: %v", s.query)
 			}
-			if _, failure := h.finishOAuth(t, provider, client, s, fakeAccountWith(uniqueEmail("pkce"), true), true); failure != nil {
+			account := fakeAccountWith(uniqueEmail("pkce"), true)
+			h.seedOAuthMember(t, h.orgID, protocol, account)
+			if _, failure := h.finishOAuth(t, provider, client, s, account, true); failure != nil {
 				t.Fatalf("callback: %v", failure)
 			}
 			// A verifier that does not match the challenge is refused at the token endpoint.
@@ -179,9 +181,10 @@ func TestOAuthSubjectIsScopedByProviderRow(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: true})
 	first, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", nil)
 	account := fakeAccountWith(uniqueEmail("owner"), true)
+	user := h.seedOAuthMember(t, h.orgID, "oauth_gitlab", account)
 	owner, failure := h.finishOAuth(t, first, client, h.startOAuth(t, first), account, true)
-	if failure != nil {
-		t.Fatalf("first row: %v", failure)
+	if failure != nil || owner.PrincipalID != user {
+		t.Fatalf("first row: %v, principal %s want %s", failure, owner.PrincipalID, user)
 	}
 	second, client2 := h.seedOAuthProvider(t, h.seedOrg(t), "oauth_gitlab", nil)
 	h.ids.signup = false
@@ -191,7 +194,7 @@ func TestOAuthSubjectIsScopedByProviderRow(t *testing.T) {
 	if failure == nil && login.PrincipalID == owner.PrincipalID {
 		t.Fatal("the same provider subject through another row signed in as the first row's account")
 	}
-	wantDenied(t, failure, http.StatusForbidden, ReasonSignupUnavailable)
+	wantDenied(t, failure, http.StatusForbidden, ReasonMembershipRequired)
 	wantUnchanged(t, h, before)
 }
 
@@ -201,6 +204,7 @@ func TestOAuthSelfHostedGitLabIssuerIsTheBaseURL(t *testing.T) {
 	provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", map[string]any{"base_url": base})
 	s := h.startOAuth(t, provider)
 	account := fakeAccountWith(uniqueEmail("self"), true)
+	h.seedOAuthMember(t, h.orgID, "oauth_gitlab", account)
 	login, failure := h.finishOAuth(t, provider, client, s, account, true)
 	if failure != nil {
 		t.Fatalf("callback: %v", failure)
@@ -256,32 +260,18 @@ func TestOAuthSubjectInTwoOrganizationsIsAConflict(t *testing.T) {
 	wantUnchanged(t, h, before)
 }
 
-func TestOAuthNewAccountFollowsTheSignupSwitch(t *testing.T) {
-	t.Run("off", func(t *testing.T) {
-		h := newHarness(t, harnessOpts{signup: false})
+func TestOAuthNewAccountIsRefusedWithoutAnyWrite(t *testing.T) {
+	for _, signup := range []bool{true, false} {
+		h := newHarness(t, harnessOpts{signup: signup})
 		provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_google", nil)
 		before := h.snapshot(t)
-		_, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), fakeAccountWith(uniqueEmail("off"), true), true)
-		wantDenied(t, failure, http.StatusForbidden, ReasonSignupUnavailable)
+		_, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), fakeAccountWith(uniqueEmail("new"), true), true)
+		wantDenied(t, failure, http.StatusForbidden, ReasonMembershipRequired)
 		wantUnchanged(t, h, before)
-	})
-	t.Run("on", func(t *testing.T) {
-		h := newHarness(t, harnessOpts{signup: true})
-		provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_google", nil)
-		account := fakeAccountWith(uniqueEmail("on"), true)
-		login, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), account, true)
-		if failure != nil {
-			t.Fatalf("callback: %v", failure)
+		if h.sessions.count() != 0 {
+			t.Fatalf("signup=%v: a refused new account got a session", signup)
 		}
-		if n := h.count(t, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1 AND issuer = 'https://accounts.google.com' AND provider = $2 AND subject = $3`,
-			login.PrincipalID, provider.String(), account.ID); n != 1 {
-			t.Fatalf("provisioned identity rows = %d", n)
-		}
-		req := h.sessions.requests[len(h.sessions.requests)-1]
-		if len(req.AMR) != 1 || req.AMR[0] != "fed" {
-			t.Fatalf("session request %+v", req)
-		}
-	})
+	}
 }
 
 func TestOAuthLinkedIdentityAnswersWithTheStoredEmail(t *testing.T) {
@@ -290,6 +280,7 @@ func TestOAuthLinkedIdentityAnswersWithTheStoredEmail(t *testing.T) {
 	account := fakeAccountWith(uniqueEmail("asserted"), true)
 	stored := uniqueEmail("stored")
 	owner := h.link(t, ExternalKey{Issuer: "https://gitlab.com", Provider: provider.String(), Subject: account.ID}, stored)
+	h.seedMembership(t, owner, h.orgID, "member")
 	login, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), account, true)
 	if failure != nil {
 		t.Fatalf("callback: %v", failure)
@@ -392,7 +383,9 @@ func TestOAuthOutcomesRecordedOnce(t *testing.T) {
 		}
 	}
 	provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", nil)
-	if _, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), fakeAccountWith(uniqueEmail("counted"), true), true); failure != nil {
+	counted := fakeAccountWith(uniqueEmail("counted"), true)
+	h.seedOAuthMember(t, h.orgID, "oauth_gitlab", counted)
+	if _, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), counted, true); failure != nil {
 		t.Fatalf("callback: %v", failure)
 	}
 	if _, err := svc.AuthorizeOAuthByType(context.Background(), "gitlab", h.orgID); err != nil {
@@ -441,7 +434,9 @@ func TestOAuthHandlersRoundTrip(t *testing.T) {
 		t.Fatalf("Google authorize URL %s", authz["authorization_url"])
 	}
 	code := "code-" + uuid.NewString()
-	h.idp.oauth.grant(code, fakeGrant{client: client, challenge: q.Get("code_challenge"), account: fakeAccountWith(uniqueEmail("http"), true)})
+	account := fakeAccountWith(uniqueEmail("http"), true)
+	h.seedOAuthMember(t, org, "oauth_google", account)
+	h.idp.oauth.grant(code, fakeGrant{client: client, challenge: q.Get("code_challenge"), account: account})
 	body, _ := json.Marshal(map[string]string{"code": code, "state": authz["state"]})
 	req, _ := http.NewRequest(http.MethodPost, server.URL+"/api/v1/auth/oauth/"+provider.String()+"/callback", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

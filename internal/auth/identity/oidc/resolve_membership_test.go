@@ -1,0 +1,146 @@
+package oidc
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"testing"
+
+	"github.com/google/uuid"
+)
+
+type resolveIdentities struct {
+	principal Principal
+	err       error
+	inUse     bool
+	provision int
+}
+
+func (r *resolveIdentities) IdentityBySubject(context.Context, ExternalKey, LegacyMatch) (Principal, error) {
+	return r.principal, r.err
+}
+func (r *resolveIdentities) EmailInUse(context.Context, string) (bool, error) { return r.inUse, nil }
+func (r *resolveIdentities) ProvisionFederated(context.Context, FederatedAccount) (Principal, error) {
+	r.provision++
+	return Principal{ID: uuid.New(), Active: true}, nil
+}
+
+type resolveMembers struct {
+	found bool
+	role  string
+}
+
+func (m resolveMembers) Role(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
+	return m.role, m.found, nil
+}
+
+type resolveSessions struct{ issued []SessionRequest }
+
+func (s *resolveSessions) Issue(_ context.Context, req SessionRequest) (Tokens, error) {
+	s.issued = append(s.issued, req)
+	return Tokens{AccessToken: "a"}, nil
+}
+
+type resolveJIT struct {
+	calls []SessionRequest
+	err   error
+	// writes counts rows that would be committed: none when err is set.
+	writes int
+}
+
+func (j *resolveJIT) JoinAndIssue(_ context.Context, _, _ uuid.UUID, req SessionRequest) (Tokens, error) {
+	j.calls = append(j.calls, req)
+	if j.err != nil {
+		return Tokens{}, j.err
+	}
+	j.writes += 2
+	return Tokens{AccessToken: "j"}, nil
+}
+
+func resolveRun(protocol string, ids *resolveIdentities, members resolveMembers, jit MembershipJIT) (Login, *Error, *resolveSessions) {
+	sessions := &resolveSessions{}
+	svc := &Service{cfg: Config{Identities: ids, Memberships: members, Sessions: sessions, MembershipJIT: jit}}
+	row := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: protocol, AutoProvision: true}
+	v := validated{profile: profile{Email: "p@example.com", EmailVerified: true}}
+	login, failure := svc.resolve(context.Background(), row, v, nil)
+	return login, failure, sessions
+}
+
+func TestResolveKeyHitWithoutMembershipIsRefusedBeforeASession(t *testing.T) {
+	for _, protocol := range []string{"oidc", "oauth"} {
+		t.Run(protocol, func(t *testing.T) {
+			ids := &resolveIdentities{principal: Principal{ID: uuid.New(), Active: true}}
+			_, failure, sessions := resolveRun(protocol, ids, resolveMembers{}, nil)
+			wantRefused(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+			if len(sessions.issued) != 0 {
+				t.Fatalf("sessions issued = %d, want 0", len(sessions.issued))
+			}
+		})
+	}
+}
+
+func TestResolveKeyHitWithJITJoinsAndIssuesInOneStep(t *testing.T) {
+	for _, protocol := range []string{"oidc", "oauth"} {
+		t.Run(protocol, func(t *testing.T) {
+			ids := &resolveIdentities{principal: Principal{ID: uuid.New(), Active: true}}
+			jit := &resolveJIT{}
+			login, failure, sessions := resolveRun(protocol, ids, resolveMembers{}, jit)
+			if failure != nil {
+				t.Fatalf("resolve: %v", failure)
+			}
+			if len(jit.calls) != 1 || len(sessions.issued) != 0 {
+				t.Fatalf("join calls %d, separate sessions %d; want 1 and 0", len(jit.calls), len(sessions.issued))
+			}
+			if login.OrgID == nil || jit.calls[0].OrgID == nil || *jit.calls[0].OrgID != *login.OrgID || login.Role != "member" {
+				t.Fatalf("login %+v request %+v", login, jit.calls[0])
+			}
+		})
+	}
+}
+
+func TestResolveJITFailureWritesNothingAndIssuesNoSession(t *testing.T) {
+	ids := &resolveIdentities{principal: Principal{ID: uuid.New(), Active: true}}
+	jit := &resolveJIT{err: errors.New("tx failed")}
+	_, failure, sessions := resolveRun("oidc", ids, resolveMembers{}, jit)
+	if failure == nil || failure.Status != http.StatusInternalServerError {
+		t.Fatalf("failure %+v, want 500", failure)
+	}
+	if jit.writes != 0 || len(sessions.issued) != 0 {
+		t.Fatalf("writes %d sessions %d, want 0 and 0", jit.writes, len(sessions.issued))
+	}
+}
+
+func TestResolveMemberGetsAnOrgSession(t *testing.T) {
+	ids := &resolveIdentities{principal: Principal{ID: uuid.New(), Active: true}}
+	login, failure, sessions := resolveRun("oidc", ids, resolveMembers{found: true, role: "admin"}, nil)
+	if failure != nil || len(sessions.issued) != 1 || login.OrgID == nil || login.Role != "admin" ||
+		sessions.issued[0].OrgID == nil || *sessions.issued[0].OrgID != *login.OrgID {
+		t.Fatalf("login %+v failure %v sessions %+v", login, failure, sessions.issued)
+	}
+}
+
+func TestResolveNewAccountIsRefusedBeforeProvisionWithZeroWrites(t *testing.T) {
+	for _, jitOn := range []bool{false, true} {
+		for _, protocol := range []string{"oidc", "oauth"} {
+			ids := &resolveIdentities{err: ErrIdentityNotFound}
+			var jit MembershipJIT
+			recorded := &resolveJIT{}
+			if jitOn {
+				jit = recorded
+			}
+			_, failure, sessions := resolveRun(protocol, ids, resolveMembers{}, jit)
+			wantRefused(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+			if ids.provision != 0 || len(sessions.issued) != 0 || len(recorded.calls) != 0 {
+				t.Fatalf("%s jit=%v: provision %d sessions %d joins %d, want all 0",
+					protocol, jitOn, ids.provision, len(sessions.issued), len(recorded.calls))
+			}
+		}
+	}
+}
+
+func wantRefused(t *testing.T, failure *Error, status int, reason Reason) {
+	t.Helper()
+	if failure == nil || failure.Status != status || failure.Reason != reason {
+		t.Fatalf("failure %+v, want %d %s", failure, status, reason)
+	}
+}

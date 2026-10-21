@@ -30,47 +30,18 @@ import (
 
 func uniqueEmail(prefix string) string { return prefix + "-" + uuid.NewString()[:8] + "@example.com" }
 
-func TestNewAccountIsProvisionedAndAuditedWhenSignupIsOn(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
-	before := h.snapshot(t)
-	s := h.start(t)
-	email := uniqueEmail("new")
-	login, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-new", email)))
-	if failure != nil {
-		t.Fatalf("callback: %v", failure)
+func TestNewAccountIsRefusedWithoutAnyWrite(t *testing.T) {
+	for _, signup := range []bool{true, false} {
+		h := newHarness(t, harnessOpts{signup: signup})
+		before := h.snapshot(t)
+		s := h.start(t)
+		_, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-new", uniqueEmail("new"))))
+		wantDenied(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+		wantUnchanged(t, h, before)
+		if h.sessions.count() != 0 {
+			t.Fatalf("signup=%v: a refused new account got a session", signup)
+		}
 	}
-	var principal uuid.UUID
-	if err := h.env.admin.QueryRow(context.Background(), `SELECT principal_id FROM auth.external_identities
-WHERE issuer = $1 AND provider = $2 AND subject = 'sub-new'`, h.issuer, h.providerID.String()).Scan(&principal); err != nil {
-		t.Fatalf("identity row: %v", err)
-	}
-	if principal != login.PrincipalID {
-		t.Fatalf("login principal %s, identity principal %s", login.PrincipalID, principal)
-	}
-	after := h.snapshot(t)
-	if after.auditRows != before.auditRows+1 || after.identities != before.identities+1 {
-		t.Fatalf("provisioning wrote %+v -> %+v, want one identity and one audit row", before, after)
-	}
-	if after.publicUsers != before.publicUsers {
-		t.Fatal("provisioning wrote public.users")
-	}
-	if n := h.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1 AND request_id = $2`,
-		principal, h.requestID); n != 1 {
-		t.Fatalf("audit rows carrying the request id = %d, want 1", n)
-	}
-	req := h.sessions.requests[len(h.sessions.requests)-1]
-	if req.PrincipalID != principal || len(req.AMR) != 1 || req.AMR[0] != "fed" || req.OrgID != nil || req.Role != "member" {
-		t.Fatalf("session request %+v", req)
-	}
-}
-
-func TestNewAccountIsNotAvailableWhileSignupIsOff(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: false})
-	before := h.snapshot(t)
-	s := h.start(t)
-	_, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-off", uniqueEmail("off"))))
-	wantDenied(t, failure, http.StatusForbidden, ReasonSignupUnavailable)
-	wantUnchanged(t, h, before)
 }
 
 func TestProviderEmailCollisionIsAConflict(t *testing.T) {
@@ -128,23 +99,27 @@ func TestUnverifiedProviderEmailIsRefused(t *testing.T) {
 
 func TestSubjectIsScopedByIssuer(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: true})
-	other := h.link(t, ExternalKey{Issuer: "https://another-issuer.example", Provider: h.providerID.String(), Subject: "shared-sub"}, uniqueEmail("other"))
+	h.link(t, ExternalKey{Issuer: "https://another-issuer.example", Provider: h.providerID.String(), Subject: "shared-sub"}, uniqueEmail("other"))
+	before := h.snapshot(t)
 	s := h.start(t)
-	login, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "shared-sub", uniqueEmail("mine"))))
-	if failure != nil {
-		t.Fatalf("callback: %v", failure)
-	}
-	if login.PrincipalID == other {
-		t.Fatal("a subject of another issuer signed in as that issuer's account")
+	_, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "shared-sub", uniqueEmail("mine"))))
+	wantDenied(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+	wantUnchanged(t, h, before)
+	if h.sessions.count() != 0 {
+		t.Fatal("a subject of another issuer got a session")
 	}
 }
 
 func TestSubjectIsScopedByProviderRow(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: true})
+	owner := h.seedOIDCMember(t, "sub-consented", uniqueEmail("owner"))
 	first := h.start(t)
-	owner, failure := h.finish(t, first, h.sign(t, h.claims(first.nonce, "sub-consented", uniqueEmail("owner"))))
+	signedIn, failure := h.finish(t, first, h.sign(t, h.claims(first.nonce, "sub-consented", uniqueEmail("owner"))))
 	if failure != nil {
 		t.Fatalf("sign-in through the first provider row: %v", failure)
+	}
+	if signedIn.PrincipalID != owner {
+		t.Fatalf("first row signed in as %s, want %s", signedIn.PrincipalID, owner)
 	}
 	otherClient := "client-" + uuid.NewString()
 	other := h.seedProvider(t, h.seedOrg(t), map[string]any{"client_id": otherClient, "issuer": h.issuer,
@@ -155,10 +130,10 @@ func TestSubjectIsScopedByProviderRow(t *testing.T) {
 	claims := h.claims(s.nonce, "sub-consented", uniqueEmail("asserted"))
 	claims["aud"] = otherClient
 	login, failure := h.finishWith(t, other, s, h.sign(t, claims), true)
-	if failure == nil && login.PrincipalID == owner.PrincipalID {
+	if failure == nil && login.PrincipalID == owner {
 		t.Fatal("the same issuer and subject through another provider row signed in as the first row's account")
 	}
-	wantDenied(t, failure, http.StatusForbidden, ReasonSignupUnavailable)
+	wantDenied(t, failure, http.StatusForbidden, ReasonMembershipRequired)
 	wantUnchanged(t, h, before)
 }
 
@@ -166,6 +141,7 @@ func TestLinkedIdentitySignsInWithoutReadingEmail(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: false})
 	key := ExternalKey{Issuer: h.issuer, Provider: h.providerID.String(), Subject: "sub-linked"}
 	owner := h.link(t, key, uniqueEmail("owner"))
+	h.seedMembership(t, owner, h.orgID, "member")
 	s := h.start(t)
 	claims := h.claims(s.nonce, "sub-linked", uniqueEmail("changed"))
 	claims["email_verified"] = false
@@ -182,6 +158,7 @@ func TestLinkedIdentityAnswersWithTheStoredEmail(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: false})
 	stored := uniqueEmail("stored")
 	owner := h.link(t, ExternalKey{Issuer: h.issuer, Provider: h.providerID.String(), Subject: "sub-stored"}, stored)
+	h.seedMembership(t, owner, h.orgID, "member")
 	s := h.start(t)
 	claims := h.claims(s.nonce, "sub-stored", uniqueEmail("asserted"))
 	claims["email_verified"] = false
@@ -520,6 +497,7 @@ func TestUserinfoSubjectMustMatchTheIDToken(t *testing.T) {
 
 func TestHandlersRoundTrip(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: true})
+	h.seedOIDCMember(t, "sub-http", uniqueEmail("http"))
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/auth/oidc/{provider_id}/authorize", h.svc.AuthorizeHandler())
 	mux.Handle("POST /api/v1/auth/oidc/{provider_id}/callback", h.svc.CallbackHandler())
@@ -782,6 +760,7 @@ func TestEveryOutcomeIsRecordedOnce(t *testing.T) {
 			t.Fatalf("%s for a non-entitled organization = %d, want 402", route, resp.StatusCode)
 		}
 	}
+	h.seedOIDCMember(t, "sub-counted", uniqueEmail("counted"))
 	s := h.start(t)
 	if _, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-counted", uniqueEmail("counted")))); failure != nil {
 		t.Fatalf("callback: %v", failure)

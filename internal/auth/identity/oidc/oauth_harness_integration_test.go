@@ -297,3 +297,12 @@ func (h *harness) finishOAuth(t *testing.T, providerID uuid.UUID, client string,
 func fakeAccountWith(email string, verified bool) fakeAccount {
 	return fakeAccount{ID: strconv.FormatInt(rand.Int64N(1<<40)+1000, 10), Email: email, Verified: verified}
 }
+
+// seedOAuthMember seeds a go-api account of this provider account as a member
+// of orgID, so its sign-in is a membership hit.
+func (h *harness) seedOAuthMember(t *testing.T, orgID uuid.UUID, protocol string, account fakeAccount) uuid.UUID {
+	t.Helper()
+	user := h.seedPublicUser(t, account.Email, strings.TrimPrefix(protocol, "oauth_"), account.ID)
+	h.seedMembership(t, user, orgID, "member")
+	return user
+}

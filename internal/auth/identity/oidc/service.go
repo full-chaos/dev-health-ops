@@ -85,11 +85,13 @@ type MembershipReader interface {
 	Role(ctx context.Context, principalID, orgID uuid.UUID) (role string, found bool, err error)
 }
 
-// MembershipJIT adds a new principal to the provider's organization. go-api
-// is the membership writer until Wave 4, so the auth-service runtime leaves it
-// nil and a new account signs in with no organization, as in go-api.
+// MembershipJIT is the seam that turns JIT membership on. JoinAndIssue adds the
+// principal to the provider's organization as req.Role and issues the session
+// in that organization, in one transaction: a failure writes nothing. The
+// auth-service runtime leaves it nil, so a sign-in without a membership is
+// refused.
 type MembershipJIT interface {
-	Join(ctx context.Context, principalID, orgID uuid.UUID) (role string, err error)
+	JoinAndIssue(ctx context.Context, principalID, orgID uuid.UUID, req SessionRequest) (Tokens, error)
 }
 
 // Entitlements decides whether an organization may use SSO.
@@ -525,7 +527,6 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 // only if the provider and the identity store both allow it.
 func (s *Service) resolve(ctx context.Context, row Provider, v validated, requestID *string) (Login, *Error) {
 	principal, err := s.cfg.Identities.IdentityBySubject(ctx, v.key, LegacyMatch{AuthProvider: v.legacyAuthProvider, MembershipOrg: row.OrgID})
-	newAccount := false
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrInvalidKey):
@@ -534,14 +535,9 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 		return Login{}, deny(http.StatusConflict, ReasonIdentityConflict,
 			"More than one account carries this sign-in. Contact your organization administrator.")
 	case errors.Is(err, ErrNotOrgMember):
-		return Login{}, deny(http.StatusForbidden, ReasonMembershipRequired,
-			"This account is not a member of the provider's organization.")
+		return Login{}, notMember()
 	case errors.Is(err, ErrIdentityNotFound):
-		var failure *Error
-		if principal, failure = s.provision(ctx, row, v, requestID); failure != nil {
-			return Login{}, failure
-		}
-		newAccount = true
+		return Login{}, s.refuseNewAccount(ctx, row, v)
 	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
@@ -553,67 +549,59 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	if err != nil {
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
-	if !found && newAccount && s.cfg.MembershipJIT != nil {
-		if role, err = s.cfg.MembershipJIT.Join(ctx, principal.ID, row.OrgID); err != nil {
-			return Login{}, internal(ReasonStoreUnavailable, err)
-		}
-		found = true
+	if role == "" {
+		role = "member"
 	}
-	login := Login{PrincipalID: principal.ID, Email: principal.Email, Role: "member"}
-	if found {
-		org := row.OrgID
-		login.OrgID = &org
-		if role != "" {
-			login.Role = role
-		}
+	org := row.OrgID
+	req := SessionRequest{PrincipalID: principal.ID, OrgID: &org, Role: role, AMR: AMR}
+	var tokens Tokens
+	switch {
+	case found:
+		tokens, err = s.cfg.Sessions.Issue(ctx, req)
+	case s.cfg.MembershipJIT != nil:
+		tokens, err = s.cfg.MembershipJIT.JoinAndIssue(ctx, principal.ID, org, req)
+	default:
+		return Login{}, notMember()
 	}
-	tokens, err := s.cfg.Sessions.Issue(ctx, SessionRequest{PrincipalID: principal.ID, OrgID: login.OrgID, Role: login.Role, AMR: AMR})
 	if err != nil {
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
-	login.Tokens = tokens
-	return login, nil
+	return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: role, Tokens: tokens}, nil
 }
 
-func (s *Service) provision(ctx context.Context, row Provider, v validated, requestID *string) (Principal, *Error) {
+func notMember() *Error {
+	return deny(http.StatusForbidden, ReasonMembershipRequired,
+		"This account is not a member of the provider's organization.")
+}
+
+// refuseNewAccount runs the e-mail checks, then refuses. A new account is not
+// created here: the account and its membership must commit together, and that
+// write does not exist yet. Nothing is written.
+func (s *Service) refuseNewAccount(ctx context.Context, row Provider, v validated) *Error {
 	p := v.profile
 	if p.Email == "" {
-		return Principal{}, deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
+		return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
 	}
 	if !p.EmailVerified {
-		return Principal{}, deny(http.StatusForbidden, ReasonEmailUnverified, "No verified email address is available from this OIDC provider")
+		return deny(http.StatusForbidden, ReasonEmailUnverified, "No verified email address is available from this OIDC provider")
 	}
 	if len(row.AllowedDomains) > 0 && !contains(row.AllowedDomains, emailDomain(p.Email)) {
-		return Principal{}, deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
+		return deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
 	}
 	inUse, err := s.cfg.Identities.EmailInUse(ctx, p.Email)
 	if errors.Is(err, ErrInvalidEmail) {
-		return Principal{}, deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
+		return deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
 	}
 	if err != nil {
-		return Principal{}, internal(ReasonStoreUnavailable, err)
+		return internal(ReasonStoreUnavailable, err)
 	}
 	if inUse {
-		return Principal{}, conflict()
+		return conflict()
 	}
 	if !row.AutoProvision {
-		return Principal{}, deny(http.StatusForbidden, ReasonProvisioningDisabled, "User not found and auto-provisioning is disabled")
+		return deny(http.StatusForbidden, ReasonProvisioningDisabled, "User not found and auto-provisioning is disabled")
 	}
-	principal, err := s.cfg.Identities.ProvisionFederated(ctx, FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, RequestID: requestID})
-	switch {
-	case err == nil:
-		return principal, nil
-	case errors.Is(err, ErrSignupNotAvailable):
-		return Principal{}, deny(http.StatusForbidden, ReasonSignupUnavailable, "Sign-up through this provider is not available")
-	case errors.Is(err, ErrIdentityConflict):
-		return Principal{}, conflict()
-	case errors.Is(err, ErrInvalidEmail):
-		return Principal{}, deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
-	case errors.Is(err, ErrInvalidKey):
-		return Principal{}, authFailed(ReasonMalformed, err)
-	default:
-		return Principal{}, internal(ReasonStoreUnavailable, err)
-	}
+	return notMember()
 }
 
 func conflict() *Error {

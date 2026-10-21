@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 type roundTripper struct{ next http.RoundTripper }
@@ -33,6 +35,10 @@ func Adapter() *http.Client {
 	return &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) { return nil, nil })}
 }
 
-func Proxied(next http.RoundTripper) *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{Transport: next}
+func Proxied() *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{Transport: httpguard.Transport()}
+}
+
+func ProxiedClone() *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{Transport: httpguard.SharedTransport().Clone()}
 }

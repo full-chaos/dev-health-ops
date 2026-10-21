@@ -97,6 +97,18 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 		{dir + "reverseproxy/reverseproxy.go", "Bare", "reverseproxy-no-transport"}:         1,
 		{dir + "reverseproxy/reverseproxy.go", "NilTransport", "reverseproxy-no-transport"}: 1,
 		{dir + "reverseproxy/reverseproxy.go", "Single", "reverseproxy-no-transport"}:       1,
+		{dir + "reverseproxy/reverseproxy.go", "Param", "transport-unproven"}:               1,
+		{dir + "reverseproxy/reverseproxy.go", "NewZero", "reverseproxy-no-transport"}:      1,
+		{dir + "reverseproxy/reverseproxy.go", "LocalVar", "reverseproxy-no-transport"}:     1,
+		{dir + "reverseproxy/reverseproxy.go", "NamedResult", "reverseproxy-no-transport"}:  1,
+		{dir + "reverseproxy/reverseproxy.go", "var zero", "reverseproxy-no-transport"}:     1,
+		{dir + "reverseproxy/reverseproxy.go", "type Holder", "reverseproxy-by-value"}:      1,
+		{dir + "reverseproxy/reverseproxy.go", "Slice", "reverseproxy-by-value"}:            1,
+		{dir + "reverseproxy/reverseproxy.go", "NilAssign", "transport-nil"}:                1,
+		{dir + "reverseproxy/reverseproxy.go", "Assign", "transport-unproven"}:              1,
+		{dir + "reverseproxy/reverseproxy.go", "Address", "transport-address"}:              1,
+		{dir + "reverseproxy/reverseproxy.go", "Overwrite", "reverseproxy-no-transport"}:    1,
+		{dir + "reverseproxy/reverseproxy.go", "Overwrite", "value-overwrite"}:              1,
 	}
 	if got, expected := render(found), render(want); got != expected {
 		t.Errorf("planted sites differ\n got:\n%s\nwant:\n%s", got, expected)

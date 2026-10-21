@@ -6,6 +6,12 @@ import (
 	"net/url"
 )
 
+var zero httputil.ReverseProxy
+
+type Holder struct {
+	proxy httputil.ReverseProxy
+}
+
 func Bare() *httputil.ReverseProxy { return &httputil.ReverseProxy{Director: func(*http.Request) {}} }
 
 func NilTransport() *httputil.ReverseProxy {
@@ -15,3 +21,28 @@ func NilTransport() *httputil.ReverseProxy {
 func Single(target *url.URL) *httputil.ReverseProxy {
 	return httputil.NewSingleHostReverseProxy(target)
 }
+
+func Param(next http.RoundTripper) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{Transport: next}
+}
+
+func NewZero() *httputil.ReverseProxy { return new(httputil.ReverseProxy) }
+
+func LocalVar() *httputil.ReverseProxy {
+	var p httputil.ReverseProxy
+	return &p
+}
+
+func NamedResult() (p httputil.ReverseProxy) { return }
+
+func Slice() []httputil.ReverseProxy { return nil }
+
+func NilAssign(p *httputil.ReverseProxy) { p.Transport = nil }
+
+func Assign(p *httputil.ReverseProxy, next http.RoundTripper) { p.Transport = next }
+
+func Address(p *httputil.ReverseProxy) *http.RoundTripper { return &p.Transport }
+
+func Overwrite(p *httputil.ReverseProxy) { *p = httputil.ReverseProxy{} }
+
+func Zero() *httputil.ReverseProxy { return &zero }

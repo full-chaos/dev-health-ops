@@ -268,7 +268,7 @@ func composeStackFindings(text []byte) ([]string, error) {
 	}
 	sort.Strings(names)
 
-	// No Python api, by name, by image and by build.
+	// No Python api, by name and by image.
 	for _, name := range names {
 		service := stack.Services[name]
 		if name == "api" || name == "metrics-api" {
@@ -276,9 +276,6 @@ func composeStackFindings(text []byte) ([]string, error) {
 		}
 		if strings.Contains(service.Image, "dev-hops-api") {
 			found("python api: %s runs the Python api image %q", name, service.Image)
-		}
-		if service.Build != nil && strings.TrimPrefix(service.Build.Dockerfile, "./") == "docker/Dockerfile" {
-			found("python api: %s builds docker/Dockerfile, the Python api image", name)
 		}
 	}
 
@@ -597,7 +594,7 @@ func TestComposeStackCheckSeesEachDefect(t *testing.T) {
 		{
 			name: "the Python api service back",
 			old:  "\n  bugsink:\n",
-			new:  "\n  api:\n    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:local}\n    build:\n      context: .\n      dockerfile: ./docker/Dockerfile\n\n  bugsink:\n",
+			new:  "\n  api:\n    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:local}\n\n  bugsink:\n",
 			want: "python api: the service \"api\" is back",
 		},
 		{

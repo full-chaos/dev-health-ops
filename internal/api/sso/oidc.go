@@ -487,6 +487,11 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 
 	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID)
 	if err != nil {
+		if errors.Is(err, errIdentityConflict) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
+				identityConflictDetail(), "oidc", "provisioning")
+			return
+		}
 		var processing ssoProcessing
 		if !asSSOProcessing(err, &processing) {
 			h.fail(w, r, "oidc provisioning", err)

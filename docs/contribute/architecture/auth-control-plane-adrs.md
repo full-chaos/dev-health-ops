@@ -158,7 +158,7 @@ ACP-ADR-01 pinned four of six Wave 1 dependencies and explicitly deferred the
 other three — OAuth 2.0/OIDC client, SAML, and password hashing — because no
 candidate for any of them was evaluated in Wave 0. This addendum makes that
 selection. Docs only: the versions below are the recorded decision, not yet a
-`go.mod` change — pinning happens with the identity package implementation
+`go.mod` change — pinning happens with the `internal/identity` implementation
 work (Wave 2), per TRD §26's own sequencing.
 
 Two dependencies are already present in the platform's Go module graph, which
@@ -268,7 +268,7 @@ Two facts constrain this decision more than any preference:
 
 ### Decision
 
-1. **Custody interface first, adapters behind it.** The keystore package exposes
+1. **Custody interface first, adapters behind it.** `internal/keystore/` exposes
    sign and public-JWKS operations only. No caller outside `internal/token/`
    may reach it (TRD §5 package rules).
 2. **Production: an external KMS or secret store holds private material**;
@@ -692,8 +692,8 @@ service-account management, security-policy changes, and nested impersonation.
 Without step-up, the only compliant option for that list is **denied**.
 
 The relevant surface is larger than it looks. The 150 Server Actions
-(threat model §11.3) are concentrated in the web repository's admin server-action directory and
-the web repository's billing actions directory — administrative and billing mutations, which is
+(threat model §11.3) are concentrated in `src/lib/admin/server/` and
+`src/lib/billing/actions/` — administrative and billing mutations, which is
 G-51's list almost exactly — and in Next.js 16.2.12 none of them is protected by
 a layout guard or by path middleware (§2.5).
 

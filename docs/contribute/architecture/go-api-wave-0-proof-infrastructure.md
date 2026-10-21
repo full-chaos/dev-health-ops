@@ -284,7 +284,7 @@ for every authenticated organisation, revocable only by mode*.
 generates `query-api` from it) and is never regenerated from Python — see
 `contracts/graphql/v1/README.md` for how to change it and for how web
 codegen consumes it. Two gates: the Python schema must be a subset of it
-(the Python schema subset test was removed with the Python api), and the schema baked into
+(`tests/api/graphql/test_schema_sdl_pinned.py`, removed with the Python api), and the schema baked into
 the generated Go code must equal it byte for byte
 (`TestGeneratedSchemaSourceIsTheCheckedInPin`). Its sha256 digest is
 unchanged by which plane a member came from, so the routing key, the
@@ -318,7 +318,7 @@ proofs.
 ### The same procedure with the Go verbs (CHAOS-5486)
 
 `dho goapi routing` (spec S1, CHAOS-6280 folded the standalone
-standalone go-api-routing binary into the `dho` operator binary's `goapi
+`cmd/go-api-routing` binary into the `dho` operator binary's `goapi
 routing` verb) is the Go implementation of the same contract, built
 because the cutover rule forbids new Python compute on the critical path
 of a rollout operation. The verbs `seed`, `enable` and `disable` take MCP class

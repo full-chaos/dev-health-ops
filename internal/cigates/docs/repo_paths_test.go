@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -26,6 +27,18 @@ var (
 	pythonTree    = regexp.MustCompile(`src/dev_health_ops(?:/[^\s` + "`" + `)'"]*)?`)
 	lineSuffix    = regexp.MustCompile(`:\d+(?:-\d+)?$`)
 	frontValue    = regexp.MustCompile(`^\s*(?:-\s+|[A-Za-z_][A-Za-z0-9_]*:\s+)["']?([^\s"']+)["']?\s*$`)
+	// History records keep their text: a name that was true when the record was written (a planned package, a web
+	// repository directory, a migration range) stays, and is listed here by page and name.
+	historyNames = map[string][]string{
+		"docs/contribute/architecture/auth-control-plane-adrs.md": {"internal/identity", "internal/keystore",
+			"src/lib/admin/server", "src/lib/billing/actions"},
+		"docs/contribute/architecture/auth-control-plane-decision-sheet.md": {"internal/identity", "internal/keystore",
+			"src/lib/admin/server", "src/lib/billing/actions"},
+		"docs/contribute/development/integration-suite-targets.md":           {"internal/testsupport/computeparity"},
+		"docs/contribute/development/lane-isolation-kiac.md":                 {"deploy/local/kiac.sh", "deploy/local/trial-data.sh", "deploy/vendor"},
+		"docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md": {"cmd/go-api-routing"},
+		"docs/contribute/architecture/auth-control-plane-database.md":        {"internal/storage/postgres/authschema/migrations/0001"},
+	}
 	// Port records list the Python modules by design: each row is a Python path and its Go replacement.
 	portRecordPages = map[string]bool{
 		"docs/go-migration-matrix.md":                          true,
@@ -191,7 +204,7 @@ func docsRepoPathGuard(d docTree) []string {
 					continue
 				}
 				seen[ref] = true
-				if files[ref] || dirs[ref] || namesGoSymbolIn(ref, dirs) {
+				if slices.Contains(historyNames[rel], ref) || files[ref] || dirs[ref] || namesGoSymbolIn(ref, dirs) {
 					continue
 				}
 				out = append(out, fmt.Sprintf("%s:%d names %s, which git does not track: name the Go owner, or write %q on that line when no Go owner exists", rel, i+1, ref, pathRemovedNote))

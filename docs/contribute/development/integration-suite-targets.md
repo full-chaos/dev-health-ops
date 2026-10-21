@@ -190,7 +190,7 @@ semantics that a version change can move.
 
 **Eight packages carry engine-sensitive ClickHouse SQL and cannot be proven by
 CI at all** — roughly 1366s (down from 1416s/nine packages pre-CHAOS-5336:
-the retired computeparity test package's ~50s row is gone with the package
+`internal/testsupport/computeparity`'s ~50s row is gone with the package
 itself, retired along with dora/capacity's Python producers; re-measure rather
 than trust this percentage exactly), about three quarters of the total
 integration weight. Two of them (`jobs/report`, `jobs/metrics/remaining`) are
@@ -349,7 +349,7 @@ result is eventually `Close`d. A suite that caches across tests needs a
 ### And check nothing creates a datastore behind the harness's back
 
 The check above is necessary but not sufficient, because it only sees resources
-the harness created. The retired computeparity test package used to be the
+the harness created. `internal/testsupport/computeparity` used to be the
 example that passed the closing check above yet was still unsafe on a shared
 cluster: it created **fixed-name** databases (`parity_left`, `parity_right`,
 `parity_capacity_*`) through a separate fixture tool
@@ -365,7 +365,7 @@ still applies to any future out-of-band creator.
 **So the second question is: does anything here create a datastore the harness
 does not own?** Any creator that is not the harness is a potential collision and
 a potential orphan, because nothing will namespace it and nothing will drop it.
-As of the computeparity test package's retirement, no Go test issues
+As of `internal/testsupport/computeparity`'s retirement, no Go test issues
 `CREATE DATABASE` directly and no out-of-band fixture tool remains in the
 repository — re-sweep before trusting that this stays true.
 

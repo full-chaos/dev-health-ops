@@ -44,6 +44,7 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 		{dir + "unproven/unproven.go", "FieldRead", "transport-unproven"}:            1,
 		{dir + "unproven/unproven.go", "Assigned", "transport-unproven"}:             1,
 		{dir + "unproven/unproven.go", "Unkeyed", "transport-unproven"}:              1,
+		{dir + "unproven/unproven.go", "ParameterReassigned", "transport-unproven"}:  1,
 	}
 	if got, expected := render(found), render(want); got != expected {
 		t.Errorf("planted sites differ\n got:\n%s\nwant:\n%s", got, expected)

@@ -29,3 +29,10 @@ func Assigned(client *http.Client, transport http.RoundTripper) {
 }
 
 func Unkeyed(rt http.RoundTripper) http.Client { return http.Client{rt, nil, nil, 0} }
+
+func ParameterReassigned(transport http.RoundTripper, own bool) *http.Client {
+	if own {
+		transport = &http.Transport{}
+	}
+	return &http.Client{Transport: transport}
+}

@@ -82,7 +82,7 @@ func TestSessionsOwnedByAuthTakeEveryPairFromTheIssueRoute(t *testing.T) {
 	route := &fakeIssueRoute{}
 	auth := httptest.NewServer(route)
 	defer auth.Close()
-	st := startStackWith(t, ctx, issueClient(t, auth.URL))
+	st := startStackWith(t, ctx, issueClient(t, auth.URL), nil)
 	before := refreshTokenRows(t, ctx, st)
 	orgA := st.specs["alice"]["org_id"].(string)
 	alice := changeToken(t, st, changeAlice, "alice@example.com", orgA, "owner", 0)
@@ -137,7 +137,7 @@ func TestSessionsOwnedByAuthAnswer503WhenTheIssueRouteIsDown(t *testing.T) {
 	}
 	down := "http://" + closed.Addr().String()
 	_ = closed.Close()
-	st := startStackWith(t, ctx, issueClient(t, down))
+	st := startStackWith(t, ctx, issueClient(t, down), nil)
 	before := refreshTokenRows(t, ctx, st)
 	hashBefore := passwordHashOf(t, ctx, st, changeAlice)
 	orgA := st.specs["alice"]["org_id"].(string)

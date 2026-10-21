@@ -49,11 +49,10 @@ func apiPosture(sessionsOwnedByAuth bool) RolePosture {
 	}
 	if sessionsOwnedByAuth {
 		// AUTH_PROXY_SESSIONS: auth-service owns sessions, so go-api inserts
-		// and rotates no refresh token. It keeps revoking them (revoked_at) on
-		// a password reset, change, admin set-password or soft delete: a
-		// go-api refresh token from before the flip stays exchangeable at
-		// auth-service until it is revoked or expires. DELETE stays for the
-		// org purge and the expired-token cleanup.
+		// and rotates no refresh token. The revoke-all writes are kept under
+		// the flag (password reset, change, admin set-password, soft delete),
+		// so UPDATE narrows to revoked_at. DELETE stays for the org purge and
+		// the expired-token cleanup.
 		refreshTokens = TablePrivilege{"refresh_tokens", false, false, true}
 		columns = append(columns, ColumnPrivilege{"refresh_tokens", "revoked_at", "UPDATE"})
 	}

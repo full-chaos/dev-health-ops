@@ -198,6 +198,10 @@ func (r *recordedJoins) JoinOnSignIn(_ context.Context, principalID uuid.UUID, _
 	return nil
 }
 
+func (r *recordedJoins) ProvisionOnSignIn(context.Context, saml.NewAccount, saml.Provider) (uuid.UUID, error) {
+	return uuid.Nil, errors.New("the harness seam provisions nothing")
+}
+
 func (r *recordedJoins) Member(ctx context.Context, principalID, orgID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	joined := r.joined[principalID]
@@ -746,6 +750,7 @@ func TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail(t *testing.T) {
 // list compare case-insensitively.
 func TestSAMLAllowedDomainsCompareWithoutCase(t *testing.T) {
 	h := newHarness(t, true)
+	h.withoutJoins()
 	h.ownUsers()
 	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = '["Example.COM"]'::json WHERE id = $1`, h.provider.ID); err != nil {
 		t.Fatal(err)
@@ -826,9 +831,10 @@ func TestSAMLDisabledAccountIsRefused(t *testing.T) {
 
 // TestSAMLNewAccountIsRefusedWithoutWrites: a sign-in that would need a new
 // account is refused with ErrNotOrgMember (membership_required) before and
-// after the users cutover, with the membership seam set, and writes nothing.
+// after the users cutover, with no membership seam, and writes nothing.
 func TestSAMLNewAccountIsRefusedWithoutWrites(t *testing.T) {
 	h := newHarness(t, true)
+	h.withoutJoins()
 	for _, owned := range []bool{false, true} {
 		t.Run(fmt.Sprintf("users owned by auth %v", owned), func(t *testing.T) {
 			if owned {
@@ -859,7 +865,7 @@ func TestSAMLNewAccountIsRefusedWithoutWrites(t *testing.T) {
 // TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites: with no membership
 // seam, a linked account that is not a member of the provider's organization
 // and a new account are refused with ErrNotOrgMember (membership_required)
-// and write nothing; with a failing seam a new account is refused and writes
+// and write nothing; with a failing seam a new account fails and writes
 // nothing; the linked account signs in once it is a member.
 func TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites(t *testing.T) {
 	h := newHarness(t, true)
@@ -883,8 +889,8 @@ func TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites(t *testing.T) {
 		defer func() { h.svc.JIT = nil }()
 		before := h.writeCounts()
 		signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: uniqueEmail("free")}), nil)
-		if !errors.Is(err, saml.ErrNotOrgMember) {
-			t.Fatalf("sign-in %+v err %v, want ErrNotOrgMember before any join", signIn, err)
+		if err == nil || errors.Is(err, saml.ErrNotOrgMember) {
+			t.Fatalf("sign-in %+v err %v, want the seam failure", signIn, err)
 		}
 		if after := h.writeCounts(); after != before {
 			t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
@@ -904,11 +910,16 @@ func (failingSeam) JoinOnSignIn(context.Context, uuid.UUID, saml.Provider) error
 	return errors.New("membership store unavailable")
 }
 
+func (failingSeam) ProvisionOnSignIn(context.Context, saml.NewAccount, saml.Provider) (uuid.UUID, error) {
+	return uuid.Nil, errors.New("membership store unavailable")
+}
+
 // TestSAMLAllowedDomainsAreEnforcedOnAMiss: without a linked identity the
 // asserted email must be in an allowed domain; a key hit is covered by
 // TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail.
 func TestSAMLAllowedDomainsAreEnforcedOnAMiss(t *testing.T) {
 	h := newHarness(t, true)
+	h.withoutJoins()
 	h.ownUsers()
 	before := h.identityCount()
 	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = '["corp.example.com"]'::json WHERE id = $1`, h.provider.ID); err != nil {

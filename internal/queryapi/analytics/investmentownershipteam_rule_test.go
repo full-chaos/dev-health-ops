@@ -48,12 +48,17 @@ func TestOwnershipTeamSourceRendersTheOneOwnershipRule(t *testing.T) {
 	if defects := ruleDefects(now); len(defects) != 0 {
 		t.Errorf("ownershipTeamSource: %v", defects)
 	}
+	bound := false
 	for _, b := range bindings {
 		if b.Name == teamscope.OwnerSharesBindingAsOf {
+			bound = true
 			if at, ok := b.Value.(time.Time); !ok || time.Since(at) > time.Minute || at.After(time.Now().Add(time.Minute)) {
 				t.Errorf("ownershipTeamSource is not bound to the present: %v", b.Value)
 			}
 		}
+	}
+	if !bound {
+		t.Errorf("ownershipTeamSource binds no instant: %+v", bindings)
 	}
 }
 

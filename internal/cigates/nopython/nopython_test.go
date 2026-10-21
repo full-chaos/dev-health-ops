@@ -128,7 +128,6 @@ var scriptPython = regexp.MustCompile(`(^|[^\p{L}\p{N}_.-])(?:[^\s'"\x60;|&<>()=
 // change that removes it. An entry goes when its owner merges; a new entry needs a ruling.
 var shellPythonPending = map[string]string{
 	"ci/local_validate.sh": "CHAOS-10180 (K1 deletes the pytest gate, uv setup and Python installs)",
-	"ci/run_tests.sh":      "CHAOS-10413 (strip its uv/pytest tiers)",
 }
 
 // shellPythonData reads testdata/shell_python_data_lines.tsv: lines that name Python as data and run none.

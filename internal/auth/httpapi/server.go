@@ -448,7 +448,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	}))
 
 	if options.NoStore != nil {
-		options.NoStore.bind(mux, options.StrictPaths)
+		options.NoStore.bind(mux, options.StrictPaths, redirector)
 	}
 	// RequestID is outermost so every response -- including the 404 and 405
 	// envelopes above, which never reach a route chain -- carries a

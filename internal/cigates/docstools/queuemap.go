@@ -530,7 +530,7 @@ func qmMarkers(doc string) (start, stop int, ok bool) {
 }
 
 func qmGenVerb(_ []string, _, stderr io.Writer) int {
-	root, err := os.Getwd()
+	root, err := docsRoot(qmDocRel)
 	if err != nil {
 		fmt.Fprintln(stderr, "gen-queue-mapping:", err)
 		return 1
@@ -557,7 +557,7 @@ func qmGenVerb(_ []string, _, stderr io.Writer) int {
 }
 
 func qmDriftVerb(_ []string, stdout, stderr io.Writer) int {
-	root, err := os.Getwd()
+	root, err := docsRoot(qmDocRel)
 	if err != nil {
 		fmt.Fprintln(stderr, "check-queue-mapping-drift:", err)
 		return 1

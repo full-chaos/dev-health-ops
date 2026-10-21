@@ -1,0 +1,5 @@
+query	expected	rank	max_rank	top_result	status
+"tab	here ""quoted"" and
+newline"	/guide/install/	2	5	/guide/config/	pass
+plain, comma; semi	/guide/install/	2	5	/guide/config/	pass
+padded	/guide/install/	2	5	/guide/config/	pass

@@ -139,7 +139,7 @@ func TestPythonDecimalBlocksMatchLivePython(t *testing.T) {
 				"  running python: unicode %s (%d decimal blocks)\n"+
 				"  this port's table: %d blocks, derived from the SHIPPED interpreter\n"+
 				"Fix the ENVIRONMENT, not the table: this port must match the Python that runs\n"+
-				"builder.py in production (pyproject requires-python, docker/Dockerfile), not\n"+
+				"builder.py in production (the last pyproject requires-python), not\n"+
 				"whichever interpreter this job happens to provide. Regenerating the table\n"+
 				"against a different version silently changes which runes are PR numbers.",
 			live.UnicodeVersion, len(live.Blocks), len(pythonDecimalBlocks))

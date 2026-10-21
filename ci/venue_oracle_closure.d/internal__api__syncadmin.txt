@@ -47,6 +47,7 @@ internal/auth/signedtoken
 internal/backfillrun
 internal/chmigrate
 internal/cli
+internal/egressguard
 internal/entitlements
 internal/httpguard
 internal/identityalias
@@ -61,6 +62,7 @@ internal/jobs/workgraph/linktier
 internal/llmbudget
 internal/llmorgsettings
 internal/mail
+internal/netclass
 internal/operationalordering
 internal/pgmigrate
 internal/platform/buildstamp
@@ -110,6 +112,7 @@ internal/teamid
 internal/teamkeytables
 internal/teamprovider
 internal/testsupport/containers
+internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed

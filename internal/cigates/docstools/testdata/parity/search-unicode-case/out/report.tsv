@@ -1,0 +1,4 @@
+query	expected	rank	max_rank	top_result	status
+STRAẞE	/u/	1	5	/u/	pass
+école	/u/	1	1	/u/	pass
+kelvin K	/u/	1	5	/u/	pass

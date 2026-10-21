@@ -1,0 +1,1 @@
+{"queries": [{"query": "running pipelines", "expected": "/", "max_rank": 1}, {"query": "tried updating", "expected": "guide/install", "max_rank": 1}, {"query": "configured", "expected": "/guide/config/"}]}

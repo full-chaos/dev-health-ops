@@ -572,12 +572,12 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 	return same, compared, py, gr
 }
 
-// intendedNoStore is the declared divergence "admin no-store": every Go admin
-// route answers Cache-Control: no-store, which the frozen Python goldens never
+// intendedNoStore is the declared divergence "admin no-store": every Go route
+// under /api/v1/admin answers Cache-Control: no-store, which the frozen Python goldens never
 // carried. It applies only to a route of the admin route table
 // (httpapi.AdminRoutes), only when the golden has no cache-control, and only for
-// exactly "no-store"; any other Go value, a golden that has the header, or an
-// admin-prefixed route of another package still compares.
+// exactly "no-store"; any other Go value, a golden that has the header, or a
+// path no package mounts under the prefix still compares.
 // adminNoStore is the serving router's own no-store decision, unbound: the
 // same decode, strict-path and mux-pattern steps as the api service.
 var adminNoStore = httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)

@@ -234,6 +234,32 @@ func awaitResponse(t *testing.T, client *http.Client, url string) *http.Response
 	return nil
 }
 
+// awaitSettledReadiness polls /readyz until its answer is no longer the
+// startup-only {"runtime"} failure, so a test reads the dependency checks
+// rather than the instant before readiness opens.
+func awaitSettledReadiness(t *testing.T, client *http.Client, url string) *http.Response {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		response := awaitResponse(t, client, url)
+		raw, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatalf("read %s body: %v", url, err)
+		}
+		var readiness struct {
+			FailedChecks []string `json:"failed_checks"`
+		}
+		if json.Unmarshal(raw, &readiness) != nil || !slices.Equal(readiness.FailedChecks, []string{"runtime"}) {
+			response.Body = io.NopCloser(bytes.NewReader(raw))
+			return response
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("%s still reports only the runtime check within 20s", url)
+	return nil
+}
+
 // TestReadinessFailsClosedOnBrokenDatabaseAndSigningKey is CHAOS-4881's
 // executed negative proof, run as a test so CI re-runs it on every change
 // rather than trusting a transcript pasted once.
@@ -253,7 +279,7 @@ func TestReadinessFailsClosedOnBrokenDatabaseAndSigningKey(t *testing.T) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	defer client.CloseIdleConnections()
 
-	response := awaitResponse(t, client, "http://"+operatorAddress+"/readyz")
+	response := awaitSettledReadiness(t, client, "http://"+operatorAddress+"/readyz")
 	body, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil {

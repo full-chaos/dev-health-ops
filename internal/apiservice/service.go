@@ -86,7 +86,7 @@ const (
 	// default keeps that true for the Go api.
 	maxBodyBytes = 50 << 20
 	// maxHeaderBytes is the smallest bound under which the api accepts every
-	// request head the Python api accepts. uvicorn on h11 (uv.lock), with the
+	// request head the Python api accepts. uvicorn on h11 (the last uv.lock), with the
 	// head arriving in one piece, accepts a request line of up to 127,917
 	// bytes of target and a single header value of up to 127,887 bytes;
 	// net/http reads MaxHeaderBytes plus its own slop (measured +4,040 bytes

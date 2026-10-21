@@ -22,7 +22,7 @@ var (
 )
 
 // CORS reproduces Starlette's CORSMiddleware (starlette 1.7.0, the version
-// uv.lock pins and the deployed Python api runs) for the Python api's
+// the last uv.lock pinned and the deployed Python api runs) for the Python api's
 // parameters, so a browser and a cache see the same headers from either
 // plane. Each branch below names the Starlette line it mirrors.
 type CORS struct {

@@ -120,8 +120,6 @@ jobs:
               - 'internal/**'
               - 'go.mod'
               - 'go.sum'
-              - 'requirements.txt'
-              - 'pyproject.toml'
               - 'docker/**'
               - 'compose.yml'
               - '.dockerignore'

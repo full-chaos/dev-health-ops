@@ -1,0 +1,1 @@
+{"queries": [{"query": "ΑΣ", "expected": "/greek/", "max_rank": 1}, {"query": "ασβ", "expected": "/other/", "max_rank": 2}, {"query": "ΑΣΒ", "expected": "/greek/"}, {"query": "Σ", "expected": "/greek/"}]}

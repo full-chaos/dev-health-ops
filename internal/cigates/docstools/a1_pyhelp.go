@@ -85,6 +85,10 @@ func a1PathStr(p string) string {
 	}
 	out := strings.Join(parts, "/")
 	if strings.HasPrefix(p, "/") {
+		// pathlib keeps exactly two leading slashes (POSIX), and collapses one or three or more to one
+		if strings.HasPrefix(p, "//") && !strings.HasPrefix(p, "///") {
+			return "//" + out
+		}
 		return "/" + out
 	}
 	if out == "" {

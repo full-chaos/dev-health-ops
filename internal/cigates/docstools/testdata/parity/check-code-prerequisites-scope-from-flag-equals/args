@@ -1,0 +1,2 @@
+check-code-prerequisites
+--scope=my-scope.yml

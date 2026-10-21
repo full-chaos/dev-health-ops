@@ -15,9 +15,10 @@
 # commit carries eight `venue-oracles (shard K/8)` contexts, all informational (R430), none required.
 #
 # RELEVANCE. A push to main decides relevance INSIDE the job, not with a
-# trigger path filter: `ci/go_relevance.sh` (the decider go-quality.yml
-# uses) against go.yml's own `on.pull_request.paths`, over the push range
-# from `github.event.before`. The job then either runs the real oracle
+# trigger path filter: `cmd/cigate plan-verdict --event range` (the plan
+# go-quality.yml and go.yml run) over the push range from
+# `github.event.before`; a NONE verdict skips the suite (no change set plans
+# NONE today: any non-Go path is FULL). The job then either runs the real oracle
 # suite or says in plain text that it skipped and why. A path filter on the
 # trigger would skip the run with no record at all. A workflow_dispatch run
 # has no push range and always runs the full suite.
@@ -100,6 +101,13 @@ jobs:
           # below; the default depth-1 checkout cannot see it.
           fetch-depth: 0
 
+      # Before the relevance step: the plan verdict is a Go program.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
       - name: Decide whether this change set is Go-relevant
         id: relevance
         env:
@@ -144,8 +152,20 @@ jobs:
             printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          bash ci/go_relevance.sh < changed.txt | tee relevance.out
-          grep -E '^relevant=(true|false)$' relevance.out >> "${GITHUB_OUTPUT}"
+          modpath="$(go list -m)" && go list -mod=readonly ./... | sed -e "s#^${modpath}/##" -e "s#^${modpath}\$#.#" > keys.txt \
+            && go list -mod=readonly -test -json ./... > golist.json \
+            && go run -trimpath -mod=readonly ./cmd/cigate plan-verdict --event range --changed changed.txt --golist golist.json \
+              --keys keys.txt --root "${GITHUB_WORKSPACE}" --base "${BASE_SHA}" > plan.txt || {
+            echo "the plan verdict failed; failing open to relevant=true"
+            printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
+          cat plan.txt
+          if [ "$(head -n 1 plan.txt)" = "NONE" ]; then
+            printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
+          else
+            printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Report that the gate was skipped, and why
         if: steps.relevance.outputs.relevant != 'true'
@@ -153,14 +173,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          echo "skipped: no Go-relevant paths in this change set."
-          echo "Relevance is decided by ci/go_relevance.sh against go.yml's own"
-          echo "on.pull_request.paths list. The job still reports, so the skip is"
-          echo "on record for this commit rather than a run that never happened."
+          echo "skipped: the plan verdict of this change set is NONE."
+          echo "Relevance is decided by cmd/cigate plan-verdict --event range. The job still"
+          echo "reports, so the skip is on record for this commit rather than a run that never happened."
           # Loud, and best-effort: a failed API read must never fail the skip.
           state="$(bash ci/last-venue-run.sh --branch main 2>/dev/null | tail -n 1 || true)"
           [ -n "${state}" ] || state="venue-main: UNKNOWN (could not read the run history)"
-          reason="no Go-relevant paths in this change set"
+          reason="the plan verdict of this change set is NONE"
           echo "::notice title=VENUE ORACLES NOT RUN::${reason}. This green is NOT oracle evidence. ${state}"
           {
             echo "### VENUE ORACLES NOT RUN"
@@ -169,13 +188,6 @@ jobs:
             echo
             echo "A skipped run is not a pass (Trap #408): the last EXECUTED run is the state of record."
           } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Set up Go
-        if: steps.relevance.outputs.relevant == 'true'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
 
       - name: Log in to GitHub Container Registry
         if: steps.relevance.outputs.relevant == 'true'

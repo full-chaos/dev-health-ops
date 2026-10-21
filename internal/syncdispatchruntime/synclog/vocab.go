@@ -69,6 +69,7 @@ var (
 	MsgSyncRunRollupBumped                               = Msg{"sync_run.rollup_bumped"}
 	MsgDispatchSyncRunRedispatchRearmFailed              = Msg{"dispatch_sync_run.redispatch_rearm_failed"}
 	MsgDispatchSyncRunRedispatchRearmed                  = Msg{"dispatch_sync_run.redispatch_rearmed"}
+	MsgDispatchSyncRunRedispatchBackoffReadFailed        = Msg{"dispatch_sync_run.redispatch_backoff_read_failed"}
 	MsgDispatchSyncRunWokenByUnitCompletion              = Msg{"dispatch_sync_run.woken_by_unit_completion"}
 	MsgDispatchSyncRunUnitCompletionWakeFailed           = Msg{"dispatch_sync_run.unit_completion_wake_failed"}
 	MsgTeamRepoOwnershipDerivation                       = Msg{"team_repo_ownership_derivation"}
@@ -173,6 +174,9 @@ var (
 	KeyPath                         = Key{"path"}
 	KeyCountdown                    = Key{"countdown"}
 	KeyKeptEarlierWakeup            = Key{"kept_earlier_wakeup"}
+	KeyIdleSeconds                  = Key{"idle_seconds"}
+	KeyBackoffSeconds               = Key{"backoff_seconds"}
+	KeyBackoffLevel                 = Key{"backoff_level"}
 	KeyRowsWritten                  = Key{"rows_written"}
 	KeyRowsRetracted                = Key{"rows_retracted"}
 	KeyRowsRetractionHeld           = Key{"rows_retraction_held"}

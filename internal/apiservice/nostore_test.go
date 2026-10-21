@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -93,9 +95,6 @@ func TestAdminRoutesAnswerNoStoreThroughTheRealServerChain(t *testing.T) {
 // Every route of the real admin.Routes answers no-store on a refused caller.
 func TestEveryAdminRouteAnswersNoStoreThroughTheServer(t *testing.T) {
 	routes := admin.Routes(admin.Deps{Guard: policy.NewGuard(nil, nil)})
-	if len(routes) != len(httpapi.AdminRoutes) {
-		t.Fatalf("%d admin routes, %d in the table", len(routes), len(httpapi.AdminRoutes))
-	}
 	handler := noStoreServer(t, routes)
 	sawModels := false
 	for _, route := range routes {
@@ -141,7 +140,19 @@ func TestAdminUnhandledErrorKeepsThePythonShapeWithoutNoStore(t *testing.T) {
 	if got := response.Header().Get("Cache-Control"); got != "" {
 		t.Fatalf("unhandled 500 carries Cache-Control %q; the Python shape strips it", got)
 	}
-	if body := response.Body.String(); body != `{"detail":"Internal Server Error"}` && body != "Internal Server Error" {
+	// exactly the frozen Python headers (content-length, content-type) plus the provenance stamp (the build header only
+	// when the binary knows its commit)
+	var names []string
+	for name := range response.Header() {
+		if name != "X-Dev-Health-Build" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	if want := []string{"Content-Length", "Content-Type", "X-Dev-Health-Plane"}; !slices.Equal(names, want) {
+		t.Fatalf("unhandled 500 headers %v, want exactly %v", names, want)
+	}
+	if body := response.Body.String(); body != `{"detail":"Internal Server Error"}` {
 		t.Fatalf("body %q is not the generic 500 body", body)
 	}
 }

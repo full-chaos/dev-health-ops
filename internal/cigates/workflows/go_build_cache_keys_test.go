@@ -38,6 +38,8 @@ var noSetupGoCacheJobs = [][2]string{
 	{"auth-k8s-proof.yml", "auth-k8s-proof"},
 }
 
+var goVersionStepRef = regexp.MustCompile(`steps\.([A-Za-z0-9_-]+)\.outputs\.go-version`)
+
 func usesAction(step yamlMap, action string) bool {
 	return strings.HasPrefix(asString(step["uses"]), action+"@")
 }
@@ -64,6 +66,12 @@ func goCacheViolations(t *testing.T, root string) []string {
 		}
 	}
 
+	pinned := func(action string, s yamlMap) {
+		if got := asString(s["uses"]); got != action+"@"+cacheActionSHA {
+			add("go-quality.yml: %s must be pinned to %s (got %q)", action, cacheActionSHA, got)
+		}
+	}
+
 	steps := stepsOf(jobsOf(loadWf(t, root, "go-quality.yml"))["go-quality-leg"])
 	setupAt, restoreAt, legAt, saveAt := -1, -1, -1, -1
 	var restore, save yamlMap
@@ -76,8 +84,10 @@ func goCacheViolations(t *testing.T, root string) []string {
 			}
 		case usesAction(s, "actions/cache/restore"):
 			restoreAt, restore = i, s
+			pinned("actions/cache/restore", s)
 		case usesAction(s, "actions/cache/save"):
 			saveAt, save = i, s
+			pinned("actions/cache/save", s)
 		case strings.Contains(asString(s["run"]), "bash ci/check_go.sh ci-leg ${{ matrix.args }}"):
 			legAt = i
 		}
@@ -95,7 +105,7 @@ func goCacheViolations(t *testing.T, root string) []string {
 		if restoreAt < setupAt || restoreAt > legAt {
 			add("go-quality.yml: the cache restore must run after setup-go and before the leg")
 		}
-		for _, part := range []string{"go-quality-", "${{ matrix.name }}", "${{ runner.os }}", "${{ runner.arch }}", "steps.setup-go.outputs.go-version", "hashFiles('**/go.sum')"} {
+		for _, part := range []string{"go-quality-", "${{ matrix.name }}", "${{ runner.os }}", "${{ runner.arch }}", "hashFiles('**/go.sum')"} {
 			if !strings.Contains(key, part) {
 				add("go-quality.yml: the restore key %q does not hold %s", key, part)
 			}
@@ -107,6 +117,23 @@ func goCacheViolations(t *testing.T, root string) []string {
 			add("go-quality.yml: the restore key %q has no layout-version segment go-quality-v<N>-", key)
 		} else if n, _ := strconv.Atoi(m[1]); n < minCacheLayout {
 			add("go-quality.yml: the restore key %q has layout-version v%d, want v%d or later (earlier entries were built into /tmp)", key, n, minCacheLayout)
+		}
+		if m := goVersionStepRef.FindStringSubmatch(key); m == nil {
+			add("go-quality.yml: the restore key %q does not hold steps.<id>.outputs.go-version", key)
+		} else {
+			found := false
+			for _, st := range steps {
+				if asString(st["id"]) != m[1] {
+					continue
+				}
+				found = true
+				if !usesAction(st, "actions/setup-go") {
+					add("go-quality.yml: step id %q is not actions/setup-go (uses %q)", m[1], asString(st["uses"]))
+				}
+			}
+			if !found {
+				add("go-quality.yml: the restore key reads steps.%s.outputs.go-version but there is no step with id %q", m[1], m[1])
+			}
 		}
 		if prefix, _, ok := strings.Cut(key, "${{ hashFiles"); !ok || strings.TrimSpace(rk) != prefix {
 			add("go-quality.yml: restore-keys must be the key without its go.sum hash (got %q)", rk)

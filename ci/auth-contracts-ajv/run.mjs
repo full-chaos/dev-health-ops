@@ -103,6 +103,10 @@ const APPROVED_AUDIT = [
   "email_collision",
   "signup_unavailable",
   "identity_conflict",
+  "provider_already_linked",
+  "expired",
+  "principal_not_found",
+  "malformed",
 ];
 const NOT_IN_THE_VOCABULARY = [
   "secret_0123456789abcdef0123",

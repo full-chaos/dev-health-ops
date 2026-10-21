@@ -54,7 +54,7 @@ type loginInput struct {
 // (internal/api/session/limits.go): EmailStr, a password of at most 128
 // characters and an optional organization id.
 func (h compatHandlers) readLogin(w http.ResponseWriter, r *http.Request) (loginInput, bool) {
-	body, ok := h.readCompatBody(w, r, opCompatLogin)
+	body, ok := h.readCompatBody(w, r, opCompatLogin, h.bodyRefused(providerLocal))
 	if !ok {
 		return loginInput{}, false
 	}
@@ -68,8 +68,9 @@ func (h compatHandlers) readLogin(w http.ResponseWriter, r *http.Request) (login
 		}
 	}
 	if len(errs) > 0 {
-		h.rec.record(r.Context(), opCompatLogin, "denied", reasonMalformed, nil)
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		h.refuseBody(w, r, opCompatLogin, h.bodyRefused(providerLocal), func() {
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		})
 		return loginInput{}, false
 	}
 	return input, true
@@ -237,7 +238,10 @@ func (h compatHandlers) auditSignInFailed(ctx context.Context, principal uuid.UU
 	}
 	event := audit.AuditEvent{
 		EventType: audit.EventLoginFailed, Outcome: audit.OutcomeDenied, RequestID: requestid.Audit(ctx),
-		Attributes: map[string]any{"reason_code": reason, "provider": provider},
+		Attributes: map[string]any{"reason_code": reason},
+	}
+	if provider != "" {
+		event.Attributes["provider"] = provider
 	}
 	if org != nil {
 		text := org.String()

@@ -21,7 +21,7 @@ const socialProviderPattern = "^(github|gitlab|google)$"
 // readSocialLogin is go-api's BodyFirst then SocialLoginRequest: a provider
 // matching the pattern and a provider_access_token, both required strings.
 func (h compatHandlers) readSocialLogin(w http.ResponseWriter, r *http.Request) (social.Provider, contracts.SecretString, bool) {
-	body, ok := h.readCompatBody(w, r, opSocialLogin)
+	body, ok := h.readCompatBody(w, r, opSocialLogin, h.bodyRefused(""))
 	if !ok {
 		return "", contracts.SecretString{}, false
 	}
@@ -42,8 +42,9 @@ func (h compatHandlers) readSocialLogin(w http.ResponseWriter, r *http.Request) 
 		token, _ = errs.RequiredString(object, "provider_access_token", 0, 0)
 	}
 	if len(errs) > 0 {
-		h.rec.record(r.Context(), opSocialLogin, "denied", reasonMalformed, nil)
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		h.refuseBody(w, r, opSocialLogin, h.bodyRefused(string(provider)), func() {
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		})
 		return "", contracts.SecretString{}, false
 	}
 	return provider, contracts.NewSecretString(token), true
@@ -53,8 +54,9 @@ func (h compatHandlers) readSocialLogin(w http.ResponseWriter, r *http.Request) 
 // (internal/api/session/social.go): the social sign-in domain signs in the
 // owner of the provider token, and the answer is go-api's
 // SocialLoginResponse or its refusal. A refusal (4xx) writes its
-// auth.login.failed row through the sign-in refusal path before it answers;
-// an operational failure (5xx) is no sign-in decision and writes none.
+// auth.login.failed row through the sign-in refusal path before it answers,
+// naming the principal when the social domain knows it; an operational
+// failure (5xx) is no sign-in decision and writes none.
 func (h compatHandlers) compatSocialLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	provider, token, ok := h.readSocialLogin(w, r)
@@ -65,7 +67,7 @@ func (h compatHandlers) compatSocialLogin(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		status, reason := social.Classify(err)
 		if status < http.StatusInternalServerError {
-			if auditErr := h.auditSignInFailed(ctx, uuid.Nil, nil, string(reason), string(provider)); auditErr != nil {
+			if auditErr := h.auditSignInFailed(ctx, result.PrincipalID, nil, string(reason), string(provider)); auditErr != nil {
 				h.fail(w, r, opSocialLogin, auditErr)
 				return
 			}

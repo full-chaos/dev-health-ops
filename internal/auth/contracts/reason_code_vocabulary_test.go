@@ -229,6 +229,10 @@ var approvedAuditReasonCodes = []string{
 	"email_collision",
 	"signup_unavailable",
 	"identity_conflict",
+	"provider_already_linked",
+	"expired",
+	"principal_not_found",
+	"malformed",
 }
 
 func TestTheVocabularyFileIsExactlyTheApprovedLists(t *testing.T) {

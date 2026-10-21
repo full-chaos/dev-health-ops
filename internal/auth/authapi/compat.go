@@ -119,10 +119,12 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 			return nil, err
 		}
 		h.login = login
-		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin)})
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin),
+			ErrorWriter: h.signInTransportRefusal(providerLocal)})
 	}
 	if deps.Social != nil {
-		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin)})
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin),
+			ErrorWriter: h.signInTransportRefusal("")})
 	}
 	return routes, nil
 }
@@ -144,16 +146,41 @@ const (
 	textLogoutDone     = "Logout successful"
 )
 
+// signInAudit writes a refused sign-in's audit row (auditSignInFailed for one
+// provider); nil for a route that is no sign-in.
+type signInAudit func(ctx context.Context) error
+
+// refuseBody answers a refused body: a sign-in route audits it first and
+// answers go-api's 500 when it cannot.
+func (h compatHandlers) refuseBody(w http.ResponseWriter, r *http.Request, operation string, audited signInAudit, write func()) {
+	if audited != nil {
+		if err := audited(r.Context()); err != nil {
+			h.fail(w, r, operation, err)
+			return
+		}
+	}
+	h.rec.record(r.Context(), operation, "denied", reasonMalformed, nil)
+	write()
+}
+
+// bodyRefused is the signInAudit of a refused sign-in body.
+func (h compatHandlers) bodyRefused(provider string) signInAudit {
+	return func(ctx context.Context) error {
+		return h.auditSignInFailed(ctx, uuid.Nil, nil, reasonMalformed, provider)
+	}
+}
+
 // readCompatBody is go-api's policy.BodyFirst: a body that does not decode is
 // its 422, bytes that are not UTF-8 its 400, an over-long body its 413. It
 // returns false when it answered.
-func (h compatHandlers) readCompatBody(w http.ResponseWriter, r *http.Request, operation string) (pybody.Body, bool) {
+func (h compatHandlers) readCompatBody(w http.ResponseWriter, r *http.Request, operation string, audited signInAudit) (pybody.Body, bool) {
 	body, outcome, failure, err := pybody.Read(r)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			h.rec.record(r.Context(), operation, "denied", reasonMalformed, nil)
-			policy.WriteDetail(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large", nil)
+			h.refuseBody(w, r, operation, audited, func() {
+				policy.WriteDetail(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large", nil)
+			})
 			return pybody.Body{}, false
 		}
 		h.fail(w, r, operation, err)
@@ -161,21 +188,42 @@ func (h compatHandlers) readCompatBody(w http.ResponseWriter, r *http.Request, o
 	}
 	switch outcome {
 	case pybody.DecodeFailed:
-		h.rec.record(r.Context(), operation, "denied", reasonMalformed, nil)
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}), nil)
+		h.refuseBody(w, r, operation, audited, func() {
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}), nil)
+		})
 		return pybody.Body{}, false
 	case pybody.ParseFailed:
-		h.rec.record(r.Context(), operation, "denied", reasonMalformed, nil)
-		policy.WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)
+		h.refuseBody(w, r, operation, audited, func() {
+			policy.WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)
+		})
 		return pybody.Body{}, false
 	}
 	return body, true
 }
 
+// signInTransportRefusal is the transport ErrorWriter of a sign-in route: a
+// body over the limit or one that could not be read is a refused sign-in and
+// is audited first (go-api's 500 envelope when it cannot be). The rate
+// limit's and the in-flight cap's 429 are not audited: one audit insert per
+// refused request would defeat the bucket that guards the store.
+func (h compatHandlers) signInTransportRefusal(provider string) httpapi.ErrorWriter {
+	return func(w http.ResponseWriter, r *http.Request, code httpapi.Code) {
+		switch code {
+		case httpapi.CodePayloadTooLarge, httpapi.CodeInvalidRequest:
+			if err := h.auditSignInFailed(r.Context(), uuid.Nil, nil, reasonMalformed, provider); err != nil {
+				h.rec.record(r.Context(), "transport", "error", reasonStoreUnavailable, err)
+				httpapi.WriteError(w, r, httpapi.CodeInternal)
+				return
+			}
+		}
+		httpapi.WriteError(w, r, code)
+	}
+}
+
 // readRefreshToken is go-api's TokenRefreshRequest and LogoutRequest: one
 // required string member, refresh_token.
 func (h compatHandlers) readRefreshToken(w http.ResponseWriter, r *http.Request, operation string) (string, bool) {
-	body, ok := h.readCompatBody(w, r, operation)
+	body, ok := h.readCompatBody(w, r, operation, nil)
 	if !ok {
 		return "", false
 	}

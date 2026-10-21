@@ -485,6 +485,9 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 // route's own panic recovery closest to the handler so the log line names the
 // real pattern.
 func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) http.Handler {
+	if route.ErrorWriter != nil {
+		write = route.ErrorWriter
+	}
 	perSecond := route.RateLimitPerSecond
 	if perSecond <= 0 {
 		perSecond = options.RateLimit

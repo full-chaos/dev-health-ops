@@ -661,8 +661,11 @@ func TestCompatLoginValidatesTheBodyAsGoAPIDoes(t *testing.T) {
 		f := newCompatFixture(t)
 		response := f.do(http.MethodPost, PatternCompatLogin, body, nil)
 		expectGolden(t, response, response.Body.Bytes(), golden)
-		if len(f.appended) != 0 || f.attempts.failures != 0 {
+		if f.attempts.failures != 0 {
 			t.Fatalf("%s: a refused body reached the credential check", golden)
+		}
+		if len(f.appended) != 1 || f.appended[0].Attributes["reason_code"] != "malformed" {
+			t.Fatalf("%s: audit rows %+v, want one malformed refusal", golden, f.appended)
 		}
 	}
 }
@@ -731,8 +734,8 @@ func TestCompatSocialLoginValidatesTheBodyAsGoAPIDoes(t *testing.T) {
 		f, fake := newSocialFixture(t)
 		response := f.do(http.MethodPost, PatternCompatSocialLogin, body, nil)
 		expectGolden(t, response, response.Body.Bytes(), golden)
-		if fake.calls != 0 || len(f.appended) != 0 {
-			t.Fatalf("%s: a refused body reached the exchange (%d) or the audit (%d)", golden, fake.calls, len(f.appended))
+		if fake.calls != 0 || len(f.appended) != 1 || f.appended[0].Attributes["reason_code"] != "malformed" {
+			t.Fatalf("%s: a refused body reached the exchange (%d) or wrote audit rows %+v, want one malformed refusal", golden, fake.calls, f.appended)
 		}
 	}
 	f, _ := newSocialFixture(t)

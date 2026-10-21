@@ -70,14 +70,14 @@ func TestTheHarnessListCallGuardPlantedDefectsAreCaught(t *testing.T) {
 	}
 }
 
-// The stand-in's go list cache keys on the directory, the go environment and the arguments, serves a repeated call without the real
+// The stand-in's go list cache keys on the directory, the whole environment and the arguments, serves a repeated call without the real
 // go, caches only in the real tree and only a call that succeeded.
 func TestTheStandInGoListCacheKeysOnDirectoryEnvironmentAndArguments(t *testing.T) {
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls")
 	fakeGo := filepath.Join(dir, "realgo")
 	// the real go stands in as a script that prints what it was given and counts its calls; FAIL_LIST makes it fail
-	script := "#!/usr/bin/env bash\nprintf x >> " + calls + "\nprintf '%s|%s|%s|%s\\n' \"$PWD\" \"${GOFLAGS:-}\" \"${GOWORK:-}\" \"$*\"\n" +
+	script := "#!/usr/bin/env bash\nprintf x >> " + calls + "\nprintf '%s|%s|%s\\n' \"$PWD\" \"$*\" \"$(env | grep -v '^_=' | LC_ALL=C sort | sha256sum)\"\n" +
 		"[ -z \"${FAIL_LIST:-}\" ] || exit 3\n"
 	if err := os.WriteFile(fakeGo, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -126,6 +126,8 @@ func TestTheStandInGoListCacheKeysOnDirectoryEnvironmentAndArguments(t *testing.
 		{"another directory of the tree", filepath.Join(root, "sub"), nil, []string{"-m"}},
 		{"other GOFLAGS", root, []string{"GOFLAGS=-tags=integration"}, []string{"-m"}},
 		{"other GOWORK", root, []string{"GOWORK=on"}, []string{"-m"}},
+		{"other GO111MODULE", root, []string{"GO111MODULE=off"}, []string{"-m"}},
+		{"another variable of the environment", root, []string{"GOTOOLCHAIN=local"}, []string{"-m"}},
 	} {
 		before := count()
 		out, _ := list(c.cwd, c.env, c.args...)
@@ -146,5 +148,48 @@ func TestTheStandInGoListCacheKeysOnDirectoryEnvironmentAndArguments(t *testing.
 	}
 	if _, code := list(root, nil, "-e", "./failing"); code != 0 || count() != before+2 {
 		t.Errorf("a failing call was cached (exit %d, %d real call(s))", code, count()-before)
+	}
+}
+
+// With the real go: the same go list in the same directory, under a GO111MODULE and then a GOFLAGS that make real go fail, is not
+// served from the cache; it fails as real go does.
+func TestTheStandInGoListCacheMissesWhenTheGoEnvironmentFlips(t *testing.T) {
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	standIn := filepath.Join(dir, "go")
+	if err := os.WriteFile(standIn, []byte(fmt.Sprintf(standInGo, realGo)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := repoRoot(t)
+	run := func(bin string, env ...string) (string, int) {
+		t.Helper()
+		cmd := exec.Command(bin, "list", "-m")
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), append([]string{"FAKE_GO_LIST_CACHE=" + dir, "FAKE_GO_LIST_CACHE_ROOT=" + root, "PWD=" + root,
+			"GOWORK=off", "GOFLAGS=-mod=readonly", "GO111MODULE=on"}, env...)...)
+		out, err := cmd.Output()
+		code := 0
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code = exitErr.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return string(out), code
+	}
+	if out, code := run(standIn); code != 0 || out == "" {
+		t.Fatalf("go list -m through the stand-in: exit %d, %q", code, out)
+	}
+	for _, flip := range []string{"GO111MODULE=off", "GOFLAGS=-mod=bogus"} {
+		wantOut, wantCode := run(realGo, flip)
+		gotOut, gotCode := run(standIn, flip)
+		if wantCode == 0 {
+			t.Fatalf("%s: real go list -m succeeded; the flip must make it fail", flip)
+		}
+		if gotCode != wantCode || gotOut != wantOut {
+			t.Errorf("%s: the stand-in gave exit %d %q, real go exit %d %q (a stale cache entry)", flip, gotCode, gotOut, wantCode, wantOut)
+		}
 	}
 }

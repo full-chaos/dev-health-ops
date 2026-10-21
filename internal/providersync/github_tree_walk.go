@@ -128,9 +128,22 @@ func gitHubWalkTreeLimited(
 // noteNearCeiling says, once per walk and ceiling, that a walk reached half of
 // that ceiling (inclusive): a WARN and a counter, both labelled by the ceiling's
 // closed name only. A repository growing toward a ceiling shows here long
-// before a walk is stopped.
+// before a walk is stopped. Counts (directories, entries, depth) are compared as
+// integers; time is compared as a duration at full precision (noteNearTime): a
+// whole-second compare misses the threshold of a deadline-derived ceiling.
 func (walker *gitHubTreeWalker) noteNearCeiling(limit string, value, ceiling int) {
-	// value >= ceil(ceiling/2), written without a product that can overflow.
+	walker.noteNear(limit, int64(value), int64(ceiling), value, ceiling)
+}
+
+func (walker *gitHubTreeWalker) noteNearTime(elapsed, ceiling time.Duration) {
+	walker.noteNear(GitHubTreeWalkLimitTime, int64(elapsed), int64(ceiling),
+		int(elapsed.Milliseconds()), int(ceiling.Milliseconds()))
+}
+
+// noteNear compares value >= ceil(ceiling/2) in int64 (no product that can
+// overflow; ceiling <= 0 never fires) and logs the values it was given in
+// shown units (counts, or milliseconds for time).
+func (walker *gitHubTreeWalker) noteNear(limit string, value, ceiling int64, shownValue, shownCeiling int) {
 	if ceiling <= 0 || value < ceiling-ceiling/2 || walker.nearWarn[limit] {
 		return
 	}
@@ -138,7 +151,7 @@ func (walker *gitHubTreeWalker) noteNearCeiling(limit string, value, ceiling int
 	walker.metrics.RecordTreeWalkNearCeiling(limit)
 	slog.Warn(
 		"github tree walk passed half of a ceiling",
-		"limit", limit, "value", value, "ceiling", ceiling,
+		"limit", limit, "value", shownValue, "ceiling", shownCeiling,
 		"dirs", walker.stats.dirs, "depth", walker.stats.depth, "entries", walker.stats.entries,
 	)
 }
@@ -153,7 +166,7 @@ func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha,
 	// very value it first observes (elapsed past the budget at the next
 	// directory, depth past the ceiling) still says it passed half.
 	walker.noteNearCeiling(GitHubTreeWalkLimitDepth, depth, walker.limits.maxDepth)
-	walker.noteNearCeiling(GitHubTreeWalkLimitTime, int(now.Sub(walker.startedAt)/time.Second), int(walker.timeCeiling/time.Second))
+	walker.noteNearTime(now.Sub(walker.startedAt), walker.timeCeiling)
 	if depth > walker.limits.maxDepth {
 		return walker.stop(GitHubTreeWalkLimitDepth, walker.limits.maxDepth)
 	}

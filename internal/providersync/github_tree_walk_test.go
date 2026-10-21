@@ -534,7 +534,7 @@ func TestGitHubTreeWalkHalfComparisonIsOverflowSafeAndExactForOddCeilings(t *tes
 // is the half-way point, and a walk stopped by the deadline margin has said so.
 func TestGitHubTreeWalkWarnsAboutHalfTheTimeBeforeADeadlineMarginStop(t *testing.T) {
 	logs := captureWalkLog(t)
-	start := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	start := time.Now()
 	// deadline = start + 5 min; margin 2 min: the walk may use 3 min; half = 90 s.
 	// The budget alone (12 min, half 6 min) would never have said anything.
 	deadline := start.Add(5 * time.Minute)
@@ -560,5 +560,67 @@ func TestGitHubTreeWalkWarnsAboutHalfTheTimeBeforeADeadlineMarginStop(t *testing
 	}
 	if got := nearCeilingCounter(t, metrics, GitHubTreeWalkLimitTime); got != 1 {
 		t.Fatalf("time counter=%d want 1", got)
+	}
+}
+
+// The time half-way compare is at full precision. A deadline-derived ceiling is
+// fractional (usable = deadline - start - margin), and a whole-second compare
+// missed the threshold, fired early, or never fired before a deadline stop
+// (r3 repro). Also one nanosecond either side of half, for even and odd ceilings.
+func TestGitHubTreeWalkTimeHalfCompareKeepsFullPrecision(t *testing.T) {
+	margin := defaultGitHubTreeWalkLimits().deadlineMargin
+	cases := []struct {
+		name    string
+		budget  time.Duration // custom budget (0 = default 12 min)
+		usable  time.Duration // deadline - start - margin (0 = no deadline)
+		elapsed time.Duration
+		want    bool
+	}{
+		{"usable 11m59.8s elapsed 5m59.9s (exactly half)", 0, 11*time.Minute + 59*time.Second + 800*time.Millisecond, 5*time.Minute + 59*time.Second + 900*time.Millisecond, true},
+		{"usable 11m58.8s elapsed 5m59.1s (below half 5m59.4s)", 0, 11*time.Minute + 58*time.Second + 800*time.Millisecond, 5*time.Minute + 59*time.Second + 100*time.Millisecond, false},
+		{"usable 800ms elapsed 800ms (a stop before whole seconds)", 0, 800 * time.Millisecond, 800 * time.Millisecond, true},
+		{"usable 800ms elapsed 399ms", 0, 800 * time.Millisecond, 399 * time.Millisecond, false},
+		{"budget 12m, half minus 1ns", 0, 0, 6*time.Minute - 1, false},
+		{"budget 12m, half", 0, 0, 6 * time.Minute, true},
+		{"budget 12m, half plus 1ns", 0, 0, 6*time.Minute + 1, true},
+		{"odd budget 12m+1ns, 6m", 12*time.Minute + 1, 0, 6 * time.Minute, false},
+		{"odd budget 12m+1ns, 6m+1ns", 12*time.Minute + 1, 0, 6*time.Minute + 1, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			logs := captureWalkLog(t)
+			start := time.Now()
+			ctx := context.Background()
+			if c.usable > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, start.Add(c.usable+margin))
+				defer cancel()
+			}
+			offsets := []time.Duration{0, 0, c.elapsed}
+			calls := 0
+			limits := defaultGitHubTreeWalkLimits()
+			if c.budget > 0 {
+				limits.budget = c.budget
+			}
+			limits.now = func() time.Time {
+				offset := offsets[min(calls, len(offsets)-1)]
+				calls++
+				return start.Add(offset)
+			}
+			client := walkWide(2).client(t)
+			metrics := providerfoundation.NewMetrics()
+			client.Metrics = metrics
+			_, _, _, _ = gitHubWalkTreeLimited(ctx, client, "/repos/acme/api", "root", "", limits)
+			want := 0
+			if c.want {
+				want = 1
+			}
+			if got := nearCeilingWarns(logs, GitHubTreeWalkLimitTime); got != want {
+				t.Fatalf("WARN lines=%d want %d: %s", got, want, logs.String())
+			}
+			if got := nearCeilingCounter(t, metrics, GitHubTreeWalkLimitTime); got != want {
+				t.Fatalf("counter=%d want %d", got, want)
+			}
+		})
 	}
 }

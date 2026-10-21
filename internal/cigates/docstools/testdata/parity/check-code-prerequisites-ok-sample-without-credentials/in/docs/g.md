@@ -1,0 +1,3 @@
+```bash
+dev-hops --help
+```

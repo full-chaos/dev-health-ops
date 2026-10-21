@@ -362,3 +362,24 @@ func TestARotationDuringSignDiscardsTheSignature(t *testing.T) {
 		})
 	}
 }
+
+// TestFileCustodySignsOnlyFromASetWithOneActiveKey: a manifest with two
+// active keys signs with neither, read before or after the signature.
+func TestFileCustodySignsOnlyFromASetWithOneActiveKey(t *testing.T) {
+	dir := t.TempDir()
+	writeKeyFile(t, dir, "a.pem")
+	writeKeyFile(t, dir, "b.pem")
+	ctx := context.Background()
+	custody := NewFileCustody(writeManifest(t, dir, entries("a", "active", "b", "active")))
+	for _, kid := range []string{"a", "b"} {
+		if signature, err := custody.Sign(ctx, kid, []byte("m")); err == nil {
+			t.Fatalf("%s signed (%x) from a set with two active keys", kid, signature)
+		}
+	}
+	writeManifest(t, dir, entries("a", "active", "b", "pending"))
+	afterSign = func() { writeManifest(t, dir, entries("a", "active", "b", "active")) }
+	t.Cleanup(func() { afterSign = nil })
+	if signature, err := custody.Sign(ctx, "a", []byte("m")); err == nil {
+		t.Fatalf("a's signature (%x) was returned after the set gained a second active key", signature)
+	}
+}

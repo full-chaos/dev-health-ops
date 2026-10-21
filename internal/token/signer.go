@@ -67,6 +67,9 @@ func (s *Signer) Sign(ctx context.Context, typ string, payload []byte) (string, 
 		if err != nil {
 			return "", "", err
 		}
+		if afterSnapshot != nil {
+			afterSnapshot()
+		}
 		kid := set.Active().KeyID
 		encodedHeader, err := json.Marshal(header{Algorithm: keystore.Algorithm, KeyID: kid, Type: typ})
 		if err != nil {
@@ -94,6 +97,9 @@ func (s *Signer) Check(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if afterSnapshot != nil {
+			afterSnapshot()
+		}
 		active := set.Active()
 		signature, err := s.custody.Sign(ctx, active.KeyID, probeMessage)
 		if err == nil {
@@ -109,6 +115,10 @@ func (s *Signer) Check(ctx context.Context) error {
 	}
 	return lastErr
 }
+
+// afterSnapshot is a test hook run after the key set is read and before
+// custody signs.
+var afterSnapshot func()
 
 // rotatedAway reports a sign refused because the kid stopped being active
 // between reading the set and signing.

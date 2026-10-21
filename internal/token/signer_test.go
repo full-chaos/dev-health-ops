@@ -333,3 +333,23 @@ func TestSignerRetriesWhenARotationLandsMidSign(t *testing.T) {
 		t.Fatalf("Check under persistent refusal: %v after %d calls", err, checkAlways.calls)
 	}
 }
+
+// TestSignAndCheckRefuseASetThatTurnsInvalidAfterTheSnapshot: the manifest
+// gains a second active key between the signer's read of the set and the
+// signature; Sign and Check fail closed instead of signing.
+func TestSignAndCheckRefuseASetThatTurnsInvalidAfterTheSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	writeKey(t, dir, "a")
+	writeKey(t, dir, "b")
+	signer := NewFileSigner(FileConfig{KeySetPath: writeSet(t, dir, "a", "active", "b", "pending")})
+	afterSnapshot = func() { writeSet(t, dir, "a", "active", "b", "active") }
+	t.Cleanup(func() { afterSnapshot = nil })
+	ctx := context.Background()
+	if compact, _, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err == nil {
+		t.Fatalf("Sign returned a token (%d bytes) while the current set has two active keys", len(compact))
+	}
+	writeSet(t, dir, "a", "active", "b", "pending")
+	if err := signer.Check(ctx); err == nil {
+		t.Fatal("Check passed while the current set has two active keys")
+	}
+}

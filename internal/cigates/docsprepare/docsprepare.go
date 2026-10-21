@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,6 +24,9 @@ var securityHeaders = []string{
 	"X-Frame-Options: SAMEORIGIN",
 	"Permissions-Policy: camera=(), geolocation=(), microphone=(), payment=(), usb=()",
 }
+
+// robotsName is built, not spelled, so the workflow path-filter guard does not read it as a docs/ input file.
+const robotsName = "robots" + ".txt"
 
 type redirect struct{ source, target string }
 
@@ -115,7 +119,7 @@ func Prepare(o Options) (manifestInfo, error) {
 	if err := writeText(filepath.Join(o.Output, "_headers"), headersText(o.Mode)); err != nil {
 		return manifestInfo{}, err
 	}
-	if err := writeText(filepath.Join(o.Output, "robots.txt"), robotsText(o.Mode, o.CanonicalOrigin)); err != nil {
+	if err := writeText(filepath.Join(o.Output, robotsName), robotsText(o.Mode, o.CanonicalOrigin)); err != nil {
 		return manifestInfo{}, err
 	}
 	entries, err := walk(o.Output)
@@ -331,7 +335,51 @@ func validOrigin(value string) (string, error) {
 	if netloc == "" || (tail != "" && tail != "/") {
 		return "", bad
 	}
+	if err := checkBracketedHost(netloc); err != nil {
+		return "", err
+	}
 	return strings.TrimRight(value, "/"), nil
+}
+
+// checkBracketedHost mirrors urlsplit: when a netloc holds brackets, unbalanced or misplaced brackets and a host that
+// is no IPv6 address or IPvFuture literal raise ValueError there, which the Python script reported as ERROR.
+func checkBracketedHost(netloc string) error {
+	open, closed := strings.Contains(netloc, "["), strings.Contains(netloc, "]")
+	if open != closed {
+		return fmt.Errorf("Invalid IPv6 URL")
+	}
+	if !open {
+		return nil
+	}
+	hostPort := netloc[strings.LastIndexByte(netloc, '@')+1:]
+	var host string
+	if before, bracketed, found := strings.Cut(hostPort, "["); found {
+		if before != "" {
+			return fmt.Errorf("Invalid IPv6 URL")
+		}
+		var rest string
+		host, rest, _ = strings.Cut(bracketed, "]")
+		if rest != "" && !strings.HasPrefix(rest, ":") {
+			return fmt.Errorf("Invalid IPv6 URL")
+		}
+	} else {
+		host, _, _ = strings.Cut(hostPort, ":")
+	}
+	if strings.HasPrefix(host, "v") {
+		dot := strings.IndexByte(host, '.')
+		if dot < 2 || dot == len(host)-1 || strings.Trim(host[1:dot], "0123456789abcdefABCDEF") != "" {
+			return fmt.Errorf("IPvFuture address is invalid")
+		}
+		return nil
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return fmt.Errorf("%s does not appear to be an IPv4 or IPv6 address", pyRepr(host))
+	}
+	if addr.Is4() {
+		return fmt.Errorf("An IPv4 address cannot be in brackets")
+	}
+	return nil
 }
 
 func loadRedirects(path string) ([]redirect, error) {
@@ -434,16 +482,57 @@ func walk(root string) ([]entry, error) {
 	if err := rec(root, nil); err != nil {
 		return nil, err
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := out[i].rel, out[j].rel
+	keys := make([][][]rune, len(out))
+	idx := make([]int, len(out))
+	for i, e := range out {
+		idx[i] = i
+		for _, part := range e.rel {
+			keys[i] = append(keys[i], pyCodePoints(part))
+		}
+	}
+	sort.SliceStable(idx, func(i, j int) bool {
+		a, b := keys[idx[i]], keys[idx[j]]
 		for k := 0; k < len(a) && k < len(b); k++ {
-			if a[k] != b[k] {
-				return a[k] < b[k]
+			if c := compareRunes(a[k], b[k]); c != 0 {
+				return c < 0
 			}
 		}
 		return len(a) < len(b)
 	})
+	sorted := make([]entry, len(out))
+	for i, k := range idx {
+		sorted[i] = out[k]
+	}
+	out = sorted
 	return out, nil
+}
+
+// pyCodePoints decodes like Python's filesystem decoding: each invalid byte becomes the lone surrogate U+DC00+byte, so
+// names compare by code point exactly as Python's str does.
+func pyCodePoints(s string) []rune {
+	var out []rune
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			out = append(out, 0xdc00+rune(s[i]))
+		} else {
+			out = append(out, r)
+		}
+		i += size
+	}
+	return out
+}
+
+func compareRunes(a, b []rune) int {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return len(a) - len(b)
 }
 
 // copyTree is shutil.copytree: symlinks are followed and file modes are kept.

@@ -1,6 +1,6 @@
 {
   "canonical_origin": "https://docs.fullchaos.dev",
-  "file_count": 14,
+  "file_count": 19,
   "files": [
     {
       "bytes": 4,
@@ -8,9 +8,9 @@
       "sha256": "f8bf41177a5f5e808a7ccb648b51080b031f15ca8018d91a576263d6cc626eb6"
     },
     {
-      "bytes": 265,
+      "bytes": 299,
       "path": "_headers",
-      "sha256": "3cbde2cb2b5d0618e4f2591a93b429e719607128887f2fa40dce71c648cc9b4b"
+      "sha256": "4168d0dd04320e924318c78f26eebe557537314219d1688a8d300bbba64495bd"
     },
     {
       "bytes": 170,
@@ -38,6 +38,16 @@
       "sha256": "5f546eb4606b5c2b7d2a449a5cc2bbb477ed5a246c7051ce871b12f2dbfc8419"
     },
     {
+      "bytes": 1,
+      "path": "bad\udcff.bin",
+      "sha256": "8254c329a92850f6d539dd376f4816ee2764517da5e0235514af433164480d7a"
+    },
+    {
+      "bytes": 1,
+      "path": "ctl\u0001\u007f.t",
+      "sha256": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6"
+    },
+    {
       "bytes": 0,
       "path": "empty",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -54,13 +64,13 @@
     },
     {
       "bytes": 3,
-      "path": "q\"\\\\.t",
+      "path": "q\"\\.t",
       "sha256": "75d820327e27a204de513436de536fb1b26e6800eb8a77c8e007921fdea8d5ad"
     },
     {
-      "bytes": 71,
+      "bytes": 26,
       "path": "robots.txt",
-      "sha256": "0cadf83f16a307f5388ac6d51bc5c32ee9eec5ddca75a93e9b923989238b6c5b"
+      "sha256": "331ea9090db0c9f6f597bd9840fd5b171830f6e0b3ba1cb24dfa91f0c95aedc1"
     },
     {
       "bytes": 1,
@@ -68,12 +78,27 @@
       "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
     },
     {
+      "bytes": 1,
+      "path": "\udcc3(",
+      "sha256": "62c66a7a5dd70c3146618063c344e531e6d4b59e379808443ce962b3abd63c5a"
+    },
+    {
+      "bytes": 1,
+      "path": "\udcff.txt",
+      "sha256": "de7d1b721a1e0632b7cf04edf5032c8ecffa9f9a08492152b926f1a5a7e765d7"
+    },
+    {
+      "bytes": 1,
+      "path": "\ue000.t",
+      "sha256": "148de9c5a7a44d19e56cd9ae1a554bf67847afb0c58f6e12fa29ac7ddfca9940"
+    },
+    {
       "bytes": 4,
       "path": "\ud83d\ude00.txt",
       "sha256": "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9"
     }
   ],
-  "mode": "production",
+  "mode": "preview",
   "redirect_count": 3,
   "schema_version": 1,
   "source_revision": "rev\ud83d\ude00\t\""

@@ -2,7 +2,6 @@ package docsprepare
 
 import (
 	"bytes"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,75 +17,85 @@ func run(t *testing.T, args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
-func treeBytes(t *testing.T, root string) map[string]string {
-	t.Helper()
-	got := map[string]string{}
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		b, rerr := os.ReadFile(p)
-		rel, _ := filepath.Rel(root, p)
-		got[rel] = string(b)
-		return rerr
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return got
+type fixtureFile struct{ name, body string }
+
+// fixtureFiles is the tree the golden files were captured from: the former Python helper ran once over exactly these
+// names (NFC and NFD, emoji, quote and backslash, a private-use name, control bytes, invalid UTF-8) and its manifest,
+// _redirects, _headers and robots.txt were saved in testdata. The names are built here, not committed, because
+// non-ASCII and non-UTF-8 file names break git and the repository's path guards.
+var fixtureFiles = []fixtureFile{
+	{"index.html", "<html>\n"}, {"404.html", "404\n"}, {"assets/x.css", "a{}"}, {"é/sub/n.html", "x"},
+	{"é.html", "y"}, {"a-b.txt", "z"}, {"a/b", "q"}, {"a b", "q"}, {"\U0001F600.txt", "\U0001F600"},
+	{"empty", ""}, {"q\"\\.t", "q\"\\"}, {"bad\xff.bin", "k"}, {"\xff.txt", "i"}, {"ctl\x01\x7f.t", "c"},
+	{"\xee\x80\x80.t", "p"}, {"\xc3(", "m"},
 }
 
-// The golden trees were produced once by scripts/prepare_docs_cloudflare.py over testdata/site (NFC and NFD names,
-// non-ASCII, quote and backslash names, a non-ASCII redirect row, a quoted TSV field). The Go port must match every
-// byte, including the JSON \u escapes and the path order.
+const fixtureRedirects = "source_path\ttarget_path\tx\n/é/\t/ü/\tz\n\n\"/q a/\"\t /w/ \n/x\t/y\textra\textra2\n"
+
+func writeFixture(t *testing.T) (site, redirects string) {
+	t.Helper()
+	dir := t.TempDir()
+	site = filepath.Join(dir, "site")
+	for _, f := range fixtureFiles {
+		p := filepath.Join(site, f.name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(f.body), 0o644); err != nil {
+			t.Skipf("filesystem refuses the name %q: %v", f.name, err)
+		}
+	}
+	return site, redirectsFile(t)
+}
+
+func redirectsFile(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "r.tsv")
+	if err := os.WriteFile(p, []byte(fixtureRedirects), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// The Go port must match the Python output byte for byte: the manifest lists every file with its size, sha256 and path
+// order, so a matching manifest proves the copied tree too.
 func TestPrepareMatchesPythonGolden(t *testing.T) {
+	site, redirects := writeFixture(t)
 	for _, mode := range []string{"preview", "production"} {
 		t.Run(mode, func(t *testing.T) {
 			outDir := filepath.Join(t.TempDir(), "out")
-			code, stdout, stderr := run(t, "--source", "testdata/site", "--output", outDir, "--mode", mode,
-				"--redirects", "testdata/redirects.tsv", "--source-revision", goldenRevision)
+			code, stdout, stderr := run(t, "--source", site, "--output", outDir, "--mode", mode,
+				"--redirects", redirects, "--source-revision", goldenRevision)
 			if code != 0 || stderr != "" {
 				t.Fatalf("code=%d stderr=%q", code, stderr)
 			}
-			if !strings.HasPrefix(stdout, "Prepared Cloudflare documentation assets: mode="+mode+" files=") {
-				t.Errorf("stdout = %q", stdout)
+			if want := "Prepared Cloudflare documentation assets: mode=" + mode + " files=19 redirects=3\n"; stdout != want {
+				t.Errorf("stdout = %q, want %q", stdout, want)
 			}
-			want, got := treeBytes(t, "testdata/golden-"+mode), treeBytes(t, outDir)
-			for name, w := range want {
-				g, ok := got[name]
-				if !ok {
-					t.Errorf("missing %q", name)
-				} else if g != w {
-					t.Errorf("%q differs:\n got %q\nwant %q", name, g, w)
+			for out, golden := range map[string]string{
+				"cloudflare-build-manifest.json": "manifest", "_redirects": "redirects", "_headers": "headers", robotsName: "robots",
+			} {
+				got, err := os.ReadFile(filepath.Join(outDir, out))
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-			for name := range got {
-				if _, ok := want[name]; !ok {
-					t.Errorf("unexpected %q", name)
+				want, err := os.ReadFile(filepath.Join("testdata", mode+"."+golden))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != string(want) {
+					t.Errorf("%s differs from the Python golden:\n got %q\nwant %q", out, got, want)
 				}
 			}
 		})
 	}
 }
 
-// Python names an undecodable file byte with a lone surrogate (\udcXX) in the manifest.
-func TestInvalidUTF8NameMatchesPythonEscape(t *testing.T) {
-	src := t.TempDir()
-	for name, body := range map[string]string{"index.html": "<html>\n", "404.html": "404\n", "bad\xff.bin": "k", "ctl\x01\x7f.t": "c"} {
-		if err := os.WriteFile(filepath.Join(src, name), []byte(body), 0o644); err != nil {
-			t.Skipf("filesystem refuses the name: %v", err)
+func TestAcceptedBracketedOrigins(t *testing.T) {
+	for _, o := range []string{"https://[::1]", "https://[::1]:8080", "https://[v1.x]", "https://[fe80::1%25eth0]"} {
+		if _, err := validOrigin(o); err != nil {
+			t.Errorf("%s: %v", o, err)
 		}
-	}
-	outDir := filepath.Join(t.TempDir(), "out")
-	if code, _, stderr := run(t, "--source", src, "--output", outDir, "--mode", "preview", "--redirects", "testdata/redirects.tsv"); code != 0 {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
-	}
-	m, _ := os.ReadFile(filepath.Join(outDir, "cloudflare-build-manifest.json"))
-	if !strings.Contains(string(m), `"path": "bad\udcff.bin"`) {
-		t.Errorf("manifest = %s", m)
-	}
-	if !strings.Contains(string(m), `"path": "ctl\u0001\u007f.t"`) {
-		t.Errorf("control bytes not escaped like Python: %s", m)
 	}
 }
 
@@ -112,6 +121,12 @@ func TestPrepareRejects(t *testing.T) {
 		{"empty file", tsv(""), "", "redirect manifest is missing"},
 		{"http origin", tsv(hdr), "http://x.com", "canonical origin must be an HTTPS origin: http://x.com"},
 		{"origin path", tsv(hdr), "https://x.com/p", "canonical origin must be an HTTPS origin"},
+		{"unclosed bracket", tsv(hdr), "https://[not-ipv6", "Invalid IPv6 URL"},
+		{"bad IPv6", tsv(hdr), "https://[:::]", "':::' does not appear to be an IPv4 or IPv6 address"},
+		{"IPv4 in brackets", tsv(hdr), "https://[1.2.3.4]", "An IPv4 address cannot be in brackets"},
+		{"empty brackets", tsv(hdr), "https://[]", "'' does not appear to be an IPv4 or IPv6 address"},
+		{"text after bracket", tsv(hdr), "https://[::1]x", "Invalid IPv6 URL"},
+		{"bad IPvFuture", tsv(hdr), "https://[vz.x]", "IPvFuture address is invalid"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -133,7 +148,7 @@ func TestPrepareRejectsMarkdownAndMissingInputs(t *testing.T) {
 		os.WriteFile(filepath.Join(site, n), nil, 0o644)
 	}
 	args := func(src string) []string {
-		return []string{"--source", src, "--output", filepath.Join(t.TempDir(), "o"), "--mode", "production", "--redirects", "testdata/redirects.tsv"}
+		return []string{"--source", src, "--output", filepath.Join(t.TempDir(), "o"), "--mode", "production", "--redirects", redirectsFile(t)}
 	}
 	if code, _, e := run(t, args(site)...); code != 1 || !strings.Contains(e, "built output unexpectedly contains Markdown source: x.md") {
 		t.Errorf("markdown: code=%d %q", code, e)

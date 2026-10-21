@@ -16,6 +16,19 @@ import (
 
 const standInGo = `#!/usr/bin/env bash
 # Stand-in go: go test records "<args>" and succeeds (or fails when FAKE_GO_FAIL is set); every other subcommand is the real go.
+# A go list run in the real tree (FAKE_GO_LIST_CACHE_ROOT, which no test changes) is the real go's output, kept per directory,
+# arguments and go environment for the test process (FAKE_GO_LIST_CACHE): a check_go.sh run lists the packages several times.
+if [ "$1" = "list" ] && [ -n "${FAKE_GO_LIST_CACHE:-}" ]; then
+  case "${PWD}/" in "${FAKE_GO_LIST_CACHE_ROOT}"/*)
+    key="$(printf '%%s\0' "${PWD}" "${GOFLAGS:-}" "${GOWORK:-}" "${GOEXPERIMENT:-}" "${GOOS:-}" "${GOARCH:-}" "${CGO_ENABLED:-}" "$@" | sha256sum | cut -c1-64)"
+    if [ -f "${FAKE_GO_LIST_CACHE}/${key}" ]; then cat "${FAKE_GO_LIST_CACHE}/${key}"; exit 0; fi
+    tmp="$(mktemp "${FAKE_GO_LIST_CACHE}/.${key}.XXXXXX")" || exit 1
+    "%[1]s" "$@" > "${tmp}"; rc=$?
+    cat "${tmp}"
+    if [ "${rc}" -eq 0 ]; then mv -f "${tmp}" "${FAKE_GO_LIST_CACHE}/${key}"; else rm -f "${tmp}"; fi
+    exit "${rc}" ;;
+  esac
+fi
 if [ "$1" != "test" ]; then exec "%[1]s" "$@"; fi
 case " $* " in *" -list "*)
   printf '%%s\n' "$*" >> "${FAKE_GO_LIST_LOG}"
@@ -42,16 +55,31 @@ exit 0
 var (
 	listReplayOnce sync.Once
 	listReplayData []byte
+	// goListCache is the stand-in's go list cache for this test process (removed when it ends).
+	goListCache string
 )
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "testshard-golist-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	goListCache = dir
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 // providersyncListUnset and providersyncListArgs are the race leg's providersync listing call: the variables it unsets (GO_ENV_OFF)
 // and its go arguments.
 var (
-	providersyncListUnset = []string{}
-	providersyncListArgs  = []string{"test", "-mod=readonly", "-race", "-list", ".*", "./internal/providersync"}
+	providersyncListUnset = []string{"GO_PROVIDER_ROUTES", "DEV_HEALTH_ENV", "GOFLAGS", "GOEXPERIMENT"}
+	providersyncListArgs  = []string{"test", "-mod=readonly", "-trimpath", "-race", "-list", ".*", "./internal/providersync"}
 )
 
-// providersyncRaceListing returns the REAL `go test -race -list .* ./internal/providersync` output, produced once per process.
+// providersyncRaceListing returns the REAL `go test -race -list .* ./internal/providersync` output, produced once per process. It is
+// the race leg's own call, so it reuses the build the leg made of the race test binary instead of compiling it again.
 func providersyncRaceListing(t *testing.T) []byte {
 	t.Helper()
 	listReplayOnce.Do(func() {
@@ -110,7 +138,7 @@ func runCheckGoIn(t *testing.T, root string, extraEnv []string, fail bool, args 
 	env := append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GO_LOG="+log, "FAKE_GO_LIST_LOG="+listLog, "TMPDIR="+filepath.Join(dir, "tmp"),
-		"FAKE_GO_LIST_REPLAY="+replay)
+		"FAKE_GO_LIST_REPLAY="+replay, "FAKE_GO_LIST_CACHE="+goListCache, "FAKE_GO_LIST_CACHE_ROOT="+repoRoot(t))
 	env = append(env, extraEnv...)
 	if fail {
 		env = append(env, "FAKE_GO_FAIL=1")

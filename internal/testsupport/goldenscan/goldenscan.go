@@ -293,10 +293,10 @@ const (
 )
 
 // matchSpans is every match of generic over text (start and end offsets). The expression is slow over a long text, and most of a golden
-// holds no credential word, so for an ASCII text it is run only over a window around each keyword (every match holds one; a window runs
-// on to the end of the run of secret characters, because the second secret form has no upper length); a text with a non-ASCII byte is
-// run whole, because the expression's case folding reaches beyond ASCII. A differential test holds this equal to the expression over
-// the whole text.
+// holds no credential word, so for an ASCII text it is run only over a window around each keyword a separator can follow (every match
+// holds one; a window runs on to the end of the run of secret characters, because the second secret form has no upper length), and in
+// a window only anchored at one start per such keyword; a text with a non-ASCII byte is run whole, because the expression's case
+// folding reaches beyond ASCII. A differential test holds this equal to the expression over the whole text.
 func matchSpans(text string) [][2]int {
 	spans, _ := matchSpansCounting(text)
 	return spans
@@ -337,6 +337,7 @@ func matchSpansCounting(text string) ([][2]int, int) {
 		return spans, starts
 	}
 	var windows [][2]int
+	var kwAt []int
 	for _, word := range keywords {
 		for from := 0; ; {
 			at := strings.Index(lowered[from:], word)
@@ -345,6 +346,10 @@ func matchSpansCounting(text string) ([][2]int, int) {
 			}
 			at += from
 			from = at + 1
+			if !separatorFollows(text, at+len(word)) {
+				continue
+			}
+			kwAt = append(kwAt, at)
 			start, end := at-windowBefore, at+len(word)+windowAfter
 			if start < 0 {
 				start = 0
@@ -375,13 +380,41 @@ func matchSpansCounting(text string) ([][2]int, int) {
 	}
 	var spans [][2]int
 	for _, window := range merged {
-		starts += window[1] - window[0]
-		for _, loc := range generic.FindAllStringIndex(text[window[0]:window[1]], -1) {
-			spans = append(spans, [2]int{window[0] + loc[0], window[0] + loc[1]})
+		// one start per keyword of the window: the far end of the run of up to 50 prefix bytes before it (the rule's lazy prefix),
+		// so the leftmost match of the window starts at one of them; past a match the next start is its end, as FindAll goes on
+		var cands []int
+		for _, q := range kwAt {
+			if q < window[0] || q >= window[1] {
+				continue
+			}
+			from := q
+			for from > window[0] && q-from < 50 && isPrefixByte(text[from-1]) {
+				from--
+			}
+			cands = append(cands, from)
+		}
+		sort.Ints(cands)
+		pos, last := window[0], -1
+		for _, c := range cands {
+			if c < pos {
+				c = pos
+			}
+			if c == last {
+				continue
+			}
+			last = c
+			starts++
+			if loc := anchored.FindStringIndex(text[c:window[1]]); loc != nil {
+				spans = append(spans, [2]int{c, c + loc[1]})
+				pos = c + loc[1]
+			}
 		}
 	}
 	return spans, starts
 }
+
+// anchored is generic held to the start of the text it is given.
+var anchored = regexp.MustCompile(`\A(?:` + generic.String() + `)`)
 
 // isSecretByte is a character of either secret form: [\w.=-] or the base64 alphabet.
 func isSecretByte(c byte) bool {
@@ -403,4 +436,44 @@ func hasSegmentRun(text string) bool {
 		run = 0
 	}
 	return false
+}
+
+// separatorFollows reports whether, from offset at (just past a keyword), the rule's gap and quote run can reach a separator: up to
+// 20 of [ \t\w.-], then up to 3 of [\s'"], then the first byte of a separator (= > : | ? ,). Every match holds a keyword so followed,
+// so a keyword without it opens no window. ASCII text only (the windowed path).
+func separatorFollows(text string, at int) bool {
+	for gap := 0; gap <= 20; gap++ {
+		i := at + gap
+		if i > len(text) {
+			return false
+		}
+		if gap > 0 && !isGapByte(text[i-1]) {
+			return false
+		}
+		for quote := 0; quote <= 3 && i+quote <= len(text); quote++ {
+			j := i + quote
+			if quote > 0 && !isQuoteByte(text[j-1]) {
+				break
+			}
+			if j < len(text) && strings.IndexByte("=>:|?,", text[j]) >= 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isGapByte is a byte of the gap after the keyword: [ \t\w.-].
+func isGapByte(c byte) bool {
+	return c == ' ' || c == '\t' || isPrefixByte(c)
+}
+
+// isQuoteByte is a byte of the quote run before the separator: [\s'"] (Go's \s: tab, newline, form feed, carriage return, space).
+func isQuoteByte(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == '\'' || c == '"'
+}
+
+// isPrefixByte is a byte of the lazy prefix before the keyword: [\w.-].
+func isPrefixByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '-'
 }

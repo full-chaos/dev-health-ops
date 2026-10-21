@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -16,7 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -60,22 +58,6 @@ func goRevisions(t *testing.T, uri, verb string) string {
 	}
 	if strings.Contains(stdout.String()+stderr.String(), "postgres://") {
 		t.Fatal("the output carries the DSN")
-	}
-	return stdout.String()
-}
-
-func pythonRevisions(t *testing.T, producer *venueoracle.Producer, uri, verb string) string {
-	t.Helper()
-	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command, err := producer.Command(context.Background(), pgmigratePythonSettings, []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}, "-c", program, "migrate", "postgres", verb)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("the Python producer failed: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
 	}
 	return stdout.String()
 }
@@ -125,27 +107,17 @@ func revisionsDatabase(t *testing.T) (uri string, admin func(string)) {
 // carried the Python CLI.
 const revisionsPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
-// revisionsPythonProgram is the entry point the producer runs: the real dev-hops CLI.
-const revisionsPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-
 // TestRevisionsMatchTheFrozenAlembicOutput runs the verbs on a real PostgreSQL and compares their text with
 // what Alembic printed for the same states. The answers were executed once on revisionsPythonBuild (the real
 // `dev-hops migrate postgres current|heads` against a database in each state) and are frozen in
 // testdata/golden/revisions.json (the recipe regenerates them by execution); the scenarios are part of the
 // golden's key.
 func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/revisions.json",
 		PythonBuild: revisionsPythonBuild,
 		SHA256:      "2a739c531a37758783463f25e1ac489375fbb3d99d5f90b38953511e9d2101ce",
-		Recipe: "git worktree add --detach $DIR " + revisionsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestRevisionsMatchTheFrozenAlembicOutput$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	scenarios := make([]map[string]string, len(revisionScenarios))
 	for index, scenario := range revisionScenarios {
@@ -155,25 +127,8 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("revisions scenarios", revisionsPythonProgram, input, pgmigratePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		uri, exec := revisionsDatabase(t)
-		exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")
-		var results []revisionResult
-		for _, scenario := range revisionScenarios {
-			if scenario.setup != "" {
-				exec(scenario.setup)
-			}
-			results = append(results, revisionResult{Name: scenario.name, Stdout: setOrdered(scenario.verb, pythonRevisions(t, producer, uri, scenario.verb))})
-			exec("DROP TABLE IF EXISTS alembic_version")
-			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
-		}
-		body, err := json.Marshal(results)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("revisions scenarios", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen []revisionResult
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {

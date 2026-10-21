@@ -4,3 +4,5 @@
 # to the module root. Sorted (LC_ALL=C), no duplicates; every row names a real package that has a row in
 # ci/go_race_weights.d (check_go.sh race-weights-rows). The file may hold no rows. A package leaves this file when its race time no longer depends
 # on its co-tenants, and its weight stays the measured one either way.
+internal/cigates/testshard	drives check_go.sh with a stand-in go: about 170 s alone, over the 10 min go test timeout when it shares a leg with heavy packages (race-3 timed out at 600 s)
+internal/testsupport/goldenscan/treegate	one CPU-bound regexp scan of the whole tree: beside the heavy packages of a heaviest-first leg it ran past the 10 min go test timeout, alone it takes a few minutes

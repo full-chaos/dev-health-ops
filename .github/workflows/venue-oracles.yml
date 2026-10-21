@@ -80,8 +80,8 @@ jobs:
     # exceeds VENUE_LEG_BUDGET_SECONDS (the cap minus setup and drift). Each
     # package's own go test is bounded at 40 minutes inside the verb; a leg logs
     # its planned and actual test seconds and warns over the budget. When the
-    # guard fails: regenerate the weights from a saved run log
-    # (ci/venue_oracle_weights.py) or add a leg here.
+    # guard fails: add a measured row (seconds from a saved run
+    # log) to ci/venue_oracle_weights.d/ or add a leg here.
     name: venue-oracles (shard ${{ matrix.shard }}/8)
     timeout-minutes: 40
     strategy:
@@ -212,14 +212,12 @@ jobs:
   # go-api running as its own container on its own stores, brought up by a private compose project
   # (ci/auth_corpus_external.sh; compose.yml's own pinned images, an exception to the test-image mirror that this
   # job alone has). Like the other venue-oracles jobs it runs on every push to main and by hand; it is
-  # informational, not a required check, and it builds the operator image from the tree. Leg acp puts auth-service behind go-api (AUTH_PROXY_*, CHAOS-10231); it may fail until its
-  # prerequisites are on main, and a failed acp leg does not fail the workflow run.
+  # informational, not a required check, and it builds the operator image from the tree. Leg acp puts auth-service behind go-api (AUTH_PROXY_*, CHAOS-10231) for
+  # each aggregate auth-service serves (ci/auth_corpus_external.sh asks the running auth-service), so both legs must pass.
   auth-corpus-external:
     name: auth-corpus-external (${{ matrix.leg }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # leg acp: auth-service C1 PR2 (10228) and the C2-C5 route mounts are not on main yet; remove this line when they land
-    continue-on-error: ${{ matrix.leg == 'acp' }}
     strategy:
       fail-fast: false
       matrix:

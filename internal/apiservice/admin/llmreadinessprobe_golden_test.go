@@ -1,37 +1,24 @@
 package admin
 
 import (
-	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // readinessProbePythonBuild is a build whose readiness.py and
 // openai_compatible.py answered the frozen scenarios.
 const readinessProbePythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
-
-// readinessOracleProgram is the Python producer: readiness.py's real
-// AgentReadinessService.certify over the real OpenAICompatibleAgentProvider
-// (see the file's own comment for why it calls certify directly).
-//
-//go:embed testdata/llmreadinessoracle/certify_oracle.py
-var readinessOracleProgram string
 
 // readinessStubSource is the text of the scripted provider both planes call.
 //
@@ -88,10 +75,9 @@ type readinessAnswer struct {
 // wire shape is not the contract's.
 //
 // The Python answers were executed on readinessProbePythonBuild against that
-// stub and are frozen in testdata/admin/llm_readiness_probe.json. The
-// producer's text, each scenario's model and the stub's text are in the
-// golden's key: a changed producer, scenario or stub cannot replay the answers
-// of another, it must be recorded again.
+// stub and are frozen in testdata/admin/llm_readiness_probe.json. Each
+// scenario.s model and the stub.s text are in the request, which the golden is
+// keyed by: a changed scenario or stub cannot replay the answers of another
 //
 // NOT pinned: the stub checks each request against the schema constants of
 // llmreadinessprobe.go. A change of those constants changes what the stub
@@ -99,16 +85,11 @@ type readinessAnswer struct {
 // answers to an older contract; the Go plane's "ready" scenarios still fail if
 // the Go request and the constants disagree.
 func TestReadinessProbeMatchesTheFrozenPythonProbe(t *testing.T) {
-	_, currentFile, _, _ := moduleroot.Caller(0)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/admin/llm_readiness_probe.json",
 		PythonBuild: readinessProbePythonBuild,
 		SHA256:      "a7ff4e0365b8a84e9c64dd9fe44d835a76b7a0854962c982c516f03dbc95b49a",
-		Recipe: "git worktree add --detach $DIR " + readinessProbePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^TestReadinessProbeMatchesTheFrozenPythonProbe$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	server := httptest.NewServer(http.HandlerFunc(scriptedReadinessStub))
 	defer server.Close()
@@ -120,38 +101,9 @@ func TestReadinessProbeMatchesTheFrozenPythonProbe(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		requests[index] = venueoracle.ProgramRequest(scenario.name, readinessOracleProgram, input, nil)
+		requests[index] = venueoracle.ProgramRequest(scenario.name, input)
 	}
-	scriptPath := filepath.Join(repoRoot, "internal", "apiservice", "admin", "testdata", "llmreadinessoracle", "certify_oracle.py")
-	answers := golden.Produce(t, root, requests, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		ctx := context.Background()
-		producer.RequireDeployed()
-		out := make([]venueoracle.Response, len(readinessScenarios))
-		for index, scenario := range readinessScenarios {
-			// The "transient" scenario is stateful (round 1 fails once, then
-			// succeeds): each plane starts it from the same fresh state.
-			if scenario.model == "scripted-transient" {
-				atomic.StoreInt32(&transientRound1Attempts, 0)
-			}
-			// The stub's address is another one in every run: it is the
-			// program's argument, never part of its answer.
-			command, err := producer.Command(ctx, nil, nil, scriptPath, server.URL, scenario.model)
-			if err != nil {
-				t.Fatal(err)
-			}
-			output, err := command.Output()
-			if err != nil {
-				var stderr []byte
-				var exitErr *exec.ExitError
-				if errors.As(err, &exitErr) {
-					stderr = exitErr.Stderr
-				}
-				t.Fatalf("%s: python producer: %v", scenario.name, pyoracle.RunError(command.Path, err, stderr))
-			}
-			out[index] = venueoracle.Response{Status: 0, Body: string(output)}
-		}
-		return out
-	})
+	answers := golden.Produce(t, requests)
 	golden.Consumed(t, answers...)
 	if len(answers) != len(readinessScenarios) {
 		t.Fatalf("python answered %d of %d scenarios", len(answers), len(readinessScenarios))

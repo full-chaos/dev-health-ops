@@ -27,7 +27,9 @@ var AuthOutcomeReasonCodes = []string{
 	"missing_sub", "missing_type", "type_mismatch", "refresh_unknown", "refresh_expired",
 	"refresh_reused", "session_revoked", "session_expired", "principal_not_found",
 	"principal_deactivated", "revision_stale", "invalid_credentials", "account_locked",
-	"email_unverified", "email_collision", "rate_limited",
+	"email_unverified", "email_collision", "signup_unavailable", "provider_already_linked",
+	"identity_conflict", "rate_limited",
+	"replayed", "nonce_mismatch", "provisioning_disabled", "domain_not_allowed", "not_entitled",
 	"store_unavailable", "dependency_unavailable",
 }
 

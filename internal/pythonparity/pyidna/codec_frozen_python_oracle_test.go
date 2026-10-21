@@ -11,25 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// The program encodes with the interpreter's own "idna" codec; "!" stands
-// where str.encode("idna") raises. The code point sweep is generated inside
-// Python, so the corpus is not a Go-side guess: every code point between two
-// letters, then every code point on its own. Its 2.2 million answers are
-// frozen as block digests, one canonical line per answer: the encoded host as
-// a text field. The corpus answers are frozen as text.
-const pythonIDNAProgram = programoracle.BlocksPython + `
-import sys
-def enc(s):
-    try:
-        return s.encode("idna").decode("ascii")
-    except UnicodeError:
-        return "!"
-payload = json.loads(sys.stdin.read())
-points = [cp for cp in range(0x110000) if not 0xD800 <= cp <= 0xDFFF]
-lines = [text(enc("a" + chr(cp) + "b")) for cp in points] + [text(enc(chr(cp))) for cp in points]
-print(json.dumps({"sweep": block_digests(lines), "corpus": [enc(s) for s in payload]}))
-`
-
 func idnaCorpus() []string {
 	corpus := []string{
 		"", "example.com", "a..b", ".a", "a.", "ａ.com", "０.０.０.０", "ＧＩＴ.com", "straße.de", "ß", "ẞ", "İ", "ǅ", "ﬃ", "㎏", "ⓐⓑ", "a\u200db", "a\u00adb",
@@ -59,7 +40,7 @@ func TestCodecEncodeMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "codec.golden.json", programoracle.Program{Name: "codec", Text: pythonIDNAProgram, Stdin: input})[0]
+	output := frozenPython(t, "codec.golden.json", programoracle.Program{Name: "codec", Stdin: input})[0]
 	var want struct {
 		Sweep  json.RawMessage `json:"sweep"`
 		Corpus []string        `json:"corpus"`

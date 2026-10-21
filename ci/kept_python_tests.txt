@@ -9,5 +9,3 @@
 # source, a Python migration, a Python oracle or a golden recording is NOT
 # listed. New files are NOT picked up: add a path here on purpose.
 tests/scripts/test_strip_agent_attribution.py
-tests/test_go_api_routing_digest_checker.py
-tests/test_go_api_routing_operator_text.py

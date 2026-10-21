@@ -67,7 +67,7 @@ func TestCounterParityVenueOracle(t *testing.T) {
 	jwtKey := nextID().String() + nextID().String()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
-		Root:      golden.PythonRoot(t, venueRoot()),
+		Root:      venueRoot(),
 		JWTKey:    jwtKey,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + encryptionKey, "INGEST_API_KEYS=" + ingestAPIKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
@@ -196,25 +196,10 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 	t.Log("\n" + receipt)
 	goMetrics := operator()
 
-	// The families the Python api registers at import: listed by the pinned
-	// build's interpreter, through the record verb's launcher, while recording;
-	// frozen in the golden otherwise.
-	familiesRequest := venueoracle.ProgramRequest("python metric families", pythonMetricFamilies, nil, nil)
-	familiesAnswers := golden.Produce(t, venue.Root, []venueoracle.Request{familiesRequest}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		command, err := producer.Command(ctx, nil, nil, "-c", pythonMetricFamilies)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Dir = venue.Root
-		output, err := command.Output()
-		if err != nil {
-			t.Fatalf("list the Python api's metric families: %v", err)
-		}
-		// The app's import logs a JSON line with the time of day before the RESULT line: only the
-		// RESULT line is the answer, so two recordings write the same bytes.
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody([]byte("RESULT " + metricFamiliesResult(t, string(output)) + "\n"))}}
-	})
+	// The families the Python api registers at import: frozen in the golden,
+	// listed by the pinned build.
+	familiesRequest := venueoracle.ProgramRequest("python metric families", nil)
+	familiesAnswers := golden.Produce(t, []venueoracle.Request{familiesRequest})
 	golden.Consumed(t, familiesAnswers...)
 	checkPythonMetricsTable(t, metricFamiliesResult(t, venueoracle.UnpackBody(t, familiesAnswers[0].Body)))
 
@@ -246,15 +231,6 @@ var routeCounters = []struct{ metric, route string }{
 
 //go:embed testdata/python_metrics.tsv
 var pythonMetricsTable string
-
-// pythonMetricFamilies lists every metric family the Python api registers,
-// by importing the app in the venue's interpreter: family -> type.
-const pythonMetricFamilies = `
-import json
-import dev_health_ops.api.main
-from prometheus_client import REGISTRY
-print("RESULT " + json.dumps({m.name: m.type for m in REGISTRY.collect()}))
-`
 
 // tableStatuses are the statuses python_metrics.tsv may give a family; its
 // header says what each means.

@@ -11,39 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// emailStrProgram serves each raw JSON body to a real FastAPI route per
-// field shape (required EmailStr, optional EmailStr) and returns the
-// status and the exact response bytes.
-const emailStrProgram = `
-import base64, json, sys
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from pydantic import BaseModel, EmailStr
-
-class Required(BaseModel):
-    email: EmailStr
-
-class Optional_(BaseModel):
-    email: EmailStr | None = None
-
-app = FastAPI()
-
-@app.post("/required")
-def required(payload: Required):
-    return {"email": payload.email}
-
-@app.post("/optional")
-def optional(payload: Optional_):
-    return {"email": payload.email}
-
-client = TestClient(app, raise_server_exceptions=False)
-out = []
-for case in json.load(sys.stdin):
-    r = client.post(case["path"], content=base64.b64decode(case["body"]), headers={"content-type": "application/json"})
-    out.append({"status": r.status_code, "body": base64.b64encode(r.content).decode()})
-print(json.dumps(out))
-`
-
 var emailStrBodies = []string{
 	`{}`, `{"email": null}`, `{"email": 5}`, `{"email": true}`, `{"email": []}`, `{"email": {}}`, `{"email": ""}`,
 	`{"email": "a@b.com"}`, `{"email": "Admin@Example.COM"}`, `{"email": " a@b.com "}`, `{"email": "Name <a@b.com>"}`,
@@ -69,7 +36,7 @@ func TestEmailStrMatchesFrozenFastAPI(t *testing.T) {
 	}
 	payload, _ := json.Marshal(requests)
 	output := frozenPython(t, "email-str.golden.json",
-		programoracle.Program{Name: "email-str", Text: emailStrProgram, Stdin: payload})[0]
+		programoracle.Program{Name: "email-str", Stdin: payload})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct {
 		Status int    `json:"status"`

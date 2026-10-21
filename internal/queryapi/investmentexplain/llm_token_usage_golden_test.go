@@ -49,7 +49,7 @@ func TestBuildLLMTokenUsageRecordMatchesPythonGolden(t *testing.T) {
 		t.Fatalf("glob goldens: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no llm_token_usage__*.json goldens found -- run generate_llm_token_usage_golden.py")
+		t.Fatal("no llm_token_usage__*.json goldens found")
 	}
 
 	for _, path := range files {

@@ -15,24 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonSignProgram signs each case with the real sign_license: stdin is a
-// JSON list of [key, org_id, tier, issued_at, license_id, duration_days as decimal text ("" = the default)]; each answer is
-// the digest of the license ({"sha256", "length"}: the text is a signed
-// token and is not stored) or "error: <ValueError text>".
-const pythonSignProgram = `
-import hashlib, json, sys
-from dev_health_ops.licensing.generator import sign_license
-out = []
-for key, org, tier, issued, license_id, days in json.loads(sys.stdin.read()):
-    try:
-        extra = {} if days == "" else {"duration_days": int(days)}
-        text = sign_license(key, org_id=org, tier=tier, issued_at=issued, license_id=license_id, **extra).encode("utf-8")
-        out.append({"sha256": hashlib.sha256(text).hexdigest(), "length": len(text)})
-    except ValueError as exc:
-        out.append("error: " + str(exc))
-print(json.dumps(out))
-`
-
 // digestOf is the digest a golden holds for text.
 func digestOf(text string) textDigest {
 	sum := sha256.Sum256([]byte(text))
@@ -114,7 +96,7 @@ func TestSignLicenseMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "sign-license.golden.json", programoracle.Program{Name: "sign license", Text: pythonSignProgram, Stdin: stdin})[0]
+	output := frozenPython(t, "sign-license.golden.json", programoracle.Program{Name: "sign license", Stdin: stdin})[0]
 	var answers []json.RawMessage
 	if err := json.Unmarshal([]byte(output), &answers); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -172,19 +154,6 @@ func TestSignLicenseMatchesFrozenPython(t *testing.T) {
 	t.Logf("%d cases, %d signed on both planes, %d mismatches", len(cases), signed, mismatches)
 }
 
-// pythonDecodeProgram decodes each text with the real base64.b64decode: stdin is
-// a JSON list of strings; each answer is the bytes as hex, or "error: <text>".
-const pythonDecodeProgram = `
-import base64, json, sys
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        out.append(base64.b64decode(text).hex())
-    except Exception as exc:
-        out.append("error: " + str(exc))
-print(json.dumps(out))
-`
-
 // TestPythonB64DecodeMatchesFrozenPython holds pythonB64Decode to the frozen
 // answers of base64.b64decode over every text of up to five characters drawn
 // from a set that covers the alphabet, padding, skipped characters and
@@ -215,7 +184,7 @@ func TestPythonB64DecodeMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "b64decode.golden.json", programoracle.Program{Name: "b64decode", Text: pythonDecodeProgram, Stdin: stdin})[0]
+	output := frozenPython(t, "b64decode.golden.json", programoracle.Program{Name: "b64decode", Stdin: stdin})[0]
 	var want []string
 	if err := json.Unmarshal([]byte(output), &want); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -245,29 +214,6 @@ func TestPythonB64DecodeMatchesFrozenPython(t *testing.T) {
 	t.Logf("%d texts, %d decoded, %d mismatches", len(texts), decoded, mismatches)
 }
 
-// pythonSignAndJudgeProgram signs each case with the real sign_license and
-// judges the license with the real LicenseValidator, under the public key of
-// the case's seed and at a fixed clock. Stdin is {"now", "cases": [[key,
-// org_id, tier, issued_at, license_id, duration_days as decimal text], ...]};
-// each answer is [digest of the license, valid, error, payload JSON,
-// in_grace_period].
-const pythonSignAndJudgeProgram = `
-import base64, hashlib, json, sys
-from nacl.signing import SigningKey
-from dev_health_ops.licensing.generator import sign_license
-from dev_health_ops.licensing.validator import LicenseValidator
-request = json.loads(sys.stdin.read())
-out = []
-for key, org, tier, issued, license_id, days in request["cases"]:
-    text = sign_license(key, org_id=org, tier=tier, issued_at=issued, license_id=license_id, duration_days=int(days))
-    public = base64.b64encode(bytes(SigningKey(base64.b64decode(key)).verify_key)).decode()
-    result = LicenseValidator(public).validate(text, current_time=request["now"])
-    raw = text.encode("utf-8")
-    out.append([{"sha256": hashlib.sha256(raw).hexdigest(), "length": len(raw)}, result.valid, result.error,
-                result.payload.model_dump_json() if result.payload else None, result.in_grace_period])
-print(json.dumps(out))
-`
-
 // TestBigDurationLicensesAreThePythonLicensesAndPythonAcceptsThem: a license
 // whose expiry is beyond 64 bits is a capability only if the verifier accepts
 // it. The Go-signed license text is the Python-signed text (the same SHA-256
@@ -287,7 +233,7 @@ func TestBigDurationLicensesAreThePythonLicensesAndPythonAcceptsThem(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "big-duration-license.golden.json", programoracle.Program{Name: "sign and judge", Text: pythonSignAndJudgeProgram, Stdin: stdin})[0]
+	output := frozenPython(t, "big-duration-license.golden.json", programoracle.Program{Name: "sign and judge", Stdin: stdin})[0]
 	var answers []struct {
 		digest  textDigest
 		valid   bool

@@ -8,22 +8,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonRegistryProgram prints the REAL registry constants the entitlements
-// read uses besides the decision engine.
-const pythonRegistryProgram = `
-import json
-from dev_health_ops.licensing.registry import STANDARD_FEATURES
-from dev_health_ops.licensing.types import TIER_ORDER
-from dev_health_ops.models.licensing import TIER_LIMITS
-print(json.dumps({
-    "standard": [row[0] for row in STANDARD_FEATURES],
-    "tier_order": [t.value for t in TIER_ORDER],
-    "limits": {t.value: [[k, v, type(v).__name__] for k, v in limits.items()] for t, limits in TIER_LIMITS.items()},
-}))
-`
-
 func TestRegistryMatchesFrozenPython(t *testing.T) {
-	output := frozenPython(t, "registry.golden.json", programoracle.Program{Name: "licensing registry", Text: pythonRegistryProgram})[0]
+	output := frozenPython(t, "registry.golden.json", programoracle.Program{Name: "licensing registry"})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var result struct {
 		Standard  []string            `json:"standard"`

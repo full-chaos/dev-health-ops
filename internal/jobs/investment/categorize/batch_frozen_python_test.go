@@ -32,77 +32,10 @@ var batchGoldenPins = map[string]string{
 }
 
 var batchGoldens = programoracle.Set{
-	Package:  "./internal/jobs/investment/categorize/",
 	Build:    batchPythonBuild,
 	Identity: batchProducerIdentity,
 	Pins:     batchGoldenPins,
 }
-
-// batchOracleProgram runs the real Python producers over the corpus on stdin.
-// The field sets it prints come from the production code: the dataclass
-// fields of BatchItemResult and the keys _batch_payload_metadata assigns.
-const batchOracleProgram = `
-import ast, dataclasses, inspect, json, sys, textwrap
-from dev_health_ops.llm.providers import openai as o
-from dev_health_ops.llm.providers.batch import BatchItemRequest, BatchItemResult
-from dev_health_ops.work_graph.investment.categorization_prompts import build_prompt
-
-def tag(v):
-    if v is None:
-        return {"t": "null", "v": ""}
-    if isinstance(v, bool):
-        return {"t": "bool", "v": "true" if v else "false"}
-    if isinstance(v, int):
-        return {"t": "number", "v": str(v)}
-    if isinstance(v, float):
-        return {"t": "number", "v": repr(v)}
-    if isinstance(v, str):
-        return {"t": "str", "v": v}
-    if isinstance(v, list):
-        return {"t": "array", "v": [tag(x) for x in v]}
-    if isinstance(v, dict):
-        return {"t": "object", "v": {str(k): tag(x) for k, x in v.items()}}
-    raise TypeError(type(v).__name__)
-
-def provider_of(case):
-    if case["facade"]:
-        return o.OpenAIProvider(api_key="oracle-placeholder", model=case["model"])._impl
-    return o.OpenAIGPT5Provider(o.OpenAIProviderConfig(
-        api_key="oracle-placeholder", base_url=None, model=case["model"],
-        max_output_tokens=case["max_output_tokens"], temperature=0.3))
-
-def prompt_of(case):
-    if case["kind"] == "categorization":
-        return build_prompt(case["source_block"])
-    return case["prompt"]
-
-def metadata_keys():
-    tree = ast.parse(textwrap.dedent(inspect.getsource(o._batch_payload_metadata)))
-    keys = set()
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store)
-                and isinstance(node.value, ast.Name) and node.value.id == "metadata"):
-            keys.add(node.slice.value)
-    return sorted(keys)
-
-fields = [f.name for f in dataclasses.fields(BatchItemResult)]
-corpus = json.load(sys.stdin)
-out = {"lines": {}, "parse": {}, "statuses": {}, "result_fields": fields, "metadata_keys": metadata_keys()}
-for case in corpus["lines"]:
-    line = provider_of(case)._batch_line(BatchItemRequest(custom_id=case["custom_id"], prompt=prompt_of(case)))
-    out["lines"][case["name"]] = {"newline_free": "\n" not in line, "line": tag(json.loads(line))}
-for case in corpus["parse"]:
-    try:
-        results = o._parse_openai_batch_lines(case["text"])
-    except Exception as exc:
-        out["parse"][case["name"]] = {"error": True, "results": tag(type(exc).__name__)}
-        continue
-    rows = [{name: getattr(r, name) for name in fields} for r in results]
-    out["parse"][case["name"]] = {"error": False, "results": tag(rows)}
-for status in corpus["statuses"]:
-    out["statuses"][status] = o._map_openai_batch_status(status).value
-json.dump(out, sys.stdout, sort_keys=True, ensure_ascii=True)
-`
 
 type batchLineCase struct {
 	Name            string `json:"name"`
@@ -283,8 +216,8 @@ func frozenBatchAnswer(t *testing.T) (batchCorpus, batchOracleAnswer) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	program := programoracle.Program{Name: "batch provider oracle", Text: batchOracleProgram, Stdin: stdin}
-	stdout := batchGoldens.Outputs(t, categorizeRepositoryRoot(t), "batch.golden.json", program)[0]
+	program := programoracle.Program{Name: "batch provider oracle", Stdin: stdin}
+	stdout := batchGoldens.Outputs(t, "batch.golden.json", program)[0]
 	var answer batchOracleAnswer
 	decoder := json.NewDecoder(strings.NewReader(stdout))
 	decoder.UseNumber()

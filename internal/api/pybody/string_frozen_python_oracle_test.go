@@ -20,38 +20,13 @@ var stringCorpus = []string{
 	`null`, `5`, `true`, `[]`, `{}`,
 }
 
-const pythonStringProgram = `
-import json, sys
-from pydantic import BaseModel, Field, ValidationError
-class Plain(BaseModel):
-    v: str
-class Min(BaseModel):
-    v: str = Field(min_length=1)
-class Max(BaseModel):
-    v: str = Field(max_length=5)
-class OptionalMax(BaseModel):
-    v: str | None = Field(default=None, max_length=5)
-out = []
-for text in json.loads(sys.stdin.read()):
-    row = {}
-    for name, model in (("plain", Plain), ("min", Min), ("max", Max), ("optional_max", OptionalMax)):
-        try:
-            value = model.model_validate({"v": json.loads(text)}).v
-            row[name] = {"ok": "None" if value is None else json.dumps(value)}
-        except ValidationError as exc:
-            err = exc.errors()[0]
-            row[name] = {"type": err["type"], "msg": err["msg"], "input": json.dumps(err["input"])}
-    out.append(row)
-print(json.dumps(out))
-`
-
 // TestStringMatchesFrozenPydantic compares the str helpers with pydantic 2
 // for every constraint shape the helpers take: no bound, a minimum, a
 // maximum, and an optional field with a maximum.
 func TestStringMatchesFrozenPydantic(t *testing.T) {
 	input, _ := json.Marshal(stringCorpus)
 	output := frozenPython(t, "string.golden.json",
-		programoracle.Program{Name: "string", Text: pythonStringProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "string", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []map[string]struct{ OK, Type, Msg, Input string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

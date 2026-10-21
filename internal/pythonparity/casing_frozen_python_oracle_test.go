@@ -24,19 +24,8 @@ import (
 // promoting the helper must not weaken it, so it is carried over and WIDENED
 // to cover pythonparity.Upper, which had no such guard before.
 func TestLowerAndUpperMatchFrozenPythonOnEveryMultiRuneMapping(t *testing.T) {
-	const derive = `
-import json, sys
-out = {"lower": {}, "upper": {}}
-for cp in range(0x110000):
-    c = chr(cp)
-    if len(c.lower()) > 1:
-        out["lower"][cp] = c.lower()
-    if len(c.upper()) > 1:
-        out["upper"][cp] = c.upper()
-json.dump(out, sys.stdout)
-`
 	rendered := frozenPython(t, "casing-multi-rune.golden.json",
-		programoracle.Program{Name: "multi-rune case mappings", Text: derive})[0]
+		programoracle.Program{Name: "multi-rune case mappings"})[0]
 	var derived struct {
 		Lower map[string]string `json:"lower"`
 		Upper map[string]string `json:"upper"`
@@ -104,7 +93,6 @@ func TestFinalSigmaMatchesFrozenPythonAtAnyDistance(t *testing.T) {
 	}
 	rendered := frozenPython(t, "casing-sigma-distance.golden.json", programoracle.Program{
 		Name:  "lower at any distance",
-		Text:  "import json, sys; json.dump([s.lower() for s in json.load(sys.stdin)], sys.stdout)",
 		Stdin: encoded,
 	})[0]
 	var want []string
@@ -131,21 +119,8 @@ func TestFinalSigmaMatchesFrozenPythonAtAnyDistance(t *testing.T) {
 // general category differs between the two (unassigned in CPython's version,
 // or re-categorised since) is skipped and counted.
 func TestSigmaPropertiesMatchFrozenPythonOnEveryCodePoint(t *testing.T) {
-	const derive = `
-import sys, unicodedata
-bits, cats = [], []
-for cp in range(0x110000):
-    c = chr(cp)
-    b = 0
-    if (c + "Σ").lower()[-1] == "ς": b |= 1
-    if ("A" + c + "Σ").lower()[-1] == "ς": b |= 2
-    if ("AΣ" + c + "B").lower()[1] == "ς": b |= 4
-    bits.append(str(b))
-    cats.append(unicodedata.category(c))
-sys.stdout.write(unicodedata.unidata_version + "\n" + "".join(bits) + "\n" + "".join(cats))
-`
 	rendered := frozenPython(t, "casing-sigma-properties.golden.json",
-		programoracle.Program{Name: "sigma properties", Text: derive})[0]
+		programoracle.Program{Name: "sigma properties"})[0]
 	parts := strings.SplitN(rendered, "\n", 3)
 	if len(parts) != 3 || len(parts[1]) != 0x110000 || len(parts[2]) != 2*0x110000 {
 		t.Fatalf("derivation output malformed (%d parts)", len(parts))

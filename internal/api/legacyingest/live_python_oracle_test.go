@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -18,54 +17,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// pythonProgram runs each case through the real Python router (the FastAPI
-// app with api.ingest.router mounted) in-process: the credentials and the
-// environment name from the case, the stream write captured instead of sent.
-// It reports, per case, the status, the body, and what would be streamed.
-const pythonProgram = `
-import base64, json, os, sys
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-import importlib
-ingest_router = importlib.import_module("dev_health_ops.api.ingest.router")
-
-captured = []
-ingest_router.get_redis_client = lambda: object()
-ingest_router.write_to_stream = lambda rc, name, data: captured.append([name, data["payload"]]) or True
-rows = []
-async def persist(records):
-    def iso(value):
-        if value.tzinfo is not None:
-            from datetime import timezone
-            value = value.astimezone(timezone.utc).replace(tzinfo=None)
-        return value.isoformat(timespec="microseconds")
-    for r in records:
-        rows.append([r.org_id, r.signal_type, r.signal_count, r.session_count, r.unique_pseudonymous_count, r.endpoint_group or "", r.environment,
-                     str(r.repo_id) if r.repo_id else "", r.release_ref or "", iso(r.bucket_start), iso(r.bucket_end), r.is_sampled, r.schema_version or "", r.dedupe_key])
-ingest_router._persist_telemetry = persist
-app = FastAPI()
-app.include_router(ingest_router.router)
-client = TestClient(app, raise_server_exceptions=False)
-managed = ["INGEST_API_KEYS", "INGEST_SIGNING_SECRET", "ENVIRONMENT", "APP_ENV", "ENV", "REDIS_URL"]
-out = []
-for case in json.loads(sys.stdin.read()):
-    for key in managed:
-        os.environ.pop(key, None)
-    os.environ.update(case["env"])
-    del captured[:]
-    del rows[:]
-    headers = {"content-type": "application/json"}
-    headers.update({k: base64.b64decode(v) for k, v in case["headers"].items()})
-    body = base64.b64decode(case["body"])
-    r = client.post("/api/v1/ingest/" + case["route"], content=body, headers=headers)
-    out.append([r.status_code, r.text, list(captured), list(rows)])
-print(json.dumps(out))
-`
 
 // oracleCase is one request; its bytes go to Python base64-encoded, so a
 // header or body that is not valid UTF-8 reaches both planes as it is.
@@ -169,8 +122,6 @@ func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
 	spec := programGolden("legacy-ingest", t.Name(), "de1b0f2c31e8ce7cc37635e0cde898fc3217afb3d27650d6097d99f59c810d99")
 	spec.Scrub = scrubGeneratedIDs
 	frozen := venueoracle.OpenGolden(t, spec)
-	_, file, _, _ := moduleroot.Caller(0)
-	root := frozen.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..")))
 	corpus := append(authCorpus(), bodyCorpus()...)
 	wire := make([]oracleWire, len(corpus))
 	for index, item := range corpus {
@@ -181,20 +132,8 @@ func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
 		wire[index] = oracleWire{Route: item.Route, Env: item.Env, Headers: headers, Body: base64.StdEncoding.EncodeToString([]byte(item.Body))}
 	}
 	input, _ := json.Marshal(wire)
-	request := venueoracle.ProgramRequest("legacy ingest corpus", pythonProgram, input, producerEnv)
-	answers := frozen.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		command, err := producer.Command(context.Background(), producerEnv, nil, "-c", pythonProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = strings.NewReader(string(input))
-		output, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
-		}
-		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
-	})
+	request := venueoracle.ProgramRequest("legacy ingest corpus", input)
+	answers := frozen.Produce(t, []venueoracle.Request{request})
 	frozen.Consumed(t, answers...)
 	output := []byte(answers[0].Body)
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")

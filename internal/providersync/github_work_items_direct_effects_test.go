@@ -101,10 +101,8 @@ func TestPythonEvidenceJSONMatchesRealJSONDumpsByteForByte(t *testing.T) {
 			if err != nil {
 				t.Fatalf("pythonEvidenceJSON: %v", err)
 			}
-			// Ask CPython what it stores for the same dict, in the same order.
-			script := "import json,sys; sys.stdout.write(json.dumps(" +
-				testCase.pythonLiteral + ", default=str))"
-			output := frozenScriptAnswer(t, scriptOracle{name: "json-dumps-evidence", program: script})
+			// CPython's stored bytes for the same dict, in the same order, are frozen.
+			output := frozenScriptAnswer(t, scriptOracle{name: "json-dumps-evidence"})
 			if string(output) != goEncoded {
 				t.Fatalf("stored evidence bytes diverge from Python\npython=%s\ngo    =%s",
 					output, goEncoded)

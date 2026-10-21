@@ -176,13 +176,11 @@ func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, root),
+		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + repositoriesVenueKey,
 			"NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost",
-			"VENUE_PINNED_NOW=" + repositoriesPinnedNow,
-			"VENUE_PINNED_NOW_MODULES=dev_health_ops.api.admin.routers.sync,dev_health_ops.models.settings,dev_health_ops.models.integrations",
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -306,12 +304,10 @@ SELECT concat_ws(' | ', id, org_id, sync_config_id, payload::text, CASE WHEN inv
   CASE WHEN updated_at > '2026-06-01' THEN 'moved' ELSE updated_at::text END) AS row_text
 FROM sync_coverage_projections) AS rows`,
 	}
-	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
+	goDB := venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integration_sources", "sync_configurations", "sync_coverage_projections"} {
 		goRows := fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, goDB, queries[table]), "127.0.0.1:<port>")
-		golden.CompareRows(t, "rows:"+table, func() string {
-			return fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, source, queries[table]), "127.0.0.1:<port>")
-		}, goRows)
+		golden.CompareRows(t, "rows:"+table, goRows)
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
 	}
 	// The writes happened: the pinned instant reached the rows, a coverage

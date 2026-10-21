@@ -75,7 +75,7 @@ VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_time
 	default:
 		return uuid.Nil, s.storeErr(ctx, "provision local user", err)
 	}
-	s.logger.InfoContext(ctx, "identity: local principal provisioned", "principal_id", subject)
+	s.logger.InfoContext(ctx, "identity: local principal provisioned")
 	return principal, nil
 }
 

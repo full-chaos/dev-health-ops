@@ -4,10 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -21,12 +19,8 @@ func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 // and the Resend SDK with its HTTP client, so Identity names those
 // distributions. A golden recorded by another producer is refused.
 var mailGoldens = programoracle.Set{
-	Package:       "./internal/mail/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\nrequests 2.34.2\nresend 2.47.0",
-	Distributions: []string{"requests", "resend"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\nrequests 2.34.2\nresend 2.47.0",
 	Pins: map[string]string{
 		"resend.golden.json": "a19e74d61139bad5ac1b33659f09489d3de6056189aea1df33c73dfab136797b",
 		"smtp.golden.json":   "496ea9ec800636426edddbc13f6659e5622fa62585cb1984a3a06e14fef8191e",
@@ -39,12 +33,7 @@ var mailGoldens = programoracle.Set{
 // fails the test; so does a program that exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	return mailGoldens.Outputs(t, root, golden, programs...)
+	return mailGoldens.Outputs(t, golden, programs...)
 }
 
 // textDigest is how a golden holds a credential the Python plane sent: the

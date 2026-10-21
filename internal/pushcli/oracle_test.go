@@ -14,8 +14,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -55,48 +53,6 @@ type pushResult struct {
 }
 
 const dirToken = "<dir>"
-
-// pythonPushProgram runs every case through the real dev-hops entry point in one
-// process: stdin is {"dir": ..., "cases": [...]}; the answers are printed as JSON.
-const pythonPushProgram = `
-import contextlib, io, json, os, sys
-from dev_health_ops import cli
-
-job = json.loads(sys.stdin.read())
-out = []
-for case in job["cases"]:
-    rep = case.get("repeat")
-    if rep:
-        text = rep["text"] * rep["count"]
-        if rep.get("toStdin"):
-            case["stdin"] = text
-        else:
-            case["file"] = text
-    if case.get("file") is not None:
-        with open(os.path.join(job["dir"], case["fileName"]), "wb") as handle:
-            handle.write(case["file"].encode("utf-8"))
-    args = ["push"] + [a.replace("{file}", os.path.join(job["dir"], case.get("fileName", ""))) for a in case["args"]]
-    stdin = io.TextIOWrapper(io.BytesIO(case.get("stdin", "").encode("utf-8")), encoding="utf-8")
-    stdout, stderr = io.StringIO(), io.StringIO()
-    real_stdin = sys.stdin
-    sys.stdin = stdin
-    code = 0
-    try:
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            try:
-                code = cli.main(args)
-            except SystemExit as exc:
-                code = exc.code if isinstance(exc.code, int) else 1
-            except BaseException as exc:
-                # A crash (traceback) is not a behaviour to port: it is reported as
-                # exit 70 with the exception's type and text.
-                code = 70
-                print(type(exc).__name__ + ": " + str(exc)[:300], file=sys.stderr)
-    finally:
-        sys.stdin = real_stdin
-    out.append({"exit": code, "stdout": stdout.getvalue(), "stderr": stderr.getvalue()})
-print("RESULT" + json.dumps(out))
-`
 
 func normalize(text, dir string) string {
 	return strings.ReplaceAll(text, dir, dirToken)
@@ -451,10 +407,6 @@ func substituteDir(c pushCase, dir string) pushCase {
 	return c
 }
 
-// pushPythonSettings are the variables that shape the answers of both push oracles, as constants: the
-// producer's environment AND part of each golden's request key (a changed value fails the frozen replay).
-var pushPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-
 // pushPythonBuild is the build whose Python `dev-hops push` verbs answered the corpus: a build that
 // still carried the Python CLI.
 const pushPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
@@ -468,16 +420,11 @@ const pushOracleDir = "/tmp/dho-push-oracle-dir"
 // are frozen in testdata/golden/push.json (the recipe regenerates them by execution); the corpus and the
 // program are part of the golden's key.
 func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
-	_, file, _, _ := moduleroot.Caller(0)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/push.json",
 		PythonBuild: pushPythonBuild,
 		SHA256:      "fdc1146fc39042d4551f8c91c746b9bfaa7b5b4cd3157dac65881f48ccc01cdc",
-		Recipe: "git worktree add --detach $DIR " + pushPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushMatchesTheFrozenPythonOutput$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	cases := corpus(t)
 	pythonCases := make([]pushCase, len(cases))
@@ -488,26 +435,8 @@ func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("push corpus", pythonPushProgram, input, pushPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		dir := t.TempDir()
-		command, err := producer.Command(context.Background(), pushPythonSettings, nil, "-c", pythonPushProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = bytes.NewReader(bytes.ReplaceAll(input, []byte(pushOracleDir), []byte(dir)))
-		output, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
-		}
-		marker := strings.LastIndex(string(output), "RESULT")
-		if marker < 0 {
-			t.Fatalf("no result from python: %.400s", output)
-		}
-		results := output[marker+len("RESULT"):]
-		return []venueoracle.Response{{Status: 0, Body: normalize(strings.TrimSpace(string(results)), dir)}}
-	})
+	request := venueoracle.ProgramRequest("push corpus", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var want []pushResult
 	if err := json.Unmarshal([]byte(answers[0].Body), &want); err != nil {
@@ -561,27 +490,4 @@ func maskProducerVersion(text string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-// CHAOS-7469: the producer environment is closed; a variable of the test process never reaches Python. The
-// environment is the launcher's (Producer.Env): the fixed set of the harness and pushPythonSettings.
-func TestPushPythonEnvIsClosed(t *testing.T) {
-	for _, name := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "ORG_ID", "PYTHONHASHSEED", "TZ", "LANG"} {
-		t.Setenv(name, "from-the-test-process")
-	}
-	producer := &venueoracle.Producer{Root: "/checkout"}
-	env := producer.Env(pushPythonSettings)
-	seen := map[string]string{}
-	for _, entry := range env {
-		name, value, _ := strings.Cut(entry, "=")
-		seen[name] = value
-		if value == "from-the-test-process" {
-			t.Errorf("the producer environment carries the test process's %s", name)
-		}
-	}
-	for name, value := range pushPythonSettings {
-		if seen[name] != value {
-			t.Errorf("the producer environment holds %s=%q, want the declared %q", name, seen[name], value)
-		}
-	}
 }

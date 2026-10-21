@@ -1,0 +1,451 @@
+// Package livee2e holds the checks and fixture steps the Live Backend E2E harness runs between its Go binaries:
+// JSON assertions on the health, meta and home answers, the registered edge request, the proof service principal
+// fixture, the e2e access token, the Valkey readiness ping. They replace the Python programs the harness used to
+// embed, so the workflow installs no Python.
+package livee2e
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"net"
+	"net/url"
+	"reflect"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+type doc = map[string]any
+
+func decode(payload []byte) (doc, error) {
+	var out doc
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return nil, fmt.Errorf("not a JSON object: %w", err)
+	}
+	if out == nil {
+		return nil, errors.New("not a JSON object")
+	}
+	return out, nil
+}
+
+func obj(v any) doc {
+	m, _ := v.(doc)
+	if m == nil {
+		return doc{}
+	}
+	return m
+}
+
+// truthy mirrors the truthiness the checks were written with: nil, false, zero, "" and empty containers are false.
+func truthy(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return x
+	case float64:
+		return x != 0
+	case string:
+		return x != ""
+	case []any:
+		return len(x) > 0
+	case doc:
+		return len(x) > 0
+	}
+	return true
+}
+
+// AssertHealth checks a /health answer: status ok, ClickHouse ok, Postgres ok or not configured.
+func AssertHealth(payload []byte) error {
+	p, err := decode(payload)
+	if err != nil {
+		return err
+	}
+	if p["status"] != "ok" {
+		return fmt.Errorf("health status is not ok: %s", payload)
+	}
+	services := obj(p["services"])
+	if services["clickhouse"] != "ok" {
+		return fmt.Errorf("clickhouse is not ok: %v", services)
+	}
+	if pg := services["postgres"]; pg != "ok" && pg != "not_configured" {
+		return fmt.Errorf("postgres is not ok or not_configured: %v", services)
+	}
+	return nil
+}
+
+// Where this is stricter than the Python assertions it replaces (each a refusal of a payload the api never emits, so
+// no job that passed before fails on real output): supported_endpoints must be a list holding the exact route
+// (Python's `in` also accepted a substring of a string or a key of a dict); tiles must be an object (Python's `in`
+// also accepted a list or a string naming the four keys); a raw Infinity or NaN literal in the JSON is refused by the
+// decoder (Python's json.loads accepts it). Strings follow Python's Unicode semantics: float() takes Unicode digits
+// and whitespace, str.lower() maps U+0130 to "i" plus a combining dot.
+
+// AssertMeta checks a /api/v1/meta answer.
+func AssertMeta(payload []byte) error {
+	p, err := decode(payload)
+	if err != nil {
+		return err
+	}
+	if p["backend"] != "clickhouse" {
+		return fmt.Errorf("backend is not clickhouse: %s", payload)
+	}
+	limits := obj(p["limits"])
+	if limits["max_days"] != float64(365) {
+		return fmt.Errorf("limits.max_days is not 365: %v", limits)
+	}
+	if limits["max_repos"] != float64(1000) {
+		return fmt.Errorf("limits.max_repos is not 1000: %v", limits)
+	}
+	supported, _ := p["supported_endpoints"].([]any)
+	for _, e := range supported {
+		if e == "/api/v1/home" {
+			return nil
+		}
+	}
+	return fmt.Errorf("/api/v1/home is not a supported endpoint: %v", supported)
+}
+
+var homeAllowedStates = map[string]bool{"ok": true, "degraded": true, "down": true, "stale": true, "unknown": true, "not_configured": true, "error": true}
+
+// AssertHome checks a /api/v1/home answer for the seeded fixture provider.
+func AssertHome(payload []byte, fixtureProvider string) error {
+	p, err := decode(payload)
+	if err != nil {
+		return err
+	}
+	freshness := obj(p["freshness"])
+	if _, ok := freshness["last_ingested_at"]; !ok {
+		return fmt.Errorf("freshness has no last_ingested_at: %v", freshness)
+	}
+	sources := obj(freshness["sources"])
+	if fixtureProvider == "" {
+		fixtureProvider = "github"
+	}
+	expected := map[string]bool{"ci": true}
+	if fixtureProvider != "synthetic" {
+		expected[fixtureProvider] = true
+	}
+	got := map[string]bool{}
+	for k := range sources {
+		got[k] = true
+	}
+	if !reflect.DeepEqual(got, expected) {
+		return fmt.Errorf("freshness sources are %v, want %v", sortedKeys(got), sortedKeys(expected))
+	}
+	for key := range expected {
+		state, _ := sources[key].(string)
+		if !homeAllowedStates[pythonLower(state)] {
+			return fmt.Errorf("source %q has state %v: %v", key, sources[key], sources)
+		}
+	}
+	coverage := obj(freshness["coverage"])
+	pct, err := number(coverage["repos_covered_pct"])
+	if err != nil || math.IsNaN(pct) || pct <= 0 {
+		return fmt.Errorf("coverage.repos_covered_pct is not above zero: %v", coverage)
+	}
+	deltas, _ := p["deltas"].([]any)
+	if len(deltas) < 1 {
+		return errors.New("deltas is empty")
+	}
+	hasMove := false
+	for _, raw := range deltas {
+		row := obj(raw)
+		for _, key := range []string{"metric", "value", "has_data", "has_prior_data", "rate_state"} {
+			if _, ok := row[key]; !ok {
+				return fmt.Errorf("a delta has no %s: %v", key, row)
+			}
+		}
+		if truthy(row["has_data"]) && truthy(row["has_prior_data"]) {
+			hasMove = true
+		}
+	}
+	tiles := obj(p["tiles"])
+	for _, key := range []string{"understand", "measure", "align", "execute"} {
+		if _, ok := tiles[key]; !ok {
+			return fmt.Errorf("tiles has no %s: %v", key, tiles)
+		}
+	}
+	constraint := doc{}
+	if raw, present := p["constraint"]; present {
+		c, ok := raw.(doc)
+		if !ok {
+			return fmt.Errorf("constraint is not an object: %v", raw)
+		}
+		constraint = c
+	}
+	if hasMove {
+		if !truthy(constraint["title"]) || !truthy(constraint["evidence"]) {
+			return fmt.Errorf("a metric moved between two windows but the constraint card is empty: %v", constraint)
+		}
+		return nil
+	}
+	if truthy(constraint["title"]) || truthy(constraint["claim"]) || truthy(constraint["evidence"]) {
+		return fmt.Errorf("no metric has data in both windows but the constraint card makes a claim: %v", constraint)
+	}
+	return nil
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+type featureFlagsVariables struct {
+	OrgID           string  `json:"orgId"`
+	Provider        *string `json:"provider"`
+	Project         *string `json:"project"`
+	IncludeArchived bool    `json:"includeArchived"`
+	Limit           int     `json:"limit"`
+}
+
+// EdgeRequest builds the body the edge checks post: the registered document of the operation from documents.json,
+// with the variables its proof request carries (internal/goapiproof/operations.go).
+func EdgeRequest(documents []byte, operation, org string) ([]byte, error) {
+	var entries []struct {
+		Operation string `json:"operation"`
+		Document  string `json:"document"`
+	}
+	if err := json.Unmarshal(documents, &entries); err != nil {
+		return nil, fmt.Errorf("documents.json: %w", err)
+	}
+	var texts []string
+	for _, e := range entries {
+		if e.Operation == operation {
+			texts = append(texts, e.Document)
+		}
+	}
+	if len(texts) != 1 {
+		return nil, fmt.Errorf("documents.json does not carry exactly one document for %s", operation)
+	}
+	var vars any
+	switch operation {
+	case "featureFlags":
+		vars = featureFlagsVariables{OrgID: org, IncludeArchived: false, Limit: 100}
+	default:
+		return nil, fmt.Errorf("no request variables for %s", operation)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	body := struct {
+		Query     string `json:"query"`
+		Variables any    `json:"variables"`
+	}{texts[0], vars}
+	if err := enc.Encode(body); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// JWTSecret is the signing key the e2e token and the api share: the hex sha256 of the settings encryption key.
+func JWTSecret(encKey string) string {
+	sum := sha256.Sum256([]byte(encKey))
+	return hex.EncodeToString(sum[:])
+}
+
+// E2E identities the access token names.
+const (
+	E2EUserID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	e2eEmail  = "e2e@test.local"
+	// DefaultOrgID is the organization the harness seeds and measures.
+	DefaultOrgID = "11111111-2222-4333-8444-555555555555"
+	// DefaultEncryptionKey is the settings encryption key the harness runs with when none is set.
+	DefaultEncryptionKey = "dev-key-not-for-prod"
+)
+
+// MintToken signs the e2e admin access token (HS256, one hour).
+func MintToken(secret, userID, orgID string, now time.Time, jti string) (string, error) {
+	claims := jwt.MapClaims{
+		"sub":          userID,
+		"email":        e2eEmail,
+		"org_id":       orgID,
+		"role":         "admin",
+		"is_superuser": false,
+		"type":         "access",
+		"exp":          now.Add(time.Hour).Unix(),
+		"iat":          now.Unix(),
+		"jti":          jti,
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+}
+
+// ValkeyPing answers whether the Valkey at the redis:// URL replies PONG.
+func ValkeyPing(ctx context.Context, redisURL string) error {
+	u, err := url.Parse(redisURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("not a redis URL: %q", redisURL)
+	}
+	host := u.Host
+	if u.Port() == "" {
+		host = net.JoinHostPort(u.Hostname(), "6379")
+	}
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", host)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	r := bufio.NewReader(conn)
+	send := func(args ...string) (string, error) {
+		var b strings.Builder
+		fmt.Fprintf(&b, "*%d\r\n", len(args))
+		for _, a := range args {
+			fmt.Fprintf(&b, "$%d\r\n%s\r\n", len(a), a)
+		}
+		if _, err := conn.Write([]byte(b.String())); err != nil {
+			return "", err
+		}
+		line, err := r.ReadString('\n')
+		return strings.TrimRight(line, "\r\n"), err
+	}
+	if pw, ok := u.User.Password(); ok {
+		args := []string{"AUTH"}
+		if user := u.User.Username(); user != "" {
+			args = append(args, user)
+		}
+		if reply, err := send(append(args, pw)...); err != nil || !strings.HasPrefix(reply, "+OK") {
+			return fmt.Errorf("AUTH refused: %q %v", reply, err)
+		}
+	}
+	if dbPath := strings.TrimPrefix(u.Path, "/"); dbPath != "" {
+		db, err := strconv.Atoi(dbPath)
+		if err != nil || db < 0 {
+			return fmt.Errorf("not a database number in %q", redactedURL(u))
+		}
+		if db != 0 {
+			if reply, err := send("SELECT", strconv.Itoa(db)); err != nil || !strings.HasPrefix(reply, "+OK") {
+				return fmt.Errorf("SELECT %d refused: %q %v", db, reply, err)
+			}
+		}
+	}
+	reply, err := send("PING")
+	if err != nil {
+		return err
+	}
+	if reply != "+PONG" {
+		return fmt.Errorf("PING answered %q", reply)
+	}
+	return nil
+}
+
+func redactedURL(u *url.URL) string {
+	c := *u
+	c.User = nil
+	return c.String()
+}
+
+// pythonFloatRe is the ASCII text Python's float() accepts once whitespace is stripped and Unicode digits are mapped
+// to ASCII: a decimal number whose digit groups may be joined by single underscores. inf, infinity and nan (with an
+// optional sign, ASCII case-insensitive) are matched by pythonFloatWord. Hex floats are refused by Python and by this.
+var pythonFloatRe = regexp.MustCompile(`^[+-]?(?:(?:[0-9](?:_?[0-9])*(?:\.(?:[0-9](?:_?[0-9])*)?)?|\.[0-9](?:_?[0-9])*)(?:[eE][+-]?[0-9](?:_?[0-9])*)?)$`)
+
+var pythonFloatWord = map[string]bool{"inf": true, "infinity": true, "nan": true}
+
+// pythonFloatSpaces is every character CPython's float() strips (it folds Unicode whitespace to an ASCII space and then
+// skips only ASCII space characters): \t \n \v \f \r, space, and the Unicode spaces above 127. It is NOT str.isspace():
+// U+001C..U+001F are whitespace to that and are REJECTED by float(). Pointer: the canonical copy of this set is
+// pythonIntSpaces in internal/pythonparity/pythonint_table.go (unexported, so it is copied here; keep the two equal).
+// pythonparity.IsSpace is the str.strip() set and includes U+001C..U+001F, so it is the wrong predicate here.
+var pythonFloatSpaces = map[rune]bool{
+	0x9: true, 0xa: true, 0xb: true, 0xc: true, 0xd: true, 0x20: true, 0x85: true, 0xa0: true,
+	0x1680: true, 0x2000: true, 0x2001: true, 0x2002: true, 0x2003: true, 0x2004: true, 0x2005: true, 0x2006: true,
+	0x2007: true, 0x2008: true, 0x2009: true, 0x200a: true, 0x2028: true, 0x2029: true, 0x202f: true, 0x205f: true,
+	0x3000: true,
+}
+
+func pythonSpace(r rune) bool { return pythonFloatSpaces[r] }
+
+// decimalDigitValue is the value of a Unicode decimal digit (category Nd): the digits of a script are contiguous runs
+// of ten (or a multiple of ten, as in the mathematical digits), so the offset in its run, modulo ten, is the value.
+func decimalDigitValue(r rune) int {
+	n := 0
+	for unicode.Is(unicode.Nd, r-rune(n)-1) {
+		n++
+	}
+	return n % 10
+}
+
+// Version divergence, named: the digit table is Go's (Go 1.27 carries Unicode 17) and CPython's float() uses the table
+// of its own release (3.12: Unicode 15, 3.14: Unicode 16), so a decimal digit added in a newer Unicode than the Python
+// of record is accepted here and refused there. The payload of our own api never carries such a digit.
+// pythonASCIIDigits maps every Unicode decimal digit to its ASCII digit, as float() does before it parses.
+func pythonASCIIDigits(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r > unicode.MaxASCII && unicode.Is(unicode.Nd, r) {
+			return rune('0' + decimalDigitValue(r))
+		}
+		return r
+	}, s)
+}
+
+func asciiLower(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, s)
+}
+
+// pythonLower is str.lower(): Go's ToLower except U+0130 (I with a dot above), which Python lowers to "i" plus a
+// combining dot above.
+func pythonLower(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, "İ", "i̇"))
+}
+
+// number reads a JSON value the way `float(value)` read it: a bool is 0 or 1, a number is itself, a string is stripped
+// and must be float() text (Unicode digits and whitespace included). null reads as 0 (float(None) raised, and 0 fails
+// the same positive check); anything else is an error.
+func number(v any) (float64, error) {
+	switch x := v.(type) {
+	case nil:
+		return 0, nil
+	case bool:
+		if x {
+			return 1, nil
+		}
+		return 0, nil
+	case float64:
+		return x, nil
+	case string:
+		s := pythonASCIIDigits(strings.TrimFunc(x, pythonSpace))
+		if word := strings.TrimLeft(s, "+-"); len(s)-len(word) <= 1 && pythonFloatWord[asciiLower(word)] {
+			switch asciiLower(word) {
+			case "nan":
+				return math.NaN(), nil
+			default:
+				if strings.HasPrefix(s, "-") {
+					return math.Inf(-1), nil
+				}
+				return math.Inf(1), nil
+			}
+		}
+		if !pythonFloatRe.MatchString(s) {
+			return 0, fmt.Errorf("not a float: %q", x)
+		}
+		f, err := strconv.ParseFloat(strings.ReplaceAll(s, "_", ""), 64)
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
+			return 0, err
+		}
+		return f, nil
+	}
+	return 0, fmt.Errorf("not a number: %v", v)
+}

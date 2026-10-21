@@ -3,12 +3,10 @@ package streamhandlers
 import (
 	"bytes"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -51,10 +49,8 @@ print(json.dumps(out))
 // build, over pydantic, so Identity names those distributions. A golden
 // recorded by another producer is refused.
 var normalizeGoldens = programoracle.Set{
-	Package:       "./internal/streamhandlers/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3.0\npydantic 2.13.5\npydantic-core 2.46.5",
-	Distributions: []string{"email-validator", "pydantic", "pydantic-core"},
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3.0\npydantic 2.13.5\npydantic-core 2.46.5",
 	// The goldenrecord verb writes each digest when it promotes a recording; a
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
@@ -282,12 +278,7 @@ func TestNormalizeExternalRecordsMatchesFrozenPythonNormalizeBatch(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	output := []byte(normalizeGoldens.Outputs(t, root, "normalize-batch.golden.json", programoracle.Program{Name: "normalize batch", Text: pythonNormalizeBatchProgram, Stdin: input})[0])
+	output := []byte(normalizeGoldens.Outputs(t, "normalize-batch.golden.json", programoracle.Program{Name: "normalize batch", Stdin: input})[0])
 	lines := bytes.Split(bytes.TrimSpace(output), []byte("\n"))
 	var want [][]struct {
 		Index      int    `json:"index"`

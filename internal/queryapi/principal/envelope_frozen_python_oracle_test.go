@@ -14,7 +14,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -22,107 +21,12 @@ import (
 // issuer mints. The producer is dev_health_ops.api.graphql.principal_envelope over PyJWT and cryptography. A golden
 // recorded by another producer is refused.
 var envelopeGoldens = programoracle.Set{
-	Package:  "./internal/queryapi/principal/",
 	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
 	Identity: "python 3.14.7\nunicodedata 16.0.0",
-	// The goldenrecord verb writes each digest when it promotes a recording; a new golden starts as
-	// "PIN:" + its file name without ".json".
 	Pins: map[string]string{
 		"envelope-claims.golden.json": "66c1422e1f3672fe173fd2e860767e9fb62bf141178f7e18e05e3d55e4f4fd17",
 	},
 }
-
-// pythonEnvelopeStructureProgram mints a REAL effective-principal envelope with
-// principal_envelope.issue_effective_principal_envelope and exports its REAL JWKS via build_envelope_jwks, as the
-// live oracle does, and answers only the STRUCTURE of both: the token header, the claims without the three
-// per-run values (iat, exp, jti), the lifetime, whether the id is a random UUID, the attributes of the public key
-// without the key and its length. The answer holds no token, no key and no signature: the key is generated in the
-// program and never leaves it. The app logs to stdout while it loads: that goes to stderr, so the answer is the
-// only stdout.
-const pythonEnvelopeStructureProgram = `
-import json
-import os
-import sys
-import uuid
-
-answer_stream = sys.stdout
-sys.stdout = sys.stderr
-
-import jwt
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
-
-key = Ed25519PrivateKey.generate()
-os.environ["GO_API_ENVELOPE_PRIVATE_KEY"] = key.private_bytes(
-    encoding=Encoding.PEM,
-    format=PrivateFormat.PKCS8,
-    encryption_algorithm=NoEncryption(),
-).decode("utf-8")
-
-from dev_health_ops.api.graphql import principal_envelope
-from dev_health_ops.api.services import auth
-from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.licensing.types import LicenseTier
-
-
-def user(**changes):
-    fields = dict(
-        user_id="11111111-1111-4111-8111-111111111111",
-        email="dev@example.com",
-        org_id="org-1",
-        role="admin",
-        is_superuser=False,
-        is_superuser_verified=False,
-        token_version=3,
-    )
-    fields.update(changes)
-    return AuthenticatedUser(**fields)
-
-
-def structure(token):
-    header = jwt.get_unverified_header(token)
-    payload = jwt.decode(token, options={"verify_signature": False, "verify_aud": False})
-    return {
-        "header": header,
-        "claims": {name: value for name, value in payload.items() if name not in ("iat", "exp", "jti")},
-        "ttl_seconds": payload["exp"] - payload["iat"],
-        "jti_is_random_uuid": str(uuid.UUID(payload["jti"], version=4)) == payload["jti"],
-    }
-
-
-def issue(account):
-    return structure(principal_envelope.issue_effective_principal_envelope(
-        account, tier=LicenseTier.TEAM, licensed_features=["ai_review"],
-    ))
-
-
-envelopes = {"plain": issue(user())}
-# One envelope per flag, each set alone, from the real issuer.
-envelopes["superuser only"] = issue(user(is_superuser=True))
-envelopes["superuser verified only"] = issue(user(is_superuser_verified=True))
-reset = auth.set_impersonation_context(
-    target_user_id="33333333-3333-4333-8333-333333333333",
-    target_org_id="org-2",
-    target_role="viewer",
-    real_user_id="11111111-1111-4111-8111-111111111111",
-)
-try:
-    envelopes["impersonation active"] = issue(user())
-finally:
-    auth._impersonation_ctx.reset(reset)
-
-jwks = principal_envelope.build_envelope_jwks()
-public = dict(jwks["keys"][0])
-x = public.pop("x")
-answer_stream.write(json.dumps({
-    "envelopes": envelopes,
-    "jwks_key": public,
-    "jwks_key_count": len(jwks["keys"]),
-    "jwks_x_length": len(x),
-    "issuer": principal_envelope.ENVELOPE_ISSUER,
-    "audience": principal_envelope.ENVELOPE_AUDIENCE,
-}, sort_keys=True) + "\n")
-`
 
 // TestVerifierMatchesFrozenPythonIssuedEnvelopeStructure proves query-api's Go verifier accepts an envelope with
 // the claim structure the Python edge's issuer actually produces and a JWKS with the attributes its key export
@@ -131,16 +35,10 @@ answer_stream.write(json.dumps({
 // and the attributes of the real key export. Go builds, for each, an envelope with the recorded claims, its own key
 // and the clock of the run (the issued and expiry times are per run); the verifier must accept it and read every
 // recorded claim field by field, so two claim names crossed in the verifier are seen. What the golden cannot pin:
-// the signature bytes of the Python issuer (the key is generated per issuance and never recorded); the live
-// TestVerifierMatchesLivePythonIssuedEnvelope stays until the Python delete (CHAOS-7308) for that.
+// the signature bytes of the Python issuer (the key is generated per issuance and never recorded).
 func TestVerifierMatchesFrozenPythonIssuedEnvelopeStructure(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("resolve principal package path")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	output := []byte(envelopeGoldens.Outputs(t, root, "envelope-claims.golden.json",
-		programoracle.Program{Name: "issued envelope structure", Text: pythonEnvelopeStructureProgram})[0])
+	output := []byte(envelopeGoldens.Outputs(t, "envelope-claims.golden.json",
+		programoracle.Program{Name: "issued envelope structure"})[0])
 	type issued struct {
 		Header          map[string]any `json:"header"`
 		Claims          map[string]any `json:"claims"`

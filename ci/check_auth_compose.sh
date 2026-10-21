@@ -159,36 +159,26 @@ expected="$(compose --profile auth ps -q auth-service postgres | xargs docker in
 [ "${members}" = "${expected}" ] || die "auth_plane has members other than auth-service and postgres: ${members} (want ${expected})"
 
 printf 'step 4d: no auth service is on the default network\n'
-compose --profile auth config --format json | python3 -c '
-import json, sys
-services = json.load(sys.stdin)["services"]
-bad = []
-for name in ("auth-keys-init", "auth-provision", "auth-migrate", "auth-service"):
-    service = services[name]
-    nets = sorted((service.get("networks") or {}).keys())
-    mode = service.get("network_mode")
-    print(f"{name}: networks={nets} network_mode={mode}")
-    if mode != "none" and nets != ["auth_plane"]:
-        bad.append(name)
-if bad:
-    sys.exit("auth services outside auth_plane (or network_mode none): " + ", ".join(bad))
+compose --profile auth config --format json | jq -er '
+  [ "auth-keys-init", "auth-provision", "auth-migrate", "auth-service" ] as $names
+  | .services as $s
+  | [ $names[] | . as $n | $s[$n]
+      | { name: $n, nets: ((.networks // {}) | keys | sort), mode: (.network_mode // null) } ] as $rows
+  | ($rows[] | "\(.name): networks=\(.nets | tojson) network_mode=\(.mode // "None")"),
+    ([ $rows[] | select(.mode != "none" and .nets != ["auth_plane"]) | .name ] as $bad
+     | if ($bad | length) > 0 then error("auth services outside auth_plane (or network_mode none): " + ($bad | join(", "))) else empty end)
 ' || die "an auth service is attached to a network other than auth_plane"
 
 printf 'step 4e: no secret reaches a process argument\n'
-compose --profile auth config --format json | python3 -c '
-import json, re, sys
-services = json.load(sys.stdin)["services"]
-bad = []
-for name in ("auth-keys-init", "auth-provision", "auth-migrate", "auth-service"):
-    service = services[name]
-    argv = list(service.get("entrypoint") or []) + list(service.get("command") or [])
-    text = " ".join(argv)
-    hit = re.search(r"\$\{?[A-Za-z_]*(PASSWORD|SECRET|TOKEN|KEY)(?!_ID|_FILE)", text)
-    print(f"{name}: argv expands a secret variable: {bool(hit)}")
-    if hit:
-        bad.append(name)
-if bad:
-    sys.exit("secret variable expanded into a process argument: " + ", ".join(bad))
+compose --profile auth config --format json | jq -er '
+  [ "auth-keys-init", "auth-provision", "auth-migrate", "auth-service" ] as $names
+  | .services as $s
+  | [ $names[] | . as $n | $s[$n]
+      | ([ (.entrypoint // [])[], (.command // [])[] ] | join(" ")) as $text
+      | { name: $n, hit: ($text | test("\\$\\{?[A-Za-z_]*(PASSWORD|SECRET|TOKEN|KEY)(?!_ID|_FILE)")) } ] as $rows
+  | ($rows[] | "\(.name): argv expands a secret variable: \(if .hit then "True" else "False" end)"),
+    ([ $rows[] | select(.hit) | .name ] as $bad
+     | if ($bad | length) > 0 then error("secret variable expanded into a process argument: " + ($bad | join(", "))) else empty end)
 ' || die "a secret reaches a process argument (visible to docker top)"
 
 printf 'step 5: signing key custody\n'

@@ -159,16 +159,12 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, root),
+		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + createVenueKey,
 			"NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost",
 			"REQUESTS_CA_BUNDLE=" + certFile,
-			"VENUE_PINNED_NOW=" + createVenuePinnedNow,
-			"VENUE_PINNED_NOW_MODULES=dev_health_ops.api.admin.routers.sync,dev_health_ops.models.settings," +
-				"dev_health_ops.models.integrations,dev_health_ops.sync.pagerduty_repair,dev_health_ops.sync.discovery",
-			"VENUE_PINNED_TIME_MODULES=croniter.croniter",
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -303,16 +299,14 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 
 	orgs := fmt.Sprintf("'%s','%s','%s','%s'", ids.orgA, ids.orgB, ids.orgC, ids.orgE)
 	queries := createVenueRowQueries(orgs, "i.name <> 'jira inactive cred'")
-	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
+	goDB := venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integrations", "sync_configurations", "integration_sources", "integration_datasets", "scheduled_jobs"} {
 		goRows := fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, goDB, queries[table]), "127.0.0.1:<port>")
-		golden.CompareRows(t, "rows:"+table, func() string {
-			return fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, source, queries[table]), "127.0.0.1:<port>")
-		}, goRows)
+		golden.CompareRows(t, "rows:"+table, goRows)
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
 	}
 	inactive := `SELECT count(*) FROM integration_sources s JOIN integrations i ON i.id = s.integration_id WHERE i.name = 'jira inactive cred'`
-	if pythonCount, goCount := golden.InspectRows(t, "inactive", func() string { return venueoracle.TableRows(t, ctx, source, inactive) }), venueoracle.TableRows(t, ctx, goDB, inactive); pythonCount != "292" || goCount != "0" {
+	if pythonCount, goCount := golden.InspectRows(t, "inactive"), venueoracle.TableRows(t, ctx, goDB, inactive); pythonCount != "292" || goCount != "0" {
 		t.Errorf("inactive credential discovery: python %s sources, go %s; want the documented 292 / 0", pythonCount, goCount)
 	}
 	// The writes happened on the Go plane: discovered Jira projects, the

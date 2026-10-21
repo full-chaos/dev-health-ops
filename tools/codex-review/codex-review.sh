@@ -2340,7 +2340,13 @@ else
     printf '\n[permissions.codex-review.network]\nenabled = true\ndangerously_allow_all_unix_sockets = false\n\n[permissions.codex-review.network.unix_sockets]\n"/var/run/docker.sock" = "allow"\n'
   } > "$CODEX_HOME_ROUND/config.toml" || die "cannot write $CODEX_HOME_ROUND/config.toml"
   chmod 600 "$CODEX_HOME_ROUND/config.toml"
-  python3 -c "import tomllib,sys; d=tomllib.load(open(sys.argv[1],'rb')); assert d.get('default_permissions')=='codex-review', d.get('default_permissions'); assert 'codex-review' in d.get('permissions',{})" "$CODEX_HOME_ROUND/config.toml" \
+  # Root keys end at the first table header: exactly one root default_permissions, set to codex-review, and the
+  # [permissions.codex-review] table present. codex itself refuses a config.toml that does not parse.
+  awk 'BEGIN { root = 1; dp = 0; ok = 0; table = 0 }
+       /^[[:space:]]*\[/ { root = 0 }
+       root && /^[[:space:]]*default_permissions[[:space:]]*=/ { dp++; if ($0 ~ /^[[:space:]]*default_permissions[[:space:]]*=[[:space:]]*"codex-review"[[:space:]]*$/) ok++ }
+       /^[[:space:]]*\[permissions\.codex-review\][[:space:]]*$/ { table++ }
+       END { exit !(dp == 1 && ok == 1 && table == 1) }' "$CODEX_HOME_ROUND/config.toml" \
     || die "per-round CODEX_HOME config.toml at $CODEX_HOME_ROUND/config.toml failed its own TOML/key sanity check -- refusing to launch codex against a config that might not mean what this wrapper intended"
   ln -s "$CODEX_HOME_REAL/auth.json" "$CODEX_HOME_ROUND/auth.json" || die "cannot symlink auth.json into per-round CODEX_HOME"
   # Same flipped classification as the base preflight above: only call it

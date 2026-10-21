@@ -40,7 +40,7 @@ func TestIntegrationsAdminVenueOracle(t *testing.T) {
 	v := newIDs()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root),
+		Golden: golden, Root: root,
 		JWTKey: jwtKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -77,9 +77,7 @@ discovered_at, last_seen_at, last_sync_at, last_sync_success, last_sync_error FR
 FROM integration_datasets ORDER BY integration_id, dataset_key`},
 	} {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		pythonRows := golden.CompareRows(t, table.name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
-		}, goRows)
+		pythonRows := golden.CompareRows(t, table.name, goRows)
 		if strings.TrimSpace(pythonRows) == "" {
 			t.Errorf("%s: no rows compared", table.name)
 		}
@@ -142,7 +140,7 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	return ts.URL
 }
 
-// repoRoot walks up from this file to the directory holding src/dev_health_ops.
+// repoRoot walks up from this file to the directory holding go.mod.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := moduleroot.Caller(0)
@@ -151,12 +149,12 @@ func repoRoot(t *testing.T) string {
 	}
 	directory := filepath.Dir(file)
 	for {
-		if info, err := os.Stat(filepath.Join(directory, "src", "dev_health_ops")); err == nil && info.IsDir() {
+		if info, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil && !info.IsDir() {
 			return directory
 		}
 		parent := filepath.Dir(directory)
 		if parent == directory {
-			t.Fatalf("no src/dev_health_ops above %s", file)
+			t.Fatalf("no go.mod above %s", file)
 		}
 		directory = parent
 	}

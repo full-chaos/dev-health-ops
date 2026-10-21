@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,75 +13,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
-
-// pythonAuthenticateDecisionProgram runs the real
-// AuthService.authenticate_access_token for each case on stdin: a token the
-// program mints itself (the base claims with the case's changes, against the
-// clock of the run) and the users row the validator's own SELECT gets (a fake
-// session answers it; none when the case has no row). It prints, per case, the
-// decision and, when the user is accepted, the superuser flag and the token
-// version the validator settled on. No token is printed.
-const pythonAuthenticateDecisionProgram = `
-import asyncio, json, os, sys, uuid
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
-
-import jwt
-
-from dev_health_ops.api.services.auth import AuthService, JWT_ALGORITHM
-
-key = os.environ["ORACLE_SIGNING_KEY"]
-svc = AuthService(secret_key=key)
-now = datetime.now(timezone.utc)
-uid = "11111111-1111-4111-8111-111111111111"
-
-
-class Result:
-    def __init__(self, row):
-        self.row = row
-
-    def one_or_none(self):
-        return self.row
-
-
-class Session:
-    def __init__(self, row):
-        self.row = row
-
-    async def execute(self, statement):
-        if self.row is None:
-            return Result(None)
-        return Result(SimpleNamespace(
-            id=uuid.UUID(uid), is_active=self.row["is_active"],
-            is_superuser=self.row["is_superuser"], token_version=self.row["token_version"],
-        ))
-
-
-def token(case):
-    payload = {
-        "sub": uid, "email": "u@example.com", "org_id": "org-1", "role": "member",
-        "is_superuser": False, "type": "access", "iss": svc.issuer, "aud": svc.audience,
-        "exp": now + timedelta(minutes=5), "iat": now, "jti": "j", "tv": 0,
-    }
-    payload.update(case["claims"])
-    for name in case["remove"] or []:
-        payload.pop(name, None)
-    return jwt.encode(payload, key, algorithm=JWT_ALGORITHM)
-
-
-out = []
-for case in json.load(sys.stdin):
-    user = asyncio.run(svc.authenticate_access_token(token(case), Session(case["row"])))
-    answer = {"name": case["name"], "accepted": user is not None}
-    if user is not None:
-        answer["is_superuser"] = user.is_superuser
-        answer["token_version"] = user.token_version
-    out.append(answer)
-print(json.dumps(out))
-`
 
 // authenticateRow is the users row of a case as the Python validator reads it.
 // A null token_version is what a row written before the column had a default
@@ -169,19 +101,13 @@ func (authenticateStore) ActiveImpersonation(context.Context, uuid.UUID) (*polic
 // user the superuser flag (the row's, never the token's) and the token
 // version. The golden holds no token.
 func TestAuthenticateDecisionsMatchFrozenPython(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	cases := authenticateCases()
 	input, err := json.Marshal(cases)
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := decisionGoldens.Outputs(t, root, "users-row-decisions.golden.json", programoracle.Program{
-		Name: "authenticate decisions", Text: pythonAuthenticateDecisionProgram, Stdin: input,
-		Env: map[string]string{"ORACLE_SIGNING_KEY": testKey},
+	output := decisionGoldens.Outputs(t, "users-row-decisions.golden.json", programoracle.Program{
+		Name: "authenticate decisions", Stdin: input,
 	})[0]
 	var want []struct {
 		Name         string `json:"name"`

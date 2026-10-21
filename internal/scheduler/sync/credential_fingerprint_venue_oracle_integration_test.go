@@ -90,10 +90,8 @@ func TestCredentialFingerprintVenueOracleMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
-		Name: "credential stamp", Text: pythonCredentialStampProgram, Stdin: input,
-		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test", "SETTINGS_ENCRYPTION_KEY": fingerprintVenueKey},
-		PerRun: oracleDatabase(t, venue), PerRunNames: []string{oracleDatabaseEnv},
+	answer := programoracle.Produce(t, golden, []programoracle.Program{{
+		Name: "credential stamp", Stdin: input,
 	}})[0]
 	if answer.ExitCode != 0 {
 		t.Fatalf("the credential stamp program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)

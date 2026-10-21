@@ -1,44 +1,9 @@
 package mail
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// TestEmbeddedTemplatesMatchThePythonOnes fails when an embedded copy drifts
-// from src/dev_health_ops/templates/email/<name>.html -- the templates are
-// copies (go:embed cannot reach outside the package), so this is the only
-// thing keeping the two planes' invite mail identical.
-func TestEmbeddedTemplatesMatchThePythonOnes(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate this test's source file")
-	}
-	pythonDir := filepath.Join(filepath.Dir(file), "..", "..", "src", "dev_health_ops", "templates", "email")
-	embedded, err := templateFiles.ReadDir("templates")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(embedded) == 0 {
-		t.Fatal("no templates embedded")
-	}
-	for _, entry := range embedded {
-		want, err := os.ReadFile(filepath.Join(pythonDir, entry.Name()))
-		if err != nil {
-			t.Fatalf("%s has no Python original: %v", entry.Name(), err)
-		}
-		got, err := templateFiles.ReadFile("templates/" + entry.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(got) != string(want) {
-			t.Errorf("%s: embedded copy differs from src/dev_health_ops/templates/email/%s", entry.Name(), entry.Name())
-		}
-	}
-}
 
 func TestFormatTemplateFollowsPythonStrFormat(t *testing.T) {
 	context := map[string]string{"a": "1", "b_2": "<b>&</b>", "_c": ""}

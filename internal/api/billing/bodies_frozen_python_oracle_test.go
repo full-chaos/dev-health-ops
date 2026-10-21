@@ -13,36 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonBodiesProgram mounts the REAL billing request models on a bare
-// FastAPI app and answers each body with the 422 FastAPI renders, or the
-// validated model dumped the way the routes read it (exclude_unset for the
-// update model, whose routes act on model_fields_set).
-const pythonBodiesProgram = `
-import json, sys
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from dev_health_ops.api.billing.plans import BillingPlanCreate, BillingPlanUpdate
-from dev_health_ops.api.billing.router import CheckoutRequest
-from dev_health_ops.api.billing.subscriptions import ChangePlanRequest, CancelSubscriptionRequest
-app = FastAPI()
-@app.post("/create")
-def create(p: BillingPlanCreate): return p.model_dump(mode="json")
-@app.post("/update")
-def update(p: BillingPlanUpdate): return p.model_dump(mode="json", exclude_unset=True)
-@app.post("/checkout")
-def checkout(p: CheckoutRequest): return p.model_dump(mode="json")
-@app.post("/change")
-def change(p: ChangePlanRequest): return p.model_dump(mode="json")
-@app.post("/cancel")
-def cancel(p: CancelSubscriptionRequest): return p.model_dump(mode="json")
-client = TestClient(app, raise_server_exceptions=False)
-out = []
-for model, body in json.loads(sys.stdin.read()):
-    r = client.post("/" + model, content=body.encode("utf-8"), headers={"content-type": "application/json"})
-    out.append([r.status_code, r.text])
-print(json.dumps(out))
-`
-
 var modelFields = map[string][]string{
 	"create":   {"key", "name", "description", "tier", "is_active", "display_order", "stripe_product_id", "metadata", "prices", "bundle_ids"},
 	"update":   {"key", "name", "description", "tier", "is_active", "display_order", "stripe_product_id", "metadata", "prices", "bundle_ids"},
@@ -288,7 +258,7 @@ func TestBillingBodiesMatchFrozenFastAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenPython(t, "billing-bodies.golden.json", programoracle.Program{
-		Name: "billing request bodies", Text: pythonBodiesProgram, Stdin: input,
+		Name: "billing request bodies", Stdin: input,
 	})[0]
 	var want [][2]any
 	if err := json.Unmarshal([]byte(output), &want); err != nil {

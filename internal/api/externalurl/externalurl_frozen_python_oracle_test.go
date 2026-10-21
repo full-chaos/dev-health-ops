@@ -3,11 +3,8 @@ package externalurl
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -15,18 +12,12 @@ import (
 // producer is the credentials router of the pinned build, over the standard
 // library's address tables. A golden recorded by another producer is refused.
 var externalURLGoldens = programoracle.Set{
-	Package:  "./internal/api/externalurl/",
 	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
 	Identity: "python 3.14.7\nunicodedata 16.0.0",
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
 		"validate-external-url.golden.json": "0f2ba046284d057d9cfab5e8ddb6d38ade27243e786db7830723d356cc3a22c8",
 	},
 }
-
-// oracleScript is the place of the oracle script under the repository root.
-const oracleScript = "internal/api/externalurl/testdata/venue_oracle_validate_external_url.py"
 
 // TestValidateExternalURLMatchesFrozenPython runs the Go Validate over the
 // URLs the real Python _validate_external_url answered when the golden was
@@ -36,12 +27,6 @@ const oracleScript = "internal/api/externalurl/testdata/venue_oracle_validate_ex
 // including the private-network exceptions and the reserved/link-local/
 // loopback tables.
 func TestValidateExternalURLMatchesFrozenPython(t *testing.T) {
-	_, currentFile, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
-
 	urls := []string{
 		"", "8.8.8.8", "//8.8.8.8", "ftp://8.8.8.8", "file:///etc/passwd", "https:///x", "https://",
 		"https://8.8.8.8", "https://8.8.8.8:8443/path?q=1", "http://140.82.112.5",
@@ -63,14 +48,7 @@ func TestValidateExternalURLMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The script reads its URLs from argv[1]; the program hands them over from
-	// its input, so they are part of the request.
-	script, err := os.ReadFile(filepath.Join(root, oracleScript))
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := "import sys\nsys.argv = [sys.argv[0], sys.stdin.read()]\n" + string(script)
-	output := externalURLGoldens.Outputs(t, root, "validate-external-url.golden.json", programoracle.Script("validate external url", oracleScript, text, payload))[0]
+	output := externalURLGoldens.Outputs(t, "validate-external-url.golden.json", programoracle.Program{Name: "validate external url", Stdin: payload})[0]
 	var want [][2]any
 	if err := json.Unmarshal([]byte(output), &want); err != nil {
 		t.Fatalf("decode %s: %v", output, err)

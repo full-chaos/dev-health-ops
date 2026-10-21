@@ -47,7 +47,7 @@ func roundRobin(t *testing.T, backends ...string) string {
 func TestSharedRateLimitAcrossReplicasVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("sharedlimit", t.Name(), "de2ce6f486b354de34ef501a869191811a7571c972749639db0f740fcb1c20f3"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("shl")
 	const jwtKey = "venue-oracle-test-secret-key-for-shared-rate-limit-32-by"
 	const adminPlaintextPassword = "correct horse battery staple sl"

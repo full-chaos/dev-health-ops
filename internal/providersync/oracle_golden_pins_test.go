@@ -1,9 +1,7 @@
 package providersync
 
 // oraclePairGoldenPins pins the SHA-256 of every golden under
-// testdata/oracle_golden. A comparison whose golden is not named here fails. The
-// goldenrecord verb writes each digest when it promotes a recording; a new
-// golden starts as "PIN:" + its file name without ".json".
+// testdata/oracle_golden. A comparison whose golden is not named here fails.
 var oraclePairGoldenPins = map[string]string{
 	"acr_entitlements_agent-context-runtime.TestGenericOracleMatchesFrozenPythonForAcrEntitlement.golden.json":                                     "8855dd8f7a104328b77458b3ded74cb0f788ddb2ea452bddf156cee28ebc9636",
 	"github_blame_outcomes.TestGitHubBlamePerFileFailureMatchesFrozenPython.golden.json":                                                           "5ff0e34b1f3e6efb6a3d204d4ab55193693de70921103b43a4c7a161fd6d79bc",

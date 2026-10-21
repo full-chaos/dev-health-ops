@@ -134,25 +134,9 @@ printf '\nPOST /api/v1/auth/register -> %s\n' "${status}"
 [ "${status}" = "200" ] || [ "${status}" = "201" ] || die "register answered ${status}"
 token=""
 for _ in $(seq 1 30); do
-  if [ -s "${SINK_DIR}/mail" ]; then
-    token="$(python3 -I - "${SINK_DIR}/mail" <<'PY' || true
-import email, re, sys
-raw = open(sys.argv[1], encoding="latin-1").read()
-for chunk in raw.split("---MESSAGE-END---"):
-    if not chunk.strip():
-        continue
-    message = email.message_from_string(chunk.lstrip("\n"))
-    for part in message.walk():
-        body = part.get_payload(decode=True)
-        if body is None:
-            continue
-        found = re.search(r"verify\?token=([A-Za-z0-9._~%-]+)", body.decode("utf-8", "replace"))
-        if found:
-            print(found.group(1))
-            sys.exit(0)
-PY
-)"
-    [ -z "${token}" ] || break
+  if [ -s "${SINK_DIR}/mail.token" ]; then
+    token="$(cat "${SINK_DIR}/mail.token")"
+    break
   fi
   sleep 1
 done

@@ -4,6 +4,10 @@ import net from "node:net";
 import fs from "node:fs";
 
 const [, , portFile, mailFile] = process.argv;
+const tokenFile = `${mailFile}.token`;
+
+const decodeQuotedPrintable = (text) =>
+    text.replace(/=\r?\n/g, "").replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 
 const server = net.createServer((socket) => {
     let inData = false;
@@ -15,7 +19,10 @@ const server = net.createServer((socket) => {
         let index;
         while (inData ? (index = buffer.indexOf("\r\n.\r\n")) >= 0 : (index = buffer.indexOf("\r\n")) >= 0) {
             if (inData) {
-                fs.appendFileSync(mailFile, `${buffer.slice(0, index)}\n---MESSAGE-END---\n`);
+                const message = buffer.slice(0, index);
+                fs.appendFileSync(mailFile, `${message}\n---MESSAGE-END---\n`);
+                const found = /verify\?token=([A-Za-z0-9._~%-]+)/.exec(decodeQuotedPrintable(message));
+                if (found) fs.writeFileSync(tokenFile, found[1]);
                 buffer = buffer.slice(index + 5);
                 inData = false;
                 reply("250 queued");

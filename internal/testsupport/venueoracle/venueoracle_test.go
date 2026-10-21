@@ -86,6 +86,9 @@ func TestAdminNoStoreIsAnIntendedDivergenceOnlyWhenTheGoldenLacksIt(t *testing.T
 		{"go sends no-store, with a suffix", request, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store, private"}, false},
 		{"golden has it, values match", request, map[string]string{"a": "1", "cache-control": "no-store"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
 		{"golden has it, values differ", request, map[string]string{"a": "1", "cache-control": "public"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"admin-prefixed route of another package", Request{Method: "GET", Path: "/api/v1/admin/credentials"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"admin route with a path parameter", Request{Method: "GET", Path: "/api/v1/admin/integrations/pagerduty/webhook-bindings/abc"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+		{"admin route, wrong method", Request{Method: "PATCH", Path: "/api/v1/admin/llm-settings/models"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
 		{"outside admin scope", Request{Method: "GET", Path: "/api/v1/other"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
 	}
 	for _, tc := range cases {

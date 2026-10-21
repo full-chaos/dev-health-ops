@@ -168,6 +168,9 @@ var (
 	KeyPath                         = Key{"path"}
 	KeyCountdown                    = Key{"countdown"}
 	KeyKeptEarlierWakeup            = Key{"kept_earlier_wakeup"}
+	KeyIdleSeconds                  = Key{"idle_seconds"}
+	KeyBackoffSeconds               = Key{"backoff_seconds"}
+	KeyBackoffLevel                 = Key{"backoff_level"}
 	KeyRowsWritten                  = Key{"rows_written"}
 	KeyRowsRetracted                = Key{"rows_retracted"}
 	KeyRowsRetractionHeld           = Key{"rows_retraction_held"}

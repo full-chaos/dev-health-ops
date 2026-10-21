@@ -253,3 +253,55 @@ func TestNoCIRequirementsFileFiresOnPlantedFile(t *testing.T) {
 		t.Fatalf("planted ci/requirements-x.txt not found: %v", found)
 	}
 }
+
+// The scan reads what git tracks: an untracked .py (a tool cache, a scratch file) is not tracked Python, and must
+// neither be reported nor keep an emptied owned entry alive.
+func TestPythonScanReadsTrackedFilesOnly(t *testing.T) {
+	both := func(t *testing.T, root string) (dead, tests []string) {
+		t.Helper()
+		return pyDeadWalk(t, root), testsTreePythonFiles(t, root)
+	}
+	t.Run("untracked .py is not reported", func(t *testing.T) {
+		for _, untracked := range []string{".uv-cache/x.py", "scratch/y.py", "tests/.uv-cache/z.py"} {
+			root := plantedRepo(t, map[string]string{"tests/test_a.py": "", untracked: ""}, "tests/test_a.py")
+			dead, tests := both(t, root)
+			if strings.Join(dead, ",") != "tests/test_a.py" || strings.Join(tests, ",") != "tests/test_a.py" {
+				t.Errorf("untracked %s: pyDeadWalk=%v testsTreePythonFiles=%v, want only the tracked tests/test_a.py", untracked, dead, tests)
+			}
+		}
+	})
+	t.Run("tracked .py outside the owned entries is reported", func(t *testing.T) {
+		for _, planted := range []string{"brand/new/dir/y.py", "internal/x.py"} {
+			root := plantedRepo(t, map[string]string{planted: ""}, planted)
+			if outside, _ := pyDeadVerdict(pyDeadWalk(t, root)); len(outside) != 1 || outside[0] != planted {
+				t.Errorf("tracked %s: outside = %v", planted, outside)
+			}
+		}
+	})
+	t.Run("untracked .py in an owned prefix does not hide an emptied entry", func(t *testing.T) {
+		for _, e := range pyOwnedEntries {
+			if !strings.HasSuffix(e.stem, "/") {
+				continue
+			}
+			files := map[string]string{}
+			var track []string
+			for _, o := range pyOwnedEntries {
+				p := o.stem + "a.py"
+				if !strings.HasSuffix(o.stem, "/") {
+					p = o.stem + ".py"
+				}
+				if o.stem == e.stem {
+					files[p] = "" // present on disk, never staged
+					continue
+				}
+				files[p] = ""
+				track = append(track, p)
+			}
+			root := plantedRepo(t, files, track...)
+			_, emptied := pyDeadVerdict(pyDeadWalk(t, root))
+			if len(emptied) != 1 || !strings.HasPrefix(emptied[0], e.stem+" ") {
+				t.Errorf("entry %s holds only an untracked .py: emptied = %v, want it reported", e.stem, emptied)
+			}
+		}
+	})
+}

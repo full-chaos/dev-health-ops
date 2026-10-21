@@ -773,3 +773,25 @@ func TestComputedJoinUnderACoveredDirectoryIsNotReported(t *testing.T) {
 	root := miniRepo(t, miniFiles(map[string]string{"internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"tests\", \"fixtures\", name)"}, miniGoYml))
 	expectNoViolations(t, pathFilterViolations(t, root, map[string]string{}))
 }
+
+// Every input KIND the CHAOS-10376 guards read must be Go-relevant in both events: a change confined to one of them
+// would otherwise be judged non-Go and the guard that reads it would never run.
+func TestGoYmlTriggersOnEveryTestsPythonGuardInput(t *testing.T) {
+	root := repoRoot(t)
+	for _, p := range []string{
+		"brand/new/dir/y.py",
+		"ci/requirements-x.txt",
+		"mkdocs.yml",
+		"docs/reference/limits-and-compatibility/provider-limits.md",
+		"ci/local_validate.sh",
+		"ci/run_live_backend_e2e.sh",
+	} {
+		for _, event := range []string{"push", "pull_request"} {
+			t.Run(event+"/"+p, func(t *testing.T) {
+				if !matchesAny(t, p, goPaths(t, root, event)) {
+					t.Errorf("go.yml %s.paths does not match %s, so a change confined to it is judged non-Go and its guard is skipped", event, p)
+				}
+			})
+		}
+	}
+}

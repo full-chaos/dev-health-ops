@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -306,4 +307,70 @@ func sizeDoerClient(t *testing.T, provider string, doer providerfoundation.HTTPD
 		t.Fatal(err)
 	}
 	return client
+}
+
+// githubTestsAllocated is the heap the call allocates (runtime TotalAlloc).
+func githubTestsAllocated(call func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	call()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// githubTestsOverCapAllocationBound pins the fix by a number: refusing one
+// artifact above the default 100 MiB cap allocates far below the cap. The
+// old path allocated the capped read itself, cap+1 bytes and more.
+const githubTestsOverCapAllocationBound = 1 << 20
+
+func TestGitHubTestsOverCapArtifactAllocationIsFarBelowTheCap(t *testing.T) {
+	overCap := githubTestsMaxDownloadSize + 500
+	t.Run("declared size skip, whole unit", func(t *testing.T) {
+		doer := newGitHubTestsSizedDoer(t, map[int]githubTestsSizedArtifact{
+			1: {listedSize: strconv.Itoa(overCap), contentLength: int64(overCap), bodyBytes: overCap},
+		})
+		client := githubTestsClient(t, fakehttp.Client(doer))
+		var walk githubTestsWalk
+		allocated := githubTestsAllocated(func() {
+			walk = walkGitHubTestsChunks(t, GitHubTestsRouteHandler{}, nativeTestClaim("github", "cicd"), client, 8)
+		})
+		githubTestsOversizedMarker(t, walk, "1")
+		t.Logf("ALLOC bytes_read=%d allocated=%d bound=%d", doer.read[1], allocated, githubTestsOverCapAllocationBound)
+		if doer.read[1] != 0 || allocated >= githubTestsOverCapAllocationBound {
+			t.Fatalf("bytes_read=%d allocated=%d, want 0 and < %d", doer.read[1], allocated, githubTestsOverCapAllocationBound)
+		}
+	})
+	t.Run("content-length refusal, one download", func(t *testing.T) {
+		doer := newGitHubTestsSizedDoer(t, map[int]githubTestsSizedArtifact{
+			1: {contentLength: int64(overCap), bodyBytes: overCap},
+		})
+		client := githubTestsClient(t, fakehttp.Client(doer))
+		var err error
+		allocated := githubTestsAllocated(func() {
+			_, _, _, err = downloadGitHubTestsArtifact(context.Background(), client, "/repos/acme/api", "1", githubTestsMaxDownloadSize)
+		})
+		if !errors.Is(err, ErrGitHubTestsArtifactOversized) {
+			t.Fatalf("err=%v, want ErrGitHubTestsArtifactOversized", err)
+		}
+		t.Logf("ALLOC bytes_read=%d allocated=%d bound=%d", doer.read[1], allocated, githubTestsOverCapAllocationBound)
+		if doer.read[1] != 0 || allocated >= githubTestsOverCapAllocationBound {
+			t.Fatalf("bytes_read=%d allocated=%d, want 0 and < %d", doer.read[1], allocated, githubTestsOverCapAllocationBound)
+		}
+	})
+	t.Run("gitlab content-length refusal, one download", func(t *testing.T) {
+		doer := &gitLabSizedDoer{contentLength: gitLabTestsMaxDownload + 500, bodyBytes: gitLabTestsMaxDownload + 500}
+		client := sizeDoerClient(t, "gitlab", doer)
+		var err error
+		allocated := githubTestsAllocated(func() {
+			_, err = downloadGitLabTestsArtifact(context.Background(), client, "/projects/1", "2")
+		})
+		if !errors.Is(err, ErrGitLabTestsIncomplete) {
+			t.Fatalf("err=%v, want ErrGitLabTestsIncomplete", err)
+		}
+		t.Logf("ALLOC bytes_read=%d allocated=%d bound=%d", doer.read, allocated, githubTestsOverCapAllocationBound)
+		if doer.read != 0 || allocated >= githubTestsOverCapAllocationBound {
+			t.Fatalf("bytes_read=%d allocated=%d, want 0 and < %d", doer.read, allocated, githubTestsOverCapAllocationBound)
+		}
+	})
 }

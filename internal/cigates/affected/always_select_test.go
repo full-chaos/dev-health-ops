@@ -1,14 +1,11 @@
 package affected_test
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 )
 
 // always.tsv holds no package: the tests that read or run other packages' files (a DDL scan of every _test.go, `go run` of
@@ -85,12 +82,12 @@ func realPlan(t *testing.T, changed string) []string {
 	if err := os.WriteFile(list, []byte(changed+"\x00"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var out, errb bytes.Buffer
-	if code := affected.PlanVerdict([]string{"--event", "pull_request", "--changed", list, "--golist", in.golist,
-		"--keys", in.keys, "--root", root}, &out, &errb); code != 0 {
-		t.Fatalf("plan-verdict exited %d: %s", code, errb.String())
+	res := cmdSpec{dir: root, env: inheritedEnv([]string{"GOFLAGS"}, "GOFLAGS=")}.run(cigate(t), "plan-verdict", "--event", "pull_request",
+		"--changed", list, "--golist", in.golist, "--keys", in.keys, "--root", root)
+	if res.code != 0 {
+		t.Fatalf("plan-verdict exited %d: %s", res.code, res.stderr)
 	}
-	return strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	return strings.Split(strings.TrimRight(res.stdout, "\n"), "\n")
 }
 
 // One row per executed repro of a test that reads another package's files.
@@ -107,6 +104,7 @@ func TestAlwaysSelectedPackagesRunOnGoOnlyChanges(t *testing.T) {
 		{"internal/queryapi/aianalytics/ai_opportunities.go", "internal/queryapi/scancensus"},
 	} {
 		t.Run(c.changed, func(t *testing.T) {
+			t.Parallel()
 			lines := realPlan(t, c.changed)
 			if !strings.HasPrefix(lines[0], "AFFECTED ") {
 				t.Fatalf("a .go-only change plans %q, want AFFECTED", lines[0])
@@ -133,6 +131,7 @@ func TestPlannerInputsPlanFull(t *testing.T) {
 		".github/workflows/go-quality.yml",
 	} {
 		t.Run(changed, func(t *testing.T) {
+			t.Parallel()
 			if lines := realPlan(t, changed); lines[0] != "FULL planner input: "+changed {
 				t.Fatalf("a change to %s plans %q, want %q", changed, lines[0], "FULL planner input: "+changed)
 			}

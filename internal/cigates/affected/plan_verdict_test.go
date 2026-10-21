@@ -611,3 +611,29 @@ func TestPlanVerdictLogsEachRootWalkDecision(t *testing.T) {
 		})
 	}
 }
+
+// In a git checkout the guard reads tracked files only: an untracked file in a declared class (a local note, a review
+// context file) changes neither a walk's computed classes nor the generated dynreads table.
+func TestPlanReadsCountsTrackedFilesOnly(t *testing.T) {
+	work := t.TempDir()
+	r := newGitRepo(filepath.Join(work, "repo"))
+	for name, body := range map[string]string{
+		"go.mod":                                "module m\n",
+		"docs/a.md":                             "a\n",
+		"contracts/x.json":                      "{}\n",
+		"q/q_test.go":                           plantedRootWalker,
+		"internal/cigates/affected/classes.tsv": "docs\tdocs/**\ncontracts\tcontracts/**\nclaude\t.claude/**\n",
+		"internal/cigates/affected/walks.tsv":   "q\ttest\tq_test.go\t.\t-\t*\tcontracts,docs\n",
+	} {
+		r.write(name, body)
+	}
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "base")
+	r.write(".claude/local.json", "{}\n")
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if res := planReads(t, r.dir); res.code != 0 {
+		t.Fatalf("an untracked .claude file changed the guard's view (exit %d):\n%s%s", res.code, res.stdout, res.stderr)
+	}
+}

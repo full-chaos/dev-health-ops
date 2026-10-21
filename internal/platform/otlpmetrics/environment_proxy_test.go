@@ -20,7 +20,7 @@ import (
 func exportOnce(ctx context.Context, endpoint string) error {
 	exporter, err := otlpmetricgrpc.New(ctx, dialOptions(endpoint)...)
 	if err != nil {
-		return err
+		panic(err)
 	}
 	defer func() { _ = exporter.Shutdown(ctx) }()
 	return exporter.Export(ctx, &metricdata.ResourceMetrics{})

@@ -21,7 +21,7 @@ import (
 func exportOneSpan(ctx context.Context, endpoint string) error {
 	exporter, err := otlptracegrpc.New(ctx, dialOptions(endpoint)...)
 	if err != nil {
-		return err
+		panic(err)
 	}
 	defer func() { _ = exporter.Shutdown(ctx) }()
 	return exporter.ExportSpans(ctx, []sdktrace.ReadOnlySpan{tracetest.SpanStub{Name: "proxy-probe"}.Snapshot()})

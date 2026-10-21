@@ -301,3 +301,23 @@ Unicode rows: U+00E9 and U+0663 before the variable name (not a credential), U+0
 ## Unicode word table
 
 The `\b` of the credential pattern is Python's `\w` (letter, number, underscore by Python's Unicode data). Go 1.27 ships Unicode 17.0.0, CI Python 3.14 ships 16.0.0. `codeprereq_unicode.go` lists the 4657 code points that Go counts as word characters and Python does not (no code point is a word character in Python only); the verb treats them as non-word. `TestCodePrerequisitesUnicodeTableMatchesGo` fails when `unicode.Version` differs from the version the table was generated for, and when a listed code point is no Go word character. No test runs Python. To generate the table again (by hand, outside CI), print every code point with `unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_'` from a Go program, then with python3.14 compare it against `re.match(r'\w', chr(c))` for every code point except the surrogates, and write the ranges where Go says word and Python does not (and note any range where Python says word and Go does not: the verb would have to treat those as word) into `codeprereq_unicode.go` with both versions (`unicodedata.unidata_version`, `unicode.Version`).
+
+# Part c2: check-docs-accessibility
+
+Cases `parity/a11y-*` (74), corpora `helpers/htmlevents.jsonl` (2838: events of html.parser.HTMLParser(convert_charrefs=True).feed(text)),
+`helpers/a11yaudit.jsonl` (2838: findings of `_audit_html`), `helpers/tabindex.jsonl` (3420: `int(text) > 0`, every Python decimal digit and space),
+`helpers/utf8err.jsonl` (2832: `str(UnicodeDecodeError)`), frozen script `refusals/check_docs_candidate_accessibility.py.frozen`.
+Recorded with Python 3.14.7 (`python3.14 -I -B`) from `scripts/check_docs_candidate_accessibility.py` at the merge base.
+Also run, not stored: 133728 further fuzz inputs (events and findings) with 0 differences; on the real built site (212 pages) and on a copy
+with 60 pages mutated, Python and Go gave the same stdout and report bytes.
+Tables: `pytables/html5_names.txt` (keys of html.entities.html5), `pytables/decimal.tsv` (code points >= 0x80 with a decimal value, Unicode 16.0.0).
+Stricter than Python 3.14.7: arguments (as part 1); a page name that is not UTF-8; a named pipe named *.html; the 80 decimal digits Unicode 16 added (`pytables/decimal_unicode16.txt`) in a tabindex: Python 3.14.7 reads them in `int()`, Python 3.13 (Unicode 15.1), on which Cloudflare Workers Builds ran the former script, refuses them, and Go refuses (refusal row `a11y tabindex Unicode 16 digit`, `TestTabindexRefusesUnicode16Digits`; the 80 rows of the corpus that held them are left out, so the corpus is the same under 3.13.15 and 3.14.7). Same text as Python: UnicodeDecodeError
+(position and reason), OSError of an unreadable page, FileExistsError/NotADirectoryError of a report parent.
+
+# Part c2: validate-publication
+
+Cases `parity/pub-*` (163), corpora under `helpers/` (YAML 2770 documents recorded with `yaml.safe_load`, base64, `str.title`, csv reader and writer, nav flattening, `sorted()` TypeError, `urlparse`, links, front matter, canonical URL, stem and title), frozen script `refusals/validate_docs_v2_publication.py.frozen`, refusal inventory `refusals/validate-publication.tsv` (39 rows) and `cmd/cigate/docs_pub_refusals_test.go` (81 rows).
+Recorded with Python 3.14.7 and PyYAML 6.0.3 (pure-Python SafeLoader) from `scripts/validate_docs_v2_publication.py` at the merge base. On the real repository tree (211 pages, 138 redirects, 239 IA nodes) Python and Go gave the same stdout, stderr and the three `.build` files; the verb passes the real `mkdocs.yml` and the front matter of all 207 pages that have one.
+The loader is a port of the PyYAML 6.0.3 SafeLoader (`dc_pub_yaml_*.go`): the standard YAML 1.1 tags, anchors, merge keys and implicit types as `safe_load`; other tags are refused.
+Stricter than Python (named): compose nesting deeper than 400 (RecursionError; Python stops near 485); a lone surrogate escape in a double-quoted scalar; a scalar that matches an implicit type only through `$` before a final newline; a non-ASCII decimal digit in an explicit `!!int` or `!!float`; `str()` of a set with two or more members (hash order); a bracketed netloc in a link; a page file name that is not UTF-8.
+Different on purpose: a YAML exception prints as one line (kind plus the first line of `str(exc)`); the `sorted()` TypeError text is exact below 64 IA rows and may differ from 64 up (the exit code does not).

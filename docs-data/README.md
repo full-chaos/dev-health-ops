@@ -11,8 +11,8 @@ Reader-facing documentation guidance lives under
 
 | Path | Consumed by |
 | --- | --- |
-| `ia/*.tsv` | `scripts/validate_docs_ia_v2.py`, `scripts/validate_docs_v2_publication.py`, `cigate docs validate-inventory-review` |
-| `redirects.tsv` | `scripts/validate_docs_v2_publication.py`, `scripts/build_docs_cloudflare.py`, `.github/workflows/docs-cloudflare.yml` |
+| `ia/*.tsv` | `scripts/validate_docs_ia_v2.py`, `cigate docs validate-publication`, `cigate docs validate-inventory-review` |
+| `redirects.tsv` | `cigate docs validate-publication`, `scripts/build_docs_cloudflare.py`, `.github/workflows/docs-cloudflare.yml` |
 | `search-acceptance.json` | `cigate docs check-docs-search` (`internal/cigates/docstools`) via `.github/workflows/docs-guards.yml`, `scripts/build_docs_cloudflare.py` |
 | `inventory/` | `cigate docs validate-inventory-review` via `.github/workflows/docs-inventory-review.yml` (a frozen Phase 1 snapshot: its generator is deleted) |
 | `freshness-inventory.yml` | `scripts/check_freshness_inventory.py` (`make docs:check-freshness`) |

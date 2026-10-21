@@ -1,0 +1,4 @@
+url	id	label	kind
+/	home	Home	landing	extra
+/guide/intro/	g1	Intro	guide	a	b
+/guide/advanced/	a

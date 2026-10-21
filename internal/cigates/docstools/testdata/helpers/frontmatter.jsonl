@@ -1,0 +1,19 @@
+{"in": "---\na: 1\n---\nbody", "out": "a: 1"}
+{"in": "---\n---\nbody", "out": null}
+{"in": "---\n\n---\n", "out": ""}
+{"in": "--- \na: 1\n---\n", "out": "a: 1"}
+{"in": "---\na: 1\n--- \nbody", "out": "a: 1"}
+{"in": "---\na: 1\n---", "out": null}
+{"in": "---a\n---\n", "out": null}
+{"in": "\n---\na: 1\n---\n", "out": null}
+{"in": "---\r\na: 1\r\n---\r\n", "out": "a: 1\r"}
+{"in": "---\na: 1\n---\n---\nb: 2\n---\n", "out": "a: 1"}
+{"in": "---\n\n\n\na\n---\n", "out": "a"}
+{"in": "---\u00a0\na: 1\n---\u2003\n", "out": "a: 1"}
+{"in": "---\u000b\na: 1\n---\n", "out": "a: 1"}
+{"in": "---\na: ---\n---\n", "out": "a: ---"}
+{"in": "----\na\n---\n", "out": null}
+{"in": "---\n- a\n---\n", "out": "- a"}
+{"in": "---\na\n\n---\n", "out": "a\n"}
+{"in": "---\n---\n---\n", "out": "---"}
+{"in": "---\n\n---\n---\n", "out": "---"}

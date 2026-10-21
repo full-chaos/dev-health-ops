@@ -87,6 +87,7 @@ var walkArg = map[string]struct {
 }{
 	"path/filepath.WalkDir": {0, depthTree}, "path/filepath.Walk": {0, depthTree}, "path/filepath.Glob": {0, depthDir},
 	"os.ReadDir": {0, depthDir}, "io/ioutil.ReadDir": {0, depthDir}, "os.DirFS": {0, depthTree}, "net/http.Dir": {0, depthTree},
+	"os.OpenRoot": {0, depthTree}, "os.OpenInRoot": {0, depthTree},
 	"go/parser.ParseDir": {1, depthDir}, "go/build.ImportDir": {0, depthDir},
 }
 
@@ -234,7 +235,7 @@ func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 			case *ast.CallExpr:
 				calls[x.Fun] = true
 				name := s.callName(x.Fun)
-				if name == "os.Chdir" || strings.HasSuffix(name, ".Chdir") || name == "syscall.Chdir" {
+				if isChdir(name) {
 					g.chdir = true
 				}
 			case *ast.AssignStmt:
@@ -1148,6 +1149,11 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 		}
 		return
 	}
+	// A directory change moves every relative read of the test binary that runs this code: the call is unbounded.
+	if isChdir(name) {
+		dyn(name)
+		return
+	}
 	if otherExec[name] {
 		add(Read{Kind: ReadEdge, Line: line, Target: unexpressed, Literal: name})
 		return
@@ -1763,6 +1769,9 @@ func modelledCall(name string) bool {
 	case "os/exec.Command", "os/exec.CommandContext", "golang.org/x/tools/go/packages.Load":
 		return true
 	}
+	if isChdir(name) {
+		return true
+	}
 	if otherExec[name] {
 		return true
 	}
@@ -1788,14 +1797,15 @@ func (c *fileCtx) cmdMutated(x *ast.CallExpr) bool {
 	ast.Inspect(holder, func(n ast.Node) bool {
 		if a, ok := n.(*ast.AssignStmt); ok {
 			for _, l := range a.Lhs {
-				if s, ok := l.(*ast.SelectorExpr); ok && (s.Sel.Name == "Args" || s.Sel.Name == "Path") && refersTo(s.X, v) {
+				// any receiver: an alias of the command (c2 := c) is not followed
+				if s, ok := l.(*ast.SelectorExpr); ok && (s.Sel.Name == "Args" || s.Sel.Name == "Path") {
 					mutated = true
 				}
 			}
 		}
 		return true
 	})
-	return mutated
+	return mutated || escapes(holder, v)
 }
 
 // assignedTo is the name of the variable x is assigned to in holder ("" when x is not kept in one).
@@ -1821,4 +1831,55 @@ func assignedTo(holder ast.Node, x ast.Expr) string {
 		return true
 	})
 	return v
+}
+
+func isChdir(name string) bool {
+	return name == "os.Chdir" || name == "syscall.Chdir" || strings.HasSuffix(name, ".Chdir")
+}
+
+// escapes reports whether the variable v is used in holder other than as the receiver of a selector (c.Dir, c.Run()):
+// passed on, assigned to another name, returned or stored, so a later write to its Args or Path is out of sight.
+func escapes(holder ast.Node, v string) bool {
+	found := false
+	var visit func(n ast.Node, receiver bool)
+	visit = func(n ast.Node, receiver bool) {
+		if n == nil || found {
+			return
+		}
+		switch x := n.(type) {
+		case *ast.Ident:
+			if x.Name == v && !receiver {
+				found = true
+			}
+			return
+		case *ast.SelectorExpr:
+			visit(x.X, true)
+			return
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				if id, ok := l.(*ast.Ident); ok && id.Name == v {
+					continue
+				}
+				visit(l, false)
+			}
+			for _, r := range x.Rhs {
+				visit(r, false)
+			}
+			return
+		case *ast.ValueSpec:
+			for _, r := range x.Values {
+				visit(r, false)
+			}
+			return
+		}
+		ast.Inspect(n, func(m ast.Node) bool {
+			if m == n {
+				return true
+			}
+			visit(m, false)
+			return false
+		})
+	}
+	visit(holder, false)
+	return found
 }

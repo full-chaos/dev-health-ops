@@ -220,3 +220,54 @@ func TestNonGoPlanReproSourceLoadOfAPackageTree(t *testing.T) {
 			changed: []string{"b/b.go"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_census_test.go\tb/..."}},
 	})
 }
+
+// CHAOS-10475 review findings: each case reproduces a read the first scanner did not bound, with the exact tables the
+// scanner generates for the fixture (readsCode 0: plan-reads passes) and the verdict that selects the reader.
+
+// An unbounded read may name a changed Go file: a Go-only change set selects every unbounded reader.
+func TestNonGoPlanGoOnlyChangeSelectsAnUnboundedReader(t *testing.T) {
+	const reader = "package b\n\nimport \"os\"\n\nfunc TestReadChanged() { _, _ = os.ReadFile(os.Getenv(\"CHANGED_PATH\")) }\n"
+	runNongo(t, []nongoCase{
+		{name: "go_only_change_selects_the_unbounded_reader", head: map[string]string{"b/b_changed_test.go": reader, tablesDir + "dynreads.tsv": "b\tb_changed_test.go\n"},
+			changed: []string{"a/a.go"}, want: "AFFECTED 2", keys: []string{"a", "b"}},
+	})
+}
+
+// A directory change in one test binary moves the relative reads of every package it links: the Chdir call is unbounded.
+func TestNonGoPlanChdirMakesRelativeReadsUnbounded(t *testing.T) {
+	const helper = "package b\n\nimport \"os\"\n\nfunc Read() ([]byte, error) { return os.ReadFile(\"a.md\") }\n"
+	const test = "package a\n\nimport (\n\t\"os\"\n\t\"testing\"\n\n\t\"m/b\"\n)\n\nfunc TestRead(t *testing.T) {\n\tif err := os.Chdir(os.Getenv(\"TEST_DIR\")); err != nil {\n\t\tt.Fatal(err)\n\t}\n\t_, _ = b.Read()\n}\n"
+	runNongo(t, []nongoCase{
+		{name: "chdir_test_selects_itself_for_a_reader_less_path", head: map[string]string{"b/b_help.go": helper, "a/a_chdir_test.go": test, tablesDir + "dynreads.tsv": "a\ta_chdir_test.go\n"},
+			changed: []string{".claude/x.json"}, want: "AFFECTED 1", keys: []string{"a"}},
+		{name: "chdir_without_its_row_fails_the_guard", head: map[string]string{"b/b_help.go": helper, "a/a_chdir_test.go": test},
+			changed: []string{".claude/x.json"}, want: "FULL *", readsCode: 1, readsWant: []string{"a\ta_chdir_test.go"}},
+	})
+}
+
+// Mutating exec.Cmd.Args through an alias, or handing the command on, leaves the run target unknown.
+func TestNonGoPlanCmdArgsMutatedThroughAnAlias(t *testing.T) {
+	const alias = "package x\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc TestAlias(t *testing.T) {\n\tc := exec.Command(\"go\", \"run\", \"./cmd/tool\")\n\talias := c\n\talias.Args = []string{\"go\", \"run\", \"./a\"}\n\t_ = c.Run()\n}\n"
+	const passed = "package x\n\nimport (\n\t\"os/exec\"\n\t\"testing\"\n)\n\nfunc tune(c *exec.Cmd) { c.Args = []string{\"go\", \"run\", \"./a\"} }\n\nfunc TestPassed(t *testing.T) {\n\tc := exec.Command(\"go\", \"run\", \"./cmd/tool\")\n\ttune(c)\n\t_ = c.Run()\n}\n"
+	runNongo(t, []nongoCase{
+		{name: "alias_mutation_is_an_unexpressed_run", head: map[string]string{"x/x_alias_test.go": alias, tablesDir + "edges.tsv": "x\tx_alias_test.go\tunexpressed\n"},
+			changed: []string{"b/b.go"}, want: "AFFECTED 3", keys: []string{"b", "c", "x"}},
+		{name: "passed_on_command_is_an_unexpressed_run", head: map[string]string{"x/x_passed_test.go": passed, tablesDir + "edges.tsv": "x\tx_passed_test.go\tunexpressed\n"},
+			changed: []string{"b/b.go"}, want: "AFFECTED 3", keys: []string{"b", "c", "x"}},
+		{name: "alias_with_a_stale_target_row_fails_the_guard", head: map[string]string{"x/x_alias_test.go": alias, tablesDir + "edges.tsv": "x\tx_alias_test.go\tcmd/tool\n"},
+			changed: []string{"b/b.go"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_alias_test.go\tunexpressed"}},
+	})
+}
+
+// A read through os.Root is a read of the directory the root opens.
+func TestNonGoPlanOsRootReadsAreBounded(t *testing.T) {
+	const root = "package x\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestRoot(t *testing.T) {\n\tr, err := os.OpenRoot(%s)\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\t_, _ = r.ReadFile(os.Getenv(\"FILE_NAME\"))\n}\n"
+	runNongo(t, []nongoCase{
+		{name: "env_root_is_an_unbounded_walk", head: map[string]string{"x/x_root_test.go": fmt.Sprintf(root, `os.Getenv("ROOT_DIR")`), tablesDir + "walks.tsv": "x\tx_root_test.go\tunexpressed\t-\n"},
+			changed: []string{"docs/a.md"}, want: "AFFECTED 2", keys: []string{"a", "x"}},
+		{name: "constant_root_walks_that_directory", head: map[string]string{"x/x_root_test.go": fmt.Sprintf(root, `"../docs"`), tablesDir + "walks.tsv": "x\tx_root_test.go\tdocs\ttree\n", tablesDir + "reads.tsv": withReads("x\ttest\tdocs\n")},
+			changed: []string{"docs/a.md"}, want: "AFFECTED 2", keys: []string{"a", "x"}},
+		{name: "env_root_without_its_row_fails_the_guard", head: map[string]string{"x/x_root_test.go": fmt.Sprintf(root, `os.Getenv("ROOT_DIR")`)},
+			changed: []string{"docs/a.md"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_root_test.go\tunexpressed\t-"}},
+	})
+}

@@ -335,9 +335,7 @@ func plan(in planInput) (Verdict, error) {
 	changedPaths := append(append([]string{}, goPaths...), nonGo...)
 	for _, w := range t.walks {
 		if w.root == unexpressed {
-			if len(nonGo) > 0 {
-				sel.reader(importPath(w.pkg), w.test(), "walks.tsv "+w.pkg+" "+w.site+" walks an unbounded root")
-			}
+			sel.reader(importPath(w.pkg), w.test(), "walks.tsv "+w.pkg+" "+w.site+" walks an unbounded root")
 			continue
 		}
 		for _, p := range changedPaths {
@@ -364,17 +362,14 @@ func plan(in planInput) (Verdict, error) {
 			sort.Strings(pkgs)
 		}
 		if len(pkgs) == 0 {
-			if len(nonGo) > 0 {
-				sel.reader(importPath(e.pkg), e.test(), "edges.tsv "+e.pkg+" "+e.site+" runs "+e.target)
-			}
+			sel.reader(importPath(e.pkg), e.test(), "edges.tsv "+e.pkg+" "+e.site+" runs "+e.target)
 			continue
 		}
 		edges = append(edges, ran{e, pkgs})
 	}
-	if len(nonGo) > 0 {
-		for _, d := range t.dynReads {
-			sel.reader(importPath(d.pkg), d.test(), "dynreads.tsv "+d.pkg+" "+d.site+" reads an unbounded path")
-		}
+	// An unbounded read may name a changed Go file as well as a data file: every change set selects its readers.
+	for _, d := range t.dynReads {
+		sel.reader(importPath(d.pkg), d.test(), "dynreads.tsv "+d.pkg+" "+d.site+" reads an unbounded path")
 	}
 	always := map[string]bool{}
 	for _, k := range in.always {

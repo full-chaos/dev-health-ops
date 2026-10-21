@@ -104,8 +104,14 @@ internal/goapiproof	edge_bearer_env_var_absence_test.go	unexpressed	-
 internal/goapiproof	writeskew_inventory_test.go	unexpressed	-
 internal/gqlgenguard	confinement_test.go	unexpressed	-
 internal/gqlgenguard	copyandwrite_test.go	unexpressed	-
+internal/gqlgenguard	guard.go	unexpressed	-
+internal/gqlgenguard	guard_test.go	unexpressed	-
 internal/gqlgenguard	plan.go	unexpressed	-
+internal/gqlgenguard	plan_test.go	unexpressed	-
+internal/gqlgenguard	realmodule_test.go	.	tree
+internal/gqlgenguard	realmodule_test.go	unexpressed	-
 internal/gqlgenguard	rootwrites_test.go	unexpressed	-
+internal/gqlgenguard	testsupport_test.go	unexpressed	-
 internal/httpguard	origin_census_test.go	internal	tree
 internal/httpguard	redirect_sites_test.go	unexpressed	-
 internal/jobcontract	registry_test.go	unexpressed	-
@@ -143,6 +149,7 @@ internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree
 internal/localgit	blame.go	unexpressed	-
 internal/localgit	refs.go	unexpressed	-
+internal/migrationmatrix	restendpoints.go	unexpressed	-
 internal/operationalordering	finalreads_test.go	unexpressed	-
 internal/operationalordering	one_resolver_test.go	.	tree
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree

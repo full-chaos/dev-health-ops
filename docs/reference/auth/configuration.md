@@ -97,6 +97,9 @@ The run is bounded to five minutes. See
   by an atomic rename rotates the set with no restart; give a new key a new
   file. A kid the process has seen `compromised` never signs again in that
   process. The single key form is a one-key set whose key is `active`.
+  The Helm chart stages one key and renders the single key form; it refuses
+  `AUTH_SIGNING_KEYSET_FILE` in `authService.extraEnv`. Key-set staging in the
+  chart comes with the rotation state machine (CHAOS-10449).
 - **The key file contract**, checked live on every readiness request: a regular
   file opened with `O_NOFOLLOW` (a symlink is refused), at most 8 KiB, mode with
   **no group or world bit** (`0600` or tighter), exactly one `PRIVATE KEY` PEM

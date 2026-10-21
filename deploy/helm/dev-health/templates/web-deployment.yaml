@@ -78,7 +78,7 @@ spec:
           {{- fail (printf "web.extraEnv %s must not hold the HS256 key (CHAOS-10446): its literal value equals secrets.data.JWT_SECRET_KEY" .name) }}
           {{- end }}
           {{- with .valueFrom }}{{- with .secretKeyRef }}
-          {{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" .name "key" .key "what" "web.extraEnv secretKeyRef") }}
+          {{- include "dev-health.webSecretGuard" (dict "ctx" $ "name" .name "key" .key "what" "web.extraEnv secretKeyRef" "sharedOk" true) }}
           {{- end }}{{- end }}
           {{- end }}
           {{- with .Values.web.extraEnv }}

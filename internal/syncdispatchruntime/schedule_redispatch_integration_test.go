@@ -3,7 +3,10 @@
 package syncdispatchruntime
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,9 +173,14 @@ func TestRearmBackoffFallsBackToTheBaseWhenTheReadFails(t *testing.T) {
 	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
-		got, attrs := rearmBackoff(cancelled, pool, synclog.Default(), discoveryTestRun, time.Now().UTC())
+		var captured bytes.Buffer
+		logger := synclog.New(slog.New(slog.NewTextHandler(&captured, nil)))
+		got, attrs := rearmBackoff(cancelled, pool, logger, discoveryTestRun, time.Now().UTC())
 		if got != 10*time.Second || attrs != nil {
 			t.Fatalf("got countdown=%s attrs=%v want the base and no back-off fields on a read error", got, attrs)
+		}
+		if !strings.Contains(captured.String(), "level=WARN") || !strings.Contains(captured.String(), "dispatch_sync_run.redispatch_backoff_read_failed") {
+			t.Fatalf("log=%q want a WARN dispatch_sync_run.redispatch_backoff_read_failed", captured.String())
 		}
 	})
 }

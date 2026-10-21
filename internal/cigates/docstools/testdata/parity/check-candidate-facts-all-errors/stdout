@@ -1,0 +1,2 @@
+ERROR: missing canonical taxonomy keys: ['operational']
+ERROR: unknown taxonomy keys: ['operational.nope']

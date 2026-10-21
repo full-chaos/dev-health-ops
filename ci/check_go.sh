@@ -627,10 +627,23 @@ check_providersync_race_shard() {
     && [ "$(printf '%s' "${names}" | LC_ALL=C sort)" = "$(printf '%s\n' "${all}" | LC_ALL=C sort)" ] \
     || die "providersync race shards are not an exact partition of the ${total} listed tests"
   printf 'go test -race providersync shard %s/%s: %s of %s tests\n' "${shard}" "${count}" "$(printf '%s\n' "${regex}" | tr -cd '|' | wc -c | awk '{print $1 + 1}')" "${total}"
+  # CHAOS-10481: -json goes to a per-leg file (the leg number is in the name); jq turns it back into the plain go test log, and
+  # pipefail keeps go test's exit code. The guard runs after a failed run too, so a timeout names the test that never ended.
+  command -v jq >/dev/null 2>&1 || die "providersync race shards need jq to print the go test -json log"
+  local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}" json run_rc=0 guard_rc=0
+  mkdir -p "${json_dir}"
+  json="${json_dir}/providersync-race-${shard}.json"
   (
+    set -o pipefail
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync
-  )
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
+      | tee "${json}" \
+      | jq -rj 'select(.Action == "output") | .Output'
+  ) || run_rc=$?
+  awk -v weights="${weights}" -v thresh="${DEV_HEALTH_GO_RACE_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${weights#"${ROOT}/"}" \
+    -f "${GO_RACE_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_race_unweighted_slow.awk}" "${json}" || guard_rc=$?
+  [ "${run_rc}" -ge "${guard_rc}" ] || run_rc="${guard_rc}"
+  return "${run_rc}"
 }
 
 check_race_shard() {

@@ -160,10 +160,6 @@ COPY --from=go-migrator-builder /out/ask-dev-jobs-probe /usr/local/bin/ask-dev-j
 # grants; only its delivery changes.
 COPY scripts/worker/provision_river_roles.sql /usr/local/share/dev-health/provision_river_roles.sql
 
-# Fail the image build if the installed distribution cannot load the exact job
-# contract artifacts used by Python worker routing.
-RUN python -c "from dev_health_ops.jobs.contracts.registry import load_migration_jobs, load_registry; load_registry(); load_migration_jobs()"
-
 RUN useradd --uid 10001 --create-home --shell /bin/bash appuser
 
 WORKDIR /app

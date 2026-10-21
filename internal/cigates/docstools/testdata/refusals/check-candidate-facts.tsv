@@ -1,0 +1,14 @@
+# Every refusing site of the Python scripts/check_docs_candidate_facts.py (frozen beside this file) and the Go row that answers it.
+# site<TAB>kind<TAB>refs. site: the trimmed source line, "#N" for the Nth identical line; kind case = parity cases run live through the cigate binary, go = a named Go test.
+tree = ast.parse(path.read_text(encoding="utf-8"))	go	TestCandidateFactsRegistryIsCompiledAndShaped
+raise ValueError(f"{name} is not a set literal in {path}")	go	TestCandidateFactsRegistryIsCompiledAndShaped
+raise ValueError(f"{name} contains a non-string literal")	go	TestCandidateFactsRegistryIsCompiledAndShaped
+raise ValueError(f"{name} not found in {path}")	go	TestCandidateFactsRegistryIsCompiledAndShaped
+if not REGISTRY.is_file() or not DOCUMENT.is_file():	case	check-candidate-facts-missing-page;check-candidate-facts-dir-named-page
+return 1#1	case	check-candidate-facts-missing-page
+except (OSError, SyntaxError, ValueError) as exc:	go	TestCandidateFactsRegistryIsCompiledAndShaped
+return 1#2	go	TestCandidateFactsRegistryIsCompiledAndShaped
+documented = set(KEY_RE.findall(DOCUMENT.read_text(encoding="utf-8")))	case	check-candidate-facts-invalid-utf8-page
+documented = set(KEY_RE.findall(DOCUMENT.read_text(encoding="utf-8")))#unreadable	go	TestCandidateFactsUnreadablePage
+return 1#3	case	check-candidate-facts-all-errors;check-candidate-facts-missing-keys;check-candidate-facts-unknown-dotted-key
+raise SystemExit(main())	case	check-candidate-facts-ok;check-candidate-facts-all-errors

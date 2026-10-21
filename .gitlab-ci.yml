@@ -396,7 +396,6 @@ docs:guards:
       python scripts/check_built_site_links.py --site-dir .build/docs 2>&1 | tee .build/docs-links.log
       python scripts/check_docs_candidate_search.py --site-dir .build/docs --queries docs-data/search-acceptance.json 2>&1 | tee .build/docs-search.log
       python scripts/check_docs_candidate_accessibility.py --site-dir .build/docs --css docs/stylesheets/extra.css 2>&1 | tee .build/docs-accessibility.log
-      python scripts/check_docs_candidate_facts.py 2>&1 | tee .build/docs-facts.log
       python scripts/check_code_prerequisites.py 2>&1 | tee .build/docs-code-prerequisites.log
       python scripts/check_freshness_inventory.py 2>&1 | tee .build/docs-freshness-inventory.log
   artifacts:
@@ -404,6 +403,12 @@ docs:guards:
     expire_in: 14 days
     paths:
       - .build/docs-*.log
+
+docs:facts:
+  image: $GO_IMAGE
+  stage: test
+  script:
+    - go run -trimpath -mod=readonly ./cmd/cigate docs check-candidate-facts
 
 docs:inventory-review:
   extends: .python_job

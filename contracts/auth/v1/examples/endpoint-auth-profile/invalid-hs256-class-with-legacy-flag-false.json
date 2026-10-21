@@ -1,0 +1,25 @@
+{
+  "accepted_credential_classes": [
+    "ops_access_token_hs256"
+  ],
+  "access_token_validation": {
+    "legacy_hs256": false
+  },
+  "action": "members.invite",
+  "cache_class": "none",
+  "classification": "protected",
+  "current_state_required": true,
+  "denial_disclosure": "forbidden",
+  "impersonation": "denied",
+  "method": "POST",
+  "resource_resolver": "organization_from_path_or_session",
+  "route": "/v1/memberships/invite",
+  "schema_version": "endpoint-auth-profile.v1",
+  "tenant_requirement": "active_membership",
+  "token": {
+    "algorithm": "HS256",
+    "audience": "dev-health-api",
+    "issuer": "dev-health-ops",
+    "token_type": "jwt"
+  }
+}

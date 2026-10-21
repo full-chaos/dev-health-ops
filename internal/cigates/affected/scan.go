@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -57,18 +58,93 @@ func (r Read) String() string {
 }
 
 // topLevel is the repository's first-level entries, the only names a bare path segment is matched against.
-func topLevel(root string) (map[string]bool, error) {
+func topLevel(root string, files []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if files != nil {
+		for _, f := range files {
+			out[strings.SplitN(f, "/", 2)[0]] = true
+		}
+		return out, nil
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]bool{}
 	for _, e := range entries {
 		if e.Name() != ".git" {
 			out[e.Name()] = true
 		}
 	}
 	return out, nil
+}
+
+// repoFiles is the tracked files of the git checkout at root (`git ls-files`), so a scan reads what CI checks out and
+// never a local untracked or ignored file; nil when root is not a git checkout (a plain fixture tree is walked instead).
+func repoFiles(root string) []string {
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		return nil
+	}
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, f := range strings.Split(string(out), "\x00") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	return files
+}
+
+// skippedGoDir: directories the source scan never enters below the root.
+func skippedGoDir(name string) bool {
+	return strings.HasPrefix(name, ".") || name == "testdata" || name == "vendor" || name == "node_modules"
+}
+
+// goSources is every Go file the scan reads, as repository paths.
+func goSources(root string, files []string) ([]string, error) {
+	var out []string
+	if files != nil {
+		for _, f := range files {
+			if !strings.HasSuffix(f, ".go") {
+				continue
+			}
+			segs := strings.Split(f, "/")
+			skip := false
+			for _, d := range segs[:len(segs)-1] {
+				if skippedGoDir(d) {
+					skip = true
+				}
+			}
+			if !skip {
+				if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(f))); err == nil {
+					out = append(out, f)
+				}
+			}
+		}
+		return out, nil
+	}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if p != root && skippedGoDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), ".go") {
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				return err
+			}
+			out = append(out, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	return out, err
 }
 
 // normalizeRepoPath strips leading ./ and ../ and a trailing slash; "" when nothing is left.
@@ -94,7 +170,8 @@ func normalizeRepoPath(v string) string {
 // a literal holding a slash whose first segment is such an entry, or a bare entry name passed to a read call.
 // A walk call in a package that also locates the repository root is a read of the whole repository.
 func ScanReads(root string) ([]Read, error) {
-	top, err := topLevel(root)
+	tracked := repoFiles(root)
+	top, err := topLevel(root, tracked)
 	if err != nil {
 		return nil, err
 	}
@@ -105,29 +182,15 @@ func ScanReads(root string) ([]Read, error) {
 	}
 	var files []parsed
 	consts := map[string]map[string]bool{} // package dir -> its constant names
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		name := d.Name()
-		if d.IsDir() {
-			if p != root && (strings.HasPrefix(name, ".") || name == "testdata" || name == "vendor" || name == "node_modules") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(name, ".go") {
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
+	sources, err := goSources(root, tracked)
+	if err != nil {
+		return nil, err
+	}
+	for _, rel := range sources {
 		fset := token.NewFileSet()
-		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
+		f, err := parser.ParseFile(fset, filepath.Join(root, filepath.FromSlash(rel)), nil, parser.SkipObjectResolution)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		files = append(files, parsed{rel, fset, f})
 		dir := path.Dir(rel)
@@ -143,10 +206,6 @@ func ScanReads(root string) ([]Read, error) {
 				}
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	var reads []Read
 	for _, pf := range files {

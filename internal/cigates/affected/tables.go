@@ -40,6 +40,9 @@ type tables struct {
 	reads    []readRow
 	walks    []walkRow // walks.tsv: one measured row per walk call site (walks.go)
 	dynReads []dynRow  // dynreads.tsv: one declared row per file with a non-constant read (dynreads.go)
+
+	trackedLoaded bool
+	trackedFiles  []string
 }
 
 func readTSV(file string, fields int) ([][]string, []int, error) {

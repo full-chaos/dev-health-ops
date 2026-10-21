@@ -169,40 +169,58 @@ func (t *tables) reach(root string, w walkRow) ([]string, error) {
 		return nil, fmt.Errorf("root %s: %w", w.root, err)
 	}
 	got := map[string]bool{}
-	err := filepath.WalkDir(start, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, fs.ErrPermission) {
-				return nil
-			}
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
+	note := func(rel string) {
 		if !w.matches(rel) {
-			return nil
+			return
 		}
 		if classes, known := t.classesOf(rel); known {
 			for c := range classes {
 				got[c] = true
 			}
 		}
-		return nil
-	})
+	}
+	var err error
+	if tracked := t.tracked(root); tracked != nil {
+		for _, f := range tracked {
+			note(f)
+		}
+	} else {
+		err = filepath.WalkDir(start, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, fs.ErrPermission) {
+					return nil
+				}
+				return err
+			}
+			if d.IsDir() {
+				if d.Name() == ".git" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				return err
+			}
+			note(filepath.ToSlash(rel))
+			return nil
+		})
+	}
 	var out []string
 	for c := range got {
 		out = append(out, c)
 	}
 	sort.Strings(out)
 	return out, err
+}
+
+// tracked caches the checkout's tracked files for reach (nil outside a git checkout).
+func (t *tables) tracked(root string) []string {
+	if !t.trackedLoaded {
+		t.trackedLoaded = true
+		t.trackedFiles = repoFiles(root)
+	}
+	return t.trackedFiles
 }
 
 // walkersOf is every walk row that reads p.

@@ -31,13 +31,17 @@ const (
 	ReasonProvisioningDisabled Reason = "provisioning_disabled"
 	ReasonDomainNotAllowed     Reason = "domain_not_allowed"
 	ReasonNotEntitled          Reason = "not_entitled"
+	ReasonInvalidCredentials   Reason = "invalid_credentials"
+	ReasonIdentityConflict     Reason = "identity_conflict"
+	ReasonMembershipRequired   Reason = "membership_required"
 )
 
 var allReasons = []Reason{
 	ReasonAccepted, ReasonMalformed, ReasonBadSignature, ReasonAudience, ReasonIssuer, ReasonExpired,
 	ReasonNotYetValid, ReasonMissingSub, ReasonEmailUnverified, ReasonEmailCollision, ReasonPrincipalDeactivated,
 	ReasonStoreUnavailable, ReasonDependency, ReasonReplayed, ReasonNonceMismatch, ReasonSignupUnavailable,
-	ReasonProvisioningDisabled, ReasonDomainNotAllowed, ReasonNotEntitled,
+	ReasonProvisioningDisabled, ReasonDomainNotAllowed, ReasonNotEntitled, ReasonInvalidCredentials,
+	ReasonIdentityConflict, ReasonMembershipRequired,
 }
 
 // Errors of the IdentityStore seam. StoreIdentities maps the identity store's
@@ -46,6 +50,8 @@ var (
 	ErrIdentityNotFound   = errors.New("oidc: no principal holds this external identity")
 	ErrSignupNotAvailable = identity.ErrSignupNotAvailable
 	ErrIdentityConflict   = errors.New("oidc: the external identity or e-mail belongs to another account")
+	ErrIdentityAmbiguous  = errors.New("oidc: more than one account carries the external identity")
+	ErrNotOrgMember       = errors.New("oidc: the account is not a member of the provider organization")
 	ErrInvalidEmail       = identity.ErrInvalidEmail
 	ErrInvalidKey         = identity.ErrInvalidExternalKey
 )

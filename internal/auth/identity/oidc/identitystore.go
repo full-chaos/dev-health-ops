@@ -29,14 +29,17 @@ func (a StoreIdentities) storedEmail(ctx context.Context, id uuid.UUID) (string,
 
 // IdentityBySubject looks up (issuer, provider row, subject), then the go-api
 // fallback bound to the provider row's organization. More than one legacy
-// account carrying the subject is a miss, never a pick.
+// account carrying the subject, in any organization, is ErrIdentityAmbiguous;
+// one outside the provider organization is ErrNotOrgMember.
 func (a StoreIdentities) IdentityBySubject(ctx context.Context, key ExternalKey, legacy LegacyMatch) (Principal, error) {
 	org := legacy.MembershipOrg
 	p, found, err := a.Store.IdentityBySubject(ctx, key.Issuer, identity.Provider(key.Provider), key.Subject,
 		&identity.LegacyMatch{AuthProvider: legacy.AuthProvider, MembershipOrg: &org})
 	switch {
 	case errors.Is(err, identity.ErrMultipleUsers):
-		return Principal{}, ErrIdentityNotFound
+		return Principal{}, ErrIdentityAmbiguous
+	case errors.Is(err, identity.ErrLegacyNotMember):
+		return Principal{}, ErrNotOrgMember
 	case err != nil:
 		return Principal{}, err
 	case !found:

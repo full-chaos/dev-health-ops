@@ -219,3 +219,23 @@ func TestVerifyLegacyRefreshReadsSubOrgAndJTI(t *testing.T) {
 		}
 	}
 }
+
+func TestRefreshOfAPinlessSessionAnswersRevisionStale(t *testing.T) {
+	f := newFixture(t)
+	f.sessions.result = session.Result{Reason: session.ReasonRevisionStale}
+	response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
+	expectError(t, response, http.StatusUnauthorized, reasonRevisionStale)
+	if len(f.sessions.revoked) != 0 {
+		t.Fatalf("revoked %v, want nothing", f.sessions.revoked)
+	}
+}
+
+func TestCompatRefreshOfAPinlessSessionAnswersGoAPIsInvalidRefresh(t *testing.T) {
+	f := newCompatFixture(t)
+	f.sessions.result = session.Result{Reason: session.ReasonRevisionStale}
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	expectGolden(t, response, response.Body.Bytes(), "refresh: garbage")
+	if len(f.sessions.revoked) != 0 {
+		t.Fatalf("revoked %v, want nothing", f.sessions.revoked)
+	}
+}

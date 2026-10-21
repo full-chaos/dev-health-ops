@@ -233,3 +233,47 @@ func TestExchangeLegacyRefusesWithoutChangingAnything(t *testing.T) {
 		t.Fatalf("%d sessions after only refusals, want 0", n)
 	}
 }
+
+// A session row without a pin (older than migration 0015) is refused under its
+// lock before anything is written: its credential is neither consumed nor
+// revoked, and the session stays as it was.
+func TestExchangeRefusesAPinlessSessionWithoutRotating(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	principal := e.principal(t, ctx)
+	credential, err := newCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, amr)
+		VALUES ($1, $2, $3, 'infinity', '{pwd}')`, sessionID, principal, hashCredential(contracts.NewSecretString("pinless-handle"))); err != nil {
+		t.Fatalf("seed a pinless session: %v", err)
+	}
+	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at)
+		VALUES ($1, $2, $3, now() + interval '1 hour')`, sessionID, principal, hashCredential(credential)); err != nil {
+		t.Fatalf("seed its credential: %v", err)
+	}
+
+	result, err := e.store.Exchange(ctx, credential)
+	if err != nil || result.Reason != ReasonRevisionStale {
+		t.Fatalf("Exchange = %s, %v; want revision_stale", result.Reason, err)
+	}
+	if result.Credential.Reveal() != "" {
+		t.Fatal("a refused exchange returned a credential")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.refresh_credentials
+		WHERE session_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL`, sessionID.String()); n != 1 {
+		t.Fatalf("%d untouched credentials after the refusal, want the one", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.refresh_credentials WHERE session_id = $1`, sessionID.String()); n != 1 {
+		t.Fatalf("%d credentials after the refusal, want no successor", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE id = $1 AND revoked_at IS NULL AND last_seen_at IS NULL`, sessionID.String()); n != 1 {
+		t.Fatal("the refusal changed the session row")
+	}
+	again, err := e.store.Exchange(ctx, credential)
+	if err != nil || again.Reason != ReasonRevisionStale {
+		t.Fatalf("the same credential again = %s, %v; want revision_stale, not reuse", again.Reason, err)
+	}
+}

@@ -133,6 +133,7 @@ func newVerdictFixture(work string, head map[string]string) (*verdictFixture, er
 		"c/c.go":                                 "package c\n",
 		"d/d.go":                                 "package d\n",
 		"x/x.go":                                 "package x\n",
+		"cmd/tool/main.go":                       "package main\n\nimport _ \"m/a\"\n\nfunc main() {}\n",
 		"internal/testsupport/h/h.go":            "package h\n",
 		"internal/cigates/affected/plan.go":      "package affected\n",
 		"internal/cigates/affected/classes.tsv":  fixtureClasses,
@@ -162,8 +163,16 @@ func newVerdictFixture(work string, head map[string]string) (*verdictFixture, er
 		return nil, r.err
 	}
 	mod := map[string]string{"Path": "m"}
-	pkg := func(rel string) map[string]any {
-		return map[string]any{"ImportPath": "m/" + rel, "Dir": filepath.Join(dir, rel), "Module": mod}
+	pkg := func(rel string, deps ...string) map[string]any {
+		e := map[string]any{"ImportPath": "m/" + rel, "Dir": filepath.Join(dir, rel), "Module": mod}
+		if len(deps) > 0 {
+			var d []string
+			for _, dep := range deps {
+				d = append(d, "m/"+dep)
+			}
+			e["Deps"] = d
+		}
+		return e
 	}
 	bin := func(rel string, deps ...string) map[string]any {
 		d := []string{"m/" + rel + " [m/" + rel + ".test]"}
@@ -173,7 +182,7 @@ func newVerdictFixture(work string, head map[string]string) (*verdictFixture, er
 		return map[string]any{"ImportPath": "m/" + rel + ".test", "Deps": d}
 	}
 	entries := []map[string]any{
-		pkg("a"), pkg("b"), pkg("c"), pkg("d"), pkg("x"), pkg("internal/testsupport/h"), pkg("internal/cigates/affected"),
+		pkg("a"), pkg("b"), pkg("c"), pkg("d"), pkg("x"), pkg("internal/testsupport/h"), pkg("internal/cigates/affected"), pkg("cmd/tool", "a"),
 		bin("a"), bin("b"), bin("c", "b"), bin("d", "internal/testsupport/h"), bin("x"),
 	}
 	var lines []string

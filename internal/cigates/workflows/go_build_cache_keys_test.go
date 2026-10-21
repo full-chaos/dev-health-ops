@@ -19,6 +19,8 @@ var cacheLayoutRE = regexp.MustCompile(`^go-quality-v([0-9]+)-`)
 
 const minCacheLayout = 2
 
+const cacheActionSHA = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+
 var goCacheWorkflows = []string{
 	".github/workflows/go-quality.yml",
 	".github/workflows/go-auth-service.yml",
@@ -221,6 +223,33 @@ func TestGoCacheGuardPlantedDefectsAreCaught(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			planted := plantTree(t, root, goCacheWorkflows, c.m)
+			expectViolation(t, goCacheViolations(t, planted), c.want)
+		})
+	}
+}
+
+func TestGoCacheGuardPinsTheCacheActionsAndTheSetupGoStep(t *testing.T) {
+	root := rootOf(t)
+	const gq = ".github/workflows/go-quality.yml"
+	const wrongSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cases := []struct {
+		name string
+		muts []mutation
+		want string
+	}{
+		{"restore pinned to another SHA", []mutation{{gq, "actions/cache/restore@" + cacheActionSHA, "actions/cache/restore@" + wrongSHA}}, "actions/cache/restore must be pinned to"},
+		{"save pinned to another SHA", []mutation{{gq, "actions/cache/save@" + cacheActionSHA, "actions/cache/save@" + wrongSHA}}, "actions/cache/save must be pinned to"},
+		{"restore pinned to a tag", []mutation{{gq, "actions/cache/restore@" + cacheActionSHA + " # v6.1.0", "actions/cache/restore@v6.1.0"}}, "actions/cache/restore must be pinned to"},
+		{"save pinned to a tag", []mutation{{gq, "actions/cache/save@" + cacheActionSHA + " # v6.1.0", "actions/cache/save@v6.1.0"}}, "actions/cache/save must be pinned to"},
+		{"the setup-go id is renamed", []mutation{{gq, "        id: setup-go\n", "        id: setup-golang\n"}}, "no step with id \"setup-go\""},
+		{"the setup-go id moves to another step", []mutation{
+			{gq, "        id: setup-go\n", "        id: setup-golang\n"},
+			{gq, "      - name: Configure self-hosted Go cache paths\n", "      - name: Configure self-hosted Go cache paths\n        id: setup-go\n"},
+		}, "step id \"setup-go\" is not actions/setup-go"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			planted := plantTree(t, root, goCacheWorkflows, c.muts...)
 			expectViolation(t, goCacheViolations(t, planted), c.want)
 		})
 	}

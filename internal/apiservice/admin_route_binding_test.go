@@ -147,3 +147,34 @@ func TestAdminNoStoreBindingPlantedTablesAreCaught(t *testing.T) {
 		})
 	}
 }
+
+// HEAD on an admin GET route answers 405 with Allow, as the Python api did (FastAPI routes no HEAD there; frozen goldens
+// "HEAD schemas" and "me: HEAD" are 405, Allow: GET), and keeps Cache-Control: no-store: the real mux matches HEAD to the
+// GET pattern, so it falls under the declared admin no-store divergence.
+func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://binding@127.0.0.1:1/binding?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger())}, quietLogger()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, entry := range httpapi.AdminRoutes {
+		method, pattern, _ := strings.Cut(entry, " ")
+		if method != http.MethodGet {
+			continue
+		}
+		checked++
+		response := serve(server.Handler(), httptest.NewRequest(http.MethodHead, concrete(pattern), nil))
+		allow := response.Header().Get("Allow")
+		if response.Code != http.StatusMethodNotAllowed || !strings.Contains(", "+allow+",", " GET,") || response.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("HEAD %s: status %d Allow %q Cache-Control %q; want 405, Allow with GET, no-store", pattern, response.Code, allow, response.Header().Get("Cache-Control"))
+		}
+	}
+	if checked < 30 {
+		t.Fatalf("only %d admin GET routes checked", checked)
+	}
+}

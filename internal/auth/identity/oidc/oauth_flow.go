@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	protocolOAuth       = "oauth"
-	routeOAuthAuthorize = "oauth_authorize"
-	routeOAuthCallback  = "oauth_callback"
+	protocolOAuth             = "oauth"
+	routeOAuthAuthorize       = "oauth_authorize"
+	routeOAuthAuthorizeByType = "oauth_authorize_by_type"
+	routeOAuthCallback        = "oauth_callback"
 )
 
 // OAuthEndpoints are the public URLs of the OAuth providers. GitLab's
@@ -166,25 +167,35 @@ func oauthLoginNonceCookieName(flowID string) string { return "dho_oauth_login_n
 
 // AuthorizeOAuth starts an OAuth flow for a provider row.
 func (s *Service) AuthorizeOAuth(ctx context.Context, providerID uuid.UUID) (AuthorizeResult, error) {
-	result, failure := s.authorizeOAuth(ctx, providerID)
+	row, failure := s.admit(ctx, providerID, oauthSpec)
 	if failure != nil {
 		s.refused(ctx, routeOAuthAuthorize, providerID, failure)
 		return AuthorizeResult{}, failure
 	}
-	s.succeeded(ctx, routeOAuthAuthorize, providerID, nil)
+	return s.authorizeOAuthAdmitted(ctx, row)
+}
+
+// authorizeOAuthAdmitted is AuthorizeOAuth for a row admit already checked.
+func (s *Service) authorizeOAuthAdmitted(ctx context.Context, admitted StoredProvider) (AuthorizeResult, error) {
+	result, failure := s.authorizeOAuth(ctx, admitted)
+	if failure != nil {
+		s.refused(ctx, routeOAuthAuthorize, admitted.ID, failure)
+		return AuthorizeResult{}, failure
+	}
+	s.succeeded(ctx, routeOAuthAuthorize, admitted.ID, nil)
 	return result, nil
 }
 
 // AuthorizeOAuthByType starts an OAuth flow for an organization's active row
 // of one provider type: the entitlement gate runs on the organization before
-// any row is read.
+// any row is read. Its outcomes count under oauth_authorize_by_type.
 func (s *Service) AuthorizeOAuthByType(ctx context.Context, providerType string, orgID uuid.UUID) (AuthorizeResult, error) {
 	result, providerID, failure := s.authorizeOAuthByType(ctx, providerType, orgID)
 	if failure != nil {
-		s.refused(ctx, routeOAuthAuthorize, providerID, failure)
+		s.refused(ctx, routeOAuthAuthorizeByType, providerID, failure)
 		return AuthorizeResult{}, failure
 	}
-	s.succeeded(ctx, routeOAuthAuthorize, providerID, nil)
+	s.succeeded(ctx, routeOAuthAuthorizeByType, providerID, nil)
 	return result, nil
 }
 
@@ -196,7 +207,7 @@ func (s *Service) authorizeOAuthByType(ctx context.Context, providerType string,
 	if failure := s.entitled(ctx, orgID); failure != nil {
 		return AuthorizeResult{}, uuid.Nil, failure
 	}
-	head, err := s.cfg.Providers.DefaultProviderHead(ctx, orgID, protocol)
+	row, err := s.cfg.Providers.DefaultProviderRow(ctx, orgID, protocol)
 	if errors.Is(err, ErrProviderNotFound) {
 		return AuthorizeResult{}, uuid.Nil, deny(http.StatusNotFound, ReasonMalformed,
 			"No active "+providerType+" OAuth provider found for this organization")
@@ -204,12 +215,18 @@ func (s *Service) authorizeOAuthByType(ctx context.Context, providerType string,
 	if err != nil {
 		return AuthorizeResult{}, uuid.Nil, internal(ReasonStoreUnavailable, err)
 	}
-	result, failure := s.authorizeOAuth(ctx, head.ID)
-	return result, head.ID, failure
+	selected(ctx, row.ID)
+	spec := oauthSpec
+	spec.accepts = func(p string) bool { return p == protocol }
+	if failure := spec.check(row); failure != nil {
+		return AuthorizeResult{}, row.ID, failure
+	}
+	result, failure := s.authorizeOAuth(ctx, row)
+	return result, row.ID, failure
 }
 
-func (s *Service) authorizeOAuth(ctx context.Context, providerID uuid.UUID) (AuthorizeResult, *Error) {
-	row, failure := s.loadProvider(ctx, providerID, oauthSpec)
+func (s *Service) authorizeOAuth(ctx context.Context, admitted StoredProvider) (AuthorizeResult, *Error) {
+	row, failure := decodeAdmitted(admitted)
 	if failure != nil {
 		return AuthorizeResult{}, failure
 	}
@@ -265,12 +282,22 @@ func (s *Service) authorizeOAuth(ctx context.Context, providerID uuid.UUID) (Aut
 // CallbackOAuth completes an OAuth flow. The returned cookie, when non-nil,
 // clears the flow's login-nonce cookie on success and failure alike.
 func (s *Service) CallbackOAuth(ctx context.Context, providerID uuid.UUID, in CallbackInput) (Login, *http.Cookie, error) {
-	login, clear, failure := s.callbackOAuth(ctx, providerID, in)
+	row, failure := s.admit(ctx, providerID, oauthSpec)
 	if failure != nil {
 		s.refused(ctx, routeOAuthCallback, providerID, failure)
+		return Login{}, nil, failure
+	}
+	return s.callbackOAuthAdmitted(ctx, row, in)
+}
+
+// callbackOAuthAdmitted is CallbackOAuth for a row admit already checked.
+func (s *Service) callbackOAuthAdmitted(ctx context.Context, admitted StoredProvider, in CallbackInput) (Login, *http.Cookie, error) {
+	login, clear, failure := s.callbackOAuth(ctx, admitted, in)
+	if failure != nil {
+		s.refused(ctx, routeOAuthCallback, admitted.ID, failure)
 		return Login{}, clear, failure
 	}
-	s.succeeded(ctx, routeOAuthCallback, providerID, &login.PrincipalID)
+	s.succeeded(ctx, routeOAuthCallback, admitted.ID, &login.PrincipalID)
 	return login, clear, nil
 }
 
@@ -279,8 +306,8 @@ func oauthFailure(reason Reason, code string, cause error) *Error {
 		Detail: map[string]any{"message": "OAuth authentication failed", "reason": code}}
 }
 
-func (s *Service) callbackOAuth(ctx context.Context, providerID uuid.UUID, in CallbackInput) (Login, *http.Cookie, *Error) {
-	row, failure := s.loadProvider(ctx, providerID, oauthSpec)
+func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in CallbackInput) (Login, *http.Cookie, *Error) {
+	row, failure := decodeAdmitted(admitted)
 	if failure != nil {
 		return Login{}, nil, failure
 	}

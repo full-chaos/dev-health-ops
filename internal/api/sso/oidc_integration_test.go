@@ -289,6 +289,7 @@ type providerOpts struct {
 func seedProvider(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, opts providerOpts) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
+	opts.config = strings.ReplaceAll(opts.config, "{provider_id}", id.String())
 	secrets := "null"
 	if opts.clientSecretEncryptedFallback != "" {
 		text, err := json.Marshal(map[string]string{"client_secret": opts.clientSecretEncryptedFallback})

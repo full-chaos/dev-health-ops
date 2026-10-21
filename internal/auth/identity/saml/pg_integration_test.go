@@ -733,11 +733,12 @@ func TestSAMLResponseIsBoundToTheRowOfItsRoute(t *testing.T) {
 	}
 }
 
-// TestSAMLPrefixedACSOverrideSignsIn: an override that puts a proxy prefix in
-// front of /saml/{row id}/acs is this row's ACS URL and signs in.
-func TestSAMLPrefixedACSOverrideSignsIn(t *testing.T) {
+// TestSAMLPrefixedACSOverrideIsRefused: an override that puts a proxy prefix in
+// front of /api/v1/auth/saml/{row id}/acs is not the served route; the row is
+// refused at load.
+func TestSAMLPrefixedACSOverrideIsRefused(t *testing.T) {
 	h := newHarness(t, true)
-	user := h.linkedUser(uniqueEmail("u"), "user-1")
+	h.linkedUser(uniqueEmail("u"), "user-1")
 	acs := "https://proxy.example.com/edge/api/v1/auth/saml/" + h.provider.ID.String() + "/acs"
 	config := fmt.Sprintf(`{"entity_id": %q, "sso_url": "https://idp.example.test/sso", "certificate": %q, "sp_acs_url": %q}`, h.idp.entityID, encodeCert(h.idp), acs)
 	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET config = $2::json WHERE id = $1`, h.provider.ID, config); err != nil {
@@ -745,9 +746,8 @@ func TestSAMLPrefixedACSOverrideSignsIn(t *testing.T) {
 	}
 	posted := b64(h.idp.response(t, resp{nameID: nid("user-1"), email: "a@example.com", destination: strp(acs), recipient: strp(acs),
 		audiences: [][]string{{h.provider.SPEntityID(baseURL)}}}))
-	signIn, err := h.svc.Consume(context.Background(), h.provider.ID, posted, nil)
-	if err != nil || signIn.PrincipalID != user {
-		t.Fatalf("prefixed override: sign-in %+v err %v", signIn, err)
+	if _, err := h.svc.Consume(context.Background(), h.provider.ID, posted, nil); !errors.Is(err, saml.ErrConfig) {
+		t.Fatalf("prefixed override: err = %v, want ErrConfig", err)
 	}
 }
 

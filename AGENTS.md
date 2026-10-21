@@ -91,7 +91,7 @@ dho workers metrics daily-start --org <org-id> --day <YYYY-MM-DD> --reason <code
 
 - The api is Go (`dho api`, `dho query-api`): its tests are Go tests under `internal/`. There is no Python api test tree.
 - The GraphQL schema pin `contracts/graphql/v1/schema.graphql` is consumed by web CI for drift detection.
-- **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-commit` ruff format+fix; `pre-push` `ruff format --check` + `ruff check` (no mypy: CI retired it, CHAOS-8616). Fix code, don't add ignores/config exclusions.
+- **Lefthook** (`make install` once — `core.hooksPath` is shared across worktrees): `commit-msg` strips agent attribution; `pre-push` runs the pinned shellcheck. Fix code, do not add ignores or config exclusions.
 - **Mutation testing has no shared harness — do not write one.** `scripts/mutation_harness.py`, its ~8k lines of meta-tests, and its 98 checked-in plan JSONs were removed under CHAOS-3875: no GitHub workflow ever ran them, only `ci/local_validate.sh`'s `verify` stage touched the harness at all, and the plans had to be re-anchored by hand on every refactor of the files they pinned. The durable lesson from the 2026-07-26 incident survives the tool: three ad-hoc per-lane harnesses produced false results, all the same shape — the harness could not detect its own failure. One left `if false && (guard)` on disk while reporting a restore it had "verified" with `go build`; one used `git checkout` to restore and silently reverted unrelated uncommitted edits; one waited on `pgrep -qf "m22.sh"`, matched its own command line, and hung. **Never verify a restore with a build or a git check** (`go build`/`go vet` pass on `if false && …`; `git diff` calls an *untracked* file clean whatever it contains), and **mutate compound predicates clause by clause** — a wholesale mutation reported KILLED on a condition holding a wrong, unasserted clause. If you need a one-off kill proof, run it by hand, restore by content digest, and keep it out of the tree.
 
 ## Worktrees and branches
@@ -206,7 +206,7 @@ worktree root:
 bash ci/local_validate.sh
 ```
 
-It is a LOCAL gate: hosted CI runs no Python and so does this script. It MUST be green before `git push`:
+It is a LOCAL gate and runs no Python. It MUST be green before `git push`:
 
 1. A ClickHouse stage that CI's unit tiers never run: it provisions an isolated **scratch db**,
    migrates it with `dho migrate clickhouse` (built on demand from this tree) and proves

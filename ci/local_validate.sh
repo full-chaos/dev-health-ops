@@ -4,12 +4,12 @@
 # WHY THIS EXISTS (CHAOS-2604 root cause):
 #   A change was pushed after running only 2 test FILES locally. CI then failed on
 #   tests/test_clickhouse_migration_splitter.py::test_no_committed_migration_comment_line_contains_semicolon
-#   — a pure-Python guard that lived in the full unit suite (removed from hosted CI by CHAOS-8352) but was not one of the 2
+#   — a pure-Python guard that lived in the full unit suite (since removed from hosted CI) but was not one of the 2
 #   files run. Separately, a new argMax SQL query in load_team_attribution_context had
 #   NO live-ClickHouse execution proof (clickhouse-marked tests are opt-in / skipped).
 #   This gate closes BOTH gaps.
 #
-# WHAT IT DOES (a LOCAL gate; hosted CI runs no Python, and this gate runs none):
+# WHAT IT DOES (a LOCAL gate; it runs no Python):
 #   1. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
 #   2. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
 #      apply the schema to a SCRATCH db with dho and prove it is current. The scratch
@@ -70,15 +70,13 @@
 #   had been up and healthy the entire time. A degraded run was indistinguishable
 #   from a full one unless a human counted the ✔ lines.
 #
-#   Since that fix: without SKIP_CLICKHOUSE=1, EVERY reason the ClickHouse stages
+#   Since that fix: EVERY reason the ClickHouse stages
 #   might not run -- docker missing, the probe itself failing/timing out
 #   (indeterminate container state), the container confirmed not running, or a
 #   missing dho binary -- is a HARD FAILURE with a distinct diagnostic message
-#   naming the true mechanism, never a silent skip. SKIP_CLICKHOUSE=1 is the
-#   ONLY sanctioned way to run without the CH-dependent stages: it is an
-#   explicit, logged, caller-initiated decision that shrinks the gate's
-#   DECLARED stage set up front, not a runtime probe result the gate decided on
-#   its own to trust.
+#   naming the true mechanism, never a silent skip. SKIP_CLICKHOUSE=1 is refused: the
+#   ClickHouse stages are the only stages this gate has, so a run without them would
+#   declare no stage and still print a pass.
 #
 #   A machine-readable `GATE_STAGE_MANIFEST ... declared=<N> executed=<N>
 #   declared_ids=... executed_ids=...` log line carries the literal counts and
@@ -316,7 +314,7 @@ DHO="${DHO:-${ROOT}/.build/dho}"
 
 # Scrub the ambient environment of every dho invocation: the local socks5h proxy variables (a proxy in the
 # way is a false negative, not a real defect), and the operator-shell variables (dev/.env, direnv) that polluted
-# the Python test suite this gate used to run. The list is kept as it was; pruning it is its own change.
+# the test suite this gate used to run. The list is kept as it was; pruning it is its own change.
 # TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX (CHAOS-5024): bigboy's login shell exports it, rewriting the image names a Go test observes pulled -- unset it here.
 PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX)
 
@@ -351,7 +349,7 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 # THROUGHPUT TRADE-OFF: this re-serializes gates across worktrees that a prior fix
 # (commit 3d3ca881b2, the per-worktree scratch db above) deliberately let run
 # concurrently. That trade is not free. Observed, not benchmarked: a full gate run
-# end-to-end is on the order of 15 minutes; the unit-suite tier alone is on the
+# end-to-end is on the order of 15 minutes; the Go fast gate alone is on the
 # order of 180s. With N worktrees contending for the same CH_CONTAINER, the
 # worst-case wait for the last one is on the order of (N-1) x that full-run time —
 # an order-of-magnitude figure, not a guarantee.
@@ -1050,9 +1048,8 @@ ch_migrate() {
   return 0
 }
 
-# Provision the isolated scratch db + apply THIS branch's migrations BEFORE the
-# unit suite, then export CLICKHOUSE_URI=<scratch> so the CH-dependent unit tests
-# run faithfully.
+# Provision the isolated scratch db + apply THIS branch's migrations, then export CLICKHOUSE_URI=<scratch>
+# for the stages that follow.
 #
 # CHAOS-3571: every failure branch below now goes through `record` (so it
 # appears in RESULTS / the summary) and `fail_fast` (so it stops the gate

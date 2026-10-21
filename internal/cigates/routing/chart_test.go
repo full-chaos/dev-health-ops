@@ -46,7 +46,7 @@ func renderChart(t *testing.T, chartValues m) chartRender {
 	})
 	// helm v4 renders every template before --show-only filters, and web-deployment.yaml requires
 	// web.env.BACKEND_URL (CHAOS-8310); the ingress never reads it.
-	chartValues["web"] = m{"env": m{"BACKEND_URL": "http://backend.example"}}
+	chartValues["web"] = m{"env": m{"BACKEND_URL": "http://backend.example"}, "authSecret": m{"secretName": "web-auth-placeholder"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, helm, "template", "differential", chart, "-f", "-", "--show-only", "templates/ingress.yaml")

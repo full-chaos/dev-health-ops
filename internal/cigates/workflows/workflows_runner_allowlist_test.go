@@ -62,7 +62,7 @@ var draftGatedJobs = [][2]string{
 
 var requiredContextJobs = map[string][]string{
 	"go-quality.yml": {"go-quality-leg", "go-quality"},
-	"test.yml":       {"changes", "docs-tests", "chart-started", "test"},
+	"test.yml":       {"changes", "chart-started", "test"},
 	"live-e2e.yml":   {"changes", "metrics-executed-proof"},
 }
 

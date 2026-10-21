@@ -1,6 +1,7 @@
 # Every file under internal/cigates/outboundtransport/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+297d8f0eaaa729791ca0d8e171e86b109af483a712d0166fef26eccffe553a71	hand-written	planted/assigndefault/assigndefault.go
 c1082d6aebed1b768a661c23fab04cf08d017b6043a01f904b60895303265d36	hand-written	planted/byvalue/byvalue.go
 33d85390e3d77a032f61668aa0efc4ac4c10a12375a4ad44765b361141b89de6	hand-written	planted/decl/decl.go
 77e4f20aa48bb647812e8e23f763cd485dc49a4d570d0f4681ad4042c32dcf68	hand-written	planted/defaultclient/defaultclient.go

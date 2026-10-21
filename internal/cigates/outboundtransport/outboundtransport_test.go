@@ -21,6 +21,8 @@
 //	                     element whose type is the non-pointer net/http.Client: its zero value has no Transport and its
 //	                     (promoted) Do uses http.DefaultTransport, and no literal of net/http.Client is ever written
 //	default-transport    any use of net/http.DefaultTransport
+//	default-transport-assign  an assignment to net/http.DefaultTransport: FORBIDDEN, no allow row admits it (the transport
+//	                     helpers fall back to net/http's defaults when it is replaced, so repository code must never replace it)
 //	default-client       any use of net/http.DefaultClient or the package functions Get, Head, Post, PostForm
 //	proxy                any use of net/http.ProxyFromEnvironment, net/http.ProxyURL or httpproxy.FromEnvironment, and a
 //	                     Proxy field of a net/http.Transport set (in a literal or by assignment) to anything but nil
@@ -226,6 +228,9 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 	case *ast.AssignStmt:
 		var kinds []string
 		for i, lhs := range n.Lhs {
+			if isDefaultTransportVar(info, lhs) {
+				kinds = append(kinds, "default-transport-assign")
+			}
 			selector, ok := lhs.(*ast.SelectorExpr)
 			if !ok || i >= len(n.Rhs) || len(n.Lhs) != len(n.Rhs) {
 				continue
@@ -479,6 +484,24 @@ func calledFunc(info *types.Info, call *ast.CallExpr) *types.Func {
 	return nil
 }
 
+// isDefaultTransportVar: expression names the package variable net/http.DefaultTransport.
+func isDefaultTransportVar(info *types.Info, expression ast.Expr) bool {
+	var ident *ast.Ident
+	switch e := ast.Unparen(expression).(type) {
+	case *ast.Ident:
+		ident = e
+	case *ast.SelectorExpr:
+		ident = e.Sel
+	default:
+		return false
+	}
+	obj, ok := info.Uses[ident].(*types.Var)
+	return ok && obj.Pkg() != nil && obj.Pkg().Path() == "net/http" && obj.Name() == "DefaultTransport"
+}
+
+// forbiddenKinds can never be allowed: an allow row for one is itself a problem.
+var forbiddenKinds = map[string]bool{"default-transport-assign": true}
+
 // isNamed: the type is exactly net/http.<name> (not a pointer to it).
 func isNamed(t types.Type, name string) bool {
 	if t == nil {
@@ -564,6 +587,8 @@ func compare(found map[site]int, rows map[site]allowRow) []string {
 	for key, count := range found {
 		row, ok := rows[key]
 		switch {
+		case forbiddenKinds[key.kind]:
+			problems = append(problems, fmt.Sprintf("FORBIDDEN site (no allow row can admit it): %s %s %s (x%d)", key.file, key.symbol, key.kind, count))
 		case !ok:
 			problems = append(problems, fmt.Sprintf("UNLISTED site: %s %s %s (x%d)", key.file, key.symbol, key.kind, count))
 		case row.count != count:

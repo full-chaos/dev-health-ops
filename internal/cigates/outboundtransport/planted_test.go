@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield", "unproven", "byvalue", "wrapper"}
+var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield", "unproven", "byvalue", "wrapper", "assigndefault"}
 
 // The walker is itself tested: each planted package under testdata/planted must yield exactly its sites, and the
 // negative package none. A clause removed from kindsOf is RED here.
@@ -25,37 +25,39 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 	}
 	const dir = "internal/cigates/outboundtransport/testdata/planted/"
 	want := map[site]int{
-		{dir + "literal/literal.go", "Bare", "client-no-transport"}:                  1,
-		{dir + "literal/literal.go", "TimeoutOnly", "client-no-transport"}:           1,
-		{dir + "literal/literal.go", "NilTransport", "client-no-transport"}:          1,
-		{dir + "newclient/newclient.go", "New", "client-no-transport"}:               1,
-		{dir + "decl/decl.go", "var zero", "client-no-transport"}:                    1,
-		{dir + "nilassign/nilassign.go", "Clear", "transport-nil"}:                   1,
-		{dir + "defaulttransport/defaulttransport.go", "Clone", "default-transport"}: 1,
-		{dir + "defaultclient/defaultclient.go", "Fetch", "default-client"}:          1,
-		{dir + "defaultclient/defaultclient.go", "Probe", "default-client"}:          1,
-		{dir + "defaultclient/defaultclient.go", "Values", "default-client"}:         3,
-		{dir + "envproxy/envproxy.go", "Env", "proxy"}:                               1,
-		{dir + "envproxy/envproxy.go", "Fixed", "proxy"}:                             1,
-		{dir + "envproxy/envproxy.go", "Config", "proxy"}:                            1,
-		{dir + "proxyfield/proxyfield.go", "Literal", "proxy"}:                       1,
-		{dir + "proxyassign/proxyassign.go", "Assign", "proxy"}:                      1,
-		{dir + "unproven/unproven.go", "NilVariable", "transport-unproven"}:          1,
-		{dir + "byvalue/byvalue.go", "type Embedded", "client-by-value"}:             1,
-		{dir + "wrapper/wrapper.go", "OverParameter", "transport-unproven"}:          1,
-		{dir + "byvalue/byvalue.go", "type Named", "client-by-value"}:                1,
-		{dir + "byvalue/byvalue.go", "type Defined", "client-by-value"}:              1,
-		{dir + "byvalue/byvalue.go", "type Alias", "client-by-value"}:                1,
-		{dir + "byvalue/byvalue.go", "Slice", "client-by-value"}:                     1,
-		{dir + "byvalue/byvalue.go", "Map", "client-by-value"}:                       1,
-		{dir + "byvalue/byvalue.go", "Array", "client-by-value"}:                     2,
-		{dir + "byvalue/byvalue.go", "Chan", "client-by-value"}:                      1,
-		{dir + "unproven/unproven.go", "Parameter", "transport-unproven"}:            1,
-		{dir + "unproven/unproven.go", "WrapperOverNil", "transport-unproven"}:       1,
-		{dir + "unproven/unproven.go", "FieldRead", "transport-unproven"}:            1,
-		{dir + "unproven/unproven.go", "Assigned", "transport-unproven"}:             1,
-		{dir + "unproven/unproven.go", "Unkeyed", "transport-unproven"}:              1,
-		{dir + "unproven/unproven.go", "ParameterReassigned", "transport-unproven"}:  1,
+		{dir + "literal/literal.go", "Bare", "client-no-transport"}:                     1,
+		{dir + "literal/literal.go", "TimeoutOnly", "client-no-transport"}:              1,
+		{dir + "literal/literal.go", "NilTransport", "client-no-transport"}:             1,
+		{dir + "newclient/newclient.go", "New", "client-no-transport"}:                  1,
+		{dir + "decl/decl.go", "var zero", "client-no-transport"}:                       1,
+		{dir + "nilassign/nilassign.go", "Clear", "transport-nil"}:                      1,
+		{dir + "defaulttransport/defaulttransport.go", "Clone", "default-transport"}:    1,
+		{dir + "defaultclient/defaultclient.go", "Fetch", "default-client"}:             1,
+		{dir + "defaultclient/defaultclient.go", "Probe", "default-client"}:             1,
+		{dir + "defaultclient/defaultclient.go", "Values", "default-client"}:            3,
+		{dir + "envproxy/envproxy.go", "Env", "proxy"}:                                  1,
+		{dir + "envproxy/envproxy.go", "Fixed", "proxy"}:                                1,
+		{dir + "envproxy/envproxy.go", "Config", "proxy"}:                               1,
+		{dir + "proxyfield/proxyfield.go", "Literal", "proxy"}:                          1,
+		{dir + "proxyassign/proxyassign.go", "Assign", "proxy"}:                         1,
+		{dir + "unproven/unproven.go", "NilVariable", "transport-unproven"}:             1,
+		{dir + "byvalue/byvalue.go", "type Embedded", "client-by-value"}:                1,
+		{dir + "assigndefault/assigndefault.go", "Replace", "default-transport"}:        1,
+		{dir + "assigndefault/assigndefault.go", "Replace", "default-transport-assign"}: 1,
+		{dir + "wrapper/wrapper.go", "OverParameter", "transport-unproven"}:             1,
+		{dir + "byvalue/byvalue.go", "type Named", "client-by-value"}:                   1,
+		{dir + "byvalue/byvalue.go", "type Defined", "client-by-value"}:                 1,
+		{dir + "byvalue/byvalue.go", "type Alias", "client-by-value"}:                   1,
+		{dir + "byvalue/byvalue.go", "Slice", "client-by-value"}:                        1,
+		{dir + "byvalue/byvalue.go", "Map", "client-by-value"}:                          1,
+		{dir + "byvalue/byvalue.go", "Array", "client-by-value"}:                        2,
+		{dir + "byvalue/byvalue.go", "Chan", "client-by-value"}:                         1,
+		{dir + "unproven/unproven.go", "Parameter", "transport-unproven"}:               1,
+		{dir + "unproven/unproven.go", "WrapperOverNil", "transport-unproven"}:          1,
+		{dir + "unproven/unproven.go", "FieldRead", "transport-unproven"}:               1,
+		{dir + "unproven/unproven.go", "Assigned", "transport-unproven"}:                1,
+		{dir + "unproven/unproven.go", "Unkeyed", "transport-unproven"}:                 1,
+		{dir + "unproven/unproven.go", "ParameterReassigned", "transport-unproven"}:     1,
 	}
 	if got, expected := render(found), render(want); got != expected {
 		t.Errorf("planted sites differ\n got:\n%s\nwant:\n%s", got, expected)
@@ -135,5 +137,15 @@ func TestATransportUnprovenAllowRowRoundTrips(t *testing.T) {
 	write(append(lines, "internal/nowhere.go\tGone\ttransport-unproven\t1\tplanted"))
 	if got := compare(found, readAllow(t, path)); len(got) != 1 || got[0] != "STALE row: internal/nowhere.go Gone transport-unproven" {
 		t.Fatalf("a row for a missing site should be STALE, got %v", got)
+	}
+}
+
+// A forbidden kind is a problem even with an allow row for it.
+func TestAForbiddenKindCannotBeAllowed(t *testing.T) {
+	found := map[site]int{{"a.go", "Replace", "default-transport-assign"}: 1}
+	rows := map[site]allowRow{{"a.go", "Replace", "default-transport-assign"}: {count: 1, reason: "would be allowed"}}
+	got := compare(found, rows)
+	if len(got) != 1 || got[0] != "FORBIDDEN site (no allow row can admit it): a.go Replace default-transport-assign (x1)" {
+		t.Fatalf("a forbidden kind with an allow row must still fail, got %v", got)
 	}
 }

@@ -7,12 +7,12 @@ package affected
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -25,8 +25,6 @@ var (
 	sharedFiles    = map[string]bool{"go.mod": true, "go.sum": true, "go.work": true, "go.work.sum": true}
 	// The planner's own code: a change here changes the verdict of this very change set.
 	plannerDir = "internal/cigates/affected/"
-	// Packages every AFFECTED plan selects, one per line: their tests read or run files the import closure cannot see.
-	alwaysFile = "internal/cigates/affected/always.tsv"
 	// Events that judge a change set. Every other event (push, merge_group, schedule, workflow_dispatch) runs everything.
 	judgedEvents = map[string]bool{"pull_request": true, "range": true}
 	knownEvents  = map[string]bool{"pull_request": true, "range": true, "push": true, "merge_group": true, "schedule": true,
@@ -132,22 +130,20 @@ func ownerOfDataFile(p string, packages map[string]goListEntry) (string, bool) {
 	return "", false
 }
 
-// readAlways reads the always-select list; a missing file is an empty list (deleting it is a non-Go change: FULL).
-func readAlways(p string) ([]string, error) {
-	raw, err := os.ReadFile(p)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
+// alwaysTSV lists the packages every AFFECTED plan selects, one per line: their tests read or run files the import
+// closure cannot see. It is compiled into the planner, so the list that judges a change set is the merge base's.
+//
+//go:embed always.tsv
+var alwaysTSV string
+
+func alwaysList() []string {
 	var out []string
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range strings.Split(alwaysTSV, "\n") {
 		if line = strings.Trim(line, " \t\r"); line != "" && !strings.HasPrefix(line, "#") {
 			out = append(out, line)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // Verdict is the plan for one change set: AFFECTED (Keys: the planned packages the change reaches) or FULL (Reason).
@@ -319,13 +315,8 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	always, err := readAlways(filepath.Join(*root, filepath.FromSlash(alwaysFile)))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
 	v, err := plan(planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, goFilesFull: *goFilesFull,
-		always: always})
+		always: alwaysList()})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

@@ -10,6 +10,7 @@ internal/chmigrate
 internal/cli
 internal/httpguard
 internal/operationalordering
+internal/ownershipwindow
 internal/pgmigrate
 internal/platform/config
 internal/platform/dbphase
@@ -39,6 +40,7 @@ internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/river
 internal/storage/roleacl
+internal/teamactive
 internal/teamkeytables
 internal/testsupport/containers
 internal/testsupport/moduleroot

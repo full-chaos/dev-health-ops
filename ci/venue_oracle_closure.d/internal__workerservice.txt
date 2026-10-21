@@ -79,6 +79,7 @@ internal/jobs/workgraph/units
 internal/llmbudget
 internal/mail
 internal/operationalordering
+internal/ownershipwindow
 internal/pgmigrate
 internal/platform/config
 internal/platform/dbphase

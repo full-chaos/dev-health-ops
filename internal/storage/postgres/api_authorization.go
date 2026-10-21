@@ -47,7 +47,16 @@ func apiPosture(sessionsOwnedByAuth bool) RolePosture {
 		// table: the audit text and state stay out of reach of an UPDATE.
 		{"billing_audit_log", "actor_id", "UPDATE"},
 	}
-	_ = sessionsOwnedByAuth
+	if sessionsOwnedByAuth {
+		// AUTH_PROXY_SESSIONS: auth-service owns sessions, so go-api inserts
+		// and rotates no refresh token. It keeps revoking them (revoked_at) on
+		// a password reset, change, admin set-password or soft delete: a
+		// go-api refresh token from before the flip stays exchangeable at
+		// auth-service until it is revoked or expires. DELETE stays for the
+		// org purge and the expired-token cleanup.
+		refreshTokens = TablePrivilege{"refresh_tokens", false, false, true}
+		columns = append(columns, ColumnPrivilege{"refresh_tokens", "revoked_at", "UPDATE"})
+	}
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			// Read root for GET /api/v1/internal/acr/entitlements/{org_id}:

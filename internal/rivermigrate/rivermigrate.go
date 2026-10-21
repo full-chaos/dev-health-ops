@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -484,8 +485,17 @@ const envAuthProxySessions = "AUTH_PROXY_SESSIONS"
 
 // authProxySessions reads AUTH_PROXY_SESSIONS as go-api does: unset or empty
 // is off, anything strconv.ParseBool refuses is an error.
-func authProxySessions(func(string) (string, bool)) (bool, error) {
-	return false, nil
+func authProxySessions(lookup func(string) (string, bool)) (bool, error) {
+	raw, _ := lookup(envAuthProxySessions)
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false, nil
+	}
+	on, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", envAuthProxySessions)
+	}
+	return on, nil
 }
 
 func queryAPILeg(lookup func(string) (string, bool)) (string, []riverstore.TableGrant, []riverstore.ColumnGrant) {

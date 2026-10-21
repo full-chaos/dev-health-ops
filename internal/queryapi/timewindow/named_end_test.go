@@ -54,11 +54,12 @@ func TestNamedEndIsInclusiveAndNeverTodayOrLater(t *testing.T) {
 	if err != nil || window.StartDay != start || window.EndDay.Format(time.DateOnly) != "2026-10-18" {
 		t.Errorf("start 10-01 end today: %+v, %v; want [2026-10-01, 2026-10-18)", window, err)
 	}
-	// A start on or after the clipped end moves to the day before it, as the reference does.
+	// A start on the day that is not over, end of today: nothing is left to read, the window is empty (see
+	// TestStartOnTodayWithEndOfTodayIsAnEmptyWindowNotYesterday).
 	late := date(t, "2026-10-18")
 	window, err = Compute(14, 14, &late, &end, today)
-	if err != nil || window.StartDay.Format(time.DateOnly) != "2026-10-17" {
-		t.Errorf("start today: %+v, %v; want the start moved to the last final day", window, err)
+	if err != nil || !window.StartDay.Equal(window.EndDay) {
+		t.Errorf("start today: %+v, %v; want an empty window", window, err)
 	}
 }
 
@@ -83,5 +84,32 @@ func TestExplicitEndThatThePythonReferenceRefusesIsStillRefused(t *testing.T) {
 	end := date(t, "9999-12-31")
 	if _, err := Compute(14, 14, nil, &end, today); !errors.Is(err, ErrOverflow) {
 		t.Fatalf("end 9999-12-31: err = %v, want ErrOverflow", err)
+	}
+}
+
+// A start on the day that is not over, with that day named as the end (or no end): the clip leaves nothing to read, and the
+// window is empty, as the GraphQL dateRange reads it. It is not the reference's repair (start moved to yesterday), which
+// stays for a start that is after the end the caller named.
+func TestStartOnTodayWithEndOfTodayIsAnEmptyWindowNotYesterday(t *testing.T) {
+	today := date(t, "2026-10-18")
+	start := date(t, "2026-10-18")
+	for _, end := range []*time.Time{nil, &today} {
+		window, err := Compute(14, 14, &start, end, today)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !window.StartDay.Equal(today) || !window.EndDay.Equal(today) {
+			t.Errorf("start today, end %v: window [%s, %s), want the empty [2026-10-18, 2026-10-18)", end, window.StartDay.Format(time.DateOnly), window.EndDay.Format(time.DateOnly))
+		}
+		if !window.CompareEnd.Equal(window.StartDay) {
+			t.Errorf("compare window ends %s, want it to end where the window starts", window.CompareEnd.Format(time.DateOnly))
+		}
+	}
+	// A start after the end the caller named is the reference's repair: the one day before the end.
+	pastEnd := date(t, "2026-10-10")
+	late := date(t, "2026-10-14")
+	window, err := Compute(14, 14, &late, &pastEnd, today)
+	if err != nil || window.StartDay.Format(time.DateOnly) != "2026-10-10" || window.EndDay.Format(time.DateOnly) != "2026-10-11" {
+		t.Errorf("start after the named end: %+v, %v; want the reference repair [2026-10-10, 2026-10-11)", window, err)
 	}
 }

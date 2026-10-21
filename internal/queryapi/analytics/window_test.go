@@ -107,3 +107,61 @@ func TestADateRangeThatEndsTodayOrLaterIsTheTrailingWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestOneRequestReadsOneWindowAcrossMidnight pins the r1 finding: the parts of one request convert their dateRange at
+// slightly different instants, and a request that crosses UTC midnight must not give them different ends.
+func TestOneRequestReadsOneWindowAcrossMidnight(t *testing.T) {
+	evening := time.Date(2026, 10, 21, 23, 59, 59, 0, time.UTC)
+	calls := 0
+	prior := windowToday
+	windowToday = func() time.Time {
+		calls++
+		if calls == 1 {
+			return evening
+		}
+		return evening.Add(2 * time.Second) // 2026-10-22 00:00:01
+	}
+	t.Cleanup(func() { windowToday = prior })
+
+	start := graphqldate.New(evening.AddDate(0, 0, -10))
+	end := graphqldate.New(evening) // today when the request began
+	dr := &model.DateRangeInput{StartDate: start, EndDate: end}
+	batch := snapshotWindows(model.AnalyticsRequestInput{
+		Timeseries: []model.TimeseriesRequestInput{{Dimension: model.DimensionInputTheme, Measure: model.MeasureInputCount, DateRange: dr, Interval: model.BucketIntervalInputDay}},
+		Breakdowns: []model.BreakdownRequestInput{{Dimension: model.DimensionInputTheme, Measure: model.MeasureInputCount, DateRange: dr, TopN: 5}},
+	})
+	ts, err := TimeseriesRequestFromInput(batch.Timeseries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	bd, err := BreakdownRequestFromInput(batch.Breakdowns[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ts.EndDate.Time().Equal(bd.EndDate.Time()) {
+		t.Fatalf("one request binds two ends across midnight: timeseries %s, breakdown %s", ts.EndDate.Time().Format(time.DateOnly), bd.EndDate.Time().Format(time.DateOnly))
+	}
+	if got := ts.EndDate.Time().Format(time.DateOnly); got != "2026-10-21" {
+		t.Errorf("both read the window the request began in: exclusive end %s, want 2026-10-21 (the request began on 10-21: yesterday is 10-20)", got)
+	}
+}
+
+// The REST window and the GraphQL conversion of the same start/end are the same window when the clip leaves nothing:
+// both are empty, neither falls back to yesterday.
+func TestEmptyClippedWindowIsEmptyInRESTAndGraphQL(t *testing.T) {
+	today := withWindowToday(t, "2026-10-18")
+	rest, err := timewindow.Compute(14, 14, &today, &today, today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := BreakdownRequestFromInput(model.BreakdownRequestInput{
+		Dimension: model.DimensionInputTheme, Measure: model.MeasureInputCount, TopN: 5,
+		DateRange: &model.DateRangeInput{StartDate: graphqldate.New(today), EndDate: graphqldate.New(today)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rest.StartDay.Equal(today) || !rest.EndDay.Equal(req.EndDate.Time()) || !req.StartDate.Time().Equal(rest.StartDay) {
+		t.Errorf("REST [%s, %s) vs GraphQL [%s, %s): want the same empty window", rest.StartDay.Format(time.DateOnly), rest.EndDay.Format(time.DateOnly), req.StartDate.Time().Format(time.DateOnly), req.EndDate.Time().Format(time.DateOnly))
+	}
+}

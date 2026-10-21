@@ -29,3 +29,41 @@ func dateRangeBounds(dr *model.DateRangeInput) (start, endExclusive graphqldate.
 	endExclusive, err = windowEndExclusive(dr.EndDate)
 	return dr.StartDate, endExclusive, err
 }
+
+// snapshotWindows returns the batch with the end of every dateRange clipped to the last final day of ONE reading of the
+// clock. The conversions that follow clip again with their own reading of it; a clipped end is at most yesterday of that
+// first reading, so a later clock cannot move it, and the parts of one request cannot read two different windows across
+// midnight. The input batch is not changed.
+func snapshotWindows(batch model.AnalyticsRequestInput) model.AnalyticsRequestInput {
+	today := windowToday()
+	clip := func(dr *model.DateRangeInput) *model.DateRangeInput {
+		if dr == nil {
+			return nil
+		}
+		clipped, err := timewindow.ClipLastDay(dr.EndDate.Time(), today)
+		if err != nil {
+			return dr
+		}
+		return &model.DateRangeInput{StartDate: dr.StartDate, EndDate: graphqldate.New(clipped)}
+	}
+	out := batch
+	out.Timeseries = append([]model.TimeseriesRequestInput(nil), batch.Timeseries...)
+	for i := range out.Timeseries {
+		out.Timeseries[i].DateRange = clip(out.Timeseries[i].DateRange)
+	}
+	out.Breakdowns = append([]model.BreakdownRequestInput(nil), batch.Breakdowns...)
+	for i := range out.Breakdowns {
+		out.Breakdowns[i].DateRange = clip(out.Breakdowns[i].DateRange)
+	}
+	if batch.Sankey != nil {
+		sankey := *batch.Sankey
+		sankey.DateRange = clip(sankey.DateRange)
+		out.Sankey = &sankey
+	}
+	if batch.FlowMatrix != nil {
+		flow := *batch.FlowMatrix
+		flow.DateRange = clip(flow.DateRange)
+		out.FlowMatrix = &flow
+	}
+	return out
+}

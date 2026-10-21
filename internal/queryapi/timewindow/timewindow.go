@@ -53,7 +53,22 @@ func Compute(rangeDays, compareDays int, startDate, endDate *time.Time, today ti
 	if err != nil {
 		return Window{}, err
 	}
-	return ComputeReference(rangeDays, compareDays, startDate, &last, today)
+	window, err := ComputeReference(rangeDays, compareDays, startDate, &last, today)
+	if err != nil || startDate == nil || window.StartDay.Equal(midnight(*startDate)) {
+		return window, err
+	}
+	// ComputeReference moved the start back to the day before the end because the start was not before it. That is the
+	// reference's repair of a start after the end. When the start was before the end the caller named, and only the clip
+	// (D6101: a named end of today or later is yesterday) put it at or after the exclusive end, the window is EMPTY, as the
+	// GraphQL dateRange reads it: no reader may fall back to yesterday for a day that was named.
+	if named, namedErr := ComputeReference(rangeDays, compareDays, startDate, endDate, today); namedErr == nil && midnight(*startDate).Before(named.EndDay) {
+		window.StartDay = window.EndDay
+		window.CompareEnd = window.StartDay
+		if window.CompareStart, err = addDays(window.StartDay, -max(1, compareDays)); err != nil {
+			return Window{}, err
+		}
+	}
+	return window, nil
 }
 
 // LastFinalDay is the newest day a window can hold: yesterday. A day that is not over is never in a window, whether the

@@ -1,0 +1,1 @@
+ValueError: netloc 'a℀b' contains invalid characters under NFKC normalization

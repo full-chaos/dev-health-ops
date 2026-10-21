@@ -342,7 +342,7 @@ func TestSAMLACSFullRoundTrip(t *testing.T) {
 		spEntityID = "https://sp.test/saml/metadata"
 	)
 	entityID := idp.idp.MetadataURL.String()
-	const acsURL = "https://sp.test/saml/{provider_id}/acs"
+	const acsURL = "https://sp.test/api/v1/auth/saml/{provider_id}/acs"
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":%q,"sp_acs_url":%q}`,
 		entityID, idp.certConfigValue(), spEntityID, acsURL)
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
@@ -401,7 +401,7 @@ func TestSAMLACSRefusesAReplayedAssertion(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
@@ -438,7 +438,7 @@ func TestSAMLACSRefusesATamperedAssertion(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
@@ -463,7 +463,7 @@ func TestSAMLACSRefusesAnUnsignedAssertion(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
@@ -497,7 +497,7 @@ func TestSAMLACSRefusesAnAssertionWithNoSubjectConfirmation(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
@@ -556,7 +556,7 @@ func TestSAMLACSRefusesAWrongIssuerAtTheResponseLevel(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
@@ -579,7 +579,7 @@ func TestSAMLACSRefusesAWrongIssuerAtTheAssertionLevel(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
@@ -608,7 +608,7 @@ func TestSAMLACSRefusesAnAssertionWithExpiredConditions(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
@@ -631,7 +631,7 @@ func TestSAMLACSRefusesAnAssertionWithExpiredSubjectConfirmation(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
@@ -756,7 +756,7 @@ func TestSAMLACSHonoursAllowIdpInitiatedFalse(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
@@ -813,7 +813,7 @@ func TestSAMLTwoConcurrentInitiateFlowsBothComplete(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
@@ -883,7 +883,7 @@ func TestSAMLACSRefusesAMissingLoginNonceCookie(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
@@ -924,7 +924,7 @@ func TestSAMLACSRefusesATamperedLoginNonceCookie(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
@@ -1011,7 +1011,7 @@ func TestSAMLACSRefusesMissingRelayStateWhenNotIdpInitiated(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
@@ -1035,7 +1035,7 @@ func TestSAMLACSRefusesATamperedRelayStateWhenNotIdpInitiated(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
-	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/saml/{provider_id}/acs"}`,
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
@@ -1069,7 +1069,7 @@ func TestSAMLACSRefusesATamperedRelayStateWhenNotIdpInitiated(t *testing.T) {
 // samlACSOverrideFor is the sp_acs_url override these tests store: the config
 // literals carry {provider_id}, which seedProvider replaces with the row id.
 func samlACSOverrideFor(providerID uuid.UUID) string {
-	return "https://sp.test/saml/" + providerID.String() + "/acs"
+	return "https://sp.test/api/v1/auth/saml/" + providerID.String() + "/acs"
 }
 
 func TestSAMLConfigRefusesAnACSOverrideWithAnotherPath(t *testing.T) {

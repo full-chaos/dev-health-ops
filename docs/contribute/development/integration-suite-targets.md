@@ -190,7 +190,7 @@ semantics that a version change can move.
 
 **Eight packages carry engine-sensitive ClickHouse SQL and cannot be proven by
 CI at all** — roughly 1366s (down from 1416s/nine packages pre-CHAOS-5336:
-`internal/testsupport/computeparity`'s ~50s row is gone with the package
+the retired computeparity test package's ~50s row is gone with the package
 itself, retired along with dora/capacity's Python producers; re-measure rather
 than trust this percentage exactly), about three quarters of the total
 integration weight. Two of them (`jobs/report`, `jobs/metrics/remaining`) are
@@ -201,7 +201,7 @@ but is not done here.
 Two classifications were left explicitly uncertain rather than guessed:
 `jobs/metrics/daily/repo_user_commit_org_scope` (queries `FROM work_items FINAL`
 but never inserts into that table, so `FINAL`'s effect is not outcome-asserted)
-and `internal/workerservice/multi_family_boot` (may transitively hit the
+and `internal/workerservice/multi_family_boot_integration_test.go` (may transitively hit the
 ordering guard but asserts nothing about it). Both sit inside packages already
 routed to kiac, so the uncertainty changes no routing decision today.
 
@@ -349,11 +349,11 @@ result is eventually `Close`d. A suite that caches across tests needs a
 ### And check nothing creates a datastore behind the harness's back
 
 The check above is necessary but not sufficient, because it only sees resources
-the harness created. `internal/testsupport/computeparity` used to be the
+the harness created. The retired computeparity test package used to be the
 example that passed the closing check above yet was still unsafe on a shared
 cluster: it created **fixed-name** databases (`parity_left`, `parity_right`,
 `parity_capacity_*`) through a separate fixture tool
-(`scripts/worker/compute_parity_fixtures.py`) and provisioned them with
+(`scripts/worker/compute_parity_fixtures.py`, removed with the Python api) and provisioned them with
 `--reset`. Two lanes then collided on the same names and one dropped the
 other's live database. The tool's ownership marker did not help: it was the
 same table name in every lane, so it distinguished a fixture database from a
@@ -365,7 +365,7 @@ still applies to any future out-of-band creator.
 **So the second question is: does anything here create a datastore the harness
 does not own?** Any creator that is not the harness is a potential collision and
 a potential orphan, because nothing will namespace it and nothing will drop it.
-As of `internal/testsupport/computeparity`'s retirement, no Go test issues
+As of the computeparity test package's retirement, no Go test issues
 `CREATE DATABASE` directly and no out-of-band fixture tool remains in the
 repository — re-sweep before trusting that this stays true.
 
@@ -397,7 +397,7 @@ against anything holding prior state:
 
 The scratch-database-per-caller design satisfies these — a scratch database is
 empty by construction — but pointing such a suite at a *seeded* lane database
-does not. CHAOS-4457 recorded this concretely: two `tests/test_dispatch_outbox.py`
+does not. CHAOS-4457 recorded this concretely: two `tests/test_dispatch_outbox.py` (removed with the Python api)
 tests failed with `IndexError` against a seeded lane whose `worker_job_outbox`
 already held 32 pending rows, because they claim with `limit=1` and expect
 their own seeded row back. Against a scratch database both pass unchanged (see
@@ -512,7 +512,7 @@ count was **22 before and 22 after every run**.
 | --- | --- | --- | --- |
 | `internal/jobroute` | Go | PostgreSQL | **PASS** — run twice, 0.85s / 0.94s |
 | `internal/jobs/report` | Go | PostgreSQL + ClickHouse | **PASS** — run twice, 1.04s / 1.10s |
-| `tests/test_dispatch_outbox.py` (the two `test_real_postgres_*` cases) | Python | PostgreSQL | **PASS**, 6.68s |
+| `tests/test_dispatch_outbox.py` (the two `test_real_postgres_*` cases; removed with the Python api) | Python | PostgreSQL | **PASS**, 6.68s |
 
 Each Go suite was run **twice** deliberately. A single green run against a
 shared server proves less than it looks: the role collision described above

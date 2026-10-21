@@ -8,7 +8,7 @@ source_of_truth:
   - contracts/auth/v1/jsonschema
   - contracts/auth/v1/examples
   - internal/auth/contracts
-  - src/dev_health_ops/authclient
+  - internal/auth/contracts/
   - ci/auth-contracts-ajv/run.mjs
   - contracts/auth/v1/credential-classes.json
 applicability: current
@@ -30,7 +30,7 @@ and are not repeated here.
 
 | Surface | Schema | Go | Python |
 | --- | --- | --- | --- |
-| `principal.v1` | `jsonschema/principal.v1.schema.json` | `internal/auth/contracts/principal.go` | `src/dev_health_ops/authclient/principal.py` |
+| `principal.v1` | `jsonschema/principal.v1.schema.json` | `internal/auth/contracts/principal.go` | `src/dev_health_ops/authclient/principal.py` (removed with the Python api) |
 | `error.v1` | `jsonschema/error.v1.schema.json` | `error_envelope.go` | `authclient/error_envelope.py` |
 | `jwks.v1`, `discovery.v1` | `jsonschema/jwks.v1...`, `discovery.v1...` | `contracts.go` (`Validate`) | `authclient/discovery.py` |
 | `provisioning-event.v1` | `jsonschema/provisioning-event.v1.schema.json` | `contracts.go` | `authclient/provisioning_event.py` |
@@ -109,6 +109,6 @@ by registry tests. Two are worth knowing before you touch a class:
 ## Verified against
 
 - `contracts/auth/v1/jsonschema/*.schema.json`, `contracts/auth/v1/openapi/auth-v1.openapi.json`.
-- `internal/auth/contracts` and `src/dev_health_ops/authclient` file names above; `tests/authclient/`.
+- `internal/auth/contracts` file names above, and the Python client tests removed with the Python api.
 - `ci/auth-contracts-ajv/run.mjs`, `scope.sh`; `.github/workflows/auth-contracts-ajv.yml`.
 - `internal/queryapi/server/endpoint_profile_rows_test.go`: the two registry tests.

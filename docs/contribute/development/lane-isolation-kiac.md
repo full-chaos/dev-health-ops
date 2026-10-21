@@ -27,7 +27,7 @@ Apple's `container` runtime, entirely outside any Docker daemon, so it never
 competes with Compose or with host Testcontainers.
 
 Tracked by CHAOS-4428. The runtime interface lives in the ACR repository
-(`deploy/local/kiac.sh`, `deploy/local/trial-data.sh`) because that is where the
+(the kiac and trial-data scripts in the ACR repository's local deploy directory) because that is where the
 kiac pilot (CHAOS-4051/4055) and the trial data plane (CHAOS-4186) already live.
 
 ## What isolation buys you
@@ -404,7 +404,7 @@ a quoted key reaches the provider as an invalid credential.
 
 ### 7. Install the two releases
 
-Install from **your worktree's** charts, not from `deploy/vendor/` — those
+Install from **your worktree's** charts, not from the vendored submodule charts — those
 submodules are pinned to older commits.
 
 ```bash

@@ -118,4 +118,4 @@ cannot escalate (for example by `SET ROLE` to the schema owner).
 - `internal/storage/postgres/authschema/grants.go` (`RuntimePosture`, `ApplyRuntimeGrants`).
 - `cmd/auth-migrate/main.go`: flags `--check` and `--version`, `AUTH_MIGRATION_DATABASE_URI`, `AUTH_RUNTIME_DATABASE_ROLE`, `AUTH_DATABASE_SCHEMA`, `AUTH_SESSION_READER_ROLES`, `runBudget`.
 - `internal/storage/postgres/authschema/session_readers.go`: the session reader roles' grant (`SessionReaderColumns`) and its posture check. go-api and query-api (`internal/api/policy` `PGStore.SessionState`) read a session to end an access token that carries `sid` once the session is revoked.
-- `internal/storage/postgres/authschema/migrations/0001` to `0007`.
+- `internal/storage/postgres/authschema/migrations/` (files `0001_principals_and_identities.sql` through `0007`).

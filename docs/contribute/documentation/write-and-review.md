@@ -6,7 +6,6 @@ owner: documentation
 source_of_truth:
   - docs/contribute/documentation/style-guide.md
   - docs/contribute/documentation/templates.md
-  - docs/visualizations/patterns.md
 applicability: current
 lifecycle: active
 ---

@@ -5,7 +5,6 @@ content_type: landing
 owner: product-analytics
 source_of_truth:
   - current /plan/capacity product surface
-  - docs/user-guide/views/capacity-planning.md
 applicability: current
 lifecycle: active
 hide:

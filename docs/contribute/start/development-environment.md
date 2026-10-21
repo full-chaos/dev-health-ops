@@ -7,7 +7,6 @@ source_of_truth:
   - pyproject.toml
   - requirements files
   - compose.yml
-  - docs/getting-started.md
   - current CI workflows
 applicability: current
 lifecycle: active

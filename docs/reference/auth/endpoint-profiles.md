@@ -4,10 +4,10 @@
 
 !!! info "Machine-readable contract"
     This page is prose over
-    [`contracts/auth/v1/endpoint-profiles.ops.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/endpoint-profiles.ops.json)
+    [`contracts/auth/v1/endpoint-profiles.ops.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/endpoint-profiles.ops.json) (removed with the Python api)
     (schema: [`endpoint-profile.schema.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/endpoint-profile.schema.json)),
     generated from independent source discovery in
-    [`ci/discover_ops_routes.py`](https://github.com/full-chaos/dev-health-ops/blob/main/ci/discover_ops_routes.py).
+    [`ci/discover_ops_routes.py`](https://github.com/full-chaos/dev-health-ops/blob/main/ci/discover_ops_routes.py) (removed with the Python api).
     The JSON is authoritative; every row carries a `file:line` anchor. This
     page summarizes; it does not repeat every anchor inline.
 
@@ -37,7 +37,7 @@ argument, which is the point of carrying it in the inventory at all; see
 
 ## Scope and counts
 
-`ci/discover_ops_routes.py` enumerates surfaces from the **served objects**,
+`ci/discover_ops_routes.py` (removed with the Python api) enumerates surfaces from the **served objects**,
 not from source text: it imports each deployed `FastAPI()` application and
 walks `app.routes` (recursing through mounts) for REST and websocket
 surfaces, and imports the served `strawberry.Schema` and walks every type's
@@ -102,7 +102,7 @@ serves the billing host and is outside this ops-Python inventory. `service`
 stays a per-deployed-app field, and the closed `service` vocabulary keeps the
 retired value:
 
-- `dev-health-ops-api` — `src/dev_health_ops/api/main.py`, the main app. Full
+- `dev-health-ops-api` — `cmd/dho/main.go` via `internal/apiservice/service.go`, the main app. Full
   middleware stack registered in `api/_middleware.py`: on the request path,
   `CorrelationIdMiddleware` → `OrgIdMiddleware` → `ImpersonationMiddleware` →
   `SlowAPIMiddleware` → `OriginValidationMiddleware` (CSRF) →
@@ -275,7 +275,7 @@ written repo-qualified (`acr:internal/auth/web_assertion.go:96`). Anchors in the
 **Backfill discipline.** A row gets `issued_credential` only where issuance was
 *proven* by tracing the route handler through to the mint site. The known Wave 0
 case is dev-health-web, which mints an `acr_web_assertion` on three of its
-routes (see the web repo's `docs/auth-endpoint-profiles.md`). **No ops row is
+routes (see the web repo's auth-endpoint-profiles page). **No ops row is
 backfilled yet.** ops has obvious issuer candidates — the login and SSO-callback
 routes that return `ops_access_token_hs256` / `ops_refresh_token`, and the
 device-flow surfaces — but "obvious" is a family pattern, and this inventory
@@ -344,7 +344,7 @@ every anchor line holds.
 ## Contributor guide: registering a new route or credential class
 
 1. **New route, existing credential class.** Add a row to
-   `contracts/auth/v1/endpoint-profiles.ops.json` with `id`, `route`/`method`
+   `contracts/auth/v1/endpoint-profiles.ops.json` (removed with the Python api) with `id`, `route`/`method`
    (or `graphql_field_name`), `source` anchor, `classification`, and — if
    protected — `accepted_credential_classes` from
    `contracts/auth/v1/credential-classes.json`'s closed vocabulary plus
@@ -378,7 +378,7 @@ every anchor line holds.
    trace it, write `null` and add the `gaps` entry. Do not leave the field
    absent on a row you touched.
 6. **CI gate.** A later lane (L3) enforces this contract the same way
-   `ci/check_transitional_inventory.py` enforces the transitional-workload
+   `ci/check_transitional_inventory.py` (removed with the Python api) enforces the transitional-workload
    inventory: independent re-discovery, unowned-surface detection, and
-   staleness/content-drift checks on every anchor. `ci/discover_ops_routes.py`
+   staleness/content-drift checks on every anchor. `ci/discover_ops_routes.py` (removed with the Python api)
    is that gate's discovery half.

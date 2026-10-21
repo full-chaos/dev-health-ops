@@ -36,7 +36,7 @@ the recommendation, the alternatives considered, and the risk for each.
     read during Wave 0; where it cites nothing, the ADR says so and names the gap.
 
 !!! success "The inventory contract these ADRs build on is enforced"
-    `ci/check_endpoint_profiles.py` (`0a7ff7ccd`) and acr's Go equivalent are
+    `ci/check_endpoint_profiles.py` (removed with the Python api) (`0a7ff7ccd`) and acr's Go equivalent are
     committed and **verified to reject seeded violations** — dropped rows,
     off-vocabulary class ids, drifted anchors, and an unexplained null — not
     merely to pass on clean input. **G-1 is enforced rather than intended**, and
@@ -158,7 +158,7 @@ ACP-ADR-01 pinned four of six Wave 1 dependencies and explicitly deferred the
 other three — OAuth 2.0/OIDC client, SAML, and password hashing — because no
 candidate for any of them was evaluated in Wave 0. This addendum makes that
 selection. Docs only: the versions below are the recorded decision, not yet a
-`go.mod` change — pinning happens with the `internal/identity` implementation
+`go.mod` change — pinning happens with the identity package implementation
 work (Wave 2), per TRD §26's own sequencing.
 
 Two dependencies are already present in the platform's Go module graph, which
@@ -174,7 +174,7 @@ dependencies rather than introducing something wholly new:
 
 The current Python password-hashing implementation is `bcrypt` (the PyPI
 `bcrypt` package, not `passlib`), anchored at
-`src/dev_health_ops/api/services/users.py:30-36` (`_hash_password`/
+`src/dev_health_ops/api/services/users.py:30-36` (removed with the Python api) (`_hash_password`/
 `_verify_password`, `bcrypt.hashpw`/`bcrypt.checkpw`),
 `api/auth/routers/login.py:42-43` (a fixed bcrypt hash used specifically for
 missing-user timing mitigation — TRD §13's timing-safe unknown-user handling,
@@ -268,7 +268,7 @@ Two facts constrain this decision more than any preference:
 
 ### Decision
 
-1. **Custody interface first, adapters behind it.** `internal/keystore/` exposes
+1. **Custody interface first, adapters behind it.** The keystore package exposes
    sign and public-JWKS operations only. No caller outside `internal/token/`
    may reach it (TRD §5 package rules).
 2. **Production: an external KMS or secret store holds private material**;
@@ -434,7 +434,7 @@ vocabulary cannot be generated from the inventory alone.
    role, grant type, condition, or entitlement key **denies** (G-26). Same
    closed-vocabulary discipline as the credential classes, and for the same
    reason: an unknown value must fail, not be tolerated. The mechanism is not
-   hypothetical — `ci/check_endpoint_profiles.py` already enforces exactly this
+   hypothetical — `ci/check_endpoint_profiles.py` (removed with the Python api) already enforces exactly this
    for the credential vocabulary and is verified to reject an off-vocabulary
    id, so the action vocabulary is a second instance of a working gate rather
    than a new one.
@@ -692,8 +692,8 @@ service-account management, security-policy changes, and nested impersonation.
 Without step-up, the only compliant option for that list is **denied**.
 
 The relevant surface is larger than it looks. The 150 Server Actions
-(threat model §11.3) are concentrated in `src/lib/admin/server/` and
-`src/lib/billing/actions/` — administrative and billing mutations, which is
+(threat model §11.3) are concentrated in the web repository's admin server-action directory and
+the web repository's billing actions directory — administrative and billing mutations, which is
 G-51's list almost exactly — and in Next.js 16.2.12 none of them is protected by
 a layout guard or by path middleware (§2.5).
 

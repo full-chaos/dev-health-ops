@@ -6,7 +6,6 @@ owner: platform-api
 source_of_truth:
   - contracts/graphql/v1/schema.graphql
   - internal/queryapi/analytics/resolve.go
-  - docs/api/graphql-overview.md
 applicability: current
 lifecycle: active
 ---

@@ -4,11 +4,9 @@ summary: Run the one-time Ask Dev ephemeral-expiry repair and arm the isolated q
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
-  - src/dev_health_ops/cli.py
-  - src/dev_health_ops/api/dev/persistence/service.py
-  - src/dev_health_ops/workers/ask_dev_retention.py
-  - src/dev_health_ops/llm/qua_shadow_budget.py
-  - src/dev_health_ops/api/dev/production_runtime.py
+  - internal/maintenancecli/maintenance.go
+  - internal/jobs/system/retention_postgres.go
+  - internal/scheduler/fixed/ask_dev_admission.go
 applicability: current
 lifecycle: active
 ---

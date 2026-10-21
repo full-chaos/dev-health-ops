@@ -6,12 +6,12 @@ owner: engineering
 source_of_truth:
   - .github/docs-legacy/plans/go-api-epic.md (the epic plan; this page documents two of its pieces in the customer-nav-visible docs tree)
   - .github/docs-legacy/plans/chaos-4381-parity-rules-proposal.md (comparator parity rules, ACCEPTED 2026-08-27)
-  - src/dev_health_ops/api/graphql/go_api_comparator.py (comparator implementation)
+  - internal/goapiproof/compare.go (comparator implementation)
   - internal/queryapi/principal (Go envelope verifier)
   - internal/queryapi/routeswitch (reachability gate: catalog and class-decision switches)
-  - src/dev_health_ops/api/graphql/principal_envelope.py (envelope issuer)
-  - src/dev_health_ops/models/go_api_registry.py (registry + ledger schema)
-  - src/dev_health_ops/alembic/versions/0114_add_go_api_operation_registry.py
+  - internal/envelopemint/envelopemint.go (envelope issuer)
+  - internal/goapiproof/registry.go (registry + ledger schema)
+  - internal/pgmigrate/baseline/head.json
   - contracts/graphql/v1/schema.graphql (canonical SDL pin)
 applicability: current
 lifecycle: active
@@ -164,9 +164,9 @@ build it proved via a full 4-column composite foreign key, never a bare
 `candidate_build` string match, so a proof can never be silently
 reattributed to a later build (plan §8.3).
 
-Python access layer: `src/dev_health_ops/api/graphql/go_api_registry.py`
-(`lookup_routing_state`, `register_candidate_build`, `record_proof_run`),
-instrumented in `go_api_registry_telemetry.py`
+Go access layer: `internal/goapiproof/registry.go` (the Python access layer was removed with the Python api),
+with the routing verbs in `internal/goapicli/routing/`,
+instrumented with
 (`devhealth_go_api_registry_lookup_total`,
 `devhealth_go_api_candidate_build_registered_total`,
 `devhealth_go_api_proof_run_recorded_total`).
@@ -284,7 +284,7 @@ for every authenticated organisation, revocable only by mode*.
 generates `query-api` from it) and is never regenerated from Python — see
 `contracts/graphql/v1/README.md` for how to change it and for how web
 codegen consumes it. Two gates: the Python schema must be a subset of it
-(`tests/api/graphql/test_schema_sdl_pinned.py`), and the schema baked into
+(the Python schema subset test was removed with the Python api), and the schema baked into
 the generated Go code must equal it byte for byte
 (`TestGeneratedSchemaSourceIsTheCheckedInPin`). Its sha256 digest is
 unchanged by which plane a member came from, so the routing key, the
@@ -318,7 +318,7 @@ proofs.
 ### The same procedure with the Go verbs (CHAOS-5486)
 
 `dho goapi routing` (spec S1, CHAOS-6280 folded the standalone
-`cmd/go-api-routing` binary into the `dho` operator binary's `goapi
+standalone go-api-routing binary into the `dho` operator binary's `goapi
 routing` verb) is the Go implementation of the same contract, built
 because the cutover rule forbids new Python compute on the critical path
 of a rollout operation. The verbs `seed`, `enable` and `disable` take MCP class

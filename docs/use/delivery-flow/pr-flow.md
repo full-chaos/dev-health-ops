@@ -5,7 +5,6 @@ content_type: workflow-guide
 owner: product-analytics
 source_of_truth:
   - current /metrics?tab=flow product surface
-  - docs/user-guide/views/pr-flow.md
 applicability: current
 lifecycle: active
 ---

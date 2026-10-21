@@ -5,7 +5,6 @@ content_type: task-guide
 owner: product-analytics
 source_of_truth:
   - current Report Center Run Now action and ReportRun contract
-  - docs/user-guide/reports.md
 applicability: current
 lifecycle: active
 ---

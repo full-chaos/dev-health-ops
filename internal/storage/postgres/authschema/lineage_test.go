@@ -179,6 +179,16 @@ var columnDefinition = regexp.MustCompile(`(?m)^\s+([a-z_][a-z0-9_]*)\s+`)
 // secretRoot, approvedSecretColumns and hasApprovedSuffix survive here because
 // the RULE is still the right rule; only the thing it reads has changed.
 
+// secretColumnApproved reports whether table.column (of dataType) passes the
+// secret-name rule: approved by name, by a safe suffix, or by a table-scoped
+// approval of that exact column and type.
+func secretColumnApproved(table, column, dataType string) bool {
+	if _, approved := approvedSecretColumns[column]; approved {
+		return true
+	}
+	return hasApprovedSuffix(column)
+}
+
 func hasApprovedSuffix(column string) bool {
 	for _, suffix := range approvedSecretSuffixes {
 		if strings.HasSuffix(column, suffix) {

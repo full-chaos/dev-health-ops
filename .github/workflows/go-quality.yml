@@ -222,7 +222,7 @@ jobs:
 
       - name: Set up Helm
         # internal/cigates/chartgates renders the chart with `helm template` in the test and race legs; the
-        # oci-arc-runners image ships no helm (same pin as test.yml's tooling-tests job). A missing helm fails
+        # oci-arc-runners image ships no helm. A missing helm fails
         # those guards, it never skips them.
         if: steps.relevance.outputs.relevant == 'true'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1

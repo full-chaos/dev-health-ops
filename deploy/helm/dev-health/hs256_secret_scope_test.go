@@ -226,3 +226,30 @@ func TestWebLocalDevelopmentStillNeedsAnAuthSecretInProduction(t *testing.T) {
 		t.Fatalf("localDevelopment with NODE_ENV=development must render without an auth secret: %v\n%.300s", err, out)
 	}
 }
+
+const requiredValuesHeading = "Required values change: separate Secrets for web and the HS256 key"
+
+// The fail-closed web render tells the operator what to set and where to read about it; both docs carry the section.
+func TestWebAuthSecretRefusalPointsAtTheDocs(t *testing.T) {
+	out, err := helmOut(t, true, "--set", "web.env.BACKEND_URL=http://x")
+	if err == nil {
+		t.Fatalf("a web render without an auth secret succeeded")
+	}
+	for _, want := range []string{"web.authSecret.secretName", "docs/operate/install/production.md", requiredValuesHeading} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the refusal does not say %q:\n%.600s", want, out)
+		}
+	}
+	for _, doc := range []string{"../../../docs/operate/install/production.md", "../../../docs/operate/maintain/upgrade.md"} {
+		raw, err := os.ReadFile(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(raw)
+		for _, want := range []string{"## " + requiredValuesHeading, "web.authSecret", "hs256Secret.externalSecretName", "required values change"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s lacks %q", doc, want)
+			}
+		}
+	}
+}

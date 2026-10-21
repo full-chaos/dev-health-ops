@@ -214,7 +214,7 @@ func TestTeamScopeOwnership_ResolutionMatrix(t *testing.T) {
 	seedTeamScopeWorkUnit(t, conn, orgID, "wu-revoked", revokedID, 50)
 
 	// Not yet in force: valid_from after the instant this request resolves
-	// ownership at.
+	// ownership at. It is the first record of its repository, so its owners apply before it.
 	futureID := uuid.New()
 	seedTeamScopeRepo(t, conn, orgID, "acme/future", futureID)
 	future := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
@@ -270,6 +270,7 @@ SETTINGS max_execution_time = 30
 		{"wu-direct", "the ownership row carries the repository id and the repository is in the catalog"},
 		{"wu-named", "the ownership row carries only a name, which the catalog holds under different case"},
 		{"wu-pattern", "a pattern claim resolves like any other once its name is in the catalog"},
+		{"wu-future", "its only ownership row starts after this request's instant: the first recorded owners apply before the first record (D5987 option C)"},
 	} {
 		if !got[want.unitID] {
 			t.Errorf("work unit %q did not come back: %s", want.unitID, want.why)
@@ -281,7 +282,6 @@ SETTINGS max_execution_time = 30
 	}{
 		{"wu-zero-repo-id", "an unmatched ownership name must not resolve to the zero UUID"},
 		{"wu-revoked", "the newest version of that ownership row carries valid_to"},
-		{"wu-future", "that ownership row's valid_from has not arrived at this request's instant"},
 		{"wu-orphan", "the org's catalog holds no repository with that id"},
 		{"wu-other-team", "that repository belongs to a different team"},
 	} {
@@ -289,8 +289,8 @@ SETTINGS max_execution_time = 30
 			t.Errorf("work unit %q came back and must not have: %s", notWanted.unitID, notWanted.why)
 		}
 	}
-	if len(got) != 3 {
-		t.Fatalf("team %q resolved to %d work units (%v), want exactly 3", teamID, len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("team %q resolved to %d work units (%v), want exactly 4", teamID, len(got), got)
 	}
 }
 

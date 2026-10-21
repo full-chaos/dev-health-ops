@@ -44,7 +44,7 @@ func (conn *governanceQueryRecorder) Query(_ context.Context, query string, args
 // live keys of a team-keyed daily table (stale_team_keys.go). A fake that
 // serves canned rows of a family's own read answers these with no row.
 func isTeamRuleRead(query string) bool {
-	if strings.Contains(query, "FROM teams") && strings.Contains(query, teamactive.NewestRowInactive) {
+	if strings.HasPrefix(strings.TrimSpace(query), "SELECT id FROM teams") && strings.Contains(query, teamactive.NewestRowInactive) {
 		return true
 	}
 	for _, table := range StaleTeamKeyTables() {

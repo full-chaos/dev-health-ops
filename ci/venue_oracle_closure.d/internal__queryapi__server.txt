@@ -58,6 +58,7 @@ internal/mintcli/envelope
 internal/netclass
 internal/operationalbackfill
 internal/operationalordering
+internal/ownershipwindow
 internal/pgmigrate
 internal/platform/buildstamp
 internal/platform/config

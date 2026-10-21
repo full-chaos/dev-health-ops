@@ -14,7 +14,6 @@ on:
       - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
       - 'scripts/read_wrangler_output.py'
-      - 'scripts/check_docs_cloudflare_host.py'
       - 'docs-data/**'
       - '.github/workflows/docs-cloudflare.yml'
   workflow_dispatch:
@@ -227,7 +226,7 @@ jobs:
       - name: Smoke-test the canonical domain
         run: |
           for attempt in 1 2 3 4 5 6; do
-            if python scripts/check_docs_cloudflare_host.py \
+            if go run -trimpath -mod=readonly ./cmd/cigate docs host-smoke \
               --origin https://docs.fullchaos.dev \
               --redirects docs-data/redirects.tsv; then
               exit 0
@@ -277,9 +276,12 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          python-version: '3.14'
+          go-version-file: go.mod
+          # CHAOS-10486: no setup-go cache here. Its key is shared by every workflow, and a job that compiles little or
+          # nothing saved it first and left the heavy jobs an empty entry.
+          cache: false
 
       - name: Roll back to the requested Worker version
         env:
@@ -294,6 +296,6 @@ jobs:
 
       - name: Smoke-test the rolled-back deployment
         run: |
-          python scripts/check_docs_cloudflare_host.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs host-smoke \
             --origin https://docs.fullchaos.dev \
             --redirects docs-data/redirects.tsv

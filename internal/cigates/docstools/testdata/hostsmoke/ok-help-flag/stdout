@@ -1,0 +1,9 @@
+usage: check_docs_cloudflare_host.py [-h] --origin ORIGIN
+                                     --redirects REDIRECTS
+
+Smoke-test a deployed documentation host.
+
+options:
+  -h, --help            show this help message and exit
+  --origin ORIGIN
+  --redirects REDIRECTS

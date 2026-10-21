@@ -206,6 +206,9 @@ func (c *FileCustody) Sign(ctx context.Context, kid string, message []byte) ([]b
 	return nil, failure(ReasonKeyUnknown, nil)
 }
 
+// afterSign is a test hook run after the signature is made.
+var afterSign func()
+
 func (c *FileCustody) keyPath(entry manifestEntry) string {
 	return filepath.Join(filepath.Dir(c.manifestPath), entry.File)
 }

@@ -284,3 +284,52 @@ func TestKeySetInvariants(t *testing.T) {
 		t.Fatalf("published %v active %s", published, set.Active().KeyID)
 	}
 }
+
+// rotating refuses the first `refusals` signs as "not active" and makes the
+// second key active from then on, as a rotation landing mid-sign does.
+type rotating struct {
+	inner    keystore.Custody
+	rotate   func()
+	refusals int
+	calls    int
+}
+
+func (r *rotating) Keys(ctx context.Context) ([]keystore.Key, error) { return r.inner.Keys(ctx) }
+
+func (r *rotating) Sign(ctx context.Context, kid string, message []byte) ([]byte, error) {
+	r.calls++
+	if r.calls <= r.refusals {
+		r.rotate()
+		return nil, &keystore.Error{Reason: keystore.ReasonKeyNotActive}
+	}
+	return r.inner.Sign(ctx, kid, message)
+}
+
+func TestSignerRetriesWhenARotationLandsMidSign(t *testing.T) {
+	dir := t.TempDir()
+	writeKey(t, dir, "a")
+	writeKey(t, dir, "b")
+	inner := NewFileSigner(FileConfig{KeySetPath: writeSet(t, dir, "a", "active", "b", "pending")}).custody
+	custody := &rotating{inner: inner, refusals: 1, rotate: func() { writeSet(t, dir, "a", "compromised", "b", "active") }}
+	signer := &Signer{custody: custody}
+	ctx := context.Background()
+	compact, kid, err := signer.Sign(ctx, "at+jwt", []byte(`{}`))
+	if err != nil || kid != "b" {
+		t.Fatalf("Sign after a mid-sign rotation = kid %q, %v; want kid b", kid, err)
+	}
+	set, err := signer.KeySet(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verify(t, compact, set); err != nil {
+		t.Fatalf("the retried token does not verify under the published set: %v", err)
+	}
+	always := &rotating{inner: inner, refusals: signAttempts, rotate: func() {}}
+	if _, _, err := (&Signer{custody: always}).Sign(ctx, "at+jwt", []byte(`{}`)); ReasonOf(err) != "key_not_active" || always.calls != signAttempts {
+		t.Fatalf("persistent refusal: %v after %d calls, want key_not_active after %d", err, always.calls, signAttempts)
+	}
+	checkAlways := &rotating{inner: inner, refusals: signAttempts, rotate: func() {}}
+	if err := (&Signer{custody: checkAlways}).Check(ctx); ReasonOf(err) != "key_not_active" || checkAlways.calls != signAttempts {
+		t.Fatalf("Check under persistent refusal: %v after %d calls", err, checkAlways.calls)
+	}
+}

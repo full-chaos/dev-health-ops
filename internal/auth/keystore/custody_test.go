@@ -339,3 +339,26 @@ func types(expr ast.Expr) string {
 	}
 	return fmt.Sprintf("%T", expr)
 }
+
+// TestARotationDuringSignDiscardsTheSignature: the manifest is replaced after
+// the key has signed and before Sign returns; the signature is discarded.
+func TestARotationDuringSignDiscardsTheSignature(t *testing.T) {
+	for _, next := range []string{"compromised", "retiring"} {
+		t.Run(next, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKeyFile(t, dir, "a.pem")
+			writeKeyFile(t, dir, "b.pem")
+			custody := NewFileCustody(writeManifest(t, dir, entries("a", "active", "b", "pending")))
+			afterSign = func() { writeManifest(t, dir, entries("a", next, "b", "active")) }
+			t.Cleanup(func() { afterSign = nil })
+			signature, err := custody.Sign(context.Background(), "a", []byte("m"))
+			if err == nil || reasonOf(t, err) != ReasonKeyNotActive || signature != nil {
+				t.Fatalf("Sign across a rotation to a=%s returned %x, %v; want no signature and %s", next, signature, err, ReasonKeyNotActive)
+			}
+			afterSign = nil
+			if _, err := custody.Sign(context.Background(), "b", []byte("m")); err != nil {
+				t.Fatalf("the new active key does not sign: %v", err)
+			}
+		})
+	}
+}

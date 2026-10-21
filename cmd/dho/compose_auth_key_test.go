@@ -133,3 +133,27 @@ services:
 		t.Fatalf("findings %v, want one naming envelope_keys", findings)
 	}
 }
+
+func TestTheSigningKeyGuardSeesANestedEnvelopeMount(t *testing.T) {
+	planted := []byte(`
+services:
+  go-api:
+    environment:
+      GO_API_ENVELOPE_PRIVATE_KEY_FILE: /run/envelope/private/envelope-private-key.pem
+    volumes:
+      - envelope_keys:/run/envelope/private:ro
+  auth-service:
+    environment:
+      AUTH_SIGNING_KEY_FILE: /run/auth/signing/keys/envelope-private-key.pem
+    volumes:
+      - signing_keys:/run/auth/signing:ro
+      - envelope_keys:/run/auth/signing/keys:ro
+`)
+	findings, err := authKeyVolumeFindings(planted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || !strings.Contains(findings[0], "envelope_keys") {
+		t.Fatalf("findings %v, want one naming the nested envelope_keys mount", findings)
+	}
+}

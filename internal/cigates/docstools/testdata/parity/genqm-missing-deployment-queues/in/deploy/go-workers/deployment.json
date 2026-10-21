@@ -1,0 +1,80 @@
+{
+  "processes": [
+    {
+      "name": "heavy",
+      "binary": "bin-heavy",
+      "job_kinds": [
+        "investment.materialize",
+        "metrics.a",
+        "metrics.b",
+        "reports.run",
+        "workgraph.x"
+      ]
+    },
+    {
+      "name": "ops",
+      "binary": "bin-ops",
+      "queues": [
+        "coverage",
+        "heartbeat",
+        "retention",
+        "webhooks"
+      ],
+      "job_kinds": [
+        "coverage.c",
+        "heartbeat.h",
+        "webhooks.w"
+      ]
+    },
+    {
+      "name": "sync",
+      "binary": "bin-sync",
+      "queues": [
+        "sync"
+      ],
+      "job_kinds": [
+        "sync.s"
+      ]
+    },
+    {
+      "name": "sync-provider",
+      "binary": "bin-sp",
+      "queues": [
+        "sync_provider"
+      ],
+      "job_kinds": [
+        "sync.provider_unit"
+      ]
+    },
+    {
+      "name": "scheduler",
+      "binary": "bin-sched",
+      "queues": [],
+      "job_kinds": []
+    },
+    {
+      "name": "reconciler",
+      "binary": "bin-rec",
+      "queues": [],
+      "job_kinds": []
+    },
+    {
+      "name": "stream-ingest",
+      "binary": "bin-si",
+      "queues": [],
+      "job_kinds": []
+    },
+    {
+      "name": "stream-external",
+      "binary": "bin-se",
+      "queues": [],
+      "job_kinds": []
+    },
+    {
+      "name": "stream-pagerduty",
+      "binary": "bin-sp2",
+      "queues": [],
+      "job_kinds": []
+    }
+  ]
+}

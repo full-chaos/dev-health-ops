@@ -150,6 +150,7 @@ type Loop struct {
 	occurrencesCompleted       uint64
 	occurrencesRetried         uint64
 	occurrencesQuarantined     uint64
+	reconcileBudgetExhausted   uint64
 	occurrencesMinted          uint64
 	occurrencesRepeated        uint64
 	idleDueWindows             uint64
@@ -328,8 +329,17 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	// the marker advance while the occurrence it handed off sat unconsumed.
 	stage = "reconcile"
 	reconciled, err := loop.config.Occurrences.Reconcile(stepCtx, now.UTC(), loop.config.Limit)
+	budgetEnded := false
 	if err != nil {
-		return fmt.Errorf("consume pending scheduled sync occurrences: %w", err)
+		// Only the window's own deadline after a committed handoff is a budget
+		// end; shutdown or any other error still fails the window.
+		if !errors.Is(err, context.DeadlineExceeded) ||
+			!errors.Is(stepCtx.Err(), context.DeadlineExceeded) || parent.Err() != nil {
+			return fmt.Errorf("consume pending scheduled sync occurrences: %w", err)
+		}
+		budgetEnded = true
+		loop.logger().WarnContext(parent, "sync scheduler reconcile budget exhausted",
+			"completed", reconciled.Completed, "retried", reconciled.Retried, "quarantined", reconciled.Quarantined, "scanned", reconciled.Scanned)
 	}
 	span.SetAttributes(
 		attribute.Int("dev_health.scheduler.occurrences_completed", reconciled.Completed),
@@ -344,6 +354,9 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	loop.occurrencesCompleted += uint64(reconciled.Completed)
 	loop.occurrencesRetried += uint64(reconciled.Retried)
 	loop.occurrencesQuarantined += uint64(reconciled.Quarantined)
+	if budgetEnded {
+		loop.reconcileBudgetExhausted++
+	}
 	loop.cycles++
 	loop.handoffs += uint64(len(result.HandedOff))
 	loop.occurrencesMinted += uint64(result.Minted())
@@ -520,6 +533,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	lastOK, up, now := loop.lastOK, loop.up, loop.clock.Now()
 	completed, retried := loop.occurrencesCompleted, loop.occurrencesRetried
 	quarantined := loop.occurrencesQuarantined
+	budgetExhausted := loop.reconcileBudgetExhausted
 	minted, repeated, idle := loop.occurrencesMinted, loop.occurrencesRepeated, loop.idleDueWindows
 	orgMissing, featureDisabled := loop.skippedOrgMissing, loop.skippedFeatureDisabled
 	notPlannerManaged := loop.skippedNotPlannerManaged
@@ -544,6 +558,7 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	writeLoopCounter(&text, "sync_scheduler_occurrences_completed_total", "Pending scheduled sync occurrences materialized.", completed)
 	writeLoopCounter(&text, "sync_scheduler_occurrences_retried_total", "Pending scheduled sync occurrences deferred for retry.", retried)
 	writeLoopCounter(&text, "sync_scheduler_occurrences_quarantined_total", "Pending scheduled sync occurrences terminally quarantined.", quarantined)
+	writeLoopCounter(&text, "sync_scheduler_reconcile_budget_exhausted_total", "Windows whose occurrence reconcile used the whole step budget after a committed handoff. Pending occurrences stay pending and the next window continues; sustained growth means the batch no longer fits one step budget.", budgetExhausted)
 	writeLoopCounter(&text, "sync_scheduler_skipped_org_missing_total", "Due candidates refused before minting because their organization no longer exists. Sustained growth means schedules are outliving the orgs that owned them.", orgMissing)
 	writeLoopCounter(&text, "sync_scheduler_skipped_feature_disabled_total", "Due candidates refused before minting because their sync targets require the canonical-incident feature and the organization is not entitled to it.", featureDisabled)
 	writeLoopCounter(&text, "sync_scheduler_skipped_not_planner_managed_total", "Due candidates refused before minting because planner_managed is false, marking them a fixture or legacy fan-out config that must never be scheduled (CHAOS-4174).", notPlannerManaged)

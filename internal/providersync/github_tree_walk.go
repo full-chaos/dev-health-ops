@@ -75,12 +75,16 @@ type gitHubTreeWalker struct {
 	root      string
 	limits    gitHubTreeWalkLimits
 	startedAt time.Time
-	ancestors map[string]bool
-	paths     []string
-	sizes     map[string]*int
-	stats     gitHubTreeWalkStats
-	metrics   *providerfoundation.Metrics
-	nearWarn  map[string]bool
+	// timeCeiling is the time the walk may take: the budget, or less when the
+	// job deadline (minus its margin) comes first, so the half-way note covers
+	// every way the time can end a walk.
+	timeCeiling time.Duration
+	ancestors   map[string]bool
+	paths       []string
+	sizes       map[string]*int
+	stats       gitHubTreeWalkStats
+	metrics     *providerfoundation.Metrics
+	nearWarn    map[string]bool
 }
 
 // gitHubWalkTree recovers a complete blob inventory when the recursive tree
@@ -106,9 +110,14 @@ func gitHubWalkTreeLimited(
 	limits gitHubTreeWalkLimits,
 ) ([]string, map[string]*int, gitHubTreeWalkStats, error) {
 	walker := &gitHubTreeWalker{
-		ctx: ctx, root: root, limits: limits, startedAt: limits.now(),
+		ctx: ctx, root: root, limits: limits, startedAt: limits.now(), timeCeiling: limits.budget,
 		ancestors: map[string]bool{}, sizes: map[string]*int{},
 		metrics: client.Metrics, nearWarn: map[string]bool{},
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if usable := deadline.Sub(walker.startedAt) - limits.deadlineMargin; usable < walker.timeCeiling {
+			walker.timeCeiling = usable
+		}
 	}
 	if err := walker.walk(client, sha, prefix, 0); err != nil {
 		return nil, nil, walker.stats, err
@@ -121,7 +130,8 @@ func gitHubWalkTreeLimited(
 // closed name only. A repository growing toward a ceiling shows here long
 // before a walk is stopped.
 func (walker *gitHubTreeWalker) noteNearCeiling(limit string, value, ceiling int) {
-	if ceiling <= 0 || value*2 < ceiling || walker.nearWarn[limit] {
+	// value >= ceil(ceiling/2), written without a product that can overflow.
+	if ceiling <= 0 || value < ceiling-ceiling/2 || walker.nearWarn[limit] {
 		return
 	}
 	walker.nearWarn[limit] = true
@@ -143,7 +153,7 @@ func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha,
 	// very value it first observes (elapsed past the budget at the next
 	// directory, depth past the ceiling) still says it passed half.
 	walker.noteNearCeiling(GitHubTreeWalkLimitDepth, depth, walker.limits.maxDepth)
-	walker.noteNearCeiling(GitHubTreeWalkLimitTime, int(now.Sub(walker.startedAt)/time.Second), int(walker.limits.budget/time.Second))
+	walker.noteNearCeiling(GitHubTreeWalkLimitTime, int(now.Sub(walker.startedAt)/time.Second), int(walker.timeCeiling/time.Second))
 	if depth > walker.limits.maxDepth {
 		return walker.stop(GitHubTreeWalkLimitDepth, walker.limits.maxDepth)
 	}

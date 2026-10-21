@@ -98,7 +98,7 @@
     {
       "file": "invalid-scope-unknown.json",
       "expect_instance_location": "/claims/scope",
-      "expect_keyword": "enum",
+      "expect_keyword": "const",
       "why": "A scope outside the closed vocabulary."
     },
     {
@@ -110,7 +110,7 @@
     {
       "file": "invalid-scope-list.json",
       "expect_instance_location": "/claims/scope",
-      "expect_keyword": "enum",
+      "expect_keyword": "const",
       "why": "Two scopes in one string: v1 carries exactly one."
     },
     {

@@ -23,8 +23,9 @@ import (
 //
 // classes is the union of the measured walk rows a walk-callback path comes from, or `unexpressed` when any call of the
 // file reads a path the tool cannot bound. Temp-rooted, own-directory and measured-walk calls need no row. The planner
-// plans FULL for any non-Go change while an `unexpressed` row exists or the table differs from the generated one;
-// plan-reads fails the difference. A hand edit may only narrow an `unexpressed` row to a class list (a reviewed diff).
+// selects the package of an `unexpressed` row on every non-Go change (and the importers of a test-support library), so no
+// such change plans NONE while one exists; a table that differs from the generated one plans FULL, and plan-reads fails
+// the difference. A hand edit may only narrow an `unexpressed` row to a class list (a reviewed diff).
 // A `_test.go` site selects its package, any other site the package's importers' tests too.
 const (
 	dynReadsFile   = "dynreads.tsv"

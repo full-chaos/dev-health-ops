@@ -228,20 +228,27 @@ func plan(in planInput) (Verdict, error) {
 			if len(in.dynDiff) > 0 {
 				return full("dynreads.tsv differs from the tree (" + in.dynDiff[0] + ") and can miss " + p), nil
 			}
-			for _, d := range in.tables.dynReads {
-				if d.unexpressed() {
-					return full("unexpressed dynamic read in " + d.pkg + " (" + d.site + ") can read " + p), nil
-				}
-			}
 			pc, _ := in.tables.classesOf(p)
 			for _, d := range in.tables.dynReads {
-				for _, c := range d.classes {
-					if pc[c] {
-						dynSelected[d.pkg] = true
-						if d.scope() == scopeCode {
-							changedPackages[importPath(d.pkg)] = true
-						} else {
-							direct[importPath(d.pkg)] = true
+				switch {
+				case d.unexpressed():
+					// The tool cannot bound the path: the package can read any file, so every non-Go change selects it.
+					// Only a test-support library also selects its importers; elsewhere only the package's own tests read it.
+					dynSelected[d.pkg] = true
+					if d.scope() == scopeCode && strings.HasPrefix(d.pkg+"/", sharedPrefixes[0]) {
+						changedPackages[importPath(d.pkg)] = true
+					} else {
+						direct[importPath(d.pkg)] = true
+					}
+				default:
+					for _, c := range d.classes {
+						if pc[c] {
+							dynSelected[d.pkg] = true
+							if d.scope() == scopeCode {
+								changedPackages[importPath(d.pkg)] = true
+							} else {
+								direct[importPath(d.pkg)] = true
+							}
 						}
 					}
 				}

@@ -323,8 +323,8 @@ func TestGitHubFileContentRequestsAreSizedByBytesNotOnlyByBlobCount(t *testing.T
 		t.Fatalf("contents=%d", len(contents))
 	}
 	for _, call := range fake.graphql {
-		if call.declared > gitHubFileChunkMaxBytes {
-			t.Fatalf("a request declared %d bytes of text, bound %d (50 x 1 MB in one request is 50 MB, above the 32 MiB response cap)", call.declared, gitHubFileChunkMaxBytes)
+		if call.declared > gitHubFileContentMaxBytes {
+			t.Fatalf("a request declared %d bytes of text, above one blob of %d (50 x 1 MB in one request is 50 MB, above the 32 MiB response cap)", call.declared, gitHubFileContentMaxBytes)
 		}
 	}
 	if len(fake.graphql) != 50 {
@@ -339,8 +339,8 @@ func TestGitHubFilesChunkKeepsAnOverEncodedRowWithoutContentsAndSaysSo(t *testin
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	fake := newFilesChunkFake(t, 2, 300_000, 0)
 	paths := fake.trees["tree-1"]
-	// "<" encodes as the six bytes <: 300,000 of them are 1.8 MB.
-	fake.texts[paths[0]] = strings.Repeat("<", 300_000)
+	// "<" encodes as six bytes: 400,000 of them are 2.4 MB, above one chunk.
+	fake.texts[paths[0]] = strings.Repeat("<", 400_000)
 	run, err := runFilesChunks(t, fake, "", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -443,15 +443,17 @@ func (sink *filesReadbackSink) InspectEffect(_ context.Context, _ Claim, effect 
 }
 
 func filesChunkExecutor(t *testing.T, fake *filesChunkFake, sink *filesReadbackSink) (
-	CompleteRouteExecutor, *LeaseSession, CompleteRouteDescriptor, *chunkMemoryStore,
+	CompleteRouteExecutor, *LeaseSession, CompleteRouteDescriptor, *InProcessChunkLedger,
 ) {
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	_, session := completeRouteSessionFor(t, now, false, "github", "files")
+	claim, session := completeRouteSessionFor(t, now, false, "github", "files")
 	descriptor, ok := Descriptor("github", "files")
 	if !ok || !descriptor.Chunked {
 		t.Fatalf("descriptor=%+v", descriptor)
 	}
-	store := newChunkMemoryStore()
+	// The production validation of a prepared chunk (payload + ledger inside
+	// 2 MiB), not the test store that bypasses it.
+	store := NewInProcessChunkLedger(claim)
 	executor := completeRouteExecutor(now, GitHubFilesRouteHandler{}, store, sink)
 	executor.Committer.Readback = sink
 	executor.Comparator = ProductionContractComparator{}
@@ -746,5 +748,55 @@ func TestGitHubFilesUnitKeepsItsPinOnAServerErrorOfThePinnedTree(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func runFilesUnitToTheEnd(t *testing.T, fake *filesChunkFake) (CompleteRouteExecutionResult, *filesReadbackSink) {
+	t.Helper()
+	sink := &filesReadbackSink{}
+	executor, session, descriptor, _ := filesChunkExecutor(t, fake, sink)
+	for attempt := 0; ; attempt++ {
+		if attempt > 60 {
+			t.Fatal("the unit does not complete in 60 attempts: a stuck cursor")
+		}
+		result, err := executor.Execute(context.Background(), session, descriptor)
+		if err == nil {
+			return result, sink
+		}
+		if !errors.As(err, new(ChunkContinuationError)) {
+			t.Fatalf("attempt %d: %v", attempt+1, err)
+		}
+	}
+}
+
+// r3 P1: two eligible files of 174,620 "<" each fit the byte budget, but JSON
+// escaping makes each 1,047,722 bytes and the pair cannot be one prepared chunk
+// (payload + ledger inside 2 MiB). The chunk store refused it on every attempt
+// while the unit made no progress. The chunk is sized by its persisted form, and
+// a file that cannot fit even alone loses its contents (counted), never the cursor.
+func TestGitHubFilesChunkOfEscapeHeavyFilesConvergesThroughTheProductionChunkValidation(t *testing.T) {
+	fake := newFilesChunkFake(t, 2, 174_620, 1)
+	for _, path := range fake.trees["tree-1"] {
+		if strings.HasSuffix(path, ".go") {
+			fake.texts[path] = strings.Repeat("<", 174_620)
+		}
+	}
+	result, sink := runFilesUnitToTheEnd(t, fake)
+	if len(sink.rows) != 3 || fmt.Sprint(result.Result["files_synced"]) != "3" {
+		t.Fatalf("rows=%d result=%v, want all 3 paths written", len(sink.rows), result.Result)
+	}
+	if fmt.Sprint(result.Result["files_with_contents"]) != "2" || fmt.Sprint(result.Result["contents_oversize"]) != "0" {
+		t.Fatalf("result=%v: each file fits a chunk alone, so both keep their contents (the pair is split)", result.Result)
+	}
+}
+
+func TestGitHubFilesSingleFileAboveOneChunkIsCountedAndNeverStopsTheCursor(t *testing.T) {
+	fake := newFilesChunkFake(t, 3, 300_000, 0)
+	paths := fake.trees["tree-1"]
+	fake.texts[paths[1]] = strings.Repeat("<", 400_000)
+	result, sink := runFilesUnitToTheEnd(t, fake)
+	if len(sink.rows) != 3 || fmt.Sprint(result.Result["contents_oversize"]) != "1" ||
+		fmt.Sprint(result.Result["files_with_contents"]) != "2" {
+		t.Fatalf("rows=%d result=%v, want 3 rows, 2 with contents, 1 oversize", len(sink.rows), result.Result)
 	}
 }

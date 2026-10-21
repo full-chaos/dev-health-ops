@@ -37,15 +37,13 @@ const (
 	gitHubFileContentMaxBytes = 1_000_000
 	gitHubFileContentBatch    = 50
 	// gitHubFileChunkMaxBytes bounds the declared blob text of one chunk and of
-	// one GraphQL content request. The prepared chunk sidecar column holds 2 MiB
-	// (ck_sync_chunk_payload_bytes), so a chunk stays below it with room for the
-	// row fields. A blob of unknown size counts as the largest eligible blob.
+	// one GraphQL content request. A chunk (payload plus its effect ledger)
+	// must fit 2 MiB (ck_sync_chunk_payload_bytes): 1.5 MiB of declared text
+	// leaves room for the row fields, and gitHubFilesChunkFits has the last
+	// word when escaping inflates the text. A blob of unknown size counts as
+	// the largest eligible blob.
 	gitHubFileChunkMaxBytes = 1_572_864
-	// gitHubFileRowMaxEncodedBytes is the JSON-encoded length above which one
-	// row's contents are dropped (and counted): escaping can inflate a 1 MB blob
-	// above what one prepared chunk can hold.
-	gitHubFileRowMaxEncodedBytes = 1_500_000
-	gitHubFileChunkMaxRows       = 500
+	gitHubFileChunkMaxRows  = 500
 )
 
 // GitHubFilesChunkPolicy is the chunk policy of github/files. MaxSourceItems
@@ -332,6 +330,9 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 	if cursor.Ordinal > len(paths) {
 		return ErrInvalidConfiguration
 	}
+	// fetched keeps the text of every blob read in this attempt, by presence, so
+	// a chunk shortened below to fit is not read twice.
+	fetched := map[string]string{}
 	for cursor.Ordinal < len(paths) {
 		end, declared := cursor.Ordinal, 0
 		for end < len(paths) && end-cursor.Ordinal < gitHubFileChunkMaxRows {
@@ -345,55 +346,83 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 			declared += cost
 			end++
 		}
-		chunkPaths := paths[cursor.Ordinal:end]
-		contents, err := fetchGitHubFileContents(ctx, client, owner, repository, cursor.TreeRef, chunkPaths, sizes)
+		var missing []string
+		for _, filePath := range paths[cursor.Ordinal:end] {
+			if _, done := fetched[filePath]; !done {
+				missing = append(missing, filePath)
+			}
+		}
+		contents, err := fetchGitHubFileContents(ctx, client, owner, repository, cursor.TreeRef, missing, sizes)
 		if err != nil {
 			return continueGitHubFilesTraversal(err, repoPayload.FullName)
 		}
-		rows := make([]gitFileRow, 0, len(chunkPaths))
-		next := cursor
-		for _, filePath := range chunkPaths {
-			// Presence, not value: an empty file is "" (present), a file the
-			// provider returned no text for (binary, truncated, absent) is missing.
-			content, present := contents[filePath]
-			oversize := false
-			if present && content != "" {
-				if encoded, marshalErr := json.Marshal(content); marshalErr != nil || len(encoded) > gitHubFileRowMaxEncodedBytes {
+		for filePath, text := range contents {
+			fetched[filePath] = text
+		}
+		// The chunk is sized by its persisted form: the same material the chunk
+		// store builds (payload, effect ledger, cursors) must be accepted. A
+		// chunk that is not is halved; one row that alone is not loses its
+		// contents (counted) so it can never stop the cursor.
+		dropped := map[string]bool{}
+		var (
+			rows   []gitFileRow
+			next   githubFilesChunkCursor
+			effect EffectBatch
+			after  string
+		)
+		for {
+			rows = rows[:0]
+			next = cursor
+			for _, filePath := range paths[cursor.Ordinal:end] {
+				content, present := fetched[filePath]
+				oversize := dropped[filePath]
+				if oversize {
+					content, present = "", false
 					next.Oversize++
-					content, present, oversize = "", false, true
 				}
+				row := newGitHubFileRow(claim, repoID, filePath, content, normalizedAt)
+				if present && row.Contents == nil {
+					row.Contents = &content
+				}
+				if err := row.validate(claim); err != nil {
+					return err
+				}
+				if row.Contents != nil {
+					next.Contents++
+				} else if !oversize && gitHubFileContentEligible(filePath, sizes[filePath]) {
+					next.Unavailable++
+				}
+				rows = append(rows, row)
 			}
-			row := newGitHubFileRow(claim, repoID, filePath, content, normalizedAt)
-			if present && row.Contents == nil {
-				row.Contents = &content
-			}
-			if err := row.validate(claim); err != nil {
+			effect, err = effectBatchFromValues("git_files", EffectReadbackRequired, rows)
+			if err != nil {
 				return err
 			}
-			if row.Contents != nil {
-				next.Contents++
-			} else if !oversize && gitHubFileContentEligible(filePath, sizes[filePath]) {
-				next.Unavailable++
+			next.Ordinal = end
+			next.Rows += len(rows)
+			next.Chunks++
+			next.Requests = baseRequests + requests
+			after, err = next.encode()
+			if err != nil {
+				return err
 			}
-			rows = append(rows, row)
+			if gitHubFilesChunkFits(claim, effect, before, after, normalizedAt) {
+				break
+			}
+			if len(rows) > 1 {
+				end = cursor.Ordinal + len(rows)/2
+				continue
+			}
+			if rows[0].Contents == nil {
+				return ErrChunkPolicyExceeded
+			}
+			dropped[rows[0].Path] = true
 		}
 		if next.Oversize > cursor.Oversize {
 			slog.Warn(
-				"github files rows kept without contents: encoded text above the row bound",
-				"skipped", next.Oversize-cursor.Oversize, "max_encoded_bytes", gitHubFileRowMaxEncodedBytes,
+				"github files rows kept without contents: persisted size above one chunk",
+				"skipped", next.Oversize-cursor.Oversize,
 			)
-		}
-		effect, err := effectBatchFromValues("git_files", EffectReadbackRequired, rows)
-		if err != nil {
-			return err
-		}
-		next.Ordinal = end
-		next.Rows += len(rows)
-		next.Chunks++
-		next.Requests = baseRequests + requests
-		after, err := next.encode()
-		if err != nil {
-			return err
 		}
 		batch := CompleteRouteBatch{Effects: []EffectBatch{effect}}
 		if err := emit(ChunkRouteEmission{Batch: batch, CursorBefore: before, CursorAfter: after}); err != nil {
@@ -729,3 +758,17 @@ func (row gitFileRow) validate(claim Claim) error {
 }
 
 var _ CompleteRouteHandler = GitHubFilesRouteHandler{}
+
+// gitHubFilesChunkFits builds the prepared chunk the executor will build for
+// this one emission and runs the chunk store's own material and validation on
+// it. No estimate: what the store would refuse is refused here first.
+func gitHubFilesChunkFits(claim Claim, effect EffectBatch, before, after string, now time.Time) bool {
+	chunk := PreparedProviderChunk{
+		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
+		Ordinal: 99999, TotalChunks: 0, Effects: []EffectBatch{effect},
+		CursorBefore: before, CursorAfter: after, PayloadBytes: effect.PayloadBytes,
+	}
+	chunk.ManifestDigest = preparedChunkDigest(chunk)
+	_, err := buildPreparedChunkMaterial(claim, chunk, now)
+	return err == nil
+}

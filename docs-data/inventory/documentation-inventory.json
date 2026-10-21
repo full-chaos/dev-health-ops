@@ -2,7 +2,7 @@
   "schema_version": 2,
   "repository": "full-chaos/dev-health-ops",
   "generated_from": ".",
-  "row_count": 221,
+  "row_count": 220,
   "counts": {
     "artifact:configuration": 3,
     "artifact:external-gap": 1,
@@ -10,14 +10,14 @@
     "artifact:markdown-page": 176,
     "artifact:publication-configuration": 1,
     "artifact:repository-entry-point": 2,
-    "artifact:tooling": 20,
+    "artifact:tooling": 19,
     "artifact:visual-asset": 1,
     "artifact:workflow": 4,
     "excluded-internal": 13,
     "external-entry-point": 2,
     "gap-unverified": 1,
     "public-nav": 176,
-    "supporting-artifact": 29
+    "supporting-artifact": 28
   },
   "rows": [
     {

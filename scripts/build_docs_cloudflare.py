@@ -99,7 +99,17 @@ def build(*, mode: str, full_check: bool) -> None:
                 "docs/stylesheets/extra.css",
             ]
         )
-        _run(["go", "run", "-trimpath", "-mod=readonly", "./cmd/cigate", "docs", "check-candidate-facts"])
+        _run(
+            [
+                "go",
+                "run",
+                "-trimpath",
+                "-mod=readonly",
+                "./cmd/cigate",
+                "docs",
+                "check-candidate-facts",
+            ]
+        )
 
     _run(
         [

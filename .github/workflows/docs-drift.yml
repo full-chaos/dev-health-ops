@@ -1,0 +1,60 @@
+name: Docs Drift
+
+# The generated blocks of docs/reference/taxonomies/investment.md and docs/contribute/architecture/go-worker-runtime.md
+# must match the Go taxonomy and the Go worker producers. A light Go-only job, so a docs-only change runs these two
+# checks without the Go workflow's full fan-out. It is its own workflow because docs-guards.yml takes docs paths only.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'internal/jobs/workgraph/units/taxonomy.go'
+      - 'deploy/go-workers/deployment.json'
+      - 'contracts/jobs/v1/registry.json'
+      - 'contracts/jobs/v1/migration-state.json'
+      - 'internal/cigates/docstools/**'
+      - 'cmd/cigate/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/docs-drift.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'docs/**'
+      - 'internal/jobs/workgraph/units/taxonomy.go'
+      - 'deploy/go-workers/deployment.json'
+      - 'contracts/jobs/v1/registry.json'
+      - 'contracts/jobs/v1/migration-state.json'
+      - 'internal/cigates/docstools/**'
+      - 'cmd/cigate/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/docs-drift.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+
+permissions:
+  contents: read
+
+jobs:
+  docs-drift:
+    name: docs-drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Check the investment taxonomy docs against the Go taxonomy
+        run: go run -trimpath -mod=readonly ./cmd/cigate docs check-investment-drift
+
+      - name: Check the queue-mapping docs against the Go worker producers
+        run: go run -trimpath -mod=readonly ./cmd/cigate docs check-queue-mapping-drift

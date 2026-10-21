@@ -3,7 +3,6 @@
 package ssovenue_test
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -34,9 +33,5 @@ func venueGolden(file, test, digest string) venueoracle.GoldenSpec {
 		// The ids the test seeds have the shape of a random id and are compared by
 		// value: only the ids the planes generate are blanked.
 		Scrub: venueoracle.ScrubRunValues(runFloor, runCeiling, orgA, orgB, owner, admin, member, ownerB, samlID, oidcID, oauthID, otherOrgID, unknownID, badConfigID, badDomainsID),
-		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/ssovenue/ -test '^%s$' -python-root $DIR "+
-			"(records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-			venuePythonBuild, test),
 	}
 }

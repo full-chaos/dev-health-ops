@@ -1,0 +1,3 @@
+ERROR: nan.md JSON example #1 unknown themes keys: ['bogus']
+ERROR: nan.md JSON example #1 unknown subcategories keys: ['zz.top']
+ERROR: nan.md JSON example #2 unknown themes keys: ['other']

@@ -13,8 +13,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -302,45 +300,6 @@ func goRun(t *testing.T, ch clickHouse, s scenario) (int, string, string, [2]tim
 // build that still carried the Python CLI.
 const operationalPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-// operationalPythonProgram is the entry point the producer runs: the real dev-hops CLI.
-const operationalPythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-
-// operationalPythonSettings are the variables of pyoracle.ClosedEnv that shape the answers, as constants:
-// the producer's environment AND part of the golden's request key (a changed value fails the frozen replay).
-// The scenario's own contract variable is in its input; the ClickHouse address is a per-run value.
-var operationalPythonSettings = map[string]string{"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TZ": "UTC", "PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-
-func pythonRun(t *testing.T, producer *venueoracle.Producer, ch clickHouse, s scenario) (int, string, string, [2]time.Time) {
-	t.Helper()
-	// The launcher's closed environment (CHAOS-7471): the settings, the contract the scenario sets (none when it
-	// is unset; it is in the scenario's input, so in the golden's key) and the ClickHouse address; nothing
-	// inherited: SERVICE_NAME and SERVICE_VERSION stay unset, as the golden's writer-rejection text
-	// ("service=dev-health-ops version=unknown") assumes.
-	declared := map[string]string{}
-	for name, value := range operationalPythonSettings {
-		declared[name] = value
-	}
-	for _, entry := range s.environ() {
-		name, value, _ := strings.Cut(entry, "=")
-		declared[name] = value
-	}
-	command, err := producer.Command(context.Background(), declared, []string{"CLICKHOUSE_URI=" + ch.httpDSN}, append([]string{"-c", operationalPythonProgram, "backfill", "operational"}, s.args()...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	start := time.Now()
-	err = command.Run()
-	code := 0
-	if exit, ok := err.(*exec.ExitError); ok {
-		code = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run python: %v", err)
-	}
-	return code, stdout.String(), stderr.String(), [2]time.Time{start, time.Now()}
-}
-
 // result is what one implementation did for a scenario: the exit code, the
 // summary line, and the rows it left, stamps masked.
 type result struct {
@@ -365,20 +324,11 @@ func checkMessage(t *testing.T, who string, s scenario, code int, stderr string)
 	}
 }
 
-func run(t *testing.T, producer *venueoracle.Producer, ch clickHouse, s scenario, python bool) result {
+func run(t *testing.T, ch clickHouse, s scenario) result {
 	t.Helper()
 	ch.truncate(t)
-	var code int
-	var stdout, stderr string
-	var window [2]time.Time
-	who := "go"
-	if python {
-		who = "python"
-		code, stdout, stderr, window = pythonRun(t, producer, ch, s)
-	} else {
-		code, stdout, stderr, window = goRun(t, ch, s)
-	}
-	checkMessage(t, who, s, code, stderr)
+	code, stdout, stderr, window := goRun(t, ch, s)
+	checkMessage(t, "go", s, code, stderr)
 	return result{Exit: code, Stdout: stdout, Rows: ch.dump(t, window)}
 }
 
@@ -448,18 +398,11 @@ func forEachShape(t *testing.T, body func(t *testing.T, ch clickHouse, shape str
 // scenarios and the seeded legacy rows are part of the golden's key. The stamps Python takes from the wall
 // clock are checked to lie inside the run's window and stored as a placeholder.
 func TestBackfillOperationalWritesTheFrozenPythonRows(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	goldenFile := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/backfill_operational.json",
 		PythonBuild: operationalPythonBuild,
 		SHA256:      "1d965741b6bc22104912257e0062d71956dd8455699c9d80236cced566e6594a",
-		Recipe: "git worktree add --detach $DIR " + operationalPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/operationalbackfill/ -test '^TestBackfillOperationalWritesTheFrozenPythonRows$' -python-root $DIR",
 	})
-	root := goldenFile.PythonRoot(t, repoRoot)
 
 	type keyed struct {
 		Name     string   `json:"name"`
@@ -481,31 +424,8 @@ func TestBackfillOperationalWritesTheFrozenPythonRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("backfill operational scenarios", operationalPythonProgram, input, operationalPythonSettings)
-	answers := goldenFile.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		var produced []golden
-		forEachShape(t, func(t *testing.T, ch clickHouse, _ string, group []scenario) {
-			for _, s := range comparable(group) {
-				py := run(t, producer, ch, s, true)
-				if s.message == "" {
-					total := 0
-					for _, rows := range py.Rows {
-						total += len(rows)
-					}
-					if total == 0 && !strings.Contains(s.name, "empty") {
-						t.Fatalf("%s: the producer wrote no rows: the comparison would measure nothing", s.name)
-					}
-				}
-				produced = append(produced, golden{Name: s.name, Result: py})
-			}
-		})
-		body, err := json.Marshal(produced)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("backfill operational scenarios", input)
+	answers := goldenFile.Produce(t, []venueoracle.Request{request})
 	goldenFile.Consumed(t, answers...)
 	var frozen []golden
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
@@ -524,7 +444,7 @@ func TestBackfillOperationalWritesTheFrozenPythonRows(t *testing.T) {
 			if !ok {
 				t.Fatalf("no frozen scenario %q", s.name)
 			}
-			got := run(t, nil, ch, s, false)
+			got := run(t, ch, s)
 			if got.Exit != want.Result.Exit {
 				t.Fatalf("%s: exit %d, frozen Python %d", s.name, got.Exit, want.Result.Exit)
 			}
@@ -559,7 +479,7 @@ func TestBackfillOperationalRefusesATableShapeThatIsNotTheContract(t *testing.T)
 		if !s.goOnly {
 			continue
 		}
-		result := run(t, nil, ch, s, false)
+		result := run(t, ch, s)
 		for table, rows := range result.Rows {
 			if len(rows) != 0 {
 				t.Fatalf("%s: the refused run left %d rows in %s", s.name, len(rows), table)

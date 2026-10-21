@@ -6,6 +6,7 @@ internal/api/pytime
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
+internal/auth/sessionid
 internal/chmigrate
 internal/cli
 internal/httpguard
@@ -60,13 +61,10 @@ internal/teamid
 internal/teamkeytables
 internal/teamprovider
 internal/testsupport/containers
-internal/testsupport/goldenscan
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/programoracle
 internal/testsupport/pydanticecho
-internal/testsupport/pyoracle
-internal/testsupport/recordedfiles
 internal/testsupport/venueoracle
 internal/workitemcontract
 ~internal/chmigrate/baseline
@@ -76,4 +74,3 @@ internal/workitemcontract
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
-~internal/scheduler/sync/testdata

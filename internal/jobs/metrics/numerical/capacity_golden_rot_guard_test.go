@@ -30,11 +30,9 @@ import (
 // frozen run makes the same comparison on the recorded stdout (no Python runs).
 func TestCapacityForecastGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRoot(t)
-	spec := rotguard.Spec("testdata/golden/capacity_forecast_rot_guard.json", "1b7a1ec86d1a5a635596179d2b5d979cb6444bc4cd9ef47a20d365a6aa5b8c76",
-		"./internal/jobs/metrics/numerical/", "^TestCapacityForecastGoldenMatchesLivePython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/capacity_forecast_rot_guard.json", "1b7a1ec86d1a5a635596179d2b5d979cb6444bc4cd9ef47a20d365a6aa5b8c76")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "capacity forecast golden generator",
-		Path: "tests/fixtures/generate_capacity_forecast_golden.py",
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", "capacity_forecast_golden.json"))
@@ -51,9 +49,8 @@ func TestCapacityForecastGoldenMatchesLivePython(t *testing.T) {
 				"the recorded capacity forecasts no longer match the checked-in golden in %q.\n"+
 					"This is producer drift, not necessarily a Go bug: the frozen file was generated "+
 					"from production Python, and the parity test only proves Go matches the FILE. "+
-					"Regenerate with\n    python tests/fixtures/generate_capacity_forecast_golden.py\n"+
-					"read the diff as a real behaviour change -- if Go should follow, Go changes too -- "+
-					"and record the producer again (the golden's recipe).", key)
+					"Read the diff as a real behaviour change -- if Go should follow, Go changes too -- "+
+					"and record the producer again.", key)
 		}
 	}
 }

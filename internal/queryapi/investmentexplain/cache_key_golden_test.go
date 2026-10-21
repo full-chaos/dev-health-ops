@@ -24,7 +24,7 @@ func TestComputeCacheKeyMatchesPythonGolden(t *testing.T) {
 		t.Fatalf("glob goldens: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no cache_key__*.json goldens found -- run generate_cache_key_golden.py")
+		t.Fatal("no cache_key__*.json goldens found")
 	}
 
 	for _, path := range files {

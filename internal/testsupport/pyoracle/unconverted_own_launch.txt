@@ -1,8 +1,0 @@
-# The test packages that still start their own Python child instead of asking
-# the record verb's launcher (venueoracle's Producer.Command). In a recording
-# (the record verb's runs) a test of any other package that resolves an
-# interpreter through pyoracle.Resolve gets a refusing stand-in, not Python.
-# The list only shrinks: the owner of a package converts its sites to
-# producer.Command and deletes its line in the same change (CHAOS-7707).
-internal/api/externalingest
-internal/providersync

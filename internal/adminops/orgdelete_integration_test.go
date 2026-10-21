@@ -396,7 +396,7 @@ func TestOrgsDeleteCommandLineRefusals(t *testing.T) {
 	}
 }
 
-func runDeleteScenarios(t *testing.T, run func(*testing.T, *database, *chFixture, deleteScenario) deleteResult) []deleteResult {
+func runDeleteScenarios(t *testing.T) []deleteResult {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	t.Cleanup(cancel)
@@ -407,16 +407,12 @@ func runDeleteScenarios(t *testing.T, run func(*testing.T, *database, *chFixture
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 	chschema.Apply(ctx, t, instance)
-	httpURI, err := containers.ClickHouseHTTPDSN(ctx, instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 	conn, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(instance.URI))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	fixture := &chFixture{nativeURI: instance.URI, httpURI: httpURI, exec: func(sql string, args ...any) {
+	fixture := &chFixture{nativeURI: instance.URI, exec: func(sql string, args ...any) {
 		t.Helper()
 		if err := conn.Exec(ctx, sql, args...); err != nil {
 			t.Fatalf("clickhouse: %v\n%s", err, sql)
@@ -454,15 +450,15 @@ func runDeleteScenarios(t *testing.T, run func(*testing.T, *database, *chFixture
 	for _, scenario := range deleteScenarios {
 		db.seedOrganizations(t, scenario.pagerduty)
 		fixture.reseed()
-		results = append(results, run(t, db, fixture, scenario))
+		results = append(results, goDelete(t, db, fixture, scenario))
 	}
 	return results
 }
 
 type chFixture struct {
-	nativeURI, httpURI string
-	exec               func(string, ...any)
-	counts             func() map[string]map[string]uint64
+	nativeURI string
+	exec      func(string, ...any)
+	counts    func() map[string]map[string]uint64
 }
 
 func (f *chFixture) reseed() {
@@ -488,27 +484,19 @@ func snapshot(t *testing.T, db *database, fixture *chFixture, scenario deleteSce
 	return string(raw)
 }
 
-func deleteEnv(fixture *chFixture, scenario deleteScenario, python bool) map[string]string {
+func deleteEnv(fixture *chFixture, scenario deleteScenario) map[string]string {
 	env := map[string]string{}
 	if scenario.clickhouse {
 		env["CLICKHOUSE_URI"] = fixture.nativeURI
-		if python {
-			env["CLICKHOUSE_URI"] = fixture.httpURI
-		}
 	}
 	return env
 }
 
 func goDelete(t *testing.T, db *database, fixture *chFixture, scenario deleteScenario) deleteResult {
-	code, stdout := goVerbEnv(t, db, deleteEnv(fixture, scenario, false), scenario.args)
+	code, stdout := goVerbEnv(t, db, deleteEnv(fixture, scenario), scenario.args)
 	if scenario.clickhouse {
 		assertTablesAfterTheFreezeArePlanned(t, scenario.name, stdout)
 	}
-	return deleteResult{Name: scenario.name, Exit: code, Stdout: normalize(t, stdout, scenario.clickhouse), State: snapshot(t, db, fixture, scenario)}
-}
-
-func pythonDelete(t *testing.T, db *database, fixture *chFixture, scenario deleteScenario) deleteResult {
-	code, stdout := pythonVerbEnv(t, db, deleteEnv(fixture, scenario, true), scenario.args)
 	return deleteResult{Name: scenario.name, Exit: code, Stdout: normalize(t, stdout, scenario.clickhouse), State: snapshot(t, db, fixture, scenario)}
 }
 
@@ -534,10 +522,10 @@ func compareDeletes(t *testing.T, got, want []deleteResult, wantName string) {
 // TestOrgsDeleteMatchesTheFrozenPythonOutput runs every scenario and compares it (exit, the printed plan,
 // the rows each organization has left in every PostgreSQL and ClickHouse table) with what the REAL
 // `dev-hops admin orgs delete` did. The answers were executed once on adminPythonBuild and are frozen in
-// testdata/golden/orgdelete.json (the recipe regenerates them by execution); the scenarios are part of the
+// testdata/golden/orgdelete.json; the scenarios are part of the
 // golden's key.
 func TestOrgsDeleteMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := adminGolden(t, "orgdelete", "5eb3d3e548001aaae68d3902649700cf126e9c82ebce7cf01b813e63d1fd6d4c", "TestOrgsDeleteMatchesTheFrozenPythonOutput")
+	golden := adminGolden(t, "orgdelete", "5eb3d3e548001aaae68d3902649700cf126e9c82ebce7cf01b813e63d1fd6d4c")
 	script := make([]map[string]any, len(deleteScenarios))
 	for index, s := range deleteScenarios {
 		script[index] = map[string]any{"name": s.name, "args": s.args, "clickhouse": s.clickhouse, "pagerduty": s.pagerduty}
@@ -546,7 +534,7 @@ func TestOrgsDeleteMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := adminProduce(t, golden, root, "orgs delete scenarios", input, func() any { return runDeleteScenarios(t, pythonDelete) })
+	raw := adminProduce(t, golden, "orgs delete scenarios", input)
 	var frozen []deleteResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
@@ -559,7 +547,7 @@ func TestOrgsDeleteMatchesTheFrozenPythonOutput(t *testing.T) {
 	for index := range frozen {
 		frozen[index] = withoutDroppedTables(t, frozen[index])
 	}
-	got := runDeleteScenarios(t, goDelete)
+	got := runDeleteScenarios(t)
 	compareDeletes(t, got, frozen, "frozen Python")
 	// A golden in which nothing was deleted passes for any implementation.
 	deleted := 0

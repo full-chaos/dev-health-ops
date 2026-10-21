@@ -30,6 +30,7 @@ var AuthOutcomeReasonCodes = []string{
 	"email_unverified", "email_collision", "signup_unavailable", "provider_already_linked",
 	"identity_conflict", "rate_limited",
 	"replayed", "nonce_mismatch", "provisioning_disabled", "domain_not_allowed", "not_entitled",
+	"membership_required",
 	"store_unavailable", "dependency_unavailable",
 }
 

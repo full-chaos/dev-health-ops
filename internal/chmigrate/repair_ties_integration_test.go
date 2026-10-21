@@ -3,11 +3,8 @@
 package chmigrate_test
 
 import (
-	"context"
 	"fmt"
 	"maps"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -120,71 +117,29 @@ func winnerFree(stdout, state string) string {
 // for the dry run and for --apply, with and without --org. The producer ran once on repairTiesPythonBuild
 // (CHAOS-7832) and its answers are frozen in testdata/golden/repair-ties.json.
 func TestRepairRulesMatchTheFrozenPythonProducer(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/repair-ties.json",
 		PythonBuild: repairTiesPythonBuild,
 		SHA256:      "8d5603e1944366ac7d92224932d888bfb79a887ef81109fdf31b6092b5c1f27e",
-		Recipe: "git worktree add --detach $DIR " + repairTiesPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/chmigrate/ -test '^TestRepairRulesMatchTheFrozenPythonProducer$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
-	// The producer's own ClickHouse exists only while recording.
-	var python repairDB
-	if golden.Recording() {
-		python = startRepairDB(t)
-	}
-	scenarios := map[string]ruleScenario{}
-	produce := func(producer *venueoracle.Producer, requests []venueoracle.Request) []venueoracle.Response {
-		answers := make([]venueoracle.Response, len(requests))
-		for index, request := range requests {
-			s, ok := scenarios[request.Path]
-			if !ok {
-				t.Fatalf("no scenario for %s", request.Path)
-			}
-			python.seedRows(t, s.rows)
-			command, err := producer.Command(context.Background(), maps.Clone(repairTiesProducerEnv), []string{"CLICKHOUSE_URI=" + python.httpDSN},
-				append([]string{"-m", "dev_health_ops.cli", "migrate", "clickhouse", "repair"}, s.args...)...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var stdout, stderr strings.Builder
-			command.Stdout, command.Stderr = &stdout, &stderr
-			code := 0
-			if err := command.Run(); err != nil {
-				exit, ok := err.(*exec.ExitError)
-				if !ok {
-					t.Fatalf("run python: %v", err)
-				}
-				code = exit.ExitCode()
-			}
-			answers[index] = venueoracle.Response{Status: code, Body: stdout.String()}
-		}
-		return answers
-	}
-
 	golang := startRepairDB(t)
 	compared, notMeasured := 0, 0
 	for _, s := range ruleScenarios {
 		request := ruleRequest(s)
-		scenarios[request.Path] = s
-		answer := golden.Produce(t, root, []venueoracle.Request{request}, produce)[0]
+		answer := golden.Produce(t, []venueoracle.Request{request})[0]
 		golden.Consumed(t, answer)
 		golang.seedRows(t, s.rows)
 		got := golang.goRun(t, s.repairScenario)
 		name := "state after " + s.name
 		var pythonState string
 		if s.measured {
-			pythonState = golden.CompareRows(t, name, func() string { return python.state(t) }, got.State)
+			pythonState = golden.CompareRows(t, name, got.State)
 			if answer.Status != 0 || answer.Body != got.Stdout {
 				t.Errorf("%s: python (exit %d)\n%s\ndho\n%s", s.name, answer.Status, answer.Body, got.Stdout)
 			}
 			compared++
 		} else {
-			pythonState = golden.InspectRows(t, name, func() string { return python.state(t) })
+			pythonState = golden.InspectRows(t, name)
 			if want, have := winnerFree(answer.Body, pythonState), winnerFree(got.Stdout, got.State); answer.Status != 0 || want != have {
 				t.Errorf("%s: winner-free facts differ: python (exit %d) %q, dho %q", s.name, answer.Status, want, have)
 			}

@@ -251,12 +251,30 @@ func RefuseDecimalForm(token string) error {
 // is UTC year 0000). Python's twin is authclient.contracts.parse_rfc3339; both
 // replay the same timestamp_vectors from the provisioning manifest.
 func ParseWireTimestamp(surface, field, raw string) (time.Time, error) {
-	parsed, err := time.Parse(time.RFC3339, raw)
+	parsed, err := parseRFC3339(raw)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("%s: /%s = %q is not a valid RFC 3339 instant: %w", surface, field, raw, err)
 	}
 	if err := checkInstantInRange(surface, field, parsed); err != nil {
 		return time.Time{}, err
+	}
+	return parsed, nil
+}
+
+// parseRFC3339 is time.Parse(time.RFC3339) held to the RFC 3339 offset grammar
+// (hours 00-23, minutes 00-59). Go accepts hour 24 and minute 60, so
+// "+24:60" parses to a +25:00 offset whose marshalled text Go then refuses.
+func parseRFC3339(raw string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if strings.HasSuffix(raw, "Z") {
+		return parsed, nil
+	}
+	offset := raw[len(raw)-6:]
+	if hour, minute := offset[1:3], offset[4:6]; hour > "23" || minute > "59" {
+		return time.Time{}, fmt.Errorf("offset %s is outside -23:59..+23:59", offset)
 	}
 	return parsed, nil
 }

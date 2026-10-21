@@ -1,0 +1,3 @@
+ERROR: n.md JSON example #1 unknown themes keys: ['nope']
+ERROR: n.md JSON example #2 unknown subcategories keys: ['aa.bot']
+ERROR: n.md JSON example #3 unknown themes keys: ['zz']

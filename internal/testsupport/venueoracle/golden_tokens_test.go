@@ -97,32 +97,20 @@ func TestProjectionDropsSignatureAndVolatileValuesAndKeepsTheRest(t *testing.T) 
 	}
 }
 
-func TestTheRecorderRefusesACandidateHoldingATokenShape(t *testing.T) {
-	underTheVerb(t)
-	final := filepath.Join(t.TempDir(), "g.json")
+func TestTheGoldenScanRefusesAFileHoldingATokenShape(t *testing.T) {
 	for name, sample := range tokenSamples() {
-		golden, err := openGolden(GoldenSpec{Path: final, PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
-		golden.recorded.Requests = []goldenRequest{{Name: "a", Body: "x " + sample}}
-		if _, err := golden.writeCandidate(false); err == nil || !strings.Contains(err.Error(), name) {
-			t.Errorf("%s: the recorder wrote a candidate holding it: %v", name, err)
+		if err := tokenShapeErr("g.json", goldenText(t, goldenRequest{Name: "a", Body: "x " + sample})); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: the scan accepted a golden holding it: %v", name, err)
 		}
 	}
-	if _, err := os.Stat(final + GoldenCandidateSuffix); err == nil {
-		t.Fatal("a candidate holding a token is on disk")
+	if err := tokenShapeErr("g.json", goldenText(t, goldenRequest{Name: "a", Body: "x"})); err != nil {
+		t.Fatalf("a golden holding no token was refused: %v", err)
 	}
 }
 
-func TestRecordingProjectsAJWTAndScrubsWhatTheSpecNames(t *testing.T) {
-	final := filepath.Join(t.TempDir(), "g.json")
+func TestTheProjectionTurnsAJWTIntoClaimsAndScrubsWhatTheSpecNames(t *testing.T) {
 	scrub := func(text string) string { return strings.ReplaceAll(text, "opaque-session-12345", "<session>") }
-	golden, err := openGolden(GoldenSpec{Path: final, PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	golden := &Golden{spec: GoldenSpec{Path: "g.json", PythonBuild: goldenBuild, Scrub: scrub}}
 	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
 	got, err := golden.projectResponse(Response{Status: 200, Headers: map[string]string{"set-cookie": "session=opaque-session-12345; token=" + token}, Body: `{"access_token":"` + token + `"}`})
 	if err != nil {
@@ -139,7 +127,6 @@ func TestRecordingProjectsAJWTAndScrubsWhatTheSpecNames(t *testing.T) {
 // TestDiffComparesBothPlanesAsProjected is the Go side of the projection: the
 // frozen answer holds a projected token, the Go plane mints a fresh one.
 func TestDiffComparesBothPlanesAsProjected(t *testing.T) {
-	t.Setenv(goldenUpdateEnv, "")
 	t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
 	requests := []Request{{Name: "login", Method: "GET", Path: "/x"}}
 	python := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":1,"exp":2}`, "python-signature")
@@ -154,9 +141,9 @@ func TestDiffComparesBothPlanesAsProjected(t *testing.T) {
 		_, _ = w.Write([]byte(`{"token":"` + mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":123456,"exp":123457}`, "go-signature-longer") + `"}`))
 	}))
 	t.Cleanup(goPlane.Close)
-	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest})
 	answers := golden.Python(t, nil, requests)
-	golden.CompareRows(t, "rows", func() string { return "" }, "a | b")
+	golden.CompareRows(t, "rows", "a | b")
 	Diff(t, goPlane.URL, requests, answers, DiffOptions{Golden: golden})
 	golden.Finish(t)
 }
@@ -215,7 +202,7 @@ func TestProjectionKeepsNumbersExactAndTheLifetime(t *testing.T) {
 	}
 }
 
-func TestAnUndecodableTokenIsRefusedByTheRecorderAndByDiff(t *testing.T) {
+func TestAnUndecodableTokenIsRefusedByTheGoldenScanAndByDiff(t *testing.T) {
 	enc := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
 	truncated := "eyJhYmM" // decodes to a cut-off JSON object
 	for name, token := range map[string]string{
@@ -227,7 +214,7 @@ func TestAnUndecodableTokenIsRefusedByTheRecorderAndByDiff(t *testing.T) {
 			t.Fatalf("%s: projection %s does not mark the token undecodable", name, projected)
 		}
 		if err := tokenShapeErr("g.json", []byte(projected)); err == nil || !strings.Contains(err.Error(), "could not be decoded") {
-			t.Errorf("%s: the recorder accepted it: %v", name, err)
+			t.Errorf("%s: the golden scan accepted it: %v", name, err)
 		}
 		if err := undecodableErr(Request{Name: "r"}, Response{Body: projected}); err == nil {
 			t.Errorf("%s: Diff accepted it", name)
@@ -236,13 +223,9 @@ func TestAnUndecodableTokenIsRefusedByTheRecorderAndByDiff(t *testing.T) {
 }
 
 func TestATokenInsideAPackedBodyIsProjectedRefusedAndReported(t *testing.T) {
-	underTheVerb(t)
 	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
-	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	packed := PackBody([]byte("program output " + token))
+	golden := &Golden{spec: GoldenSpec{Path: "g.json", PythonBuild: goldenBuild}}
+	packed := packBody([]byte("program output " + token))
 	projected, err := golden.projectResponse(Response{Body: packed})
 	if err != nil {
 		t.Fatal(err)
@@ -254,10 +237,8 @@ func TestATokenInsideAPackedBodyIsProjectedRefusedAndReported(t *testing.T) {
 	if _, err := golden.projectResponse(Response{Body: packedPrefix + "not-base64!"}); err == nil {
 		t.Fatal("a packed body that does not unpack was accepted")
 	}
-	golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
-	golden.recorded.Requests = []goldenRequest{{Name: "a", Body: packed}}
-	if _, err := golden.writeCandidate(false); err == nil || !strings.Contains(err.Error(), "jwt") {
-		t.Fatalf("the recorder accepted a token inside a packed body: %v", err)
+	if err := tokenShapeErr("g.json", goldenText(t, goldenRequest{Name: "a", Body: packed})); err == nil || !strings.Contains(err.Error(), "jwt") {
+		t.Fatalf("the scan accepted a token inside a packed body: %v", err)
 	}
 	dir := filepath.Join(t.TempDir(), "x", "testdata")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -277,7 +258,6 @@ func TestATokenInsideAPackedBodyIsProjectedRefusedAndReported(t *testing.T) {
 // reason, so the call in Diff is shown wired and not only its helper.
 func TestDiffRefusesAnUndecodableToken(t *testing.T) {
 	if os.Getenv("VENUEORACLE_CHILD_UNDECODABLE") == "1" {
-		t.Setenv(goldenUpdateEnv, "")
 		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
 		requests := []Request{{Name: "login", Method: "GET", Path: "/x"}}
 		file := sampleGolden(requests)
@@ -286,7 +266,7 @@ func TestDiffRefusesAnUndecodableToken(t *testing.T) {
 		path, digest := writeGoldenFile(t, t.TempDir(), file)
 		goPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }))
 		t.Cleanup(goPlane.Close)
-		golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+		golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest})
 		answers := golden.Python(t, nil, requests)
 		Diff(t, goPlane.URL, requests, answers, DiffOptions{Golden: golden})
 		return
@@ -300,27 +280,20 @@ func TestDiffRefusesAnUndecodableToken(t *testing.T) {
 }
 
 // TestScrubIsTheEscapeForAFalsePositive: an identifier that merely looks like
-// a credential is refused, and a per-golden Scrub that names it lets the
-// recording through.
+// a credential is refused by the golden scan, and a per-golden Scrub that
+// names it clears the projected answer.
 func TestScrubIsTheEscapeForAFalsePositive(t *testing.T) {
-	underTheVerb(t)
 	lookalike := "basic " + strings.Repeat("a", 30)
 	record := func(scrub func(string) string) error {
-		golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
-		if err != nil {
-			t.Fatal(err)
-		}
+		golden := &Golden{spec: GoldenSpec{Path: "g.json", PythonBuild: goldenBuild, Scrub: scrub}}
 		projected, err := golden.projectResponse(Response{Body: "plan: " + lookalike})
 		if err != nil {
 			t.Fatal(err)
 		}
-		golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
-		golden.recorded.Requests = []goldenRequest{{Name: "a", Body: projected.Body}}
-		_, err = golden.writeCandidate(false)
-		return err
+		return tokenShapeErr("g.json", goldenText(t, goldenRequest{Name: "a", Body: projected.Body}))
 	}
 	if err := record(nil); err == nil {
-		t.Fatal("a credential lookalike was recorded without a scrub")
+		t.Fatal("a credential lookalike passed the scan without a scrub")
 	}
 	if err := record(func(text string) string { return strings.ReplaceAll(text, lookalike, "<plan-name>") }); err != nil {
 		t.Fatalf("the scrub did not clear the lookalike: %v", err)
@@ -328,20 +301,22 @@ func TestScrubIsTheEscapeForAFalsePositive(t *testing.T) {
 }
 
 func TestRowSnapshotsAreScrubbedOnBothPlanes(t *testing.T) {
-	dir := t.TempDir()
 	scrub := func(text string) string { return strings.ReplaceAll(text, "reset=abc123", "reset=<token>") }
-	golden, err := openGolden(GoldenSpec{Path: filepath.Join(dir, "g.json"), PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
+	jwt := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
+	frozen := "link reset=<token> " + ProjectTokens(jwt)
+	golden := &Golden{spec: GoldenSpec{Path: "g.json", PythonBuild: goldenBuild, Scrub: scrub}, state: statePython, rowsUsed: map[string]bool{}, rowsFetched: map[string]bool{},
+		loaded: goldenFile{Rows: map[string]goldenRows{"mail": {Rows: frozen}}}}
+	// The Go plane's rows hold the raw per-run value and another mint of the token: projected, they are the frozen rows.
+	value := golden.CompareRows(t, "mail", "link reset=abc123 "+mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":99}`, "other"))
+	if value != frozen || !golden.rowsUsed["mail"] {
+		t.Fatalf("CompareRows returned %q, want the frozen rows %q, used", value, frozen)
+	}
+	projected, err := golden.project("", "rows mail", "link reset=abc123 "+mintJWT(`{"alg":"HS256"}`, `{"sub":"u2","iat":99}`, "other"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	golden.state = statePython
-	jwt := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
-	value := golden.CompareRows(t, "mail", func() string { return "link reset=abc123 " + jwt }, "link reset=abc123 "+mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":99}`, "other"))
-	if strings.Contains(value, "abc123") || strings.Contains(value, jwt) || !strings.Contains(value, "reset=<token>") {
-		t.Fatalf("recorded rows hold a per-run value or a token: %q", value)
-	}
-	if got := golden.recorded.Rows["mail"].Rows; got != value {
-		t.Fatalf("stored rows %q differ from the returned %q", got, value)
+	if strings.Contains(projected, "abc123") || rowsDiffer("mail", frozen, projected) == nil {
+		t.Fatalf("the projection kept the per-run value, or another caller's rows compare equal: %q", projected)
 	}
 }
 
@@ -369,7 +344,7 @@ func TestJWTFormsTheRegexOfAPrefixWouldMiss(t *testing.T) {
 		t.Fatalf("a JWE is not marked encrypted: %s", encrypted)
 	}
 	if err := tokenShapeErr("g.json", []byte(`{"requests":[{"body":`+strconv.Quote(encrypted)+`}]}`)); err == nil {
-		t.Fatalf("the recorder accepted an encrypted token: %s", encrypted)
+		t.Fatalf("the golden scan accepted an encrypted token: %s", encrypted)
 	}
 	// Text after the token is kept.
 	if got := ProjectTokens("see " + spaced + "."); !strings.HasSuffix(got, ">.") {
@@ -390,15 +365,9 @@ func TestTrailingBytesAfterTheClaimsMakeATokenUndecodable(t *testing.T) {
 }
 
 func TestACredentialInAPackedHeaderValueIsRefused(t *testing.T) {
-	underTheVerb(t)
-	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
-	golden.recorded.Requests = []goldenRequest{{Name: "a", Headers: map[string]string{"x-credential": PackBody([]byte("tok " + tokenSamples()["github-token"]))}}}
-	if _, err := golden.writeCandidate(false); err == nil || !strings.Contains(err.Error(), "github-token") {
-		t.Fatalf("a credential in a packed header value was recorded: %v", err)
+	entry := goldenRequest{Name: "a", Headers: map[string]string{"x-credential": packBody([]byte("tok " + tokenSamples()["github-token"]))}}
+	if err := tokenShapeErr("g.json", goldenText(t, entry)); err == nil || !strings.Contains(err.Error(), "github-token") {
+		t.Fatalf("a credential in a packed header value passed the scan: %v", err)
 	}
 }
 
@@ -446,7 +415,7 @@ func TestAShortBearerCredentialAndAnEncodedTokenAreFound(t *testing.T) {
 
 func TestATokenPackedInsideAPackedBodyIsFoundAndAGoldenOutsideTestdataIsWalked(t *testing.T) {
 	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1"}`, "sig")
-	twice := PackBody([]byte(PackBody([]byte("out " + token))))
+	twice := packBody([]byte(packBody([]byte("out " + token))))
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
 		t.Fatal(err)
@@ -461,10 +430,7 @@ func TestATokenPackedInsideAPackedBodyIsFoundAndAGoldenOutsideTestdataIsWalked(t
 }
 
 func TestVolatileHeadersAreStoredAsAPlaceholderAndOtherHeadersStillCompare(t *testing.T) {
-	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	golden := &Golden{spec: GoldenSpec{Path: "g.json", PythonBuild: goldenBuild}}
 	python := Response{Status: 200, Body: "{}", Headers: map[string]string{"x-request-id": "req-aaaa", "date": "Mon", "x-frame-options": "DENY"}}
 	got, err := golden.projectResponse(python)
 	if err != nil {
@@ -499,8 +465,8 @@ func TestVolatileHeadersAreStoredAsAPlaceholderAndOtherHeadersStillCompare(t *te
 }
 
 // executionRecordedGoldens is the closed list of the recorded Python facts that have NO venue
-// header: they are not HTTP oracles of a retired route (the goldenrecord verb and its header
-// serve those), but schema facts produced by executing the real Python migration chain on a
+// header: they are not HTTP oracles of a retired route (the venue golden header
+// serves those), but schema facts produced by executing the real Python migration chain on a
 // named build and digest-pinned IN SOURCE, every read verified against the pin (D3626). They are
 // exempt from the header, not from the checks: the walk above never sees them (it looks for the
 // header), so this test scans each for token shapes and verifies the pin by reading it out of the

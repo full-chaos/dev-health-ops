@@ -224,6 +224,14 @@ func (handler collectErrorHandler) Collect(
 	return providersync.CompleteRouteBatch{}, handler.err
 }
 
+// CollectChunks makes the stub reach the chunked executor too (github/files).
+func (handler collectErrorHandler) CollectChunks(
+	context.Context, providersync.Claim, providerfoundation.Credential,
+	*providerfoundation.HTTPClient, time.Time, string, func(providersync.ChunkRouteEmission) error,
+) error {
+	return handler.err
+}
+
 // The measured work-items defect: the unit's result is above the bounded write
 // contract. The error is built by the real BuildEffectBatch from real rows.
 func realBoundExceededError(t *testing.T, rows int) error {

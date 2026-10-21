@@ -10,10 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os/exec"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
@@ -23,7 +20,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -350,131 +346,25 @@ func goVerbEnv(t *testing.T, db *database, extra map[string]string, args []strin
 	return code, stdout.String()
 }
 
-func pythonVerb(t *testing.T, db *database, args []string) (int, string) {
-	return pythonVerbEnv(t, db, nil, args)
-}
-
-func pythonVerbEnv(t *testing.T, db *database, extra map[string]string, args []string) (int, string) {
-	return pythonVerbFull(t, db, extra, nil, args)
-}
-
-// pythonVerbFull runs `dev-hops <global> admin <args>`: global holds the root
-// flags Python takes before the subcommand (--org).
-func pythonVerbFull(t *testing.T, db *database, extra map[string]string, global []string, args []string) (int, string) {
-	t.Helper()
-	command := adminCommand(t, db, adminPythonSettings, extra, append(append([]string{"-c", adminPythonProgram}, global...), append([]string{"admin"}, args...)...)...)
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
-	code := 0
-	if exit, ok := err.(*exec.ExitError); ok {
-		code = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(command.Args[0], err, []byte(stderr.String())))
-	}
-	if code == 1 && strings.Contains(stderr.String(), "Traceback") {
-		// A Python traceback is a crash, not a refusal: the step records it as a
-		// crash so the difference is named rather than compared as text.
-		return 70, "<python traceback>\n"
-	}
-	return code, stdout.String()
-}
-
-// adminPythonProgram is the entry point the producer runs: the real dev-hops CLI. Test-runner-only
-// monkeypatch (the venue oracle's rule): when VENUE_STRIPE_API_BASE is set, every StripeClient the verb
-// builds talks to this base instead of Stripe.
-const adminPythonProgram = "import os, sys\n" +
-	"_base = os.environ.get('VENUE_STRIPE_API_BASE')\n" +
-	"if _base:\n" +
-	"    import stripe as _stripe\n" +
-	"    _init = _stripe.StripeClient.__init__\n" +
-	"    def _patched(self, *args, **kwargs):\n" +
-	"        kwargs['base_addresses'] = {'api': _base}\n" +
-	"        _init(self, *args, **kwargs)\n" +
-	"    _stripe.StripeClient.__init__ = _patched\n" +
-	"from dev_health_ops import cli\n" +
-	"raise SystemExit(cli.main(sys.argv[1:]))\n"
-
-// adminPythonSettings are the variables that shape the Python verbs' answers, as constants: they are
-// the producer's environment AND part of every golden's key (a changed value fails the frozen replay).
-var adminPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "DISABLE_DOTENV": "1"}
-
-// adminProducer is the record verb's launcher for the session being recorded (nil outside a recording).
-// Every Python child of the admin sessions starts through it: its closed environment holds PATH, HOME,
-// the checkout's source and the declared entries; nothing is inherited from the test process.
-var adminProducer *venueoracle.Producer
-
-// useAdminProducer makes adminCommand start its children through producer until the test ends.
-func useAdminProducer(t *testing.T, producer *venueoracle.Producer) {
-	t.Helper()
-	producer.RequireDeployed()
-	adminProducer = producer
-	t.Cleanup(func() { adminProducer = nil })
-}
-
-// adminCommand is the Python child of one step: the launcher's command with settings and the step's own
-// variables declared, and the run's own addresses (the database, a fake server) passed by name.
-func adminCommand(t *testing.T, db *database, settings, stepEnv map[string]string, args ...string) *exec.Cmd {
-	t.Helper()
-	if adminProducer == nil {
-		t.Fatal("a Python child starts only inside a recording, through the record verb's launcher")
-	}
-	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
-	declared := map[string]string{}
-	for name, value := range settings {
-		declared[name] = value
-	}
-	extra := []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}
-	for name, value := range stepEnv {
-		if name == "CLICKHOUSE_URI" || name == "VENUE_STRIPE_API_BASE" {
-			extra = append(extra, name+"="+value)
-			continue
-		}
-		declared[name] = value
-	}
-	sort.Strings(extra)
-	command, err := adminProducer.Command(context.Background(), declared, extra, args...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return command
-}
-
 // adminPythonBuild is the build whose Python `dev-hops admin` verbs answered the frozen sessions: a build
 // that still carried the Python CLI.
 const adminPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-// adminGolden opens a golden of one admin session and the pinned Python root. pin is the literal
-// "PIN:<name>" (the recorder looks for it in the test source until the golden exists).
-func adminGolden(t *testing.T, name, pin, test string) (*venueoracle.Golden, string) {
+// adminGolden opens the golden of one admin session.
+func adminGolden(t *testing.T, name, pin string) *venueoracle.Golden {
 	t.Helper()
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+	return venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/" + name + ".json",
 		PythonBuild: adminPythonBuild,
 		SHA256:      pin,
-		Recipe: "git worktree add --detach $DIR " + adminPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/adminops/ -test '^" + test + "$' -python-root $DIR",
 	})
-	return golden, golden.PythonRoot(t, repoRoot)
 }
 
-// adminProduce runs one recorded session: produce is called only while recording, with the Python root
-// pinned, and returns the session's answers as JSON; the frozen run gets them from the golden.
-func adminProduce(t *testing.T, golden *venueoracle.Golden, root, label string, input []byte, produce func() any) []byte {
+// adminProduce returns the frozen answers of one admin session as JSON.
+func adminProduce(t *testing.T, golden *venueoracle.Golden, label string, input []byte) []byte {
 	t.Helper()
-	request := venueoracle.ProgramRequest(label, adminPythonProgram, input, adminPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		useAdminProducer(t, producer)
-		body, err := json.Marshal(produce())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest(label, input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	return []byte(answers[0].Body)
 }
@@ -519,10 +409,9 @@ func compare(t *testing.T, got, want []stepResult, wantName string) {
 
 // TestUsersMatchTheFrozenPythonOutput runs the script on a real PostgreSQL and compares every step (exit,
 // stdout, the rows left) with what the REAL `dev-hops admin users|orgs` verbs did. The answers were executed
-// once on adminPythonBuild and are frozen in testdata/golden/users.json (the recipe regenerates them by
-// execution); the script is part of the golden's key.
+// once on adminPythonBuild and are frozen in testdata/golden/users.json; the script is part of the golden's key.
 func TestUsersMatchTheFrozenPythonOutput(t *testing.T) {
-	golden, root := adminGolden(t, "users", "3e8bad8fd8e602826042b00f4e69eca20a7fce5cb57a86fd7871a1fc3663fbe5", "TestUsersMatchTheFrozenPythonOutput")
+	golden := adminGolden(t, "users", "3e8bad8fd8e602826042b00f4e69eca20a7fce5cb57a86fd7871a1fc3663fbe5")
 	script := make([]map[string]any, len(usersScript))
 	for index, s := range usersScript {
 		script[index] = map[string]any{"args": s.args, "seedTokenFor": s.seedTokenFor}
@@ -531,9 +420,7 @@ func TestUsersMatchTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := adminProduce(t, golden, root, "users script", input, func() any {
-		return startDatabase(t).session(t, pythonVerb)
-	})
+	raw := adminProduce(t, golden, "users script", input)
 	var frozen []stepResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)

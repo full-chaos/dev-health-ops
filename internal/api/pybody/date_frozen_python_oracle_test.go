@@ -45,32 +45,11 @@ func jsonDateCorpus() []string {
 	return corpus
 }
 
-const pythonDateFieldsProgram = `
-import json, sys
-from datetime import date, datetime, timezone
-from pydantic import AwareDatetime, TypeAdapter, ValidationError
-adapters = {"date": TypeAdapter(date), "aware": TypeAdapter(AwareDatetime)}
-def render(value):
-    if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).isoformat()
-    return value.isoformat()
-out = {name: [] for name in adapters}
-for text in json.loads(sys.stdin.read()):
-    raw = json.loads(text)
-    for name, ta in adapters.items():
-        try:
-            out[name].append({"ok": render(ta.validate_python(raw))})
-        except ValidationError as exc:
-            err = exc.errors()[0]
-            out[name].append({"type": err["type"], "msg": err["msg"], "reason": (err.get("ctx") or {}).get("error", "")})
-print(json.dumps(out))
-`
-
 func TestDateAndAwareDatetimeMatchFrozenPydantic(t *testing.T) {
 	corpus := jsonDateCorpus()
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "date-and-aware-datetime.golden.json",
-		programoracle.Program{Name: "date-and-aware-datetime", Text: pythonDateFieldsProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "date-and-aware-datetime", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	type result struct{ OK, Type, Msg, Reason string }
 	var want map[string][]result

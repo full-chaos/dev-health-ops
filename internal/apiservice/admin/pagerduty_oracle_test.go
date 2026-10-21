@@ -19,7 +19,7 @@ import (
 func TestPagerDutyStatusAndPreflightVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("status_preflight", "TestPagerDutyStatusAndPreflightVenueOracle", "330564a0e051de2fcfce96251f9f048e5a4ccc26bce120fcdabefc9c8ba86858"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-status-32-bytes!"
 
 	type orgSpec struct {

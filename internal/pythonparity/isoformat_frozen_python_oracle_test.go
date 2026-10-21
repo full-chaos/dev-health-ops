@@ -1,7 +1,6 @@
 package pythonparity_test
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -11,12 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
-
-// isoformatOracleProgram is the oracle script, run as an inline program: its
-// text is part of the request the golden is keyed on.
-//
-//go:embed testdata/python_isoformat_oracle.py
-var isoformatOracleProgram string
 
 // TestIsoformatUTCMatchesFrozenPython compares byte for byte with what CPython
 // answered, executed once on the pinned build and frozen.
@@ -30,7 +23,7 @@ func TestIsoformatUTCMatchesFrozenPython(t *testing.T) {
 	}
 
 	output := frozenPython(t, "isoformat.golden.json",
-		programoracle.Program{Name: "isoformat", Text: isoformatOracleProgram, Stdin: []byte(input.String())})[0]
+		programoracle.Program{Name: "isoformat", Stdin: []byte(input.String())})[0]
 
 	var got map[string]string
 	if err := json.Unmarshal([]byte(output), &got); err != nil {

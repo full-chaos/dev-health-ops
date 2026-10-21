@@ -2,7 +2,6 @@ package policy_test
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -23,106 +21,13 @@ var testKey = policy.OracleTestKey()
 // it, so Identity names that distribution. A golden recorded by another
 // producer is refused.
 var decisionGoldens = programoracle.Set{
-	Package:       "./internal/api/policy/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\npyjwt 2.15.0",
-	Distributions: []string{"pyjwt"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\npyjwt 2.15.0",
 	Pins: map[string]string{
 		"users-row-decisions.golden.json": "faf04be9a3e2ebbef4f520ac9a8fec3d7ca931aa382891d5f7ef4edd8b2682e8",
 		"principal-decisions.golden.json": "d86d5409f3d0460d24984ad5e310221fd3a9f93dd79786e7c458736237f8aad0",
 	},
 }
-
-// pythonPrincipalDecisionProgram is pythonPrincipalProgram with the token left
-// out of every answer: the golden holds the case name, the decision and the tv
-// reading, and no token. Each token is minted against the clock of the run
-// that recorded it, so only its decision can be kept.
-const pythonPrincipalDecisionProgram = `
-import json
-import os
-import sys
-from datetime import datetime, timedelta, timezone
-
-import jwt
-
-from dev_health_ops.api.services.auth import AuthService, JWT_ALGORITHM
-
-key = os.environ["ORACLE_SIGNING_KEY"]
-svc = AuthService(secret_key=key)
-now = datetime.now(timezone.utc)
-uid = "11111111-1111-4111-8111-111111111111"
-
-def base(**over):
-    payload = {
-        "sub": uid, "email": "u@example.com", "org_id": "org-1", "role": "member",
-        "is_superuser": False, "type": "access", "iss": svc.issuer, "aud": svc.audience,
-        "exp": now + timedelta(minutes=5), "iat": now, "jti": "j", "tv": 0,
-    }
-    for k, v in over.items():
-        if v is KeyError:
-            payload.pop(k, None)
-        else:
-            payload[k] = v
-    return jwt.encode(payload, key, algorithm=JWT_ALGORITHM)
-
-cases = {
-    "minted": svc.create_access_token(uid, "u@example.com", org_id="org-1", token_version=3),
-    "minted superuser": svc.create_access_token(uid, "u@example.com", is_superuser=True, username="u", full_name="U"),
-    "minted impersonating": svc.create_access_token(uid, "u@example.com", impersonating_user_id="x"),
-    "refresh": svc.create_refresh_token(uid, org_id="org-1"),
-    "minted expired": svc.create_access_token(uid, "u@example.com", expires_delta=timedelta(seconds=-5)),
-    "other key": jwt.encode({"sub": uid, "type": "access", "exp": now + timedelta(minutes=5)}, key + "x", algorithm=JWT_ALGORITHM),
-    "hs512": jwt.encode({"sub": uid, "type": "access", "exp": now + timedelta(minutes=5)}, key, algorithm="HS512"),
-    "alg none": jwt.encode({"sub": uid, "type": "access", "exp": now + timedelta(minutes=5)}, None, algorithm="none"),
-    "tampered": base()[:-2] + ("AA" if not base().endswith("AA") else "BB"),
-    "garbage": "not.a.token",
-    "no aud no iss": base(aud=KeyError, iss=KeyError),
-    "wrong aud": base(aud="other"),
-    "wrong iss": base(iss="other"),
-    "aud list with match": base(aud=["x", svc.audience]),
-    "missing sub": base(sub=KeyError),
-    "missing type": base(type=KeyError),
-    "missing exp": base(exp=KeyError),
-    "wrong type": base(type="refresh"),
-    "type not a string": base(type=1),
-    "iat future": base(iat=now + timedelta(minutes=10)),
-    "nbf future": base(nbf=now + timedelta(minutes=10)),
-    "nbf past": base(nbf=now - timedelta(minutes=10)),
-    "sub empty": base(sub=""),
-    "tv absent": base(tv=KeyError),
-    "tv null": base(tv=None),
-    "tv int": base(tv=4),
-    "tv true": base(tv=True),
-    "tv float": base(tv=2.9),
-    "tv negative float": base(tv=-2.9),
-    "tv numeric string": base(tv=" 7 "),
-    "tv underscore string": base(tv="1_0"),
-    "tv signed string": base(tv="-3"),
-    "tv bad string": base(tv="seven"),
-    "tv float string": base(tv="1.0"),
-    "tv list": base(tv=[1]),
-    "tv object": base(tv={"a": 1}),
-}
-
-out = []
-for name, token in cases.items():
-    try:
-        payload = svc.validate_token(token, token_type="access")
-        decision = "accepted" if payload is not None else "refused"
-    except Exception as exc:
-        payload, decision = None, "raised:" + type(exc).__name__
-    tv = None
-    if payload is not None:
-        raw = payload.get("tv")
-        try:
-            tv = {"value": 0 if raw is None else int(raw)}
-        except (TypeError, ValueError):
-            tv = {"unreadable": True}
-    out.append({"name": name, "decision": decision, "tv": tv})
-print(json.dumps(out))
-`
 
 // principalDecisionIssuer and principalDecisionAudience are the AuthService
 // defaults (JWT_ISSUER, JWT_AUDIENCE) the Python cases were minted under.
@@ -235,13 +140,8 @@ func principalDecisionTokens(t *testing.T, now time.Time) map[string]string {
 // its own against the clock of the recording), so the times relative to now
 // are the same and the decision must be too.
 func TestPrincipalDecisionsMatchFrozenPython(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	output := decisionGoldens.Outputs(t, root, "principal-decisions.golden.json", programoracle.Program{
-		Name: "principal decisions", Text: pythonPrincipalDecisionProgram, Env: map[string]string{"ORACLE_SIGNING_KEY": testKey},
+	output := decisionGoldens.Outputs(t, "principal-decisions.golden.json", programoracle.Program{
+		Name: "principal decisions",
 	})[0]
 	var cases []struct {
 		Name     string `json:"name"`

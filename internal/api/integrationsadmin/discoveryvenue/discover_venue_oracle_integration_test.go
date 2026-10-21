@@ -177,14 +177,12 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	t.Setenv("no_proxy", "127.0.0.1,localhost")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root),
+		Golden: golden, Root: root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + venueKey,
 			"NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost",
 			"REQUESTS_CA_BUNDLE=" + certFile,
-			"VENUE_PINNED_NOW=" + venuePinnedNow,
-			"VENUE_PINNED_NOW_MODULES=dev_health_ops.sync.discovery,dev_health_ops.models.integrations",
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -319,9 +317,7 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 discovered_at, last_seen_at, last_sync_at, last_sync_success, last_sync_error
 FROM integration_sources ORDER BY org_id, integration_id, provider, external_id`
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-	pythonRows := golden.CompareRows(t, "integration_sources", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-	}, goRows)
+	pythonRows := golden.CompareRows(t, "integration_sources", goRows)
 	// Rows are joined by " | ": the seed and the discoveries must have
 	// produced hundreds of them, or SAME could be two empty tables agreeing.
 	if rows := strings.Count(pythonRows, " | ") + 1; rows < 300 {
@@ -504,12 +500,12 @@ func repoRoot(t *testing.T) string {
 	}
 	directory := filepath.Dir(file)
 	for {
-		if info, err := os.Stat(filepath.Join(directory, "src", "dev_health_ops")); err == nil && info.IsDir() {
+		if info, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil && !info.IsDir() {
 			return directory
 		}
 		parent := filepath.Dir(directory)
 		if parent == directory {
-			t.Fatalf("no src/dev_health_ops above %s", file)
+			t.Fatalf("no go.mod above %s", file)
 		}
 		directory = parent
 	}

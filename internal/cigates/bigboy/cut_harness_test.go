@@ -205,12 +205,19 @@ func cutDockerBody(ds []cutDigest) string {
 	return b.String()
 }
 
-// The retired Python helpers the cut still calls are stood in; the flags file names one secret ref so BLANK is decidable.
-const cutPython = cutRecFn + `rec tool python3 "$@"
+// The cut builds cigate with go (DEPLOY_SHA STEPs); this go writes a recorder cigate at -o. The flags file names one secret ref
+// so BLANK is decidable.
+const cutGo = cutRecFn + `rec tool go "$@"
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
+cat > "$out" <<'CIGATE'
+#!/bin/bash
+` + cutRecFn + `rec tool cigate "$@"
 case "$1" in
-  *generate-query-api-enabled-flags.py) while [ $# -gt 0 ]; do [ "$1" = --out ] && printf 'GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}\n' > "$2"; shift; done ;;
+  query-api-flags) while [ $# -gt 0 ]; do [ "$1" = --out ] && printf 'GO_API_EDGE_JWT_SECRET: ${JWT_SECRET_KEY}\n' > "$2"; shift; done ;;
 esac
 exit 0
+CIGATE
+chmod +x "$out"
 `
 
 var cutSiblings = []string{
@@ -267,7 +274,7 @@ func cutRunCut(g *guard, o cutOpts) cutResult {
 	cutStub(g, bin, "gh", "echo "+cutWebSHA+"\n")
 	cutStub(g, bin, "curl", "echo 200\n")
 	cutStub(g, bin, "sleep", "exit 0\n")
-	cutStub(g, bin, "python3", cutPython)
+	cutStub(g, bin, "go", cutGo)
 	ops := cutMkdir(g, work, "ops-clone", ".git")
 	env := []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + work, "CUT_LOG=" + log, "BIGBOY_ROOT=" + o.root,
 		"BIGBOY_OPS_REPO=" + filepath.Dir(ops), "WEB_REPIN_WAIT_TRIES=1", "WEB_REPIN_WAIT_SECS=0"}

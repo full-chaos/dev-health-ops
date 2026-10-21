@@ -73,7 +73,7 @@ func (db *database) billingState(t *testing.T) string {
 	return string(raw)
 }
 
-func billingSession(t *testing.T, python bool) []bundleResult {
+func billingSession(t *testing.T) []bundleResult {
 	t.Helper()
 	db := startDatabase(t)
 	ctx := context.Background()
@@ -91,11 +91,7 @@ func billingSession(t *testing.T, python bool) []bundleResult {
 		}
 		var code int
 		var stdout string
-		if python {
-			code, stdout = pythonVerbFull(t, db, s.env, nil, s.args)
-		} else {
-			code, stdout = goVerbEnv(t, db, s.env, s.args)
-		}
+		code, stdout = goVerbEnv(t, db, s.env, s.args)
 		if s.dbError && strings.HasPrefix(stdout, "Error: ") {
 			stdout = "Error: <database error>\n"
 		}
@@ -106,10 +102,9 @@ func billingSession(t *testing.T, python bool) []bundleResult {
 
 // TestBillingMatchesTheFrozenPythonOutput runs the script and compares every step (exit, stdout, the plan and
 // price rows left) with what the REAL `dev-hops admin billing seed|list` verbs did. The answers were
-// executed once on adminPythonBuild and are frozen in testdata/golden/billing.json (the recipe regenerates
-// them by execution); the script is part of the golden's key.
+// executed once on adminPythonBuild and are frozen in testdata/golden/billing.json; the script is part of the golden's key.
 func TestBillingMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := adminGolden(t, "billing", "a90677055d98c1a8e31aa74c063a16b0cadd8ca666446479234e4aa2011cf733", "TestBillingMatchesTheFrozenPythonOutput")
+	golden := adminGolden(t, "billing", "a90677055d98c1a8e31aa74c063a16b0cadd8ca666446479234e4aa2011cf733")
 	script := make([]map[string]any, len(billingScript))
 	for index, s := range billingScript {
 		script[index] = map[string]any{"args": s.args, "env": s.env, "dbError": s.dbError, "sql": s.sql, "seed": s.seed}
@@ -118,12 +113,12 @@ func TestBillingMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := adminProduce(t, golden, root, "billing script", input, func() any { return billingSession(t, true) })
+	raw := adminProduce(t, golden, "billing script", input)
 	var frozen []bundleResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
 	}
-	compareBundles(t, billingSession(t, false), frozen, "frozen Python")
+	compareBundles(t, billingSession(t), frozen, "frozen Python")
 	seeded, listed := 0, 0
 	for _, item := range frozen {
 		if strings.HasPrefix(item.Stdout, "Seeded") {

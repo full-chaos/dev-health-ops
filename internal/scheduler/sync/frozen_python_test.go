@@ -3,10 +3,8 @@ package sync
 import (
 	"bytes"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -15,7 +13,6 @@ import (
 // discovery and licensing sources of that build, and its answer is frozen
 // under testdata/golden. Identity names the interpreter that ran them.
 var schedulerSyncGoldens = programoracle.Set{
-	Package:  "./internal/scheduler/sync/",
 	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
 	Identity: "python 3.14.7\nunicodedata 16.0.0",
 	// The goldenrecord verb writes each digest when it promotes a recording; a
@@ -35,12 +32,7 @@ var schedulerSyncGoldens = programoracle.Set{
 // fails the test; so does a program that exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	return schedulerSyncGoldens.Outputs(t, root, golden, programs...)
+	return schedulerSyncGoldens.Outputs(t, golden, programs...)
 }
 
 // decodeKeepingNumbers decodes JSON with every number kept as its text, so a

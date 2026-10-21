@@ -118,7 +118,7 @@ func (t *Timestamp) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	parsed, err := time.Parse(time.RFC3339, raw)
+	parsed, err := parseRFC3339(raw)
 	if err != nil {
 		return fmt.Errorf("timestamp %q is not RFC 3339: %w", raw, err)
 	}

@@ -19,35 +19,13 @@ var bodyIntCorpus = []string{
 	"2147483648", "1.8446744073709552e19", "9.2e18", "9.223372036854775807e18", "-9.223372036854775808e18", "-9.3e18", "4.0e9", "-1e300", `"18446744073709551617"`, "100000000000000000000000000000",
 }
 
-const pythonBodyIntProgram = `
-import json, sys
-from pydantic import BaseModel, Field, ValidationError
-class Min(BaseModel):
-    v: int = Field(90, ge=1)
-class Bounded(BaseModel):
-    v: int = Field(1, ge=0, le=2)
-class Lax(BaseModel):
-    v: int | None = None
-out = []
-for text in json.loads(sys.stdin.read()):
-    row = {}
-    for name, model in (("min", Min), ("bounded", Bounded), ("lax", Lax)):
-        try:
-            row[name] = {"ok": str(model.model_validate({"v": json.loads(text)}).v)}
-        except ValidationError as exc:
-            err = exc.errors()[0]
-            row[name] = {"type": err["type"], "msg": err["msg"], "input": json.dumps(err["input"])}
-    out.append(row)
-print(json.dumps(out))
-`
-
 // TestBodyIntMatchesFrozenPydantic compares the unbounded and bounded body int
 // helpers with pydantic 2's lax int on every JSON shape a client can send,
 // including booleans (accepted as 0/1) and integers past the int64 range.
 func TestBodyIntMatchesFrozenPydantic(t *testing.T) {
 	input, _ := json.Marshal(bodyIntCorpus)
 	output := frozenPython(t, "body-int.golden.json",
-		programoracle.Program{Name: "body-int", Text: pythonBodyIntProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "body-int", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []map[string]struct{ OK, Type, Msg, Input string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

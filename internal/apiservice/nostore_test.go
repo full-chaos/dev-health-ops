@@ -127,3 +127,22 @@ func signedToken(t *testing.T, key string, sub uuid.UUID, superuser bool) string
 	}
 	return token
 }
+
+// Accepted limit: an UNHANDLED 500 keeps the Python shape (content headers
+// only, generic body), so an admin route's unhandled 500 carries no
+// Cache-Control. The body holds no org data.
+func TestAdminUnhandledErrorKeepsThePythonShapeWithoutNoStore(t *testing.T) {
+	panicking := httpapi.Route{Method: http.MethodGet, Pattern: modelsPath, Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})}
+	response := serve(noStoreServer(t, []httpapi.Route{panicking}), httptest.NewRequest(http.MethodGet, modelsPath, nil))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500", response.Code)
+	}
+	if got := response.Header().Get("Cache-Control"); got != "" {
+		t.Fatalf("unhandled 500 carries Cache-Control %q; the Python shape strips it", got)
+	}
+	if body := response.Body.String(); body != `{"detail":"Internal Server Error"}` && body != "Internal Server Error" {
+		t.Fatalf("body %q is not the generic 500 body", body)
+	}
+}

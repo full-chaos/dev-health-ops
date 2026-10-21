@@ -184,7 +184,19 @@ func (h compatHandlers) loginUnverified(w http.ResponseWriter, r *http.Request, 
 		h.fail(w, r, opCompatLogin, errors.New("authapi: an unverified login's user is gone"))
 		return
 	}
-	if err := h.auditSignInFailed(ctx, outcome.PrincipalID, requested, string(outcome.Reason), providerLocal); err != nil {
+	// go-api's unverified branch audits under the user's first membership,
+	// and under the requested organization only when the user has none
+	// (internal/api/session/login.go blockedOrg).
+	auditRequested := requested
+	memberships, err := h.Users.Memberships(ctx, outcome.PrincipalID)
+	if err != nil {
+		h.fail(w, r, opCompatLogin, err)
+		return
+	}
+	if chooseMembership(memberships, nil) != nil {
+		auditRequested = nil
+	}
+	if err := h.auditSignInFailed(ctx, outcome.PrincipalID, auditRequested, string(outcome.Reason), providerLocal); err != nil {
 		h.fail(w, r, opCompatLogin, err)
 		return
 	}

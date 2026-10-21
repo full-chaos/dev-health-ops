@@ -1,0 +1,1 @@
+ValueError: allow.yml entry missing required string fields: {'url': 'https://x/', 'owner': 'a', 'reason': 'b', 'expires': datetime.date(2026, 1, 1)}

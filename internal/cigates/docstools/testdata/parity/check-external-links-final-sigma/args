@@ -1,0 +1,7 @@
+check-external-links
+--built-site
+pages
+--allowlist
+allow.yml
+--site-url
+https://ας

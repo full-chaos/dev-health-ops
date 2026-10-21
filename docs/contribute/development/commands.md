@@ -47,17 +47,22 @@ ruff check --fix .
 git diff --check
 ```
 
-## Run Python tests
+## Run tests
+
+The Go checks run through `ci/check_go.sh`:
 
 ```bash
-make test:unit
-make test:integration
-make test:e2e
-make test:live-e2e
-make test:ci
+make go:check-fast
+make go:check
 ```
 
-Use `pytest` directly for a narrow development loop:
+The live backend e2e harness:
+
+```bash
+make test:live-e2e
+```
+
+Use `pytest` directly for a narrow development loop on the remaining Python tests:
 
 ```bash
 pytest tests/path/to/test_module.py -q

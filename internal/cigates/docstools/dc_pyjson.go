@@ -227,8 +227,8 @@ func (p *dcJSONParser) number() (*dcJValue, error) {
 		f, _ := strconv.ParseFloat(text, 64)
 		return &dcJValue{kind: dcJFloat, f: f}, nil
 	}
-	if len(strings.TrimPrefix(text, "-")) > 4300 {
-		return nil, dcValueError{"ValueError", "Exceeds the limit (4300 digits) for integer string conversion"}
+	if digits := len(strings.TrimPrefix(text, "-")); digits > 4300 {
+		return nil, dcValueError{"ValueError", fmt.Sprintf("Exceeds the limit (4300 digits) for integer string conversion: value has %d digits; use sys.set_int_max_str_digits() to increase the limit", digits)}
 	}
 	n := new(big.Int)
 	n.SetString(text, 10)

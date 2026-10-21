@@ -192,7 +192,7 @@ exit code, stdout and report bytes as Python for `check-built-site-links` (relat
 
 ## Stricter than Python, or different on purpose (RISK-NOTES)
 
-Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (102 rows, pinned) unless marked.
+Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (103 rows, pinned) unless marked.
 
 - Arguments: no abbreviation of an option, no `-h`/`--help` (exit 0 in Python, exit 2 here), no `--`, no value that starts with `-` (a
   negative number, `"-a b"`, `--site-dir=-x`), no empty value (`Path("")` is `.` in Python). Exit code 2 and a usage line; the text differs from argparse's.
@@ -203,6 +203,7 @@ Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (102 
 - Search fields: `location`, `title`, `text`, `query`, `expected` must be strings (Python took `str()` of a truthy number, list or object);
   `max_rank` as a non-empty string is refused (Python parsed it with `int()`). Falsy values still mean the default as in Python.
 - Page names that are not UTF-8 and a named pipe named `*.html` are refused (Python listed the first and blocked on the second).
+- Paths: every path stays a string as written (pathlib keeps `..`; the kernel resolves `link/../site` through the link, `filepath.Join`/`Dir` would clean it first): the tree walk below `--site-dir`, the report's parent (`new/../report.tsv` makes `new`), and `Path.resolve()` of link targets follow Python (cases `links-site-dir-through-a-link-and-dotdot`, `links-absolute-site-dir-through-a-link-and-dotdot`, `links-site-dir-with-a-dotdot-component`, `search-report-path-with-dotdot-makes-the-parent`, `search-paths-through-a-link-and-dotdot`). The search report is opened and truncated, and its header written, before anything is ranked: a ranking error leaves the header and the rows so far, as in Python (`search-ranking-error-leaves-the-header-in-the-report`, `search-ranking-error-leaves-the-rows-so-far-in-the-report`).
 - Working directory: the facts script took its root from its own path (`parents[1]`), so it ran from any directory; the Go verb takes the nearest directory at or above the working directory that holds `go.mod` (cases `facts-from-the-taxonomy-directory`, `facts-from-a-new-nested-directory`) and refuses a working directory outside any module (STRICTER; refusal row `facts outside any module`). The links and search scripts have no root: their paths, and the default report `.build/docs-search-acceptance.tsv`, are relative to the working directory in both (cases `links-from-a-nested-directory`, `search-from-a-nested-directory`, `search-default-report-from-a-nested-directory`; a case may carry a `cwd` file naming the directory, below the work directory, the run starts in).
 - `check-docs-facts` reads the Go registry (`internal/jobs/workgraph/units`, the source `check-investment-drift` reads) and not
   `src/dev_health_ops/investment_taxonomy.py`: the Python refusals "registry file missing", "not a set literal", "non-string literal",

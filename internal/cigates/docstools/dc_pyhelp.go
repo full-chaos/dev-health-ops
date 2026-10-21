@@ -7,7 +7,6 @@ import (
 	"math"
 	"math/big"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -155,7 +154,7 @@ func dcUnescape(s string) (string, error) {
 				digits, base = digits[1:], 16
 			}
 			if base == 10 && len(digits) > 4300 {
-				failure = dcValueError{"ValueError", "Exceeds the limit (4300 digits) for integer string conversion"}
+				failure = dcValueError{"ValueError", fmt.Sprintf("Exceeds the limit (4300 digits) for integer string conversion: value has %d digits; use sys.set_int_max_str_digits() to increase the limit", len(digits))}
 				return m
 			}
 			n := new(big.Int)
@@ -485,7 +484,8 @@ func dcRglob(root, suffix string) []string {
 				out = append(out, name)
 			}
 			if e.Type().IsDir() {
-				walk(filepath.Join(dir, e.Name()), name+"/")
+				// the path stays as written (pathlib keeps ".."): the kernel resolves "link/../x" through the link, a lexical clean would not
+				walk(dir+"/"+e.Name(), name+"/")
 			}
 		}
 	}

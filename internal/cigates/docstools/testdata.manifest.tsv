@@ -1,7 +1,7 @@
 # Every file under internal/cigates/docstools/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 18d1599789aa9aa6c1a3a32c22151684d62ed77c997646657c378e8637392786 (1011 files)
+# python-recorded set: 11bc9b2a0b0f48261cafc29c319c8350ec85d3719364b3ecacd530c9561cb9c7 (1065 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-05b553339a92b34f0698553412129dec5fbbd05c8eef794ead26259d7932de96	hand-written	README.md
+af688db0ded5dce2fa9867b30cb1be3107dd6b9192fd383491ccabcba501355e	hand-written	README.md
 0f0c4bf5e5009999b6d5f6b87f7ae119b583442f6db3bd29b65fce0962828459	python-recorded	helpers/csvrow.jsonl
 8a60eb01e931bad342ff81c6dddd74815dff950d12ca32050c15948136d71e8b	python-recorded	helpers/floatrepr.jsonl
 63d9592b29908345ca774d94c71f9c09b6a72962c7fa72b9203803208dbeabb6	python-recorded	helpers/jsonloads.jsonl
@@ -810,6 +810,14 @@ be3056708907db658266eb3d6466f6ebf6c1dd06fa5054b582ca53fb2c378b68	python-recorded
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/links-absolute-site-dir-ok/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-absolute-site-dir-ok/stderr
 3494c5f1e6eed8b1ecfbb38ec94249cc40dc21a8c84f2e4b3d0892011b7a7c13	python-recorded	parity/links-absolute-site-dir-ok/stdout
+2573660bcf052a8200b5fd36fac7a02f8524901b06ddc674313ee6e6108079a1	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/args
+6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/in/other/child/x.txt.fixture
+c43ff44a809a9bd2d3396432e5e61fd584dd654ac7e2e3a4fa8e783988187bc4	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/in/other/site/b.html.fixture
+d14f49a2c0c285933c3c64248cb772c1282064b59fcfa97f87c35f3d76f8540c	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/in/other/site/index.html.fixture
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/stderr
+ae28c2a5293285f0a62743af3917e4b4720e85e5942508737cc36f5e37b58c5b	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/stdout
+6563f0325669e62c40cd845b0df1c57737c4bf6a1458a627bcb10877fea3630f	python-recorded	parity/links-absolute-site-dir-through-a-link-and-dotdot/symlinks
 2a437b65d3934443368e0a05e8da74c54d4a5d2cae400dcedece137e09e9d2ec	python-recorded	parity/links-anchor-on-non-html/args
 5cf1675d8caa0c028702f26479410586949e63fe067f1838093ccf5fef85fc10	python-recorded	parity/links-anchor-on-non-html/in/site/index.html.fixture
 5f546eb4606b5c2b7d2a449a5cc2bbb477ed5a246c7051ce871b12f2dbfc8419	python-recorded	parity/links-anchor-on-non-html/in/site/x.css.fixture
@@ -1034,12 +1042,26 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-site-dir-missing/rc
 184166266dc91c9a99343a342e1b02aefcafd740b8cc293bcbba7b6eee1e5656	python-recorded	parity/links-site-dir-missing/stderr
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-site-dir-missing/stdout
+972a75d5ea536135c2691495b0bad081edecac8911a3c1da23cd4b6e9608ebb2	python-recorded	parity/links-site-dir-through-a-link-and-dotdot/args
+6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b	python-recorded	parity/links-site-dir-through-a-link-and-dotdot/in/other/child/x.txt.fixture
+58f160a3b269a6ddcb995f802d55184933f15f0c9c841bd502f71a52c99d0d3f	python-recorded	parity/links-site-dir-through-a-link-and-dotdot/in/other/site/index.html.fixture
+3344fc33c746c3eba8eb15984ff2a393adb7dc6d18d813524fd580ee1963edc4	python-recorded	parity/links-site-dir-through-a-link-and-dotdot/in/other/site/sub/index.html.fixture
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-site-dir-through-a-link-and-dotdot/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-site-dir-through-a-link-and-dotdot/stderr
+866eb317a6c0d0779a57d1ba49ecd6b2f317f281bf9874ad56d7ed9d7e3aa3b9	python-recorded	parity/links-site-dir-through-a-link-and-dotdot/stdout
+6563f0325669e62c40cd845b0df1c57737c4bf6a1458a627bcb10877fea3630f	python-recorded	parity/links-site-dir-through-a-link-and-dotdot/symlinks
 61abb035222c863e0f0f1d32056409a3c929ccd799c2de1a0115512b822a58f6	python-recorded	parity/links-site-dir-through-symlink-absolute-same-page/args
 01ca816d9ce98eee13dbf38ad4da1a2824a29538e43c956de55f80681c5df991	python-recorded	parity/links-site-dir-through-symlink-absolute-same-page/in/real/index.html.fixture
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/links-site-dir-through-symlink-absolute-same-page/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-site-dir-through-symlink-absolute-same-page/stderr
 3494c5f1e6eed8b1ecfbb38ec94249cc40dc21a8c84f2e4b3d0892011b7a7c13	python-recorded	parity/links-site-dir-through-symlink-absolute-same-page/stdout
 4bea5af015775ac7ea11338cf6628b02ade4aa5e00e8df72b918220fd064c407	python-recorded	parity/links-site-dir-through-symlink-absolute-same-page/symlinks
+63f44509eec32f26843783474ed46f7962c07e8414e17c62bd3fa243fa38033d	python-recorded	parity/links-site-dir-with-a-dotdot-component/args
+1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-site-dir-with-a-dotdot-component/in/site/index.html.fixture
+be85bec0f005d91be8d6e97d62237d364ebb9c6452d93beccd5c8b503336e33e	python-recorded	parity/links-site-dir-with-a-dotdot-component/in/site/sub/p.html.fixture
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-site-dir-with-a-dotdot-component/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-site-dir-with-a-dotdot-component/stderr
+a90b0998f94c18ca20bd6e70116d41d4044d5f8f5091c0722a468aaa824a57b2	python-recorded	parity/links-site-dir-with-a-dotdot-component/stdout
 2a437b65d3934443368e0a05e8da74c54d4a5d2cae400dcedece137e09e9d2ec	python-recorded	parity/links-skip-schemes/args
 93546c7e93986ec8a8b2c850e7b95508da95c7202798be038f92c413809d73b4	python-recorded	parity/links-skip-schemes/in/site/index.html.fixture
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/links-skip-schemes/rc
@@ -1298,6 +1320,15 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/search-ok-default-report-path/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/search-ok-default-report-path/stderr
 d1daeb1eac689d71e6ba93b3cfabc1ceb238fe2152790c34f4c1888371d9e621	python-recorded	parity/search-ok-default-report-path/stdout
+40351ba46acf57948f6fbf3e1d808aa3bc7d7fcefdf05dc93d9b7e6d4b8a58e9	python-recorded	parity/search-paths-through-a-link-and-dotdot/args
+6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b	python-recorded	parity/search-paths-through-a-link-and-dotdot/in/other/child/x.txt.fixture
+7b69a6aabb82eb574721a18bea759a0e5ee1ffad02499646d885758d02e6ee99	python-recorded	parity/search-paths-through-a-link-and-dotdot/in/other/queries.json.fixture
+830ce4fe7d50e81ae51890b87147be35c2cc3fa5083426571f2975ad4da76b64	python-recorded	parity/search-paths-through-a-link-and-dotdot/in/other/site/search/search_index.json.fixture
+89582b891227c8d8625d283154f85c5495208322a8258cd0330f11b2395e90f9	python-recorded	parity/search-paths-through-a-link-and-dotdot/out/other/out.tsv
+9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/search-paths-through-a-link-and-dotdot/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/search-paths-through-a-link-and-dotdot/stderr
+0a44daef2611ef99a21a25fcf31a3032a7b419d394b761a20e0719d3589f9ec8	python-recorded	parity/search-paths-through-a-link-and-dotdot/stdout
+6563f0325669e62c40cd845b0df1c57737c4bf6a1458a627bcb10877fea3630f	python-recorded	parity/search-paths-through-a-link-and-dotdot/symlinks
 e58b442e9cf70068f2ba6a57428a0a4ad416d84a5ab8f45d3f75bba49cb2fc4a	python-recorded	parity/search-queries-crlf-and-bom-free/args
 494e880d3942b963da3256d0b612d27103b4f5ef4b788097b2128b43ca7c69db	python-recorded	parity/search-queries-crlf-and-bom-free/in/queries.json.fixture
 830ce4fe7d50e81ae51890b87147be35c2cc3fa5083426571f2975ad4da76b64	python-recorded	parity/search-queries-crlf-and-bom-free/in/site/search/search_index.json.fixture
@@ -1337,6 +1368,22 @@ b9d02abe2658798cea70c6d0be7d02829a07053ff7afdb6f091138b6f2e163f1	python-recorded
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/search-rank-fail/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/search-rank-fail/stderr
 d513f78b8a46d3dcbf8da2e7b8a3836850e2afa91fee0b9b278b9af14adb8d04	python-recorded	parity/search-rank-fail/stdout
+e58b442e9cf70068f2ba6a57428a0a4ad416d84a5ab8f45d3f75bba49cb2fc4a	python-recorded	parity/search-ranking-error-leaves-the-header-in-the-report/args
+7b69a6aabb82eb574721a18bea759a0e5ee1ffad02499646d885758d02e6ee99	python-recorded	parity/search-ranking-error-leaves-the-header-in-the-report/in/queries.json.fixture
+16e675c4f20f823fde3f08ac7920b0ca1a93cdb7fd8ecb0f6b841e29ec96ad17	python-recorded	parity/search-ranking-error-leaves-the-header-in-the-report/in/report.tsv.fixture
+d5589d65b9e071bbe96bfe4ee43454ed78cb6588337daf66d03a2b86c5c04f08	python-recorded	parity/search-ranking-error-leaves-the-header-in-the-report/in/site/search/search_index.json.fixture
+ae74d7469b3f6238208dd5e07dd9a5d387ede961df142674fb050e4007c0174d	python-recorded	parity/search-ranking-error-leaves-the-header-in-the-report/out/report.tsv
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/search-ranking-error-leaves-the-header-in-the-report/rc
+3cd51f638cee61536be5a3b58038388a704225d5175442ea7b630308187a6b6a	python-recorded	parity/search-ranking-error-leaves-the-header-in-the-report/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/search-ranking-error-leaves-the-header-in-the-report/stdout
+e58b442e9cf70068f2ba6a57428a0a4ad416d84a5ab8f45d3f75bba49cb2fc4a	python-recorded	parity/search-ranking-error-leaves-the-rows-so-far-in-the-report/args
+6dd321cdd384b6d7675744711e672a3b7eae650f61527e572478247d57c41c2b	python-recorded	parity/search-ranking-error-leaves-the-rows-so-far-in-the-report/in/queries.json.fixture
+4695eda917877901537a7ec36afa49a8beba0f3f15e4b61ead1fb8ff72419a23	python-recorded	parity/search-ranking-error-leaves-the-rows-so-far-in-the-report/in/report.tsv.fixture
+830ce4fe7d50e81ae51890b87147be35c2cc3fa5083426571f2975ad4da76b64	python-recorded	parity/search-ranking-error-leaves-the-rows-so-far-in-the-report/in/site/search/search_index.json.fixture
+432689eda65677a4b6a9c13eff05023e15b2d39d642c5fb24a797bf494314e30	python-recorded	parity/search-ranking-error-leaves-the-rows-so-far-in-the-report/out/report.tsv
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/search-ranking-error-leaves-the-rows-so-far-in-the-report/rc
+3167e727801442d8af26aede572663c4cffc0f811d522b64bcf6f8ca8d7b26c2	python-recorded	parity/search-ranking-error-leaves-the-rows-so-far-in-the-report/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/search-ranking-error-leaves-the-rows-so-far-in-the-report/stdout
 37a1a4a962b6b80a01dd54c18460cd4d8149e37432d22e4da991b748c7c36201	python-recorded	parity/search-report-equals-form/args
 7b69a6aabb82eb574721a18bea759a0e5ee1ffad02499646d885758d02e6ee99	python-recorded	parity/search-report-equals-form/in/queries.json.fixture
 830ce4fe7d50e81ae51890b87147be35c2cc3fa5083426571f2975ad4da76b64	python-recorded	parity/search-report-equals-form/in/site/search/search_index.json.fixture
@@ -1366,6 +1413,13 @@ e4036d733aa7ebd3cd3592b5f954e08a9b6e0dc95fee13f1a17143f0990692e7	python-recorded
 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/search-report-parent-created/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/search-report-parent-created/stderr
 61fc03aa94c2c0a8a12f5e97bbe8c776b224252604c0c6ed8d2be1e84120b23f	python-recorded	parity/search-report-parent-created/stdout
+d218036cbf2bc77879f0737619ece11f5f8f1c3f4979cfe6e3a496fd06d5b543	python-recorded	parity/search-report-path-with-dotdot-makes-the-parent/args
+7b69a6aabb82eb574721a18bea759a0e5ee1ffad02499646d885758d02e6ee99	python-recorded	parity/search-report-path-with-dotdot-makes-the-parent/in/queries.json.fixture
+830ce4fe7d50e81ae51890b87147be35c2cc3fa5083426571f2975ad4da76b64	python-recorded	parity/search-report-path-with-dotdot-makes-the-parent/in/site/search/search_index.json.fixture
+89582b891227c8d8625d283154f85c5495208322a8258cd0330f11b2395e90f9	python-recorded	parity/search-report-path-with-dotdot-makes-the-parent/out/report.tsv
+9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/search-report-path-with-dotdot-makes-the-parent/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/search-report-path-with-dotdot-makes-the-parent/stderr
+3bafec757732adfe076dc0f808d306379f769fd86f0cbe24c88ca0cdab193dd2	python-recorded	parity/search-report-path-with-dotdot-makes-the-parent/stdout
 e58b442e9cf70068f2ba6a57428a0a4ad416d84a5ab8f45d3f75bba49cb2fc4a	python-recorded	parity/search-report-quoting/args
 2c86d3ebeb50ad9667db1336eb363b6699b1930a2899628e84fbef1b03335fcb	python-recorded	parity/search-report-quoting/in/queries.json.fixture
 830ce4fe7d50e81ae51890b87147be35c2cc3fa5083426571f2975ad4da76b64	python-recorded	parity/search-report-quoting/in/site/search/search_index.json.fixture

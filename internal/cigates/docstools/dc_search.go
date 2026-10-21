@@ -7,7 +7,6 @@ import (
 	"math"
 	"math/big"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -355,8 +354,19 @@ func dcSearchVerb(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return loadFail(err)
 	}
-	var tsv strings.Builder
-	tsv.WriteString(dcCSVRow([]string{"query", "expected", "rank", "max_rank", "top_result", "status"}))
+	// Python makes the report's parent (Path.parent keeps "..": new/../r.tsv makes "new"), then opens and truncates the
+	// report and writes the header before it ranks anything, so a ranking error leaves the header and the rows so far.
+	if err := os.MkdirAll(dcParent(report), 0o777); err != nil { // S175
+		return dcFail(stderr, err)
+	}
+	out, err := os.OpenFile(report, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666) // S177
+	if err != nil {
+		return dcFail(stderr, err)
+	}
+	defer out.Close()
+	if _, err := out.WriteString(dcCSVRow([]string{"query", "expected", "rank", "max_rank", "top_result", "status"})); err != nil {
+		return dcFail(stderr, err)
+	}
 	var failures []string
 	for _, c := range cases {
 		ranked, err := dcRank(c.query, docs)
@@ -382,15 +392,14 @@ func dcSearchVerb(args []string, stdout, stderr io.Writer) int {
 		if rank != 0 {
 			rankText = fmt.Sprint(rank)
 		}
-		tsv.WriteString(dcCSVRow([]string{c.query, c.expected, rankText, c.maxRank.String(), top, status}))
+		if _, err := out.WriteString(dcCSVRow([]string{c.query, c.expected, rankText, c.maxRank.String(), top, status})); err != nil {
+			return dcFail(stderr, err)
+		}
 		if !passed {
 			failures = append(failures, fmt.Sprintf("%s: expected %s at rank <= %s, found %s; top=%s", a1Repr(c.query), c.expected, c.maxRank, rankText, top))
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(report), 0o777); err != nil { // S175
-		return dcFail(stderr, err)
-	}
-	if err := os.WriteFile(report, []byte(tsv.String()), 0o666); err != nil { // S177
+	if err := out.Close(); err != nil {
 		return dcFail(stderr, err)
 	}
 	if len(failures) > 0 {

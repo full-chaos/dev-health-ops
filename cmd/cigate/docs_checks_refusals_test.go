@@ -27,7 +27,7 @@ type dcRow struct {
 	out   string
 }
 
-const dcRefusalRows = 102
+const dcRefusalRows = 103
 
 func dcPage(body string) string { return "<html><body>" + body + "</body></html>\n" }
 
@@ -85,6 +85,7 @@ func dcRefusalTable() []dcRow {
 		{name: "links netloc NFKC at", ref: "L35 urlsplit _checknetloc: NFKC netloc gains @", files: page("<a href=\"//u＠h/x\">1</a>"), args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "NFKC"},
 		{name: "links symlink loop in a target", ref: "L43,70-75 Path.resolve() (3.14) keeps a loop; exists() is false: errors.append missing built asset", files: page(`<a href="loop/x.html">1</a>`), links: [][2]string{{"site/loop", "loop"}}, args: dcLinksArgs("--site-dir", "site"), rc: 1, out: "loop/x.html: missing built asset"},
 		{name: "links NUL in a target", ref: "L43 Path.resolve() (3.14): ValueError lstat: embedded null character in path", files: page(`<a href="a%00b.html">1</a>`), args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "embedded null character"},
+		{name: "links site dir through a link and dotdot", ref: "L59-60 rglob keeps '..': link/../site is read through the link (other/site) and the walk goes on below it; a missing asset there is errors.append", files: map[string]string{"other/child/x.txt": "1", "other/site/index.html": dcPage(`<a href="sub/">1</a>`), "other/site/sub/index.html": dcPage(`<a href="missing.css">2</a>`)}, links: [][2]string{{"link", "other/child"}}, args: dcLinksArgs("--site-dir", "link/../site"), rc: 1, out: "sub/index.html -> missing.css: missing built asset"},
 		{name: "links broken target reported", ref: "L72-75 errors.append missing built asset, return 1", files: page(`<a href="nope.html">1</a>`), args: dcLinksArgs("--site-dir", "site"), rc: 1, out: "index.html -> nope.html: missing built asset"},
 		{name: "links missing anchor reported", ref: "L78-82 errors.append missing anchor, return 1", files: map[string]string{"site/index.html": dcPage(`<a href="b.html#z">b</a>`), "site/b.html": dcPage("x")}, args: dcLinksArgs("--site-dir", "site"), rc: 1, out: "missing anchor 'z'"},
 		{name: "links page name not UTF-8", ref: "L59 STRICTER: Python listed the page and printed its name with surrogateescape (a UnicodeEncodeError on error)", files: map[string]string{"site/bad\xffname.html": dcPage("x")}, args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "not UTF-8"},
@@ -259,6 +260,27 @@ func TestDocsFactsRunsFromANestedDirectoryOfTheRepository(t *testing.T) {
 				t.Fatalf("exit %d\nstdout: %q\nstderr: %q", code, stdout, stderr)
 			}
 		})
+	}
+}
+
+// Python makes Path.parent of the report lexically (".." kept) before it opens the report.
+func TestDocsSearchReportParentKeepsDotDot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "site", "search"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"site/search/search_index.json": dcIndexJSON, "q.json": dcOKQuery} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+	code, _, stderr := runCaptured(t, "docs", "check-docs-search", "--site-dir", "site", "--queries", "q.json", "--report", "new/../report.tsv")
+	if _, err := os.Stat(filepath.Join(dir, "new")); code != 0 || err != nil {
+		t.Fatalf("exit %d, stderr %q, stat new: %v", code, stderr, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "report.tsv")); err != nil {
+		t.Fatal(err)
 	}
 }
 

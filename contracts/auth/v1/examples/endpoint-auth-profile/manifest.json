@@ -338,6 +338,12 @@
       "expect_instance_location": "/token/algorithm",
       "expect_keyword": "const",
       "why": "The HS256 access token's pins name algorithm HS256; an HS256 opt-in pinned to EdDSA would route the legacy token to the wrong verifier."
+    },
+    {
+      "file": "invalid-hs256-tokens-pin-not-hs256.json",
+      "expect_instance_location": "/tokens/ops_access_token_hs256/algorithm",
+      "expect_keyword": "const",
+      "why": "The multi-class shape of the HS256 pin rule: the HS256 class's entry in tokens names algorithm HS256, so the legacy token is never pinned to another verifier."
     }
   ]
 }

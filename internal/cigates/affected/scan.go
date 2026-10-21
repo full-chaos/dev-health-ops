@@ -249,7 +249,8 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool)
 
 // checkReads returns one line per defect: a read with no covering reads.tsv row, a code read declared only as test, a
 // row for a package directory with no Go file. A read of a path in no class needs no row.
-func checkReads(root string, t *tables, reads []Read) []string {
+func checkReads(root string, t *tables, reads []Read) (defects []string, add, replace map[string]bool) {
+	add, replace = map[string]bool{}, map[string]bool{}
 	declared := map[string]map[string]string{} // package -> class -> scope
 	for _, r := range t.reads {
 		if declared[r.pkg] == nil {
@@ -277,8 +278,14 @@ func checkReads(root string, t *tables, reads []Read) []string {
 		switch {
 		case !t.covers(r.Path, declared[r.Package]):
 			report(fmt.Sprintf("%s: undeclared reader: %s; add the reads.tsv row %s\t%s\t%s", r.Package, r, r.Package, scope, class))
+			add[r.Package+"\t"+scope+"\t"+class] = true
 		case scope == scopeCode && !t.covers(r.Path, codeOnly(declared[r.Package])):
 			report(fmt.Sprintf("%s: %s is read by non-test code, so the row must be %s\t%s\t%s (its importers' tests read it too)", r.Package, r, r.Package, scopeCode, class))
+			if declared[r.Package][class] == scopeTest {
+				replace[r.Package+"\t"+scopeTest+"\t"+class+" -> "+r.Package+"\t"+scopeCode+"\t"+class] = true
+			} else {
+				add[r.Package+"\t"+scopeCode+"\t"+class] = true
+			}
 		}
 	}
 	for _, r := range t.reads {
@@ -293,7 +300,28 @@ func checkReads(root string, t *tables, reads []Read) []string {
 			report(fmt.Sprintf("reads.tsv:%d: package %s has no Go file", r.line, r.pkg))
 		}
 	}
-	return out
+	for row := range add {
+		if pkg, class, ok := strings.Cut(row, "\t"+scopeTest+"\t"); ok && add[pkg+"\t"+scopeCode+"\t"+class] {
+			delete(add, row) // the code row covers the tests' reads too
+		}
+	}
+	return out, add, replace
+}
+
+// printRows prints a heading and the rows under it, one exact TSV line each, sorted, ready to paste.
+func printRows(w io.Writer, heading string, rows map[string]bool) {
+	if len(rows) == 0 {
+		return
+	}
+	sorted := make([]string, 0, len(rows))
+	for r := range rows {
+		sorted = append(sorted, r)
+	}
+	sort.Strings(sorted)
+	fmt.Fprintln(w, heading)
+	for _, r := range sorted {
+		fmt.Fprintln(w, r)
+	}
 }
 
 func codeOnly(classes map[string]string) map[string]string {
@@ -334,11 +362,17 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	defects := checkReads(*root, t, reads)
+	defects, add, replace := checkReads(*root, t, reads)
 	for _, d := range defects {
 		fmt.Fprintln(stdout, d)
 	}
 	if len(defects) > 0 {
+		table := filepath.ToSlash(filepath.Join(dir, readsFile))
+		if rel, err := filepath.Rel(*root, filepath.Join(dir, readsFile)); err == nil && !strings.HasPrefix(rel, "..") {
+			table = filepath.ToSlash(rel)
+		}
+		printRows(stdout, "add these rows to "+table+":", add)
+		printRows(stdout, "replace these rows in "+table+":", replace)
 		fmt.Fprintf(stdout, "plan-reads: %d defect(s) in the declared-read table\n", len(defects))
 		return 1
 	}

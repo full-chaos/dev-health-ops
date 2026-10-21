@@ -1,0 +1,8 @@
+{
+ "*": "HTTP/1.1 404 X\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx",
+ "/": "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\nX-0: 1\r\nX-1: 1\r\nX-2: 1\r\nX-3: 1\r\nX-4: 1\r\nX-5: 1\r\nX-6: 1\r\nX-7: 1\r\nX-8: 1\r\nX-9: 1\r\nX-10: 1\r\nX-11: 1\r\nX-12: 1\r\nX-13: 1\r\nX-14: 1\r\nX-15: 1\r\nX-16: 1\r\nX-17: 1\r\nX-18: 1\r\nX-19: 1\r\nX-20: 1\r\nX-21: 1\r\nX-22: 1\r\nX-23: 1\r\nX-24: 1\r\nX-25: 1\r\nX-26: 1\r\nX-27: 1\r\nX-28: 1\r\nX-29: 1\r\nX-30: 1\r\nX-31: 1\r\nX-32: 1\r\nX-33: 1\r\nX-34: 1\r\nX-35: 1\r\nX-36: 1\r\nX-37: 1\r\nX-38: 1\r\nX-39: 1\r\nX-40: 1\r\nX-41: 1\r\nX-42: 1\r\nX-43: 1\r\nX-44: 1\r\nX-45: 1\r\nX-46: 1\r\nX-47: 1\r\nX-48: 1\r\nX-49: 1\r\nX-50: 1\r\nX-51: 1\r\nX-52: 1\r\nX-53: 1\r\nX-54: 1\r\nX-55: 1\r\nX-56: 1\r\nX-57: 1\r\nX-58: 1\r\nX-59: 1\r\nX-60: 1\r\nX-61: 1\r\nX-62: 1\r\nX-63: 1\r\nX-64: 1\r\nX-65: 1\r\nX-66: 1\r\nX-67: 1\r\nX-68: 1\r\nX-69: 1\r\nX-70: 1\r\nX-71: 1\r\nX-72: 1\r\nX-73: 1\r\nX-74: 1\r\nX-75: 1\r\nX-76: 1\r\nX-77: 1\r\nX-78: 1\r\nX-79: 1\r\nX-80: 1\r\nX-81: 1\r\nX-82: 1\r\nX-83: 1\r\nX-84: 1\r\nX-85: 1\r\nX-86: 1\r\nX-87: 1\r\nX-88: 1\r\nX-89: 1\r\nX-90: 1\r\nX-91: 1\r\nX-92: 1\r\nX-93: 1\r\nX-94: 1\r\nX-95: 1\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\n\r\nDev Health",
+ "/old/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /new/\r\n\r\n",
+ "/phase-11-intentional-missing-page/": "HTTP/1.1 404 X\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnope",
+ "/reference/metrics/weighting-and-aggregation/": "HTTP/1.1 200 X\r\nContent-Length: 1\r\nConnection: close\r\n\r\nm",
+ "/use/": "HTTP/1.1 200 X\r\nContent-Length: 3\r\nConnection: close\r\n\r\nuse"
+}

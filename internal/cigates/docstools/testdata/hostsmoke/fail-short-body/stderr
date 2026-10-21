@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/var/lib/oci-cache/lane-scratch/lane-10434/rec/check_docs_cloudflare_host.py", line 148, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ~~~~^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/lane-10434/rec/check_docs_cloudflare_host.py", line 90, in main
+    result = _request(urljoin(origin, path.lstrip("/")))
+  File "/var/lib/oci-cache/lane-scratch/lane-10434/rec/check_docs_cloudflare_host.py", line 36, in _request
+    body=response.read(),
+         ~~~~~~~~~~~~~^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 510, in read
+    s = self._safe_read(self.length)
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 671, in _safe_read
+    raise IncompleteRead(data, amt - len(data))
+http.client.IncompleteRead: IncompleteRead(5 bytes read, 45 more expected)

@@ -22,7 +22,7 @@
 #     tags (docker-images.yml's fan-in-latest); the registry is the GitLab one.
 #   - Image archives for the scan stage are amd64 only (as go-container-security).
 #   - go:arm64-numeric-parity needs an arm64 runner: set GITLAB_ARM64_RUNNER_TAG.
-#   - Go-relevance skip (ci/go_relevance.sh) is not used: go:quality always runs.
+#   - The go-quality plan verdict (cmd/cigate plan-verdict) is not used: go:quality always runs.
 #   - Python lint (ruff) and typecheck (mypy), the Python unit matrix, the
 #     coverage gate and the Python integration tier are gone from GitHub
 #     (#3748, #3761); they are gone here too.

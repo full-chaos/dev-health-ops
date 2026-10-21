@@ -8,6 +8,70 @@ import (
 	"testing"
 )
 
+// pythonRefusals is the checked-in refusal inventory: each row names a trigger exercised by the table below and the
+// line of scripts/prepare_docs_cloudflare.py at the merge base (9127c3728d51) that refuses it (STRICTER = Go refuses what
+// Python accepted, allowed by the port rule). Removing a row, or a refusal from the table, fails the test.
+var pythonRefusals = map[string]string{
+	"missing source":                           "165 add_argument(--source, required=True): argparse exit 2",
+	"missing output":                           "166 add_argument(--output, required=True): argparse exit 2",
+	"missing mode":                             "167 add_argument(--mode, required=True): argparse exit 2",
+	"missing redirects":                        "168 add_argument(--redirects, required=True): argparse exit 2",
+	"mode staging":                             "167 choices=(preview, production): argparse exit 2",
+	"trailing positional":                      "174 parse_args: unrecognized arguments (junk after valid options)",
+	"trailing positional then flag":            "174 parse_args: unrecognized arguments (junk, then a later --mode)",
+	"unknown option":                           "174 parse_args: unrecognized arguments (--nope)",
+	"abbreviated option":                       "174 STRICTER: argparse accepted --mod as --mode",
+	"single dash option":                       "174 parse_args: -mode is no option of the parser",
+	"double dash":                              "174 parse_args: -- ends options, leaving positional junk",
+	"option without value":                     "174 parse_args: expected one argument",
+	"value that looks like an option":          "174 parse_args: expected one argument (-abc taken as an option)",
+	"empty required value":                     "165 STRICTER: Path('') is '.' in Python",
+	"origin http":                              "26 raise ValueError: scheme != https",
+	"origin no scheme":                         "26 raise ValueError: no scheme",
+	"origin empty netloc":                      "26 raise ValueError: empty netloc",
+	"origin with path":                         "26 raise ValueError: path not empty or /",
+	"origin unclosed bracket":                  "24 urlparse raises ValueError: Invalid IPv6 URL",
+	"origin bad IPv6":                          "24 urlparse raises ValueError: bracketed host is no IPv6 address",
+	"origin IPv4 in brackets":                  "24 urlparse raises ValueError: An IPv4 address cannot be in brackets",
+	"origin text before bracket":               "24 urlparse raises ValueError: Invalid IPv6 URL (text before the bracket)",
+	"origin fullwidth slash":                   "24 urlparse _checknetloc: NFKC netloc gains /",
+	"origin fullwidth colon":                   "24 urlparse _checknetloc: NFKC netloc gains :",
+	"origin fullwidth question":                "24 urlparse _checknetloc: NFKC netloc gains ?",
+	"origin fullwidth hash":                    "24 urlparse _checknetloc: NFKC netloc gains #",
+	"origin fullwidth at":                      "24 urlparse _checknetloc: NFKC netloc gains @",
+	"production origin that is not UTF-8":      "88 write_text(robots.txt): UnicodeEncodeError on a surrogate (production only)",
+	"source missing":                           "121-122 raise ValueError: built documentation directory not found",
+	"source without index":                     "123-124 raise ValueError: no index.html",
+	"source without 404":                       "125-126 raise ValueError: no 404.html",
+	"redirects missing":                        "127-128 raise ValueError: redirect manifest not found",
+	"redirects not UTF-8":                      "33-34 open(encoding=utf-8) + csv read: UnicodeDecodeError (ValueError)",
+	"redirects empty file":                     "36-37 raise ValueError: manifest is missing columns (no fieldnames)",
+	"redirects wrong header":                   "36-37 raise ValueError: manifest is missing columns",
+	"redirects empty first line":               "36-37 DictReader takes the empty first line as the header",
+	"redirects source over the csv limit":      "34 csv.Error: field larger than field limit (131072), source field",
+	"redirects target over the csv limit":      "34 csv.Error: field larger than field limit (131072), target field",
+	"redirects extra field over the csv limit": "34 csv.Error: field larger than field limit (131072), unused extra field",
+	"redirects header over the csv limit":      "34 csv.Error: field larger than field limit (131072), header field",
+	"redirects empty target":                   "41-42 raise ValueError: empty redirect",
+	"redirects short row":                      "41-42 raise ValueError: empty redirect (row with one field)",
+	"redirects relative":                       "43-47 raise ValueError: redirect paths must be site-relative",
+	"redirects self":                           "48-49 raise ValueError: self redirect",
+	"redirects duplicate":                      "50-53 raise ValueError: duplicate redirect source",
+	"redirects CRLF in quotes":                 "65 STRICTER: Python keeps CRLF in _redirects; Go csv would fold it to LF",
+	"redirects LF in quotes":                   "65 STRICTER: a line break inside a _redirects field corrupts the file",
+	"redirects CR in quotes":                   "65 STRICTER: same, bare CR",
+	"redirects tab in quotes":                  "65 STRICTER: a tab inside a _redirects field corrupts the file",
+	"redirects NUL":                            "65 STRICTER: control character in a redirect field",
+	"output is a file":                         "132 shutil.rmtree(file): NotADirectoryError (OSError)",
+	"output is a symlink to a directory":       "132 shutil.rmtree(symlink): Cannot call rmtree on a symbolic link",
+	"output is a dangling symlink":             "133 shutil.copytree: makedirs File exists (OSError)",
+	"markdown file in the output":              "139-142 raise ValueError: output contains Markdown source (file)",
+	"directory named .md in the output":        "139-142 raise ValueError: rglob('*.md') also matches directories",
+	"dangling symlink in the source":           "133 shutil.copytree: copy2 of a dangling symlink (shutil.Error)",
+}
+
+const pythonRefusalRows = 56
+
 // Every input the former Python helper refused (its argparse errors, its ValueError and OSError paths, and the stdlib
 // calls that raise inside it) must be refused by `cigate docs-prepare`: exit 2 for a usage error as argparse did, exit 1
 // with "ERROR:" for everything else. lanes/lane-10431/refusals.md maps each row to the Python raise and the Go line.
@@ -136,6 +200,14 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		row{"directory named .md in the output", mk(mdDir, out("md2")), 1, "Markdown source"},
 		row{"dangling symlink in the source", mk(dangling, out("dl")), 1, ""},
 	)
+	if len(rows) != pythonRefusalRows || len(pythonRefusals) != pythonRefusalRows {
+		t.Fatalf("refusal table has %d rows and %d Python references, want %d each: a refusal was removed or added without its reference", len(rows), len(pythonRefusals), pythonRefusalRows)
+	}
+	for _, r := range rows {
+		if pythonRefusals[r.name] == "" {
+			t.Fatalf("row %q has no Python reference", r.name)
+		}
+	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			code, stdout, stderr := runCaptured(t, append([]string{"docs-prepare"}, r.args...)...)

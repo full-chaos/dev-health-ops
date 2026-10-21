@@ -55,7 +55,6 @@ var draftGatedJobs = [][2]string{
 	{"go.yml", "graphql-wire-parity"},
 	{"live-e2e.yml", "live-e2e"},
 	{"live-e2e.yml", "metrics-executed-proof"},
-	{"security-scan.yml", "pip-audit"},
 	{"security-scan.yml", "semgrep"},
 	{"venue-oracles-changed.yml", "venue-oracles-changed"},
 }

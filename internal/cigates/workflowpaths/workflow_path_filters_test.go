@@ -266,7 +266,7 @@ func TestWorkflowPathFiltersSecurityScanGatesByJobNotWorkflow(t *testing.T) {
 		requireNoPathFilter(t, wf, event)
 	}
 	jobs := wf["jobs"].(map[string]any)
-	for name, want := range map[string]string{"pip-audit": "needs.changes.outputs.deps == 'true'", "semgrep": "needs.changes.outputs.code == 'true'"} {
+	for name, want := range map[string]string{"semgrep": "needs.changes.outputs.code == 'true'"} {
 		cond, _ := jobs[name].(map[string]any)["if"].(string)
 		if !strings.Contains(cond, want) {
 			t.Errorf("job %s no longer gates on %q: %q", name, want, cond)

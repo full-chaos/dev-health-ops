@@ -16,8 +16,6 @@ on:
       - '**/go.sum'
       - 'go.work'
       - 'go.work.sum'
-      - 'pyproject.toml'
-      - 'uv.lock'
       - 'contracts/jobs/v1/**'
       - 'deploy/go-workers/**'
       # internal/cigates/chartgates reads these: alert rules, the Grafana dashboard, the deploy tree
@@ -237,8 +235,6 @@ on:
       - '**/go.sum'
       - 'go.work'
       - 'go.work.sum'
-      - 'pyproject.toml'
-      - 'uv.lock'
       - 'contracts/jobs/v1/**'
       - 'deploy/go-workers/**'
       # internal/cigates/chartgates reads these: alert rules, the Grafana dashboard, the deploy tree

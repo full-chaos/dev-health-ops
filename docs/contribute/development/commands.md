@@ -5,7 +5,6 @@ content_type: task-guide
 owner: engineering
 source_of_truth:
   - Makefile
-  - pyproject.toml
   - go.mod
   - compose.yml
   - current CI workflows
@@ -18,18 +17,12 @@ lifecycle: active
 Run commands from the `dev-health-ops` repository root. Start with the narrowest check that can answer your question, then run the aggregate families required for the changed contracts before opening a pull request.
 {: .fc-page-lede }
 
-## Install the Python project
+## Build the CLI
 
-```bash
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
-```
-
-Verify the CLI and import path:
+The `dho` CLI is a Go binary. A Go toolchain is required.
 
 ```bash
 go build -o dho ./cmd/dho && ./dho help
-python -c "import dev_health_ops; print(dev_health_ops.__file__)"
 ```
 
 ## Format, lint, and type-check Python

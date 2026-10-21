@@ -218,5 +218,4 @@ test\:ci:
 	@./ci/run_tests.sh ci
 
 install:
-	pip install -r requirements.txt
 	lefthook install

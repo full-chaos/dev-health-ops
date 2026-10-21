@@ -46,7 +46,7 @@
 #   go.yml : go-arm64-numeric-parity          -> go:arm64-numeric-parity (opt-in runner tag)
 #   go.yml : graphql-wire-parity              -> go:graphql-wire-parity
 #   live-e2e.yml : live-e2e, metrics-executed-proof -> e2e:live, e2e:metrics-executed-proof
-#   security-scan.yml / scheduled-scan.yml    -> security:pip-audit, security:semgrep, security:gitleaks
+#   security-scan.yml                         -> security:semgrep, security:gitleaks
 #   governance.yml : governance               -> governance
 #   docs-guards.yml / docs-inventory-review.yml / docs-health-report.yml -> docs:*
 #   docker-images.yml : go-build, go-api-tools-build + merge -> build:go-images, build:go-images-manifest
@@ -107,11 +107,7 @@ variables:
   - scripts/**/*
   - migrations/**/*
   - alerts/**/*
-  - requirements.txt
   - requirements-docs.txt
-  - pyproject.toml
-  - uv.lock
-  - pytest.ini
   - alembic.ini
   - lefthook.yml
   - compose.yml
@@ -304,7 +300,6 @@ pipeline:validate:
           "go:graphql-wire-parity",
           "e2e:live",
           "e2e:metrics-executed-proof",
-          "security:pip-audit",
           "security:semgrep",
           "security:gitleaks",
           "security:go-image-build",
@@ -722,43 +717,8 @@ e2e:metrics-executed-proof:
       - metrics-executed-proof-family-summary.json
 
 # ---------------------------------------------------------------------------
-# security (security-scan.yml, scheduled-scan.yml)
+# security (security-scan.yml)
 # ---------------------------------------------------------------------------
-
-# scheduled-scan.yml (weekly pip-audit) is the same job on a schedule pipeline.
-security:pip-audit:
-  stage: security
-  image: python:3.14
-  needs: []
-  rules: *security_rules
-  before_script:
-    - python -V
-    - python -m pip install --upgrade pip
-    - pip install "pip-audit==2.10.0"
-  script:
-    - |
-      IGNORE_ARGS=""
-      if [ -f .pip-audit-ignore ]; then
-        while IFS= read -r line; do
-          CVE=$(printf '%s\n' "$line" | awk '{$1=$1; print $1}')
-          case "$CVE" in
-            ''|'#'*) continue ;;
-          esac
-          IGNORE_ARGS="$IGNORE_ARGS --ignore-vuln $CVE"
-        done < .pip-audit-ignore
-      fi
-      # shellcheck disable=SC2086
-      pip-audit \
-        --requirement requirements.txt \
-        --vulnerability-service pypi \
-        --format markdown \
-        --output pip-audit-report.md \
-        $IGNORE_ARGS
-  artifacts:
-    when: always
-    expire_in: 30 days
-    paths:
-      - pip-audit-report.md
 
 # continue-on-error in security-scan.yml, so allow_failure here.
 security:semgrep:

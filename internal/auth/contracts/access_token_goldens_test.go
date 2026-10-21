@@ -156,7 +156,7 @@ var accessTokenClientRefusals = map[string]string{
 	"client-rejected-exp-before-iat.json":            "exp is not after nbf",
 	"client-rejected-duplicate-claim-aud.json":       "duplicate object member \"aud\"",
 	"client-rejected-duplicate-header-alg.json":      "duplicate object member \"alg\"",
-	"client-rejected-exp-decimal-form.json":          "cannot unmarshal number 1760000600.0",
+	"client-rejected-exp-decimal-form.json":          "decoding validated document failed (text withheld",
 }
 
 func TestClientEnforcedAccessTokenFixturesValidateButTheClientRefusesThemForTheirRule(t *testing.T) {
@@ -313,8 +313,11 @@ func TestAnAccessTokenRefusalCarriesNoMemberValue(t *testing.T) {
 			if err == nil {
 				t.Fatal("a refused fixture was accepted")
 			}
+			// The surface name opens every message; a value such as "access" is
+			// part of it, not a repeat.
+			message := strings.TrimPrefix(err.Error(), AccessTokenSurface+": ")
 			for _, value := range memberValues(t, raw) {
-				if strings.Contains(err.Error(), value) {
+				if strings.Contains(message, value) {
 					t.Fatalf("the refusal repeats the member value %q: %v", value, err)
 				}
 			}

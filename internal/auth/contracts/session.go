@@ -122,7 +122,7 @@ type AuthOutcome struct {
 }
 
 // credentialCarryingSurfaces are the surfaces whose documents carry credentials.
-var credentialCarryingSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true}
+var credentialCarryingSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true, AccessTokenSurface: true}
 
 // decodeWire runs the shared order: duplicate members, schema, then decode.
 // Validation sees the decoded JSON value, not dest, so a field dest does not
@@ -144,6 +144,10 @@ func decodeWire(root, surface string, raw []byte, dest any) error {
 		return err
 	}
 	if err := json.Unmarshal(raw, dest); err != nil {
+		if credentialCarryingSurfaces[surface] {
+			// The decoder's message repeats a number it could not hold.
+			return fmt.Errorf("%s: decoding validated document failed (text withheld: this surface carries credentials)", surface)
+		}
 		return fmt.Errorf("%s: decoding validated document: %w", surface, err)
 	}
 	return nil

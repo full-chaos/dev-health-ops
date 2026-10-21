@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -88,7 +89,21 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 		timeout = defaultTimeout
 	}
 	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
+	// The bearer is a service credential: no proxy from the environment, a
+	// connection pool of its own, and no redirect following, as the auth
+	// proxy dials auth-service.
+	transport := &http.Transport{
+		Proxy:                 nil,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		ForceAttemptHTTP2:     true,
+	}
 	return &Client{endpoint: endpoint.String(), token: token, http: &http.Client{
+		Transport:     transport,
 		Timeout:       timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}, nil

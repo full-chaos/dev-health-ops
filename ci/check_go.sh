@@ -706,10 +706,9 @@ check_ratchets() {
   )
 }
 
-# check_race_weights_text FILE...: the files hold no NUL byte and are valid UTF-8 (each byte counted with LC_ALL=C).
+# check_race_weights_text FILE...: the files hold only ASCII bytes and no NUL (bytes counted with LC_ALL=C).
 check_race_weights_text() {
-  [ "$(( $(tail -n +1 -- "$@" | LC_ALL=C tr -dc '\000' | wc -c) ))" -eq 0 ] \
-    && tail -n +1 -- "$@" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
+  [ "$(( $(cat -- "$@" | LC_ALL=C tr -dc '\000\200-\377' | wc -c) ))" -eq 0 ]
 }
 
 # check_race_weights_rows (CHAOS-4233, CHAOS-10300): the census of ci/go_race_weights.d, run by `fast`, `ci` and the static leg so a
@@ -723,14 +722,13 @@ check_race_weights_rows() {
   local modpath listed missing stale dup key rows files f
   shopt -s dotglob
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race weights directory missing: ${GO_RACE_WEIGHTS_DIR}"
-  # Rule 0: every file is UTF-8 text without a NUL byte, so grep and every awk, in every locale, read the same rows. One pass over all
-  # files (tail separates them with ASCII header lines, so no sequence spans two files); a file is named only when that pass fails.
-  command -v tr >/dev/null 2>&1 && command -v iconv >/dev/null 2>&1 \
-    || die "race-weights-rows needs tr and iconv on PATH (the UTF-8 text check of ci/go_race_weights.d)"
+  # Rule 0: every file is ASCII without a NUL byte, so grep and every awk, in every locale, read the same rows (white space, digits
+  # and ranges beyond ASCII differ between awks and locales). One pass over all files; a file is named only when that pass fails.
+  command -v tr >/dev/null 2>&1 || die "race-weights-rows needs tr on PATH (the ASCII check of ci/go_race_weights.d)"
   if ! check_race_weights_text "${GO_RACE_WEIGHTS_DIR}"/*.tsv; then
     for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
       check_race_weights_text "${f}" \
-        || die "${f##*/} is not text: it holds a NUL byte or a byte sequence that is not UTF-8 (race weight files hold one package<TAB>seconds row)"
+        || die "${f##*/} is not ASCII text: it holds a NUL byte or a byte above 0x7f (race weight files hold one package<TAB>seconds row, in ASCII)"
     done
   fi
   rows="$(race_weights_rows)" || die "race weights unreadable: ${GO_RACE_WEIGHTS_DIR}"

@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -76,6 +77,12 @@ func clickHouseOptions(config Config) (*clickhouse.Options, error) {
 	options.Debug = false
 	options.Debugf = nil
 	options.Logger = nil
+	// The driver builds its own http.Transport for http(s) DSNs with the environment proxy; credentials must not ride it.
+	options.HTTPProxyURL = nil
+	options.TransportFunc = func(t *http.Transport) (http.RoundTripper, error) {
+		t.Proxy = nil
+		return t, nil
+	}
 	return options, nil
 }
 

@@ -237,6 +237,7 @@ func TestACheckTreeFindsAStaleRowAndAMissingFile(t *testing.T) {
 
 // The windowed scan is the expression over the whole text (CHAOS-7890: the expression over a long leaf took 74 s over the tree).
 func TestTheWindowedScanEqualsTheExpressionOverTheWholeText(t *testing.T) {
+	t.Parallel()
 	r := rand.New(rand.NewSource(7890))
 	pieces := []string{"api_key", "API:", "Api-token=", "password: ", "secret", `"`, " ", "\n", "=", ":", generatedValue(1)[:19], strings.Repeat("a1", 40), strings.Repeat("Zx9", 60), "plain words here", "key", "KEY", "ſecret", "token\\n", "access ", "creds=", "|", "auth_", "x-y.z", strings.Repeat("\u023a", 70), "\u212a"}
 	for iter := 0; iter < 3000; iter++ {

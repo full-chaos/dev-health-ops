@@ -386,7 +386,7 @@ func providerTests(t *testing.T) (map[string]bool, map[string]bool) {
 	t.Helper()
 	providerTestsOnce.Do(func() {
 		root := rootOf(t)
-		res := freeSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN=go1.27.2", "GOWORK=off")}.run("go", "list", "-mod=readonly", "-tags=integration",
+		res := freeSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN="+pinnedGoToolchain(t), "GOWORK=off")}.run("go", "list", "-mod=readonly", "-tags=integration",
 			"-f={{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}", "./"+providerPackage)
 		if res.code != 0 {
 			return

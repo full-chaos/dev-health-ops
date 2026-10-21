@@ -314,7 +314,7 @@ func TestRegistryGuardPlantedDefects(t *testing.T) {
 
 const venueFakeGo = `#!/usr/bin/env bash
 case "$1" in
-  version) echo "go version go1.27.2 linux/amd64"; exit 0 ;;
+  version) echo "go version __GO_TOOLCHAIN__ linux/amd64"; exit 0 ;;
   env) echo "${FAKE_GOROOT}"; exit 0 ;;
 esac
 pattern="" ; pkg=""
@@ -340,7 +340,7 @@ func (v *vtree) verb(skipProof string) (cmdResult, []string) {
 	bin := filepath.Join(v.dir, "bin")
 	goroot := filepath.Join(v.dir, "fakeroot")
 	log := filepath.Join(v.dir, "fake_go.log")
-	v.write("bin/go", venueFakeGo)
+	v.write("bin/go", strings.ReplaceAll(venueFakeGo, "__GO_TOOLCHAIN__", pinnedGoToolchain(v.t)))
 	v.write("fakeroot/bin/gofmt", "#!/bin/sh\n")
 	v.write("fake_go.log", "")
 	for _, p := range []string{filepath.Join(bin, "go"), filepath.Join(goroot, "bin", "gofmt")} {

@@ -37,7 +37,7 @@ func dryRun(t *testing.T, root, target string, shard int) cmdResult {
 
 func goTestList(t *testing.T, root, pkg string) map[string]bool {
 	t.Helper()
-	res := freeSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN=go1.27.2", "GOWORK=off")}.run("go", "test", "-mod=readonly", "-tags=integration", "-list", ".*", "./"+pkg)
+	res := freeSpec{dir: root, env: inheritedEnv(nil, "GOTOOLCHAIN="+pinnedGoToolchain(t), "GOWORK=off")}.run("go", "test", "-mod=readonly", "-tags=integration", "-list", ".*", "./"+pkg)
 	if res.code != 0 {
 		t.Fatalf("go test -list %s: %s%s", pkg, res.stdout, res.stderr)
 	}

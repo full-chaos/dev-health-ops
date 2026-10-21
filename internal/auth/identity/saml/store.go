@@ -93,6 +93,8 @@ var (
 	// ErrSignupNotAvailable: new accounts are not created by auth-service until
 	// it owns the users aggregate. The identity store returns it (wrapped or not).
 	ErrSignupNotAvailable = identity.ErrSignupNotAvailable
+	// ErrIdentityTaken: the identity key is linked to another account.
+	ErrIdentityTaken = identity.ErrIdentityTaken
 	// ErrEmailTaken: the email belongs to an existing account.
 	ErrEmailTaken = identity.ErrEmailTaken
 	// ErrInvalidEmailAddress: the asserted email is not an address.

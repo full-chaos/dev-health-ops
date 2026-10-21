@@ -47,6 +47,18 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 	return out, nil
 }
 
+// InsertIn writes a session and its first refresh credential inside tx, the
+// caller's audit.Commit transaction, with the rows CreateAudited writes. It is
+// the hook that lets a sign-in join an organization and start its session in
+// one commit; the caller's audit row covers the commit. A missing or disabled
+// principal is ErrPrincipalUnavailable.
+func (s *Store) InsertIn(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID, amr []string) (Issued, error) {
+	if !validAMR(amr) {
+		return Issued{}, ErrInvalidAMR
+	}
+	return s.insertSession(ctx, tx, principalID, organizationID, amr)
+}
+
 // insertSession writes a session and its first refresh credential, the rows
 // Create writes, inside the caller's transaction. The session's client_ip is
 // the request's client address and its user_agent the request's user agent,

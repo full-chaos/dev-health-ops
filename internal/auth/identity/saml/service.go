@@ -348,7 +348,7 @@ func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, ema
 	switch {
 	case err == nil:
 		return principalID, nil
-	case errors.Is(err, ErrEmailTaken):
+	case errors.Is(err, ErrEmailTaken), errors.Is(err, ErrIdentityTaken):
 		return uuid.Nil, s.refuse(ctx, p, &EmailConflictError{})
 	}
 	return uuid.Nil, s.refuse(ctx, p, err)

@@ -256,7 +256,14 @@ type ProvisionRequest struct {
 // (ErrSignupNotAvailable before). A key already linked is ErrIdentityTaken; an
 // email another principal holds is ErrEmailTaken, and nothing is linked to that
 // principal.
-func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_ uuid.UUID, err error) {
+func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (uuid.UUID, error) {
+	return s.provisionFederated(ctx, req, nil)
+}
+
+// provisionFederated is ProvisionFederated with extra, when set, run inside
+// the same audit.Commit after the identity is attached (a failure in extra
+// rolls the whole commit back).
+func (s *Store) provisionFederated(ctx context.Context, req ProvisionRequest, extra func(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "provision", err) }()
 	if !s.ownsUsers {
 		return uuid.Nil, ErrSignupNotAvailable
@@ -282,7 +289,13 @@ func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_
 VALUES ($1, $2, $3, clock_timestamp())`, principal, req.Email, emailLower); err != nil {
 				return err
 			}
-			return s.attachIdentity(ctx, tx, linkID, req.Key, principal, true, ErrIdentityTaken, ErrIdentityTaken)
+			if err := s.attachIdentity(ctx, tx, linkID, req.Key, principal, true, ErrIdentityTaken, ErrIdentityTaken); err != nil {
+				return err
+			}
+			if extra != nil {
+				return extra(ctx, tx, principal)
+			}
+			return nil
 		},
 		Audit: auditEvent,
 		Events: []audit.OutboxEvent{

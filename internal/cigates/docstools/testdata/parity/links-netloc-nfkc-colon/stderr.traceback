@@ -1,0 +1,1 @@
+ValueError: netloc 'ex：ample' contains invalid characters under NFKC normalization

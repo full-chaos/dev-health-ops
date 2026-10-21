@@ -1,0 +1,16 @@
+query	expected	rank	max_rank	top_result	status
+install	/guide/install/	1	5	/guide/install/	pass
+install	/guide/install/	1	5	/guide/install/	pass
+install	/guide/install/	1	5	/guide/install/	pass
+install	/guide/install/	1	5	/guide/install/	pass
+install	/guide/install/	1	5	/guide/install/	pass
+install	/guide/install/	1	5	/guide/install/	pass
+install	/guide/install/	1	5	/guide/install/	pass
+install	/guide/install/	1	5	/guide/install/	pass
+install	/guide/install/	1	1	/guide/install/	pass
+install	/guide/install/	1	2	/guide/install/	pass
+install	/guide/install/	1	-3	/guide/install/	fail
+install	/guide/install/	1	1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160	/guide/install/	pass
+install	/guide/install/	1	123456789012345678901234567890	/guide/install/	pass
+install	/guide/install/	1	0	/guide/install/	fail
+install	/guide/install/	1	5	/guide/install/	pass

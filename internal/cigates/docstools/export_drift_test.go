@@ -6,3 +6,10 @@ func SetThemeOfForTest(f func(string) string) (restore func()) {
 	invTxThemeOf = f
 	return func() { invTxThemeOf = old }
 }
+
+const (
+	CodePrereqUnicodeGoVersion = codePrereqUnicodeGoVersion
+	CodePrereqUnicodeGoOnly    = codePrereqUnicodeGoOnly
+)
+
+var CodePrereqGoOnlyWord = codePrereqGoOnlyWord

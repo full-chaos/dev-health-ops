@@ -1,0 +1,1 @@
+{"queries": [{"query": "install", "expected": "#top", "max_rank": 2.5, "note": [1, 2.5e-07, null, true, {"k": "v"}]}]}

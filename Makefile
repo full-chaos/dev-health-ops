@@ -55,7 +55,7 @@ docs\:build:
 
 docs\:check-built-site:
 	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
-	$(PYTHON) scripts/check_built_site_links.py --site-dir .build/docs
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-built-site-links --site-dir .build/docs
 
 docs\:check-external-links:
 	$(PYTHON) -m mkdocs build --strict --config-file mkdocs.yml
@@ -65,7 +65,7 @@ docs\:check-freshness:
 	$(PYTHON) scripts/check_freshness_inventory.py
 
 docs\:check-code-prerequisites:
-	$(PYTHON) scripts/check_code_prerequisites.py
+	go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites
 
 # Canonical documentation lifecycle:
 #   make docs:serve
@@ -206,5 +206,4 @@ test\:live-e2e:
 	@./ci/run_tests.sh live-e2e
 
 install:
-	pip install -r requirements.txt
 	lefthook install

@@ -10,8 +10,6 @@ on:
       - 'wrangler.jsonc'
       - 'scripts/build_docs_cloudflare.py'
       - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_built_site_links.py'
-      - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
       - 'scripts/read_wrangler_output.py'
       - 'scripts/check_docs_cloudflare_host.py'

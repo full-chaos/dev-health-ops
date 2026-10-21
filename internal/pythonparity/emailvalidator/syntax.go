@@ -1,5 +1,5 @@
 // Package emailvalidator is email-validator's syntax check (the version
-// pinned in uv.lock, email_validator/syntax.py and validate_email.py) as
+// pinned in the last uv.lock, email_validator/syntax.py and validate_email.py) as
 // pydantic's EmailStr calls it: check_deliverability=False and every other
 // option at the module default. Strings are code points ([]rune), since a
 // Python str may hold a lone surrogate.

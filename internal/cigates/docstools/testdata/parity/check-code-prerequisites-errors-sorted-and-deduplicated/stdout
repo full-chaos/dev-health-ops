@@ -1,0 +1,3 @@
+ERROR: a.md: listed in scope but the page does not exist
+ERROR: guide.md
+ERROR: z.md: listed in scope but the page does not exist

@@ -22,7 +22,7 @@ Use this guide for a source checkout. Production configuration, secrets, sizing,
 
 ## Prerequisites
 
-- Python 3.14. The project declares `requires-python = ">=3.14"` and containers ship 3.14 (`docker/Dockerfile`); older interpreters are not tested (CHAOS-3419).
+- Python 3.14. The project declares `requires-python = ">=3.14"`; older interpreters are not tested (CHAOS-3419).
 - Docker with Compose.
 - Git.
 - A supported Node.js release only when the change touches JavaScript tooling, Wrangler, or a related frontend repository.

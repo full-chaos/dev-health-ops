@@ -6,8 +6,8 @@
 //
 // radon's rules are defined over Python's AST, so the honest port is an AST
 // walk. The production images build with CGO_ENABLED=0
-// (docker/go-worker.Dockerfile, which also builds dho and so query-api,
-// and docker/Dockerfile), which rules out tree-sitter and every other cgo
+// (docker/go-worker.Dockerfile, which also builds dho and so query-api),
+// which rules out tree-sitter and every other cgo
 // Python grammar. A pure-Go Python parser is therefore the only route that
 // can run inside the worker binary, and this file is its lexical half.
 //

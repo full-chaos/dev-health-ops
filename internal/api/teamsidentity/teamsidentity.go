@@ -69,7 +69,7 @@ func Routes(conn driver.Conn, guard *policy.Guard, logger *slog.Logger, pool *pg
 		// parameter -- getTeam below now intercepts exactly that one case
 		// (the only one this PR can prove without CHAOS-6311's business
 		// logic) before it ever reaches a team lookup.
-		{Method: http.MethodDelete, Pattern: "/api/v1/admin/teams/{team_id}",
+		{Method: http.MethodDelete, Pattern: "/api/v1/admin/teams/{team_id}", Allow: "DELETE",
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.deleteTeam))},
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/teams/{team_id}",
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.getTeam))},

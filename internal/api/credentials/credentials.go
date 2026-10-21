@@ -60,13 +60,13 @@ type Deps struct {
 func Routes(deps Deps) []httpapi.Route {
 	h := newHandlers(deps)
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: "/api/v1/admin/credentials",
+		{Method: http.MethodGet, Pattern: "/api/v1/admin/credentials", Allow: http.MethodGet,
 			Handler: deps.Guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.list))},
 		{Method: http.MethodPost, Pattern: "/api/v1/admin/credentials",
 			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.create))},
 		{Method: http.MethodPost, Pattern: "/api/v1/admin/credentials/test",
 			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.testConnection))},
-		{Method: http.MethodGet, Pattern: "/api/v1/admin/credentials/{provider}/{name}",
+		{Method: http.MethodGet, Pattern: "/api/v1/admin/credentials/{provider}/{name}", Allow: http.MethodGet,
 			Handler: deps.Guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.get))},
 		{Method: http.MethodPatch, Pattern: "/api/v1/admin/credentials/{provider}/{name}",
 			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.update))},

@@ -41,7 +41,7 @@ var lookupEnv = envsecrets.ProcessLookup
 
 func (h *handlers) llmSettingsRoutes() []httpapi.Route {
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSettings))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings", Allow: "GET", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSettings))},
 		{Method: http.MethodPut, Pattern: governancePrefix + "/llm-settings", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.putLLMSettings))},
 		{Method: http.MethodDelete, Pattern: governancePrefix + "/llm-settings", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteLLMSettings))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/status", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSettingsStatus))},

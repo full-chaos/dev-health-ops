@@ -692,7 +692,7 @@
       "request_headers_sha256": "2e760cf504298e287969292e7fc090a9583aa47a175df23f972ad8d83bb488a1",
       "status": 405,
       "headers": {
-        "allow": "DELETE, GET, PUT",
+        "allow": "GET",
         "content-length": "31",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",

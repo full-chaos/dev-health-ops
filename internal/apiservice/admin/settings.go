@@ -31,7 +31,7 @@ func (h *handlers) settingsRoutes() []httpapi.Route {
 		// checkOrMethodNotAllowed); it is mounted on the wildcard's GET and
 		// told apart by the segment.
 		{Method: http.MethodGet, Pattern: governancePrefix + "/settings/{category}", Handler: h.categoriesOrListSettings()},
-		{Method: http.MethodGet, Pattern: governancePrefix + "/settings/{category}/{key}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getSetting))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/settings/{category}/{key}", Allow: "GET", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getSetting))},
 		{Method: http.MethodPut, Pattern: governancePrefix + "/settings/{category}/{key}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.putSetting))},
 		{Method: http.MethodPost, Pattern: governancePrefix + "/settings", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.postSetting))},
 		{Method: http.MethodDelete, Pattern: governancePrefix + "/settings/{category}/{key}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteSetting))},

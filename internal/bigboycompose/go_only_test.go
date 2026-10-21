@@ -20,7 +20,6 @@ import (
 const (
 	pythonAPIImage      = "dev-hops-api"
 	pythonAPIContainer  = "dev-health-api-1"
-	retiredAPIProfile   = "retired-python-api"
 	dhoImageRepository  = "ghcr.io/full-chaos/dev-health-go-dho"
 	pinsName            = "images.env"
 	cutScriptName       = "bigboy-cut.sh"
@@ -92,12 +91,10 @@ func goOnlyFindings(files map[string]string) ([]string, error) {
 			found("%s: %s waits for the Python api", composeName, name)
 		}
 	}
-	api, ok := services["api"]
-	switch {
-	case !ok:
-		found("%s: the `api` service is gone: nothing says it is retired", composeName)
-	case len(api.Profiles) != 1 || api.Profiles[0] != retiredAPIProfile:
-		found("%s: `api` must be in the profile %s alone, so `up` never starts it", composeName, retiredAPIProfile)
+	for _, python := range []string{"api", "billing-edge"} {
+		if _, back := services[python]; back {
+			found("%s: the Python `%s` service is back", composeName, python)
+		}
 	}
 	if migrate := services["migrate"]; !strings.HasPrefix(migrate.Image, "${BIGBOY_DHO_IMAGE:") {
 		found("%s: migrate runs %q, want the dho image pin ${BIGBOY_DHO_IMAGE}", composeName, migrate.Image)
@@ -191,9 +188,11 @@ func TestBigboyGoOnlyCheckSeesEachDefect(t *testing.T) {
 		old, new         string
 	}{
 		{name: "the Python api image back on api", file: composeName, want: "api runs the Python api image",
-			compose: func(s map[string]map[string]any) { s["api"]["image"] = frozen }},
-		{name: "api no longer retired", file: composeName, want: "`api` must be in the profile retired-python-api alone",
-			compose: func(s map[string]map[string]any) { delete(s["api"], "profiles") }},
+			compose: func(s map[string]map[string]any) { s["api"] = map[string]any{"image": frozen} }},
+		{name: "the api service is back", file: composeName, want: "the Python `api` service is back",
+			compose: func(s map[string]map[string]any) { s["api"] = map[string]any{"image": "example.test/other:1"} }},
+		{name: "the billing-edge service is back", file: composeName, want: "the Python `billing-edge` service is back",
+			compose: func(s map[string]map[string]any) { s["billing-edge"] = map[string]any{"image": "example.test/other:1"} }},
 		{name: "migrate from the Python api image", file: composeName, want: "migrate runs",
 			compose: func(s map[string]map[string]any) { s["migrate"]["image"] = frozen }},
 		{name: "venue-prove in the network namespace of the api", file: composeName, want: "venue-prove shares the network namespace of the Python api",

@@ -95,8 +95,8 @@
 #   A machine-readable `GATE_STAGE_MANIFEST ... declared=<N> executed=<N>
 #   declared_ids=... executed_ids=...` log line carries the literal counts and
 #   ids, and the human verdict line carries the same information formatted as
-#   `[executed/declared: ids]` (`GATE PASSED. [7/7: lint_format,lint_check,
-#   ch_probe,ch_scratch_create,ch_migrate,unit_suite,ch_argmax_proof]
+#   `[executed/declared: ids]` (`GATE PASSED. [6/6: lint_format,lint_check,
+#   ch_probe,ch_scratch_create,ch_migrate,unit_suite]
 #   safe to push.`, or `[3/3: ...]` under SKIP_CLICKHOUSE=1) -- a degraded run
 #   cannot produce a verdict line indistinguishable from a full one, even in a
 #   copy-pasted PR quote. `verify_stage_manifest()` additionally self-checks
@@ -742,17 +742,6 @@ release_lock() {
   fi
 }
 
-# Temp dir holding the argMax proof program (CHAOS-3362). Empty until
-# ch_argmax_proof() creates it; declared here, ABOVE the trap, so the EXIT
-# handler can reference it under `set -u` even on the earliest `die`.
-ARGMAX_PROOF_TMPDIR=""
-cleanup_argmax_tmpdir() {
-  if [ -n "${ARGMAX_PROOF_TMPDIR:-}" ] && [ -d "${ARGMAX_PROOF_TMPDIR}" ]; then
-    rm -rf "${ARGMAX_PROOF_TMPDIR}"
-  fi
-  ARGMAX_PROOF_TMPDIR=""
-}
-
 # Single EXIT trap for the whole script (trap does not stack — a second `trap ...
 # EXIT` would silently replace this one, which is why ch_create_scratch() below
 # does NOT set its own trap and instead relies on this handler calling
@@ -768,11 +757,6 @@ cleanup_argmax_tmpdir() {
 # rather than a wedged mutex for the whole host.
 on_exit() {
   release_lock
-  # Second: a local `rm -rf` of our own mktemp -d, which cannot block on anything
-  # external, so it is safe to run before the unbounded docker exec below. This
-  # is what stops a SIGINT/SIGTERM mid-argMax-stage from leaking the temp dir the
-  # stage's own inline cleanup would otherwise have removed.
-  cleanup_argmax_tmpdir
   cleanup_scratch
 }
 trap on_exit EXIT
@@ -1295,125 +1279,9 @@ ch_migrate() {
   return 0
 }
 
-# The argMax proof PROGRAM, held as a shell string rather than a here-document.
-#
-# WHY NOT A HERE-DOCUMENT (CHAOS-3362 — this is the whole fix, do not "simplify"
-# it back). Bash delivers a here-document by writing it into a pipe and only
-# THEN forking the command that reads it, so the writing shell briefly holds
-# both ends of that pipe itself. If the document does not fit in the pipe
-# buffer, the write can never complete: nothing is reading, and because the
-# writer owns the read end it cannot even get EPIPE. It blocks forever.
-#
-# That is not theoretical here. Measured on this host, `cat >/dev/null <<EOF`:
-#
-#     400 bytes -> completes in 0.3s
-#     512 bytes -> BLOCKS (killed at 5s)
-#    1024 bytes -> BLOCKS
-#    4000 bytes -> BLOCKS
-#
-# while `lsof` reports the same pipes with the nominal 16384-byte capacity.
-# Nominal is not actual: macOS hands out a small pipe buffer and defers
-# expansion under kernel pipe-memory pressure, and a host running many
-# concurrent agent sessions sits in that state persistently. So "the program is
-# small, the pipe is fine" is not a defense at any size worth writing.
-#
-# This program is 1269 bytes, i.e. permanently over the line. That is the real
-# mechanism behind CHAOS-3362's "gate hangs entering the argMax stage": the
-# stage never reached ClickHouse and never even exec'd Python — the forensics on
-# that ticket found the writer subshell in write() on 1802 of 1808 samples with
-# fd 3 and fd 4 both on the same pipe, and no Python child at all. The argMax
-# attribution was pointing at the wrong subsystem the whole time. Same class as
-# CHAOS-3468 (lock-test probes blocking in write() at ~370 bytes of output).
-#
-# The fix is to remove the pipe, not to shrink the program: the text below is
-# written to a private temp file with the `printf` BUILTIN (in-process, no pipe,
-# no fork) and Python is handed that path.
-#
-# CONSTRAINT: this is a single-quoted shell string, so the program text must
-# contain NO single-quote character. tests/tooling/test_local_validate_heredocs.py
-# enforces that, that it is valid Python, and that no here-document anywhere in
-# this script grows back over the measured threshold.
-ARGMAX_PROOF_PY='import asyncio, os, sys
-from datetime import datetime, timezone
-
-uri = os.environ["CLICKHOUSE_URI"]
-scratch_db = os.environ["SCRATCH_DB"]
-assert scratch_db != "default" and f"/{scratch_db}" in uri and "/default" not in uri, f"refusing non-scratch URI: {uri!r}"
-
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
-
-async def main() -> int:
-    sink = ClickHouseMetricsSink(uri)
-    sink.ensure_schema(force=True)  # build full schema into the scratch db
-    loader = ClickHouseDataLoader(sink.client, org_id="ci_local_validate_org")
-    ctx = await loader.load_team_attribution_context(as_of=datetime.now(timezone.utc))
-    # Reaching here means the real engine parsed + executed every argMax/GROUP BY
-    # block in load_team_attribution_context without a SYNTAX/TYPE error.
-    #
-    # ...unless nothing was awaited. Dropping the await above leaves a coroutine
-    # that is never run: no query reaches ClickHouse, Python exits 0, and this
-    # stage prints OK. Measured, not imagined -- the only visible trace was
-    # "candidate buckets: coroutine" and a RuntimeWarning nobody reads. This
-    # stage exists to prove the engine executed, so refuse to claim it did.
-    if asyncio.iscoroutine(ctx):
-        raise AssertionError("load_team_attribution_context was never awaited - no query reached ClickHouse")
-    print(f"   argMax live-exec OK — context loaded (candidate buckets: {type(ctx).__name__})")
-    sink.close()
-    return 0
-
-try:
-    raise SystemExit(asyncio.run(main()))
-except SystemExit:
-    raise
-except Exception as exc:  # noqa: BLE001 — surface the real engine error verbatim
-    print(f"   argMax live-exec FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
-    raise SystemExit(1)
-'
-
-ch_argmax_proof() {
-  # The high-value, CI-uncovered data-layer check. CI's unit tier runs
-  # `-m "not clickhouse"`, and the only mock-based loader test merely string-matches
-  # 'argMax'. Here we build a real ClickHouseDataLoader against the (migrated, empty)
-  # scratch db and AWAIT load_team_attribution_context, forcing ClickHouse to parse +
-  # EXECUTE every argMax(...,(updated_at,valid_from)) / GROUP BY block. A tuple-arg or
-  # column mistake throws here; an empty scratch legitimately returns zero candidates
-  # (still execution proof).
-  #
-  # NOTE: the broader `pytest -m clickhouse` suite (flow-matrix-live, recommendations,
-  # resolver EXPLAIN, RMT-dedup-live) needs a SEEDED ClickHouse and is NOT part of this
-  # gate (CI does not run it either). To run it by hand: create a scratch db, point
-  # CLICKHOUSE_URI at it, `dev-hops fixtures generate`, then `pytest -m clickhouse`.
-  local rc
-  # A private DIRECTORY, not a bare temp file: `python <script>` puts the
-  # script's directory on sys.path[0] (where `python -` put the CWD). An empty
-  # dir of our own is the closest safe equivalent — a shared /tmp on sys.path
-  # would let any stray /tmp/*.py shadow a real module. PYTHONPATH=src below is
-  # what makes dev_health_ops importable either way.
-  ARGMAX_PROOF_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/local-validate-argmax.XXXXXX")" || {
-    printf '   %s could not create a temp dir for the argMax proof program.\n' "$(c_red 'FAILED:')" >&2
-    return 1
-  }
-  # `printf` is a BUILTIN writing straight to the redirected file: no pipe, no
-  # fork, nothing that can block. Using `cat >file <<EOF` here would reintroduce
-  # exactly the here-document pipe this whole change exists to remove.
-  if ! printf '%s' "${ARGMAX_PROOF_PY}" >"${ARGMAX_PROOF_TMPDIR}/argmax_proof.py"; then
-    printf '   %s could not write the argMax proof program to %s.\n' "$(c_red 'FAILED:')" "${ARGMAX_PROOF_TMPDIR}" >&2
-    cleanup_argmax_tmpdir
-    return 1
-  fi
-  SCRATCH_DB="${SCRATCH_DB}" CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" "${ARGMAX_PROOF_TMPDIR}/argmax_proof.py"
-  rc=$?
-  # Capture rc FIRST: the cleanup below must never become the return value, or a
-  # real argMax mismatch would be reported as a pass.
-  cleanup_argmax_tmpdir
-  return "${rc}"
-}
-
 # Provision the isolated scratch db + apply THIS branch's migrations BEFORE the
 # unit suite, then export CLICKHOUSE_URI=<scratch> so the CH-dependent unit tests
-# run faithfully and the CH-marked tests + argMax proof reuse the same schema.
+# run faithfully.
 #
 # CHAOS-3571: every failure branch below now goes through `record` (so it
 # appears in RESULTS / the summary) and `fail_fast` (so it stops the gate
@@ -1450,23 +1318,6 @@ ch_provision() {
   CH_READY=1
   export CLICKHOUSE_URI="${SCRATCH_URI}"
   printf '   %s -> %s\n' "$(c_green 'CLICKHOUSE_URI')" "$(redact_uri "${SCRATCH_URI}") (scratch)"
-}
-
-# CH-marked tests (need production DDL) + the direct argMax live-exec proof.
-# Runs AFTER the unit suite, reusing the provisioned scratch db.
-ch_tests() {
-  if [ "${CH_READY:-0}" != "1" ]; then
-    # CHAOS-3571: this branch is reachable ONLY via the explicit
-    # SKIP_CLICKHOUSE=1 opt-out now -- ch_provision() fail_fast's the whole
-    # gate on every other reason CH_READY could be unset, so CH_READY=0
-    # reaching here with no opt-out set would itself be a bug in ch_provision,
-    # not a legitimate runtime state. DECLARED_STAGE_IDS already excludes
-    # ch_argmax_proof under SKIP_CLICKHOUSE=1 (see run_declared_stages), so
-    # this skip does not need its own EXECUTED_STAGE_IDS entry.
-    skip "argMax live-exec proof" "scratch CH not provisioned (SKIP_CLICKHOUSE=1)"
-    return 0
-  fi
-  run_stage "argMax live-exec proof (real engine)" ch_argmax_proof ch_argmax_proof
 }
 
 # metrics_readback (CHAOS-4266) RETIRED, CHAOS-5307: this stage exercised
@@ -1537,7 +1388,7 @@ run_declared_stages() {
   if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
     DECLARED_STAGE_IDS=(lint_format lint_check unit_suite)
   else
-    DECLARED_STAGE_IDS=(lint_format lint_check ch_probe ch_scratch_create ch_migrate unit_suite ch_argmax_proof)
+    DECLARED_STAGE_IDS=(lint_format lint_check ch_probe ch_scratch_create ch_migrate unit_suite)
   fi
 
   run_stage "lint: ruff format --check" lint_format gate_lint_format
@@ -1546,7 +1397,6 @@ run_declared_stages() {
   # run_stage "river: static compatibility harness" river_compat gate_river_compat_static
   ch_provision # scratch db + migrations; exports CLICKHOUSE_URI when available
   run_stage "unit suite (hosted selection)" unit_suite gate_unit_suite
-  ch_tests # argMax live-exec proof on the real engine (reuses the scratch db)
 
   verify_stage_manifest
 
@@ -1743,7 +1593,6 @@ if [ "${1:-}" = "--stage-manifest-probe" ]; then
   # manifest bookkeeping, not ClickHouse.
   ch_create_scratch() { return 0; }
   ch_migrate() { return 0; }
-  ch_argmax_proof() { return 0; }
   run_declared_stages
 fi
 

@@ -16,7 +16,7 @@ var composeRequiredVar = regexp.MustCompile(`\$\{(\w+):\?`)
 
 func composeSchemaBigboy(g *guard) {
 	composeMust(g, composeIn{})
-	for _, p := range [][]string{{"acr"}, {"acr-venue"}, {"venue"}, {"retired-python-api"}} {
+	for _, p := range [][]string{{"acr"}, {"acr-venue"}, {"venue"}} {
 		composeMust(g, composeIn{profiles: p})
 	}
 }
@@ -70,7 +70,7 @@ func TestComposeSchemaPlanted(t *testing.T) {
 		{name: "web-restart-is-a-boolean", copy: bb, check: composeSchemaBigboy, want: "restart",
 			mutate: inService("web", "    restart: unless-stopped", "    restart: true")},
 		{name: "inactive-profile-service-restart-is-a-boolean", copy: bb, check: composeSchemaBigboy, want: "restart",
-			mutate: inService("api", "    restart: unless-stopped", "    restart: true")},
+			mutate: inService("acr-api", "    restart: unless-stopped", "    restart: true")},
 		{name: "unknown-service-key", copy: bb, check: composeSchemaBigboy, want: "frobnicate",
 			mutate: inService("web", "    restart: unless-stopped", "    restart: unless-stopped\n    frobnicate: 1")},
 		{name: "healthcheck-retries-is-not-a-number", copy: bb, check: composeSchemaBigboy, want: "retries",

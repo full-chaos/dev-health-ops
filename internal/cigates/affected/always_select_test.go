@@ -14,7 +14,7 @@ import (
 
 // Packages whose tests read or run other packages' files (a DDL scan of every _test.go, `go run` of a command) are
 // selected by every .go-only integration plan: the import closure cannot see those reads.
-var alwaysSelected = []string{"internal/fixturescli", "internal/pgmigrate", "internal/queryapi/server"}
+var alwaysSelected = []string{"internal/fixturescli", "internal/pgmigrate", "internal/queryapi/scancensus", "internal/queryapi/server"}
 
 func TestAlwaysSelectListHoldsExactlyItsPackages(t *testing.T) {
 	var rows []string
@@ -104,6 +104,8 @@ func TestAlwaysSelectedPackagesRunOnGoOnlyChanges(t *testing.T) {
 		// fixturescli tests `go run ../../cmd/dho migrate`, which runs rivermigrate.
 		{"internal/rivermigrate/rivermigrate.go", "internal/fixturescli"},
 		{"cmd/dho/main.go", "internal/fixturescli"},
+		// scancensus's LoadSites reads every queryapi/storage source file.
+		{"internal/queryapi/aianalytics/ai_opportunities.go", "internal/queryapi/scancensus"},
 	} {
 		t.Run(c.changed, func(t *testing.T) {
 			lines := realPlan(t, c.changed)

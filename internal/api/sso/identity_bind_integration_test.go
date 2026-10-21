@@ -602,3 +602,61 @@ func TestOAuthAutoProvisionJoinsAnAccountWithNoMembership(t *testing.T) {
 	status, body := oauthSignIn(t, st, providerID)
 	assertProvisionedMember(t, ctx, st, orgID, "oauth.orphan@allowed.example", "gitlab", "gl-orphan", status, body)
 }
+
+func TestSAMLAutoProvisionUsesTheProviderDefaultRole(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	idp := newSAMLIdP(t)
+	const sp = "https://sp.test/saml/metadata"
+	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
+	if _, err := st.pool.Exec(ctx, `UPDATE sso_providers SET default_role = 'viewer' WHERE id = $1`, providerID); err != nil {
+		t.Fatal(err)
+	}
+
+	const email = "role.person@allowed.example"
+	status, body := samlSignIn(t, st, idp, providerID, sp, email, "role-subject")
+	if status != http.StatusOK || body["role"] != "viewer" {
+		t.Fatalf("status=%d body=%v, want 200 with role viewer", status, body)
+	}
+	if n := countRows(t, ctx, st, `SELECT count(*) FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = $1 AND m.role = 'viewer'`, email); n != 1 {
+		t.Fatalf("viewer memberships = %d, want 1", n)
+	}
+}
+
+func TestSAMLAutoProvisionTwoConcurrentFirstSignInsEndWithOneAccount(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	idp := newSAMLIdP(t)
+	const sp = "https://sp.test/saml/metadata"
+	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
+
+	const email = "race.person@allowed.example"
+	statuses := make(chan int, 2)
+	for range 2 {
+		go func() {
+			status, _ := samlSignIn(t, st, idp, providerID, sp, email, "race-subject")
+			statuses <- status
+		}()
+	}
+	ok := 0
+	for range 2 {
+		switch status := <-statuses; status {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+		default:
+			t.Fatalf("status=%d, want 200 or 409", status)
+		}
+	}
+	if ok == 0 {
+		t.Fatal("no sign-in succeeded")
+	}
+	if n := countRows(t, ctx, st, `SELECT count(*) FROM users WHERE email = $1`, email); n != 1 {
+		t.Fatalf("users rows = %d, want 1", n)
+	}
+	if n := countRows(t, ctx, st, `SELECT count(*) FROM memberships`); n != 1 {
+		t.Fatalf("memberships rows = %d, want 1", n)
+	}
+}

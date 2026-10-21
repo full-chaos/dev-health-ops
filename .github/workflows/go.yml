@@ -207,6 +207,8 @@ on:
       # internal/cigates/docsprepare writes a file named robots.txt; the path guard cannot tell that output name from
       # the tracked docs/robots.txt, so it is covered here (a change to that docs file runs the Go tests too)
       - 'docs/robots.txt'
+      # read by internal/cigates/docsprepare: the real redirect manifest must keep fitting the tool's narrow contract
+      - 'docs-data/redirects.tsv'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'
@@ -459,6 +461,8 @@ on:
       # internal/cigates/docsprepare writes a file named robots.txt; the path guard cannot tell that output name from
       # the tracked docs/robots.txt, so it is covered here (a change to that docs file runs the Go tests too)
       - 'docs/robots.txt'
+      # read by internal/cigates/docsprepare: the real redirect manifest must keep fitting the tool's narrow contract
+      - 'docs-data/redirects.tsv'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'

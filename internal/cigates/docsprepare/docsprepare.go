@@ -4,7 +4,6 @@ package docsprepare
 
 import (
 	"crypto/sha256"
-	"encoding/csv"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -437,25 +436,15 @@ func checkBracketedHost(netloc string) error {
 	return nil
 }
 
-// csvFieldLimit is Python's csv.field_size_limit default: a longer field is a csv.Error, reported as ERROR.
-const csvFieldLimit = 131072
+// fieldLimit is the longest redirect-manifest field accepted, in characters (the former helper's csv field size limit).
+const fieldLimit = 131072
 
-func checkFieldLimit(row []string) error {
-	for _, f := range row {
-		if len(f) > csvFieldLimit && utf8.RuneCountInString(f) > csvFieldLimit {
-			return fmt.Errorf("field larger than field limit (%d)", csvFieldLimit)
-		}
-	}
-	return nil
-}
-
-func rawField(row []string, index map[string]int, name string) string {
-	if i := index[name]; i < len(row) {
-		return row[i]
-	}
-	return ""
-}
-
+// loadRedirects reads the redirect manifest under a deliberately narrow contract, not a CSV dialect: plain tab-separated
+// text, lines ended by LF or CRLF, no quote character anywhere, no carriage return inside a line, no blank line,
+// exactly the header's columns on every row, no repeated column name, no field over fieldLimit characters, and no
+// control character in a source or target. The first line is the header and must name source_path and target_path.
+// Whatever the former helper's csv module accepted outside this contract (quoting, bare-CR line ends, ragged rows,
+// blank lines) is refused here, so no input is read two ways; the repository's own manifest fits the contract.
 func loadRedirects(path string) ([]redirect, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -464,55 +453,73 @@ func loadRedirects(path string) ([]redirect, error) {
 	if !utf8.Valid(data) {
 		return nil, fmt.Errorf("'utf-8' codec can't decode %s: invalid utf-8", pyRepr(path))
 	}
-	r := csv.NewReader(strings.NewReader(string(data)))
-	r.Comma = '\t'
-	r.FieldsPerRecord = -1
-	r.LazyQuotes = true
-	// csv.DictReader takes the first line as the header even when it is empty (then the manifest is "missing" its
-	// columns); encoding/csv would skip the empty line and read the next one as the header.
-	if strings.HasPrefix(string(data), "\n") || strings.HasPrefix(string(data), "\r") {
-		return nil, fmt.Errorf("redirect manifest is missing ['source_path', 'target_path']: %s", path)
+	missing := fmt.Errorf("redirect manifest is missing ['source_path', 'target_path']: %s", path)
+	text := string(data)
+	if text == "" {
+		return nil, missing
 	}
-	header, err := r.Read()
-	if err != nil && err != io.EOF {
-		return nil, err
+	lines := strings.Split(text, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
 	}
-	if err := checkFieldLimit(header); err != nil {
-		return nil, err
-	}
-	index := map[string]int{}
-	for i, name := range header {
-		index[name] = i
-	}
-	_, hasSource := index["source_path"]
-	_, hasTarget := index["target_path"]
-	if len(header) == 0 || !hasSource || !hasTarget {
-		return nil, fmt.Errorf("redirect manifest is missing ['source_path', 'target_path']: %s", path)
-	}
-	field := func(row []string, name string) string { return pyStrip(rawField(row, index, name)) }
+	var header []string
 	var out []redirect
 	seen := map[string]bool{}
-	for line := 2; ; line++ {
-		row, err := r.Read()
-		if err == io.EOF {
-			return out, nil
+	index := map[string]int{}
+	for i, raw := range lines {
+		line := i + 1
+		raw = strings.TrimSuffix(raw, "\r")
+		if strings.Contains(raw, "\r") {
+			return nil, fmt.Errorf("carriage return inside a line of the redirect manifest at %s:%d", path, line)
 		}
-		if err != nil {
-			return nil, err
+		if strings.Contains(raw, `"`) {
+			return nil, fmt.Errorf("quote character in the redirect manifest at %s:%d: quoting is not supported", path, line)
 		}
-		if err := checkFieldLimit(row); err != nil {
-			return nil, err
+		if strings.Contains(raw, "\x00") {
+			return nil, fmt.Errorf("control character in the redirect manifest at %s:%d", path, line)
 		}
-		source, target := field(row, "source_path"), field(row, "target_path")
+		if raw == "" {
+			if line == 1 {
+				return nil, missing
+			}
+			return nil, fmt.Errorf("blank line in the redirect manifest at %s:%d", path, line)
+		}
+		fields := strings.Split(raw, "\t")
+		for _, f := range fields {
+			if utf8.RuneCountInString(f) > fieldLimit {
+				return nil, fmt.Errorf("field larger than field limit (%d) at %s:%d", fieldLimit, path, line)
+			}
+		}
+		if line == 1 {
+			header = fields
+			for col, name := range header {
+				if _, dup := index[name]; dup {
+					return nil, fmt.Errorf("repeated column %s in the redirect manifest header: %s", pyRepr(name), path)
+				}
+				index[name] = col
+			}
+			if _, ok := index["source_path"]; !ok {
+				return nil, missing
+			}
+			if _, ok := index["target_path"]; !ok {
+				return nil, missing
+			}
+			continue
+		}
+		if len(fields) != len(header) {
+			return nil, fmt.Errorf("redirect row has %d fields, the header has %d, at %s:%d", len(fields), len(header), path, line)
+		}
+		rawSource, rawTarget := fields[index["source_path"]], fields[index["target_path"]]
+		source, target := pyStrip(rawSource), pyStrip(rawTarget)
 		if source == "" || target == "" {
 			return nil, fmt.Errorf("empty redirect at %s:%d", path, line)
 		}
 		if !strings.HasPrefix(source, "/") || !strings.HasPrefix(target, "/") {
 			return nil, fmt.Errorf("redirect paths must be site-relative at %s:%d: %s -> %s", path, line, pyRepr(source), pyRepr(target))
 		}
-		for _, name := range []string{"source_path", "target_path"} {
-			if raw := rawField(row, index, name); strings.IndexFunc(raw, unicode.IsControl) >= 0 {
-				return nil, fmt.Errorf("control character in redirect %s at %s:%d: %s", name, path, line, pyRepr(raw))
+		for name, v := range map[string]string{"source_path": rawSource, "target_path": rawTarget} {
+			if strings.IndexFunc(v, unicode.IsControl) >= 0 {
+				return nil, fmt.Errorf("control character in redirect %s at %s:%d: %s", name, path, line, pyRepr(v))
 			}
 		}
 		if source == target {
@@ -524,6 +531,7 @@ func loadRedirects(path string) ([]redirect, error) {
 		seen[source] = true
 		out = append(out, redirect{source, target})
 	}
+	return out, nil
 }
 
 func sha256File(path string) (string, error) {

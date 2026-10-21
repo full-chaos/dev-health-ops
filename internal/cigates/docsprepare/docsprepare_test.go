@@ -30,7 +30,7 @@ var fixtureFiles = []fixtureFile{
 	{"\xee\x80\x80.t", "p"}, {"\xc3(", "m"},
 }
 
-const fixtureRedirects = "source_path\ttarget_path\tx\n/é/\t/ü/\tz\n\n\"/q a/\"\t /w/ \n/x\t/y\textra\textra2\n"
+const fixtureRedirects = "source_path\ttarget_path\tx\n/\u00e9/\t/\u00fc/\tz\n/q a/\t /w/ \tq\n/x\t/y\textra\n"
 
 func writeFixture(t *testing.T) (site, redirects string) {
 	t.Helper()
@@ -116,19 +116,25 @@ func TestPrepareRejects(t *testing.T) {
 		{"duplicate", tsv(hdr + "/a\t/b\n/a\t/c\n"), "", "duplicate redirect source at"},
 		{"self", tsv(hdr + "/a\t/a\n"), "", "self redirect at"},
 		{"relative", tsv(hdr + "a\t/a\n"), "", "redirect paths must be site-relative at"},
-		{"short row", tsv(hdr + "/a\n"), "", "empty redirect at"},
+		{"short row", tsv(hdr + "/a\n"), "", "redirect row has 1 fields, the header has 2"},
+		{"long row", tsv(hdr + "/a\t/b\t/c\n"), "", "redirect row has 3 fields, the header has 2"},
+		{"blank line between rows", tsv(hdr + "/a\t/b\n\n/c\t/d\n"), "", "blank line in the redirect manifest"},
+		{"repeated column", tsv("source_path\ttarget_path\tsource_path\n/a\t/b\t/c\n"), "", "repeated column"},
+		{"empty source field", tsv(hdr + "\t/b\n"), "", "empty redirect at"},
 		{"header", tsv("a\tb\n/a\t/b\n"), "", "redirect manifest is missing ['source_path', 'target_path']"},
 		{"empty first line", tsv("\n" + hdr + "/a\t/b\n"), "", "redirect manifest is missing"},
 		{"CRLF empty first line", tsv("\r\n" + hdr + "/a\t/b\n"), "", "redirect manifest is missing"},
 		{"empty file", tsv(""), "", "redirect manifest is missing"},
 		{"http origin", tsv(hdr), "http://x.com", "canonical origin must be an HTTPS origin: http://x.com"},
 		{"origin path", tsv(hdr), "https://x.com/p", "canonical origin must be an HTTPS origin"},
-		{"CRLF in quoted fields", tsv(hdr + "\"/a\r\nb\"\t\"/c\r\nd\"\n"), "", "control character in redirect source_path at"},
-		{"bare LF in a quoted source", tsv(hdr + "\"/a\nb\"\t/c\n"), "", "control character in redirect source_path at"},
-		{"bare CR in a quoted target", tsv(hdr + "/a\t\"/c\rd\"\n"), "", "control character in redirect target_path at"},
-		{"tab in a quoted target", tsv(hdr + "/a\t\"/c\td\"\n"), "", "control character in redirect target_path at"},
-		{"NUL in a source", tsv(hdr + "/a\x00b\t/c\n"), "", "control character in redirect source_path at"},
-		{"line break around a quoted source", tsv(hdr + "\"\n/a\n\"\t/c\n"), "", "control character in redirect source_path at"},
+		{"quote character in a source", tsv(hdr + "\"/a\r\nb\"\t\"/c\r\nd\"\n"), "", "quote character in the redirect manifest"},
+		{"quote character inside a field", tsv(hdr + "/a\"b\t/c\n"), "", "quote character in the redirect manifest"},
+		{"lone CR inside a line", tsv(hdr + "/a\t/c\rd\n"), "", "carriage return inside a line"},
+		{"lone CR in the last column of a wide row", tsv("source_path\ttarget_path\tx\n/a\t/b\t\r/c\t/d\tz\n"), "", "carriage return inside a line"},
+		{"CR-only line endings", tsv(hdr + "/a\t/b\r/c\t/d\r"), "", "carriage return inside a line"},
+		{"NUL in a line", tsv(hdr + "/a\x00b\t/c\n"), "", "control character in the redirect manifest"},
+		{"control character in a source", tsv(hdr + "/a\x01b\t/c\n"), "", "control character in redirect source_path"},
+		{"DEL in a target", tsv(hdr + "/a\t/c\x7f\n"), "", "control character in redirect target_path"},
 		{"unclosed bracket", tsv(hdr), "https://[not-ipv6", "Invalid IPv6 URL"},
 		{"bad IPv6", tsv(hdr), "https://[:::]", "':::' does not appear to be an IPv4 or IPv6 address"},
 		{"IPv4 in brackets", tsv(hdr), "https://[1.2.3.4]", "An IPv4 address cannot be in brackets"},
@@ -176,5 +182,37 @@ func TestUsage(t *testing.T) {
 	}
 	if code, _, _ := run(t, "--source", "a", "--output", "b", "--mode", "staging", "--redirects", "c"); code != 2 {
 		t.Errorf("bad mode: code=%d", code)
+	}
+}
+
+func TestCRLFLineEndingsAreAcceptedAndMatchTheLFResult(t *testing.T) {
+	site, _ := writeFixture(t)
+	read := func(body string) string {
+		p := filepath.Join(t.TempDir(), "r.tsv")
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		outDir := filepath.Join(t.TempDir(), "out")
+		if code, _, stderr := run(t, "--source", site, "--output", outDir, "--mode", "preview", "--redirects", p); code != 0 {
+			t.Fatalf("code=%d stderr=%q", code, stderr)
+		}
+		b, _ := os.ReadFile(filepath.Join(outDir, "_redirects"))
+		return string(b)
+	}
+	lf := read("source_path\ttarget_path\n/a\t/b\n/c\t/d")
+	crlf := read("source_path\ttarget_path\r\n/a\t/b\r\n/c\t/d\r\n")
+	if lf != crlf || !strings.HasSuffix(lf, "/c /d 301\n") {
+		t.Errorf("LF %q vs CRLF %q", lf, crlf)
+	}
+}
+
+// The manifest the docs build reads must fit the narrow redirect contract; a drift in the real file fails here.
+func TestTheRepositoryRedirectManifestFitsTheContract(t *testing.T) {
+	got, err := loadRedirects("../../../docs-data/redirects.tsv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) < 100 {
+		t.Errorf("only %d redirects read from docs-data/redirects.tsv", len(got))
 	}
 }

@@ -13,6 +13,15 @@ import (
 // line of scripts/prepare_docs_cloudflare.py at the merge base (9127c3728d51) that refuses it (STRICTER = Go refuses what
 // Python accepted, allowed by the port rule). Removing a row, or a refusal from the table, fails the test.
 var pythonRefusals = map[string]string{
+	"redirects control character in a source":   "65 STRICTER: control character in a redirect field",
+	"redirects DEL in a target":                 "65 STRICTER: control character in a redirect field",
+	"redirects quote character mid-field":       "34 STRICTER: csv accepted a quote inside a field (Go csv and Python read it differently)",
+	"redirects lone CR inside a line":           "34 STRICTER: csv reader ends the record at a lone CR, Go csv does not",
+	"redirects lone CR ending a wide row":       "34 STRICTER: csv reader ends the record at a lone CR, Go csv does not",
+	"redirects CR-only line endings":            "34 STRICTER: Python read CR-only files",
+	"redirects row with extra fields":           "34 STRICTER: DictReader accepted ragged rows (extras under a None key)",
+	"redirects blank line between rows":         "34 STRICTER: DictReader skipped blank rows",
+	"redirects repeated column name":            "34 STRICTER: DictReader let the last duplicate column win",
 	"named pipe in the source":                  "133 shutil.copytree: copy2 SpecialFileError, a named pipe",
 	"origin zone that is empty":                 "24 urlparse: ip_address empty scope id",
 	"origin zone with a second percent":         "24 urlparse: ip_address scope id contains %",
@@ -64,14 +73,14 @@ var pythonRefusals = map[string]string{
 	"redirects extra field over the csv limit":  "34 csv.Error: field larger than field limit (131072), unused extra field",
 	"redirects header over the csv limit":       "34 csv.Error: field larger than field limit (131072), header field",
 	"redirects empty target":                    "41-42 raise ValueError: empty redirect",
-	"redirects short row":                       "41-42 raise ValueError: empty redirect (row with one field)",
+	"redirects short row":                       "34 STRICTER: DictReader accepted a short row (missing fields became empty, then 41-42)",
 	"redirects relative":                        "43-47 raise ValueError: redirect paths must be site-relative",
 	"redirects self":                            "48-49 raise ValueError: self redirect",
 	"redirects duplicate":                       "50-53 raise ValueError: duplicate redirect source",
-	"redirects CRLF in quotes":                  "65 STRICTER: Python keeps CRLF in _redirects; Go csv would fold it to LF",
-	"redirects LF in quotes":                    "65 STRICTER: a line break inside a _redirects field corrupts the file",
-	"redirects CR in quotes":                    "65 STRICTER: same, bare CR",
-	"redirects tab in quotes":                   "65 STRICTER: a tab inside a _redirects field corrupts the file",
+	"redirects CRLF in quotes":                  "34 STRICTER: quoted fields are not supported (Python kept CRLF in quotes, Go csv folded it to LF)",
+	"redirects LF in quotes":                    "34 STRICTER: quoted fields are not supported (Python kept CRLF in quotes, Go csv folded it to LF)",
+	"redirects CR in quotes":                    "34 STRICTER: quoted fields are not supported (Python kept CRLF in quotes, Go csv folded it to LF)",
+	"redirects tab in quotes":                   "34 STRICTER: quoted fields are not supported (Python kept CRLF in quotes, Go csv folded it to LF)",
 	"redirects NUL":                             "65 STRICTER: control character in a redirect field",
 	"output is a file":                          "132 shutil.rmtree(file): NotADirectoryError (OSError)",
 	"output is a symlink to a directory":        "132 shutil.rmtree(symlink): Cannot call rmtree on a symbolic link",
@@ -81,7 +90,7 @@ var pythonRefusals = map[string]string{
 	"dangling symlink in the source":            "133 shutil.copytree: copy2 of a dangling symlink (shutil.Error)",
 }
 
-const pythonRefusalRows = 66
+const pythonRefusalRows = 75
 
 // Every input the former Python helper refused (its argparse errors, its ValueError and OSError paths, and the stdlib
 // calls that raise inside it) must be refused by `cigate docs-prepare`: exit 2 for a usage error as argparse did, exit 1
@@ -178,15 +187,24 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		{"redirects extra field over the csv limit", with("am", tsv("source_path\ttarget_path\tx\n/a\t/b\t"+long(131073)+"\n")), 1, "field larger than field limit"},
 		{"redirects header over the csv limit", with("an", tsv("source_path\ttarget_path\t"+long(131073)+"\n/a\t/b\n")), 1, "field larger than field limit"},
 		{"redirects empty target", with("ao", tsv(hdr+"/a\t\n")), 1, "empty redirect"},
-		{"redirects short row", with("ap", tsv(hdr+"/a\n")), 1, "empty redirect"},
+		{"redirects short row", with("ap", tsv(hdr+"/a\n")), 1, "redirect row has 1 fields"},
 		{"redirects relative", with("aq", tsv(hdr+"a\t/b\n")), 1, "site-relative"},
 		{"redirects self", with("ar", tsv(hdr+"/a\t/a\n")), 1, "self redirect"},
 		{"redirects duplicate", with("as", tsv(hdr+"/a\t/b\n/a\t/c\n")), 1, "duplicate redirect source"},
-		{"redirects CRLF in quotes", with("at", tsv(hdr+"\"/a\r\nb\"\t\"/c\r\nd\"\n")), 1, "control character"},
-		{"redirects LF in quotes", with("au", tsv(hdr+"\"/a\nb\"\t/c\n")), 1, "control character"},
-		{"redirects CR in quotes", with("av", tsv(hdr+"/a\t\"/c\rd\"\n")), 1, "control character"},
-		{"redirects tab in quotes", with("aw", tsv(hdr+"/a\t\"/c\td\"\n")), 1, "control character"},
+		{"redirects CRLF in quotes", with("at", tsv(hdr+"\"/a\r\nb\"\t\"/c\r\nd\"\n")), 1, "quote character"},
+		{"redirects LF in quotes", with("au", tsv(hdr+"\"/a\nb\"\t/c\n")), 1, "quote character"},
+		{"redirects CR in quotes", with("av", tsv(hdr+"/a\t\"/c\rd\"\n")), 1, "carriage return"},
+		{"redirects tab in quotes", with("aw", tsv(hdr+"/a\t\"/c\td\"\n")), 1, "quote character"},
 		{"redirects NUL", with("ax", tsv(hdr+"/a\x00b\t/c\n")), 1, "control character"},
+		{"redirects control character in a source", with("ba", tsv(hdr+"/a\x01b\t/c\n")), 1, "control character in redirect source_path"},
+		{"redirects DEL in a target", with("bb", tsv(hdr+"/a\t/c\x7f\n")), 1, "control character in redirect target_path"},
+		{"redirects quote character mid-field", with("bc", tsv(hdr+"/a\"b\t/c\n")), 1, "quote character"},
+		{"redirects lone CR inside a line", with("bd", tsv(hdr+"/a\t/c\rd\n")), 1, "carriage return inside a line"},
+		{"redirects lone CR ending a wide row", with("be", tsv("source_path\ttarget_path\tx\n/a\t/b\t\r/c\t/d\tz\n")), 1, "carriage return inside a line"},
+		{"redirects CR-only line endings", with("bf", tsv(hdr+"/a\t/b\r/c\t/d\r")), 1, "carriage return inside a line"},
+		{"redirects row with extra fields", with("bg", tsv(hdr+"/a\t/b\t/c\n")), 1, "redirect row has 3 fields"},
+		{"redirects blank line between rows", with("bh", tsv(hdr+"/a\t/b\n\n/c\t/d\n")), 1, "blank line"},
+		{"redirects repeated column name", with("bi", tsv("source_path\ttarget_path\tsource_path\n/a\t/b\t/c\n")), 1, "repeated column"},
 	}
 	outFile := write(t, dir, "outfile", "x")
 	target := filepath.Join(dir, "target")
@@ -228,13 +246,25 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		row{"output is a symlink with a trailing slash", mk(site, link+"/"), 1, "symbolic link"},
 		row{"named pipe in the source", mk(fifoSite, out("ff")), 1, "special file"},
 	)
+	names := map[string]int{}
+	for _, r := range rows {
+		names[r.name]++
+	}
+	for name, n := range names {
+		if n != 1 {
+			t.Fatalf("row name %q is used %d times: a renamed row would leave its refusal untested", name, n)
+		}
+		if pythonRefusals[name] == "" {
+			t.Fatalf("row %q has no Python reference", name)
+		}
+	}
+	for name := range pythonRefusals {
+		if names[name] != 1 {
+			t.Fatalf("Python reference %q has no row (orphan)", name)
+		}
+	}
 	if len(rows) != pythonRefusalRows || len(pythonRefusals) != pythonRefusalRows {
 		t.Fatalf("refusal table has %d rows and %d Python references, want %d each: a refusal was removed or added without its reference", len(rows), len(pythonRefusals), pythonRefusalRows)
-	}
-	for _, r := range rows {
-		if pythonRefusals[r.name] == "" {
-			t.Fatalf("row %q has no Python reference", r.name)
-		}
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {

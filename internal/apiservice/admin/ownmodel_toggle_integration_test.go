@@ -132,6 +132,9 @@ WHERE org_id = $1 AND resource_id = 'llm/own_model_enabled' ORDER BY created_at 
 		}
 	})
 	t.Run("a member is refused", func(t *testing.T) {
+		if resp := doJSONRequest(t, base, http.MethodGet, ownModelPath, "", auth("member")); resp.status != http.StatusForbidden {
+			t.Fatalf("member GET: status=%d body=%s, want 403", resp.status, resp.body)
+		}
 		if resp := put("member", false); resp.status != http.StatusForbidden {
 			t.Fatalf("member PUT: status=%d body=%s, want 403", resp.status, resp.body)
 		}

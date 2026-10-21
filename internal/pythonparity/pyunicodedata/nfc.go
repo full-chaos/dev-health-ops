@@ -23,6 +23,16 @@ func NFC(text []rune) []rune { return normalize(text, current, false) }
 // decomposition, canonical ordering, canonical composition.
 func NFKC(text []rune) []rune { return normalize(text, current, true) }
 
+// NFKD is unicodedata.normalize("NFKD", text): compatibility decomposition and canonical ordering, no composition.
+func NFKD(text []rune) []rune {
+	decomposed := make([]rune, 0, len(text))
+	for _, r := range text {
+		decomposed = current.appendDecomposition(decomposed, r, true)
+	}
+	current.canonicalOrder(decomposed)
+	return decomposed
+}
+
 // NFKC32 is unicodedata.ucd_3_2_0.normalize("NFKC", text), the form
 // encodings.idna's nameprep uses: decomposition follows the Unicode 3.2.0
 // data (a code point assigned later is not decomposed), ordering and

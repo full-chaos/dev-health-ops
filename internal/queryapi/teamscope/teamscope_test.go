@@ -98,11 +98,14 @@ func TestRepoConditionScopesEveryReadByOrg(t *testing.T) {
 	sources := indexesOf(condition, "FROM repos FINAL")
 	sources = append(sources, indexesOf(condition, "FROM team_repo_ownership AS o FINAL")...)
 	predicates := indexesOf(condition, orgPredicate)
-	if len(sources) != 3 {
-		t.Fatalf("expected three reads (the join's repos, the ownership table, the catalog guard), found %d:\n%s", len(sources), condition)
+	// Three reads of the statement (the join's repos, the ownership table, the catalog guard) and two inside the
+	// first-record subquery of each of the two window bounds (the join's repos, the ownership table); each of the three
+	// statements also reads the inactive teams under an org predicate (a teams read is no FINAL read).
+	if len(sources) != 7 {
+		t.Fatalf("expected seven FINAL reads (three in the ownership statement, two in each first-record subquery), found %d:\n%s", len(sources), condition)
 	}
-	if len(predicates) != 3 {
-		t.Fatalf("expected an org predicate per read, found %d:\n%s", len(predicates), condition)
+	if len(predicates) != 10 {
+		t.Fatalf("expected an org predicate per read and per inactive-team read, found %d:\n%s", len(predicates), condition)
 	}
 	for _, source := range sources {
 		matched := false
@@ -152,11 +155,12 @@ func TestRepoConditionResolvesANullRepoIDByName(t *testing.T) {
 func TestRepoConditionWindowsOnTheBoundInstant(t *testing.T) {
 	condition, _ := RepoCondition("org-1", "repo_id", []string{"ABC-123"}, asOf)
 	instant := fmt.Sprintf("{%s:DateTime64(3, 'UTC')}", BindingAsOf)
-	if !strings.Contains(condition, "o.valid_from <= "+instant) {
-		t.Errorf("valid_from is not tested against the bound instant:\n%s", condition)
+	clamped := "greatest(" + instant + ", "
+	if !strings.Contains(condition, "o.valid_from <= "+clamped) {
+		t.Errorf("valid_from is not tested against the bound instant (clamped to the first record):\n%s", condition)
 	}
-	if !strings.Contains(condition, "o.valid_to IS NULL OR o.valid_to > "+instant) {
-		t.Errorf("valid_to is not tested against the bound instant:\n%s", condition)
+	if !strings.Contains(condition, "o.valid_to IS NULL OR o.valid_to > "+clamped) {
+		t.Errorf("valid_to is not tested against the bound instant (clamped to the first record):\n%s", condition)
 	}
 	if strings.Contains(condition, "now64") || strings.Contains(condition, "now()") {
 		t.Errorf("condition resolves its own instant instead of the caller's:\n%s", condition)
@@ -177,7 +181,7 @@ func TestRepoConditionRequiresTheRepositoryInTheCatalog(t *testing.T) {
 		t.Fatalf("condition does not require the resolved id to be in the catalog:\n%s", condition)
 	}
 	depths := sqlshape.Depths(condition)
-	guardIdx := strings.Index(condition, guard)
+	guardIdx := strings.LastIndex(condition, guard)
 	ownershipIdx := strings.Index(condition, "FROM team_repo_ownership AS o FINAL")
 	if depths[guardIdx] != depths[ownershipIdx] {
 		t.Fatalf("the catalog guard sits at depth %d and the ownership read at %d -- it must narrow that read, not a different one:\n%s",
@@ -442,7 +446,7 @@ func TestOwnerSharesReadsTheOneOwnershipPredicate(t *testing.T) {
 	for _, line := range []string{
 		"FROM team_repo_ownership AS o FINAL",
 		"AND (o.repo_id IS NOT NULL OR r.matched = 1)",
-		"AND (o.valid_to IS NULL OR o.valid_to > {" + OwnerSharesBindingAsOf + ":DateTime64(3, 'UTC')})",
+		"AND (o.valid_to IS NULL OR o.valid_to > greatest({" + OwnerSharesBindingAsOf + ":DateTime64(3, 'UTC')}, ",
 		"max(o.share) AS stored_share",
 		"owned.stored_share / sum(owned.stored_share) OVER (PARTITION BY owned.owner_repo_id)",
 		"1.0 / count() OVER (PARTITION BY owned.owner_repo_id)",

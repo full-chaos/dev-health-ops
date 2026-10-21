@@ -13,7 +13,7 @@ import (
 // replayed through the built cigate binary (kind case), cases where Go is stricter than Python (kind stricter), or a named
 // Go test (kind go). A Python refusal with no row fails here, so a port cannot drop one unnoticed.
 
-var refusalSite = regexp.MustCompile(`check_output\(|\.decode\(\)|^\s*except |^\s*with open\(|json\.load\(|data\.get\(|re\.match\(|\bint\(|parse_args\(|pre_num \+ 1|patch \+ 1|print\(f"(Package|Next)`)
+var refusalSite = regexp.MustCompile(`check_output\(|\.decode\(\)|^\s*except |^\s*with open\(|json\.load\(|data\.get\(|re\.match\(|\bint\(|parse_args\(|pre_num \+ 1|patch \+ 1|print\(f"(Package|Next)|\bf\.write\(`)
 
 type refusalRow struct{ kind, refs string }
 

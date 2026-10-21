@@ -19,3 +19,4 @@ next_ver_str = f"{major}.{minor}.{patch + 1}-{args.pre_release_suffix}.1"	go	Tes
 print(f"Next tag determined: {next_tag}")	go	TestInvalidUTF8SuffixPassesStdoutAndRefusesTheOutputFile
 with open(os.environ["GITHUB_OUTPUT"], "a") as f:	case	github-output-is-directory;github-output-parent-missing
 implicit: flush of sys.stdout at interpreter exit	case	stdout-full-ok;stdout-full-no-tag-no-package;stdout-full-help;stdout-full-github-output-is-directory;stdout-full-package-version-4301-digits;stdout-full-package-syntax-error-prints-nothing;stdout-full-argparse-error-prints-nothing;stdout-full-suffix-9000-bytes;stdout-full-package-version-used-4300-digits
+f.write(f"new_tag={next_tag}\n")	go	TestGithubOutputWriteFails;TestInvalidUTF8SuffixPassesStdoutAndRefusesTheOutputFile

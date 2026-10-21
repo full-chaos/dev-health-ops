@@ -347,8 +347,8 @@ func (e errRow) Scan(...any) error { return e.err }
 // error. The number of state rows it changed is counted by the database, not
 // reported by the callback: the guard trigger of migration 0006 counts every
 // row written to a guarded table other than the audit and outbox tables, and
-// migration 0013's create guard counts every principal or user row a
-// mutation inserts. Zero rolls everything back with ErrNoStateChange.
+// migration 0013's create guard counts every principal, user or (0014)
+// session row a mutation inserts. Zero rolls everything back with ErrNoStateChange.
 //
 // Events lists the provisioning events of the mutation, one or more (one
 // mutation may create a principal, its user and its external identity).

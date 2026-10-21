@@ -1053,3 +1053,18 @@ func TestAnUnverifiedSignInIsAuditedUnderTheUsersOwnMembership(t *testing.T) {
 		t.Fatalf("without a membership the audit organization is %v, want the requested %s", org, f.orgD)
 	}
 }
+
+// A collision's refusal row names the account that holds the email.
+func TestAnEmailCollisionsRefusalRowNamesTheAccountThatHoldsTheEmail(t *testing.T) {
+	f, fake := newSocialFixture(t)
+	fake.result, fake.err = social.ExchangeResult{PrincipalID: f.principal}, &social.ConflictError{ExistingMethod: "local"}
+	response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"tok"}`, nil)
+	if response.Code != http.StatusConflict || len(f.appended) != 1 {
+		t.Fatalf("status %d, %d audit rows", response.Code, len(f.appended))
+	}
+	event := f.appended[0]
+	if event.Attributes["reason_code"] != "email_collision" || event.SubjectPrincipalID == nil || *event.SubjectPrincipalID != f.principal.String() ||
+		event.OrganizationID == nil || *event.OrganizationID != f.orgB.String() {
+		t.Fatalf("audit row %+v, want the account that holds the email and its organization", event)
+	}
+}

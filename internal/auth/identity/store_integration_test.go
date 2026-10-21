@@ -1541,3 +1541,25 @@ FROM auth.auth_outbox_events WHERE id > $1 ORDER BY id`, since)
 		t.Fatalf("the scenario wrote %d outbox rows; expected every producer to write", n)
 	}
 }
+
+// A legacy subject whose user already holds another identity at the provider
+// is refused (ErrProviderAlreadyLinked) and the refusal names that user's
+// principal, so the sign-in's refusal row can name it.
+func TestIdentityBySubjectNamesThePrincipalOfAProviderAlreadyLinkedRefusal(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	first := "gl-" + uuid.NewString()
+	user := e.seedLegacy(t, ctx, uniqueEmail("gl-linked"), "gitlab", first, false)
+	issuer, _ := SocialIssuer(ProviderGitLab)
+	if _, found, err := e.store.IdentityBySubject(ctx, issuer, ProviderGitLab, first, socialLegacy(ProviderGitLab)); err != nil || !found {
+		t.Fatalf("first projection: %v, %v", found, err)
+	}
+	second := "gl-" + uuid.NewString()
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET auth_provider_id = $2 WHERE id = $1`, user, second); err != nil {
+		t.Fatal(err)
+	}
+	p, found, err := e.store.IdentityBySubject(ctx, issuer, ProviderGitLab, second, socialLegacy(ProviderGitLab))
+	if !errors.Is(err, ErrProviderAlreadyLinked) || found || p.ID != user {
+		t.Fatalf("second subject = %+v, %v, %v; want ErrProviderAlreadyLinked naming %v", p, found, err, user)
+	}
+}

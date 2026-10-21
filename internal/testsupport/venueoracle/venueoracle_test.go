@@ -70,3 +70,30 @@ func TestCompareDecisionTable(t *testing.T) {
 		})
 	}
 }
+
+func TestAdminNoStoreIsAnIntendedDivergenceOnlyWhenTheGoldenLacksIt(t *testing.T) {
+	request := Request{Method: "GET", Path: "/api/v1/admin/llm-settings/models"}
+	python := func(headers map[string]string) Response { return Response{Status: 200, Headers: headers, Body: "{}"} }
+	cases := []struct {
+		name    string
+		request Request
+		py      map[string]string
+		gr      map[string]string
+		same    bool
+	}{
+		{"golden lacks it, go sends no-store", request, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+		{"go sends another value", request, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-cache"}, false},
+		{"go sends no-store, with a suffix", request, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store, private"}, false},
+		{"golden has it, values match", request, map[string]string{"a": "1", "cache-control": "no-store"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+		{"golden has it, values differ", request, map[string]string{"a": "1", "cache-control": "public"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"outside admin scope", Request{Method: "GET", Path: "/api/v1/other"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			same, _, _, _ := Compare(tc.request, python(tc.py), Response{Status: 200, Headers: tc.gr, Body: "{}"}, DiffOptions{})
+			if same != tc.same {
+				t.Fatalf("same = %v, want %v", same, tc.same)
+			}
+		})
+	}
+}

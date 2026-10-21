@@ -117,7 +117,11 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.ClickHouse != nil {
 		area.spend = clickhouseSpend{conn: deps.ClickHouse}
 	}
-	return area.routes()
+	routes := area.routes()
+	for index := range routes {
+		routes[index].Handler = httpapi.NoStore(routes[index].Handler)
+	}
+	return routes
 }
 
 // routes is this area's full route set: impersonation, users, orgs.

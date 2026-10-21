@@ -557,6 +557,9 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 		// middleware that adds the security headers, so no header is compared.
 		return true, nil, py, gr
 	}
+	if intendedNoStore(request, py, gr) {
+		skip = withSkipped(skip, "cache-control")
+	}
 	compared := headerUnion(py.Headers, gr.Headers, skip)
 	for _, header := range compared {
 		pv, pok := py.Headers[header]
@@ -566,6 +569,30 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 		}
 	}
 	return same, compared, py, gr
+}
+
+// intendedNoStore is the declared divergence "admin no-store": every Go admin
+// route answers Cache-Control: no-store, which the frozen Python goldens never
+// carried. It applies only under /api/v1/admin/, only when the golden has no
+// cache-control, and only for exactly "no-store"; any other Go value, or a
+// golden that has the header, still compares.
+func intendedNoStore(request Request, py, gr Response) bool {
+	if !strings.HasPrefix(request.Path, "/api/v1/admin/") {
+		return false
+	}
+	if _, has := py.Headers["cache-control"]; has {
+		return false
+	}
+	return gr.Headers["cache-control"] == "no-store"
+}
+
+func withSkipped(skip map[string]bool, name string) map[string]bool {
+	out := make(map[string]bool, len(skip)+1)
+	for key, value := range skip {
+		out[key] = value
+	}
+	out[name] = true
+	return out
 }
 
 // Mark is "SAME" or "DIFF".

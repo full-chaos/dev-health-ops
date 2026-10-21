@@ -34,7 +34,7 @@ func (h *handlers) retentionRoutes() []httpapi.Route {
 		// side (see checkOrMethodNotAllowed). It is mounted on the wildcard's
 		// GET and told apart by the segment; FastAPI's 405 for any other
 		// method names GET, the first route that matched the path.
-		{Method: http.MethodGet, Pattern: governancePrefix + "/retention-policies/{policy_id}", Allow: "GET", Handler: h.resourceTypesOrGetPolicy()},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/retention-policies/{policy_id}", Handler: h.resourceTypesOrGetPolicy()},
 		{Method: http.MethodPatch, Pattern: governancePrefix + "/retention-policies/{policy_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateRetentionPolicy))},
 		{Method: http.MethodDelete, Pattern: governancePrefix + "/retention-policies/{policy_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteRetentionPolicy))},
 		{Method: http.MethodPost, Pattern: governancePrefix + "/retention-policies/{policy_id}/execute", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.executeRetentionPolicy))},

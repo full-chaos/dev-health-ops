@@ -387,11 +387,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		// conflict with a literal GET sibling of a wildcard (GET /a/literal
 		// beside HEAD /a/{id}), which net/http refuses to register.
 		if options.ExplicitHead && route.Method == http.MethodGet {
-			headRefusal := notAllowedByPattern[route.Pattern]
-			if options.NoStore != nil && options.NoStore.patterns[route.Method+" "+route.Pattern] {
-				headRefusal = allMethodsNotAllowed(headRefusal, methodsByPattern[route.Pattern])
-			}
-			handler = refuseHead(handler, headRefusal)
+			handler = refuseHead(handler, notAllowedByPattern[route.Pattern])
 		}
 		mux.Handle(route.Method+" "+route.Pattern, handler)
 	}
@@ -682,17 +678,4 @@ func canonicalPath(p string) string {
 		cleaned += "/"
 	}
 	return cleaned
-}
-
-// allMethodsNotAllowed is the HEAD refusal of a no-store (admin) GET path: its
-// Allow lists every method the path serves (RFC 9110 10.2.1), where the 405 of
-// another method keeps the path's declared Allow.
-func allMethodsNotAllowed(base http.Handler, methods []string) http.Handler {
-	m, ok := base.(*methodNotAllowed)
-	if !ok {
-		return base
-	}
-	sorted := append([]string(nil), methods...)
-	sort.Strings(sorted)
-	return &methodNotAllowed{allow: strings.Join(sorted, ", "), write: m.write, pattern: m.pattern}
 }

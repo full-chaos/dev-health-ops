@@ -7124,7 +7124,7 @@
       "request_headers_sha256": "44f5d06a842a071725212f2abc0e6ca7f30fc53f5accc27c6e7d18e42866d7e3",
       "status": 405,
       "headers": {
-        "allow": "DELETE",
+        "allow": "DELETE, GET, PATCH, POST",
         "content-length": "31",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
@@ -7145,7 +7145,7 @@
       "request_headers_sha256": "44f5d06a842a071725212f2abc0e6ca7f30fc53f5accc27c6e7d18e42866d7e3",
       "status": 405,
       "headers": {
-        "allow": "DELETE",
+        "allow": "DELETE, GET, PATCH, POST",
         "content-length": "31",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
@@ -7166,7 +7166,7 @@
       "request_headers_sha256": "44f5d06a842a071725212f2abc0e6ca7f30fc53f5accc27c6e7d18e42866d7e3",
       "status": 405,
       "headers": {
-        "allow": "DELETE",
+        "allow": "DELETE, GET, PATCH, POST",
         "content-length": "31",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",

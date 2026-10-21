@@ -44,8 +44,8 @@ type handlers struct {
 	cipher credentials.Cipher
 }
 
-// Routes returns the area's routes. A path's Allow value is the methods of
-// the first route FastAPI declares for it, which Starlette reports on a
+// Routes returns the area's routes. A 405's Allow lists every method the path serves
+// (the router derives it), not only the first route's.
 // 405.
 func Routes(deps Deps) []httpapi.Route {
 	h := &handlers{pool: deps.Pool, guard: deps.Guard, logger: deps.Logger, now: deps.Now, getenv: deps.Getenv, cipher: deps.Cipher}
@@ -63,13 +63,13 @@ func Routes(deps Deps) []httpapi.Route {
 	// (FastAPI's order); its validation errors come after it.
 	adminBody := func(handler http.HandlerFunc) http.Handler { return h.guard.BodyFirst(policy.Admin, handler) }
 	return []httpapi.Route{
-		{Method: http.MethodPost, Pattern: prefix + "/sources", Handler: adminBody(h.createSource), Allow: "POST"},
+		{Method: http.MethodPost, Pattern: prefix + "/sources", Handler: adminBody(h.createSource)},
 		{Method: http.MethodGet, Pattern: prefix + "/sources", Handler: admin(h.listSources)},
-		{Method: http.MethodGet, Pattern: prefix + "/sources/{source_id}", Handler: admin(h.getSource), Allow: "GET"},
+		{Method: http.MethodGet, Pattern: prefix + "/sources/{source_id}", Handler: admin(h.getSource)},
 		{Method: http.MethodPatch, Pattern: prefix + "/sources/{source_id}", Handler: adminBody(h.patchSource)},
-		{Method: http.MethodGet, Pattern: prefix + "/sources/{source_id}/tokens", Handler: admin(h.listSourceTokens), Allow: "GET"},
+		{Method: http.MethodGet, Pattern: prefix + "/sources/{source_id}/tokens", Handler: admin(h.listSourceTokens)},
 		{Method: http.MethodPost, Pattern: prefix + "/sources/{source_id}/tokens", Handler: adminBody(h.createSourceToken)},
-		{Method: http.MethodGet, Pattern: prefix + "/tokens", Handler: admin(h.listOrgTokens), Allow: "GET"},
+		{Method: http.MethodGet, Pattern: prefix + "/tokens", Handler: admin(h.listOrgTokens)},
 		{Method: http.MethodPost, Pattern: prefix + "/tokens", Handler: adminBody(h.createOrgToken)},
 		{Method: http.MethodPost, Pattern: prefix + "/tokens/{token_id}/rotate", Handler: admin(h.rotateToken), Allow: "POST"},
 		{Method: http.MethodPost, Pattern: prefix + "/tokens/{token_id}/revoke", Handler: admin(h.revokeToken), Allow: "POST"},

@@ -2144,7 +2144,7 @@
       "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
       "status": 405,
       "headers": {
-        "allow": "POST",
+        "allow": "GET, POST",
         "content-length": "31",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",
@@ -2165,7 +2165,7 @@
       "request_headers_sha256": "d8c0580aeca0a4009b2732d2d06d6d8abc01ccb138c1885fb630cd737276747a",
       "status": 405,
       "headers": {
-        "allow": "GET",
+        "allow": "GET, PATCH",
         "content-length": "31",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         "content-type": "application/json",

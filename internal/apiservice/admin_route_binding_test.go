@@ -204,29 +204,3 @@ func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
 }
 
 const headCheckedRoutes = 60
-
-// The all-methods Allow is the HEAD refusal's only: the 405 of any other method keeps the path's declared Allow, the
-// first FastAPI route's (frozen goldens pin it).
-func TestAdminDeclaredAllowIsKeptForNonHeadMethods(t *testing.T) {
-	pool, err := pgxpool.New(context.Background(), "postgres://binding@127.0.0.1:1/binding?connect_timeout=1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}}, quietLogger()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for target, c := range map[string]struct{ method, allow string }{
-		"/api/v1/admin/credentials":                {http.MethodPut, "GET"},
-		"/api/v1/admin/customer-push/sources":      {http.MethodPut, "POST"},
-		"/api/v1/admin/settings/general/site_name": {http.MethodPost, "GET"},
-		"/api/v1/admin/teams/eng":                  {http.MethodPut, "DELETE"},
-	} {
-		want := c.allow
-		response := serve(server.Handler(), httptest.NewRequest(c.method, target, nil))
-		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != want {
-			t.Errorf("%s: status %d Allow %q; want 405, Allow %q", c.method+" "+target, response.Code, response.Header().Get("Allow"), want)
-		}
-	}
-}

@@ -1,0 +1,5 @@
+# Generated from the approved Phase 9 redirect inventory.
+# Source order is deterministic; every rule is a permanent path redirect.
+/é/ /ü/ 301
+/q a/ /w/ 301
+/x /y 301

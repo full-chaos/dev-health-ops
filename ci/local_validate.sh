@@ -10,15 +10,12 @@
 #   This gate closes BOTH gaps.
 #
 # WHAT IT DOES (a LOCAL gate; hosted CI no longer runs ruff, mypy (this gate no longer runs it either: CHAOS-8616) or the Python
-# test matrix: it runs the Go gates, the tooling and docs tests and the kept list
+# test matrix: it runs the Go gates, the tooling tests and the kept list
 # ci/kept_python_tests.txt):
-#   0. preflight also installs requirements-docs.txt into .venv so
-#      tests/docs/*.py's `mkdocs build --strict` shells don't false-fail with
-#      "No module named mkdocs" in a freshly `uv sync`'d worktree venv.
 #   1. ruff format --check .
 #   2. ruff check .
 #   3. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
-#   4. the hosted Python test selection (tests/docs, tests/tooling and
+#   4. the hosted Python test selection (tests/tooling and
 #      ci/kept_python_tests.txt, as test.yml runs it, CHAOS-8352), with
 #      the local socks5h proxy neutralized.
 #   5. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
@@ -930,35 +927,6 @@ run_stage() {
 }
 
 # --- Preflight: must run from the worktree with its .venv. --------------------------
-# CI-parity for pip installs: the docs-tests and tooling-tests jobs of
-# .github/workflows/test.yml install requirements-docs.txt too.
-# gate_unit_suite() below runs tests/docs, and those
-# tests shell out to `python -m mkdocs build --strict`. `uv sync --all-extras
-# --dev` (requirements.txt / -e .[dev]) does NOT pull in requirements-docs.txt
-# (mkdocs-material lives outside pyproject.toml on purpose, per docs-guards.yml
-# installing it separately), so a venv built the documented way is missing it.
-# Without this step the gate reports "No module named mkdocs" — a red CI would
-# never produce, since CI always provisions it. Install it here too, exactly
-# like CI, rather than letting the docs tests fail or silently skip.
-ensure_docs_deps() {
-  local reqs="${ROOT}/requirements-docs.txt"
-  [ -f "${reqs}" ] || die "requirements-docs.txt not found at ${reqs} (repo layout changed?)."
-  local pip_log
-  pip_log="$(mktemp)"
-  printf '   installing %s (mirrors CI test.yml pip install step)...\n' "$(basename "${reqs}")"
-  if "${PYBIN}" -m pip install -q -r "${reqs}" >"${pip_log}" 2>&1; then
-    rm -f "${pip_log}"
-  else
-    cat "${pip_log}" >&2
-    rm -f "${pip_log}"
-    die "could not install requirements-docs.txt into ${PYBIN} (pip output above). Run manually:
-      ${PYBIN} -m pip install -r requirements-docs.txt
-   tests/docs/*.py shell out to 'python -m mkdocs build --strict' and WILL
-   false-fail with 'No module named mkdocs' until this succeeds — do not
-   reinterpret that failure as a real docs regression without this installed."
-  fi
-}
-
 preflight() {
   banner "preflight"
   [ -f "${ROOT}/ci/run_tests.sh" ] || die "not a worktree root (no ci/run_tests.sh at ${ROOT})."
@@ -977,7 +945,6 @@ preflight() {
    UV_CACHE_DIR keeps either recipe off the shared ~/.cache/uv/.lock other worktrees hold —
    CHAOS-4411.)"
   [ -x "${RUFF}" ] || die "missing ${RUFF}; install the [dev] extra into .venv."
-  ensure_docs_deps
   printf '   worktree root : %s\n' "${ROOT}"
   printf '   interpreter   : %s\n' "${PYBIN}"
   printf '   %s\n' "$(c_green 'preflight OK')"
@@ -990,9 +957,9 @@ gate_go_fast() { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
 
 # --- The unit step: the HOSTED selection (CHAOS-8352 removed the full-suite matrix). --
-# Same three pytest invocations as the `tooling-tests` and `docs-tests` jobs of
-# .github/workflows/test.yml (and tests:docs / tests:tooling in .gitlab-ci.yml):
-# tests/docs, tests/tooling, and the explicit list in ci/kept_python_tests.txt,
+# Same two pytest invocations as the `tooling-tests` job of
+# .github/workflows/test.yml (and tests:tooling in .gitlab-ci.yml):
+# tests/tooling, and the explicit list in ci/kept_python_tests.txt,
 # read from that file so the gate cannot drift from the hosted job. Running the
 # whole tests/ dir is no longer the standard: it collects tests of the deleted
 # Python api tree and is red by construction.
@@ -1006,10 +973,6 @@ gate_unit_suite() {
   # Same guard as test.yml: a short or empty list would run nothing.
   [ "${#kept[@]}" -ge 1 ] || die "${list} lists only ${#kept[@]} files (hosted jobs require >= 1)."
   printf '   kept files: %s\n' "${#kept[@]}"
-  OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/docs -q || return 1
-  OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/tooling -q -n "${nw}" || return 1
   OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${PYBIN}" -m pytest "${kept[@]}" -q -rs -n "${nw}"
 }

@@ -869,11 +869,11 @@ func downloadGitLabTestsArtifact(ctx context.Context, client *providerfoundation
 		}
 		return nil, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: gitlabJobArtifactsRoute}
 	}
-	body, err := providerfoundation.ReadResponseBodyTransport(response, gitLabTestsMaxDownload)
+	body, over, err := providerfoundation.ReadResponseBodyWithin(response, gitLabTestsMaxDownload, logging.TransportFailure)
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > gitLabTestsMaxDownload {
+	if over > 0 {
 		return nil, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, ErrGitLabTestsIncomplete)
 	}
 	return body, nil

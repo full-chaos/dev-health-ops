@@ -178,6 +178,50 @@ func TestCheckNeverAdmitsAMetadataAddressInsideAnAllowedRange(t *testing.T) {
 	}
 }
 
+// A translation address (NAT64, 6to4, Teredo) is decided on the IPv4 address it embeds: an allow list for the IPv6
+// translation range never admits a non-public embedded target, and a public embedded target is public.
+func TestCheckDecidesATranslationAddressOnItsEmbeddedIPv4(t *testing.T) {
+	allowOnly(t, "64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32")
+	_ = captureLogs(t)
+	for address, class := range map[string]string{
+		"64:ff9b::7f00:1": "loopback", "64:ff9b::a00:1": "private", "2002:7f00:1::": "loopback", "2002:a00:1::": "private",
+		"2001:0:a00:1::": "private", "64:ff9b::6440:1": "shared_address",
+	} {
+		var refused *RefusedError
+		if err := check(netip.MustParseAddr(address)); !errors.As(err, &refused) || refused.Class != class {
+			t.Errorf("check(%s) = %v, want the %s refusal", address, err, class)
+		}
+	}
+	for _, address := range []string{"64:ff9b::808:808", "2002:808:808::"} {
+		if err := check(netip.MustParseAddr(address)); err != nil {
+			t.Errorf("check(%s) = %v, want allowed (it embeds a public address)", address, err)
+		}
+	}
+	// The embedded IPv4 is what an allow list admits.
+	t.Cleanup(SetAllowForTest(netip.MustParsePrefix("10.0.0.0/8")))
+	if err := check(netip.MustParseAddr("64:ff9b::a00:1")); err != nil {
+		t.Errorf("check(64:ff9b::a00:1) with 10.0.0.0/8 allowed = %v, want allowed", err)
+	}
+	if err := check(netip.MustParseAddr("64:ff9b::7f00:1")); err == nil {
+		t.Error("check(64:ff9b::7f00:1) with 10.0.0.0/8 allowed was admitted")
+	}
+}
+
+// The IPv6 and the less common metadata endpoints are never admitted, even with an allow list for their range.
+func TestCheckNeverAdmitsTheIPv6AndWireServerMetadataEndpoints(t *testing.T) {
+	allowOnly(t, "fd00::/8", "fc00::/7", "168.63.0.0/16")
+	_ = captureLogs(t)
+	for _, address := range []string{"fd20:ce::254", "fd00:c1::a9fe:a9fe", "fd12:3456:789a::a9fe:a9fe", "fc00::a9fe:a9fe", "168.63.129.16"} {
+		var refused *RefusedError
+		if err := check(netip.MustParseAddr(address)); !errors.As(err, &refused) || refused.Class != "metadata" {
+			t.Errorf("check(%s) = %v, want the metadata refusal", address, err)
+		}
+	}
+	if err := check(netip.MustParseAddr("fd00::1")); err != nil {
+		t.Errorf("an allowed unique-local address was refused: %v", err)
+	}
+}
+
 func TestCheckDefaultDeniesEveryNonPublicClass(t *testing.T) {
 	allowOnly(t)
 	_ = captureLogs(t)
@@ -431,16 +475,13 @@ func TestWrapShapes(t *testing.T) {
 	}
 }
 
-// The allow list is loosened only by its environment setting; SetAllowForTest is for tests.
-func TestNoProductionCallOfTheTestSeams(t *testing.T) {
-	root, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("module root not found at %s: %v", root, err)
-	}
-	var offenders []string
+// seamNames are the identifiers no production file may mention: the test seams and the Offline marker method. Any
+// mention counts (a call, a method value, a declaration), so an alias or a stored func value cannot hide one.
+var seamNames = []string{"SetAllowForTest", "SetLookupForTest", "SetUnguardedTransportsForTest", "EgressOffline"}
+
+// scanForSeams walks the production .go files under root (not *_test.go, testdata, internal/testsupport, or this
+// package's own source) and returns the files that mention a seam name, and how many files it read.
+func scanForSeams(root string) (offenders []string, scanned int, err error) {
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -463,16 +504,66 @@ func TestNoProductionCallOfTheTestSeams(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(content), "SetAllowForTest(") || strings.Contains(string(content), "SetLookupForTest(") ||
-			strings.Contains(string(content), "SetUnguardedTransportsForTest(") || strings.Contains(string(content), ") EgressOffline()") {
-			offenders = append(offenders, relative)
+		scanned++
+		for _, name := range seamNames {
+			if strings.Contains(string(content), name) {
+				offenders = append(offenders, relative)
+				break
+			}
 		}
 		return nil
 	})
+	return offenders, scanned, err
+}
+
+// The allow list is loosened only by its environment setting; the test seams and the Offline marker are for tests.
+func TestNoProductionCallOfTheTestSeams(t *testing.T) {
+	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("module root not found at %s: %v", root, err)
+	}
+	offenders, scanned, err := scanForSeams(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned < 1000 {
+		t.Fatalf("the scan read %d production files: it reads too little", scanned)
+	}
 	if len(offenders) > 0 {
-		t.Fatalf("production files call a test seam of egressguard: %v", offenders)
+		t.Fatalf("production files mention a test seam of egressguard: %v", offenders)
+	}
+	t.Logf("%d production files scanned", scanned)
+}
+
+// Positive control: planted offenders (a call, a method value, a marker method) are found; a test file, a testsupport
+// file and the guard's own source are not.
+func TestTheSeamScanFindsPlantedOffenders(t *testing.T) {
+	root := t.TempDir()
+	plant := func(relative, content string) {
+		path := filepath.Join(root, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plant("internal/a/a.go", "package a\nfunc f() { egressguard.SetAllowForTest() }\n")
+	plant("internal/b/b.go", "package b\nvar seam = eg.SetUnguardedTransportsForTest\n")
+	plant("internal/c/c.go", "package c\ntype t struct{}\nfunc (t) EgressOffline() {}\n")
+	plant("internal/d/d_test.go", "package d\nfunc f() { egressguard.SetAllowForTest() }\n")
+	plant("internal/testsupport/e/e.go", "package e\nfunc f() { egressguard.SetLookupForTest(nil) }\n")
+	plant("internal/egressguard/egressguard.go", "package egressguard\nfunc SetAllowForTest() {}\n")
+	plant("internal/clean/clean.go", "package clean\n")
+	offenders, scanned, err := scanForSeams(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join("internal", "a", "a.go"), filepath.Join("internal", "b", "b.go"), filepath.Join("internal", "c", "c.go")}
+	if strings.Join(offenders, ",") != strings.Join(want, ",") || scanned != 4 {
+		t.Fatalf("offenders=%v scanned=%d, want %v and 4", offenders, scanned, want)
 	}
 }

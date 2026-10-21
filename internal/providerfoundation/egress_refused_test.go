@@ -154,8 +154,21 @@ func TestEgressGuardedDoerShapes(t *testing.T) {
 		t.Fatal("a client with no transport must get the shared guarded transport")
 	}
 	var nilClient *http.Client
-	if EgressGuardedDoer(nilClient) != HTTPDoer(nilClient) {
-		t.Fatal("a nil client must stay as it is")
+	for name, doer := range map[string]HTTPDoer{
+		"a nil client": nilClient, "a doer the guard cannot reach into": doerFunc(func(*http.Request) (*http.Response, error) { return nil, nil }),
+		"a Wrapper whose rebuild returns nil": nilRewrapper{inner: &http.Client{}}, "a Wrapper whose rebuild returns a typed nil": typedNilRewrapper{inner: &http.Client{}},
+	} {
+		guardedDoer := EgressGuardedDoer(doer)
+		if _, err := guardedDoer.Do(httptest.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)); !IsEgressRefused(err) {
+			t.Errorf("%s: Do = %v, want the egress refusal (fail closed)", name, err)
+		}
+	}
+	for name, doer := range map[string]HTTPDoer{
+		"nil": nilRewrapper{inner: &http.Client{}}, "typed nil": typedNilRewrapper{inner: &http.Client{}},
+	} {
+		if _, err := originGuardedAtConstruction(doer).Do(httptest.NewRequest(http.MethodGet, "http://127.0.0.1/", nil)); !IsEgressRefused(err) {
+			t.Errorf("originGuardedAtConstruction with a rebuild that returns %s: Do = %v, want the egress refusal", name, err)
+		}
 	}
 }
 
@@ -170,4 +183,40 @@ func TestEgressRefusedIsPermanentAndKeepsItsReason(t *testing.T) {
 	if IsEgressRefused(errors.New("dial tcp: connection refused")) {
 		t.Fatal("an ordinary transport error is not an egress refusal")
 	}
+}
+
+// nilRewrapper and typedNilRewrapper are decorators whose rebuild fails: the guard must not fall back to the unguarded doer.
+type nilRewrapper struct{ inner HTTPDoer }
+
+func (w nilRewrapper) Do(request *http.Request) (*http.Response, error) { return w.inner.Do(request) }
+func (w nilRewrapper) Unwrap() interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return w.inner
+}
+func (w nilRewrapper) Rewrap(interface {
+	Do(*http.Request) (*http.Response, error)
+}) interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return nil
+}
+
+type typedNilRewrapper struct{ inner HTTPDoer }
+
+func (w typedNilRewrapper) Do(request *http.Request) (*http.Response, error) {
+	return w.inner.Do(request)
+}
+func (w typedNilRewrapper) Unwrap() interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	return w.inner
+}
+func (w typedNilRewrapper) Rewrap(interface {
+	Do(*http.Request) (*http.Response, error)
+}) interface {
+	Do(*http.Request) (*http.Response, error)
+} {
+	var client *http.Client
+	return client
 }

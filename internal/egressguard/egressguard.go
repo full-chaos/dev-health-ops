@@ -92,12 +92,27 @@ func SetAllowForTest(prefixes ...netip.Prefix) (restore func()) {
 
 // check is nil for a public address or an allowed one, else the classed refusal (one WARN with the class only).
 func check(addr netip.Addr) error {
-	addr = addr.Unmap()
+	addr = addr.Unmap().WithZone("")
+	// A translation address (NAT64, 6to4, Teredo) is decided on the IPv4 addresses it reaches, each checked and allowed
+	// as itself: an allow list for the IPv6 translation range never admits a non-public target, and a public target is
+	// public. A metadata form is refused first.
+	if targets := netclass.TranslationTargets(addr); len(targets) > 0 {
+		if class := netclass.BlockedAddressClass(addr); class == "metadata" {
+			logRefused(class)
+			return &RefusedError{Class: class}
+		}
+		for _, target := range targets {
+			if err := check(target); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	class := netclass.BlockedAddressClass(addr)
 	if class == "" {
 		return nil
 	}
-	if !neverAllowed[class] && inAny(addr.WithZone(""), allowList()) {
+	if !neverAllowed[class] && inAny(addr, allowList()) {
 		return nil
 	}
 	logRefused(class)

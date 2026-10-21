@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -199,10 +200,10 @@ type originState struct {
 // and is returned as it is.
 func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 	if wrapper, ok := doer.(httpguard.Wrapper); ok {
-		if rebuilt, ok := wrapper.Rewrap(originGuardedAtConstruction(wrapper.Unwrap())).(HTTPDoer); ok {
+		if rebuilt, ok := wrapper.Rewrap(originGuardedAtConstruction(wrapper.Unwrap())).(HTTPDoer); ok && !isNilDoer(rebuilt) {
 			return rebuilt
 		}
-		return doer
+		return refusedDoer{err: errUnguardedDoer} // a decorator that cannot be rebuilt around the guarded client never sends unguarded
 	}
 	hc, ok := doer.(*http.Client)
 	if !ok || hc == nil {
@@ -1027,20 +1028,38 @@ func RateLimitDimension(provider, path, message string) string {
 }
 
 // EgressGuardedDoer is doer with its transport guarded at dial time (egressguard.Wrap): an *http.Client is
-// copied with the guarded transport, a Wrapper is rebuilt around its guarded inner doer, any other doer (a test's) is
-// returned as it is. Every constructor that sends a credential to a stored provider URL applies it.
+// copied with the guarded transport, a Wrapper is rebuilt around its guarded inner doer, any other doer (or a nil
+// one, or a Wrapper whose rebuild fails) is a refusedDoer: fail closed. Every constructor
+// that sends a credential to a stored provider URL applies it.
 func EgressGuardedDoer(doer HTTPDoer) HTTPDoer {
 	if wrapper, ok := doer.(httpguard.Wrapper); ok {
-		if rebuilt, ok := wrapper.Rewrap(EgressGuardedDoer(wrapper.Unwrap())).(HTTPDoer); ok {
+		if rebuilt, ok := wrapper.Rewrap(EgressGuardedDoer(wrapper.Unwrap())).(HTTPDoer); ok && !isNilDoer(rebuilt) {
 			return rebuilt
 		}
-		return doer
+		return refusedDoer{err: errUnguardedDoer}
 	}
 	hc, ok := doer.(*http.Client)
 	if !ok || hc == nil {
-		return doer
+		return refusedDoer{err: errUnguardedDoer} // a doer the guard cannot reach into (fail closed)
 	}
 	guarded := *hc
 	guarded.Transport = egressguard.Wrap(guarded.Transport)
 	return &guarded
+}
+
+// errUnguardedDoer is what a doer the egress guard cannot reach into answers in its place (refusedDoer): nothing is
+// sent unchecked.
+var errUnguardedDoer error = &egressguard.RefusedError{Class: "unguarded_transport"}
+
+// isNilDoer is a nil doer, also a typed nil pointer inside the interface.
+func isNilDoer(doer HTTPDoer) bool {
+	if doer == nil {
+		return true
+	}
+	value := reflect.ValueOf(doer)
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Interface, reflect.Chan:
+		return value.IsNil()
+	}
+	return false
 }

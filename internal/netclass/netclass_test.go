@@ -13,6 +13,7 @@ func TestEveryMetadataFormIsTheMetadataClass(t *testing.T) {
 		"::ffff:169.254.169.254", "::ffff:100.100.100.200",
 		"64:ff9b::a9fe:a9fe", "64:ff9b::6464:64c8", "64:ff9b:1::a9fe:a9fe", "64:ff9b:1:ffff::6464:64c8",
 		"2002:a9fe:a9fe::", "2002:6464:64c8::1",
+		"fd20:ce::254", "fd00:c1::a9fe:a9fe", "fd12:3456:789a::a9fe:a9fe", "fc00::a9fe:a9fe", "168.63.129.16", "64:ff9b::a83f:8110",
 	} {
 		if got := BlockedAddressClass(netip.MustParseAddr(address)); got != "metadata" {
 			t.Errorf("BlockedAddressClass(%s) = %q, want metadata", address, got)
@@ -36,6 +37,29 @@ func TestBlockedAddressClassTable(t *testing.T) {
 	} {
 		if got := BlockedAddressClass(netip.MustParseAddr(address)); got != want {
 			t.Errorf("BlockedAddressClass(%s) = %q, want %q", address, got, want)
+		}
+	}
+}
+
+func TestTranslationTargets(t *testing.T) {
+	for address, want := range map[string][]string{
+		"64:ff9b::a00:1":            {"10.0.0.1"},
+		"64:ff9b::":                 {"0.0.0.0"},
+		"2002:7f00:1::":             {"127.0.0.1"},
+		"2001:0:808:808::f7f7:f7f7": {"8.8.8.8", "8.8.8.8"},
+		"64:ff9b:1::808:808":        {"0.0.0.8", "8.8.8.8"},
+		"fd00::1":                   nil,
+		"10.0.0.1":                  nil,
+	} {
+		got := TranslationTargets(netip.MustParseAddr(address))
+		if len(got) != len(want) {
+			t.Errorf("TranslationTargets(%s) = %v, want %v", address, got, want)
+			continue
+		}
+		for i := range want {
+			if got[i] != netip.MustParseAddr(want[i]) {
+				t.Errorf("TranslationTargets(%s) = %v, want %v", address, got, want)
+			}
 		}
 	}
 }

@@ -70,22 +70,13 @@ func BlockedAddressClass(addr netip.Addr) string {
 	if metadataAddrs[addr] {
 		return "metadata"
 	}
-	// A translation address (NAT64, 6to4, Teredo) reaches the IPv4 address it embeds: it takes the strictest class of the
-	// addresses it can carry, so an allow list for the IPv6 range never admits what the IPv4 address would not be.
-	embedded := embeddedIPv4(addr)
-	// A 0.0.0.0 candidate is the zero fill of another length's position while some other candidate carries bits; when
-	// every candidate is 0.0.0.0 the address embeds the unspecified address itself (64:ff9b::, 2002::).
-	zeroFill := false
-	for _, candidate := range embedded {
-		if !candidate.IsUnspecified() {
-			zeroFill = true
-		}
+	if isMetadataULA(addr) {
+		return "metadata"
 	}
+	// A translation address (NAT64, 6to4, Teredo) reaches the IPv4 address it embeds: it takes the strictest class of the
+	// addresses it can carry, so it is never less strict than the IPv4 address itself.
 	strictest := ""
-	for _, candidate := range embedded {
-		if zeroFill && candidate.IsUnspecified() {
-			continue
-		}
+	for _, candidate := range TranslationTargets(addr) {
 		if class := BlockedAddressClass(candidate); class != "" && (strictest == "" || classRank[class] < classRank[strictest]) {
 			strictest = class
 		}
@@ -117,11 +108,26 @@ func BlockedAddressClass(addr netip.Addr) string {
 
 // metadataAddrs are the cloud instance-metadata endpoints (they hand out the node's credentials): AWS, GCP, Azure and
 // OCI 169.254.169.254, AWS ECS task metadata 169.254.170.2 and .23, Alibaba 100.100.100.200, AWS IPv6 fd00:ec2::254
-// and its DNS fd00:ec2::23.
+// and its DNS fd00:ec2::23, GCP IPv6 fd20:ce::254, OCI IPv6 fd00:c1::a9fe:a9fe, and the Azure WireServer
+// 168.63.129.16 (a public address that serves the host's agent protocol).
 var metadataAddrs = map[netip.Addr]bool{
 	netip.MustParseAddr("169.254.169.254"): true, netip.MustParseAddr("169.254.170.2"): true,
 	netip.MustParseAddr("169.254.170.23"): true, netip.MustParseAddr("100.100.100.200"): true,
 	netip.MustParseAddr("fd00:ec2::254"): true, netip.MustParseAddr("fd00:ec2::23"): true,
+	netip.MustParseAddr("fd20:ce::254"): true, netip.MustParseAddr("fd00:c1::a9fe:a9fe"): true,
+	netip.MustParseAddr("168.63.129.16"): true,
+}
+
+var uniqueLocal = netip.MustParsePrefix("fc00::/7")
+
+// isMetadataULA is a unique-local IPv6 address whose low 32 bits are 169.254.169.254 (a9fe:a9fe): the form the clouds
+// use for an IPv6 metadata endpoint (OCI fd00:c1::a9fe:a9fe and the like), so an unlisted one is still metadata.
+func isMetadataULA(addr netip.Addr) bool {
+	if !addr.Is6() || !uniqueLocal.Contains(addr) {
+		return false
+	}
+	b := addr.As16()
+	return b[12] == 0xa9 && b[13] == 0xfe && b[14] == 0xa9 && b[15] == 0xfe
 }
 
 // classRank orders the classes from the strictest (never admitted by any allow list) down.
@@ -138,6 +144,24 @@ var (
 // embeddedIPv4 is every IPv4 address an IPv6 translation address can carry: NAT64 well-known /96 (RFC 6052), the
 // local-use prefix 64:ff9b:1::/48 at every RFC 6052 length it allows (/48, /56, /64, /96; RFC 8215), and 6to4 (RFC
 // 3056) and Teredo (RFC 4380). Every candidate is returned, so the strictest reading wins.
+// TranslationTargets is every IPv4 address a translation address (NAT64, 6to4, Teredo) can reach, nil for any other
+// address. A 0.0.0.0 candidate is the zero fill of another length's position while some other candidate carries bits,
+// and is dropped; when every candidate is 0.0.0.0 the address embeds the unspecified address itself (64:ff9b::, 2002::)
+// and that is the one target. A guard decides a translation address on these targets, never on its IPv6 range.
+func TranslationTargets(addr netip.Addr) []netip.Addr {
+	embedded := embeddedIPv4(addr.Unmap().WithZone(""))
+	var targets []netip.Addr
+	for _, candidate := range embedded {
+		if !candidate.IsUnspecified() {
+			targets = append(targets, candidate)
+		}
+	}
+	if len(targets) == 0 && len(embedded) > 0 {
+		return []netip.Addr{netip.IPv4Unspecified()}
+	}
+	return targets
+}
+
 func embeddedIPv4(addr netip.Addr) []netip.Addr {
 	if !addr.Is6() {
 		return nil

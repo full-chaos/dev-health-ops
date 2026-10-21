@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -17,7 +18,20 @@ import (
 
 const adminPrefix = "/api/v1/admin"
 
+// nilConn is a ClickHouse conn that answers every probe with an error, so routes
+// that touch it (readiness) fail cleanly instead of dereferencing nil.
 type nilConn struct{ driver.Conn }
+
+type failedRow struct{}
+
+func (failedRow) Err() error           { return errNilConn }
+func (failedRow) Scan(...any) error    { return errNilConn }
+func (failedRow) ScanStruct(any) error { return errNilConn }
+
+var errNilConn = errors.New("no clickhouse in this test")
+
+func (nilConn) QueryRow(context.Context, string, ...any) driver.Row { return failedRow{} }
+func (nilConn) Ping(context.Context) error                          { return errNilConn }
 
 // mountedAdminRoutes is the real Routes() set with every optional area mounted
 // (guard, a lazy never-connecting pool, a ClickHouse conn), so no package that

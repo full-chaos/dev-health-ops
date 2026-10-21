@@ -1,0 +1,20 @@
+{
+  "keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "use": "sig",
+      "kid": "auth-example-2026-10",
+      "x": "Gwwaf1pjvsCzhJiDdFzuFpQEaNAL2hTRLdPp6YLo5bs"
+    },
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "use": "sig",
+      "kid": "auth-example-2026-11",
+      "x": "OQqjnS0BgWH3FDxyTSQ7UK3swX15ZKnrHhX-lLPB8gU"
+    }
+  ]
+}

@@ -124,6 +124,46 @@ func TestWorkflowPathFiltersCodeQLMatrixKeepsEveryMainConfiguration(t *testing.T
 	}
 }
 
+// docsWorkflowPathProblems is every way the paths of a docs workflow's events break the docs-only contract.
+func docsWorkflowPathProblems(t *testing.T, file string, wf map[string]any, events []string) []string {
+	t.Helper()
+	var problems []string
+	for _, event := range events {
+		trig := triggerMap(t, wf, event)
+		if trig == nil {
+			problems = append(problems, file+": no "+event+" trigger")
+			continue
+		}
+		paths := stringList(t, trig["paths"])
+		if len(paths) == 0 {
+			problems = append(problems, file+": "+event+" has no paths filter")
+		}
+		has := map[string]bool{}
+		for _, p := range paths {
+			has[p] = true
+			if p == "**" || p == "*" {
+				problems = append(problems, file+": "+event+" paths contains catch-all \""+p+"\"")
+			}
+		}
+		for _, p := range paths {
+			for _, bad := range []string{"src/", "internal/", "cmd/", "deploy/", "tests/", "web/"} {
+				if strings.HasPrefix(p, bad) {
+					problems = append(problems, file+": "+event+" paths contains code path \""+p+"\"")
+				}
+			}
+		}
+		for _, want := range []string{"docs/**", docsSiteConfig, "docs-data/**"} {
+			if !has[want] {
+				problems = append(problems, file+": "+event+" paths is missing "+want)
+			}
+		}
+		if !has[".github/workflows/"+file] {
+			problems = append(problems, file+": "+event+" paths must include the workflow file itself")
+		}
+	}
+	return problems
+}
+
 func TestWorkflowPathFiltersDocsWorkflowsRunOnlyForDocsPaths(t *testing.T) {
 	cases := []struct {
 		file   string
@@ -133,39 +173,56 @@ func TestWorkflowPathFiltersDocsWorkflowsRunOnlyForDocsPaths(t *testing.T) {
 		{"docs-cloudflare.yml", []string{"pull_request"}},
 	}
 	for _, c := range cases {
-		wf := loadWorkflowMap(t, c.file)
-		for _, event := range c.events {
-			trig := triggerMap(t, wf, event)
-			if trig == nil {
-				t.Errorf("%s: no %s trigger", c.file, event)
-				continue
-			}
-			paths := stringList(t, trig["paths"])
-			if len(paths) == 0 {
-				t.Errorf("%s: %s has no paths filter", c.file, event)
-			}
-			has := map[string]bool{}
-			for _, p := range paths {
-				has[p] = true
-				if p == "**" || p == "*" {
-					t.Errorf("%s: %s paths contains catch-all %q", c.file, event, p)
-				}
-			}
-			for _, p := range paths {
-				for _, bad := range []string{"src/", "internal/", "cmd/", "deploy/", "tests/", "web/"} {
-					if strings.HasPrefix(p, bad) {
-						t.Errorf("%s: %s paths contains code path %q", c.file, event, p)
-					}
-				}
-			}
-			for _, want := range []string{"docs/**", docsSiteConfig, "docs-data/**"} {
-				if !has[want] {
-					t.Errorf("%s: %s paths is missing %s", c.file, event, want)
-				}
-			}
-			if !has[".github/workflows/"+c.file] {
-				t.Errorf("%s: %s paths must include the workflow file itself", c.file, event)
-			}
+		for _, problem := range docsWorkflowPathProblems(t, c.file, loadWorkflowMap(t, c.file), c.events) {
+			t.Error(problem)
+		}
+	}
+}
+
+// Planted: a code path added to docs-guards.yml must keep the docs-only contract red.
+func TestDocsGuardsCodePathStaysRed(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "docs-guards.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const anchor = "      - 'docs-data/**'\n"
+	if strings.Count(string(raw), anchor) != 2 {
+		t.Fatalf("docs-guards.yml no longer lists docs-data/** once per event; the plant cannot land")
+	}
+	planted := strings.ReplaceAll(string(raw), anchor, anchor+"      - 'internal/cigates/docstools/**'\n")
+	var wf map[string]any
+	if err := yaml.Unmarshal([]byte(planted), &wf); err != nil {
+		t.Fatal(err)
+	}
+	problems := docsWorkflowPathProblems(t, "docs-guards.yml", wf, []string{"pull_request", "push"})
+	if len(problems) != 2 || !strings.Contains(strings.Join(problems, "\n"), `contains code path "internal/cigates/docstools/**"`) {
+		t.Fatalf("planted code path not caught for both events: %q", problems)
+	}
+}
+
+// docs-drift.yml carries the docs drift checks with the code paths their inputs live in; its list is pinned.
+func TestDocsDriftWorkflowPathsArePinned(t *testing.T) {
+	want := []string{
+		"docs/**",
+		"internal/jobs/workgraph/units/taxonomy.go",
+		"deploy/go-workers/deployment.json",
+		"contracts/jobs/v1/registry.json",
+		"contracts/jobs/v1/migration-state.json",
+		"internal/cigates/docstools/**",
+		"cmd/cigate/**",
+		"go.mod",
+		"go.sum",
+		".github/workflows/docs-drift.yml",
+	}
+	wf := loadWorkflowMap(t, "docs-drift.yml")
+	for _, event := range []string{"push", "pull_request"} {
+		trig := triggerMap(t, wf, event)
+		if trig == nil {
+			t.Errorf("docs-drift.yml: no %s trigger", event)
+			continue
+		}
+		if got := stringList(t, trig["paths"]); !reflect.DeepEqual(got, want) {
+			t.Errorf("docs-drift.yml %s paths = %q, want %q", event, got, want)
 		}
 	}
 }

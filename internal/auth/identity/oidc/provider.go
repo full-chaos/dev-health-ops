@@ -20,7 +20,8 @@ type Provider struct {
 	Protocol         string
 	Status           string
 	AutoProvision    bool
-	Config           ProviderConfig
+	Config           ProviderConfig // an OIDC row
+	OAuth            OAuthConfig    // an OAuth row
 	AllowedDomains   []string
 	EncryptedSecrets string // the raw JSON column; "" when NULL
 }
@@ -42,8 +43,12 @@ var errProviderShape = errors.New("oidc: stored provider column has the wrong JS
 // entitlement gate and the protocol and status checks run before anything
 // stored is decoded. Provider reads and decodes the whole row; a stored column
 // it cannot read is ErrProviderConfig.
+//
+// DefaultProviderHead picks an organization's active row of one protocol: the
+// default row first, then the oldest; ErrProviderNotFound when there is none.
 type ProviderSource interface {
 	ProviderHead(ctx context.Context, id uuid.UUID) (ProviderHead, error)
+	DefaultProviderHead(ctx context.Context, orgID uuid.UUID, protocol string) (ProviderHead, error)
 	Provider(ctx context.Context, id uuid.UUID) (Provider, error)
 }
 
@@ -73,6 +78,17 @@ func (p PGProviders) ProviderHead(ctx context.Context, id uuid.UUID) (ProviderHe
 	return head, err
 }
 
+func (p PGProviders) DefaultProviderHead(ctx context.Context, orgID uuid.UUID, protocol string) (ProviderHead, error) {
+	var head ProviderHead
+	err := p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status FROM public.sso_providers
+WHERE org_id = $1 AND protocol = $2 AND status = 'active'
+ORDER BY is_default DESC, created_at, id LIMIT 1`, orgID, protocol).Scan(&head.ID, &head.OrgID, &head.Protocol, &head.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ProviderHead{}, ErrProviderNotFound
+	}
+	return head, err
+}
+
 func (p PGProviders) Provider(ctx context.Context, id uuid.UUID) (Provider, error) {
 	var (
 		row                     Provider
@@ -89,7 +105,14 @@ FROM public.sso_providers WHERE id = $1`, id).Scan(&row.ID, &row.OrgID, &row.Pro
 	if err != nil {
 		return Provider{}, err
 	}
-	if row.Config, err = decodeProviderConfig(config); err != nil {
+	if _, oauth := oauthProviderOf(row.Protocol); oauth {
+		if row.OAuth, err = decodeOAuthConfig(config); err == nil {
+			err = checkOAuthBase(row.Protocol, row.OAuth)
+		}
+	} else {
+		row.Config, err = decodeProviderConfig(config)
+	}
+	if err != nil {
 		return Provider{}, fmt.Errorf("%w: config: %w", ErrProviderConfig, err)
 	}
 	if allowedDomains != nil {

@@ -622,6 +622,49 @@ func TestSAMLLegacyAccountSignsInBySubject(t *testing.T) {
 	})
 }
 
+// TestSAMLNameIDInTwoOrganizationsIsRefusedWithoutWrites: two go-api accounts
+// in two organizations carry one NameID. With auto-provisioning on, the
+// sign-in is refused and writes no account, membership or identity.
+func TestSAMLNameIDInTwoOrganizationsIsRefusedWithoutWrites(t *testing.T) {
+	h := newHarness(t, true)
+	ctx := context.Background()
+	if _, err := h.db.admin.Exec(ctx, `UPDATE public.sso_providers SET auto_provision_users = true WHERE id = $1`, h.provider.ID); err != nil {
+		t.Fatal(err)
+	}
+	otherOrg := uuid.New()
+	if _, err := h.db.admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'saml-test')`, otherOrg, "org-"+otherOrg.String()); err != nil {
+		t.Fatal(err)
+	}
+	shared := "two-orgs-" + uuid.NewString()
+	inOrgEmail := uniqueEmail("in-org")
+	h.member(h.goAPIUser(inOrgEmail, "saml", &shared, false))
+	elsewhere := h.goAPIUser(uniqueEmail("other-org"), "saml", &shared, false)
+	if _, err := h.db.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'member')`, uuid.New(), elsewhere, otherOrg); err != nil {
+		t.Fatal(err)
+	}
+	counts := func() [5]int {
+		return [5]int{
+			h.count(`SELECT count(*) FROM public.users`),
+			h.count(`SELECT count(*) FROM public.memberships`),
+			h.count(`SELECT count(*) FROM auth.principals`),
+			h.count(`SELECT count(*) FROM auth.users`),
+			h.identityCount(),
+		}
+	}
+	for name, email := range map[string]string{"a new email": uniqueEmail("asserted"), "the in-org account's email": inOrgEmail} {
+		t.Run(name, func(t *testing.T) {
+			before := counts()
+			signIn, err := h.consume(h.respond(resp{nameID: nid(shared), email: email}), nil)
+			if err == nil {
+				t.Fatalf("sign-in %+v accepted, want a refusal", signIn)
+			}
+			if after := counts(); after != before {
+				t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
+			}
+		})
+	}
+}
+
 // TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail: on a key hit the stored
 // account signs in; the assertion's email is neither required nor compared.
 func TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail(t *testing.T) {

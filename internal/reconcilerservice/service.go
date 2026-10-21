@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -95,7 +96,7 @@ func runHealthcheck(lookup secrets.LookupEnv) int {
 	if err != nil || port == "" {
 		port = "8080"
 	}
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{Timeout: 3 * time.Second, Transport: httpguard.SharedTransport()}
 	response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%s/readyz", port))
 	if err != nil {
 		return 1

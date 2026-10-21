@@ -200,31 +200,19 @@ the coexistence boundary.
 Canonical local test commands:
 
 ```bash
-make test:unit
-make test:integration
-make test:e2e
+make go:check-fast
+make go:check
 make test:live-e2e
-make test:ci
 ```
 
-All tiers route through one entrypoint:
-
-```bash
-./ci/run_tests.sh <unit|integration|e2e|live-e2e|ci>
-```
+The Go checks run through `ci/check_go.sh`; the live backend e2e harness runs
+through `./ci/run_tests.sh live-e2e`.
 
 Notes:
 
-- `integration` is token-aware and skips provider tests cleanly when credentials
-  are unavailable.
 - `live-e2e` starts a live backend harness, generates deterministic ClickHouse
   fixtures, waits for API readiness, and asserts `/health`, `/api/v1/meta`, and
   `/api/v1/home`.
-- `ci` blocks on `flake8` and coverage-gated unit tests. `black`, `isort`, and
-  `mypy` are advisory by default; set `STRICT_QUALITY_GATES=1` to make them
-  blocking.
-- JUnit XML paths are stable under `test-results/junit/` and can be overridden
-  with `TEST_RESULTS_DIR` / `JUNIT_XML_*` variables.
 
 ## Container images
 

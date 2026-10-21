@@ -22,6 +22,7 @@ internal/cigates/affected	test	README.md
 internal/cigates/affected	test	contracts
 internal/cigates/affected	test	deploy
 internal/cigates/affected	test	docs
+internal/cigates/affected	test	mkdocs.yml
 internal/cigates/affectedmatrix	test	.github
 internal/cigates/affectedmatrix	test	README.md
 internal/cigates/affectedmatrix	test	ci

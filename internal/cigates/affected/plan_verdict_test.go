@@ -298,7 +298,7 @@ func TestPlanVerdict(t *testing.T) {
 		{name: "planner_code_is_full", changed: []string{"internal/cigates/affected/plan.go"}, want: "FULL planner input*"},
 		{name: "go_quality_go_source_is_full", extra: q, changed: []string{"x/x.go"}, want: "FULL Go source*"},
 		// any other path: FULL.
-		{name: "reader_less_path_is_full", changed: []string{".claude/settings.json"}, want: nonGo},
+		{name: "reader_less_path_is_full", changed: []string{".claude/x.json"}, want: nonGo},
 		{name: "docs_path_is_full", changed: []string{"docs/a.md"}, want: nonGo},
 		{name: "go_beside_a_non_go_path_is_full", changed: []string{"x/x.go", "docs/a.md"}, want: nonGo},
 		{name: "testdata_data_is_full", changed: []string{"x/testdata/a.json"}, want: nonGo},

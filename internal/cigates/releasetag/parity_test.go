@@ -171,6 +171,14 @@ func runCase(t *testing.T, bin, dir string) (outcome, string) {
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if exists(filepath.Join(dir, "stdout-to-dev-full")) {
+		full, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+		if err != nil {
+			t.Skipf("no /dev/full: %v", err)
+		}
+		defer full.Close()
+		cmd.Stdout = full
+	}
 	got := outcome{}
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
@@ -286,7 +294,8 @@ func TestEveryRefusalCaseNamesAnExceptionLikePython(t *testing.T) {
 		if !exists(filepath.Join(dir, "stderr.traceback")) {
 			continue
 		}
-		lines := strings.Split(strings.TrimRight(mustRead(t, filepath.Join(dir, "stderr.traceback")), "\n"), "\n")
+		text, _, _ := strings.Cut(mustRead(t, filepath.Join(dir, "stderr.traceback")), "Exception ignored while flushing sys.stdout:\n")
+		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 		last := lines[len(lines)-1]
 		if !tracebackLine.MatchString(last) {
 			t.Errorf("%s: last stderr line %q is not a Kind: message line", name, last)

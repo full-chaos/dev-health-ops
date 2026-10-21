@@ -74,7 +74,7 @@ func TestEveryPythonRefusalOfAutoTagHasAGoRow(t *testing.T) {
 		}
 	}
 	for site := range inventory {
-		if !listed[site] && !strings.HasSuffix(site, "#stricter") {
+		if !listed[site] && !strings.HasSuffix(site, "#stricter") && !strings.HasPrefix(site, "implicit: ") {
 			t.Errorf("inventory row %q matches no refusing site of the frozen script", site)
 		}
 		if base, ok := strings.CutSuffix(site, "#stricter"); ok && !listed[base] {

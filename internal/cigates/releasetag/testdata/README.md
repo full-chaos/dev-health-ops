@@ -13,6 +13,7 @@ Case layout (`{WORK}` stands for the work directory in every recorded text):
 | `args` | a JSON array: the arguments after `release next-tag` |
 | `in/` | files copied into the work directory, without the `.fixture` suffix (a file of the cases is often not valid JSON, and the manifest tool reads a `.json` file as a golden) |
 | `no-github-output`, `github-output-path` | `GITHUB_OUTPUT` unset, or set to this path under the work directory (empty: set to the empty string); the default is `github_output` |
+| `stdout-to-dev-full` | stdout is `/dev/full` (the case is skipped where there is none); `stdout` is then empty |
 | `rc`, `stdout` | what Python printed and exited with |
 | `github_output` | what the file `GITHUB_OUTPUT` names held after the run (absent: the run left no file) |
 | `stderr` | Python's stderr, byte for byte (it is git's own complaint, which both programs pass through) |
@@ -23,6 +24,14 @@ Case layout (`{WORK}` stands for the work directory in every recorded text):
 Recording, for each case: a temporary directory `$W` with `git init`, the `repo` steps (user name and mail set, signing off,
 `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` at `/dev/null`, `GIT_CEILING_DIRECTORIES` at the parent of `$W`), `in/` copied,
 then `python3.14 -I -B auto_tag.py <args>` with cwd `$W` and `GITHUB_OUTPUT=$W/github_output`.
+
+## stdout
+
+Python wrote stdout through a buffer it flushed once at exit and ignored a failed flush: two lines on stderr
+(`Exception ignored while flushing sys.stdout:` and the OSError line) and exit status 120, over any status before it
+(a traceback came first; `-h` too), and only when the buffer held something. A write of 30000 bytes did not fail earlier.
+`GITHUB_OUTPUT` is written before the flush. The `stdout-full-*` cases record this; a closed pipe gives
+`BrokenPipeError: [Errno 32] Broken pipe` (Python ignores SIGPIPE, and so does `Run`).
 
 ## Stricter than Python (D6129)
 

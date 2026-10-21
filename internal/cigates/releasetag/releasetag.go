@@ -8,12 +8,14 @@
 package releasetag
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"syscall"
 	"unicode"
@@ -25,7 +27,46 @@ import (
 const usage = "usage: cigate release next-tag [-h] [--package-json PACKAGE_JSON] [--pre-release-suffix PRE_RELEASE_SUFFIX]"
 
 // Run is `cigate release <verb>`; only next-tag exists. env reads a process variable.
+//
+// Python wrote stdout through a buffer that it flushed once, at exit, and ignored a failed flush with one stderr message and
+// exit status 120, whatever the status was before (a traceback came first). Run does the same: stdout is held and written once.
 func Run(args []string, env func(string) string, stdout, stderr io.Writer) int {
+	// Python ignored SIGPIPE: a closed stdout was a failed flush (exit 120), not death by signal.
+	signal.Ignore(syscall.SIGPIPE)
+	var held bytes.Buffer
+	code := run(args, env, &held, stderr)
+	if held.Len() == 0 {
+		return code
+	}
+	n, err := stdout.Write(held.Bytes())
+	if err == nil && n < held.Len() {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		fmt.Fprint(stderr, "Exception ignored while flushing sys.stdout:\n"+flushErrorLine(err)+"\n")
+		return 120
+	}
+	return code
+}
+
+// flushErrorLine is the exception line Python printed for a failed write of stdout.
+func flushErrorLine(err error) string {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return "OSError: " + err.Error()
+	}
+	text := errno.Error()
+	if text != "" {
+		text = strings.ToUpper(text[:1]) + text[1:]
+	}
+	kind := "OSError"
+	if errno == syscall.EPIPE {
+		kind = "BrokenPipeError"
+	}
+	return fmt.Sprintf("%s: [Errno %d] %s", kind, int(errno), text)
+}
+
+func run(args []string, env func(string) string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "next-tag" {
 		fmt.Fprintln(stderr, "usage: cigate release next-tag [flags]")
 		return 2

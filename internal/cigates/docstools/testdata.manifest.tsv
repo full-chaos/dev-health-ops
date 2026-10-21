@@ -1,5 +1,5 @@
 # Every file under internal/cigates/docstools/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: d84b6d258b34b2db21f0809fc0a6cf9f8d13c87707b8a98b257a05fba40a4f14 (5219 files)
+# python-recorded set: cb49f74567c94a1376bc8d1df160d3ef34be83c12702f7eea427f3c56b777822 (5219 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 4d624e9fd3102b04e2049e1dd34fab35caea616f45ce2bbb0f7029de31b16e49	hand-written	README.md
 8a509c842354e26c0722fb393f7701c3e6b9425a04c36cf5d686505374c59afd	python-recorded	helpers/a11yaudit.jsonl
@@ -3398,7 +3398,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded
 1ec75c9f3d27b87c55c9c6e690304b38241b68936139ab687b2591a41b99d452	python-recorded	parity/pub-link-up-to-root/in/docs/guide/advanced/index.md.fixture
 5ef76b03026269900f46688a8b03e3fa547c5b61ea444a7f84f4f29e814c4431	python-recorded	parity/pub-link-up-to-root/in/docs/guide/intro.md.fixture
 8d537002fec2119e556cefb2f3e61523339c4e25d48e86fe8b1da1ea290e8613	python-recorded	parity/pub-link-up-to-root/in/docs/index.md.fixture
-0c646d3de64caf13c46bf48d95edb667573a916b82c8dd9cb0af487d5ae3f80f	python-recorded	parity/pub-link-up-to-root/in/docs/reference.md.fixture
+457b5d5fe7c64e2820f656348d0eb1b6580c3d189531c3b972e8458953d444fc	python-recorded	parity/pub-link-up-to-root/in/docs/reference.md.fixture
 cd3a05e8490ae8ea73b2abff90816a585a786634f89fe2e9c9d95d07e7bb42ce	python-recorded	parity/pub-link-up-to-root/in/mkdocs.yml.fixture
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/pub-link-up-to-root/rc
 efd66792c9d4fb06273146edc973ad4e7d03dd1737f0f661d9084709d3462ad5	python-recorded	parity/pub-link-up-to-root/stderr.traceback

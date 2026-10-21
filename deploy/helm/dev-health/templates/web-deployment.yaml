@@ -58,7 +58,7 @@ spec:
                   name: {{ .Values.web.authSecret.secretName | quote }}
                   key: {{ .Values.web.authSecret.key | default "AUTH_SECRET" | quote }}
             {{- else if or (not .Values.web.localDevelopment.enabled) (eq (.Values.web.env.NODE_ENV | default "production") "production") }}
-            {{- fail "web.authSecret.secretName (or web.env.AUTH_SECRET) is required whenever web.enabled=true (only web.localDevelopment with NODE_ENV other than production may omit it) (CHAOS-10446): web's session secret has its own Secret and never falls back to JWT_SECRET_KEY" }}
+            {{- fail "web.authSecret.secretName (or web.env.AUTH_SECRET) is required whenever web.enabled=true (only web.localDevelopment with NODE_ENV other than production may omit it) (CHAOS-10446): web's session secret has its own Secret and never falls back to JWT_SECRET_KEY. This is a required values change: see docs/operate/install/production.md, section \"Required values change: separate Secrets for web and the HS256 key\"." }}
             {{- end }}
             - name: NODE_ENV
               value: {{ .Values.web.env.NODE_ENV | quote }}

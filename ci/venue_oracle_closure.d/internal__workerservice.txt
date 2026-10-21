@@ -16,6 +16,7 @@ internal/cacheinvalidation
 internal/chmigrate
 internal/cli
 internal/deploymentcontract
+internal/egressguard
 internal/externalrecompute
 internal/httpguard
 internal/identityalias
@@ -78,6 +79,7 @@ internal/jobs/workgraph/textrefs
 internal/jobs/workgraph/units
 internal/llmbudget
 internal/mail
+internal/netclass
 internal/operationalordering
 internal/pgmigrate
 internal/platform/config
@@ -139,6 +141,7 @@ internal/teamprovider
 internal/teamresolve
 internal/testsupport/chschema
 internal/testsupport/containers
+internal/testsupport/egressallow
 internal/testsupport/fakehttp
 internal/testsupport/moduleroot
 internal/testsupport/pgschema

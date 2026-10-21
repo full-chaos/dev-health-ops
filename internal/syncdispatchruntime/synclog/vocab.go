@@ -73,10 +73,15 @@ var (
 	MsgDispatchSyncRunWokenByUnitCompletion              = Msg{"dispatch_sync_run.woken_by_unit_completion"}
 	MsgDispatchSyncRunUnitCompletionWakeFailed           = Msg{"dispatch_sync_run.unit_completion_wake_failed"}
 	MsgTeamRepoOwnershipDerivation                       = Msg{"team_repo_ownership_derivation"}
+	// The provider egress guard (internal/egressguard): a refused dial, and an allow-list setting that is not a CIDR list.
+	MsgEgressRefused          = Msg{"egressguard: provider egress refused"}
+	MsgEgressAllowListInvalid = Msg{"egressguard: PROVIDER_EGRESS_ALLOW_CIDRS has an entry that is not a CIDR; no non-public address is allowed"}
 )
 
 // Keys.
 var (
+	KeyEgressClass                  = Key{"class"}
+	KeyEgressEntries                = Key{"entries"}
 	KeyStrict                       = Key{"strict"}
 	KeyDeferredUnits                = Key{"deferred_units"}
 	KeyConsideredUnits              = Key{"considered_units"}

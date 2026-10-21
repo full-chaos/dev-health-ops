@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/egressguard"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -468,7 +469,7 @@ func TestCauseClassVocabularyIsClosedAndWrapSafe(t *testing.T) {
 // collapses to "other", and the operator loses the very series that tells the
 // causes apart.
 func TestNewTerminalCategoriesAreInTheFailureCounterVocabulary(t *testing.T) {
-	for _, category := range []string{ResponseTooLargeCategory, ResultTooLargeCategory, TimeLimitCategory, TreeWalkLimitCategory} {
+	for _, category := range []string{ResponseTooLargeCategory, ResultTooLargeCategory, TimeLimitCategory, TreeWalkLimitCategory, EgressRefusedCategory} {
 		if got := providerfoundation.MetricUnitFailureReasonLabel(category); got != category {
 			t.Errorf("MetricUnitFailureReasonLabel(%q) = %q", category, got)
 		}
@@ -575,6 +576,41 @@ func TestTreeWalkLimitIsTerminalOnTheFirstAttemptWithItsClass(t *testing.T) {
 					t.Fatalf("stored detail=%+v, want %+v", repository.detail, want)
 				}
 			}
+		})
+	}
+}
+
+// A provider call the egress guard refused (a stored URL that is not public) is refused the same way on every attempt:
+// the unit ends on the first attempt under egress_refused, both as the classified provider error and as the raw dial
+// error a caller outside providerfoundation returns.
+func TestEgressRefusedIsTerminalOnTheFirstAttemptWithItsClass(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	for name, err := range map[string]error{
+		"classified": fmt.Errorf("list repositories: %w", &providerfoundation.ProviderError{
+			Class: providerfoundation.ErrorPermanent, Reason: providerfoundation.TransportReasonEgressRefused}),
+		"raw dial error": fmt.Errorf("gateway: %w", &egressguard.RefusedError{Class: "private"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			repository := &classRepository{memoryUnitRepository: newMemoryUnitRepository(githubFilesUnit())}
+			var builds atomic.Int32
+			logs := captureWarnings(t)
+			handler := &Handler{
+				Repository: repository, LeaseDuration: time.Minute, Heartbeat: 10 * time.Second,
+				Now: func() time.Time { return now },
+				BuildExecutor: githubRouteExecutor(now, collectErrorHandler{err: err},
+					doerFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected") }), &builds),
+			}
+			execution := providerExecution(repository.unit, now, 1)
+			execution.Definition.MaxAttempts = 5
+			if err := handler.Work(context.Background(), execution); err == nil {
+				t.Fatal("Work() = nil, want the terminal error")
+			}
+			if builds.Load() != 1 || repository.status != "failed" || repository.releaseCalls != 0 ||
+				repository.lastFailCategory != EgressRefusedCategory || repository.causeClass != EgressRefusedCategory {
+				t.Fatalf("executions=%d status=%s releases=%d category=%q class=%q, want one execution, failed, egress_refused",
+					builds.Load(), repository.status, repository.releaseCalls, repository.lastFailCategory, repository.causeClass)
+			}
+			assertOneSafeWarning(t, logs.String(), EgressRefusedCategory)
 		})
 	}
 }

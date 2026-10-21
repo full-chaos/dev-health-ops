@@ -457,10 +457,11 @@ var approvedTransportConstructors = map[string]bool{
 }
 
 // approvedTransportWrappers are the functions whose result is a non-nil RoundTripper over the transport they are given
-// (CompletePagesOnly puts httpguard.SharedTransport under a nil base itself): the result is proven only when every
+// (CompletePagesOnly puts httpguard.SharedTransport under a nil base itself; egressguard.Wrap puts the guarded SharedTransport there): the result is proven only when every
 // RoundTripper argument is the nil literal or itself proven, so a wrapper never launders a transport it was handed.
 var approvedTransportWrappers = map[string]bool{
 	modulePath + "/internal/atlassianteams.CompletePagesOnly": true,
+	modulePath + "/internal/egressguard.Wrap":                 true,
 }
 
 const maxProofDepth = 8

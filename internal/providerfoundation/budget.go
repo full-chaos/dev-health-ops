@@ -1038,6 +1038,8 @@ var metricUnitFailureReasonVocabulary = map[string]struct{}{
 	"time_limit":         {},
 	// CHAOS-8829: a GitHub tree walk a ceiling stopped, or a truncated directory.
 	"tree_walk_limit": {},
+	// A provider call the dial-time egress guard refused (a stored URL that is not public).
+	"egress_refused": {},
 }
 
 // MetricUnitFailureReasonLabel bounds a unit failure category label.

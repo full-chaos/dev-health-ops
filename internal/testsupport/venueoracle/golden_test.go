@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -41,7 +40,7 @@ func sampleRequests() []Request {
 }
 
 func sampleGolden(requests []Request) goldenFile {
-	file := goldenFile{Header: goldenHeader{Test: "TestSample", PythonBuild: goldenBuild, ProducerDigest: strings.Repeat("a", 64), Recipe: "record it"}, Rows: map[string]goldenRows{"rows": {Rows: "a | b"}}}
+	file := goldenFile{Header: goldenHeader{Test: "TestSample", PythonBuild: goldenBuild, ProducerDigest: strings.Repeat("a", 64)}, Rows: map[string]goldenRows{"rows": {Rows: "a | b"}}}
 	for index, request := range requests {
 		entry := requestKey(request)
 		entry.Status, entry.Headers, entry.Body = 200+index, map[string]string{"content-type": "application/json"}, `{"n":`+string(rune('0'+index))+`}`
@@ -53,14 +52,11 @@ func sampleGolden(requests []Request) goldenFile {
 func TestFrozenGoldenAnswersFromTheFile(t *testing.T) {
 	requests := sampleRequests()
 	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(requests))
-	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest}, "TestSample")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if golden.Recording() {
-		t.Fatal("a frozen golden must not record")
-	}
-	answers, err := golden.frozenAnswers(requests, "")
+	answers, err := golden.frozenAnswers(requests)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,9 +65,6 @@ func TestFrozenGoldenAnswersFromTheFile(t *testing.T) {
 	}
 	if got, err := golden.frozenRows("rows"); err != nil || got != "a | b" {
 		t.Fatalf("rows = %q, %v", got, err)
-	}
-	if got := golden.PythonRoot(t, "/repo"); got != "/repo" {
-		t.Fatalf("frozen root = %q, want the caller's own", got)
 	}
 }
 
@@ -84,22 +77,28 @@ func TestFrozenGoldenRefusesWhatItCannotTrust(t *testing.T) {
 		spec GoldenSpec
 		want string
 	}{
-		"missing file":     {GoldenSpec{Path: filepath.Join(dir, "none.json"), PythonBuild: goldenBuild, SHA256: digest, Recipe: "r"}, "is missing"},
-		"no pinned digest": {GoldenSpec{Path: path, PythonBuild: goldenBuild, Recipe: "r"}, "pins no digest"},
-		"edited by hand":   {GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: strings.Repeat("0", 64), Recipe: "r"}, "changed without its digest"},
-		"another build":    {GoldenSpec{Path: path, PythonBuild: strings.Repeat("a", 40), SHA256: digest, Recipe: "r"}, "was executed on build"},
-		"not a build":      {GoldenSpec{Path: path, PythonBuild: "main", SHA256: digest, Recipe: "r"}, "40-hex"},
-		"no recipe":        {GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest}, "recipe"},
+		"missing file":     {GoldenSpec{Path: filepath.Join(dir, "none.json"), PythonBuild: goldenBuild, SHA256: digest}, "is missing"},
+		"no pinned digest": {GoldenSpec{Path: path, PythonBuild: goldenBuild}, "pins no digest"},
+		"edited by hand":   {GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: strings.Repeat("0", 64)}, "changed without its digest"},
+		"another build":    {GoldenSpec{Path: path, PythonBuild: strings.Repeat("a", 40), SHA256: digest}, "was executed on build"},
+		"not a build":      {GoldenSpec{Path: path, PythonBuild: "main", SHA256: digest}, "40-hex"},
 	}
 	for name, testCase := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := openGolden(testCase.spec, "TestSample", false)
+			_, err := openGolden(testCase.spec, "TestSample")
 			if err == nil || !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("error = %v, want it to say %q", err, testCase.want)
 			}
 		})
 	}
-	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "r"}, "TestSample", false)
+	// A header that names no producer digest was not written by this harness.
+	unstamped := sampleGolden(requests)
+	unstamped.Header.ProducerDigest = ""
+	unstampedPath, unstampedDigest := writeGoldenFile(t, t.TempDir(), unstamped)
+	if _, err := openGolden(GoldenSpec{Path: unstampedPath, PythonBuild: goldenBuild, SHA256: unstampedDigest}, "TestSample"); err == nil || !strings.Contains(err.Error(), "names no producer digest") {
+		t.Fatalf("a golden without a producer digest was accepted: %v", err)
+	}
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest}, "TestSample")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,23 +113,23 @@ func TestFrozenGoldenRefusesWhatItCannotTrust(t *testing.T) {
 		t.Run("drift "+name, func(t *testing.T) {
 			changed := sampleRequests()
 			mutate(changed)
-			if _, err := golden.frozenAnswers(changed, ""); err == nil || !strings.Contains(err.Error(), "regenerate") {
-				t.Fatalf("error = %v, want a regeneration instruction", err)
+			if _, err := golden.frozenAnswers(changed); err == nil || !strings.Contains(err.Error(), "the request it was recorded for") {
+				t.Fatalf("error = %v, want a refusal naming the recorded request", err)
 			}
 		})
 	}
 	// A shorter request list is served, and the answer it leaves unused is
 	// what Finish refuses; a longer one asks for more than the file holds.
-	if _, err := golden.frozenAnswers(sampleRequests()[:1], ""); err != nil {
+	if _, err := golden.frozenAnswers(sampleRequests()[:1]); err != nil {
 		t.Fatalf("a shorter request list: error = %v", err)
 	}
 	if err := golden.unusedAnswers(); err == nil || !strings.Contains(err.Error(), "holds 2 answers but the test asked for 1") {
 		t.Fatalf("an unused frozen answer: error = %v", err)
 	}
-	if _, err := golden.frozenAnswers(sampleRequests(), ""); err == nil || !strings.Contains(err.Error(), "the test asks for 2 more") {
+	if _, err := golden.frozenAnswers(sampleRequests()); err == nil || !strings.Contains(err.Error(), "the test asks for 2 more") {
 		t.Fatalf("more requests than answers left: error = %v", err)
 	}
-	if _, err := golden.frozenAnswers(sampleRequests()[1:], ""); err != nil {
+	if _, err := golden.frozenAnswers(sampleRequests()[1:]); err != nil {
 		t.Fatalf("the remaining request: error = %v", err)
 	}
 	if err := golden.unusedAnswers(); err != nil {
@@ -138,131 +137,6 @@ func TestFrozenGoldenRefusesWhatItCannotTrust(t *testing.T) {
 	}
 	if _, err := golden.frozenRows("nope"); err == nil || !strings.Contains(err.Error(), `no row comparison "nope"`) {
 		t.Fatalf("an unknown row comparison: error = %v", err)
-	}
-}
-
-func TestRecordingWritesTheHeaderAndNeverAProof(t *testing.T) {
-	spec := GoldenSpec{Path: filepath.Join(t.TempDir(), "sub", "golden.json"), PythonBuild: goldenBuild, Recipe: "record it"}
-	golden, err := openGolden(spec, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !golden.Recording() {
-		t.Fatal("recording golden reports frozen")
-	}
-	golden.state = statePython
-	value := golden.InspectRows(t, "rows", func() string { return "x | y" })
-	if value != "x | y" {
-		t.Fatalf("recording must return what the source computed, got %q", value)
-	}
-	if golden.recorded.Header.PythonBuild != goldenBuild || golden.recorded.Header.Test != "TestSample" || golden.recorded.Header.Recipe != "record it" {
-		t.Fatalf("header = %+v", golden.recorded.Header)
-	}
-}
-
-func TestPinnedCheckoutMustBeTheBuildItsSourceByteForByte(t *testing.T) {
-	dir := t.TempDir()
-	run := func(args ...string) string {
-		t.Helper()
-		command := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...)
-		out, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	write := func(name, content string) {
-		t.Helper()
-		path := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	run("init", "-q")
-	write("src/app/probe_module.py", "ROUTE = 1\n")
-	write("README.md", "docs\n")
-	run("add", ".")
-	run("commit", "-q", "-m", "one")
-	head := run("rev-parse", "HEAD")
-	digest, err := verifyPinnedCheckout(dir, head)
-	if err != nil || len(digest) != 64 {
-		t.Fatalf("a clean checkout at the build was refused: %q %v", digest, err)
-	}
-	if again, err := verifyPinnedCheckout(dir, head); err != nil || again != digest {
-		t.Fatalf("the producer digest is not stable: %q %q %v", digest, again, err)
-	}
-	if _, err := verifyPinnedCheckout(dir, strings.Repeat("b", 40)); err == nil || !strings.Contains(err.Error(), "the test pins") {
-		t.Fatalf("a checkout at another build was accepted: %v", err)
-	}
-	// A tracked file edited.
-	write("src/app/probe_module.py", "ROUTE = 2\n")
-	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
-		t.Fatalf("a dirty checkout was accepted: %v", err)
-	}
-	// The same edit hidden from git status: the planted producer drift. Only the
-	// byte-for-byte comparison with the commit's blobs sees it.
-	run("update-index", "--assume-unchanged", "src/app/probe_module.py")
-	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "differs from the pinned commit's blob") {
-		t.Fatalf("a source edit hidden by assume-unchanged was accepted: %v", err)
-	}
-	run("update-index", "--no-assume-unchanged", "src/app/probe_module.py")
-	run("checkout", "-q", "--", "src/app/probe_module.py")
-	if _, err := verifyPinnedCheckout(dir, head); err != nil {
-		t.Fatalf("the restored checkout was refused: %v", err)
-	}
-	// An untracked source file is a route the pinned build never had.
-	write("src/app/untracked_route.py", "x = 1\n")
-	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
-		t.Fatalf("an untracked file was accepted: %v", err)
-	}
-	if err := os.Remove(filepath.Join(dir, "src/app/untracked_route.py")); err != nil {
-		t.Fatal(err)
-	}
-	// An ignored file under src (a sitecustomize.py on the Python path runs at
-	// start-up) is refused, and so is any bytecode: a timestamp-validated cache
-	// can run code older than the source beside it.
-	write(".git/info/exclude", "sitecustomize.py\n__pycache__/\n*.pyc\n")
-	write("src/app/__pycache__/m.cpython-314.pyc", "x")
-	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "bytecode cache") {
-		t.Fatalf("a bytecode cache was accepted: %v", err)
-	}
-	if err := os.RemoveAll(filepath.Join(dir, "src/app/__pycache__")); err != nil {
-		t.Fatal(err)
-	}
-	write("src/injected.pyc", "x")
-	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "compiled Python file") {
-		t.Fatalf("a compiled Python file was accepted: %v", err)
-	}
-	if err := os.Remove(filepath.Join(dir, "src/injected.pyc")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := verifyPinnedCheckout(dir, head); err != nil {
-		t.Fatalf("the cleared checkout was refused: %v", err)
-	}
-	write("src/sitecustomize.py", "print('hook')\n")
-	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "sitecustomize.py") {
-		t.Fatalf("an ignored startup hook was accepted: %v", err)
-	}
-	if err := os.Remove(filepath.Join(dir, "src/sitecustomize.py")); err != nil {
-		t.Fatal(err)
-	}
-	// A committed symbolic link under src: its blob is the link text, not the code it
-	// resolves to, so the source it points at could change unseen.
-	write("outside/real.py", "VALUE = 1\n")
-	if err := os.Symlink("../../outside/real.py", filepath.Join(dir, "src/app/linked.py")); err != nil {
-		t.Fatal(err)
-	}
-	run("add", ".")
-	run("commit", "-q", "-m", "link")
-	linked := run("rev-parse", "HEAD")
-	if _, err := verifyPinnedCheckout(dir, linked); err == nil || !strings.Contains(err.Error(), "symbolic link") {
-		t.Fatalf("a symbolic link under src was accepted: %v", err)
-	}
-	if _, err := verifyPinnedCheckout(t.TempDir(), head); err == nil || !strings.Contains(err.Error(), "not a git checkout") {
-		t.Fatalf("a directory that is no checkout was accepted: %v", err)
 	}
 }
 
@@ -281,11 +155,11 @@ func TestStableUUIDIsDeterministicDistinctAndWellFormed(t *testing.T) {
 
 func TestAGoldenBelongsToOneTest(t *testing.T) {
 	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(sampleRequests()))
-	spec := GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}
-	if _, err := openGolden(spec, "TestSample", false); err != nil {
+	spec := GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest}
+	if _, err := openGolden(spec, "TestSample"); err != nil {
 		t.Fatalf("the golden's own test was refused: %v", err)
 	}
-	if _, err := openGolden(spec, "TestAnother", false); err == nil || !strings.Contains(err.Error(), "not for") {
+	if _, err := openGolden(spec, "TestAnother"); err == nil || !strings.Contains(err.Error(), "not for") {
 		t.Fatalf("a golden recorded for another test was accepted: %v", err)
 	}
 }
@@ -333,11 +207,11 @@ func TestRequestHeadersAreKeptInTheKeyAndABearerTokenByItsClaims(t *testing.T) {
 	// A golden recorded for one caller refuses a request from another.
 	requests := []Request{sameCaller(`{"sub":"u1","role":"admin","iat":1}`)}
 	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(requests))
-	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest}, "TestSample")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := golden.frozenAnswers([]Request{sameCaller(`{"sub":"u1","role":"member","iat":1}`)}, ""); err == nil || !strings.Contains(err.Error(), "regenerate") {
+	if _, err := golden.frozenAnswers([]Request{sameCaller(`{"sub":"u1","role":"member","iat":1}`)}); err == nil || !strings.Contains(err.Error(), "the request it was recorded for") {
 		t.Fatalf("header drift was accepted: %v", err)
 	}
 }
@@ -345,7 +219,7 @@ func TestRequestHeadersAreKeptInTheKeyAndABearerTokenByItsClaims(t *testing.T) {
 func TestAFrozenSnapshotNobodyComparedIsRefused(t *testing.T) {
 	requests := sampleRequests()
 	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(requests))
-	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest}, "TestSample")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,54 +245,6 @@ func TestRowsThatDifferAreAnErrorNamingBothValues(t *testing.T) {
 	}
 	if err := rowsDiffer("orgs", "id=1", "id=999"); err == nil || !strings.Contains(err.Error(), "id=1") || !strings.Contains(err.Error(), "id=999") {
 		t.Fatalf("divergent rows were accepted: %v", err)
-	}
-}
-
-func TestARecordingWritesACandidateBesideTheGoldenNeverTheGolden(t *testing.T) {
-	underTheVerb(t)
-	dir := t.TempDir()
-	final := filepath.Join(dir, "sub", "g.json")
-	newRecording := func() *Golden {
-		golden, err := openGolden(GoldenSpec{Path: final, PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		golden.recorded.Requests = []goldenRequest{{Name: "a"}}
-		golden.recorded.Header.ProducerDigest = strings.Repeat("c", 64)
-		return golden
-	}
-	if _, err := newRecording().writeCandidate(true); err == nil || !strings.Contains(err.Error(), "already failed") {
-		t.Fatalf("a failed run wrote a candidate: %v", err)
-	}
-	empty, err := openGolden(GoldenSpec{Path: final, PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := empty.writeCandidate(false); err == nil || !strings.Contains(err.Error(), "no request was served") {
-		t.Fatalf("an empty recording wrote a candidate: %v", err)
-	}
-	unverified := newRecording()
-	unverified.recorded.Header.ProducerDigest = ""
-	if _, err := unverified.writeCandidate(false); err == nil || !strings.Contains(err.Error(), "never verified") {
-		t.Fatalf("a recording whose producer was never verified wrote a candidate: %v", err)
-	}
-	if _, err := os.Stat(final + GoldenCandidateSuffix); err == nil {
-		t.Fatal("a candidate is on disk that no passing run wrote")
-	}
-	digest, err := newRecording().writeCandidate(false)
-	if err != nil || len(digest) != 64 {
-		t.Fatalf("a passing run did not write: %q %v", digest, err)
-	}
-	raw, err := os.ReadFile(final + GoldenCandidateSuffix)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
-	if hex.EncodeToString(sum[:]) != digest {
-		t.Fatal("the printed digest is not the digest of the candidate written")
-	}
-	if _, err := os.Stat(final); err == nil {
-		t.Fatal("a recording wrote the golden itself: only the record verb may, after a fresh-process replay")
 	}
 }
 
@@ -452,7 +278,6 @@ func TestTheLifecycleOrderIsEnforcedWithANamedError(t *testing.T) {
 // The public replay workflow a test uses, from OpenGolden to Finish, with the
 // comparison done by Diff against a Go plane.
 func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
-	t.Setenv(goldenUpdateEnv, "")
 	t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
 	body := B64(`{"a":1}`)
 	requests := []Request{
@@ -477,12 +302,12 @@ func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
 		}
 	}))
 	t.Cleanup(goPlane.Close)
-	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest})
 	answers := golden.Python(t, nil, requests)
 	if len(answers) != 2 || answers[1].Status != 201 {
 		t.Fatalf("answers = %+v", answers)
 	}
-	if got := golden.CompareRows(t, "rows", func() string { t.Fatal("frozen replay must not read the source database"); return "" }, "a | b"); got != "a | b" {
+	if got := golden.CompareRows(t, "rows", "a | b"); got != "a | b" {
 		t.Fatalf("rows = %q", got)
 	}
 	Diff(t, goPlane.URL, requests, answers, DiffOptions{Golden: golden})
@@ -499,13 +324,12 @@ func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
 // does not relax the "every answer used" requirement: with one answer left
 // uninspected, Finish still refuses it.
 func TestSkipDiffLetsAnAllConsumedGoldenReachFinish(t *testing.T) {
-	t.Setenv(goldenUpdateEnv, "")
 	t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
 	requests := sampleRequests()
 	file := sampleGolden(requests)
 	file.Header.Test = t.Name()
 	path, digest := writeGoldenFile(t, t.TempDir(), file)
-	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest})
 	answers := golden.Python(t, nil, requests)
 
 	if err := golden.stepErr("Finish", stateDiffed); err == nil || !strings.Contains(err.Error(), "Finish called when the golden is answers fetched") {
@@ -521,7 +345,7 @@ func TestSkipDiffLetsAnAllConsumedGoldenReachFinish(t *testing.T) {
 		t.Fatalf("SkipDiff waived the still-uninspected second answer: %v", err)
 	}
 	golden.Consumed(t, answers[1:]...)
-	golden.InspectRows(t, "rows", func() string { t.Fatal("frozen replay must not read the source database"); return "" })
+	golden.InspectRows(t, "rows")
 	golden.Finish(t)
 }
 
@@ -532,7 +356,7 @@ func handOut(t *testing.T) (*Golden, []Request, []Response) {
 	golden := &Golden{spec: GoldenSpec{Path: "x.json"}}
 	answers := []Response{{Status: 200}, {Status: 201}}
 	for index := range answers {
-		golden.slots = append(golden.slots, answerSlot{request: requestIdentity(requests[index])})
+		golden.slots = append(golden.slots, answerSlot{request: golden.identityOf(requests[index])})
 		answers[index].slot = len(golden.slots)
 	}
 	return golden, requests, answers
@@ -584,7 +408,7 @@ func TestAnAnswerAnswersTheOneRequestItWasFetchedFor(t *testing.T) {
 
 func TestAFrozenRowSnapshotAnswersOneComparison(t *testing.T) {
 	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(sampleRequests()))
-	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest}, "TestSample")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,221 +420,32 @@ func TestAFrozenRowSnapshotAnswersOneComparison(t *testing.T) {
 	}
 }
 
-func TestARecordingRefusesPythonFromARootItNeverVerifiedOrThatTheVenueDoesNotServe(t *testing.T) {
-	golden, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verified, other := t.TempDir(), t.TempDir()
-	if err := golden.recordingRootErr(&Venue{Root: verified}); err == nil || !strings.Contains(err.Error(), "PythonRoot") {
-		t.Fatalf("an unverified root was accepted: %v", err)
-	}
-	golden.verifiedRoot = verified
-	if err := golden.recordingRootErr(&Venue{Root: verified}); err != nil {
-		t.Fatalf("a venue on the verified root was refused: %v", err)
-	}
-	// The same directory through a symlink is the same root.
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(verified, link); err != nil {
-		t.Fatal(err)
-	}
-	if err := golden.recordingRootErr(&Venue{Root: link}); err != nil {
-		t.Fatalf("the verified root through a symlink was refused: %v", err)
-	}
-	// The verified checkout is not the one the venue runs Python from.
-	if err := golden.recordingRootErr(&Venue{Root: other}); err == nil || !strings.Contains(err.Error(), "not from the verified checkout") {
-		t.Fatalf("a venue on another root was accepted: %v", err)
-	}
-	if err := golden.recordingRootErr(nil); err == nil {
-		t.Fatal("no venue was accepted")
-	}
-}
-
-// The recording path a test takes up to the Python plane: OpenGolden in
-// recording mode, PythonRoot verifying the pinned checkout, and Finish writing
-// the candidate (the Python plane itself needs a venue, so its answers are put
-// in the recording directly).
-func TestTheRecordingPathVerifiesTheRootThenWritesOnlyACandidate(t *testing.T) {
-	underTheVerb(t)
-	dir := t.TempDir()
-	run := func(args ...string) string {
-		t.Helper()
-		command := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...)
-		out, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-		return strings.TrimSpace(string(out))
-	}
-	run("init", "-q")
-	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "src", "app.py"), []byte("X = 1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("add", ".")
-	run("commit", "-q", "-m", "one")
-	build := run("rev-parse", "HEAD")
-
-	t.Setenv(goldenUpdateEnv, "1")
-	t.Setenv(goldenPythonRootEnv, dir)
-	t.Setenv("PYTHONDONTWRITEBYTECODE", "1")
-	final := filepath.Join(t.TempDir(), "testdata", "g.json")
-	golden := OpenGolden(t, GoldenSpec{Path: final, PythonBuild: build, Recipe: "record it"})
-	if !golden.Recording() {
-		t.Fatal("OpenGolden did not open a recording")
-	}
-	if err := golden.recordingRootErr(&Venue{Root: dir}); err == nil {
-		t.Fatal("Python was allowed before the root was verified")
-	}
-	if got := golden.PythonRoot(t, "/the/callers/own/root"); got != dir {
-		t.Fatalf("PythonRoot = %q, want the pinned checkout %q", got, dir)
-	}
-	if err := golden.recordingRootErr(&Venue{Root: dir}); err != nil {
-		t.Fatalf("a verified root was refused: %v", err)
-	}
-	if len(golden.recorded.Header.ProducerDigest) != 64 {
-		t.Fatalf("header producer digest = %q", golden.recorded.Header.ProducerDigest)
-	}
-	golden.recorded.Requests = []goldenRequest{{Name: "a", Method: "GET", Path: "/x"}}
-	golden.state = stateDiffed
-	golden.Finish(t)
-	if _, err := os.Stat(final); err == nil {
-		t.Fatal("Finish wrote the golden itself")
-	}
-	raw, err := os.ReadFile(final + GoldenCandidateSuffix)
-	if err != nil {
-		t.Fatalf("Finish wrote no candidate: %v", err)
-	}
-	var written goldenFile
-	if err := json.Unmarshal(raw, &written); err != nil || written.Header.PythonBuild != build || len(written.Header.ProducerDigest) != 64 {
-		t.Fatalf("candidate = %s (%v)", raw, err)
-	}
-}
-
-func TestARecordingNeedsBytecodeWritingSwitchedOff(t *testing.T) {
-	t.Setenv("PYTHONDONTWRITEBYTECODE", "")
-	if err := bytecodeEnvErr(); err == nil || !strings.Contains(err.Error(), "PYTHONDONTWRITEBYTECODE=1") {
-		t.Fatalf("a recording with bytecode writing on was accepted: %v", err)
-	}
-	t.Setenv("PYTHONDONTWRITEBYTECODE", "1")
-	if err := bytecodeEnvErr(); err != nil {
-		t.Fatalf("PYTHONDONTWRITEBYTECODE=1 was refused: %v", err)
-	}
-}
-
-// PythonWithEnv serves one request under several configurations: frozen it
-// answers each from the file, keyed by the request's Name and by the key of
-// the call's extra environment, so a scenario whose name or whose environment
-// drifted is refused.
-func TestFrozenPythonWithEnvAnswersEachScenarioByNameAndEnvironment(t *testing.T) {
-	t.Setenv(goldenUpdateEnv, "")
-	requests := []Request{
-		{Name: "secrets=111 GET /health", Method: "GET", Path: "/health"},
-		{Name: "secrets=000 GET /health", Method: "GET", Path: "/health"},
-		{Name: "plain GET /health", Method: "GET", Path: "/health"},
-	}
-	unset := []string{"STRIPE_SECRET_KEY="}
-	unsetKey, _ := pythonEnvKey(fromTest(unset...))
-	noneKey, _ := pythonEnvKey(nil)
-	frozen := func(callEnv ...string) (string, string) {
-		file := sampleGolden(requests)
-		file.Header.Test = t.Name()
-		for index, key := range callEnv {
-			file.Requests[index].CallEnv = key
-		}
-		return writeGoldenFile(t, t.TempDir(), file)
-	}
-	path, digest := frozen(unsetKey, noneKey, "")
-	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
-	first := golden.PythonWithEnv(t, nil, unset, requests[:1])
-	second := golden.PythonWithEnv(t, nil, nil, requests[1:2]) // no entry is an extra environment too
-	third := golden.Python(t, nil, requests[2:])
-	if first[0].Status != 200 || second[0].Status != 201 || third[0].Status != 202 {
-		t.Fatalf("scenario answers = %d, %d, %d; each scenario must get its own recorded answer", first[0].Status, second[0].Status, third[0].Status)
-	}
-	open := func(callEnv ...string) *Golden {
-		path, digest := frozen(callEnv...)
-		opened, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, t.Name(), false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return opened
-	}
-	renamed := []Request{{Name: "secrets=101 GET /health", Method: "GET", Path: "/health"}}
-	if _, err := open(unsetKey).frozenAnswers(renamed, unsetKey); err == nil || !strings.Contains(err.Error(), "secrets=111 GET /health") {
-		t.Fatalf("a renamed scenario was answered from the file: %v", err)
-	}
-	otherKey, _ := pythonEnvKey(fromTest("STRIPE_SECRET_KEY=", "LICENSE_PRIVATE_KEY="))
-	valueKey, _ := pythonEnvKey(fromTest("STRIPE_SECRET_KEY=x"))
-	for name, c := range map[string]struct {
-		recorded, call string
-		refusal        string
-	}{
-		"an entry more in the call":               {unsetKey, otherKey, "recorded under another extra environment"},
-		"another value in the call":               {unsetKey, valueKey, "recorded under another extra environment"},
-		"the call passes no extra environment":    {unsetKey, "", "recorded under another extra environment"},
-		"an answer of the venue's own, with one":  {"", unsetKey, "recorded before a golden kept the key of a call's extra environment"},
-		"an answer of the venue's own, with none": {"", noneKey, "recorded before a golden kept the key of a call's extra environment"},
-	} {
-		_, err := open(c.recorded).frozenAnswers(requests[:1], c.call)
-		if err == nil || !strings.Contains(err.Error(), c.refusal) || !strings.Contains(err.Error(), "secrets=111 GET /health") {
-			t.Errorf("%s: err = %v, want a refusal holding %q and the scenario's name", name, err, c.refusal)
-		}
-		if err != nil && (strings.Contains(err.Error(), "STRIPE_SECRET_KEY") || strings.Contains(err.Error(), "LICENSE_PRIVATE_KEY")) {
-			t.Errorf("%s: the refusal shows an entry of the environment: %v", name, err)
-		}
-	}
-	// Recording: the key of the call's extra environment is stored with each of its answers, never an entry.
-	recording, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, t.Name(), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	live := func() []Response { return []Response{{Status: 200, Body: "{}"}} }
-	recording.answer(t, "PythonWithEnv", unsetKey, requests[:1], func() error { return nil }, live, nil)
-	recording.answer(t, "Python", "", requests[2:], func() error { return nil }, live, nil)
-	if got := recording.recorded.Requests; len(got) != 2 || got[0].CallEnv != unsetKey || got[1].CallEnv != "" {
-		t.Fatalf("recorded call environments: %+v", got)
-	}
-	raw, _ := json.Marshal(recording.recorded)
-	if strings.Contains(string(raw), "STRIPE_SECRET_KEY") || strings.Count(string(raw), "call_env") != 1 {
-		t.Fatalf("the recorded file holds an entry of the environment, or a key for the venue's own: %s", raw)
-	}
-}
-
-// An Allow header is recorded in the order the comparison uses, whatever order
-// the producer's set gave it in this run: two recordings of the same answers
-// are then the same bytes, and the frozen comparison still treats it as a set.
-func TestARecordedAllowHeaderIsStoredInTheComparisonsOrder(t *testing.T) {
+// A frozen answer's Allow header was stored in the order the comparison uses,
+// and the projection of the compared side gives the Go plane's header that
+// order too; the comparison still treats it as a set of exactly these methods.
+func TestAnAllowHeaderIsProjectedInTheComparisonsOrderAndComparedAsASet(t *testing.T) {
 	requests := []Request{{Name: "TRACE /health/", Method: "TRACE", Path: "/health/"}}
-	record := func(allow string) goldenRequest {
-		recording, err := openGolden(GoldenSpec{Path: filepath.Join(t.TempDir(), "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, t.Name(), true)
+	golden := &Golden{spec: GoldenSpec{Path: "x.json"}}
+	projectAllow := func(allow string) map[string]string {
+		projected, err := golden.projectResponse(Response{Status: 405, Headers: map[string]string{"allow": allow, "content-type": "application/json"}, Body: "{}"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		live := func() []Response {
-			return []Response{{Status: 405, Headers: map[string]string{"allow": allow, "content-type": "application/json"}, Body: "{}"}}
-		}
-		answers := recording.answer(t, "Python", "", requests, func() error { return nil }, live, nil)
-		if got := answers[0].Headers["allow"]; got != recording.recorded.Requests[0].Headers["allow"] {
-			t.Fatalf("the test was handed %q and the file holds %q", got, recording.recorded.Requests[0].Headers["allow"])
-		}
-		return recording.recorded.Requests[0]
+		return projected.Headers
 	}
-	first, second := record("PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS"), record("GET, DELETE, PUT, OPTIONS, POST, PATCH, HEAD")
-	if first.Headers["allow"] != "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT" || first.Headers["allow"] != second.Headers["allow"] {
-		t.Fatalf("two runs of one answer are stored as %q and %q", first.Headers["allow"], second.Headers["allow"])
+	first, second := projectAllow("PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS"), projectAllow("GET, DELETE, PUT, OPTIONS, POST, PATCH, HEAD")
+	if first["allow"] != "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT" || first["allow"] != second["allow"] {
+		t.Fatalf("one set of methods is projected as %q and %q", first["allow"], second["allow"])
 	}
 	// Another set of methods is another answer: one method less, and one method more.
-	if other := record("GET, HEAD"); other.Headers["allow"] != "GET, HEAD" || other.Headers["content-type"] != "application/json" {
-		t.Fatalf("stored headers: %v", other.Headers)
+	if other := projectAllow("GET, HEAD"); other["allow"] != "GET, HEAD" || other["content-type"] != "application/json" {
+		t.Fatalf("projected headers: %v", other)
 	}
-	if more := record("PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS, TRACE"); more.Headers["allow"] != "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT, TRACE" || more.Headers["allow"] == first.Headers["allow"] {
-		t.Fatalf("a header with one method more is stored as %q, the same as without it", more.Headers["allow"])
+	if more := projectAllow("PUT, HEAD, PATCH, GET, POST, DELETE, OPTIONS, TRACE"); more["allow"] != "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT, TRACE" {
+		t.Fatalf("a header with one method more is projected as %q", more["allow"])
 	}
 	// The frozen comparison: the Go plane's header in any order is the same answer; a method more is not.
-	python := Response{Status: 405, Headers: map[string]string{"allow": first.Headers["allow"]}, Body: "{}"}
+	python := Response{Status: 405, Headers: map[string]string{"allow": first["allow"]}, Body: "{}"}
 	same := func(goAllow string) bool {
 		ok, _, _, _ := Compare(requests[0], python, Response{Status: 405, Headers: map[string]string{"allow": goAllow}, Body: "{}"}, DiffOptions{})
 		return ok

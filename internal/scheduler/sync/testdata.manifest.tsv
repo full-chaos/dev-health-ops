@@ -9,5 +9,3 @@
 -	header	golden/venue-credential-fingerprint.golden.json
 -	header	golden/venue-jira-rename.golden.json
 -	header	golden/venue-zero-unit-stamp.golden.json
-b42409196680c9828ef295e9d5e2fd6f9cd9829783466197b06af2cd5f093d01	unclassified	python_feature_decision_reason_oracle.py
-e745e5334bc96a906b4794858c2e13b1e04e1d7c3607a45f5a01a6866dc50715	unclassified	python_planner_oracle.py

@@ -100,7 +100,7 @@ func TestBuildPromptMatchesPythonGolden(t *testing.T) {
 		t.Fatalf("glob goldens: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no build_prompt__*.json goldens found -- run generate_build_prompt_golden.py")
+		t.Fatal("no build_prompt__*.json goldens found")
 	}
 
 	for _, path := range files {
@@ -118,7 +118,7 @@ func TestBuildPromptMatchesPythonGolden(t *testing.T) {
 			if golden.BasePrompt != LoadPrompt() {
 				t.Fatalf("golden's captured base_prompt no longer matches LoadPrompt() -- "+
 					"prompts/investment_mix_explain_prompt.txt and the Python source have "+
-					"diverged, or the golden is stale; re-run generate_build_prompt_golden.py"+
+					"diverged"+
 					"\n--- golden ---\n%s\n--- LoadPrompt() ---\n%s", golden.BasePrompt, LoadPrompt())
 			}
 

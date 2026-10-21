@@ -49,7 +49,7 @@ func TestSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
 func runSettingsOracle(t *testing.T, withKey bool, mode, digest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, governanceGolden("settings_"+mode, t.Name(), digest))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("set")
 	const jwtKey = "venue-oracle-test-secret-key-for-settings-flow-32-bytes!"
 
@@ -273,9 +273,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		source := golden.CompareRows(t, name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, goRows)
+		source := golden.CompareRows(t, name, goRows)
 		if source == "" {
 			t.Errorf("%s: the query matched no rows on the Python plane; the comparison proves nothing", name)
 		}
@@ -325,10 +323,7 @@ FROM settings ORDER BY org_id, category, key`)
 		return strings.Join(lines, "\n"), len(names)
 	}
 	goText, goCount := opened(venue.GoDB)
-	source := golden.CompareRows(t, "encrypted settings opened", func() string {
-		text, _ := opened(venue.SourceDB)
-		return text
-	}, goText)
+	source := golden.CompareRows(t, "encrypted settings opened", goText)
 	if goCount == 0 || source == "" {
 		t.Fatalf("no encrypted rows to compare: python %q, go %d rows", source, goCount)
 	}

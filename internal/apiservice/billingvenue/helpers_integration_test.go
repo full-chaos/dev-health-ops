@@ -219,8 +219,6 @@ func goldenSpec(name, sha string) venueoracle.GoldenSpec {
 		Path:        filepath.Join("testdata", "golden", name+".json"),
 		PythonBuild: pythonBuild,
 		SHA256:      sha,
-		Recipe: "git worktree add --detach <dir> " + pythonBuild + "; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 " +
-			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_VENUE_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
 	}
 }
 
@@ -232,8 +230,6 @@ func webhookGoldenSpec(name, sha string) venueoracle.GoldenSpec {
 		Path:        filepath.Join("testdata", "golden", name+".json"),
 		PythonBuild: webhookPythonBuild,
 		SHA256:      sha,
-		Recipe: "git worktree add --detach <dir> " + webhookPythonBuild + "; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 " +
-			"DHO_VENUE_GOLDEN_PYTHON_ROOT=<dir> DEV_HEALTH_VENUE_ORACLES=1 go test -tags=integration -count=1 -run '^" + name + "$' .",
 	}
 }
 
@@ -242,7 +238,7 @@ func webhookGoldenSpec(name, sha string) venueoracle.GoldenSpec {
 // against it, the Go ones against this run's clock.
 func recordedAt(t *testing.T, golden *venueoracle.Golden, now time.Time) time.Time {
 	t.Helper()
-	text := golden.InspectRows(t, "recorded_at", func() string { return now.Format(time.RFC3339Nano) })
+	text := golden.InspectRows(t, "recorded_at")
 	at, err := time.Parse(time.RFC3339Nano, text)
 	if err != nil {
 		t.Fatalf("golden recorded_at %q: %v", text, err)
@@ -264,11 +260,7 @@ func normalizeAnswers(answers []venueoracle.Response, normalize func(string) str
 // the golden's text otherwise.
 func pythonCalls(t *testing.T, golden *venueoracle.Golden, fake *fakeStripe) []string {
 	t.Helper()
-	text := golden.InspectRows(t, "stripe_calls_py", func() string {
-		fake.mu.Lock()
-		defer fake.mu.Unlock()
-		return strings.Join(fake.calls["py"], "\n")
-	})
+	text := golden.InspectRows(t, "stripe_calls_py")
 	if text == "" {
 		return nil
 	}

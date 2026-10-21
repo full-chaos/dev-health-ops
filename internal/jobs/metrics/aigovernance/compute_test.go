@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,26 +14,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/rotguard"
 )
 
-// runPythonOracle returns the answers of the production Python governance evaluation over the fixture
-// (testdata/python_governance_oracle.py). The script was executed once on the last build that carried the
-// Python sources and its stdout is frozen in testdata/golden/governance_oracle.json (recipe in the golden's
-// spec); a frozen run reads it and runs no Python. The script's text is part of the request, so a changed
-// script is refused until it is recorded again.
+// runPythonOracle returns the frozen answers of the production Python governance evaluation over the fixture.
+// The stdout is frozen in testdata/golden/governance_oracle.json; a run reads it and runs no Python.
 func runPythonOracle(t *testing.T) pythonOracleOutput {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	const scriptPath = "internal/jobs/metrics/aigovernance/testdata/python_governance_oracle.py"
-	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scriptPath)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec := rotguard.Spec("testdata/golden/governance_oracle.json", "5c92eb0d945bfc97cdbebb35edfe801d2566dc4b8452ea144afd278cc8fc4439",
-		"./internal/jobs/metrics/aigovernance/", "^TestGovernanceRowsMatchLivePythonProduction$")
-	answers := programoracle.Run(t, spec, root, []programoracle.Program{
-		programoracle.Script("governance oracle", scriptPath, string(source), nil),
+	spec := rotguard.Spec("testdata/golden/governance_oracle.json", "5c92eb0d945bfc97cdbebb35edfe801d2566dc4b8452ea144afd278cc8fc4439")
+	answers := programoracle.Run(t, spec, []programoracle.Program{
+		{Name: "governance oracle"},
 	})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the governance oracle exited %d (stdout %q)", answers[0].ExitCode, answers[0].Stdout)
@@ -81,9 +66,8 @@ type pythonCoverage struct {
 }
 
 // ---------------------------------------------------------------------------
-// Fixture -- MUST stay byte-identical to testdata/python_governance_oracle.py.
-// Any edit to one side without the other stops the oracle proving anything
-// (the same rule testops' oracle fixtures carry).
+// Fixture -- the frozen governance oracle golden was recorded over exactly this data.
+// Any edit stops the golden proving anything.
 // ---------------------------------------------------------------------------
 
 const (

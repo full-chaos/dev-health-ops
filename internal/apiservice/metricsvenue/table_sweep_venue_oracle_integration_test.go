@@ -3,23 +3,16 @@
 package metricsvenue
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,100 +21,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// sweepPlugin is a pytest plugin that records, for every prometheus_client
-// counter increment, histogram observation and gauge change, the FastAPI
-// route whose handler was running ("<no request>" outside one). Each
-// process (xdist worker) writes <COUNTER_SWEEP_OUT>.<pid>.json at exit.
-const sweepPlugin = `
-import atexit, contextvars, json, os
-import fastapi.routing
-from prometheus_client.metrics import Counter, Gauge, Histogram
-
-_current = contextvars.ContextVar("counter_sweep_route", default=None)
-_fired = {}
-
-def _wrap(cls, name):
-    original = getattr(cls, name)
-    def wrapped(self, *args, **kwargs):
-        family = getattr(self, "_name", None) or "<unknown>"
-        _fired.setdefault(family, set()).add(_current.get() or "<no request>")
-        return original(self, *args, **kwargs)
-    setattr(cls, name, wrapped)
-
-_wrap(Counter, "inc")
-_wrap(Histogram, "observe")
-_wrap(Gauge, "set")
-_wrap(Gauge, "inc")
-_wrap(Gauge, "dec")
-
-_original_handler = fastapi.routing.APIRoute.get_route_handler
-
-def _get_route_handler(self):
-    handler = _original_handler(self)
-    label = ",".join(sorted(self.methods or [])) + " " + self.path
-    async def wrapped(request):
-        token = _current.set(label)
-        try:
-            return await handler(request)
-        finally:
-            _current.reset(token)
-    return wrapped
-
-fastapi.routing.APIRoute.get_route_handler = _get_route_handler
-
-def _dump():
-    out = os.environ.get("COUNTER_SWEEP_OUT")
-    if out:
-        with open(out + "." + str(os.getpid()) + ".json", "w") as handle:
-            json.dump({family: sorted(routes) for family, routes in _fired.items()}, handle)
-
-# pytest_sessionfinish runs in every xdist worker BEFORE it reports itself
-# finished, so the controller cannot return, and the Go test cannot glob the
-# dumps, ahead of a worker's dump. atexit alone lost that race: a worker
-# still running its exit hooks when the controller returned left no file
-# (4 of 11 local runs wrote fewer files than processes). The atexit hook stays
-# as the fallback for a process that never runs a session finish.
-def pytest_sessionfinish(session, exitstatus):
-    _dump()
-
-atexit.register(_dump)
-`
-
-// sweepMigrateProgram runs the Alembic heads on POSTGRES_URI, as the
-// venue's "migrate" mode does.
-const sweepMigrateProgram = `
-from alembic import command
-from dev_health_ops.migrate import _make_alembic_config
-command.upgrade(_make_alembic_config(), "heads")
-`
-
-// sweepWorkers is the xdist worker count (-n) the sweep runs with. Every one of
-// the sweepWorkers workers and the controller writes one dump file, so a run
-// that finds fewer files measured only part of the Python api's tests.
-const sweepWorkers = 4
-
-// checkSweepDumps fails when fewer process dumps exist than processes ran. A
-// missing dump silently removes every route a lost process fired: a ported
-// row then reads "lists routes X; fired under a subset of X" (main venue shard
-// 5/5, runs 36137514387 and 36137593534: 3 of 5 dumps). A measurement that did
-// not happen must fail, not shrink.
-func checkSweepDumps(files int) error {
-	if want := sweepWorkers + 1; files < want {
-		return fmt.Errorf("the sweep found %d process dump files, want %d (%d xdist workers and the controller): a process ended without writing its dump, so the fired routes are incomplete", files, want, sweepWorkers)
-	}
-	return nil
-}
-
-// noRequest is the plugin's label for a metric recorded outside any route.
+// noRequest is the frozen sweep's label for a metric recorded outside any route.
 const noRequest = "<no request>"
 
 // TestPythonMetricsTableSweepVenueOracle proves python_metrics.tsv's
-// statuses and routes by execution. It runs the Python api's own route
-// tests under sweepPlugin, which records the route every metric family
+// statuses and routes against the frozen sweep of the Python api's own route
+// tests, which recorded the route every metric family
 // fires under, and it builds the dho api's production route set
 // (apiservice.Routes) to tell which of those routes the Go api serves.
 // Then each row must list exactly the routes its family fired under, and
@@ -141,19 +49,11 @@ const noRequest = "<no request>"
 // not firing under that route.
 func TestPythonMetricsTableSweepVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, sweepGoldenSpec(t.Name(), "0136d988806c3ac67a419b4822044730e368d05cd8ae49b84f8d3df1dfdbf2f0"))
-	root := golden.PythonRoot(t, venueRoot())
-	// The sweep is one Python run (the migrations, then the api's route tests
-	// under sweepPlugin); its answer is the map of metric families to the routes
+	// The sweep was one Python run (the migrations, then the api's route tests);
+	// its answer is the map of metric families to the routes
 	// they fired under, executed once on the pinned build and frozen.
-	declared := map[string]string{"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1", "OTEL_SDK_DISABLED": "true"}
-	request := venueoracle.ProgramRequest("python api route sweep", sweepPlugin+"\n"+sweepMigrateProgram+"\n# pytest tests/api -m 'not benchmark and not clickhouse'", nil, declared)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		body, err := json.Marshal(sortedFired(runSweep(t, producer, declared)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("python api route sweep", nil)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var recorded map[string][]string
 	if err := json.Unmarshal([]byte(answers[0].Body), &recorded); err != nil {
@@ -183,19 +83,7 @@ func sweepGoldenSpec(test, digest string) venueoracle.GoldenSpec {
 		Path:        "testdata/table-sweep.golden.json",
 		PythonBuild: sweepPythonBuild,
 		SHA256:      digest,
-		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/metricsvenue/ -test '^%s$' -python-root $DIR",
-			sweepPythonBuild, test),
 	}
-}
-
-// sortedFired is the sweep's result as sorted lists, the form that is frozen.
-func sortedFired(fired map[string]map[string]bool) map[string][]string {
-	out := make(map[string][]string, len(fired))
-	for family, routes := range fired {
-		out[family] = sortedKeys(routes)
-	}
-	return out
 }
 
 // checkSweptTable applies the rules above to a sweep's result (family ->
@@ -262,108 +150,6 @@ func checkSweptTable(t *testing.T, fired map[string]map[string]bool, served func
 	}
 }
 
-// runSweep runs the Python api's route tests under sweepPlugin and returns
-// family -> the set of route labels it fired under. It fails, rather than
-// returning an empty map, when the run fails or fires nothing: an empty
-// sweep would read as "fires under no route" for every row.
-//
-// The tests that need a live PostgreSQL read DEV_HEALTH_POSTGRES_TEST_URI,
-// and under CI they fail without it rather than skip. The sweep gives them
-// a PostgreSQL of its own, as the Python test job does, so every test runs
-// in every environment and none is silently skipped out of the sweep. It
-// migrates that database to the Alembic heads first, as the venue does:
-// some of these tests expect the app schema, which the Python test job
-// only has because its migration tests (outside tests/api) ran first.
-func runSweep(t *testing.T, producer *venueoracle.Producer, declared map[string]string) map[string]map[string]bool {
-	t.Helper()
-	root := producer.Root
-	postgres, err := containers.StartPostgres(context.Background())
-	if err != nil {
-		t.Fatalf("start the sweep's PostgreSQL: %v", err)
-	}
-	t.Cleanup(func() { _ = postgres.Close(context.Background()) })
-	postgresURI, err := url.Parse(postgres.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postgresURI.Scheme, postgresURI.RawQuery = "postgresql+asyncpg", ""
-	// The run's database address is per-run: it is not in the request, only in the child's environment.
-	migrate, err := producer.Command(context.Background(), declared, []string{"POSTGRES_URI=" + postgresURI.String()}, "-c", sweepMigrateProgram)
-	if err != nil {
-		t.Fatal(err)
-	}
-	migrate.Dir = root
-	if migrated, err := migrate.CombinedOutput(); err != nil {
-		t.Fatalf("migrate the sweep's PostgreSQL: %v\n%s", err, lastLines(string(migrated), 20))
-	}
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "counter_sweep_plugin.py"), []byte(sweepPlugin), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	command, err := producer.Command(context.Background(), declared, []string{
-		"PYTHONPATH=" + filepath.Join(root, "src") + string(os.PathListSeparator) + dir,
-		"COUNTER_SWEEP_OUT=" + filepath.Join(dir, "out"),
-		"DEV_HEALTH_POSTGRES_TEST_URI=" + postgresURI.String()},
-		"-m", "pytest", "tests/api", "-p", "counter_sweep_plugin",
-		"-m", "not benchmark and not clickhouse", "-n", strconv.Itoa(sweepWorkers), "-q", "--no-header",
-		"-p", "no:warnings", "-p", "no:cacheprovider")
-	if err != nil {
-		t.Fatal(err)
-	}
-	command.Dir = root
-	var output bytes.Buffer
-	command.Stdout, command.Stderr = &output, &output
-	started := time.Now()
-	err = command.Run()
-	elapsed := time.Since(started).Round(time.Second)
-	summary := lastLines(output.String(), 5)
-	if err != nil {
-		t.Fatalf("the Python api's tests failed under the sweep (%s): %v\n%s\n%s", elapsed, err, failureLines(output.String()), summary)
-	}
-	t.Logf("sweep: the Python api's route tests ran in %s\n%s", elapsed, summary)
-
-	files, err := filepath.Glob(filepath.Join(dir, "out.*.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := checkSweepDumps(len(files)); err != nil {
-		t.Fatal(err)
-	}
-	fired := map[string]map[string]bool{}
-	for _, file := range files {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var part map[string][]string
-		if err := json.Unmarshal(data, &part); err != nil {
-			t.Fatalf("%s: %v", file, err)
-		}
-		for family, routes := range part {
-			if fired[family] == nil {
-				fired[family] = map[string]bool{}
-			}
-			for _, route := range routes {
-				fired[family][route] = true
-			}
-		}
-	}
-	underRoute := 0
-	for _, routes := range fired {
-		for route := range routes {
-			if route != noRequest {
-				underRoute++
-				break
-			}
-		}
-	}
-	if len(fired) == 0 || underRoute == 0 {
-		t.Fatalf("the sweep recorded %d families from %d process files, %d of them under a route; the plugin did not record", len(fired), len(files), underRoute)
-	}
-	t.Logf("sweep: %d families fired, %d of them under a route, from %d processes", len(fired), underRoute, len(files))
-	return fired
-}
-
 type stubClickHouse struct{ driver.Conn }
 
 type stubValkey struct{ valkeygo.Client }
@@ -416,26 +202,6 @@ func dhoAPIServes(t *testing.T) func(string) bool {
 	}
 }
 
-// failureLines keeps pytest's short-summary lines (FAILED and ERROR, one
-// per test), which the last lines of a long run do not always hold.
-func failureLines(text string) string {
-	var kept []string
-	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(line, "FAILED ") || strings.HasPrefix(line, "ERROR ") {
-			kept = append(kept, line)
-		}
-	}
-	return strings.Join(kept, "\n")
-}
-
-func lastLines(text string, n int) string {
-	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
-}
-
 func sortedKeys(set map[string]bool) []string {
 	keys := make([]string, 0, len(set))
 	for key := range set {
@@ -443,12 +209,4 @@ func sortedKeys(set map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func TestCheckSweepDumps(t *testing.T) {
-	for files, wantErr := range map[int]bool{0: true, 3: true, sweepWorkers: true, sweepWorkers + 1: false, sweepWorkers + 2: false} {
-		if err := checkSweepDumps(files); (err != nil) != wantErr {
-			t.Errorf("checkSweepDumps(%d) = %v, want error=%v", files, err, wantErr)
-		}
-	}
 }

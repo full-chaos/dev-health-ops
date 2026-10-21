@@ -27,10 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const (
-	investmentGoldenFixture   = "tests/fixtures/investment_materialize_python_golden.json"
-	investmentGoldenGenerator = "tests/fixtures/generate_investment_materialize_python_golden.py"
-)
+const investmentGoldenFixture = "tests/fixtures/investment_materialize_python_golden.json"
 
 type investmentGolden struct {
 	MinEvidenceChars int `json:"min_evidence_chars"`
@@ -70,7 +67,7 @@ func loadInvestmentGolden(t *testing.T) investmentGolden {
 	path := filepath.Join(repoRootFromInvestment(t), investmentGoldenFixture)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reading %s: %v -- regenerate with `python %s`", path, err, investmentGoldenGenerator)
+		t.Fatalf("reading %s: %v", path, err)
 	}
 	var golden investmentGolden
 	if err := json.Unmarshal(raw, &golden); err != nil {
@@ -211,17 +208,12 @@ func assertAuditJSONRoundTrips(t *testing.T, encoded, status string) {
 }
 
 // TestFrozenPythonGoldenStillMatchesFrozenPython compares the frozen answer of
-// the generator (executed once on the pinned build, --stdout) with the
+// the generator (executed once on the pinned build) with the
 // checked-in file byte for byte: the file is what the Python reference
 // produced, not an edit of it.
 func TestFrozenPythonGoldenStillMatchesFrozenPython(t *testing.T) {
 	repoRoot := repoRootFromInvestment(t)
-	generator, err := os.ReadFile(filepath.Join(repoRoot, investmentGoldenGenerator))
-	if err != nil {
-		t.Fatalf("reading %s: %v", investmentGoldenGenerator, err)
-	}
-	program := programoracle.Script("investment materialize golden generator", investmentGoldenGenerator, string(generator), nil)
-	program.Text = "import sys\nsys.argv = [sys.argv[0], \"--stdout\"]\n" + program.Text
+	program := programoracle.Program{Name: "investment materialize golden generator"}
 	rendered := frozenPython(t, "generator.golden.json", program)[0]
 
 	frozen, err := os.ReadFile(filepath.Join(repoRoot, investmentGoldenFixture))
@@ -230,9 +222,8 @@ func TestFrozenPythonGoldenStillMatchesFrozenPython(t *testing.T) {
 	}
 	if string(frozen) != rendered {
 		t.Fatalf(
-			"%s is not what the frozen answer of %s says -- the file was edited or the golden is stale. "+
-				"Regenerate it from the pinned build and re-record the golden",
-			investmentGoldenFixture, investmentGoldenGenerator,
+			"%s is not what the frozen answer of the generator says -- the file was edited or the golden is stale",
+			investmentGoldenFixture,
 		)
 	}
 }

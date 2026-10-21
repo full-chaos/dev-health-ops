@@ -21,8 +21,8 @@ var topLevelTestFunction = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
 // test runs a pair's Python any more, so nothing at run time proves a pair is
 // still compared; this does, from the files alone:
 //
-//   - every checked-in pair (testdata/oracle_pairs/<pair>.py) has at least one
-//     golden that answers it;
+//   - every pair of testdata/oracle_pair_ids.txt has at least one golden that
+//     answers it;
 //   - every golden is pinned, holds its pinned bytes, was executed on the pinned
 //     build, answers exactly one request of a checked-in pair, is named for
 //     that pair and for the test it belongs to, and that test still exists;
@@ -36,17 +36,14 @@ func TestEveryOraclePairHasAFrozenGolden(t *testing.T) {
 	packageDir := filepath.Dir(currentFile)
 
 	pairs := map[string]bool{}
-	entries, err := fs.ReadDir(embeddedOracleSources, "testdata/oracle_pairs")
+	// testdata/oracle_pair_ids.txt is the frozen list of the pairs the goldens answer, one
+	// <provider>/<dataset>/<boundary> id per line.
+	idList, err := fs.ReadFile(embeddedOracleSources, "testdata/oracle_pair_ids.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range entries {
-		stem, isPython := strings.CutSuffix(entry.Name(), ".py")
-		// The runner's own rule (python_generic_row_oracle.py): a pair file is
-		// <provider>_<dataset>_<boundary>.py; a leading underscore is a helper.
-		if parts := strings.Split(stem, "_"); isPython && !strings.HasPrefix(stem, "_") && len(parts) == 3 {
-			pairs[strings.Join(parts, "/")] = true
-		}
+	for _, id := range strings.Fields(string(idList)) {
+		pairs[id] = true
 	}
 	if len(pairs) == 0 {
 		t.Fatal("no checked-in oracle pair found: the inventory would measure nothing")
@@ -113,7 +110,7 @@ func TestEveryOraclePairHasAFrozenGolden(t *testing.T) {
 			t.Errorf("golden %s was executed on build %s, pair %q pins %s", name, file.Header.PythonBuild, pairID, want)
 		}
 		if !pairs[pairID] {
-			t.Errorf("golden %s answers pair %q, which is no checked-in testdata/oracle_pairs file", name, pairID)
+			t.Errorf("golden %s answers pair %q, which is not in testdata/oracle_pair_ids.txt", name, pairID)
 			continue
 		}
 		if want := oraclePairGoldenName(pairID, file.Header.Test); want != name {
@@ -139,16 +136,6 @@ func TestEveryOraclePairHasAFrozenGolden(t *testing.T) {
 		}
 	}
 
-	for path, pairID := range oracleHarnessFilesAfterBuild {
-		if _, err := fs.Stat(embeddedOracleSources, path); err != nil {
-			t.Errorf("oracleHarnessFilesAfterBuild names %s, which is no harness file: %v", path, err)
-		}
-		if oraclePairBuild(pairID) == oraclePairPythonBuild {
-			t.Errorf("harness file %s was added after build %s by pair %q, which is answered on that build: "+
-				"pin the pair to a later build in oraclePairLaterPythonBuilds", path, oraclePairPythonBuild, pairID)
-		}
-	}
-
 	pairIDs := make([]string, 0, len(pairs))
 	for pairID := range pairs {
 		pairIDs = append(pairIDs, pairID)
@@ -162,18 +149,15 @@ func TestEveryOraclePairHasAFrozenGolden(t *testing.T) {
 			continue
 		}
 		if answered[pairID] == 0 {
-			t.Errorf("pair %q (testdata/oracle_pairs/%s.py) has no frozen golden: no test compares Go with its Python answer",
-				pairID, strings.ReplaceAll(pairID, "/", "_"))
+			t.Errorf("pair %q has no frozen golden: no test compares Go with its Python answer", pairID)
 		}
 	}
 	t.Logf("%d pairs, %d goldens", len(pairs), len(goldens))
 }
 
-// retiredPairHarnessSources are the pair files whose feature was removed and whose goldens and tests went with it
-// (CHAOS-9200, on chris's word 2026-10-11: the investment rule classifier). The files stay: the harness manifest
-// (oracleHarnessManifest) holds one digest line per pair file and per pair configuration file, and it is part of
-// the request every other golden is keyed on, so removing a file changes the key of every pair golden and would
-// need every golden re-recorded from the pinned Python build. They are never run (a frozen oracle runs no Python).
+// retiredPairHarnessSources are the pairs whose feature was removed and whose goldens and tests went with it
+// (CHAOS-9200, on chris's word 2026-10-11: the investment rule classifier). They stay in the pair list and
+// no golden may answer them.
 var retiredPairHarnessSources = map[string]string{
 	"analytics/investment/classify":   "investment rule classifier removed, CHAOS-9200",
 	"analytics/investment/divergence": "investment rule classifier removed, CHAOS-9200",

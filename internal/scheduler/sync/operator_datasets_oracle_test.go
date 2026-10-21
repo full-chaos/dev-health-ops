@@ -93,7 +93,7 @@ func TestOperatorDatasetsMatchFrozenPythonOnEverySubset(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenPython(t, "operator-datasets.golden.json", programoracle.Program{
-		Name: "operator datasets", Text: operatorDatasetsPython, Stdin: input, Env: map[string]string{"OTEL_ENABLED": "false"},
+		Name: "operator datasets", Stdin: input,
 	})[0]
 	var python2 map[string]oracleProvider
 	if err := json.Unmarshal([]byte(output), &python2); err != nil {

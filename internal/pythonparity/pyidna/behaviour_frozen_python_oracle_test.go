@@ -15,58 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// behaviourProgram answers each call with the idna package: the result (code
-// points or ASCII) or type(exc).__name__ and str(exc). Its 5.6 million
-// answers are frozen as block digests, one canonical line per answer:
-// kind|result|message, a text field, a code point list and a text field.
-const behaviourProgram = programoracle.BlocksPython + `
-import sys, idna
-
-def run(fn, arg):
-    try:
-        value = fn(arg)
-        if isinstance(value, bytes):
-            return {"ok": [b for b in value]}
-        return {"ok": [ord(c) for c in value]}
-    except idna.IDNAError as exc:
-        return {"kind": type(exc).__name__, "message": str(exc)}
-
-def direct(call, label):
-    pos = call.get("pos", 0)
-    try:
-        if call["fn"] == "contextj":
-            return {"ok": [1 if idna.core.valid_contextj(label, pos) else 0]}
-        if call["fn"] == "contexto":
-            return {"ok": [1 if idna.core.valid_contexto(label, pos) else 0]}
-        idna.core.check_bidi(label)
-        return {"ok": [1]}
-    except idna.IDNAError as exc:
-        return {"kind": type(exc).__name__, "message": str(exc)}
-    except ValueError as exc:
-        return {"kind": "ValueError", "message": str(exc)}
-
-def line(result):
-    return text(result.get("kind", "")) + "|" + code_points(result.get("ok", [])) + "|" + text(result.get("message", ""))
-
-lines = []
-for call in json.load(sys.stdin):
-    label = "".join(map(chr, call["text"] or []))
-    if call["fn"] in ("contextj", "contexto", "bidi"):
-        lines.append(line(direct(call, label)))
-        continue
-    if call["fn"] == "decode":
-        label = label.encode("ascii")
-    fn = {
-        "remap": lambda s: idna.uts46_remap(s, std3_rules=False, transitional=False),
-        "alabel": idna.alabel,
-        "ulabel": idna.ulabel,
-        "encode": idna.encode,
-        "decode": idna.decode,
-    }[call["fn"]]
-    lines.append(line(run(fn, label)))
-print(json.dumps(block_digests(lines)))
-`
-
 type behaviourCall struct {
 	Fn   string `json:"fn"`
 	Text []rune `json:"text"`
@@ -341,7 +289,7 @@ func TestBehaviourMatchesFrozenPython(t *testing.T) {
 	calls := behaviourCorpus()
 	requireCallEncoding(t, calls)
 	payload := appendCallsJSON(make([]byte, 0, 240<<20), calls)
-	output := frozenPython(t, "behaviour.golden.json", programoracle.Program{Name: "behaviour", Text: behaviourProgram, Stdin: payload})[0]
+	output := frozenPython(t, "behaviour.golden.json", programoracle.Program{Name: "behaviour", Stdin: payload})[0]
 	// The answers here. The block digests prove each is the Python answer, so
 	// the slice cut for the golden below is a slice of the Python answers.
 	want := make([]behaviourResult, len(calls))

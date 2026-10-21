@@ -1,9 +1,7 @@
 package legacyingest
 
 import (
-	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -22,30 +20,7 @@ func programGolden(file, test, digest string) venueoracle.GoldenSpec {
 		Path:        "testdata/golden/" + file + ".json",
 		PythonBuild: programPythonBuild,
 		SHA256:      digest,
-		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/legacyingest/ -test '^%s$' -python-root $DIR "+
-			"(records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-			programPythonBuild, test),
 	}
-}
-
-// producerEnv is the environment entries that shape a producer's answer. They
-// are part of the program's request, and with PATH, HOME, the pinned sources on
-// PYTHONPATH and no bytecode they are the whole environment the producer gets:
-// nothing is inherited from the process that records.
-var producerEnv = map[string]string{"PYTHONHASHSEED": "0", "PYTHONUTF8": "1"}
-
-// withoutLogLines drops the structured log lines the Python process writes on
-// start-up ({"timestamp": ...}): they carry the clock, so they would make two
-// recordings differ, and no test reads them.
-func withoutLogLines(output []byte) string {
-	var kept []string
-	for _, line := range strings.SplitAfter(string(output), "\n") {
-		if !strings.HasPrefix(line, `{"timestamp": "`) {
-			kept = append(kept, line)
-		}
-	}
-	return strings.Join(kept, "")
 }
 
 // generatedID is a random (version 4) UUID, such as the ingestion id each

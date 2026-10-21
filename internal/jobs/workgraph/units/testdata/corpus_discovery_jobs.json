@@ -1,0 +1,130 @@
+[
+  {
+    "generator": "generate_categorization_prompts_python_golden.py",
+    "fixture": "categorization_prompts_python_golden.json"
+  },
+  {
+    "generator": "generate_clickhouse_string_decode_golden.py",
+    "fixture": "clickhouse_string_decode_python_golden.json"
+  },
+  {
+    "generator": "generate_daily_compounding_risk_python_golden.py",
+    "fixture": "daily_compounding_risk_python_golden.json"
+  },
+  {
+    "generator": "generate_effort_golden.py",
+    "fixture": "effort_python_golden.json"
+  },
+  {
+    "generator": "generate_evidence_json_edge_shapes_golden.py",
+    "fixture": "evidence_json_edge_shapes_python_golden.json"
+  },
+  {
+    "generator": "generate_evidence_json_repr_band_golden.py",
+    "fixture": "evidence_json_repr_band_python_golden.json"
+  },
+  {
+    "generator": "generate_fma_golden.py",
+    "fixture": "fma_golden.json"
+  },
+  {
+    "generator": "generate_investment_materialize_python_golden.py",
+    "fixture": "investment_materialize_python_golden.json"
+  },
+  {
+    "generator": "generate_investment_quality_golden.py",
+    "fixture": "investment_quality_python_golden.json"
+  },
+  {
+    "generator": "generate_investment_taxonomy_golden.py",
+    "fixture": "investment_taxonomy_python_golden.json"
+  },
+  {
+    "generator": "generate_llm_schema_python_golden.py",
+    "fixture": "llm_schema_python_golden.json"
+  },
+  {
+    "generator": "generate_max_component_nodes_golden.py",
+    "fixture": "max_component_nodes_python_golden.json"
+  },
+  {
+    "generator": "generate_membership_backfill_golden.py",
+    "fixture": "membership_backfill_golden.json"
+  },
+  {
+    "generator": "generate_membership_golden.py",
+    "fixture": "membership_python_golden.json"
+  },
+  {
+    "generator": "generate_mock_provider_explanation_python_golden.py",
+    "fixture": "mock_provider_explanation_python_golden.json"
+  },
+  {
+    "generator": "generate_mock_provider_python_golden.py",
+    "fixture": "mock_provider_python_golden.json"
+  },
+  {
+    "generator": "generate_pysum_golden.py",
+    "fixture": "pysum_golden.json"
+  },
+  {
+    "generator": "generate_python_decimal_digits_golden.py",
+    "fixture": "python_decimal_digits_python_golden.json"
+  },
+  {
+    "generator": "generate_python_float_golden.py",
+    "fixture": "python_float_python_golden.json"
+  },
+  {
+    "generator": "generate_python_isclose_golden.py",
+    "fixture": "python_isclose_python_golden.json"
+  },
+  {
+    "generator": "generate_python_json_golden.py",
+    "fixture": "python_json_python_golden.json"
+  },
+  {
+    "generator": "generate_python_json_insertion_order_golden.py",
+    "fixture": "python_json_insertion_order_python_golden.json"
+  },
+  {
+    "generator": "generate_python_sum_golden.py",
+    "fixture": "python_sum_python_golden.json"
+  },
+  {
+    "generator": "generate_python_whitespace_golden.py",
+    "fixture": "python_whitespace_python_golden.json"
+  },
+  {
+    "generator": "generate_remaining_metrics_python_golden.py",
+    "fixture": "remaining_metrics_python_golden.json"
+  },
+  {
+    "generator": "generate_repo_effort_allocation_golden.py",
+    "fixture": "repo_effort_allocation_python_golden.json"
+  },
+  {
+    "generator": "generate_telemetry_labels_golden.py",
+    "fixture": "telemetry_labels_python_golden.json"
+  },
+  {
+    "generator": "generate_text_reference_parity.py",
+    "fixture": "text_reference_parity.json"
+  },
+  {
+    "generator": "generate_throughput_forecast_golden.py",
+    "fixture": "throughput_forecast_golden.json"
+  },
+  {
+    "generator": "generate_time_bounds_golden.py",
+    "fixture": "time_bounds_python_golden.json"
+  },
+  {
+    "generator": "generate_work_unit_label_golden.py",
+    "fixture": "work_unit_label_python_golden.json"
+  },
+  {
+    "generator": "generate_workgraph_ids_python_golden.py",
+    "fixture": "workgraph_ids_python_golden.json"
+  }
+]

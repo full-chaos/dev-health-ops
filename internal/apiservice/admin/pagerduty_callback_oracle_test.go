@@ -292,7 +292,7 @@ type callbackOrg struct {
 func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("callback", "TestPagerDutyCallbackAndManualVenueOracle", "4abac9d40a4a717bc3dbef25ec0c2548b83dd6b5338fb1b91d6efeb07e034c45"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-callback-32-b"
 
 	fake := &fakePagerDuty{failRevoke: map[string]bool{"old-fail-rt": true, "rt-missing-refused": true, "rt-noaccount-refused": true, "rt-corrupt-refused": true},
@@ -358,9 +358,6 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 			"PAGER_DUTY_SECRET=" + pagerDutyCallbackVenueSecret,
 			"PAGER_DUTY_REDIRECT_URI=" + pagerDutyCallbackVenueRedirectURI,
 			"SETTINGS_ENCRYPTION_KEY=" + pagerDutyCallbackVenueEncryptionKey,
-			"VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE=" + upstream.URL + "/revoke",
-			"VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE=" + upstream.URL + "/token",
-			"VENUE_PAGERDUTY_API_BASE_OVERRIDE=" + upstream.URL,
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -597,7 +594,7 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	python := golden.Python(t, venue, requests)
 	// What the Python plane sent upstream is part of what its executed build
 	// answered: frozen with the golden, compared with the Go plane's calls.
-	pythonCallsText := golden.InspectRows(t, "upstream calls of the Python plane", func() string { return strings.Join(fake.take(), "\n") })
+	pythonCallsText := golden.InspectRows(t, "upstream calls of the Python plane")
 	fake.take()
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
@@ -629,9 +626,7 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		golden.CompareRows(t, name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, goRows)
+		golden.CompareRows(t, name, goRows)
 	}
 	// The states only the Go plane's follow-up callbacks consume are not part
 	// of the two-plane comparison.
@@ -722,7 +717,7 @@ FROM provider_oauth_revocations WHERE purpose <> 'setup' ORDER BY org_id, creden
 		return out
 	}
 	goSecrets := strings.Join(opened(venue.GoDB), "\n")
-	pythonSecrets := golden.CompareRows(t, "stored secrets opened", func() string { return strings.Join(opened(venue.SourceDB), "\n") }, goSecrets)
+	pythonSecrets := golden.CompareRows(t, "stored secrets opened", goSecrets)
 	if count := strings.Count(pythonSecrets, "\n") + 1; count < 20 {
 		t.Errorf("only %d stored secrets to compare", count)
 	}
@@ -783,7 +778,7 @@ FROM provider_oauth_revocations WHERE purpose = 'setup' ORDER BY org_id`)
 		}
 		return out
 	}
-	pythonSetupRows := golden.InspectRows(t, "python setup revocation rows", func() string { return fmt.Sprint(setupRows(venue.SourceDB)) })
+	pythonSetupRows := golden.InspectRows(t, "python setup revocation rows")
 	if pythonSetupRows != fmt.Sprint(map[string]string{}) {
 		t.Errorf("the Python plane kept setup revocations (%v); it used to keep none: this is a decision, not an accident", pythonSetupRows)
 	}

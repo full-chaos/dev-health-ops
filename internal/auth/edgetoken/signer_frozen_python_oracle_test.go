@@ -5,12 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -22,12 +20,8 @@ func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 // it, so Identity names that distribution. A golden recorded by another
 // producer is refused.
 var signerGoldens = programoracle.Set{
-	Package:       "./internal/auth/edgetoken/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\npyjwt 2.15.0",
-	Distributions: []string{"pyjwt"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\npyjwt 2.15.0",
 	Pins: map[string]string{
 		"signer.golden.json": "1eb5e3577e4dc0fb5e5bcf00c38c17e936a9c720a698cea731ea1c33dafcff38",
 	},
@@ -49,48 +43,6 @@ func digestOf(token string) tokenDigest {
 // at. It is fixed: it is in the program's input, and an input is the same in
 // every run.
 var signerInstant = time.Unix(1_790_000_000, 0).UTC()
-
-// signerProgram mints with the REAL AuthService (api/services/auth.py), with
-// only its clock and uuid4 fixed so the output is the same in every run, and
-// reports what the real validate_token says about each token it minted, at
-// the same instant (the token library reads the clock itself, so its clock is
-// fixed too). A token is answered as its digest. The key arrives on stdin,
-// never argv.
-const signerProgram = `
-import hashlib, json, sys, uuid
-from datetime import datetime, timezone
-import jwt.api_jwt
-import dev_health_ops.api.services.auth as auth
-
-spec = json.load(sys.stdin)
-
-class FixedDatetime(datetime):
-    @classmethod
-    def now(cls, tz=None):
-        return now
-
-# Every datetime the service and the token library make is a FixedDatetime, so
-# the library's own isinstance checks see a datetime.
-now = FixedDatetime.fromtimestamp(spec["now"], tz=timezone.utc)
-auth.datetime = FixedDatetime
-jwt.api_jwt.datetime = FixedDatetime
-service = auth.AuthService(secret_key=spec["key"])
-out = []
-for case in spec["cases"]:
-    auth.uuid.uuid4 = (lambda value: (lambda: uuid.UUID(value)))(case["jti"])
-    if case["kind"] == "access":
-        token = service.create_access_token(**case["args"])
-    elif case["kind"] == "refresh":
-        token = service.create_refresh_token(**case["args"])
-    else:
-        args = dict(case["args"])
-        args["expires_at"] = FixedDatetime.fromtimestamp(args["expires_at"], tz=timezone.utc)
-        token = service.create_refresh_token_with_jti(**args)
-    verdict = service.validate_token(token, token_type=case["verify_as"])
-    raw = token.encode("utf-8")
-    out.append({"token": {"sha256": hashlib.sha256(raw).hexdigest(), "length": len(raw)}, "accepted": verdict is not None})
-print(json.dumps(out))
-`
 
 type signerCase struct {
 	Kind     string         `json:"kind"`
@@ -166,12 +118,7 @@ func TestSignerMatchesFrozenAuthService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	output := signerGoldens.Outputs(t, root, "signer.golden.json", programoracle.Program{Name: "auth service signer", Text: signerProgram, Stdin: payload})[0]
+	output := signerGoldens.Outputs(t, "signer.golden.json", programoracle.Program{Name: "auth service signer", Stdin: payload})[0]
 	var got []struct {
 		Token    tokenDigest `json:"token"`
 		Accepted bool        `json:"accepted"`

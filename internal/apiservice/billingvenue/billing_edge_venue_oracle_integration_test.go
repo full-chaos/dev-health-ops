@@ -25,8 +25,7 @@ import (
 )
 
 // TestVenueOracleBillingEdge holds the Go billing-edge listener to the real
-// Python billing edge app (dev_health_ops.api.billing_edge:app, served by the
-// venue through VENUE_PY_APP): GET and HEAD /health under every combination
+// Python billing edge app (dev_health_ops.api.billing_edge:app, frozen): GET and HEAD /health under every combination
 // of the three secrets (set, unset) and postgres (reachable, not), and, with
 // everything configured, the webhook (a signed event, a bad and a missing
 // signature) and the 404 grid over paths x the catch-all's methods.
@@ -44,15 +43,13 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name(), goldenDigest(t.Name())))
 	edgeNow := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	env := webhookEnv()
-	// Only a recording serves Python, and only from the pinned checkout (pythonBuild)
-	// that still carries this module; the module is deleted on main.
-	pythonEnv := []string{"VENUE_PY_APP=dev_health_ops.api.billing_edge:app"}
+	var pythonEnv []string
 	for key, value := range env {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			return billingSeed(t, ctx, admin).tokenSpecs()
 		},
@@ -115,7 +112,7 @@ func TestVenueOracleBillingEdge(t *testing.T) {
 				{Name: name + " GET /health", Method: "GET", Path: "/health", Headers: map[string]string{}},
 				{Name: name + " HEAD /health", Method: "HEAD", Path: "/health", Headers: map[string]string{}},
 			}
-			python := golden.PythonWithEnv(t, venue, extra, requests)
+			python := golden.Python(t, venue, requests)
 			receipt += venueoracle.Diff(t, edge(stripeKey, webhookSecret, licenseKey, pool), requests, python, venueoracle.DiffOptions{Golden: golden})
 			scenarios++
 		}

@@ -142,37 +142,6 @@ func TestSetTargetEnvExternalRunsTheStaticScript(t *testing.T) {
 	}
 }
 
-// The frozen golden keys each call by the process environment (callEnvKey). The auth-flow golden was recorded with
-// the auto-create-org setting changed in the process, so an external run must key the call the same way, or the
-// run stops at the first changed batch ("recorded under another extra environment").
-func TestExternalSetTargetEnvKeysTheGoldenCallLikeInProcess(t *testing.T) {
-	useTargetEnvScript(t, "#!/bin/sh\nexit 0\n", 0o755)
-	golden, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := golden.bindPythonEnv(Options{JWTKey: "k"}); err != nil {
-		t.Fatal(err)
-	}
-	keyAfter := func(external bool) (key string) {
-		t.Run(map[bool]string{false: "in-process", true: "external"}[external], func(sub *testing.T) {
-			SetTargetEnv(sub, external, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF ")
-			var err error
-			if key, err = golden.callEnvKey(nil); err != nil {
-				sub.Fatal(err)
-			}
-		})
-		return key
-	}
-	inProcess, external := keyAfter(false), keyAfter(true)
-	if inProcess == "" {
-		t.Fatal("the in-process change is not in the call key: the test measures nothing")
-	}
-	if external != inProcess {
-		t.Errorf("external call key %q differs from the in-process key %q", external, inProcess)
-	}
-}
-
 func TestWithoutProvenanceHeadersDropsOnlyThePlaneAndBuildStamp(t *testing.T) {
 	response := Response{Status: 200, Body: "{}", Headers: map[string]string{
 		"content-type": "application/json", "X-Dev-Health-Build": "abc", "x-dev-health-plane": "api", "x-request-id": "r1"}}
@@ -186,5 +155,30 @@ func TestWithoutProvenanceHeadersDropsOnlyThePlaneAndBuildStamp(t *testing.T) {
 	}
 	if len(response.Headers) != 4 {
 		t.Errorf("the input response was changed: %v", response.Headers)
+	}
+}
+
+// The Go ports read the Python plane's settings as the recording's process saw them (pythonPlaneLookup): what test
+// code set in the process, then the venue's own entries. The auth-flow golden was recorded with the auto-create-org
+// setting changed in the process, so an external run must leave the same value for the ports to read.
+func TestExternalSetTargetEnvReachesTheGoPortsLikeInProcess(t *testing.T) {
+	useTargetEnvScript(t, "#!/bin/sh\nexit 0\n", 0o755)
+	venue := &Venue{pythonEnv: planeEnv(Options{JWTKey: "k"})}
+	valueAfter := func(external bool) (value string) {
+		t.Run(map[bool]string{false: "in-process", true: "external"}[external], func(sub *testing.T) {
+			SetTargetEnv(sub, external, "AUTH_AUTO_CREATE_ORG_ON_REGISTER", " OFF ")
+			var found bool
+			if value, found = venue.pythonPlaneLookup("AUTH_AUTO_CREATE_ORG_ON_REGISTER"); !found {
+				sub.Fatal("the change is not in the plane's settings")
+			}
+		})
+		return value
+	}
+	inProcess, external := valueAfter(false), valueAfter(true)
+	if inProcess != " OFF " {
+		t.Fatalf("the in-process change reads %q: the test measures nothing", inProcess)
+	}
+	if external != inProcess {
+		t.Errorf("external value %q differs from the in-process value %q", external, inProcess)
 	}
 }

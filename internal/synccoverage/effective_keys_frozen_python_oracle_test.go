@@ -58,7 +58,7 @@ func TestEffectiveDatasetKeysMatchFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "effective-datasets.golden.json", programoracle.Program{Name: "effective dataset keys", Text: pythonEffectiveKeysProgram, Stdin: input})[0]
+	output := frozenPython(t, "effective-datasets.golden.json", programoracle.Program{Name: "effective dataset keys", Stdin: input})[0]
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var want []struct {
 		Keys  []string

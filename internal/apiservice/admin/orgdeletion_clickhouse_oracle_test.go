@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"sort"
 	"testing"
 	"time"
@@ -14,7 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -49,9 +47,7 @@ var clickHouseOrgTableKnownPythonOnlyStale = map[string]string{
 // if the real set drifts from what is named here.
 //
 // This test needs a real, migrated ClickHouse (chmigrate, the migration
-// chain `dho migrate clickhouse upgrade` applies) and, only while recording,
-// a python3 interpreter; it does not need the live-Python FastAPI app, so it
-// is not gated on DEV_HEALTH_VENUE_ORACLES -- only -tags=integration,
+// chain `dho migrate clickhouse upgrade` applies); it is not gated on DEV_HEALTH_VENUE_ORACLES -- only -tags=integration,
 // like every other container-backed test in this tree.
 func TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -80,36 +76,9 @@ func TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex(t *testing.T)
 	}
 
 	golden := venueoracle.OpenGolden(t, adminGolden("clickhouse_org_tables", t.Name(), "ddb6c013976cedeebecc72e77848a833a212f0ca614d716793d2fbfc20524935"))
-	root := golden.PythonRoot(t, repoRoot(t))
-	script := `
-import json
-import sys
-sys.path.insert(0, "src")
-from dev_health_ops.api.services import org_deletion
-
-print(json.dumps(sorted(org_deletion._clickhouse_tables_from_migrations())))
-`
 	// org_deletion.py's table list, parsed from the pinned build's migration
-	// files while recording, frozen otherwise.
-	answers := golden.Produce(t, root, []venueoracle.Request{venueoracle.ProgramRequest("clickhouse org tables", script, nil, nil)},
-		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-			// The harness starts the child in the closed environment: nothing
-			// ambient shapes its answer.
-			cmd, err := producer.Command(ctx, nil, nil, "-c", script)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cmd.Dir = producer.Root
-			output, err := cmd.Output()
-			if err != nil {
-				var stderr []byte
-				if exitErr, ok := err.(*exec.ExitError); ok {
-					stderr = exitErr.Stderr
-				}
-				t.Fatalf("python: %v", pyoracle.RunError(cmd.Path, err, stderr))
-			}
-			return []venueoracle.Response{{Status: 0, Body: string(output)}}
-		})
+	// files, frozen.
+	answers := golden.Produce(t, []venueoracle.Request{venueoracle.ProgramRequest("clickhouse org tables", nil)})
 	golden.Consumed(t, answers...)
 	output := []byte(answers[0].Body)
 	var pythonNames []string

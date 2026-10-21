@@ -28,7 +28,7 @@ import (
 func TestRateLimitPathCardinalityVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminGolden("ratelimit_path_cardinality", t.Name(), "2448fe8a75a7360e1cf80bebc2f0170488ae8c9cff2b96c1deac66d8b7073d2c"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("rlpc")
 	const jwtKey = "venue-oracle-test-secret-key-for-path-cardinality-32-by"
 	const adminPlaintextPassword = "correct horse battery staple pc"

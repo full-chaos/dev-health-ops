@@ -1,37 +1,27 @@
 // Package venueoracle is the venue differential oracle for `dho api` routes
-// ported from the Python api. The REAL Python app (dev_health_ops.api.main:app,
-// every middleware and handler, driven by TestClient) and the REAL Go api
-// answer the same requests against two copies of one Postgres database that
-// the real Alembic chain built and one seed filled. Each plane has its own
-// Valkey database. Responses must match byte for byte on status, body and
-// every header except the per-response ones. After the writes, the caller
-// compares the rows and stream entries they touched with TableRows and
-// StreamEntries.
+// ported from the Python api. The Python api is gone: what the REAL Python app
+// answered (dev_health_ops.api.main:app, every middleware and handler, driven
+// by TestClient) was executed once on the last Python-bearing build and frozen
+// in golden files (Golden). The REAL Go api answers the same requests against a
+// copy of one Postgres database that one seed filled, and Diff compares its
+// responses with the frozen ones byte for byte on status, body and every
+// header except the per-response ones. After the writes, the caller compares
+// the rows and stream entries they touched with TableRows and StreamEntries.
 //
-// Start builds the venue: Postgres and Valkey containers, the Alembic
-// heads, the caller's seed, tokens minted by the real AuthService, a
-// CREATE DATABASE ... TEMPLATE copy for Go, and the api role provisioned
-// and granted on that copy as a deploy does (provision_river_roles.sql,
-// then the River migration with postgres.APIPosture). The caller starts
-// the Go api on Venue.GoAPIDatabaseURI and passes its base URL to Diff.
-//
-// A ClickHouse container is started too (CHAOS-6310), with two isolated
-// databases -- Python's own CLICKHOUSE_URI is pointed at one (unset by
-// default otherwise, so a route touching ClickHouse would 500 without
-// this), and a dedicated login is provisioned on the other, granted
-// exactly clickhouse.APIPosture()'s manifest via
-// clickhouse.GrantStatements -- the same statements a deploy's grant
-// recipe runs, so the two can never drift. Venue.GoAPIClickHouseURI is
-// that login's DSN, for a route area's Deps.ClickHouse.
+// Start builds the venue: Postgres, Valkey and ClickHouse containers, the
+// schemas (pgmigrate and chmigrate), the caller's seed, tokens minted by the
+// Go minter, a CREATE DATABASE ... TEMPLATE copy for Go, and the api role
+// provisioned and granted on that copy as a deploy does
+// (provision_river_roles.sql, then the River migration with
+// postgres.APIPosture). The caller starts the Go api on
+// Venue.GoAPIDatabaseURI and passes its base URL to Diff. ClickHouse has two
+// isolated databases (CHAOS-6310), and a dedicated login on the Go one,
+// granted exactly clickhouse.APIPosture()'s manifest via
+// clickhouse.GrantStatements; Venue.GoAPIClickHouseURI is that login's DSN.
 //
 // Start skips unless DEV_HEALTH_VENUE_ORACLES=1, and ci/check_go.sh
-// venue-oracles sets it. No test of the tree starts the live Python api any
-// more (the live oracles were deleted: Go is the implementation of record);
-// the live path stays only for a golden's recording. A venue built for a frozen golden or a Go-only test
-// (Options.Golden, Options.GoOnly) runs no Python at all: its schemas come
-// from pgmigrate and chmigrate, its tokens from the Go minter and CallPython
-// from the Go ports (gosubstrate.go); a golden's recording builds its schemas
-// the same way, so a recording and its replay read one physical layout.
+// venue-oracles sets it. A venue runs no Python: it is built for a frozen
+// golden or for a Go-only test (Options.Golden, Options.GoOnly).
 package venueoracle
 
 import (
@@ -51,7 +41,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -63,315 +52,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
-
-// pythonProgram has four modes: "migrate" runs the Alembic heads, "mint"
-// mints access tokens with the real AuthService (stdin: name -> keyword
-// arguments of create_access_token), "call" runs Python functions (stdin: a
-// list of {"target": "module:attribute", "args": [...], "kwargs": {...}};
-// stdout: their JSON results, in order -- CHAOS-6247's PagerDuty binding
-// secret is seeded through this mode, calling core.encryption.encrypt_value,
-// so the ciphertext is a genuine cross-language artifact rather than a
-// Go-side round-trip), and "serve" answers a batch of requests with
-// TestClient over the real app.
-const pythonProgram = `
-import base64, json, os, sys
-mode = sys.argv[1]
-if mode == "migrate":
-    from alembic import command
-    from dev_health_ops.migrate import _make_alembic_config
-    command.upgrade(_make_alembic_config(), "heads")
-    print(json.dumps({"ok": True}))
-elif mode == "mint":
-    from dev_health_ops.api.services.auth import AuthService
-    svc = AuthService()
-    out = {}
-    for name, spec in json.loads(sys.stdin.read()).items():
-        out[name] = svc.create_access_token(**spec)
-    print(json.dumps(out))
-elif mode == "call":
-    import importlib
-    out = []
-    for call in json.loads(sys.stdin.read()):
-        module, _, attribute = call["target"].partition(":")
-        target = importlib.import_module(module)
-        for part in attribute.split("."):
-            target = getattr(target, part)
-        out.append(target(*call.get("args", []), **call.get("kwargs", {})))
-    print(json.dumps(out))
-elif mode == "serve":
-    # Test-runner-only monkeypatch (never a production src/ edit, CHAOS-6306
-    # condition 2): when set, points PagerDutyOAuthConfig.from_env()'s
-    # revoke_url at a fake endpoint, so a venue test can prove the Go and
-    # Python planes revoke against the SAME fake server without the
-    # production PagerDutyOAuthConfig ever gaining a revoke_url env knob.
-    _pd_overrides = {}
-    _pd_revoke_override = os.environ.get("VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE")
-    if _pd_revoke_override:
-        _pd_overrides["revoke_url"] = _pd_revoke_override
-    # Same rule, for the code exchange and the client-credentials token
-    # request (PagerDutyOAuthConfig.token_url and credential_validation's
-    # own _TOKEN_URL) and for the regional REST base the live validation
-    # reads (credential_validation.pagerduty_base_url): a venue test points
-    # both planes at one fake PagerDuty, and the Go plane's
-    # PagerDutyRevokeConfig.TokenURL/APIBaseOverride are its counterparts.
-    _pd_token_override = os.environ.get("VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE")
-    if _pd_token_override:
-        _pd_overrides["token_url"] = _pd_token_override
-    if _pd_overrides:
-        import dataclasses
-        from dev_health_ops.providers.pagerduty import oauth as _pd_oauth
-        _pd_original_from_env = _pd_oauth.PagerDutyOAuthConfig.from_env.__func__
-
-        def _pd_patched_from_env(cls):
-            config = _pd_original_from_env(cls)
-            if config is None:
-                return config
-            return dataclasses.replace(config, **_pd_overrides)
-
-        _pd_oauth.PagerDutyOAuthConfig.from_env = classmethod(_pd_patched_from_env)
-    if _pd_token_override or os.environ.get("VENUE_PAGERDUTY_API_BASE_OVERRIDE"):
-        from dev_health_ops.providers.pagerduty import credential_validation as _pd_cv
-        if _pd_token_override:
-            _pd_cv._TOKEN_URL = _pd_token_override
-        _pd_api_override = os.environ.get("VENUE_PAGERDUTY_API_BASE_OVERRIDE")
-        if _pd_api_override:
-            _pd_cv.pagerduty_base_url = lambda *, region: _pd_api_override + "/" + region
-            # The services route builds its client through providers/
-            # pagerduty/client.py, which reads its own imported copy.
-            from dev_health_ops.providers.pagerduty import client as _pd_client
-            _pd_client.pagerduty_base_url = lambda *, region: _pd_api_override + "/" + region
-        if _pd_token_override:
-            # The services route builds its client-credentials OAuth config
-            # directly (not from the environment), so its token request is
-            # redirected on the router's own imported function.
-            from dev_health_ops.api.admin.routers import pagerduty_services as _pd_services
-            _pd_services_client_credentials = _pd_services.client_credentials
-
-            async def _pd_patched_client_credentials(config, **kwargs):
-                return await _pd_services_client_credentials(
-                    dataclasses.replace(config, token_url=_pd_token_override), **kwargs
-                )
-
-            _pd_services.client_credentials = _pd_patched_client_credentials
-    # Test-runner-only monkeypatch, same rule as above: when set, every
-    # StripeClient the app builds talks to this base instead of Stripe, so
-    # a venue test can record what each plane asks of Stripe on one fake
-    # server. The production get_stripe_client gains no knob.
-    _stripe_api_base = os.environ.get("VENUE_STRIPE_API_BASE")
-    if _stripe_api_base:
-        import stripe as _stripe
-        _stripe_original_init = _stripe.StripeClient.__init__
-
-        def _stripe_patched_init(self, *args, **kwargs):
-            kwargs["base_addresses"] = {"api": _stripe_api_base}
-            _stripe_original_init(self, *args, **kwargs)
-
-        _stripe.StripeClient.__init__ = _stripe_patched_init
-    # VENUE_STRIPE_LIST_KWARGS=1 lets the v1 subscription, invoice and
-    # refund services take list(limit=...) as keywords, the call the
-    # reconciliation service makes (and stripe-python refuses with a
-    # TypeError). The Python plane then runs the reconciliation it was
-    # written to run, which is what the Go port implements.
-    if os.environ.get("VENUE_STRIPE_LIST_KWARGS") == "1":
-        from stripe._invoice_service import InvoiceService as _InvoiceService
-        from stripe._refund_service import RefundService as _RefundService
-        from stripe._subscription_service import SubscriptionService as _SubscriptionService
-
-        def _stripe_list_kwargs(original):
-            def patched(self, params=None, options=None, **keywords):
-                if keywords:
-                    params = {**(params or {}), **keywords}
-                return original(self, params, options)
-            return patched
-
-        for _service in (_SubscriptionService, _InvoiceService, _RefundService):
-            _service.list = _stripe_list_kwargs(_service.list)
-    # Test-runner-only monkeypatch, same rule as above: when set, every
-    # httpx call the social-login providers make to GitHub, GitLab or
-    # Google goes to a fake provider instead (the provider URLs are
-    # hard-coded in api/services/oauth.py, the GitHub emails URL inside a
-    # method), so both planes read the SAME fake profile.
-    _oauth_override = os.environ.get("VENUE_OAUTH_PROVIDER_BASE_URL")
-    if _oauth_override:
-        import httpx
-        from dev_health_ops.api.services import oauth as _oauth
-        _hosts = {"https://api.github.com": "/github", "https://gitlab.com": "/gitlab", "https://www.googleapis.com": "/google"}
-
-        class _RedirectedClient(httpx.AsyncClient):
-            async def get(self, url, *args, **kwargs):
-                for host, prefix in _hosts.items():
-                    if str(url).startswith(host):
-                        url = _oauth_override + prefix + str(url)[len(host):]
-                return await super().get(url, *args, **kwargs)
-
-        _oauth.httpx = type("httpx_shim", (), {"AsyncClient": _RedirectedClient, "HTTPStatusError": httpx.HTTPStatusError,
-                                               "RequestError": httpx.RequestError, "Response": httpx.Response})
-    # VENUE_STRIPE_SESSION_LINE_ITEMS=1 gives the checkout session service
-    # the list_line_items(session_id) the webhook's checkout handler calls
-    # (stripe-python's is sessions.line_items.list), so the handler reads the
-    # line items it was written to read instead of failing to TEAM.
-    if os.environ.get("VENUE_STRIPE_SESSION_LINE_ITEMS") == "1":
-        from stripe.checkout._session_service import SessionService as _CheckoutSessionService
-
-        def _list_line_items(self, session, params=None, options=None):
-            return self.line_items.list(session, params, options)
-
-        _CheckoutSessionService.list_line_items = _list_line_items
-    # VENUE_STRIPE_EVENT_AS_DICT names the event types (comma separated,
-    # or 1 for every type) whose verified event reaches the webhook
-    # handlers as plain JSON dicts with attribute access, which is what
-    # those handlers were written against; stripe-python's StripeObject is
-    # not a dict, so the unpatched handlers crash or skip. Other types keep
-    # the deployed StripeObject. The signature is still verified by the
-    # real stripe-python code first.
-    _event_as_dict = os.environ.get("VENUE_STRIPE_EVENT_AS_DICT", "")
-    if _event_as_dict:
-        import json as _json
-        import stripe as _stripe_ev
-
-        class _EventDict(dict):
-            def __getattr__(self, name):
-                try:
-                    return self[name]
-                except KeyError:
-                    raise AttributeError(name) from None
-
-        def _as_event_dict(value):
-            if isinstance(value, dict):
-                return _EventDict((k, _as_event_dict(v)) for k, v in value.items())
-            if isinstance(value, list):
-                return [_as_event_dict(v) for v in value]
-            return value
-
-        _stripe_original_construct = _stripe_ev.StripeClient.construct_event
-
-        def _stripe_construct_as_dict(self, payload, sig_header, secret, *args, **kwargs):
-            event = _stripe_original_construct(self, payload, sig_header, secret, *args, **kwargs)
-            if _event_as_dict != "1" and event.type not in _event_as_dict.split(","):
-                return event
-            return _as_event_dict(_json.loads(payload))
-
-        _stripe_ev.StripeClient.construct_event = _stripe_construct_as_dict
-    # Test-runner-only monkeypatch, same rule as above: when set, every
-    # datetime.now()/utcnow() the listed modules call reads the pinned
-    # instant instead of the wall clock (each module's own global name
-    # 'datetime' is replaced by a subclass whose now() is pinned), so a
-    # venue test can compare Python-written timestamps as raw values
-    # against a Go plane run on the same injected clock.
-    _pinned_now = os.environ.get("VENUE_PINNED_NOW")
-    if _pinned_now:
-        import datetime as _dt, importlib as _importlib
-        _pin = _dt.datetime.fromisoformat(_pinned_now)
-
-        class _PinnedDatetime(_dt.datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return _pin.astimezone(tz) if tz is not None else _pin.replace(tzinfo=None)
-
-            @classmethod
-            def utcnow(cls):
-                return _pin.astimezone(_dt.timezone.utc).replace(tzinfo=None)
-
-        for _module_name in os.environ.get("VENUE_PINNED_NOW_MODULES", "").split(","):
-            if _module_name:
-                setattr(_importlib.import_module(_module_name), "datetime", _PinnedDatetime)
-        # Same rule for a module that reads the clock through its own
-        # global name 'time' (croniter's "from time import time"): the
-        # listed modules' time() returns the pinned instant's epoch.
-        for _module_name in os.environ.get("VENUE_PINNED_TIME_MODULES", "").split(","):
-            if _module_name:
-                setattr(_importlib.import_module(_module_name), "time", lambda: _pin.timestamp())
-    from fastapi.testclient import TestClient
-    # VENUE_PY_APP names another app to serve, "module:attribute" (for
-    # example dev_health_ops.api.billing_edge:app, the billing edge's own
-    # FastAPI app); the default is the main api.
-    import importlib as _app_importlib
-    _app_module, _, _app_attribute = os.environ.get("VENUE_PY_APP", "dev_health_ops.api.main:app").partition(":")
-    app = getattr(_app_importlib.import_module(_app_module), _app_attribute)
-    # VENUE_STRIPE_SUBSCRIPTION_HANDLERS_AS_DICT=1 hands the router's
-    # subscription updated/deleted/trial_will_end handlers the subscription
-    # as what they were written against: a dict (isinstance, .get) whose
-    # fields are also attributes, a field winning over a dict method of the
-    # same name (subscription.items is the Stripe items list, not
-    # dict.items). On the deployed StripeObject, metadata is not a dict and
-    # those handlers skip every event. SubscriptionService.process_event
-    # keeps the deployed StripeObject, which it reads correctly.
-    if os.environ.get("VENUE_STRIPE_SUBSCRIPTION_HANDLERS_AS_DICT") == "1":
-        import importlib as _importlib
-
-        # sys.modules, not attribute access: the billing package exports an
-        # APIRouter named router that shadows the module.
-        _importlib.import_module("dev_health_ops.api.billing.router")
-        _billing_router = sys.modules["dev_health_ops.api.billing.router"]
-
-        class _FieldDict(dict):
-            # A field is an attribute; an absent field is getattr's default
-            # (not a dict method of the same name: a subscription without
-            # items has no items). .get stays, for metadata.get.
-            def __getattribute__(self, name):
-                if name.startswith("__"):
-                    return dict.__getattribute__(self, name)
-                if dict.__contains__(self, name):
-                    return dict.__getitem__(self, name)
-                if name == "get":
-                    return dict.__getattribute__(self, name)
-                raise AttributeError(name)
-
-        def _as_field_dict(value):
-            if isinstance(value, dict):
-                return _FieldDict((k, _as_field_dict(v)) for k, v in value.items())
-            if isinstance(value, list):
-                return [_as_field_dict(v) for v in value]
-            return value
-
-        def _field_dict_handler(original):
-            async def handler(subscription):
-                return await original(_as_field_dict(subscription.to_dict()))
-            return handler
-
-        for _name in ("_handle_subscription_updated", "_handle_subscription_deleted", "_handle_trial_will_end"):
-            setattr(_billing_router, _name, _field_dict_handler(getattr(_billing_router, _name)))
-    # VENUE_PY_LOGGING=1 sends the app's log records (INFO and up) to stderr,
-    # so a handled failure (a logged, swallowed exception) shows its cause.
-    if os.environ.get("VENUE_PY_LOGGING") == "1":
-        import logging as _logging
-        _logging.basicConfig(stream=sys.stderr, level=_logging.INFO, force=True,
-                             format="VENUE LOG %(levelname)s %(name)s: %(message)s")
-    # VENUE_PY_TRACEBACKS=1 writes each unhandled exception's traceback to
-    # stderr (DEV_HEALTH_VENUE_PY_LOG keeps it), so a 500 carries its cause.
-    if os.environ.get("VENUE_PY_TRACEBACKS") == "1":
-        import traceback as _traceback
-        _inner_app = app
-
-        async def app(scope, receive, send):
-            try:
-                await _inner_app(scope, receive, send)
-            except Exception:
-                sys.stderr.write("VENUE TRACEBACK %s %s\n" % (scope.get("method"), scope.get("path")))
-                _traceback.print_exc(file=sys.stderr)
-                raise
-    client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
-    # VENUE_RESET_ATTRS_PER_REQUEST="module:attribute,..." sets each named
-    # module global back to None before every request. TestClient runs each
-    # request on its own event loop, and a module-cached httpx.AsyncClient
-    # (graphql/go_api_dispatcher.py's _http_client, _internal_http_client)
-    # keeps pooled connections bound to the loop that opened them: the next
-    # request that reuses one fails before anything is sent. A server runs
-    # one loop, so this is the harness's artefact, not the app's.
-    import importlib as _reset_importlib
-    _reset_attrs = [item.partition(":") for item in os.environ.get("VENUE_RESET_ATTRS_PER_REQUEST", "").split(",") if item]
-    out = []
-    for req in json.loads(sys.stdin.read()):
-        for _module_name, _, _attribute in _reset_attrs:
-            setattr(_reset_importlib.import_module(_module_name), _attribute, None)
-        body = base64.b64decode(req["body"]) if req.get("body") is not None else None
-        r = client.request(req["method"], req["path"], headers=req.get("headers") or {}, content=body)
-        out.append({"status": r.status_code, "headers": {k.lower(): v for k, v in r.headers.items()},
-                    "body": base64.b64encode(r.content).decode()})
-    print(json.dumps(out))
-`
 
 // APIPassword is the api role's password on the Go copy.
 const APIPassword = "venue_api_password"
@@ -410,44 +91,31 @@ type Options struct {
 	// JWTKey is JWT_SECRET_KEY on the Python plane; the Go api must be given
 	// the same key.
 	JWTKey string
-	// PythonEnv is extra environment for the Python plane, for example
-	// EXPECTED_WORKER_GROUPS or TELEMETRY_ENDPOINT.
+	// PythonEnv is the Python plane's settings the golden was recorded under,
+	// for example SETTINGS_ENCRYPTION_KEY: the Go ports of the substrate
+	// (gosubstrate.go) read them.
 	PythonEnv []string
-	// PythonPathRel are directories of the Python checkout (Root), given relative to Root
-	// and slash-separated, put on the Python plane's PYTHONPATH before its src: a stub site
-	// directory the test's fake services need (a sitecustomize.py). The HARNESS builds
-	// PYTHONPATH from them, so the key of a golden holds the relative names and not the
-	// absolute path of any checkout: a test that set PYTHONPATH itself through PythonEnv
-	// would key the path of its own checkout and replay in that checkout only.
-	PythonPathRel []string
-	// Seed fills the source database after the Alembic heads and before the
-	// copy, as a superuser. It may call Python through venue.CallPython, for
-	// example to write a value the way the Python api encrypts it. It
-	// returns the tokens to mint: name -> create_access_token keyword
-	// arguments (nil = none).
+	// Seed fills the source database after the schema and before the copy, as
+	// a superuser. It may call the Go ports of Python functions through
+	// venue.CallPython, for example to write a value the way the Python api
+	// encrypted it. It returns the tokens to mint: name -> create_access_token
+	// keyword arguments (nil = none).
 	Seed func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *Venue) map[string]map[string]any
 	// Logger receives the River migration logs (nil = discard).
 	Logger *slog.Logger
-	// Golden is the test's golden, when it has one. Its venue's schemas come
-	// from pgmigrate and chmigrate in both modes, so a recording and its
-	// replay see one physical layout (gosubstrate.go). A frozen golden (a run
-	// that is not recording) also runs no Python at all: the tokens come
-	// from the Go minter and CallPython from the Go ports. A recording run
-	// mints and calls through the pinned build's Python.
+	// Golden is the test's golden, when it has one: the Python plane's frozen
+	// answers.
 	Golden *Golden
 	// GoOnly is a test that compares nothing with the Python plane (it
-	// writes the Go-only proof, WriteGoOnlyProof): its venue is built without
-	// Python, as a frozen golden's is.
+	// writes the Go-only proof, WriteGoOnlyProof).
 	GoOnly bool
 	// External, when set, is the Go side of the venue: a target that already runs, with its own stores.
-	// It needs a frozen golden or GoOnly (see ExternalStores).
 	External *ExternalStores
 }
 
 // Venue is a built venue.
 type Venue struct {
-	Root   string
-	Python string
+	Root string
 	// Tokens are the minted access tokens, by seed name.
 	Tokens map[string]string
 	// Roles are the provisioned role names: domain, queue, coordinator, api.
@@ -459,35 +127,32 @@ type Venue struct {
 	ValkeyURI, PythonValkeyURI string
 
 	postgresURI string
-	pythonEnv   []string
-	// hostEnv is the values of the inherited names (inheritedPythonEnv) when
-	// the venue was built, PATH with the interpreter's directory first: what
-	// every Python child of this venue gets for them, whatever the process
-	// holds later.
-	hostEnv map[string]string
+	// pythonEnv is the Python plane's settings as the Go ports read them (planeEnv).
+	pythonEnv []string
 
 	// ClickHouse (CHAOS-6310): one server, two databases. PythonClickHouseDB
-	// is what CLICKHOUSE_URI (Python's env) names; GoClickHouseDB is what
+	// is what CLICKHOUSE_URI (Python's env) named; GoClickHouseDB is what
 	// the dedicated api login is scoped to.
 	clickHouseURI, clickHouseHTTPURI     string
 	PythonClickHouseDB, GoClickHouseDB   string
 	clickHouseAPIRole, clickHouseAPIPass string
 
-	// frozen is a venue built for a frozen golden or a Go-only test: it runs
-	// no Python.
+	// frozen is a venue built for a frozen golden or a Go-only test. Every
+	// venue is one: no Python plane can be served.
 	frozen bool
 }
 
 // Start builds the venue; see the package comment. It skips unless
 // DEV_HEALTH_VENUE_ORACLES=1. Everything it creates is removed by
-// t.Cleanup.
+// t.Cleanup. A venue needs a golden (Options.Golden) or is Go-only
+// (Options.GoOnly): no Python plane can be served.
 //
 // Start itself writes no proof file: it only proves the venue built, not
 // that the caller went on to compare anything against it, and a test that
 // calls Start and returns (no Diff, no failure, no skip) would otherwise
 // still satisfy a proof-file check while never running a real comparison.
 // Diff writes the proof instead, once it has actually sent requests to
-// both planes and compared them -- see its doc comment.
+// the Go plane and compared them with the frozen answers -- see its doc comment.
 func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	t.Helper()
 	if os.Getenv("DEV_HEALTH_VENUE_ORACLES") != "1" {
@@ -497,35 +162,16 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	frozen := options.GoOnly || (options.Golden != nil && !options.Golden.Recording())
-	goSchema := options.GoOnly || options.Golden != nil
 	if options.GoOnly && options.Golden != nil {
 		t.Fatal("venue: a GoOnly venue has no golden: a golden holds the Python plane's answers, which a Go-only test never compares")
 	}
-	if options.Golden != nil {
-		// The environment this venue gives the Python plane is the golden's
-		// key: what the test set in the process, and the plane's own entries.
-		if err := options.Golden.bindPythonEnv(options); err != nil {
-			t.Fatal(err)
-		}
-	}
-	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: frozen}
 	if !options.GoOnly && options.Golden == nil {
-		// Before anything is built: the mark and its check are the same in a
-		// tree that used a frozen golden first and in one that starts live first.
-		if err := frozenTreeErr(t); err != nil {
-			t.Fatal(err)
-		}
-		liveVenues.Store(rootTestName(t), struct{}{})
+		t.Fatal("venue: a venue needs its golden (Options.Golden) or Options.GoOnly: no Python plane can be served")
 	}
-	if !frozen {
-		bin := activateInterpreter(t, options.Root, "venue")
-		v.Python = filepath.Join(bin, "python3")
-	}
+	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: true, pythonEnv: planeEnv(options)}
 	if options.External != nil {
 		return startExternal(t, ctx, options, v)
 	}
-	v.hostEnv = inheritedValues(map[string]string{})
 
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -550,8 +196,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 
 	// ClickHouse (CHAOS-6310): one server, two isolated databases, named
 	// after the Postgres ones above for the same "one identical copy per
-	// plane" shape. Real migrations, applied to each database
-	// independently (ClickHouse has no CREATE DATABASE ... TEMPLATE, so
+	// plane" shape (ClickHouse has no CREATE DATABASE ... TEMPLATE, so
 	// this is two migration runs, not a copy).
 	chInstance, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -559,11 +204,6 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	}
 	t.Cleanup(func() { _ = chInstance.Close(context.Background()) })
 	v.clickHouseURI = chInstance.URI
-	// Python's clickhouse_connect is an HTTP-only client: it needs the
-	// HTTP-port DSN, never Instance.URI's native-port one (clickhouse-go,
-	// this package's own admin/CHRows connections, speaks the native
-	// protocol and needs the opposite -- confirmed live, both ways, with
-	// the wrong port on either side).
 	chHTTPURI, err := containers.ClickHouseHTTPDSN(ctx, chInstance)
 	if err != nil {
 		t.Fatal(err)
@@ -584,11 +224,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		}
 	}
 	for _, database := range []string{v.PythonClickHouseDB, v.GoClickHouseDB} {
-		if goSchema {
-			v.migrateClickHouseGo(t, ctx, database)
-		} else {
-			v.migrateClickHouse(t, ctx, database)
-		}
+		v.migrateClickHouseGo(t, ctx, database)
 	}
 	chRole, err := containers.RoleName("venue_ch_api", instance)
 	if err != nil {
@@ -606,26 +242,8 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		}
 	}
 
-	async := strings.Replace(v.AdminURI(t, v.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
-	async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
-	pythonPath := []string{}
-	for _, rel := range options.PythonPathRel {
-		pythonPath = append(pythonPath, filepath.Join(options.Root, filepath.FromSlash(rel)))
-	}
-	pythonPath = append(pythonPath, filepath.Join(options.Root, "src"))
-	perRun := map[string]string{"PYTHONPATH": strings.Join(pythonPath, string(os.PathListSeparator)), "POSTGRES_URI": async,
-		"REDIS_URL": v.PythonValkeyURI, "CLICKHOUSE_URI": v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)}
-	for name, value := range v.hostEnv {
-		perRun[name] = value
-	}
-	v.pythonEnv = pythonPlaneEnv(options, perRun)
-
-	// 1. The real schema, then one seed and its tokens.
-	if goSchema {
-		v.migratePostgresGo(t, ctx)
-	} else {
-		v.runPython(t, nil, "migrate")
-	}
+	// 1. The schema, then one seed and its tokens.
+	v.migratePostgresGo(t, ctx)
 	admin, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
@@ -636,11 +254,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	}
 	admin.Close()
 	if len(specs) > 0 {
-		if frozen {
-			v.Tokens = v.mintGo(t, options.JWTKey, specs)
-		} else if err := json.Unmarshal(v.runPython(t, specs, "mint"), &v.Tokens); err != nil {
-			t.Fatal(err)
-		}
+		v.Tokens = v.mintGo(t, options.JWTKey, specs)
 	}
 
 	// 2. Two identical copies: Python serves the source, Go serves the copy.
@@ -671,61 +285,6 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	return v
 }
 
-// ActivateInterpreter is the one place a recording resolves the real
-// interpreter (pyoracle.ResolveLauncher, which gives it in a recording too,
-// where pyoracle.Resolve gives a stand-in), puts its directory first on PATH
-// for the rest of the test as `source bin/activate` does, and checks that the
-// python3 a command would start is the one in that directory. It returns that
-// directory. The venue, the producer and programoracle all start here.
-func ActivateInterpreter(t *testing.T, root string) (string, error) {
-	t.Helper()
-	bin, err := interpreterDir(pyoracle.ResolveLauncher(t, root))
-	if err != nil {
-		return "", err
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
-		return "", fmt.Errorf("python3 on PATH is %q (%v), want the one in %s", found, err, bin)
-	}
-	return bin, nil
-}
-
-func activateInterpreter(t *testing.T, root, who string) string {
-	t.Helper()
-	bin, err := ActivateInterpreter(t, root)
-	if err != nil {
-		t.Fatalf("%s: %v", who, err)
-	}
-	return bin
-}
-
-// interpreterDir returns the directory of the interpreter pyoracle chose,
-// which must also hold an executable python3 (every virtualenv and every
-// Python 3 install directory does), as an absolute path. The venue runs
-// that python3 by activating the directory, never by executing a path.
-func interpreterDir(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		found, err := exec.LookPath(path)
-		if err != nil {
-			return "", fmt.Errorf("interpreter %q: %w", path, err)
-		}
-		path = found
-	}
-	dir, err := filepath.Abs(filepath.Dir(path))
-	if err != nil {
-		return "", err
-	}
-	python3 := filepath.Join(dir, "python3")
-	info, err := os.Stat(python3)
-	if err != nil {
-		return "", fmt.Errorf("interpreter %q: no python3 beside it: %w", path, err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("interpreter %q: %s is not an executable file", path, python3)
-	}
-	return dir, nil
-}
-
 // AdminURI is a superuser DSN for database on the venue's Postgres.
 func (v *Venue) AdminURI(t *testing.T, database string) string {
 	return withDatabase(t, v.postgresURI, database, "", "")
@@ -735,48 +294,6 @@ func (v *Venue) AdminURI(t *testing.T, database string) string {
 // Go copy.
 func (v *Venue) GoAPIDatabaseURI(t *testing.T) string {
 	return withDatabase(t, v.postgresURI, v.GoDB, v.Roles["api"], APIPassword)
-}
-
-// liveVenues holds the top-level test of each test that started a live venue:
-// one built with Python, with no Options.GoOnly and no Options.Golden. A
-// Go-only proof or a frozen golden's answers anywhere in that test's tree (the
-// top-level test and its subtests, whichever of them called Start) would hide
-// that the test still needs Python. An entry stays for the life of the test
-// binary: a subtest's venue also marks what its parent does after it.
-var liveVenues sync.Map // top-level test name -> struct{}
-
-// rootTestName is the name of t's top-level test.
-func rootTestName(t *testing.T) string {
-	name, _, _ := strings.Cut(t.Name(), "/")
-	return name
-}
-
-// frozenTrees holds, per top-level test, the first Python-free claim made in
-// its tree: a Go-only proof written, or a frozen golden's answers served. A
-// live venue started later in that tree is refused: the claim is already on
-// disk or already compared, and the tree would then need Python after all. An
-// entry stays for the life of the test binary, like liveVenues.
-var frozenTrees sync.Map // top-level test name -> what was claimed
-
-// markFrozenTree records what, the Python-free claim made in t's tree.
-func markFrozenTree(t *testing.T, what string) {
-	frozenTrees.LoadOrStore(rootTestName(t), what)
-}
-
-// frozenTreeErr is an error when t's tree already made a Python-free claim.
-func frozenTreeErr(t *testing.T) error {
-	if what, claimed := frozenTrees.Load(rootTestName(t)); claimed {
-		return fmt.Errorf("venue: %s starts a venue built with Python (Start without Options.GoOnly or Options.Golden), but its test tree already has %s: a top-level test is live, or Python-free, not both; split it into two top-level tests", t.Name(), what)
-	}
-	return nil
-}
-
-// liveVenueErr is an error when a test in t's tree started a live venue.
-func liveVenueErr(t *testing.T, what string) error {
-	if _, live := liveVenues.Load(rootTestName(t)); live {
-		return fmt.Errorf("%s in %s, whose test tree started a venue built with Python (Start without Options.GoOnly or Options.Golden): the test still needs Python; pass Options.GoOnly for a Go-only test, or the golden for a frozen one", what, t.Name())
-	}
-	return nil
 }
 
 // AdminClickHouseURI is the ClickHouse server's admin connection (native
@@ -819,143 +336,12 @@ type PythonCall struct {
 	Kwargs map[string]any `json:"kwargs,omitempty"`
 }
 
-// CallPython runs calls in one Python process with the Python plane's
-// environment (the source database, Valkey and PythonEnv) and returns each
-// result as raw JSON, in order. A frozen venue answers them with the Go ports
-// instead (goCallPorts), and fails naming a target that has none.
+// CallPython answers calls to Python functions with their Go ports
+// (goCallPorts), each result as raw JSON, in order, and fails naming a target
+// that has none.
 func (v *Venue) CallPython(t *testing.T, calls ...PythonCall) []json.RawMessage {
 	t.Helper()
-	if v.frozen {
-		return v.callGo(t, calls)
-	}
-	var out []json.RawMessage
-	if err := json.Unmarshal(v.runPython(t, calls, "call"), &out); err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != len(calls) {
-		t.Fatalf("python returned %d of %d call results", len(out), len(calls))
-	}
-	return out
-}
-
-// ServePython answers requests with the Python plane, in order, in one
-// process.
-func (v *Venue) ServePython(t *testing.T, requests []Request) []Response {
-	t.Helper()
-	if v.frozen {
-		t.Fatal("venue: a frozen venue serves no Python plane; its answers come from the golden (Golden.Python)")
-	}
-	var out []Response
-	if err := json.Unmarshal(v.runPython(t, requests, "serve"), &out); err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != len(requests) {
-		t.Fatalf("python answered %d of %d requests", len(out), len(requests))
-	}
-	for index := range out {
-		raw, err := base64.StdEncoding.DecodeString(out[index].Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out[index].Body = string(raw)
-	}
-	return out
-}
-
-// ServePythonWithEnv is ServePython with extra environment for this call
-// only (each entry KEY=value, later entries winning over the venue's own):
-// the same Python app under another configuration, for example the same
-// requests with a secret unset.
-func (v *Venue) ServePythonWithEnv(t *testing.T, extra []string, requests []Request) []Response {
-	t.Helper()
-	clone := *v
-	clone.pythonEnv = append(append([]string(nil), v.pythonEnv...), extra...)
-	return clone.ServePython(t, requests)
-}
-
-// pythonChildEnv is the whole environment of the venue's Python child: the
-// variables test code set in the process, then the plane's entries, so the
-// plane's win, as they did when the child inherited the process environment.
-func (v *Venue) pythonChildEnv() []string {
-	return append(testSetEnv(), v.pythonEnv...)
-}
-
-// pythonCommand is the one way this package starts a Python child: the
-// program is the constant name "python3", found through PATH as an activated
-// environment finds it, and the launch is refused unless what PATH gives is
-// the interpreter the venue fixed when it was built (Start put its directory
-// first on PATH). The lookup reads the process's PATH at this moment, which
-// is in no key: a PATH that changed since Start would run another interpreter
-// under an unchanged key, so it is an error and never a launch.
-func (v *Venue) pythonCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
-	command := exec.CommandContext(ctx, "python3", args...)
-	switch {
-	case v.Python == "":
-		return nil, fmt.Errorf("venue: this venue fixed no Python interpreter (python3 %v)", args)
-	case command.Err != nil:
-		return nil, fmt.Errorf("venue: python3 is not found through PATH any more (%v); the venue's interpreter is %s: PATH changed after the venue was built", command.Err, v.Python)
-	case command.Path != v.Python:
-		return nil, fmt.Errorf("venue: python3 through PATH is now %s, the venue's interpreter is %s: PATH changed after the venue was built, and another interpreter would answer under the same key", command.Path, v.Python)
-	}
-	return command, nil
-}
-
-func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
-	t.Helper()
-	if v.frozen {
-		t.Fatalf("venue: a frozen venue runs no Python (python %v)", args)
-	}
-	// The program is the compiled-in pythonProgram; only its mode and the JSON
-	// on stdin vary.
-	command, err := v.pythonCommand(context.Background(), append([]string{"-c", pythonProgram}, args...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The child's whole environment: what the test set in the process, then
-	// the plane's entries (a later entry wins). Nothing else is inherited.
-	command.Env = v.pythonChildEnv()
-	if stdin != nil {
-		payload, err := json.Marshal(stdin)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = bytes.NewReader(payload)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
-	if path := os.Getenv("DEV_HEALTH_VENUE_PY_LOG"); path != "" {
-		_ = os.WriteFile(path+"."+args[0], stderr.Bytes(), 0o600)
-	}
-	if err != nil {
-		t.Fatalf("python %v: %v\n%s", args, err, tail(stderr.String()))
-	}
-	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	return []byte(lines[len(lines)-1])
-}
-
-// migrateClickHouse runs the real `dev-hops migrate clickhouse upgrade`
-// CLI against database -- the same entrypoint a deploy's init step runs,
-// never a hand-copied CREATE TABLE list (the trap class this whole family
-// of test fixtures kept hitting elsewhere in this repo). CLICKHOUSE_URI is
-// this call's own env, never v.pythonEnv: the venue's Python plane must
-// keep pointing at PythonClickHouseDB throughout, including while this
-// runs against GoClickHouseDB.
-func (v *Venue) migrateClickHouse(t *testing.T, ctx context.Context, database string) {
-	t.Helper()
-	command, err := v.pythonCommand(ctx, "-m", "dev_health_ops.cli", "migrate", "clickhouse", "upgrade")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The child's whole environment: what the test set in the process, the
-	// inherited names as the venue fixed them when it was built (PATH carries
-	// the activated interpreter) and the interpreter's settings, and this
-	// call's two own entries. Nothing else is inherited.
-	command.Env = append(append(testSetEnv(), interpreterEnv(v.hostEnv)...),
-		"PYTHONPATH="+filepath.Join(v.Root, "src"), "CLICKHOUSE_URI="+v.AdminClickHouseHTTPURI(t, database))
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("clickhouse migrate %s: %v\n%s", database, err, output)
-	}
+	return v.callGo(t, calls)
 }
 
 func (v *Venue) provisionRoles(t *testing.T, ctx context.Context) {
@@ -1448,13 +834,6 @@ func withDatabase(t *testing.T, raw, database, user, password string) string {
 	return parsed.String()
 }
 
-func tail(text string) string {
-	if len(text) > 4000 {
-		return text[len(text)-4000:]
-	}
-	return text
-}
-
 // writeProof marks that THIS test genuinely compared a real request against
 // the live Python api -- one file per test name, so a CI job naming every
 // expected venue-oracle test by name can fail loudly when one is missing
@@ -1498,9 +877,5 @@ func WriteGoOnlyProof(t *testing.T, reason string) {
 	if strings.TrimSpace(reason) == "" || strings.ContainsAny(reason, "\n\r") {
 		t.Fatal("WriteGoOnlyProof needs a one-line reason naming what the test measures instead of a Python response")
 	}
-	if err := liveVenueErr(t, "a Go-only proof"); err != nil {
-		t.Fatal(err)
-	}
-	markFrozenTree(t, "a Go-only proof")
 	writeProofText(t, "go-only: "+reason)
 }

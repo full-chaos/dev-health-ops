@@ -53,7 +53,7 @@ func TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
 func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, governanceGolden("llmsettings_"+mode, t.Name(), digest))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("llm")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-settings-32-bytes!"
 	t.Setenv("BYO_LLM_MAX_BUDGET_MICRO_USD", llmVenueOperatorMax)
@@ -369,9 +369,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		source := golden.CompareRows(t, name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, goRows)
+		source := golden.CompareRows(t, name, goRows)
 		if source == "" {
 			t.Errorf("%s: the query matched no rows on the Python plane; the comparison proves nothing", name)
 		}

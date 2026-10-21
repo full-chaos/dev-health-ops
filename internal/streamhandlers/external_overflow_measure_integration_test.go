@@ -3,11 +3,9 @@
 package streamhandlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,8 +16,6 @@ import (
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -30,45 +26,6 @@ type overflowCase struct {
 	Name    string
 	Records [][3]string
 }
-
-// pythonSinkProgram runs the real Python path for each case: normalize_batch,
-// then write_batch against the real ClickHouse (no retry ladder: one attempt,
-// the ladder only re-runs the same call). It prints one JSON row per case.
-const pythonSinkProgram = `
-import asyncio, json, os, sys, types, uuid
-# The integration shards install only the migration chain's Python closure, and
-# importing dev_health_ops.api.external_ingest runs its __init__ (the whole
-# FastAPI router and its middleware). The models this needs are in
-# .schemas: register the package without running its __init__.
-import dev_health_ops
-package = types.ModuleType("dev_health_ops.api.external_ingest")
-package.__path__ = [os.path.join(os.path.dirname(dev_health_ops.__file__), "api", "external_ingest")]
-sys.modules["dev_health_ops.api.external_ingest"] = package
-from dev_health_ops.api.external_ingest.schemas import RecordEnvelope
-from dev_health_ops.external_ingest.normalize import normalize_batch
-from dev_health_ops.external_ingest.sinks import write_batch
-
-dsn = sys.argv[1]
-cases = json.loads(sys.stdin.read())
-
-async def run(case):
-    org = case["org"]
-    records = [RecordEnvelope.model_validate({"kind": k, "externalId": e, "payload": json.loads(p)}) for k, e, p in case["records"]]
-    norm = normalize_batch(org_id=org, source_id=uuid.uuid4(), source_system="github", source_instance="full-chaos/dev-health",
-                           ingestion_id=uuid.uuid4(), records=records)
-    out = {"name": case["name"], "rejections": [[r.index, r.kind, r.code, r.message] for r in norm.rejections]}
-    try:
-        result = await write_batch(norm.batch, clickhouse_dsn=dsn)
-        out["sink_errors"] = [[e.kind, e.code, e.message[:300]] for e in result.errors]
-        out["counts"] = result.counts if hasattr(result, "counts") else None
-    except Exception as exc:
-        out["raised"] = type(exc).__name__ + ": " + str(exc)[:300]
-    return out
-
-async def main():
-    print("RESULT " + json.dumps([await run(c) for c in cases]))
-asyncio.run(main())
-`
 
 func overflowCases() []overflowCase {
 	pr := func(external string, number string) [3]string {
@@ -138,10 +95,6 @@ func TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	httpDSN, err := containers.ClickHouseHTTPDSN(ctx, instance)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	cases := overflowCases()
 	type pythonCase struct {
@@ -152,7 +105,7 @@ func TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse(t *testing.T) {
 	pythonOrgs, goOrgs := make([]string, len(cases)), make([]string, len(cases))
 	input := make([]pythonCase, len(cases))
 	for i, item := range cases {
-		// The Python orgs are named, so the recording and a frozen run send the same input.
+		// The Python orgs are named: they are part of the request the golden is keyed on.
 		pythonOrgs[i], goOrgs[i] = venueoracle.StableUUID("external-overflow/python/"+item.Name), uuid.NewString()
 		input[i] = pythonCase{Name: item.Name, Org: pythonOrgs[i], Records: item.Records}
 	}
@@ -183,54 +136,15 @@ func TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse(t *testing.T) {
 		return strings.Join(parts, " ")
 	}
 
-	// The Python plane's outcome and the rows it stored, per case: executed on the pinned build while
-	// recording (the real normalize_batch and write_batch, through the record verb's launcher, against this
-	// test's ClickHouse), frozen after. The golden holds the outcome and the stored rows of each case.
-	_, file, _, _ := moduleroot.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	// The Python plane outcome and the rows it stored, per case, were executed once on the pinned build and
+	// are frozen. The golden holds the outcome and the stored rows of each case.
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/external-overflow-python-outcomes.golden.json",
 		PythonBuild: "a4847c5e93607451a0c987b314d37e02fc43ce85",
 		SHA256:      "02230f3e2b67fabc3cc754b91ade3c144e8376da9694eda04741ccf84ca11232",
-		Recipe: "git worktree add --detach $DIR a4847c5e93607451a0c987b314d37e02fc43ce85 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/streamhandlers/ -test '^TestExternalSinkOutcomesMatchFrozenPythonAgainstClickHouse$' -python-root $DIR",
 	})
-	pythonRoot := golden.PythonRoot(t, root)
-	declared := map[string]string{}
-	request := venueoracle.ProgramRequest("external overflow sink outcomes", pythonSinkProgram, encoded, declared)
-	answers := golden.Produce(t, pythonRoot, []venueoracle.Request{request},
-		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-			producer.RequireDeployed()
-			command, err := producer.Command(ctx, declared, nil, "-c", pythonSinkProgram, httpDSN)
-			if err != nil {
-				t.Fatal(err)
-			}
-			command.Stdin = bytes.NewReader(encoded)
-			output, err := command.CombinedOutput()
-			if err != nil {
-				t.Fatalf("python: %v\n%s", pyoracle.RunError(command.Args[0], err, output), output)
-			}
-			var recorded []map[string]any
-			for _, line := range strings.Split(string(output), "\n") {
-				if text, ok := strings.CutPrefix(line, "RESULT "); ok {
-					if err := json.Unmarshal([]byte(text), &recorded); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			if len(recorded) != len(cases) {
-				t.Fatalf("python returned %d results for %d cases\n%s", len(recorded), len(cases), output)
-			}
-			rows := make([]string, len(cases))
-			for i := range cases {
-				rows[i] = stored(pythonOrgs[i])
-			}
-			body, err := json.Marshal(map[string]any{"results": recorded, "stored": rows})
-			if err != nil {
-				t.Fatal(err)
-			}
-			return []venueoracle.Response{{Status: 0, Body: string(body)}}
-		})
+	request := venueoracle.ProgramRequest("external overflow sink outcomes", encoded)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen struct {
 		Results []map[string]any `json:"results"`

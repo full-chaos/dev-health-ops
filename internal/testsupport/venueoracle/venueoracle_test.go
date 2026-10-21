@@ -92,6 +92,7 @@ func TestAdminNoStoreIsAnIntendedDivergenceOnlyWhenTheGoldenLacksIt(t *testing.T
 		{"integrations route", Request{Method: "POST", Path: "/api/v1/admin/integrations/abc/sync"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
 		{"teams route", Request{Method: "GET", Path: "/api/v1/admin/teams/eng"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
 		{"credentials route, golden has another value", Request{Method: "GET", Path: "/api/v1/admin/credentials"}, map[string]string{"a": "1", "cache-control": "private"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"trailing-slash redirect of an admin route", Request{Method: "GET", Path: "/api/v1/admin/credentials/"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
 		{"admin-prefixed path no package mounts", Request{Method: "GET", Path: "/api/v1/admin/unmounted"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
 		{"billing route is not admin-prefixed", Request{Method: "GET", Path: "/api/v1/billing/plans"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
 		{"admin route with a path parameter", Request{Method: "GET", Path: "/api/v1/admin/integrations/pagerduty/webhook-bindings/abc"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},

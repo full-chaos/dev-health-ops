@@ -31,7 +31,7 @@ func mountedAdminRoutes(t *testing.T) []httpapi.Route {
 	t.Cleanup(pool.Close)
 	var out []httpapi.Route
 	for _, route := range Routes(Deps{Guard: policy.NewGuard(nil, nil), Pool: pool, ClickHouse: nilConn{}}, quietLogger()) {
-		if strings.HasPrefix(route.Pattern, adminPrefix+"/") {
+		if route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/") {
 			out = append(out, route)
 		}
 	}
@@ -99,5 +99,37 @@ func TestNoStoreNegativeControlsOutsideTheAdminPrefix(t *testing.T) {
 		if got := serve(handler, httptest.NewRequest(http.MethodGet, path, nil)).Header().Get("Cache-Control"); got != "" {
 			t.Errorf("GET %s: Cache-Control %q, want none", path, got)
 		}
+	}
+}
+
+// A trailing-slash variant of a mounted admin path is answered by the router's
+// own 307 redirect to that path; it carries no-store like the route it names.
+// A non-admin redirect and a wrong-method request on an exact route do not.
+func TestAdminTrailingSlashRedirectsAnswerNoStoreThroughTheServer(t *testing.T) {
+	routes := mountedAdminRoutes(t)
+	handler := noStoreServer(t, append(routes,
+		stubRoute(http.MethodGet, "/api/v1/billing/plans", http.StatusOK)))
+	for _, route := range routes {
+		path := strings.NewReplacer("{", "", "}", "").Replace(route.Pattern)
+		for _, variant := range []string{path + "/", path + "//"} {
+			response := serve(handler, httptest.NewRequest(http.MethodGet, variant, nil))
+			if response.Code != http.StatusTemporaryRedirect {
+				continue
+			}
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Errorf("GET %s: 307 without no-store", variant)
+			}
+		}
+	}
+	probe := serve(handler, httptest.NewRequest(http.MethodGet, "/api/v1/admin/credentials/github/name/", nil))
+	if probe.Code != http.StatusTemporaryRedirect || probe.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("credentials slash variant: status %d cache-control %q", probe.Code, probe.Header().Get("Cache-Control"))
+	}
+	control := serve(handler, httptest.NewRequest(http.MethodGet, "/api/v1/billing/plans/", nil))
+	if control.Code != http.StatusTemporaryRedirect || control.Header().Get("Cache-Control") != "" {
+		t.Fatalf("billing slash variant: status %d cache-control %q, want 307 with none", control.Code, control.Header().Get("Cache-Control"))
+	}
+	if got := serve(handler, httptest.NewRequest(http.MethodGet, "/api/v1/admin/unmounted/", nil)).Header().Get("Cache-Control"); got != "" {
+		t.Fatalf("unmounted admin path slash variant: Cache-Control %q", got)
 	}
 }

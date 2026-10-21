@@ -24,6 +24,10 @@ func TestNoStoreRoutesMatchesWithTheRoutersOwnPathRules(t *testing.T) {
 		{"GET", "/api/v1/admin/unmounted", false},
 		{"GET", "/api/v1/admin/llm-settings/models/extra", false},
 		{"GET", "/api/v1/other", false},
+		{"GET", "/api/v1/admin/credentials/", true},
+		{"GET", "/api/v1/admin/users/abc/", true},
+		{"GET", "/api/v1/admin/unmounted/", false},
+		{"PATCH", "/api/v1/admin/llm-settings/models/", true},
 	}
 	for _, tc := range cases {
 		if got := n.Matches(httptest.NewRequest(tc.method, tc.target, nil)); got != tc.want {

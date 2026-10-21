@@ -23,8 +23,10 @@ import (
 var (
 	sharedPrefixes = []string{"ci/", ".github/", "internal/testsupport/"}
 	sharedFiles    = map[string]bool{"go.mod": true, "go.sum": true, "go.work": true, "go.work.sum": true}
-	// The planner's own code: a change here changes the verdict of this very change set.
-	plannerDir = "internal/cigates/affected/"
+	// The planner's code and data, and the workflow steps that build and run it: a change here can steer the verdict of
+	// this very change set, so it is FULL. Test files (outside testdata) are not inputs.
+	plannerDirs  = []string{"cmd/cigate/", "internal/cigates/affected/"}
+	plannerFiles = map[string]bool{".github/workflows/go.yml": true, ".github/workflows/go-quality.yml": true}
 	// Events that judge a change set. Every other event (push, merge_group, schedule, workflow_dispatch) runs everything.
 	judgedEvents = map[string]bool{"pull_request": true, "range": true}
 	knownEvents  = map[string]bool{"pull_request": true, "range": true, "push": true, "merge_group": true, "schedule": true,
@@ -219,14 +221,14 @@ func plan(in planInput) (Verdict, error) {
 	changedPackages := map[string]bool{} // import paths whose reverse closure is selected
 	for _, raw := range in.changed {
 		p := path.Clean(raw)
+		if plannerFiles[p] || (hasAnyPrefix(p, plannerDirs) && !strings.HasSuffix(p, "_test.go") && !inTestdata(p)) {
+			return full("planner input: " + p), nil
+		}
 		if sharedFiles[p] || hasAnyPrefix(p, sharedPrefixes) {
 			return full("shared change: " + p), nil
 		}
 		if !strings.HasSuffix(p, ".go") {
 			return full("non-Go file: " + p), nil
-		}
-		if strings.HasPrefix(p, plannerDir) && !strings.HasSuffix(p, "_test.go") && !inTestdata(p) {
-			return full("planner input: " + p), nil
 		}
 		if inTestdata(p) {
 			owner, ok := ownerOfDataFile(p, packages)

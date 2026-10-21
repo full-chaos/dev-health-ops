@@ -322,7 +322,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	}
 	dir := *tablesDir
 	if dir == "" {
-		dir = filepath.Join(*root, filepath.FromSlash(plannerDir))
+		dir = filepath.Join(*root, "internal", "cigates", "affected")
 	}
 	t, err := loadTables(dir)
 	if err != nil {

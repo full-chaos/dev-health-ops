@@ -131,8 +131,12 @@ func affectedSelectorScenarios() []scenario {
 		}},
 		{"shared_changes_run_the_full_suite", func(s, w string) error {
 			for _, path := range []string{"ci/check_go.sh", ".github/workflows/go.yml", "go.mod", "go.sum", "internal/testsupport/containers/harness.go"} {
+				want := "FULL shared change"
+				if path == ".github/workflows/go.yml" {
+					want = "FULL planner input" // the step that builds and runs the planner
+				}
 				g, err := sel(s, w, "internal/leaf/leaf.go", path)
-				if err := wantFull(g, err, "FULL shared change"); err != nil {
+				if err := wantFull(g, err, want); err != nil {
 					return fmt.Errorf("%s: %w", path, err)
 				}
 			}

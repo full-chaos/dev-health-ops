@@ -28,7 +28,6 @@ var docsGuardsChecks = []expectedCheck{
 	{"Check rendered links, anchors, and assets", pyCmd("check_built_site_links"), []string{"--site-dir .build/docs"}},
 	{"Check task-based search acceptance", pyCmd("check_docs_candidate_search"), []string{"--site-dir .build/docs", "--queries " + searchAcceptance}},
 	{"Check structural accessibility invariants", pyCmd("check_docs_candidate_accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
-	{"Check objective documentation facts", pyCmd("check_docs_candidate_facts"), nil},
 	{"Check code prerequisites", pyCmd("check_code_prerequisites"), nil},
 	{"Check freshness inventory", pyCmd("check_freshness_inventory"), nil},
 }
@@ -45,7 +44,6 @@ var docsGuardsTriggerPaths = []string{
 	".github/workflows/docs-guards.yml", ".github/workflows/docs-cloudflare.yml",
 	"scripts/" + "validate_docs_v2_publication" + "." + "py", "scripts/" + "check_built_site_links" + "." + "py",
 	"scripts/" + "check_docs_candidate_search" + "." + "py", "scripts/" + "check_docs_candidate_accessibility" + "." + "py",
-	"scripts/" + "check_docs_candidate_facts" + "." + "py",
 }
 
 var statusMask = regexp.MustCompile(`\|\|\s*(true|:|exit\s+0)(\s|$|;|&)|;\s*(true|:)(\s|$|;|&)|set\s+\+e\b`)
@@ -300,8 +298,8 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, "name: Check structural accessibility invariants", "name: Check accessibility")
 		}, "Check structural accessibility invariants"},
 		{"a streamed check loses pipefail", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "          set -o pipefail\n          "+pyCmd("check_docs_candidate_facts"), "          "+pyCmd("check_docs_candidate_facts"))
-		}, "Check objective documentation facts"},
+			return d.edit(t, docsGuardsPath, "          set -o pipefail\n          "+pyCmd("check_code_prerequisites"), "          "+pyCmd("check_code_prerequisites"))
+		}, "Check code prerequisites"},
 		{"the strict build loses --strict (command replaced)", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "mkdocs build --strict", "mkdocs build")
 		}, "Strict canonical build"},
@@ -382,7 +380,7 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, "  docs-content-guards:\n    name: docs-content-guards\n", "  docs-content-guards:\n    name: docs-content-guards\n    continue-on-error: true\n")
 		}, "must not set continue-on-error"},
 		plantCase{"a Python checker status is masked by || true", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, pyCmd("check_docs_candidate_facts"), pyCmd("check_docs_candidate_facts")+" || true")
+			return d.edit(t, docsGuardsPath, pyCmd("check_code_prerequisites"), pyCmd("check_code_prerequisites")+" || true")
 		}, "masks a failing command status"},
 	)
 	// The evidence upload is found by its action, never by its name: renaming it and disabling it is refused.

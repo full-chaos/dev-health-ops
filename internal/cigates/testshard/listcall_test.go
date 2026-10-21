@@ -128,6 +128,7 @@ func TestTheStandInGoListCacheKeysOnDirectoryEnvironmentAndArguments(t *testing.
 		{"other GOWORK", root, []string{"GOWORK=on"}, []string{"-m"}},
 		{"other GO111MODULE", root, []string{"GO111MODULE=off"}, []string{"-m"}},
 		{"another variable of the environment", root, []string{"GOTOOLCHAIN=local"}, []string{"-m"}},
+		{"a variable go does not read (the key holds the whole environment)", root, []string{"ZZ_UNRELATED_TO_GO=1"}, []string{"-m"}},
 		{"another PATH", root, []string{"PATH=" + other + string(os.PathListSeparator) + os.Getenv("PATH")}, []string{"-m"}},
 	} {
 		before := count()

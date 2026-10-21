@@ -523,15 +523,15 @@ check_test_shard_wall_guard() {
   die "test shard ${shard}/${count} took ${wall}s, over ${GO_TEST_SHARD_WALL_PERCENT}% (${limit}s) of the ${GO_TEST_SHARD_CAP_SECONDS}s job cap; heaviest packages by ${basis}: ${top} -- rebalance ci/go_test_weights.tsv or add a shard"
 }
 
-# check_test_shard_unweighted_guard SHARD COUNT LOGFILE (CHAOS-10498): fails when a package of the shard ran 30 s or more in
+# check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 30 s or more in
 # LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints the row to add. A package with no row weighs
 # 1, so an unweighted heavy package unbalances the shards without anyone seeing it; this makes it red on the leg that ran it.
 check_test_shard_unweighted_guard() {
-  local shard="${1:-}" count="${2:-}" log="${3:-}" plan
+  local shard="${1:-}" count="${2:-}" log="${3:-}" partial="${4:-}" plan
   check_test_shard_args "${shard}" "${count}"
   { [ -f "${log}" ] && [ -r "${log}" ]; } || die "test-shard-unweighted-guard needs the shard's go test log as a readable file, got '${log}'"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
-  awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" \
+  awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
     -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}"
 }
 
@@ -552,14 +552,14 @@ check_test_shard() {
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${rest} 2>&1 | tee -a "${log}"
-      ) || { rm -f -- "${log}"; return 1; }
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}"; return 1; }
     fi
     if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 == heavy { found = 1 } END { exit !found }'; then
       printf 'go test (shard %s/%s, alone): %s\n' "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
       (
         cd "${ROOT}/${module_dir}"
         "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath "${SERIAL_HEAVY_TEST_PACKAGE}" 2>&1 | tee -a "${log}"
-      ) || { rm -f -- "${log}"; return 1; }
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}"; return 1; }
     fi
   done
   check_race_excluded_ran "${shard}" "${count}"

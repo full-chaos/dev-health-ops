@@ -11,6 +11,12 @@
 //	client-no-transport  a composite literal of net/http.Client whose Transport is absent or nil, new(net/http.Client),
 //	                     or a var declared with the non-pointer type net/http.Client and no value
 //	transport-nil        an assignment of nil to the Transport field of a net/http.Client
+//	transport-unproven   a Transport (in a literal or by assignment) whose value is not PROVEN non-nil: a nil-valued
+//	                     variable or parameter leaves the client on http.DefaultTransport at run time. Proven are: a
+//	                     call to an approved constructor (approvedTransportConstructors), Clone of a proven
+//	                     *http.Transport, a composite literal whose RoundTripper fields are all proven, a conversion of a
+//	                     func literal, and a local variable whose every assignment is proven (an assignment excused by
+//	                     an `if v == nil { v = <proven> }` fallback in the same function)
 //	default-transport    any use of net/http.DefaultTransport
 //	default-client       any use of net/http.DefaultClient or the package functions Get, Head, Post, PostForm
 //	proxy                any use of net/http.ProxyFromEnvironment, net/http.ProxyURL or httpproxy.FromEnvironment, and a
@@ -140,7 +146,7 @@ func scan(t *testing.T, root string, patterns []string, skip func(string) bool) 
 				for _, declaration := range file.Decls {
 					symbol := declSymbol(declaration)
 					ast.Inspect(declaration, func(node ast.Node) bool {
-						for _, kind := range kindsOf(pkg.TypesInfo, node) {
+						for _, kind := range kindsOf(pkg.TypesInfo, declaration, node) {
 							counts[site{rel, symbol, kind}]++
 						}
 						return true
@@ -158,8 +164,8 @@ func scan(t *testing.T, root string, patterns []string, skip func(string) bool) 
 	return found, uniqueStrings(problems), loaded
 }
 
-// kindsOf is the site kinds one node is.
-func kindsOf(info *types.Info, node ast.Node) []string {
+// kindsOf is the site kinds one node of declaration is.
+func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 	switch n := node.(type) {
 	case *ast.CompositeLit:
 		tv, ok := info.Types[n]
@@ -168,8 +174,12 @@ func kindsOf(info *types.Info, node ast.Node) []string {
 		}
 		switch {
 		case isNamed(tv.Type, "Client"):
-			if value, ok := fieldValue(n, "Transport", 0); !ok || isNil(info, value) {
+			value, ok := fieldValue(n, "Transport", 0)
+			if !ok || isNil(info, value) {
 				return []string{"client-no-transport"}
+			}
+			if !provenTransport(info, declaration, value, 0) {
+				return []string{"transport-unproven"}
 			}
 		case isNamed(tv.Type, "Transport"):
 			if value, ok := fieldValue(n, "Proxy", -1); ok && !isNil(info, value) {
@@ -197,6 +207,8 @@ func kindsOf(info *types.Info, node ast.Node) []string {
 			switch {
 			case selector.Sel.Name == "Transport" && isNamed(owner, "Client") && isNil(info, n.Rhs[i]):
 				kinds = append(kinds, "transport-nil")
+			case selector.Sel.Name == "Transport" && isNamed(owner, "Client") && !provenTransport(info, declaration, n.Rhs[i], 0):
+				kinds = append(kinds, "transport-unproven")
 			case selector.Sel.Name == "Proxy" && isNamed(owner, "Transport") && !isNil(info, n.Rhs[i]):
 				kinds = append(kinds, "proxy")
 			}
@@ -222,6 +234,206 @@ func kindsOf(info *types.Info, node ast.Node) []string {
 				return []string{"proxy"}
 			}
 		}
+	}
+	return nil
+}
+
+// approvedTransportConstructors are the functions whose result is a non-nil RoundTripper that never uses an
+// environment proxy, whatever their arguments: the transport helpers, and CompletePagesOnly, which puts
+// httpguard.SharedTransport under a nil base itself.
+var approvedTransportConstructors = map[string]bool{
+	modulePath + "/internal/httpguard.Transport":              true,
+	modulePath + "/internal/httpguard.SharedTransport":        true,
+	modulePath + "/internal/api/externalurl.GuardedTransport": true,
+	modulePath + "/internal/atlassianteams.CompletePagesOnly": true,
+}
+
+const maxProofDepth = 8
+
+// provenTransport reports whether expression, the value of a Transport, cannot be nil at run time. Anything it cannot
+// prove (a parameter, a field read, a package variable, a call to another function) is unproven: the site then needs
+// an allow row naming why it is safe, or a helper.
+func provenTransport(info *types.Info, declaration ast.Decl, expression ast.Expr, depth int) bool {
+	if depth > maxProofDepth || expression == nil {
+		return false
+	}
+	switch e := ast.Unparen(expression).(type) {
+	case *ast.UnaryExpr:
+		if lit, ok := ast.Unparen(e.X).(*ast.CompositeLit); ok && e.Op.String() == "&" {
+			return provenLiteral(info, declaration, lit, depth)
+		}
+	case *ast.CompositeLit:
+		return provenLiteral(info, declaration, e, depth)
+	case *ast.CallExpr:
+		if tv, ok := info.Types[e.Fun]; ok && tv.IsType() {
+			if len(e.Args) != 1 {
+				return false
+			}
+			if _, ok := ast.Unparen(e.Args[0]).(*ast.FuncLit); ok {
+				return true
+			}
+			return provenTransport(info, declaration, e.Args[0], depth+1)
+		}
+		fn := calledFunc(info, e)
+		if fn == nil || fn.Pkg() == nil {
+			return false
+		}
+		signature, _ := fn.Type().(*types.Signature)
+		if signature != nil && signature.Recv() == nil {
+			return approvedTransportConstructors[fn.Pkg().Path()+"."+fn.Name()]
+		}
+		if signature != nil && fn.Name() == "Clone" && isNamed(derefPointer(signature.Recv().Type()), "Transport") {
+			if selector, ok := ast.Unparen(e.Fun).(*ast.SelectorExpr); ok {
+				return provenTransport(info, declaration, selector.X, depth+1)
+			}
+		}
+	case *ast.Ident:
+		return provenVariable(info, declaration, e, depth)
+	}
+	return false
+}
+
+// provenLiteral: a net/http.Transport literal is a non-nil transport (its Proxy is checked as its own site); any other
+// literal is proven when every field it holds of type net/http.RoundTripper or *net/http.Transport is proven, an
+// omitted one included (a wrapper over a nil base).
+func provenLiteral(info *types.Info, declaration ast.Decl, lit *ast.CompositeLit, depth int) bool {
+	tv, ok := info.Types[lit]
+	if !ok {
+		return false
+	}
+	if isNamed(tv.Type, "Transport") {
+		return true
+	}
+	structType, ok := derefPointer(tv.Type).Underlying().(*types.Struct)
+	if !ok {
+		return true
+	}
+	for i := 0; i < structType.NumFields(); i++ {
+		field := structType.Field(i)
+		if !isNamed(field.Type(), "RoundTripper") && !isNamed(derefPointer(field.Type()), "Transport") {
+			continue
+		}
+		value, present := fieldValue(lit, field.Name(), i)
+		if !present || !provenTransport(info, declaration, value, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+// provenVariable: a local variable or parameter of declaration whose every assignment is proven. A parameter, an
+// assignment that is not proven, a declaration without a value and an assignment from a multi-value expression are
+// all excused only when the function also holds `if v == nil { v = <proven> }`. Package variables and receivers are
+// unproven.
+func provenVariable(info *types.Info, declaration ast.Decl, ident *ast.Ident, depth int) bool {
+	variable, ok := info.Uses[ident].(*types.Var)
+	if !ok {
+		return false
+	}
+	fn, ok := declaration.(*ast.FuncDecl)
+	if !ok || fn.Body == nil {
+		return false
+	}
+	parameter := false
+	if fn.Type.Params != nil {
+		for _, field := range fn.Type.Params.List {
+			for _, name := range field.Names {
+				if info.Defs[name] == variable {
+					parameter = true
+				}
+			}
+		}
+	}
+	refersTo := func(expression ast.Expr) bool {
+		id, ok := ast.Unparen(expression).(*ast.Ident)
+		return ok && (info.Defs[id] == variable || info.Uses[id] == variable)
+	}
+	var assigned []ast.Expr
+	declared, unprovable, fallback := parameter, parameter, false
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.ValueSpec:
+			for i, name := range n.Names {
+				if info.Defs[name] != variable {
+					continue
+				}
+				declared = true
+				if len(n.Values) != len(n.Names) {
+					unprovable = true
+				} else {
+					assigned = append(assigned, n.Values[i])
+				}
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range n.Lhs {
+				if !refersTo(lhs) {
+					continue
+				}
+				declared = true
+				if len(n.Lhs) != len(n.Rhs) {
+					unprovable = true
+				} else {
+					assigned = append(assigned, n.Rhs[i])
+				}
+			}
+		case *ast.RangeStmt:
+			if refersTo(n.Key) || (n.Value != nil && refersTo(n.Value)) {
+				unprovable = true
+			}
+		case *ast.IfStmt:
+			if nilCheckOf(info, n.Cond, refersTo) && assignsProven(info, declaration, n.Body, refersTo, depth) {
+				fallback = true
+			}
+		}
+		return true
+	})
+	if !declared || (unprovable && !fallback) {
+		return false
+	}
+	for _, value := range assigned {
+		if refersTo(value) {
+			continue
+		}
+		if !fallback && !provenTransport(info, declaration, value, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+// nilCheckOf: condition is `v == nil` (either order) for the variable refersTo names.
+func nilCheckOf(info *types.Info, condition ast.Expr, refersTo func(ast.Expr) bool) bool {
+	binary, ok := ast.Unparen(condition).(*ast.BinaryExpr)
+	if !ok || binary.Op.String() != "==" {
+		return false
+	}
+	return (refersTo(binary.X) && isNil(info, binary.Y)) || (refersTo(binary.Y) && isNil(info, binary.X))
+}
+
+// assignsProven: body assigns the variable a proven value at its top level.
+func assignsProven(info *types.Info, declaration ast.Decl, body *ast.BlockStmt, refersTo func(ast.Expr) bool, depth int) bool {
+	for _, statement := range body.List {
+		assign, ok := statement.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != len(assign.Rhs) {
+			continue
+		}
+		for i, lhs := range assign.Lhs {
+			if refersTo(lhs) && provenTransport(info, declaration, assign.Rhs[i], depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func calledFunc(info *types.Info, call *ast.CallExpr) *types.Func {
+	switch fun := ast.Unparen(call.Fun).(type) {
+	case *ast.Ident:
+		fn, _ := info.Uses[fun].(*types.Func)
+		return fn
+	case *ast.SelectorExpr:
+		fn, _ := info.Uses[fun.Sel].(*types.Func)
+		return fn
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield"}
+var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield", "unproven"}
 
 // The walker is itself tested: each planted package under testdata/planted must yield exactly its sites, and the
 // negative package none. A clause removed from kindsOf is RED here.
@@ -38,6 +38,12 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 		{dir + "envproxy/envproxy.go", "Config", "proxy"}:                            1,
 		{dir + "proxyfield/proxyfield.go", "Literal", "proxy"}:                       1,
 		{dir + "proxyassign/proxyassign.go", "Assign", "proxy"}:                      1,
+		{dir + "unproven/unproven.go", "NilVariable", "transport-unproven"}:          1,
+		{dir + "unproven/unproven.go", "Parameter", "transport-unproven"}:            1,
+		{dir + "unproven/unproven.go", "WrapperOverNil", "transport-unproven"}:       1,
+		{dir + "unproven/unproven.go", "FieldRead", "transport-unproven"}:            1,
+		{dir + "unproven/unproven.go", "Assigned", "transport-unproven"}:             1,
+		{dir + "unproven/unproven.go", "Unkeyed", "transport-unproven"}:              1,
 	}
 	if got, expected := render(found), render(want); got != expected {
 		t.Errorf("planted sites differ\n got:\n%s\nwant:\n%s", got, expected)

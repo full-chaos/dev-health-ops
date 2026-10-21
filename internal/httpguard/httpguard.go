@@ -11,6 +11,7 @@
 package httpguard
 
 import (
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -26,14 +27,18 @@ func refuseRedirects(req *http.Request, via []*http.Request) error {
 // NoRedirects is the client with its redirect policy replaced by "answer the 3xx, follow nothing" (a nil client stays
 // nil). A followed redirect carries the credential to wherever the server sends it: Go drops only Authorization and
 // Cookie when the host changes, not a custom header such as PRIVATE-TOKEN, and keeps Authorization for a subdomain of
-// the original host; httpx, whose behaviour these clients port, follows no redirect by default. The input is copied,
-// never changed.
+// the original host; httpx, whose behaviour these clients port, follows no redirect by default. A client with no
+// Transport gets SharedTransport(): a nil Transport is http.DefaultTransport, which sends through an environment proxy.
+// The input is copied, never changed.
 func NoRedirects(client *http.Client) *http.Client {
 	if client == nil {
 		return nil
 	}
 	copied := *client
 	copied.CheckRedirect = refuseRedirects
+	if copied.Transport == nil {
+		copied.Transport = SharedTransport()
+	}
 	return &copied
 }
 
@@ -79,9 +84,20 @@ func httpClientOrNil(client *http.Client) *http.Client { return NoRedirects(clie
 // Transport would be http.DefaultTransport, which honours those variables. internal/cigates/outboundtransport fails a
 // client of production code built without one.
 func Transport() *http.Transport {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	return transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport := base.Clone()
+		transport.Proxy = nil
+		return transport
+	}
+	// A dependency replaced http.DefaultTransport with another RoundTripper: net/http's own default settings, no proxy.
+	return &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 }
 
 var sharedTransport = sync.OnceValue(Transport)

@@ -42,3 +42,34 @@ func TestSharedTransportIsOnePool(t *testing.T) {
 		t.Fatal("a transport of this package has a Proxy function")
 	}
 }
+
+// A supplied client with no Transport would dial through http.DefaultTransport; NoRedirects (and every seam that guards
+// a supplied client with it) gives the copy SharedTransport instead.
+func TestNoRedirectsGivesASuppliedClientWithoutATransportNoEnvironmentProxy(t *testing.T) {
+	proxycapture.Check(t, func(ctx context.Context) {
+		sendCanary(ctx, NoRedirects(&http.Client{Timeout: 5 * time.Second}))
+		sendCanary(ctx, NoRedirectsDoer(&http.Client{Timeout: 5 * time.Second}))
+	}).AssertNothingReached(t)
+	supplied := &http.Client{}
+	if NoRedirects(supplied).Transport == nil || supplied.Transport != nil {
+		t.Fatal("NoRedirects must give its copy a transport and leave the supplied client unchanged")
+	}
+}
+
+type replacedDefaultTransport struct{}
+
+func (replacedDefaultTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, http.ErrNotSupported
+}
+
+// A dependency may replace http.DefaultTransport with another RoundTripper; Transport must still build a no-proxy
+// transport instead of panicking on the type assertion.
+func TestTransportSurvivesAReplacedDefaultTransport(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = replacedDefaultTransport{}
+	transport := Transport()
+	if transport == nil || transport.Proxy != nil || transport.DialContext == nil || transport.MaxIdleConns != 100 {
+		t.Fatalf("Transport() over a replaced DefaultTransport = %+v, want net/http's default settings with no proxy", transport)
+	}
+}

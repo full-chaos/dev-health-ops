@@ -1,6 +1,7 @@
 package atlassian
 
 import (
+	"net"
 	"net/http"
 	"time"
 )
@@ -8,11 +9,22 @@ import (
 func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // noProxyTransport is the transport of NewDefaultHTTPClient: http.DefaultTransport's settings with no proxy from the
-// environment, so the credential reaches only the host the request names. Local modification, patch 0009.
+// environment, so the credential reaches only the host the request names; net/http's default settings when a
+// dependency replaced http.DefaultTransport with another RoundTripper. Local modification, patch 0009.
 var noProxyTransport = func() *http.Transport {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	return transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport := base.Clone()
+		transport.Proxy = nil
+		return transport
+	}
+	return &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 }()
 
 // NewDefaultHTTPClient is the client every call in this module builds when its caller supplied none: the given timeout and NO redirect

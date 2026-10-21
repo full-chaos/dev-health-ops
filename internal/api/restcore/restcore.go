@@ -114,7 +114,11 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 	// A copy of the client (NoRedirects never changes the caller's): its transport also records whether a 3xx answer with a
 	// Location came back, the one fact that tells net/http's refusal of that Location from an ordinary transport error whose
 	// text happens to start with the same words (CHAOS-7927 r2).
-	witness := &redirectWitness{base: httpClient.Transport}
+	base := httpClient.Transport
+	if base == nil {
+		base = httpguard.SharedTransport()
+	}
+	witness := &redirectWitness{base: base}
 	httpClient.Transport = witness
 	sleep := c.Sleep
 	if sleep == nil {

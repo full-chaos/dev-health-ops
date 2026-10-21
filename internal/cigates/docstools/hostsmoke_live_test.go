@@ -31,7 +31,7 @@ import (
 // where Go is stricter or its error text differs, each listed in testdata/refusals/host-smoke.tsv.
 
 // hostSmokeCaseCount pins the number of recorded cases; adding or dropping one changes it on purpose.
-const hostSmokeCaseCount = 145
+const hostSmokeCaseCount = 146
 
 type hsTLS struct {
 	certFile string

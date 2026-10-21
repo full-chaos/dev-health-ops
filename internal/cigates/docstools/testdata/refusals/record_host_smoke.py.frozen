@@ -183,6 +183,7 @@ case("ok-followed-location-space", {"/": raw(302, {"Location": "/a b/"}), "/a%20
 case("ok-followed-location-latin1-byte", {"/": raw(302, {"Location": "/caf\xe9/"}), "/caf%E9/": good_home()})
 case("ok-followed-location-uppercase-scheme", {"/": raw(302, {"Location": "HTTPS://{HOSTPORT}/new/"}), "/new/": good_home()})
 case("ok-followed-location-trailing-space", {"/": raw(302, {"Location": "/new/ "}), "/new/%20": good_home()})
+case("ok-followed-location-control-char", {"/": raw(302, {"Location": "/ne\x01w/"}), "/ne%01w/": good_home()})
 HEAD = "source_path\ttarget_path\n/old/\t/new/\n"
 case("fail-tsv-invalid-utf8-first-chunk", tsv=HEAD.encode() + b"\xff\n")
 case("fail-tsv-invalid-utf8-last-byte-of-first-chunk", tsv=(HEAD.encode() + b"y\n" * 4080)[:8191] + b"\xff\n")

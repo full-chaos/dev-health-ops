@@ -24,3 +24,4 @@ ok-followed-location-space
 ok-followed-location-latin1-byte
 ok-followed-location-uppercase-scheme
 ok-followed-location-trailing-space
+ok-followed-location-control-char

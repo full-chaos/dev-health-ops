@@ -47,6 +47,11 @@ var Reasons = []string{
 	ReasonSignature, ReasonNotYetValid, ReasonExpired,
 }
 
+// KeySetPublishedAndRemoved marks a row the verifier runs with the removed
+// keys added to the published set, as a stale cache would hold them. A row
+// without key_set runs with the published set alone.
+const KeySetPublishedAndRemoved = "published_and_removed"
+
 // Vector is one stored token.
 type Vector struct {
 	HeaderJSON   string `json:"header_json"`
@@ -60,6 +65,7 @@ type Entry struct {
 	File     string `json:"file"`
 	Now      int64  `json:"now"`
 	VerifyAs string `json:"verify_as_audience"`
+	KeySet   string `json:"key_set,omitempty"`
 	Expect   string `json:"expect"`
 	Reason   string `json:"reason,omitempty"`
 	Stage    string `json:"contract_stage,omitempty"`
@@ -104,6 +110,14 @@ type Corpus struct {
 func (v Vector) SigningInput() []byte {
 	enc := base64.RawURLEncoding
 	return []byte(enc.EncodeToString([]byte(v.HeaderJSON)) + "." + enc.EncodeToString([]byte(v.PayloadJSON)))
+}
+
+// KeysFor is the key set a verifier holds for one row.
+func (c *Corpus) KeysFor(e Entry) Jwks {
+	if e.KeySet != KeySetPublishedAndRemoved {
+		return c.Jwks
+	}
+	return Jwks{Keys: append(append([]JwkKey{}, c.Jwks.Keys...), c.Manifest.RemovedKeys...)}
 }
 
 // PublicKeys decodes the set into key bytes by kid, refusing a malformed key.

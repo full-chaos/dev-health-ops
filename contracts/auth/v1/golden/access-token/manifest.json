@@ -13,7 +13,7 @@
       "alg": "EdDSA",
       "use": "sig",
       "kid": "auth-example-2026-04",
-      "x": "IAjddQsjpBaJt1a8CUHkZuCRkTOvY8UEhfvJYHTfpWI"
+      "x": "H72MJ_45gFmj771_aLTZ9F8D6IlfY1yH8IUEZG83t14"
     }
   ],
   "decision_order": [
@@ -86,6 +86,14 @@
       "reason": "contract",
       "contract_stage": "schema",
       "why": "an audience outside the contract's two."
+    },
+    {
+      "file": "invalid-delayed-nbf-before-nbf.json",
+      "now": 1760000399,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "not_yet_valid",
+      "why": "nbf later than iat: the clock is after iat and one second before nbf, so the token is not yet valid."
     },
     {
       "file": "invalid-duplicate-claim-aud.json",
@@ -195,9 +203,10 @@
       "file": "invalid-kid-removed.json",
       "now": 1760000300,
       "verify_as_audience": "dev-health-api",
+      "key_set": "published_and_removed",
       "expect": "reject",
       "reason": "unknown_kid",
-      "why": "Valid claims signed by a key that was published and has been removed from the set; a verifier that still holds that key (a stale cache) must refuse it."
+      "why": "Valid claims signed by a key that was published and has been removed from the set. The row runs with that key in the verifier's key set (a stale cache): it must still refuse the kid."
     },
     {
       "file": "invalid-kid-unknown.json",
@@ -385,6 +394,13 @@
       "verify_as_audience": "auth-service",
       "expect": "accept",
       "why": "The token for auth-service's own session routes, verified as that audience."
+    },
+    {
+      "file": "valid-delayed-nbf-at-nbf.json",
+      "now": 1760000400,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "nbf later than iat: the clock equals nbf, after iat, so the token is valid."
     },
     {
       "file": "valid-last-second-before-exp.json",

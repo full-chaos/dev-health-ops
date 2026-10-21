@@ -103,6 +103,11 @@ func reject(now int64, aud, reason, why string) Entry {
 	return Entry{Now: now, VerifyAs: aud, Expect: Reject, Reason: reason, Why: why}
 }
 
+func withRemovedKey(e Entry) Entry {
+	e.KeySet = KeySetPublishedAndRemoved
+	return e
+}
+
 func contractRefusal(stage, why string) Entry {
 	return Entry{Now: FixedNow, VerifyAs: AudienceAPI, Expect: Reject, Reason: ReasonContract, Stage: stage, Why: why}
 }
@@ -242,7 +247,7 @@ func Generate(random io.Reader) (*Corpus, error) {
 	b.add("invalid-kid-unknown", headerText("EdDSA", "at+jwt", KidUnknown), api.text(), edSigner(strangerKey),
 		reject(now, AudienceAPI, ReasonUnknownKid, "A kid that was never published."))
 	b.add("invalid-kid-removed", headerText("EdDSA", "at+jwt", KidRemoved), api.text(), edSigner(removedKey),
-		reject(now, AudienceAPI, ReasonUnknownKid, "Valid claims signed by a key that was published and has been removed from the set; a verifier that still holds that key (a stale cache) must refuse it."))
+		withRemovedKey(reject(now, AudienceAPI, ReasonUnknownKid, "Valid claims signed by a key that was published and has been removed from the set. The row runs with that key in the verifier's key set (a stale cache): it must still refuse the kid.")))
 	b.add("invalid-signature-wrong-key", good, api.text(), edSigner(strangerKey),
 		reject(now, AudienceAPI, ReasonSignature, "The active kid, signed by a key outside the set."))
 	b.add("invalid-signature-wrong-published-key", good, api.text(), edSigner(overlapKey),
@@ -261,6 +266,12 @@ func Generate(random io.Reader) (*Corpus, error) {
 		return ed25519.Sign(activeKey, Vector{HeaderJSON: good, PayloadJSON: api.text()}.SigningInput())
 	}, reject(now, AudienceAPI, ReasonSignature, "A payload changed by one byte after signing."))
 
+	delayed := api
+	delayed.nbf = delayed.iat + 400
+	b.add("valid-delayed-nbf-at-nbf", good, delayed.text(), edSigner(activeKey),
+		accept(delayed.nbf, AudienceAPI, "nbf later than iat: the clock equals nbf, after iat, so the token is valid."))
+	b.add("invalid-delayed-nbf-before-nbf", good, delayed.text(), edSigner(activeKey),
+		reject(delayed.nbf-1, AudienceAPI, ReasonNotYetValid, "nbf later than iat: the clock is after iat and one second before nbf, so the token is not yet valid."))
 	b.add("invalid-order-contract-over-unknown-kid", headerText("EdDSA", "JWT", KidUnknown), api.text(), edSigner(strangerKey),
 		contractRefusal("schema", "Two failures: typ JWT and a kid never published. The contract refusal comes first."))
 	b.add("invalid-order-signature-over-issuer", good, otherIss.text(), edSigner(strangerKey),

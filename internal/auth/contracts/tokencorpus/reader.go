@@ -23,27 +23,36 @@ type Decision struct {
 	Stage  string
 }
 
-// skipRemoved names the broken reader that ignores the manifest's removed kids.
-const skipRemoved = "removed_kids"
+// The broken readers that are not "skip one Reason": one ignores the
+// manifest's removed kids, one reads iat where nbf belongs.
+const (
+	skipRemoved    = "removed_kids"
+	skipNbfFromIat = "nbf_from_iat"
+)
 
 // Check is the reference decision for one vector, in the manifest's decision
 // order: the access-token.v1 contract (a repeated member, the schema, the
 // client rules), the key by kid, the signature, the issuer, the audience, then
 // the clock. root is the repo root that owns the contract schemas.
-func Check(root string, c *Corpus, v Vector, now int64, audience string) (Decision, error) {
-	return check(root, c, v, now, audience, c.Manifest.ReasonOrder, "")
+func Check(root string, c *Corpus, e Entry) (Decision, error) {
+	v, ok := c.Vectors[e.File]
+	if !ok {
+		return Decision{}, fmt.Errorf("tokencorpus: %s has no vector", e.File)
+	}
+	return check(root, c, c.KeysFor(e), v, e.Now, e.VerifyAs, c.Manifest.ReasonOrder, "")
 }
 
 // check is Check with the decision order given and one decision skipped (skip
 // is a Reason, or skipRemoved; "" for none): a deliberately broken reader, so a
 // test can prove the corpus fails it.
-func check(root string, c *Corpus, v Vector, now int64, audience string, order []string, skip string) (Decision, error) {
+func check(root string, c *Corpus, jwks Jwks, v Vector, now int64, audience string, order []string, skip string) (Decision, error) {
 	var header struct {
 		Kid string `json:"kid"`
 	}
 	var claims struct {
 		Iss string `json:"iss"`
 		Aud string `json:"aud"`
+		Iat int64  `json:"iat"`
 		Nbf int64  `json:"nbf"`
 		Exp int64  `json:"exp"`
 	}
@@ -51,7 +60,7 @@ func check(root string, c *Corpus, v Vector, now int64, audience string, order [
 	// fields then stay zero, which is what a later step would read.
 	_ = json.Unmarshal([]byte(v.HeaderJSON), &header)
 	_ = json.Unmarshal([]byte(v.PayloadJSON), &claims)
-	keys, err := c.Jwks.PublicKeys()
+	keys, err := jwks.PublicKeys()
 	if err != nil {
 		return Decision{}, err
 	}
@@ -97,7 +106,11 @@ func check(root string, c *Corpus, v Vector, now int64, audience string, order [
 				return Decision{Reason: ReasonAudience}, nil
 			}
 		case ReasonNotYetValid:
-			if now+leeway < claims.Nbf {
+			notBefore := claims.Nbf
+			if skip == skipNbfFromIat {
+				notBefore = claims.Iat
+			}
+			if now+leeway < notBefore {
 				return Decision{Reason: ReasonNotYetValid}, nil
 			}
 		case ReasonExpired:
@@ -128,7 +141,10 @@ func verifyAllIn(root string, c *Corpus, order []string, skip string) error {
 		if !ok {
 			return fmt.Errorf("tokencorpus: %s has no vector", e.File)
 		}
-		got, err := check(root, c, v, e.Now, e.VerifyAs, order, skip)
+		if (e.Expect == Accept) != (e.Reason == "") || (e.Expect != Accept && e.Expect != Reject) {
+			return fmt.Errorf("tokencorpus: %s: expect %q contradicts reason %q", e.File, e.Expect, e.Reason)
+		}
+		got, err := check(root, c, c.KeysFor(e), v, e.Now, e.VerifyAs, order, skip)
 		if err != nil {
 			return fmt.Errorf("tokencorpus: %s: %w", e.File, err)
 		}

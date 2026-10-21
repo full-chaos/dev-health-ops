@@ -14,3 +14,7 @@ and the decision it must reach, in `decision_order`.
 
 Regenerate with fresh keys: `go run ./internal/auth/contracts/tokencorpus/gen`.
 Everything except the keys and the signatures is fixed.
+
+A row with `key_set: published_and_removed` is run with the removed public keys
+(`removed_public_keys` in the manifest) added to the published set, as a stale
+cache would hold them; the verifier must still refuse that kid.

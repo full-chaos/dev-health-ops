@@ -315,30 +315,65 @@ func TestTheCorpusFailsAReaderThatSkipsADecision(t *testing.T) {
 	}
 }
 
-// A verifier that still holds a removed key (a stale cache) must refuse its
-// tokens: the corpus carries the removed public key so a harness can plant it.
-func TestRemovedKeyIsRefusedEvenWhenAStaleCacheStillHoldsIt(t *testing.T) {
+// The removed-kid row is run with the removed key in the verifier's key set
+// (a stale cache), by the manifest itself, so every consumer executes it.
+func TestRemovedKidRowRunsWithTheStaleKeyFromTheManifest(t *testing.T) {
 	root := testRoot(t)
 	c, err := Load(filepath.Join(root, Dir))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Manifest.RemovedKeys) == 0 {
-		t.Fatal("the manifest carries no removed public key")
+	stale := 0
+	for _, e := range c.Manifest.Vectors {
+		if e.KeySet == KeySetPublishedAndRemoved {
+			stale++
+			if e.Reason != ReasonUnknownKid {
+				t.Errorf("%s: a stale-key row must be refused as %s", e.File, ReasonUnknownKid)
+			}
+		}
 	}
-	stale := *c
-	stale.Jwks = Jwks{Keys: append(append([]JwkKey{}, c.Jwks.Keys...), c.Manifest.RemovedKeys...)}
-	if err := VerifyAll(root, &stale); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyAll(root, &stale, skipRemoved); err == nil {
-		t.Fatal("a reader that ignores removed kids passed a stale cache")
+	if stale == 0 {
+		t.Fatal("no manifest row runs with the removed key in the key set")
 	}
 	for _, k := range c.Jwks.Keys {
 		for _, removed := range c.Manifest.RemovedKeys {
 			if k.Kid == removed.Kid {
 				t.Fatalf("removed kid %s is still in jwks.json", k.Kid)
 			}
+		}
+	}
+	if err := verifyAll(root, c, skipRemoved); err == nil {
+		t.Fatal("a reader that ignores removed kids passed the manifest run")
+	}
+}
+
+func TestTheCorpusFailsAReaderThatChecksIatInsteadOfNbf(t *testing.T) {
+	root := testRoot(t)
+	c, err := Load(filepath.Join(root, Dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyAll(root, c, skipNbfFromIat); err == nil {
+		t.Fatal("a reader that reads iat where nbf belongs passed every vector")
+	}
+}
+
+func TestVerifyAllRefusesAManifestRowWhoseExpectContradictsItsReason(t *testing.T) {
+	root := testRoot(t)
+	c, err := Load(filepath.Join(root, Dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flip := range []struct{ file, expect string }{{"valid-api.json", Reject}, {"invalid-alg-none.json", Accept}, {"valid-api.json", "maybe"}} {
+		bad := *c
+		bad.Manifest.Vectors = append([]Entry{}, c.Manifest.Vectors...)
+		for i := range bad.Manifest.Vectors {
+			if bad.Manifest.Vectors[i].File == flip.file {
+				bad.Manifest.Vectors[i].Expect = flip.expect
+			}
+		}
+		if err := VerifyAll(root, &bad); err == nil {
+			t.Errorf("%s with expect %q passed VerifyAll", flip.file, flip.expect)
 		}
 	}
 }

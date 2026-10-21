@@ -18,9 +18,7 @@ const pythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // or another version of one of these packages is refused.
 const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nemail-validator 2.3.0\nfastapi 0.136.3\npydantic 2.13.5\npydantic_core 2.46.5\nstarlette 1.7.0"
 
-// goldenPins pins the SHA-256 of every golden under testdata/golden. The
-// goldenrecord verb writes each digest when it promotes a recording; a new
-// golden starts as "PIN:" + its file name without ".json".
+// goldenPins pins the SHA-256 of every golden under testdata/golden.
 var goldenPins = map[string]string{
 	"body-int.golden.json":                "ccc7fc5b10edb06b295ef8e62a54414aed1d5022000bc029a20c26372f91db98",
 	"date-and-aware-datetime.golden.json": "6ea2077fa613f2c821644b880678b713fbe5ffaed1b96b68fc0c81755c4dd008",
@@ -33,11 +31,9 @@ var goldenPins = map[string]string{
 
 // goldens is the set of this package's frozen Python answers.
 var goldens = programoracle.Set{
-	Package:       "./internal/api/pybody/",
-	Build:         pythonBuild,
-	Identity:      producerIdentity,
-	Distributions: []string{"email-validator", "fastapi", "pydantic", "pydantic_core", "starlette"},
-	Pins:          goldenPins,
+	Build:    pythonBuild,
+	Identity: producerIdentity,
+	Pins:     goldenPins,
 }
 
 // frozenPython returns the stdout of each program, in order, from the golden
@@ -48,7 +44,7 @@ var goldens = programoracle.Set{
 // exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	return goldens.Outputs(t, repositoryRoot(t), golden, programs...)
+	return goldens.Outputs(t, golden, programs...)
 }
 
 // repositoryRoot is the repository root, from this file's own location.

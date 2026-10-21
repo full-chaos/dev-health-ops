@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// taggedValue decodes testdata/generate_json_indent_sorted_golden.py's
+// taggedValue decodes the frozen indent-sorted goldens'
 // {"type": ..., "value": ...} tree back into the exact Go type each case
 // needs -- json.Unmarshal alone can't recover the int-vs-float distinction
 // a bare JSON number erases, which is precisely what
@@ -86,7 +86,7 @@ func TestMarshalPythonJSONIndentSortedMatchesPythonGolden(t *testing.T) {
 		t.Fatalf("glob goldens: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no json_indent_sorted__*.json goldens found -- run generate_json_indent_sorted_golden.py")
+		t.Fatal("no json_indent_sorted__*.json goldens found")
 	}
 
 	for _, path := range files {

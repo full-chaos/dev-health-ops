@@ -1,0 +1,15 @@
+      # go-api service labels (add to its compose block):
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.go-api-paths.rule: "Host(`traefik`) && PathRegexp(`^(/api/v1/external-ingest/schemas|/api/v1/external-ingest/schemas/[^/]+|/api/v1/billing/plans/[^/]+/sync-stripe|/api/v1/admin/audit-logs/resource/[^/]+/[^/]+|/api/v1/admin/orgs/[^/]+/members/[^/]+|/health|/ready|/api/v1/auth/me)$`)"
+      traefik.http.routers.go-api-paths.entrypoints: web
+      traefik.http.routers.go-api-paths.priority: "1000"
+      traefik.http.services.go-api-paths.loadbalancer.server.port: "8000"
+
+      # query-api service labels (add to its compose block):
+      traefik.enable: "true"
+      traefik.scope: dev-health
+      traefik.http.routers.query-api-paths.rule: "Host(`traefik`) && PathRegexp(`^(/api/v1/work-units|/api/v1/people/[^/]+/metric|/api/v1/work-units/[^/]+/explain|/api/v1/home|(?i:/graphql))$`)"
+      traefik.http.routers.query-api-paths.entrypoints: web
+      traefik.http.routers.query-api-paths.priority: "1000"
+      traefik.http.services.query-api-paths.loadbalancer.server.port: "8090"

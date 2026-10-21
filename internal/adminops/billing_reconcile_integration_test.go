@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -21,16 +20,14 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // `billing reconcile` (CHAOS-6893) is compared with the real `dev-hops billing
 // reconcile` on one scripted session over real PostgreSQL, each plane talking to
 // its own Stripe API fake. The fake answers from objects the real Stripe SDK
-// (Python stripe) builds and serialises (testdata/reconcile_fixtures.json, the
-// stdout of testdata/reconcile_fixtures.py, pinned by sha256), so no
-// response is hand-written JSON, and pages them two at a time so every listing
+// (Python stripe) built and serialised (testdata/reconcile_fixtures.json, pinned
+// by sha256), so no response is hand-written JSON, and pages them two at a time so every listing
 // follows its pages. Per step: exit code, stdout (the two run instants masked),
 // the audit rows the run left, and (compared between the planes) every request each
 // plane made of Stripe.
@@ -301,60 +298,6 @@ func (db *database) reconcileState(t *testing.T) string {
 	return string(raw)
 }
 
-// reconcilePythonProgram is the entry point the producer runs: the real dev-hops CLI, its Stripe client
-// pointed at the fake and its listing patched to the call it was written to make (the named divergence above).
-const reconcilePythonProgram = "import os, sys\n" +
-	"_base = os.environ.get('VENUE_STRIPE_API_BASE')\n" +
-	"if _base:\n" +
-	"    import stripe as _stripe\n" +
-	"    _init = _stripe.StripeClient.__init__\n" +
-	"    def _patched(self, *args, **kwargs):\n" +
-	"        kwargs['base_addresses'] = {'api': _base}\n" +
-	"        _init(self, *args, **kwargs)\n" +
-	"    _stripe.StripeClient.__init__ = _patched\n" +
-	"    from stripe._invoice_service import InvoiceService as _I\n" +
-	"    from stripe._refund_service import RefundService as _R\n" +
-	"    from stripe._subscription_service import SubscriptionService as _S\n" +
-	"    def _kw(original):\n" +
-	"        def patched(self, params=None, options=None, **keywords):\n" +
-	"            if keywords:\n" +
-	"                params = {**(params or {}), **keywords}\n" +
-	"            return original(self, params, options)\n" +
-	"        return patched\n" +
-	"    for _svc in (_S, _I, _R):\n" +
-	"        _svc.list = _kw(_svc.list)\n" +
-	"from dev_health_ops import cli\n" +
-	"raise SystemExit(cli.main(sys.argv[1:]))\n"
-
-// reconcilePythonSettings are the variables that shape the answers: the shared settings plus TZ (a --since
-// without an offset reaches asyncpg as a naive datetime, which it reads in the process zone: pin it, the
-// verb reads such a value as UTC). They are the producer's environment AND part of the golden's key.
-var reconcilePythonSettings = func() map[string]string {
-	settings := map[string]string{"TZ": "UTC"}
-	for name, value := range adminPythonSettings {
-		settings[name] = value
-	}
-	return settings
-}()
-
-// pythonReconcile runs the real `dev-hops billing reconcile <args>`, its Stripe
-// client pointed at the fake and its listing patched to the call it was written to
-// make (see the named divergences above).
-func pythonReconcile(t *testing.T, db *database, extra map[string]string, args []string) (int, string, bool) {
-	t.Helper()
-	command := adminCommand(t, db, reconcilePythonSettings, extra, append([]string{"-c", reconcilePythonProgram, "billing"}, args...)...)
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
-	code := 0
-	if exit, ok := err.(*exec.ExitError); ok {
-		code = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(command.Args[0], err, []byte(stderr.String())))
-	}
-	return code, stdout.String(), code == 1 && strings.Contains(stderr.String(), "Traceback")
-}
-
 func goReconcile(t *testing.T, db *database, extra map[string]string, args []string) (int, string) {
 	t.Helper()
 	env := map[string]string{"MIGRATION_DATABASE_URI": db.uri}
@@ -370,7 +313,7 @@ func goReconcile(t *testing.T, db *database, extra map[string]string, args []str
 	return code, stdout.String()
 }
 
-func reconcileSession(t *testing.T, python bool) []reconcileResult {
+func reconcileSession(t *testing.T) []reconcileResult {
 	t.Helper()
 	db := startDatabase(t)
 	ctx := context.Background()
@@ -398,15 +341,7 @@ func reconcileSession(t *testing.T, python bool) []reconcileResult {
 		fake.calls = nil
 		fake.failing, fake.failingLater, fake.overrides = s.failing, s.failingLater, s.overrides
 		fake.mu.Unlock()
-		var code int
-		var stdout string
-		crash := false
-		if python {
-			env["VENUE_STRIPE_API_BASE"] = server.URL
-			code, stdout, crash = pythonReconcile(t, db, env, s.args)
-		} else {
-			code, stdout = goReconcile(t, db, env, s.args)
-		}
+		code, stdout := goReconcile(t, db, env, s.args)
 		fake.mu.Lock()
 		calls := append([]string(nil), fake.calls...)
 		fake.mu.Unlock()
@@ -414,7 +349,7 @@ func reconcileSession(t *testing.T, python bool) []reconcileResult {
 			t.Fatalf("the Stripe key is in the output of %v", s.args)
 		}
 		out = append(out, reconcileResult{Args: s.args, Exit: code, Stdout: runInstant.ReplaceAllString(stdout, `"$1": "<instant>"`),
-			State: db.reconcileState(t), Calls: calls, Crash: crash})
+			State: db.reconcileState(t), Calls: calls})
 	}
 	return out
 }
@@ -454,10 +389,10 @@ func TestReconcileFixturesAreTheFileTheDigestPins(t *testing.T) {
 // TestBillingReconcileMatchesTheFrozenPythonOutput runs the script against the fake and compares every step
 // (exit, stdout, the audit rows, the Stripe requests) with what the REAL `dev-hops billing reconcile` did
 // against the same fake. The answers were executed once on adminPythonBuild and are frozen in
-// testdata/golden/reconcile.json (the recipe regenerates them by execution); the script and the digest of the
+// testdata/golden/reconcile.json; the script and the digest of the
 // recorded Stripe fixtures are part of the golden's key.
 func TestBillingReconcileMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := adminGolden(t, "reconcile", "02cebda0a39bcfa5e36c8a125b999ec2b7987697318ba1b5bba0a09cf84bbc6c", "TestBillingReconcileMatchesTheFrozenPythonOutput")
+	golden := adminGolden(t, "reconcile", "02cebda0a39bcfa5e36c8a125b999ec2b7987697318ba1b5bba0a09cf84bbc6c")
 	script := make([]map[string]any, len(reconcileScript))
 	for index, s := range reconcileScript {
 		script[index] = map[string]any{"args": s.args, "noKey": s.noKey, "sql": s.sql, "seed": s.seed,
@@ -467,21 +402,14 @@ func TestBillingReconcileMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("reconcile script", reconcilePythonProgram, input, reconcilePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		useAdminProducer(t, producer)
-		body, err := json.Marshal(reconcileSession(t, true))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("reconcile script", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen []reconcileResult
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {
 		t.Fatal(err)
 	}
-	compareReconcile(t, reconcileSession(t, false), frozen, "frozen Python")
+	compareReconcile(t, reconcileSession(t), frozen, "frozen Python")
 	reports, mismatches, missing, requests, crashes := 0, 0, 0, 0, 0
 	for _, item := range frozen {
 		if strings.Contains(item.Stdout, `"subscriptions_checked"`) {

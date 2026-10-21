@@ -391,7 +391,7 @@ check_vet() {
 # the census (~570 s, 16 rows) and every row runs in exactly one shard (`race-excluded-shard-plan SHARD COUNT` lists a shard's rows).
 # race_excluded_rows [SHARD COUNT]: the rows of ci/race_excluded_tests.tsv (the shard's rows with SHARD COUNT), one per line.
 race_excluded_rows() {
-  local list="${ROOT}/ci/race_excluded_tests.tsv" row shard="${1:-}" shard_count="${2:-}" position=0
+  local list="${GO_RACE_EXCLUDED_TESTS:-${ROOT}/ci/race_excluded_tests.tsv}" row shard="${1:-}" shard_count="${2:-}" position=0
   local -a rows=()
   [ -f "${list}" ] || die "ci/race_excluded_tests.tsv is missing"
   while IFS= read -r row; do rows+=("${row}"); done < <(grep -v '^#' "${list}" | grep -v '^$')
@@ -404,9 +404,10 @@ race_excluded_rows() {
 }
 
 check_race_excluded_ran() {
-  local row package name out count=0
+  local row package name out count=0 listing
   local -a rows=()
-  while IFS= read -r row; do rows+=("${row}"); done < <(race_excluded_rows "$@")
+  listing="$(race_excluded_rows "$@")" || exit 2
+  while IFS= read -r row; do [ -z "${row}" ] || rows+=("${row}"); done <<<"${listing}"
   for row in "${rows[@]}"; do
     name="${row#*$'\t'}"
     package="${row%%$'\t'*}"
@@ -892,7 +893,7 @@ check_ci_leg() {
 # worst leg finished at 39:59, and three new rows pushed two other legs over. The
 # legs are now cost-balanced (ci/venue_oracle_shard.awk, the longest-processing-time
 # assignment ci/go_race_shard.awk uses) by the measured seconds in
-# ci/venue_oracle_weights.d/ (regenerate: ci/venue_oracle_weights.py). A wrong or
+# ci/venue_oracle_weights.d/ (edit a row by hand from a run log). A wrong or
 # missing weight costs balance, never coverage: the legs always partition the run
 # rows. tests/tooling/test_venue_oracle_shards.py fails a PR whose registry rows
 # lack a weight or whose heaviest leg would exceed the leg's test-time budget.
@@ -1255,7 +1256,7 @@ check_venue_oracles() {
   elapsed=$(( $(date +%s) - leg_started ))
   printf 'venue-oracles: leg %ss of tests (predicted %ss, budget %ss)\n' "${elapsed}" "${predicted_seconds:-n/a}" "${budget}"
   if [ "${elapsed}" -gt "${budget}" ]; then
-    printf '::warning title=venue-oracles leg over its test-time budget::%ss of tests against a %ss budget: rebalance ci/venue_oracle_weights.d/ (ci/venue_oracle_weights.py) or add a leg before the job cap cancels it\n' "${elapsed}" "${budget}"
+    printf '::warning title=venue-oracles leg over its test-time budget::%ss of tests against a %ss budget: rebalance ci/venue_oracle_weights.d/ or add a leg before the job cap cancels it\n' "${elapsed}" "${budget}"
   fi
   [ "${failed}" -eq 0 ] || return 1
 }
@@ -3367,6 +3368,12 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/authconfig FuzzConfigLoad"
   "./internal/auth/identity FuzzNormalizeEmail"
   "./internal/auth/identity FuzzExternalKeyValidate"
+  "./internal/auth/identity/oidc FuzzOpenState"
+  "./internal/auth/identity/oidc FuzzParseJOSEHeader"
+  "./internal/auth/identity/oidc FuzzValidateIDTokenClaims"
+  "./internal/auth/identity/oidc FuzzParseCallbackBody"
+  "./internal/auth/identity/saml FuzzParseSAMLResponse"
+  "./internal/auth/identity/saml FuzzSAMLSubject"
 )
 AUTH_FUZZTIME="${AUTH_FUZZTIME:-20s}"
 AUTH_GOVULNCHECK_VERSION="v1.9.0"

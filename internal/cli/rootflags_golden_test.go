@@ -1,19 +1,14 @@
 package cli_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -25,53 +20,26 @@ const rootFlagsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // build_parser().parse_args(...) + main()'s _resolve_org over the corpus: the
 // exit code of what refuses, and the value of every root option of what parses.
 // The Python answers were executed once on rootFlagsPythonBuild and are frozen
-// in testdata/golden/root_flags.json (the recipe regenerates them by
-// execution); the corpus and the program are part of the golden's key, so a
-// changed corpus or program must be recorded again.
+// in testdata/golden/root_flags.json; the corpus is part of the golden's key.
 //
 // Named limits: a root value is handed to the command, where a flag typed after
 // the command wins (asserted by the dispatch tests, not by this oracle); the
 // environment defaults of the root parser (LOG_LEVEL, POSTGRES_URI, ...) stay
-// each command's own, so the program runs with them unset.
+// each command's own, so the frozen run had them unset.
 func TestRootFlagsMatchThePythonRootParser(t *testing.T) {
-	_, currentFile, _, _ := moduleroot.Caller(0)
-	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/root_flags.json",
 		PythonBuild: rootFlagsPythonBuild,
 		SHA256:      "798781695c44504d608e033719b09b904698bd83de3b1d252f36d63c22091ed2",
-		Recipe: "git worktree add --detach $DIR " + rootFlagsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/cli/ -test '^TestRootFlagsMatchThePythonRootParser$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	corpus := cli.RootCorpus()
 	input, err := json.Marshal(corpus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"PYTHONHASHSEED": "0"}
-	request := venueoracle.ProgramRequest("root flags corpus", cli.RootFlagsOracleProgram(), input, env)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		ctx := context.Background()
-		producer.RequireDeployed()
-		// The closed environment: the root parser's own environment defaults
-		// are unset in it (see the named limits).
-		command, err := producer.Command(ctx, env, nil, "-c", cli.RootFlagsOracleProgram())
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = strings.NewReader(string(input))
-		output, err := command.Output()
-		if err != nil {
-			var stderr []byte
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				stderr = exitErr.Stderr
-			}
-			t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, stderr))
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(output)}}
-	})
+	request := venueoracle.ProgramRequest("root flags corpus", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 
 	want, err := decodeRootAnswers(answers[0].Body)

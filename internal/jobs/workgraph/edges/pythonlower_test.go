@@ -62,17 +62,7 @@ func TestPythonLowerMatchesStrLowerOnTheKnownDivergences(t *testing.T) {
 // Unicode revision adding another multi-char lowercase mapping would silently
 // reintroduce the divergence in whichever direction the new rune falls.
 func TestPythonLowerMatchesLivePython(t *testing.T) {
-	const derive = `
-import json, sys
-out = {}
-for cp in range(0x110000):
-    c = chr(cp)
-    low = c.lower()
-    if len(low) > 1:
-        out[cp] = low
-json.dump(out, sys.stdout)
-`
-	rendered := []byte(edgesProgram(t, "python_lower_multirune", "TestPythonLowerMatchesLivePython", "multi-rune lowercase mappings", derive))
+	rendered := []byte(edgesProgram(t, "python_lower_multirune", "multi-rune lowercase mappings"))
 	var multi map[string]string
 	if err := json.Unmarshal(rendered, &multi); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -201,17 +191,7 @@ var unicodeVersionSkewRunes = []rune{
 // be deleted rather than quietly shrinking.
 func TestEveryRuneLowercasesLikeLivePython(t *testing.T) {
 
-	const derive = `
-import json, sys, unicodedata
-mapping = {}
-for cp in range(0x110000):
-    c = chr(cp)
-    low = c.lower()
-    if low != c:
-        mapping[cp] = [ord(x) for x in low]
-print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
-`
-	output := []byte(edgesProgram(t, "python_lower_allrunes", "TestEveryRuneLowercasesLikeLivePython", "full lower mapping", derive))
+	output := []byte(edgesProgram(t, "python_lower_allrunes", "full lower mapping"))
 	var live struct {
 		Mapping map[string][]int `json:"mapping"`
 		Unicode string           `json:"unicode"`
@@ -263,23 +243,19 @@ print(json.dumps({"mapping": mapping, "unicode": unicodedata.unidata_version}))
 
 }
 
-// edgesProgram returns the stdout of the inline Python program `text` (run as `python3 -c`). Every
-// derivation of this package that asks the interpreter was executed once on the last build that carried
-// the Python sources and is frozen in testdata/golden/<slug>.json (recipe in the golden's spec); a frozen
-// run reads the recorded stdout and starts no Python. The program's text is part of the request, so a
-// changed derivation is refused until it is recorded again.
-func edgesProgram(t *testing.T, slug, test, name, text string) string {
+// edgesProgram returns the frozen stdout of the named program. Its derivation is frozen in
+// testdata/golden/<slug>.json; a frozen run reads the recorded stdout and starts no Python.
+func edgesProgram(t *testing.T, slug, name string) string {
 	t.Helper()
-	spec := rotguard.Spec("testdata/golden/"+slug+".json", edgesGoldenPins[slug], "./internal/jobs/workgraph/edges/", "^"+test+"$")
-	answers := programoracle.Run(t, spec, repositoryRootPath(t), []programoracle.Program{{Name: name, Text: text}})
+	spec := rotguard.Spec("testdata/golden/"+slug+".json", edgesGoldenPins[slug])
+	answers := programoracle.Run(t, spec, []programoracle.Program{{Name: name}})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the %s program exited %d (stdout %q)", name, answers[0].ExitCode, answers[0].Stdout)
 	}
 	return answers[0].Stdout
 }
 
-// edgesGoldenPins holds the digest each golden of this package is pinned to (a placeholder until the
-// goldenrecord verb records the golden and replaces it).
+// edgesGoldenPins holds the digest each golden of this package is pinned to .
 var edgesGoldenPins = map[string]string{
 	"numeric_type_digit_table": "d6bd3f4a9c49512e6d03d327a2b04235222a24a3f461a5b2e34b1fbe0e870e91",
 	"int_max_str_digits":       "975e6aff200f3bfeb49203cea9173579f15b627aeadcce70262b64bb8e89f174",

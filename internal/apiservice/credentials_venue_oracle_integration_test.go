@@ -247,7 +247,7 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed = venueSeed(t, ctx, admin)
@@ -337,7 +337,7 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	}
 	goRendered := renderPlane(planes[1])
 	rendered := map[string]string{
-		"python": golden.CompareRows(t, "python integration_credentials rows decrypted", func() string { return renderPlane(planes[0]) }, goRendered),
+		"python": golden.CompareRows(t, "python integration_credentials rows decrypted", goRendered),
 		"go":     goRendered,
 	}
 	same := rendered["python"] == rendered["go"] && rendered["go"] != ""

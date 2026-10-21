@@ -518,7 +518,7 @@ operation any more: nothing is keyed by the schema digest that serves. What rema
 
 | Signal | Where | Fires when |
 |---|---|---|
-| `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and the table below |
+| `TestSchemaDigestPinMatchesTheSDLAndIsInTheHistoryTable` (`internal/goapicli/routing`) | CI | The SDL moved without updating the pin and the table below |
 | `dho goapi routing status` | operator | A catalog operation is `MISMATCH` or `UNREGISTERED` against the deployed registry, or a class root reads `MISSING` (dark) |
 
 None of the above shortcuts the recovery procedure: a schema digest that happens to match a previously-proven build is NOT
@@ -528,11 +528,12 @@ grounds to carry a proof onto a new image without a fresh `go-api-prove` run: a 
 ### Schema-digest history
 
 Update this table in the SAME change that moves the SDL.
-`ci/check_go_api_routing_digest.py` fails if
+`TestSchemaDigestPinMatchesTheSDLAndIsInTheHistoryTable` fails if
 `contracts/graphql/v1/schema-digest.json` names a digest that does not
 appear here.
 
 | Digest | In force from | Moved by | Notes |
+|---|---|---|---|
 | `sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706` | before 2026-09-01 | superseded by `33b3f3f21d` | The twelve 2026-09-01 rows were seeded here and died the same day |
 | `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88` | 2026-09-01 | `33b3f3f21d` (#2065, widen `TimeseriesBucket.value` nullability) | superseded |
 | `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0` | 2026-09-11 | declaring the coverage split's three nullable fields on the Strawberry type, which regenerates this SDL | superseded |

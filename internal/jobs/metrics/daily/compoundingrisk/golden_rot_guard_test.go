@@ -17,18 +17,15 @@ import (
 //
 // The generator's stdout was executed once on the last build that carried the
 // Python sources and is frozen in testdata/golden/compounding_risk_rot_guard.json
-// (recipe in the golden's spec); a frozen run compares that recorded stdout with
+// ; a frozen run compares that recorded stdout with
 // the checked-in fixture, so the guard fails the moment the fixture is edited
 // without recording the producer again, and a changed generator is another
 // request. No Python runs in a frozen run.
 func TestCompoundingRiskGoldenMatchesLivePython(t *testing.T) {
 	root := repositoryRoot(t)
-	spec := rotguard.Spec("testdata/golden/compounding_risk_rot_guard.json", "7b1603598242c659433434668462c80b33e7ca3db75ec427a32d12f22e49afeb",
-		"./internal/jobs/metrics/daily/compoundingrisk/", "^TestCompoundingRiskGoldenMatchesLivePython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/compounding_risk_rot_guard.json", "7b1603598242c659433434668462c80b33e7ca3db75ec427a32d12f22e49afeb")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "compounding risk golden generator",
-		Path: "tests/fixtures/generate_daily_compounding_risk_python_golden.py",
-		Args: []string{"--stdout"},
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", "daily_compounding_risk_python_golden.json"))
@@ -39,10 +36,8 @@ func TestCompoundingRiskGoldenMatchesLivePython(t *testing.T) {
 		t.Errorf(
 			"the recorded Python render no longer equals the checked-in golden.\n" +
 				"Either tests/fixtures/daily_compounding_risk_python_golden.json was edited by hand or the generator changed. " +
-				"Regenerate the fixture on the pinned build with\n" +
-				"    python tests/fixtures/generate_daily_compounding_risk_python_golden.py\n" +
-				"review the diff as a real behaviour change -- if Go should follow, port the change " +
-				"into compute.go and update compute_test.go's goldenCases too -- and record the producer again (the golden's recipe).",
+				"Review the diff as a real behaviour change -- if Go should follow, port the change " +
+				"into compute.go and update compute_test.go's goldenCases too -- and record the producer again.",
 		)
 	}
 }

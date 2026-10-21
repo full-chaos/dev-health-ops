@@ -60,6 +60,11 @@ var errIssue = errors.New("authapi: access token could not be minted")
 // Access mints the access token of grant: go-api's claims (create_access_token,
 // internal/api/session/tokens.go accessClaims) plus sid.
 func (i *Issuer) Access(grant Grant) (string, error) {
+	// go-api and query-api end a token when its session is revoked (the sid
+	// check in policy.Authenticator), so no token is minted without one.
+	if grant.SessionID == uuid.Nil || grant.PrincipalID == uuid.Nil {
+		return "", fmt.Errorf("%w: a grant needs its principal and its session", errIssue)
+	}
 	org := ""
 	if grant.OrganizationID != nil {
 		org = grant.OrganizationID.String()

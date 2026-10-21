@@ -980,7 +980,10 @@ func TestRaceUnlinksNeverRemoveTheLastSignInMethod(t *testing.T) {
 	e.project(t, ctx, user)
 	keys := make([]ExternalKey, 6)
 	for i := range keys {
-		keys[i] = googleKey(fmt.Sprintf("unrace-%d-%s", i, uuid.NewString()))
+		// One identity per provider per principal: each key is its own SSO
+		// provider row.
+		keys[i] = ExternalKey{Issuer: "https://idp.example.com", Provider: Provider(uuid.NewString()),
+			Subject: fmt.Sprintf("unrace-%d-%s", i, uuid.NewString())}
 		if _, err := e.store.LinkIdentity(ctx, keys[i], user, Actor{}); err != nil {
 			t.Fatal(err)
 		}

@@ -145,6 +145,11 @@ spec:
           env:
             - name: QUERY_API_ADDR
               value: {{ printf ":%v" .Values.queryApi.port | quote }}
+            {{- if .Values.authService.enabled }}
+            {{- /* The auth schema the sid check reads auth-service sessions in. */}}
+            - name: AUTH_DATABASE_SCHEMA
+              value: {{ include "dev-health.authDatabaseSchema" . | quote }}
+            {{- end }}
             {{- if .Values.queryApi.internal.enabled }}
             {{- /*
             The internal listener: honours X-DH-Internal-* identity headers, serves

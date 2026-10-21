@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	_ "embed"
 	"encoding/json"
 	"io"
 	"strings"
@@ -10,9 +9,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
-
-//go:embed testdata/root_flags_oracle.py
-var rootFlagsOracleProgram string
 
 type typedValue struct {
 	T string `json:"t"`
@@ -108,12 +104,11 @@ func rootResult(argv []string) map[string]any {
 
 // The frozen oracle (rootflags_golden_test.go) is an external test package,
 // because the venue golden harness it uses imports this package. These are
-// its handles on the corpus, the Go side and the Python program.
+// its handles on the corpus and the Go side.
 var (
-	RootCorpus             = rootCorpus
-	RootResult             = rootResult
-	CanonicalJSON          = canonicalJSON
-	RootFlagsOracleProgram = func() string { return rootFlagsOracleProgram }
+	RootCorpus    = rootCorpus
+	RootResult    = rootResult
+	CanonicalJSON = canonicalJSON
 )
 
 // canonicalJSON is raw with its object keys sorted. A number keeps its literal

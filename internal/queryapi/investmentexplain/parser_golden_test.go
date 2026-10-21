@@ -126,7 +126,7 @@ func TestParseInvestmentMixResponseMatchesPythonGolden(t *testing.T) {
 		t.Fatalf("glob goldens: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no parser__*.json goldens found -- run generate_parser_golden.py")
+		t.Fatal("no parser__*.json goldens found")
 	}
 
 	for _, path := range files {

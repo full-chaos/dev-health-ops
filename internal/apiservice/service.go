@@ -560,7 +560,11 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (
 	if err != nil {
 		return protection{}, fmt.Errorf("access-token signer: %w", err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	authSchema, err := policy.AuthSchemaFromEnv(envsecrets.ProcessGetenv)
+	if err != nil {
+		return protection{}, err
+	}
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema}, logger)
 	if err != nil {
 		return protection{}, err
 	}

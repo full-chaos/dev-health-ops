@@ -6,48 +6,13 @@ import (
 	"math"
 	"math/big"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// pythonTimeWindowProgram runs the real filtering.time_window (through a
-// MetricFilter, as the routes build it) and people._time_window, with
-// utc_today pinned, for each case on stdin, and prints the four dates or
-// "overflow" for an OverflowError. Any other exception fails the run.
-const pythonTimeWindowProgram = `
-import json, sys
-from datetime import date, timedelta
-import dev_health_ops.api.services.filtering as filtering
-import dev_health_ops.api.services.people as people
-from dev_health_ops.api.models.filters import MetricFilter
-cases = json.loads(sys.stdin.read())
-out = []
-for case in cases:
-    today = date.fromisoformat(case["today"])
-    filtering.utc_today = lambda: today
-    people.utc_today = lambda: today
-    try:
-        if case.get("subtract"):
-            out.append([(date.fromisoformat(case["end"]) - timedelta(days=int(case["range"]))).isoformat()])
-            continue
-        if case["people"]:
-            window = people._time_window(int(case["range"]), int(case["compare"]))
-        else:
-            window = filtering.time_window(MetricFilter(time={
-                "range_days": int(case["range"]), "compare_days": int(case["compare"]),
-                "start_date": case["start"], "end_date": case["end"],
-            }))
-        out.append([d.isoformat() for d in window])
-    except OverflowError:
-        out.append("overflow")
-print("RESULT " + json.dumps(out))
-`
 
 func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 
@@ -56,12 +21,8 @@ func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 // filter model under them, so Identity names pydantic. A golden recorded by
 // another producer is refused.
 var timeWindowGoldens = programoracle.Set{
-	Package:       "./internal/queryapi/timewindow/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5",
-	Distributions: []string{"pydantic", "pydantic-core"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5",
 	Pins: map[string]string{
 		"time-window.golden.json": "201117697dc0885ec6c922c9b0fe6da60fe516f18f708ae6020b9f8de8dc67d8",
 	},
@@ -73,12 +34,6 @@ var timeWindowGoldens = programoracle.Set{
 // range is sent to Python exactly and to Compute saturated, as the
 // validators hand it on.
 func TestComputeMatchesFrozenPythonTimeWindow(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-
 	counts := []string{
 		"-1000000000000000000000", "-5", "0", "1", "14", "365",
 		"738000", "738522", "738523", "739000", "3652058", "3652059",
@@ -127,7 +82,7 @@ func TestComputeMatchesFrozenPythonTimeWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := timeWindowGoldens.Outputs(t, root, "time-window.golden.json", programoracle.Program{Name: "time window", Text: pythonTimeWindowProgram, Stdin: payload})[0]
+	output := timeWindowGoldens.Outputs(t, "time-window.golden.json", programoracle.Program{Name: "time window", Stdin: payload})[0]
 	var results []any
 	for _, line := range strings.Split(string(output), "\n") {
 		if rest, ok := strings.CutPrefix(line, "RESULT "); ok {

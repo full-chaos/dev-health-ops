@@ -27,6 +27,21 @@ on:
       - 'docker/go-worker.Dockerfile'
       - '.env.example'
       - 'docs/operate/runbooks/query-api-bootstrap.md'
+      - 'docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md'
+      # the bare-verb scans of internal/goapicli/routing read every .md, .sh and .py under these roots (and docs/, which stays
+      # limited to the files Go tests name, as before)
+      - 'ci/**/*.md'
+      - 'ci/**/*.sh'
+      - 'ci/**/*.py'
+      - 'cmd/**/*.md'
+      - 'cmd/**/*.sh'
+      - 'cmd/**/*.py'
+      - 'internal/**/*.md'
+      - 'internal/**/*.sh'
+      - 'internal/**/*.py'
+      - 'src/**/*.md'
+      - 'src/**/*.sh'
+      - 'src/**/*.py'
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'
@@ -141,12 +156,11 @@ on:
       # check that regenerates from it. Without this line a gqlgen.yml-only
       # change is classified non-Go and that check passes vacuously.
       - 'internal/queryapi/gqlgen.yml'
-      # ci/go_relevance.py decides whether go-quality's steps run at all, and
+      # ci/go_relevance.sh decides whether go-quality's steps run at all, and
       # internal/gqlgenguard's wiring test executes it -- so it is an input of
       # a Go test. It was named only in comments here, never as a path, so a
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
-      - 'ci/go_relevance.py'
       - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
@@ -194,6 +208,8 @@ on:
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'
       - 'ci/lib/go_worker_fixture.sh'
+      - 'ci/run_metrics_executed_proof.sh'
+      - 'scripts/worker/provision_river_roles.sql'
       - 'ci/check_river_compat_static.sh'
       # CHAOS-4915: the pinned linter, its self-test and its negative-control
       # fixture must trigger the job that validates them. A file that cannot
@@ -202,7 +218,7 @@ on:
       - 'ci/check_shellcheck_pin.sh'
       - 'ci/fixtures/shellcheck_unclean_fixture.sh'
       # go-quality.yml HOSTS those steps, and codex round 1 found it was not
-      # itself Go-relevant: `ci/go_relevance.py` returned relevant=false for it,
+      # itself Go-relevant: `ci/go_relevance.sh` returned relevant=false for it,
       # so a commit editing ONLY that workflow -- including one that removes the
       # pin's install or check step -- would green-skip the very enforcement it
       # was editing. Verified before and after this line was added.
@@ -260,6 +276,21 @@ on:
       - 'docker/go-worker.Dockerfile'
       - '.env.example'
       - 'docs/operate/runbooks/query-api-bootstrap.md'
+      - 'docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md'
+      # the bare-verb scans of internal/goapicli/routing read every .md, .sh and .py under these roots (and docs/, which stays
+      # limited to the files Go tests name, as before)
+      - 'ci/**/*.md'
+      - 'ci/**/*.sh'
+      - 'ci/**/*.py'
+      - 'cmd/**/*.md'
+      - 'cmd/**/*.sh'
+      - 'cmd/**/*.py'
+      - 'internal/**/*.md'
+      - 'internal/**/*.sh'
+      - 'internal/**/*.py'
+      - 'src/**/*.md'
+      - 'src/**/*.sh'
+      - 'src/**/*.py'
       # The chart's own Go tests (images_test.go, stream_subcommand_test.go)
       # render deploy/helm/dev-health, so a chart-only change is a Go input.
       - 'deploy/helm/dev-health/**'
@@ -374,12 +405,11 @@ on:
       # check that regenerates from it. Without this line a gqlgen.yml-only
       # change is classified non-Go and that check passes vacuously.
       - 'internal/queryapi/gqlgen.yml'
-      # ci/go_relevance.py decides whether go-quality's steps run at all, and
+      # ci/go_relevance.sh decides whether go-quality's steps run at all, and
       # internal/gqlgenguard's wiring test executes it -- so it is an input of
       # a Go test. It was named only in comments here, never as a path, so a
       # change to the relevance decider alone was classified non-Go and the gate
       # that depends on it passed vacuously.
-      - 'ci/go_relevance.py'
       - 'ci/go_relevance.sh'
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
@@ -427,6 +457,8 @@ on:
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'
       - 'ci/lib/go_worker_fixture.sh'
+      - 'ci/run_metrics_executed_proof.sh'
+      - 'scripts/worker/provision_river_roles.sql'
       - 'ci/check_river_compat_static.sh'
       # CHAOS-4915: the pinned linter, its self-test and its negative-control
       # fixture must trigger the job that validates them. A file that cannot
@@ -435,7 +467,7 @@ on:
       - 'ci/check_shellcheck_pin.sh'
       - 'ci/fixtures/shellcheck_unclean_fixture.sh'
       # go-quality.yml HOSTS those steps, and codex round 1 found it was not
-      # itself Go-relevant: `ci/go_relevance.py` returned relevant=false for it,
+      # itself Go-relevant: `ci/go_relevance.sh` returned relevant=false for it,
       # so a commit editing ONLY that workflow -- including one that removes the
       # pin's install or check step -- would green-skip the very enforcement it
       # was editing. Verified before and after this line was added.

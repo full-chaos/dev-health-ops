@@ -10,8 +10,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -97,36 +95,9 @@ func goVerb(t *testing.T, ch clickHouse, verb func(context.Context, cli.Env) int
 	return code, stdout.String(), stderr.String()
 }
 
-// producerEnv is the environment of every producer run that shapes its
-// answers and is the same in every run: it is part of each request's key
-// (cliRequest), with the run's ORG_ID.
+// producerEnv is the environment the frozen producer ran under. It is part of
+// each request's key (cliRequest), with the run's ORG_ID.
 var producerEnv = map[string]string{"OTEL_ENABLED": "false", "PYTHONHASHSEED": "0", "PYTHONUTF8": "1"}
-
-// pythonVerb runs the real `dev-hops ai allowlist ...` against ch, through the
-// producer's command: the one closed environment, then producerEnv and the
-// run's org (both in the request's key, cliRequest), then the run's
-// ClickHouse address by name. Nothing of the ambient environment reaches the
-// producer.
-func pythonVerb(t *testing.T, ch clickHouse, producer *venueoracle.Producer, org string, args ...string) (int, string, string) {
-	t.Helper()
-	declared := maps.Clone(producerEnv)
-	declared["ORG_ID"] = org
-	command, err := producer.Command(context.Background(), declared, []string{"CLICKHOUSE_URI=" + ch.httpDSN},
-		append([]string{"-m", "dev_health_ops.cli", "ai", "allowlist"}, args...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
-	code := 0
-	if exit, ok := err.(*exec.ExitError); ok {
-		code = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run python: %v", err)
-	}
-	return code, stdout.String(), stderr.String()
-}
 
 // The one command sequence both planes run: an entry per tool, a per-model
 // entry, updates of an existing entry, a blank model (the wildcard), an empty
@@ -237,46 +208,15 @@ func cliRequest(name string, step cliStep) venueoracle.Request {
 // prints byte-identical text, for every org of the sequence and for an org
 // with no entries; a blank tool is refused by both, writing nothing. The
 // producer's exit codes, output and rows were executed once on
-// allowlistPythonBuild and are frozen in testdata/golden/allowlist.json (the
-// recipe regenerates them by execution).
+// allowlistPythonBuild and are frozen in testdata/golden/allowlist.json.
 func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/allowlist.json",
 		PythonBuild: allowlistPythonBuild,
 		SHA256:      "2dafa998aefaca5d73d2bce10af8b549577d4cdadb937bb0eadf9e85edef36ee",
-		Recipe: "git worktree add --detach $DIR " + allowlistPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/aicli/ -test '^TestAllowlistMatchesTheFrozenPythonProducer$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
-	// The producer's own ClickHouse exists only while recording.
-	var python clickHouse
-	if golden.Recording() {
-		python = startClickHouse(t)
-	}
-	// steps maps each request's path to the run it stands for.
-	steps := map[string]cliStep{}
 	request := func(name, org string, args ...string) venueoracle.Request {
-		step := cliStep{org: org, args: args}
-		built := cliRequest(name, step)
-		steps[built.Path] = step
-		return built
-	}
-	produce := func(producer *venueoracle.Producer, requests []venueoracle.Request) []venueoracle.Response {
-		answers := make([]venueoracle.Response, len(requests))
-		for index, request := range requests {
-			step, ok := steps[request.Path]
-			if !ok {
-				t.Fatalf("no run for %s", request.Path)
-			}
-			code, stdout, _ := pythonVerb(t, python, producer, step.org, step.args...)
-			answers[index] = venueoracle.Response{Status: code, Body: stdout}
-			time.Sleep(15 * time.Millisecond) // computed_at is the row version, at millisecond precision
-		}
-		return answers
+		return cliRequest(name, cliStep{org: org, args: args})
 	}
 
 	golang := startClickHouse(t)
@@ -284,7 +224,7 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 	for index, step := range sequence {
 		sequenceRequests = append(sequenceRequests, request(fmt.Sprintf("sequence %d", index), step.org, step.args...))
 	}
-	for index, answer := range golden.Produce(t, root, sequenceRequests, produce) {
+	for index, answer := range golden.Produce(t, sequenceRequests) {
 		golden.Consumed(t, answer)
 		if answer.Status != 0 {
 			t.Fatalf("the producer refused %v: exit %d", sequence[index].args, answer.Status)
@@ -293,8 +233,7 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 	runSequence(t, golang, func(org string, args ...string) (int, string, string) {
 		return goVerb(t, golang, runSet, org, args[1:]...)
 	})
-	pythonRows := golden.CompareRows(t, "stored rows", func() string { return strings.Join(python.storedRows(t), "\n") },
-		strings.Join(golang.storedRows(t), "\n"))
+	pythonRows := golden.CompareRows(t, "stored rows", strings.Join(golang.storedRows(t), "\n"))
 	if got := len(strings.Split(pythonRows, "\n")); pythonRows == "" || got != distinctEntries {
 		t.Fatalf("the producer stored %q, want %d entries: the comparison would measure nothing", pythonRows, distinctEntries)
 	}
@@ -304,7 +243,7 @@ func TestAllowlistMatchesTheFrozenPythonProducer(t *testing.T) {
 		listRequests = append(listRequests, request("list "+org, org, "list"))
 	}
 	listRequests = append(listRequests, request("blank tool", testOrg, "set", "--tool", " ", "--status", "allowed"))
-	answers := golden.Produce(t, root, listRequests, produce)
+	answers := golden.Produce(t, listRequests)
 	golden.Consumed(t, answers...)
 	for index, org := range orgs {
 		goCode, goOut, _ := goVerb(t, golang, runList, org)

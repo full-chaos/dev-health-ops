@@ -252,7 +252,7 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 	seed := newExternalIngestVenueSeed()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root),
+		Golden: golden, Root: root,
 		JWTKey: "venue-oracle-jwt-signing-key-32-bytes-min",
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seedExternalIngestVenue(t, ctx, admin, seed)
@@ -456,9 +456,7 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 
 	batchesQuery := `SELECT idempotency_key, status, items_received, items_accepted, items_rejected, coalesce(record_counts::text, '<null>'),
 			coalesce(error_summary::text, '<null>'), coalesce(recompute_scope::text, '<null>') FROM external_ingest_batches ORDER BY idempotency_key`
-	golden.CompareRows(t, "external_ingest_batches", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), batchesQuery)
-	}, venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), batchesQuery))
+	golden.CompareRows(t, "external_ingest_batches", venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), batchesQuery))
 	// venueoracle.Start already wrote this test's own proof file.
 	golden.Finish(t)
 }

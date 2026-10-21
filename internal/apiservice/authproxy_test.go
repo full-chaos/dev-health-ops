@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -861,5 +862,83 @@ func TestAuthProxyLogsCarryNoClientWrittenText(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// An error.v1 answer auth-service writes reaches the client as written: its
+// request_id is the one the server minted, never empty, and never the
+// X-Request-ID the client sent.
+func TestAuthProxyKeepsTheServerRequestIDOfAForwardedError(t *testing.T) {
+	const serverID = "req_SERVERMINTEDAAAAAAAAAAAAAA"
+	const clientID = "client-written-request-id"
+	upstreamBody := `{"error":{"code":"not_found","message":"Not Found","request_id":"` + serverID + `"}}`
+	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Auth-Request-ID", serverID)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, upstreamBody)
+	})
+	handler := proxyFixture(t, mustProxyConfig(t, allOn(stub.URL)))
+	for _, call := range proxyCalls {
+		request := call.request(t)
+		request.Header.Set("X-Request-ID", clientID)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotFound || recorder.Body.String() != upstreamBody {
+			t.Errorf("%s %s = %d %s, want auth-service's 404 as written", call.method, call.target, recorder.Code, recorder.Body.String())
+			continue
+		}
+		var envelope struct {
+			Error struct {
+				RequestID string `json:"request_id"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("%s: the forwarded error is not JSON: %v", call.target, err)
+		}
+		if envelope.Error.RequestID == "" || envelope.Error.RequestID != serverID {
+			t.Errorf("%s: error.request_id = %q, want the server's %q", call.target, envelope.Error.RequestID, serverID)
+		}
+		if strings.Contains(recorder.Body.String(), clientID) {
+			t.Errorf("%s: the client's X-Request-ID is in the forwarded error: %s", call.target, recorder.Body.String())
+		}
+	}
+}
+
+// The acp corpus leg reads which routes make up each aggregate from
+// ci/auth_corpus_acp_routes.tsv; it must be this file's proxy map.
+func TestAuthCorpusAcpRoutesAreTheProxyMap(t *testing.T) {
+	raw, err := os.ReadFile("../../ci/auth_corpus_acp_routes.tsv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]AuthAggregate{}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 {
+			t.Fatalf("not aggregate<TAB>method<TAB>pattern: %q", line)
+		}
+		key := fields[1] + " " + fields[2]
+		if _, dup := listed[key]; dup {
+			t.Errorf("%s is listed twice", key)
+		}
+		listed[key] = AuthAggregate(fields[0])
+	}
+	want := map[string]AuthAggregate{}
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+		for key, aggregate := range routes {
+			want[key] = aggregate
+		}
+	}
+	if len(listed) != len(want) {
+		t.Errorf("the corpus lists %d routes, the proxy maps %d", len(listed), len(want))
+	}
+	for key, aggregate := range want {
+		if listed[key] != aggregate {
+			t.Errorf("%s: the corpus lists aggregate %q, the proxy maps %q", key, listed[key], aggregate)
+		}
 	}
 }

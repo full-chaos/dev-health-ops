@@ -37,11 +37,9 @@ import (
 
 func TestGoldenStillDescribesLiveCPython(t *testing.T) {
 	root := repoRoot(t)
-	spec := rotguard.Spec("testdata/golden/cpython_random_rot_guard.json", "576ad15d045dab250d239710c6f7d64a5aef539f02e6b8ba450458d1a48fe4e3",
-		"./internal/jobs/metrics/numerical/cpyrandom/", "^TestGoldenStillDescribesLiveCPython$")
-	rendered := rotguard.Run(t, spec, root, rotguard.Generator{
+	spec := rotguard.Spec("testdata/golden/cpython_random_rot_guard.json", "576ad15d045dab250d239710c6f7d64a5aef539f02e6b8ba450458d1a48fe4e3")
+	rendered := rotguard.Run(t, spec, rotguard.Generator{
 		Name: "cpython random golden generator",
-		Path: "tests/fixtures/generate_cpython_random_golden.py",
 	})[0]
 
 	frozen, err := os.ReadFile(filepath.Join(root, "tests", "fixtures", "cpython_random_golden.json"))
@@ -57,7 +55,7 @@ func TestGoldenStillDescribesLiveCPython(t *testing.T) {
 			"the recorded CPython vectors no longer match the checked-in golden.\n" +
 				"Either the golden was edited by hand, CPython changed its random stream (in which case the " +
 				"capacity port's parity claim needs re-examining, not just a regenerated file) or the generator " +
-				"was edited; record the producer again (the golden's recipe).",
+				"was edited; record the producer again.",
 		)
 	}
 }

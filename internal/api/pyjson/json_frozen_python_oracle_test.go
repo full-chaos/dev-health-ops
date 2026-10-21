@@ -33,31 +33,9 @@ var corpus = []string{
 	strings.Repeat("1", 4301) + " x", `"` + strings.Repeat("1", 4301) + `"`, "0", "-0", "-" + strings.Repeat("0", 3), `é`, `"é\u00e9"`, `[1,,2]`, `{,}`, `{"a":1,,}`, "\t[\n1\r]\n", `Infinityx`, `nullx`,
 }
 
-const pythonDumpsProgram = `
-import json, sys
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
-        out.append("JSONDecodeError:%s:%d" % (exc.msg, exc.pos))
-        continue
-    except ValueError as exc:
-        # An integer literal past sys.get_int_max_str_digits(): a ValueError,
-        # not a JSONDecodeError.
-        out.append("IntLimit:%s" % exc)
-        continue
-    try:
-        # Starlette's JSONResponse.render encodes the dump as UTF-8.
-        out.append(json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8").decode())
-    except ValueError:
-        out.append("ValueError")
-print(json.dumps(out))
-`
-
 func TestMarshalMatchesFrozenPythonJSONDumps(t *testing.T) {
 	input, _ := json.Marshal(corpus)
-	output := frozenPython(t, "marshal.golden.json", programoracle.Program{Name: "json.dumps compact", Text: pythonDumpsProgram, Stdin: input})[0]
+	output := frozenPython(t, "marshal.golden.json", programoracle.Program{Name: "json.dumps compact", Stdin: input})[0]
 	var want []string
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &want); err != nil {
 		t.Fatal(err)
@@ -85,32 +63,6 @@ func TestMarshalMatchesFrozenPythonJSONDumps(t *testing.T) {
 	}
 }
 
-const pythonDumpsDefaultProgram = `
-import json, sys
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
-        out.append("JSONDecodeError:%s:%d" % (exc.msg, exc.pos))
-        continue
-    except ValueError as exc:
-        # An integer literal past sys.get_int_max_str_digits(): a ValueError,
-        # not a JSONDecodeError.
-        out.append("IntLimit:%s" % exc)
-        continue
-    try:
-        # NO keyword arguments at all -- json.dumps' own bare defaults
-        # (ensure_ascii=True, allow_nan=True, separators=(", ", ": ")),
-        # the EXACT call every ClickHouse JSON-column writer
-        # (storage/clickhouse.py's bare json.dumps(value)) actually makes,
-        # distinct from Starlette's response encoding Marshal matches above.
-        out.append(json.dumps(value))
-    except ValueError:
-        out.append("ValueError")
-print(json.dumps(out))
-`
-
 // TestDumpsMatchesFrozenPythonJSONDumpsDefault pins Dumps -- the shared
 // encoder every ClickHouse JSON-column writer uses (CHAOS-6310 r1 finding
 // #10) -- against a frozen Python bare `json.dumps(value)` call (no keyword
@@ -121,7 +73,7 @@ print(json.dumps(out))
 // ensure_ascii=TRUE (not False) and allow_nan=TRUE (not False).
 func TestDumpsMatchesFrozenPythonJSONDumpsDefault(t *testing.T) {
 	input, _ := json.Marshal(corpus)
-	output := frozenPython(t, "dumps-default.golden.json", programoracle.Program{Name: "json.dumps bare defaults", Text: pythonDumpsDefaultProgram, Stdin: input})[0]
+	output := frozenPython(t, "dumps-default.golden.json", programoracle.Program{Name: "json.dumps bare defaults", Stdin: input})[0]
 	var want []string
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &want); err != nil {
 		t.Fatal(err)
@@ -207,24 +159,9 @@ var bodyCorpus = func() []string {
 	return out
 }()
 
-const pythonBodyProgram = `
-import json, sys
-out = []
-for hexed in json.loads(sys.stdin.read()):
-    raw = bytes.fromhex(hexed)
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        out.append("JSONDecodeError:%s:%d" % (exc.msg, exc.pos)); continue
-    except Exception as exc:
-        out.append("Error"); continue
-    out.append(json.dumps(value, ensure_ascii=True, separators=(",", ":")))
-print(json.dumps(out))
-`
-
 func TestDecodeBodyMatchesFrozenPythonJSONLoads(t *testing.T) {
 	input, _ := json.Marshal(bodyCorpus)
-	output := frozenPython(t, "decode-body.golden.json", programoracle.Program{Name: "json.loads of bytes", Text: pythonBodyProgram, Stdin: input})[0]
+	output := frozenPython(t, "decode-body.golden.json", programoracle.Program{Name: "json.loads of bytes", Stdin: input})[0]
 	var want []string
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &want); err != nil {
 		t.Fatal(err)

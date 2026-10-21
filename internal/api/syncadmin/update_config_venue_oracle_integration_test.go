@@ -84,16 +84,12 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, root),
+		Root:   root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + updateVenueKey,
 			"NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost",
 			"REQUESTS_CA_BUNDLE=" + certFile,
-			"VENUE_PINNED_NOW=" + updateVenuePinnedNow,
-			"VENUE_PINNED_NOW_MODULES=dev_health_ops.api.admin.routers.sync,dev_health_ops.models.settings," +
-				"dev_health_ops.models.integrations,dev_health_ops.sync.discovery",
-			"VENUE_PINNED_TIME_MODULES=croniter.croniter",
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -197,13 +193,11 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
   p.payload::text, CASE WHEN p.invalidated_at IS NULL THEN 'valid' ELSE 'invalidated' END,
   CASE WHEN p.updated_at > '2026-06-01' THEN 'moved' ELSE p.updated_at::text END) AS r
   FROM sync_coverage_projections p JOIN sync_configurations c ON c.id = p.sync_config_id WHERE p.org_id IN (` + orgs + `)) AS rows`
-	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
+	goDB := venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integrations", "sync_configurations", "integration_sources", "integration_datasets", "scheduled_jobs",
 		"sync_coverage_projections"} {
 		goRows := fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, goDB, queries[table]), "127.0.0.1:<port>")
-		golden.CompareRows(t, "rows:"+table, func() string {
-			return fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, source, queries[table]), "127.0.0.1:<port>")
-		}, goRows)
+		golden.CompareRows(t, "rows:"+table, goRows)
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
 	}
 	// The writes happened on the Go plane: configs on the pinned clock,

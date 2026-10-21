@@ -1,0 +1,268 @@
+{
+  "credential_class_source": "contracts/auth/v1/credential-classes.json",
+  "generated_at": "2026-10-20T00:00:00Z",
+  "rows": [
+    {
+      "accepted_credential_classes": [
+        "refresh_credential"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
+      "disclosure_behavior": "Every refusal of a presented credential is a 401 error.v1 with an auth-outcome reason code; a store or key failure is a 503 with retry_after_seconds. The body never echoes the credential.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /v1/token/refresh [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 62,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 505,
+            "note": "func (s *Store) rotate",
+            "path": "internal/auth/session/store.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The rotated opaque credential (dhr1_ + 32 random bytes); a grace replay inside 30 s returns the same successor."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 411,
+          "note": "func (s *Store) Exchange",
+          "path": "internal/auth/session/store.go"
+        },
+        "description": "session.Store.Exchange: the presented credential's SHA-256 is looked up under the session row lock; consumed, expired, revoked and reused credentials are refused, reuse revokes the session."
+      },
+      "public_rationale": null,
+      "route": "/v1/token/refresh",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 69
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
+      "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /v1/sessions/current [dev-health-auth-service @api]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 96,
+          "note": "func (h handlers) authenticate",
+          "path": "internal/auth/authapi/routes.go"
+        },
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code."
+      },
+      "public_rationale": null,
+      "route": "/v1/sessions/current",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 70
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": "AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE)",
+        "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER)",
+        "token_type": "HS256 JWT, type=access, with sid"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
+      "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /v1/sessions/revoke [dev-health-auth-service @api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 96,
+          "note": "func (h handlers) authenticate",
+          "path": "internal/auth/authapi/routes.go"
+        },
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code."
+      },
+      "public_rationale": null,
+      "route": "/v1/sessions/revoke",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 71
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": "AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE)",
+        "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER)",
+        "token_type": "HS256 JWT, type=access, with sid"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
+      "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /v1/sessions/revoke-all [dev-health-auth-service @api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 96,
+          "note": "func (h handlers) authenticate",
+          "path": "internal/auth/authapi/routes.go"
+        },
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code."
+      },
+      "public_rationale": null,
+      "route": "/v1/sessions/revoke-all",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 72
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": "AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE)",
+        "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER)",
+        "token_type": "HS256 JWT, type=access, with sid"
+      }
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /healthz [dev-health-auth-service @operator]",
+      "method": "GET",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/healthz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 117
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /readyz [dev-health-auth-service @operator]",
+      "method": "GET",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/readyz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 118
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /metrics [dev-health-auth-service @operator]",
+      "method": "GET",
+      "public_rationale": "Scrape endpoint on the operator listener only (never the API one); process metrics, no tenant data.",
+      "route": "/metrics",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 119
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /healthz [dev-health-auth-service @operator]",
+      "method": "HEAD",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/healthz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 117
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /readyz [dev-health-auth-service @operator]",
+      "method": "HEAD",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/readyz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 118
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /metrics [dev-health-auth-service @operator]",
+      "method": "HEAD",
+      "public_rationale": "Scrape endpoint on the operator listener only (never the API one); process metrics, no tenant data.",
+      "route": "/metrics",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 119
+      },
+      "surface_kind": "rest"
+    }
+  ],
+  "schema_version": "endpoint-profile.v1",
+  "source_commit": "2fe0919e2f82f4a4fc52fefc99bf6c97a5cec59c"
+}

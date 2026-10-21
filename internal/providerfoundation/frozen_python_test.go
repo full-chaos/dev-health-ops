@@ -1,10 +1,8 @@
 package providerfoundation_test
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -18,9 +16,7 @@ const pythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // another interpreter or another version of one of them is refused.
 const producerIdentity = "python 3.14.7\nunicodedata 16.0.0"
 
-// goldenPins pins the SHA-256 of every golden under testdata/golden. The
-// goldenrecord verb writes each digest when it promotes a recording; a new
-// golden starts as "PIN:" + its file name without ".json".
+// goldenPins pins the SHA-256 of every golden under testdata/golden.
 var goldenPins = map[string]string{
 	"credential-field-grid.golden.json":        "c352036680cf5f75900bcde6ca706aad937b475bcc661dd6d4961005ca225bff",
 	"credential-field-grid-derive.golden.json": "e71b84df68c7c93ccd58147ad918fb45b30d6fd460d57572ab5a5321be4820ca",
@@ -32,7 +28,6 @@ var goldenPins = map[string]string{
 
 // goldens is the set of this package's frozen Python answers.
 var goldens = programoracle.Set{
-	Package:  "./internal/providerfoundation/",
 	Build:    pythonBuild,
 	Identity: producerIdentity,
 	Pins:     goldenPins,
@@ -46,15 +41,5 @@ var goldens = programoracle.Set{
 // exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	return goldens.Outputs(t, repositoryRoot(t), golden, programs...)
-}
-
-// repositoryRoot is the repository root, from this file's own location.
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	return goldens.Outputs(t, golden, programs...)
 }

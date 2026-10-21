@@ -30,6 +30,9 @@ type PGStore struct {
 	Pool *pgxpool.Pool
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
+	// AuthSchema is the auth-service schema the sessions live in
+	// (AUTH_DATABASE_SCHEMA); empty means "auth".
+	AuthSchema string
 }
 
 func (s PGStore) now() time.Time {

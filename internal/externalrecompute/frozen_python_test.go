@@ -1,10 +1,8 @@
 package externalrecompute
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -18,16 +16,13 @@ const pythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // another interpreter or another version of one of them is refused.
 const producerIdentity = "python 3.14.7\nunicodedata 16.0.0"
 
-// goldenPins pins the SHA-256 of every golden under testdata/golden. The
-// goldenrecord verb writes each digest when it promotes a recording; a new
-// golden starts as "PIN:" + its file name without ".json".
+// goldenPins pins the SHA-256 of every golden under testdata/golden.
 var goldenPins = map[string]string{
 	"python-int.golden.json": "43d438832e1819f3ec035852739e148e22ddf98edafcd63757a3535d9d27df08",
 }
 
 // goldens is the set of this package's frozen Python answers.
 var goldens = programoracle.Set{
-	Package:  "./internal/externalrecompute/",
 	Build:    pythonBuild,
 	Identity: producerIdentity,
 	Pins:     goldenPins,
@@ -41,15 +36,5 @@ var goldens = programoracle.Set{
 // exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	return goldens.Outputs(t, repositoryRoot(t), golden, programs...)
-}
-
-// repositoryRoot is the repository root, from this file's own location.
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	return goldens.Outputs(t, golden, programs...)
 }

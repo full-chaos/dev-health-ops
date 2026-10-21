@@ -6,90 +6,15 @@ import (
 	"encoding/json"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// pythonOrgGuardProgram executes each case through a real Strawberry schema
-// carrying the production OrgIdAuthExtension, with a non-superuser caller in
-// org "org-own", and prints the operation's errors and whether a resolver ran.
-const pythonOrgGuardProgram = `
-import asyncio, json, sys, types
-from typing import Annotated
-import strawberry
-from dev_health_ops.api.graphql.extensions import OrgIdAuthExtension
-
-ran = []
-
-@strawberry.type
-class Inner:
-    @strawberry.field
-    def inner(self, org_id: str = "x") -> int:
-        ran.append("inner")
-        return 1
-
-@strawberry.type
-class Query:
-    @strawberry.field
-    def do_it(self, info: strawberry.Info, org_id: str | None = None) -> Inner:
-        ran.append(info.context.org_id)
-        return Inner()
-
-    @strawberry.field
-    def raw(self, info: strawberry.Info, org: Annotated[str | None, strawberry.argument(name="org_id")] = None) -> int:
-        ran.append(info.context.org_id)
-        return 1
-
-@strawberry.type
-class Mutation:
-    @strawberry.mutation
-    def write(self, info: strawberry.Info, org_id: str | None = None) -> int:
-        ran.append(info.context.org_id)
-        return 1
-
-schema = strawberry.Schema(query=Query, mutation=Mutation, extensions=[OrgIdAuthExtension])
-
-def make_context(caller):
-    return types.SimpleNamespace(
-        org_id="org-own",
-        user=types.SimpleNamespace(
-            is_superuser=caller["superuser"], is_superuser_verified=caller["superuser"] and caller["verified"]
-        ),
-    )
-
-async def run(case):
-    from dev_health_ops.api.services.auth import _impersonation_ctx, set_impersonation_context
-    del ran[:]
-    caller = case["caller"]
-    token = None
-    if caller["impersonating"]:
-        token = set_impersonation_context("target-user", "org-own", "member", "real-user")
-    try:
-        result = await schema.execute(case["document"], variable_values=case["variables"], context_value=make_context(caller))
-    finally:
-        if token is not None:
-            _impersonation_ctx.reset(token)
-    return {
-        "errors": [e.message for e in (result.errors or [])],
-        "formatted": [e.formatted for e in (result.errors or [])],
-        "resolverRan": bool(ran),
-        "seenOrg": ran[0] if ran else "",
-    }
-
-async def main():
-    cases = json.loads(sys.stdin.read())
-    print("RESULT " + json.dumps([await run(c) for c in cases]))
-
-asyncio.run(main())
-`
 
 func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 
@@ -98,12 +23,8 @@ func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 // schema, so Identity names that distribution. A golden recorded by another
 // producer is refused.
 var orgGuardGoldens = programoracle.Set{
-	Package:       "./internal/queryapi/graph/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\nstrawberry-graphql 0.327.7",
-	Distributions: []string{"strawberry-graphql"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\nstrawberry-graphql 0.327.7",
 	Pins: map[string]string{
 		"org-guard.golden.json": "3689953d5f5ebc64d04becf73493af684d7cff1d3bb8d57179b8fdb1cc28d485",
 	},
@@ -112,12 +33,6 @@ var orgGuardGoldens = programoracle.Set{
 // Go's guard answers every case exactly as the frozen Python extension did:
 // the same refusal message, and no resolver run when it refuses.
 func TestOperationOrgViolationMatchesFrozenPythonExtension(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-
 	const own = "org-own"
 	docs := map[string]string{
 		"query":           `query Q($orgId: String) { doIt(orgId: $orgId) { __typename } }`,
@@ -192,7 +107,7 @@ func TestOperationOrgViolationMatchesFrozenPythonExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := []byte(orgGuardGoldens.Outputs(t, root, "org-guard.golden.json", programoracle.Program{Name: "org guard", Text: pythonOrgGuardProgram, Stdin: payload})[0])
+	output := []byte(orgGuardGoldens.Outputs(t, "org-guard.golden.json", programoracle.Program{Name: "org guard", Stdin: payload})[0])
 	var results []struct {
 		Errors      []string         `json:"errors"`
 		Formatted   []map[string]any `json:"formatted"`

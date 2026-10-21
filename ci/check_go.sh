@@ -719,6 +719,11 @@ check_ratchets() {
   )
 }
 
+# check_race_weights_text FILE...: the files hold only ASCII bytes and no NUL (bytes counted with LC_ALL=C).
+check_race_weights_text() {
+  [ "$(( $(cat -- "$@" | LC_ALL=C tr -dc '\000\200-\377' | wc -c) ))" -eq 0 ]
+}
+
 # check_race_weights_rows (CHAOS-4233, CHAOS-10300): the census of ci/go_race_weights.d, run by `fast`, `ci` and the static leg so a
 # package added, removed or renamed names the missing or stale file on the author's machine. One file per package, one row each:
 #   1. every file holds exactly one `package<TAB>seconds` row (comments and blank lines are ignored);
@@ -727,19 +732,42 @@ check_ratchets() {
 #   4. every package of the root module has a file, and no file names a package that is gone.
 # Order is not checked: the directory has none, and the shard awks look rows up by key.
 check_race_weights_rows() {
-  local modpath listed missing stale dup f body key weight want rows
+  local modpath listed missing stale dup key rows files f
   shopt -s dotglob
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race weights directory missing: ${GO_RACE_WEIGHTS_DIR}"
+  # Rule 0: every file is ASCII without a NUL byte, so grep and every awk, in every locale, read the same rows (white space, digits
+  # and ranges beyond ASCII differ between awks and locales). One pass over all files; a file is named only when that pass fails.
+  command -v tr >/dev/null 2>&1 || die "race-weights-rows needs tr on PATH (the ASCII check of ci/go_race_weights.d)"
+  if ! check_race_weights_text "${GO_RACE_WEIGHTS_DIR}"/*.tsv; then
+    for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
+      check_race_weights_text "${f}" \
+        || die "${f##*/} is not ASCII text: it holds a NUL byte or a byte above 0x7f (race weight files hold one package<TAB>seconds row, in ASCII)"
+    done
+  fi
   rows="$(race_weights_rows)" || die "race weights unreadable: ${GO_RACE_WEIGHTS_DIR}"
-  for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
-    body="$(grep -v '^\(#\|[[:space:]]*$\)' "${f}" || true)"
-    [ "$(printf '%s\n' "${body}" | grep -c .)" -eq 1 ] \
-      || die "${f##*/} must hold exactly one row: package<TAB>seconds (race weight files, one per package)"
-    [ "$(printf '%s\n' "${body}" | awk -F'\t' '{ print NF }')" = 2 ] \
-      || die "${f##*/} must hold exactly two columns: package<TAB>seconds, a whole-number weight after the package (got: ${body})"
-    weight="$(printf '%s' "${body}" | cut -f2)"
-    case "${weight}" in ""|*[!0-9]*) die "${f##*/}: the weight '${weight}' is not a whole number of seconds (row: package<TAB>seconds)" ;; esac
-  done
+  # One awk pass over every file (a few forks, not several per file): the first file that breaks rule 1, then the first that
+  # breaks rule 3, each as the message the per-file check prints. Rule 2 (the rows above) is checked between the two, as before.
+  files="$(awk -F'\t' '
+    BEGIN { for (i = 1; i < ARGC; i++) path[i] = ARGV[i]; n = ARGC - 1 }
+    /^#/ || /^[[:space:]]*$/ { next }
+    { if (++count[FILENAME] == 1) { body[FILENAME] = $0; nf[FILENAME] = NF; key[FILENAME] = $1; weight[FILENAME] = $2 } }
+    END {
+      for (i = 1; i <= n; i++) {
+        f = path[i]; base = f; sub(/.*\//, "", base)
+        if (count[f] != 1) { print "1" base " must hold exactly one row: package<TAB>seconds (race weight files, one per package)"; exit }
+        if (nf[f] != 2) { print "1" base " must hold exactly two columns: package<TAB>seconds, a whole-number weight after the package (got: " body[f] ")"; exit }
+        if (weight[f] == "" || weight[f] ~ /[^0-9]/) { print "1" base ": the weight \047" weight[f] "\047 is not a whole number of seconds (row: package<TAB>seconds)"; exit }
+      }
+      for (i = 1; i <= n; i++) {
+        f = path[i]; base = f; sub(/.*\//, "", base)
+        want = key[f]
+        if (want == ".") want = "_root"
+        else { gsub(/_/, "_u", want); gsub(/\//, "__", want) }
+        want = want ".tsv"
+        if (base != want) { print "3" base " holds package " key[f] ": name the file " want; exit }
+      }
+    }' "${GO_RACE_WEIGHTS_DIR}"/*.tsv)" || die "race weights unreadable: ${GO_RACE_WEIGHTS_DIR}"
+  case "${files}" in 1*) die "${files#1}" ;; esac
   dup="$(printf '%s\n' "${rows}" | cut -f1 | LC_ALL=C sort | uniq -d)"
   if [ -n "${dup}" ]; then
     for key in ${dup}; do
@@ -747,11 +775,7 @@ check_race_weights_rows() {
     done
     die "ci/go_race_weights.d weighs a package twice (rows above): delete the file that is not the newest measurement"
   fi
-  for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
-    key="$(grep -v '^\(#\|[[:space:]]*$\)' "${f}" | cut -f1)"
-    want="$(race_weights_file_name "${key}")"
-    [ "${f##*/}" = "${want}" ] || die "${f##*/} holds package ${key}: name the file ${want}"
-  done
+  case "${files}" in 3*) die "${files#3}" ;; esac
   modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
   listed="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./...)" || die "go list ./... failed"
   missing="$(printf '%s\n' "${listed}" | awk -v mod="${modpath}" -v weights=<(race_weights_rows) -f "${ROOT}/ci/go_race_missing_rows.awk")" \
@@ -3373,6 +3397,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/contracts FuzzParseErrorEnvelope"
   "./internal/auth/contracts FuzzRevisionUnmarshal"
   "./internal/auth/contracts FuzzTimestampUnmarshal"
+  "./internal/auth/contracts FuzzParseAccessToken"
   "./internal/auth/edgetoken FuzzVerifyToken"
   "./internal/auth/signedtoken FuzzValidSignedToken"
   "./internal/auth/httpapi FuzzParseLimit"

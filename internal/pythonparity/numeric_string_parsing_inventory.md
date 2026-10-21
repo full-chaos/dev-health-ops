@@ -21,7 +21,7 @@ Every `strconv.ParseFloat`/`ParseInt`/`Atoi` call site in non-test `.go`
 files is listed below (`rg -n 'strconv\.(ParseFloat|ParseInt|Atoi)\(' --type go
 -g '!*_test.go'`, full repo). Each gets a first-pass classification by
 package/context, **not** a verified per-site diff against the Python source
-the way `generate_fma_golden.py`'s corpus was — that verification is exactly
+the way `generate_fma_golden (generator deleted, golden frozen)`'s corpus was — that verification is exactly
 the follow-up work this inventory is scoping, not doing.
 
 - **PARITY?** -- the call site's package name or immediate context suggests

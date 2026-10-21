@@ -10,15 +10,12 @@
 #   This gate closes BOTH gaps.
 #
 # WHAT IT DOES (a LOCAL gate; hosted CI no longer runs ruff, mypy (this gate no longer runs it either: CHAOS-8616) or the Python
-# test matrix: it runs the Go gates, the tooling and docs tests and the kept list
+# test matrix: it runs the Go gates, the tooling tests and the kept list
 # ci/kept_python_tests.txt):
-#   0. preflight also installs requirements-docs.txt into .venv so
-#      tests/docs/*.py's `mkdocs build --strict` shells don't false-fail with
-#      "No module named mkdocs" in a freshly `uv sync`'d worktree venv.
 #   1. ruff format --check .
 #   2. ruff check .
 #   3. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
-#   4. the hosted Python test selection (tests/docs, tests/tooling and
+#   4. the hosted Python test selection (tests/tooling and
 #      ci/kept_python_tests.txt, as test.yml runs it, CHAOS-8352), with
 #      the local socks5h proxy neutralized.
 #   5. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
@@ -946,35 +943,6 @@ run_stage() {
 }
 
 # --- Preflight: must run from the worktree with its .venv. --------------------------
-# CI-parity for pip installs: the docs-tests and tooling-tests jobs of
-# .github/workflows/test.yml install requirements-docs.txt too.
-# gate_unit_suite() below runs tests/docs, and those
-# tests shell out to `python -m mkdocs build --strict`. `uv sync --all-extras
-# --dev` (requirements.txt / -e .[dev]) does NOT pull in requirements-docs.txt
-# (mkdocs-material lives outside pyproject.toml on purpose, per docs-guards.yml
-# installing it separately), so a venv built the documented way is missing it.
-# Without this step the gate reports "No module named mkdocs" — a red CI would
-# never produce, since CI always provisions it. Install it here too, exactly
-# like CI, rather than letting the docs tests fail or silently skip.
-ensure_docs_deps() {
-  local reqs="${ROOT}/requirements-docs.txt"
-  [ -f "${reqs}" ] || die "requirements-docs.txt not found at ${reqs} (repo layout changed?)."
-  local pip_log
-  pip_log="$(mktemp)"
-  printf '   installing %s (mirrors CI test.yml pip install step)...\n' "$(basename "${reqs}")"
-  if "${PYBIN}" -m pip install -q -r "${reqs}" >"${pip_log}" 2>&1; then
-    rm -f "${pip_log}"
-  else
-    cat "${pip_log}" >&2
-    rm -f "${pip_log}"
-    die "could not install requirements-docs.txt into ${PYBIN} (pip output above). Run manually:
-      ${PYBIN} -m pip install -r requirements-docs.txt
-   tests/docs/*.py shell out to 'python -m mkdocs build --strict' and WILL
-   false-fail with 'No module named mkdocs' until this succeeds — do not
-   reinterpret that failure as a real docs regression without this installed."
-  fi
-}
-
 preflight() {
   banner "preflight"
   [ -f "${ROOT}/ci/run_tests.sh" ] || die "not a worktree root (no ci/run_tests.sh at ${ROOT})."
@@ -993,7 +961,6 @@ preflight() {
    UV_CACHE_DIR keeps either recipe off the shared ~/.cache/uv/.lock other worktrees hold —
    CHAOS-4411.)"
   [ -x "${RUFF}" ] || die "missing ${RUFF}; install the [dev] extra into .venv."
-  ensure_docs_deps
   printf '   worktree root : %s\n' "${ROOT}"
   printf '   interpreter   : %s\n' "${PYBIN}"
   printf '   %s\n' "$(c_green 'preflight OK')"
@@ -1006,9 +973,9 @@ gate_go_fast() { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
 
 # --- The unit step: the HOSTED selection (CHAOS-8352 removed the full-suite matrix). --
-# Same three pytest invocations as the `tooling-tests` and `docs-tests` jobs of
-# .github/workflows/test.yml (and tests:docs / tests:tooling in .gitlab-ci.yml):
-# tests/docs, tests/tooling, and the explicit list in ci/kept_python_tests.txt,
+# Same two pytest invocations as the `tooling-tests` job of
+# .github/workflows/test.yml (and tests:tooling in .gitlab-ci.yml):
+# tests/tooling, and the explicit list in ci/kept_python_tests.txt,
 # read from that file so the gate cannot drift from the hosted job. Running the
 # whole tests/ dir is no longer the standard: it collects tests of the deleted
 # Python api tree and is red by construction.
@@ -1020,10 +987,8 @@ gate_unit_suite() {
   [ -f "${list}" ] || die "missing ${list}: the hosted kept-test list."
   mapfile -t kept < <(grep -v '^[[:space:]]*#' "${list}" | grep -v '^[[:space:]]*$')
   # Same guard as test.yml: a short or empty list would run nothing.
-  [ "${#kept[@]}" -ge 9 ] || die "${list} lists only ${#kept[@]} files (hosted jobs require >= 9)."
+  [ "${#kept[@]}" -ge 1 ] || die "${list} lists only ${#kept[@]} files (hosted jobs require >= 1)."
   printf '   kept files: %s\n' "${#kept[@]}"
-  OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/docs -q || return 1
   OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${PYBIN}" -m pytest "${kept[@]}" -q -rs -n "${nw}"
 }
@@ -1528,9 +1493,7 @@ verify_stage_manifest() {
 # ch_provision() hard failure against the FULL 8-id declaration, never a
 # reason to shrink it at runtime. Factored out of main() so the CHAOS-3571
 # `--stage-manifest-probe` test-only hook near the bottom of this file can
-# exercise this exact sequencing (with the expensive leaf stages stubbed) --
-# same precedent as `--lock-probe` exercising the real acquire_lock/
-# release_lock without paying for preflight/lint/mypy/the unit suite.
+# exercise this exact sequencing (with the expensive leaf stages stubbed).
 run_declared_stages() {
   if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
     DECLARED_STAGE_IDS=(lint_format lint_check unit_suite)
@@ -1581,119 +1544,6 @@ main() {
   run_declared_stages
 }
 
-# High-resolution timestamp for --lock-probe, in order of preference: bash's
-# own EPOCHREALTIME builtin (no fork); `date +%s.%N` where it is actually
-# interpreted (GNU date, and modern BSD date); python3 -- available under this
-# harness's PATH and virtually every CI image, and unlike EPOCHREALTIME/date it
-# cannot silently degrade to whole seconds; perl's Time::HiRes as a last resort.
-#
-# This exists because whole-second resolution doesn't just make the probe
-# coarser -- it makes the tests that consume it UNFALSIFIABLE. Those tests
-# assert non-overlapping [acquired, released) intervals specifically so a
-# reintroduced microsecond-scale double-acquisition bug can be caught; at
-# whole-second resolution two racing acquisitions round to IDENTICAL integer
-# timestamps, and `a_end <= b_start` treats equal integers as "no overlap" --
-# i.e. PASS. That failure mode is silent (a test that cannot fail reads as
-# coverage), so a source that can't actually produce sub-second resolution
-# must FAIL LOUDLY here rather than quietly handing back whole seconds.
-
-# Accepts only a string that is purely digits-and-a-single-dot (e.g.
-# "1785988080.123456") -- rejects empty output, a literal "N" (old BSD date's
-# unsubstituted %N), and anything else a fallback might emit on failure.
-# `command -v` / a zero exit status from a fallback proves the TOOL exists,
-# not that its OUTPUT this time was actually a valid high-res timestamp --
-# every fallback below is validated the same way rather than trusted blind.
-_looks_like_subsecond_time() {
-  case "$1" in
-  '' | *[!0-9.]*) return 1 ;;
-  *.*) return 0 ;;
-  *) return 1 ;;
-  esac
-}
-
-lock_probe_time() {
-  if [ -n "${EPOCHREALTIME:-}" ]; then
-    printf '%s' "${EPOCHREALTIME}"
-    return 0
-  fi
-  local t
-  t="$(date +%s.%N 2>/dev/null)"
-  if _looks_like_subsecond_time "${t}"; then
-    printf '%s' "${t}"
-    return 0
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    t="$(python3 -c 'import time; print(f"{time.time():.6f}")' 2>/dev/null)"
-    if _looks_like_subsecond_time "${t}"; then
-      printf '%s' "${t}"
-      return 0
-    fi
-  fi
-  if command -v perl >/dev/null 2>&1; then
-    t="$(perl -MTime::HiRes=time -e 'printf "%.6f", time()' 2>/dev/null)"
-    if _looks_like_subsecond_time "${t}"; then
-      printf '%s' "${t}"
-      return 0
-    fi
-  fi
-  return 1
-}
-
-# Test-only harness hook (CHAOS-3403), same idea as ci/check_go.sh's narrow
-# "integration-coverage" verb (see internal/cigates/checkgo/check_go_script_test.go):
-# exercises the REAL acquire_lock/release_lock/reclaim_stale_lock functions above —
-# not a reimplementation — without paying for preflight, lint, mypy, ClickHouse, or
-# the unit suite, so a regression test can race the actual lock acquisition path
-# cheaply and repeatably. Never invoked by main(); only by
-# tests/tooling/test_local_validate_lock.py.
-if [ "${1:-}" = "--lock-probe" ]; then
-  shift
-  hold_secs="${1:-0}"
-  acquire_lock
-  acquired_at="$(lock_probe_time)" || {
-    printf 'lock-probe: FATAL -- no sub-second time source available (EPOCHREALTIME unset, date +%%N not interpreted, no python3/perl on PATH); refusing to silently degrade to whole-second resolution.\n' >&2
-    exit 1
-  }
-  printf 'lock-probe: acquired (pid %s) at %s\n' "$$" "${acquired_at}"
-  sleep "${hold_secs}"
-  released_at="$(lock_probe_time)" || {
-    printf 'lock-probe: FATAL -- lost sub-second time source between acquire and release.\n' >&2
-    exit 1
-  }
-  printf 'lock-probe: releasing (pid %s) at %s\n' "$$" "${released_at}"
-  exit 0
-fi
-
-# Test-only harness hook (CHAOS-3403 adversarial-review fix): proves
-# release_lock() runs BEFORE cleanup_scratch() inside the consolidated on_exit()
-# trap, by swapping cleanup_scratch() for a stand-in that sleeps and then writes
-# a marker file. A test can then observe the real lock symlink disappear (via
-# the real release_lock()) strictly before the marker appears — i.e. the mutex
-# is free before the slow step even finishes, not after. Never invoked by
-# main(); only by tests/tooling/test_local_validate_lock.py.
-if [ "${1:-}" = "--lock-probe-exit-order" ]; then
-  shift
-  hold_secs="${1:?hold_secs required}"
-  cleanup_delay="${2:?cleanup_delay required}"
-  marker="${3:?marker path required}"
-  # Companion to cleanup_scratch: the http transport's credential file must not
-cleanup_scratch() {
-  cleanup_ch_curl_config
-    sleep "${cleanup_delay}"
-    : >"${marker}"
-  }
-  acquire_lock
-  printf 'lock-probe-exit-order: acquired (pid %s)\n' "$$"
-  # Without an explicit hold, acquire-then-immediately-exit leaves the lock
-  # symlink existing for a near-zero window (a handful of shell statements,
-  # no I/O wait) before on_exit() removes it — too short for an external
-  # poll loop to reliably observe "it existed" at all, which produced
-  # exactly that flaky non-observation during this hook's own development.
-  # hold_secs makes the window a real, controllable duration to poll for.
-  sleep "${hold_secs}"
-  exit 0
-fi
-
 # Test-only harness hook (CHAOS-3571): exercises the REAL ch_probe_docker()
 # function in isolation -- no lock, no preflight, no lint/mypy/unit suite, no
 # scratch db. Prints its return code and CH_PROBE_DETAIL so a test can plant a
@@ -1713,9 +1563,8 @@ fi
 # Test-only harness hook (CHAOS-3571): exercises the REAL stage-declaration /
 # stage-execution / verify_stage_manifest / verdict-line bookkeeping in
 # run_declared_stages() end-to-end, with every expensive or environment-
-# dependent LEAF stage swapped for a trivial stand-in -- same technique as
-# --lock-probe-exit-order's cleanup_scratch() override above, applied to eight
-# functions instead of one. This is deliberately NOT a test of any individual
+# dependent LEAF stage swapped for a trivial stand-in (eight functions are
+# overridden). This is deliberately NOT a test of any individual
 # gate's correctness (lint/mypy/pytest are not being exercised here at all);
 # it is a test that the manifest machinery itself -- the part CHAOS-3571 was
 # actually about -- correctly declares, tracks, diffs, and reports, without

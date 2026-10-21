@@ -489,7 +489,7 @@ func TestComputeDailyTripletMatchesPythonGolden(t *testing.T) {
 // TestComputeFileHotspotsScoreMatchesLivePythonBitExact post-CHAOS-5272).
 // Inputs (items, primary_attributions) still come from the shared work_item
 // golden; only the expected rows moved to their own frozen file when the
-// live rot guard for them was retired (see golden_rot_guard_test.go).
+// live rot guard for them was retired (golden_rot_guard_test.go, deleted).
 func TestComputeEstimateCoverageMatchesPythonGolden(t *testing.T) {
 	fixture := loadGolden(t)
 	items, _, resolve := goldenInputs(t, fixture)

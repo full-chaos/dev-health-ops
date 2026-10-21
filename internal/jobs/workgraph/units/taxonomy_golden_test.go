@@ -9,7 +9,7 @@ import (
 )
 
 // taxonomyGolden mirrors tests/fixtures/investment_taxonomy_python_golden.json,
-// produced by generate_investment_taxonomy_golden.py, which IMPORTS the
+// produced by generate_investment_taxonomy_golden (generator deleted, golden frozen), which IMPORTS the
 // canonical registry rather than restating it.
 type taxonomyGolden struct {
 	ThemesSorted        []string          `json:"themes_sorted"`

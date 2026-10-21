@@ -150,15 +150,21 @@ creates <fullname>-hs256 (secrets.create). Only go-api reads it through the char
 {{- end }}
 
 {{/*
-CHAOS-10446: one guard for every web selector. args: dict "ctx" <root> "name" <Secret name> "key" <Secret key> "what" <where>.
+CHAOS-10446: one guard for every web selector. args: dict "ctx" <root> "name" <Secret name> "key" <Secret key> "what" <where> ["sharedOk" true].
 Fails when the name (trim + case-fold) is the HS256 key's Secret or the shared Secret, or the key is JWT_SECRET_KEY.
+sharedOk (single keys only, web.extraEnv secretKeyRef): the shared Secret is allowed for keys other than JWT_SECRET_KEY.
 */}}
 {{- define "dev-health.webSecretGuard" -}}
 {{- $ctx := .ctx -}}
 {{- $n := lower (trim (.name | default "")) -}}
 {{- $hs := lower (trim ($ctx.Values.hs256Secret.externalSecretName | default (ternary (printf "%s-hs256" (include "dev-health.fullname" $ctx)) "" $ctx.Values.secrets.create))) -}}
 {{- $sh := lower (trim (ternary (printf "%s-secrets" (include "dev-health.fullname" $ctx)) ($ctx.Values.secrets.externalSecretName | default "") $ctx.Values.secrets.create)) -}}
-{{- if or (and $n $hs (eq $n $hs)) (and $n $sh (eq $n $sh)) (eq (trim (.key | default "")) "JWT_SECRET_KEY") -}}
+{{- $sharedOk := .sharedOk | default false -}}
+{{- if $sharedOk -}}
+{{- if or (and $n $hs (eq $n $hs)) (eq (trim (.key | default "")) "JWT_SECRET_KEY") -}}
+{{- fail (printf "%s must not name the HS256 key's Secret or the key JWT_SECRET_KEY (CHAOS-10446): web would hold a token-minting key; other keys of the shared Secret are allowed" .what) -}}
+{{- end -}}
+{{- else if or (and $n $hs (eq $n $hs)) (and $n $sh (eq $n $sh)) (eq (trim (.key | default "")) "JWT_SECRET_KEY") -}}
 {{- fail (printf "%s must not name the HS256 key's Secret, the shared Secret, or the key JWT_SECRET_KEY (CHAOS-10446): web would hold a token-minting key" .what) -}}
 {{- end -}}
 {{- end }}

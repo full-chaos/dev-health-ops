@@ -26,8 +26,7 @@ func loadTimeBoundsCases(t *testing.T) []timeBoundsCase {
 	)
 	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		t.Fatalf("read time-bounds golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_time_bounds_golden.py)", err)
+		t.Fatalf("read time-bounds golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden struct {
 		Cases []timeBoundsCase `json:"cases"`

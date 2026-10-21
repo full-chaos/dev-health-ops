@@ -13,7 +13,7 @@ import (
 )
 
 // goldenRecord is CompoundingRiskDailyRecord as the Python generator
-// serializes it (tests/fixtures/generate_daily_compounding_risk_python_golden.py):
+// serializes it (generate_daily_compounding_risk_python_golden (generator deleted, golden frozen)):
 // dataclass field names verbatim, date/datetime as isoformat strings, and
 // Nullable columns as JSON null.
 type goldenRecord struct {
@@ -191,7 +191,7 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 		t.Fatalf(
 			"frozen golden has %d records but the Go corpus has %d cases -- the two "+
 				"corpora have drifted; regenerate with\n"+
-				"    python tests/fixtures/generate_daily_compounding_risk_python_golden.py",
+				"    (frozen golden; generator generate_daily_compounding_risk_python_golden deleted)",
 			len(golden.Records), len(cases),
 		)
 	}

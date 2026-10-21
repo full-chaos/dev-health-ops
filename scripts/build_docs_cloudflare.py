@@ -99,7 +99,7 @@ def build(*, mode: str, full_check: bool) -> None:
                 "docs/stylesheets/extra.css",
             ]
         )
-        _run([sys.executable, "scripts/check_docs_candidate_facts.py"])
+        _run(["go", "run", "-trimpath", "-mod=readonly", "./cmd/cigate", "docs", "check-candidate-facts"])
 
     _run(
         [

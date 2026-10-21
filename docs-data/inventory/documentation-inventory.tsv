@@ -202,7 +202,7 @@ full-chaos/dev-health-ops	requirements-docs.txt	configuration	supporting-artifac
 full-chaos/dev-health-ops	scripts/build_docs_cloudflare.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/check_built_site_links.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/check_docs_candidate_accessibility.py	tooling	supporting-artifact						documentation-system			False	False							
-full-chaos/dev-health-ops	scripts/check_docs_candidate_facts.py	tooling	supporting-artifact						documentation-system			False	False							
+full-chaos/dev-health-ops	internal/cigates/docstools/candidatefacts.go	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/check_docs_candidate_search.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/check_docs_cloudflare_host.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/check_docs_links.py	tooling	supporting-artifact						documentation-system			False	False							

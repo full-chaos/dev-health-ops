@@ -58,3 +58,6 @@ jobs:
 
       - name: Check the queue-mapping docs against the Go worker producers
         run: go run -trimpath -mod=readonly ./cmd/cigate docs check-queue-mapping-drift
+
+      - name: Check the objective documentation facts against the Go taxonomy
+        run: go run -trimpath -mod=readonly ./cmd/cigate docs check-candidate-facts

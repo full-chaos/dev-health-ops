@@ -120,8 +120,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Same non-root numeric-friendly convention as docker/Dockerfile's runtime
-# stage: a real user, not root, but one a Kubernetes securityContext can
+# Same non-root numeric-friendly convention as the other Go images: a real user, not root, but one a Kubernetes securityContext can
 # still pin by uid.
 RUN groupadd --gid 10001 toolsuser \
  && useradd --uid 10001 --gid 10001 --create-home --shell /bin/bash toolsuser

@@ -201,7 +201,7 @@ func newRiverWorkerProcess(
 //     as excess privilege -- again failing readiness.
 //
 // Either route would therefore need a posture change, and the derived GRANTs
-// ship in the Python image (docker/Dockerfile: the dev-hops-api image, which the
+// ship in the Python image (the retired dev-hops-api image, which the
 // chart's provision-roles Job runs), NOT the Go worker
 // image, so a posture edit not accompanied by an api-image rebuild breaks
 // production worse than the noise it removes. Reclaiming river_job index bloat

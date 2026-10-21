@@ -282,6 +282,31 @@ device-flow surfaces — but "obvious" is a family pattern, and this inventory
 does not record family patterns as facts. They are tracked as an explicit gap
 rather than guessed.
 
+## Access-token validation: `access_token_validation`
+
+A row that accepts a bearer access token says how that token is validated.
+`access_token_validation` is an object with one member, `legacy_hs256`, a
+required boolean:
+
+| Accepted access-token class | `access_token_validation` |
+|---|---|
+| `ops_access_token_hs256` (the legacy HS256 token) | required, `legacy_hs256: true` |
+| `user_access_token` only (the platform EdDSA token) | required, `legacy_hs256: false` |
+| neither | forbidden |
+
+The opt-in is explicit: a validator never infers HS256 from the class list
+alone, and a route that does not accept the HS256 class cannot opt in. The
+accepted classes are the ones in `accepted_credential_classes`; the object
+does not repeat them. The field and its rules are defined once, in
+`endpoint-profile.schema.json` (`$defs/endpointProfile/properties/access_token_validation`
+and `$defs/accessTokenValidationRules`); `endpoint-auth-profile.v1` references
+both. The wire profile also holds the HS256 class's pins to algorithm `HS256`.
+
+Every row that accepts `ops_access_token_hs256` sets `legacy_hs256: true`:
+every Bearer route accepts the HS256 token today. The profile-routed
+validation middleware picks the HS256 verifier only on a row that opts in;
+HS256 retirement removes the opt-ins.
+
 ## One registration per line (CHAOS-4774)
 
 A row addresses its surface as `file:line`, so two route registrations written

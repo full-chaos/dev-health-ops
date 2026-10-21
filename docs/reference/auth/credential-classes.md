@@ -88,6 +88,7 @@ Design docs (read the guardrails at minimum):
 | `infrastructure_deployment_credentials` | active | infrastructure | |
 | `effective_principal_envelope` | active | human | |
 | `refresh_credential` | active | human | |
+| `user_access_token` | **unconsumed** | human | |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -112,6 +113,15 @@ validator (`POST /v1/token/refresh`); its four API routes and three operator
 routes have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`.
 It does not replace `ops_refresh_token` yet: go-api still mints that one until
 the session cutover.
+
+**`user_access_token` (CHAOS-10442).** The EdDSA user access token of TRD
+section 11, the successor of `ops_access_token_hs256`. It is class 33. Its wire
+contract is `access-token.v1`: header {alg EdDSA, typ at+jwt, kid}; claims iss,
+aud (one of `dev-health-api`, `auth-service`), sub, principal_type, sid, jti,
+iat, nbf, exp, optional org_id and scope. It carries no role, email, profile,
+superuser bit or token version: authorization is checked per request. Its
+lifetime is at most the 60 min HS256-compat ceiling. The class is
+`unconsumed`: nothing mints or verifies it yet.
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 

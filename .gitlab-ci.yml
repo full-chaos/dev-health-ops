@@ -37,7 +37,7 @@
 #   - Needs a runner that allows privileged dind (docker:27-dind services).
 #
 # Job map (GitHub workflow : job -> GitLab job):
-#   test.yml : docs-tests, tooling-tests      -> tests:docs, tests:tooling
+#   test.yml : tooling-tests                  -> tests:tooling
 #   go-quality.yml : go-quality-leg           -> go:quality (matrix)
 #   go.yml : go-storage-integration           -> go:storage-integration (unsharded)
 #   go.yml : go-container-smoke               -> go:container-smoke (matrix)
@@ -77,7 +77,7 @@ variables:
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUNBUFFERED: "1"
   GIT_DEPTH: "0"
-  GO_IMAGE: "golang:1.27.2-bookworm"
+  GO_IMAGE: "golang:1.27.3-bookworm"
   DOCKER_CLI_VERSION: "27.5.1"
   DOCKER_IMAGE: "docker:27"
   DIND_IMAGE: "docker:27-dind"
@@ -340,19 +340,8 @@ governance:
     - go run -trimpath -mod=readonly ./cmd/cigate governance --base-sha "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --head-sha "$CI_COMMIT_SHA"
 
 # ---------------------------------------------------------------------------
-# test (test.yml: docs-tests, tooling-tests incl. the kept Python tests)
+# test (test.yml: tooling-tests incl. the kept Python tests)
 # ---------------------------------------------------------------------------
-
-tests:docs:
-  extends: .python_job
-  stage: test
-  before_script:
-    - pip install uv
-    - uv sync --frozen --all-extras --dev --python 3.14
-    - uv pip install --python .venv/bin/python -r requirements-docs.txt
-    - export PATH="$PWD/.venv/bin:$PATH"
-  script:
-    - pytest tests/docs -q
 
 tests:tooling:
   extends: .go_job

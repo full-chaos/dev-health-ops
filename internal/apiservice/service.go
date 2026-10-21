@@ -596,7 +596,8 @@ func NewServer(
 	routes []httpapi.Route,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
-	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
+	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
+	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, DecodedPathRouting, noStore.Middleware}, scope...)
 	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, pyheaders.SecurityHeaders, pyheaders.NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
@@ -607,6 +608,7 @@ func NewServer(
 		RequestTimeout: requestTimeout,
 		MaxBodyBytes:   maxBodyBytes,
 		ErrorWriter:    WriteError,
+		NoStore:        noStore,
 		// The Python api echoes any non-empty X-Request-ID
 		// (api/middleware/correlation_id.py) and routes the raw path, never
 		// redirecting one.

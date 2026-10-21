@@ -38,3 +38,38 @@ func FuzzParseEd25519Key(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseKeySetManifest drives the key-set manifest parser with arbitrary
+// bytes. Properties: it never panics, every refusal carries a bounded Reason,
+// and an accepted manifest is non-empty with valid, unique kids and bare,
+// unique file names.
+func FuzzParseKeySetManifest(f *testing.F) {
+	f.Add([]byte(`{"keys":[{"kid":"a","state":"active","file":"a.pem"}]}`))
+	f.Add([]byte(`{"keys":[{"kid":"a","state":"active","file":"a.pem"},{"kid":"b","state":"pending","file":"b.pem"}]}`))
+	f.Add([]byte(`{"keys":[{"kid":"a","state":"active","file":"../a.pem"}]}`))
+	f.Add([]byte(`{"keys":[{"kid":"a","state":"active","file":"a.pem","x":1}]}`))
+	f.Add([]byte(`{"keys":[]}`))
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, input []byte) {
+		entries, err := parseManifest(input)
+		if err != nil {
+			if ReasonOf(err) == "key_custody_failed" {
+				t.Fatalf("a refusal carries no bounded reason: %v", err)
+			}
+			return
+		}
+		if len(entries) == 0 {
+			t.Fatal("accepted an empty set")
+		}
+		kids, files := map[string]bool{}, map[string]bool{}
+		for _, entry := range entries {
+			if !KeyIDPattern.MatchString(entry.KeyID) || !entry.State.Valid() || !bareFileName(entry.File) {
+				t.Fatalf("accepted an invalid entry %+v", entry)
+			}
+			if kids[entry.KeyID] || files[entry.File] {
+				t.Fatalf("accepted a repeated kid or file %+v", entry)
+			}
+			kids[entry.KeyID], files[entry.File] = true, true
+		}
+	})
+}

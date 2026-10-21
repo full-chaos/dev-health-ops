@@ -1,0 +1,33 @@
+{
+  "description": "Every token audience the Auth Control Plane names, with the credential class that may carry it. A user access token (access-token.v1) carries only an audience whose classes include user_access_token; any other value is refused. Workload audiences are added with the workload registration that uses them (no speculative values, CHAOS-10194).",
+  "audiences": [
+    {
+      "audience": "dev-health-api",
+      "classes": [
+        "user_access_token"
+      ],
+      "services": [
+        "dev-health-ops-api",
+        "dev-health-query-api"
+      ]
+    },
+    {
+      "audience": "auth-service",
+      "classes": [
+        "user_access_token"
+      ],
+      "services": [
+        "dev-health-auth-service"
+      ]
+    },
+    {
+      "audience": "query-api",
+      "classes": [
+        "effective_principal_envelope"
+      ],
+      "services": [
+        "dev-health-query-api"
+      ]
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // The provider limits page is the catalog the sync budget's route families are documented in; it must exist and be
@@ -23,7 +24,12 @@ func providerLimitsProblems(root string) []string {
 		bad = append(bad, "missing canonical provider limits page "+providerLimitsPage)
 	}
 	nav, err := os.ReadFile(filepath.Join(root, "mkdocs.yml"))
-	if err != nil || !strings.Contains(string(nav), strings.TrimPrefix(providerLimitsPage, "docs/")) {
+	switch {
+	case err != nil:
+		bad = append(bad, "cannot read mkdocs.yml: "+err.Error())
+	case !utf8.Valid(nav):
+		bad = append(bad, "mkdocs.yml is not valid UTF-8")
+	case !strings.Contains(string(nav), strings.TrimPrefix(providerLimitsPage, "docs/")):
 		bad = append(bad, "provider-limits.md is not wired into the mkdocs.yml nav: the page would be unreachable")
 	}
 	return bad

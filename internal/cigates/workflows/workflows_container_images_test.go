@@ -590,59 +590,81 @@ func setOf(items ...string) map[string]bool {
 	return m
 }
 
-// shlexSplit splits a shell line into words, honouring single and double quotes and backslash escapes, and dropping
-// a `#` comment. It reports false when a quote is left open.
+// shlexSplit is python shlex.split(line, comments=True) in posix mode: words split on ' \t\r\n'; a backslash outside quotes
+// escapes the next character and is an error at the end of the line; single quotes are literal; inside double quotes a
+// backslash escapes only `"` and `\` and is otherwise kept; an unquoted `#` ends the word and drops the rest of the line;
+// an empty quoted string is an (empty) word. It reports false where python raises (an open quote, a trailing backslash).
 func shlexSplit(line string) ([]string, bool) {
 	var words []string
 	var cur strings.Builder
 	inWord := false
-	runes := []rune(line)
-	for i := 0; i < len(runes); i++ {
-		c := runes[i]
-		switch {
-		case c == '\\' && i+1 < len(runes):
+	emit := func() {
+		if inWord {
+			words = append(words, cur.String())
+			cur.Reset()
+			inWord = false
+		}
+	}
+	rs := []rune(line)
+	for i := 0; i < len(rs); i++ {
+		c := rs[i]
+		switch c {
+		case '\\':
+			if i+1 >= len(rs) {
+				return nil, false
+			}
 			i++
-			cur.WriteRune(runes[i])
+			cur.WriteRune(rs[i])
 			inWord = true
-		case c == '\'':
+		case '\'':
 			j := i + 1
-			for j < len(runes) && runes[j] != '\'' {
+			for j < len(rs) && rs[j] != '\'' {
 				j++
 			}
-			if j >= len(runes) {
+			if j >= len(rs) {
 				return nil, false
 			}
-			cur.WriteString(string(runes[i+1 : j]))
+			cur.WriteString(string(rs[i+1 : j]))
 			i, inWord = j, true
-		case c == '"':
+		case '"':
 			j := i + 1
-			for j < len(runes) && runes[j] != '"' {
-				if runes[j] == '\\' && j+1 < len(runes) {
-					j++
+			closed := false
+			for j < len(rs) {
+				if rs[j] == '"' {
+					closed = true
+					break
 				}
-				cur.WriteRune(runes[j])
+				if rs[j] == '\\' {
+					if j+1 >= len(rs) {
+						return nil, false
+					}
+					if rs[j+1] == '"' || rs[j+1] == '\\' {
+						cur.WriteRune(rs[j+1])
+					} else {
+						cur.WriteRune('\\')
+						cur.WriteRune(rs[j+1])
+					}
+					j += 2
+					continue
+				}
+				cur.WriteRune(rs[j])
 				j++
 			}
-			if j >= len(runes) {
+			if !closed {
 				return nil, false
 			}
 			i, inWord = j, true
-		case c == '#' && !inWord:
-			i = len(runes)
-		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
-			if inWord {
-				words = append(words, cur.String())
-				cur.Reset()
-				inWord = false
-			}
+		case '#':
+			emit()
+			return words, true
+		case ' ', '\t', '\r', '\n':
+			emit()
 		default:
 			cur.WriteRune(c)
 			inWord = true
 		}
 	}
-	if inWord {
-		words = append(words, cur.String())
-	}
+	emit()
 	return words, true
 }
 
@@ -855,6 +877,39 @@ func TestStepKindClassificationDecoys(t *testing.T) {
 	} {
 		if got := stepKind(c.step); got != c.want {
 			t.Errorf("%s: stepKind = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Executed rows against python's shlex.split(comments=True): each expectation is what python returns (or raises on).
+func TestShlexSplitMatchesPythonShlex(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want []string
+		ok   bool
+	}{
+		{`docker pull postgres:16`, []string{"docker", "pull", "postgres:16"}, true},
+		{`echo a\ b`, []string{"echo", "a b"}, true},
+		{`echo 'a b' "c d"`, []string{"echo", "a b", "c d"}, true},
+		{`echo ''`, []string{"echo", ""}, true},
+		{`docker pull x#comment`, []string{"docker", "pull", "x"}, true},
+		{`docker pull x # comment`, []string{"docker", "pull", "x"}, true},
+		{`# only a comment`, nil, true},
+		{`docker pull a\#b`, []string{"docker", "pull", "a#b"}, true},
+		{`docker pull "a#b"`, []string{"docker", "pull", "a#b"}, true},
+		{`echo "a\nb"`, []string{"echo", `a\nb`}, true},
+		{`echo "a\"b"`, []string{"echo", `a"b`}, true},
+		{`echo "a\\b"`, []string{"echo", `a\b`}, true},
+		{`echo "a\$b"`, []string{"echo", `a\$b`}, true},
+		{`docker pull x\`, nil, false},
+		{`echo "a\`, nil, false},
+		{`echo 'unterminated`, nil, false},
+		{`echo "unterminated`, nil, false},
+		{"echo a b", []string{"echo", "a b"}, true},
+	} {
+		got, ok := shlexSplit(c.in)
+		if ok != c.ok || (ok && strings.Join(got, "\x00") != strings.Join(c.want, "\x00")) {
+			t.Errorf("shlexSplit(%q) = %q, %v; want %q, %v", c.in, got, ok, c.want, c.ok)
 		}
 	}
 }

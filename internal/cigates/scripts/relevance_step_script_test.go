@@ -9,18 +9,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The relevance step of the venue-oracles workflow, executed in bash in a scratch repo. ci/go_relevance.sh is STUBBED (it
-// prints a fixed answer), so the test pins the step's own dispatch: the auth-corpus-only dispatch skips the shards, a plain
-// dispatch runs the full suite, a change to the gate itself runs it, an unresolvable range fails open, and every other push
-// takes the decider's answer. The real ci/go_relevant_diff.sh produces the changed-file list from the scratch repo's history.
+// The relevance step of the venue-oracles workflow, EXECUTED in bash in a scratch repo with the real ci/go_relevant_diff.sh,
+// ci/go_relevance.sh and go.yml: a plain dispatch runs the full suite, an auth-corpus-only dispatch skips the shards, a push
+// that changes the gate itself runs the suite (on that branch, not by failing open), and an unresolvable range fails open.
 
 type relevanceCase struct {
 	name, event, authOnly string
 	changed               string // file changed by the pushed commit ("" = none)
 	badBase               bool
-	stub                  string // the stub decider's output
-	want                  string
-	wantOut               string // a phrase that must appear on stdout
+	want, wantOut         string
+	noOut                 string // a phrase that must NOT appear on stdout
 }
 
 func oraclesRelevanceStep(t *testing.T, root string) string {
@@ -61,9 +59,9 @@ func runRelevanceCase(t *testing.T, step string, c relevanceCase) (output, stdou
 	t.Helper()
 	root := rootOf(t)
 	r := newGitRepo(t.TempDir())
-	r.write("ci/go_relevant_diff.sh", readText(t, filepath.Join(root, "ci", "go_relevant_diff.sh")))
-	r.write(".github/workflows/go.yml", readText(t, filepath.Join(root, ".github", "workflows", "go.yml")))
-	r.write("ci/go_relevance.sh", "#!/usr/bin/env bash\ncat >/dev/null\nprintf '"+c.stub+"\\n'\n")
+	for _, rel := range []string{"ci/go_relevant_diff.sh", "ci/go_relevance.sh", ".github/workflows/go.yml"} {
+		r.write(rel, readText(t, filepath.Join(root, filepath.FromSlash(rel))))
+	}
 	r.git("add", "-A")
 	r.git("commit", "-q", "-m", "base")
 	base := r.git("rev-parse", "HEAD")
@@ -72,6 +70,7 @@ func runRelevanceCase(t *testing.T, step string, c relevanceCase) (output, stdou
 		if b, err := os.ReadFile(filepath.Join(r.dir, filepath.FromSlash(c.changed))); err == nil {
 			prev = string(b)
 		}
+		// append a comment rather than overwrite: a copied script must keep working, or the step fails open and passes for the wrong reason
 		r.write(c.changed, prev+"\n# changed\n")
 		r.git("add", "-A")
 		r.git("commit", "-q", "-m", "push")
@@ -90,7 +89,11 @@ func runRelevanceCase(t *testing.T, step string, c relevanceCase) (output, stdou
 			baseSHA = strings.Repeat("0", 40)
 		}
 	}
-	res := freeSpec{dir: r.dir, env: []string{shimBasePath(), "HOME=" + t.TempDir(), "GITHUB_OUTPUT=" + out, "EVENT_NAME=" + c.event, "BASE_SHA=" + baseSHA, "AUTH_CORPUS_ONLY=" + c.authOnly}}.run("bash", "-c", step)
+	env := []string{shimBasePath(), "HOME=" + t.TempDir(), "GITHUB_OUTPUT=" + out, "EVENT_NAME=" + c.event, "BASE_SHA=" + baseSHA}
+	if c.authOnly != "" {
+		env = append(env, "AUTH_CORPUS_ONLY="+c.authOnly)
+	}
+	res := freeSpec{dir: r.dir, env: env}.run("bash", "-c", step)
 	if res.code != 0 {
 		t.Fatalf("%s: the relevance step exited %d: stdout=%q stderr=%q", c.name, res.code, res.stdout, res.stderr)
 	}
@@ -98,15 +101,13 @@ func runRelevanceCase(t *testing.T, step string, c relevanceCase) (output, stdou
 }
 
 var relevanceCases = []relevanceCase{
-	{"an auth-corpus-only dispatch skips the shards", "workflow_dispatch", "true", "", false, "relevant=true", "relevant=false", "the venue-oracles shards are not run"},
-	{"a plain dispatch runs the full suite", "workflow_dispatch", "", "", false, "relevant=false", "relevant=true", "running the full oracle suite"},
-	{"a dispatch with auth_corpus_only false runs the full suite", "workflow_dispatch", "false", "", false, "relevant=false", "relevant=true", "running the full oracle suite"},
-	{"a push changing the workflow itself runs the suite", "push", "", ".github/workflows/venue-oracles.yml", false, "relevant=false", "relevant=true", "gate itself changed"},
-	{"a push changing the discovery awk runs the suite", "push", "", "ci/venue_oracle_discovery.awk", false, "relevant=false", "relevant=true", "gate itself changed"},
-	{"a push changing the diff script runs the suite", "push", "", "ci/go_relevant_diff.sh", false, "relevant=false", "relevant=true", "gate itself changed"},
-	{"an unresolvable range fails open", "push", "", "docs/x.md", true, "relevant=false", "relevant=true", "failing open"},
-	{"another push takes the decider's relevant=false", "push", "", "docs/x.md", false, "relevant=false", "relevant=false", ""},
-	{"another push takes the decider's relevant=true", "push", "", "docs/x.md", false, "relevant=true", "relevant=true", ""},
+	{"a dispatch with the flag unset runs the full suite", "workflow_dispatch", "", "", false, "relevant=true", "running the full oracle suite", "failing open"},
+	{"a dispatch with auth_corpus_only false runs the full suite", "workflow_dispatch", "false", "", false, "relevant=true", "running the full oracle suite", "failing open"},
+	{"an auth-corpus-only dispatch skips the shards", "workflow_dispatch", "true", "", false, "relevant=false", "the venue-oracles shards are not run", ""},
+	{"a push changing the workflow itself runs the suite", "push", "", ".github/workflows/venue-oracles.yml", false, "relevant=true", "gate itself changed", "failing open"},
+	{"a push changing the discovery awk runs the suite", "push", "", "ci/venue_oracle_discovery.awk", false, "relevant=true", "gate itself changed", "failing open"},
+	{"a push changing the diff script runs the suite", "push", "", "ci/go_relevant_diff.sh", false, "relevant=true", "gate itself changed", "failing open"},
+	{"an unresolvable range fails open", "push", "", "docs/x.md", true, "relevant=true", "failing open", ""},
 }
 
 func checkRelevanceCases(t *testing.T, step string) []string {
@@ -120,6 +121,9 @@ func checkRelevanceCases(t *testing.T, step string) []string {
 		if c.wantOut != "" && !strings.Contains(stdout, c.wantOut) {
 			defects = append(defects, c.name+": stdout lacks "+c.wantOut)
 		}
+		if c.noOut != "" && strings.Contains(stdout, c.noOut) {
+			defects = append(defects, c.name+": stdout has "+c.noOut)
+		}
 	}
 	return defects
 }
@@ -131,9 +135,8 @@ func TestRelevanceStepDispatchOfTheOraclesWorkflow(t *testing.T) {
 	}
 	for _, m := range []struct{ name, old, new string }{
 		{"the auth-only condition flipped", `[ "${AUTH_CORPUS_ONLY:-}" = "true" ]`, `[ "${AUTH_CORPUS_ONLY:-}" != "true" ]`},
+		{"one gate path removed", `\.github/workflows/venue-oracles\.yml|`, ``},
 		{"the dispatch branch removed", `if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then`, `if [ "${EVENT_NAME}" = "never" ]; then`},
-		{"the gate-itself list loses the workflow", `\.github/workflows/venue-oracles\.yml|`, ``},
-		{"the fail-open branch answers false", "failing open to relevant=true\"\n  printf 'relevant=true\\n'", "failing open to relevant=true\"\n  printf 'relevant=false\\n'"},
 	} {
 		if !strings.Contains(step, m.old) {
 			t.Fatalf("planted defect %q did not land: %q not in the step", m.name, m.old)

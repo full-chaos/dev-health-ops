@@ -21,7 +21,7 @@ func (c freeSpec) run(name string, args ...string) cmdResult {
 	defer func() { <-freeSlots }()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = c.dir
-	cmd.Env = c.env
+	cmd.Env = withNoPythonShims(c.env)
 	if c.stdin != nil {
 		cmd.Stdin = bytes.NewReader(c.stdin)
 	}

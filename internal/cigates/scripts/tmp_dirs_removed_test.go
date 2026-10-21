@@ -205,8 +205,8 @@ func pyCode(src string) string {
 
 var (
 	pyFromTempfile = regexp.MustCompile(`^[ \t]*from[ \t]+tempfile[ \t]+import[ \t]+(.+)$`)
-	pyImportAlias  = regexp.MustCompile(`(mkdtemp|gettempdir)(?:[ \t]+as[ \t]+(\w+))?`)
-	pyRemoves      = regexp.MustCompile(`(?:^|[^\w])(?:rmtree|addfinalizer)[ \t]*\(|(?:^|[^\w])atexit[ \t]*\.[ \t]*register[ \t]*\(`)
+	pyImportAlias  = regexp.MustCompile(`(mkdtemp|gettempdir)(?:[ \t]+as[ \t]+([\p{L}\p{N}_]+))?`)
+	pyRemoves      = regexp.MustCompile(`(?:^|[^\p{L}\p{N}_])(?:rmtree|addfinalizer)[ \t]*\(|(?:^|[^\p{L}\p{N}_])atexit[ \t]*\.[ \t]*register[ \t]*\(`)
 )
 
 // pyLogicalLines joins physical lines inside open brackets or after a backslash, so an expression is one unit.
@@ -215,6 +215,11 @@ func pyLogicalLines(code string) []string {
 	var cur strings.Builder
 	depth := 0
 	for _, l := range strings.Split(code, "\n") {
+		trimmed := strings.TrimRight(l, " \t")
+		continued := strings.HasSuffix(trimmed, `\`)
+		if continued {
+			l = strings.TrimSuffix(trimmed, `\`)
+		}
 		cur.WriteString(l)
 		for _, r := range l {
 			switch r {
@@ -224,7 +229,7 @@ func pyLogicalLines(code string) []string {
 				depth--
 			}
 		}
-		if depth > 0 || strings.HasSuffix(strings.TrimRight(l, " \t"), `\`) {
+		if depth > 0 || continued {
 			cur.WriteString(" ")
 			continue
 		}
@@ -238,11 +243,34 @@ func pyLogicalLines(code string) []string {
 	return lines
 }
 
+// pyStatements: the logical lines, each cut at a top-level `;` (a `;` inside brackets belongs to the expression).
+func pyStatements(code string) []string {
+	var out []string
+	for _, line := range pyLogicalLines(code) {
+		depth, start := 0, 0
+		for i, r := range line {
+			switch r {
+			case '(', '[', '{':
+				depth++
+			case ')', ']', '}':
+				depth--
+			case ';':
+				if depth == 0 {
+					out = append(out, line[start:i])
+					start = i + 1
+				}
+			}
+		}
+		out = append(out, line[start:])
+	}
+	return out
+}
+
 // pyMakesTempDir: a mkdtemp call, or a gettempdir() joined into a path (a read of the name alone makes nothing).
 func pyMakesTempDir(src string) bool {
 	code := pyCode(src)
 	names := map[string]string{"mkdtemp": "mkdtemp", "gettempdir": "gettempdir"}
-	logical := pyLogicalLines(code)
+	logical := pyStatements(code)
 	for _, line := range logical {
 		m := pyFromTempfile.FindStringSubmatch(line)
 		if m == nil {
@@ -260,17 +288,17 @@ func pyMakesTempDir(src string) bool {
 			if orig != want {
 				continue
 			}
-			if regexp.MustCompile(`(?:^|[^\w])` + regexp.QuoteMeta(local) + `[ \t]*\(`).MatchString(line) {
+			if regexp.MustCompile(`(?:^|[^\p{L}\p{N}_])` + regexp.QuoteMeta(local) + `[ \t]*\(`).MatchString(line) {
 				return true
 			}
 		}
 		return false
 	}
-	for _, line := range pyLogicalLines(code) {
+	for _, line := range pyStatements(code) {
 		if callsOf(line, "mkdtemp") {
 			return true
 		}
-		if callsOf(line, "gettempdir") && (strings.Contains(line, "/") || regexp.MustCompile(`(?:^|[^\w])join[ \t]*\(`).MatchString(line)) {
+		if callsOf(line, "gettempdir") && (strings.Contains(line, "/") || regexp.MustCompile(`(?:^|[^\p{L}\p{N}_])join[ \t]*\(`).MatchString(line)) {
 			return true
 		}
 	}
@@ -346,6 +374,11 @@ func TestPythonTempDirCheckFlagsALeakAndIsNotFooledByTextOrAnAlias(t *testing.T)
 		{"f-string text naming mkdtemp outside its braces makes nothing", "x = f'tempfile.mkdtemp() {1}'\n", false},
 		{"a parenthesised multi-line alias import", "from tempfile import (\n    mkdtemp as make,\n)\nx = make()\n", true},
 		{"a backslash continued alias import", "from tempfile import \\\n    mkdtemp as make\nx = make()\n", true},
+		{"an alias import after a semicolon", "import os; from tempfile import mkdtemp as make\nx = make()\n", true},
+		{"a non-ASCII alias", "from tempfile import mkdtemp as café\nx = café()\n", true},
+		{"a call glued to a non-ASCII word is not the alias", "from tempfile import mkdtemp as make\nx = émake()\n", false},
+		{"a semicolon inside brackets does not split a join", "import tempfile\nC = (1; 2) / tempfile.gettempdir()\n", true},
+		{"a cleanup after a semicolon counts", "import shutil, tempfile\nd = tempfile.mkdtemp(); shutil.rmtree(d)\n", false},
 		{"a multi-line gettempdir join", "import tempfile\nfrom pathlib import Path\nC = (\n    Path(tempfile.gettempdir())\n    / 'fixed'\n)\n", true},
 	} {
 		got := pyMakesTempDir(c.body) && !pyHasCleanup(c.body)

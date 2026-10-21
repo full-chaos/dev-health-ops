@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
+	osexec "os/exec"
 	"testing"
 	"time"
 
@@ -48,7 +48,7 @@ func TestTheVendoredDefaultClientNeverDialsTheEnvironmentProxy(t *testing.T) {
 
 // runCaptureChild re-runs this test binary for proxycapture.Check.
 func runCaptureChild(args, env []string) ([]byte, error) {
-	command := exec.Command(os.Args[0], args...)
+	command := osexec.Command(os.Args[0], args...)
 	command.Env = env
 	return command.CombinedOutput()
 }

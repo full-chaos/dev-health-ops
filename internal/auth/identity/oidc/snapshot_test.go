@@ -21,6 +21,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 var errUnused = errors.New("oidc test: dependency not used by this test")
@@ -373,8 +374,27 @@ func TestRecoveredPanicIsCountedOnce(t *testing.T) {
 			if strings.Contains(logged, value) {
 				t.Errorf("the log carries the panic value:\n%s", logged)
 			}
+			if !strings.Contains(logged, "provider_id="+row.ID.String()+" ") {
+				t.Errorf("the outcome log line does not name the selected provider %s:\n%s", row.ID, logged)
+			}
+			if attr := renderedErrorAttr(errHandlerPanic); !strings.Contains(logged, " "+attr) {
+				t.Errorf("the outcome log line does not carry %q:\n%s", attr, logged)
+			}
 		})
 	}
+}
+
+// renderedErrorAttr is logging.ErrorAttr(err) as the outcome logger's text
+// handler writes it.
+func renderedErrorAttr(err error) string {
+	var line bytes.Buffer
+	slog.New(slog.NewTextHandler(&line, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+		if len(groups) == 0 && (a.Key == slog.TimeKey || a.Key == slog.LevelKey || a.Key == slog.MessageKey) {
+			return slog.Attr{}
+		}
+		return a
+	}})).Info("", logging.ErrorAttr(err))
+	return strings.TrimSpace(line.String())
 }
 
 // The type route counts and logs under its own label, refusals included.

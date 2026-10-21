@@ -352,7 +352,6 @@ docs:guards:
       python scripts/validate_docs_v2_publication.py 2>&1 | tee .build/docs-publication-validation.log
       python -m mkdocs build --strict --config-file mkdocs.yml 2>&1 | tee .build/docs-build.log
       python scripts/check_docs_candidate_accessibility.py --site-dir .build/docs --css docs/stylesheets/extra.css 2>&1 | tee .build/docs-accessibility.log
-      python scripts/check_code_prerequisites.py 2>&1 | tee .build/docs-code-prerequisites.log
       python scripts/check_freshness_inventory.py 2>&1 | tee .build/docs-freshness-inventory.log
   artifacts:
     when: always
@@ -383,6 +382,17 @@ docs:facts:
   stage: test
   script:
     - go run -trimpath -mod=readonly ./cmd/cigate docs check-candidate-facts
+    - |
+      mkdir -p .build
+      status=0
+      go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites > .build/docs-code-prerequisites.log 2>&1 || status=$?
+      cat .build/docs-code-prerequisites.log
+      exit $status
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - .build/docs-code-prerequisites.log
 
 docs:inventory-review:
   extends: .python_job

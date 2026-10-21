@@ -2,12 +2,15 @@ name: Docs Drift
 
 # The generated blocks of docs/reference/taxonomies/investment.md and docs/contribute/architecture/go-worker-runtime.md
 # must match the Go taxonomy and the Go worker producers. A light Go-only job, so a docs-only change runs these two
-# checks without the Go workflow's full fan-out. It is its own workflow because docs-guards.yml takes docs paths only.
+# checks without the Go workflow's full fan-out. It also runs the provider-limits page/nav guard, whose inputs
+# (mkdocs.yml, the page) are docs paths that go.yml must not list. It is its own workflow because docs-guards.yml takes docs paths only.
 on:
   push:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'mkdocs.yml'
+      - 'docs/reference/limits-and-compatibility/provider-limits.md'
       - 'internal/jobs/workgraph/units/taxonomy.go'
       - 'deploy/go-workers/deployment.json'
       - 'contracts/jobs/v1/registry.json'
@@ -21,6 +24,8 @@ on:
     branches: ['**']
     paths:
       - 'docs/**'
+      - 'mkdocs.yml'
+      - 'docs/reference/limits-and-compatibility/provider-limits.md'
       - 'internal/jobs/workgraph/units/taxonomy.go'
       - 'deploy/go-workers/deployment.json'
       - 'contracts/jobs/v1/registry.json'
@@ -58,3 +63,6 @@ jobs:
 
       - name: Check the queue-mapping docs against the Go worker producers
         run: go run -trimpath -mod=readonly ./cmd/cigate docs check-queue-mapping-drift
+
+      - name: Check the provider limits page exists and is in the mkdocs nav
+        run: go run -trimpath -mod=readonly ./cmd/cigate docs check-provider-limits

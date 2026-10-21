@@ -401,7 +401,7 @@ func TestTheModuleRootIsTheOneContainingTheWorkingDirectoryInAWorkspace(t *testi
 	}
 	write(t, other, "go.mod", "module example.com/other\n\ngo 1.25\n")
 	work := filepath.Join(t.TempDir(), "go.work")
-	if err := os.WriteFile(work, []byte("go 1.27.2\n\nuse (\n\t"+other+"\n\t"+dir+"\n)\n"), 0o644); err != nil {
+	if err := os.WriteFile(work, []byte("go 1.27.3\n\nuse (\n\t"+other+"\n\t"+dir+"\n)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

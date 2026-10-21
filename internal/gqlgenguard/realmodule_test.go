@@ -316,7 +316,7 @@ func TestCheckDriftOnThisRepositoryIgnoresAnInheritedWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	work := filepath.Join(t.TempDir(), "go.work")
-	if err := os.WriteFile(work, []byte("go 1.27.2\n\nuse (\n\t"+other+"\n\t"+root+"\n)\n"), 0o644); err != nil {
+	if err := os.WriteFile(work, []byte("go 1.27.3\n\nuse (\n\t"+other+"\n\t"+root+"\n)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GOWORK", work)

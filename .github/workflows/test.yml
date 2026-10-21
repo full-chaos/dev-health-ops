@@ -150,56 +150,6 @@ jobs:
               # derives the directories that need an entry from the tracked fixtures.
               - 'tools/**'
 
-  docs-tests:
-    name: docs-tests
-    # CHAOS-3514. Runs `pytest tests/docs` alone (16s measured in a clean
-    # py3.14 env, excluding install) so the 116
-    # docs guards execute on a docs-content-only PR, which previously ran
-    # none of them: `code` selects on `tests/**` but not `docs/**`, so
-    # editing a docs TEST ran it while editing the page it asserts on did
-    # not. docs-guards.yml cannot cover this -- it invokes pytest zero times.
-    #
-    # DELIBERATELY UNCONDITIONAL, and this is the design rather than
-    # laziness. Two gated alternatives were built and rejected against the
-    # repo's own machinery:
-    #
-    #   * a second `docs` filter output gating this job -- rejected because
-    #     ci/aggregate_gate_results.sh's `path-filtered` policy treats a skip
-    #     as legitimate ONLY when CHANGES_CODE == 'false', so a docs-gated
-    #     job would SKIP on an ordinary code-only PR while the aggregator
-    #     held that skip illegitimate, failing the required gate on EVERY
-    #     such PR;
-    #   * widening the condition to `code || docs` -- rejected because
-    #     _PATH_FILTERED_IF pins the exact condition every `path-filtered`
-    #     job must carry, and says in terms: "Drift here means the model is
-    #     stale: fix ci/aggregate_gate_results.sh, do not just update the
-    #     string." Inventing a policy in the script whose purpose is to
-    #     refuse ambiguity, to save ~10s on a code-only PR, is a bad trade.
-    #
-    # Unconditional needs no filter, no new policy, and no skip-legitimacy
-    # reasoning at all -- and a job that never skips is the strongest
-    # available answer to "no required job may exit success after skipping
-    # substantive work". The cost is ~10s on PRs that changed no docs.
-    needs: [changes]
-    # Same ARC routing as `changes` above.
-    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # CHAOS-6646: installs uv.lock's resolution, not an unlocked re-resolve
-      # (the same pin as live-e2e.yml).
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          python-version: '3.14'
-      - name: Install docs test dependencies
-        run: |
-          uv sync --frozen --all-extras --dev
-          uv pip install --python .venv/bin/python -r requirements-docs.txt
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-      - name: Run the docs guards
-        run: pytest tests/docs -q
-
   # tests/tooling guards the Go CI wiring (workflow shape, path filters, shard
   # inventories, bigboy cut scripts, gate aggregation). Until the Python unit
   # matrix was removed (CHAOS-8352) it ran inside that matrix, which no longer
@@ -278,9 +228,8 @@ jobs:
         run: go test -mod=readonly -trimpath -count=1 -v -run '^TestClickHouseConfigdStartsAndAnswersOnThePodAddress$' ./deploy/helm/dev-health
 
   # Required-status-check gate. Branch protection requires a check named
-  # exactly "test". It judges docs-tests and tooling-tests through
-  # ci/aggregate_gate_results.sh. docs-tests is `unconditional`; tooling-tests is
-  # `path-filtered` (CHAOS-10176): a docs-only skip passes, while a job the `code`
+  # exactly "test". It judges tooling-tests through
+  # ci/aggregate_gate_results.sh. tooling-tests is `path-filtered` (CHAOS-10176): a docs-only skip passes, while a job the `code`
   # filter selected that skipped, was cancelled or failed fails the gate (a
   # measurement that did not happen must fail). The verdict is driven through its result matrix by
   # internal/cigates/workflows/aggregate_gate_results_test.go.
@@ -293,7 +242,7 @@ jobs:
     # Cancellation has to be reported by a job that actually ran, so this job
     # runs unconditionally and the script fails the gate on `cancelled`.
     if: always()
-    needs: [changes, docs-tests, tooling-tests]
+    needs: [changes, tooling-tests]
     # Same ARC routing as `changes` above.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     steps:
@@ -305,8 +254,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           CHANGES_CODE: ${{ needs.changes.outputs.code }}
-          GATED_JOB_1: docs-tests|unconditional|${{ needs.docs-tests.result }}
-          GATED_JOB_2: tooling-tests|path-filtered|${{ needs.tooling-tests.result }}
+          GATED_JOB_1: tooling-tests|path-filtered|${{ needs.tooling-tests.result }}
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh

@@ -61,6 +61,7 @@ internal/cigates/docsprepare	test	docs-data
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs
+internal/cigates/docstools	code	docs-data
 internal/cigates/docstools	code	mkdocs.yml
 internal/cigates/docstools	test	.github
 internal/cigates/docstools	test	Makefile

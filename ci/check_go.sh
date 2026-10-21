@@ -706,6 +706,12 @@ check_ratchets() {
   )
 }
 
+# check_race_weights_text FILE...: the files hold no NUL byte and are valid UTF-8 (each byte counted with LC_ALL=C).
+check_race_weights_text() {
+  [ "$(( $(tail -n +1 -- "$@" | LC_ALL=C tr -dc '\000' | wc -c) ))" -eq 0 ] \
+    && tail -n +1 -- "$@" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
+}
+
 # check_race_weights_rows (CHAOS-4233, CHAOS-10300): the census of ci/go_race_weights.d, run by `fast`, `ci` and the static leg so a
 # package added, removed or renamed names the missing or stale file on the author's machine. One file per package, one row each:
 #   1. every file holds exactly one `package<TAB>seconds` row (comments and blank lines are ignored);
@@ -714,9 +720,17 @@ check_ratchets() {
 #   4. every package of the root module has a file, and no file names a package that is gone.
 # Order is not checked: the directory has none, and the shard awks look rows up by key.
 check_race_weights_rows() {
-  local modpath listed missing stale dup key rows files
+  local modpath listed missing stale dup key rows files f
   shopt -s dotglob
   [ -d "${GO_RACE_WEIGHTS_DIR}" ] || die "race weights directory missing: ${GO_RACE_WEIGHTS_DIR}"
+  # Rule 0: every file is UTF-8 text without a NUL byte, so grep and every awk, in every locale, read the same rows. One pass over all
+  # files (tail separates them with ASCII header lines, so no sequence spans two files); a file is named only when that pass fails.
+  if ! check_race_weights_text "${GO_RACE_WEIGHTS_DIR}"/*.tsv; then
+    for f in "${GO_RACE_WEIGHTS_DIR}"/*.tsv; do
+      check_race_weights_text "${f}" \
+        || die "${f##*/} is not text: it holds a NUL byte or a byte sequence that is not UTF-8 (race weight files hold one package<TAB>seconds row)"
+    done
+  fi
   rows="$(race_weights_rows)" || die "race weights unreadable: ${GO_RACE_WEIGHTS_DIR}"
   # One awk pass over every file (a few forks, not several per file): the first file that breaks rule 1, then the first that
   # breaks rule 3, each as the message the per-file check prints. Rule 2 (the rows above) is checked between the two, as before.

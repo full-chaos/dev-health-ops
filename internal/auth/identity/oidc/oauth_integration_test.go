@@ -20,7 +20,7 @@ import (
 func TestOAuthPKCEIsSentAndCheckedForEveryProvider(t *testing.T) {
 	for _, protocol := range []string{"oauth_github", "oauth_gitlab", "oauth_google"} {
 		t.Run(protocol, func(t *testing.T) {
-			h := newHarness(t, harnessOpts{signup: true})
+			h := newHarness(t, harnessOpts{signup: false})
 			provider, client := h.seedOAuthProvider(t, h.orgID, protocol, nil)
 			s := h.startOAuth(t, provider)
 			if s.challenge == "" || s.query.Get("code_challenge_method") != "S256" {
@@ -113,10 +113,11 @@ func TestOIDCStateIsRefusedByTheOAuthCallback(t *testing.T) {
 }
 
 func TestOAuthCallbackRefusesReplayedState(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
 	provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", nil)
 	s := h.startOAuth(t, provider)
 	account := fakeAccountWith(uniqueEmail("replay"), true)
+	h.seedOAuthMember(t, h.orgID, "oauth_gitlab", account)
 	if _, failure := h.finishOAuth(t, provider, client, s, account, true); failure != nil {
 		t.Fatalf("first callback: %v", failure)
 	}
@@ -140,14 +141,16 @@ func TestOAuthCallbackRefusesStateForAnotherProvider(t *testing.T) {
 }
 
 func TestOAuthCallbackRefusesMissingLoginNonceCookie(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
 	provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", nil)
 	s := h.startOAuth(t, provider)
+	account := fakeAccountWith(uniqueEmail("x"), true)
+	h.seedOAuthMember(t, h.orgID, "oauth_gitlab", account)
 	before := h.snapshot(t)
-	_, failure := h.finishOAuth(t, provider, client, s, fakeAccountWith(uniqueEmail("x"), true), false)
+	_, failure := h.finishOAuth(t, provider, client, s, account, false)
 	wantDenied(t, failure, http.StatusBadRequest, ReasonMalformed)
 	wantUnchanged(t, h, before)
-	if _, failure := h.finishOAuth(t, provider, client, s, fakeAccountWith(uniqueEmail("x"), true), true); failure != nil {
+	if _, failure := h.finishOAuth(t, provider, client, s, account, true); failure != nil {
 		t.Fatalf("flow owner after a cookieless attempt: %v", failure)
 	}
 }
@@ -178,7 +181,7 @@ func TestOAuthEmailCollisionIsAConflict(t *testing.T) {
 }
 
 func TestOAuthSubjectIsScopedByProviderRow(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
 	first, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", nil)
 	account := fakeAccountWith(uniqueEmail("owner"), true)
 	user := h.seedOAuthMember(t, h.orgID, "oauth_gitlab", account)
@@ -199,7 +202,7 @@ func TestOAuthSubjectIsScopedByProviderRow(t *testing.T) {
 }
 
 func TestOAuthSelfHostedGitLabIssuerIsTheBaseURL(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
 	base := h.idp.server.URL + "/gitlab/selfhosted"
 	provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", map[string]any{"base_url": base})
 	s := h.startOAuth(t, provider)
@@ -354,7 +357,7 @@ func TestOAuthByTypePicksTheDefaultActiveProvider(t *testing.T) {
 }
 
 func TestOAuthOutcomesRecordedOnce(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
 	reader := sdkmetric.NewManualReader()
 	var logged bytes.Buffer
 	cfg := h.svc.cfg
@@ -408,7 +411,7 @@ func TestOAuthOutcomesRecordedOnce(t *testing.T) {
 }
 
 func TestOAuthHandlersRoundTrip(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
 	org := h.seedOrg(t)
 	provider, client := h.seedOAuthProvider(t, org, "oauth_google", nil)
 	mux := http.NewServeMux()

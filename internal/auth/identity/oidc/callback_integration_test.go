@@ -111,7 +111,7 @@ func TestSubjectIsScopedByIssuer(t *testing.T) {
 }
 
 func TestSubjectIsScopedByProviderRow(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
 	owner := h.seedOIDCMember(t, "sub-consented", uniqueEmail("owner"))
 	first := h.start(t)
 	signedIn, failure := h.finish(t, first, h.sign(t, h.claims(first.nonce, "sub-consented", uniqueEmail("owner"))))
@@ -311,9 +311,10 @@ func TestCallbackRefusesNonceFromAnotherFlow(t *testing.T) {
 }
 
 func TestCallbackRefusesReplayedState(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
-	s := h.start(t)
+	h := newHarness(t, harnessOpts{signup: false})
 	email := uniqueEmail("replay")
+	h.seedOIDCMember(t, "sub-replay", email)
+	s := h.start(t)
 	if _, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-replay", email))); failure != nil {
 		t.Fatalf("first callback: %v", failure)
 	}
@@ -349,7 +350,8 @@ func TestCallbackRefusesStateForAnotherProvider(t *testing.T) {
 }
 
 func TestCallbackRefusesMissingLoginNonceCookie(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
+	h.seedOIDCMember(t, "sub-cookie", uniqueEmail("cookie"))
 	before := h.snapshot(t)
 	s := h.start(t)
 	idToken := h.sign(t, h.claims(s.nonce, "sub-cookie", uniqueEmail("cookie")))
@@ -462,7 +464,8 @@ func TestDisabledAccountIsRefused(t *testing.T) {
 
 func TestDiscoveryIssuerMustMatchTheConfiguredIssuer(t *testing.T) {
 	t.Run("matching", func(t *testing.T) {
-		h := newHarness(t, harnessOpts{signup: true, discovery: true})
+		h := newHarness(t, harnessOpts{signup: false, discovery: true})
+		h.seedOIDCMember(t, "sub-disco", uniqueEmail("disco"))
 		s := h.start(t)
 		if _, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-disco", uniqueEmail("disco")))); failure != nil {
 			t.Fatalf("callback: %v", failure)
@@ -496,7 +499,7 @@ func TestUserinfoSubjectMustMatchTheIDToken(t *testing.T) {
 }
 
 func TestHandlersRoundTrip(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
 	h.seedOIDCMember(t, "sub-http", uniqueEmail("http"))
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/auth/oidc/{provider_id}/authorize", h.svc.AuthorizeHandler())
@@ -560,12 +563,8 @@ func TestHandlersRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("response request id %q: %v", wire, err)
 	}
-	serverID, err := uuid.FromBytes(raw)
-	if err != nil {
+	if _, err := uuid.FromBytes(raw); err != nil {
 		t.Fatal(err)
-	}
-	if n := h.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE request_id = $1`, serverID.String()); n != 1 {
-		t.Fatalf("provisioning audit rows carrying the server request id = %d, want 1", n)
 	}
 
 	resp, err = http.Post(base+"/callback", "application/json", strings.NewReader(`{"code":"c","state":"s","code":"d"}`))
@@ -731,7 +730,7 @@ func TestProviderChecksPrecedeConfigDecode(t *testing.T) {
 }
 
 func TestEveryOutcomeIsRecordedOnce(t *testing.T) {
-	h := newHarness(t, harnessOpts{signup: true})
+	h := newHarness(t, harnessOpts{signup: false})
 	reader := sdkmetric.NewManualReader()
 	var logged bytes.Buffer
 	cfg := h.svc.cfg

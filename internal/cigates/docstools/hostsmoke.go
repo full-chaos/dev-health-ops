@@ -87,80 +87,75 @@ func hsTransport() *http.Transport {
 	return transport
 }
 
-func hsClient(follow bool) *http.Client {
-	transport := hsTransport()
-	client := &http.Client{Transport: transport}
-	if !follow {
-		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-		return client
-	}
-	// urllib.request.HTTPRedirectHandler: per request chain, at most 10 distinct URLs and at most 4 visits of one URL, http and https only.
-	chains := map[*http.Request]map[string]int{}
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if requote, err := hsLocationNeedsRequote(req.Context()); err != nil || requote {
-			if err != nil {
-				return err
-			}
-			return errors.New("location needs re-quote (urllib re-quotes a followed Location; this port does not)")
-		}
-		next := req.URL.String()
-		if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-			return http.ErrUseLastResponse
-		}
-		visited := chains[via[0]]
-		if visited == nil {
-			visited = map[string]int{}
-			chains[via[0]] = visited
-		}
-		if visited[next] >= 4 || len(visited) >= 10 {
-			return http.ErrUseLastResponse
-		}
-		visited[next]++
-		return nil
-	}
-	return client
-}
+// hsRedirectCodes are the statuses urllib's HTTPRedirectHandler follows for a GET.
+var hsRedirectCodes = map[int]bool{301: true, 302: true, 303: true, 307: true, 308: true}
 
-// hsGet sends a GET; with follow false it uses the transport directly, so net/http never parses the Location header of a
-// 3xx (urllib with NoRedirect does not either).
-func hsGet(client *http.Client, follow bool, target string) (hsResponse, error) {
-	req, err := http.NewRequest(http.MethodGet, target, nil)
-	if err != nil {
-		return hsResponse{}, err
-	}
-	trace := &hsTrace{}
-	req = req.WithContext(context.WithValue(req.Context(), hsTraceKey{}, trace))
-	req.Header.Set("User-Agent", hsUserAgent)
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Close = true
-	var resp *http.Response
-	if follow {
-		resp, err = client.Do(req)
-	} else {
-		resp, err = client.Transport.RoundTrip(req)
-	}
-	if err != nil {
-		return hsResponse{}, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return hsResponse{}, err
-	}
-	headers := map[string]string{}
-	for key, values := range resp.Header {
-		headers[strings.ToLower(key)] = values[len(values)-1]
-	}
-	if raw := trace.last(); raw != nil {
-		parsed, ok, err := hsRawHeaders(raw)
+// hsGet sends a GET through the transport. With follow it follows redirects as urllib does, itself, so net/http never
+// parses a Location: per request chain at most 10 distinct URLs and 4 visits of one URL (the redirect answer is then the
+// result), http and https only, and a Location urllib would re-quote is refused. Without follow the 3xx is the result.
+func hsGet(rt http.RoundTripper, follow bool, target string) (hsResponse, error) {
+	visited := map[string]int{}
+	for {
+		req, err := http.NewRequest(http.MethodGet, target, nil)
 		if err != nil {
 			return hsResponse{}, err
 		}
-		if ok {
-			headers = hsLastWins(parsed)
+		trace := &hsTrace{}
+		req = req.WithContext(context.WithValue(req.Context(), hsTraceKey{}, trace))
+		req.Header.Set("User-Agent", hsUserAgent)
+		req.Header.Set("Accept-Encoding", "identity")
+		req.Close = true
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			return hsResponse{}, err
 		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return hsResponse{}, err
+		}
+		headers := map[string]string{}
+		for key, values := range resp.Header {
+			headers[strings.ToLower(key)] = values[len(values)-1]
+		}
+		var pairs []hsHeader
+		if raw := trace.last(); raw != nil {
+			parsed, ok, err := hsRawHeaders(raw)
+			if err != nil {
+				return hsResponse{}, err
+			}
+			if ok {
+				pairs = parsed
+				headers = hsLastWins(parsed)
+			}
+		}
+		result := hsResponse{status: resp.StatusCode, headers: headers, body: body}
+		if !follow || !hsRedirectCodes[resp.StatusCode] {
+			return result, nil
+		}
+		location, found := hsFirst(pairs, "location")
+		if pairs == nil {
+			location, found = resp.Header.Get("Location"), resp.Header.Get("Location") != ""
+		}
+		if !found {
+			return result, nil
+		}
+		if hsLocationNeedsRequote(location) {
+			return hsResponse{}, errors.New("location needs re-quote (urllib re-quotes a followed Location; this port does not)")
+		}
+		next, err := req.URL.Parse(location)
+		if err != nil {
+			return hsResponse{}, err
+		}
+		if next.Scheme != "http" && next.Scheme != "https" {
+			return result, nil
+		}
+		if visited[next.String()] >= 4 || len(visited) >= 10 {
+			return result, nil
+		}
+		visited[next.String()]++
+		target = next.String()
 	}
-	return hsResponse{status: resp.StatusCode, headers: headers, body: body}, nil
 }
 
 var (
@@ -401,7 +396,7 @@ func hostSmokeVerb(args []string, stdout, stderr io.Writer) int {
 	}
 	func() {
 		var home *hsResponse
-		follow := hsClient(true)
+		follow := hsTransport()
 		for _, check := range checks {
 			result, err := hsGet(follow, true, hsJoin(origin, strings.TrimLeft(check.path, "/")))
 			if err != nil {
@@ -429,7 +424,7 @@ func hostSmokeVerb(args []string, stdout, stderr io.Writer) int {
 				errs = append(errs, "/: response body does not contain the Dev Health site identity")
 			}
 		}
-		redirect, err := hsGet(hsClient(false), false, hsJoin(origin, strings.TrimLeft(source, "/")))
+		redirect, err := hsGet(hsTransport(), false, hsJoin(origin, strings.TrimLeft(source, "/")))
 		if err != nil {
 			requestFailed(err)
 			return

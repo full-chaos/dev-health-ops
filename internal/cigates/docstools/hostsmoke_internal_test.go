@@ -170,3 +170,55 @@ func TestHostSmokeDialWithProxyEnvironmentNeverDialsTheTarget(t *testing.T) {
 		t.Error("NO_PROXY suffix did not bypass the proxy")
 	}
 }
+
+type hsFakeTransport struct {
+	requests []string
+	reply    func(path string) (int, map[string]string)
+}
+
+func (f *hsFakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	f.requests = append(f.requests, req.URL.String())
+	status, header := f.reply(req.URL.Path)
+	resp := &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("Dev Health")), Request: req}
+	for k, v := range header {
+		resp.Header.Set(k, v)
+	}
+	return resp, nil
+}
+
+func TestHostSmokeRedirectCheckNeverFollows(t *testing.T) {
+	fake := &hsFakeTransport{reply: func(string) (int, map[string]string) { return 301, map[string]string{"Location": "/new/"} }}
+	result, err := hsGet(fake, false, "https://docs.fullchaos.dev/old/")
+	if err != nil || result.status != 301 || len(fake.requests) != 1 {
+		t.Errorf("status %d err %v requests %v", result.status, err, fake.requests)
+	}
+}
+
+// urllib follows at most 10 distinct URLs and visits one URL at most 4 times, per request chain; other schemes than
+// http and https are not followed; a Location it would re-quote is refused.
+func TestHostSmokeFollowBoundsEveryRequestChain(t *testing.T) {
+	loop := &hsFakeTransport{reply: func(string) (int, map[string]string) { return 302, map[string]string{"Location": "/loop/"} }}
+	result, err := hsGet(loop, true, "https://h/loop/")
+	if err != nil || result.status != 302 || len(loop.requests) != 5 {
+		t.Errorf("loop: status %d err %v requests %d, want the 302 after 5 requests", result.status, err, len(loop.requests))
+	}
+	again := &hsFakeTransport{reply: loop.reply}
+	if _, err := hsGet(again, true, "https://h/loop/"); err != nil || len(again.requests) != 5 {
+		t.Errorf("a second chain shares the first one's visits: %d requests, %v", len(again.requests), err)
+	}
+	chain := &hsFakeTransport{reply: func(path string) (int, map[string]string) {
+		n, _ := strconv.Atoi(strings.Trim(path, "/h"))
+		return 301, map[string]string{"Location": "/h" + strconv.Itoa(n+1) + "/"}
+	}}
+	if result, err := hsGet(chain, true, "https://h/h0/"); err != nil || result.status != 301 || len(chain.requests) != 11 {
+		t.Errorf("chain: status %d err %v requests %d, want the 301 after 11 requests (10 distinct redirect targets)", result.status, err, len(chain.requests))
+	}
+	ftp := &hsFakeTransport{reply: func(string) (int, map[string]string) { return 302, map[string]string{"Location": "ftp://h/x"} }}
+	if result, err := hsGet(ftp, true, "https://h/"); err != nil || result.status != 302 || len(ftp.requests) != 1 {
+		t.Errorf("ftp: status %d err %v requests %v", result.status, err, ftp.requests)
+	}
+	requote := &hsFakeTransport{reply: func(string) (int, map[string]string) { return 302, map[string]string{"Location": "/new/?"} }}
+	if _, err := hsGet(requote, true, "https://h/"); err == nil || len(requote.requests) != 1 {
+		t.Errorf("re-quote: err %v requests %v", err, requote.requests)
+	}
+}

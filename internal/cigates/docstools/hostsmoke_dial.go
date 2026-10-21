@@ -402,40 +402,20 @@ func hsFirst(pairs []hsHeader, name string) (string, bool) {
 	return "", false
 }
 
-// hsLocationNeedsRequote reports whether urllib would change the Location of the redirect just answered before following
-// it: HTTPRedirectHandler.http_error_302 runs urlunparse(urlparse(Location)) and quote(..., safe=string.punctuation) over
+// hsLocationNeedsRequote reports whether urllib would change a Location before following it: HTTPRedirectHandler.http_error_302 runs urlunparse(urlparse(Location)) and quote(..., safe=string.punctuation) over
 // it. Go follows the Location as net/http parses it, so a Location that urllib would rewrite (a byte outside printable
 // ASCII, brackets, an uppercase scheme, a netloc without a path, an empty "?", "#" or ";") is refused instead: Go never
 // follows a URL Python could have followed differently. Only the redirects of schemes urllib follows are asked.
-func hsLocationNeedsRequote(ctx context.Context) (bool, error) {
-	trace, _ := ctx.Value(hsTraceKey{}).(*hsTrace)
-	if trace == nil {
-		return false, nil
-	}
-	raw := trace.last()
-	if raw == nil {
-		return false, nil
-	}
-	pairs, ok, err := hsRawHeaders(raw)
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return false, nil
-	}
-	loc, found := hsFirst(pairs, "location")
-	if !found {
-		return false, nil
-	}
+func hsLocationNeedsRequote(loc string) bool {
 	for i := 0; i < len(loc); i++ {
 		if loc[i] < 0x21 || loc[i] > 0x7e || loc[i] == '[' || loc[i] == ']' {
-			return true, nil
+			return true
 		}
 	}
 	rest := loc
 	if m := hsSchemeRe.FindStringIndex(rest); m != nil {
 		if rest[:m[1]-1] != strings.ToLower(rest[:m[1]-1]) {
-			return true, nil
+			return true
 		}
 		rest = rest[m[1]:]
 	}
@@ -443,22 +423,22 @@ func hsLocationNeedsRequote(ctx context.Context) (bool, error) {
 		after := rest[2:]
 		end := strings.IndexAny(after, "/?#")
 		if end < 0 || strings.ContainsAny(after[end:end+1], "?#") {
-			return true, nil
+			return true
 		}
 		rest = after[end:]
 	}
 	if i := strings.Index(rest, "#"); i >= 0 {
 		if i == len(rest)-1 {
-			return true, nil
+			return true
 		}
 		rest = rest[:i]
 	}
 	if i := strings.Index(rest, "?"); i >= 0 {
 		if i == len(rest)-1 {
-			return true, nil
+			return true
 		}
 		rest = rest[:i]
 	}
 	last := rest[strings.LastIndex(rest, "/")+1:]
-	return strings.HasSuffix(last, ";"), nil
+	return strings.HasSuffix(last, ";")
 }

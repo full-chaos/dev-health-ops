@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
@@ -92,8 +95,10 @@ func TestLinkOfAnotherAccountsSubjectIsAnIdentityConflict(t *testing.T) {
 			f := newFakeProviders(t)
 			var logs bytes.Buffer
 			store := refusingStore{lookupErr: identity.ErrProviderAlreadyLinked, lookupID: c.holder}
+			reader := sdkmetric.NewManualReader()
 			svc, err := New(Config{Store: store, Providers: f.client(), Now: func() time.Time { return now },
-				Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+				Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+				Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -104,6 +109,27 @@ func TestLinkOfAnotherAccountsSubjectIsAnIdentityConflict(t *testing.T) {
 			}
 			if !strings.Contains(logs.String(), "reason_code="+c.reason) {
 				t.Fatalf("log has no reason_code=%s: %s", c.reason, logs.String())
+			}
+			var collected metricdata.ResourceMetrics
+			if err := reader.Collect(context.Background(), &collected); err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]int64{}
+			for _, scope := range collected.ScopeMetrics {
+				for _, m := range scope.Metrics {
+					sum, ok := m.Data.(metricdata.Sum[int64])
+					if m.Name != "auth.social.outcomes" || !ok {
+						continue
+					}
+					for _, point := range sum.DataPoints {
+						reason, _ := point.Attributes.Value("reason_code")
+						operation, _ := point.Attributes.Value("operation")
+						got[operation.AsString()+"/"+reason.AsString()] += point.Value
+					}
+				}
+			}
+			if want := map[string]int64{string(OperationLink) + "/" + c.reason: 1}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("outcome counter = %v, want %v", got, want)
 			}
 		})
 	}

@@ -772,17 +772,19 @@ func TestARefusedIdentityProjectionWritesNoPrincipalOrUserRow(t *testing.T) {
 		user, uniqueEmail("changed")); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := func() [5]int {
-		return [5]int{
+	snapshot := func() [7]int {
+		return [7]int{
 			e.count(t, ctx, `SELECT count(*) FROM auth.principals WHERE id = $1`, user),
 			e.count(t, ctx, `SELECT count(*) FROM auth.principals WHERE id = $1 AND disabled_at IS NULL`, user),
 			e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND email_lower = lower($2)`, user, email),
 			e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND email_verified_at IS NOT NULL`, user),
 			e.auditRows(t, ctx, "auth.principal.projection_updated", user.String()),
+			e.count(t, ctx, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1`, user),
+			e.auditRows(t, ctx, "auth.identity.projected", user.String()),
 		}
 	}
 	before := snapshot()
-	if before[0] != 1 || before[1] != 1 || before[2] != 1 || before[3] != 1 {
+	if before[0] != 1 || before[1] != 1 || before[2] != 1 || before[3] != 1 || before[5] != 1 || before[6] != 0 {
 		t.Fatalf("fixture rows = %v, want a live verified projected user", before)
 	}
 	p, found, err := e.store.IdentityBySubject(ctx, issuer, ProviderGitHub, wanted, socialLegacy(ProviderGitHub))

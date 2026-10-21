@@ -754,6 +754,46 @@ AND subject_principal_id::text = $1 AND attributes->>'reason_code' = 'identity_p
 	}
 }
 
+// A refused identity projection leaves the go-api account's auth principal
+// and user rows, and their audit rows, as they were: the refusal comes before
+// any projection of the account's changed go-api row.
+func TestARefusedIdentityProjectionWritesNoPrincipalOrUserRow(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	issuer, _ := SocialIssuer(ProviderGitHub)
+	held, wanted := "gh-held-"+uuid.NewString(), "gh-wanted-"+uuid.NewString()
+	email := uniqueEmail("refused")
+	user := e.seedLegacy(t, ctx, email, "github", wanted, false)
+	e.project(t, ctx, user)
+	if _, err := e.store.LinkIdentity(ctx, ExternalKey{Issuer: issuer, Provider: ProviderGitHub, Subject: held}, user, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET email = $2, is_active = false, is_verified = false, updated_at = now() WHERE id = $1`,
+		user, uniqueEmail("changed")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() [5]int {
+		return [5]int{
+			e.count(t, ctx, `SELECT count(*) FROM auth.principals WHERE id = $1`, user),
+			e.count(t, ctx, `SELECT count(*) FROM auth.principals WHERE id = $1 AND disabled_at IS NULL`, user),
+			e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND email_lower = lower($2)`, user, email),
+			e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND email_verified_at IS NOT NULL`, user),
+			e.auditRows(t, ctx, "auth.principal.projection_updated", user.String()),
+		}
+	}
+	before := snapshot()
+	if before[0] != 1 || before[1] != 1 || before[2] != 1 || before[3] != 1 {
+		t.Fatalf("fixture rows = %v, want a live verified projected user", before)
+	}
+	p, found, err := e.store.IdentityBySubject(ctx, issuer, ProviderGitHub, wanted, socialLegacy(ProviderGitHub))
+	if !errors.Is(err, ErrProviderAlreadyLinked) || found || p.ID != user {
+		t.Fatalf("IdentityBySubject = %+v, %v, %v; want the refusal naming %v", p, found, err, user)
+	}
+	if after := snapshot(); after != before {
+		t.Fatalf("a refused projection changed the account's rows: before %v, after %v", before, after)
+	}
+}
+
 func TestIdentityBySubjectLegacyRefusals(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()

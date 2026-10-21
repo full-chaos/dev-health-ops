@@ -3,6 +3,7 @@ package social
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -18,11 +19,12 @@ import (
 type refusingStore struct {
 	stubStore
 	lookupErr error
+	lookupID  uuid.UUID
 	linkErr   error
 }
 
 func (s refusingStore) IdentityBySubject(context.Context, string, identity.Provider, string, *identity.LegacyMatch) (identity.Principal, bool, error) {
-	return identity.Principal{}, false, s.lookupErr
+	return identity.Principal{ID: s.lookupID}, false, s.lookupErr
 }
 
 func (refusingStore) ListIdentities(context.Context, uuid.UUID) ([]identity.Identity, error) {
@@ -62,6 +64,43 @@ func TestLinkRefusalsCarryTheirReasonCodes(t *testing.T) {
 			}
 			if err == nil {
 				t.Fatal("the refusal was not returned")
+			}
+			if !strings.Contains(logs.String(), "reason_code="+c.reason) {
+				t.Fatalf("log has no reason_code=%s: %s", c.reason, logs.String())
+			}
+		})
+	}
+}
+
+// A link of a subject whose go-api account holds another subject at the
+// provider answers identity_conflict when that account is another principal's,
+// and provider_already_linked when it is the signed-in principal's own.
+func TestLinkOfAnotherAccountsSubjectIsAnIdentityConflict(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	signedIn, other := uuid.New(), uuid.New()
+	cases := []struct {
+		name    string
+		holder  uuid.UUID
+		reason  string
+		wantErr error
+	}{
+		{"the subject's account is another principal's", other, "identity_conflict", identity.ErrIdentityConflict},
+		{"the subject's account is the signed-in principal's", signedIn, "provider_already_linked", ErrProviderLinked},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeProviders(t)
+			var logs bytes.Buffer
+			store := refusingStore{lookupErr: identity.ErrProviderAlreadyLinked, lookupID: c.holder}
+			svc, err := New(Config{Store: store, Providers: f.client(), Now: func() time.Time { return now },
+				Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			token := f.token(t.Name(), account{provider: GitHub, id: 9301, email: "conflict@example.com", verified: true, public: true})
+			_, err = svc.Link(context.Background(), SignedIn{PrincipalID: signedIn, AuthTime: now}, GitHub, token)
+			if !errors.Is(err, c.wantErr) {
+				t.Fatalf("err = %v, want %v", err, c.wantErr)
 			}
 			if !strings.Contains(logs.String(), "reason_code="+c.reason) {
 				t.Fatalf("log has no reason_code=%s: %s", c.reason, logs.String())

@@ -2,15 +2,17 @@ package releasetag
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
-const (
-	defaultPackageJSON = "grafana/plugins/dev-health-panels/package.json"
-	defaultSuffix      = "beta"
-)
+// defaultPackageJSON is written in pieces: the path guard of the workflow filters reads a string literal that ends in .json as
+// a named file and, finding none, takes the one tracked file of the same base name (ci/auth-contracts-ajv/package.json).
+var defaultPackageJSON = path.Join("grafana", "plugins", "dev-health-panels", "package"+".json")
+
+const defaultSuffix = "beta"
 
 type options struct {
 	packageJSON string

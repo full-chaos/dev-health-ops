@@ -76,6 +76,7 @@
         "provisioning_disabled",
         "domain_not_allowed",
         "not_entitled",
+        "membership_required",
         "rate_limited",
         "store_unavailable",
         "dependency_unavailable"

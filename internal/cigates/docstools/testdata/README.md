@@ -153,3 +153,17 @@ except where marked. Hand-written rows: `TestQueuemapRefusesNullAndNonIntegerPro
 Same as Python (recorded pairs): an absent key (`genqm-missing-registry-queue`, `genqm-missing-state`), a case-folded
 key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-folded key
 (`genqm-key-unicode-folded-state`, U+017F): `KeyError` naming the key, rc 1.
+
+# Recorded Python/Go parity pairs, check-code-prerequisites
+
+Cases `check-code-prerequisites-*` under `parity/`. The Python side was recorded once from `scripts/check_code_prerequisites.py`
+at the parent of the porting commit (Python 3.12.3, PyYAML 6.0.1): `$W/scripts/` holds the script, cwd is `$W`, `$W` is `{WORK}`.
+The frozen script and its refusal inventory are `refusals/check_code_prerequisites.py.frozen` and
+`refusals/check-code-prerequisites.tsv` (`refusals_codeprereq_test.go`).
+
+Named differences: the repository root is the working directory, not the script location; a scope file that PyYAML cannot load
+prints one line `YAMLError: <path>: not loadable by yaml.safe_load` (rc 1); a usage error is one stderr line with rc 2 and an
+abbreviated option is refused (`TestCodePrerequisitesRefusesAbbreviatedOptions`); `--help` prints the Go usage line (the
+`help` case stdout is hand-written). Scope scalars are resolved with the PyYAML 1.1 implicit resolvers (yes/no/on/off, ints
+including 0x, 0b, octal and sexagesimal, floats, null and timestamps are not strings). Unicode rows: U+00E9 and U+0663 before
+the variable name (not a credential), U+00A0, U+001C and U+001F before it (a credential), `_` before it (not a credential).

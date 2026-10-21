@@ -29,7 +29,7 @@ non-ranking interpretation guidance and the existing AI evidence paths.
 | --- | --- |
 | `DOCS-CONTRACTS` | `pytest tests/docs -q` |
 | `DOCS-STRICT-SOURCE` | `make docs:check` |
-| `DOCS-SOURCE-LINKS` | `python scripts/check_docs_links.py` |
+| `DOCS-SOURCE-LINKS` | `make docs:check-links` |
 | `DOCS-STRICT-BUILT` | `python -m mkdocs build --strict --site-dir .build/site` |
 | `DOCS-BUILT-LINKS` | `python scripts/check_built_site_links.py --site-dir .build/site` |
 | `DOCS-EXTERNAL-LINKS` | `make docs:check-external-links` |
@@ -40,19 +40,11 @@ non-ranking interpretation guidance and the existing AI evidence paths.
 | `DOCS-QA-CHROME-A11Y` | `pnpm --dir docs-qa run test:a11y` |
 | `DOCS-QA-CHROME-JOURNEYS` | `pnpm --dir docs-qa run test:journeys` |
 | `DOCS-QA-SEARCH` | `pnpm --dir docs-qa run test:search` |
-| `EVIDENCE-VALIDATOR` | `EVIDENCE_ROOT="/path/to/user-guide-coverage-evidence"; .venv/bin/python scripts/validate_user_guide_evidence.py --evidence-root "$EVIDENCE_ROOT"` |
 | `OPS-LOCAL-VALIDATE` | `bash ci/local_validate.sh` |
 
 ### Required receipts before opening the PR
 
 - [ ] `FINAL-GATE-RECEIPT`: `<!-- paste the final local gate receipt after push -->`
-- [ ] `EVIDENCE-VALIDATOR-RECEIPT`: `<!-- paste the 5-manifest / 48-artifact local validator receipt after fresh capture -->`
-
-The evidence-validator command is a required local pre-PR gate. It recursively inventories only
-the five canonical task-7 through task-11 directories, so unrelated historical evidence elsewhere
-under the explicit root is ignored. The known noncanonical `task-3-final` orphan is explicitly
-rejected for this wave and must be removed before capture validation. CI does not depend on
-uncommitted workspace evidence.
 
 ## Visual evidence
 

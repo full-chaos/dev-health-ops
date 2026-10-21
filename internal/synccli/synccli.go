@@ -28,6 +28,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -133,7 +134,7 @@ type deps struct {
 // credential to another host (providerfoundation.DropCredentialsOnHostChange); the provider clients also
 // guard their own credential origin.
 func productionDoer() *http.Client {
-	return &http.Client{Timeout: 45 * time.Second, CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
+	return &http.Client{Timeout: 45 * time.Second, Transport: httpguard.SharedTransport(), CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
 }
 
 func defaultDeps() deps {

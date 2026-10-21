@@ -120,6 +120,7 @@ internal/testsupport/containers
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed
+internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
 internal/testsupport/venueoracle
 internal/workitemcontract

@@ -328,6 +328,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvDatabaseConnectTimeout: "3s",
 		EnvSigningKeyFile:         "/tmp/other-key.pem",
 		EnvSigningKeyID:           "other-kid",
+		EnvSigningKeySetFile:      "/tmp/other-keyset.json",
 		EnvAccessTokenIssuer:      "other-issuer",
 		EnvAccessTokenAudience:    "other-audience",
 		EnvTrustedProxies:         "10.0.0.5,192.168.0.0/16",
@@ -351,6 +352,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvDatabaseConnectTimeout: func(c Config) string { return c.DatabaseConnectTimeout.String() },
 		EnvSigningKeyFile:         func(c Config) string { return c.SigningKeyPath },
 		EnvSigningKeyID:           func(c Config) string { return c.SigningKeyID },
+		EnvSigningKeySetFile:      func(c Config) string { return c.SigningKeySetPath },
 		EnvAccessTokenIssuer:      func(c Config) string { return c.Session.AccessIssuer },
 		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
 		EnvTrustedProxies:         func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
@@ -380,6 +382,11 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 				)
 			}
 			env, base := baseEnv(), baseline
+			// The key-set manifest replaces the single key file and kid.
+			if option.Env == EnvSigningKeySetFile {
+				delete(env, EnvSigningKeyFile)
+				delete(env, EnvSigningKeyID)
+			}
 			if option.Env == EnvCompatRoutes {
 				// The compat routes need the session secrets; the baseline has them too.
 				env = sessionEnv(testAccessSecret, testSuccessorKey)

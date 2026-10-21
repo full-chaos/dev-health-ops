@@ -62,6 +62,9 @@ const (
 	EnvDatabaseConnectTimeout = "AUTH_DATABASE_CONNECT_TIMEOUT"
 	EnvSigningKeyFile         = "AUTH_SIGNING_KEY_FILE"
 	EnvSigningKeyID           = "AUTH_SIGNING_KEY_ID"
+	// EnvSigningKeySetFile names a key-set manifest (several keys, each with a
+	// kid and a rotation state) in place of the single key file and kid.
+	EnvSigningKeySetFile = "AUTH_SIGNING_KEYSET_FILE"
 	// EnvSigningKeyDirect is the PROHIBITED spelling. ACP-ADR-02 §4:
 	// "Direct-value secret env vars are prohibited for signing material."
 	// Load rejects it when present rather than ignoring it, because an
@@ -166,6 +169,9 @@ type Config struct {
 
 	SigningKeyPath string
 	SigningKeyID   string
+	// SigningKeySetPath is the key-set manifest; when set, SigningKeyPath and
+	// SigningKeyID are empty.
+	SigningKeySetPath string
 
 	// Session holds the session routes' token settings. Session.Enabled is
 	// false when neither secret is set: the service then mounts no session
@@ -234,6 +240,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Int64("database_max_conns", int64(c.DatabaseMaxConns)),
 		slog.String("database_connect_timeout", c.DatabaseConnectTimeout.String()),
 		slog.Bool("signing_key_configured", c.SigningKeyPath != ""),
+		slog.Bool("signing_keyset_configured", c.SigningKeySetPath != ""),
 		slog.String("signing_key_id", c.SigningKeyID),
 		slog.Bool("api_routes_enabled", c.Session.Enabled),
 		slog.Bool("compat_routes_enabled", c.Session.CompatRoutes),
@@ -355,7 +362,7 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 
-	if cfg.SigningKeyPath, cfg.SigningKeyID, err = signingKey(lookup); err != nil {
+	if cfg.SigningKeySetPath, cfg.SigningKeyPath, cfg.SigningKeyID, err = signingKey(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.Session, err = sessionTokens(lookup); err != nil {
@@ -464,28 +471,37 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 // regular file, is not a symlink, is mode 0600-ish, is small enough, and
 // parses as an Ed25519 private key is a DEPENDENCY question answered live by
 // the keystore readiness check -- see this package's doc comment.
-func signingKey(lookup secrets.LookupEnv) (path string, keyID string, err error) {
+func signingKey(lookup secrets.LookupEnv) (keySetPath, path, keyID string, err error) {
 	if _, present := lookup(EnvSigningKeyDirect); present {
-		return "", "", fmt.Errorf(
+		return "", "", "", fmt.Errorf(
 			"%s must not carry signing material directly; mount it and set %s instead (ACP-ADR-02 §4)",
 			EnvSigningKeyDirect, EnvSigningKeyFile,
 		)
 	}
 	path = strings.TrimSpace(valueOf(lookup, EnvSigningKeyFile))
-	if path == "" {
-		return "", "", fmt.Errorf("%s is required and must name a file", EnvSigningKeyFile)
-	}
 	keyID = strings.TrimSpace(valueOf(lookup, EnvSigningKeyID))
+	if keySetPath = strings.TrimSpace(valueOf(lookup, EnvSigningKeySetFile)); keySetPath != "" {
+		if path != "" || keyID != "" {
+			return "", "", "", fmt.Errorf(
+				"%s names the whole key set; unset %s and %s",
+				EnvSigningKeySetFile, EnvSigningKeyFile, EnvSigningKeyID,
+			)
+		}
+		return keySetPath, "", "", nil
+	}
+	if path == "" {
+		return "", "", "", fmt.Errorf("%s is required and must name a file (or set %s)", EnvSigningKeyFile, EnvSigningKeySetFile)
+	}
 	if keyID == "" {
-		return "", "", fmt.Errorf(
+		return "", "", "", fmt.Errorf(
 			"%s is required: every signing key carries a kid and a JWKS entry from day one (ACP-ADR-02 §5)",
 			EnvSigningKeyID,
 		)
 	}
 	if err := validateKeyID(keyID); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return path, keyID, nil
+	return "", path, keyID, nil
 }
 
 // keyIDAllowed is the character set a JWKS `kid` may use here. It is

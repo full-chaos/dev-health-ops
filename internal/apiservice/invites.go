@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
@@ -37,7 +38,7 @@ func inviteConfig(cfg config.Config, logger *slog.Logger, lookup func(string) (s
 		out.TokenSecret = key
 	}
 	out.AppBaseURL, out.AppBaseURLSet = lookup("APP_BASE_URL")
-	sender, err := mail.NewSenderFromEnv(&http.Client{Timeout: inviteMailHTTPTimeout})
+	sender, err := mail.NewSenderFromEnv(&http.Client{Timeout: inviteMailHTTPTimeout, Transport: httpguard.SharedTransport()})
 	if err != nil {
 		logger.Error("api: invite email provider is unusable; invites will be created but not emailed",
 			"error", err)

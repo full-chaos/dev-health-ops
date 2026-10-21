@@ -8,7 +8,7 @@
 // mains are worth the small indirection -- and for why that note is not a
 // licence to build a plugin host here.
 //
-// It wires interfaces: keystore.Source for signing-key custody,
+// It wires interfaces: token.Signer over signing-key custody,
 // authstore.Prober for storage, httpapi.Route for transport. The domain
 // packages plug in at this one site: the session routes (internal/auth/authapi
 // over internal/auth/session) mount here when their secrets are configured.
@@ -39,7 +39,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
-	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -48,6 +47,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/token"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -316,10 +316,13 @@ func configureWithRoutes(
 		}
 	}
 
-	var signingKey keystore.Source = keystore.FileSource{
-		Path:  cfg.SigningKeyPath,
-		KeyID: cfg.SigningKeyID,
-	}
+	// The token signer is built here and proved by readiness; nothing issues
+	// with it yet.
+	signer := token.NewFileSigner(token.FileConfig{
+		KeySetPath: cfg.SigningKeySetPath,
+		KeyPath:    cfg.SigningKeyPath,
+		KeyID:      cfg.SigningKeyID,
+	})
 
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
 	// Both checks are REQUIRED, so readiness fails closed on either. The
@@ -345,12 +348,12 @@ func configureWithRoutes(
 		return nil, err
 	}
 	if err := registry.RegisterRequired(CheckSigningKey, func(ctx context.Context) error {
-		if _, describeErr := signingKey.Describe(ctx); describeErr != nil {
+		if checkErr := signer.Check(ctx); checkErr != nil {
 			logger.ErrorContext(
 				ctx, "readiness check failed",
-				"check", CheckSigningKey, "reason", keystore.ReasonOf(describeErr),
+				"check", CheckSigningKey, "reason", token.ReasonOf(checkErr),
 			)
-			return describeErr
+			return checkErr
 		}
 		return nil
 	}); err != nil {

@@ -140,6 +140,7 @@ jobs:
           - FuzzParseForwardedTrust
           - FuzzParseTrust
           - FuzzParseEd25519Key
+          - FuzzParseKeySetManifest
           - FuzzConfigLoad
           - FuzzNormalizeEmail
           - FuzzExternalKeyValidate

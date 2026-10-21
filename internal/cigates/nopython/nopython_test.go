@@ -132,7 +132,6 @@ var shellPythonPending = map[string]string{
 	"ci/bigboy/check-dho-api-ch-user.sh": "#4565 ports its helper to Go",
 	"ci/bigboy/cut-contents.sh":          "#4565 ports its helpers to Go",
 	"ci/local_validate.sh":               "CHAOS-10180 (K1 deletes the pytest gate, uv setup and Python installs)",
-	"ci/run_tests.sh":                    "CHAOS-10413 (strip its uv/pytest tiers)",
 }
 
 // shellPythonData reads testdata/shell_python_data_lines.tsv: lines that name Python as data and run none.

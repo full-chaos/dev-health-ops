@@ -168,6 +168,12 @@ var optionRegistry = []Option{
 		Usage: "JWKS `kid` for the configured signing key (ACP-ADR-02 §5)",
 	},
 	{
+		Flag: "signing-keyset-file", Env: EnvSigningKeySetFile, Kind: KindString,
+		Group: GroupKeys,
+		Usage: "path to a key-set manifest (kid, rotation state and key file per key) in place of " +
+			EnvSigningKeyFile + " and " + EnvSigningKeyID,
+	},
+	{
 		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
 			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Set together with " +

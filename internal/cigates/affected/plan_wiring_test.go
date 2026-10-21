@@ -250,3 +250,33 @@ func TestPlanReadsGuardRunsInTheAlwaysRunStaticLeg(t *testing.T) {
 		t.Errorf("the relevance step does not run the static leg on every change set:\n%s", rel.Run)
 	}
 }
+
+// A pull request must not judge itself: both plan steps build cigate from a checkout of the merge base and run that
+// binary on the PR tree, never `go run ./cmd/cigate` from the PR's own tree.
+func TestPlanStepsBuildThePlannerFromTheMergeBase(t *testing.T) {
+	for _, c := range []struct{ file, job string }{
+		{".github/workflows/go.yml", "go-storage-integration-plan"},
+		{".github/workflows/go-quality.yml", "go-quality-plan"},
+	} {
+		t.Run(c.job, func(t *testing.T) {
+			s, ok := stepRunning(loadJobs(t, c.file)[c.job], "plan-verdict")
+			if !ok {
+				t.Fatalf("%s runs no plan-verdict", c.job)
+			}
+			for _, want := range []string{
+				`mb="$(git merge-base "${BASE_SHA}" HEAD)"`,
+				`git worktree add --detach "${RUNNER_TEMP}/planbase" "${mb}"`,
+				`go -C "${RUNNER_TEMP}/planbase" build -trimpath -mod=readonly -o "${RUNNER_TEMP}/cigate-base" ./cmd/cigate`,
+				`"${RUNNER_TEMP}/cigate-base" plan-verdict`,
+				`--root "${GITHUB_WORKSPACE}"`,
+			} {
+				if !strings.Contains(s.Run, want) {
+					t.Errorf("the %s plan step does not contain %s", c.job, want)
+				}
+			}
+			if strings.Contains(s.Run, "./cmd/cigate plan-verdict") {
+				t.Errorf("the %s plan step runs the planner from the PR's own tree", c.job)
+			}
+		})
+	}
+}

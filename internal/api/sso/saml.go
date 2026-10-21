@@ -12,7 +12,7 @@
 // (entity_id, sso_url, sp_acs_url, certificate) and the signed assertion's
 // own claims. The one real reason this family is unusable in a real
 // Python deployment today is a missing OPTIONAL dependency: signxml is
-// declared under pyproject.toml's "enterprise-sso" extra, which the
+// declared under the last pyproject.toml's "enterprise-sso" extra, which the
 // deployed image does not install, so _validate_saml_signature's
 // importlib.import_module("signxml") always raises ImportError in
 // production. That is a deployment gap, not a code gap, and it does not

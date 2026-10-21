@@ -1,0 +1,3 @@
+query	expected	rank	max_rank	top_result	status
+same words	/c/	3	2	/a/	fail
+same words	/a/	1	1	/a/	pass

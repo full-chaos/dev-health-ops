@@ -1,0 +1,3 @@
+query	expected	rank	max_rank	top_result	status
+deploy to production	/t/	1	1	/t/	pass
+deploy to production	/x/	2	1	/t/	fail

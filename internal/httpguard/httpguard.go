@@ -150,3 +150,11 @@ func Guardable(doer interface {
 	}
 	return false
 }
+
+// TransportWrapper is a RoundTripper that decorates another (a response check): it can say what it wraps and be rebuilt
+// around another, so a dial-time guard can reach the transport inside it (externalurl.GuardRoundTripper).
+type TransportWrapper interface {
+	http.RoundTripper
+	UnwrapTransport() http.RoundTripper
+	RewrapTransport(inner http.RoundTripper) http.RoundTripper
+}

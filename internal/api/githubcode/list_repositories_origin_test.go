@@ -3,11 +3,13 @@ package githubcode
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/egressguard"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -119,11 +121,14 @@ func TestAnotherSchemePortOrHostIsAnotherOrigin(t *testing.T) {
 	}
 }
 
-// A non-ASCII base host goes on the wire in its IDNA form.
+// A non-ASCII base host goes on the wire in its IDNA form: the name the dialer resolves is the IDNA one.
 func TestNonASCIIBaseHostIsDialledInIDNAForm(t *testing.T) {
 	var dialled []string
-	transport := &http.Transport{DialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
-		dialled = append(dialled, addr)
+	t.Cleanup(egressguard.SetLookupForTest(func(_ context.Context, host string) ([]netip.Addr, error) {
+		dialled = append(dialled, host+":443")
+		return nil, errors.New("stand-in: not resolved")
+	}))
+	transport := &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
 		return nil, errors.New("stand-in: not dialled")
 	}}
 	client := Client{Token: "tok", BaseURL: "https://ghé.test/api/v3", HTTP: &http.Client{Transport: transport}}

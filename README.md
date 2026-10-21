@@ -60,12 +60,6 @@ go build -o dho ./cmd/dho
 ./dho help
 ```
 
-For Python development from this repository:
-
-```bash
-pip install -r requirements.txt
-```
-
 ## Database model
 
 Dev Health Ops uses two databases with different responsibilities:

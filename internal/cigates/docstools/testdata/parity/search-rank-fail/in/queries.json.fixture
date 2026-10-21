@@ -1,0 +1,1 @@
+{"queries": [{"query": "queues", "expected": "/reference/api/", "max_rank": 1}, {"query": "nothing matches xyzzy", "expected": "/guide/install/"}]}

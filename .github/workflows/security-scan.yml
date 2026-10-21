@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   # CHAOS-6973: a stacked PR's base is a sibling branch, never main -- with
-  # `branches: [main]` here that meant Gitleaks/pip-audit/Semgrep silently
+  # `branches: [main]` here that meant Gitleaks/Semgrep silently
   # never ran on any stacked PR in this repo's history (confirmed on
   # #3330/#3331: zero Security Scan check-runs, not even a cancelled one,
   # while #3329, the bottom of that same stack with base=main, got a real
@@ -31,8 +31,8 @@ permissions:
   contents: read
 
 jobs:
-  # CHAOS-9919: a docs-only PR changes nothing pip-audit or Semgrep scan. Gitleaks stays
-  # unfiltered because a secret can sit in a doc. None of these three jobs is a required
+  # CHAOS-9919: a docs-only PR changes nothing Semgrep scans. Gitleaks stays
+  # unfiltered because a secret can sit in a doc. Neither of these two jobs is a required
   # check, so a skipped job leaves no check "expected". Push and merge_group always scan (a PR touching this file runs both jobs).
   changes:
     runs-on: ubuntu-latest
@@ -40,7 +40,6 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      deps: ${{ steps.filter.outputs.deps }}
       code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -49,12 +48,6 @@ jobs:
         with:
           predicate-quantifier: some-with-excludes
           filters: |
-            deps:
-              - 'requirements.txt'
-              - 'pyproject.toml'
-              - 'uv.lock'
-              - '.pip-audit-ignore'
-              - '.github/workflows/security-scan.yml'
             code:
               - '**'
               - '!docs/**'
@@ -62,59 +55,6 @@ jobs:
               - '!**/*.md'
               - '!.github/docs-legacy/**'
               - '!mkdocs.yml'
-
-  pip-audit:
-    needs: [changes]
-    if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full'))) && (github.event_name != 'pull_request' || needs.changes.outputs.deps == 'true')
-    name: Dependency Vulnerability Scan (pip-audit)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.14"
-          cache: "pip"
-
-      - name: Install pip-audit
-        # CHAOS-3948: pinned to the uv.lock version, same shape/fix as
-        # lint.yml's ruff pin (CHAOS-3946) -- a bare floor specifier resolves
-        # to whatever is newest on PyPI at CI run time, not the version
-        # contributors actually run locally via `uv sync`.
-        run: pip install "pip-audit==2.10.0"
-
-      - name: Run pip-audit (fail on any vulnerability)
-        run: |
-          # Build ignore flags from repo-controlled allowlist (not user input)
-          IGNORE_ARGS=""
-          if [ -f .pip-audit-ignore ]; then
-            while IFS= read -r line; do
-              [[ "$line" =~ ^[[:space:]]*# ]] && continue
-              [[ -z "${line// }" ]] && continue
-              CVE=$(echo "$line" | awk '{print $1}')
-              IGNORE_ARGS="$IGNORE_ARGS --ignore-vuln $CVE"
-            done < .pip-audit-ignore
-          fi
-          # shellcheck disable=SC2086
-          pip-audit \
-            --requirement requirements.txt \
-            --vulnerability-service pypi \
-            --format markdown \
-            --output pip-audit-report.md \
-            $IGNORE_ARGS
-
-      - name: Upload pip-audit report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: pip-audit-report
-          path: pip-audit-report.md
-          if-no-files-found: ignore
-          retention-days: 30
 
   semgrep:
     needs: [changes]

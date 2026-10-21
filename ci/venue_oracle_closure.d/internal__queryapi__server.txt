@@ -16,6 +16,7 @@ internal/cacheinvalidation
 internal/chmigrate
 internal/cli
 internal/edgetokenmint
+internal/egressguard
 internal/envelopemint
 internal/fixturescli
 internal/fixturesgen
@@ -54,6 +55,7 @@ internal/llmorgsettings
 internal/mcpclass
 internal/mintcli/edgetoken
 internal/mintcli/envelope
+internal/netclass
 internal/operationalbackfill
 internal/operationalordering
 internal/ownershipwindow
@@ -167,6 +169,7 @@ internal/testsupport/chquery
 internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/crossorg
+internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed

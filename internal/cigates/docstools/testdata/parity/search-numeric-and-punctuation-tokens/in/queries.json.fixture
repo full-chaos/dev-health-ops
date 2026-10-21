@@ -1,0 +1,1 @@
+{"queries": [{"query": "v1.2.3-rc1", "expected": "/v/", "max_rank": 1}, {"query": "foo_bar/baz.qux", "expected": "/v/"}, {"query": "a-b-c", "expected": "/v/"}]}

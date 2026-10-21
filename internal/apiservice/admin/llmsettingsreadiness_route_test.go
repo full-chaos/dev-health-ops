@@ -125,6 +125,7 @@ func TestLLMSettingsReadinessRouteSuccessPath(t *testing.T) {
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-readiness-32-bytes!"
 
 	readyOrgID, failOrgID, ssrfOrgID := uuid.New(), uuid.New(), uuid.New()
+	anthropicOrgID, geminiOrgID := uuid.New(), uuid.New()
 	adminUserID := uuid.New()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
@@ -139,7 +140,7 @@ func TestLLMSettingsReadinessRouteSuccessPath(t *testing.T) {
 					t.Fatalf("seed: %v\n%s", err, sql)
 				}
 			}
-			for slug, id := range map[string]uuid.UUID{"ready": readyOrgID, "fail": failOrgID, "ssrf": ssrfOrgID} {
+			for slug, id := range map[string]uuid.UUID{"ready": readyOrgID, "fail": failOrgID, "ssrf": ssrfOrgID, "anthropic": anthropicOrgID, "gemini": geminiOrgID} {
 				exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, 'team', 'stripe', true, now(), now())`, id, "llmreadiness-route-"+slug)
 			}
@@ -164,9 +165,17 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), org.Stri
 			row(ssrfOrgID, "model", "gpt-5-mini")
 			row(ssrfOrgID, "api_key", "sk-route-test")
 			row(ssrfOrgID, "base_url", "https://127.0.0.1/v1")
+			// A certified Anthropic config and an uncertified Gemini one: the preflight probes the Messages API
+			// for the first and names the provider in the 404 for the second.
+			for org, provider := range map[uuid.UUID]string{anthropicOrgID: "anthropic", geminiOrgID: "gemini"} {
+				row(org, "provider", provider)
+				row(org, "model", "claude-sonnet-test")
+				row(org, "api_key", "sk-route-test")
+				row(org, "base_url", "https://example.invalid")
+			}
 
 			tokens := map[string]map[string]any{}
-			for slug, org := range map[string]uuid.UUID{"ready": readyOrgID, "fail": failOrgID, "ssrf": ssrfOrgID} {
+			for slug, org := range map[string]uuid.UUID{"ready": readyOrgID, "fail": failOrgID, "ssrf": ssrfOrgID, "anthropic": anthropicOrgID, "gemini": geminiOrgID} {
 				tokens[slug] = map[string]any{"user_id": adminUserID.String(), "email": "llmreadiness-route-admin@example.com", "org_id": org.String(), "role": "admin"}
 			}
 			return tokens
@@ -279,6 +288,56 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), org.Stri
 		}
 		if getDecoded["readiness_safe_failure_reason"] != reason {
 			t.Fatalf("GET status readiness_safe_failure_reason = %v, want the POST's own %q (readback of the SAME row): %s", getDecoded["readiness_safe_failure_reason"], reason, getResp.body)
+		}
+	})
+
+	t.Run("anthropic_is_probed_over_the_messages_api", func(t *testing.T) {
+		var urls []string
+		doer := fakeReadinessDoer(func(req *http.Request) (*http.Response, error) {
+			urls = append(urls, req.URL.String())
+			raw, _ := io.ReadAll(req.Body)
+			req.Body.Close()
+			if strings.Contains(string(raw), `"tool_result"`) {
+				return jsonResponse(200, `{"stop_reason":"end_turn","content":[{"type":"text","text":"{\"kind\":\"final_answer\",\"value\":{\"nonce\":\"ready-v1\"}}"}]}`), nil
+			}
+			return jsonResponse(200, `{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"toolu_route","name":"readiness_echo_v1","input":{"nonce":"ready-v1"}}]}`), nil
+		})
+		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
+
+		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("anthropic"))
+		if postResp.status != 200 {
+			t.Fatalf("POST readiness: status=%d body=%s", postResp.status, postResp.body)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(postResp.body), &decoded); err != nil {
+			t.Fatalf("decode POST body: %v\n%s", err, postResp.body)
+		}
+		if decoded["readiness"] != "ready" {
+			t.Fatalf("POST readiness = %v, want ready: %s", decoded["readiness"], postResp.body)
+		}
+		if len(urls) != 2 || urls[0] != "https://example.invalid/v1/messages" {
+			t.Fatalf("requests = %v, want two POSTs to https://example.invalid/v1/messages", urls)
+		}
+	})
+
+	t.Run("a provider without a prober is named in the 404", func(t *testing.T) {
+		doer := &poisonDoer{}
+		base, _ := startGoServer(t, ctx, venue, jwtKey, func(d *apiservice.Deps) { d.HTTPDoer = fakehttp.Client(doer) })
+
+		postResp := doRouteRequest(t, base, "POST", "/api/v1/admin/llm-settings/readiness", auth("gemini"))
+		if postResp.status != 404 {
+			t.Fatalf("POST readiness: status=%d body=%s, want 404", postResp.status, postResp.body)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(postResp.body), &decoded); err != nil {
+			t.Fatalf("decode POST body: %v\n%s", err, postResp.body)
+		}
+		const want = "BYO preflight is not available yet for provider gemini."
+		if decoded["detail"] != want {
+			t.Fatalf("POST readiness detail = %v, want %q: %s", decoded["detail"], want, postResp.body)
+		}
+		if invoked := doer.invokedURL.Load(); invoked != nil {
+			t.Fatalf("an unprobed provider reached the network at %s", *invoked)
 		}
 	})
 

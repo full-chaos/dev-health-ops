@@ -1,8 +1,0 @@
-yaml.composer.ComposerError: expected a single document in the stream
-  in "<unicode string>", line 1, column 1:
-    - page: guide.md
-    ^
-but found another document
-  in "<unicode string>", line 2, column 1:
-    ---
-    ^

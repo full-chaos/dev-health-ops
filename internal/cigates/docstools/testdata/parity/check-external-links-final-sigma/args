@@ -1,6 +1,6 @@
 check-external-links
 --built-site
-site
+pages
 --allowlist
 allow.yml
 --site-url

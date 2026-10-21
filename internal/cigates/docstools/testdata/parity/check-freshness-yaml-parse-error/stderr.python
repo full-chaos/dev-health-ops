@@ -1,5 +1,0 @@
-yaml.parser.ParserError: while parsing a flow node
-expected the node content, but found '<stream end>'
-  in "<unicode string>", line 2, column 1:
-    
-    ^

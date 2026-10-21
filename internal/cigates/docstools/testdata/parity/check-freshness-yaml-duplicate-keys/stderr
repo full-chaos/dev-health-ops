@@ -1,1 +1,0 @@
-ERROR: {WORK}/docs-data/freshness-inventory.yml entry missing required string fields: {'page': 5, 1: 'c', nan: 'e'}

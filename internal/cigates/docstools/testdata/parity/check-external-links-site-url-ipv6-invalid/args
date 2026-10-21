@@ -1,5 +1,5 @@
 check-external-links
 --built-site
-site
+pages
 --site-url
 https://[x

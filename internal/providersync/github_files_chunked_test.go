@@ -29,7 +29,8 @@ type filesChunkFake struct {
 	trees map[string][]string
 	sizes map[string]int
 
-	texts map[string]string
+	texts  map[string]string
+	binary map[string]bool
 
 	graphql  []filesChunkRequest
 	treeGets []string
@@ -96,6 +97,10 @@ func (fake *filesChunkFake) Do(request *http.Request) (*http.Response, error) {
 			if fields.Len() > 0 {
 				fields.WriteByte(',')
 			}
+			if fake.binary[path] {
+				fmt.Fprintf(&fields, `"f%s":{"text":null,"isBinary":true,"isTruncated":false}`, match[1])
+				continue
+			}
 			fmt.Fprintf(&fields, `"f%s":{"text":%s,"isBinary":false,"isTruncated":false}`, match[1], encoded)
 		}
 		fake.graphql = append(fake.graphql, call)
@@ -107,7 +112,7 @@ func (fake *filesChunkFake) Do(request *http.Request) (*http.Response, error) {
 }
 
 func newFilesChunkFake(t *testing.T, goFiles, goSize, otherFiles int) *filesChunkFake {
-	fake := &filesChunkFake{t: t, head: "tree-1", sizes: map[string]int{}, texts: map[string]string{}}
+	fake := &filesChunkFake{t: t, head: "tree-1", sizes: map[string]int{}, texts: map[string]string{}, binary: map[string]bool{}}
 	paths := make([]string, 0, goFiles+otherFiles)
 	for index := 0; index < goFiles; index++ {
 		path := fmt.Sprintf("src/pkg%03d/f%05d.go", index%97, index)
@@ -563,5 +568,40 @@ func TestGitHubFilesCrashAfterAChunkWriteIsReadBackNotRewritten(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("%s written %d times", path, count)
 		}
+	}
+}
+
+// An eligible empty file is a successful read of "": its row keeps contents ""
+// (present), and only a file the provider returned no text for stays without
+// contents, counted as unavailable. A missing blob never reads as complete.
+func TestGitHubFilesChunkKeepsAnEmptyFileAsEmptyContentsAndCountsUnavailableOnes(t *testing.T) {
+	fake := newFilesChunkFake(t, 3, 100, 1)
+	paths := fake.trees["tree-1"]
+	fake.sizes[paths[0]] = 0
+	fake.texts[paths[0]] = ""
+	fake.binary[paths[1]] = true
+	run, err := runFilesChunks(t, fake, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]gitFileRow{}
+	for _, row := range run.rows {
+		byPath[row.Path] = row
+	}
+	if row := byPath[paths[0]]; row.Contents == nil || *row.Contents != "" {
+		t.Fatalf("empty eligible file contents=%v, want present and empty", row.Contents)
+	}
+	if byPath[paths[1]].Contents != nil {
+		t.Fatalf("binary file contents=%v, want missing", byPath[paths[1]].Contents)
+	}
+	if row := byPath[paths[2]]; row.Contents == nil || len(*row.Contents) != 100 {
+		t.Fatalf("regular file contents=%v", row.Contents)
+	}
+	if byPath["docs/d00000.md"].Contents != nil {
+		t.Fatal("an ineligible file must have no contents")
+	}
+	final := run.emissions[len(run.emissions)-1].Batch.Result
+	if final["files_with_contents"] != 2 || final["contents_unavailable"] != 1 {
+		t.Fatalf("result=%v, want 2 with contents (empty + regular) and 1 unavailable (binary)", final)
 	}
 }

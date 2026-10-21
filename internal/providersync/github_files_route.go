@@ -134,11 +134,14 @@ type githubFilesChunkCursor struct {
 	Rows     int    `json:"rows"`
 	Contents int    `json:"contents"`
 	Oversize int    `json:"oversize"`
-	Requests int    `json:"requests"`
-	Chunks   int    `json:"chunks"`
-	Walked   bool   `json:"walked,omitempty"`
-	NoCommit bool   `json:"no_commit,omitempty"`
-	Done     bool   `json:"done,omitempty"`
+	// Unavailable counts eligible blobs the provider returned no text for
+	// (binary, truncated, absent): they stay without contents.
+	Unavailable int  `json:"unavailable"`
+	Requests    int  `json:"requests"`
+	Chunks      int  `json:"chunks"`
+	Walked      bool `json:"walked,omitempty"`
+	NoCommit    bool `json:"no_commit,omitempty"`
+	Done        bool `json:"done,omitempty"`
 }
 
 func decodeGitHubFilesChunkCursor(raw string) (githubFilesChunkCursor, error) {
@@ -149,7 +152,7 @@ func decodeGitHubFilesChunkCursor(raw string) (githubFilesChunkCursor, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cursor); err != nil || cursor.Version != 1 || cursor.Ordinal < 0 ||
-		cursor.Rows < 0 || cursor.Contents < 0 || cursor.Oversize < 0 || cursor.Requests < 0 || cursor.Chunks < 0 ||
+		cursor.Rows < 0 || cursor.Contents < 0 || cursor.Oversize < 0 || cursor.Unavailable < 0 || cursor.Requests < 0 || cursor.Chunks < 0 ||
 		(cursor.TreeRef == "" && !cursor.NoCommit) {
 		return githubFilesChunkCursor{}, ErrInvalidConfiguration
 	}
@@ -295,19 +298,27 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 		rows := make([]gitFileRow, 0, len(chunkPaths))
 		next := cursor
 		for _, filePath := range chunkPaths {
-			content := contents[filePath]
-			if content != "" {
+			// Presence, not value: an empty file is "" (present), a file the
+			// provider returned no text for (binary, truncated, absent) is missing.
+			content, present := contents[filePath]
+			oversize := false
+			if present && content != "" {
 				if encoded, marshalErr := json.Marshal(content); marshalErr != nil || len(encoded) > gitHubFileRowMaxEncodedBytes {
 					next.Oversize++
-					content = ""
+					content, present, oversize = "", false, true
 				}
 			}
 			row := newGitHubFileRow(claim, repoID, filePath, content, normalizedAt)
+			if present && row.Contents == nil {
+				row.Contents = &content
+			}
 			if err := row.validate(claim); err != nil {
 				return err
 			}
 			if row.Contents != nil {
 				next.Contents++
+			} else if !oversize && gitHubFileContentEligible(filePath, sizes[filePath]) {
+				next.Unavailable++
 			}
 			rows = append(rows, row)
 		}
@@ -499,13 +510,15 @@ func gitHubFilesFinalBatch(claim Claim, fullName string, cursor githubFilesChunk
 		"github files inventory", "repository", fullName, "entries", cursor.Rows,
 		"subtree_walk", cursor.Walked, "inventory_status", inventoryStatus,
 		"chunks", cursor.Chunks, "with_contents", cursor.Contents, "contents_oversize", cursor.Oversize,
+		"contents_unavailable", cursor.Unavailable,
 	)
 	return CompleteRouteBatch{
 		Effects: []EffectBatch{effect},
 		Result: map[string]any{
 			"files_synced": cursor.Rows, "inventory_status": inventoryStatus, "repo": fullName,
 			"files_with_contents": cursor.Contents, "contents_oversize": cursor.Oversize,
-			"content_chunks": cursor.Chunks,
+			"contents_unavailable": cursor.Unavailable,
+			"content_chunks":       cursor.Chunks,
 		},
 		Watermark: claim.BeforeAt,
 		Evidence: FetchEvidence{

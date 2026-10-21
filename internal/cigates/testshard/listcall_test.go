@@ -11,9 +11,9 @@ import (
 	"testing"
 )
 
-// The harness lists providersync with the race leg's own call (check_providersync_race_shard): the same flags and the same go
-// environment, so it reuses the build the leg made of the race test binary. A call with other flags compiles that binary again
-// (about 100 s cold, the cost that timed out the test leg).
+// check_go.sh lists providersync with one call (check_providersync_race_shard). The race-only oracle (providersynclist_race_test.go) makes
+// that same call (same flags, same go environment, so a race leg already holds the build) and holds the harness's derived names equal
+// to it; these guards pin the call shape the oracle copies.
 
 var (
 	legGoEnvOff     = regexp.MustCompile(`(?m)^GO_ENV_OFF=\(env((?: -u [A-Z_]+)+)\)$`)

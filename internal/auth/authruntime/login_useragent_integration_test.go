@@ -24,7 +24,9 @@ func TestLoginAuditRowsCarryTheUserAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var email string
-	if err := e.admin.QueryRow(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING email`, user, hash).Scan(&email); err != nil {
+	// A non-special-use domain: the login refuses a reserved one (go-api parity).
+	if err := e.admin.QueryRow(ctx, `UPDATE users SET password_hash = $2, email = split_part(email, '@', 1) || '@example.com'
+		WHERE id = $1 RETURNING email`, user, hash).Scan(&email); err != nil {
 		t.Fatal(err)
 	}
 	// The header carries the UTF-8 bytes of "é"; each byte reads as one latin-1

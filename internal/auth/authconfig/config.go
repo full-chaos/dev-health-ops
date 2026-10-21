@@ -382,10 +382,19 @@ func signingKey(lookup secrets.LookupEnv) (keySetPath, path, keyID string, err e
 		)
 	}
 	path = strings.TrimSpace(valueOf(lookup, EnvSigningKeyFile))
-	if path == "" {
-		return "", "", "", fmt.Errorf("%s is required and must name a file", EnvSigningKeyFile)
-	}
 	keyID = strings.TrimSpace(valueOf(lookup, EnvSigningKeyID))
+	if keySetPath = strings.TrimSpace(valueOf(lookup, EnvSigningKeySetFile)); keySetPath != "" {
+		if path != "" || keyID != "" {
+			return "", "", "", fmt.Errorf(
+				"%s names the whole key set; unset %s and %s",
+				EnvSigningKeySetFile, EnvSigningKeyFile, EnvSigningKeyID,
+			)
+		}
+		return keySetPath, "", "", nil
+	}
+	if path == "" {
+		return "", "", "", fmt.Errorf("%s is required and must name a file (or set %s)", EnvSigningKeyFile, EnvSigningKeySetFile)
+	}
 	if keyID == "" {
 		return "", "", "", fmt.Errorf(
 			"%s is required: every signing key carries a kid and a JWKS entry from day one (ACP-ADR-02 §5)",

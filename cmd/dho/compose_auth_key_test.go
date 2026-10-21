@@ -61,7 +61,32 @@ func keyVolume(service composeKeyService, env string) (string, error) {
 // of its own, never the volume go-api's envelope key comes from (the access
 // issuer has its own key and kid in every stack).
 func authKeyVolumeFindings(text []byte) ([]string, error) {
-	return nil, nil
+	var file composeKeyFile
+	if err := yaml.Unmarshal(text, &file); err != nil {
+		return nil, err
+	}
+	auth, ok := file.Services["auth-service"]
+	if !ok {
+		return []string{"compose has no auth-service"}, nil
+	}
+	authVolume, err := keyVolume(auth, "AUTH_SIGNING_KEY_FILE")
+	if err != nil {
+		return nil, err
+	}
+	var findings []string
+	if authVolume == "" {
+		findings = append(findings, "auth-service: AUTH_SIGNING_KEY_FILE is not on a named volume")
+	}
+	for name, service := range file.Services {
+		envelope, err := keyVolume(service, "GO_API_ENVELOPE_PRIVATE_KEY_FILE")
+		if err != nil {
+			return nil, err
+		}
+		if envelope != "" && envelope == authVolume {
+			findings = append(findings, fmt.Sprintf("auth-service signs from volume %s, which holds %s's envelope key", authVolume, name))
+		}
+	}
+	return findings, nil
 }
 
 func TestAuthServiceSigningKeyIsNotTheEnvelopeKey(t *testing.T) {

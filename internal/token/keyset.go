@@ -40,9 +40,11 @@ const (
 	ReasonNoActiveKey    Reason = "keyset_no_active_key"
 	ReasonManyActiveKeys Reason = "keyset_many_active_keys"
 	ReasonDuplicateKeyID Reason = "keyset_duplicate_key_id"
-	ReasonInvalidKey     Reason = "keyset_invalid_key"
-	ReasonProbeMismatch  Reason = "signing_probe_mismatch"
-	ReasonInvalidInput   Reason = "token_input_invalid"
+	// ReasonDuplicatePublicKey: one key listed under two kids.
+	ReasonDuplicatePublicKey Reason = "keyset_duplicate_public_key"
+	ReasonInvalidKey         Reason = "keyset_invalid_key"
+	ReasonProbeMismatch      Reason = "signing_probe_mismatch"
+	ReasonInvalidInput       Reason = "token_input_invalid"
 )
 
 // Error is a key-set or signing failure carrying only its Reason outwards.

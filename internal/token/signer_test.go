@@ -254,25 +254,30 @@ func TestKeySetInvariants(t *testing.T) {
 	key := func(kid string, state State) Key {
 		return Key{KeyID: kid, State: state, Algorithm: "EdDSA", PublicKey: public}
 	}
+	own := func(kid string, state State) Key {
+		fresh, _, _ := ed25519.GenerateKey(rand.Reader)
+		return Key{KeyID: kid, State: state, Algorithm: "EdDSA", PublicKey: fresh}
+	}
 	cases := map[string]struct {
 		keys []Key
 		want Reason
 	}{
-		"empty":        {nil, ReasonNoKeys},
-		"no active":    {[]Key{key("a", StatePending), key("b", StateRetiring)}, ReasonNoActiveKey},
-		"two active":   {[]Key{key("a", StateActive), key("b", StateActive)}, ReasonManyActiveKeys},
-		"repeated kid": {[]Key{key("a", StateActive), key("a", StateRetiring)}, ReasonDuplicateKeyID},
-		"bad kid":      {[]Key{key("a b", StateActive)}, ReasonInvalidKey},
-		"bad state":    {[]Key{key("a", "enabled")}, ReasonInvalidKey},
-		"bad alg":      {[]Key{{KeyID: "a", State: StateActive, Algorithm: "RS256", PublicKey: public}}, ReasonInvalidKey},
-		"short key":    {[]Key{{KeyID: "a", State: StateActive, Algorithm: "EdDSA", PublicKey: public[:8]}}, ReasonInvalidKey},
+		"empty":          {nil, ReasonNoKeys},
+		"no active":      {[]Key{own("a", StatePending), own("b", StateRetiring)}, ReasonNoActiveKey},
+		"two active":     {[]Key{own("a", StateActive), own("b", StateActive)}, ReasonManyActiveKeys},
+		"repeated kid":   {[]Key{key("a", StateActive), key("a", StateRetiring)}, ReasonDuplicateKeyID},
+		"bad kid":        {[]Key{key("a b", StateActive)}, ReasonInvalidKey},
+		"bad state":      {[]Key{key("a", "enabled")}, ReasonInvalidKey},
+		"bad alg":        {[]Key{{KeyID: "a", State: StateActive, Algorithm: "RS256", PublicKey: public}}, ReasonInvalidKey},
+		"same key twice": {[]Key{key("a", StateActive), key("b", StateRetiring)}, ReasonDuplicatePublicKey},
+		"short key":      {[]Key{{KeyID: "a", State: StateActive, Algorithm: "EdDSA", PublicKey: public[:8]}}, ReasonInvalidKey},
 	}
 	for name, c := range cases {
 		if _, err := NewKeySet(c.keys); ReasonOf(err) != string(c.want) {
 			t.Errorf("%s: %v, want %s", name, err, c.want)
 		}
 	}
-	set, err := NewKeySet([]Key{key("p", StatePending), key("a", StateActive), key("r", StateRetiring), key("x", StateRetired), key("c", StateCompromised)})
+	set, err := NewKeySet([]Key{own("p", StatePending), own("a", StateActive), own("r", StateRetiring), own("x", StateRetired), own("c", StateCompromised)})
 	if err != nil {
 		t.Fatal(err)
 	}

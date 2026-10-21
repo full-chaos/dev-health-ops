@@ -117,6 +117,7 @@ func TestTheImportBoundaryRefusesAPlantedImport(t *testing.T) {
 	plant("internal/token/allowed.go", importing("token"))
 	plant("internal/auth/keystore/allowed_test.go", importing("keystore"))
 	plant("internal/tokenizer/planted.go", importing("tokenizer"))
+	plant("internal/node_modules/evil/evil.go", importing("evil"))
 	violations, err := keystoreImportViolations(root)
 	if err != nil {
 		t.Fatal(err)
@@ -125,6 +126,7 @@ func TestTheImportBoundaryRefusesAPlantedImport(t *testing.T) {
 		"internal/auth/authruntime/planted.go": true,
 		"cmd/tool/planted_test.go":             true,
 		"internal/tokenizer/planted.go":        true,
+		"internal/node_modules/evil/evil.go":   true,
 	}
 	if len(violations) != len(want) {
 		t.Fatalf("violations %v, want %v", violations, want)

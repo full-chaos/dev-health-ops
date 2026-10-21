@@ -209,6 +209,9 @@ func (c *FileCustody) Sign(ctx context.Context, kid string, message []byte) ([]b
 	if err != nil {
 		return nil, err
 	}
+	if beforeSign != nil {
+		beforeSign()
+	}
 	signature, err := signWithFile(c.keyPath(entry), message)
 	if err != nil {
 		return nil, err
@@ -225,6 +228,10 @@ func (c *FileCustody) Sign(ctx context.Context, kid string, message []byte) ([]b
 	}
 	return signature, nil
 }
+
+// beforeSign is a test hook run between the first manifest read and the
+// signature.
+var beforeSign func()
 
 // afterSign is a test hook run between the signature and the second manifest
 // read.

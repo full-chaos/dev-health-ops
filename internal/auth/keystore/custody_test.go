@@ -411,3 +411,79 @@ func TestFileCustodySignsOnlyFromASetWhoseEveryKeyIsCustodied(t *testing.T) {
 		t.Fatalf("a's signature (%x) was returned after the set gained an uncustodied key", signature)
 	}
 }
+
+// replaceKeyFile atomically renames a fresh key onto name.
+func replaceKeyFile(t *testing.T, dir, name string) ed25519.PublicKey {
+	t.Helper()
+	staged, public := writeKeyFile(t, dir, ".staged-"+name)
+	if err := os.Rename(staged, filepath.Join(dir, name)); err != nil {
+		t.Fatal(err)
+	}
+	return public
+}
+
+// TestAKeyFileReplacedInPlaceNeverSigns: the key under a kid is replaced by
+// another key under the same file name between the first read and the
+// signature, or between the signature and the second read; the signature is
+// refused.
+func TestAKeyFileReplacedInPlaceNeverSigns(t *testing.T) {
+	ctx := context.Background()
+	for name, hook := range map[string]*func(){"before the signature": &beforeSign, "after the signature": &afterSign} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKeyFile(t, dir, "a.pem")
+			custody := NewFileCustody(writeManifest(t, dir, entries("a", "active")))
+			*hook = func() { replaceKeyFile(t, dir, "a.pem") }
+			t.Cleanup(func() { *hook = nil })
+			if signature, err := custody.Sign(ctx, "a", []byte("m")); err == nil {
+				t.Fatalf("a signed (%x) across an in-place replacement of a.pem", signature)
+			}
+		})
+	}
+}
+
+// TestACompromisedKeyNeverSignsUnderAnotherKid: the latch follows the key, and
+// a set that lists one key under two kids is refused.
+func TestACompromisedKeyNeverSignsUnderAnotherKid(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	writeKeyFile(t, dir, "a.pem")
+	custody := NewFileCustody(writeManifest(t, dir, entries("a", "compromised", "c", "active")))
+	writeKeyFile(t, dir, "c.pem")
+	if _, err := custody.Keys(ctx); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "a.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.pem"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest(t, dir, entries("b", "active", "c", "retiring"))
+	if signature, err := custody.Sign(ctx, "b", []byte("m")); err == nil {
+		t.Fatalf("the compromised key signed (%x) under kid b", signature)
+	}
+	fresh := NewFileCustody(writeManifest(t, dir, entries("a", "retiring", "b", "active")))
+	if _, err := fresh.Keys(ctx); err == nil {
+		t.Fatal("Keys accepted one key listed under two kids")
+	}
+	if signature, err := fresh.Sign(ctx, "b", []byte("m")); err == nil {
+		t.Fatalf("b signed (%x) from a set that lists its key under two kids", signature)
+	}
+}
+
+func TestManifestMemberNamesAreExactAndUnique(t *testing.T) {
+	for name, body := range map[string]string{
+		"case-folded state over state": `{"keys":[{"kid":"a","state":"compromised","State":"active","file":"a.pem"}]}`,
+		"upper-case members":           `{"KEYS":[{"KID":"a","STATE":"active","FILE":"a.pem"}]}`,
+		"repeated state":               `{"keys":[{"kid":"a","state":"compromised","state":"active","file":"a.pem"}]}`,
+		"repeated kid":                 `{"keys":[{"kid":"x","kid":"a","state":"active","file":"a.pem"}]}`,
+		"repeated keys":                `{"keys":[{"kid":"x","state":"compromised","file":"x.pem"}],"keys":[{"kid":"a","state":"active","file":"a.pem"}]}`,
+		"mixed-case file":              `{"keys":[{"kid":"a","state":"active","File":"a.pem"}]}`,
+	} {
+		if _, err := parseManifest([]byte(body)); err == nil {
+			t.Errorf("%s: manifest accepted", name)
+		}
+	}
+}

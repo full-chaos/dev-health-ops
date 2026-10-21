@@ -1378,7 +1378,7 @@ verify_stage_manifest() {
 # happened to execute. The only branch is the explicit SKIP_CLICKHOUSE=1
 # opt-out; every other reason a CH stage might not run (docker missing, the
 # probe failing, the container confirmed absent, dho missing) is a
-# ch_provision() hard failure against the FULL 8-id declaration, never a
+# ch_provision() hard failure against the FULL 6-id declaration, never a
 # reason to shrink it at runtime. Factored out of main() so the CHAOS-3571
 # `--stage-manifest-probe` test-only hook near the bottom of this file can
 # exercise this exact sequencing (with the expensive leaf stages stubbed) --
@@ -1410,7 +1410,7 @@ run_declared_stages() {
     exit 1
   fi
   # The verdict line itself now carries the stage count and the exact ids that
-  # ran (CHAOS-3571 (b)): "GATE PASSED [8/8: ...]" cannot be produced by a run
+  # ran (CHAOS-3571 (b)): "GATE PASSED [6/6: ...]" cannot be produced by a run
   # that executed fewer stages than it declared -- verify_stage_manifest above
   # already exited 1 before this line if it had. A degraded run can no longer
   # print an indistinguishable "GATE PASSED. safe to push." — the bracketed

@@ -14,7 +14,7 @@ Backend: ingest → metrics → API → jobs. The versioned platform contract (W
 | LLM categorization contract | [`.github/docs-legacy/llm/categorization-contract.md`](.github/docs-legacy/llm/categorization-contract.md) |
 | API surface | [`docs/reference/graphql/index.md`](docs/reference/graphql/index.md), [`.github/docs-legacy/api/view-mapping.md`](.github/docs-legacy/api/view-mapping.md) |
 | CLI & workers | [`docs/reference/cli/index.md`](docs/reference/cli/index.md), [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md) |
-| How to run / test tiers | [`README.md`](README.md), [`ci/run_tests.sh`](ci/run_tests.sh) |
+| How to run / test tiers | [`README.md`](README.md), [`ci/check_go.sh`](ci/check_go.sh), [`ci/run_tests.sh`](ci/run_tests.sh) (live-e2e) |
 
 ## Source layout (`src/dev_health_ops/`)
 

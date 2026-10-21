@@ -103,10 +103,12 @@ stays a per-deployed-app field, and the closed `service` vocabulary keeps the
 retired value:
 
 - `dev-health-ops-api` — `cmd/dho/main.go` via `internal/apiservice/service.go`, the main app. The Go
-  transport stack is composed in `NewServer` (`internal/apiservice/service.go`): on the request path, the
-  plane and build stamp, the request id, panic recovery, the org scope and impersonation policy
-  (`internal/api/policy/scope.go`, when a database is configured), the origin check (CSRF), security
-  headers and CORS, then the route (with its own recovery, deadline and body bound).
+  transport stack is built by `httpapi.NewServer` (`internal/auth/httpapi/server.go:481`) around the
+  middleware that `NewServer` in `internal/apiservice/service.go` passes: on the request path, the
+  request id (outermost), the access log and panic recovery, then the app middleware in the order
+  given, including the build stamp, the unhandled-error shape, the org scope and impersonation policy from
+  `internal/api/policy/scope.go` when a database is configured, the origin check (CSRF), security
+  headers and CORS, then the route (with its own rate limit, body bound, deadline and recovery).
 
 Every row's `service` field says which app serves it. `reachable_validators`
 is derived from the middleware that app mounts.

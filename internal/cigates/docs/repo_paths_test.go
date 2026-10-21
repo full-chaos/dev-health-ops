@@ -116,8 +116,8 @@ func repoPathOf(token string, topDirs map[string]bool) (string, bool) {
 }
 
 type pathRef struct {
-	ref string
-	end int
+	ref        string
+	start, end int
 }
 
 // lineRefs lists the repo paths named on one body line, with the offset where each token ends. The retired Python tree
@@ -128,21 +128,39 @@ func lineRefs(line string, fenced bool, topDirs map[string]bool) []pathRef {
 		for _, re := range []*regexp.Regexp{backtickToken, linkTarget} {
 			for _, m := range re.FindAllStringSubmatchIndex(line, -1) {
 				if p, ok := repoPathOf(line[m[2]:m[3]], topDirs); ok {
-					out = append(out, pathRef{p, m[3]})
+					out = append(out, pathRef{p, m[2], m[3]})
 				}
 			}
 		}
 	}
 	for _, m := range pythonTree.FindAllStringIndex(line, -1) {
-		out = append(out, pathRef{strings.TrimSuffix(lineSuffix.ReplaceAllString(strings.TrimRight(line[m[0]:m[1]], ".,;:"), ""), "/"), m[1]})
+		out = append(out, pathRef{strings.TrimSuffix(lineSuffix.ReplaceAllString(strings.TrimRight(line[m[0]:m[1]], ".,;:"), ""), "/"), m[0], m[1]})
+	}
+	return dedupeRefs(out)
+}
+
+// dedupeRefs drops a ref that names the same token as an earlier one (a backticked token the Python-tree pattern also
+// matched): same path, same start.
+func dedupeRefs(refs []pathRef) []pathRef {
+	var out []pathRef
+	for _, r := range refs {
+		dup := false
+		for _, o := range out {
+			if o.ref == r.ref && o.start == r.start {
+				dup = true
+			}
+		}
+		if !dup {
+			out = append(out, r)
+		}
 	}
 	return out
 }
 
-// check reports every ref that git does not track. The removed note exempts only the one path it follows: the nearest
-// path that ends before the note.
+// checkRefs reports every token that names a path git does not track. The removed note exempts only the one token it
+// follows: the nearest token that ends before the note, by position, so two identical paths are two tokens.
 func checkRefs(rel string, lineNo int, text string, refs []pathRef, files, dirs map[string]bool) []string {
-	exempt := map[string]bool{}
+	exempt := map[int]bool{}
 	for from := 0; ; {
 		i := strings.Index(text[from:], pathRemovedNote)
 		if i < 0 {
@@ -156,23 +174,56 @@ func checkRefs(rel string, lineNo int, text string, refs []pathRef, files, dirs 
 			}
 		}
 		if best >= 0 {
-			exempt[refs[best].ref] = true
+			exempt[best] = true
 		}
 		from = n + len(pathRemovedNote)
 	}
 	var out []string
-	seen := map[string]bool{}
-	for _, r := range refs {
-		if seen[r.ref] {
+	reported := map[string]bool{}
+	for k, r := range refs {
+		if exempt[k] || slices.Contains(historyNames[rel], r.ref) || files[r.ref] || dirs[r.ref] || namesGoSymbolIn(r.ref, dirs) {
 			continue
 		}
-		seen[r.ref] = true
-		if exempt[r.ref] || slices.Contains(historyNames[rel], r.ref) || files[r.ref] || dirs[r.ref] || namesGoSymbolIn(r.ref, dirs) {
+		if reported[r.ref] {
 			continue
 		}
+		reported[r.ref] = true
 		out = append(out, fmt.Sprintf("%s:%d names %s, which git does not track: name the Go owner, or write %q right after that path when no Go owner exists", rel, lineNo, r.ref, pathRemovedNote))
 	}
 	return out
+}
+
+// fenceState follows CommonMark code fences: an opening run of three or more backticks or tildes, closed by a run of the
+// same character at least as long with nothing else on the line.
+type fenceState struct {
+	char byte
+	n    int
+}
+
+func (f *fenceState) open() bool { return f.n > 0 }
+
+func (f *fenceState) line(raw string) {
+	t := strings.TrimSpace(raw)
+	if t == "" || (t[0] != '`' && t[0] != '~') {
+		return
+	}
+	run := 0
+	for run < len(t) && t[run] == t[0] {
+		run++
+	}
+	if run < 3 {
+		return
+	}
+	if f.open() {
+		if t[0] == f.char && run >= f.n && strings.TrimSpace(t[run:]) == "" {
+			f.n = 0
+		}
+		return
+	}
+	if t[0] == '`' && strings.ContainsRune(t[run:], '`') {
+		return
+	}
+	f.char, f.n = t[0], run
 }
 
 func frontMatterScalars(n *yaml.Node, visit func(line int, value string)) {
@@ -243,22 +294,22 @@ func docsRepoPathGuard(d docTree) []string {
 				var refs []pathRef
 				if first := strings.Fields(value); len(first) > 0 {
 					if p, ok := repoPathOf(first[0], topDirs); ok {
-						refs = append(refs, pathRef{p, len(first[0])})
+						refs = append(refs, pathRef{p, 0, len(first[0])})
 					}
 				}
 				for _, m := range pythonTree.FindAllStringIndex(value, -1) {
-					refs = append(refs, pathRef{strings.TrimSuffix(lineSuffix.ReplaceAllString(strings.TrimRight(value[m[0]:m[1]], ".,;:"), ""), "/"), m[1]})
+					refs = append(refs, pathRef{strings.TrimSuffix(lineSuffix.ReplaceAllString(strings.TrimRight(value[m[0]:m[1]], ".,;:"), ""), "/"), m[0], m[1]})
 				}
+				refs = dedupeRefs(refs)
 				out = append(out, checkRefs(rel, line+1, value, refs, files, dirs)...)
 			})
 		}
-		fenced := false
+		var fence fenceState
 		for i := body; i < len(lines); i++ {
 			line := lines[i]
-			if strings.HasPrefix(strings.TrimSpace(line), "```") {
-				fenced = !fenced
-			}
-			out = append(out, checkRefs(rel, i+1, line, lineRefs(line, fenced, topDirs), files, dirs)...)
+			wasOpen := fence.open()
+			fence.line(line)
+			out = append(out, checkRefs(rel, i+1, line, lineRefs(line, wasOpen || fence.open(), topDirs), files, dirs)...)
 		}
 	}
 	return out

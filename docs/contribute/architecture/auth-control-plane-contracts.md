@@ -19,12 +19,14 @@ lifecycle: active
 
 `contracts/auth/v1/` is the language-neutral source of truth for what the Auth
 Control Plane emits and accepts. The JSON Schemas, the OpenAPI document that
-`$ref`s them and the golden fixtures are authoritative; the Go and Python types
-are implementations of them, never the other way round. This page is the
+`$ref`s them and the golden fixtures are authoritative; the Go types (and the
+removed Python client) are implementations of them, never the other way round. This page is the
 contributor map; the rules each surface inherited live in
 [`contracts/auth/v1/README.md`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/README.md)
 and are not repeated here.
 {: .fc-page-lede }
+
+> **History:** the Python client (the Python column below, `src/dev_health_ops/authclient`) and its test job were removed with the Python api. The Python column and the Python runner row are a record of what shipped; the live gates are the Go validators and the ajv runner. Do not edit or run the Python steps.
 
 ## What ships
 
@@ -72,7 +74,7 @@ looks like a real credential, in values and in prose.
 | Runner | Where | Runs |
 | --- | --- | --- |
 | Go | `internal/auth/contracts/*_goldens_test.go`, `go test ./internal/auth/contracts/` | Part of the [auth gate](auth-control-plane-go-gates.md) and the Go quality job. |
-| Python | `tests/authclient/test_*_contract_goldens.py` | The Python test job. |
+| Python (removed) | `tests/authclient/test_*_contract_goldens.py` (removed with the Python api) | No longer runs. |
 | ajv 2020-12, strict | `ci/auth-contracts-ajv/run.mjs`, workflow `auth-contracts-ajv.yml` | Any change under `contracts/auth/v1/`; `cd ci/auth-contracts-ajv && npm ci && node run.mjs` locally. Exit 1: a fixture disagrees. Exit 2: a schema did not compile. |
 
 The workflow has no `paths:` trigger: the job always runs and always reports,
@@ -96,13 +98,12 @@ by registry tests. Two are worth knowing before you touch a class:
 
 1. Edit or add the schema under `jsonschema/`, keeping to the cross-language
    dialect intersection described in the contracts README. One constraint per
-   property (a redundant `maxLength` beside a pattern makes Go and Python report
+   property (a redundant `maxLength` beside a pattern makes validators report
    different keywords).
 2. Add fixtures to the manifest in all three categories as needed, each
    violating one location.
-3. Add or extend the Go validator and the Python client; guard every integer on
-   the raw number token in both.
-4. Run Go, Python and ajv on **one tip** and paste the output, then show a
+3. Add or extend the Go validator; guard every integer on the raw number token.
+4. Run Go and ajv on **one tip** and paste the output, then show a
    mutation table: delete each guard, confirm exactly the predicted fixtures go
    red, restore (the README's proof obligation).
 

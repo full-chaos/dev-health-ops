@@ -125,28 +125,27 @@ lifetime is at most the 60 min HS256-compat ceiling. The class is
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 
-`OrgIdMiddleware` scans every request for an `authorization` header
-(`internal/api/policy/scope.go:103-120`) and, if present,
-decodes it as a user access JWT
-(`get_authenticated_user_from_headers` → `authenticate_access_token`,
-same file, lines 36-50) — **regardless of what the token actually is** —
-except for one explicit path-prefix exemption:
+The org scope (`Scope.OrgScope`, `internal/api/policy/scope.go:128`) reads every
+request's `authorization` header through `Scope.headerAuthenticate`
+(`internal/api/policy/scope.go:103-120`), which calls
+`Authenticator.Authenticate` (`internal/api/policy/principal.go:109`) and
+decodes it as a user access JWT — **regardless of what the token actually
+is** — except for one explicit path-prefix exemption (`acrInternalPrefix`,
+`internal/api/policy/scope.go:97-98`, checked at `:130`):
 
-```python
-if path.startswith("/api/v1/internal/acr/"):
-    # These routes authenticate opaque ACR service credentials themselves.
-    await self.app(scope, receive, send)
-    return
+```go
+if strings.HasPrefix(r.URL.Path, acrInternalPrefix) {
+	next.ServeHTTP(w, r)
+	return
+}
 ```
 
-`internal/api/policy/scope.go:97-98,130-133`
-
-Post-fix, a non-JWT bearer value no longer crashes: `AuthService.validate_token`
-catches `InvalidTokenError` and returns `None`
-(`internal/api/policy/principal.go:109-128`), so the request proceeds
-as anonymous through `OrgIdMiddleware` and its *real* validator still gets a
-turn. **But the credential still transited a validator it does not own**,
-which is exactly the shape CHAOS-3271 warns about. Every class below hits
+A non-JWT bearer value does not fail the request: `Authenticator.Authenticate`
+returns a refusal, and `Scope.headerAuthenticate` treats a refusal as no user
+(`internal/api/policy/scope.go:116-118`), so the request proceeds as anonymous
+through the org scope and its *real* validator still gets a turn. **But the
+credential still transited a validator it does not own**, which is exactly the
+shape CHAOS-3271 warns about. Every class below hits
 this:
 
 | Credential class | Route(s) | Exempted from the path prefix? |

@@ -4225,6 +4225,6 @@ detail the comments actually reference (the resolver internals), not at `work-gr
 | Schema (base + widened) | `internal/chmigrate/history/051_team_attribution_dimensions.sql`, `internal/chmigrate/history/053_manual_attribution_fallbacks.sql` — see §0.6 |
 | Go dispatch → Python compatibility bridge (added §0.6) | `internal/workerservice/daily.go` (`NewHTTPCompatibilityExecutor`) (HTTP compatibility executor removed with the Python api) |
 
-> All Python paths above are repo-relative to `src/dev_health_ops/` (e.g. `metrics/compute_work_items.py`
-> is `internal/teamattribution/cascade.go`). All Go paths are repo-relative to `ops/`.
+> All Python paths above are repo-relative to `src/dev_health_ops/` (e.g. `metrics/compute_work_items.py`,
+> removed with the Python api; its Go owner is `internal/teamattribution/cascade.go`). All Go paths are repo-relative to `ops/`.
 > Every path in this table was verified to still exist during the 2026-08-19 restoration (CHAOS-3968).

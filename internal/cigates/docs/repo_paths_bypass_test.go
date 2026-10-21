@@ -1,6 +1,9 @@
 package docs_test
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDocsRepoPathGuardBypasses(t *testing.T) {
 	assertGuard(t, docsRepoPathGuard, []plantCase{
@@ -24,6 +27,43 @@ func TestDocsRepoPathGuardNoteExemptsOnlyItsPath(t *testing.T) {
 	for _, v := range docsRepoPathGuard(d) {
 		if len(v) > 28 && v[:28] == "docs/reference/planted.md:1 " {
 			t.Errorf("a noted path or a tracked path was refused: %s", v)
+		}
+	}
+}
+
+func TestDocsRepoPathGuardNoteIsPositional(t *testing.T) {
+	assertGuard(t, docsRepoPathGuard, []plantCase{
+		{"two identical missing paths, the note after the second", func(t *testing.T, d docTree) docTree {
+			return d.added("docs/reference/planted.md", "`internal/nosuchpackage/e.go` then `internal/nosuchpackage/e.go` (removed with the Python api)\n")
+		}, "docs/reference/planted.md:1 names internal/nosuchpackage/e.go"},
+		{"two identical Python paths in a table row, the note after the second", func(t *testing.T, d docTree) docTree {
+			return d.added("docs/reference/planted.md", "| `src/dev_health_ops/api/main.py` | `src/dev_health_ops/api/main.py` (removed with the Python api) |\n")
+		}, "docs/reference/planted.md:1 names src/dev_health_ops/api/main.py"},
+	})
+}
+
+func TestDocsRepoPathGuardFences(t *testing.T) {
+	missing := "internal/nosuchpackage/f.go"
+	assertGuard(t, docsRepoPathGuard, []plantCase{
+		{"text after a closed fence is checked", func(t *testing.T, d docTree) docTree {
+			return d.added("docs/reference/planted.md", "~~~text\nx\n~~~\n`"+missing+"`\n")
+		}, "docs/reference/planted.md:4 names " + missing},
+		{"a shorter closing run does not close the fence, a longer one does", func(t *testing.T, d docTree) docTree {
+			return d.added("docs/reference/planted.md", "````text\n```\n`internal/nosuchpackage/g.go`\n````\n`"+missing+"`\n")
+		}, "docs/reference/planted.md:5 names " + missing},
+		{"a different fence character does not close the fence", func(t *testing.T, d docTree) docTree {
+			return d.added("docs/reference/planted.md", "~~~text\n```\n~~~\n`"+missing+"`\n")
+		}, "docs/reference/planted.md:4 names " + missing},
+	})
+	for _, c := range []struct{ name, page string }{
+		{"a tilde fence", "~~~text\n`internal/nosuchpackage/h.go`\n~~~\n"},
+		{"a long tilde fence closed by a longer run", "~~~~text\n`internal/nosuchpackage/h.go`\n~~~\n~~~~~\n"},
+		{"a backtick fence inside a tilde fence", "~~~text\n```\n`internal/nosuchpackage/h.go`\n```\n~~~\n"},
+	} {
+		for _, v := range docsRepoPathGuard(realTree(t).added("docs/reference/planted.md", c.page)) {
+			if strings.Contains(v, "docs/reference/planted.md") {
+				t.Errorf("%s: a path inside a fence was reported: %s", c.name, v)
+			}
 		}
 	}
 }

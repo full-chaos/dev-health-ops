@@ -136,3 +136,37 @@ func TestWebAuthSecretNeverFallsBackToTheMintKey(t *testing.T) {
 		t.Fatalf("a literal web.env.AUTH_SECRET did not render: %v", err)
 	}
 }
+
+func goAPIPodTemplate(t *testing.T, key string) string {
+	t.Helper()
+	out, err := helmOut(t, false, "--set", "secrets.data.JWT_SECRET_KEY="+key)
+	if err != nil {
+		t.Fatalf("render failed: %v\n%s", err, out)
+	}
+	api, ok := docByName(t, out, "Deployment", "hs256-dev-health-go-api")
+	if !ok {
+		t.Fatalf("no go-api Deployment")
+	}
+	start := strings.Index(api, "\n  template:\n")
+	if start < 0 {
+		t.Fatalf("no pod template in the go-api Deployment")
+	}
+	return api[start:]
+}
+
+// A key change in the chart-created hs256 Secret must roll go-api: envFrom/env never restart a pod on their own.
+func TestHS256KeyChangeRollsGoAPI(t *testing.T) {
+	a, b := goAPIPodTemplate(t, "key-A"), goAPIPodTemplate(t, "key-B")
+	if !strings.Contains(a, "checksum/hs256:") {
+		t.Fatalf("the go-api pod template carries no checksum/hs256 annotation:\n%s", a)
+	}
+	if a == b {
+		t.Fatalf("the go-api pod template is identical for key A and key B")
+	}
+	if a != goAPIPodTemplate(t, "key-A") {
+		t.Fatalf("the go-api pod template is not stable for the same key")
+	}
+	if strings.Contains(a, "key-A") {
+		t.Fatalf("the key value leaked into the pod template")
+	}
+}

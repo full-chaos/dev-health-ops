@@ -92,6 +92,10 @@ type MembershipReader interface {
 // refused.
 type MembershipJIT interface {
 	JoinAndIssue(ctx context.Context, principalID, orgID uuid.UUID, req SessionRequest) (Tokens, error)
+	// ProvisionJoinAndIssue creates the account, adds it to orgID as req.Role
+	// and issues the session in orgID, in one transaction. req.PrincipalID is
+	// unset: the new account's id is returned.
+	ProvisionJoinAndIssue(ctx context.Context, account FederatedAccount, orgID uuid.UUID, req SessionRequest) (Principal, Tokens, error)
 }
 
 // Entitlements decides whether an organization may use SSO.
@@ -537,7 +541,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	case errors.Is(err, ErrNotOrgMember):
 		return Login{}, notMember()
 	case errors.Is(err, ErrIdentityNotFound):
-		return Login{}, s.refuseNewAccount(ctx, row, v)
+		return s.newAccount(ctx, row, v, requestID)
 	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
@@ -574,10 +578,38 @@ func notMember() *Error {
 		"This account is not a member of the provider's organization.")
 }
 
-// refuseNewAccount runs the e-mail checks, then refuses. A new account is not
-// created here: the account and its membership must commit together, and that
-// write does not exist yet. Nothing is written.
-func (s *Service) refuseNewAccount(ctx context.Context, row Provider, v validated) *Error {
+// newAccount runs the e-mail checks. With JIT off it then refuses, writing
+// nothing. With JIT on, one JIT step creates the account, joins it to the
+// provider's organization and issues the session together.
+func (s *Service) newAccount(ctx context.Context, row Provider, v validated, requestID *string) (Login, *Error) {
+	if failure := s.checkNewAccount(ctx, row, v); failure != nil {
+		return Login{}, failure
+	}
+	if s.cfg.MembershipJIT == nil {
+		return Login{}, notMember()
+	}
+	p := v.profile
+	org := row.OrgID
+	req := SessionRequest{OrgID: &org, Role: "member", AMR: AMR}
+	principal, tokens, err := s.cfg.MembershipJIT.ProvisionJoinAndIssue(ctx,
+		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, RequestID: requestID}, org, req)
+	switch {
+	case err == nil:
+		return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: req.Role, Tokens: tokens}, nil
+	case errors.Is(err, ErrSignupNotAvailable):
+		return Login{}, deny(http.StatusForbidden, ReasonSignupUnavailable, "Sign-up through this provider is not available")
+	case errors.Is(err, ErrIdentityConflict):
+		return Login{}, conflict()
+	case errors.Is(err, ErrInvalidEmail):
+		return Login{}, deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
+	case errors.Is(err, ErrInvalidKey):
+		return Login{}, authFailed(ReasonMalformed, err)
+	default:
+		return Login{}, internal(ReasonStoreUnavailable, err)
+	}
+}
+
+func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated) *Error {
 	p := v.profile
 	if p.Email == "" {
 		return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
@@ -601,7 +633,7 @@ func (s *Service) refuseNewAccount(ctx context.Context, row Provider, v validate
 	if !row.AutoProvision {
 		return deny(http.StatusForbidden, ReasonProvisioningDisabled, "User not found and auto-provisioning is disabled")
 	}
-	return notMember()
+	return nil
 }
 
 func conflict() *Error {

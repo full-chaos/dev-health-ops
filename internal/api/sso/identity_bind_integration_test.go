@@ -42,6 +42,26 @@ VALUES ($1, $2, 'local', true, true, false, 0, now(), now())`, uuid.New(), email
 	}
 }
 
+func assertIdentityConflict(t *testing.T, ctx context.Context, st stack, providerID uuid.UUID, body map[string]any) {
+	t.Helper()
+	detail, _ := body["detail"].(map[string]any)
+	if detail["reason"] != "identity_conflict" || body["access_token"] != nil {
+		t.Fatalf("body=%v, want reason identity_conflict and no token", body)
+	}
+	var providerStatus string
+	var audits int
+	if err := st.pool.QueryRow(ctx, `SELECT status FROM sso_providers WHERE id = $1`, providerID).Scan(&providerStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_id = $1 AND action = 'sso_login' AND status = 'failure'`,
+		providerID.String()).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if providerStatus != "active" || audits != 1 {
+		t.Fatalf("provider status=%q failure audits=%d, want active and 1", providerStatus, audits)
+	}
+}
+
 func seedSAMLOrgProvider(t *testing.T, ctx context.Context, st stack, idp *samlIdP, spEntityID string) uuid.UUID {
 	t.Helper()
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
@@ -72,9 +92,7 @@ func TestSAMLSignInKeepsAnExistingAccountsIdentity(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("status=%d body=%v, want 409", status, body)
 	}
-	if body["access_token"] != nil {
-		t.Fatalf("a token was issued: %v", body)
-	}
+	assertIdentityConflict(t, ctx, st, providerID, body)
 	got, n := readIdentity(t, ctx, st.pool, email)
 	if n != 1 || got.provider == nil || *got.provider != "local" || got.subject != nil || got.fullName != nil {
 		t.Fatalf("account changed: rows=%d %+v", n, got)
@@ -98,6 +116,7 @@ func TestSAMLSignInFromASecondOrgDoesNotRebindAnAccount(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("second org: status=%d body=%v, want 409", status, body)
 	}
+	assertIdentityConflict(t, ctx, st, providerB, body)
 	got, n := readIdentity(t, ctx, st.pool, email)
 	if n != 1 || got.subject == nil || *got.subject != "subject-a" {
 		t.Fatalf("account rebound: rows=%d %+v", n, got)
@@ -128,7 +147,7 @@ func TestSAMLACSRefusesAResponseAddressedToAnotherRow(t *testing.T) {
 		spEntityID: sp, acsURL: samlACSOverrideFor(providerA), email: "other." + email, fullName: "Person", nameID: "subject-2",
 	})
 	status, body = postJSON(t, st.server, "/api/v1/auth/saml/"+providerB.String()+"/acs", map[string]any{"SAMLResponse": response})
-	if status == http.StatusOK || body["access_token"] != nil {
+	if status < 400 || body["access_token"] != nil {
 		t.Fatalf("row B accepted a response addressed to row A: %d %v", status, body)
 	}
 	if _, n := readIdentity(t, ctx, st.pool, "other."+email); n != 0 {
@@ -160,8 +179,29 @@ func TestOAuthSignInKeepsAnExistingAccountsIdentity(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("callback: status=%d body=%v, want 409", status, body)
 	}
+	assertIdentityConflict(t, ctx, st, providerID, body)
 	got, n := readIdentity(t, ctx, st.pool, gitlab.email)
 	if n != 1 || got.provider == nil || *got.provider != "local" || got.subject != nil {
 		t.Fatalf("account changed: rows=%d %+v", n, got)
+	}
+}
+
+func TestSAMLSignInMatchesAnExistingEmailIgnoringCase(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	idp := newSAMLIdP(t)
+	const sp = "https://sp.test/saml/metadata"
+	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
+	seedLocalUser(t, ctx, st.pool, "Mixed.Case@allowed.example")
+
+	status, body := samlSignIn(t, st, idp, providerID, sp, "mixed.case@allowed.example", "subject-1")
+	if status != http.StatusConflict {
+		t.Fatalf("status=%d body=%v, want 409", status, body)
+	}
+	assertIdentityConflict(t, ctx, st, providerID, body)
+	var n int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE lower(email) = 'mixed.case@allowed.example'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("users with this email: %d (err %v), want 1", n, err)
 	}
 }

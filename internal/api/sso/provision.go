@@ -170,7 +170,7 @@ func (h handlers) resolveSSOIdentity(ctx context.Context, authProvider, external
 		}
 	}
 	var taken bool
-	if err := h.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE email = $1::text)`, email).Scan(&taken); err != nil {
+	if err := h.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE lower(email) = lower($1::text))`, email).Scan(&taken); err != nil {
 		return uuid.Nil, false, err
 	}
 	if taken {

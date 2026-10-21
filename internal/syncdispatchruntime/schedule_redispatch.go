@@ -130,9 +130,9 @@ func backoffCountdown(base, limit, idle time.Duration, syncRunID string) (time.D
 func lastRunProgressAt(ctx context.Context, pool *pgxpool.Pool, syncRunID string) (*time.Time, error) {
 	var at *time.Time
 	err := pool.QueryRow(ctx, `
-SELECT COALESCE(MAX(updated_at) FILTER (WHERE status IN ('success', 'failed')), MIN(created_at))
+SELECT COALESCE(MAX(updated_at) FILTER (WHERE status IN ($2, $3)), MIN(created_at))
 FROM public.sync_run_units
-WHERE sync_run_id = $1::uuid`, syncRunID).Scan(&at)
+WHERE sync_run_id = $1::uuid`, syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at)
 	if err != nil {
 		return nil, err
 	}

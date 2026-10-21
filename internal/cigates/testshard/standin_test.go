@@ -16,6 +16,21 @@ import (
 
 const standInGo = `#!/usr/bin/env bash
 # Stand-in go: go test records "<args>" and succeeds (or fails when FAKE_GO_FAIL is set); every other subcommand is the real go.
+# A go list run in the real tree (FAKE_GO_LIST_CACHE_ROOT, which no test changes) is the real go's output, kept per directory,
+# arguments and whole environment for the test process (FAKE_GO_LIST_CACHE): a check_go.sh run lists the packages several times.
+# Left out of the key: the shell's own _, SHLVL and OLDPWD, the per-test TMPDIR and FAKE_GO_* paths of this harness, and the
+# per-test directory of this stand-in at the head of PATH (the rest of PATH is kept).
+if [ "$1" = "list" ] && [ -n "${FAKE_GO_LIST_CACHE:-}" ]; then
+  case "${PWD}/" in "${FAKE_GO_LIST_CACHE_ROOT}"/*)
+    key="$({ printf '%%s\0' "${PWD}" "$@" "PATH=${PATH#"${0%%/*}:"}"; env -0 | grep -zv '^\(_\|SHLVL\|OLDPWD\|TMPDIR\|PATH\|FAKE_GO_[A-Z_]*\)=' | LC_ALL=C sort -z; } | sha256sum | cut -c1-64)"
+    if [ -f "${FAKE_GO_LIST_CACHE}/${key}" ]; then cat "${FAKE_GO_LIST_CACHE}/${key}"; exit 0; fi
+    tmp="$(mktemp "${FAKE_GO_LIST_CACHE}/.${key}.XXXXXX")" || exit 1
+    "%[1]s" "$@" > "${tmp}"; rc=$?
+    cat "${tmp}"
+    if [ "${rc}" -eq 0 ]; then mv -f "${tmp}" "${FAKE_GO_LIST_CACHE}/${key}"; else rm -f "${tmp}"; fi
+    exit "${rc}" ;;
+  esac
+fi
 if [ "$1" != "test" ]; then exec "%[1]s" "$@"; fi
 case " $* " in *" -list "*)
   printf '%%s\n' "$*" >> "${FAKE_GO_LIST_LOG}"
@@ -30,6 +45,7 @@ case " $* " in *" -list "*)
   exit 0 ;;
 esac
 printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
+case " $* " in *" -json "*) printf '{"Time":"2026-01-01T00:00:00Z","Action":"pass","Package":"p","Test":"TestFake","Elapsed":0.01}\n' ;; esac
 [ -z "${FAKE_GO_FAIL:-}" ] || exit 1
 # FAKE_GO_FAIL_ONLY fails exactly one of the two race calls of a leg: "providersync" or "packages".
 case "${FAKE_GO_FAIL_ONLY:-}" in
@@ -42,15 +58,40 @@ exit 0
 var (
 	listReplayOnce sync.Once
 	listReplayData []byte
+	// goListCache is the stand-in's go list cache for this test process (removed when it ends).
+	goListCache string
 )
 
-// providersyncRaceListing returns the REAL `go test -race -list .* ./internal/providersync` output, produced once per process.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "testshard-golist-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	goListCache = dir
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// providersyncListUnset and providersyncListArgs are the race leg's providersync listing call: the variables it unsets (GO_ENV_OFF)
+// and its go arguments.
+var (
+	providersyncListUnset = []string{"GO_PROVIDER_ROUTES", "DEV_HEALTH_ENV", "GOFLAGS", "GOEXPERIMENT"}
+	providersyncListArgs  = []string{"test", "-mod=readonly", "-trimpath", "-race", "-list", ".*", "./internal/providersync"}
+)
+
+// providersyncRaceListing returns the REAL `go test -race -list .* ./internal/providersync` output, produced once per process. It is
+// the race leg's own call, so it reuses the build the leg made of the race test binary instead of compiling it again.
 func providersyncRaceListing(t *testing.T) []byte {
 	t.Helper()
 	listReplayOnce.Do(func() {
-		cmd := exec.Command("go", "test", "-mod=readonly", "-race", "-list", ".*", "./internal/providersync")
+		args := []string{}
+		for _, name := range providersyncListUnset {
+			args = append(args, "-u", name)
+		}
+		cmd := exec.Command("env", append(append(args, "GOWORK=off", "go"), providersyncListArgs...)...)
 		cmd.Dir = repoRoot(t)
-		cmd.Env = append(os.Environ(), "GOWORK=off")
 		out, err := cmd.Output()
 		if err == nil {
 			listReplayData = out
@@ -100,7 +141,7 @@ func runCheckGoIn(t *testing.T, root string, extraEnv []string, fail bool, args 
 	env := append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GO_LOG="+log, "FAKE_GO_LIST_LOG="+listLog, "TMPDIR="+filepath.Join(dir, "tmp"),
-		"FAKE_GO_LIST_REPLAY="+replay)
+		"FAKE_GO_LIST_REPLAY="+replay, "FAKE_GO_LIST_CACHE="+goListCache, "FAKE_GO_LIST_CACHE_ROOT="+repoRoot(t))
 	env = append(env, extraEnv...)
 	if fail {
 		env = append(env, "FAKE_GO_FAIL=1")

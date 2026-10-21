@@ -78,6 +78,43 @@ func ReadResponseBodyWith(response *http.Response, limit int64, cause func(error
 	return body, nil
 }
 
+// ReadResponseBodyWithin reads a body of at most limit bytes. over > 0 means
+// the body is above limit: the response's own Content-Length when that
+// already says so (no byte is read), else limit+1 (the read stops there).
+// A declared length only sizes the first buffer, never past limit+1, and the
+// read stays capped at limit+1, so an under-reported length cannot widen it.
+func ReadResponseBodyWithin(response *http.Response, limit int64, cause func(error) error) (body []byte, over int64, err error) {
+	if response == nil || response.Body == nil || limit < 0 {
+		return nil, 0, ResponseFailure(response, ReasonBodyRead, ErrNormalizationInvalid)
+	}
+	if response.ContentLength > limit {
+		return nil, response.ContentLength, nil
+	}
+	initial := int64(bytes.MinRead)
+	if response.ContentLength >= 0 {
+		initial = response.ContentLength + 1
+	}
+	body = make([]byte, 0, min(initial, limit+1))
+	reader := io.LimitReader(response.Body, limit+1)
+	for {
+		if len(body) == cap(body) {
+			body = append(body, 0)[:len(body)]
+		}
+		n, readErr := reader.Read(body[len(body):cap(body)])
+		body = body[:len(body)+n]
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return body, 0, ResponseFailure(response, ReasonBodyRead, cause(readErr))
+		}
+	}
+	if int64(len(body)) > limit {
+		return nil, int64(len(body)), nil
+	}
+	return body, 0, nil
+}
+
 // DecodeFlag selects decoder behaviour for DecodeResponseJSON.
 type DecodeFlag int
 

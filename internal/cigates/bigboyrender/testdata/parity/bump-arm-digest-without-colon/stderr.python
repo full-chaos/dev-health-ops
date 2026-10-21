@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "{A}/bump-swap-rewrite-values.py", line 20, in <module>
+    s, n = re.subn(
+           ^^^^^^^^
+  File "/usr/lib/python3.12/re/__init__.py", line 197, in subn
+    return _compile(pattern, flags).subn(repl, string, count)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "{A}/bump-swap-rewrite-values.py", line 22, in <lambda>
+    lambda m: m.group(1) + arm.split(":")[1],
+                           ~~~~~~~~~~~~~~^^^
+IndexError: list index out of range

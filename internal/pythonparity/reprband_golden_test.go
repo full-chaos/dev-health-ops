@@ -48,8 +48,7 @@ func loadReprBandGolden(t *testing.T) reprBandGolden {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Clean(reprBandGoldenPath))
 	if err != nil {
-		t.Fatalf("read golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_evidence_json_repr_band_golden.py)", err)
+		t.Fatalf("read golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden reprBandGolden
 	if err := json.Unmarshal(raw, &golden); err != nil {

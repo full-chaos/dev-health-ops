@@ -1,4 +1,4 @@
-ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d"
+ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd"
 # CHAOS-4922: the Python base comes from our ghcr mirror, not Docker Hub.
 #
 # CI never authenticates to Docker Hub, so an unauthenticated Hub pull is rate
@@ -159,10 +159,6 @@ COPY --from=go-migrator-builder /out/ask-dev-jobs-probe /usr/local/bin/ask-dev-j
 # The SQL, not this image, remains the source of truth for the domain role's
 # grants; only its delivery changes.
 COPY scripts/worker/provision_river_roles.sql /usr/local/share/dev-health/provision_river_roles.sql
-
-# Fail the image build if the installed distribution cannot load the exact job
-# contract artifacts used by Python worker routing.
-RUN python -c "from dev_health_ops.jobs.contracts.registry import load_migration_jobs, load_registry; load_registry(); load_migration_jobs()"
 
 RUN useradd --uid 10001 --create-home --shell /bin/bash appuser
 

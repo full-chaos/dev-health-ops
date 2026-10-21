@@ -11,7 +11,11 @@
 package httpguard
 
 import (
+	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -22,17 +26,33 @@ func refuseRedirects(req *http.Request, via []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
+// WithTransport is client unchanged when it has a Transport, else a copy with SharedTransport(): a supplied client with
+// a nil Transport would dial through http.DefaultTransport and so through an environment proxy. A nil client stays nil;
+// the caller's client is never modified.
+func WithTransport(client *http.Client) *http.Client {
+	if client == nil || client.Transport != nil {
+		return client
+	}
+	copied := *client
+	copied.Transport = SharedTransport()
+	return &copied
+}
+
 // NoRedirects is the client with its redirect policy replaced by "answer the 3xx, follow nothing" (a nil client stays
 // nil). A followed redirect carries the credential to wherever the server sends it: Go drops only Authorization and
 // Cookie when the host changes, not a custom header such as PRIVATE-TOKEN, and keeps Authorization for a subdomain of
-// the original host; httpx, whose behaviour these clients port, follows no redirect by default. The input is copied,
-// never changed.
+// the original host; httpx, whose behaviour these clients port, follows no redirect by default. A client with no
+// Transport gets SharedTransport(): a nil Transport is http.DefaultTransport, which sends through an environment proxy.
+// The input is copied, never changed.
 func NoRedirects(client *http.Client) *http.Client {
 	if client == nil {
 		return nil
 	}
 	copied := *client
 	copied.CheckRedirect = refuseRedirects
+	if copied.Transport == nil {
+		copied.Transport = SharedTransport()
+	}
 	return &copied
 }
 
@@ -73,10 +93,39 @@ func NoRedirectsDoer[D interface {
 
 func httpClientOrNil(client *http.Client) *http.Client { return NoRedirects(client) }
 
-// NewClient is the client a production binary builds when it has no client of its own to guard: the given timeout and
-// no redirect followed (a 3xx is returned as the response).
+// Transport is the transport of every outbound client: a connection pool of its own and never a proxy from the process
+// environment (HTTP_PROXY, HTTPS_PROXY), so a credential on a request reaches only the host the request names. A nil
+// Transport would be http.DefaultTransport, which honours those variables. internal/cigates/outboundtransport fails a
+// client of production code built without one.
+func Transport() *http.Transport {
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport := base.Clone()
+		transport.Proxy = nil
+		return transport
+	}
+	// A dependency replaced http.DefaultTransport with another RoundTripper: net/http's own default settings, no proxy.
+	slog.Warn("httpguard: http.DefaultTransport was replaced by another RoundTripper; the outbound transport uses net/http's default settings with no proxy",
+		"default_transport_type", fmt.Sprintf("%T", http.DefaultTransport))
+	return &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
+var sharedTransport = sync.OnceValue(Transport)
+
+// SharedTransport is one process-wide Transport(): the connection pool a client that customises nothing shares, as such a
+// client shared http.DefaultTransport before. A client that changes a field of its transport takes Transport() instead.
+func SharedTransport() *http.Transport { return sharedTransport() }
+
+// NewClient is the client a production binary builds when it has no client of its own to guard: the given timeout, no
+// redirect followed (a 3xx is returned as the response) and SharedTransport().
 func NewClient(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, CheckRedirect: refuseRedirects}
+	return &http.Client{Timeout: timeout, Transport: SharedTransport(), CheckRedirect: refuseRedirects}
 }
 
 // Guardable is the ALLOW-LIST BY REACHABILITY (CHAOS-7910): a provider client constructor accepts a doer only if the guard can be

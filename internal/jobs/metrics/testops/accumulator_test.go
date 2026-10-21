@@ -28,7 +28,7 @@ import (
 // mean()/Neumaier-sum oracle) was deleted by CHAOS-5245 alongside
 // compute_testops.py -- there is no more live Python compute to compare
 // against. The Neumaier-sum requirement itself is still enforced: see
-// internal/pythonparity's own TestFMAGoldenMatchesLivePython-style guards,
+// internal/pythonparity's frozen-golden guards,
 // and ComputePipelineMetrics's use of pythonparity.Sum directly.
 
 // TestPipelineAccumulatorMatchesSliceAPI proves the streaming path the native

@@ -202,7 +202,7 @@ full-chaos/dev-health-ops	requirements-docs.txt	configuration	supporting-artifac
 full-chaos/dev-health-ops	scripts/build_docs_cloudflare.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	internal/cigates/docstools/dc_links.go	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/check_docs_candidate_accessibility.py	tooling	supporting-artifact						documentation-system			False	False							
-full-chaos/dev-health-ops	internal/cigates/docstools/dc_facts.go	tooling	supporting-artifact						documentation-system			False	False							
+full-chaos/dev-health-ops	internal/cigates/docstools/candidatefacts.go	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	internal/cigates/docstools/dc_search.go	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/check_docs_cloudflare_host.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/check_docs_links.py	tooling	supporting-artifact						documentation-system			False	False							
@@ -212,7 +212,7 @@ full-chaos/dev-health-ops	internal/cigates/docstools/invtaxonomy.go	tooling	supp
 full-chaos/dev-health-ops	scripts/docs_inventory_review.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/docs_inventory_v2.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	internal/cigates/docstools/run.go	tooling	supporting-artifact						documentation-system			False	False							
-full-chaos/dev-health-ops	scripts/prepare_docs_cloudflare.py	tooling	supporting-artifact						documentation-system			False	False							
+full-chaos/dev-health-ops	internal/cigates/docsprepare/docsprepare.go	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/user_guide_evidence_contract.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/user_guide_evidence_validation.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/validate_docs_ia_v2.py	tooling	supporting-artifact						documentation-system			False	False							

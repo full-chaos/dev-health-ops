@@ -100,12 +100,24 @@ def build(*, mode: str, full_check: bool) -> None:
                 "docs/stylesheets/extra.css",
             ]
         )
-        _run([*CIGATE_DOCS, "check-docs-facts"])
+        _run(
+            [
+                "go",
+                "run",
+                "-trimpath",
+                "-mod=readonly",
+                "./cmd/cigate",
+                "docs",
+                "check-candidate-facts",
+            ]
+        )
 
     _run(
         [
-            sys.executable,
-            "scripts/prepare_docs_cloudflare.py",
+            "go",
+            "run",
+            "./cmd/cigate",
+            "docs-prepare",
             "--source",
             str(SITE_DIR.relative_to(ROOT)),
             "--output",

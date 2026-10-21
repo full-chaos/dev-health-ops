@@ -14,7 +14,7 @@ Backend: ingest → metrics → API → jobs. The versioned platform contract (W
 | LLM categorization contract | [`.github/docs-legacy/llm/categorization-contract.md`](.github/docs-legacy/llm/categorization-contract.md) |
 | API surface | [`docs/reference/graphql/index.md`](docs/reference/graphql/index.md), [`.github/docs-legacy/api/view-mapping.md`](.github/docs-legacy/api/view-mapping.md) |
 | CLI & workers | [`docs/reference/cli/index.md`](docs/reference/cli/index.md), [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md) |
-| How to run / test tiers | [`README.md`](README.md), [`ci/run_tests.sh`](ci/run_tests.sh) |
+| How to run / test tiers | [`README.md`](README.md), [`ci/check_go.sh`](ci/check_go.sh), [`ci/run_tests.sh`](ci/run_tests.sh) (live-e2e) |
 
 ## Source layout (`src/dev_health_ops/`)
 
@@ -214,7 +214,7 @@ It mirrors the PR-time CI gates of the ops repo and MUST be green before `git pu
 
 1. `ruff format --check .` and `ruff check .` (local only; CI no longer runs ruff)
 2. The **hosted** Python test selection, the same files the hosted `test` check runs after
-   CHAOS-8352 removed the Python unit matrix: `tests/docs`, `tests/tooling` (`-n 4`) and the
+   CHAOS-8352 removed the Python unit matrix: `tests/tooling` (`-n 4`) and the
    explicit list in `ci/kept_python_tests.txt` (read from that file, never copied), with the
    local socks5h proxy neutralized. **Do not run the whole `tests/` dir**: it still holds
    tests of the deleted Python api tree and is red by construction (CHAOS-8692). A new file

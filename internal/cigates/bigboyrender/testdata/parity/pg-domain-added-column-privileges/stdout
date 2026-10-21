@@ -1,0 +1,1 @@
+PG domain posture delta (privileges added): integration_credentials.updated_at UPDATE; worker_job_completion_fences.completion_key SELECT,INSERT

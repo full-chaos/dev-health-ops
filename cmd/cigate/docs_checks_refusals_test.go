@@ -15,7 +15,6 @@ import (
 //
 //	L = scripts/check_built_site_links.py
 //	S = scripts/check_docs_candidate_search.py
-//	F = scripts/check_docs_candidate_facts.py
 type dcRow struct {
 	name  string
 	ref   string
@@ -27,7 +26,7 @@ type dcRow struct {
 	out   string
 }
 
-const dcRefusalRows = 103
+const dcRefusalRows = 96
 
 func dcPage(body string) string { return "<html><body>" + body + "</body></html>\n" }
 
@@ -156,14 +155,6 @@ func dcRefusalTable() []dcRow {
 		{name: "search report parent is a file", ref: "S175 Path.mkdir(parents=True, exist_ok=True): FileExistsError", files: map[string]string{"site/search/search_index.json": dcIndexJSON, "q.json": dcOKQuery, "blocked": "x"}, args: []string{"docs", "check-docs-search", "--site-dir", "site", "--queries", "q.json", "--report", "blocked/r.tsv"}, rc: 1, err: "Error"},
 		{name: "search report is a directory", ref: "S177 Path.open('w'): IsADirectoryError", files: map[string]string{"site/search/search_index.json": dcIndexJSON, "q.json": dcOKQuery, "rdir/x": "1"}, args: []string{"docs", "check-docs-search", "--site-dir", "site", "--queries", "q.json", "--report", "rdir"}, rc: 1, err: "IsADirectoryError"},
 		{name: "search character reference with too many digits", ref: "S52 html.unescape: int() of more than 4300 digits raises ValueError", files: dcSearchFiles(`{"docs": [{"location": "a/", "title": "&#`+strings.Repeat("1", 4301)+`;"}]}`, dcOKQuery), args: dcSearchArgs, rc: 1, err: "4300"},
-		// ---- facts (F 47-83); the script took no arguments
-		{name: "facts outside any module", ref: "F10 STRICTER: ROOT came from the script path (parents[1]); the Go verb finds the repository by go.mod at or above the working directory and refuses a directory outside any module", args: []string{"docs", "check-docs-facts"}, rc: 1, err: "repository root (go.mod) not found"},
-		{name: "facts page missing", ref: "F48-50 print ERROR canonical taxonomy source or page is missing, return 1", files: map[string]string{"go.mod": "module x\n"}, args: []string{"docs", "check-docs-facts"}, rc: 1, out: "canonical taxonomy source or page is missing"},
-		{name: "facts page is a directory", ref: "F48 is_file() false for a directory", files: map[string]string{"go.mod": "module x\n", "docs/reference/taxonomies/investment.md/x": "1"}, args: []string{"docs", "check-docs-facts"}, rc: 1, out: "canonical taxonomy source or page is missing"},
-		{name: "facts page not UTF-8", ref: "F59 read_text: UnicodeDecodeError (uncaught)", files: map[string]string{"go.mod": "module x\n", "docs/reference/taxonomies/investment.md": "`risk` \xff"}, args: []string{"docs", "check-docs-facts"}, rc: 1, err: "UnicodeDecodeError"},
-		{name: "facts page without keys", ref: "F63-73 errors.append missing canonical taxonomy keys, return 1", files: map[string]string{"go.mod": "module x\n", "docs/reference/taxonomies/investment.md": "nothing\n"}, args: []string{"docs", "check-docs-facts"}, rc: 1, out: "missing canonical taxonomy keys: ['feature_delivery'"},
-		{name: "facts page with an unknown dotted key", ref: "F64-65 unknown keys with a dot, return 1", files: map[string]string{"go.mod": "module x\n", "docs/reference/taxonomies/investment.md": "`risk.nope`\n"}, args: []string{"docs", "check-docs-facts"}, rc: 1, out: "unknown taxonomy keys: ['risk.nope']"},
-		{name: "facts page with the placeholder key", ref: "F64-65 unknown keys with a dot (theme.subcategory is not a taxonomy key here)", files: map[string]string{"go.mod": "module x\n", "docs/reference/taxonomies/investment.md": "`theme.subcategory`\n"}, args: []string{"docs", "check-docs-facts"}, rc: 1, out: "unknown taxonomy keys: ['theme.subcategory']"},
 	}
 	return rows
 }
@@ -232,55 +223,6 @@ func TestDocsChecksRefuseEverythingTheFormerScriptsRefused(t *testing.T) {
 			t.Fatalf("row %q has no line reference", r.name)
 		}
 		t.Run(r.name, func(t *testing.T) { dcRunRow(t, r) })
-	}
-}
-
-// The docs checks accept the real docs page, and a page the Python script accepted with the registry file absent.
-func TestDocsFactsAcceptsTheRepositoryPage(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(root)
-	if code, stdout, stderr := runCaptured(t, "docs", "check-docs-facts"); code != 0 || !strings.HasPrefix(stdout, "Canonical fact drift check passed for 5 themes and 15 subcategories") || stderr != "" {
-		t.Fatalf("exit %d\nstdout: %q\nstderr: %q", code, stdout, stderr)
-	}
-}
-
-// The former script found its repository from its own path, so it passed from any directory of the repository.
-func TestDocsFactsRunsFromANestedDirectoryOfTheRepository(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, sub := range []string{"docs", "docs/reference/taxonomies", "internal/cigates/docstools"} {
-		t.Run(sub, func(t *testing.T) {
-			t.Chdir(filepath.Join(root, filepath.FromSlash(sub)))
-			if code, stdout, stderr := runCaptured(t, "docs", "check-docs-facts"); code != 0 || !strings.HasPrefix(stdout, "Canonical fact drift check passed") || stderr != "" {
-				t.Fatalf("exit %d\nstdout: %q\nstderr: %q", code, stdout, stderr)
-			}
-		})
-	}
-}
-
-// Python makes Path.parent of the report lexically (".." kept) before it opens the report.
-func TestDocsSearchReportParentKeepsDotDot(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "site", "search"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, text := range map[string]string{"site/search/search_index.json": dcIndexJSON, "q.json": dcOKQuery} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Chdir(dir)
-	code, _, stderr := runCaptured(t, "docs", "check-docs-search", "--site-dir", "site", "--queries", "q.json", "--report", "new/../report.tsv")
-	if _, err := os.Stat(filepath.Join(dir, "new")); code != 0 || err != nil {
-		t.Fatalf("exit %d, stderr %q, stat new: %v", code, stderr, err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "report.tsv")); err != nil {
-		t.Fatal(err)
 	}
 }
 

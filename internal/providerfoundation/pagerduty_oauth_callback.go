@@ -162,15 +162,18 @@ func pagerDutyFormClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
 
 // pagerDutyValidationClient is the client of the credential validation read: it FOLLOWS a redirect (Python's httpx does)
 // and drops the credential when the origin changes (net/http alone would also replay it to a subdomain of the original
-// host). A supplied *http.Client gets the same policy; a Wrapper is rebuilt around its inner doer's validation client; any
+// host). A supplied *http.Client gets the same policy (and httpguard.SharedTransport() when it has no transport); a Wrapper is rebuilt around its inner doer's validation client; any
 // other supplied doer is refused (it sends nothing).
 func pagerDutyValidationClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
 	if doer == nil {
-		return &http.Client{Timeout: timeout, CheckRedirect: DropCredentialsOnHostChange}
+		return &http.Client{Timeout: timeout, Transport: httpguard.SharedTransport(), CheckRedirect: DropCredentialsOnHostChange}
 	}
 	if supplied, ok := doer.(*http.Client); ok {
 		copied := *supplied
 		copied.CheckRedirect = DropCredentialsOnHostChange
+		if copied.Transport == nil {
+			copied.Transport = httpguard.SharedTransport()
+		}
 		return &copied
 	}
 	if wrapper, ok := doer.(httpguard.Wrapper); ok && admitDoer(doer) == nil {

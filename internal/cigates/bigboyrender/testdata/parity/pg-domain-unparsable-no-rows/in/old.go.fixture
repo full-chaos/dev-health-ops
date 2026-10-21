@@ -1,0 +1,14 @@
+package postgres
+
+func domainPosture() RolePosture {
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			{"sync_runs", true, true, false},
+		},
+		ColumnScoped: []ColumnPrivilege{
+			{"integration_credentials", "is_active", "UPDATE"},
+		},
+	}
+}
+
+func other() {}

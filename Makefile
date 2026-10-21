@@ -5,7 +5,7 @@ VERSION_ID ?=
 DOCS_REVISION := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 DOCS_TAG := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 
-.PHONY: docs\:check docs\:check-fast docs\:check-drift docs\:check-links docs\:generate-taxonomy docs\:generate-queue-map docs\:build docs\:check-built-site docs\:check-external-links docs\:check-freshness docs\:check-code-prerequisites docs\:serve docs\:check-v2 docs\:build-preview docs\:preview docs\:version docs\:upload-preview docs\:deploy docs\:rollback docs\:versions docs\:deployments docs\:v2-serve docs\:v2-check docs\:cloudflare-preview docs\:cloudflare-dev docs\:cloudflare-version docs\:cloudflare-deploy go\:fmt go\:vet go\:test go\:race go\:build go\:contract go\:integration go\:container-smoke go\:container-reproducible go\:container go\:verify go\:check-fast go\:check install test\:unit test\:integration test\:e2e test\:live-e2e test\:ci
+.PHONY: docs\:check docs\:check-fast docs\:check-drift docs\:check-links docs\:generate-taxonomy docs\:generate-queue-map docs\:build docs\:check-built-site docs\:check-external-links docs\:check-freshness docs\:check-code-prerequisites docs\:serve docs\:check-v2 docs\:build-preview docs\:preview docs\:version docs\:upload-preview docs\:deploy docs\:rollback docs\:versions docs\:deployments docs\:v2-serve docs\:v2-check docs\:cloudflare-preview docs\:cloudflare-dev docs\:cloudflare-version docs\:cloudflare-deploy go\:fmt go\:vet go\:test go\:race go\:build go\:contract go\:integration go\:container-smoke go\:container-reproducible go\:container go\:verify go\:check-fast go\:check install test\:live-e2e
 
 docs\:generate-taxonomy:
 	go run -trimpath -mod=readonly ./cmd/cigate docs gen-taxonomy
@@ -202,20 +202,8 @@ go\:check-fast:
 go\:check:
 	@./ci/check_go.sh all
 
-test\:unit:
-	@./ci/run_tests.sh unit
-
-test\:integration:
-	@./ci/run_tests.sh integration
-
-test\:e2e:
-	@./ci/run_tests.sh e2e
-
 test\:live-e2e:
 	@./ci/run_tests.sh live-e2e
-
-test\:ci:
-	@./ci/run_tests.sh ci
 
 install:
 	pip install -r requirements.txt

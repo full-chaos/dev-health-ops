@@ -40,8 +40,7 @@ func loadBundleCases(t *testing.T) []bundleCase {
 	)
 	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		t.Fatalf("read golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_python_json_golden.py)", err)
+		t.Fatalf("read golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden struct {
 		BundleCases []bundleCase `json:"bundle_cases"`

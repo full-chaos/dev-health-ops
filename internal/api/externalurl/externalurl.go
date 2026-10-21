@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // Validate ports _validate_external_url
@@ -144,8 +146,7 @@ func pythonIPNotGlobalTarget(addr netip.Addr) bool {
 // never uses an environment proxy: the address that is dialled must be the
 // address that was checked.
 func GuardedTransport() *http.Transport {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
+	transport := httpguard.Transport()
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: refuseInternalAddress, Resolver: dialResolver}
 	transport.DialContext = dialer.DialContext
 	return transport

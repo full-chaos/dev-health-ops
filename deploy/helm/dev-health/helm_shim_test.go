@@ -17,6 +17,9 @@ import (
 // must see the refusal sets it (TestWebBackendURLIsRequired).
 const helmShimBackendURL = "http://backend.test:8000"
 
+// CHAOS-10446: web.authSecret.secretName is required the same way; the shim gives it a placeholder Secret name.
+const helmShimAuthSecret = "web-auth-placeholder"
+
 func TestMain(m *testing.M) {
 	os.Exit(runWithHelmShim(m))
 }
@@ -33,7 +36,7 @@ func runWithHelmShim(m *testing.M) int {
 	defer func() { _ = os.RemoveAll(dir) }()
 	script := "#!/usr/bin/env bash\n" +
 		"if [ \"${HELM_SHIM_OFF:-}\" = 1 ] || [ \"${1:-}\" != template ]; then exec \"" + real + "\" \"$@\"; fi\n" +
-		"shift\nexec \"" + real + "\" template --set \"web.env.BACKEND_URL=" + helmShimBackendURL + "\" \"$@\"\n"
+		"shift\nexec \"" + real + "\" template --set \"web.env.BACKEND_URL=" + helmShimBackendURL + "\" --set \"web.authSecret.secretName=" + helmShimAuthSecret + "\" \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "helm"), []byte(script), 0o755); err != nil {
 		panic(err)
 	}
@@ -63,7 +66,7 @@ func TestWebBackendURLIsRequired(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("web.enabled=false must render without a BACKEND_URL: %v\n%.400s", err, out)
 	}
-	cmd = exec.Command("helm", "template", "t", ".", "--set", "web.env.BACKEND_URL=http://explicit.example:9000")
+	cmd = exec.Command("helm", "template", "t", ".", "--set", "web.env.BACKEND_URL=http://explicit.example:9000", "--set", "web.authSecret.secretName=web-auth-placeholder")
 	cmd.Env = append(os.Environ(), "HELM_SHIM_OFF=1")
 	out, err = cmd.CombinedOutput()
 	if err != nil {

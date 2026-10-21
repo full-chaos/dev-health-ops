@@ -15,6 +15,7 @@ import (
 	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -395,7 +396,7 @@ func normalizeAtlassianTenantURL(value string) (*url.URL, error) {
 // defaultAtlassianTeamsDoer follows redirects (a tenant answers with its canonical host) but never replays a credential
 // to another host.
 func defaultAtlassianTeamsDoer() *http.Client {
-	return &http.Client{Timeout: 45 * time.Second, CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
+	return &http.Client{Timeout: 45 * time.Second, Transport: httpguard.SharedTransport(), CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
 }
 
 // atlassianAbsenceProver is the gateway's own answer for each fact the run no

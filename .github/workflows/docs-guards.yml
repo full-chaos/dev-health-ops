@@ -11,6 +11,7 @@ on:
       - 'scripts/check_docs_candidate_accessibility.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
+      - '.github/workflows/docs-cloudflare.yml'
   pull_request:
     branches: ['**']
     paths:
@@ -21,6 +22,7 @@ on:
       - 'scripts/check_docs_candidate_accessibility.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
+      - '.github/workflows/docs-cloudflare.yml'
   merge_group:
   workflow_dispatch:
 
@@ -40,6 +42,24 @@ permissions:
   contents: read
 
 jobs:
+  # The Go guards of the docs content and of the docs workflows (internal/cigates/docs). This job runs on every
+  # change of the paths above, so a docs-only pull request, which the Go relevance filter classifies as non-Go,
+  # still runs them. It installs no Python.
+  docs-content-guards:
+    name: docs-content-guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Run the docs content guards
+        run: go test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/...
+
   docs-guards:
     name: docs-guards
     runs-on: ubuntu-latest
@@ -95,12 +115,6 @@ jobs:
             --site-dir .build/docs \
             --css docs/stylesheets/extra.css \
             2>&1 | tee .build/docs-accessibility.log
-
-      - name: Check objective documentation facts
-        run: |
-          set -o pipefail
-          go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-facts \
-            2>&1 | tee .build/docs-facts.log
 
       # CHAOS-3514 (chris ruling: gate the scripts, keep the tests). These two
       # guards had unit tests in tests/docs but their SCRIPTS ran only from

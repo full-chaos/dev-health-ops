@@ -123,18 +123,14 @@ func scanHTTPSites(t *testing.T) []httpSite {
 
 // TestProverHTTPSendsGoOnlyThroughTheLegClient pins the one-client rule
 // at the compiler's level: in the prover packages, a request reaches the
-// wire only through (*LegClient).Do, and a client or transport is built
-// only by NewLegClient. Any other send, client, transport, or use of the
-// default client fails here by position.
+// wire only through (*LegClient).Do, and a client is built only by
+// NewLegClient (its transport is httpguard.Transport()). Any other send,
+// client, transport, or use of the default client fails here by position.
 func TestProverHTTPSendsGoOnlyThroughTheLegClient(t *testing.T) {
 	sites := scanHTTPSites(t)
 	allowed := map[string]map[string]bool{
 		"(*LegClient).Do": {"send func (*net/http.Client).Do(req *net/http.Request) (*net/http.Response, error)": true},
-		"NewLegClient": {
-			"http.DefaultTransport":    true,
-			"build net/http.Transport": true,
-			"build net/http.Client":    true,
-		},
+		"NewLegClient":    {"build net/http.Client": true},
 	}
 	var outside []string
 	found := map[string]int{}

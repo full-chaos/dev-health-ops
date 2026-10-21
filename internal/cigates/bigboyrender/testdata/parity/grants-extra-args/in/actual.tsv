@@ -1,0 +1,30 @@
+SELECT	teams
+INSERT	teams
+ALTER DELETE	teams
+SELECT	identities
+INSERT	identities
+ALTER DELETE	identities
+SELECT	team_sync_policies
+INSERT	team_sync_policies
+SELECT	team_provider_observations
+INSERT	team_provider_observations
+SELECT	team_drift_changes
+INSERT	team_drift_changes
+SELECT	team_memberships
+INSERT	team_memberships
+SELECT	team_project_ownership
+INSERT	team_project_ownership
+SELECT	team_repo_ownership
+INSERT	team_repo_ownership
+SELECT	manual_attribution_fallbacks
+INSERT	manual_attribution_fallbacks
+SELECT	repo_metrics_daily
+SELECT	user_metrics_daily
+SELECT	team_metrics_daily
+SELECT	work_item_metrics_daily
+SELECT	repo_complexity_daily
+SELECT	compounding_risk_daily
+INSERT	telemetry_signal_bucket
+SELECT	llm_token_usage
+SELECT	work_unit_investments
+SELECT	work_items

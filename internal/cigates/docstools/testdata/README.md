@@ -154,29 +154,27 @@ Same as Python (recorded pairs): an absent key (`genqm-missing-registry-queue`, 
 key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-folded key
 (`genqm-key-unicode-folded-state`, U+017F): `KeyError` naming the key, rc 1.
 
-# Part c1: check-built-site-links, check-docs-search, check-docs-facts
+# Part c1: check-built-site-links, check-docs-search
 
-Cases `parity/links-*`, `parity/search-*`, `parity/facts-*` and the helper corpora under `helpers/`. Recorded once with
-Python 3.14.7 (`python3.14 -I -B`, Unicode 16.0.0: the Python the CI jobs run, set up as `python-version: '3.14'`) from `scripts/check_built_site_links.py`,
-`scripts/check_docs_candidate_search.py` and `scripts/check_docs_candidate_facts.py` at ops `a64af6106a44`
-(`git show a64af6106a44:scripts/<script>`). The three scripts, their tests under `tests/docs` and the `.py` registry the facts
-check read are not part of the recording.
+Cases `parity/links-*`, `parity/search-*` and the helper corpora under `helpers/`. Recorded once with
+Python 3.14.7 (`python3.14 -I -B`, Unicode 16.0.0: the Python the CI jobs run, set up as `python-version: '3.14'`) from `scripts/check_built_site_links.py`
+and `scripts/check_docs_candidate_search.py` at ops `a64af6106a44`
+(`git show a64af6106a44:scripts/<script>`). The two scripts and their tests under `tests/docs` are not part of the recording.
+(The facts check was ported separately as `check-candidate-facts`, with its own refusal inventory under `testdata/refusals/`.)
 
-Record recipe, per case, in a fresh work directory `$W` (cwd `$W`, so the facts script's `ROOT` is `$W`): write the files of the
+Record recipe, per case, in a fresh work directory `$W` (cwd `$W`): write the files of the
 case's `in/` into `$W` (a `.fixture` suffix is dropped; `symlinks` lines `<link> -> <target>` are made after), copy the script to
 `$W/scripts/`, run `python3 -I -B $W/scripts/<script> <args>` (`{WORK}` in `args` is `$W`), store rc, stdout and stderr with `$W`
-replaced by `{WORK}`, and under `out/` every file the run created or changed (the search report). The facts cases also carry a
-stub `src/dev_health_ops/investment_taxonomy.py` (the 5 themes and 15 subcategories as two set literals) in `in/`; the Go verb does not read it.
+replaced by `{WORK}`, and under `out/` every file the run created or changed (the search report).
 
 Cases with `stderr.traceback`: Python died on an uncaught exception (a traceback); the Go verb prints the one exception line
-instead. Three of those lines are edited on purpose: for `UnicodeDecodeError` Go names the file, Python the byte position
-(`links-invalid-utf8-page`, `facts-page-invalid-utf8`).
+instead. One of those lines is edited on purpose: for `UnicodeDecodeError` Go names the file, Python the byte position
+(`links-invalid-utf8-page`).
 
 | Go verb | Python | cases |
 | --- | --- | --- |
 | `check-built-site-links` | `check_built_site_links.py` | `links-*`: Unicode `\b` before `href=`/`src=`/`id=` (the `\w` of a non-ASCII letter, digit or underscore blocks the match; a rejected match restarts one character on), same-page anchors skipped when `--site-dir` is relative (`relative_to` of a relative path on a resolved one raises), `Path.resolve()` of symlinks, loops and NUL, `urlsplit` ValueErrors, `rglob` order and symlinked directories, unreadable pages |
 | `check-docs-search` | `check_docs_candidate_search.py` | `search-*`: ranking, stemming, double `html.unescape`, tag stripping, `str.lower` with final sigma and U+0130, URL normalisation, every `max_rank` form, the TSV report bytes (tab dialect, `\r\n`), error order |
-| `check-docs-facts` | `check_docs_candidate_facts.py` | `facts-*`: key regex, missing and unknown keys (a dotted placeholder is unknown), extra arguments ignored |
 
 Helper corpora (`helpers/*.jsonl`, rows `{"in", "out"}` or `{"in", "err"}`), each replayed by `dc_helpers_test.go`:
 `urlsplit` (4784 strings of URL pieces, control characters, brackets, fullwidth characters), `unquote` (4116, invalid UTF-8
@@ -192,7 +190,7 @@ exit code, stdout and report bytes as Python for `check-built-site-links` (relat
 
 ## Stricter than Python, or different on purpose (RISK-NOTES)
 
-Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (103 rows, pinned) unless marked.
+Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (96 rows, pinned) unless marked.
 
 - Arguments: no abbreviation of an option, no `-h`/`--help` (exit 0 in Python, exit 2 here), no `--`, no value that starts with `-` (a
   negative number, `"-a b"`, `--site-dir=-x`), no empty value (`Path("")` is `.` in Python). Exit code 2 and a usage line; the text differs from argparse's.
@@ -205,10 +203,6 @@ Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (103 
 - Page names that are not UTF-8 and a named pipe named `*.html` are refused (Python listed the first and blocked on the second).
 - Paths: every path stays a string as written (pathlib keeps `..`; the kernel resolves `link/../site` through the link, `filepath.Join`/`Dir` would clean it first): the tree walk below `--site-dir`, the report's parent (`new/../report.tsv` makes `new`), and `Path.resolve()` of link targets follow Python (cases `links-site-dir-through-a-link-and-dotdot`, `links-absolute-site-dir-through-a-link-and-dotdot`, `links-site-dir-with-a-dotdot-component`, `search-report-path-with-dotdot-makes-the-parent`, `search-paths-through-a-link-and-dotdot`). The search report is opened and truncated, and its header written, before anything is ranked: a ranking error leaves the header and the rows so far, as in Python (`search-ranking-error-leaves-the-header-in-the-report`, `search-ranking-error-leaves-the-rows-so-far-in-the-report`).
 - Working directory is physical: Python's `os.getcwd()` is the `getcwd` system call, Go's `os.Getwd` returns the logical `$PWD` a shell leaves after a `cd` through a symlink and made `Path.resolve()` differ (a link target under the physical path escaped the resolved site directory: a broken site passed). `dcGetwd` calls `syscall.Getwd`; `os.Getwd` is banned in the ported checks by `TestDocsChecksCleanNoUserPath`. Cases `links-logical-cwd-through-a-link`, `links-site-dir-across-a-link-from-a-logical-cwd`, `links-absolute-site-dir-through-a-link-with-anchors` start in a directory reached through a link (a case's `symlinks` file may name `{WORK}` in a target). The queue-map and investment verbs of the earlier port still take their root from `os.Getwd`, as before.
-- Working directory: the facts script took its root from its own path (`parents[1]`), so it ran from any directory; the Go verb takes the nearest directory at or above the working directory that holds `go.mod` (cases `facts-from-the-taxonomy-directory`, `facts-from-a-new-nested-directory`) and refuses a working directory outside any module (STRICTER; refusal row `facts outside any module`). The links and search scripts have no root: their paths, and the default report `.build/docs-search-acceptance.tsv`, are relative to the working directory in both (cases `links-from-a-nested-directory`, `search-from-a-nested-directory`, `search-default-report-from-a-nested-directory`; a case may carry a `cwd` file naming the directory, below the work directory, the run starts in).
-- `check-docs-facts` reads the Go registry (`internal/jobs/workgraph/units`, the source `check-investment-drift` reads) and not
-  `src/dev_health_ops/investment_taxonomy.py`: the Python refusals "registry file missing", "not a set literal", "non-string literal",
-  "not found" and a `SyntaxError` in that file have no Go counterpart (the vocabulary cannot be missing or malformed). Named gap; Go never refuses what Python accepted here.
 - A decimal character reference of more than 4300 digits is refused in the search text (the integer string limit, `sys.int_info.default_max_str_digits`, raises `ValueError`; it counts digits and leading zeros, not a sign; JSON integers of more than 4300 digits are refused the same way).
 - Drift that no test can pin: `repr()` of a string prints a code point as itself when Go's `unicode.IsPrint` (Unicode 17) says printable,
   Python 3.14 (Unicode 16) escapes the characters Unicode 17 added, which only shows in the text of a failure line; `str.lower()`,

@@ -158,6 +158,35 @@ test("the row schema (strict ajv) requires class_disambiguator on a row that acc
   assert.equal(validate(document), false);
 });
 
+test("the row schema (strict ajv) holds the HS256 opt-in to the class list on every inventory", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const { default: addFormats } = await import("ajv-formats");
+  const v1 = path.join(repo, "contracts", "auth", "v1");
+  const ajv = new Ajv2020({ strict: true, allErrors: true });
+  addFormats(ajv);
+  const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "endpoint-profile.schema.json"), "utf8")));
+  const accessClasses = ["ops_access_token_hs256", "user_access_token"];
+  for (const file of ["endpoint-profiles.auth-service.json", "endpoint-profiles.query-api.json"]) {
+    const read = () => JSON.parse(readFileSync(path.join(v1, file), "utf8"));
+    assert.equal(validate(read()), true, `${file}: ${JSON.stringify(validate.errors)}`);
+    const legacy = read().rows.findIndex((r) => r.accepted_credential_classes.includes("ops_access_token_hs256"));
+    const plain = read().rows.findIndex((r) => !r.accepted_credential_classes.some((c) => accessClasses.includes(c)));
+    assert.ok(legacy >= 0 && plain >= 0, `${file}: no HS256 row or no row without an access-token class`);
+    const probes = [
+      [legacy, (row) => delete row.access_token_validation],
+      [legacy, (row) => (row.access_token_validation = { legacy_hs256: false })],
+      [legacy, (row) => (row.access_token_validation = { legacy_hs256: true, classes: ["ops_access_token_hs256"] })],
+      [plain, (row) => (row.access_token_validation = { legacy_hs256: false })],
+      [plain, (row) => (row.access_token_validation = { legacy_hs256: true })],
+    ];
+    for (const [index, mutate] of probes) {
+      const document = read();
+      mutate(document.rows[index]);
+      assert.equal(validate(document), false, `${file} row ${index}: ${mutate}`);
+    }
+  }
+});
+
 test("the row schema (strict ajv) rejects a row that omits accepted_credential_classes", async () => {
   const { default: Ajv2020 } = await import("ajv/dist/2020.js");
   const { default: addFormats } = await import("ajv-formats");

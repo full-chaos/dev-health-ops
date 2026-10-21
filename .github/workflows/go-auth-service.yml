@@ -133,11 +133,13 @@ jobs:
           - FuzzParseErrorEnvelope
           - FuzzRevisionUnmarshal
           - FuzzTimestampUnmarshal
+          - FuzzParseAccessToken
           - FuzzVerifyToken
           - FuzzValidSignedToken
           - FuzzParseLimit
           - FuzzParseForwardedTrust
           - FuzzParseEd25519Key
+          - FuzzParseKeySetManifest
           - FuzzConfigLoad
           - FuzzNormalizeEmail
           - FuzzExternalKeyValidate

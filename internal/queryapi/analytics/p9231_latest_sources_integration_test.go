@@ -15,6 +15,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,14 +93,27 @@ type p9231EffortRow struct {
 	repo                  *string
 	effort                float64
 	source                string
+	// repoSource is the repo_source column: nil seeds "hierarchy" (the rows that do not care), the text "NULL" seeds SQL NULL,
+	// any other text seeds itself.
+	repoSource *string
+}
+
+func p9231RepoSourceSQL(r p9231EffortRow) string {
+	if r.repoSource == nil {
+		return "'hierarchy'"
+	}
+	if *r.repoSource == "NULL" {
+		return "NULL"
+	}
+	return "'" + *r.repoSource + "'"
 }
 
 func p9231SeedEffort(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, rows []p9231EffortRow) {
 	t.Helper()
 	for _, r := range rows {
 		insert := fmt.Sprintf(`INSERT INTO work_unit_repo_effort (work_unit_id, repo_id, effort_metric, effort_value, allocation_weight, allocation_source,
- categorization_run_id, computed_at, org_id, repo_source) VALUES ('%s', %s, 'fte_days', %g, 1.0, '%s', 'run', toDateTime64('%s',3), '%s', 'hierarchy')`,
-			r.unit, p9231QUUID(r.repo), r.effort, r.source, r.computedAt, r.org)
+ categorization_run_id, computed_at, org_id, repo_source) VALUES ('%s', %s, 'fte_days', %g, 1.0, '%s', 'run', toDateTime64('%s',3), '%s', %s)`,
+			r.unit, p9231QUUID(r.repo), r.effort, r.source, r.computedAt, r.org, p9231RepoSourceSQL(r))
 		if err := conn.Exec(ctx, insert); err != nil {
 			t.Fatalf("seed work_unit_repo_effort %s@%s: %v", r.unit, r.computedAt, err)
 		}
@@ -191,6 +205,10 @@ func TestLatestRowSourcesEqualTheFrozenReference_SeededRealClickHouse(t *testing
 		{org: p9231Org, unit: "wu-one", computedAt: "2026-02-01 00:00:00", repo: &repoC, effort: 4, source: "evidence"},
 		{org: p9231Org, unit: "wu-norepo", computedAt: "2026-02-01 00:00:00", repo: nil, effort: 1, source: "scalar_fallback"},
 		{org: p9231OtherOrg, unit: "wu-gen", computedAt: "2026-03-01 00:00:00", repo: &repoC, effort: 7, source: "evidence"},
+		// CHAOS-4547 on repo_source (Nullable): an older generation names a provenance, the newer one has none; the
+		// newest NULL must win (the tuple-wrapped argMax), the older value must not come back (a bare argMax skips NULL)
+		{org: p9231Org, unit: "wu-src", computedAt: "2026-02-01 00:00:00", repo: &repoA, effort: 2, source: "evidence", repoSource: s("team_fallback")},
+		{org: p9231Org, unit: "wu-src", computedAt: "2026-02-02 00:00:00", repo: &repoA, effort: 2, source: "evidence", repoSource: s("NULL")},
 	})
 
 	refUnits, err := os.ReadFile("testdata/p9231_reference_latest_work_unit_investments_source.sql")
@@ -217,8 +235,17 @@ func TestLatestRowSourcesEqualTheFrozenReference_SeededRealClickHouse(t *testing
 	effortCols := "work_unit_id, repo_id, effort_metric, repo_effort_value, allocation_source, repo_source, org_id, latest_repo_effort_computed_at, has_allocation"
 	wantEffort := p9231Rows(t, ctx, client, string(refEffort), effortCols, "work_unit_id, ifNull(toString(repo_id), '')")
 	gotEffort := p9231Rows(t, ctx, client, LatestWorkUnitRepoEffortSource(), effortCols, "work_unit_id, ifNull(toString(repo_id), '')")
-	if len(wantEffort) != 5 {
-		t.Fatalf("the reference answered %d repository rows, want 5 (gen: A only; zero: A and B; one; norepo; none for the other org)\n%v", len(wantEffort), wantEffort)
+	if len(wantEffort) != 6 {
+		t.Fatalf("the reference answered %d repository rows, want 6 (gen: A only; zero: A and B; one; norepo; src; none for the other org)\n%v", len(wantEffort), wantEffort)
+	}
+	foundNullSource := false
+	for _, row := range wantEffort {
+		if strings.Contains(row, "wu-src") && strings.Contains(row, "NULL") && !strings.Contains(row, "team_fallback") {
+			foundNullSource = true
+		}
+	}
+	if !foundNullSource {
+		t.Fatalf("the reference row of wu-src does not carry the newest NULL repo_source: the seed does not exercise the tuple-wrapped argMax\n%v", wantEffort)
 	}
 	if !reflect.DeepEqual(wantEffort, gotEffort) {
 		t.Fatalf("LatestWorkUnitRepoEffortSource answers differently from the frozen reference.\nwant %v\n got %v", wantEffort, gotEffort)

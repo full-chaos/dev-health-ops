@@ -38,8 +38,9 @@ var dynamicEnvReads = map[string]string{
 // (os.Environ, os.ExpandEnv, os.Expand, syscall.Getenv, syscall.Environ), which no
 // variable-name rule can classify, with what each does with it.
 var environScans = map[string]string{
-	"internal/localgit/git.go":      "copies the environment into the child git process; nothing is logged",
-	"internal/gqlgenguard/guard.go": "copies the environment into the child go tool; nothing is logged",
+	"internal/localgit/git.go":                     "copies the environment into the child git process; nothing is logged",
+	"internal/gqlgenguard/guard.go":                "copies the environment into the child go tool; nothing is logged",
+	"internal/cigates/docstools/hostsmoke_dial.go": "picks out only the variables named <scheme>_proxy (proxy URL, no_proxy list) to choose a proxy as urllib does; the values are used to dial and never logged",
 }
 
 var secretEnvName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*(TOKEN|PASSWORD|PASSWD|SECRET|PRIVATE_KEY|API_KEY|_KEY|_PASS|DSN|_URI)[A-Z0-9_]*$`)

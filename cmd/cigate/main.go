@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates"
@@ -29,10 +30,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cigates/metricsproof"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/releasetag"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/routing"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() {
+	logging.InstallDefault(logging.NewJSON(os.Stderr, slog.LevelInfo))
+	os.Exit(run(os.Args[1:]))
+}
 
 func run(args []string) int {
 	if len(args) == 0 {

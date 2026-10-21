@@ -36,7 +36,7 @@ var binaryLogging = map[string]string{
 	"ask-dev-jobs-probe":                     "installs",
 	"auth-migrate":                           "silent",
 	"auth-service":                           "authruntime",
-	"cigate":                                 "silent",
+	"cigate":                                 "installs",
 	"dev-health-migration-matrix":            "installs",
 	"dev-health-provider-fixture":            "installs",
 	"dev-health-provider-normalized-fixture": "installs",

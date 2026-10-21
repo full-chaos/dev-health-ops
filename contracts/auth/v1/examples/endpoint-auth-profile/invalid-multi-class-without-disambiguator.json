@@ -3,6 +3,9 @@
     "user_access_token",
     "workload_token"
   ],
+  "access_token_validation": {
+    "legacy_hs256": false
+  },
   "action": "members.invite",
   "cache_class": "none",
   "classification": "protected",

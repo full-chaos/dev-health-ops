@@ -131,6 +131,9 @@
         }
       }
     },
+    "access_token_validation": {
+      "$ref": "../endpoint-profile.schema.json#/$defs/endpointProfile/properties/access_token_validation"
+    },
     "minimum_assurance": {
       "$ref": "principal.v1.schema.json#/properties/authentication/properties/assurance",
       "description": "Lowest authenticator assurance level the route accepts. Absent means no assurance requirement (not applicable), never a default of aal1."
@@ -642,6 +645,92 @@
               }
             },
             "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "$ref": "../endpoint-profile.schema.json#/$defs/accessTokenValidationRules"
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "ops_access_token_hs256"
+            },
+            "not": {
+              "contains": {
+                "enum": [
+                  "user_access_token",
+                  "workload_token",
+                  "ops_refresh_token",
+                  "acr_web_assertion",
+                  "effective_principal_envelope"
+                ]
+              }
+            }
+          },
+          "token": {},
+          "tokens": {}
+        },
+        "required": [
+          "accepted_credential_classes",
+          "token"
+        ],
+        "not": {
+          "required": [
+            "tokens"
+          ],
+          "properties": {
+            "tokens": {}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "token": {
+            "type": "object",
+            "properties": {
+              "algorithm": {
+                "const": "HS256"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "accepted_credential_classes": {
+            "type": "array",
+            "contains": {
+              "const": "ops_access_token_hs256"
+            }
+          },
+          "tokens": {}
+        },
+        "required": [
+          "accepted_credential_classes",
+          "tokens"
+        ]
+      },
+      "then": {
+        "properties": {
+          "tokens": {
+            "type": "object",
+            "properties": {
+              "ops_access_token_hs256": {
+                "type": "object",
+                "properties": {
+                  "algorithm": {
+                    "const": "HS256"
+                  }
+                }
+              }
+            }
           }
         }
       }

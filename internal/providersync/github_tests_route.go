@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,8 +105,9 @@ var ErrGitHubTestsArtifactUnavailable = fmt.Errorf("%w: artifact unavailable", E
 // succeed on retry (CHAOS-4191).
 var ErrGitHubTestsArtifactOversized = fmt.Errorf("%w: artifact oversized", ErrGitHubTestsIncomplete)
 
-// githubTestsArtifactOversizedError carries the observed (capped) size and
-// the configured cap alongside ErrGitHubTestsArtifactOversized, so a caller
+// githubTestsArtifactOversizedError carries the size that crossed the cap (the
+// declared size when the listing or the response states one, else the capped
+// read, cap+1) and the configured cap alongside ErrGitHubTestsArtifactOversized, so a caller
 // building a durable per-artifact marker (CHAOS-4315's GitHubTestsSkippedArtifact)
 // does not have to parse them back out of the error string. ErrGitHubTestsArtifactOversized
 // stays the stable sentinel every errors.Is check matches against; Unwrap
@@ -197,9 +199,25 @@ type githubTestsArtifactsPayload struct {
 	Artifacts []githubTestsArtifactPayload `json:"artifacts"`
 }
 type githubTestsArtifactPayload struct {
-	ID      json.Number `json:"id"`
-	Expired bool        `json:"expired"`
-	Name    string      `json:"name"`
+	ID          json.Number     `json:"id"`
+	Expired     bool            `json:"expired"`
+	Name        string          `json:"name"`
+	SizeInBytes json.RawMessage `json:"size_in_bytes"`
+}
+
+// declaredOversize is the artifact_oversized error for an artifact whose listed
+// size is above maxBytes, so it is skipped without a download. A missing, zero,
+// negative or non-integer size is unknown and is downloaded under the cap.
+func (artifact githubTestsArtifactPayload) declaredOversize(maxBytes int64) error {
+	size, err := strconv.ParseInt(string(artifact.SizeInBytes), 10, 64)
+	if err != nil || size <= maxBytes {
+		return nil
+	}
+	failure := providerfoundation.ResponseFailure(nil, providerfoundation.ReasonBodyTooLarge, &githubTestsArtifactOversizedError{
+		SizeBytes: size, CapBytes: maxBytes,
+	})
+	failure.Route = githubArtifactZipRoute
+	return failure
 }
 
 // githubTestsNonReportArtifactSuffixes/Prefixes name GitHub/CI-generated
@@ -509,7 +527,10 @@ func (handler GitHubTestsRouteHandler) Collect(
 			// treats a routine 404/410 and a genuinely empty 2xx body
 			// identically (CHAOS-4185 codex round 3 only changed the
 			// CHUNKED route's accounting, not this oracle's disposition).
-			archive, used, _, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
+			archive, used, downloadErr := []byte(nil), 0, artifact.declaredOversize(maxArtifactBytes)
+			if downloadErr == nil {
+				archive, used, _, downloadErr = downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
+			}
 			requests += used
 			if downloadErr != nil {
 				// Same disposition as an unreadable container below: an
@@ -934,23 +955,21 @@ func downloadGitHubTestsArtifact(
 		}
 		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode, Route: githubArtifactZipRoute}
 	}
-	body, readErr := providerfoundation.ReadResponseBodyTransport(response, maxBytes)
+	body, over, readErr := providerfoundation.ReadResponseBodyWithin(response, maxBytes, logging.TransportFailure)
 	if readErr != nil {
 		return nil, requests, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyRead, fmt.Errorf(
 			"%w: artifact download read failed: %w", ErrGitHubTestsIncomplete, errors.Unwrap(readErr),
 		))
 	}
-	if int64(len(body)) > maxBytes {
-		// len(body) is capped at maxBytes+1 by the LimitReader above, so it
-		// is always exactly that value here -- the true artifact size beyond
-		// the cap is never read. That capped length is still the useful
-		// "observed size" for the skip marker: it is the boundary the
-		// download actually crossed. Carried on the typed error (not just
+	if over > 0 {
+		// over is the final response's Content-Length when that is above the
+		// cap (nothing was read), else cap+1: the read never passes cap+1, so
+		// the true size beyond it is not known. Carried on the typed error (not just
 		// the message) so the chunked route's durable marker
 		// (GitHubTestsSkippedArtifact, CHAOS-4315) gets real ints, not a
 		// re-parse of formatted text.
 		return nil, requests, false, providerfoundation.ResponseFailure(response, providerfoundation.ReasonBodyTooLarge, &githubTestsArtifactOversizedError{
-			SizeBytes: int64(len(body)), CapBytes: maxBytes,
+			SizeBytes: over, CapBytes: maxBytes,
 		})
 	}
 	return body, requests, false, nil

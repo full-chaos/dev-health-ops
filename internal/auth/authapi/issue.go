@@ -9,8 +9,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 // PatternIssueSession is the session issue route go-api calls, with its
@@ -101,7 +105,115 @@ type issueAnswer struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
-// issueSession is POST /internal/v1/sessions.
+// issueSession is POST /internal/v1/sessions. It refuses anything but a live
+// auth-session-issuer credential, an active user and, with an organization,
+// a member of it. It creates the session (pinned to the user's
+// token_version) with its auth.session.issued audit row in one transaction
+// and answers the go-api compatible pair.
 func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
-	h.rec.refuse(w, r, opSessionIssue, unavailable(reasonDependency), nil)
+	ctx := r.Context()
+	token, ok := bearerToken(r)
+	if !ok {
+		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonInvalidCredentials), nil)
+		return
+	}
+	credential, refused, err := h.ServiceCredentials.Check(ctx, contracts.NewSecretString(token))
+	if err != nil {
+		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
+		return
+	}
+	if refused != "" {
+		h.rec.logger.WarnContext(ctx, "session issue refused: service credential", "refusal", string(refused))
+		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonInvalidCredentials), nil)
+		return
+	}
+	req, err := parseIssueRequest(http.MaxBytesReader(w, r.Body, maxIssueBody))
+	if err != nil {
+		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonMalformed), nil)
+		return
+	}
+	user, found, err := h.Users.State(ctx, req.principal)
+	if err != nil {
+		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
+		return
+	}
+	if !found {
+		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonPrincipalNotFound}, nil)
+		return
+	}
+	if !user.IsActive {
+		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonDeactivated}, nil)
+		return
+	}
+	role := roleText(nil, false)
+	if req.organization != nil {
+		value, member, err := h.Users.Role(ctx, req.principal, *req.organization)
+		if err != nil {
+			h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
+			return
+		}
+		if !member {
+			h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
+			return
+		}
+		role = roleText(value, member)
+	}
+	err = h.Projector.Project(ctx, req.principal)
+	if err == nil && req.organization != nil {
+		err = h.Projector.ProjectOrganization(ctx, *req.organization)
+	}
+	switch {
+	case errors.Is(err, identity.ErrUserNotFound):
+		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonPrincipalNotFound}, nil)
+		return
+	case errors.Is(err, identity.ErrOrganizationNotFound):
+		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
+		return
+	case err != nil:
+		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonDependency), err)
+		return
+	}
+	issued, err := h.Sessions.CreateAudited(ctx, req.principal, req.organization, req.amr,
+		issuedEvent(ctx, req, credential))
+	switch {
+	case errors.Is(err, session.ErrInvalidAMR):
+		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonMalformed), nil)
+		return
+	case errors.Is(err, session.ErrPrincipalUnavailable):
+		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonDeactivated}, nil)
+		return
+	case err != nil:
+		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
+		return
+	}
+	access, err := h.Issuer.Access(Grant{
+		PrincipalID: req.principal, OrganizationID: req.organization, Role: role, SessionID: issued.Session.ID, User: user,
+	})
+	if err != nil {
+		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonDependency), err)
+		return
+	}
+	h.rec.record(ctx, opSessionIssue, "success", reasonAccepted, nil)
+	writeJSON(w, http.StatusOK, issueAnswer{
+		AccessToken: access, RefreshToken: issued.Credential.Reveal(), TokenType: "bearer", ExpiresIn: AccessExpiresIn,
+	})
+}
+
+// issuedEvent is the auth.session.issued audit row: the user as subject, the
+// organization, the amr, the service credential that asked, and its source.
+func issuedEvent(ctx context.Context, req issueRequest, credential servicecred.Credential) audit.AuditEvent {
+	principal := req.principal.String()
+	event := audit.AuditEvent{
+		EventType: EventSessionIssued, Outcome: audit.OutcomeAllowed,
+		SubjectPrincipalID: &principal, RequestID: requestid.Audit(ctx),
+		Attributes: map[string]any{
+			"reason_code": reasonAccepted, "target_kind": "session", "source": sourceGoAPIDelegated,
+			"amr": append([]string(nil), req.amr...), "credential_id": credential.ID,
+		},
+	}
+	if req.organization != nil {
+		org := req.organization.String()
+		event.OrganizationID = &org
+	}
+	return event
 }

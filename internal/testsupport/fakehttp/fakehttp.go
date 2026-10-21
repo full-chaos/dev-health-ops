@@ -12,6 +12,10 @@ type Doer interface {
 
 type transport struct{ doer Doer }
 
+// EgressOffline marks the double as one that opens no connection (egressguard.Offline): the provider egress guard
+// passes it through in every test binary.
+func (transport) EgressOffline() {}
+
 func (t transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	return t.doer.Do(request)
 }

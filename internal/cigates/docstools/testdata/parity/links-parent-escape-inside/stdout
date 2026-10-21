@@ -1,0 +1,2 @@
+ERROR: sub/p.html -> ../sub/../index.html#nope: missing anchor 'nope'
+ERROR: sub/p.html -> ./../missing.html: missing built asset

@@ -60,12 +60,6 @@ go build -o dho ./cmd/dho
 ./dho help
 ```
 
-For Python development from this repository:
-
-```bash
-pip install -r requirements.txt
-```
-
 ## Database model
 
 Dev Health Ops uses two databases with different responsibilities:
@@ -216,7 +210,7 @@ Notes:
 
 ## Container images
 
-CI no longer builds or publishes the Python API image (`dev-hops-api`, from `docker/Dockerfile`; CHAOS-7674). The root compose stack does not run it (CHAOS-8361): a router on host port 8000 sends each request to the Go api or the Go query-api. The last published image stays in the registry for the bigboy test host until that stack moves to Go; the Python API source is removed. The Go images (`dev-health-go-*`) are the published images; run CLI jobs with `dho`.
+The Python API image (`dev-hops-api`) is retired: CI neither builds nor publishes it (CHAOS-7674), the Dockerfile and the Python API source are removed, and the root compose stack does not run it (CHAOS-8361): a router on host port 8000 sends each request to the Go api or the Go query-api. The last published image stays in the registry. The Go images (`dev-health-go-*`) are the published images; run CLI jobs with `dho`.
 
 ## Key docs
 

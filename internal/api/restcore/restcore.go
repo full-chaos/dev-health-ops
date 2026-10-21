@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/egressguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -114,10 +115,8 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 	// A copy of the client (NoRedirects never changes the caller's): its transport also records whether a 3xx answer with a
 	// Location came back, the one fact that tells net/http's refusal of that Location from an ordinary transport error whose
 	// text happens to start with the same words (CHAOS-7927 r2).
-	base := httpClient.Transport
-	if base == nil {
-		base = httpguard.SharedTransport()
-	}
+	// The stored provider base URL is checked at every connect: only a public (or explicitly allowed) address is dialled.
+	base := egressguard.Wrap(httpClient.Transport)
 	witness := &redirectWitness{base: base}
 	httpClient.Transport = witness
 	sleep := c.Sleep

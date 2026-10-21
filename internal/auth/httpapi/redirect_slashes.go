@@ -74,18 +74,24 @@ func (s *slashRedirector) wrap(mux http.Handler, notFound http.HandlerFunc) http
 	})
 }
 
-// redirect answers the 307 and reports true when r's toggled path matches
-// a route; otherwise it writes nothing.
-func (s *slashRedirector) redirect(w http.ResponseWriter, r *http.Request) bool {
-	current := r.URL.Path
+// toggledSlash is the path Starlette's redirect_slashes tries: all trailing
+// slashes removed, or one added.
+func toggledSlash(current string) (string, bool) {
 	if current == "/" || current == "" {
-		return false
+		return "", false
 	}
 	target := current + "/"
 	if strings.HasSuffix(current, "/") {
 		target = strings.TrimRight(current, "/")
 	}
-	if target == "" {
+	return target, target != ""
+}
+
+// redirect answers the 307 and reports true when r's toggled path matches
+// a route; otherwise it writes nothing.
+func (s *slashRedirector) redirect(w http.ResponseWriter, r *http.Request) bool {
+	target, ok := toggledSlash(r.URL.Path)
+	if !ok {
 		return false
 	}
 	pattern, ok := s.matches(r, target)

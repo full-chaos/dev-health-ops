@@ -1,0 +1,2 @@
+ERROR: 'same words': expected /c/ at rank <= 2, found 3; top=/a/
+Search acceptance failed; report: report.tsv

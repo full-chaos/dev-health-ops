@@ -1,0 +1,5 @@
+check-code-prerequisites
+--docs-root
+pages
+--scope
+s.yml

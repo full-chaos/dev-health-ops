@@ -61,7 +61,7 @@ func TestReadinessProvesTheKeySetThroughTheSigner(t *testing.T) {
 	logs, stop := runService(t, env)
 	client := &http.Client{Timeout: 10 * time.Second}
 	defer client.CloseIdleConnections()
-	response := awaitResponse(t, client, "http://"+ports[1]+"/readyz")
+	response := awaitSettledReadiness(t, client, "http://"+ports[1]+"/readyz")
 	raw, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil {

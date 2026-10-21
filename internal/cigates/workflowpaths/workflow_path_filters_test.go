@@ -115,13 +115,30 @@ func TestWorkflowPathFiltersCodeQLOtherTriggersUnfiltered(t *testing.T) {
 	}
 }
 
-func TestWorkflowPathFiltersCodeQLMatrixKeepsEveryMainConfiguration(t *testing.T) {
+// codeqlMatrixProblem is why a CodeQL language matrix is wrong, or "": the matrix is Go only. Any change of the
+// configuration set is paired with the admin step on main's code-scanning analyses, because the code_scanning
+// ruleset blocks every pull request while main holds a configuration the pull requests no longer upload.
+func codeqlMatrixProblem(languages []string) string {
+	if reflect.DeepEqual(languages, []string{"go"}) {
+		return ""
+	}
+	return fmt.Sprintf("CodeQL language matrix = %v, want [go]: Python is out of the CodeQL scan, and a changed configuration set needs the admin step on main's code-scanning analyses, or the code_scanning ruleset blocks every pull request", languages)
+}
+
+func TestWorkflowPathFiltersCodeQLMatrixIsGoOnly(t *testing.T) {
 	wf := loadWorkflowMap(t, "codeql-analysis.yml")
 	job := wf["jobs"].(map[string]any)["analyze"].(map[string]any)
 	matrix := job["strategy"].(map[string]any)["matrix"].(map[string]any)
-	got := stringList(t, matrix["language"])
-	if !reflect.DeepEqual(got, []string{"python", "go"}) {
-		t.Errorf("CodeQL language matrix = %v, want [python go]: dropping a configuration that main has makes the code_scanning ruleset block every pull request until its stale analyses are deleted", got)
+	if problem := codeqlMatrixProblem(stringList(t, matrix["language"])); problem != "" {
+		t.Error(problem)
+	}
+}
+
+func TestWorkflowPathFiltersCodeQLMatrixPlantedLanguages(t *testing.T) {
+	for _, planted := range [][]string{{"python", "go"}, {"go", "python"}, {"python"}, {}, {"go", "javascript"}} {
+		if codeqlMatrixProblem(planted) == "" {
+			t.Errorf("planted CodeQL matrix %v passed the Go-only rule", planted)
+		}
 	}
 }
 
@@ -266,7 +283,7 @@ func TestWorkflowPathFiltersSecurityScanGatesByJobNotWorkflow(t *testing.T) {
 		requireNoPathFilter(t, wf, event)
 	}
 	jobs := wf["jobs"].(map[string]any)
-	for name, want := range map[string]string{"pip-audit": "needs.changes.outputs.deps == 'true'", "semgrep": "needs.changes.outputs.code == 'true'"} {
+	for name, want := range map[string]string{"semgrep": "needs.changes.outputs.code == 'true'"} {
 		cond, _ := jobs[name].(map[string]any)["if"].(string)
 		if !strings.Contains(cond, want) {
 			t.Errorf("job %s no longer gates on %q: %q", name, want, cond)

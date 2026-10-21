@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -24,15 +23,6 @@ import (
 // The Python answers were recorded once on the pinned build (testdata/golden/ssrf_address_classes.json; recipe in the
 // golden's spec) and are read from it: a frozen run starts no Python. The probe list is part of the request, so a changed
 // list is refused until it is recorded again.
-
-const pythonAddressProgram = `
-import json, sys
-from dev_health_ops.llm.credentials import _ip_is_safe_public_target
-answers = {}
-for address in json.loads(sys.stdin.read()):
-    answers[address] = bool(_ip_is_safe_public_target(address))
-print(json.dumps(answers, sort_keys=True))
-`
 
 // referencePrefixes are the special-purpose ranges the probe list is built from. They are the tables of CPython's
 // ipaddress module (IPv4Address/IPv6Address _private_networks, _private_networks_exceptions, _reserved_networks, plus the
@@ -107,17 +97,12 @@ func lastAddress(prefix netip.Prefix) netip.Addr {
 // recordedAddressAnswers returns, per probe address, whether the recorded Python judged it a safe public target.
 func recordedAddressAnswers(t *testing.T) map[string]bool {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	request, err := json.Marshal(probeAddresses(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := rotguard.Spec("testdata/golden/ssrf_address_classes.json", "cdf1200ab2e5568210187db89342af727a7aa4c7597ae36311c86129937fbeda",
-		"./internal/llmorgsettings/", "^TestAddressClassesMatchTheRecordedPython$")
-	answers := programoracle.Run(t, spec, root, []programoracle.Program{{Name: "_ip_is_safe_public_target over the probe list", Text: pythonAddressProgram, Stdin: request}})
+	spec := rotguard.Spec("testdata/golden/ssrf_address_classes.json", "cdf1200ab2e5568210187db89342af727a7aa4c7597ae36311c86129937fbeda")
+	answers := programoracle.Run(t, spec, []programoracle.Program{{Name: "_ip_is_safe_public_target over the probe list", Stdin: request}})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the recorded Python run exited %d (stdout %q)", answers[0].ExitCode, answers[0].Stdout)
 	}

@@ -135,10 +135,19 @@ func postPagerDutyTokenForm(ctx context.Context, doer HTTPDoer, config PagerDuty
 	return pagerDutyTokensFromPayload(body, now)
 }
 
-// refusedDoer is what a PagerDuty entry point uses in place of a supplied doer the allow-list refused: it sends nothing.
-type refusedDoer struct{}
+// refusedDoer sends nothing: a PagerDuty entry point uses it in place of a supplied doer the allow-list refused (err nil:
+// ErrCredentialInvalid), and the egress guard in place of a doer it cannot reach into (errUnguardedDoer).
+type refusedDoer struct{ err error }
 
-func (refusedDoer) Do(*http.Request) (*http.Response, error) { return nil, ErrCredentialInvalid }
+func (d refusedDoer) Do(request *http.Request) (*http.Response, error) {
+	if request != nil && request.Body != nil {
+		_ = request.Body.Close()
+	}
+	if d.err != nil {
+		return nil, d.err
+	}
+	return nil, ErrCredentialInvalid
+}
 
 // pagerDutyAdmitted is the supplied doer when the allow-list admits it (an *http.Client, or a Wrapper chain ending at one), or a
 // doer that sends nothing (the same construction refusal, loud, as the provider client constructors): the PagerDuty entry
@@ -162,15 +171,18 @@ func pagerDutyFormClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
 
 // pagerDutyValidationClient is the client of the credential validation read: it FOLLOWS a redirect (Python's httpx does)
 // and drops the credential when the origin changes (net/http alone would also replay it to a subdomain of the original
-// host). A supplied *http.Client gets the same policy; a Wrapper is rebuilt around its inner doer's validation client; any
+// host). A supplied *http.Client gets the same policy (and httpguard.SharedTransport() when it has no transport); a Wrapper is rebuilt around its inner doer's validation client; any
 // other supplied doer is refused (it sends nothing).
 func pagerDutyValidationClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
 	if doer == nil {
-		return &http.Client{Timeout: timeout, CheckRedirect: DropCredentialsOnHostChange}
+		return &http.Client{Timeout: timeout, Transport: httpguard.SharedTransport(), CheckRedirect: DropCredentialsOnHostChange}
 	}
 	if supplied, ok := doer.(*http.Client); ok {
 		copied := *supplied
 		copied.CheckRedirect = DropCredentialsOnHostChange
+		if copied.Transport == nil {
+			copied.Transport = httpguard.SharedTransport()
+		}
 		return &copied
 	}
 	if wrapper, ok := doer.(httpguard.Wrapper); ok && admitDoer(doer) == nil {

@@ -518,7 +518,7 @@ operation any more: nothing is keyed by the schema digest that serves. What rema
 
 | Signal | Where | Fires when |
 |---|---|---|
-| `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and the table below |
+| `TestSchemaDigestPinMatchesTheSDLAndIsInTheHistoryTable` (`internal/goapicli/routing`) | CI | The SDL moved without updating the pin and the table below |
 | `dho goapi routing status` | operator | A catalog operation is `MISMATCH` or `UNREGISTERED` against the deployed registry, or a class root reads `MISSING` (dark) |
 
 None of the above shortcuts the recovery procedure: a schema digest that happens to match a previously-proven build is NOT
@@ -528,11 +528,12 @@ grounds to carry a proof onto a new image without a fresh `go-api-prove` run: a 
 ### Schema-digest history
 
 Update this table in the SAME change that moves the SDL.
-`ci/check_go_api_routing_digest.py` fails if
+`TestSchemaDigestPinMatchesTheSDLAndIsInTheHistoryTable` fails if
 `contracts/graphql/v1/schema-digest.json` names a digest that does not
 appear here.
 
 | Digest | In force from | Moved by | Notes |
+|---|---|---|---|
 | `sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706` | before 2026-09-01 | superseded by `33b3f3f21d` | The twelve 2026-09-01 rows were seeded here and died the same day |
 | `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88` | 2026-09-01 | `33b3f3f21d` (#2065, widen `TimeseriesBucket.value` nullability) | superseded |
 | `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0` | 2026-09-11 | declaring the coverage split's three nullable fields on the Strawberry type, which regenerates this SDL | superseded |
@@ -619,7 +620,7 @@ compose file `ci/bigboy/compose.bigboy.yml` mounts the host file `DHO_API_CH_USE
 (default `$BIGBOY_ROOT/.go-api-dev/dho_api_ch.xml`) read-only at
 `/etc/clickhouse-server/users.d/dho_api_ch.xml`, so recreating the ClickHouse container no longer loses the
 user (a recreate that did, after the login was `docker cp`ed in, is what made go-api fail every ClickHouse call
-with code 516). `ci/bigboy/render-dho-api-ch-users.py <authorization.go> <out>` writes the file. It takes no XML: it builds a fixed
+with code 516). `cigate bigboy render-ch-users <authorization.go> <out>` writes the file. It takes no XML: it builds a fixed
 element table (`networks/ip`, `profile`, `quota`, `access_management`, `password_sha256_hex`, `grants/query`) whose only
 variable parts are the SHA-256 of the password in `API_CH_PASSWORD` (environment only, never printed) and the grants,
 read from the `APIPosture` manifest in the given `authorization.go` (the file at the ops sha being cut). No attribute,
@@ -667,7 +668,7 @@ outright instead of trailing a fixed entrypoint binary:
 kubectl run dev-health-go-api-tools-oneoff \
   --image=ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT> \
   --restart=Never \
-  --overrides='{"spec":{"containers":[{"name":"dev-health-go-api-tools-oneoff","image":"ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT>","command":["sleep","86400"],"env":[{"name":"GO_API_ENVELOPE_PRIVATE_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"GO_API_ENVELOPE_PRIVATE_KEY"}}},{"name":"JWT_SECRET_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"JWT_SECRET_KEY"}}},{"name":"POSTGRES_URI","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"POSTGRES_URI"}}}]}]}}'
+  --overrides='{"spec":{"containers":[{"name":"dev-health-go-api-tools-oneoff","image":"ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT>","command":["sleep","86400"],"env":[{"name":"GO_API_ENVELOPE_PRIVATE_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"GO_API_ENVELOPE_PRIVATE_KEY"}}},{"name":"JWT_SECRET_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-hs256","key":"JWT_SECRET_KEY"}}},{"name":"POSTGRES_URI","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"POSTGRES_URI"}}}]}]}}'
 
 kubectl exec dev-health-go-api-tools-oneoff -- \
   dho goapi routing status -registry-url http://query-api:8090/registry
@@ -709,8 +710,8 @@ the raw credential printed to stdout.
 calls for outside callers) in process. It mints the other bearer, the
 edge **access token** the Python edge checks on every request, the same
 way the envelope is minted: locally, in this Pod, from the key the api
-Pod's environment already holds (`JWT_SECRET_KEY`, by `secretKeyRef`, as
-the `--overrides` above shows). The edge bearer check is unchanged; there
+Pod's environment already holds (`JWT_SECRET_KEY`, by `secretKeyRef` to the
+`dev-health-hs256` Secret, as the `--overrides` above shows). The edge bearer check is unchanged; there
 is no in-cluster trust bypass.
 
 The token is for a **dedicated proof service principal**, never a human

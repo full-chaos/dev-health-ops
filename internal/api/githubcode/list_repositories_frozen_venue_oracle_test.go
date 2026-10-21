@@ -25,57 +25,6 @@ import (
 	"sort"
 )
 
-// pythonListRepositoriesProgram drives the api's own GitHubCodeClient
-// (list_repositories and list_installation_repositories) through an
-// httpx.MockTransport that answers each scenario's scripted responses in
-// order, with asyncio.sleep made instant (the retry delays are not compared,
-// only the attempts). It reports each request URL and Authorization header,
-// then the repositories as (name, full_name, description, url) or the raised
-// exception as "Class: str(exc)".
-const pythonListRepositoriesProgram = `
-import asyncio, base64, json, sys
-import httpx
-async def _no_sleep(_):
-    return None
-asyncio.sleep = _no_sleep
-from dev_health_ops.providers.github.client import GitHubAuth
-from dev_health_ops.providers.github.code_client import GitHubCodeClient
-async def run(scenario):
-    responses = list(scenario["responses"])
-    seen = []
-    def handler(request):
-        seen.append([str(request.url), request.headers.get("Authorization")])
-        status, headers, body = responses.pop(0) if responses else (599, [], "")
-        if status == -1:
-            raise httpx.ConnectError("boom", request=request)
-        if status == -2:
-            raise httpx.ReadTimeout("slow", request=request)
-        if status == -3:
-            raise httpx.RemoteProtocolError("bad framing", request=request)
-        if status == -4:
-            raise httpx.ReadError("cut", request=request)
-        return httpx.Response(status, headers=headers, content=base64.b64decode(body))
-    try:
-        client = GitHubCodeClient(auth=GitHubAuth(token="tok", base_url=scenario["base"] or None), transport=httpx.MockTransport(handler))
-        maximum = scenario.get("max")
-        maximum = int(maximum) if maximum is not None else None
-        if scenario["mode"] == "installation":
-            repos = await client.list_installation_repositories(search=scenario.get("search") or None, max_repos=maximum)
-        else:
-            repos = await client.list_repositories(
-                org_name=scenario.get("org") or None,
-                search=scenario.get("search") or None,
-                pattern=scenario.get("pattern") or None,
-                max_repos=maximum,
-            )
-        result = [[r.name, r.full_name, r.description, r.url] for r in repos]
-    except Exception as exc:
-        result = type(exc).__name__ + ": " + str(exc)
-    return {"requests": seen, "result": result}
-out = [asyncio.run(run(s)) for s in json.loads(sys.stdin.read())]
-print(json.dumps(out))
-`
-
 type scripted struct {
 	Status  int
 	Headers [][2]string
@@ -462,7 +411,7 @@ func TestListRepositoriesVenueOracleMatchesFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenPython(t, "list-repositories.golden.json",
-		programoracle.Program{Name: "list-repositories", Text: pythonListRepositoriesProgram, Stdin: []byte(input)})[0]
+		programoracle.Program{Name: "list-repositories", Stdin: []byte(input)})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct {
 		Requests [][2]*string    `json:"requests"`

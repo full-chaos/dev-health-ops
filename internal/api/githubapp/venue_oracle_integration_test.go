@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -401,16 +400,9 @@ func runGitHubAppVariant(t *testing.T, ctx context.Context, golden *venueoracle.
 		return claims
 	}()), full)
 	pythonResponses := golden.Python(t, venue, requests)
-	pythonSeen := strings.Split(golden.InspectRows(t, "python github requests: "+name, func() string { return strings.Join(stub.take(), "\n") }), "\n")
+	pythonSeen := strings.Split(golden.InspectRows(t, "python github requests: "+name), "\n")
 	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Golden: golden, Normalize: normalizeGitHubState})
-	pythonShape := golden.InspectRows(t, "python minted state: "+name, func() string {
-		raw := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.api.integrations.github_app_state:mint_github_app_install_state", Args: []any{orgs[0], "/auth/onboard/integration"}})
-		var minted string
-		if len(raw) != 1 || json.Unmarshal(raw[0], &minted) != nil || minted == "" {
-			t.Fatalf("mint a state on the Python plane: %s", raw)
-		}
-		return stateShape(t, minted)
-	})
+	pythonShape := golden.InspectRows(t, "python minted state: "+name)
 	goMinted, err := (githubapp.Signer{Secret: venueKey, Issuer: "dev-health-ops", Audience: "dev-health-api"}).Mint(orgs[0], &returnTo, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -445,14 +437,10 @@ func TestVenueOracleGitHubAppInstall(t *testing.T) {
 
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, repoRoot(t)), JWTKey: venueKey,
+		Golden: golden, Root: repoRoot(t), JWTKey: venueKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsKey,
-			"VENUE_PROVIDER_STUB_PORT=" + stubPort(stub.server.URL),
 		},
-		// The harness builds PYTHONPATH from the checkout it runs Python from: the golden's key holds
-		// this relative name, not the path of the checkout the test ran in.
-		PythonPathRel: []string{"internal/apiservice/testdata/provider_stub"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed = seedVenue(t, ctx, admin)
 			for _, row := range []struct {
@@ -505,9 +493,7 @@ func compareGitHubAppRows(t *testing.T, ctx context.Context, golden *venueoracle
 	installations := `SELECT installation_id, coalesce(account_login, '<null>'), coalesce(account_type, '<null>'), coalesce(org_id, '<null>'),
 		suspended_at IS NOT NULL, updated_at > created_at FROM github_app_installations ORDER BY installation_id`
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), installations)
-	pythonRows := golden.CompareRows(t, "github_app_installations", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), installations)
-	}, goRows)
+	pythonRows := golden.CompareRows(t, "github_app_installations", goRows)
 	if pythonRows == "" {
 		t.Error("github_app_installations are empty")
 	}
@@ -544,9 +530,7 @@ func compareGitHubAppRows(t *testing.T, ctx context.Context, golden *venueoracle
 		return fmt.Sprintf("%s|%s|%s|active=%v|config=%s|secret=%s", org, provider, credName, active, config, plaintext)
 	}
 	goRendered := render("go", venue.AdminURI(t, venue.GoDB))
-	pythonRendered := golden.CompareRows(t, "github-app credential (decrypted)", func() string {
-		return render("python", venue.AdminURI(t, venue.SourceDB))
-	}, goRendered)
+	pythonRendered := golden.CompareRows(t, "github-app credential (decrypted)", goRendered)
 	fmt.Fprintf(receipt, "github-app credential (decrypted): %s\n", venueoracle.Mark(pythonRendered == goRendered))
 }
 
@@ -583,12 +567,6 @@ func stateShape(t *testing.T, state string) string {
 		out = append(out, string(canonical))
 	}
 	return strings.Join(out, " ")
-}
-
-func stubPort(rawURL string) string {
-	parsed, _ := url.Parse(rawURL)
-	_, port, _ := net.SplitHostPort(parsed.Host)
-	return port
 }
 
 const (
@@ -718,7 +696,7 @@ func generatePEM(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
 }
 
-// repoRoot walks up from this file to the directory holding src/dev_health_ops.
+// repoRoot walks up from this file to the directory holding go.mod.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := moduleroot.Caller(0)
@@ -727,12 +705,12 @@ func repoRoot(t *testing.T) string {
 	}
 	directory := filepath.Dir(file)
 	for {
-		if info, err := os.Stat(filepath.Join(directory, "src", "dev_health_ops")); err == nil && info.IsDir() {
+		if info, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil && !info.IsDir() {
 			return directory
 		}
 		parent := filepath.Dir(directory)
 		if parent == directory {
-			t.Fatalf("no src/dev_health_ops above %s", file)
+			t.Fatalf("no go.mod above %s", file)
 		}
 		directory = parent
 	}

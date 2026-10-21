@@ -3,8 +3,12 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
-	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
+	"hash/fnv"
+	"math/bits"
+	"strconv"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,10 +62,112 @@ func redispatchCountdown() time.Duration {
 // tested on its own because the RULE is what regressed, and a regression back to
 // "always the countdown" is invisible at a call site.
 func dueNowRearmAt(nextDeferredAt *time.Time, now time.Time) *time.Time {
-	return earlierOf(nextDeferredAt, now.Add(redispatchCountdown()))
+	return dueNowRearmAtAfter(nextDeferredAt, now, redispatchCountdown())
 }
 
-func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog.Logger, syncRunID string, availableAt *time.Time, now time.Time) {
+// dueNowRearmAtAfter is dueNowRearmAt with the countdown given, so the idle
+// back-off (CHAOS-8459) lengthens only the countdown and never a deferral.
+func dueNowRearmAtAfter(nextDeferredAt *time.Time, now time.Time, countdown time.Duration) *time.Time {
+	return earlierOf(nextDeferredAt, now.Add(countdown))
+}
+
+// redispatchBackoffMaxDefaultSeconds bounds the idle back-off of the re-arm
+// (CHAOS-8459). A unit's terminal commit wakes the pass at once (CHAOS-10013),
+// so the countdown only bounds a lost wake and may grow while nothing ends.
+const redispatchBackoffMaxDefaultSeconds = 300
+
+// redispatchBackoffJitter is the half-width of the seeded spread (20 percent).
+const redispatchBackoffJitter = 0.2
+
+// redispatchCountdownMax is the ceiling of the back-off. A value below the
+// configured base is clamped to the base, so a bad setting turns the back-off
+// off and never makes the re-arm faster than the base.
+func redispatchCountdownMax(base time.Duration) time.Duration {
+	limit := time.Duration(budgetEnvInt("SYNC_DISPATCH_REDISPATCH_COUNTDOWN_MAX", redispatchBackoffMaxDefaultSeconds)) * time.Second
+	if limit < base {
+		return base
+	}
+	return limit
+}
+
+// backoffCountdown grows the re-arm delay with the time since the run last
+// made progress: base * 2^k where k is the bit length of idle/base, so the
+// delay roughly doubles each time the idle time doubles. The spread is seeded
+// by the run id and level, so a given run gets the same value for the same
+// level (no test or log flakiness) while different runs do not re-arm in step.
+// The result never goes below base or above limit.
+func backoffCountdown(base, limit, idle time.Duration, syncRunID string) (time.Duration, int) {
+	if base <= 0 || idle < base {
+		return base, 0
+	}
+	level := bits.Len64(uint64(idle / base))
+	if level > 20 {
+		level = 20
+	}
+	raw := base
+	for step := 0; step < level && raw < limit; step++ {
+		raw *= 2
+	}
+	if raw > limit {
+		raw = limit
+	}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(syncRunID + ":" + strconv.Itoa(level)))
+	unit := float64(hash.Sum32())/float64(^uint32(0))*2 - 1
+	jittered := raw + time.Duration(float64(raw)*redispatchBackoffJitter*unit)
+	if jittered < base {
+		jittered = base
+	}
+	if jittered > limit {
+		jittered = limit
+	}
+	return jittered, level
+}
+
+// lastRunProgressAt is the newest end of a unit of the run (success or
+// failed), else the oldest unit creation. A running unit's heartbeat is not
+// progress: a long chunked unit must not keep the re-arm at the base.
+func lastRunProgressAt(ctx context.Context, pool *pgxpool.Pool, syncRunID string) (*time.Time, error) {
+	var at *time.Time
+	err := pool.QueryRow(ctx, `
+SELECT COALESCE(MAX(updated_at) FILTER (WHERE status IN ($2, $3)), MIN(created_at))
+FROM public.sync_run_units
+WHERE sync_run_id = $1::uuid`, syncRunID, syncRunUnitStatusSuccess, syncRunUnitStatusFailed).Scan(&at)
+	if err != nil {
+		return nil, err
+	}
+	return at, nil
+}
+
+// rearmBackoff returns the countdown for a pass that claimed nothing and left
+// due-now work behind, plus log attributes when it grew. A failed read gives
+// the base: the back-off is an optimisation and must not delay a run.
+func rearmBackoff(ctx context.Context, pool *pgxpool.Pool, logger *synclog.Logger, syncRunID string, now time.Time) (time.Duration, []synclog.Attr) {
+	base := redispatchCountdown()
+	progressAt, err := lastRunProgressAt(ctx, pool, syncRunID)
+	if err != nil {
+		logger.Warn(ctx, synclog.MsgDispatchSyncRunRedispatchBackoffReadFailed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Failure(err))
+		return base, nil
+	}
+	if progressAt == nil {
+		return base, nil
+	}
+	return countdownForIdle(base, redispatchCountdownMax(base), now.Sub(*progressAt), syncRunID)
+}
+
+func countdownForIdle(base, limit, idle time.Duration, syncRunID string) (time.Duration, []synclog.Attr) {
+	countdown, level := backoffCountdown(base, limit, idle, syncRunID)
+	if level == 0 {
+		return base, nil
+	}
+	return countdown, []synclog.Attr{
+		synclog.Count(synclog.KeyIdleSeconds, int(idle.Seconds())),
+		synclog.Count(synclog.KeyBackoffSeconds, int(countdown.Seconds())),
+		synclog.Count(synclog.KeyBackoffLevel, level),
+	}
+}
+
+func scheduleRedispatch(ctx context.Context, pool *pgxpool.Pool, logger *synclog.Logger, syncRunID string, availableAt *time.Time, now time.Time, extra ...synclog.Attr) {
 	countdown := redispatchCountdown()
 	redispatchAt := now.Add(countdown)
 	if availableAt != nil {
@@ -122,7 +228,8 @@ WHERE sync_run_id = $1::uuid AND kind = $4 AND status = 'pending' AND claim_toke
 		fail(err)
 		return
 	}
-	logger.Info(ctx, synclog.MsgDispatchSyncRunRedispatchRearmed, synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyCountdown, int(countdown.Seconds())), synclog.Instant(synclog.KeyAvailableAt, redispatchAt), synclog.Flag(synclog.KeyKeptEarlierWakeup, rearmedByOther))
+	attrs := append([]synclog.Attr{synclog.Run(synclog.ParseID(syncRunID)), synclog.Count(synclog.KeyCountdown, int(countdown.Seconds())), synclog.Instant(synclog.KeyAvailableAt, redispatchAt), synclog.Flag(synclog.KeyKeptEarlierWakeup, rearmedByOther)}, extra...)
+	logger.Info(ctx, synclog.MsgDispatchSyncRunRedispatchRearmed, attrs...)
 }
 
 // dispatchWakeupAlreadyPending locks the run's dispatch_sync_run outbox row

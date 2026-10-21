@@ -13,13 +13,13 @@ quality guards.
 - `docs/publication.yml` + `scripts/docs_publication.py` classify every
   `docs/**/*.md` file as `public-nav`, `public-reference`, or
   `excluded-internal`; `mkdocs build --strict` is warning-free.
-- `tests/docs/test_investment_drift.py` extends the Investment drift guard
+- `cigate docs check-investment-drift` (`internal/cigates/docstools`) extends the Investment drift guard
   and reconciles CHAOS-2316 and CHAOS-2326 with posted Linear evidence.
 - `ops/DESIGN.md`, Material overrides, and `ops/docs-qa/` add the
   evidence-led documentation design system and primitive showcase.
 - Rebuilt `mkdocs.yml` navigation and `docs/freshness-inventory.yml`
   introduce the six fixed audience sections and page-freshness tracking.
-- `scripts/check_built_site_links.py`, `scripts/check_external_links.py`,
+- `cigate docs check-built-site-links` (`internal/cigates/docstools`), `scripts/check_external_links.py`,
   `scripts/check_freshness_inventory.py`, and
   `scripts/check_code_prerequisites.py` extend cross-tree publication
   quality guards; `.github/workflows/docs-guards.yml` wires strict build,

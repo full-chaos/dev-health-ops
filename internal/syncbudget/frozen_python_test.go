@@ -1,10 +1,8 @@
 package syncbudget
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -27,7 +25,6 @@ var goldenPins = map[string]string{
 
 // goldens is the set of this package's frozen Python answers.
 var goldens = programoracle.Set{
-	Package:  "./internal/syncbudget/",
 	Build:    pythonBuild,
 	Identity: producerIdentity,
 	Pins:     goldenPins,
@@ -41,15 +38,5 @@ var goldens = programoracle.Set{
 // exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	return goldens.Outputs(t, repositoryRoot(t), golden, programs...)
-}
-
-// repositoryRoot is the repository root, from this file's own location.
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	return goldens.Outputs(t, golden, programs...)
 }

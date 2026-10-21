@@ -1,0 +1,22 @@
+Traceback (most recent call last):
+  File "{RECORDER}/pyrun.py", line 4, in <module>
+    exec(compile(open(script, encoding="utf-8").read(), script, "exec"), {"__name__": "__main__", "__file__": script})
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 303, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 298, in main
+    validate(args.generated_json, args.inventory_dir, args.ia_dir)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 239, in validate
+    approved_urls = _approved_urls(ia_dir)
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 147, in _approved_urls
+    for row in _load_tsv(path):
+               ~~~~~~~~~^^^^^^
+  File "{SCRIPTS}/validate_docs_inventory_review.py", line 75, in _load_tsv
+    with path.open(encoding="utf-8", newline="") as handle:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+IsADirectoryError: [Errno 21] Is a directory: 'docs-data/ia/sub.tsv'

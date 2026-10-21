@@ -80,7 +80,7 @@ func TestPreparedManifestRouteListIsExactlyTheEnrolledCanonicalRoutes(t *testing
 		{"github", "pr-reviews", false}, {"github", "pr-comments", false},
 		{"gitlab", "pr-reviews", false}, {"gitlab", "pr-comments", false},
 		{"github", "commits", true}, {"gitlab", "commits", true}, {"github", "commit-stats", true},
-		{"gitlab", "commit-stats", true}, {"github", "files", true}, {"gitlab", "files", true},
+		{"gitlab", "commit-stats", true}, {"github", "files", false}, {"gitlab", "files", true},
 		{"github", "repo-metadata", true}, {"gitlab", "repo-metadata", true},
 		{"github", "security", true}, {"gitlab", "security", true},
 		{"github", "blame", false}, {"github", "cicd", false},
@@ -388,7 +388,7 @@ func TestEveryPlannableRouteStatesItsRecoveryMode(t *testing.T) {
 		"github/commit-stats":            "prepared snapshot",
 		"github/commits":                 "prepared snapshot",
 		"github/deployments":             "prepared snapshot",
-		"github/files":                   "prepared snapshot",
+		"github/files":                   "chunked checkpoints",
 		"github/prs":                     "prepared snapshot",
 		"github/repo-metadata":           "prepared snapshot",
 		"github/security":                "prepared snapshot",
@@ -513,6 +513,9 @@ func TestEnrolledRoutesReplayTheirSnapshotWithoutRecollecting(t *testing.T) {
 	}
 	for _, provider := range []string{"github", "gitlab"} {
 		for _, dataset := range []string{"commit-stats", "commits", "files", "repo-metadata", "security"} {
+			if provider == "github" && dataset == "files" {
+				continue
+			}
 			routes = append(routes, [2]string{provider, dataset})
 		}
 	}

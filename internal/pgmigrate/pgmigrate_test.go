@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -148,8 +147,6 @@ func TestBaselineLoads(t *testing.T) {
 		t.Fatal("the baseline still holds a psql meta-command")
 	}
 }
-
-var alembicRevision = regexp.MustCompile(`^([0-9]{4})_[a-z0-9_]+\.py$`)
 
 func TestChainNames(t *testing.T) {
 	chain, err := LoadChain()

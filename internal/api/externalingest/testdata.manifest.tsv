@@ -5,5 +5,4 @@
 -	header	golden/envelope-validation.golden.json
 -	header	golden/operational-provider-instance.golden.json
 -	header	golden/schema-bundle.json
-5bf759094840d4dc1305b295f02a32740fd93b01a9eeaf4188e84286f9108527	unclassified	python_schema_bundle_oracle.py
 3d257b6b1b60f0b5ef0af898f67536664ff300c40761b6a3f2652f0a172d031e	unclassified	schema_bundle.v1.json

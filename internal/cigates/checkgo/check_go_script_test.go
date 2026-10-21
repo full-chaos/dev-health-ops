@@ -30,11 +30,11 @@ var publicVerbs = []string{
 // check_integration call). Anything else is a coverage regression in one verb or the other.
 var (
 	fastSteps = []string{"check_format", "check_vet", "check_test", "check_build", "check_contract", "check_ratchets",
-		"check_race_weights_rows", "check_integration_vet", "plan_integration_shards", "plan_providersync_test_shards", "check_multi_replica_workers"}
+		"check_race_weights_rows", "check_integration_vet", "plan_integration_shards", "plan_providersync_test_shards", "check_plan_reads", "check_multi_replica_workers"}
 	ciSteps = []string{"check_format", "check_vet", "check_test", "check_race", "check_build", "check_contract", "check_ratchets",
-		"check_race_weights_rows", "check_integration_vet", "plan_integration_shards", "plan_providersync_test_shards", "check_multi_replica_workers"}
+		"check_race_weights_rows", "check_integration_vet", "plan_integration_shards", "plan_providersync_test_shards", "check_plan_reads", "check_multi_replica_workers"}
 	allSteps = []string{"check_format", "check_vet", "check_test", "check_race", "check_build", "check_contract", "check_ratchets",
-		"check_race_weights_rows", "check_integration_vet", "check_integration", "check_multi_replica_workers"}
+		"check_race_weights_rows", "check_integration_vet", "check_integration", "check_plan_reads", "check_multi_replica_workers"}
 )
 
 var verbSteps = map[string][]string{"fast": fastSteps, "ci": ciSteps, "all": allSteps}
@@ -235,7 +235,7 @@ func fakeGoBin(work, configured string) (string, error) {
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(body), 0o755); err != nil {
 		return "", err
 	}
-	return bin + ":/usr/bin:/bin", nil
+	return bin + ":" + withShims("/usr/bin:/bin"), nil
 }
 
 func runGocacheSnippet(script string, env []string) (value, stderr string, err error) {
@@ -371,7 +371,7 @@ func gocacheScenarios() []scenario {
 		}},
 		{"inherited_gocache_is_respected_not_overwritten", func(script, work string) error {
 			inherited := filepath.Join(work, "caller-chosen-cache")
-			got, _, err := runGocacheSnippet(script, []string{"PATH=/usr/bin:/bin", "TMPDIR=" + filepath.Join(work, "unused-tmpdir"), "GOCACHE=" + inherited})
+			got, _, err := runGocacheSnippet(script, []string{"PATH=" + withShims("/usr/bin:/bin"), "TMPDIR=" + filepath.Join(work, "unused-tmpdir"), "GOCACHE=" + inherited})
 			if err != nil {
 				return err
 			}
@@ -382,7 +382,7 @@ func gocacheScenarios() []scenario {
 		}},
 		{"explicit_dev_health_go_cache_wins_over_inherited_gocache", func(script, work string) error {
 			chosen, inherited := filepath.Join(work, "explicitly-chosen-cache"), filepath.Join(work, "caller-chosen-cache")
-			got, _, err := runGocacheSnippet(script, []string{"PATH=/usr/bin:/bin", "TMPDIR=" + filepath.Join(work, "unused-tmpdir"), "GOCACHE=" + inherited, "DEV_HEALTH_GO_CACHE=" + chosen})
+			got, _, err := runGocacheSnippet(script, []string{"PATH=" + withShims("/usr/bin:/bin"), "TMPDIR=" + filepath.Join(work, "unused-tmpdir"), "GOCACHE=" + inherited, "DEV_HEALTH_GO_CACHE=" + chosen})
 			if err != nil {
 				return err
 			}
@@ -393,7 +393,7 @@ func gocacheScenarios() []scenario {
 		}},
 		{"explicit_dev_health_go_cache_wins_with_no_gocache_set", func(script, work string) error {
 			chosen := filepath.Join(work, "explicitly-chosen-cache")
-			got, _, err := runGocacheSnippet(script, []string{"PATH=/usr/bin:/bin", "TMPDIR=" + filepath.Join(work, "unused-tmpdir"), "DEV_HEALTH_GO_CACHE=" + chosen})
+			got, _, err := runGocacheSnippet(script, []string{"PATH=" + withShims("/usr/bin:/bin"), "TMPDIR=" + filepath.Join(work, "unused-tmpdir"), "DEV_HEALTH_GO_CACHE=" + chosen})
 			if err != nil {
 				return err
 			}

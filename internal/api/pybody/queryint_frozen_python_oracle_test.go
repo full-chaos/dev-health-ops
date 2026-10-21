@@ -20,38 +20,6 @@ var queryIntCorpus = []string{
 	strings.Repeat("1", 4300), strings.Repeat("1", 4301), " " + strings.Repeat("1", 4300) + " ", "1_000", "5 ",
 }
 
-const pythonQueryIntProgram = `
-import json, sys
-from typing import Annotated
-from annotated_types import Ge, Le
-from pydantic import TypeAdapter, ValidationError
-ta = TypeAdapter(Annotated[int, Ge(1), Le(200)])
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        out.append({"ok": str(ta.validate_python(text))})
-    except ValidationError as exc:
-        err = exc.errors()[0]
-        out.append({"type": err["type"], "msg": err["msg"], "ctx": json.dumps(err.get("ctx"))})
-print(json.dumps(out))
-`
-
-// pythonPlainIntProgram is pydantic's unbounded int validation of each text:
-// the exact parsed value, or the error type. The bounded program above only
-// shows which side of a bound a value fell on.
-const pythonPlainIntProgram = `
-import json, sys
-from pydantic import TypeAdapter, ValidationError
-ta = TypeAdapter(int)
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        out.append(str(ta.validate_python(text)))
-    except ValidationError as exc:
-        out.append("E:" + exc.errors()[0]["type"])
-print(json.dumps(out))
-`
-
 // fuzzQueryInts adds deterministic random strings over the characters the
 // grammar cares about, so a rule the corpus does not name still meets
 // pydantic.
@@ -125,8 +93,8 @@ func TestQueryIntMatchesFrozenPydantic(t *testing.T) {
 	corpus := append(append(append(append([]string(nil), queryIntCorpus...), fuzzQueryInts()...), exhaustiveQueryInts()...), longQueryInts()...)
 	input, _ := json.Marshal(corpus)
 	answers := frozenPython(t, "query-int.golden.json",
-		programoracle.Program{Name: "query-int", Text: pythonQueryIntProgram, Stdin: input},
-		programoracle.Program{Name: "query-int plain", Text: pythonPlainIntProgram, Stdin: input})
+		programoracle.Program{Name: "query-int", Stdin: input},
+		programoracle.Program{Name: "query-int plain", Stdin: input})
 	output := answers[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct{ OK, Type, Msg, Ctx string }

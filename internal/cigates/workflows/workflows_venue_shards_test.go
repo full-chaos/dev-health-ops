@@ -318,7 +318,7 @@ func venueWeightsViolations(t *testing.T, root string) []string {
 	sort.Strings(missing)
 	sort.Strings(stale)
 	if len(missing) > 0 {
-		out = append(out, fmt.Sprintf("registry run rows with no weight: %v: regenerate %s/ (python3 ci/venue_oracle_weights.py <saved run log>)", missing, venueWeightsDir))
+		out = append(out, fmt.Sprintf("registry run rows with no weight: %v: add a measured row to %s/ (seconds from a saved run log)", missing, venueWeightsDir))
 	}
 	if len(stale) > 0 {
 		out = append(out, fmt.Sprintf("weights for tests that are not registry run rows: %v", stale))

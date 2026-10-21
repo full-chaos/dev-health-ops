@@ -5,13 +5,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stripe/stripe-go/v86"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -59,12 +57,8 @@ func TestMissingKeyIsThePythonRuntimeError(t *testing.T) {
 // producer is the installed Stripe SDK of the pinned build, so Identity names
 // that distribution. A golden recorded by another producer is refused.
 var stripeGoldens = programoracle.Set{
-	Package:       "./internal/api/billing/stripeclient/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\nstripe 15.6.1",
-	Distributions: []string{"stripe"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\nstripe 15.6.1",
 	Pins: map[string]string{
 		"stripe-api-version.golden.json": "8db487417fac896f5c18f195e1ee39772a47ad195ef4c267faf40e4047de4719",
 	},
@@ -74,13 +68,8 @@ var stripeGoldens = programoracle.Set{
 // sends to the frozen answer of the Python SDK of the pinned build: a
 // stripe-go bump that moves the version away from Python's fails here.
 func TestPinnedAPIVersionMatchesFrozenPythonSDK(t *testing.T) {
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
-	output := stripeGoldens.Outputs(t, root, "stripe-api-version.golden.json", programoracle.Program{
-		Name: "stripe api version", Text: "import stripe; print(stripe.api_version)",
+	output := stripeGoldens.Outputs(t, "stripe-api-version.golden.json", programoracle.Program{
+		Name: "stripe api version",
 	})[0]
 	if got := strings.TrimSpace(output); got != APIVersion {
 		t.Fatalf("Python stripe SDK sends API version %q, stripe-go sends %q", got, APIVersion)

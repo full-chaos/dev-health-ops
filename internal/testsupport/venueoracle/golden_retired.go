@@ -32,17 +32,12 @@ func (g *Golden) retireBound(answer Response, reason string) {
 
 // RetireRows declares a frozen row comparison retired by a ruling, as
 // Retired does for answers: the snapshot counts as used and is not compared.
-// A recording cannot retire a comparison, since it would write a snapshot no
-// run reads.
 func (g *Golden) RetireRows(t *testing.T, name, reason string) {
 	t.Helper()
 	if err := retiredReasonErr(reason); err != nil {
 		t.Fatal(err)
 	}
 	g.step(t, "RetireRows", statePython, stateDiffed)
-	if g.recording {
-		t.Fatalf("golden %s: row comparison %q is retired (%s); a recording cannot write it", g.spec.Path, name, reason)
-	}
 	if _, err := g.frozenRows(name); err != nil {
 		t.Fatal(err)
 	}

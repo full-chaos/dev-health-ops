@@ -36,6 +36,7 @@ and are not repeated here.
 | `provisioning-event.v1` | `jsonschema/provisioning-event.v1.schema.json` | `contracts.go` | `authclient/provisioning_event.py` |
 | `audit-event.v1` | `jsonschema/audit-event.v1.schema.json` | `contracts.go` | `authclient/provisioning_event.py` (`parse_audit_event`) |
 | `endpoint-auth-profile.v1` | `jsonschema/endpoint-auth-profile.v1.schema.json` | `endpoint_auth_profile.go` | `authclient/contracts.py` (schema validation) |
+| `access-token.v1` | `jsonschema/access-token.v1.schema.json` | `access_token.go` (`ParseAccessToken`) | none |
 
 `openapi/auth-v1.openapi.json` references the schemas. The TypeScript half lives in
 `dev-health-web` and reads the same schema files and fixtures; it is not part of
@@ -45,8 +46,8 @@ Distinct from these are the **inventory** contracts, which describe the
 credentials that exist today rather than what the new service emits:
 `credential-classes.json` (the closed credential vocabulary, with issuer,
 validators, lifecycle and consumers per class) and
-`endpoint-profiles.query-api.json` (the authentication profile of every
-query-api route). See the [credential classes](../../reference/auth/credential-classes.md)
+`endpoint-profiles.query-api.json` and `endpoint-profiles.auth-service.json`
+(the authentication profile of every query-api and auth-service route). See the [credential classes](../../reference/auth/credential-classes.md)
 reference.
 
 ## The corpus: one manifest per surface

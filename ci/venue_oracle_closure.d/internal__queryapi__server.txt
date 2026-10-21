@@ -10,11 +10,13 @@ internal/api/pytime
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
+internal/auth/sessionid
 internal/backfillrun
 internal/cacheinvalidation
 internal/chmigrate
 internal/cli
 internal/edgetokenmint
+internal/egressguard
 internal/envelopemint
 internal/fixturescli
 internal/fixturesgen
@@ -53,6 +55,7 @@ internal/llmorgsettings
 internal/mcpclass
 internal/mintcli/edgetoken
 internal/mintcli/envelope
+internal/netclass
 internal/operationalbackfill
 internal/operationalordering
 internal/pgmigrate
@@ -165,14 +168,12 @@ internal/testsupport/chquery
 internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/crossorg
-internal/testsupport/goldenscan
+internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/programoracle
 internal/testsupport/pydanticecho
-internal/testsupport/pyoracle
-internal/testsupport/recordedfiles
 internal/testsupport/venueoracle
 internal/workitemcontract
 ~internal/chmigrate/baseline
@@ -183,5 +184,4 @@ internal/workitemcontract
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
 ~internal/queryapi/investmentexplain/prompts
-~internal/scheduler/sync/testdata
 ~internal/testsupport/chschema/testdata

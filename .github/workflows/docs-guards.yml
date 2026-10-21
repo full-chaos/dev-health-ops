@@ -8,12 +8,10 @@ on:
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
       - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_built_site_links.py'
-      - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
-      - 'scripts/check_docs_candidate_facts.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
+      - '.github/workflows/docs-cloudflare.yml'
   pull_request:
     branches: ['**']
     paths:
@@ -21,12 +19,10 @@ on:
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
       - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_built_site_links.py'
-      - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
-      - 'scripts/check_docs_candidate_facts.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
+      - '.github/workflows/docs-cloudflare.yml'
   merge_group:
   workflow_dispatch:
 
@@ -46,6 +42,24 @@ permissions:
   contents: read
 
 jobs:
+  # The Go guards of the docs content and of the docs workflows (internal/cigates/docs). This job runs on every
+  # change of the paths above, so a docs-only pull request, which the Go relevance filter classifies as non-Go,
+  # still runs them. It installs no Python.
+  docs-content-guards:
+    name: docs-content-guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Run the docs content guards
+        run: go test -mod=readonly -trimpath -count=1 ./internal/cigates/docs/...
+
   docs-guards:
     name: docs-guards
     runs-on: ubuntu-latest
@@ -59,6 +73,12 @@ jobs:
 
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
 
       - name: Validate publication inventory and IA placement
         run: |
@@ -76,14 +96,14 @@ jobs:
       - name: Check rendered links, anchors, and assets
         run: |
           set -o pipefail
-          python scripts/check_built_site_links.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-built-site-links \
             --site-dir .build/docs \
             2>&1 | tee .build/docs-links.log
 
       - name: Check task-based search acceptance
         run: |
           set -o pipefail
-          python scripts/check_docs_candidate_search.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-search \
             --site-dir .build/docs \
             --queries docs-data/search-acceptance.json \
             2>&1 | tee .build/docs-search.log
@@ -96,12 +116,6 @@ jobs:
             --css docs/stylesheets/extra.css \
             2>&1 | tee .build/docs-accessibility.log
 
-      - name: Check objective documentation facts
-        run: |
-          set -o pipefail
-          python scripts/check_docs_candidate_facts.py \
-            2>&1 | tee .build/docs-facts.log
-
       # CHAOS-3514 (chris ruling: gate the scripts, keep the tests). These two
       # guards had unit tests in tests/docs but their SCRIPTS ran only from
       # Makefile targets -- never in CI -- so the property each enforces was
@@ -112,7 +126,7 @@ jobs:
       - name: Check code prerequisites
         run: |
           set -o pipefail
-          python scripts/check_code_prerequisites.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites \
             2>&1 | tee .build/docs-code-prerequisites.log
 
       - name: Check freshness inventory

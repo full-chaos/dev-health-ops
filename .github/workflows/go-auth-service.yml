@@ -51,6 +51,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
+          # CHAOS-10486: no setup-go cache here. Its key is shared by every workflow, and a job that compiles little or
+          # nothing saved it first and left the heavy jobs an empty entry.
+          cache: false
       - name: Does the change touch the auth service tree?
         id: relevance
         env:
@@ -133,15 +136,23 @@ jobs:
           - FuzzParseErrorEnvelope
           - FuzzRevisionUnmarshal
           - FuzzTimestampUnmarshal
+          - FuzzParseAccessToken
           - FuzzVerifyToken
           - FuzzValidSignedToken
           - FuzzParseLimit
           - FuzzParseForwardedTrust
           - FuzzParseEd25519Key
+          - FuzzParseKeySetManifest
           - FuzzConfigLoad
           - FuzzNormalizeEmail
           - FuzzExternalKeyValidate
           - FuzzParseRefreshRequest
+          - FuzzOpenState
+          - FuzzParseJOSEHeader
+          - FuzzValidateIDTokenClaims
+          - FuzzParseCallbackBody
+          - FuzzParseSAMLResponse
+          - FuzzSAMLSubject
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

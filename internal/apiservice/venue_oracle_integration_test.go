@@ -71,7 +71,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	members := newMembersStub(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"EXPECTED_WORKER_GROUPS=" + venueWorkerGroups, "TELEMETRY_ENDPOINT=" + endpoint.URL + "/py", "SETTINGS_ENCRYPTION_KEY=" + venueEncryptionKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			// Python's collect_usage_stats counts a Postgres repos table the
@@ -168,15 +168,13 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		regexp_replace(changes::text, '"collected_at": "[^"]*"', '"collected_at": "<t>"'), request_metadata::text, status
 		FROM audit_logs ORDER BY org_id`)
 	goStream := venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "product-telemetry:*", "ingestion_id")
-	pyStream := golden.CompareRows(t, "product-telemetry stream entries", func() string {
-		return venueoracle.StreamEntries(t, ctx, venue.PythonValkeyURI, "product-telemetry:*", "ingestion_id")
-	}, goStream)
+	pyStream := golden.CompareRows(t, "product-telemetry stream entries", goStream)
 	if pyStream == "" {
 		t.Errorf("product-telemetry stream entries are empty")
 	}
 	fmt.Fprintf(&receipt, "product-telemetry stream entries: %s\n", venueoracle.Mark(pyStream == goStream && pyStream != ""))
 	goSent := sent.bodies("/go")
-	pySent := golden.CompareRows(t, "telemetry reports sent", func() string { return sent.bodies("/py") }, goSent)
+	pySent := golden.CompareRows(t, "telemetry reports sent", goSent)
 	if pySent == "" {
 		t.Errorf("sent telemetry reports are empty")
 	}
@@ -268,9 +266,7 @@ func startVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *
 func compareRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, receipt *strings.Builder, name, query string) {
 	t.Helper()
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-	pyRows := golden.CompareRows(t, name, func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-	}, goRows)
+	pyRows := golden.CompareRows(t, name, goRows)
 	if pyRows == "" {
 		t.Errorf("%s after the writes are empty", name)
 	}
@@ -405,9 +401,7 @@ func assertPerTableCounts(t *testing.T, ctx context.Context, uri, body string) {
 func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, receipt *strings.Builder, name, query string) {
 	t.Helper()
 	goRows := venueoracle.CHRows(t, ctx, venue.AdminClickHouseURI(t, venue.GoClickHouseDB), query)
-	pyRows := golden.CompareRows(t, name, func() string {
-		return venueoracle.CHRows(t, ctx, venue.AdminClickHouseURI(t, venue.PythonClickHouseDB), query)
-	}, goRows)
+	pyRows := golden.CompareRows(t, name, goRows)
 	if pyRows == "" {
 		t.Errorf("%s after the writes are empty", name)
 	}

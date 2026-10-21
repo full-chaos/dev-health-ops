@@ -34,8 +34,7 @@ func loadEdgeShapesGolden(t *testing.T) edgeShapesGolden {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Clean(edgeShapesGoldenPath))
 	if err != nil {
-		t.Fatalf("read golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_evidence_json_edge_shapes_golden.py)", err)
+		t.Fatalf("read golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden edgeShapesGolden
 	if err := json.Unmarshal(raw, &golden); err != nil {

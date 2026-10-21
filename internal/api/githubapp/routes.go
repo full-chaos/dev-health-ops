@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // Config is github_app_config.py: the App's identity and OAuth client, read
@@ -351,5 +352,5 @@ func accountField(installation *pyjson.Object, field string) *string {
 
 // defaultHTTPClient is the client Routes builds when Deps.HTTPClient is nil (production passes nil): redirects are refused by fetchJSON.
 func defaultHTTPClient() *http.Client {
-	return &http.Client{Timeout: 10 * time.Second} // fetchJSON guards every request it sends
+	return &http.Client{Timeout: 10 * time.Second, Transport: httpguard.SharedTransport()} // fetchJSON guards every request it sends
 }

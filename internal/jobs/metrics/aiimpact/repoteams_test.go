@@ -3,8 +3,6 @@ package aiimpact
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -147,31 +145,17 @@ func TestLongestPrefixWinsAndTiesKeepDeclarationOrder(t *testing.T) {
 	}
 }
 
-// runRepoTeamsOracle returns the team_id the production builder and resolver gave each probe. The oracle
-// script was executed once on the last build that carried the Python sources and its stdout is frozen in
-// testdata/golden/repo_teams_oracle.json (recipe in the golden's spec); a frozen run reads it, no Python
-// runs. The script's text and the probe set are part of the request, so a changed script or fixture is
-// refused until it is recorded again.
+// runRepoTeamsOracle returns the team_id the production builder and resolver gave each probe. The stdout is
+// frozen in testdata/golden/repo_teams_oracle.json; a frozen run reads it, no Python runs.
 func runRepoTeamsOracle(t *testing.T) map[string]*string {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	const scriptPath = "internal/jobs/metrics/aiimpact/testdata/python_repo_teams_oracle.py"
-	source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scriptPath)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	spec := venueoracle.GoldenSpec{
 		Path:        "testdata/golden/repo_teams_oracle.json",
 		PythonBuild: rotguard.PythonBuild,
 		SHA256:      "636d4640d0c7a66652bd152a41d7848db6f9d2f97f6929dfb05adf388237fdc2",
-		Recipe: "git worktree add --detach $DIR " + rotguard.PythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/aiimpact/ -test '^TestRepoPatternResolverMatchesLivePython$' -python-root $DIR",
 	}
-	answers := programoracle.Run(t, spec, root, []programoracle.Program{
-		programoracle.Script("repo teams oracle", scriptPath, string(source), nil),
+	answers := programoracle.Run(t, spec, []programoracle.Program{
+		{Name: "repo teams oracle"},
 	})
 	if answers[0].ExitCode != 0 {
 		t.Fatalf("the repo teams oracle exited %d (stdout %q)", answers[0].ExitCode, answers[0].Stdout)

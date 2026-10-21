@@ -3,7 +3,6 @@
 package apiservice
 
 import (
-	"context"
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
@@ -12,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -22,29 +20,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// pythonRouteTableProgram prints the live FastAPI app's route table: for
-// each APIRoute method and path, whether FastAPI writes its success body
-// through the response_model fast path (fastapi/routing.py use_dump_json:
-// a response field and the default response class).
-const pythonRouteTableProgram = `
-import json
-from fastapi.routing import APIRoute
-from fastapi.datastructures import DefaultPlaceholder
-from dev_health_ops.api.main import app
-out = []
-for route in app.routes:
-    if not isinstance(route, APIRoute):
-        continue
-    model = route.response_field is not None and isinstance(route.response_class, DefaultPlaceholder)
-    for method in sorted(route.methods):
-        out.append([method, route.path, model])
-print("ROUTES " + json.dumps(out))
-`
 
 // goRoutesWithoutPython are Go route patterns with no FastAPI route of
 // their own, by ruling or because they only dispatch literal Python
@@ -104,21 +81,8 @@ func routeShape(method, path string) string {
 // and each named exception must still be what it says.
 func TestRouteResponseModelsMatchTheFrozenFastAPITable(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, programGolden("route-response-models", t.Name(), "53ccf0751052b5ecd6adf2c0ee773956b0b8737bdf227bec1cc23c209d3255fe"))
-	_, file, _, _ := moduleroot.Caller(0)
-	root := golden.PythonRoot(t, filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")))
-	request := venueoracle.ProgramRequest("fastapi route table", pythonRouteTableProgram, nil, producerEnv)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		command, err := producer.Command(context.Background(), producerEnv, nil, "-c", pythonRouteTableProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		output, err := command.Output()
-		if err != nil {
-			t.Fatalf("live FastAPI route table: %v", pyoracle.RunError(command.Path, err, output))
-		}
-		return []venueoracle.Response{{Status: 0, Body: withoutLogLines(output)}}
-	})
+	request := venueoracle.ProgramRequest("fastapi route table", nil)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	output := []byte(answers[0].Body)
 	var table [][3]any

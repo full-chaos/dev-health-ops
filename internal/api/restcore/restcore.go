@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/egressguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -107,14 +108,16 @@ func DefaultRetryable(r Response) bool {
 func (c Core) Get(ctx context.Context, target, operation string) (Response, error) {
 	supplied := c.HTTP
 	if supplied == nil {
-		supplied = &http.Client{Timeout: DefaultTimeout}
+		supplied = &http.Client{Timeout: DefaultTimeout, Transport: httpguard.SharedTransport()}
 	}
 	// The one guard layer: whatever client came in (a caller's, or this default), the credential never follows a redirect.
 	httpClient := httpguard.NoRedirects(supplied)
 	// A copy of the client (NoRedirects never changes the caller's): its transport also records whether a 3xx answer with a
 	// Location came back, the one fact that tells net/http's refusal of that Location from an ordinary transport error whose
 	// text happens to start with the same words (CHAOS-7927 r2).
-	witness := &redirectWitness{base: httpClient.Transport}
+	// The stored provider base URL is checked at every connect: only a public (or explicitly allowed) address is dialled.
+	base := egressguard.Wrap(httpClient.Transport)
+	witness := &redirectWitness{base: base}
 	httpClient.Transport = witness
 	sleep := c.Sleep
 	if sleep == nil {
@@ -278,7 +281,7 @@ type redirectWitness struct {
 func (w *redirectWitness) RoundTrip(request *http.Request) (*http.Response, error) {
 	base := w.base
 	if base == nil {
-		base = http.DefaultTransport
+		base = httpguard.SharedTransport()
 	}
 	response, err := base.RoundTrip(request)
 	if err == nil && response != nil && response.StatusCode >= 300 && response.StatusCode < 400 && response.Header.Get("Location") != "" {

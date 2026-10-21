@@ -65,7 +65,7 @@ func TestPagerDutyAuthorizeWithoutEncryptionKeyVenueOracle(t *testing.T) {
 func runPagerDutyAuthorizeOracle(t *testing.T, mode, digest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("authorize_"+mode, t.Name(), digest))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-authorize-32-by"
 
 	orgs := map[string]uuid.UUID{}
@@ -194,9 +194,7 @@ VALUES ($1, $2, 'v1:not-decryptable-here', now() - interval '2 hours', now() - i
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		golden.CompareRows(t, name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, goRows)
+		golden.CompareRows(t, name, goRows)
 	}
 	// The random state hash is excluded: per org, how many requests are
 	// held, that each lives exactly 15 minutes (or is the seeded expired
@@ -257,7 +255,7 @@ FROM pagerduty_oauth_authorization_requests GROUP BY org_id ORDER BY org_id`)
 		if plane == "python" {
 			// The Python plane's stored verifier is part of what its executed
 			// build answered; it is frozen with the golden (a random test value).
-			verifier = golden.InspectRows(t, "pkce verifier: "+requestName, openVerifier)
+			verifier = golden.InspectRows(t, "pkce verifier: "+requestName)
 		} else {
 			verifier = openVerifier()
 		}

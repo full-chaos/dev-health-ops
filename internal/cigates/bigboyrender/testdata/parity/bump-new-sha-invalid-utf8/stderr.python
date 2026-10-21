@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "{A}/bump-swap-rewrite-values.py", line 27, in <module>
+    f.write(s)
+UnicodeEncodeError: 'utf-8' codec can't encode character '\udcff' in position 304: surrogates not allowed

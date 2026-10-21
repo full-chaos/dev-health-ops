@@ -333,13 +333,13 @@ func webLocalDevOnlyUnchanged(g *guard) {
 }
 
 func webBackendURLRequired(g *guard) {
-	r := g.tplRaw("t")
+	r := g.tplRaw("t", set("web.authSecret.secretName=web-auth-placeholder")...)
 	g.expect(r.code != 0, "a render without web.env.BACKEND_URL succeeded")
 	g.expect(r.code == 0 || strings.Contains(r.stderr, "web.env.BACKEND_URL is required whenever web.enabled=true"), "the refusal does not name web.env.BACKEND_URL: %s", firstLines(r.stderr, 2))
 	if off := g.tplRaw("t", set("web.enabled=false")...); off.code != 0 {
 		g.failf("web.enabled=false needs no BACKEND_URL but failed: %s", firstLines(off.stderr, 2))
 	}
-	ex := g.tplRaw("t", set("web.env.BACKEND_URL=http://explicit.example:9000")...)
+	ex := g.tplRaw("t", set("web.env.BACKEND_URL=http://explicit.example:9000", "web.authSecret.secretName=web-auth-placeholder")...)
 	g.expect(ex.code == 0, "an explicit web.env.BACKEND_URL must render: %s", firstLines(ex.stderr, 2))
 	docs, err := parseDocs(ex.stdout)
 	if err != nil {

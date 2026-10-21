@@ -256,17 +256,7 @@ func customerPushNormalizer(seeded map[string]bool, start time.Time) func(string
 // stored hash and prefix.
 func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	spec := venueGolden("venue-oracle-customer-push-writes", t.Name(), "1be456e9a72af2b7445470286b75cd3f7c636882c34a449bfd36e673b6802f43")
-	// Recording, the Python plane's minted tokens are checked against its own
-	// database, so the scrub keeps each raw body it sees while the Python
-	// answers are fetched; the golden itself holds placeholders only.
-	var capturing bool
-	var pythonRaw []string
-	spec.Scrub = func(text string) string {
-		if capturing {
-			pythonRaw = append(pythonRaw, text)
-		}
-		return scrubCustomerPushTokens(text)
-	}
+	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
 	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
@@ -276,7 +266,7 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	start := time.Now().UTC()
 	var seed customerPushWriteFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = customerPushWriteSeed(t, ctx, admin)
 			return seed.tokenSpecs()
@@ -311,9 +301,7 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := customerPushWriteRequests(seed, venue.Tokens)
-	capturing = true
 	python := golden.Python(t, venue, requests)
-	capturing = false
 	normalize := customerPushNormalizer(seeded, start)
 	var goMinted []string
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
@@ -323,12 +311,8 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 			goMinted = append(goMinted, response.Body)
 		},
 	})
-	pythonMinted := pythonRaw
-
 	// Minted tokens: sha256(token) is the stored hash, token[:12] the
-	// stored prefix, on each plane's own database. The Python plane's check
-	// runs while recording (its database is gone once frozen) and is frozen
-	// as the check's lines.
+	// XX
 	mintedCheck := func(uri string, bodies []string) (lines []string) {
 		for _, body := range bodies {
 			var created struct{ ID, Token string }
@@ -343,9 +327,7 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 		}
 		return lines
 	}
-	pythonChecks := strings.Split(golden.InspectRows(t, "python minted token checks", func() string {
-		return strings.Join(mintedCheck(venue.AdminURI(t, venue.SourceDB), pythonMinted), "\n")
-	}), "\n")
+	pythonChecks := strings.Split(golden.InspectRows(t, "python minted token checks"), "\n")
 	minted := 0
 	for _, plane := range []struct {
 		name   string
@@ -380,14 +362,12 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 			request_metadata::text, status, error_message, created_at FROM audit_logs
 			WHERE action LIKE 'ingest_%' ORDER BY created_at, action`},
 	}
-	pythonIDs, goIDs := map[string]string{}, map[string]string{}
+	goIDs := map[string]string{}
 	for _, table := range tables {
 		name := table.name
 		goRows := normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query), seeded, goIDs, start)
 		failedBefore := t.Failed()
-		golden.CompareRows(t, name+" rows", func() string {
-			return normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query), seeded, pythonIDs, start)
-		}, goRows)
+		golden.CompareRows(t, name+" rows", goRows)
 		// CompareRows compares both planes as projected (the scrub turns each
 		// minted token into a placeholder) and fails the test on a difference.
 		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, venueoracle.Mark(t.Failed() == failedBefore))

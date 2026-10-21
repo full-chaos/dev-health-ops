@@ -43,7 +43,7 @@ import (
 func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminRunTimeShapesGolden("llmsettingsstatus", t.Name(), "0e1126a5d5d258ef41627a86bd6ca8720d1ad2390e799810cb1fa1aae5272229"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("llmst")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-status-32-bytes!"
 

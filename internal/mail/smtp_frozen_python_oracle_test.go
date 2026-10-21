@@ -1,7 +1,6 @@
 package mail
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,37 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
 )
-
-// smtpOracleProgram drives the REAL Python mail path
-// (src/dev_health_ops/api/services/email.py): EmailService over
-// SmtpEmailProvider, the exact classes `send_invite_email` and every other
-// Python mail caller use. Inputs arrive on stdin, so nothing reaches argv;
-// the address of the test's mail server is ORACLE_SMTP_ADDRESS in its
-// environment (host:port, new in every run). It prints "sent", or the class
-// of the exception the service raised.
-const smtpOracleProgram = `
-import asyncio, json, os, sys
-from dev_health_ops.api.services.email import EmailService, SmtpEmailProvider
-
-spec = json.load(sys.stdin)
-host, port = os.environ["ORACLE_SMTP_ADDRESS"].rsplit(":", 1)
-service = EmailService(SmtpEmailProvider(host=host, port=int(port)), spec["from"])
-
-async def run():
-    if spec.get("template"):
-        await service.send_template_email(
-            to_address=spec["to"], subject=spec["subject"],
-            template_name=spec["template"], context=spec["context"])
-    else:
-        await service.send_email(
-            to_address=spec["to"], subject=spec["subject"], html_content=spec["html"])
-
-try:
-    asyncio.run(run())
-    print(json.dumps({"sent": True}))
-except Exception as error:
-    print(json.dumps({"sent": False, "error": type(error).__name__}))
-`
 
 type smtpOracleCase struct {
 	Name     string
@@ -78,10 +46,8 @@ type smtpRecord struct {
 	Data     string   `json:"data"`
 }
 
-// smtpProgram is one run of the Python service for c. When the golden is
-// recorded, the mail server is started once for all runs, and the recorded
-// answer is the outcome with every message the server received in that run.
-func smtpProgram(t *testing.T, c smtpOracleCase, server func() *smtpcapture.Server) programoracle.Program {
+// smtpProgram is one frozen run of the Python service for c.
+func smtpProgram(t *testing.T, c smtpOracleCase) programoracle.Program {
 	t.Helper()
 	spec := map[string]any{"from": c.From, "to": c.To, "subject": c.Subject}
 	if c.Template != "" {
@@ -95,27 +61,7 @@ func smtpProgram(t *testing.T, c smtpOracleCase, server func() *smtpcapture.Serv
 		t.Fatal(err)
 	}
 	return programoracle.Program{
-		Name: c.Name, Text: smtpOracleProgram, Stdin: input,
-		PerRunNames: []string{"ORACLE_SMTP_ADDRESS"},
-		PerRun: func() map[string]string {
-			host, port := server().HostPort(t)
-			return map[string]string{"ORACLE_SMTP_ADDRESS": host + ":" + strconv.Itoa(port)}
-		},
-		Answer: func(stdout []byte) ([]byte, error) {
-			var answer smtpAnswer
-			if err := json.Unmarshal(bytes.TrimSpace(stdout), &answer); err != nil {
-				return nil, fmt.Errorf("decode the service's outcome: %w", err)
-			}
-			received := server().Drain(t)
-			if len(received) > 1 {
-				return nil, fmt.Errorf("the mail server received %d messages from one send", len(received))
-			}
-			if len(received) == 1 {
-				mail := smtpcapture.Normalize(received[0])
-				answer.Mail = &smtpRecord{MailFrom: mail.MailFrom, RcptTo: mail.RcptTo, Data: mail.Data}
-			}
-			return json.Marshal(answer)
-		},
+		Name: c.Name, Stdin: input,
 	}
 }
 
@@ -215,18 +161,9 @@ func TestSMTPSenderMatchesFrozenPythonSMTPProvider(t *testing.T) {
 		{Name: "refused: non-ascii sender address", From: "d\u00e9v@example.test", To: recipient, Subject: "Hello", HTML: "<p>x</p>", Refused: true},
 		{Name: "refused: newline in to", From: sender, To: "owner@example.test\nBcc: evil@example.test", Subject: "Hello", HTML: "<p>x</p>", Refused: true},
 	}
-	// The mail server of a recording: one for every Python run, started only
-	// when the golden is recorded.
-	var recording *smtpcapture.Server
-	recordingServer := func() *smtpcapture.Server {
-		if recording == nil {
-			recording = smtpcapture.Start(t)
-		}
-		return recording
-	}
 	programs := make([]programoracle.Program, len(cases))
 	for index, c := range cases {
-		programs[index] = smtpProgram(t, c, recordingServer)
+		programs[index] = smtpProgram(t, c)
 	}
 	outputs := frozenPython(t, "smtp.golden.json", programs...)
 	answers := make([]smtpAnswer, len(outputs))

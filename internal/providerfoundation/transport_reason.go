@@ -8,7 +8,19 @@ import (
 	"log/slog"
 	"net"
 	"syscall"
+
+	"github.com/full-chaos/dev-health-ops/internal/egressguard"
 )
+
+// IsEgressRefused reports whether err is a provider call the dial-time egress guard refused, before or after
+// providerfoundation classified it.
+func IsEgressRefused(err error) bool {
+	if errors.Is(err, egressguard.ErrRefused) {
+		return true
+	}
+	var providerErr *ProviderError
+	return errors.As(err, &providerErr) && providerErr.Reason == TransportReasonEgressRefused
+}
 
 const (
 	TransportReasonTLSUnknownAuthority = "tls_unknown_authority"
@@ -18,6 +30,9 @@ const (
 	TransportReasonConnRefused         = "conn_refused"
 	TransportReasonCanceled            = "canceled"
 	TransportReasonOther               = "other"
+	// TransportReasonEgressRefused: the dial-time guard refused the address the stored provider URL resolves to
+	// (egressguard.Wrap). Permanent: the same URL is refused on every attempt.
+	TransportReasonEgressRefused = "egress_refused"
 )
 
 // classifyTransportReason maps a transport error to a closed-set reason. The
@@ -32,6 +47,8 @@ func classifyTransportReason(err error) string {
 	switch {
 	case err == nil:
 		return TransportReasonOther
+	case errors.Is(err, egressguard.ErrRefused):
+		return TransportReasonEgressRefused
 	case errors.As(err, &unknownAuthority):
 		return TransportReasonTLSUnknownAuthority
 	case errors.As(err, &verification), errors.As(err, &certInvalid), errors.As(err, &hostname):
@@ -66,5 +83,8 @@ func newTransportError(provider, route string, cause error, attempt int) *Provid
 		attributes = append(attributes, "route", route)
 	}
 	slog.Warn("provider transport error", attributes...)
+	if reason == TransportReasonEgressRefused {
+		return &ProviderError{Class: ErrorPermanent, Reason: reason, Route: route}
+	}
 	return &ProviderError{Class: ErrorTransient, Reason: reason, Route: route}
 }

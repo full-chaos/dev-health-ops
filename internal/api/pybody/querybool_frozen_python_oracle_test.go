@@ -17,20 +17,6 @@ var queryBoolCorpus = []string{
 	" true", "ｔｒｕｅ", "１", "on\n", "None", "null",
 }
 
-const pythonQueryBoolProgram = `
-import json, sys
-from pydantic import TypeAdapter, ValidationError
-ta = TypeAdapter(bool)
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        out.append({"ok": str(ta.validate_python(text))})
-    except ValidationError as exc:
-        err = exc.errors()[0]
-        out.append({"type": err["type"], "msg": err["msg"]})
-print(json.dumps(out))
-`
-
 // TestQueryBoolMatchesFrozenPydantic pins QueryBool against pydantic's lax
 // str -> bool (FastAPI's bool query validation) over a corpus and
 // deterministic fuzz, and LastQuery's last-value rule.
@@ -47,7 +33,7 @@ func TestQueryBoolMatchesFrozenPydantic(t *testing.T) {
 	}
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "query-bool.golden.json",
-		programoracle.Program{Name: "query-bool", Text: pythonQueryBoolProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "query-bool", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct{ OK, Type, Msg string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

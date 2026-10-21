@@ -1,0 +1,2 @@
+bigboy_grants_check expected=5 actual=0 missing=[('ALTER DELETE', 'teams'), ('INSERT', 'team_memberships'), ('INSERT', 'teams'), ('SELECT', 'team_sync_policies'), ('SELECT', 'teams')] extra=[]
+GRANTS_CHECK_FAIL

@@ -4,9 +4,8 @@ summary: Implement a provider under the canonical provider package boundary with
 content_type: task-guide
 owner: engineering
 source_of_truth:
-  - src/dev_health_ops/providers/base.py
-  - src/dev_health_ops/providers/_base.py
-  - src/dev_health_ops/providers/registry.py
+  - internal/providerfoundation/clients.go
+  - internal/providersync/capability_matrix.go
   - docs/architecture/adr-001-canonical-provider-pattern.md
 applicability: current
 lifecycle: active
@@ -14,10 +13,8 @@ lifecycle: active
 
 # Build a provider integration
 
-New provider code belongs under `src/dev_health_ops/providers/<provider>/`. The provider package is the boundary between an external system and Dev Health's canonical records: it owns authentication, transport, discovery, pagination, rate behavior, and normalization before data reaches processors or storage.
+New provider code belongs in the Go provider packages (`internal/providerfoundation` and `internal/providersync`). The provider package is the boundary between an external system and Dev Health's canonical records: it owns authentication, transport, discovery, pagination, rate behavior, and normalization before data reaches processors or storage.
 {: .fc-page-lede }
-
-Do not add a new implementation to the legacy `src/dev_health_ops/connectors/` package. The GitHub and GitLab connector modules there remain compatibility surfaces for existing ingestion paths; new provider work uses the canonical provider contracts.
 
 ## Understand the provider boundary
 

@@ -12,6 +12,8 @@ import (
 
 	"atlassian/atlassian"
 
+	"github.com/full-chaos/dev-health-ops/internal/egressguard"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -34,8 +36,12 @@ func ResolveCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, tenan
 	if tenant == nil {
 		return "", errors.New("atlassianteams: no tenant URL to resolve a cloud id from")
 	}
-	if id, err := fetchTenantCloudID(ctx, doer, tenant); err == nil && id != "" {
+	id, err := fetchTenantCloudID(ctx, doer, tenant)
+	if err == nil && id != "" {
 		return id, nil
+	}
+	if errors.Is(err, egressguard.ErrRefused) {
+		return "", err // the site itself is refused: no fallback id for a tenant the sync can never reach
 	}
 	host := tenant.Hostname()
 	if i := strings.Index(host, "."); i > 0 {
@@ -46,8 +52,9 @@ func ResolveCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, tenan
 
 func fetchTenantCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, tenant *url.URL) (string, error) {
 	if doer == nil {
-		doer = &http.Client{Timeout: 15 * time.Second}
+		doer = &http.Client{Timeout: 15 * time.Second, Transport: httpguard.SharedTransport()}
 	}
+	doer = providerfoundation.EgressGuardedDoer(doer)
 	target := *tenant
 	target.Path = TenantInfoPath
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)

@@ -145,11 +145,20 @@ const (
 	// contract (providersync.EffectBoundExceededError): the next attempt
 	// rebuilds the same oversized batch from the same provider data.
 	ResultTooLargeCategory = "result_too_large"
+	// EgressRefusedCategory covers a unit whose provider call the dial-time egress guard refused: the stored provider
+	// URL resolves to an address that is not public and not in PROVIDER_EGRESS_ALLOW_CIDRS. The same URL is refused on
+	// every attempt, so the unit ends on the first one under a name that says why. Go-only: Python never guarded sync time.
+	EgressRefusedCategory = "egress_refused"
 	// TimeLimitCategory covers an attempt that reached the job time limit. It
 	// is terminal for this run: the next scheduled run is the retry, and
 	// repeating a full-length attempt five times inside one run only holds a
 	// worker slot (CHAOS-8797).
 	TimeLimitCategory = "time_limit"
+	// TreeWalkLimitCategory covers a GitHub tree walk a ceiling stopped (cycle,
+	// depth, directory or entry count) or a directory the provider reports
+	// truncated. The tree it would walk again is the same, so the unit ends on
+	// the first attempt instead of repeating the walk five times (CHAOS-8829).
+	TreeWalkLimitCategory = "tree_walk_limit"
 )
 
 // timeLimitReserve is how long before the job deadline the unit's
@@ -203,6 +212,9 @@ func causeClass(err error, timedOut bool) string {
 }
 
 func deterministicTerminalCategory(err error) (string, bool) {
+	if providerfoundation.IsEgressRefused(err) {
+		return EgressRefusedCategory, true
+	}
 	if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {
 		return ProviderDatasetUnavailableCategory, true
 	}
@@ -213,6 +225,17 @@ func deterministicTerminalCategory(err error) (string, bool) {
 	var boundExceeded *providersync.EffectBoundExceededError
 	if errors.As(err, &boundExceeded) {
 		return ResultTooLargeCategory, true
+	}
+	var walkLimit *providersync.GitHubTreeWalkLimitError
+	if errors.As(err, &walkLimit) {
+		if walkLimit.Limit == providersync.GitHubTreeWalkLimitTime {
+			return TimeLimitCategory, true
+		}
+		return TreeWalkLimitCategory, true
+	}
+	if errors.Is(err, providersync.ErrGitHubFilesSubtreeTruncated) ||
+		errors.Is(err, providersync.ErrGitHubBlameFileListTooLarge) {
+		return TreeWalkLimitCategory, true
 	}
 	// A fail-closed pagination or row-cap refusal is deterministic given the
 	// provider's current state: a repo with more in-window rows than the cap
@@ -541,6 +564,10 @@ type CauseClassRepository interface {
 
 // causeDetail returns the bounded counts of a size refusal, or nil.
 func causeDetail(err error) *providersync.CauseDetail {
+	var walkLimit *providersync.GitHubTreeWalkLimitError
+	if errors.As(err, &walkLimit) {
+		return &providersync.CauseDetail{Limit: walkLimit.Limit, Rows: walkLimit.Value}
+	}
 	var bound *providerfoundation.EffectBoundError
 	if !errors.As(err, &bound) {
 		return nil

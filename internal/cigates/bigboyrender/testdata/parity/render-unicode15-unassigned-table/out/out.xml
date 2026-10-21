@@ -1,0 +1,1 @@
+<clickhouse><users><dho_api_ch><networks><ip>::/0</ip></networks><profile>default</profile><quota>default</quota><access_management>0</access_management><password_sha256_hex>fac6f5f1b8caf491b3d35dc482947ab182625fc6fa15f2fadd4499148a34755d</password_sha256_hex><grants><query>GRANT SELECT ON default.ok</query></grants></dho_api_ch></users></clickhouse>

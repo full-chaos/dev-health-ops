@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -27,7 +25,6 @@ import (
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -361,96 +358,9 @@ func goRun(t *testing.T, uri string, s scenario) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
-// livePythonProgram runs the real `dev-hops backfill run`, with the planner
-// replaced by a recorder (the verb plans in the CLI process; the request it
-// builds is the thing recorded), then hands the recorded request to the real
-// hand-off function that writes the scheduler's occurrence and trigger rows,
-// at a fixed clock.
-const livePythonProgram = `
-import dataclasses, json, sys, uuid
-from datetime import datetime
-spec = json.load(sys.stdin)
-import dev_health_ops.sync.execution_trigger as et
-fixed = datetime.fromisoformat(spec["now"])
-class FixedDatetime(datetime):
-    @classmethod
-    def now(cls, tz=None):
-        return fixed
-et.datetime = FixedDatetime
-import dev_health_ops.sync.planner as planner
-captured = {}
-class Plan:
-    dispatch_required = False
-    sync_run_id = ""
-    total_units = 0
-    unit_ids = ()
-    terminal_reason = ""
-def fake_plan(session, request):
-    captured["request"] = request
-    return Plan()
-planner.plan_sync_run = fake_plan
-from dev_health_ops import cli
-code = cli.main(["backfill", "run", *spec["args"]])
-if code == 0 and "request" in captured:
-    from dev_health_ops.db import get_postgres_session_sync
-    from dev_health_ops.models.settings import SyncConfiguration
-    with get_postgres_session_sync() as session:
-        config = session.get(SyncConfiguration, uuid.UUID(spec["config_id"]))
-        request = dataclasses.replace(captured["request"], triggered_by="backfill")
-        if config.planner_managed and config.source_id is None:
-            # The one named difference: Python planned source_ids=None as "every
-            # enabled source"; the scheduler reads NULL on a planner-managed
-            # configuration as "the sources tagged for it", so dho names them.
-            from dev_health_ops.models.integrations import IntegrationSource
-            enabled = (
-                session.query(IntegrationSource)
-                .filter(
-                    IntegrationSource.org_id == config.org_id,
-                    IntegrationSource.integration_id == config.integration_id,
-                    IntegrationSource.is_enabled.is_(True),
-                )
-                .order_by(IntegrationSource.full_name, IntegrationSource.id)
-                .all()
-            )
-            request = dataclasses.replace(request, source_ids=tuple(str(row.id) for row in enabled))
-        et._create_go_manual_sync_execution_trigger(session, config, str(config.org_id), request)
-        session.commit()
-raise SystemExit(code)
-`
-
 // backfillPythonBuild is the build whose Python `dev-hops backfill run` answered the scenarios: a build that
 // still carried the Python CLI.
 const backfillPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
-
-// backfillPythonSettings are the variables that shape the producer's answers, as constants: the producer's
-// environment AND part of the golden's request key (a changed value fails the frozen replay). The clock is
-// pinned separately (fixedNow, in the program's input).
-var backfillPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "TZ": "UTC"}
-
-func pythonRun(t *testing.T, producer *venueoracle.Producer, uri string, s scenario) (int, string) {
-	t.Helper()
-	input, err := json.Marshal(map[string]any{"args": append([]string{"--config-id", s.configID()}, s.args...), "config_id": s.configID(), "now": fixedNow})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command, err := producer.Command(context.Background(), backfillPythonSettings, []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}, "-c", livePythonProgram)
-	if err != nil {
-		t.Fatal(err)
-	}
-	command.Stdin = bytes.NewReader(input)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	command.Stdout = &bytes.Buffer{}
-	err = command.Run()
-	code := 0
-	if exit, ok := err.(*exec.ExitError); ok {
-		code = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
-	}
-	return code, stderr.String()
-}
 
 var (
 	uuidPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -596,22 +506,14 @@ func comparable() []scenario {
 // TestBackfillRunWritesTheFrozenPythonRows runs the verb on a real PostgreSQL at the head baseline and
 // compares the exit code and the rows it leaves with what the REAL `dev-hops backfill run` and its hand-off
 // writer left for the same configurations. The answers were executed once on backfillPythonBuild, with the
-// producer's clock pinned to fixedNow, and are frozen in testdata/golden/backfill_run.json (the recipe
-// regenerates them by execution); the scenarios, the seeded configurations and the pinned instant are part of
+// producer's clock pinned to fixedNow, and are frozen in testdata/golden/backfill_run.json; the scenarios, the seeded configurations and the pinned instant are part of
 // the golden's key. dho's own clock is pinned to the same instant: no answer depends on the day it runs.
 func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/backfill_run.json",
 		PythonBuild: backfillPythonBuild,
 		SHA256:      "db44d32a8cba728fd51d5a47088b39edbf9715e2ed21a39035b2e7650029944a",
-		Recipe: "git worktree add --detach $DIR " + backfillPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/backfillrun/ -test '^TestBackfillRunWritesTheFrozenPythonRows$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	type keyed struct {
 		Name string   `json:"name"`
@@ -625,23 +527,8 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("backfill run scenarios", livePythonProgram, input, backfillPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		uri := setup(t)
-		var produced []result
-		for _, s := range comparable() {
-			reset(t, uri, s)
-			code, stderr := pythonRun(t, producer, uri, s)
-			checkRefusal(t, "python", s, code, stderr)
-			produced = append(produced, result{Name: s.name, Exit: code, Rows: rows(t, uri)})
-		}
-		body, err := json.Marshal(produced)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("backfill run scenarios", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozenList []result
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozenList); err != nil {

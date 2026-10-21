@@ -106,8 +106,6 @@ fi
 # the relaxation as coverage. Every file below is clean under BOTH versions.
 FILES=(
   # the set CI already linted before this change
-  "${ROOT}/tests/compatibility/river/run.sh"
-  "${ROOT}/tests/compatibility/river/record.sh"
   "${ROOT}/ci/check_go.sh"
   "${ROOT}/ci/check_river_compat_static.sh"
   # CHAOS-6584: the venue-oracles registry check. check_go.sh sources the lib,
@@ -127,8 +125,6 @@ FILES=(
   "${ROOT}/ci/check_migration_matrix.sh"
   "${ROOT}/ci/check_migration_matrix_test.sh"
   "${ROOT}/ci/go_worker_fixture_test.sh"
-  # CHAOS-4922: the single source of truth for PYTHON_BASE_IMAGE.
-  "${ROOT}/ci/python_base_ref.sh"
   # CHAOS-4928 codex round 1, P1 fix: mirror-test-images.yml's `precheck`
   # sources this, and its own fixture suite is enrolled alongside it so
   # neither escapes the lint the way lane-4441 found this script itself once did.
@@ -142,8 +138,6 @@ FILES=(
   "${ROOT}/ci/auth_corpus_set_env.sh"
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
-  "${ROOT}/scripts/run_py_tool.sh"
-  "${ROOT}/tests/compatibility/provider/run.sh"
   "${ROOT}/.github/docs-legacy/examples/customer-push/generic-runner.sh"
 )
 

@@ -1,0 +1,311 @@
+package saml
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"mime"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+)
+
+const maxBodyBytes = 1 << 20
+
+// SessionIssuer starts the session for a completed sign-in and writes the
+// response (the session domain owns it).
+type SessionIssuer interface {
+	IssueFederatedSession(w http.ResponseWriter, r *http.Request, signIn SignIn)
+}
+
+// Handlers are the SAML routes. The router mounts them at
+// GET /saml/{provider_id}/metadata, POST /saml/{provider_id}/initiate and
+// POST /saml/{provider_id}/acs.
+type Handlers struct {
+	Service  *Service
+	Sessions SessionIssuer
+	Logger   *slog.Logger
+}
+
+func (h Handlers) logger() *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
+}
+
+// Metadata is GET /saml/{provider_id}/metadata.
+func (h Handlers) Metadata(w http.ResponseWriter, r *http.Request) {
+	providerID, ok := h.providerID(w, r)
+	if !ok {
+		return
+	}
+	md, err := h.Service.Metadata(r.Context(), providerID)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"metadata_xml": md.XML, "entity_id": md.EntityID, "acs_url": md.ACSURL})
+}
+
+// Initiate is POST /saml/{provider_id}/initiate with {"relay_state": ...}. The
+// provider and its organization's entitlement are resolved before the body is
+// read.
+func (h Handlers) Initiate(w http.ResponseWriter, r *http.Request) {
+	providerID, ok := h.providerID(w, r)
+	if !ok {
+		return
+	}
+	p, err := h.Service.Resolve(r.Context(), providerID, true)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	var body struct {
+		RelayState *string `json:"relay_state"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	relayState := ""
+	if body.RelayState != nil {
+		relayState = *body.RelayState
+	}
+	init, err := h.Service.InitiateFor(r.Context(), p, relayState)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	http.SetCookie(w, bindingCookie(init.CookieName, init.CookieValue, init.CookiePath, int(init.MaxAge.Seconds())))
+	writeJSON(w, http.StatusOK, map[string]string{"redirect_url": init.RedirectURL})
+}
+
+// ACS is POST /saml/{provider_id}/acs. It takes the SAML HTTP-POST binding the
+// metadata advertises (a form with SAMLResponse and RelayState) and the go-api
+// JSON body ({"SAMLResponse"|"saml_response", "RelayState"|"relay_state"}).
+// The provider and its organization's entitlement are resolved before the
+// body is read.
+func (h Handlers) ACS(w http.ResponseWriter, r *http.Request) {
+	providerID, ok := h.providerID(w, r)
+	if !ok {
+		return
+	}
+	p, err := h.Service.Resolve(r.Context(), providerID, true)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	if err := h.Service.BoundToRoute(r.Context(), p, providerID); err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	posted, ok := readSAMLResponse(w, r)
+	if !ok {
+		return
+	}
+	cookiePath := ACSPath(p, h.Service.BaseURL())
+	cookie := func(name string) string {
+		c, err := r.Cookie(name)
+		if err != nil {
+			return ""
+		}
+		http.SetCookie(w, bindingCookie(name, "", cookiePath, -1))
+		return c.Value
+	}
+	signIn, err := h.Service.ConsumeFor(r.Context(), p, posted, cookie)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	h.Sessions.IssueFederatedSession(w, r, signIn)
+}
+
+// acsInput is the ACS request, from either accepted encoding.
+type acsInput struct {
+	SAMLResponse string
+	RelayState   string
+}
+
+// readSAMLResponse decodes the ACS body into one acsInput: the HTTP-POST
+// binding the metadata advertises (application/x-www-form-urlencoded with
+// SAMLResponse and RelayState) or the go-api JSON body (no content type,
+// application/json or application/*+json; "SAMLResponse" or "saml_response").
+// Any other content type, a missing or repeated SAMLResponse, is refused.
+func readSAMLResponse(w http.ResponseWriter, r *http.Request) (string, bool) {
+	in, ok := decodeACS(w, r)
+	if !ok {
+		return "", false
+	}
+	return in.SAMLResponse, true
+}
+
+func decodeACS(w http.ResponseWriter, r *http.Request) (acsInput, bool) {
+	contentType := r.Header.Get("Content-Type")
+	mediaType := ""
+	if contentType != "" {
+		parsed, _, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			writeDetail(w, http.StatusUnprocessableEntity, "Request body must be JSON or a form")
+			return acsInput{}, false
+		}
+		mediaType = parsed
+	}
+	switch {
+	case mediaType == "application/x-www-form-urlencoded":
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		if err := r.ParseForm(); err != nil {
+			writeDetail(w, http.StatusUnprocessableEntity, "Request body must be a form")
+			return acsInput{}, false
+		}
+		responses, relay := r.PostForm["SAMLResponse"], r.PostForm["RelayState"]
+		if len(responses) != 1 || len(relay) > 1 {
+			writeDetail(w, http.StatusUnprocessableEntity, "SAMLResponse is required")
+			return acsInput{}, false
+		}
+		in := acsInput{SAMLResponse: responses[0]}
+		if len(relay) == 1 {
+			in.RelayState = relay[0]
+		}
+		return in, true
+	case mediaType == "" || mediaType == "application/json" || (strings.HasPrefix(mediaType, "application/") && strings.HasSuffix(mediaType, "+json")):
+		var body struct {
+			SAMLResponse  *string `json:"SAMLResponse"`
+			SAMLResponse2 *string `json:"saml_response"`
+			RelayState    *string `json:"RelayState"`
+			RelayState2   *string `json:"relay_state"`
+		}
+		if !readJSON(w, r, &body) {
+			return acsInput{}, false
+		}
+		posted, relay := body.SAMLResponse, body.RelayState
+		if posted == nil {
+			posted = body.SAMLResponse2
+		}
+		if relay == nil {
+			relay = body.RelayState2
+		}
+		if posted == nil {
+			writeDetail(w, http.StatusUnprocessableEntity, "SAMLResponse is required")
+			return acsInput{}, false
+		}
+		in := acsInput{SAMLResponse: *posted}
+		if relay != nil {
+			in.RelayState = *relay
+		}
+		return in, true
+	}
+	writeDetail(w, http.StatusUnprocessableEntity, "Request body must be JSON or a form")
+	return acsInput{}, false
+}
+
+// bindingCookie is the per-request browser binding cookie. The IdP returns the
+// browser to the ACS with a cross-site form POST, so the cookie is
+// SameSite=None (and therefore Secure); its value is random, bound to one
+// stored request and consumed once.
+func bindingCookie(name, value, path string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: name, Value: value, Path: path, MaxAge: maxAge, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode}
+}
+
+func (h Handlers) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("provider_id"))
+	if err != nil {
+		writeDetail(w, http.StatusUnprocessableEntity, "provider_id must be a UUID")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// writeError maps a domain error to the go-api status and detail. Every
+// verification failure has the same detail.
+func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) {
+	var conflict *EmailConflictError
+	switch {
+	case errors.Is(err, ErrProviderNotFound):
+		writeDetail(w, http.StatusNotFound, "SSO provider not found")
+	case errors.Is(err, ErrNotEntitled):
+		writeJSON(w, http.StatusPaymentRequired, notLicensedBody())
+	case errors.Is(err, ErrNotSAML):
+		writeDetail(w, http.StatusBadRequest, "Provider is not SAML")
+	case errors.Is(err, ErrConfig):
+		h.logger().WarnContext(r.Context(), "auth saml: provider configuration refused", "route", r.Pattern)
+		writeDetail(w, http.StatusBadRequest, "SSO provider configuration is invalid")
+	case errors.Is(err, ErrProviderInactive):
+		writeDetail(w, http.StatusBadRequest, "SSO provider is not active")
+	case errors.As(err, &conflict):
+		method := conflict.Method
+		if method == "" {
+			method = "your existing method"
+		}
+		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{
+			"message":           "An account with this email already exists. Please sign in with " + method + ".",
+			"existing_provider": conflict.Method,
+		}})
+	case errors.Is(err, ErrSignupNotAvailable):
+		writeDetail(w, http.StatusForbidden, "Sign-up through SSO is not available")
+	case errors.Is(err, ErrAutoProvisionDisabled), errors.Is(err, ErrInvalidEmailAddress):
+		writeDetail(w, http.StatusBadRequest, "SAML user provisioning failed")
+	case errors.Is(err, ErrEmailMissing):
+		writeDetail(w, http.StatusBadRequest, "Email address is missing from SAML response")
+	case errors.Is(err, ErrEmailMalformed):
+		writeDetail(w, http.StatusBadRequest, "Email address from SAML response is malformed")
+	case errors.Is(err, ErrDomainNotAllowed):
+		writeDetail(w, http.StatusForbidden, "Email domain is not allowed for this provider")
+	case errors.Is(err, ErrAccountDisabled):
+		writeDetail(w, http.StatusForbidden, "Account is disabled")
+	case errors.Is(err, ErrNotOrgMember):
+		writeDetail(w, http.StatusForbidden, "This account is not a member of the provider's organization.")
+	case errors.Is(err, ErrIdentityAmbiguous):
+		writeDetail(w, http.StatusConflict, "More than one account carries this sign-in. Contact your organization administrator.")
+	case errors.Is(err, ErrUnsolicited), errors.Is(err, ErrFlowNotFound), errors.Is(err, ErrFlowConsumed), errors.Is(err, ErrAssertionReplayed):
+		writeDetail(w, http.StatusBadRequest, "SAML authentication failed")
+	default:
+		if _, ok := IsRefused(err); ok {
+			writeDetail(w, http.StatusBadRequest, "SAML authentication failed")
+			return
+		}
+		h.logger().ErrorContext(r.Context(), "auth saml: request failed", "route", r.Pattern,
+			"request_id", httpapi.LoggableRequestID(r.Context()), logging.ErrorAttr(err))
+		writeDetail(w, http.StatusInternalServerError, "Internal Server Error")
+	}
+}
+
+func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		writeDetail(w, http.StatusRequestEntityTooLarge, "Request body too large")
+		return false
+	}
+	if len(data) == 0 {
+		data = []byte("{}")
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		writeDetail(w, http.StatusUnprocessableEntity, "Request body must be a JSON object")
+		return false
+	}
+	return true
+}
+
+func writeDetail(w http.ResponseWriter, status int, detail string) {
+	writeJSON(w, status, map[string]string{"detail": detail})
+}
+
+// writeJSON serializes the body first: a body that cannot be serialized is
+// logged and answered 500, never written half.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	payload, err := json.Marshal(v)
+	if err != nil {
+		slog.Default().Error("auth saml: response body could not be serialized", slog.Int("status", status), logging.ErrorAttr(err))
+		payload, status = []byte(`{"detail":"Internal Server Error"}`), http.StatusInternalServerError
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+	w.WriteHeader(status)
+	_, _ = io.Copy(w, bytes.NewReader(payload))
+}

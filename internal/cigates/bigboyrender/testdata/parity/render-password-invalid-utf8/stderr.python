@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "{A}/render-dho-api-ch-users.py", line 118, in <module>
+    raise SystemExit(main(sys.argv))
+                     ^^^^^^^^^^^^^^
+  File "{A}/render-dho-api-ch-users.py", line 102, in main
+    xml = render(grants_from_manifest(manifest.read_text()), password)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "{A}/render-dho-api-ch-users.py", line 73, in render
+    password.encode()
+UnicodeEncodeError: 'utf-8' codec can't encode character '\udcff' in position 2: surrogates not allowed

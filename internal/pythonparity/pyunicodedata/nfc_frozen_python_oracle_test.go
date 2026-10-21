@@ -11,21 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// nfcProgram normalizes each input three ways. Its answers are frozen as block
-// digests, one set per form, one canonical line per answer: the normalized
-// text as a code point list.
-const nfcProgram = programoracle.BlocksPython + `
-import sys, unicodedata
-u32 = unicodedata.ucd_3_2_0
-nfc, nfkc, nfkc32 = [], [], []
-for cps in json.load(sys.stdin):
-    value = "".join(map(chr, cps or []))
-    nfc.append(code_points(map(ord, unicodedata.normalize("NFC", value))))
-    nfkc.append(code_points(map(ord, unicodedata.normalize("NFKC", value))))
-    nfkc32.append(code_points(map(ord, u32.normalize("NFKC", value))))
-print(json.dumps({"NFC": block_digests(nfc), "NFKC": block_digests(nfkc), "NFKC32": block_digests(nfkc32)}))
-`
-
 // nfcCorpus is every code point alone, every code point after a base
 // letter and before a combining mark, Hangul jamo sequences, long runs of
 // marks (past the Stream-Safe limit), and seeded random mixes of bases,
@@ -85,7 +70,7 @@ func TestNFCMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "nfc.golden.json", programoracle.Program{Name: "normalize", Text: nfcProgram, Stdin: payload})[0]
+	output := frozenPython(t, "nfc.golden.json", programoracle.Program{Name: "normalize", Stdin: payload})[0]
 	var frozen map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(output), &frozen); err != nil {
 		t.Fatalf("decode: %v", err)

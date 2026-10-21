@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -30,7 +29,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -48,24 +46,6 @@ var (
 	testSince  = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	testBefore = time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)
 )
-
-// livePythonProgram is the producer: the real
-// dev_health_ops.processors.sync._complete_synthetic_sync_run, which the
-// (deleted-by-S10i) `dev-hops sync finalize-synthetic-sync` calls, driven with
-// the same fixed window the Go side gets. It finalizes through Python's own
-// finalize_sync_run.
-const livePythonProgram = `
-import json, sys
-from datetime import datetime
-from dev_health_ops.processors.sync import _complete_synthetic_sync_run
-
-spec = json.load(sys.stdin)
-for target in spec["targets"]:
-    _complete_synthetic_sync_run(
-        org_id=spec["org_id"], repo_full_name=spec["repo_name"], target=target,
-        since_at=datetime.fromisoformat(spec["since"]), before_at=datetime.fromisoformat(spec["before"]),
-    )
-`
 
 func startDatabase(t *testing.T) (*containers.Instance, *pgx.Conn) {
 	t.Helper()
@@ -253,24 +233,6 @@ func goRun(t *testing.T, uri string, targets []string) {
 	}
 }
 
-// pythonRun runs the producer against uri through the harness launcher: the
-// pinned interpreter in the closed environment, with the address of the run's
-// own database as the only entries made for this run.
-func pythonRun(t *testing.T, producer *venueoracle.Producer, uri string, input []byte) {
-	t.Helper()
-	// SQLAlchemy has no "postgres" dialect: the container's DSN names the scheme
-	// the way libpq does.
-	uri = strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command, err := producer.Command(context.Background(), nil, []string{"POSTGRES_URI=" + uri, "DATABASE_URI=" + uri}, "-c", livePythonProgram)
-	if err != nil {
-		t.Fatal(err)
-	}
-	command.Stdin = bytes.NewReader(input)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("the Python producer failed: %v", pyoracle.RunError(command.Path, err, output))
-	}
-}
-
 // requireNonVacuous fails unless the run wrote the rows the verb exists to
 // write: a comparison of two empty sets passes for any implementation.
 func requireNonVacuous(t *testing.T, side string, rows map[string][]string, targets []string) {
@@ -305,28 +267,21 @@ func requireNonVacuous(t *testing.T, side string, rows map[string][]string, targ
 // rows the Python producer wrote: every table, every column, in the same JSON
 // text the producer's json.dumps wrote (uuids and free timestamps masked).
 //
-// The producer's rows were executed once on finalizePythonBuild by the record
-// verb, against a database this test migrates to the PostgreSQL head, and are
-// frozen in testdata/golden/finalize_synthetic.json. The producer's text and
-// its input (targets, org, repository, window) are the golden's key.
+// The producer's rows were executed once on finalizePythonBuild, against a
+// database migrated to the PostgreSQL head, and are frozen in
+// testdata/golden/finalize_synthetic.json. Its input (targets, org,
+// repository, window) is the golden's key.
 //
 // NOT pinned: the schema the producer wrote into. A later migration that adds a
 // column to one of these tables changes the Go rows and not the frozen ones:
 // the test then fails on that column, and the frozen rows are amended by hand
-// with the column's default once the producer is gone.
+// with the column's default.
 func TestFinalizeSyntheticWritesTheFrozenPythonRows(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/finalize_synthetic.json",
 		PythonBuild: finalizePythonBuild,
 		SHA256:      "892a51290a37d0c16672821bebb87ed97e87721cb0246ef28dd81a1f369fde0c",
-		Recipe: "git worktree add --detach $DIR " + finalizePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/fixturescli/ -test '^TestFinalizeSyntheticWritesTheFrozenPythonRows$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 	instance, admin := startDatabase(t)
 	targets := Targets
 	input, err := json.Marshal(map[string]any{
@@ -336,19 +291,8 @@ func TestFinalizeSyntheticWritesTheFrozenPythonRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("finalize every target", livePythonProgram, input, nil)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		uri := freshDatabase(t, instance, admin)
-		before := snapshot(t, uri)
-		pythonRun(t, producer, uri, input)
-		rows := added(t, before, snapshot(t, uri))
-		requireNonVacuous(t, "Python", rows, targets)
-		body, err := json.Marshal(rows)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("finalize every target", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen map[string][]string
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {

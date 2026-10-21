@@ -1,15 +1,11 @@
 package fixturescli
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -18,57 +14,6 @@ import (
 // "The server accepted the row" proves only the CHECK, not the values, so this oracle builds the REAL
 // producer entity from the same frozen row and compares (source_revision, source_conflict_key,
 // ingest_revision, ordering_contract) leaf for leaf. Replays a frozen golden.
-
-const orderingOracleProgram = `
-import json, sys
-from dataclasses import fields
-from datetime import datetime, timezone
-from uuid import UUID
-from dev_health_ops.models import operational as ops
-
-CLASSES = {
-    "operational_incident": ops.OperationalIncident,
-    "operational_service": ops.OperationalService,
-    "operational_service_repository_mapping": ops.ServiceRepositoryMapping,
-}
-DERIVED = {"id", "source_revision", "source_conflict_key", "ingest_revision", "ordering_contract"}
-
-def convert(annotation, leaf):
-    # Typed from the producer's own dataclass annotation, never from the column type Go read.
-    if leaf["t"] == "null":
-        return None
-    text = leaf["v"]
-    if "UUID" in annotation:
-        return UUID(text)
-    if "datetime" in annotation:
-        parsed = datetime.fromisoformat(text)
-        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
-    if "bool" in annotation:
-        return text not in ("0", "false", "False")
-    if "float" in annotation:
-        return float(text)
-    if "int" in annotation:
-        return int(text)
-    return text
-
-out = {}
-for case in json.load(sys.stdin):
-    cls = CLASSES[case["family"]]
-    annotations = {f.name: str(f.type) for f in fields(cls)}
-    kwargs = {}
-    for name, leaf in case["row"].items():
-        if name in DERIVED:
-            continue
-        kwargs[name] = convert(annotations[name], leaf)
-    entity = cls(**kwargs)
-    out[case["name"]] = {
-        "source_revision": str(int(entity.source_revision)),
-        "source_conflict_key": str(entity.source_conflict_key),
-        "ingest_revision": str(int(entity.ingest_revision)),
-        "ordering_contract": int(entity.ordering_contract),
-    }
-json.dump(out, sys.stdout)
-`
 
 type oracleLeaf struct {
 	T string `json:"t"`
@@ -103,21 +48,13 @@ const orderingPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // TestOrderingStampMatchesThePythonProducer compares stampOrdering with the Python
 // producer's ordering stamp for every operational row of the frozen live-e2e world and
 // its variants. The producer's stamps were executed once on orderingPythonBuild and are
-// frozen in testdata/golden/ordering.json (the recipe regenerates them by execution);
-// the cases and the program are part of the golden's key.
+// frozen in testdata/golden/ordering.json; the cases are part of the golden's key.
 func TestOrderingStampMatchesThePythonProducer(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/ordering.json",
 		PythonBuild: orderingPythonBuild,
 		SHA256:      "b8d31703b19efd7ae7a23770561ba1695bff77f4e6bd5da234fe9ee4d84c95ce",
-		Recipe: "git worktree add --detach $DIR " + orderingPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/fixturescli/ -test '^TestOrderingStampMatchesThePythonProducer$' -python-root $DIR",
 	})
-	pythonRoot := golden.PythonRoot(t, repoRoot)
 	set := generateOracleWorld(t)
 
 	var cases []oracleCase
@@ -154,22 +91,8 @@ func TestOrderingStampMatchesThePythonProducer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"OTEL_ENABLED": "false"}
-	request := venueoracle.ProgramRequest("ordering cases", orderingOracleProgram, input, env)
-	answers := golden.Produce(t, pythonRoot, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		command, err := producer.Command(context.Background(), env, nil, "-c", orderingOracleProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = bytes.NewReader(input)
-		var stderr bytes.Buffer
-		command.Stderr = &stderr
-		output, err := command.Output()
-		if err != nil {
-			t.Fatalf("live Python producer: %v", pyoracle.RunError(command.Path, err, stderr.Bytes()))
-		}
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
-	})
+	request := venueoracle.ProgramRequest("ordering cases", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var want map[string]oracleStamp
 	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &want); err != nil {

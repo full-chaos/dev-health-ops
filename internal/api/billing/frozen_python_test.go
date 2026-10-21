@@ -1,10 +1,8 @@
 package billing
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -15,12 +13,8 @@ import (
 // validation, pydantic, the Stripe SDK's signature check), so Identity names
 // those distributions. A golden recorded by another producer is refused.
 var billingGoldens = programoracle.Set{
-	Package:       "./internal/api/billing/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\nfastapi 0.136.3\nhttpx 0.28.1\npydantic 2.13.5\npydantic-core 2.46.5\nstarlette 1.7.0\nstripe 15.6.1",
-	Distributions: []string{"fastapi", "httpx", "pydantic", "pydantic-core", "starlette", "stripe"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\nfastapi 0.136.3\nhttpx 0.28.1\npydantic 2.13.5\npydantic-core 2.46.5\nstarlette 1.7.0\nstripe 15.6.1",
 	Pins: map[string]string{
 		"billing-bodies.golden.json":   "06792c4c527015100942788b97b8b158af574c2c373385269151c661f57b83d4",
 		"billing-helpers.golden.json":  "cfacd91e3e9112b20ed4e94d5fb58c9a1b0b11609831e52b00017d29d1a52ea6",
@@ -34,10 +28,5 @@ var billingGoldens = programoracle.Set{
 // fails the test; so does a program that exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	return billingGoldens.Outputs(t, root, golden, programs...)
+	return billingGoldens.Outputs(t, golden, programs...)
 }

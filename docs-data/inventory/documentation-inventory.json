@@ -6168,7 +6168,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/check_built_site_links.py",
+      "source_path": "internal/cigates/docstools/dc_links.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],
@@ -6214,7 +6214,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/check_docs_candidate_facts.py",
+      "source_path": "internal/cigates/docstools/candidatefacts.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],
@@ -6237,7 +6237,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/check_docs_candidate_search.py",
+      "source_path": "internal/cigates/docstools/dc_search.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],
@@ -6352,7 +6352,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/check_investment_docs_drift.py",
+      "source_path": "internal/cigates/docstools/invtaxonomy.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],
@@ -6421,7 +6421,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/gen_taxonomy_docs.py",
+      "source_path": "internal/cigates/docstools/run.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],
@@ -6444,7 +6444,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/prepare_docs_cloudflare.py",
+      "source_path": "internal/cigates/docsprepare/docsprepare.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],

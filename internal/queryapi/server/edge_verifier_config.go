@@ -101,7 +101,11 @@ func newEdgeUserStore(getenv getenvFunc, registryPool *pgxpool.Pool) (edgeUserSt
 	if registryPool == nil {
 		return nil, fmt.Errorf("build edge users store: %s is set but the /query route (which owns the registry Postgres pool, GO_API_REGISTRY_POSTGRES_URI) is not configured; the edge token cannot be accepted without a live users check", edgeJWTSecretEnvVar)
 	}
-	return policy.PGStore{Pool: registryPool}, nil
+	authSchema, err := policy.AuthSchemaFromEnv(getenv)
+	if err != nil {
+		return nil, fmt.Errorf("build edge users store: %w", err)
+	}
+	return policy.PGStore{Pool: registryPool, AuthSchema: authSchema}, nil
 }
 
 // edgeJWTConfigFromEnv resolves the shared GO_API_EDGE_JWT_* trio, applying
@@ -156,7 +160,11 @@ func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("build query edge-access-token verifier: %w", err)
 	}
-	store := policy.PGStore{Pool: pool}
+	authSchema, err := policy.AuthSchemaFromEnv(getenv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
+	}
+	store := policy.PGStore{Pool: pool, AuthSchema: authSchema}
 	auth, err := policy.NewAuthenticator(verifier, store, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)

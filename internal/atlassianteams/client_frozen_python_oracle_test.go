@@ -10,8 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -27,19 +25,7 @@ import (
 	"atlassian/atlassian/graph"
 	"atlassian/atlassian/graph/gen"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
-)
-
-// The reference is the full-chaos/atlassian Python Teams client at the sha
-// ops vendors the Go client from (third_party/vendor/atlassian/PROVENANCE.md):
-// testdata/atlassian_python_cb7c3665.zip holds its python/atlassian tree
-// unmodified (sha256 below), put first on PYTHONPATH so it shadows the older
-// atlassian-gen-client the ops venv pins, which has no Teams API. It needs
-// only httpx and graphql-core, which the ops venv already has.
-const (
-	pythonClientZip    = "testdata/atlassian_python_cb7c3665.zip"
-	pythonClientSHA256 = "c87b9781b0117895c42afe610c1bda5238a219ac5487ef001847da7f3cf34f76"
 )
 
 // The page corpus is built from the vendored client's generated response
@@ -741,115 +727,8 @@ func (s scenario) readTeams() []string {
 	return s.teamIDs
 }
 
-const pythonClientProgram = `
-import hashlib, json, os, sys
-from datetime import datetime, timezone
-import httpx
-# The pinned client first, so "atlassian" is the reference, not the venv's older
-# package. The zip is part of the pinned checkout the program runs in.
-sys.path.insert(0, os.path.join(os.getcwd(), "internal", "atlassianteams", "testdata", "atlassian_python_cb7c3665.zip"))
-from atlassian.auth import BasicApiTokenAuth
-from atlassian.graph.client import GraphQLClient
-from atlassian.graph.api.teams import iter_teams
-from atlassian.graph.api.teamwork_graph import iter_team_users, iter_team_active_projects
-
-NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-DEFAULT_AGENT = "atlassian-graphql-python/0.1.0"
-
-def s(v): return {"t": "str", "v": v}
-def o(v): return {"t": "null", "v": ""} if v is None else s(v)
-def i(v): return {"t": "null", "v": ""} if v is None else {"t": "int", "v": str(v)}
-
-CLASSES = {"GraphQLOperationError": "graphql", "TransportError": "transport", "RateLimitError": "ratelimit"}
-
-requests = []
-sleeps = []
-
-def record_request(request):
-    body = json.loads(request.content.decode())
-    variables = body.get("variables")
-    agent = request.headers.get("user-agent", "")
-    requests.append({
-        "operation": body.get("operationName", ""),
-        "variables": "null" if variables is None else json.dumps(variables, sort_keys=True, separators=(",", ":")),
-        "query": hashlib.sha256(" ".join(body.get("query", "").split()).encode()).hexdigest(),
-        "experimental": sorted(request.headers.get_list("x-experimentalapi")),
-        "content_type": request.headers.get("content-type", ""),
-        "accept": request.headers.get("accept", ""),
-        "auth": request.headers.get("authorization", "").split(" ")[0],
-        "user_agent": "default" if agent == DEFAULT_AGENT else agent,
-        "path": request.url.path,
-    })
-
-def read(fn, to_record):
-    del requests[:]
-    del sleeps[:]
-    try:
-        out = {"status": "ok", "records": [to_record(x) for x in fn()], "class": ""}
-    except Exception as exc:
-        # The text is language-specific: kept for the failure message only.
-        cls = CLASSES.get(type(exc).__name__, "other")
-        if cls == "transport" and getattr(exc, "status_code", None) == 0:
-            cls = "other"  # the connection failed before any HTTP status
-        out = {"status": "error", "records": None, "class": cls,
-               "detail": (type(exc).__name__ + ": " + str(exc)).replace(BASE, "<gateway>")[:300]}
-    out["requests"] = list(requests)
-    out["sleeps"] = list(sleeps)
-    return out
-
-# The gateway address is of one run: it reaches the program by name, and nothing
-# the program prints holds it.
-BASE = os.environ["ATLASSIAN_ORACLE_GATEWAY"]
-req = json.loads(sys.stdin.read())
-out = {}
-for sc in req["scenarios"]:
-    name = sc["name"]
-    cfg = sc["config"]
-    http_client = httpx.Client(timeout=15.0, event_hooks={"request": [record_request]})
-    try:
-        auth = BasicApiTokenAuth("", "") if cfg["no_auth"] else BasicApiTokenAuth("oracle@example.test", "t")
-        kwargs = {"strict": sc["strict"], "max_retries_429": 2 if cfg["default_retries"] else cfg["retries"],
-                  "sleeper": lambda seconds: sleeps.append("%.3f" % seconds), "time_provider": lambda: NOW,
-                  "enable_local_throttling": cfg["throttling"], "http_client": http_client}
-        if cfg["max_wait"] > 0:
-            kwargs["max_wait_seconds"] = cfg["max_wait"]
-        if cfg["user_agent"]:
-            kwargs["user_agent"] = cfg["user_agent"]
-        client = GraphQLClient(cfg["base_url"] if cfg["base_url"] is not None else BASE + cfg["base_suffix"], auth, **kwargs)
-        failure = None
-    except Exception as exc:
-        client, failure = None, exc
-    def go(fn, to_record):
-        if failure is not None:
-            return {"status": "error", "records": None, "class": CLASSES.get(type(failure).__name__, "other"),
-                    "detail": (type(failure).__name__ + ": " + str(failure))[:300], "requests": [], "sleeps": []}
-        return read(fn, to_record)
-    org = sc["org"] if sc["org"] is not None else "org-" + name
-    site = sc["site"] if sc["site"] is not None else "site-" + name
-    first = sc["first"] if sc["first"] is not None else 2
-    out[name + " teams"] = go(lambda: iter_teams(client, org, site, first=first),
-        lambda t: [["id", s(t.id)], ["display_name", s(t.display_name)], ["state", s(t.state)],
-                   ["description", o(t.description)], ["avatar_url", o(t.avatar_url)], ["member_count", i(t.member_count)]])
-    for team in sc["teams"] or []:
-        out[name + " users " + team] = go(lambda: iter_team_users(client, team, first=first),
-            lambda u: [["subject_user_id", s(u.subject_user_id)], ["relation_type", s(u.relation_type)],
-                       ["team_id", o(u.team_id)], ["related_user_id", o(u.related_user_id)]])
-        out[name + " projects " + team] = go(lambda: iter_team_active_projects(client, team, first=first),
-            lambda p: [["team_id", s(p.team_id)], ["project_id", s(p.project_id)],
-                       ["project_key", o(p.project_key)], ["project_name", o(p.project_name)]])
-print(json.dumps(out))
-`
-
-func pythonReads(t *testing.T, root, base string, scenarios []scenario) map[string]outcome {
+func pythonReads(t *testing.T, base string, scenarios []scenario) map[string]outcome {
 	t.Helper()
-	zipPath := filepath.Join(root, "internal", "atlassianteams", pythonClientZip)
-	content, err := os.ReadFile(zipPath)
-	if err != nil {
-		t.Fatalf("read the pinned Python client: %v", err)
-	}
-	if got := fmt.Sprintf("%x", sha256.Sum256(content)); got != pythonClientSHA256 {
-		t.Fatalf("%s has sha256 %s, want %s: the pinned reference changed", pythonClientZip, got, pythonClientSHA256)
-	}
 	type cfg struct {
 		Retries        int     `json:"retries"`
 		DefaultRetries bool    `json:"default_retries"`
@@ -879,9 +758,7 @@ func pythonReads(t *testing.T, root, base string, scenarios []scenario) map[stri
 	}
 	input, _ := json.Marshal(request)
 	output := frozenPython(t, "teams-client.golden.json", programoracle.Program{
-		Name: "teams client", Text: pythonClientProgram, Stdin: input,
-		PerRun:      func() map[string]string { return map[string]string{"ATLASSIAN_ORACLE_GATEWAY": base} },
-		PerRunNames: []string{"ATLASSIAN_ORACLE_GATEWAY"},
+		Name: "teams client", Stdin: input,
 	})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var decoded map[string]json.RawMessage
@@ -1128,14 +1005,12 @@ func compare(python, goSide map[string]outcome) []string {
 // team field, a user relation, a project link, an outcome) and requires the
 // comparison to report it.
 func TestAtlassianTeamsClientMatchesFrozenPython(t *testing.T) {
-	_, file, _, _ := moduleroot.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	scenarios := corpus()
 	gw := newOracleGateway(scenarios)
 	server := httptest.NewServer(gw)
 	defer server.Close()
 
-	python := pythonReads(t, root, server.URL, scenarios)
+	python := pythonReads(t, server.URL, scenarios)
 	goSide := goReads(context.Background(), server.URL, scenarios)
 	if len(gw.strange) > 0 {
 		t.Fatalf("the gateway could not answer %d request(s): %v", len(gw.strange), gw.strange)

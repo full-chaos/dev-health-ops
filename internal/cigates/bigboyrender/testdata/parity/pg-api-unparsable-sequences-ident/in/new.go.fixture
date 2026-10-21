@@ -1,0 +1,10 @@
+package postgres
+
+func apiPosture() []RequiredTable {
+	return Posture{
+		RequiredSequences: seqs,
+		RequiredTables: []RequiredTable{
+		{"alpha", true, false, false},
+		{"beta", true, true, false},
+	}
+}

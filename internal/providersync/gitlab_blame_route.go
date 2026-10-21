@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -34,9 +35,8 @@ type GitLabBlameCoverage interface {
 	BlamedPaths(context.Context, Claim, string) ([]string, error)
 }
 
-// GitLabBlameRouteHandler owns the active GitLab code-client blame backfill.
-// It deliberately has no route-registry or matrix wiring: activation is a
-// separate cutover concern. MaxFiles is test-configurable below the Python
+// GitLabBlameRouteHandler owns the GitLab code-client blame backfill (wired in
+// git_family_route.go). MaxFiles is test-configurable below the Python
 // producer's ceiling, while page bounds mirror GitLabCodeClient.
 type GitLabBlameRouteHandler struct {
 	// RepoIdentity reads the project's stored repository identity (CHAOS-3383).
@@ -45,6 +45,26 @@ type GitLabBlameRouteHandler struct {
 	PerPage      int
 	MaxPages     int
 	MaxFiles     int
+	// writeLimits overrides the write-contract bounds of one unit in tests.
+	writeLimits *gitLabBlameLimits
+}
+
+// gitLabBlameLimits bound the rows one unit hands to the write step: the write
+// contract (maxEffectRows / maxEffectPayloadBytes) with 10% payload headroom,
+// the same as GitHub blame. Below them a run stops BEFORE a file that would
+// cross a bound; the unblamed paths stay out of the coverage and the next run
+// selects them (CHAOS-8829).
+type gitLabBlameLimits struct {
+	maxRows         int
+	maxPayloadBytes int
+	// rowsBuilt counts rows kept in the batch; tests assert a refused file adds none.
+	rowsBuilt *int
+	// rowsMaterialised counts every row built and marshalled, kept or not.
+	rowsMaterialised *int
+}
+
+func defaultGitLabBlameLimits() gitLabBlameLimits {
+	return gitLabBlameLimits{maxRows: maxEffectRows, maxPayloadBytes: maxEffectPayloadBytes / 10 * 9}
 }
 
 // GitLabBlameResult is the concrete result contract for this provider pair.
@@ -126,8 +146,12 @@ func (handler GitLabBlameRouteHandler) Collect(
 	if handler.Coverage == nil {
 		return CompleteRouteBatch{}, ErrGitLabBlameCoverageUnavailable
 	}
+	limits := defaultGitLabBlameLimits()
+	if handler.writeLimits != nil {
+		limits = *handler.writeLimits
+	}
 	return collectGitLabBlame(ctx, claim, client, normalizedAt, handler.Coverage, handler.RepoIdentity,
-		perPage, maxPages, maxFiles, false)
+		perPage, maxPages, maxFiles, false, limits)
 }
 
 // collectGitLabBlameFoundation keeps the provider fetch and normalization
@@ -140,7 +164,7 @@ func collectGitLabBlameFoundation(
 	normalizedAt time.Time,
 ) (CompleteRouteBatch, error) {
 	return collectGitLabBlame(ctx, claim, client, normalizedAt, nil, nil,
-		gitLabBlameDefaultPerPage, gitLabBlameDefaultMaxPage, gitLabBlameMaxFiles, true)
+		gitLabBlameDefaultPerPage, gitLabBlameDefaultMaxPage, gitLabBlameMaxFiles, true, defaultGitLabBlameLimits())
 }
 
 func collectGitLabBlame(
@@ -152,6 +176,7 @@ func collectGitLabBlame(
 	repoIdentity GitLabRepoIdentityReader,
 	perPage, maxPages, maxFiles int,
 	allowUnscopedCoverage bool,
+	limits gitLabBlameLimits,
 ) (CompleteRouteBatch, error) {
 	if err := validateGitLabBlameCollectInputs(ctx, claim, client, normalizedAt); err != nil {
 		return CompleteRouteBatch{}, err
@@ -244,7 +269,8 @@ func collectGitLabBlame(
 	rows := make([]gitBlameRow, 0)
 	retryableFailures := 0
 	emptyPaths := 0
-	for _, filePath := range selected {
+	var usedBytes int64
+	for index, filePath := range selected {
 		ranges, fetchErr := fetchGitLabBlame(ctx, &counted, root, filePath, treeRef)
 		if fetchErr != nil {
 			if fatal := gitLabBlameFileControlError(ctx, fetchErr); fatal != nil {
@@ -262,15 +288,71 @@ func collectGitLabBlame(
 			remainingPaths++
 			continue
 		}
+		// One file at a time (its response is capped at nativeMaxObjectBytes),
+		// measured by the exact encoding the write step stores. A file that would
+		// cross a bound is not added: stricter than the Python producer, which
+		// had no row cap and failed the whole write instead.
+		// The row bound is known from the line count alone: a file that would
+		// cross it is refused BEFORE any of its rows is built or marshalled (a
+		// 2 MiB response of empty lines is ~700,000 rows).
+		fileLines := 0
 		for _, blameRange := range ranges {
-			for lineNo, line := range blameRange.Lines {
-				row := newGitLabBlameRow(claim, repoID, filePath,
-					uint32(blameRange.StartingLine+lineNo), blameRange, line, normalizedAt)
-				if err := validateGitLabBlameRow(row, claim); err != nil {
-					return CompleteRouteBatch{}, err
+			fileLines += len(blameRange.Lines)
+		}
+		stop := ""
+		var fileRows []gitBlameRow
+		var fileBytes int64
+		if len(rows)+fileLines > limits.maxRows {
+			stop = "rows"
+		} else {
+			fileRows = make([]gitBlameRow, 0, fileLines)
+			for _, blameRange := range ranges {
+				for lineNo, line := range blameRange.Lines {
+					row := newGitLabBlameRow(claim, repoID, filePath,
+						uint32(blameRange.StartingLine+lineNo), blameRange, line, normalizedAt)
+					if err := validateGitLabBlameRow(row, claim); err != nil {
+						return CompleteRouteBatch{}, err
+					}
+					encoded, marshalErr := json.Marshal(row)
+					if marshalErr != nil {
+						return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+					}
+					fileBytes += int64(len(encoded))
+					fileRows = append(fileRows, row)
+					if limits.rowsMaterialised != nil {
+						*limits.rowsMaterialised++
+					}
 				}
-				rows = append(rows, row)
 			}
+			if usedBytes+fileBytes > int64(limits.maxPayloadBytes) {
+				stop = "bytes"
+			}
+		}
+		if stop != "" {
+			if len(rows) == 0 {
+				// One file alone above the write contract stays a retryable
+				// path failure and never blocks the unit.
+				slog.Warn(
+					"gitlab blame file above the write bound kept retryable without rows",
+					"class", stop, "lines", fileLines, "encoded_bytes", fileBytes,
+					"max_rows", limits.maxRows, "max_payload_bytes", limits.maxPayloadBytes,
+				)
+				retryableFailures++
+				remainingPaths++
+				continue
+			}
+			remainingPaths += len(selected) - index
+			slog.Warn(
+				"gitlab blame unit stopped early; remaining paths continue next run",
+				"class", stop, "paths_done", index, "paths_deferred", len(selected)-index,
+				"rows", len(rows), "encoded_bytes", usedBytes, "requests", requests,
+			)
+			break
+		}
+		rows = append(rows, fileRows...)
+		usedBytes += fileBytes
+		if limits.rowsBuilt != nil {
+			*limits.rowsBuilt += len(fileRows)
 		}
 	}
 	return gitLabBlameBatch(claim, fullName, rows, requests, pages,

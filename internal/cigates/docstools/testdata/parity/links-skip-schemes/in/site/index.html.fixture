@@ -1,0 +1,1 @@
+<!doctype html><html><head></head><body><a href="http://x/y">1</a><a href="https://x/y">2</a><a href="mailto:a@b">3</a><a href="tel:1">4</a><a href="javascript:void(0)">5</a><a href="HTTP://X/Y">6</a><a href="ftp://x/y">7</a><a href="//cdn.example/x.js">8</a><a href="data:text/plain,x">9</a><a href="a1:b">10</a></body></html>

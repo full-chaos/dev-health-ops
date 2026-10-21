@@ -2,10 +2,8 @@ package synccoverage
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -18,10 +16,8 @@ func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 // and the database layer it imports, so Identity names those distributions. A
 // golden recorded by another producer is refused.
 var coverageGoldens = programoracle.Set{
-	Package:       "./internal/synccoverage/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5\nsqlalchemy 2.0.54",
-	Distributions: []string{"pydantic", "pydantic-core", "sqlalchemy"},
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\npydantic 2.13.5\npydantic-core 2.46.5\nsqlalchemy 2.0.54",
 	// The goldenrecord verb writes each digest when it promotes a recording; a
 	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
@@ -34,10 +30,5 @@ var coverageGoldens = programoracle.Set{
 // of the running test. No Python runs.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	return coverageGoldens.Outputs(t, root, golden, programs...)
+	return coverageGoldens.Outputs(t, golden, programs...)
 }

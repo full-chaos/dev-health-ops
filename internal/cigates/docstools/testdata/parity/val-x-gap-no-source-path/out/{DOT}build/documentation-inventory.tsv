@@ -1,0 +1,6 @@
+source_repo	source_path	artifact_type	publication_classification	current_url	current_nav_location	content_type	primary_audience	secondary_audiences	product_area	owner	last_meaningful_review	generated	public_today	duplicate_group	known_accuracy_risk	known_usability_risk	build_dependencies	links_in	links_out	notes
+full-chaos/dev-health-ops	docs/index.md	markdown-page	public-nav	https://d.test/	Home | Top	landing	eng	a | b	index.md			False	True					x.md | y.md		"quote "" and	tab and
+newline and  return"
+full-chaos/dev-health-ops	docs/orphan.md	markdown-page	excluded-internal									True	False							plain note
+full-chaos/dev-health-ops	scripts/tool.py	tooling	supporting-artifact						documentation-system			False	False							
+full-chaos/dev-health-ops		external-gap	gap-unverified						cross-repository-or-runtime			False	False							Crawl needed.

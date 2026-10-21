@@ -1427,7 +1427,7 @@ extract 'V="$OUTDIR/$NAME-$TS.md"' 'L="$OUTDIR/$NAME-$TS.log"' "$WORK/name_sites
 # Reuse the same resolved-vs-lexical path helper the earlier traversal fix
 # established: a raw string prefix match on "$OUTDIR/../../.." would still
 # start with $OUTDIR as TEXT while resolving somewhere else entirely.
-resolve_path() { python3 -c 'import os,sys; print(os.path.normpath(sys.argv[1]))' "$1"; }
+resolve_path() { realpath -ms -- "$1"; }
 
 
 # (a) RED: V/L alone, no gate, malicious NAME -- must escape OUTDIR once resolved.

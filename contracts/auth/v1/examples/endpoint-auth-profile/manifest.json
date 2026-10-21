@@ -36,6 +36,10 @@
     {
       "file": "valid-multi-class-envelope-vs-ops-token.json",
       "why": "Two signed classes with different algorithms: `tokens` states each class's pins, keyed by class id (CHAOS-10173). The positive half of the exactly-one-of rule."
+    },
+    {
+      "file": "valid-multi-class-envelope-vs-user-token-by-typ.json",
+      "why": "The envelope and the user access token share Bearer and alg EdDSA; only the JWS typ separates them, so the selector is jwt_header_typ/jwt (the envelope's). Each class pins its own typ."
     }
   ],
   "reject": [
@@ -290,6 +294,78 @@
       "expect_instance_location": "/tokens",
       "expect_keyword": "additionalProperties",
       "why": "`tokens` is keyed by the pinned class ids only."
+    },
+    {
+      "file": "invalid-hs256-class-without-legacy-flag.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A route that accepts the legacy HS256 access token must say so with access_token_validation.legacy_hs256 true; a validator never infers the opt-in from the class list."
+    },
+    {
+      "file": "invalid-hs256-class-with-legacy-flag-false.json",
+      "expect_instance_location": "/access_token_validation/legacy_hs256",
+      "expect_keyword": "const",
+      "why": "The HS256 class with the opt-in set false: the class list and the flag disagree, so the row is refused."
+    },
+    {
+      "file": "invalid-legacy-flag-without-hs256-class.json",
+      "expect_instance_location": "/access_token_validation/legacy_hs256",
+      "expect_keyword": "const",
+      "why": "An HS256 opt-in on a route that accepts only the EdDSA access token: a stray opt-in is refused, so legacy_hs256 true always names an accepted HS256 class."
+    },
+    {
+      "file": "invalid-user-access-token-without-access-token-validation.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "A route that accepts the EdDSA access token states its access-token validation (legacy_hs256 false) explicitly."
+    },
+    {
+      "file": "invalid-access-token-validation-on-opaque-route.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "why": "access_token_validation on a route that accepts no access-token class describes a validation the route never runs."
+    },
+    {
+      "file": "invalid-access-token-validation-unknown-member.json",
+      "expect_instance_location": "/access_token_validation",
+      "expect_keyword": "additionalProperties",
+      "why": "The object is closed: the accepted access-token classes are the ones in accepted_credential_classes and are not repeated here."
+    },
+    {
+      "file": "invalid-legacy-flag-not-boolean.json",
+      "expect_instance_location": "/access_token_validation/legacy_hs256",
+      "expect_keyword": "const",
+      "why": "legacy_hs256 is a JSON boolean: the string \"false\" is neither the required false nor a boolean (ajv also reports type; Go reports the const rule first)."
+    },
+    {
+      "file": "invalid-hs256-pin-not-hs256.json",
+      "expect_instance_location": "/token/algorithm",
+      "expect_keyword": "const",
+      "why": "The HS256 access token's pins name algorithm HS256; an HS256 opt-in pinned to EdDSA would route the legacy token to the wrong verifier."
+    },
+    {
+      "file": "invalid-hs256-tokens-pin-not-hs256.json",
+      "expect_instance_location": "/tokens/ops_access_token_hs256/algorithm",
+      "expect_keyword": "const",
+      "why": "The multi-class shape of the HS256 pin rule: the HS256 class's entry in tokens names algorithm HS256, so the legacy token is never pinned to another verifier."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "invalid-user-access-token-pins-the-envelope-typ.json",
+      "why": "Schema-valid, refused by the profile gate: the route accepts user_access_token but pins typ jwt, the envelope's typ, not the class marker at+jwt."
+    },
+    {
+      "file": "invalid-envelope-pins-the-access-token-typ.json",
+      "why": "The mirror case: the route accepts effective_principal_envelope but pins typ at+jwt, not the class marker jwt."
+    },
+    {
+      "file": "invalid-tokens-envelope-and-user-token-typs-swapped.json",
+      "why": "The per-class tokens form: each class pins the other class's typ. The gate holds every block to its own key's class."
+    },
+    {
+      "file": "invalid-user-access-token-pins-hs256.json",
+      "why": "The same join for alg: the route accepts user_access_token but pins algorithm HS256, not the class marker EdDSA."
     }
   ]
 }

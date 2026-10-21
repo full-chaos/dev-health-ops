@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/egressguard"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -25,12 +27,18 @@ const maxGuardedBody = 32 << 20
 // partial data into failures.)
 func CompletePagesOnly(next http.RoundTripper) http.RoundTripper {
 	if next == nil {
-		next = http.DefaultTransport
+		next = httpguard.SharedTransport()
 	}
 	return completePages{next: next}
 }
 
 type completePages struct{ next http.RoundTripper }
+
+func (t completePages) UnwrapTransport() http.RoundTripper { return t.next }
+
+func (t completePages) RewrapTransport(inner http.RoundTripper) http.RoundTripper {
+	return CompletePagesOnly(inner)
+}
 
 func (t completePages) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.next.RoundTrip(req)
@@ -102,8 +110,9 @@ func GatewayHTTPClient(timeout time.Duration) *http.Client {
 	return GatewayHTTPClientOver(timeout, nil)
 }
 
-// GatewayHTTPClientOver is GatewayHTTPClient over the given transport (nil: the default one), for a
-// caller that must answer the gateway itself (the fixture world producer replays recorded answers).
+// GatewayHTTPClientOver is GatewayHTTPClient over the given transport (nil: httpguard.SharedTransport()), for a
+// caller that must answer the gateway itself (the fixture world producer replays recorded answers). The gateway is
+// the stored Jira site, so the transport dials only what egressguard.Wrap allows.
 func GatewayHTTPClientOver(timeout time.Duration, base http.RoundTripper) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: CompletePagesOnly(base), CheckRedirect: RefuseRedirects}
+	return &http.Client{Timeout: timeout, Transport: CompletePagesOnly(egressguard.Wrap(base)), CheckRedirect: RefuseRedirects}
 }

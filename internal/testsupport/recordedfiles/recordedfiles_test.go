@@ -2,6 +2,7 @@ package recordedfiles
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -534,5 +535,40 @@ func TestDayOneWithNoClosedListAdmitsNothing(t *testing.T) {
 	_, err := Set(repo, []string{"a/testdata/golden/TestNew.json"}, Change{DayOne: true})
 	if err == nil || !strings.Contains(err.Error(), "cannot be read") {
 		t.Fatalf("err = %v, want a refusal that the closed list cannot be read", err)
+	}
+}
+
+// A file a manifest lists must be a file git keeps: a .gitignore rule that matches a testdata directory (a directory
+// named site, for one) makes the tests pass on the working tree that wrote the files and fail on every checkout.
+func TestEveryFileOnDiskUnderARootIsKeptByGit(t *testing.T) {
+	repo, err := RepoRoot(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git")); err != nil {
+		t.Skip("not a git work tree")
+	}
+	out, err := exec.Command("git", "-C", repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard").Output()
+	if err != nil {
+		t.Skip("git is not usable here:", err)
+	}
+	kept := map[string]bool{}
+	for _, name := range strings.Split(string(out), "\x00") {
+		kept[name] = true
+	}
+	roots, err := Roots(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range roots {
+		files, err := Files(repo, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range files {
+			if path := root + "/" + file; !kept[path] {
+				t.Errorf("%s is on disk but git does not keep it (an ignore rule matches it; see `git check-ignore -v %s`): a checkout would lack the file the manifest lists", path, path)
+			}
+		}
 	}
 }

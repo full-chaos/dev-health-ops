@@ -18,20 +18,16 @@ const pythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 // another interpreter or another version of one of them is refused.
 const producerIdentity = "python 3.14.7\nunicodedata 16.0.0\nalembic 1.20.0"
 
-// goldenPins pins the SHA-256 of every golden under testdata/golden. The
-// goldenrecord verb writes each digest when it promotes a recording; a new
-// golden starts as "PIN:" + its file name without ".json".
+// goldenPins pins the SHA-256 of every golden under testdata/golden.
 var goldenPins = map[string]string{
 	"schema-revisions.golden.json": "7438eca3fee81793a0744decb4d7b8880de1c5cd75b7e81b9024e7b032a46326",
 }
 
 // goldens is the set of this package's frozen Python answers.
 var goldens = programoracle.Set{
-	Package:       "./internal/api/health/",
-	Build:         pythonBuild,
-	Identity:      producerIdentity,
-	Distributions: []string{"alembic"},
-	Pins:          goldenPins,
+	Build:    pythonBuild,
+	Identity: producerIdentity,
+	Pins:     goldenPins,
 }
 
 // frozenPython returns the stdout of each program, in order, from the golden
@@ -42,7 +38,7 @@ var goldens = programoracle.Set{
 // exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	return goldens.Outputs(t, repositoryRoot(t), golden, programs...)
+	return goldens.Outputs(t, golden, programs...)
 }
 
 // repositoryRoot is the repository root, from this file's own location.

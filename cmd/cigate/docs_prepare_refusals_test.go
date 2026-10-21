@@ -13,6 +13,7 @@ import (
 // line of scripts/prepare_docs_cloudflare.py at the merge base (9127c3728d51) that refuses it (STRICTER = Go refuses what
 // Python accepted, allowed by the port rule). Removing a row, or a refusal from the table, fails the test.
 var pythonRefusals = map[string]string{
+	"redirects BOM before the header":           "36-37 the BOM stays in the first column name, so Python raised the missing-columns ValueError too",
 	"redirects control character in a source":   "65 STRICTER: control character in a redirect field",
 	"redirects DEL in a target":                 "65 STRICTER: control character in a redirect field",
 	"redirects quote character mid-field":       "34 STRICTER: csv accepted a quote inside a field (Go csv and Python read it differently)",
@@ -90,7 +91,7 @@ var pythonRefusals = map[string]string{
 	"dangling symlink in the source":            "133 shutil.copytree: copy2 of a dangling symlink (shutil.Error)",
 }
 
-const pythonRefusalRows = 75
+const pythonRefusalRows = 76
 
 // Every input the former Python helper refused (its argparse errors, its ValueError and OSError paths, and the stdlib
 // calls that raise inside it) must be refused by `cigate docs-prepare`: exit 2 for a usage error as argparse did, exit 1
@@ -203,6 +204,7 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		{"redirects lone CR ending a wide row", with("be", tsv("source_path\ttarget_path\tx\n/a\t/b\t\r/c\t/d\tz\n")), 1, "carriage return inside a line"},
 		{"redirects CR-only line endings", with("bf", tsv(hdr+"/a\t/b\r/c\t/d\r")), 1, "carriage return inside a line"},
 		{"redirects row with extra fields", with("bg", tsv(hdr+"/a\t/b\t/c\n")), 1, "redirect row has 3 fields"},
+		{"redirects BOM before the header", with("bj", tsv("\ufeff"+hdr+"/a\t/b\n")), 1, "is missing"},
 		{"redirects blank line between rows", with("bh", tsv(hdr+"/a\t/b\n\n/c\t/d\n")), 1, "blank line"},
 		{"redirects repeated column name", with("bi", tsv("source_path\ttarget_path\tsource_path\n/a\t/b\t/c\n")), 1, "repeated column"},
 	}

@@ -1004,8 +1004,11 @@ func TestTheSignInRoutesAuditTheirTransportRefusals(t *testing.T) {
 func TestTheBucket429WritesNoRowAndTheLockout429WritesOne(t *testing.T) {
 	f := newCompatFixture(t)
 	routes, err := CompatRoutes(CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: f.projector,
-		AppendAudit: func(_ context.Context, event audit.AuditEvent) error { f.appended = append(f.appended, event); return nil },
-		Login:       &LoginConfig{Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey)}})
+		AppendAudit: func(_ context.Context, event audit.AuditEvent) error {
+			f.appended = append(f.appended, event)
+			return nil
+		},
+		Login: &LoginConfig{Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey)}})
 	if err != nil {
 		t.Fatal(err)
 	}

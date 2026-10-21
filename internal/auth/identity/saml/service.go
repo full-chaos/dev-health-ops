@@ -205,8 +205,10 @@ func (s *Service) BoundToRoute(ctx context.Context, p Provider, routeID uuid.UUI
 // when absent). On an identity key hit the account signs in from its stored
 // state and the assertion's email is not read; only a miss needs the email.
 // Every sign-in ends in the provider's organization: an account that is not
-// a member after the membership seam ran is ErrNotOrgMember, and so is a new
-// account when no MembershipJIT is set (refused before it is provisioned).
+// a member after the membership seam ran is ErrNotOrgMember. A new account is
+// created only through MembershipJIT.ProvisionMember (account and membership
+// in one transaction); with no MembershipJIT set it is ErrNotOrgMember, and
+// nothing is written.
 func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, cookie func(string) string) (SignIn, error) {
 	raw, err := DecodeResponse(posted)
 	if err != nil {
@@ -251,6 +253,9 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		if principal.Disabled {
 			return SignIn{}, s.refuse(ctx, p, ErrAccountDisabled)
 		}
+		if err := s.requireMember(ctx, p, principal.ID); err != nil {
+			return SignIn{}, err
+		}
 	} else {
 		email := s.email(p, v)
 		if email == "" {
@@ -269,24 +274,31 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		created = true
 	}
 
-	member, err := s.Memberships.Member(ctx, principal.ID, p.OrgID)
+	org := p.OrgID
+	s.logger().InfoContext(ctx, "auth saml: sign-in accepted", "provider_id", p.ID, "org_id", org, "created", created)
+	return SignIn{PrincipalID: principal.ID, OrganizationID: &org, ProviderID: p.ID, AMR: []string{AMRFederated}, AuthTime: now, Created: created}, nil
+}
+
+// requireMember refuses an existing account that is not a member of the
+// provider's organization after the membership seam (when set) tried to join
+// it.
+func (s *Service) requireMember(ctx context.Context, p Provider, principalID uuid.UUID) error {
+	member, err := s.Memberships.Member(ctx, principalID, p.OrgID)
 	if err != nil {
-		return SignIn{}, err
+		return err
 	}
 	if !member && s.JIT != nil {
-		if err := s.JIT.JoinOnSignIn(ctx, principal.ID, p); err != nil {
-			return SignIn{}, err
+		if err := s.JIT.JoinOnSignIn(ctx, principalID, p); err != nil {
+			return err
 		}
-		if member, err = s.Memberships.Member(ctx, principal.ID, p.OrgID); err != nil {
-			return SignIn{}, err
+		if member, err = s.Memberships.Member(ctx, principalID, p.OrgID); err != nil {
+			return err
 		}
 	}
 	if !member {
-		return SignIn{}, s.refuse(ctx, p, ErrNotOrgMember)
+		return s.refuse(ctx, p, ErrNotOrgMember)
 	}
-	org := p.OrgID
-	s.logger().InfoContext(ctx, "auth saml: sign-in accepted", "provider_id", p.ID, "created", created)
-	return SignIn{PrincipalID: principal.ID, OrganizationID: &org, ProviderID: p.ID, AMR: []string{AMRFederated}, AuthTime: now, Created: created}, nil
+	return nil
 }
 
 // matchRequest binds a response to its stored request and browser. A response
@@ -329,9 +341,9 @@ func (s *Service) provision(ctx context.Context, p Provider, id Identity, email,
 	if s.JIT == nil {
 		return uuid.Nil, ErrNotOrgMember
 	}
-	principalID, err := s.Store.ProvisionFederated(ctx, NewFederatedUser{
+	principalID, err := s.JIT.ProvisionMember(ctx, NewFederatedUser{
 		Email: normalized, DisplayName: name, Identity: id, AuditRequestID: auditRequestID(ctx),
-	})
+	}, p)
 	switch {
 	case errors.Is(err, ErrEmailTaken):
 		conflict := &EmailConflictError{}

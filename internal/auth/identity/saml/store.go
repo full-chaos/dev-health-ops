@@ -127,9 +127,6 @@ type Store interface {
 	IdentityBySubject(ctx context.Context, id Identity, legacy *LegacyMatch) (Principal, bool, error)
 	NormalizeEmail(raw string) (string, error)
 	PrincipalByEmail(ctx context.Context, email string) (EmailOwner, bool, error)
-	// ProvisionFederated creates the principal, user and identity in one
-	// audited transaction, or returns ErrSignupNotAvailable.
-	ProvisionFederated(ctx context.Context, user NewFederatedUser) (uuid.UUID, error)
 }
 
 // Memberships reads organization membership (go-api writes it until Wave 4).
@@ -137,9 +134,17 @@ type Memberships interface {
 	Member(ctx context.Context, principalID, orgID uuid.UUID) (bool, error)
 }
 
-// MembershipJIT is the seam for organization membership on first sign-in.
-// go-api owns membership writes until Wave 4; with a nil MembershipJIT no
-// membership is added and a sign-in that needs one is refused.
+// MembershipJIT is the seam for organization membership on sign-in. go-api
+// owns membership writes until Wave 4; with a nil MembershipJIT no membership
+// is added and a sign-in that needs one is refused before any write.
 type MembershipJIT interface {
+	// JoinOnSignIn adds an existing account to the provider's organization.
 	JoinOnSignIn(ctx context.Context, principalID uuid.UUID, p Provider) error
+	// ProvisionMember creates the account (principal, user and identity, as
+	// the identity store's ProvisionFederated does) and its membership in the
+	// provider's organization in one transaction. On any error nothing is
+	// written; on success the account is a member. It returns
+	// ErrSignupNotAvailable, ErrEmailTaken or ErrIdentityTaken as the
+	// identity store does, and ErrNotOrgMember when it refuses the membership.
+	ProvisionMember(ctx context.Context, user NewFederatedUser, p Provider) (uuid.UUID, error)
 }

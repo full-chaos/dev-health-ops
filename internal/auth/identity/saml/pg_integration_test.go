@@ -173,21 +173,33 @@ VALUES ($1, $2, $3, 'saml', 'active', $4, $5::json)`, p.ID, p.OrgID, "idp-"+p.ID
 	if err != nil {
 		t.Fatal(err)
 	}
-	joins := &recordedJoins{stored: pg, joined: map[uuid.UUID]bool{}}
-	return &harness{t: t, db: d, idp: idp, provider: loaded, svc: &saml.Service{
+	svc := &saml.Service{
 		Providers: pg, Entitlements: allowSSO{}, Flows: pg, Uses: pg, Store: saml.IdentityStore{Identities: d.legacy},
-		Memberships: joins, JIT: joins, BaseURL: func() string { return baseURL },
-	}}
+		BaseURL: func() string { return baseURL },
+	}
+	joins := &recordedJoins{svc: svc, stored: pg, joined: map[uuid.UUID]bool{}}
+	svc.Memberships, svc.JIT = joins, joins
+	return &harness{t: t, db: d, idp: idp, provider: loaded, svc: svc}
 }
 
-// recordedJoins is the membership seam of the harness: JoinOnSignIn records
-// the principal (memberships stay a go-api write, and a provisioned principal
+// recordedJoins is the membership seam of the harness: a join is recorded,
+// not written (memberships stay a go-api write, and a provisioned principal
 // has no public.users row to reference), and Member answers from the record
-// or the stored memberships.
+// or the stored memberships. ProvisionMember provisions through the service's
+// identity store and records the join only when the account was written.
 type recordedJoins struct {
+	svc    *saml.Service
 	stored saml.Memberships
 	mu     sync.Mutex
 	joined map[uuid.UUID]bool
+}
+
+func (r *recordedJoins) ProvisionMember(ctx context.Context, user saml.NewFederatedUser, p saml.Provider) (uuid.UUID, error) {
+	id, err := r.svc.Store.(saml.IdentityStore).ProvisionFederated(ctx, user)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return id, r.JoinOnSignIn(ctx, id, p)
 }
 
 func (r *recordedJoins) JoinOnSignIn(_ context.Context, principalID uuid.UUID, _ saml.Provider) error {
@@ -863,11 +875,34 @@ func TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites(t *testing.T) {
 			}
 		})
 	}
+	t.Run("new account, the membership seam fails", func(t *testing.T) {
+		h.svc.JIT = failingSeam{}
+		defer func() { h.svc.JIT = nil }()
+		before := h.writeCounts()
+		signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: uniqueEmail("free")}), nil)
+		if err == nil {
+			t.Fatalf("sign-in %+v accepted, want a refusal", signIn)
+		}
+		if after := h.writeCounts(); after != before {
+			t.Fatalf("users, memberships, principals, auth users, identities %v -> %v, want no write", before, after)
+		}
+	})
 	h.member(user)
 	signIn, err := h.consume(h.respond(resp{nameID: nid("user-1"), email: uniqueEmail("free")}), nil)
 	if err != nil || signIn.PrincipalID != user || signIn.OrganizationID == nil || *signIn.OrganizationID != h.provider.OrgID {
 		t.Fatalf("member: sign-in %+v err %v, want the account in the provider's org", signIn, err)
 	}
+}
+
+// failingSeam is a membership seam whose writes fail and write nothing.
+type failingSeam struct{}
+
+func (failingSeam) JoinOnSignIn(context.Context, uuid.UUID, saml.Provider) error {
+	return errors.New("membership store unavailable")
+}
+
+func (failingSeam) ProvisionMember(context.Context, saml.NewFederatedUser, saml.Provider) (uuid.UUID, error) {
+	return uuid.Nil, errors.New("membership store unavailable")
 }
 
 // TestSAMLAllowedDomainsAreEnforcedOnAMiss: without a linked identity the

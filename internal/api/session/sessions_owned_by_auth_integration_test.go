@@ -50,6 +50,8 @@ func issueClient(t *testing.T, base string) *sessionissue.Client {
 type fakeIssueRoute struct {
 	mu     sync.Mutex
 	bodies []map[string]any
+	// onCall, when set, runs on each request before the answer.
+	onCall func(body map[string]any)
 }
 
 func (f *fakeIssueRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +60,11 @@ func (f *fakeIssueRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(raw, &body)
 	f.mu.Lock()
 	f.bodies = append(f.bodies, body)
+	onCall := f.onCall
 	f.mu.Unlock()
+	if onCall != nil {
+		onCall(body)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, `{"access_token":"issued.by.auth","refresh_token":"dhr1_issued_by_auth","token_type":"bearer","expires_in":3600}`)
 }
@@ -86,6 +92,14 @@ func TestSessionsOwnedByAuthTakeEveryPairFromTheIssueRoute(t *testing.T) {
 	before := refreshTokenRows(t, ctx, st)
 	orgA := st.specs["alice"]["org_id"].(string)
 	alice := changeToken(t, st, changeAlice, "alice@example.com", orgA, "owner", 0)
+	// auth-service pins the session to the user's token_version as it reads
+	// it: a password change must be committed before its session is issued.
+	var versionAtIssue int64 = -1
+	route.onCall = func(map[string]any) {
+		if err := st.pool.QueryRow(context.Background(), `SELECT token_version FROM users WHERE id = $1::uuid`, changeAlice).Scan(&versionAtIssue); err != nil {
+			t.Errorf("read token_version at issue: %v", err)
+		}
+	}
 
 	for _, step := range []struct {
 		name, path, token, body, org, amr string
@@ -122,11 +136,19 @@ func TestSessionsOwnedByAuthTakeEveryPairFromTheIssueRoute(t *testing.T) {
 	if after := refreshTokenRows(t, ctx, st); after != before {
 		t.Fatalf("refresh_tokens went from %d to %d rows; go-api must write none", before, after)
 	}
+	var committed int64
+	if err := st.pool.QueryRow(ctx, `SELECT token_version FROM users WHERE id = $1::uuid`, changeAlice).Scan(&committed); err != nil {
+		t.Fatal(err)
+	}
+	if versionAtIssue != committed || committed == 0 {
+		t.Fatalf("the change-password session was issued at token_version %d, the committed version is %d", versionAtIssue, committed)
+	}
 }
 
 // The executed 503 row: auth-service unreachable, every go-api sign-in route
-// answers 503 with the proxy's unavailable text, mints no pair, writes no
-// refresh_tokens row, and a password change rolls back.
+// answers 503 with the proxy's unavailable text, mints no pair and writes no
+// refresh_tokens row. A password change is committed before its session is
+// issued, so it stands; the caller signs in again with the new password.
 func TestSessionsOwnedByAuthAnswer503WhenTheIssueRouteIsDown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -160,7 +182,7 @@ func TestSessionsOwnedByAuthAnswer503WhenTheIssueRouteIsDown(t *testing.T) {
 	if after := refreshTokenRows(t, ctx, st); after != before {
 		t.Fatalf("refresh_tokens went from %d to %d rows with the issue route down", before, after)
 	}
-	if passwordHashOf(t, ctx, st, changeAlice) != hashBefore {
-		t.Fatal("a password change that could not issue its session kept the new hash")
+	if passwordHashOf(t, ctx, st, changeAlice) == hashBefore {
+		t.Fatal("the password change was not committed before its session was asked for")
 	}
 }

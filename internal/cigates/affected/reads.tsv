@@ -13,6 +13,8 @@ internal/apiservice/billingvenue	test	contracts
 internal/audit	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/contracts	code	contracts
+internal/auth/contracts/tokencorpus	code	contracts
+internal/auth/contracts/tokencorpus	test	README.md
 internal/bigboycompose	test	ci
 internal/bigboycompose	test	compose.yml
 internal/cacheinvalidation	test	contracts

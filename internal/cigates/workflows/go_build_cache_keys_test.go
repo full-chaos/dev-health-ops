@@ -198,7 +198,7 @@ func TestGoCacheGuardPlantedDefectsAreCaught(t *testing.T) {
 		want string
 	}{
 		{"go-quality back on setup-go's cache", mutation{gq, "          cache: false\n\n      - name: Restore this leg's", "          cache: true\n\n      - name: Restore this leg's"}, "go-quality-leg: setup-go must set `cache: false`"},
-		{"the key loses the leg", mutation{gq, "key: go-quality-${{ matrix.name }}-", "key: go-quality-"}, "${{ matrix.name }}"},
+		{"the key loses the leg", mutation{gq, "key: go-quality-v2-${{ matrix.name }}-", "key: go-quality-v2-"}, "${{ matrix.name }}"},
 		{"the key loses go.sum", mutation{gq, "-${{ hashFiles('**/go.sum') }}", ""}, "hashFiles"},
 		{"restore on self-hosted too", mutation{gq, "steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'\n        uses: actions/cache/restore", "steps.relevance.outputs.relevant == 'true'\n        uses: actions/cache/restore"}, "GitHub-hosted legs only"},
 		{"pull requests save", mutation{gq, "&& github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.go-cache", "&& steps.go-cache"}, "github.event_name == 'push'"},

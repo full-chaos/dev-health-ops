@@ -209,6 +209,8 @@ jobs:
       - name: Restore this leg's Go build and module cache (GitHub-hosted legs)
         # CHAOS-10486: one cache per leg, keyed on the leg, the runner, the Go version and go.sum; a pull request restores
         # what main saved (the newest entry of the leg when go.sum moved). Saved only by a push to main, below.
+        # The segment after go-quality- is the layout of the cached directory (v1 was built into /tmp, so it held little):
+        # bump it whenever that layout changes, because a key is immutable and the save runs only on a key miss.
         id: go-cache
         if: steps.relevance.outputs.relevant == 'true' && runner.environment == 'github-hosted'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -216,9 +218,9 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-quality-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          key: go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            go-quality-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
+            go-quality-v2-${{ matrix.name }}-${{ runner.os }}-${{ runner.arch }}-go${{ steps.setup-go.outputs.go-version }}-
 
       - name: Build into the restored Go cache (GitHub-hosted legs)
         # CHAOS-10486: check_go.sh builds into DEV_HEALTH_GO_CACHE, else an inherited or configured GOCACHE, else

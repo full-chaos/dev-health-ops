@@ -190,23 +190,11 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 				if splitErr != nil {
 					return splitErr
 				}
-				for index := range chunks {
-					chunks[index].TotalChunks = 0
-					chunks[index].CursorBefore = ""
-					chunks[index].CursorAfter = ""
-					chunks[index].InventoryComplete = false
-					chunks[index].Result = nil
-					chunks[index].Watermark = nil
-					chunks[index].Evidence = FetchEvidence{}
-					chunks[index].Comparison = ShadowComparison{}
-					chunks[index].WorklogObservations = nil
-				}
 				last := len(chunks) - 1
 				if last < 0 {
 					return ErrChunkPolicyExceeded
 				}
-				chunks[0].CursorBefore = emission.CursorBefore
-				chunks[last].CursorAfter = emission.CursorAfter
+				resetEmissionChunks(chunks, emission)
 				if emission.Final {
 					chunks[last].InventoryComplete = true
 					chunks[last].Result = cloneChunkResult(batch.Result)
@@ -215,12 +203,8 @@ func (executor CompleteRouteExecutor) executeChunkedStreaming(
 					chunks[last].Comparison = finalComparison
 					chunks[last].WorklogObservations = append([]JiraWorklogFetchObservation(nil), batch.WorklogObservations...)
 				}
-				for index := range chunks {
-					encoded, encodeErr := encodedPreparedChunkPayload(chunks[index])
-					if encodeErr != nil {
-						return encodeErr
-					}
-					chunks[index].PayloadBytes = len(encoded)
+				if err := sizeEmissionChunks(chunks); err != nil {
+					return err
 				}
 				// The whole emission is made durable BEFORE any of it reaches
 				// the sink. Preparing and committing one sub-chunk at a time
@@ -330,5 +314,36 @@ func loadChunkedFinalResult(
 	result.Comparison.PythonRecords = int(checkpoint.CommittedRows)
 	result.CommittedRows = checkpoint.CommittedRows
 	result.WorklogObservations = final.WorklogObservations
+	return nil
+}
+
+// resetEmissionChunks clears the per-emission metadata a split inherits and
+// stamps the emission's cursors on its first and last sub-chunk. The streaming
+// executor and the routes that pre-check a chunk's persisted size share it.
+func resetEmissionChunks(chunks []PreparedProviderChunk, emission ChunkRouteEmission) {
+	for index := range chunks {
+		chunks[index].TotalChunks = 0
+		chunks[index].CursorBefore = ""
+		chunks[index].CursorAfter = ""
+		chunks[index].InventoryComplete = false
+		chunks[index].Result = nil
+		chunks[index].Watermark = nil
+		chunks[index].Evidence = FetchEvidence{}
+		chunks[index].Comparison = ShadowComparison{}
+		chunks[index].WorklogObservations = nil
+	}
+	chunks[0].CursorBefore = emission.CursorBefore
+	chunks[len(chunks)-1].CursorAfter = emission.CursorAfter
+}
+
+// sizeEmissionChunks stamps each sub-chunk with its encoded payload size.
+func sizeEmissionChunks(chunks []PreparedProviderChunk) error {
+	for index := range chunks {
+		encoded, err := encodedPreparedChunkPayload(chunks[index])
+		if err != nil {
+			return err
+		}
+		chunks[index].PayloadBytes = len(encoded)
+	}
 	return nil
 }

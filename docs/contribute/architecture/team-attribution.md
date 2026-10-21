@@ -870,9 +870,11 @@ project's items by id. Now:
   provider, project_id, team_id, source, valid_from), `team_repo_ownership` (org_id, provider, repo_full_name,
   team_id, source, valid_from)), so a start that moves is a new row. Before its own read of its open rows, each writer
   reads every row of its scope (org, provider, source; Atlassian Teams: only the rows of its teams) and the
-  evidence, writes the FIRST row of each link (open or closed; a closed row keeps its `valid_to`) again at the
-  evidence and retires the old key as an empty interval (`valid_to = valid_from`, the supersede of the inferred rows,
-  section 0.2), all in one insert (logged `catalog_evidence_start_carried`). The first-seen rule above then gives the
+  evidence. The FIRST row of each link (open or closed; a closed row keeps its `valid_to`) starts at
+  min(its `valid_from`, evidence): a first row that already starts before the evidence keeps its start, so evidence
+  never moves a start later. A first row that moves is written again at the evidence, and the writer retires the
+  old key as an empty interval (`valid_to = valid_from`, the supersede of the inferred rows, section 0.2), all in one
+  insert (logged `catalog_evidence_start_carried`). The first-seen rule above then gives the
   fresh row the evidence start and the repeat rule below leaves it out, so the next run writes nothing. A later row of
   the same link (a member who came back, a grant given again) keeps the start of the run that saw it. A new link (no
   row in the scope) starts at min(evidence, run). A link with no evidence keeps the start of its earliest row; a new
@@ -881,7 +883,7 @@ project's items by id. Now:
   wrote) and never fails the sync: a later run moves the start. A start moved back reaches the items on or after it
   through the backstop (section 0.4j). Tests (real ClickHouse, the real collectors):
   `TestGitHubCatalogStartsAtTheEvidence`, `TestGitLabCatalogStartsAtTheEvidence`,
-  `TestLinearCatalogStartsAtTheEvidence`, `TestJiraLegacyLinksStartAtTheEvidence`,
+  `TestLinearCatalogStartsAtTheEvidence`, `TestJiraLegacyLinksStartAtTheEvidence` (an open and a closed first row),
   `TestAtlassianTeamsLinksStartAtTheEvidence` and `TestAFailedEvidenceReadKeepsTheStartAndTheSync`; the decision
   table `TestCatalogEvidenceCarryMovesTheFirstRowOfAFact`.
 - **A row is closed only through its fact kind, on that kind's own proof** (`providersync.PlanSnapshot`,

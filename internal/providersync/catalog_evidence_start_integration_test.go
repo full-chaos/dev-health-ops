@@ -396,10 +396,14 @@ func TestLinearCatalogStartsAtTheEvidence(t *testing.T) {
 		readCatalogScope(ctx, t, conn, orgID, linearProjectScope))
 }
 
+// TestJiraLegacyLinksStartAtTheEvidence holds an open and a CLOSED first row:
+// K000's link is removed and its row closed by the run before the evidence is
+// synced, and the evidence run moves that closed row (its end kept) as it moves
+// K001's open row. K002 has no evidence and keeps its start.
 func TestJiraLegacyLinksStartAtTheEvidence(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	orgID := uuid.NewString()
-	keys := []string{"K000", "K001"}
+	keys := []string{"K000", "K001", "K002"}
 	for _, key := range keys {
 		if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
 			orgID, key, "ops-team-a", "Project "+key, "Ops Team", catalogEvidenceRun[0].Add(-time.Hour)); err != nil {
@@ -409,14 +413,65 @@ func TestJiraLegacyLinksStartAtTheEvidence(t *testing.T) {
 	server := &jiraProjectServer{projects: keys}
 	jiraProjectRun(ctx, t, conn, orgID, server, catalogEvidenceRun[0])
 	links := readCatalogScope(ctx, t, conn, orgID, jiraLegacyScope)
-	first := jiraProjectNativeID("K000")
-	insertEvidenceWorkItem(t, ctx, conn, orgID, "jira:K000-1", "jira", first, "", catalogEvidenceFirst)
+	if err := conn.Exec(ctx, `ALTER TABLE jira_project_ops_team_links DELETE WHERE org_id = ? AND project_key = 'K000' SETTINGS mutations_sync = 2`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	closedAt := catalogEvidenceRun[0].Add(30 * time.Minute)
+	jiraProjectRun(ctx, t, conn, orgID, server, closedAt)
+	closedRun := readCatalogScope(ctx, t, conn, orgID, jiraLegacyScope)
+	closedFirst, openFirst := jiraProjectNativeID("K000"), jiraProjectNativeID("K001")
+	closed := false
+	for _, row := range closedRun {
+		closed = closed || (factKeyOf(row.Fact) == closedFirst && row.To != nil && row.To.Equal(closedAt))
+	}
+	if !closed {
+		t.Fatalf("the removed link's row is not closed by the run: the closed first-row case is not set: %v", closedRun)
+	}
+	insertEvidenceWorkItem(t, ctx, conn, orgID, "jira:K000-1", "jira", closedFirst, "", catalogEvidenceFirst)
+	insertEvidenceWorkItem(t, ctx, conn, orgID, "jira:K001-1", "jira", openFirst, "", catalogEvidenceSecond)
 	want := catalogEvidenceWant(t, "jira legacy links", links, func(fact string) (time.Time, bool) {
-		return catalogEvidenceFirst, factKeyOf(fact) == first
+		switch factKeyOf(fact) {
+		case closedFirst:
+			return catalogEvidenceFirst, true
+		case openFirst:
+			return catalogEvidenceSecond, true
+		}
+		return time.Time{}, false
 	})
 	jiraProjectRun(ctx, t, conn, orgID, server, catalogEvidenceRun[1])
 	after := readCatalogScope(ctx, t, conn, orgID, jiraLegacyScope)
-	requireCatalogEvidenceStart(t, "jira legacy links", links, after, want)
+	for _, row := range after {
+		if factKeyOf(row.Fact) == closedFirst && !row.empty() && (row.To == nil || !row.To.Equal(closedAt) || !row.From.Equal(catalogEvidenceFirst)) {
+			t.Fatalf("the closed first row is %s, want [%s, %s): moved to the evidence with its end kept", row, catalogEvidenceFirst, closedAt)
+		}
+	}
+	// The closed link has no open row: the check counts open rows of the open links only.
+	open := map[string]time.Time{}
+	var openLinks []catalogStoredRow
+	for _, row := range after {
+		if factKeyOf(row.Fact) != closedFirst {
+			openLinks = append(openLinks, row)
+		}
+	}
+	for fact, from := range want {
+		if factKeyOf(fact) != closedFirst {
+			open[fact] = from
+		}
+	}
+	var firstOpen []catalogStoredRow
+	for _, row := range links {
+		if factKeyOf(row.Fact) != closedFirst {
+			firstOpen = append(firstOpen, row)
+		}
+	}
+	requireCatalogEvidenceStart(t, "jira legacy links", firstOpen, openLinks, open)
+	retired := false
+	for _, row := range after {
+		retired = retired || (factKeyOf(row.Fact) == closedFirst && row.empty() && row.From.Equal(catalogEvidenceRun[0]))
+	}
+	if !retired {
+		t.Errorf("the closed first row's old key is not retired as an empty interval: %v", after)
+	}
 	physical := countCatalogScope(ctx, t, conn, orgID, jiraLegacyScope)
 	jiraProjectRun(ctx, t, conn, orgID, server, catalogEvidenceRun[2])
 	requireCatalogRepeatWritesNothing(ctx, t, conn, orgID, "jira legacy links", jiraLegacyScope, after, physical,

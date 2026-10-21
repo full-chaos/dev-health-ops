@@ -364,5 +364,7 @@ var linearWorld = providerWorld{
 		{Kind: "sync", Provider: "linear", Credential: linearToken, DepthDays: 200, Phase: "second",
 			Sources: [][2]string{{"ENG", "Engineering"}, {"MOB", "Mobile"}}, Datasets: workItemDatasets},
 		{Kind: "work_graph"},
+		// The next sync of the catalog, after the work is synced: each link starts at its evidence (CHAOS-10521).
+		{Kind: "team_catalog", Provider: "linear", Credential: linearToken, Phase: "second"},
 	},
 }

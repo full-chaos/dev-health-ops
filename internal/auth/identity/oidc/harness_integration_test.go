@@ -35,7 +35,7 @@ import (
 // The runtime role reads the go-api tables it needs by column, nothing more.
 var testGrants = []string{
 	`GRANT USAGE ON SCHEMA public TO %[1]s`,
-	`GRANT SELECT (id, org_id, protocol, status, auto_provision_users, config, allowed_domains, encrypted_secrets) ON public.sso_providers TO %[1]s`,
+	`GRANT SELECT (id, org_id, protocol, status, auto_provision_users, config, allowed_domains, encrypted_secrets, is_default, created_at) ON public.sso_providers TO %[1]s`,
 	`GRANT SELECT (user_id, org_id, role) ON public.memberships TO %[1]s`,
 	`GRANT SELECT (id, email, password_hash, is_active, is_verified, auth_provider, auth_provider_id) ON public.users TO %[1]s`,
 	`GRANT SELECT (id, slug, name, is_active, tier) ON public.organizations TO %[1]s`,
@@ -181,6 +181,7 @@ type fakeIdP struct {
 	tokenCalls int
 	userinfo   map[string]any
 	docIssuer  *string
+	oauth      *fakeOAuth
 }
 
 type pendingCode struct{ challenge, idToken string }
@@ -191,8 +192,9 @@ func startIdP(t *testing.T) *fakeIdP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idp := &fakeIdP{key: key, kid: "k1", codes: map[string]pendingCode{}}
+	idp := &fakeIdP{key: key, kid: "k1", codes: map[string]pendingCode{}, oauth: newFakeOAuth()}
 	mux := http.NewServeMux()
+	idp.oauth.routes(mux)
 	mux.HandleFunc("/jwks", idp.serveJWKS)
 	mux.HandleFunc("/token", idp.serveToken)
 	mux.HandleFunc("/userinfo", idp.serveUserinfo)
@@ -343,7 +345,8 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 		Providers: PGProviders{Pool: env.runtime}, Flows: flows, Identities: h.ids,
 		Memberships: PGMemberships{Pool: env.runtime}, Entitlements: LicensingEntitlements{Pool: env.runtime}, Sessions: h.sessions,
 		StateSecret: secret, AppBaseURL: "https://app.example", HTTPClient: idp.server.Client(),
-		Now: func() time.Time { return h.now },
+		OAuthEndpoints: idp.oauth.endpoints(idp.server.URL),
+		Now:            func() time.Time { return h.now },
 	})
 	if err != nil {
 		t.Fatal(err)

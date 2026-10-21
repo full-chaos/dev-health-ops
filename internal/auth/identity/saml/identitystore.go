@@ -25,7 +25,8 @@ func (s IdentityStore) logger() *slog.Logger {
 
 // IdentityBySubject looks up the key; the go-api account fallback matches the
 // raw NameID and requires a membership in the provider's organization. Two
-// go-api accounts with the same NameID match neither.
+// go-api accounts with the same NameID, in any organization, match neither;
+// one outside the provider's organization does not match.
 func (s IdentityStore) IdentityBySubject(ctx context.Context, id Identity, legacy *LegacyMatch) (Principal, bool, error) {
 	var match *identity.LegacyMatch
 	if legacy != nil {
@@ -35,6 +36,9 @@ func (s IdentityStore) IdentityBySubject(ctx context.Context, id Identity, legac
 	p, found, err := s.Identities.IdentityBySubject(ctx, id.Issuer, identity.Provider(id.Provider), id.Subject, match)
 	if errors.Is(err, identity.ErrMultipleUsers) {
 		s.logger().WarnContext(ctx, "auth saml: more than one go-api account holds the NameID; no account matched", "provider_id", id.Provider)
+		return Principal{}, false, nil
+	}
+	if errors.Is(err, identity.ErrLegacyNotMember) {
 		return Principal{}, false, nil
 	}
 	if err != nil || !found {

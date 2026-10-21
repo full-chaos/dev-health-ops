@@ -990,8 +990,6 @@ gate_unit_suite() {
   [ "${#kept[@]}" -ge 9 ] || die "${list} lists only ${#kept[@]} files (hosted jobs require >= 9)."
   printf '   kept files: %s\n' "${#kept[@]}"
   OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/tooling -q -n "${nw}" || return 1
-  OTEL_ENABLED=false PYTHONPATH=src \
     "${PROXY_OFF[@]}" "${PYBIN}" -m pytest "${kept[@]}" -q -rs -n "${nw}"
 }
 

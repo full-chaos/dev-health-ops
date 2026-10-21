@@ -38,7 +38,7 @@ func (c cmdSpec) run(name string, args ...string) cmdResult {
 	defer func() { <-subprocessSlots }()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = c.dir
-	cmd.Env = c.env
+	cmd.Env = withNoPythonShims(c.env)
 	if c.stdin != nil {
 		cmd.Stdin = bytes.NewReader(c.stdin)
 	}
@@ -351,4 +351,28 @@ func repoRootNoT() string {
 		}
 		dir = parent
 	}
+}
+
+// withNoPythonShims puts the directory named by CIGATES_NO_PYTHON_DIR (set by a package's TestMain to a directory of python,
+// python3, uv and pip shims that exit 127) first in the PATH of a child environment: every PATH= entry is rewritten, and one
+// is added when there is none. Without the variable, or with an inherited (nil) environment, nothing changes.
+func withNoPythonShims(env []string) []string {
+	dir := os.Getenv("CIGATES_NO_PYTHON_DIR")
+	if dir == "" || env == nil {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	found := false
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			out = append(out, "PATH="+dir+string(os.PathListSeparator)+v)
+			found = true
+			continue
+		}
+		out = append(out, kv)
+	}
+	if !found {
+		out = append(out, "PATH="+dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+	}
+	return out
 }

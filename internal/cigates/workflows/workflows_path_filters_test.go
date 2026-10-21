@@ -465,6 +465,12 @@ func TestPathFiltersMiniRepoBaselineIsClean(t *testing.T) {
 	expectNoViolations(t, pathFilterViolations(t, root, map[string]string{}))
 }
 
+func TestDocsRobotsNamedByAGoToolIsCoveredByAnExplicitFilterRow(t *testing.T) {
+	files := miniFiles(map[string]string{"docs/robots.txt": "User-agent: *", "internal/y/y.go": "package y\nvar _ = filepath.Join(out, \"robots.txt\")"},
+		strings.ReplaceAll(miniGoYml, "      - '**/*.go'\n", "      - '**/*.go'\n      - 'docs/robots.txt'\n"))
+	expectNoViolations(t, pathFilterViolations(t, miniRepo(t, files), map[string]string{}))
+}
+
 func TestAnExcusedFileNamedByGoIsNotDemandedInGoYml(t *testing.T) {
 	files := miniFiles(map[string]string{"site.yml": "a: 1", "internal/x/x_test.go": "package x\nvar _ = \"site.yml\""}, miniGoYml)
 	root := miniRepo(t, files)
@@ -496,6 +502,7 @@ func TestGoWorkflowPathFiltersPlantedDefects(t *testing.T) {
 		{"a computed Join under a directory where only *.json is covered reports the uncovered .yaml", map[string]string{"cfg/a.json": "{}", "cfg/b.yaml": "x: 1", "internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"cfg\", name)"}, strings.ReplaceAll(miniGoYml, "      - '**/*.go'\n", "      - '**/*.go'\n      - 'cfg/*.json'\n"), map[string]string{}, []string{"names a directory with tracked files that match no pull_request path filter", "cfg/b.yaml"}},
 		{"the fixture filter becomes an enumeration", nil, strings.ReplaceAll(miniGoYml, "'tests/fixtures/**'", "'"+fxDir+"a.json'"), map[string]string{}, []string{"single glob 'tests/fixtures/**'"}},
 		{"a Go test names a fixture that is gone", map[string]string{"internal/x/x_test.go": "package x // \"" + fxDir + "ghost.json\"\nvar _ = \"" + fxDir + "ghost.json\""}, miniGoYml, map[string]string{}, []string{"reference fixture paths that do not exist", fxDir + "ghost.json"}},
+		{"a non-test Go file naming robots.txt while docs/robots.txt matches no filter is refused", map[string]string{"docs/robots.txt": "User-agent: *", "internal/y/y.go": "package y\nvar _ = filepath.Join(out, \"robots.txt\")"}, miniGoYml, map[string]string{}, []string{"robots.txt", "match no"}},
 		{"an ambiguous literal naming an uncovered file is neither resolved nor dropped silently", map[string]string{"a/data.json": "{}", "b/data.json": "{}", "internal/x/x_test.go": "package x\nvar _ = fsys.Open(\"data.json\")"}, miniGoYml, map[string]string{"a": "x", "b": "x"}, []string{"could not locate", "data.json"}},
 	}
 	for _, c := range cases {

@@ -3,9 +3,9 @@ package apiservice
 import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 
 	"net/http"
-	"strings"
 )
 
 // CloseHTTP10 answers an HTTP/1.0 request with "Connection: close" and so
@@ -28,13 +28,7 @@ func CloseHTTP10(next http.Handler) http.Handler {
 // "a%2Fb" as one segment.
 func DecodedPathRouting(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.RawPath != "" && strings.Contains(strings.ToLower(r.URL.RawPath), "%2f") {
-			clone := *r.URL
-			clone.RawPath = ""
-			r = r.Clone(r.Context())
-			r.URL = &clone
-		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, httpapi.DecodePath(r))
 	})
 }
 

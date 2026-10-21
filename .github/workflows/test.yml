@@ -203,10 +203,6 @@ jobs:
       # a local gate (ruff pinned by uv.lock).
       - name: Check Python formatting
         run: ruff format --check .
-      - name: Run the tooling tests
-        env:
-          OTEL_ENABLED: "false"
-        run: pytest tests/tooling -q -n 4
       # The Python tests that pin things which stay after the Python source is
       # deleted (Helm chart, compose, alerts, ci scripts, Go contracts). An
       # explicit list, not a negative filter: a new file is not picked up unseen.

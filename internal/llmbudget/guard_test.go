@@ -40,16 +40,16 @@ func usage(in, out, cached int64) Usage {
 
 func TestCostMicroUSDRoundsUpAndRefusesUnpriced(t *testing.T) {
 	// gpt-5-mini: 250000 in, 25000 cached, 2000000 out per million.
-	got, err := CostMicroUSD("openai", "gpt-5-mini", "", 1000, 1000, 0)
+	got, err := CostMicroUSD("openai", "gpt-5-mini", "", 1000, 1000, 0, 0)
 	if err != nil || got == nil || *got != 2250 {
 		t.Fatalf("cost = %v, %v", got, err)
 	}
-	got, _ = CostMicroUSD("openai", "gpt-5-mini", "", 1, 0, 0)
+	got, _ = CostMicroUSD("openai", "gpt-5-mini", "", 1, 0, 0, 0)
 	if got == nil || *got != 1 { // ceil(0.25)
 		t.Fatalf("a fraction rounds up, got %v", got)
 	}
 	// cached 1000 of 1000 input at the cached rate.
-	got, _ = CostMicroUSD("openai", "gpt-5-mini", "", 1000, 0, 1000)
+	got, _ = CostMicroUSD("openai", "gpt-5-mini", "", 1000, 0, 1000, 0)
 	if got == nil || *got != 25 {
 		t.Fatalf("cached cost = %v", got)
 	}
@@ -62,11 +62,11 @@ func TestCostMicroUSDRoundsUpAndRefusesUnpriced(t *testing.T) {
 		{"openai", "gpt-5-mini", "", 1, 1, 2}, // cached > input
 		{"openai", "gpt-5-mini", "", -1, 1, 0},
 	} {
-		if got, _ := CostMicroUSD(c.provider, c.model, c.base, c.in, c.out, c.cached); got != nil {
+		if got, _ := CostMicroUSD(c.provider, c.model, c.base, c.in, c.out, c.cached, 0); got != nil {
 			t.Fatalf("%+v priced as %d, want unavailable", c, *got)
 		}
 	}
-	nano, _ := CostMicroUSD("openai", "gpt-5-nano-2026-01-01", "", 1_000_000, 1_000_000, 0)
+	nano, _ := CostMicroUSD("openai", "gpt-5-nano-2026-01-01", "", 1_000_000, 1_000_000, 0, 0)
 	if nano == nil || *nano != 450_000 {
 		t.Fatalf("nano = %v", nano)
 	}
@@ -198,14 +198,49 @@ func TestSettleFailureIsAnAccountingError(t *testing.T) {
 
 func TestUsageFromTreatsZeroZeroAsUnreported(t *testing.T) {
 	zero, five := 0, 5
-	if u := UsageFrom(&zero, &zero, &zero); u.InputTokens != nil {
+	if u := UsageFrom(&zero, &zero, &zero, nil); u.InputTokens != nil {
 		t.Fatal("0/0 is unreported")
 	}
-	if u := UsageFrom(&five, &zero, &zero); u.InputTokens == nil || *u.InputTokens != 5 {
+	if u := UsageFrom(&five, &zero, &zero, nil); u.InputTokens == nil || *u.InputTokens != 5 {
 		t.Fatal("5/0 is real usage")
 	}
 	neg := -1
-	if u := UsageFrom(&neg, &five, &zero); u.InputTokens != nil {
+	if u := UsageFrom(&neg, &five, &zero, nil); u.InputTokens != nil {
 		t.Fatal("negative is unreported")
+	}
+}
+
+func anthropicGuardFor(store Store) Guard {
+	guard := guardFor(store)
+	guard.Provider, guard.Model = "anthropic", "claude-haiku-5-5"
+	return guard
+}
+
+func TestCacheWriteSettlesAtTheWriteRateAndTheReserveCoversIt(t *testing.T) {
+	coldCall := func() (Usage, error) {
+		created := int64(1000)
+		return Usage{InputTokens: ptr(1000), OutputTokens: ptr(0), CachedInputTokens: ptr(0), CacheCreationInputTokens: &created}, nil
+	}
+	for _, c := range []struct {
+		name       string
+		cacheWrite bool
+		covered    bool
+	}{{"marker reserves the write rate", true, true}, {"no marker reserves the input rate", false, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			store := &fakeStore{admit: Admission{ID: "r1", BudgetConfigured: true}}
+			err := anthropicGuardFor(store).Run(context.Background(), Call{IdempotencyKey: "k", MaxInputTokens: 1000, MaxOutputTokens: 0, CacheWrite: c.cacheWrite},
+				func(context.Context) (Usage, error) { return coldCall() })
+			if err != nil {
+				t.Fatal(err)
+			}
+			settled := store.settleReq[0].Cost
+			if settled == nil || *settled != 625 {
+				t.Fatalf("settled cost = %v, want 625 (1000 tokens at 625000 per million)", settled)
+			}
+			reserved := store.admitReq[0].MaxCost
+			if reserved == nil || (*reserved >= *settled) == !c.covered {
+				t.Fatalf("reserved %v, settled %d, covered want %v", reserved, *settled, c.covered)
+			}
+		})
 	}
 }

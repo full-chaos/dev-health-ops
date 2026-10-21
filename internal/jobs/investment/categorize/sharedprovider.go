@@ -80,13 +80,14 @@ func (p *SharedProvider) Complete(ctx context.Context, request CompletionRequest
 		return CompletionResult{}, err
 	}
 	completion := CompletionResult{
-		Text:              result.Text,
-		InputTokens:       result.Usage.InputTokens,
-		OutputTokens:      result.Usage.OutputTokens,
-		Model:             result.Model,
-		CachedInputTokens: result.Usage.CachedInputTokens,
-		FormatPath:        result.FormatPath,
-		FormatReason:      result.FormatReason,
+		Text:                     result.Text,
+		InputTokens:              result.Usage.InputTokens,
+		OutputTokens:             result.Usage.OutputTokens,
+		Model:                    result.Model,
+		CachedInputTokens:        result.Usage.CachedInputTokens,
+		FormatPath:               result.FormatPath,
+		FormatReason:             result.FormatReason,
+		CacheCreationInputTokens: result.Usage.CacheCreationInputTokens,
 	}
 	LogCompletion(ctx, completion)
 	return completion, nil
@@ -209,6 +210,7 @@ func (b sharedBudget) Run(ctx context.Context, attempt llm.Attempt, invoke func(
 		IdempotencyKey:  attempt.IdempotencyKey,
 		MaxInputTokens:  attempt.MaxInputBytes,
 		MaxOutputTokens: attempt.MaxOutputTokens,
+		CacheWrite:      attempt.CacheWrite,
 	}, func(ctx context.Context) (llmbudget.Usage, error) {
 		usage, err := invoke(ctx)
 		if err != nil {
@@ -223,7 +225,7 @@ func (b sharedBudget) Run(ctx context.Context, attempt llm.Attempt, invoke func(
 			zero := 0
 			cached = &zero
 		}
-		return llmbudget.UsageFrom(usage.InputTokens, usage.OutputTokens, cached), nil
+		return llmbudget.UsageFrom(usage.InputTokens, usage.OutputTokens, cached, usage.CacheCreationInputTokens), nil
 	})
 }
 

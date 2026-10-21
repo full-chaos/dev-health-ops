@@ -86,10 +86,6 @@ on:
       # a PR touching only the denylist is classified non-Go and go-quality
       # passes vacuously.
       - 'internal/auth/passwordpolicy/data/**'
-      # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/__init__.py (deleted);
-      # the path resolver reads that literal as any remaining __init__.py, so every one stays a trigger.
-      - 'tests/__init__.py'
-      - 'tests/**/__init__.py'
       - 'tests/fixtures/**'
       # the CHAOS-10376 guards read every tracked .py and ci/requirements-*.txt (the provider-limits page and mkdocs.yml: docs-drift.yml)
       - '**/*.py'
@@ -303,10 +299,6 @@ on:
       # a PR touching only the denylist is classified non-Go and go-quality
       # passes vacuously.
       - 'internal/auth/passwordpolicy/data/**'
-      # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/__init__.py (deleted);
-      # the path resolver reads that literal as any remaining __init__.py, so every one stays a trigger.
-      - 'tests/__init__.py'
-      - 'tests/**/__init__.py'
       - 'tests/fixtures/**'
       # the CHAOS-10376 guards read every tracked .py and ci/requirements-*.txt (the provider-limits page and mkdocs.yml: docs-drift.yml)
       - '**/*.py'

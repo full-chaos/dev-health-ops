@@ -22,9 +22,9 @@
 //	                     (promoted) Do uses http.DefaultTransport, and no literal of net/http.Client is ever written
 //	transport-address    &c.Transport (resolved through the type checker: promoted fields and named pointer types included):
 //	                     a write through the pointer is invisible to every other rule; &t.Proxy is a proxy site
-//	client-copy          a copy of a supplied net/http.Client (`*client`): the copy keeps a nil Transport unless the
+//	client-copy          a copy of a supplied net/http.Client or httputil.ReverseProxy (`*client`): the copy keeps a nil Transport unless the
 //	                     code gives it one, so every copy needs a row naming where its transport comes from
-//	client-parameter     a parameter of type *net/http.Client or net/http.Client: the constructor sweep. Every function that
+//	client-parameter     a parameter of type *net/http.Client, net/http.Client, *httputil.ReverseProxy or httputil.ReverseProxy: the constructor sweep. Every function that
 //	                     takes a supplied client is listed with where that client gets its transport, so a new one fails
 //	value-overwrite      an assignment to `*p` for a pointer to net/http.Client or net/http.Transport (or such a range target):
 //	                     the whole value is replaced, which no field rule sees
@@ -283,7 +283,7 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 		var kinds []string
 		if n.Params != nil {
 			for _, field := range n.Params.List {
-				if t := info.Types[field.Type].Type; isNamed(t, "Client") || isNamed(derefPointer(t), "Client") {
+				if t := info.Types[field.Type].Type; isTransportCarrier(t) || isTransportCarrier(derefPointer(t)) {
 					names := len(field.Names)
 					if names == 0 {
 						names = 1
@@ -486,8 +486,12 @@ func isClientCopy(info *types.Info, expression ast.Expr) bool {
 		return false
 	}
 	tv, ok := info.Types[star]
-	return ok && tv.IsValue() && isNamed(tv.Type, "Client")
+	return ok && tv.IsValue() && isTransportCarrier(tv.Type)
 }
+
+// isTransportCarrier: the type is the non-pointer net/http.Client or httputil.ReverseProxy, the two types whose zero
+// value sends through http.DefaultTransport.
+func isTransportCarrier(t types.Type) bool { return isNamed(t, "Client") || isReverseProxy(t) }
 
 // isValueOverwrite: the assignment target is `*p` for a pointer to net/http.Client or net/http.Transport: the whole
 // value is replaced, which no field rule sees.

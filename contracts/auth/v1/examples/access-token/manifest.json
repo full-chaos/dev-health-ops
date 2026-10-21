@@ -234,6 +234,42 @@
       "why": "type: not in the claim set; authorization is checked live per request."
     },
     {
+      "file": "invalid-kid-trailing-newline.json",
+      "expect_instance_location": "/header/kid",
+      "expect_keyword": "pattern",
+      "why": "kid ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-iss-trailing-newline.json",
+      "expect_instance_location": "/claims/iss",
+      "expect_keyword": "pattern",
+      "why": "iss ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-sub-trailing-newline.json",
+      "expect_instance_location": "/claims/sub",
+      "expect_keyword": "pattern",
+      "why": "sub ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-sid-trailing-newline.json",
+      "expect_instance_location": "/claims/sid",
+      "expect_keyword": "pattern",
+      "why": "sid ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-jti-trailing-newline.json",
+      "expect_instance_location": "/claims/jti",
+      "expect_keyword": "pattern",
+      "why": "jti ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
+      "file": "invalid-org-id-trailing-newline.json",
+      "expect_instance_location": "/claims/org_id",
+      "expect_keyword": "pattern",
+      "why": "org_id ending in a newline: every pattern anchors at the end of the text, not before a final line break."
+    },
+    {
       "file": "invalid-top-level-member.json",
       "expect_instance_location": "/",
       "expect_keyword": "additionalProperties",

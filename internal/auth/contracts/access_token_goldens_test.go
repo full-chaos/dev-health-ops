@@ -146,15 +146,46 @@ func TestRejectedAccessTokenFixturesFailByTheDeclaredKeyword(t *testing.T) {
 	}
 }
 
-func TestClientEnforcedAccessTokenFixturesAreRefusedByTheClient(t *testing.T) {
+// accessTokenClientRefusals is the refusal each reject_by_client fixture must
+// draw from ParseAccessToken, so a fixture refused for another reason (a
+// schema violation among them) fails instead of passing.
+var accessTokenClientRefusals = map[string]string{
+	"client-rejected-lifetime-over-the-ceiling.json": "over the HS256-compat ceiling",
+	"client-rejected-exp-equals-nbf.json":            "exp is not after nbf",
+	"client-rejected-nbf-before-iat.json":            "nbf precedes iat",
+	"client-rejected-exp-before-iat.json":            "nbf precedes iat",
+	"client-rejected-duplicate-claim-aud.json":       "duplicate object member \"aud\"",
+	"client-rejected-duplicate-header-alg.json":      "duplicate object member \"alg\"",
+	"client-rejected-exp-decimal-form.json":          "cannot unmarshal number 1760000600.0",
+}
+
+func TestClientEnforcedAccessTokenFixturesValidateButTheClientRefusesThemForTheirRule(t *testing.T) {
 	root := testRoot(t)
-	for _, entry := range loadAccessTokenManifest(t).RejectByClient {
+	entries := loadAccessTokenManifest(t).RejectByClient
+	claimed := map[string]bool{}
+	for _, entry := range entries {
+		claimed[entry.File] = true
 		t.Run(entry.File, func(t *testing.T) {
-			raw := loadAccessTokenFixture(t, entry.File)
-			if _, err := ParseAccessToken(root, raw); err == nil {
+			want, ok := accessTokenClientRefusals[entry.File]
+			if !ok {
+				t.Fatal("no expected refusal registered for this fixture")
+			}
+			if err := Validate(root, AccessTokenSurface, decodeAccessTokenFixture(t, entry.File)); err != nil {
+				t.Fatalf("this fixture is meant to be VALID against the schema; schema said: %v", err)
+			}
+			_, err := ParseAccessToken(root, loadAccessTokenFixture(t, entry.File))
+			if err == nil {
 				t.Fatalf("the client accepted a document only it can refuse (%s)", entry.Why)
 			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("refused, but not for its rule: want %q in %v", want, err)
+			}
 		})
+	}
+	for file := range accessTokenClientRefusals {
+		if !claimed[file] {
+			t.Errorf("refusal registered for %s, which the manifest does not list", file)
+		}
 	}
 }
 

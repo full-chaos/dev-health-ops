@@ -1,5 +1,7 @@
 package contracts
 
+import "errors"
+
 // Refusal stages of a credential-carrying surface's parser.
 const (
 	StageDuplicateMember = "duplicate_member"
@@ -29,4 +31,15 @@ func (e *CredentialRefusal) Error() string {
 		stage += " " + e.Rule
 	}
 	return e.Surface + ": refused at " + stage + " " + credentialRefusalPhrase
+}
+
+// refuseCredential is the single exit of a credential-carrying parser: any
+// error becomes a CredentialRefusal of that surface, so no stage, present or
+// later, can return input text.
+func refuseCredential(surface string, err error) error {
+	var refusal *CredentialRefusal
+	if errors.As(err, &refusal) {
+		return &CredentialRefusal{Surface: surface, Stage: refusal.Stage, Rule: refusal.Rule}
+	}
+	return &CredentialRefusal{Surface: surface, Stage: StageUnclassified}
 }

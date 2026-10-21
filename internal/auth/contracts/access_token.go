@@ -1,9 +1,6 @@
 package contracts
 
-import (
-	"fmt"
-	"time"
-)
+import "time"
 
 // AccessTokenSurface names the access-token.v1 wire contract.
 const AccessTokenSurface = "access-token.v1"
@@ -52,20 +49,31 @@ type AccessToken struct {
 // anywhere, a NumericDate in decimal form, nbf before iat, exp not after nbf,
 // and a lifetime over AccessTokenLifetimeCeiling.
 func ParseAccessToken(root string, raw []byte) (*AccessToken, error) {
+	token, err := parseAccessToken(root, raw)
+	if err != nil {
+		return nil, refuseCredential(AccessTokenSurface, err)
+	}
+	return token, nil
+}
+
+func parseAccessToken(root string, raw []byte) (*AccessToken, error) {
 	var token AccessToken
 	if err := decodeWire(root, AccessTokenSurface, raw, &token); err != nil {
 		return nil, err
 	}
 	c := token.Claims
 	if c.Nbf < c.Iat {
-		return nil, fmt.Errorf("%s: nbf precedes iat", AccessTokenSurface)
+		return nil, accessTokenRule("nbf_before_iat")
 	}
 	if c.Exp <= c.Nbf {
-		return nil, fmt.Errorf("%s: exp is not after nbf", AccessTokenSurface)
+		return nil, accessTokenRule("exp_not_after_nbf")
 	}
 	if c.Exp-c.Iat > int64(AccessTokenLifetimeCeiling/time.Second) {
-		return nil, fmt.Errorf("%s: lifetime of %d s is over the HS256-compat ceiling of %d s",
-			AccessTokenSurface, c.Exp-c.Iat, int64(AccessTokenLifetimeCeiling/time.Second))
+		return nil, accessTokenRule("lifetime_over_ceiling")
 	}
 	return &token, nil
+}
+
+func accessTokenRule(rule string) error {
+	return &CredentialRefusal{Surface: AccessTokenSurface, Stage: StageClientRule, Rule: rule}
 }

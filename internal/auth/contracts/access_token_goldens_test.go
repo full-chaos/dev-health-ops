@@ -150,13 +150,13 @@ func TestRejectedAccessTokenFixturesFailByTheDeclaredKeyword(t *testing.T) {
 // draw from ParseAccessToken, so a fixture refused for another reason (a
 // schema violation among them) fails instead of passing.
 var accessTokenClientRefusals = map[string]string{
-	"client-rejected-lifetime-over-the-ceiling.json": "over the HS256-compat ceiling",
-	"client-rejected-exp-equals-nbf.json":            "exp is not after nbf",
-	"client-rejected-nbf-before-iat.json":            "nbf precedes iat",
-	"client-rejected-exp-before-iat.json":            "exp is not after nbf",
-	"client-rejected-duplicate-claim-aud.json":       "duplicate object member \"aud\"",
-	"client-rejected-duplicate-header-alg.json":      "duplicate object member \"alg\"",
-	"client-rejected-exp-decimal-form.json":          "decoding validated document failed (text withheld",
+	"client-rejected-lifetime-over-the-ceiling.json": "refused at client_rule lifetime_over_ceiling",
+	"client-rejected-exp-equals-nbf.json":            "refused at client_rule exp_not_after_nbf",
+	"client-rejected-nbf-before-iat.json":            "refused at client_rule nbf_before_iat",
+	"client-rejected-exp-before-iat.json":            "refused at client_rule exp_not_after_nbf",
+	"client-rejected-duplicate-claim-aud.json":       "refused at duplicate_member",
+	"client-rejected-duplicate-header-alg.json":      "refused at duplicate_member",
+	"client-rejected-exp-decimal-form.json":          "refused at decode",
 }
 
 func TestClientEnforcedAccessTokenFixturesValidateButTheClientRefusesThemForTheirRule(t *testing.T) {

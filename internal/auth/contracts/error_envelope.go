@@ -89,6 +89,17 @@ func refuseDuplicateMembersIn(surface string, raw []byte) error {
 	return nil
 }
 
+// duplicateMemberError is refuseDuplicateMembersIn's refusal of a duplicate.
+type duplicateMemberError struct{ surface, key string }
+
+func (e *duplicateMemberError) Error() string {
+	return fmt.Sprintf(
+		"%s: duplicate object member %q. Parsers keep the last value, so an "+
+			"earlier one would never reach validation -- a document can carry a "+
+			"forbidden value on the wire and still validate",
+		e.surface, e.key)
+}
+
 // scanJSONValue consumes exactly one value, recursing so that a duplicate
 // nested inside an array or a sub-object is caught too. Written as a walk
 // rather than a decode because the whole point is to see what a decode would
@@ -115,11 +126,7 @@ func scanJSONValue(surface string, dec *json.Decoder) error {
 				return fmt.Errorf("%s: object member name is not a string", surface)
 			}
 			if seen[key] {
-				return fmt.Errorf(
-					"%s: duplicate object member %q. Parsers keep the last value, so an "+
-						"earlier one would never reach validation -- a document can carry a "+
-						"forbidden value on the wire and still validate",
-					surface, key)
+				return &duplicateMemberError{surface: surface, key: key}
 			}
 			seen[key] = true
 			if err := scanJSONValue(surface, dec); err != nil {

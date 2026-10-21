@@ -800,3 +800,87 @@ func TestGitHubFilesSingleFileAboveOneChunkIsCountedAndNeverStopsTheCursor(t *te
 		t.Fatalf("rows=%d result=%v, want 3 rows, 2 with contents, 1 oversize", len(sink.rows), result.Result)
 	}
 }
+
+func fitsTestEffect(t *testing.T, length int) EffectBatch {
+	t.Helper()
+	text := strings.Repeat("x", length)
+	row := gitFileRow{
+		RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", Path: "src/a.go", Contents: &text,
+		LastSynced: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), OrgID: nativeTestClaim("github", "files").OrgID,
+	}
+	effect, err := effectBatchFromValues("git_files", EffectReadbackRequired, []gitFileRow{row})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return effect
+}
+
+func productionAccepts(claim Claim, effect EffectBatch, now time.Time) bool {
+	chunk, ok := gitHubFilesPreparedChunk(effect, "before", "after")
+	if !ok {
+		return false
+	}
+	_, err := buildPreparedChunkMaterial(claim, chunk, now)
+	return err == nil
+}
+
+// The executor stamps the chunk ledger with its own nanosecond clock; a route
+// knows a millisecond instant. The pre-check must never accept a chunk that the
+// store refuses with the nanosecond clock, also at a margin of a few bytes
+// (r3 read, P2: such a chunk was refused on every retry and the unit was stuck).
+func TestGitHubFilesChunkFitsNeverAcceptsWhatTheNanosecondClockStoreRefuses(t *testing.T) {
+	claim := nativeTestClaim("github", "files")
+	millis := time.Date(2026, 10, 1, 12, 0, 0, 123_000_000, time.UTC)
+	nanos := time.Date(2026, 10, 1, 12, 0, 0, 123_456_789, time.UTC)
+	low, high := 1_000_000, 2_200_000
+	for low+1 < high {
+		middle := (low + high) / 2
+		if productionAccepts(claim, fitsTestEffect(t, middle), nanos) {
+			low = middle
+		} else {
+			high = middle
+		}
+	}
+	window := 0
+	for length := low - 10; length <= low+40; length++ {
+		effect := fitsTestEffect(t, length)
+		if !productionAccepts(claim, effect, nanos) && productionAccepts(claim, effect, millis) {
+			window++
+		}
+		if productionAccepts(claim, effect, nanos) != gitHubFilesChunkFits(claim, effect, "before", "after") &&
+			!productionAccepts(claim, effect, nanos) {
+			t.Fatalf("length %d: the store (ns clock) refuses it and the pre-check accepts it", length)
+		}
+	}
+	if window == 0 {
+		t.Fatal("no length is accepted with a millisecond clock and refused with a nanosecond clock: the test cannot fail")
+	}
+}
+
+// The pre-check builds the chunk with the executor's own helpers; this fails if
+// the two ever size a chunk differently.
+func TestGitHubFilesPreCheckChunkIsTheChunkTheExecutorStores(t *testing.T) {
+	fake := newFilesChunkFake(t, 3, 5_000, 2)
+	run, err := runFilesChunks(t, fake, "", 0)
+	if err != nil || len(run.emissions) < 2 {
+		t.Fatalf("emissions=%d err=%v", len(run.emissions), err)
+	}
+	sink := &filesReadbackSink{}
+	executor, session, descriptor, store := filesChunkExecutor(t, fake, sink)
+	if _, err := executor.Execute(context.Background(), session, descriptor); err != nil {
+		t.Fatal(err)
+	}
+	first := run.emissions[0]
+	mine, ok := gitHubFilesPreparedChunk(first.Batch.Effects[0], first.CursorBefore, first.CursorAfter)
+	if !ok {
+		t.Fatal("pre-check chunk not built")
+	}
+	stored, err := store.LoadPreparedChunk(context.Background(), session.Claim, 0, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.PayloadBytes != mine.PayloadBytes || stored.CursorBefore != mine.CursorBefore ||
+		stored.CursorAfter != mine.CursorAfter || len(stored.Effects) != len(mine.Effects) {
+		t.Fatalf("stored chunk differs from the pre-checked chunk: payload %d/%d cursors %q,%q / %q,%q effects %d/%d", stored.PayloadBytes, mine.PayloadBytes, stored.CursorBefore, stored.CursorAfter, mine.CursorBefore, mine.CursorAfter, len(stored.Effects), len(mine.Effects))
+	}
+}

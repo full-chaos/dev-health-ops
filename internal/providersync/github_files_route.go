@@ -406,7 +406,7 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 			if err != nil {
 				return err
 			}
-			if gitHubFilesChunkFits(claim, effect, before, after, normalizedAt) {
+			if gitHubFilesChunkFits(claim, effect, before, after) {
 				break
 			}
 			if len(rows) > 1 {
@@ -427,6 +427,9 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 		batch := CompleteRouteBatch{Effects: []EffectBatch{effect}}
 		if err := emit(ChunkRouteEmission{Batch: batch, CursorBefore: before, CursorAfter: after}); err != nil {
 			return err
+		}
+		for _, row := range rows {
+			delete(fetched, row.Path)
 		}
 		before, cursor = after, next
 	}
@@ -759,16 +762,37 @@ func (row gitFileRow) validate(claim Claim) error {
 
 var _ CompleteRouteHandler = GitHubFilesRouteHandler{}
 
-// gitHubFilesChunkFits builds the prepared chunk the executor will build for
-// this one emission and runs the chunk store's own material and validation on
-// it. No estimate: what the store would refuse is refused here first.
-func gitHubFilesChunkFits(claim Claim, effect EffectBatch, before, after string, now time.Time) bool {
-	chunk := PreparedProviderChunk{
-		SchemaVersion: chunkPayloadSchemaVersion, RouteVersion: chunkRouteVersion,
-		Ordinal: 99999, TotalChunks: 0, Effects: []EffectBatch{effect},
-		CursorBefore: before, CursorAfter: after, PayloadBytes: effect.PayloadBytes,
+// gitHubFilesWidestInstant is the longest RFC3339Nano instant (nine fractional
+// digits). The executor stamps the chunk ledger with its own nanosecond clock
+// while a route only knows a millisecond instant, so the pre-check runs on the
+// widest encoding: it is never smaller than what production measures.
+var gitHubFilesWidestInstant = time.Date(2026, 12, 31, 23, 59, 59, 999_999_999, time.UTC)
+
+// gitHubFilesPreparedChunk is the one prepared chunk the executor builds for a
+// non-final emission: the same split, the same cursor stamping and the same
+// payload sizing it uses. ok is false when the split yields more than one.
+func gitHubFilesPreparedChunk(effect EffectBatch, before, after string) (PreparedProviderChunk, bool) {
+	chunks, err := splitCompleteRouteBatch(CompleteRouteBatch{Effects: []EffectBatch{effect}}, ShadowComparison{}, GitHubFilesChunkPolicy())
+	if err != nil || len(chunks) != 1 {
+		return PreparedProviderChunk{}, false
 	}
-	chunk.ManifestDigest = preparedChunkDigest(chunk)
-	_, err := buildPreparedChunkMaterial(claim, chunk, now)
+	resetEmissionChunks(chunks, ChunkRouteEmission{CursorBefore: before, CursorAfter: after})
+	if sizeEmissionChunks(chunks) != nil {
+		return PreparedProviderChunk{}, false
+	}
+	chunks[0].Ordinal = 99999
+	chunks[0].ManifestDigest = preparedChunkDigest(chunks[0])
+	return chunks[0], true
+}
+
+// gitHubFilesChunkFits runs the chunk store's own material builder and
+// validation on that chunk, with the widest clock. No estimate: what the store
+// would refuse is refused here first.
+func gitHubFilesChunkFits(claim Claim, effect EffectBatch, before, after string) bool {
+	chunk, ok := gitHubFilesPreparedChunk(effect, before, after)
+	if !ok {
+		return false
+	}
+	_, err := buildPreparedChunkMaterial(claim, chunk, gitHubFilesWidestInstant)
 	return err == nil
 }

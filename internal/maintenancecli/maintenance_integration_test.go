@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -21,7 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -359,84 +356,23 @@ func (db *database) goScrub(t *testing.T, s scrubScenario) scrubResult {
 // build that still carried the Python CLI.
 const maintenancePythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-// maintenancePythonProgram is the entry point the producer runs: the real dev-hops CLI.
-const maintenancePythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-
-// maintenancePythonSettings are the variables that shape the producer's answers, as constants: the
-// producer's environment AND part of each golden's request key (a changed value fails the frozen replay).
-// ORG_ID, which the producer used to delete from the inherited environment by hand, is absent by
-// construction. A scenario's own variables are in its input; the database address is a per-run value.
-var maintenancePythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-
-func pythonProgram(t *testing.T, producer *venueoracle.Producer, db *database, env map[string]string, args ...string) (int, string, string) {
+// maintenanceGolden opens the golden of one maintenance session.
+func maintenanceGolden(t *testing.T, name, pin string) *venueoracle.Golden {
 	t.Helper()
-	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
-	// A scenario's own variables are in its input (the golden's key): they are declared with the settings.
-	declared := map[string]string{}
-	for name, value := range maintenancePythonSettings {
-		declared[name] = value
-	}
-	for key, value := range env {
-		declared[key] = value
-	}
-	command, err := producer.Command(context.Background(), declared, []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}, append([]string{"-c", maintenancePythonProgram, "maintenance"}, args...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
-	code := 0
-	if exit, ok := err.(*exec.ExitError); ok {
-		code = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run python: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
-	}
-	return code, stdout.String(), stderr.String()
-}
-
-// maintenanceGolden opens the golden of one maintenance session and the pinned Python root. pin is the
-// literal "PIN:<name>" (the recorder looks for it in the test source until the golden exists).
-func maintenanceGolden(t *testing.T, name, pin, test string) (*venueoracle.Golden, string) {
-	t.Helper()
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
+	return venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/" + name + ".json",
 		PythonBuild: maintenancePythonBuild,
 		SHA256:      pin,
-		Recipe: "git worktree add --detach $DIR " + maintenancePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/maintenancecli/ -test '^" + test + "$' -python-root $DIR",
 	})
-	return golden, golden.PythonRoot(t, repoRoot)
 }
 
-// maintenanceProduce runs one recorded session: produce is called only while recording, with the Python root
-// of the pinned checkout, and returns the session's answers as JSON; the frozen run gets them from the golden.
-func maintenanceProduce(t *testing.T, golden *venueoracle.Golden, root, label string, input []byte, produce func(producer *venueoracle.Producer) any) []byte {
+// maintenanceProduce returns the frozen answers of one maintenance session as JSON.
+func maintenanceProduce(t *testing.T, golden *venueoracle.Golden, label string, input []byte) []byte {
 	t.Helper()
-	request := venueoracle.ProgramRequest(label, maintenancePythonProgram, input, maintenancePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		body, err := json.Marshal(produce(producer))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest(label, input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	return []byte(answers[0].Body)
-}
-
-func (db *database) pythonScrub(t *testing.T, producer *venueoracle.Producer, s scrubScenario) scrubResult {
-	t.Helper()
-	code, stdout, stderr := pythonProgram(t, producer, db, s.env, append([]string{"scrub-error-text"}, s.args...)...)
-	if code != 0 {
-		t.Fatalf("%s: python exit %d, stderr %s", s.name, code, stderr)
-	}
-	return scrubResult{Name: s.name, Exit: code, Stdout: stdout, State: db.scrubState(t)}
 }
 
 func canonicalState(t *testing.T, value any) string {
@@ -450,11 +386,10 @@ func canonicalState(t *testing.T, value any) string {
 
 // TestScrubMatchesTheFrozenPythonOutput runs the verb on a real PostgreSQL and compares the report and every
 // scrubbed value with what the REAL `dev-hops maintenance scrub-error-text` left. The answers were executed
-// once on maintenancePythonBuild and are frozen in testdata/golden/scrub.json (the recipe regenerates them by
-// execution); the scenarios (their arguments and variables) are part of the golden's key. The seeded error
+// once on maintenancePythonBuild and are frozen in testdata/golden/scrub.json; the scenarios (their arguments and variables) are part of the golden's key. The seeded error
 // texts carry no literal token (a secret scanner would read it as a real one).
 func TestScrubMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := maintenanceGolden(t, "scrub", "1b14eab8972cfcb0a5077eef844f21ff94d49475de22ff9de671aa03824ec649", "TestScrubMatchesTheFrozenPythonOutput")
+	golden := maintenanceGolden(t, "scrub", "1b14eab8972cfcb0a5077eef844f21ff94d49475de22ff9de671aa03824ec649")
 	keys := make([]map[string]any, len(scrubScenarios))
 	for index, s := range scrubScenarios {
 		keys[index] = map[string]any{"name": s.name, "args": s.args, "env": s.env}
@@ -463,15 +398,7 @@ func TestScrubMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := maintenanceProduce(t, golden, root, "scrub-error-text scenarios", input, func(producer *venueoracle.Producer) any {
-		db := startDatabase(t)
-		var produced []scrubResult
-		for _, s := range scrubScenarios {
-			db.resetScrub(t)
-			produced = append(produced, db.pythonScrub(t, producer, s))
-		}
-		return produced
-	})
+	raw := maintenanceProduce(t, golden, "scrub-error-text scenarios", input)
 	var frozen []scrubResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
@@ -625,28 +552,13 @@ func (db *database) goHousekeeping(t *testing.T, s housekeepingScenario) houseke
 	return housekeepingResult{Name: s.name, Count: count, State: s.state(db, t)}
 }
 
-func (db *database) pythonHousekeeping(t *testing.T, producer *venueoracle.Producer, s housekeepingScenario) housekeepingResult {
-	t.Helper()
-	code, _, stderr := pythonProgram(t, producer, db, nil, s.verb)
-	if code != 0 {
-		t.Fatalf("%s: python exit %d, stderr %s", s.name, code, stderr)
-	}
-	match := s.pattern.FindStringSubmatch(stderr)
-	if match == nil {
-		t.Fatalf("%s: python logged no count matching %s:\n%s", s.name, s.pattern, stderr)
-	}
-	var count int
-	fmt.Sscan(match[1], &count)
-	return housekeepingResult{Name: s.name, Count: count, State: s.state(db, t)}
-}
-
 // TestHousekeepingMatchesTheFrozenPythonOutput compares the count and the rows left by cleanup-tokens,
 // cleanup-all and backfill-ask-dev-ephemeral-expiry with what the REAL `dev-hops maintenance` verbs did. The
 // answers were executed once on maintenancePythonBuild and are frozen in testdata/golden/housekeeping.json
-// (the recipe regenerates them by execution); the scenarios are part of the golden's key. The seeded rows are
+// the scenarios are part of the golden's key. The seeded rows are
 // relative to the database's own clock (hoursAgo), so no answer depends on the day it runs.
 func TestHousekeepingMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := maintenanceGolden(t, "housekeeping", "be53a74fa67a52feb91ef0a924b13fb101a0a95a3785fe84360080e0079825d3", "TestHousekeepingMatchesTheFrozenPythonOutput")
+	golden := maintenanceGolden(t, "housekeeping", "be53a74fa67a52feb91ef0a924b13fb101a0a95a3785fe84360080e0079825d3")
 	keys := make([]map[string]any, len(housekeepingScenarios))
 	for index, s := range housekeepingScenarios {
 		keys[index] = map[string]any{"name": s.name, "verb": s.verb, "pattern": s.pattern.String()}
@@ -655,15 +567,7 @@ func TestHousekeepingMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := maintenanceProduce(t, golden, root, "housekeeping scenarios", input, func(producer *venueoracle.Producer) any {
-		db := startDatabase(t)
-		var produced []housekeepingResult
-		for _, s := range housekeepingScenarios {
-			s.seed(db, t)
-			produced = append(produced, db.pythonHousekeeping(t, producer, s))
-		}
-		return produced
-	})
+	raw := maintenanceProduce(t, golden, "housekeeping scenarios", input)
 	var frozen []housekeepingResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)

@@ -3,22 +3,15 @@ package adminops
 import (
 	"bufio"
 	"bytes"
-	"context"
-	_ "embed"
 	"encoding/json"
 	"io"
 	"math/rand"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-//go:embed testdata/service_credentials_args_oracle.py
-var credentialArgsOracleProgram string
 
 type argsLeaf struct {
 	T string `json:"t"`
@@ -78,21 +71,13 @@ const serviceArgsPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // TestCredentialArgsMatchTheFrozenPythonParser runs every command line of argsCorpus through the
 // REAL argparse (build_parser().parse_args) and through parseCredentialArgs and compares whether it parses,
 // whether it is help, and every value the handler reads. The parser's answers were executed once on
-// serviceArgsPythonBuild and are frozen in testdata/golden/credential_args.json (the recipe regenerates
-// them by execution); the corpus and the program are part of the golden's key.
+// serviceArgsPythonBuild and are frozen in testdata/golden/credential_args.json; the corpus is part of the golden's key.
 func TestCredentialArgsMatchTheFrozenPythonParser(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/credential_args.json",
 		PythonBuild: serviceArgsPythonBuild,
 		SHA256:      "45c53cb9d35ba3733ebecda7444018254679fea11285e82dfa9125e389aba306",
-		Recipe: "git worktree add --detach $DIR " + serviceArgsPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/adminops/ -test '^TestCredentialArgsMatchTheFrozenPythonParser$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	corpus := argsCorpus()
 	var input bytes.Buffer
@@ -101,23 +86,8 @@ func TestCredentialArgsMatchTheFrozenPythonParser(t *testing.T) {
 		input.Write(raw)
 		input.WriteByte('\n')
 	}
-	env := map[string]string{"PYTHONHASHSEED": "0", "DISABLE_DOTENV": "1", "OTEL_ENABLED": "false"}
-	request := venueoracle.ProgramRequest("credential args corpus", credentialArgsOracleProgram, input.Bytes(), env)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		command, err := producer.Command(context.Background(), env, nil, "-c", credentialArgsOracleProgram)
-		if err != nil {
-			t.Fatal(err)
-		}
-		command.Stdin = bytes.NewReader(input.Bytes())
-		var stderr strings.Builder
-		command.Stderr = &stderr
-		output, err := command.Output()
-		if err != nil {
-			t.Fatalf("live python: %v\n%s", pyoracle.RunError(command.Path, err, nil), stderr.String())
-		}
-		// Packed: the corpus answers are megabytes of near-identical lines.
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
-	})
+	request := venueoracle.ProgramRequest("credential args corpus", input.Bytes())
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	reader := bufio.NewReader(strings.NewReader(venueoracle.UnpackBody(t, answers[0].Body)))
 	mismatches, parsed, refused, helped := 0, 0, 0, 0

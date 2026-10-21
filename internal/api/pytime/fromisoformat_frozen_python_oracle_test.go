@@ -12,26 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const pythonFromISOProgram = `
-import json, sys
-from datetime import datetime, timezone
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        value = datetime.fromisoformat(text)
-    except (ValueError, TypeError):
-        out.append(None)
-        continue
-    offset = value.utcoffset()
-    if offset is None:
-        out.append([value.strftime("%Y-%m-%dT%H:%M:%S.%f"), None])
-    else:
-        seconds = offset.days * 86400 + offset.seconds
-        micro = offset.microseconds
-        out.append([value.replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S.%f"), [seconds, micro]])
-print(json.dumps(out))
-`
-
 // fromISOCorpus holds every form the grammar reads and the near misses of
 // each.
 var fromISOCorpus = []string{
@@ -92,7 +72,7 @@ func TestFromISOFormatMatchesFrozenPython(t *testing.T) {
 	}
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "fromisoformat.golden.json",
-		programoracle.Program{Name: "fromisoformat", Text: pythonFromISOProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "fromisoformat", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []*[2]any
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -143,22 +123,6 @@ func timeOffset(value pytime.DateTime) time.Duration {
 	return time.Duration(value.Offset)*time.Second + time.Duration(value.OffsetMicro)*time.Microsecond
 }
 
-const pythonPydanticFormatProgram = `
-import json, sys
-from datetime import datetime
-from pydantic import TypeAdapter
-adapter = TypeAdapter(datetime)
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        value = datetime.fromisoformat(text)
-    except (ValueError, TypeError):
-        out.append(None)
-        continue
-    out.append(json.loads(adapter.dump_json(value)))
-print(json.dumps(out))
-`
-
 // TestPydanticMatchesFrozenPydanticDumpJSON pins Pydantic, the pydantic-core
 // JSON form of a datetime, on every value datetime.fromisoformat reads from
 // the fromisoformat corpus: naive and aware, UTC, offsets with seconds and
@@ -175,7 +139,7 @@ func TestPydanticMatchesFrozenPydanticDumpJSON(t *testing.T) {
 	}
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "pydantic.golden.json",
-		programoracle.Program{Name: "pydantic", Text: pythonPydanticFormatProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "pydantic", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []*string
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

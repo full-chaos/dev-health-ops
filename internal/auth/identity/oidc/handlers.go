@@ -165,7 +165,7 @@ func (s *Service) AuthorizeHandler() http.Handler {
 			s.reject(w, r, routeAuthorize, providerID, failure)
 			return
 		}
-		if _, failure := s.admit(r.Context(), providerID); failure != nil {
+		if _, failure := s.admit(r.Context(), providerID, oidcSpec); failure != nil {
 			s.reject(w, r, routeAuthorize, providerID, failure)
 			return
 		}
@@ -197,7 +197,7 @@ func (s *Service) CallbackHandler() http.Handler {
 			s.reject(w, r, routeCallback, providerID, failure)
 			return
 		}
-		if _, failure := s.admit(r.Context(), providerID); failure != nil {
+		if _, failure := s.admit(r.Context(), providerID, oidcSpec); failure != nil {
 			s.reject(w, r, routeCallback, providerID, failure)
 			return
 		}
@@ -211,31 +211,41 @@ func (s *Service) CallbackHandler() http.Handler {
 			s.reject(w, r, routeCallback, providerID, deny(http.StatusUnprocessableEntity, ReasonMalformed, errs))
 			return
 		}
-		login, clear, err := s.Callback(r.Context(), providerID, CallbackInput{
-			Code: body.Code, State: body.State, RequestID: requestid.Audit(r.Context()),
-			Cookie: func(name string) (string, bool) {
-				c, err := r.Cookie(name)
-				if err != nil {
-					return "", false
-				}
-				return c.Value, true
-			},
-		})
-		if clear != nil {
-			http.SetCookie(w, clear)
-		}
-		if err != nil {
-			s.writeError(w, err)
-			return
-		}
-		orgID := ""
-		if login.OrgID != nil {
-			orgID = login.OrgID.String()
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"access_token": login.Tokens.AccessToken, "refresh_token": login.Tokens.RefreshToken,
-			"token_type": "bearer", "expires_in": login.Tokens.ExpiresIn,
-			"user_id": login.PrincipalID.String(), "email": login.Email, "org_id": orgID, "role": login.Role,
-		})
+		login, clear, err := s.Callback(r.Context(), providerID, callbackInput(r, body))
+		s.writeLogin(w, login, clear, err)
+	})
+}
+
+func callbackInput(r *http.Request, body callbackBody) CallbackInput {
+	return CallbackInput{
+		Code: body.Code, State: body.State, RequestID: requestid.Audit(r.Context()),
+		Cookie: func(name string) (string, bool) {
+			c, err := r.Cookie(name)
+			if err != nil {
+				return "", false
+			}
+			return c.Value, true
+		},
+	}
+}
+
+// writeLogin answers a callback: the clearing cookie first, then the error or
+// the login response.
+func (s *Service) writeLogin(w http.ResponseWriter, login Login, clear *http.Cookie, err error) {
+	if clear != nil {
+		http.SetCookie(w, clear)
+	}
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	orgID := ""
+	if login.OrgID != nil {
+		orgID = login.OrgID.String()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"access_token": login.Tokens.AccessToken, "refresh_token": login.Tokens.RefreshToken,
+		"token_type": "bearer", "expires_in": login.Tokens.ExpiresIn,
+		"user_id": login.PrincipalID.String(), "email": login.Email, "org_id": orgID, "role": login.Role,
 	})
 }

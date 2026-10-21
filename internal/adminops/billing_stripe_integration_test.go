@@ -25,7 +25,7 @@ import (
 // `admin billing pull-stripe|sync-stripe` are compared with the real Python verbs
 // on one scripted session over real PostgreSQL, each plane talking to its own
 // Stripe API fake. The fake answers from objects the real Stripe SDK (Python
-// stripe) builds and serialises (testdata/stripe_fixtures.json, the stdout of testdata/stripe_fixtures.py,
+// stripe) built and serialised (testdata/stripe_fixtures.json,
 // pinned by sha256), so no response is hand-written JSON. Per step: exit code, stdout, the plan and price rows, and (compared between
 // the planes) every request each plane made of Stripe.
 
@@ -280,7 +280,7 @@ func sortPrices(stdout string) string {
 	return strings.Join(lines, "\n")
 }
 
-func stripeSession(t *testing.T, python bool) []stripeResult {
+func stripeSession(t *testing.T) []stripeResult {
 	t.Helper()
 	db := startDatabase(t)
 	ctx := context.Background()
@@ -313,12 +313,7 @@ func stripeSession(t *testing.T, python bool) []stripeResult {
 		fake.mu.Unlock()
 		var code int
 		var stdout string
-		if python {
-			env["VENUE_STRIPE_API_BASE"] = server.URL
-			code, stdout = pythonVerbFull(t, db, env, nil, s.args)
-		} else {
-			code, stdout = goVerbEnv(t, db, env, s.args)
-		}
+		code, stdout = goVerbEnv(t, db, env, s.args)
 		fake.mu.Lock()
 		calls := append([]string(nil), fake.calls...)
 		fake.mu.Unlock()
@@ -374,10 +369,10 @@ func compareStripe(t *testing.T, got, want []stripeResult, wantName string) {
 // TestStripeMatchesTheFrozenPythonOutput runs the script against the fake and compares every step (exit,
 // stdout, the rows, the Stripe requests) with what the REAL `dev-hops admin billing pull-stripe|sync-stripe`
 // verbs did against the same fake. The answers were executed once on adminPythonBuild and are frozen in
-// testdata/golden/stripe.json (the recipe regenerates them by execution); the script and the digest of the
+// testdata/golden/stripe.json; the script and the digest of the
 // recorded Stripe fixtures are part of the golden's key.
 func TestStripeMatchesTheFrozenPythonOutput(t *testing.T) {
-	golden, root := adminGolden(t, "stripe", "72b4fc535c7d2432ecb44a9fd181d905ea7d2241d74b05386111ccf624f58bc6", "TestStripeMatchesTheFrozenPythonOutput")
+	golden := adminGolden(t, "stripe", "72b4fc535c7d2432ecb44a9fd181d905ea7d2241d74b05386111ccf624f58bc6")
 	script := make([]map[string]any, len(stripeScript))
 	for index, s := range stripeScript {
 		script[index] = map[string]any{"args": s.args, "noKey": s.noKey, "sql": s.sql, "seed": s.seed, "listFails": s.listFails}
@@ -386,12 +381,12 @@ func TestStripeMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := adminProduce(t, golden, root, "stripe script", input, func() any { return stripeSession(t, true) })
+	raw := adminProduce(t, golden, "stripe script", input)
 	var frozen []stripeResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
 	}
-	compareStripe(t, stripeSession(t, false), frozen, "frozen Python")
+	compareStripe(t, stripeSession(t), frozen, "frozen Python")
 	created, requests := 0, 0
 	for _, item := range frozen {
 		if strings.Contains(item.Stdout, "Created:  ['") {

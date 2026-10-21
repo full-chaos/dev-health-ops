@@ -46,20 +46,9 @@ var pythonIntDifferentialCases = []string{
 	"++5", "+-5", "-+5", "-++5",
 }
 
-// pythonIntProgram answers, per case (base64 of the value's UTF-8 bytes, so no
+// The frozen answer holds, per case (base64 of the value's UTF-8 bytes, so no
 // shell, argv or source-encoding layer can alter the exotic bytes under test),
 // "ok:<int(value)>" or "reject".
-const pythonIntProgram = `import base64, json, sys
-out = []
-for item in json.loads(sys.stdin.read()):
-    raw = base64.b64decode(item).decode("utf-8")
-    try:
-        out.append("ok:%d" % int(raw))
-    except Exception:
-        out.append("reject")
-print(json.dumps(out))
-`
-
 func TestPythonIntMatchesFrozenCPython(t *testing.T) {
 	encoded := make([]string, len(pythonIntDifferentialCases))
 	for index, raw := range pythonIntDifferentialCases {
@@ -70,7 +59,7 @@ func TestPythonIntMatchesFrozenCPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenPython(t, "python-int.golden.json",
-		programoracle.Program{Name: "int()", Text: pythonIntProgram, Stdin: input})[0]
+		programoracle.Program{Name: "int()", Stdin: input})[0]
 	var answers []string
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &answers); err != nil {
 		t.Fatalf("decode the frozen answer: %v", err)

@@ -24,11 +24,7 @@ import (
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-//go:embed testdata/teams_sync_oracle_gitlab.py
-var teamsSyncOracleGitLabProgram string
 
 // fakeGitLab is the one GitLab both planes read: python-gitlab (the real Python
 // verb, pointed here via GITLAB_URL, which providers/teams.py's gitlab branch
@@ -175,25 +171,8 @@ func (o *teamsOracle) runGitLab(fake *fakeGitLab, orgID, owner, token string, sc
 	o.truncateAll()
 	viaEnv := strings.HasPrefix(token, "env:")
 	token = strings.TrimPrefix(token, "env:")
-	argv := []string{"--org", orgID, "sync", "teams", "--provider", "gitlab"}
-	if owner != "" { // a scenario with no owner omits the flag in both planes
-		argv = append(argv, "--owner", owner)
-	}
-	pythonEnv := map[string]string{"CLICKHOUSE_URI": o.pythonHTTPDSN, "GITLAB_URL": fake.base()}
-	if sc != nil && sc.envToken != "" {
-		pythonEnv["GITLAB_TOKEN"] = sc.envToken
-	}
-	if viaEnv {
-		pythonEnv["GITLAB_TOKEN"] = token
-	} else if token != "" { // a scenario with no token sends no --auth in either plane
-		argv = append(argv, "--auth", token)
-	}
-	argv = append(argv, extra...)
-	o.python(sc.name, map[string]any{"argv": argv, "env": pythonEnv})
+	o.python(sc.name)
 	run := gitlabRun{pythonStage: o.cur.Stage, pythonCode: o.cur.Code}
-	if o.recording {
-		return run // the recording asks Python only: the Go plane runs in the comparison
-	}
 	run.goCode, run.goStdout, run.goStderr = o.runGoGitLab(fake, orgID, owner, token, viaEnv, sc, extra...)
 	return run
 }
@@ -587,16 +566,7 @@ func gitlabCorpusKey() []byte {
 // ended and, column by column, the `teams` rows it wrote. Executed once on teamsPythonBuild and frozen in
 // testdata/golden/teams_gitlab.json.
 func TestSyncTeamsGitLabMatchesFrozenPython(t *testing.T) {
-	frozen, golden := openTeamsGolden(t, "gitlab", "TestSyncTeamsGitLabMatchesFrozenPython", "2ce74c0408dd8981d23f61e1e28ba27e7a79aa1a7d2de510b036553b46a82c2e", teamsSyncOracleGitLabProgram, gitlabCorpusKey(),
-		func(t *testing.T, producer *venueoracle.Producer) []teamsFrozen {
-			o := newTeamsOracle(t)
-			o.startPython(producer, teamsSyncOracleGitLabProgram)
-			fake := newFakeGitLab(t)
-			for _, sc := range gitlabScenarios() {
-				o.arrangeAndRunGitLab(sc, fake)
-			}
-			return o.recorded
-		})
+	frozen, golden := openTeamsGolden(t, "gitlab", "2ce74c0408dd8981d23f61e1e28ba27e7a79aa1a7d2de510b036553b46a82c2e", gitlabCorpusKey())
 	o := newTeamsOracle(t)
 	o.frozen = frozen
 	fake := newFakeGitLab(t)

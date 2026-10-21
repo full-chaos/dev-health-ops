@@ -69,12 +69,10 @@ func TestIntegrationSyncVenueOracle(t *testing.T) {
 	const jwtKey = "venue-oracle-test-secret-key-for-integration-sync!"
 	v := newIDs()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root),
+		Golden: golden, Root: root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + venueKey,
-			"VENUE_PINNED_NOW=" + venuePinnedNow,
-			"VENUE_PINNED_NOW_MODULES=dev_health_ops.sync.planner,dev_health_ops.sync.watermarks,dev_health_ops.models.integrations",
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -177,9 +175,7 @@ ORDER BY u.integration_id::text, u.source_id::text, u.dataset_key`, 14},
 	}
 	for _, table := range compare {
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query)
-		pythonRows := golden.InspectRows(t, table.name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query)
-		})
+		pythonRows := golden.InspectRows(t, table.name)
 		if want := withoutUntaggedSource(t, table.name, pythonRows, v.incremental.id.String(), untaggedSource); goRows != want {
 			t.Errorf("%s differs after the requests (python minus the untagged source):\n python: %s\n go:     %s", table.name, want, goRows)
 		}
@@ -291,12 +287,12 @@ func repoRoot(t *testing.T) string {
 	}
 	directory := filepath.Dir(file)
 	for {
-		if info, err := os.Stat(filepath.Join(directory, "src", "dev_health_ops")); err == nil && info.IsDir() {
+		if info, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil && !info.IsDir() {
 			return directory
 		}
 		parent := filepath.Dir(directory)
 		if parent == directory {
-			t.Fatalf("no src/dev_health_ops above %s", file)
+			t.Fatalf("no go.mod above %s", file)
 		}
 		directory = parent
 	}

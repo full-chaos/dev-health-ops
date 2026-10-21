@@ -21,20 +21,7 @@ import (
 // `isdigit()` is True and `int()` raises.
 func TestNumericTypeDigitTableMatchesLivePython(t *testing.T) {
 
-	const derive = `
-import json, sys
-out = []
-for cp in range(0x110000):
-    c = chr(cp)
-    if not c.isdigit():
-        continue
-    try:
-        int(c)
-    except ValueError:
-        out.append(cp)
-json.dump(out, sys.stdout)
-`
-	rendered := []byte(edgesProgram(t, "numeric_type_digit_table", "TestNumericTypeDigitTableMatchesLivePython", "numeric type digit set", derive))
+	rendered := []byte(edgesProgram(t, "numeric_type_digit_table", "numeric type digit set"))
 	var live []rune
 	if err := json.Unmarshal(rendered, &live); err != nil {
 		t.Fatalf("decode derived set: %v", err)
@@ -86,8 +73,7 @@ json.dump(out, sys.stdout)
 // about which ids are convertible, silently, in the direction that mislabels a
 // crashing row as an ordinary PR.
 func TestIntMaxStrDigitsMatchesLivePython(t *testing.T) {
-	output := []byte(edgesProgram(t, "int_max_str_digits", "TestIntMaxStrDigitsMatchesLivePython", "int max str digits",
-		"import sys; print(sys.get_int_max_str_digits())"))
+	output := []byte(edgesProgram(t, "int_max_str_digits", "int max str digits"))
 	live, err := strconv.Atoi(strings.TrimSpace(string(output)))
 	if err != nil {
 		t.Fatalf("parse int_max_str_digits %q: %v", output, err)
@@ -120,29 +106,7 @@ func TestIntMaxStrDigitsMatchesLivePython(t *testing.T) {
 // would pass on the day the versions diverged and say nothing about why.
 func TestPythonDecimalBlocksMatchLivePython(t *testing.T) {
 
-	const derive = `
-import json, unicodedata
-blocks, values = [], {}
-run = []
-for cp in range(0x110000):
-    c = chr(cp)
-    if not c.isdigit():
-        continue
-    try:
-        v = int(c)
-    except ValueError:
-        continue
-    values[cp] = v
-    if v == 0:
-        run.append(cp)
-blocks = [cp for cp in run if all(values.get(cp + k) == k for k in range(10))]
-print(json.dumps({
-    "blocks": blocks,
-    "total": len(values),
-    "unicode_version": unicodedata.unidata_version,
-}))
-`
-	output := []byte(edgesProgram(t, "python_decimal_blocks", "TestPythonDecimalBlocksMatchLivePython", "python decimal blocks", derive))
+	output := []byte(edgesProgram(t, "python_decimal_blocks", "python decimal blocks"))
 	var live struct {
 		Blocks         []int  `json:"blocks"`
 		Total          int    `json:"total"`

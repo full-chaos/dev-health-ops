@@ -6,13 +6,11 @@ import (
 	"encoding/json"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -23,11 +21,8 @@ func TestMain(m *testing.M) { os.Exit(venueoracle.RunTests(m)) }
 // producers are three service modules of the pinned build, over the standard
 // library only. A golden recorded by another producer is refused.
 var signedTokenGoldens = programoracle.Set{
-	Package:  "./internal/auth/signedtoken/",
 	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
 	Identity: "python 3.14.7\nunicodedata 16.0.0",
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
 	Pins: map[string]string{
 		"link-signatures.golden.json": "37e4bf4488b8f883730668b1cbc10c9b0dc4422c073478376e0abbda48187147",
 	},
@@ -45,45 +40,6 @@ func digestOf(text string) textDigest {
 	sum := sha256.Sum256([]byte(text))
 	return textDigest{SHA256: hex.EncodeToString(sum[:]), Length: len(text)}
 }
-
-// The program runs the three Python modules' own helpers. Each module keeps
-// its own copy, so every case is checked against all three: a drift in any
-// one of them is a mismatch here. A secret and a token are answered as their
-// digest; the hash of a token is the value the services store, and is
-// answered as it is.
-const pythonSignedTokenProgram = `
-import hashlib, json, os, sys
-from dev_health_ops.api.services import email_verification, invites, password_reset
-modules = [invites, email_verification, password_reset]
-def digest(text):
-    raw = text.encode("utf-8")
-    return {"sha256": hashlib.sha256(raw).hexdigest(), "length": len(raw)}
-req = json.loads(sys.stdin.read())
-out = {"secret": [], "build": [], "valid": []}
-for jwt, settings in req["secrets"]:
-    for name in ("JWT_SECRET_KEY", "SETTINGS_ENCRYPTION_KEY"):
-        os.environ.pop(name, None)
-    if jwt is not None:
-        os.environ["JWT_SECRET_KEY"] = jwt
-    if settings is not None:
-        os.environ["SETTINGS_ENCRYPTION_KEY"] = settings
-    out["secret"].append([digest(m._token_secret()) for m in modules])
-os.environ.pop("SETTINGS_ENCRYPTION_KEY", None)
-os.environ["JWT_SECRET_KEY"] = req["secret"]
-import uuid
-for text in req["ids"]:
-    token_id = uuid.UUID(text)
-    out["build"].append([[digest(m._build_token(token_id)), m._hash_token(m._build_token(token_id))] for m in modules])
-for token in req["tokens"]:
-    row = []
-    for m in modules:
-        try:
-            row.append("valid" if m._validate_signed_token(token) is not None else "invalid")
-        except TypeError as exc:
-            row.append("TypeError")
-    out["valid"].append(row)
-print(json.dumps(out))
-`
 
 func signedTokenCorpus(secret string) []string {
 	id := uuid.MustParse("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0")
@@ -135,12 +91,7 @@ func TestSignedTokenMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	output := signedTokenGoldens.Outputs(t, root, "link-signatures.golden.json", programoracle.Program{Name: "signed token", Text: pythonSignedTokenProgram, Stdin: input})[0]
+	output := signedTokenGoldens.Outputs(t, "link-signatures.golden.json", programoracle.Program{Name: "signed token", Stdin: input})[0]
 	var want struct {
 		Secret [][]textDigest        `json:"secret"`
 		Build  [][][]json.RawMessage `json:"build"`

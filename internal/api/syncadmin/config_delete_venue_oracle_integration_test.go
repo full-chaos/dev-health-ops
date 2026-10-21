@@ -38,7 +38,7 @@ func TestSyncConfigDeleteVenueOracle(t *testing.T) {
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden:    golden,
-		Root:      golden.PythonRoot(t, root),
+		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On "},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
@@ -106,7 +106,7 @@ FROM pg_constraint WHERE contype = 'f' AND confrelid = 'sync_configurations'::re
 	for _, table := range tables {
 		query := fmt.Sprintf(`SELECT coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '') FROM %s t`, table)
 		goRows := venueoracle.TableRows(t, ctx, goDB, query)
-		golden.CompareRows(t, "rows:"+table, func() string { return venueoracle.TableRows(t, ctx, source, query) }, goRows)
+		golden.CompareRows(t, "rows:"+table, goRows)
 		t.Logf("%s: %s rows identical", table, venueoracle.TableRows(t, ctx, goDB, "SELECT count(*) FROM "+table))
 	}
 	// The deletes happened, and the refused ones did not: the deleted

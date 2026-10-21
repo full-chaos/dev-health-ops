@@ -6,9 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,7 +18,7 @@ import (
 )
 
 // Frozen-Python differential oracle for the in-process budget estimator
-// (CHAOS-6243). testdata/budget_estimate_oracle.py generates every case,
+// (CHAOS-6243). A script generated every case,
 // runs the REAL production functions (estimate_provider_budget over a real
 // SyncTaskContext, credential_fingerprint, _resolve_env_credentials,
 // _credential_mapping over ciphertext it encrypted itself) and this test
@@ -121,12 +118,8 @@ func declaredDivergence(_ oracleEstimateInput, python json.RawMessage) string {
 }
 
 func TestBudgetEstimatorMatchesFrozenPython(t *testing.T) {
-	script, err := os.ReadFile(filepath.Join("testdata", "budget_estimate_oracle.py"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	raw := []byte(frozenPython(t, "budget-estimate.golden.json",
-		programoracle.Script("budget estimate oracle", path.Join("internal", "syncbudget", "testdata", "budget_estimate_oracle.py"), string(script), nil))[0])
+		programoracle.Program{Name: "budget estimate oracle", Stdin: nil})[0])
 	var output oracleOutput
 	if err := json.Unmarshal(raw, &output); err != nil {
 		t.Fatalf("decode oracle output: %v", err)

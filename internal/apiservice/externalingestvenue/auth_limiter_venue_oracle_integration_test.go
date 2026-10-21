@@ -64,7 +64,7 @@ func TestExternalIngestAuthLimiterVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root),
+		Golden: golden, Root: root,
 		JWTKey:    "venue-oracle-jwt-signing-key-32-bytes-min",
 		PythonEnv: []string{"TRUSTED_PROXIES=testclient"},
 	})

@@ -135,14 +135,12 @@ func TestAGoldenItsTestDidNotUseIsReported(t *testing.T) {
 // The whole check, in a child process whose goldens are in a directory of its
 // own: the subtests below are the tests of a package, each with its golden.
 func TestRunTestsFailsForAGoldenItsTestDidNotUse(t *testing.T) {
-	requests := []Request{ProgramRequest("corpus", sampleProgram, []byte("abc"), nil)}
+	requests := []Request{ProgramRequest("corpus", []byte("abc"))}
 	if dir := os.Getenv(openedChildDir); dir != "" {
-		t.Setenv(goldenUpdateEnv, "")
-		t.Setenv(goldenCandidateEnv, "")
 		t.Setenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR", t.TempDir())
 		// open writes the subtest's golden under dir and opens it, as a test opens its pinned golden.
 		open := func(child *testing.T, name string) *Golden {
-			file := goldenFile{Header: goldenHeader{Test: child.Name(), PythonBuild: goldenBuild, ProducerDigest: strings.Repeat("a", 64), Recipe: "record it"}}
+			file := goldenFile{Header: goldenHeader{Test: child.Name(), PythonBuild: goldenBuild, ProducerDigest: strings.Repeat("a", 64)}}
 			entry := requestKey(requests[0])
 			entry.Headers, entry.Body = map[string]string{"stderr": ""}, "ABC\n"
 			file.Requests = []goldenRequest{entry}
@@ -150,10 +148,10 @@ func TestRunTestsFailsForAGoldenItsTestDidNotUse(t *testing.T) {
 				child.Fatal(err)
 			}
 			path, digest := writeGoldenFile(child, filepath.Join(dir, name), file)
-			return OpenGolden(child, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+			return OpenGolden(child, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest})
 		}
 		compare := func(child *testing.T, golden *Golden) {
-			answers := golden.Produce(child, "/no/python/here", requests, func(*Producer, []Request) []Response { return nil })
+			answers := golden.Produce(child, requests)
 			golden.Consumed(child, answers...)
 			golden.SkipDiff(child)
 		}

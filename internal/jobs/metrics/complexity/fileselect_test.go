@@ -194,8 +194,8 @@ func TestBlameMaxFilesArithmeticMatchesLivePython(t *testing.T) {
 		t.Fatalf("marshal cases: %v", err)
 	}
 
-	output := runComplexityOracle(t, "testdata/golden/blame_maxfiles_oracle.json", "^TestBlameMaxFilesArithmeticMatchesLivePython$",
-		"blame max files oracle", "python_blame_maxfiles_oracle.py", payload)
+	output := runComplexityOracle(t, "testdata/golden/blame_maxfiles_oracle.json",
+		"blame max files oracle", payload)
 
 	var got []struct {
 		Missing      int  `json:"missing"`

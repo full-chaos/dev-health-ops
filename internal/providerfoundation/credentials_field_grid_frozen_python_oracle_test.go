@@ -23,86 +23,6 @@ import (
 // dict entry), and every field is crossed with every value class through both
 // planes.
 
-const gridDeriveProgram = `
-import ast, dataclasses, inspect, json, textwrap
-from dev_health_ops.credentials import resolver, types
-builders = {
-    "github": (resolver.github_credentials_from_mapping, types.GitHubCredentials),
-    "gitlab": (resolver.gitlab_credentials_from_mapping, types.GitLabCredentials),
-    "jira": (resolver.jira_credentials_from_mapping, types.JiraCredentials),
-    "linear": (resolver.linear_credentials_from_mapping, types.LinearCredentials),
-}
-def const(node):
-    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
-def get_key(node):
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args:
-        return const(node.args[0])
-    return None
-out = {}
-for provider, (fn, cls) in builders.items():
-    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
-    keys, groups = set(), []
-    for node in ast.walk(tree):
-        key = get_key(node)
-        if key: keys.add(key)
-        if isinstance(node, ast.Set):
-            keys |= {const(e) for e in node.elts if const(e)}
-        if isinstance(node, ast.Compare) and const(node.left):
-            keys.add(const(node.left))
-        if isinstance(node, ast.Dict) and node.keys and all(const(k) and const(v) for k, v in zip(node.keys, node.values)):
-            for k, v in zip(node.keys, node.values):
-                keys |= {const(k), const(v)}
-                groups.append([const(v), const(k)])
-        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
-            chain = [get_key(v) for v in node.values]
-            chain = [c for c in chain if c]
-            if len(chain) >= 2:
-                groups.append(chain)
-    skip = {"provider", "source", "credential_name", "extra", "private_key_path"}
-    fields = [f.name for f in dataclasses.fields(cls) if f.name not in skip]
-    out[provider] = {"keys": sorted(keys), "groups": groups, "fields": fields}
-print(json.dumps(out))
-`
-
-const gridRunProgram = `
-import base64, json, os, sys, tempfile
-from dev_health_ops.credentials import resolver
-builders = {
-    "github": resolver.github_credentials_from_mapping,
-    "gitlab": resolver.gitlab_credentials_from_mapping,
-    "jira": resolver.jira_credentials_from_mapping,
-    "linear": resolver.linear_credentials_from_mapping,
-}
-request = json.load(sys.stdin)
-# The key files the cases name are made here, in a directory of this run, and
-# their paths replace the tokens in the bodies: a path of one run is in no
-# request and no answer.
-directory = tempfile.mkdtemp()
-paths = {}
-for name, encoded in request["files"].items():
-    paths[name] = os.path.join(directory, name + ".pem")
-    if encoded is not None:
-        with open(paths[name], "wb") as handle:
-            handle.write(base64.b64decode(encoded))
-paths["directory"] = directory
-out = []
-for case in request["cases"]:
-    body = case["body"]
-    for name, path in paths.items():
-        body = body.replace('"@FILE:' + name + '@"', json.dumps(path))
-    raised = False
-    try:
-        credential = builders[case["provider"]](json.loads(body))
-    except Exception:
-        credential, raised = None, True
-    fields = {}
-    for name in case["fields"]:
-        value = getattr(credential, name, None) if credential is not None else None
-        fields[name] = None if value is None else (str(value) if value else "")
-    out.append({"built": credential is not None, "raised": raised, "fields": fields})
-print(json.dumps(out))
-`
-
 type gridDerived struct {
 	Keys   []string   `json:"keys"`
 	Groups [][]string `json:"groups"`
@@ -178,7 +98,7 @@ func gridWithout(base []gridPair, keys ...string) []gridPair {
 func TestCredentialFieldGridMatchesFrozenPython(t *testing.T) {
 	derived := map[string]gridDerived{}
 	deriveOutput := []byte(strings.TrimSpace(frozenPython(t, "credential-field-grid-derive.golden.json",
-		programoracle.Program{Name: "credential field grid derive", Text: gridDeriveProgram})[0]))
+		programoracle.Program{Name: "credential field grid derive"})[0]))
 	if err := json.Unmarshal(deriveOutput, &derived); err != nil || len(derived) != 4 {
 		t.Fatalf("decode the derived field sets: %v\n%s", err, deriveOutput)
 	}
@@ -298,7 +218,7 @@ func TestCredentialFieldGridMatchesFrozenPython(t *testing.T) {
 	}
 	var results []gridResult
 	runOutput := frozenPython(t, "credential-field-grid.golden.json",
-		programoracle.Program{Name: "credential field grid", Text: gridRunProgram, Stdin: input})[0]
+		programoracle.Program{Name: "credential field grid", Stdin: input})[0]
 	if err := json.Unmarshal([]byte(strings.TrimSpace(runOutput)), &results); err != nil || len(results) != len(cases) {
 		t.Fatalf("decode the Python answers (%d for %d cases): %v", len(results), len(cases), err)
 	}

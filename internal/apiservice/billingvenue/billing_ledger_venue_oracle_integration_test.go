@@ -280,19 +280,16 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name(), goldenDigest(t.Name())))
 	start := time.Now().UTC()
 	fake := newFakeStripe()
-	pyStripe, goStripe := httptest.NewServer(fake.plane("py")), httptest.NewServer(fake.plane("go"))
-	t.Cleanup(pyStripe.Close)
+	goStripe := httptest.NewServer(fake.plane("go"))
 	t.Cleanup(goStripe.Close)
-	// The Python reconciliation's Stripe list call is patched to the call
-	// it was written to make (a named divergence: unpatched it raises).
-	pythonEnv := []string{"VENUE_STRIPE_API_BASE=" + pyStripe.URL, "VENUE_STRIPE_LIST_KWARGS=1"}
+	var pythonEnv []string
 	for key, value := range billingEnv {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			specs := seed.tokenSpecs()
@@ -415,9 +412,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	sort.Strings(names)
 	for _, name := range names {
 		goRows := normalize(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), tables[name]))
-		pyRows := golden.CompareRows(t, "rows:"+name, func() string {
-			return normalizePython(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), tables[name]))
-		}, goRows)
+		pyRows := golden.CompareRows(t, "rows:"+name, goRows)
 		same := pyRows == goRows && pyRows != ""
 		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, venueoracle.Mark(same))
 		if pyRows == "" {

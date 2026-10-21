@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/egressguard"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"log/slog"
@@ -193,8 +194,9 @@ type originState struct {
 // originGuardedAtConstruction guards the supplied doer ONCE, where the origin is known, before any route decorates the
 // client (a route's counting decorator wraps client.Doer: the guard is already inside it, so no decorator has to opt in).
 // An *http.Client is copied with a CheckRedirect that stops at the first hop that leaves the request's credential origin
-// (the original policy decides every same-origin hop), and given httpguard.SharedTransport() when it has no transport; a
-// Wrapper is rebuilt around its guarded inner doer; any other doer is a test's transport and is returned as it is.
+// (the original policy decides every same-origin hop), and its transport guarded at dial time
+// (egressguard.Wrap); a Wrapper is rebuilt around its guarded inner doer; any other doer is a test's transport
+// and is returned as it is.
 func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 	if wrapper, ok := doer.(httpguard.Wrapper); ok {
 		if rebuilt, ok := wrapper.Rewrap(originGuardedAtConstruction(wrapper.Unwrap())).(HTTPDoer); ok {
@@ -207,11 +209,9 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 		return doer
 	}
 	guarded := *hc
-	// A supplied client with no transport would dial through http.DefaultTransport and so through a proxy from the
-	// environment: the credential reaches the provider host only.
-	if guarded.Transport == nil {
-		guarded.Transport = httpguard.SharedTransport()
-	}
+	// The transport dials only a public (or explicitly allowed) address, never through a proxy from the environment, and
+	// a nil one is httpguard.SharedTransport() guarded: a stored base URL is checked at every connect (externalurl).
+	guarded.Transport = egressguard.Wrap(guarded.Transport)
 	inner := hc.CheckRedirect
 	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		// The client's own policy decides first: a client that refuses the hop answers the 3xx to the caller (a route that
@@ -430,7 +430,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 		if requestErr != nil {
 			last = c.transportFailure(ctx, requestErr, attempt)
 			c.observe(last.Class)
-			if attempt == c.Retry.MaxAttempts {
+			if last.Class == ErrorPermanent || attempt == c.Retry.MaxAttempts {
 				return nil, last
 			}
 			if err := c.wait(ctx, c.retryDelay(attempt, 0, ErrorTransient)); err != nil {
@@ -1024,4 +1024,23 @@ func RateLimitDimension(provider, path, message string) string {
 		return "graphql_cost"
 	}
 	return "rest_core"
+}
+
+// EgressGuardedDoer is doer with its transport guarded at dial time (egressguard.Wrap): an *http.Client is
+// copied with the guarded transport, a Wrapper is rebuilt around its guarded inner doer, any other doer (a test's) is
+// returned as it is. Every constructor that sends a credential to a stored provider URL applies it.
+func EgressGuardedDoer(doer HTTPDoer) HTTPDoer {
+	if wrapper, ok := doer.(httpguard.Wrapper); ok {
+		if rebuilt, ok := wrapper.Rewrap(EgressGuardedDoer(wrapper.Unwrap())).(HTTPDoer); ok {
+			return rebuilt
+		}
+		return doer
+	}
+	hc, ok := doer.(*http.Client)
+	if !ok || hc == nil {
+		return doer
+	}
+	guarded := *hc
+	guarded.Transport = egressguard.Wrap(guarded.Transport)
+	return &guarded
 }

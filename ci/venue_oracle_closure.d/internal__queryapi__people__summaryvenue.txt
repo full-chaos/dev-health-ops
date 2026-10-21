@@ -8,7 +8,9 @@ internal/auth/passwordhash
 internal/auth/sessionid
 internal/chmigrate
 internal/cli
+internal/egressguard
 internal/httpguard
+internal/netclass
 internal/operationalordering
 internal/pgmigrate
 internal/platform/config

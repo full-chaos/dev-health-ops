@@ -17,6 +17,9 @@
 //	                     *http.Transport, a composite literal whose RoundTripper fields are all proven, a conversion of a
 //	                     func literal, and a local variable whose every assignment is proven (an assignment excused by
 //	                     an `if v == nil { v = <proven> }` fallback in the same function)
+//	client-by-value      a struct field (embedded or named), a defined type or alias, or an array, slice, map or channel
+//	                     element whose type is the non-pointer net/http.Client: its zero value has no Transport and its
+//	                     (promoted) Do uses http.DefaultTransport, and no literal of net/http.Client is ever written
 //	default-transport    any use of net/http.DefaultTransport
 //	default-client       any use of net/http.DefaultClient or the package functions Get, Head, Post, PostForm
 //	proxy                any use of net/http.ProxyFromEnvironment, net/http.ProxyURL or httpproxy.FromEnvironment, and a
@@ -192,6 +195,30 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 				return []string{"client-no-transport"}
 			}
 		}
+	case *ast.StructType:
+		var kinds []string
+		for _, field := range n.Fields.List {
+			if isNamed(info.Types[field.Type].Type, "Client") {
+				kinds = append(kinds, "client-by-value")
+			}
+		}
+		return kinds
+	case *ast.TypeSpec:
+		if isNamed(info.Types[n.Type].Type, "Client") {
+			return []string{"client-by-value"}
+		}
+	case *ast.ArrayType:
+		if isNamed(info.Types[n.Elt].Type, "Client") {
+			return []string{"client-by-value"}
+		}
+	case *ast.MapType:
+		if isNamed(info.Types[n.Key].Type, "Client") || isNamed(info.Types[n.Value].Type, "Client") {
+			return []string{"client-by-value"}
+		}
+	case *ast.ChanType:
+		if isNamed(info.Types[n.Value].Type, "Client") {
+			return []string{"client-by-value"}
+		}
 	case *ast.ValueSpec:
 		if n.Type != nil && len(n.Values) == 0 && isNamed(info.Types[n.Type].Type, "Client") {
 			return []string{"client-no-transport"}
@@ -239,12 +266,17 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 }
 
 // approvedTransportConstructors are the functions whose result is a non-nil RoundTripper that never uses an
-// environment proxy, whatever their arguments: the transport helpers, and CompletePagesOnly, which puts
-// httpguard.SharedTransport under a nil base itself.
+// environment proxy, whatever their arguments: the transport helpers.
 var approvedTransportConstructors = map[string]bool{
 	modulePath + "/internal/httpguard.Transport":              true,
 	modulePath + "/internal/httpguard.SharedTransport":        true,
 	modulePath + "/internal/api/externalurl.GuardedTransport": true,
+}
+
+// approvedTransportWrappers are the functions whose result is a non-nil RoundTripper over the transport they are given
+// (CompletePagesOnly puts httpguard.SharedTransport under a nil base itself): the result is proven only when every
+// RoundTripper argument is the nil literal or itself proven, so a wrapper never launders a transport it was handed.
+var approvedTransportWrappers = map[string]bool{
 	modulePath + "/internal/atlassianteams.CompletePagesOnly": true,
 }
 
@@ -280,7 +312,16 @@ func provenTransport(info *types.Info, declaration ast.Decl, expression ast.Expr
 		}
 		signature, _ := fn.Type().(*types.Signature)
 		if signature != nil && signature.Recv() == nil {
-			return approvedTransportConstructors[fn.Pkg().Path()+"."+fn.Name()]
+			name := fn.Pkg().Path() + "." + fn.Name()
+			if approvedTransportWrappers[name] {
+				for _, argument := range e.Args {
+					if tv, ok := info.Types[argument]; ok && (isNamed(tv.Type, "RoundTripper") || isNamed(derefPointer(tv.Type), "Transport")) && !isNil(info, argument) && !provenTransport(info, declaration, argument, depth+1) {
+						return false
+					}
+				}
+				return true
+			}
+			return approvedTransportConstructors[name]
 		}
 		if signature != nil && fn.Name() == "Clone" && isNamed(derefPointer(signature.Recv().Type()), "Transport") {
 			if selector, ok := ast.Unparen(e.Fun).(*ast.SelectorExpr); ok {

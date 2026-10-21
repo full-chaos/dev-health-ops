@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield", "unproven"}
+var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield", "unproven", "byvalue", "wrapper"}
 
 // The walker is itself tested: each planted package under testdata/planted must yield exactly its sites, and the
 // negative package none. A clause removed from kindsOf is RED here.
@@ -41,6 +41,15 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 		{dir + "proxyfield/proxyfield.go", "Literal", "proxy"}:                       1,
 		{dir + "proxyassign/proxyassign.go", "Assign", "proxy"}:                      1,
 		{dir + "unproven/unproven.go", "NilVariable", "transport-unproven"}:          1,
+		{dir + "byvalue/byvalue.go", "type Embedded", "client-by-value"}:             1,
+		{dir + "wrapper/wrapper.go", "OverParameter", "transport-unproven"}:          1,
+		{dir + "byvalue/byvalue.go", "type Named", "client-by-value"}:                1,
+		{dir + "byvalue/byvalue.go", "type Defined", "client-by-value"}:              1,
+		{dir + "byvalue/byvalue.go", "type Alias", "client-by-value"}:                1,
+		{dir + "byvalue/byvalue.go", "Slice", "client-by-value"}:                     1,
+		{dir + "byvalue/byvalue.go", "Map", "client-by-value"}:                       1,
+		{dir + "byvalue/byvalue.go", "Array", "client-by-value"}:                     2,
+		{dir + "byvalue/byvalue.go", "Chan", "client-by-value"}:                      1,
 		{dir + "unproven/unproven.go", "Parameter", "transport-unproven"}:            1,
 		{dir + "unproven/unproven.go", "WrapperOverNil", "transport-unproven"}:       1,
 		{dir + "unproven/unproven.go", "FieldRead", "transport-unproven"}:            1,

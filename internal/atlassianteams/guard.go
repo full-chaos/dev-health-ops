@@ -106,5 +106,8 @@ func GatewayHTTPClient(timeout time.Duration) *http.Client {
 // GatewayHTTPClientOver is GatewayHTTPClient over the given transport (nil: httpguard.SharedTransport()), for a
 // caller that must answer the gateway itself (the fixture world producer replays recorded answers).
 func GatewayHTTPClientOver(timeout time.Duration, base http.RoundTripper) *http.Client {
+	if base == nil {
+		base = httpguard.SharedTransport()
+	}
 	return &http.Client{Timeout: timeout, Transport: CompletePagesOnly(base), CheckRedirect: RefuseRedirects}
 }

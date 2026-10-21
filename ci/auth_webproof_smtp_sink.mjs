@@ -9,6 +9,16 @@ const tokenFile = `${mailFile}.token`;
 const decodeQuotedPrintable = (text) =>
     text.replace(/=\r?\n/g, "").replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 
+const readableBody = (message) => {
+    const split = message.search(/\r?\n\r?\n/);
+    const head = split < 0 ? message : message.slice(0, split);
+    const body = split < 0 ? "" : message.slice(split).trim();
+    if (/^content-transfer-encoding:\s*base64/im.test(head)) {
+        return Buffer.from(body.replace(/\s+/g, ""), "base64").toString("latin1");
+    }
+    return decodeQuotedPrintable(body);
+};
+
 const server = net.createServer((socket) => {
     let inData = false;
     let buffer = "";
@@ -21,7 +31,7 @@ const server = net.createServer((socket) => {
             if (inData) {
                 const message = buffer.slice(0, index);
                 fs.appendFileSync(mailFile, `${message}\n---MESSAGE-END---\n`);
-                const found = /verify\?token=([A-Za-z0-9._~%-]+)/.exec(decodeQuotedPrintable(message));
+                const found = /verify\?token=([A-Za-z0-9._~%-]+)/.exec(readableBody(message));
                 if (found) fs.writeFileSync(tokenFile, found[1]);
                 buffer = buffer.slice(index + 5);
                 inData = false;

@@ -4,10 +4,6 @@ summary: How Ask Dev interprets a question and resolves every named subject befo
 content_type: architecture
 owner: engineering
 source_of_truth:
-  - src/dev_health_ops/api/dev/question_interpreter.py
-  - src/dev_health_ops/api/dev/subject_preflight.py
-  - src/dev_health_ops/api/dev/preflight_outcomes.py
-  - src/dev_health_ops/api/dev/orchestrator.py
   - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
 applicability: current
 lifecycle: active

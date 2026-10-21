@@ -1,0 +1,2 @@
+query	expected	rank	max_rank	top_result	status
+anything	/x/	missing	5		fail

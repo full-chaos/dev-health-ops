@@ -7,7 +7,7 @@ import (
 )
 
 // CHAOS-10177: Go port of tests/tooling/test_security_scan_fires_on_every_base.py (CHAOS-6973). A pull_request
-// trigger filtered by base branch never fires on a stacked PR (base != main), so Gitleaks/pip-audit/Semgrep were
+// trigger filtered by base branch never fires on a stacked PR (base != main), so Gitleaks/Semgrep were
 // silently skipped. The push trigger stays scoped to main so a branch push does not double-run the workflow.
 
 const securityScanFile = ".github/workflows/security-scan.yml"

@@ -4,7 +4,6 @@ summary: Connect GitLab with the minimum scopes and verify accessible groups and
 content_type: task-guide
 owner: platform-product
 source_of_truth:
-  - docs/connectors/gitlab-permissions.md
   - current GitLab provider implementation
 applicability: current
 lifecycle: active

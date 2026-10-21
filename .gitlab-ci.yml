@@ -22,7 +22,7 @@
 #     tags (docker-images.yml's fan-in-latest); the registry is the GitLab one.
 #   - Image archives for the scan stage are amd64 only (as go-container-security).
 #   - go:arm64-numeric-parity needs an arm64 runner: set GITLAB_ARM64_RUNNER_TAG.
-#   - Go-relevance skip (ci/go_relevance.sh) is not used: go:quality always runs.
+#   - The go-quality plan verdict (cmd/cigate plan-verdict) is not used: go:quality always runs.
 #   - Python lint (ruff) and typecheck (mypy), the Python unit matrix, the
 #     coverage gate and the Python integration tier are gone from GitHub
 #     (#3748, #3761); they are gone here too.
@@ -45,7 +45,7 @@
 #   go.yml : go-arm64-numeric-parity          -> go:arm64-numeric-parity (opt-in runner tag)
 #   go.yml : graphql-wire-parity              -> go:graphql-wire-parity
 #   live-e2e.yml : live-e2e, metrics-executed-proof -> e2e:live, e2e:metrics-executed-proof
-#   security-scan.yml / scheduled-scan.yml    -> security:pip-audit, security:semgrep, security:gitleaks
+#   security-scan.yml                         -> security:semgrep, security:gitleaks
 #   governance.yml : governance               -> governance
 #   docs-guards.yml / docs-inventory-review.yml / docs-health-report.yml -> docs:*
 #   docker-images.yml : go-build, go-api-tools-build + merge -> build:go-images, build:go-images-manifest
@@ -106,11 +106,7 @@ variables:
   - scripts/**/*
   - migrations/**/*
   - alerts/**/*
-  - requirements.txt
   - requirements-docs.txt
-  - pyproject.toml
-  - uv.lock
-  - pytest.ini
   - alembic.ini
   - lefthook.yml
   - compose.yml
@@ -169,8 +165,8 @@ variables:
       done
       docker info >/dev/null
 
-# Go + Docker (dind) + Python (uv, locked env) toolbox, as the GitHub jobs
-# get from setup-go + setup-uv on a runner that has Docker.
+# Go + Docker (dind) toolbox, as the GitHub jobs
+# get from setup-go on a runner that has Docker.
 .go_job:
   image: $GO_IMAGE
   services:
@@ -184,14 +180,6 @@ variables:
     - apt-get install -y --no-install-recommends jq postgresql-client python3 python3-pip
     - !reference [.docker_cli, script]
     - go version
-
-# uv + the locked Python env (kept Python tests, live-e2e, metrics proof).
-.uv_env:
-  script:
-    - pip install --break-system-packages uv
-    - uv sync --frozen --all-extras --dev --python 3.14
-    - export PATH="$PWD/.venv/bin:$PATH"
-    - uv pip install --python .venv/bin/python -r requirements-docs.txt
 
 # Service containers of live-e2e.yml / metrics-executed-proof (same images,
 # anonymous pull from the ghcr mirror).
@@ -301,7 +289,6 @@ pipeline:validate:
           "go:graphql-wire-parity",
           "e2e:live",
           "e2e:metrics-executed-proof",
-          "security:pip-audit",
           "security:semgrep",
           "security:gitleaks",
           "security:go-image-build",
@@ -351,11 +338,26 @@ docs:guards:
       set -o pipefail
       python scripts/validate_docs_v2_publication.py 2>&1 | tee .build/docs-publication-validation.log
       python -m mkdocs build --strict --config-file mkdocs.yml 2>&1 | tee .build/docs-build.log
-      python scripts/check_built_site_links.py --site-dir .build/docs 2>&1 | tee .build/docs-links.log
-      python scripts/check_docs_candidate_search.py --site-dir .build/docs --queries docs-data/search-acceptance.json 2>&1 | tee .build/docs-search.log
       python scripts/check_docs_candidate_accessibility.py --site-dir .build/docs --css docs/stylesheets/extra.css 2>&1 | tee .build/docs-accessibility.log
-      python scripts/check_code_prerequisites.py 2>&1 | tee .build/docs-code-prerequisites.log
       python scripts/check_freshness_inventory.py 2>&1 | tee .build/docs-freshness-inventory.log
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - .build/docs
+      - .build/docs-*.log
+
+# The Go half of docs-guards.yml: rendered links/anchors/assets, search acceptance, on the site that
+# docs:guards built.
+docs:guards-go:
+  stage: test
+  image: $GO_IMAGE
+  needs: [docs:guards]
+  script:
+    - |
+      set -eu
+      bash -o pipefail -c 'go run -trimpath -mod=readonly ./cmd/cigate docs check-built-site-links --site-dir .build/docs 2>&1 | tee .build/docs-links.log'
+      bash -o pipefail -c 'go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-search --site-dir .build/docs --queries docs-data/search-acceptance.json 2>&1 | tee .build/docs-search.log'
   artifacts:
     when: always
     expire_in: 14 days
@@ -367,17 +369,26 @@ docs:facts:
   stage: test
   script:
     - go run -trimpath -mod=readonly ./cmd/cigate docs check-candidate-facts
+    - |
+      mkdir -p .build
+      status=0
+      go run -trimpath -mod=readonly ./cmd/cigate docs check-code-prerequisites > .build/docs-code-prerequisites.log 2>&1 || status=$?
+      cat .build/docs-code-prerequisites.log
+      exit $status
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - .build/docs-code-prerequisites.log
 
 docs:inventory-review:
-  extends: .python_job
+  image: $GO_IMAGE
   stage: test
-  before_script:
-    - python -m pip install 'PyYAML==6.0.3'
   script:
     - mkdir -p .build
     - cp docs-data/inventory/documentation-inventory.json .build/documentation-inventory.json
     - |
-      python scripts/validate_docs_inventory_review.py \
+      go run -trimpath -mod=readonly ./cmd/cigate docs validate-inventory-review \
         --generated-json .build/documentation-inventory.json \
         --inventory-dir docs-data/inventory \
         --ia-dir docs-data/ia
@@ -639,7 +650,6 @@ e2e:live:
     LIVE_E2E_RECONCILER_LOG_FILE: ./live-e2e-reconciler.log
   before_script:
     - !reference [.go_job, before_script]
-    - !reference [.uv_env, script]
     - !reference [.wait_live_services, script]
   script:
     - chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh
@@ -666,7 +676,6 @@ e2e:metrics-executed-proof:
     METRICS_PROOF_SUMMARY_JSON_FILE: ./metrics-executed-proof-family-summary.json
   before_script:
     - !reference [.go_job, before_script]
-    - !reference [.uv_env, script]
     - !reference [.wait_live_services, script]
   script:
     - chmod +x ci/run_metrics_executed_proof.sh
@@ -680,43 +689,8 @@ e2e:metrics-executed-proof:
       - metrics-executed-proof-family-summary.json
 
 # ---------------------------------------------------------------------------
-# security (security-scan.yml, scheduled-scan.yml)
+# security (security-scan.yml)
 # ---------------------------------------------------------------------------
-
-# scheduled-scan.yml (weekly pip-audit) is the same job on a schedule pipeline.
-security:pip-audit:
-  stage: security
-  image: python:3.14
-  needs: []
-  rules: *security_rules
-  before_script:
-    - python -V
-    - python -m pip install --upgrade pip
-    - pip install "pip-audit==2.10.0"
-  script:
-    - |
-      IGNORE_ARGS=""
-      if [ -f .pip-audit-ignore ]; then
-        while IFS= read -r line; do
-          CVE=$(printf '%s\n' "$line" | awk '{$1=$1; print $1}')
-          case "$CVE" in
-            ''|'#'*) continue ;;
-          esac
-          IGNORE_ARGS="$IGNORE_ARGS --ignore-vuln $CVE"
-        done < .pip-audit-ignore
-      fi
-      # shellcheck disable=SC2086
-      pip-audit \
-        --requirement requirements.txt \
-        --vulnerability-service pypi \
-        --format markdown \
-        --output pip-audit-report.md \
-        $IGNORE_ARGS
-  artifacts:
-    when: always
-    expire_in: 30 days
-    paths:
-      - pip-audit-report.md
 
 # continue-on-error in security-scan.yml, so allow_failure here.
 security:semgrep:

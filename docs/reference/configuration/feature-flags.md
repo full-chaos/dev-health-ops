@@ -5,9 +5,8 @@ content_type: configuration-reference
 owner: platform-product
 source_of_truth:
   - current feature registry and product navigation
-  - src/dev_health_ops/licensing/registry.py
-  - src/dev_health_ops/alembic/versions/0073_seed_ask_dev_wave_3_1_feature_flag.py
-  - docs/architecture/licensing.md
+  - internal/api/licensing/registry.go
+  - internal/pgmigrate/baseline/head.json
   - deploy/go-workers/deployment.json
 applicability: current
 lifecycle: active

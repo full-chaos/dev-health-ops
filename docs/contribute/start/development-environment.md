@@ -4,10 +4,9 @@ summary: Install the Dev Health toolchain, start PostgreSQL, ClickHouse, and Val
 content_type: tutorial
 owner: engineering
 source_of_truth:
-  - pyproject.toml
-  - requirements files
+  - go.mod
+  - requirements-docs.txt
   - compose.yml
-  - docs/getting-started.md
   - current CI workflows
 applicability: current
 lifecycle: active
@@ -29,31 +28,19 @@ Use this guide for a source checkout. Production configuration, secrets, sizing,
 
 Read the root `AGENTS.md` and the nearest directory-level contributor guidance before editing a subsystem.
 
-## Create the Python environment
+## Build the CLI
 
 ```bash
 git clone https://github.com/full-chaos/dev-health-ops.git
 cd dev-health-ops
 
-python3.14 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
+go build -o dho ./cmd/dho
 ```
 
-On PowerShell, activate the environment with:
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-The editable install keeps imports connected to the source tree. The `dho` CLI is a Go binary: build it with `go build -o dho ./cmd/dho` (a Go toolchain is required).
-
-Verify the installation:
+The `dho` CLI is a Go binary, so a Go toolchain is required. Verify the installation:
 
 ```bash
 ./dho help
-python -c "import dev_health_ops; print(dev_health_ops.__file__)"
 ```
 
 ## Start the core data services

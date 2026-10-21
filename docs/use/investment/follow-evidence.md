@@ -4,8 +4,6 @@ summary: Inspect the work and source artifacts that support an Investment select
 content_type: task-guide
 owner: product-analytics
 source_of_truth:
-  - src/components/work/investment/charts/InvestmentMixSection.tsx
-  - src/lib/workGraphDrilldownUrl.ts
   - internal/queryapi/investmentexplain/
 applicability: current
 lifecycle: active

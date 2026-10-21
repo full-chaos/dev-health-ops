@@ -5,8 +5,6 @@ content_type: landing
 owner: engineering
 source_of_truth:
   - AGENTS.md
-  - docs/getting-started.md
-  - docs/architecture.md
   - current repository workflows
 applicability: current
 lifecycle: active

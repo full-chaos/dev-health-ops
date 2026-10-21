@@ -5,7 +5,6 @@ content_type: landing
 owner: platform-api
 source_of_truth:
   - current webhook routes and handlers
-  - docs/webhooks.md
 applicability: current
 lifecycle: active
 ---

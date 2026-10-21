@@ -5,8 +5,6 @@ content_type: landing
 owner: documentation
 source_of_truth:
   - docs-data/ia/use.tsv
-  - docs/user-guide/views-index.md
-  - docs/user-guide/how-to-read-dev-health.md
 applicability: current
 lifecycle: active
 hide:

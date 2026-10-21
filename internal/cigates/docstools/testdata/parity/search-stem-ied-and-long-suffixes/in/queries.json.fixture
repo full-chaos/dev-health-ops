@@ -1,0 +1,1 @@
+{"queries": [{"query": "study carry", "expected": "/z/", "max_rank": 1}, {"query": "walk", "expected": "/z/", "max_rank": 1}, {"query": "church", "expected": "/z/", "max_rank": 1}, {"query": "bus", "expected": "/z/", "max_rank": 1}, {"query": "studi", "expected": "/z/", "max_rank": 1}]}

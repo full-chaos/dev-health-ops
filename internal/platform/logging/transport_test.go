@@ -38,6 +38,7 @@ func TestTransportFailureIsOperationAndClassOnly(t *testing.T) {
 		{"dns", wrap(&net.OpError{Op: "dial", Err: &net.DNSError{Name: "canary-host", Err: "no such host"}}), "dns"},
 		{"timeout", wrap(&net.OpError{Op: "dial", Err: timeoutError{}}), "timeout"},
 		{"refused", wrap(&net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}), "refused"},
+		{"egress refused", wrap(&net.OpError{Op: "dial", Err: egressRefusedStub{}}), "egress_refused"},
 		{"reset", wrap(&net.OpError{Op: "read", Err: syscall.ECONNRESET}), "reset"},
 		{"tls", wrap(tls.RecordHeaderError{Msg: "canary-tls"}), "tls"},
 		{"eof", wrap(io.ErrUnexpectedEOF), "eof"},
@@ -100,3 +101,9 @@ func TestDecodeFailureIsClassOnly(t *testing.T) {
 		}
 	}
 }
+
+// egressRefusedStub stands for egressguard.RefusedError, which this package cannot import: it is recognised by type.
+type egressRefusedStub struct{}
+
+func (egressRefusedStub) Error() string              { return "refused canary-host" }
+func (egressRefusedStub) EgressRefusedClass() string { return "private" }

@@ -20,7 +20,7 @@ func init() {
 }
 
 func candFactsVerb(_ []string, stdout, stderr io.Writer) int {
-	root, err := os.Getwd()
+	root, err := docsRoot(invTxDocRel)
 	if err != nil {
 		fmt.Fprintln(stderr, "check-candidate-facts:", err)
 		return 1

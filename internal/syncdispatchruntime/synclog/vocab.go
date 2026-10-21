@@ -69,13 +69,19 @@ var (
 	MsgSyncRunRollupBumped                               = Msg{"sync_run.rollup_bumped"}
 	MsgDispatchSyncRunRedispatchRearmFailed              = Msg{"dispatch_sync_run.redispatch_rearm_failed"}
 	MsgDispatchSyncRunRedispatchRearmed                  = Msg{"dispatch_sync_run.redispatch_rearmed"}
+	MsgDispatchSyncRunRedispatchBackoffReadFailed        = Msg{"dispatch_sync_run.redispatch_backoff_read_failed"}
 	MsgDispatchSyncRunWokenByUnitCompletion              = Msg{"dispatch_sync_run.woken_by_unit_completion"}
 	MsgDispatchSyncRunUnitCompletionWakeFailed           = Msg{"dispatch_sync_run.unit_completion_wake_failed"}
 	MsgTeamRepoOwnershipDerivation                       = Msg{"team_repo_ownership_derivation"}
+	// The provider egress guard (internal/egressguard): a refused dial, and an allow-list setting that is not a CIDR list.
+	MsgEgressRefused          = Msg{"egressguard: provider egress refused"}
+	MsgEgressAllowListInvalid = Msg{"egressguard: PROVIDER_EGRESS_ALLOW_CIDRS has an entry that is not a CIDR; no non-public address is allowed"}
 )
 
 // Keys.
 var (
+	KeyEgressClass                  = Key{"class"}
+	KeyEgressEntries                = Key{"entries"}
 	KeyStrict                       = Key{"strict"}
 	KeyDeferredUnits                = Key{"deferred_units"}
 	KeyConsideredUnits              = Key{"considered_units"}
@@ -168,6 +174,9 @@ var (
 	KeyPath                         = Key{"path"}
 	KeyCountdown                    = Key{"countdown"}
 	KeyKeptEarlierWakeup            = Key{"kept_earlier_wakeup"}
+	KeyIdleSeconds                  = Key{"idle_seconds"}
+	KeyBackoffSeconds               = Key{"backoff_seconds"}
+	KeyBackoffLevel                 = Key{"backoff_level"}
 	KeyRowsWritten                  = Key{"rows_written"}
 	KeyRowsRetracted                = Key{"rows_retracted"}
 	KeyRowsRetractionHeld           = Key{"rows_retraction_held"}

@@ -1252,7 +1252,7 @@ at the time of the CHAOS-4243 ruling, not today's)
 (`daily.HTTPCompatibilityExecutor` →
 `/internal/worker/daily-metrics/v1/execute` → `_run_daily_direct` →
 `run_daily_metrics_job`,
-`ops/src/dev_health_ops/metrics/job_daily.py:729-1446`) already computes and
+`ops/src/dev_health_ops/metrics/job_daily.py:729-1446`, removed with the Python api) already computes and
 writes every table both families targeted — `compute_team_wellbeing_metrics_daily`
 (team_metrics_daily; CHAOS-5311 has since deleted this function and its call
 site outright, team_metrics_daily is now written exclusively by the native

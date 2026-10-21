@@ -1,0 +1,5 @@
+check-built-site-links
+--site-dir
+other
+--site-dir
+site

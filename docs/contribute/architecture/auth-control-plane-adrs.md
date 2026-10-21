@@ -36,7 +36,7 @@ the recommendation, the alternatives considered, and the risk for each.
     read during Wave 0; where it cites nothing, the ADR says so and names the gap.
 
 !!! success "The inventory contract these ADRs build on is enforced"
-    `ci/check_endpoint_profiles.py` (`0a7ff7ccd`) and acr's Go equivalent are
+    `ci/check_endpoint_profiles.py` (removed with the Python api) (`0a7ff7ccd`) and acr's Go equivalent are
     committed and **verified to reject seeded violations** — dropped rows,
     off-vocabulary class ids, drifted anchors, and an unexplained null — not
     merely to pass on clean input. **G-1 is enforced rather than intended**, and
@@ -174,7 +174,7 @@ dependencies rather than introducing something wholly new:
 
 The current Python password-hashing implementation is `bcrypt` (the PyPI
 `bcrypt` package, not `passlib`), anchored at
-`src/dev_health_ops/api/services/users.py:30-36` (`_hash_password`/
+`src/dev_health_ops/api/services/users.py:30-36` (removed with the Python api) (`_hash_password`/
 `_verify_password`, `bcrypt.hashpw`/`bcrypt.checkpw`),
 `api/auth/routers/login.py:42-43` (a fixed bcrypt hash used specifically for
 missing-user timing mitigation — TRD §13's timing-safe unknown-user handling,
@@ -434,7 +434,7 @@ vocabulary cannot be generated from the inventory alone.
    role, grant type, condition, or entitlement key **denies** (G-26). Same
    closed-vocabulary discipline as the credential classes, and for the same
    reason: an unknown value must fail, not be tolerated. The mechanism is not
-   hypothetical — `ci/check_endpoint_profiles.py` already enforces exactly this
+   hypothetical — `ci/check_endpoint_profiles.py` (removed with the Python api) already enforces exactly this
    for the credential vocabulary and is verified to reject an off-vocabulary
    id, so the action vocabulary is a second instance of a working gate rather
    than a new one.

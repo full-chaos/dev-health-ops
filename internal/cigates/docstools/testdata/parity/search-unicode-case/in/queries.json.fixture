@@ -1,0 +1,1 @@
+{"queries": [{"query": "STRAẞE", "expected": "/u/"}, {"query": "école", "expected": "/u/", "max_rank": 1}, {"query": "kelvin K", "expected": "/u/"}]}

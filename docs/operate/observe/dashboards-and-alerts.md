@@ -62,6 +62,6 @@ the identifiers instead, and each rule's description names the one it needs:
 | `dispatch_sync_run.publish_hit_terminal_delivery` | dispatcher, one per unit | sync run id, unit id, provider, dataset |
 
 Writing a rule against a metric nobody emits is worse than having no rule: it
-never fires and it *looks* covered. `tests/workers/test_unreclaimable_sweep_alerts.py`
+never fires and it *looks* covered. the Go tests in `internal/syncreconciler/unreclaimable_sweep_test.go`
 pins every metric name these rules read against the Go `WritePrometheus` bodies
 that actually render them.

@@ -1,7 +1,7 @@
 # Every file under internal/cigates/docstools/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: b43c6faf49f6e1fe29db2e48f46ae9571e7d945bd8fae5353d793ec34dc32819 (901 files)
+# python-recorded set: ac62f0ac8468e5751d60bb2340a52a90d01cb2c1141acf5bd5291c9822b9b1ab (936 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-0312eac0ca63052359de712f42bcc4e3e4b37b1eaa77a0010e42e92b1ac59a38	hand-written	README.md
+db38b11bbfcc1bff25d51430883cf6855cf97842ad9f53186366831ca5ff455f	hand-written	README.md
 022b02bc6930d958238306a5bbb82baedc9af3eed3e1189a46a3629fcb570374	hand-written	operational-external.md
 9a6675522a44f28ce1ece852dd5e9902e76ddb5409348a38a4fb11bf25154442	hand-written	parity/check-candidate-facts-all-errors/args
 b4a8e61a8d35ebe401879bed00bc2db84c40198fa7eb15a9f505e654bf2b3a38	hand-written	parity/check-candidate-facts-all-errors/in/docs/reference/taxonomies/investment.md
@@ -414,6 +414,41 @@ bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-merge-item/rc
 a4d845ee2d9b3e066f797a57ec50a11f2bef5ff4fca2d8a1c95b29d315f0a591	python-recorded	parity/check-code-prerequisites-scope-merge-item/stderr.traceback
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-merge-item/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-merge-key-alias/args
+770c463d1db33dda913ac7db53999a0db91332446abb61c907e5edda3bfad546	python-recorded	parity/check-code-prerequisites-scope-merge-key-alias/in/docs/code-prerequisite-scope.yml
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-merge-key-alias/rc
+daca12a27131d0ac313d007b7096f8cb60916c8423c3af0ece3957132098ec7b	python-recorded	parity/check-code-prerequisites-scope-merge-key-alias/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-merge-key-alias/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-merge-key-empty-mapping/args
+c753da0dc83bb20dee128b43b68b4ebbf38bb5f7ff077343bc241befbd02cb98	python-recorded	parity/check-code-prerequisites-scope-merge-key-empty-mapping/in/docs/code-prerequisite-scope.yml
+9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/check-code-prerequisites-scope-merge-key-empty-mapping/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-merge-key-empty-mapping/stderr
+70582e3d28f93b138c43566623bf81558a2f1f4ba2dde219dd91ab2e47ce5e87	python-recorded	parity/check-code-prerequisites-scope-merge-key-empty-mapping/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-empty-mappings/args
+d7fad463ab5777e9d9b0df3c4d28403cecf8d93105c5d907e943e6ef50478566	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-empty-mappings/in/docs/code-prerequisite-scope.yml
+9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-empty-mappings/rc
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-empty-mappings/stderr
+70582e3d28f93b138c43566623bf81558a2f1f4ba2dde219dd91ab2e47ce5e87	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-empty-mappings/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-mappings/args
+1e9d0cea1de707d1fc3e7d1efd89c4d07d68ec0b7567224c3621eddc70f505b3	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-mappings/in/docs/code-prerequisite-scope.yml
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-mappings/rc
+daca12a27131d0ac313d007b7096f8cb60916c8423c3af0ece3957132098ec7b	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-mappings/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-of-mappings/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-with-scalar/args
+9c823dd40ec75b9240f73fe54e0f6fe4d5960a23de757ead8dab86236fc11b37	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-with-scalar/in/docs/code-prerequisite-scope.yml
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-with-scalar/rc
+a4d845ee2d9b3e066f797a57ec50a11f2bef5ff4fca2d8a1c95b29d315f0a591	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-with-scalar/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-merge-key-list-with-scalar/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-merge-key-mapping/args
+c2df2acee168ab1033595e296b2b9715ff528da5a9b788aa6590c476c40619d2	python-recorded	parity/check-code-prerequisites-scope-merge-key-mapping/in/docs/code-prerequisite-scope.yml
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-merge-key-mapping/rc
+daca12a27131d0ac313d007b7096f8cb60916c8423c3af0ece3957132098ec7b	python-recorded	parity/check-code-prerequisites-scope-merge-key-mapping/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-merge-key-mapping/stdout
+bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-merge-key-scalar/args
+64b24502f570f89b8ceda9f5e39ff350a06d748259465241cc8e2fe119818669	python-recorded	parity/check-code-prerequisites-scope-merge-key-scalar/in/docs/code-prerequisite-scope.yml
+4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-merge-key-scalar/rc
+a4d845ee2d9b3e066f797a57ec50a11f2bef5ff4fca2d8a1c95b29d315f0a591	python-recorded	parity/check-code-prerequisites-scope-merge-key-scalar/stderr.traceback
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-code-prerequisites-scope-merge-key-scalar/stdout
 bb247e82f0687734990e20d6a2191435fbfcc08a9ce276636ddf73d3c0db46c3	python-recorded	parity/check-code-prerequisites-scope-multiline-plain/args
 2b0e135a2d37d8a304cce86df292e3e7c69670597b1d150128b9a2423f1fadf6	python-recorded	parity/check-code-prerequisites-scope-multiline-plain/in/docs/code-prerequisite-scope.yml
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-code-prerequisites-scope-multiline-plain/rc

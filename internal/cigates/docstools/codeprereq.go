@@ -331,12 +331,73 @@ func codePrereqUnsafe(n *yaml.Node, seen map[*yaml.Node]bool) bool {
 	if n.Kind == yaml.ScalarNode && n.Style&yaml.TaggedStyle == 0 && codePrereqPlain(n) && (n.Value == "<<" || n.Value == "=") {
 		return true
 	}
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k, v := n.Content[i], n.Content[i+1]
+			if codePrereqIsMergeKey(k) {
+				if !codePrereqMergeable(v) || codePrereqUnsafe(v, seen) {
+					return true
+				}
+				continue
+			}
+			if codePrereqUnsafe(k, seen) || codePrereqUnsafe(v, seen) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, c := range n.Content {
 		if codePrereqUnsafe(c, seen) {
 			return true
 		}
 	}
 	return false
+}
+
+func codePrereqIsMergeKey(k *yaml.Node) bool {
+	k = codePrereqResolve(k)
+	return k.Kind == yaml.ScalarNode && k.Value == "<<" && codePrereqPlain(k) && k.Style&yaml.TaggedStyle == 0
+}
+
+// codePrereqMergeable is flatten_mapping's test of a merge value: a mapping, or a sequence of mappings.
+func codePrereqMergeable(v *yaml.Node) bool {
+	v = codePrereqResolve(v)
+	if v.Kind == yaml.MappingNode {
+		return true
+	}
+	if v.Kind != yaml.SequenceNode {
+		return false
+	}
+	for _, c := range v.Content {
+		if codePrereqResolve(c).Kind != yaml.MappingNode {
+			return false
+		}
+	}
+	return true
+}
+
+// codePrereqMappingEmpty is whether the constructed dict has no key: merge keys contribute the keys of their mappings.
+func codePrereqMappingEmpty(n *yaml.Node, depth int) bool {
+	n = codePrereqResolve(n)
+	if depth > 64 {
+		return false
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if !codePrereqIsMergeKey(n.Content[i]) {
+			return false
+		}
+		v := codePrereqResolve(n.Content[i+1])
+		parts := []*yaml.Node{v}
+		if v.Kind == yaml.SequenceNode {
+			parts = v.Content
+		}
+		for _, p := range parts {
+			if !codePrereqMappingEmpty(p, depth+1) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // codePrereqTagFitsKind is the node-kind check of the PyYAML safe constructors for an explicit tag.
@@ -393,8 +454,10 @@ func codePrereqFalsy(n *yaml.Node) (bool, int) {
 		return false, scopeYAMLError
 	}
 	switch n.Kind {
-	case yaml.SequenceNode, yaml.MappingNode:
+	case yaml.SequenceNode:
 		return len(n.Content) == 0, scopeOK
+	case yaml.MappingNode:
+		return codePrereqMappingEmpty(n, 0), scopeOK
 	case yaml.ScalarNode:
 		return codePrereqScalarFalsy(n), scopeOK
 	}

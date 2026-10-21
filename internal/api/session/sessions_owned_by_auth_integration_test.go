@@ -17,11 +17,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 )
 
-const ownedOrgB = "b0000000-0000-4000-8000-00000000000b"
+const (
+	ownedOrgB = "b0000000-0000-4000-8000-00000000000b"
+	ownedOrgD = "d0000000-0000-4000-8000-00000000000d"
+)
+
+// pendingInviteFor seeds a pending invite of email to org and returns its token.
+func pendingInviteFor(t *testing.T, ctx context.Context, st stack, org, email string) string {
+	t.Helper()
+	token, tokenHash := signedtoken.Build(uuid.New(), authmail.Config{}.Secret())
+	if _, err := st.pool.Exec(ctx, `INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by_id, status, expires_at, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1::uuid, $2, 'member', $3, NULL, 'pending', now() + interval '1 day', now(), now())`, org, email, tokenHash); err != nil {
+		t.Fatalf("seed invite: %v", err)
+	}
+	return token
+}
+
+// newcomer seeds an active local user with no membership and returns an
+// access token for it.
+func newcomer(t *testing.T, ctx context.Context, st stack) string {
+	t.Helper()
+	id := uuid.New()
+	email := "newcomer-" + id.String()[:8] + "@example.com"
+	if _, err := st.pool.Exec(ctx, `INSERT INTO users (id, email, username, full_name, password_hash, auth_provider, is_active, is_verified,
+		is_superuser, token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'Newcomer', NULL, 'local', true, true, false, 0, now(), now())`,
+		id, email); err != nil {
+		t.Fatalf("seed newcomer: %v", err)
+	}
+	return changeToken(t, st, id.String(), email, "", "member", 0)
+}
 
 func issueCredential(t *testing.T) string {
 	t.Helper()
@@ -92,6 +124,8 @@ func TestSessionsOwnedByAuthTakeEveryPairFromTheIssueRoute(t *testing.T) {
 	before := refreshTokenRows(t, ctx, st)
 	orgA := st.specs["alice"]["org_id"].(string)
 	alice := changeToken(t, st, changeAlice, "alice@example.com", orgA, "owner", 0)
+	invite := pendingInviteFor(t, ctx, st, ownedOrgD, "alice@example.com")
+	fresh := newcomer(t, ctx, st)
 	// auth-service pins the session to the user's token_version as it reads
 	// it: a password change must be committed before its session is issued.
 	var versionAtIssue int64 = -1
@@ -107,6 +141,8 @@ func TestSessionsOwnedByAuthTakeEveryPairFromTheIssueRoute(t *testing.T) {
 		{"login", "/api/v1/auth/login", "", `{"email": "alice@example.com", "password": "` + sessionscenario.Password + `"}`, orgA, "pwd"},
 		{"switch-org", "/api/v1/auth/switch-org", alice, `{"org_id": "` + ownedOrgB + `"}`, ownedOrgB, "pwd"},
 		{"social", "/api/v1/auth/social-login", "", `{"provider": "github", "provider_access_token": "gh-frank"}`, "", "fed"},
+		{"accept-invite", "/api/v1/auth/accept-invite", alice, `{"token": "` + invite + `"}`, ownedOrgD, "pwd"},
+		{"onboard", "/api/v1/auth/onboard", fresh, `{"action": "create_org", "org_name": "Issued Onboarding Org"}`, "", "pwd"},
 		{"change-password", "/api/v1/auth/change-password", alice, changeBody(sessionscenario.Password, newPassword), orgA, "pwd"},
 	} {
 		route.mu.Lock()
@@ -164,11 +200,15 @@ func TestSessionsOwnedByAuthAnswer503WhenTheIssueRouteIsDown(t *testing.T) {
 	hashBefore := passwordHashOf(t, ctx, st, changeAlice)
 	orgA := st.specs["alice"]["org_id"].(string)
 	alice := changeToken(t, st, changeAlice, "alice@example.com", orgA, "owner", 0)
+	invite := pendingInviteFor(t, ctx, st, ownedOrgD, "alice@example.com")
+	fresh := newcomer(t, ctx, st)
 
 	for _, step := range []struct{ name, path, token, body string }{
 		{"login", "/api/v1/auth/login", "", `{"email": "alice@example.com", "password": "` + sessionscenario.Password + `"}`},
 		{"switch-org", "/api/v1/auth/switch-org", alice, `{"org_id": "` + ownedOrgB + `"}`},
 		{"social", "/api/v1/auth/social-login", "", `{"provider": "github", "provider_access_token": "gh-frank"}`},
+		{"accept-invite", "/api/v1/auth/accept-invite", alice, `{"token": "` + invite + `"}`},
+		{"onboard", "/api/v1/auth/onboard", fresh, `{"action": "create_org", "org_name": "Down Onboarding Org"}`},
 		{"change-password", "/api/v1/auth/change-password", alice, changeBody(sessionscenario.Password, newPassword)},
 	} {
 		status, body := changeRequest(t, ctx, st, http.MethodPost, step.path, step.token, step.body)

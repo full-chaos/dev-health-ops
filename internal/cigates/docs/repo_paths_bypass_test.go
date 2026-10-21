@@ -67,3 +67,18 @@ func TestDocsRepoPathGuardFences(t *testing.T) {
 		}
 	}
 }
+
+func TestDocsRepoPathGuardIndentedFence(t *testing.T) {
+	missing := "internal/nosuchpackage/i.go"
+	assertGuard(t, docsRepoPathGuard, []plantCase{
+		{"a fence indented four spaces is code, not a fence", func(t *testing.T, d docTree) docTree {
+			return d.added("docs/reference/planted.md", "    ```text\n`"+missing+"`\n")
+		}, "docs/reference/planted.md:2 names " + missing},
+	})
+	page := "   ```text\n`internal/nosuchpackage/j.go`\n   ```\n"
+	for _, v := range docsRepoPathGuard(realTree(t).added("docs/reference/planted.md", page)) {
+		if strings.Contains(v, "docs/reference/planted.md") {
+			t.Errorf("a fence indented three spaces was not recognised: %s", v)
+		}
+	}
+}

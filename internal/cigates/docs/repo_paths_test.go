@@ -203,6 +203,9 @@ type fenceState struct {
 func (f *fenceState) open() bool { return f.n > 0 }
 
 func (f *fenceState) line(raw string) {
+	if indent := len(raw) - len(strings.TrimLeft(raw, " ")); indent > 3 {
+		return
+	}
 	t := strings.TrimSpace(raw)
 	if t == "" || (t[0] != '`' && t[0] != '~') {
 		return

@@ -2,11 +2,13 @@ package docstools
 
 import (
 	"bytes"
+	"context"
 	"crypto/x509"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -91,5 +93,80 @@ func TestHostSmokeRecorderKeepsAWholeLargeHeaderBlock(t *testing.T) {
 	}
 	if len(rec.buf) != len(block) || len(block) <= 256<<10 {
 		t.Errorf("recorded %d of %d bytes (block must exceed 256 KiB)", len(rec.buf), len(block))
+	}
+}
+
+// The dial configuration, pinned without a listener: SNI/Host and roots, no ALPN, no proxy bypass, per-operation timeouts.
+func TestHostSmokeTLSConfigPinsSNIRootsAndNoALPN(t *testing.T) {
+	for _, host := range []string{"docs.fullchaos.dev", "127.0.0.1"} {
+		cfg := hsTLSConfig(host)
+		if cfg.ServerName != host || cfg.RootCAs != nil || len(cfg.NextProtos) != 0 || cfg.InsecureSkipVerify {
+			t.Errorf("%s: ServerName %q RootCAs %v NextProtos %v InsecureSkipVerify %v", host, cfg.ServerName, cfg.RootCAs, cfg.NextProtos, cfg.InsecureSkipVerify)
+		}
+	}
+}
+
+func TestHostSmokeTransportHasNoTotalTimeoutAndNoSecondProxyHook(t *testing.T) {
+	tr := hsTransport()
+	if tr.ResponseHeaderTimeout != 0 || tr.TLSHandshakeTimeout != 0 {
+		t.Errorf("ResponseHeaderTimeout %s, TLSHandshakeTimeout %s: total deadlines urllib does not have", tr.ResponseHeaderTimeout, tr.TLSHandshakeTimeout)
+	}
+	if tr.DialTLSContext == nil || !tr.DisableKeepAlives || !tr.DisableCompression || tr.ForceAttemptHTTP2 || len(tr.TLSNextProto) != 0 {
+		t.Errorf("transport is not HTTP/1.1, one request per connection, raw bodies")
+	}
+	u, _ := url.Parse("https://docs.fullchaos.dev/")
+	if proxy, err := tr.Proxy(&http.Request{URL: u}); proxy != nil || err != nil {
+		t.Errorf("https goes through hsDialTLS, the transport must not also proxy it: %v %v", proxy, err)
+	}
+}
+
+// urllib's timeout is per operation: a response that keeps trickling in within the timeout is read to the end; one that
+// stalls for the timeout is an error.
+func TestHostSmokeIdleDeadlineIsPerOperation(t *testing.T) {
+	old := hsTimeout
+	hsTimeout = 150 * time.Millisecond
+	defer func() { hsTimeout = old }()
+	server, client := net.Pipe()
+	go func() {
+		for i := 0; i < 8; i++ {
+			_, _ = server.Write([]byte("x"))
+			time.Sleep(50 * time.Millisecond)
+		}
+		time.Sleep(600 * time.Millisecond)
+		server.Close()
+	}()
+	conn := hsIdleConn{client}
+	buf := make([]byte, 1)
+	for i := 0; i < 8; i++ {
+		if _, err := conn.Read(buf); err != nil {
+			t.Fatalf("read %d of a slow trickle (total over the timeout) failed: %v", i, err)
+		}
+	}
+	if _, err := conn.Read(buf); err == nil {
+		t.Error("a stalled read did not time out")
+	}
+	if _, err := conn.Write([]byte("y")); err == nil {
+		t.Error("a stalled write did not time out")
+	}
+}
+
+// With a proxy in the environment the dial goes to the proxy and nowhere else (no direct connection to the target).
+func TestHostSmokeDialWithProxyEnvironmentNeverDialsTheTarget(t *testing.T) {
+	for _, name := range []string{"https_proxy", "NO_PROXY", "no_proxy"} {
+		t.Setenv(name, "")
+		os.Unsetenv(name)
+	}
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	proxy := hsProxyFor("https", "docs.fullchaos.dev:443")
+	if proxy == nil || proxy.Host != "127.0.0.1:1" {
+		t.Fatalf("proxy %v", proxy)
+	}
+	_, err := hsDialTLS(context.Background(), "tcp", "docs.fullchaos.dev:443")
+	if err == nil || !strings.Contains(err.Error(), "127.0.0.1:1") || strings.Contains(err.Error(), "docs.fullchaos.dev") {
+		t.Errorf("dial error %v: want it to name the proxy 127.0.0.1:1 only", err)
+	}
+	t.Setenv("NO_PROXY", "fullchaos.dev")
+	if hsProxyFor("https", "docs.fullchaos.dev:443") != nil {
+		t.Error("NO_PROXY suffix did not bypass the proxy")
 	}
 }

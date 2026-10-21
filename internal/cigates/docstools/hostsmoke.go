@@ -49,7 +49,15 @@ func (c hsIdleConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-func hsClient(follow bool) *http.Client {
+func (c hsIdleConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(hsTimeout))
+	return c.Conn.Write(p)
+}
+
+// hsTransport is the transport of both clients. urllib's timeout is per socket operation: no total or response-header
+// deadline here (net/http would end a slowly trickling response that urllib accepts); every read and write of a conn has its
+// own hsTimeout deadline (hsIdleConn), and the dial has hsTimeout.
+func hsTransport() *http.Transport {
 	// Python urllib honours HTTPS_PROXY / NO_PROXY (checked on 3.14.7): the environment proxy is deliberate here. https
 	// URLs go through hsDialTLS, which does the proxy CONNECT itself; the transport's proxy hook serves http URLs only.
 	transport := httpguard.Transport()
@@ -71,11 +79,16 @@ func hsClient(follow bool) *http.Client {
 		return hsAttach(ctx, conn), nil
 	}
 	transport.DialTLSContext = hsDialTLS
-	transport.ResponseHeaderTimeout = hsTimeout
+	transport.TLSHandshakeTimeout = 0
 	transport.DisableKeepAlives = true
 	transport.DisableCompression = true
 	transport.ForceAttemptHTTP2 = false
 	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	return transport
+}
+
+func hsClient(follow bool) *http.Client {
+	transport := hsTransport()
 	client := &http.Client{Transport: transport}
 	if !follow {
 		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

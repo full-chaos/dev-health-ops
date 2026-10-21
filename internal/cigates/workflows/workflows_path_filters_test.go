@@ -27,10 +27,9 @@ import (
 const fxDir = "tests/fix" + "tures/"
 
 var uncoveredFixtureDirectories = map[string]string{
-	"tests/testops/fixtures":                            "read by the Python testops suite, not by Go tests; covered by the Python workflow's own filters",
-	"tests/docs/fixtures":                               "documentation-lint fixtures consumed by the docs workflow; markdown and mkdocs config, with no Go reader",
-	"mkdocs.yml":                                        "docs site config named by internal/cigates/workflowpaths, which pins that the docs workflows run for it; no Go test reads its content, and a docs-only change must not queue Go CI",
-	"tools/codex-review/fixtures":                       "log excerpts read only by tools/codex-review/test-exec-classify.sh, a shell proof no workflow runs; no Go test reads them",
+	"tests/testops/fixtures":      "read by the Python testops suite, not by Go tests; covered by the Python workflow's own filters",
+	"mkdocs.yml":                  "docs site config named by internal/cigates/workflowpaths, which pins that the docs workflows run for it; no Go test reads its content, and a docs-only change must not queue Go CI",
+	"tools/codex-review/fixtures": "log excerpts read only by tools/codex-review/test-exec-classify.sh, a shell proof no workflow runs; no Go test reads them",
 	"internal/providersync/JIRA_PROVIDER_GAP_MATRIX.md": "surfaced by the os.ReadDir(\".\") reader shape; the tests doing that filter to *.go, which **/*.go already covers, so a markdown file there cannot change what they assert",
 	"internal/queryapi/server/README.md":                "surfaced by the os.ReadDir(\".\") reader shape in internal_auth_test.go's route-boundary scan, which skips every entry that is not a non-test .go file",
 }
@@ -466,6 +465,12 @@ func TestPathFiltersMiniRepoBaselineIsClean(t *testing.T) {
 	expectNoViolations(t, pathFilterViolations(t, root, map[string]string{}))
 }
 
+func TestDocsRobotsNamedByAGoToolIsCoveredByAnExplicitFilterRow(t *testing.T) {
+	files := miniFiles(map[string]string{"docs/robots.txt": "User-agent: *", "internal/y/y.go": "package y\nvar _ = filepath.Join(out, \"robots.txt\")"},
+		strings.ReplaceAll(miniGoYml, "      - '**/*.go'\n", "      - '**/*.go'\n      - 'docs/robots.txt'\n"))
+	expectNoViolations(t, pathFilterViolations(t, miniRepo(t, files), map[string]string{}))
+}
+
 func TestAnExcusedFileNamedByGoIsNotDemandedInGoYml(t *testing.T) {
 	files := miniFiles(map[string]string{"site.yml": "a: 1", "internal/x/x_test.go": "package x\nvar _ = \"site.yml\""}, miniGoYml)
 	root := miniRepo(t, files)
@@ -497,6 +502,7 @@ func TestGoWorkflowPathFiltersPlantedDefects(t *testing.T) {
 		{"a computed Join under a directory where only *.json is covered reports the uncovered .yaml", map[string]string{"cfg/a.json": "{}", "cfg/b.yaml": "x: 1", "internal/y/y_test.go": "package y\nvar _ = filepath.Join(root, \"cfg\", name)"}, strings.ReplaceAll(miniGoYml, "      - '**/*.go'\n", "      - '**/*.go'\n      - 'cfg/*.json'\n"), map[string]string{}, []string{"names a directory with tracked files that match no pull_request path filter", "cfg/b.yaml"}},
 		{"the fixture filter becomes an enumeration", nil, strings.ReplaceAll(miniGoYml, "'tests/fixtures/**'", "'"+fxDir+"a.json'"), map[string]string{}, []string{"single glob 'tests/fixtures/**'"}},
 		{"a Go test names a fixture that is gone", map[string]string{"internal/x/x_test.go": "package x // \"" + fxDir + "ghost.json\"\nvar _ = \"" + fxDir + "ghost.json\""}, miniGoYml, map[string]string{}, []string{"reference fixture paths that do not exist", fxDir + "ghost.json"}},
+		{"a non-test Go file naming robots.txt while docs/robots.txt matches no filter is refused", map[string]string{"docs/robots.txt": "User-agent: *", "internal/y/y.go": "package y\nvar _ = filepath.Join(out, \"robots.txt\")"}, miniGoYml, map[string]string{}, []string{"robots.txt", "match no"}},
 		{"an ambiguous literal naming an uncovered file is neither resolved nor dropped silently", map[string]string{"a/data.json": "{}", "b/data.json": "{}", "internal/x/x_test.go": "package x\nvar _ = fsys.Open(\"data.json\")"}, miniGoYml, map[string]string{"a": "x", "b": "x"}, []string{"could not locate", "data.json"}},
 	}
 	for _, c := range cases {

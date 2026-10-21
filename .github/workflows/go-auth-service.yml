@@ -133,6 +133,7 @@ jobs:
           - FuzzParseErrorEnvelope
           - FuzzRevisionUnmarshal
           - FuzzTimestampUnmarshal
+          - FuzzParseAccessToken
           - FuzzVerifyToken
           - FuzzValidSignedToken
           - FuzzParseLimit

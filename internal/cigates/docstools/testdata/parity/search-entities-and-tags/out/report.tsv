@@ -1,0 +1,5 @@
+query	expected	rank	max_rank	top_result	status
+credentials & tokens	/guide/install/	1	1	/guide/install/	pass
+<b>bold</b>	/reference/api/	missing	1	/reference/api.html	fail
+&amp;lt;b&amp;gt;	/reference/api/	missing	5	/guide/config/	fail
+&notit; &copy2 &#65;&#0;&#x80;	/guide/install/	2	5	/guide/config/	pass

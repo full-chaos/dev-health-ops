@@ -1,0 +1,2 @@
+query	expected	rank	max_rank	top_result	status
+alpha	/a/	1	5	/a/	pass

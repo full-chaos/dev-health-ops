@@ -8,8 +8,6 @@ on:
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
       - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_built_site_links.py'
-      - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
       - 'scripts/check_freshness_inventory.py'
       - 'docs-data/**'
@@ -22,8 +20,6 @@ on:
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
       - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_built_site_links.py'
-      - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
       - 'scripts/check_freshness_inventory.py'
       - 'docs-data/**'
@@ -102,14 +98,14 @@ jobs:
       - name: Check rendered links, anchors, and assets
         run: |
           set -o pipefail
-          python scripts/check_built_site_links.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-built-site-links \
             --site-dir .build/docs \
             2>&1 | tee .build/docs-links.log
 
       - name: Check task-based search acceptance
         run: |
           set -o pipefail
-          python scripts/check_docs_candidate_search.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-search \
             --site-dir .build/docs \
             --queries docs-data/search-acceptance.json \
             2>&1 | tee .build/docs-search.log

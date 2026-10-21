@@ -9,6 +9,7 @@ internal/auth/passwordhash
 internal/auth/sessionid
 internal/chmigrate
 internal/cli
+internal/egressguard
 internal/httpguard
 internal/identityalias
 internal/jobcontract
@@ -19,6 +20,7 @@ internal/jobs/metrics/workitemengine
 internal/jobs/metrics/workitemmetrics
 internal/jobs/workgraph/linktier
 internal/mail
+internal/netclass
 internal/operationalordering
 internal/pgmigrate
 internal/platform/config

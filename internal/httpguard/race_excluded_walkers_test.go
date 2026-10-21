@@ -41,7 +41,7 @@ func TestTheScopePinIsAppliedToTheRealWalk(t *testing.T) {
 //   - a route decorator (a struct of the same package with a Do method and an HTTPDoer field) assigned to the Doer field of a
 //     constructed provider client: it wraps client.Doer, below which the guard already sits.
 //
-//   - providerfoundation.refusedDoer, the doer that sends nothing (what a PagerDuty entry point uses in place of a refused one).
+//   - providerfoundation.refusedDoer, the doer that sends nothing (what a PagerDuty entry point uses in place of a refused one, and the egress guard in place of a doer it cannot reach into).
 //
 // So a decorator that is not a Wrapper can never be SUPPLIED into a provider client constructor: it cannot become an HTTPDoer
 // at all, except by being assigned onto a constructed client. A new production type that implements Do and is used as an

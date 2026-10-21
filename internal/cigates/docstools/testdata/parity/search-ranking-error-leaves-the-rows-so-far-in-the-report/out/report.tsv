@@ -1,0 +1,3 @@
+query	expected	rank	max_rank	top_result	status
+install	/guide/install/	1	5	/guide/install/	pass
+"tab	here"	/guide/install/	2	1	/guide/config/	fail

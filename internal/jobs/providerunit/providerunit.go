@@ -145,6 +145,10 @@ const (
 	// contract (providersync.EffectBoundExceededError): the next attempt
 	// rebuilds the same oversized batch from the same provider data.
 	ResultTooLargeCategory = "result_too_large"
+	// EgressRefusedCategory covers a unit whose provider call the dial-time egress guard refused: the stored provider
+	// URL resolves to an address that is not public and not in PROVIDER_EGRESS_ALLOW_CIDRS. The same URL is refused on
+	// every attempt, so the unit ends on the first one under a name that says why. Go-only: Python never guarded sync time.
+	EgressRefusedCategory = "egress_refused"
 	// TimeLimitCategory covers an attempt that reached the job time limit. It
 	// is terminal for this run: the next scheduled run is the retry, and
 	// repeating a full-length attempt five times inside one run only holds a
@@ -208,6 +212,9 @@ func causeClass(err error, timedOut bool) string {
 }
 
 func deterministicTerminalCategory(err error) (string, bool) {
+	if providerfoundation.IsEgressRefused(err) {
+		return EgressRefusedCategory, true
+	}
 	if errors.Is(err, providersync.ErrProviderDatasetUnavailable) {
 		return ProviderDatasetUnavailableCategory, true
 	}

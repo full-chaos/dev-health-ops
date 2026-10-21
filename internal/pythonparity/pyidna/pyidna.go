@@ -1,5 +1,5 @@
 // Package pyidna is the Python idna package (idna/core.py, the version
-// pinned in uv.lock) for the calls email-validator makes: uts46_remap,
+// pinned in the last uv.lock) for the calls email-validator makes: uts46_remap,
 // alabel, encode and decode. A Python IDNAError is an *Error whose Message
 // is str(exc), so a caller can put it into a user-facing message exactly
 // as email-validator does.

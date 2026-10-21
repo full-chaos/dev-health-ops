@@ -2,6 +2,8 @@ package workflows_test
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -12,6 +14,10 @@ import (
 // 600 s go test timeout. The go-quality legs therefore restore a cache of their own (one per leg, keyed on the leg, the
 // runner, the Go version and go.sum), saved only by a push to main on a key miss; the jobs that compile little or nothing
 // do not use setup-go's cache at all.
+
+var cacheLayoutRE = regexp.MustCompile(`^go-quality-v([0-9]+)-`)
+
+const minCacheLayout = 2
 
 var goCacheWorkflows = []string{
 	".github/workflows/go-quality.yml",
@@ -91,6 +97,14 @@ func goCacheViolations(t *testing.T, root string) []string {
 			if !strings.Contains(key, part) {
 				add("go-quality.yml: the restore key %q does not hold %s", key, part)
 			}
+		}
+		// A key is immutable and the save runs only on a key miss, so a main entry built into the wrong directory (before
+		// DEV_HEALTH_GO_CACHE was exported) would be restored for ever and never re-saved. The layout segment retires it:
+		// bump it whenever the cached directory layout changes. v1 is the /tmp layout; the first fixed layout is v2.
+		if m := cacheLayoutRE.FindStringSubmatch(key); m == nil {
+			add("go-quality.yml: the restore key %q has no layout-version segment go-quality-v<N>-", key)
+		} else if n, _ := strconv.Atoi(m[1]); n < minCacheLayout {
+			add("go-quality.yml: the restore key %q has layout-version v%d, want v%d or later (earlier entries were built into /tmp)", key, n, minCacheLayout)
 		}
 		if prefix, _, ok := strings.Cut(key, "${{ hashFiles"); !ok || strings.TrimSpace(rk) != prefix {
 			add("go-quality.yml: restore-keys must be the key without its go.sum hash (got %q)", rk)
@@ -196,6 +210,9 @@ func TestGoCacheGuardPlantedDefectsAreCaught(t *testing.T) {
 		{"the export is a literal tilde", mutation{gq, "DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build", "DEV_HEALTH_GO_CACHE=~/.cache/go-build"}, "literal ~"},
 		{"the export is on the pool path only", mutation{gq, "&& runner.environment == 'github-hosted'\n        run: echo \"DEV_HEALTH_GO_CACHE", "&& vars.SELF_HOSTED_RUNNERS == 'enabled'\n        run: echo \"DEV_HEALTH_GO_CACHE"}, "GitHub-hosted legs only"},
 		{"the export is set after check_go.sh", mutation{gq, "        run: bash ci/check_go.sh ci-leg ${{ matrix.args }}\n", "        run: bash ci/check_go.sh ci-leg ${{ matrix.args }}\n\n      - name: late export\n        if: runner.environment == 'github-hosted'\n        run: echo \"DEV_HEALTH_GO_CACHE=${HOME}/.cache/go-build\" >> \"${GITHUB_ENV}\"\n"}, "after the leg step"},
+		{"the layout segment is back to v1", mutation{gq, "go-quality-v2-", allMarker + "go-quality-v1-"}, "layout-version v1"},
+		{"the key has no layout segment", mutation{gq, "go-quality-v2-", allMarker + "go-quality-"}, "no layout-version segment"},
+		{"restore-keys keeps the old layout", mutation{gq, "restore-keys: |\n            go-quality-v2-", "restore-keys: |\n            go-quality-"}, "restore-keys must be the key without its go.sum hash"},
 		{"auth-changes back on the shared cache", mutation{".github/workflows/go-auth-service.yml", "          cache: false", "          cache: true"}, "go-auth-service.yml:auth-changes"},
 		{"graphql-wire-parity back on the shared cache", mutation{".github/workflows/go.yml", "empty entry.\n          cache: false\n\n      - uses: pnpm/action-setup", "empty entry.\n          cache: true\n\n      - uses: pnpm/action-setup"}, "go.yml:graphql-wire-parity"},
 		{"docs preview back on the shared cache", mutation{".github/workflows/docs-cloudflare.yml", "          cache: false", "          cache: true"}, "docs-cloudflare.yml:preview-or-build"},

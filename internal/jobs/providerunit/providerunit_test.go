@@ -1087,6 +1087,44 @@ type testEffectLedger struct {
 	state providersync.EffectLedgerState
 }
 
+// The chunked-store half exists so a chunked route (github/files) reaches its
+// handler; no test here prepares a chunk.
+func (*testEffectLedger) LoadChunkCheckpoint(context.Context, providersync.Claim, time.Time) (providersync.ChunkCheckpoint, error) {
+	return providersync.ChunkCheckpoint{}, providersync.ErrChunkCheckpointNotFound
+}
+
+func (*testEffectLedger) PrepareChunk(context.Context, providersync.Claim, providersync.PreparedProviderChunk, time.Time) (providersync.PreparedProviderChunk, error) {
+	return providersync.PreparedProviderChunk{}, providersync.ErrInvalidConfiguration
+}
+
+func (*testEffectLedger) PrepareChunkGroup(context.Context, providersync.Claim, []providersync.PreparedProviderChunk, time.Time) ([]providersync.PreparedProviderChunk, error) {
+	return nil, providersync.ErrInvalidConfiguration
+}
+
+func (*testEffectLedger) LoadPreparedChunk(context.Context, providersync.Claim, int, time.Time) (providersync.PreparedProviderChunk, error) {
+	return providersync.PreparedProviderChunk{}, providersync.ErrPreparedChunkNotFound
+}
+
+func (*testEffectLedger) BeginChunkEffect(context.Context, providersync.Claim, int, int, string, time.Time) error {
+	return providersync.ErrInvalidConfiguration
+}
+
+func (*testEffectLedger) CommitChunkEffect(context.Context, providersync.Claim, int, int, string, time.Time) error {
+	return providersync.ErrInvalidConfiguration
+}
+
+func (*testEffectLedger) ResolveChunkEffect(context.Context, providersync.Claim, int, int, string, providersync.GenerationBlockResolution, time.Time) error {
+	return providersync.ErrInvalidConfiguration
+}
+
+func (*testEffectLedger) MarkChunkCommitted(context.Context, providersync.Claim, int, string, time.Time) error {
+	return providersync.ErrInvalidConfiguration
+}
+
+func (*testEffectLedger) MarkInventoryComplete(context.Context, providersync.Claim, time.Time) error {
+	return providersync.ErrInvalidConfiguration
+}
+
 func (*testEffectLedger) LoadEffects(
 	context.Context,
 	providersync.Claim,

@@ -159,8 +159,7 @@ key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-
 Cases `parity/val-*`. Recorded with Python 3.12.3 (`python3 -I`) from `scripts/validate_docs_inventory_review.py` as at
 ops `8f2e19e47` (frozen as `refusals/validate_docs_inventory_review.py.frozen`), the script itself unmodified.
 
-Per case, in a fresh work directory `$W`: write the files of `in/` (a `.fixture` suffix is dropped: it marks an input
-that is not valid JSON), make the links of `symlinks`, pad (below), then run, with cwd `$W`,
+Per case, in a fresh work directory `$W`: write the inputs (below), make the links of `symlinks`, pad (below), then run, with cwd `$W`,
 `python3 -I pyrun.py validate-inventory-review <script> <args after the verb>` with `PYTHONHASHSEED=0`. `pyrun.py`
 sets `sys.argv[0]` to the verb (so argparse names the verb, not the `.py` file) and `exec`s the script as `__main__`.
 Store rc and stdout, every file the run created or changed under `out/`, and stderr with `$W`, the script directory and
@@ -169,6 +168,11 @@ as `stderr.python`, and `stderr.traceback` holds the exception text that ends it
 `Inventory review failed:` message is); the Go verb prints exactly that text. Cases `val-x-*` were built from `val-ok`'s
 inputs by one edit each; for an accepted edit of the factual JSON the committed TSV and summary were written by the
 script's own `_write_factual_tsv` and `_summary`.
+
+Inputs: a case with a `base` file (`val-ok`) starts from that case's `in/`; its own `in/` holds only the files that
+differ and is written over it; its `drop` file lists base inputs it does not have (removed). A `.fixture` suffix is
+dropped from a name: it marks an input that is not valid JSON. `placeInputs` in `parity_test.go` does this for every
+case; the recording did the same, so the recorded bytes are those of the full inputs.
 
 Padding: the script checks fixed sizes (439 disposition rows: 303 ops, 136 web). A case holds a few rows; its `counts`
 file says how many ("disposition ops web"). Before the run, Python's and Go's alike (`ivPadCase` in

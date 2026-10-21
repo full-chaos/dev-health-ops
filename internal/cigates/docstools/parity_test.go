@@ -51,19 +51,7 @@ func replayCase(t *testing.T, dir string) { replayCaseWith(t, dir, runDocs) }
 func replayCaseWith(t *testing.T, dir string, run func(args ...string) (int, string, string)) {
 	work := t.TempDir()
 	expected := map[string]bool{}
-	in := filepath.Join(dir, "in")
-	_ = filepath.Walk(in, func(path string, info os.FileInfo, err error) error {
-		if err == nil && info.Mode().IsRegular() {
-			rel, _ := filepath.Rel(in, path)
-			rel = strings.ReplaceAll(strings.TrimSuffix(rel, ".fixture"), "{E9}", "é")
-			expected[rel] = true
-			writeTree(t, filepath.Join(work, rel), mustRead(t, path), info.Mode().Perm())
-		} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			rel, _ := filepath.Rel(in, path)
-			copySymlink(t, path, filepath.Join(work, rel))
-		}
-		return nil
-	})
+	placeInputs(t, dir, work, expected)
 	seedSymlinks(t, filepath.Join(dir, "symlinks"), work)
 	sub := map[string]string{"{WORK}": work}
 	t.Chdir(work)
@@ -139,6 +127,36 @@ func replayCaseWith(t *testing.T, dir string, run func(args ...string) (int, str
 	sort.Strings(left)
 	if len(left) > 0 {
 		t.Errorf("the verb left files the Python script did not: %v", left)
+	}
+}
+
+// placeInputs writes a case's inputs into work: first the inputs of the case named in its base file (if any), then
+// its own in/ over them, then it removes the paths its drop file lists (one per line).
+func placeInputs(t *testing.T, dir, work string, expected map[string]bool) {
+	t.Helper()
+	if raw, err := os.ReadFile(filepath.Join(dir, "base")); err == nil {
+		placeInputs(t, filepath.Join(filepath.Dir(dir), strings.TrimSpace(string(raw))), work, expected)
+	}
+	in := filepath.Join(dir, "in")
+	_ = filepath.Walk(in, func(path string, info os.FileInfo, err error) error {
+		if err == nil && info.Mode().IsRegular() {
+			rel, _ := filepath.Rel(in, path)
+			rel = strings.ReplaceAll(strings.TrimSuffix(rel, ".fixture"), "{E9}", "é")
+			expected[rel] = true
+			writeTree(t, filepath.Join(work, rel), mustRead(t, path), info.Mode().Perm())
+		} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			rel, _ := filepath.Rel(in, path)
+			copySymlink(t, path, filepath.Join(work, rel))
+		}
+		return nil
+	})
+	if raw, err := os.ReadFile(filepath.Join(dir, "drop")); err == nil {
+		for _, rel := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+			if err := os.Remove(filepath.Join(work, rel)); err != nil {
+				t.Fatalf("%s: drop %s: %v", dir, rel, err)
+			}
+			delete(expected, rel)
+		}
 	}
 }
 

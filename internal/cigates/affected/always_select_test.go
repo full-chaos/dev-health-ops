@@ -119,3 +119,22 @@ func TestAlwaysSelectedPackagesRunOnGoOnlyChanges(t *testing.T) {
 		})
 	}
 }
+
+// The planner's code, its compiled-in data and the steps that run it plan FULL: a pull request that edits them must not
+// be planned by the closure it changes.
+func TestPlannerInputsPlanFull(t *testing.T) {
+	for _, changed := range []string{
+		"cmd/cigate/main.go",
+		"internal/cigates/affected/plan.go",
+		"internal/cigates/affected/always.tsv",
+		"internal/cigates/affected/reads.tsv",
+		".github/workflows/go.yml",
+		".github/workflows/go-quality.yml",
+	} {
+		t.Run(changed, func(t *testing.T) {
+			if lines := realPlan(t, changed); lines[0] != "FULL planner input: "+changed {
+				t.Fatalf("a change to %s plans %q, want %q", changed, lines[0], "FULL planner input: "+changed)
+			}
+		})
+	}
+}

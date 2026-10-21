@@ -23,6 +23,7 @@ var (
 	backtickToken = regexp.MustCompile("`([^`\n]+)`")
 	linkTarget    = regexp.MustCompile(`\]\(([^)\s]+)\)`)
 	pathChars     = regexp.MustCompile(`^[A-Za-z0-9_.@\-/]+$`)
+	pythonTree    = regexp.MustCompile(`src/dev_health_ops(?:/[^\s` + "`" + `)'"]*)?`)
 	lineSuffix    = regexp.MustCompile(`:\d+(?:-\d+)?$`)
 	frontValue    = regexp.MustCompile(`^\s*(?:-\s+|[A-Za-z_][A-Za-z0-9_]*:\s+)["']?([^\s"']+)["']?\s*$`)
 	// Port records list the Python modules by design: each row is a Python path and its Go replacement.
@@ -173,10 +174,23 @@ func docsRepoPathGuard(d docTree) []string {
 			if !front && strings.HasPrefix(strings.TrimSpace(line), "```") {
 				fenced = !fenced
 			}
-			if fenced || strings.Contains(line, pathRemovedNote) {
+			if strings.Contains(line, pathRemovedNote) {
 				continue
 			}
-			for _, ref := range pathTokens(line, front, topDirs) {
+			refs := []string(nil)
+			if !fenced {
+				refs = pathTokens(line, front, topDirs)
+			}
+			// The retired Python tree is checked everywhere on the line, in code fences and with placeholders too.
+			for _, m := range pythonTree.FindAllString(line, -1) {
+				refs = append(refs, strings.TrimSuffix(strings.TrimRight(m, ".,;:"), "/"))
+			}
+			seen := map[string]bool{}
+			for _, ref := range refs {
+				if seen[ref] {
+					continue
+				}
+				seen[ref] = true
 				if files[ref] || dirs[ref] || namesGoSymbolIn(ref, dirs) {
 					continue
 				}
@@ -196,6 +210,9 @@ func TestDocsNameNoUntrackedRepoPath(t *testing.T) {
 		{"a front matter line names a deleted Python module", func(t *testing.T, d docTree) docTree {
 			return d.added("docs/reference/planted.md", "---\nsource_of_truth:\n  - "+gone+"\n---\n# P\n")
 		}, "docs/reference/planted.md:3 names " + gone},
+		{"a Python path in a code fence", func(t *testing.T, d docTree) docTree {
+			return d.added("docs/reference/planted.md", "```text\nsrc/dev_health_ops/providers/<provider>/\n```\n")
+		}, "docs/reference/planted.md:2 names src/dev_health_ops/providers/<provider>"},
 		{"a deleted Python package directory", func(t *testing.T, d docTree) docTree {
 			return d.added("docs/reference/planted.md", "See `src/dev_health_ops/providers/`.\n")
 		}, "src/dev_health_ops/providers"},
@@ -233,7 +250,7 @@ func TestDocsRepoPathGuardAcceptsTrackedPathsAndTheNote(t *testing.T) {
 		{"the note on the same line", "docs/reference/planted.md", "`src/dev_health_ops/api/main.py` (" + pathRemovedNote + ")\n"},
 		{"a URL", "docs/reference/planted.md", "[x](https://example.com/internal/nope)\n"},
 		{"a glob and a placeholder", "docs/reference/planted.md", "`internal/jobs/*/x.go` `internal/providersync/<provider>_route.go`\n"},
-		{"a fenced block", "docs/reference/planted.md", "```\ninternal/nope/x.go\n```\n"},
+		{"a fenced block of untracked non-Python paths", "docs/reference/planted.md", "```\ninternal/nope/x.go\n```\n"},
 		{"a port record page", "docs/go-migration-matrix.md", "`src/dev_health_ops/api/main.py`\n"},
 	} {
 		for _, v := range docsRepoPathGuard(real.added(c.rel, c.page)) {

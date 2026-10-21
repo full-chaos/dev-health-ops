@@ -1,0 +1,1 @@
+ValueError: Committed snapshot is stale: docs-data/inventory/documentation-inventory.json. Regenerate the inventory and review the resulting diff.

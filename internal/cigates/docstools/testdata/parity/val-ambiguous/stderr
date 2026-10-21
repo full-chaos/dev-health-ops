@@ -1,0 +1,4 @@
+usage: validate-inventory-review [-h] [--generated-json GENERATED_JSON]
+                                 [--inventory-dir INVENTORY_DIR]
+                                 [--ia-dir IA_DIR]
+validate-inventory-review: error: ambiguous option: --i could match --inventory-dir, --ia-dir

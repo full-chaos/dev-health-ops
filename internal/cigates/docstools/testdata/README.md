@@ -154,6 +154,71 @@ Same as Python (recorded pairs): an absent key (`genqm-missing-registry-queue`, 
 key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-folded key
 (`genqm-key-unicode-folded-state`, U+017F): `KeyError` naming the key, rc 1.
 
+# validate-inventory-review
+
+Cases `parity/val-*`. Recorded with Python 3.14.7 (`python3.14 -I`, the version CI ran the script on) from
+`scripts/validate_docs_inventory_review.py` as at ops `8f2e19e47` (frozen as
+`refusals/validate_docs_inventory_review.py.frozen`), the script itself unmodified. Recorded again with 3.12.3: every
+rc, stdout, stderr, stderr.traceback and out/ file is byte-identical; only the 72 whole tracebacks (`stderr.python`)
+differ, in their frame layout.
+
+Per case, in a fresh work directory `$W`: write the inputs (below), make the links of `symlinks`, pad (below), then run, with cwd `$W`,
+`python3 -I pyrun.py validate-inventory-review <script> <args after the verb>` with `PYTHONHASHSEED=0`. `pyrun.py`
+sets `sys.argv[0]` to the verb (so argparse names the verb, not the `.py` file) and `exec`s the script as `__main__`.
+Store rc and stdout, every file the run created or changed under `out/`, and stderr with `$W`, the script directory and
+the recorder directory replaced by `{WORK}`, `{SCRIPTS}` and `{RECORDER}`. When stderr is a traceback it is kept whole
+as `stderr.python`, and `stderr.traceback` holds the exception text that ends it (it can be several lines: the
+`Inventory review failed:` message is); the Go verb prints exactly that text. Cases `val-x-*` were built from `val-ok`'s
+inputs by one edit each; for an accepted edit of the factual JSON the committed TSV and summary were written by the
+script's own `_write_factual_tsv` and `_summary`.
+
+Inputs: a case with a `base` file (`val-ok`) starts from that case's `in/`; its own `in/` holds only the files that
+differ and is written over it; its `drop` file lists base inputs it does not have (removed). A `.fixture` suffix is
+dropped from a name: it marks an input that is not valid JSON. In stored paths `{DOT}` stands for a leading dot (the
+`.build` directories, which the repository's ignore rules would drop), `{FF}` and `{FE}` for those raw bytes of a
+non-UTF-8 name, and `{E9}` for e-acute (`caseRel` in `parity_test.go`). `placeInputs` in `parity_test.go` does this for every
+case; the recording did the same, so the recorded bytes are those of the full inputs.
+
+Padding: the script checks fixed sizes (439 disposition rows: 303 ops, 136 web). A case holds a few rows; its `counts`
+file says how many ("disposition ops web"). Before the run, Python's and Go's alike (`ivPadCase` in
+`validate_inventory_review_cases_test.go`), the disposition matrix gets the first `303-ops` ops and `136-web` web rows of
+the one shared filler file `validate_inventory_filler.tsv` (valid, non-public rows) appended, the web snapshot the same
+web rows, and `docs-data/inventory/ops-~pad.tsv` the ops rows under the standard header. A file that is missing or not a regular file is not padded. So the recorded script and the Go verb check the
+real constants.
+
+`validate_inventory_argparse.golden.json`: Python 3.14.7 argparse with the script's three options over 5657 argument
+vectors (recipe inside). 736 rows differ on 3.12.3 (3.14 reports an ambiguous prefix only when it consumes it, treats
+`-1e5` / `-.5x` as negative numbers, splits `-x=y` prefixes at `=`, and prints Unicode 16 characters in repr); each keeps
+the 3.12.3 result in `py312` and the Go verb follows 3.14.7. `TestValidateInventoryArgparseMatchesPython` compares exit code, help, usage error and the
+`str(Path)` of each value.
+
+The refusal inventory (`refusals/validate-inventory-review.tsv`) maps every line of the frozen script that can refuse
+to the cases (run live through the built binary by `TestValidateInventoryRefusalRowsRunLiveThroughTheCLI`) or Go tests
+that answer it.
+
+Not recordable, hand-written in `validate_inventory_review_refusals_test.go` with what Python 3.14.7 printed (3.12.3 printed the same):
+mode 000 inputs (`PermissionError`; an unreadable IA directory is an empty glob in Python, so every target URL is
+non-IA).
+
+Python's order is not fixed in two places: `REQUIRED_DISPOSITION_FIELDS` is a set (the "missing <field>" lines of one
+row come in hash order; Go uses a fixed order, the cases were recorded with `PYTHONHASHSEED=0` and have one missing
+field per row) and `LIST_FIELDS` (which list field's `TypeError` comes first when two are bad).
+
+## Stricter than Python (RISK-NOTES)
+
+The Go verb refuses these (exit 1, no stdout, one stderr line `cigate: refused (stricter than the Python checker): ...`);
+`TestValidateInventoryStricterThanPython` pins each.
+
+| input | Python 3.14.7 (and 3.12.3) |
+| --- | --- |
+| a JSON string with a lone surrogate (`\ud800`) in a field the TSV writes | rc 1, `UnicodeEncodeError` |
+| the same in a key nothing writes | rc 0 |
+| JSON nested deeper than 200 | rc 0 (its limit is higher) |
+| `publication_classification` / `artifact_type` values of mixed types (None next to str) | rc 1, `TypeError: '<' not supported ...` |
+| two or more numeric (bool/int/float) classification or artifact-type values | sorts them; rc 0 when the snapshots match |
+| `rows` a str, an empty str, or an object; a row given as a list of pairs | iterates it (`dict()` of the items); rc 0 or rc 1 by shape |
+| a non-UTF-8 file name the `ops-*.tsv` or `*.tsv` glob matches (one it does not match is skipped, as Python skips it: `val-x-nonutf8-names-glob-misses`) | rc 0 |
+
 # Part c1: check-built-site-links, check-docs-search
 
 Cases `parity/links-*`, `parity/search-*` and the helper corpora under `helpers/`. Recorded once with

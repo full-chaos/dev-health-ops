@@ -1,0 +1,9 @@
+usage: validate-inventory-review [-h] [--generated-json GENERATED_JSON]
+                                 [--inventory-dir INVENTORY_DIR]
+                                 [--ia-dir IA_DIR]
+
+options:
+  -h, --help            show this help message and exit
+  --generated-json GENERATED_JSON
+  --inventory-dir INVENTORY_DIR
+  --ia-dir IA_DIR

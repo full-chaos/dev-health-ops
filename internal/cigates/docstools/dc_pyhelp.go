@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -154,6 +155,9 @@ func dcUnescape(s string) (string, error) {
 				digits, base = digits[1:], 16
 			}
 			if base == 10 && len(digits) > 4300 {
+				if failure != nil {
+					return m
+				}
 				failure = dcValueError{"ValueError", fmt.Sprintf("Exceeds the limit (4300 digits) for integer string conversion: value has %d digits; use sys.set_int_max_str_digits() to increase the limit", len(digits))}
 				return m
 			}
@@ -386,6 +390,10 @@ func dcJoin(parent, child string) string {
 	return a1PathStr(parent + "/" + child)
 }
 
+// dcGetwd is os.getcwd(): the physical working directory from the getcwd system call. os.Getwd would give the logical $PWD
+// a shell left after a cd through a symlink, and Path.resolve() would then differ from Python's.
+func dcGetwd() (string, error) { return syscall.Getwd() }
+
 // dcRealpath is posixpath.realpath(strict=False) of Python 3.14: the path made absolute, symlinks resolved, ".." taken
 // from the resolved prefix, a symlink loop left as the link path. A path with a NUL is the ValueError of os.lstat.
 func dcRealpath(filename string) (string, error) {
@@ -400,7 +408,7 @@ func dcRealpath(filename string) (string, error) {
 	partCount := len(rest)
 	path := "/"
 	if !strings.HasPrefix(filename, "/") {
-		cwd, err := os.Getwd()
+		cwd, err := dcGetwd()
 		if err != nil {
 			return "", err
 		}

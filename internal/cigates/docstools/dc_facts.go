@@ -21,7 +21,7 @@ func init() { register("check-docs-facts", dcFactsVerb) }
 // whatever the working directory: the nearest directory at or above the working directory that holds go.mod. A working
 // directory outside any module is refused (STRICTER: the script found its root from its path and ran from anywhere).
 func dcRepoRoot() (string, error) {
-	dir, err := os.Getwd()
+	dir, err := dcGetwd()
 	if err != nil {
 		return "", err
 	}

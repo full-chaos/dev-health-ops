@@ -190,7 +190,7 @@ func seedSymlinks(t *testing.T, list, work string) {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(work, link)), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(target, filepath.Join(work, link)); err != nil {
+		if err := os.Symlink(strings.ReplaceAll(target, "{WORK}", work), filepath.Join(work, link)); err != nil {
 			t.Fatal(err)
 		}
 	}

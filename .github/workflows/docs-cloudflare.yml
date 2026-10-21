@@ -71,15 +71,6 @@ jobs:
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
-          # CHAOS-10486: no setup-go cache here. Its key is shared by every workflow, and a job that compiles little or
-          # nothing saved it first and left the heavy jobs an empty entry.
-          cache: false
-
       - name: Build and prepare validated preview assets
         run: |
           mkdir -p .build

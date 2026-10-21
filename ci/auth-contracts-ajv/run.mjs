@@ -38,6 +38,8 @@ const REQUIRED_GROUPS = {
   // Request surfaces carry no client-only rule; the decision and batch response corpora do.
   authorization_request: ["accept", "reject"],
   authorization_batch_request: ["accept", "reject"],
+  // The transport envelope has no field a schema cannot check, so no client-only rule.
+  "transport-error": ["accept", "reject"],
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
@@ -93,6 +95,18 @@ const APPROVED_AUDIT = [
   "denied_no_membership",
   "denied_no_grant",
   "denied_policy",
+  "accepted",
+  "invalid_credentials",
+  "account_locked",
+  "principal_deactivated",
+  "email_unverified",
+  "email_collision",
+  "signup_unavailable",
+  "identity_conflict",
+  "provider_already_linked",
+  "expired",
+  "principal_not_found",
+  "malformed",
 ];
 const NOT_IN_THE_VOCABULARY = [
   "secret_0123456789abcdef0123",

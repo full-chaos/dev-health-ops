@@ -59,17 +59,41 @@ type issueRequest struct {
 }
 
 func parseIssueRequest(body io.Reader) (issueRequest, error) {
-	var raw map[string]json.RawMessage
 	dec := json.NewDecoder(body)
-	if err := dec.Decode(&raw); err != nil || dec.More() {
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
 		return issueRequest{}, errIssueRequest
 	}
-	if len(raw) != 3 {
+	members := map[string]json.RawMessage{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return issueRequest{}, errIssueRequest
+		}
+		name, _ := tok.(string)
+		if _, seen := members[name]; seen {
+			return issueRequest{}, errIssueRequest
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return issueRequest{}, errIssueRequest
+		}
+		members[name] = value
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return issueRequest{}, errIssueRequest
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return issueRequest{}, errIssueRequest
+	}
+	principalRaw, okPrincipal := members["principal_id"]
+	orgRaw, okOrg := members["organization_id"]
+	amrRaw, okAMR := members["amr"]
+	if len(members) != 3 || !okPrincipal || !okOrg || !okAMR {
 		return issueRequest{}, errIssueRequest
 	}
 	var out issueRequest
 	var principal string
-	if err := json.Unmarshal(raw["principal_id"], &principal); err != nil {
+	if err := json.Unmarshal(principalRaw, &principal); err != nil {
 		return issueRequest{}, errIssueRequest
 	}
 	id, err := uuid.Parse(principal)
@@ -77,10 +101,6 @@ func parseIssueRequest(body io.Reader) (issueRequest, error) {
 		return issueRequest{}, errIssueRequest
 	}
 	out.principal = id
-	orgRaw, ok := raw["organization_id"]
-	if !ok {
-		return issueRequest{}, errIssueRequest
-	}
 	if string(orgRaw) != "null" {
 		var org string
 		if err := json.Unmarshal(orgRaw, &org); err != nil {
@@ -92,7 +112,7 @@ func parseIssueRequest(body io.Reader) (issueRequest, error) {
 		}
 		out.organization = &orgID
 	}
-	if err := json.Unmarshal(raw["amr"], &out.amr); err != nil || len(out.amr) == 0 {
+	if err := json.Unmarshal(amrRaw, &out.amr); err != nil || !session.ValidAMR(out.amr) {
 		return issueRequest{}, errIssueRequest
 	}
 	return out, nil

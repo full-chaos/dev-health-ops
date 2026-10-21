@@ -189,6 +189,9 @@ type Result struct {
 // amrValues is session.v1's closed amr enum.
 var amrValues = map[string]bool{"pwd": true, "otp": true, "mfa": true, "hwk": true, "swk": true, "fed": true}
 
+// ValidAMR reports whether amr is a non-empty set of session.v1's amr values.
+func ValidAMR(amr []string) bool { return validAMR(amr) }
+
 func validAMR(amr []string) bool {
 	if len(amr) == 0 {
 		return false

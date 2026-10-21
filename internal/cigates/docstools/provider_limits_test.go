@@ -121,6 +121,7 @@ func readProviderLimitsInventory(t *testing.T) []providerLimitsRefusal {
 }
 
 var (
+	cigateRoot string
 	cigateDir  string
 	cigateOnce sync.Once
 	cigateBin  string
@@ -134,6 +135,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	cigateDir = dir
+	// The module root is found from the package directory, before any test changes directory.
+	if cigateRoot, err = moduleroot.Root(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
@@ -143,14 +149,9 @@ func TestMain(m *testing.M) {
 func liveCigate(t *testing.T) string {
 	t.Helper()
 	cigateOnce.Do(func() {
-		root, err := moduleroot.Root()
-		if err != nil {
-			cigateErr = err
-			return
-		}
 		cigateBin = filepath.Join(cigateDir, "cigate")
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", cigateBin, "./cmd/cigate")
-		cmd.Dir = root
+		cmd.Dir = cigateRoot
 		if out, err := cmd.CombinedOutput(); err != nil {
 			cigateErr = errors.New(err.Error() + ": " + string(out))
 		}

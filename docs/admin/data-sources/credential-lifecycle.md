@@ -5,7 +5,6 @@ content_type: task-guide
 owner: platform-product
 source_of_truth:
   - docs/admin/data-sources/incident-response.md
-  - docs/security/credential-encryption-rotation.md
   - current provider credential and revocation implementation
 applicability: current
 lifecycle: active

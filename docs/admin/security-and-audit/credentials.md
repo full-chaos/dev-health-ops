@@ -4,7 +4,6 @@ summary: Separate workspace credential responsibilities from operator secret sto
 content_type: concept
 owner: platform-product
 source_of_truth:
-  - docs/llm/byo-llm-credentials.md
   - current provider and model credential flows
 applicability: current
 lifecycle: active

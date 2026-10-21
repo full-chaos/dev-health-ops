@@ -4,7 +4,6 @@ summary: Route a change to the repository, package, command, contract, or deploy
 content_type: concept
 owner: engineering
 source_of_truth:
-  - docs/architecture/repo-layout.md
   - current repository roots and AGENTS.md
 applicability: current
 lifecycle: active

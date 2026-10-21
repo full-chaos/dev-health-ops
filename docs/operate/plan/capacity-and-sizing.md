@@ -4,7 +4,6 @@ summary: Size API, Go worker queue groups, PostgreSQL connections, ClickHouse, a
 content_type: reference
 owner: platform-operations
 source_of_truth:
-  - docs/architecture/worker-scaling-readiness.md
   - docs/operate/configure/databases-and-storage.md
   - deploy/go-workers/deployment.json
   - current worker and synchronization implementation

@@ -4,7 +4,6 @@ summary: Configure the team and repository scope used by product filters and att
 content_type: task-guide
 owner: platform-product
 source_of_truth:
-  - docs/team-configuration.md
   - current team and repository administration UI
 applicability: current
 lifecycle: active

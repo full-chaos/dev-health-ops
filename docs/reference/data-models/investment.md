@@ -8,8 +8,8 @@ source_of_truth:
   - internal/jobs/investment/chquery/teamownership.go
   - internal/jobs/investment/hierarchycascade.go
   - internal/jobs/investment/materialize.go
-  - src/dev_health_ops/investment_taxonomy.py
-  - src/dev_health_ops/work_graph/investment/
+  - internal/jobs/workgraph/units/taxonomy.go
+  - internal/jobs/investment/
   - internal/queryapi/investment/reader.go
 applicability: current
 lifecycle: active
@@ -306,8 +306,8 @@ finding names what the share counts ("of work").
 > are gone. The migrations that created them stay in the chain. The paragraphs below describe how those tables were written and read BEFORE this change (the
 > daily writer and the newest-row-per-key read rule): history for reading old rows, not current behaviour.
 
-`investment_metrics_daily` and its feeder rule set `src/dev_health_ops/config/investment_areas.yaml`
-are a **pre-WorkUnit legacy path** (`src/dev_health_ops/analytics/investment.py`). The YAML file's
+`investment_metrics_daily` and its feeder rule set (`investment_areas.yaml`)
+were a **pre-WorkUnit legacy path** (removed with the Python api). The YAML file's
 own header states this: "feeds only the pre-WorkUnit daily `investment_*` metric tables... do not
 use this file for canonical WorkUnit categorization." Its `investment_area` values (e.g.
 `security`, `infrastructure`) are free-form legacy labels — **not** the fixed five-theme taxonomy

@@ -1,0 +1,7 @@
+validate-inventory-review
+--generated-json
+.build
+--inventory-dir
+docs-data/inventory
+--ia-dir
+docs-data/ia

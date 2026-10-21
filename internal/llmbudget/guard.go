@@ -168,7 +168,7 @@ func CostMicroUSDAt(provider, model, baseURL string, input, output, cached, crea
 	if err != nil || price == nil {
 		return nil, err
 	}
-	if input < 0 || output < 0 || cached < 0 || created < 0 || cached+created > input {
+	if input < 0 || output < 0 || cached < 0 || created < 0 || cached > input || created > input-cached {
 		return nil, nil
 	}
 	rates := price.Rates

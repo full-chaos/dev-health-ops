@@ -156,7 +156,7 @@ func TestCacheWriteTokensBillAtTheWriteRate(t *testing.T) {
 			t.Errorf("%s: cost = %v (err %v), want %d", c.name, got, err, c.wantMicroUSD)
 		}
 	}
-	for _, c := range []struct{ input, cached, created int64 }{{100, 60, 50}, {100, 0, 101}, {100, 0, -1}} {
+	for _, c := range []struct{ input, cached, created int64 }{{100, 60, 50}, {100, 0, 101}, {100, 0, -1}, {1, 1<<63 - 1, 1}, {1, 1, 1<<63 - 1}, {1<<63 - 1, 1<<63 - 1, 1<<63 - 1}} {
 		if got, _ := CostMicroUSDAt("anthropic", "claude-haiku-5-5", "", c.input, 0, c.cached, c.created, beforeChanges); got != nil {
 			t.Errorf("input %d cached %d created %d priced as %d, want unpriced", c.input, c.cached, c.created, *got)
 		}

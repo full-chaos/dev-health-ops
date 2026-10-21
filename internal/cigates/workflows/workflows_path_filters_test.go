@@ -713,7 +713,7 @@ func TestAGitignoredDirectoryIsNotCollectedAsARepoFixture(t *testing.T) {
 		fxDir + "real.json":                 "{}",
 		".uv-cache/pkg/fixtures/probe.json": "{}",
 	})
-	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "-c", "maintenance.auto=false", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
 		if _, err := runGitStripped(root, args...); err != nil {
 			t.Skipf("git unavailable for the control: %v", err)
 		}
@@ -739,7 +739,7 @@ func TestAGitignoredDirectoryIsNotCollectedAsARepoFixture(t *testing.T) {
 // filters match paths in a commit. Hosted CI went red on exactly this.
 func TestAnUntrackedScratchFileIsNotAnInput(t *testing.T) {
 	root := miniRepo(t, map[string]string{"internal/x/x_test.go": "package x\nvar _ = \"changed.txt\"\n"})
-	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "-c", "maintenance.auto=false", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
 		if _, err := runGitStripped(root, args...); err != nil {
 			t.Skipf("git unavailable for the control: %v", err)
 		}

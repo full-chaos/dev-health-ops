@@ -259,6 +259,10 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		writeDetail(w, http.StatusForbidden, "Email domain is not allowed for this provider")
 	case errors.Is(err, ErrAccountDisabled):
 		writeDetail(w, http.StatusForbidden, "Account is disabled")
+	case errors.Is(err, ErrNotOrgMember):
+		writeDetail(w, http.StatusForbidden, "This account is not a member of the provider's organization.")
+	case errors.Is(err, ErrIdentityAmbiguous):
+		writeDetail(w, http.StatusConflict, "More than one account carries this sign-in. Contact your organization administrator.")
 	case errors.Is(err, ErrUnsolicited), errors.Is(err, ErrFlowNotFound), errors.Is(err, ErrFlowConsumed), errors.Is(err, ErrAssertionReplayed):
 		writeDetail(w, http.StatusBadRequest, "SAML authentication failed")
 	default:

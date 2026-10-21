@@ -63,7 +63,7 @@ func (h handlers) replaceLinkToken(ctx context.Context, tx pgx.Tx, table string,
 // it has acted. A token whose signature holds a non-ASCII character is
 // hmac.compare_digest's TypeError, returned as an error.
 func (h handlers) redeemLinkToken(ctx context.Context, tx pgx.Tx, table, token string, now time.Time) (*userRow, error) {
-	valid, err := signedtoken.Valid(token, h.Mail.Secret())
+	valid, err := signedtoken.ValidAny(token, h.Mail.AcceptSecrets())
 	if err != nil || !valid {
 		return nil, err
 	}

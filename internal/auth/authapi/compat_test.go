@@ -997,3 +997,31 @@ func TestTheSignInRoutesAuditTheirTransportRefusals(t *testing.T) {
 		}
 	}
 }
+
+// The two 429s of a sign-in: the route bucket's is a transport answer and
+// writes no audit row; the account lockout's is a sign-in decision and
+// writes one.
+func TestTheBucket429WritesNoRowAndTheLockout429WritesOne(t *testing.T) {
+	f := newCompatFixture(t)
+	routes, err := CompatRoutes(CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: f.projector,
+		AppendAudit: func(_ context.Context, event audit.AuditEvent) error { f.appended = append(f.appended, event); return nil },
+		Login:       &LoginConfig{Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range routes {
+		if route.Pattern != PatternCompatLogin {
+			continue
+		}
+		response := httptest.NewRecorder()
+		route.ErrorWriter(response, httptest.NewRequest(http.MethodPost, PatternCompatLogin, nil), httpapi.CodeRateLimited)
+		if response.Code != http.StatusTooManyRequests || len(f.appended) != 0 {
+			t.Fatalf("bucket 429: status %d, %d audit rows, want 429 and none", response.Code, len(f.appended))
+		}
+	}
+	f.attempts.locked, f.attempts.remaining = true, time.Minute
+	response := f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, ""), nil)
+	if response.Code != http.StatusTooManyRequests || len(f.appended) != 1 || f.appended[0].Attributes["reason_code"] != "account_locked" {
+		t.Fatalf("lockout 429: status %d, audit rows %+v, want 429 and one account_locked row", response.Code, f.appended)
+	}
+}

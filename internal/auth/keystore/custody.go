@@ -170,27 +170,37 @@ type manifest struct {
 
 // Keys returns the manifest's keys with their public halves.
 func (c *FileCustody) Keys(ctx context.Context) ([]Key, error) {
-	entries, states, err := c.load(ctx)
+	_, keys, err := c.readSet(ctx)
 	if err != nil {
 		return nil, err
+	}
+	return keys, nil
+}
+
+// readSet loads the manifest and reads every key it names under the file
+// contract: a set with any key that is not custodied is refused whole.
+func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, error) {
+	entries, states, err := c.load(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 	keys := make([]Key, 0, len(entries))
 	for i, entry := range entries {
 		pemBytes, err := readCustodiedFile(c.keyPath(entry), MaxKeyFileBytes)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		public, err := parseEd25519Public(pemBytes)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		keys = append(keys, Key{KeyID: entry.KeyID, State: states[i], Algorithm: Algorithm, PublicKey: public})
 	}
-	return keys, nil
+	return entries, keys, nil
 }
 
-// Sign signs with kid when the manifest names it the one active key, both
-// before and after the signature is made. A rotation that lands while the key is read
+// Sign signs with kid when every key the manifest names is custodied and kid
+// is its one active key, both before and after the signature is made. A rotation that lands while the key is read
 // and used (the kid retired, replaced or compromised) discards the signature
 // and returns ReasonKeyNotActive: a signature is returned only when the kid
 // is still active at the manifest read that follows it.
@@ -220,16 +230,17 @@ func (c *FileCustody) Sign(ctx context.Context, kid string, message []byte) ([]b
 // read.
 var afterSign func()
 
-// activeEntry returns kid's manifest entry when the set has exactly one key
-// in effective state active and that key is kid.
+// activeEntry returns kid's manifest entry when every key the manifest names
+// is custodied, exactly one key is in effective state active, and that key is
+// kid.
 func (c *FileCustody) activeEntry(ctx context.Context, kid string) (manifestEntry, error) {
-	entries, states, err := c.load(ctx)
+	entries, keys, err := c.readSet(ctx)
 	if err != nil {
 		return manifestEntry{}, err
 	}
 	active := 0
-	for _, state := range states {
-		if state == StateActive {
+	for _, key := range keys {
+		if key.State == StateActive {
 			active++
 		}
 	}
@@ -240,7 +251,7 @@ func (c *FileCustody) activeEntry(ctx context.Context, kid string) (manifestEntr
 		if entry.KeyID != kid {
 			continue
 		}
-		if states[i] != StateActive {
+		if keys[i].State != StateActive {
 			return manifestEntry{}, failure(ReasonKeyNotActive, nil)
 		}
 		return entry, nil

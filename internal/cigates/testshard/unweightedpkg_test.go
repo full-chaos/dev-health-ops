@@ -208,9 +208,9 @@ func TestATestLegFailsOnAnUnweightedSlowPackageOfItsOwnLog(t *testing.T) {
 // and the partial log does not add a coverage complaint.
 func TestAFailedGoTestRunStillPrintsTheUnweightedRow(t *testing.T) {
 	t.Parallel()
-	pkg, key := unweightedPackage(t, 350, 350)
+	pkg, key := unweightedPackage(t, 1, shardCount)
 	out := writeLog(t, "FAIL\t"+pkg+"\t31.2s\n")
-	r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + out}, true, "ci-leg", "test", "350", "350")
+	r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + out}, true, "ci-leg", "test", "1", fmt.Sprint(shardCount))
 	if r.Err == nil {
 		t.Fatalf("the leg passed although go test failed")
 	}
@@ -221,7 +221,7 @@ func TestAFailedGoTestRunStillPrintsTheUnweightedRow(t *testing.T) {
 		t.Errorf("a failed run's partial log drew a coverage complaint:\n%s", r.Stderr)
 	}
 	bad := writeLog(t, "FAIL\t"+pkg+"\t5s\n")
-	if r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + bad}, true, "ci-leg", "test", "350", "350"); r.Err == nil || strings.Contains(r.Stderr, "unweighted-slow-package") {
+	if r := runCheckGo(t, []string{"FAKE_GO_TEST_STDOUT=" + bad}, true, "ci-leg", "test", "1", fmt.Sprint(shardCount)); r.Err == nil || strings.Contains(r.Stderr, "unweighted-slow-package") {
 		t.Errorf("a failed run with a fast package: err=%v\n%s", r.Err, r.Stderr)
 	}
 }

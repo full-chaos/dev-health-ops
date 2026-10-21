@@ -428,8 +428,8 @@ func collectGitHubBlame(
 				// One file alone exceeds the write contract: it stays retryable
 				// and rotates behind other paths instead of blocking the unit.
 				slog.Warn(
-					"github blame file above the write bound kept retryable without rows",
-					"lines", fileLines, "encoded_bytes", fileBytes,
+					"github blame file above the write bound kept retryable without rows; counts are those observed when the bound was crossed",
+					"observed_lines", fileLines, "observed_encoded_bytes", fileBytes,
 					"max_rows", limits.maxRows, "max_payload_bytes", limits.maxPayloadBytes,
 				)
 				progressRows = append(progressRows, newGitHubBlamePathProgressRow(

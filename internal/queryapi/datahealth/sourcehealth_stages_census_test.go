@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
@@ -152,5 +153,28 @@ func TestSourceHealthStagesCoverEveryWriter(t *testing.T) {
 		if _, ok := found[code]; !ok {
 			t.Errorf("stage %q is named but no writer package persists it: remove it or widen the scan", code)
 		}
+	}
+}
+
+// The unit failure counter bounds its reason label with its own vocabulary: a
+// category a writer persists that it does not name is counted as "other" and
+// the operator loses the series (CHAOS-8829: tree_walk_limit). Every category
+// the provider unit handler (providerunit.go) persists must be in it.
+func TestFailureCounterVocabularyCoversEveryWriterCategory(t *testing.T) {
+	var missing []string
+	for code, where := range writerCategories(t) {
+		if !strings.Contains(strings.Join(where, " "), "providerunit.go") {
+			continue
+		}
+		if _, logged := sourceHealthLoggedOnlyCategories[code]; logged {
+			continue
+		}
+		if providerfoundation.MetricUnitFailureReasonLabel(code) != code {
+			missing = append(missing, code)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("categories a writer persists that the unit failure counter reads as \"other\": %s", strings.Join(missing, ", "))
 	}
 }

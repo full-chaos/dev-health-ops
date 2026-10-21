@@ -333,7 +333,7 @@ func TestGitHubBlameWarnsForASingleFileAboveTheWriteBound(t *testing.T) {
 	for _, line := range strings.Split(logs.String(), "\n") {
 		if strings.Contains(line, "above the write bound kept retryable") {
 			warns++
-			for _, want := range []string{"level=WARN", "lines=7", "max_rows=5"} {
+			for _, want := range []string{"level=WARN", "observed_lines=7", "max_rows=5"} {
 				if !strings.Contains(line, want) {
 					t.Fatalf("WARN lacks %q: %s", want, line)
 				}

@@ -468,7 +468,7 @@ func TestCauseClassVocabularyIsClosedAndWrapSafe(t *testing.T) {
 // collapses to "other", and the operator loses the very series that tells the
 // causes apart.
 func TestNewTerminalCategoriesAreInTheFailureCounterVocabulary(t *testing.T) {
-	for _, category := range []string{ResponseTooLargeCategory, ResultTooLargeCategory, TimeLimitCategory} {
+	for _, category := range []string{ResponseTooLargeCategory, ResultTooLargeCategory, TimeLimitCategory, TreeWalkLimitCategory} {
 		if got := providerfoundation.MetricUnitFailureReasonLabel(category); got != category {
 			t.Errorf("MetricUnitFailureReasonLabel(%q) = %q", category, got)
 		}

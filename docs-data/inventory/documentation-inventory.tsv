@@ -212,7 +212,6 @@ full-chaos/dev-health-ops	scripts/check_investment_docs_drift.py	tooling	support
 full-chaos/dev-health-ops	scripts/docs_inventory_review.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/docs_inventory_v2.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/gen_taxonomy_docs.py	tooling	supporting-artifact						documentation-system			False	False							
-full-chaos/dev-health-ops	scripts/prepare_docs_cloudflare.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/user_guide_evidence_contract.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/user_guide_evidence_validation.py	tooling	supporting-artifact						documentation-system			False	False							
 full-chaos/dev-health-ops	scripts/validate_docs_ia_v2.py	tooling	supporting-artifact						documentation-system			False	False							

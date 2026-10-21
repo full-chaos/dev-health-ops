@@ -1,0 +1,80 @@
+{
+  "canonical_origin": "https://docs.fullchaos.dev",
+  "file_count": 14,
+  "files": [
+    {
+      "bytes": 4,
+      "path": "404.html",
+      "sha256": "f8bf41177a5f5e808a7ccb648b51080b031f15ca8018d91a576263d6cc626eb6"
+    },
+    {
+      "bytes": 299,
+      "path": "_headers",
+      "sha256": "4168d0dd04320e924318c78f26eebe557537314219d1688a8d300bbba64495bd"
+    },
+    {
+      "bytes": 170,
+      "path": "_redirects",
+      "sha256": "1e6b71e4c66b592eb75e7177731aaf1a2ee82e8708cca4006dbad213725fce42"
+    },
+    {
+      "bytes": 1,
+      "path": "a/b",
+      "sha256": "8e35c2cd3bf6641bdb0e2050b76932cbb2e6034a0ddacc1d9bea82a6ba57f7cf"
+    },
+    {
+      "bytes": 1,
+      "path": "a b",
+      "sha256": "8e35c2cd3bf6641bdb0e2050b76932cbb2e6034a0ddacc1d9bea82a6ba57f7cf"
+    },
+    {
+      "bytes": 1,
+      "path": "a-b.txt",
+      "sha256": "594e519ae499312b29433b7dd8a97ff068defcba9755b6d5d00e84c524d67b06"
+    },
+    {
+      "bytes": 3,
+      "path": "assets/x.css",
+      "sha256": "5f546eb4606b5c2b7d2a449a5cc2bbb477ed5a246c7051ce871b12f2dbfc8419"
+    },
+    {
+      "bytes": 0,
+      "path": "empty",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 1,
+      "path": "e\u0301.html",
+      "sha256": "a1fce4363854ff888cff4b8e7875d600c2682390412a8cf79b37d0b11148b0fa"
+    },
+    {
+      "bytes": 7,
+      "path": "index.html",
+      "sha256": "b53a55383d2f1f040ab010606d7911907f1a17f979f1d475fb4ac226243135e5"
+    },
+    {
+      "bytes": 3,
+      "path": "q\"\\\\.t",
+      "sha256": "75d820327e27a204de513436de536fb1b26e6800eb8a77c8e007921fdea8d5ad"
+    },
+    {
+      "bytes": 26,
+      "path": "robots.txt",
+      "sha256": "331ea9090db0c9f6f597bd9840fd5b171830f6e0b3ba1cb24dfa91f0c95aedc1"
+    },
+    {
+      "bytes": 1,
+      "path": "\u00e9/sub/n.html",
+      "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+    },
+    {
+      "bytes": 4,
+      "path": "\ud83d\ude00.txt",
+      "sha256": "f0443a342c5ef54783a111b51ba56c938e474c32324d90c3a60c9c8e3a37e2d9"
+    }
+  ],
+  "mode": "preview",
+  "redirect_count": 3,
+  "schema_version": 1,
+  "source_revision": "rev\ud83d\ude00\t\""
+}

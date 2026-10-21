@@ -159,9 +159,9 @@ func TestNonGoPlanWalkRowsComeFromTheCode(t *testing.T) {
 			changed: []string{"contracts/auth/v1/x.json"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_walk_test.go\t.\ttree"}},
 		{name: "root_walk_selects_its_walker", head: map[string]string{"x/x_walk_test.go": root, tablesDir + "walks.tsv": "x\tx_walk_test.go\t.\ttree\n"},
 			changed: []string{"contracts/auth/v1/x.json"}, want: "AFFECTED 3", keys: []string{"b", "c", "x"}},
-		{name: "wide_row_for_a_docs_walk_fails", head: map[string]string{"x/x_walk_test.go": docs, tablesDir + "walks.tsv": "x\tx_walk_test.go\t.\ttree\n"},
+		{name: "wide_row_for_a_docs_walk_fails", head: map[string]string{"x/x_walk_test.go": docs, tablesDir + "reads.tsv": withReads("x\ttest\tdocs\n"), tablesDir + "walks.tsv": "x\tx_walk_test.go\t.\ttree\n"},
 			changed: []string{"contracts/auth/v1/x.json"}, want: "FULL *", readsCode: 1, readsWant: []string{"x\tx_walk_test.go\tdocs\ttree"}},
-		{name: "docs_walk_skips_a_contracts_change", head: map[string]string{"x/x_walk_test.go": docs, tablesDir + "walks.tsv": "x\tx_walk_test.go\tdocs\ttree\n"},
+		{name: "docs_walk_skips_a_contracts_change", head: map[string]string{"x/x_walk_test.go": docs, tablesDir + "reads.tsv": withReads("x\ttest\tdocs\n"), tablesDir + "walks.tsv": "x\tx_walk_test.go\tdocs\ttree\n"},
 			changed: []string{"contracts/auth/v1/x.json"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 	})
 }

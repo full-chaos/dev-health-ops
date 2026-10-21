@@ -20,8 +20,7 @@ func loadSumGolden(t *testing.T) []sumCase {
 		"../../tests/fixtures/python_sum_python_golden.json",
 	))
 	if err != nil {
-		t.Fatalf("read sum golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_python_sum_golden.py)", err)
+		t.Fatalf("read sum golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden struct {
 		Cases []sumCase `json:"cases"`

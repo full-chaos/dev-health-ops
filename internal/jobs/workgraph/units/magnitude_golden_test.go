@@ -36,8 +36,7 @@ func TestMaxComponentNodesMagnitudeMatchesPython(t *testing.T) {
 	)
 	raw, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
-		t.Fatalf("read magnitude golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_max_component_nodes_golden.py)", err)
+		t.Fatalf("read magnitude golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden struct {
 		IntMaxStrDigits int `json:"int_max_str_digits"`

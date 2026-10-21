@@ -155,7 +155,7 @@ func ResolveMaxComponentNodes(explicit *int) int {
 //     own table caught it.
 //
 // pythonDecimalRuns is generated from the deployed interpreter by
-// tests/fixtures/generate_python_decimal_digits_golden.py, which also verifies
+// generate_python_decimal_digits_golden (generator deleted, golden frozen), which also verifies
 // every run is exactly ten long and fails rather than emitting a table if that
 // stops holding.
 func decimalDigitValue(r rune) int {

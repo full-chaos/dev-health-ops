@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/cigates"
+	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 )
 
 // CHAOS-10174 PR C: Go port of tests/tooling/test_go_affected_integration.py (CHAOS-9947). Pull requests run only the
-// integration shards a change can reach. The selector (cigates.AffectedIntegration) is called on a
+// integration shards a change can reach. The selector (affected.PlanVerdict) is called on a
 // synthetic `go list` document and on the real module; the planner (`check_go.sh integration-shard-plan`) is executed
 // with each selection file.
 
@@ -81,7 +81,7 @@ func affSelect(script, work string, golist []map[string]any, keys []string, root
 		}
 	}
 	var stdout, stderr bytes.Buffer
-	if code := cigates.AffectedIntegration([]string{"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
+	if code := affected.PlanVerdict([]string{"--event", "pull_request", "--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
 		"--keys", filepath.Join(work, "keys.txt"), "--root", root}, &stdout, &stderr); code != 0 {
 		return selection{}, fmt.Errorf("selector exited %d: %s", code, stderr.String())
 	}
@@ -131,8 +131,12 @@ func affectedSelectorScenarios() []scenario {
 		}},
 		{"shared_changes_run_the_full_suite", func(s, w string) error {
 			for _, path := range []string{"ci/check_go.sh", ".github/workflows/go.yml", "go.mod", "go.sum", "internal/testsupport/containers/harness.go"} {
+				want := "FULL shared change"
+				if path == ".github/workflows/go.yml" {
+					want = "FULL planner input" // the step that builds and runs the planner
+				}
 				g, err := sel(s, w, "internal/leaf/leaf.go", path)
-				if err := wantFull(g, err, "FULL shared change"); err != nil {
+				if err := wantFull(g, err, want); err != nil {
 					return fmt.Errorf("%s: %w", path, err)
 				}
 			}
@@ -142,18 +146,10 @@ func affectedSelectorScenarios() []scenario {
 			g, err := sel(s, w, "internal/ghost/g.go")
 			return wantFull(g, err, "FULL Go file outside any listed package")
 		}},
-		{"data_file_counts_only_as_testdata_or_embed", func(s, w string) error {
-			g, err := sel(s, w, "internal/mid/sql/001.sql")
-			if err := wantSelection(g, err, "AFFECTED", "internal/mid", "internal/top"); err != nil {
-				return fmt.Errorf("embedded sql: %w", err)
-			}
-			g, err = sel(s, w, "internal/leaf/testdata/a.json")
-			if err != nil || g.verdict != "AFFECTED" {
-				return fmt.Errorf("testdata json: %v %v", g, err)
-			}
-			// a file the package neither embeds nor keeps under testdata may be read at run time by any test
-			for _, path := range []string{"internal/mid/fixtures/a.json", "src/dev_health_ops/x.py"} {
-				g, err = sel(s, w, path)
+		{"data_files_run_every_package", func(s, w string) error {
+			// embedded, testdata or loose: a data file can be read at run time by any test
+			for _, path := range []string{"internal/mid/sql/001.sql", "internal/leaf/testdata/a.json", "internal/mid/fixtures/a.json", "src/dev_health_ops/x.py"} {
+				g, err := sel(s, w, path)
 				if err := wantFull(g, err, "FULL non-Go"); err != nil {
 					return fmt.Errorf("%s: %w", path, err)
 				}
@@ -169,7 +165,7 @@ func affectedSelectorScenarios() []scenario {
 			}
 			return nil
 		}},
-		{"embedded_markdown_is_placed_by_its_owner", func(s, w string) error {
+		{"embedded_markdown_runs_every_package", func(s, w string) error {
 			golist := []map[string]any{
 				affPkg("internal/mid", map[string]any{"EmbedFiles": []string{"sql/README.md"}}),
 				affPkg("internal/top", nil),
@@ -177,7 +173,7 @@ func affectedSelectorScenarios() []scenario {
 				affBinary("internal/top", "internal/mid"),
 			}
 			g, err := affSelect(s, w, golist, []string{"internal/mid", "internal/top"}, affRoot, "internal/mid/sql/README.md")
-			return wantSelection(g, err, "AFFECTED", "internal/mid", "internal/top")
+			return wantFull(g, err, "FULL non-Go")
 		}},
 		{"go_file_under_testdata_is_a_fixture_of_its_package", func(s, w string) error {
 			g, err := sel(s, w, "internal/leaf/testdata/plant/plant.go")
@@ -227,7 +223,7 @@ func realSelection(t *testing.T, root string, changed []byte) (lines []string, t
 		}
 	}
 	var selOut, selErr bytes.Buffer
-	if code := cigates.AffectedIntegration([]string{"--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
+	if code := affected.PlanVerdict([]string{"--event", "pull_request", "--changed", filepath.Join(work, "changed.txt"), "--golist", filepath.Join(work, "golist.json"),
 		"--keys", filepath.Join(work, "keys.txt"), "--root", root}, &selOut, &selErr); code != 0 {
 		t.Fatalf("selector: %s", selErr.String())
 	}

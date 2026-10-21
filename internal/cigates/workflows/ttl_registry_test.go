@@ -12,9 +12,8 @@ import (
 )
 
 // CHAOS-10174 PR E: Go port of the schema-scanning half of tests/test_ttl_registry.py (CHAOS-3602) and
-// tests/test_fixtures_ttl_horizon.py (CHAOS-3432/3544). The Python pair stays in ci/kept_python_tests.txt while the Python
-// fixture generators ship (CHAOS-3165); this guard reads only the ClickHouse migrations, so it keeps the "a new TTL table
-// went unnoticed" class closed after they are gone. The product_telemetry_events ceiling lives in internal/fixturesgen.
+// tests/test_fixtures_ttl_horizon.py (CHAOS-3432/3544). The Python pair is gone with the Python fixture generators; this guard
+// reads only the ClickHouse migrations, so it keeps the "a new TTL table went unnoticed" class closed. The product_telemetry_events ceiling lives in internal/fixturesgen.
 
 const (
 	ttlShelfLifeDays = 30 // ttl_horizon.TTL_SAFETY_MARGIN

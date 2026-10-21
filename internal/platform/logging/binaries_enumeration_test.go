@@ -44,6 +44,7 @@ var binaryLogging = map[string]string{
 	"dho":                                    "cli",
 	"gqlgen-guard":                           "silent",
 	"registrydump":                           "silent",
+	"strip-agent-attribution":                "silent",
 }
 
 type listedPackage struct {

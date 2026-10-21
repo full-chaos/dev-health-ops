@@ -87,3 +87,9 @@ worktrees/
 
 /.codex-review-context.md
 /go-test-json/
+
+# Recorded parity cases name their built-site fixtures site/, site2/ and a report under .build/; the ignore rules must not drop them.
+!internal/cigates/docstools/testdata/**/site*
+!internal/cigates/docstools/testdata/**/site*/**
+!internal/cigates/docstools/testdata/**/.build/
+!internal/cigates/docstools/testdata/**/.build/**

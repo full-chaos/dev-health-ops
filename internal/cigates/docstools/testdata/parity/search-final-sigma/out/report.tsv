@@ -1,0 +1,5 @@
+query	expected	rank	max_rank	top_result	status
+ΑΣ	/greek/	1	1	/greek/	pass
+ασβ	/other/	2	2	/greek/	pass
+ΑΣΒ	/greek/	1	5	/greek/	pass
+Σ	/greek/	1	5	/greek/	pass

@@ -1,0 +1,1 @@
+{"queries": [{"query": "credentials & tokens", "expected": "/guide/install/", "max_rank": 1}, {"query": "<b>bold</b>", "expected": "/reference/api/", "max_rank": 1}, {"query": "&amp;lt;b&amp;gt;", "expected": "/reference/api/"}, {"query": "&notit; &copy2 &#65;&#0;&#x80;", "expected": "/guide/install/"}]}

@@ -48,6 +48,9 @@ on:
       # The migrate service's Go pins (internal/rivermigrate/deploy_wiring_test.go) read the
       # compose manifest that runs `dho migrate upgrade`.
       - 'compose.yml'
+      # the docs checks' refusal and workflow tests read .gitlab-ci.yml; internal/cigates/docstools/pytables holds the Python 3.14.7 tables its helpers embed
+      - '.gitlab-ci.yml'
+      - 'internal/cigates/docstools/pytables/**'
       - 'scripts/**'
       - 'src/dev_health_ops/config/**'
       - 'internal/chmigrate/history/**'
@@ -262,6 +265,9 @@ on:
       # The migrate service's Go pins (internal/rivermigrate/deploy_wiring_test.go) read the
       # compose manifest that runs `dho migrate upgrade`.
       - 'compose.yml'
+      # the docs checks' refusal and workflow tests read .gitlab-ci.yml; internal/cigates/docstools/pytables holds the Python 3.14.7 tables its helpers embed
+      - '.gitlab-ci.yml'
+      - 'internal/cigates/docstools/pytables/**'
       - 'scripts/**'
       - 'src/dev_health_ops/config/**'
       - 'internal/chmigrate/history/**'

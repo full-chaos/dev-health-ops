@@ -1,0 +1,3 @@
+query	expected	rank	max_rank	top_result	status
+İstanbul	/tr/	1	1	/tr/	pass
+istanbul	/en/	1	5	/en/	pass

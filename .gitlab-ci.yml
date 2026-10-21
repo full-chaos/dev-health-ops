@@ -338,10 +338,26 @@ docs:guards:
       set -o pipefail
       python scripts/validate_docs_v2_publication.py 2>&1 | tee .build/docs-publication-validation.log
       python -m mkdocs build --strict --config-file mkdocs.yml 2>&1 | tee .build/docs-build.log
-      python scripts/check_built_site_links.py --site-dir .build/docs 2>&1 | tee .build/docs-links.log
-      python scripts/check_docs_candidate_search.py --site-dir .build/docs --queries docs-data/search-acceptance.json 2>&1 | tee .build/docs-search.log
       python scripts/check_docs_candidate_accessibility.py --site-dir .build/docs --css docs/stylesheets/extra.css 2>&1 | tee .build/docs-accessibility.log
       python scripts/check_freshness_inventory.py 2>&1 | tee .build/docs-freshness-inventory.log
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - .build/docs
+      - .build/docs-*.log
+
+# The Go half of docs-guards.yml: rendered links/anchors/assets, search acceptance, on the site that
+# docs:guards built.
+docs:guards-go:
+  stage: test
+  image: $GO_IMAGE
+  needs: [docs:guards]
+  script:
+    - |
+      set -eu
+      bash -o pipefail -c 'go run -trimpath -mod=readonly ./cmd/cigate docs check-built-site-links --site-dir .build/docs 2>&1 | tee .build/docs-links.log'
+      bash -o pipefail -c 'go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-search --site-dir .build/docs --queries docs-data/search-acceptance.json 2>&1 | tee .build/docs-search.log'
   artifacts:
     when: always
     expire_in: 14 days

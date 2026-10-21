@@ -15,7 +15,8 @@ import (
 
 func pyCmd(stem string) string { return "python scripts/" + stem + "." + "py" }
 
-const goCigateDocs = "go run -trimpath -mod=readonly ./cmd/cigate docs"
+// goCmd is a Go docs check run through the cigate binary (the ported checks).
+func goCmd(verb string) string { return "go run -trimpath -mod=readonly ./cmd/cigate docs " + verb }
 
 // expectedCheck is one step of docs-guards.yml: its name, the command line it must run (binary and script) and the
 // arguments that command line must carry. A rename of a checker is an edit of this table.
@@ -27,10 +28,10 @@ type expectedCheck struct {
 var docsGuardsChecks = []expectedCheck{
 	{"Validate publication inventory and IA placement", pyCmd("validate_docs_v2_publication"), nil},
 	{"Strict canonical build", "python -m mkdocs build --strict", []string{"--config-file mkdocs.yml"}},
-	{"Check rendered links, anchors, and assets", pyCmd("check_built_site_links"), []string{"--site-dir .build/docs"}},
-	{"Check task-based search acceptance", pyCmd("check_docs_candidate_search"), []string{"--site-dir .build/docs", "--queries " + searchAcceptance}},
+	{"Check rendered links, anchors, and assets", goCmd("check-built-site-links"), []string{"--site-dir .build/docs"}},
+	{"Check task-based search acceptance", goCmd("check-docs-search"), []string{"--site-dir .build/docs", "--queries " + searchAcceptance}},
 	{"Check structural accessibility invariants", pyCmd("check_docs_candidate_accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
-	{"Check code prerequisites", goCigateDocs, []string{"check-code-prerequisites"}},
+	{"Check code prerequisites", goCmd("check-code-prerequisites"), nil},
 	{"Check freshness inventory", pyCmd("check_freshness_inventory"), nil},
 }
 
@@ -44,8 +45,7 @@ const (
 var docsGuardsTriggerPaths = []string{
 	"docs/**", "mkdocs.yml", "docs-data/**", glue("requirements-docs", ".", "txt"),
 	".github/workflows/docs-guards.yml", ".github/workflows/docs-cloudflare.yml",
-	"scripts/" + "validate_docs_v2_publication" + "." + "py", "scripts/" + "check_built_site_links" + "." + "py",
-	"scripts/" + "check_docs_candidate_search" + "." + "py", "scripts/" + "check_docs_candidate_accessibility" + "." + "py",
+	"scripts/" + "validate_docs_v2_publication" + "." + "py", "scripts/" + "check_docs_candidate_accessibility" + "." + "py",
 }
 
 var statusMask = regexp.MustCompile(`\|\|\s*(true|:|exit\s+0)(\s|$|;|&)|;\s*(true|:)(\s|$|;|&)|set\s+\+e\b`)
@@ -315,7 +315,7 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, "name: Check structural accessibility invariants", "name: Check accessibility")
 		}, "Check structural accessibility invariants"},
 		{"a streamed check loses pipefail", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, "          set -o pipefail\n          "+goCigateDocs+" check-code-prerequisites", "          "+goCigateDocs+" check-code-prerequisites")
+			return d.edit(t, docsGuardsPath, "          set -o pipefail\n          "+goCmd("check-code-prerequisites"), "          "+goCmd("check-code-prerequisites"))
 		}, "Check code prerequisites"},
 		{"the strict build loses --strict (command replaced)", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "mkdocs build --strict", "mkdocs build")
@@ -397,7 +397,7 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			return d.edit(t, docsGuardsPath, "  docs-content-guards:\n    name: docs-content-guards\n", "  docs-content-guards:\n    name: docs-content-guards\n    continue-on-error: true\n")
 		}, "must not set continue-on-error"},
 		plantCase{"a Go checker status is masked by || true", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, docsGuardsPath, goCigateDocs+" check-code-prerequisites", goCigateDocs+" check-code-prerequisites || true")
+			return d.edit(t, docsGuardsPath, goCmd("check-code-prerequisites"), goCmd("check-code-prerequisites")+" || true")
 		}, "masks a failing command status"},
 	)
 	// The evidence upload is found by its action, never by its name: renaming it and disabling it is refused.

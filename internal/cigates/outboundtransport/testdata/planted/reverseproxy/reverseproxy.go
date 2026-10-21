@@ -46,3 +46,22 @@ func Address(p *httputil.ReverseProxy) *http.RoundTripper { return &p.Transport 
 func Overwrite(p *httputil.ReverseProxy) { *p = httputil.ReverseProxy{} }
 
 func Zero() *httputil.ReverseProxy { return &zero }
+
+func Serve(p *httputil.ReverseProxy, w http.ResponseWriter, r *http.Request) { p.ServeHTTP(w, r) }
+
+func ServeValue(p httputil.ReverseProxy) {}
+
+type Handler struct{}
+
+func (Handler) Method(p *httputil.ReverseProxy) {}
+
+func Literal() {
+	_ = func(p *httputil.ReverseProxy) {}
+}
+
+func Copy(p *httputil.ReverseProxy) httputil.ReverseProxy { return *p }
+
+func CopyVar(p *httputil.ReverseProxy) {
+	c := *p
+	_ = c
+}

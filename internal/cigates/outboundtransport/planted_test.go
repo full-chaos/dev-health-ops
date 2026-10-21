@@ -109,6 +109,14 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 		{dir + "reverseproxy/reverseproxy.go", "Address", "transport-address"}:              1,
 		{dir + "reverseproxy/reverseproxy.go", "Overwrite", "reverseproxy-no-transport"}:    1,
 		{dir + "reverseproxy/reverseproxy.go", "Overwrite", "value-overwrite"}:              1,
+		{dir + "reverseproxy/reverseproxy.go", "Serve", "client-parameter"}:                 1,
+		{dir + "reverseproxy/reverseproxy.go", "ServeValue", "client-parameter"}:            1,
+		{dir + "reverseproxy/reverseproxy.go", "Method", "client-parameter"}:                1,
+		{dir + "reverseproxy/reverseproxy.go", "Literal", "client-parameter"}:               1,
+		{dir + "reverseproxy/reverseproxy.go", "Copy", "client-parameter"}:                  1,
+		{dir + "reverseproxy/reverseproxy.go", "Copy", "client-copy"}:                       1,
+		{dir + "reverseproxy/reverseproxy.go", "CopyVar", "client-parameter"}:               1,
+		{dir + "reverseproxy/reverseproxy.go", "CopyVar", "client-copy"}:                    1,
 	}
 	if got, expected := render(found), render(want); got != expected {
 		t.Errorf("planted sites differ\n got:\n%s\nwant:\n%s", got, expected)

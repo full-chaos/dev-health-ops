@@ -68,12 +68,18 @@ spec:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.goApi.podAnnotations }}
-      annotations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | nindent 8 }}
+      annotations:
+        {{- /*
+        CHAOS-10446: env from a Secret never restarts a pod, so a changed chart-created hs256 Secret
+        rolls go-api through this hash. With an external hs256 Secret the include renders nothing:
+        the hash is constant, and the operator rolls go-api by hand after changing that Secret.
+        */}}
+        checksum/hs256: {{ include (print $.Template.BasePath "/hs256-secret.yaml") . | sha256sum }}
+        {{- with .Values.goApi.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}

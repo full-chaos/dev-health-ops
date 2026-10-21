@@ -97,6 +97,51 @@ WHERE org_id = ? AND repo_id = ? AND path = ?`,
 	}
 }
 
+// A chunked files unit writes the same normalized instant on every chunk. The
+// readback of a chunk must see its own rows only: an unwritten later chunk
+// reads Absent while an earlier written chunk reads Exact, and the metadata-only
+// final effect (no rows) reads Absent without touching the store.
+func TestGitHubFilesReadbackJudgesEachChunkOfOneUnitOnItsOwnRows(t *testing.T) {
+	ctx, sink := newGitHubFilesIntegrationSink(t)
+	claim := nativeTestClaim("github", "files")
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	chunk := func(paths ...string) EffectBatch {
+		rows := make([]gitFileRow, 0, len(paths))
+		for _, path := range paths {
+			text := "package " + path
+			rows = append(rows, gitFileRow{RepoID: "c7198fbc-1945-3717-05d8-eb78866b4e79", Path: path, LastSynced: now, OrgID: claim.OrgID, Contents: &text})
+		}
+		effect, err := effectBatchFromValues("git_files", EffectReadbackRequired, rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return effect
+	}
+	first, second, mixed := chunk("a.go", "b.go"), chunk("c.go", "d.go"), chunk("b.go", "c.go")
+	if err := sink.WriteEffect(ctx, claim, first); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]struct {
+		effect EffectBatch
+		state  EffectInspection
+	}{
+		"written chunk": {first, EffectExact}, "later chunk": {second, EffectAbsent},
+		"rows of two chunks": {mixed, EffectConflict},
+	} {
+		got, err := sink.InspectEffect(ctx, claim, want.effect)
+		if err != nil || got != want.state {
+			t.Fatalf("%s: inspection=%s error=%v want %s", name, got, err, want.state)
+		}
+	}
+	final, err := effectBatchFromValues("git_files", EffectReadbackRequired, []gitFileRow(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := sink.InspectEffect(ctx, claim, final); err != nil || got != EffectAbsent {
+		t.Fatalf("final metadata effect inspection=%s error=%v", got, err)
+	}
+}
+
 func newGitHubFilesIntegrationSink(t *testing.T) (context.Context, GitHubFilesClickHouseEffects) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

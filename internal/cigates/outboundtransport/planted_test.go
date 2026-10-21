@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield", "unproven", "byvalue", "wrapper", "assigndefault"}
+var plantedPackages = []string{"decl", "defaultclient", "defaulttransport", "envproxy", "literal", "negative", "newclient", "nilassign", "proxyassign", "proxyfield", "unproven", "byvalue", "wrapper", "assigndefault", "clientcopy"}
 
 // The walker is itself tested: each planted package under testdata/planted must yield exactly its sites, and the
 // negative package none. A clause removed from kindsOf is RED here.
@@ -43,8 +43,11 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 		{dir + "unproven/unproven.go", "NilVariable", "transport-unproven"}:             1,
 		{dir + "byvalue/byvalue.go", "type Embedded", "client-by-value"}:                1,
 		{dir + "assigndefault/assigndefault.go", "Replace", "default-transport"}:        1,
+		{dir + "clientcopy/clientcopy.go", "Copied", "client-copy"}:                     1,
+		{dir + "nilassign/nilassign.go", "Clear", "client-copy"}:                        1,
 		{dir + "assigndefault/assigndefault.go", "Replace", "default-transport-assign"}: 1,
 		{dir + "wrapper/wrapper.go", "OverParameter", "transport-unproven"}:             1,
+		{dir + "wrapper/wrapper.go", "OverFallback", "transport-unproven"}:              1,
 		{dir + "byvalue/byvalue.go", "type Named", "client-by-value"}:                   1,
 		{dir + "byvalue/byvalue.go", "type Defined", "client-by-value"}:                 1,
 		{dir + "byvalue/byvalue.go", "type Alias", "client-by-value"}:                   1,
@@ -58,6 +61,14 @@ func TestTheWalkerFindsEveryPlantedKind(t *testing.T) {
 		{dir + "unproven/unproven.go", "Assigned", "transport-unproven"}:                1,
 		{dir + "unproven/unproven.go", "Unkeyed", "transport-unproven"}:                 1,
 		{dir + "unproven/unproven.go", "ParameterReassigned", "transport-unproven"}:     1,
+		{dir + "unproven/unproven.go", "ParameterWithFallback", "transport-unproven"}:   1,
+		{dir + "unproven/unproven.go", "FallbackInDeadBranch", "transport-unproven"}:    1,
+		{dir + "unproven/unproven.go", "Overwritten", "transport-unproven"}:             1,
+		{dir + "unproven/unproven.go", "AddressOfLocal", "transport-unproven"}:          1,
+		{dir + "unproven/unproven.go", "Tuple", "transport-unproven"}:                   1,
+		{dir + "unproven/unproven.go", "Address", "transport-address"}:                  1,
+		{dir + "unproven/unproven.go", "NamedResult", "client-no-transport"}:            1,
+		{dir + "unproven/unproven.go", "Generic", "client-instantiate"}:                 1,
 	}
 	if got, expected := render(found), render(want); got != expected {
 		t.Errorf("planted sites differ\n got:\n%s\nwant:\n%s", got, expected)
@@ -109,14 +120,17 @@ func TestATransportUnprovenAllowRowRoundTrips(t *testing.T) {
 	}
 	var lines []string
 	for key, count := range found {
-		if key.kind != "transport-unproven" {
-			t.Fatalf("unexpected planted kind %v", key)
-		}
 		lines = append(lines, fmt.Sprintf("%s\t%s\t%s\t%d\tplanted", key.file, key.symbol, key.kind, count))
 	}
 	sort.Strings(lines)
-	if len(lines) < 6 {
-		t.Fatalf("the planted unproven package yielded %d sites, want every shape", len(lines))
+	unproven := 0
+	for key := range found {
+		if key.kind == "transport-unproven" {
+			unproven++
+		}
+	}
+	if unproven < 6 {
+		t.Fatalf("the planted unproven package yielded %d transport-unproven sites, want every shape", unproven)
 	}
 	path := filepath.Join(t.TempDir(), "allow.tsv")
 	write := func(rows []string) {

@@ -266,6 +266,9 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL, hop func(*http.Request)) 
 		return doer, left
 	}
 	guarded := *hc
+	if guarded.Transport == nil {
+		guarded.Transport = httpguard.SharedTransport()
+	}
 	inner := hc.CheckRedirect
 	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		// the client's own policy decides first (a client that refuses the hop answers the 3xx to the caller)

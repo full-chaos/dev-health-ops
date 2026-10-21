@@ -23,21 +23,7 @@ func Own() *http.Client {
 
 func Pointer(client *http.Client) *http.Client { return client }
 
-func Copied(client *http.Client) *http.Client {
-	copied := *client
-	copied.Timeout = time.Second
-	return &copied
-}
-
 func Unkeyed() http.Client { return http.Client{&http.Transport{}, nil, nil, 0} }
-
-func Fallback(supplied http.RoundTripper) *http.Client {
-	base := supplied
-	if base == nil {
-		base = &http.Transport{}
-	}
-	return &http.Client{Transport: roundTripper{next: base}}
-}
 
 func Cloned() *http.Client {
 	base := &http.Transport{}
@@ -46,11 +32,4 @@ func Cloned() *http.Client {
 
 func Adapter() *http.Client {
 	return &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) { return nil, nil })}
-}
-
-func ParameterWithFallback(transport http.RoundTripper) *http.Client {
-	if transport == nil {
-		transport = &http.Transport{}
-	}
-	return &http.Client{Transport: transport}
 }

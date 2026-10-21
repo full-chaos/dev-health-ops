@@ -36,3 +36,58 @@ func ParameterReassigned(transport http.RoundTripper, own bool) *http.Client {
 	}
 	return &http.Client{Transport: transport}
 }
+
+func ParameterWithFallback(transport http.RoundTripper) *http.Client {
+	if transport == nil {
+		transport = &http.Transport{}
+	}
+	return &http.Client{Transport: transport}
+}
+
+func FallbackInDeadBranch(supplied http.RoundTripper, never bool) *http.Client {
+	base := supplied
+	if never {
+		if base == nil {
+			base = &http.Transport{}
+		}
+	}
+	return &http.Client{Transport: base}
+}
+
+func Overwritten() *http.Client {
+	base := http.RoundTripper(&http.Transport{})
+	base = nil
+	return &http.Client{Transport: base}
+}
+
+func pair() (http.RoundTripper, error) { return nil, nil }
+
+func Tuple(client *http.Client) error {
+	var err error
+	client.Transport, err = pair()
+	return err
+}
+
+func Address(client *http.Client) {
+	slot := &client.Transport
+	*slot = nil
+}
+
+func NamedResult() (client http.Client) { return }
+
+func zero[T any]() T {
+	var value T
+	return value
+}
+
+func Generic() *http.Client {
+	client := zero[http.Client]()
+	return &client
+}
+
+func AddressOfLocal() *http.Client {
+	base := http.RoundTripper(&http.Transport{})
+	slot := &base
+	*slot = nil
+	return &http.Client{Transport: base}
+}

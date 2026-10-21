@@ -9,17 +9,21 @@
 // for GOOS=linux with GOARCH amd64 and arm64; an import alias or a dot import cannot hide a site. A SITE is
 //
 //	client-no-transport  a composite literal of net/http.Client whose Transport is absent or nil, new(net/http.Client),
-//	                     or a var declared with the non-pointer type net/http.Client and no value
+//	                     or a var declared with the non-pointer type net/http.Client and no value, or a named result of
+//	                     that type (a bare return yields the zero client)
 //	transport-nil        an assignment of nil to the Transport field of a net/http.Client
-//	transport-unproven   a Transport (in a literal or by assignment) whose value is not PROVEN non-nil: a nil-valued
-//	                     variable or parameter leaves the client on http.DefaultTransport at run time. Proven are: a
-//	                     call to an approved constructor (approvedTransportConstructors), Clone of a proven
-//	                     *http.Transport, a composite literal whose RoundTripper fields are all proven, a conversion of a
-//	                     func literal, and a local variable whose every assignment is proven (an assignment excused by
-//	                     an `if v == nil { v = <proven> }` fallback in the same function)
+//	transport-unproven   a Transport (in a literal, by assignment, or as one target of a multi-value assignment) whose
+//	                     value is not PROVEN non-nil. Proven are: a call to an approved constructor, an approved wrapper
+//	                     over a nil or proven transport, Clone of a proven *http.Transport, a composite literal whose
+//	                     RoundTripper fields are all proven, a conversion of a func literal, and a local defined once from a
+//	                     proven value and never reassigned or address-taken. No control flow is reasoned about.
 //	client-by-value      a struct field (embedded or named), a defined type or alias, or an array, slice, map or channel
 //	                     element whose type is the non-pointer net/http.Client: its zero value has no Transport and its
 //	                     (promoted) Do uses http.DefaultTransport, and no literal of net/http.Client is ever written
+//	transport-address    &c.Transport for a net/http.Client c: a write through the pointer is invisible to every other rule
+//	client-copy          a copy of a supplied net/http.Client (`*client`): the copy keeps a nil Transport unless the
+//	                     code gives it one, so every copy needs a row naming where its transport comes from
+//	client-instantiate   a generic function or type instantiated with the non-pointer net/http.Client (zero[http.Client]())
 //	default-transport    any use of net/http.DefaultTransport
 //	default-transport-assign  an assignment to net/http.DefaultTransport: FORBIDDEN, no allow row admits it (the transport
 //	                     helpers fall back to net/http's defaults when it is replaced, so repository code must never replace it)
@@ -197,6 +201,26 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 				return []string{"client-no-transport"}
 			}
 		}
+	case *ast.UnaryExpr:
+		if selector, ok := ast.Unparen(n.X).(*ast.SelectorExpr); ok && n.Op.String() == "&" && selector.Sel.Name == "Transport" && isNamed(derefPointer(info.Types[selector.X].Type), "Client") {
+			return []string{"transport-address"}
+		}
+	case *ast.StarExpr:
+		if tv, ok := info.Types[n]; ok && tv.IsValue() && isNamed(tv.Type, "Client") {
+			return []string{"client-copy"}
+		}
+	case *ast.FuncType:
+		var kinds []string
+		if n.Results != nil {
+			for _, field := range n.Results.List {
+				if isNamed(info.Types[field.Type].Type, "Client") {
+					for range field.Names {
+						kinds = append(kinds, "client-no-transport")
+					}
+				}
+			}
+		}
+		return kinds
 	case *ast.StructType:
 		var kinds []string
 		for _, field := range n.Fields.List {
@@ -231,8 +255,14 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 			if isDefaultTransportVar(info, lhs) {
 				kinds = append(kinds, "default-transport-assign")
 			}
-			selector, ok := lhs.(*ast.SelectorExpr)
-			if !ok || i >= len(n.Rhs) || len(n.Lhs) != len(n.Rhs) {
+			selector, ok := ast.Unparen(lhs).(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if i >= len(n.Rhs) || len(n.Lhs) != len(n.Rhs) {
+				if selector.Sel.Name == "Transport" && isNamed(derefPointer(info.Types[selector.X].Type), "Client") {
+					kinds = append(kinds, "transport-unproven")
+				}
 				continue
 			}
 			owner := derefPointer(info.Types[selector.X].Type)
@@ -247,6 +277,13 @@ func kindsOf(info *types.Info, declaration ast.Decl, node ast.Node) []string {
 		}
 		return kinds
 	case *ast.Ident:
+		if instance, ok := info.Instances[n]; ok && instance.TypeArgs != nil {
+			for i := 0; i < instance.TypeArgs.Len(); i++ {
+				if isNamed(instance.TypeArgs.At(i), "Client") {
+					return []string{"client-instantiate"}
+				}
+			}
+		}
 		obj := info.Uses[n]
 		if obj == nil || obj.Pkg() == nil || obj.Pkg().Scope().Lookup(obj.Name()) != obj {
 			return nil
@@ -367,10 +404,10 @@ func provenLiteral(info *types.Info, declaration ast.Decl, lit *ast.CompositeLit
 	return true
 }
 
-// provenVariable: a local variable or parameter of declaration whose every assignment is proven. A parameter, an
-// assignment that is not proven, a declaration without a value and an assignment from a multi-value expression are
-// all excused only when the function also holds `if v == nil { v = <proven> }`. Package variables and receivers are
-// unproven.
+// provenVariable: a local variable of declaration defined exactly once, by `v := <proven>` or `var v = <proven>`, and
+// never assigned again, never address-taken and never a range variable anywhere in the function (closures included).
+// No control flow is reasoned about: parameters, receivers, package variables, a variable with a nil fallback and any
+// other shape are unproven, and their site needs an allow row or a helper call.
 func provenVariable(info *types.Info, declaration ast.Decl, ident *ast.Ident, depth int) bool {
 	variable, ok := info.Uses[ident].(*types.Var)
 	if !ok {
@@ -380,22 +417,12 @@ func provenVariable(info *types.Info, declaration ast.Decl, ident *ast.Ident, de
 	if !ok || fn.Body == nil {
 		return false
 	}
-	parameter := false
-	if fn.Type.Params != nil {
-		for _, field := range fn.Type.Params.List {
-			for _, name := range field.Names {
-				if info.Defs[name] == variable {
-					parameter = true
-				}
-			}
-		}
-	}
 	refersTo := func(expression ast.Expr) bool {
 		id, ok := ast.Unparen(expression).(*ast.Ident)
 		return ok && (info.Defs[id] == variable || info.Uses[id] == variable)
 	}
-	var assigned []ast.Expr
-	declared, unprovable, fallback := parameter, parameter, false
+	var definition ast.Expr
+	definitions, spoiled := 0, false
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
 		switch n := node.(type) {
 		case *ast.ValueSpec:
@@ -403,11 +430,11 @@ func provenVariable(info *types.Info, declaration ast.Decl, ident *ast.Ident, de
 				if info.Defs[name] != variable {
 					continue
 				}
-				declared = true
-				if len(n.Values) != len(n.Names) {
-					unprovable = true
+				definitions++
+				if len(n.Values) == len(n.Names) {
+					definition = n.Values[i]
 				} else {
-					assigned = append(assigned, n.Values[i])
+					spoiled = true
 				}
 			}
 		case *ast.AssignStmt:
@@ -415,61 +442,26 @@ func provenVariable(info *types.Info, declaration ast.Decl, ident *ast.Ident, de
 				if !refersTo(lhs) {
 					continue
 				}
-				declared = true
-				if len(n.Lhs) != len(n.Rhs) {
-					unprovable = true
+				id, _ := ast.Unparen(lhs).(*ast.Ident)
+				if n.Tok.String() == ":=" && id != nil && info.Defs[id] == variable && len(n.Lhs) == len(n.Rhs) {
+					definitions++
+					definition = n.Rhs[i]
 				} else {
-					assigned = append(assigned, n.Rhs[i])
+					spoiled = true
 				}
 			}
-		case *ast.RangeStmt:
-			if refersTo(n.Key) || (n.Value != nil && refersTo(n.Value)) {
-				unprovable = true
+		case *ast.UnaryExpr:
+			if n.Op.String() == "&" && refersTo(n.X) {
+				spoiled = true
 			}
-		case *ast.IfStmt:
-			if nilCheckOf(info, n.Cond, refersTo) && assignsProven(info, declaration, n.Body, refersTo, depth) {
-				fallback = true
+		case *ast.RangeStmt:
+			if (n.Key != nil && refersTo(n.Key)) || (n.Value != nil && refersTo(n.Value)) {
+				spoiled = true
 			}
 		}
 		return true
 	})
-	if !declared || (unprovable && !fallback) {
-		return false
-	}
-	for _, value := range assigned {
-		if refersTo(value) {
-			continue
-		}
-		if !fallback && !provenTransport(info, declaration, value, depth+1) {
-			return false
-		}
-	}
-	return true
-}
-
-// nilCheckOf: condition is `v == nil` (either order) for the variable refersTo names.
-func nilCheckOf(info *types.Info, condition ast.Expr, refersTo func(ast.Expr) bool) bool {
-	binary, ok := ast.Unparen(condition).(*ast.BinaryExpr)
-	if !ok || binary.Op.String() != "==" {
-		return false
-	}
-	return (refersTo(binary.X) && isNil(info, binary.Y)) || (refersTo(binary.Y) && isNil(info, binary.X))
-}
-
-// assignsProven: body assigns the variable a proven value at its top level.
-func assignsProven(info *types.Info, declaration ast.Decl, body *ast.BlockStmt, refersTo func(ast.Expr) bool, depth int) bool {
-	for _, statement := range body.List {
-		assign, ok := statement.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != len(assign.Rhs) {
-			continue
-		}
-		for i, lhs := range assign.Lhs {
-			if refersTo(lhs) && provenTransport(info, declaration, assign.Rhs[i], depth+1) {
-				return true
-			}
-		}
-	}
-	return false
+	return !spoiled && definitions == 1 && provenTransport(info, declaration, definition, depth+1)
 }
 
 func calledFunc(info *types.Info, call *ast.CallExpr) *types.Func {

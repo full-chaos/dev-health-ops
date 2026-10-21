@@ -3,6 +3,7 @@ package providerfoundation
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -31,4 +32,21 @@ func TestASuppliedClientWithoutATransportNeverDialsTheEnvironmentProxy(t *testin
 	proxycapture.Check(t, func(ctx context.Context) {
 		sendCanaryThrough(ctx, originGuardedAtConstruction(&http.Client{Timeout: 5 * time.Second}))
 	}).AssertNothingReached(t)
+}
+
+func TestASuppliedPagerDutyValidationClientWithoutATransportNeverDialsTheEnvironmentProxy(t *testing.T) {
+	proxycapture.Check(t, func(ctx context.Context) {
+		sendCanaryThrough(ctx, pagerDutyValidationClient(&http.Client{Timeout: 5 * time.Second}, 5*time.Second))
+	}).AssertNothingReached(t)
+}
+
+func TestThePerRequestOriginGuardGivesASuppliedClientATransport(t *testing.T) {
+	target, err := url.Parse(proxycapture.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guarded, _ := originGuardedDoer(&http.Client{}, target, nil)
+	if client, ok := guarded.(*http.Client); !ok || client.Transport == nil {
+		t.Fatalf("originGuardedDoer over a client with no transport = %#v, want a copy with a transport", guarded)
+	}
 }

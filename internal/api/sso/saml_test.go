@@ -58,6 +58,10 @@ func TestValidateSAMLACSOverridePath(t *testing.T) {
 		{"upper case id", "https://sp.test/saml/" + strings.ToUpper(samlTestProviderID) + "/acs", true},
 		{"trailing slash", "https://sp.test/saml/" + samlTestProviderID + "/acs/", true},
 		{"id in the query only", "https://sp.test/acs?p=/saml/" + samlTestProviderID + "/acs", true},
+		{"escaped slashes in the route", "https://sp.test/api/v1/auth/saml%2F" + samlTestProviderID + "%2Facs", true},
+		{"escaped slash before acs", "https://sp.test/saml/" + samlTestProviderID + "%2facs", true},
+		{"escaped letter in acs", "https://sp.test/saml/" + samlTestProviderID + "/%61cs", true},
+		{"escaped slash in a proxy prefix", "https://sp.test/a%2Fb/saml/" + samlTestProviderID + "/acs", false},
 		{"metadata route", "https://sp.test/saml/" + samlTestProviderID + "/metadata", true},
 	}
 	for _, c := range cases {

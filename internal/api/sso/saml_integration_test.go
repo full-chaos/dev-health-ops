@@ -1092,3 +1092,36 @@ func TestSAMLConfigRefusesAnACSOverrideWithAnotherPath(t *testing.T) {
 		t.Fatalf("initiate: got a redirect_url for a refused override: %v", body)
 	}
 }
+
+func TestSAMLConfigRefusesAnACSOverrideWithAnotherPathOnEveryRoute(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	idp := newSAMLIdP(t)
+	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml%%2F{provider_id}%%2Facs"}`,
+		idp.idp.MetadataURL.String(), idp.certConfigValue())
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "saml", status: "active", config: config, autoProvision: true,
+	})
+
+	base := "/api/v1/auth/saml/" + providerID.String()
+	if status, body := postJSON(t, st.server, base+"/initiate", map[string]any{}); status != http.StatusInternalServerError {
+		t.Fatalf("initiate: status=%d body=%v, want 500", status, body)
+	}
+	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
+		spEntityID: "https://sp.test/m", acsURL: samlACSOverrideFor(providerID),
+		email: "route@example.test", fullName: "Route", nameID: "route@example.test",
+	})
+	if status, body := postJSON(t, st.server, base+"/acs", map[string]any{"SAMLResponse": samlResponse}); status != http.StatusInternalServerError {
+		t.Fatalf("acs: status=%d body=%v, want 500", status, body)
+	}
+	resp, err := http.Get(st.server.URL + base + "/metadata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("metadata: status=%d, want 500", resp.StatusCode)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -114,7 +115,7 @@ func buildOperationalWorker(
 			// Python sender used, so a misconfiguration refuses worker
 			// startup instead of failing every notification at send time.
 			sender, senderErr := mail.NewSenderFromEnv(
-				&http.Client{Timeout: cfg.OperationalBridgeTimeout},
+				&http.Client{Timeout: cfg.OperationalBridgeTimeout, Transport: httpguard.SharedTransport()},
 			)
 			if senderErr != nil {
 				logger.Error("billing notification email provider is unusable",
@@ -160,7 +161,7 @@ func buildOperationalWorker(
 			build := version.Current(cfg.Service)
 			heartbeatDispatcher, dispatcherErr := systemjobs.NewNativeHeartbeatDispatcher(
 				postgresDatabase.pools.Domain,
-				&http.Client{Timeout: cfg.OperationalBridgeTimeout},
+				&http.Client{Timeout: cfg.OperationalBridgeTimeout, Transport: httpguard.SharedTransport()},
 				cfg.TelemetryEndpoint,
 				cfg.TelemetryInstanceID,
 				build.Version,

@@ -35,6 +35,7 @@ internal/storage/roleacl
 internal/testsupport/containers
 internal/testsupport/moduleroot
 internal/testsupport/programoracle
+internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
 internal/testsupport/redirectprobe
 internal/testsupport/venueoracle

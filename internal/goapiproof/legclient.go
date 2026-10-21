@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // LegClient is the one HTTP client every read of both provers goes
@@ -31,14 +33,7 @@ type LegClient struct {
 // NewLegClient builds the leg client. timeout is the client-level ceiling
 // (0: none, each request's own context bounds it).
 func NewLegClient(timeout time.Duration) *LegClient {
-	base, ok := http.DefaultTransport.(*http.Transport)
-	var transport *http.Transport
-	if ok {
-		transport = base.Clone()
-	} else {
-		transport = &http.Transport{}
-	}
-	transport.Proxy = nil
+	transport := httpguard.Transport()
 	return &LegClient{http: &http.Client{
 		Transport: transport,
 		Timeout:   timeout,

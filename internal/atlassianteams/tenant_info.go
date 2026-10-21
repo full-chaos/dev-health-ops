@@ -12,6 +12,7 @@ import (
 
 	"atlassian/atlassian"
 
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -46,7 +47,7 @@ func ResolveCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, tenan
 
 func fetchTenantCloudID(ctx context.Context, doer providerfoundation.HTTPDoer, tenant *url.URL) (string, error) {
 	if doer == nil {
-		doer = &http.Client{Timeout: 15 * time.Second}
+		doer = &http.Client{Timeout: 15 * time.Second, Transport: httpguard.SharedTransport()}
 	}
 	target := *tenant
 	target.Path = TenantInfoPath

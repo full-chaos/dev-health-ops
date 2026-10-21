@@ -93,8 +93,10 @@ func TestCompatRoutesThroughConfigure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var email string
-	if err := e.admin.QueryRow(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING email`, user, hash).Scan(&email); err != nil {
+	// go-api's LoginRequest refuses a special-use domain (example.test), so the
+	// login address is on example.com.
+	email := "compat-" + user.String()[:8] + "@example.com"
+	if _, err := e.admin.Exec(ctx, `UPDATE users SET password_hash = $2, email = $3 WHERE id = $1`, user, hash, email); err != nil {
 		t.Fatal(err)
 	}
 	client := map[string]string{"X-Forwarded-For": "198.51.100.7", "Content-Type": "application/json", "User-Agent": "compat-route-test/1.0"}

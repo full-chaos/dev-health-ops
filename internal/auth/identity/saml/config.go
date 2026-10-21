@@ -193,16 +193,17 @@ func (p Provider) DomainAllowed(email string) bool {
 func normalizeDomain(d string) string { return strings.ToLower(strings.TrimSpace(d)) }
 
 // ValidateACSOverride refuses an sp_acs_url override that is not this row's ACS
-// URL: its path must end with /saml/{row id}/acs. A proxy prefix in front of
-// that is allowed. The suffix must hold both decoded and as written: an escaped
-// separator does not match the served route.
+// URL: its path must be exactly /api/v1/auth/saml/{row id}/acs, the served
+// route, both decoded and as written (an escaped separator does not match the
+// route). No proxy prefix is accepted.
 func ValidateACSOverride(cfg Config, rowID uuid.UUID) error {
 	if cfg.SPACSURL == "" {
 		return nil
 	}
 	u, err := url.Parse(cfg.SPACSURL)
-	if err != nil || !strings.HasSuffix(u.Path, acsPathSuffix(rowID)) || !strings.HasSuffix(u.EscapedPath(), acsPathSuffix(rowID)) {
-		return fmt.Errorf("%w: sp_acs_url must end with /saml/{provider id}/acs of this provider", ErrConfig)
+	route := "/api/v1/auth/saml/" + rowID.String() + "/acs"
+	if err != nil || u.Path != route || u.EscapedPath() != route {
+		return fmt.Errorf("%w: sp_acs_url must be /api/v1/auth/saml/{provider id}/acs of this provider", ErrConfig)
 	}
 	return nil
 }

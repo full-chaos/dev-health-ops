@@ -125,10 +125,10 @@ func decodeSAMLConfig(raw *string, providerID string) (samlConfigValues, error) 
 		SPEntityID: objString(object, "sp_entity_id"), SPACSURL: objString(object, "sp_acs_url"),
 		NameIDFormat: nameIDFormat, AttributeMapping: mapping,
 	}
-	if err := validateSAMLConfigHTTPS(cfg); err != nil {
+	if err := validateSAMLACSOverridePath(cfg, providerID); err != nil {
 		return samlConfigValues{}, err
 	}
-	if err := validateSAMLACSOverridePath(cfg, providerID); err != nil {
+	if err := validateSAMLConfigHTTPS(cfg); err != nil {
 		return samlConfigValues{}, err
 	}
 	return cfg, nil
@@ -182,19 +182,21 @@ func validateSAMLConfigHTTPS(cfg samlConfigValues) error {
 	return nil
 }
 
-// validateSAMLACSOverridePath refuses an sp_acs_url override whose path does
-// not end with /saml/{provider id}/acs (exact case, no trailing slash), both
-// decoded and as written (an escaped separator does not match the served
-// route); a proxy prefix in front is allowed. The error names the provider id and the
-// rule, never the configured value.
+// validateSAMLACSOverridePath refuses an sp_acs_url override whose path is not
+// exactly /api/v1/auth/saml/{provider id}/acs, the served ACS route (exact
+// case, no trailing slash, no prefix), both decoded and as written (an escaped
+// separator does not match the route). A value url.Parse refuses is refused
+// with the same reason. The error names the provider id and the rule, never the
+// configured value. It runs before the scheme check so a malformed value logs
+// the path rule.
 func validateSAMLACSOverridePath(cfg samlConfigValues, providerID string) error {
 	if cfg.SPACSURL == "" {
 		return nil
 	}
 	parsed, err := url.Parse(cfg.SPACSURL)
-	suffix := "/saml/" + providerID + "/acs"
-	if err != nil || !strings.HasSuffix(parsed.Path, suffix) || !strings.HasSuffix(parsed.EscapedPath(), suffix) {
-		return fmt.Errorf("SAML sp_acs_url must end with /saml/%s/acs of this provider", providerID)
+	route := "/api/v1/auth/saml/" + providerID + "/acs"
+	if err != nil || parsed.Path != route || parsed.EscapedPath() != route {
+		return fmt.Errorf("SAML sp_acs_url must be /api/v1/auth/saml/%s/acs of this provider", providerID)
 	}
 	return nil
 }

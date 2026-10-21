@@ -30,7 +30,7 @@
       "entity": "members",
       "check": "membership_starts_at_its_evidence",
       "state": "known_red",
-      "ticket": "CHAOS-10521",
+      "ticket": "CHAOS-10566",
       "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
     },
     {
@@ -56,7 +56,7 @@
       "entity": "repositories",
       "check": "repository_ownership_starts_at_its_evidence",
       "state": "known_red",
-      "ticket": "CHAOS-10521",
+      "ticket": "CHAOS-10566",
       "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
     },
     {
@@ -106,7 +106,7 @@
       "entity": "issues",
       "check": "owned_history_is_attributed",
       "state": "known_red",
-      "ticket": "CHAOS-10521",
+      "ticket": "CHAOS-10566",
       "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
     },
     {
@@ -114,7 +114,7 @@
       "entity": "issues",
       "check": "every_active_owner_takes_the_item",
       "state": "known_red",
-      "ticket": "CHAOS-10521",
+      "ticket": "CHAOS-10566",
       "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
     },
     {
@@ -152,7 +152,7 @@
       "entity": "members",
       "check": "membership_starts_at_its_evidence",
       "state": "known_red",
-      "ticket": "CHAOS-10521",
+      "ticket": "CHAOS-10566",
       "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
     },
     {
@@ -256,7 +256,7 @@
       "entity": "projects",
       "check": "project_ownership_starts_at_its_evidence",
       "state": "known_red",
-      "ticket": "CHAOS-10521",
+      "ticket": "CHAOS-10566",
       "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
     },
     {
@@ -360,7 +360,7 @@
       "entity": "projects",
       "check": "project_ownership_starts_at_its_evidence",
       "state": "known_red",
-      "ticket": "CHAOS-10521",
+      "ticket": "CHAOS-10566",
       "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
     },
     {
@@ -392,7 +392,7 @@
       "entity": "members",
       "check": "membership_starts_at_its_evidence",
       "state": "known_red",
-      "ticket": "CHAOS-10521",
+      "ticket": "CHAOS-10566",
       "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
     },
     {
@@ -466,7 +466,7 @@
       "entity": "projects",
       "check": "project_ownership_starts_at_its_evidence",
       "state": "known_red",
-      "ticket": "CHAOS-10521",
+      "ticket": "CHAOS-10566",
       "why": "catalog writers stamp valid_from with the sync time, not with the earliest evidence of the link"
     }
   ],

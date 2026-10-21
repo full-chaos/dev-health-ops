@@ -1398,7 +1398,7 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 	}
 
 	t.Run("sync-time valid_from on a catalog writer", func(t *testing.T) {
-		// As the producers write it: the ownership starts at the sync (known red, CHAOS-10521).
+		// As the producers write it: the ownership starts at the sync (known red, CHAOS-10566).
 		if result := judge("jira", "project_ownership_starts_at_its_evidence", facts, readers); len(result.Violations) == 0 {
 			t.Fatal("the sync-time start of the Jira project ownership is not found")
 		}

@@ -3360,6 +3360,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/contracts FuzzParseErrorEnvelope"
   "./internal/auth/contracts FuzzRevisionUnmarshal"
   "./internal/auth/contracts FuzzTimestampUnmarshal"
+  "./internal/auth/contracts FuzzParseAccessToken"
   "./internal/auth/edgetoken FuzzVerifyToken"
   "./internal/auth/signedtoken FuzzValidSignedToken"
   "./internal/auth/httpapi FuzzParseLimit"

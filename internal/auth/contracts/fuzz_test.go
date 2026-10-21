@@ -110,3 +110,65 @@ func FuzzTimestampUnmarshal(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseAccessToken drives the access-token.v1 client parser with arbitrary
+// bytes. Properties: it never panics, and an accepted token holds the client
+// rules the schema cannot (iat <= nbf < exp, lifetime within the HS256-compat
+// ceiling) and re-parses from its own encoding.
+func FuzzParseAccessToken(f *testing.F) {
+	wd, err := os.Getwd()
+	if err != nil {
+		f.Fatal(err)
+	}
+	root, err := RepoRoot(wd)
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, name := range []string{
+		"valid-api.json",
+		"valid-api-no-organization.json",
+		"valid-auth-service.json",
+		"client-rejected-duplicate-claim-aud.json",
+		"client-rejected-lifetime-over-the-ceiling.json",
+		"client-rejected-exp-decimal-form.json",
+	} {
+		raw, err := os.ReadFile(filepath.Join(root, "contracts/auth/v1/examples/access-token", name))
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(raw)
+	}
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`[`))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		token, err := ParseAccessToken(root, raw)
+		if err != nil {
+			return
+		}
+		c := token.Claims
+		if c.Iat > c.Nbf || c.Nbf >= c.Exp {
+			t.Fatalf("accepted iat %d nbf %d exp %d", c.Iat, c.Nbf, c.Exp)
+		}
+		if time.Duration(c.Exp-c.Iat)*time.Second > AccessTokenLifetimeCeiling {
+			t.Fatalf("accepted a lifetime of %d s", c.Exp-c.Iat)
+		}
+		encoded, err := json.Marshal(token)
+		if err != nil {
+			t.Fatalf("marshal accepted token: %v", err)
+		}
+		again, err := ParseAccessToken(root, encoded)
+		if err != nil {
+			t.Fatalf("an accepted token does not re-parse from %s: %v", encoded, err)
+		}
+		before, after := token.Claims, again.Claims
+		if !sameOrg(before.OrgID, after.OrgID) {
+			t.Fatalf("round trip changed org_id")
+		}
+		before.OrgID, after.OrgID = nil, nil
+		if again.Header != token.Header || after != before {
+			t.Fatalf("round trip changed the token: %+v -> %+v", token, again)
+		}
+	})
+}
+
+func sameOrg(a, b *string) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }

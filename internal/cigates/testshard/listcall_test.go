@@ -72,6 +72,7 @@ func TestTheHarnessListCallGuardPlantedDefectsAreCaught(t *testing.T) {
 
 // The stand-in's go list cache keys on the directory, the whole environment and the arguments, serves a repeated call without the real
 // go, caches only in the real tree and only a call that succeeded.
+// Each call runs with BASH_ENV empty: a BASH_ENV file of the outer shell would run inside the stand-in and could change its PATH.
 func TestTheStandInGoListCacheKeysOnDirectoryEnvironmentAndArguments(t *testing.T) {
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls")
@@ -96,7 +97,7 @@ func TestTheStandInGoListCacheKeysOnDirectoryEnvironmentAndArguments(t *testing.
 		t.Helper()
 		cmd := exec.Command(standIn, append([]string{"list"}, args...)...)
 		cmd.Dir = cwd
-		cmd.Env = append(os.Environ(), append([]string{"FAKE_GO_LIST_CACHE=" + cache, "FAKE_GO_LIST_CACHE_ROOT=" + root, "PWD=" + cwd,
+		cmd.Env = append(os.Environ(), append([]string{"FAKE_GO_LIST_CACHE=" + cache, "FAKE_GO_LIST_CACHE_ROOT=" + root, "PWD=" + cwd, "BASH_ENV=",
 			"GOFLAGS=", "GOWORK=off"}, env...)...)
 		out, err := cmd.Output()
 		code := 0
@@ -151,7 +152,7 @@ func TestTheStandInGoListCacheKeysOnDirectoryEnvironmentAndArguments(t *testing.
 		t.Helper()
 		cmd := exec.Command(filepath.Join(bin, "go"), "list", "-json")
 		cmd.Dir = root
-		cmd.Env = append(os.Environ(), "FAKE_GO_LIST_CACHE="+cache, "FAKE_GO_LIST_CACHE_ROOT="+root, "PWD="+root, "GOFLAGS=", "GOWORK=off",
+		cmd.Env = append(os.Environ(), "FAKE_GO_LIST_CACHE="+cache, "FAKE_GO_LIST_CACHE_ROOT="+root, "PWD="+root, "BASH_ENV=", "GOFLAGS=", "GOWORK=off",
 			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 		out, err := cmd.Output()
 		if err != nil {
@@ -195,7 +196,7 @@ func TestTheStandInGoListCacheMissesWhenTheGoEnvironmentFlips(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command(bin, "list", "-m")
 		cmd.Dir = root
-		cmd.Env = append(os.Environ(), append([]string{"FAKE_GO_LIST_CACHE=" + dir, "FAKE_GO_LIST_CACHE_ROOT=" + root, "PWD=" + root,
+		cmd.Env = append(os.Environ(), append([]string{"FAKE_GO_LIST_CACHE=" + dir, "FAKE_GO_LIST_CACHE_ROOT=" + root, "PWD=" + root, "BASH_ENV=",
 			"GOWORK=off", "GOFLAGS=-mod=readonly", "GO111MODULE=on"}, env...)...)
 		out, err := cmd.Output()
 		code := 0

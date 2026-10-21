@@ -74,13 +74,17 @@ func TestRaceWeightsFiles(t *testing.T) {
 		{"an empty weight", func(d string) { write(d, victimFile, victim+"\t\n") }, true, []string{victimFile, "the weight '' is not a whole number"}},
 		{"a decimal weight", func(d string) { write(d, victimFile, victim+"\t3.5\n") }, true, []string{victimFile, "the weight '3.5' is not a whole number"}},
 		{"a negative weight", func(d string) { write(d, victimFile, victim+"\t-3\n") }, true, []string{victimFile, "the weight '-3' is not a whole number"}},
-		{"a weight in Arabic-Indic digits", func(d string) { write(d, victimFile, victim+"\t\u0663\n") }, true, []string{victimFile, "the weight '\u0663' is not a whole number"}},
-		{"a weight with a no-break space", func(d string) { write(d, victimFile, victim+"\t3\u00a0\n") }, true, []string{victimFile, "is not a whole number"}},
+		{"a weight in Arabic-Indic digits", func(d string) { write(d, victimFile, victim+"\t\u0663\n") }, true, []string{victimFile, "is not ASCII text"}},
+		{"a weight with a no-break space", func(d string) { write(d, victimFile, victim+"\t3\u00a0\n") }, true, []string{victimFile, "is not ASCII text"}},
+		{"a line of an em space only", func(d string) { write(d, victimFile, "\u2003\n"+string(victimRow)) }, true, []string{victimFile, "is not ASCII text"}},
+		{"a line of a no-break space only", func(d string) { write(d, victimFile, "\u00a0\n"+string(victimRow)) }, true, []string{victimFile, "is not ASCII text"}},
+		{"a line of an ideographic space only", func(d string) { write(d, victimFile, "\u3000\n"+string(victimRow)) }, true, []string{victimFile, "is not ASCII text"}},
+		{"a comment that is not ASCII", func(d string) { write(d, victimFile, "# caf\u00e9\n"+string(victimRow)) }, true, []string{victimFile, "is not ASCII text"}},
 		{"a row that ends in a carriage return", func(d string) { write(d, victimFile, victim+"\t3\r\n") }, true, []string{victimFile, "is not a whole number"}},
-		{"a NUL byte", func(d string) { write(d, victimFile, victim+"\t3\x00\n") }, true, []string{victimFile, "is not text"}},
-		{"a byte that is not UTF-8", func(d string) { write(d, victimFile, victim+"\t3\xff\n") }, true, []string{victimFile, "is not text"}},
-		{"a UTF-8 sequence cut at the end of the file", func(d string) { write(d, victimFile, victim+"\t3\xc3") }, true, []string{victimFile, "is not text"}},
-		{"an overlong UTF-8 sequence", func(d string) { write(d, victimFile, victim+"\t3\xc0\xaf\n") }, true, []string{victimFile, "is not text"}},
+		{"a NUL byte", func(d string) { write(d, victimFile, victim+"\t3\x00\n") }, true, []string{victimFile, "is not ASCII text"}},
+		{"a byte that is not UTF-8", func(d string) { write(d, victimFile, victim+"\t3\xff\n") }, true, []string{victimFile, "is not ASCII text"}},
+		{"a UTF-8 sequence cut at the end of the file", func(d string) { write(d, victimFile, victim+"\t3\xc3") }, true, []string{victimFile, "is not ASCII text"}},
+		{"an overlong UTF-8 sequence", func(d string) { write(d, victimFile, victim+"\t3\xc0\xaf\n") }, true, []string{victimFile, "is not ASCII text"}},
 		{"the real directory with a comment and a blank line in a file is accepted", func(d string) { write(d, victimFile, "# note\n\n"+string(victimRow)) }, false, []string{"race-weights-rows:"}},
 	}
 	for _, c := range cases {
@@ -256,5 +260,47 @@ func TestRaceWeightsRowHasExactlyTwoColumns(t *testing.T) {
 		if !strings.Contains(out, "exactly two") {
 			t.Errorf("row %q: output lacks the two-column message:\n%s", body, out)
 		}
+	}
+}
+
+// A line of Unicode white space is refused with one message under every awk on PATH (gawk, mawk) and in the C, C.UTF-8 and
+// en_US.UTF-8 locales: the check reads bytes, so no awk or locale decides what is blank. An awk that is not installed is logged
+// and left out; at least one must run.
+func TestRaceWeightsNonASCIIWhiteSpaceIsRefusedUnderEveryAwkAndLocale(t *testing.T) {
+	root := rootOf(t)
+	victimFile := "internal__httpguard.tsv"
+	victimRow, err := os.ReadFile(filepath.Join(root, weightsDir, victimFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "ERROR: " + "internal__httpguard.tsv is not ASCII text: it holds a NUL byte or a byte above 0x7f (race weight files hold one package<TAB>seconds row, in ASCII)\n"
+	ran := 0
+	for _, awk := range []string{"gawk", "mawk"} {
+		path, err := exec.LookPath(awk)
+		if err != nil {
+			t.Logf("%s is not installed: left out", awk)
+			continue
+		}
+		bin := t.TempDir()
+		if err := os.Symlink(path, filepath.Join(bin, "awk")); err != nil {
+			t.Fatal(err)
+		}
+		for _, locale := range []string{"C", "C.UTF-8", "en_US.UTF-8"} {
+			for _, line := range []string{" ", " ", "　"} {
+				dir := copyWeights(t, root)
+				if err := os.WriteFile(filepath.Join(dir, victimFile), append([]byte(line+"\n"), victimRow...), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				got := cmdSpec{dir: root, env: inheritedEnv([]string{"PATH", "LC_ALL"}, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+					"LC_ALL="+locale, "GO_RACE_WEIGHTS_DIR="+dir)}.run("bash", "ci/check_go.sh", "race-weights-rows")
+				ran++
+				if got.code != 2 || got.stderr != want {
+					t.Errorf("%s, LC_ALL=%s, a line of %q: exit %d, stderr %q; want exit 2 and %q", awk, locale, line, got.code, got.stderr, want)
+				}
+			}
+		}
+	}
+	if ran == 0 {
+		t.Fatal("neither gawk nor mawk is installed")
 	}
 }

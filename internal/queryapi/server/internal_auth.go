@@ -279,6 +279,9 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 		}
 		role = orgRole
 		orgID = canonicalOrg(orgID)
+	case !user.IsSuperuser:
+		noteRefusal(r, "edge_org_missing", "edge")
+		return authctx.Claims{}, edgeRefused
 	}
 	// No org at all (a platform-wide operation, e.g.
 	// productTelemetryPlatformDashboard, which Python itself calls with

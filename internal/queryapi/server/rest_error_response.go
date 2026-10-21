@@ -267,6 +267,11 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 				// same store failure (policy.WriteAuthFailure: 503 for
 				// ErrUnavailable, 500 otherwise, guard.go currentUser), never
 				// as a pass, and the cause is logged before the response.
+				var orgRequired *principal.OrgRequiredError
+				if errors.As(err, &orgRequired) {
+					policy.WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
+					return authctx.Claims{}, false
+				}
 				var rejection *edgetoken.Rejection
 				if !errors.As(err, &rejection) && !policy.IsRefusal(err) {
 					log.Printf("query-api: %s: edge token users lookup failed: request_id=%s unavailable=%t err=%v",

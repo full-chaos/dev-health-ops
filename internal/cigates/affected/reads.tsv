@@ -50,6 +50,10 @@ internal/cigates/chartgates	test	deploy
 internal/cigates/chartgates	test	docker
 internal/cigates/chartgates	test	docs
 internal/cigates/checkgo	test	ci
+internal/cigates/docs	test	.github
+internal/cigates/docs	test	docs
+internal/cigates/docs	test	docs-data
+internal/cigates/docs	test	mkdocs.yml
 internal/cigates/docsprepare	test	docs-data
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy

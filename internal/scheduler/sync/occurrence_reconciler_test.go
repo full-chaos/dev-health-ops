@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -66,5 +69,95 @@ func TestOccurrenceReconcilerWritePrometheusHandlesNilReceiver(t *testing.T) {
 	var reconciler *OccurrenceReconciler
 	if err := reconciler.WritePrometheus(&bytes.Buffer{}); err != nil {
 		t.Fatalf("nil receiver: err = %v, want nil (a nil reconciler has no metrics to report)", err)
+	}
+}
+
+type deferralTx struct {
+	pgx.Tx
+	execArgs  []any
+	commits   int
+	rollbacks int
+}
+
+func (tx *deferralTx) Exec(_ context.Context, _ string, args ...any) (pgconn.CommandTag, error) {
+	tx.execArgs = args
+	return pgconn.NewCommandTag("UPDATE 1"), nil
+}
+func (tx *deferralTx) Commit(context.Context) error   { tx.commits++; return nil }
+func (tx *deferralTx) Rollback(context.Context) error { tx.rollbacks++; return nil }
+
+// beginRecorder stands for the pool: it fails like pgxpool does on a dead ctx.
+type beginRecorder struct {
+	calls int
+	tx    *deferralTx
+}
+
+func (b *beginRecorder) begin(ctx context.Context) (pgx.Tx, error) {
+	b.calls++
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return b.tx, nil
+}
+
+func newDeferralReconciler(b *beginRecorder) *OccurrenceReconciler {
+	return &OccurrenceReconciler{beginTx: b.begin}
+}
+
+func TestRecordMaterializeFailureOnStepDeadlineConsumesNoAttemptAndOpensNoTransaction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	b := &beginRecorder{tx: &deferralTx{}}
+	outcome, err := newDeferralReconciler(b).recordMaterializeFailure(
+		ctx, time.Now(), PendingOccurrence{ID: "o", AttemptCount: 1}, fmt.Errorf("plan: %w", context.DeadlineExceeded))
+	if !errors.Is(err, context.DeadlineExceeded) || outcome != "" {
+		t.Fatalf("outcome=%q err=%v", outcome, err)
+	}
+	if b.calls != 0 || b.tx.commits != 0 {
+		t.Fatalf("begin calls=%d commits=%d; a step deadline must not open a deferral", b.calls, b.tx.commits)
+	}
+}
+
+func TestRecordMaterializeFailureRealPlannerErrorCountsAttemptEvenWhenStepContextJustEnded(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	b := &beginRecorder{tx: &deferralTx{}}
+	outcome, err := newDeferralReconciler(b).recordMaterializeFailure(
+		ctx, time.Now(), PendingOccurrence{ID: "o", AttemptCount: 1}, errors.New("planner exploded"))
+	if err != nil || outcome != OccurrenceReconcileRetry {
+		t.Fatalf("outcome=%q err=%v", outcome, err)
+	}
+	if b.tx.commits != 1 || len(b.tx.execArgs) != 7 || b.tx.execArgs[0] != 2 {
+		t.Fatalf("commits=%d args=%v; attempt must be counted to 2", b.tx.commits, b.tx.execArgs)
+	}
+	if b.tx.execArgs[2] != OccurrenceErrorPlannerError {
+		t.Fatalf("code = %v", b.tx.execArgs[2])
+	}
+}
+
+func TestBudgetEndMarksOnlyTheCallersOwnContextError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	if err := budgetEnd(ctx, fmt.Errorf("lock: %w", context.DeadlineExceeded)); !errors.Is(err, ErrReconcileBudgetEnded) {
+		t.Fatalf("own deadline not marked: %v", err)
+	}
+	if err := budgetEnd(ctx, markRecordWrite(context.DeadlineExceeded)); errors.Is(err, ErrReconcileBudgetEnded) {
+		t.Fatalf("a failure-record write timeout was marked as the budget ending: %v", err)
+	}
+	if err := budgetEnd(ctx, errors.New("boom")); errors.Is(err, ErrReconcileBudgetEnded) {
+		t.Fatalf("a non-context error was marked: %v", err)
+	}
+	if err := budgetEnd(context.Background(), context.DeadlineExceeded); errors.Is(err, ErrReconcileBudgetEnded) {
+		t.Fatalf("a deadline with a live ctx was marked: %v", err)
+	}
+}
+
+func TestDeferOccurrenceBeginFailureIsMarkedAsAFailureRecordWrite(t *testing.T) {
+	r := &OccurrenceReconciler{beginTx: func(context.Context) (pgx.Tx, error) { return nil, context.DeadlineExceeded }}
+	_, err := r.deferOccurrence(context.Background(), time.Now(), PendingOccurrence{ID: "o"}, OccurrenceErrorPlannerError)
+	if !errors.Is(err, errFailureRecordWrite) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
 	}
 }

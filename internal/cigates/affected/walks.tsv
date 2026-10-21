@@ -49,9 +49,11 @@ internal/cigates/chartgates	helpers_test.go	unexpressed	-
 internal/cigates/checkgo	support_test.go	unexpressed	-
 internal/cigates/docs	docs_helpers_test.go	unexpressed	-
 internal/cigates/docsprepare	docsprepare.go	unexpressed	-
+internal/cigates/docstools	dc_pyhelp.go	unexpressed	-
 internal/cigates/docstools	invtaxonomy.go	unexpressed	-
 internal/cigates/docstools	parity_test.go	unexpressed	-
 internal/cigates/docstools	queuemap_guard_test.go	unexpressed	-
+internal/cigates/docstools	refusals_codeprereq_test.go	unexpressed	-
 internal/cigates/docstools	refusals_test.go	unexpressed	-
 internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-
@@ -76,6 +78,7 @@ internal/cigates/testshard	trimpath_test.go	.github/workflows	dir
 internal/cigates/testshard	trimpath_test.go	unexpressed	-
 internal/cigates/weightsfiles	race_weights_files_test.go	unexpressed	-
 internal/cigates/weightsfiles	support_test.go	unexpressed	-
+internal/cigates/workflows	chart_started_selector_test.go	unexpressed	-
 internal/cigates/workflows	ttl_registry_test.go	unexpressed	-
 internal/cigates/workflows	workflows_common_test.go	unexpressed	-
 internal/cigates/workflows	workflows_go_resolver_test.go	unexpressed	-
@@ -86,6 +89,7 @@ internal/cigates/workflows	workflows_venue_always_runs_test.go	unexpressed	-
 internal/cigates/workflows	workflows_venue_shards_test.go	ci/venue_oracle_weights.d	dir
 internal/cigates/workflows	workflows_venue_shards_test.go	unexpressed	-
 internal/clicredentials	opensites_test.go	unexpressed	-
+internal/egressguard	egressguard_test.go	unexpressed	-
 internal/envelopemint	keygen.go	unexpressed	-
 internal/envelopemint	keygen_state_test.go	unexpressed	-
 internal/fixturescli	dropped_columns_census_test.go	internal/chmigrate/sql	dir

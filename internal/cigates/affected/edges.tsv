@@ -80,6 +80,7 @@ internal/cigates/routing	pinned_test.go	unexpressed
 internal/cigates/scripts	ci_script_helpers_test.go	unexpressed
 internal/cigates/scripts	free_run_test.go	unexpressed
 internal/cigates/scripts	local_validate_clickhouse_test.go	unexpressed
+internal/cigates/scripts	local_validate_stage_manifest_test.go	unexpressed
 internal/cigates/scripts	oracle_triggers_script_test.go	unexpressed
 internal/cigates/splitshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/splitshards	free_run_test.go	unexpressed
@@ -95,6 +96,7 @@ internal/cigates/workflows	aggregate_gate_results_test.go	unexpressed
 internal/cigates/workflows	auth_compose_proof_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_test.go	unexpressed
+internal/cigates/workflows	chart_started_selector_test.go	unexpressed
 internal/cigates/workflows	ci_script_helpers_test.go	unexpressed
 internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed
@@ -165,6 +167,7 @@ internal/testsupport/ratchet	ratchet.go	unexpressed
 internal/testsupport/ratchet	ratchet_test.go	unexpressed
 internal/testsupport/ratchet/cmd/ratchets	main_test.go	internal/testsupport/ratchet/cmd/ratchets
 internal/testsupport/ratchet/cmd/ratchets	main_test.go	unexpressed
+internal/testsupport/recordedfiles	recordedfiles_test.go	unexpressed
 internal/testsupport/venuechanged	changed_test.go	unexpressed
 internal/testsupport/venuechanged	closure_derivation_test.go	**/internal/venue
 internal/testsupport/venuechanged	closure_test.go	unexpressed

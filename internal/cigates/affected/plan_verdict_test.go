@@ -312,25 +312,25 @@ func TestPlanVerdict(t *testing.T) {
 		{name: "planner_test_file_is_not_a_planner_input", changed: []string{"x/x_test.go", "internal/cigates/affected/plan_test.go"}, want: "AFFECTED 1", keys: []string{"x"}},
 		{name: "go_quality_go_source_is_full", extra: q, changed: []string{"x/x.go"}, want: "FULL Go source*"},
 		// any other path: FULL.
-		{name: "reader_less_path_is_full", changed: []string{".claude/x.json"}, want: nonGo},
-		{name: "docs_path_is_full", changed: []string{"docs/a.md"}, want: nonGo},
-		{name: "go_beside_a_non_go_path_is_full", changed: []string{"x/x.go", "docs/a.md"}, want: nonGo},
+		{name: "reader_less_path_is_none", changed: []string{".claude/x.json"}, want: "NONE"},
+		{name: "docs_path_selects_its_reader", changed: []string{"docs/a.md"}, want: "AFFECTED 1", keys: []string{"a"}},
+		{name: "go_beside_a_non_go_path_selects_both", changed: []string{"x/x.go", "docs/a.md"}, want: "AFFECTED 2", keys: []string{"a", "x"}},
 		{name: "testdata_data_is_full", changed: []string{"x/testdata/a.json"}, want: nonGo},
 		{name: "plan_tables_are_full", changed: []string{"internal/cigates/affected/reads.tsv"}, want: "FULL planner input*"},
 		{name: "go_mod_is_full", changed: []string{"go.mod"}, want: "FULL shared change*"},
 		{name: "go_yml_is_full", changed: []string{".github/workflows/go.yml"}, want: "FULL planner input*"},
 		{name: "check_go_is_full", changed: []string{"ci/check_go.sh"}, want: "FULL shared change*"},
-		{name: "go_quality_non_go_is_full", extra: q, changed: []string{"docs/a.md"}, want: nonGo},
+		{name: "go_quality_non_go_selects_its_reader", extra: q, changed: []string{"docs/a.md"}, want: "AFFECTED 1", keys: []string{"a"}},
 		// the relevance inputs of the deleted go-quality decider never plan below FULL.
 		{name: "python_source_is_full", changed: []string{"scripts/x.py"}, want: nonGo},
 		{name: "python_in_docs_is_full", changed: []string{"docs/x.py"}, want: nonGo},
 		{name: "ci_requirements_is_full", changed: []string{"ci/requirements-docs.txt"}, want: "FULL shared change*"},
 		{name: "mkdocs_is_full", changed: []string{"mkdocs.yml"}, want: nonGo},
-		{name: "provider_limits_doc_is_full", changed: []string{"docs/reference/limits-and-compatibility/provider-limits.md"}, want: nonGo},
+		{name: "provider_limits_doc_selects_its_reader", changed: []string{"docs/reference/limits-and-compatibility/provider-limits.md"}, want: "AFFECTED 1", keys: []string{"a"}},
 		{name: "local_validate_is_full", changed: []string{"ci/local_validate.sh"}, want: "FULL shared change*"},
 		{name: "live_backend_e2e_is_full", changed: []string{"ci/run_live_backend_e2e.sh"}, want: "FULL shared change*"},
 		// non-ASCII names (D6129) and odd list entries.
-		{name: "non_ascii_doc_is_full", changed: []string{"docs/caf\u00e9.md"}, want: nonGo},
+		{name: "non_ascii_doc_selects_its_reader", changed: []string{"docs/caf\u00e9.md"}, want: "AFFECTED 1", keys: []string{"a"}},
 		{name: "a_path_of_non_ascii_space_is_a_path_not_a_blank", changed: []string{"\u00a0"}, want: nonGo},
 		// events.
 		{name: "push_is_full", event: "push", changed: []string{"x/x.go"}, want: "FULL event push*"},
@@ -343,9 +343,9 @@ func TestPlanVerdict(t *testing.T) {
 	})
 }
 
-// The four bounded-read cases an adversarial review executed against the 0b4d992e9b planner, which tried to plan a
-// non-Go change below FULL. Each fixture holds the tables that planner generated for it; there each case skipped a test
-// that the change breaks (wrong answer in the comment). The planner plans every one FULL.
+// The four bounded-read cases an adversarial review executed against the 0b4d992e9b planner, each of which skipped a test
+// that the change breaks (wrong answer in the comment). The planner now selects the reader, or plans FULL when the read
+// tables do not match the code (the guard).
 const (
 	plantedEnvReader = "package %s\n\nimport \"os\"\n\nfunc Load() ([]byte, error) { return os.ReadFile(os.Getenv(\"READ_PATH\")) }\n"
 	plantedOwnJoin   = "package x\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nfunc read() ([]byte, error) { return os.ReadFile(filepath.Join(\".\", os.Getenv(\"READ_PATH\"))) }\n"
@@ -353,22 +353,22 @@ const (
 	plantedRepoWalk  = "package x\n\nimport (\n\t\"io/fs\"\n\t\"path/filepath\"\n)\n\nfunc repoRoot() string { return \"..\" }\n\nfunc walk() error {\n\treturn filepath.WalkDir(repoRoot(), func(string, fs.DirEntry, error) error { return nil })\n}\n"
 )
 
-func TestPlanVerdictBoundedReadCasesPlanFull(t *testing.T) {
+func TestPlanVerdictReviewedWrongWayCasesPlanTheReader(t *testing.T) {
 	runRows(t, []verdictRow{
 		// 0b4d992e9b: AFFECTED 1 [b]; c, whose test calls b.Load, was skipped.
 		{name: "importer_of_an_env_reader", head: map[string]string{"b/b_dyn.go": fmt.Sprintf(plantedEnvReader, "b"),
-			"internal/cigates/affected/dynreads.tsv": "b\tb_dyn.go\tunexpressed\n"},
-			changed: []string{"AGENTS.md"}, want: nonGo},
+			"internal/cigates/affected/dynreads.tsv": "b\tb_dyn.go\n"},
+			changed: []string{"AGENTS.md"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 		// 0b4d992e9b: AFFECTED 1 [a]; x, reading ../docs through READ_PATH, was skipped.
 		{name: "own_join_escape", head: map[string]string{"x/x_own_test.go": plantedOwnJoin},
-			changed: []string{"docs/a.md"}, want: nonGo},
+			changed: []string{"docs/a.md"}, want: "FULL the read tables differ*"},
 		// 0b4d992e9b: AFFECTED 1 [a]; x, reading "../do"+"cs/a.md", was skipped.
 		{name: "constant_concat", head: map[string]string{"x/x_cat_test.go": plantedConcat},
-			changed: []string{"docs/a.md"}, want: nonGo},
+			changed: []string{"docs/a.md"}, want: "FULL the read tables differ*"},
 		// 0b4d992e9b: AFFECTED 2 [b c]; x, walking the repository root under a row declaring docs/, was skipped.
 		{name: "root_walk_with_a_docs_row", head: map[string]string{"x/x_walk_test.go": plantedRepoWalk,
-			"internal/cigates/affected/walks.tsv": "x\ttest\tx_walk_test.go\tdocs\t-\t*\tdocs\n"},
-			changed: []string{"contracts/auth/v1/x.json"}, want: nonGo},
+			"internal/cigates/affected/walks.tsv": "x\tx_walk_test.go\tdocs\ttree\n"},
+			changed: []string{"contracts/auth/v1/x.json"}, want: "FULL the read tables differ*"},
 	})
 }
 
@@ -476,7 +476,7 @@ func TestPlanVerdictChangedListFormats(t *testing.T) {
 		name, raw, want string
 		keys            []string
 	}{
-		{"a_rename_out_of_a_go_package_is_full", "docs/a.md\x00x/x.go\x00", "FULL non-Go file: docs/a.md", nil},
+		{"a_rename_out_of_a_go_package_selects_both_sides", "docs/a.md\x00x/x.go\x00", "AFFECTED 2", []string{"a", "x"}},
 		{"newline_delimited_entries_are_separate", "x/x.go\ngo.mod\n", "FULL shared change: go.mod", nil},
 		{"nul_delimited_entries_are_separate", "x/x.go\x00go.mod\x00", "FULL shared change: go.mod", nil},
 		{"a_single_nul_terminated_entry_is_one_path", "x/x.go\x00", "AFFECTED 1", []string{"x"}},
@@ -489,7 +489,7 @@ func TestPlanVerdictChangedListFormats(t *testing.T) {
 		{"nul_format_unterminated_last_entry", "a/a.go\x00x/x.go", "AFFECTED 2", []string{"a", "x"}},
 		{"newline_format_unterminated_last_line", "a/a.go\nx/x.go", "AFFECTED 2", []string{"a", "x"}},
 		{"nul_format_embedded_newline_in_a_go_path", "x/new\nline/module.go\x00", "FULL Go file outside any listed package: x/new\\nline/module.go", nil},
-		{"a_newline_entry_of_non_ascii_space_is_kept", "x/x.go\n\u00a0\n", "FULL non-Go file: \u00a0", nil},
+		{"a_newline_entry_of_non_ascii_space_is_kept", "x/x.go\n\u00a0\n", "FULL non-Go file*", nil},
 	}
 	for _, c := range cases {
 		c := c
@@ -525,11 +525,11 @@ func TestPlanVerdictChangedListFormats(t *testing.T) {
 func TestDeletedDeciderCasesArePlanned(t *testing.T) {
 	q := []string{"--go-files-full"}
 	runRows(t, []verdictRow{
-		{name: "docs_only", extra: q, changed: []string{"docs/guide.md", "README.md"}, want: nonGo},
+		{name: "docs_only", extra: q, changed: []string{"docs/guide.md", "README.md"}, want: "AFFECTED 1", keys: []string{"a"}},
 		{name: "go_only", extra: q, changed: []string{"x/x.go"}, want: "FULL Go source*"},
 		{name: "root_go_file_and_go_mod", extra: q, changed: []string{"main.go", "go.mod", "go.sum"}, want: "FULL*"},
-		{name: "chart_only", extra: q, changed: []string{"deploy/helm/dev-health/values.yaml"}, want: nonGo},
-		{name: "chart_sibling", extra: q, changed: []string{"deploy/helm/other-chart/values.yaml"}, want: nonGo},
+		{name: "chart_only", extra: q, changed: []string{"deploy/helm/dev-health/values.yaml"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
+		{name: "chart_sibling", extra: q, changed: []string{"deploy/helm/other-chart/values.yaml"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 		{name: "mixed_docs_and_go", extra: q, changed: []string{"docs/a.md", "x/y.go", "web/readme.md"}, want: "FULL*"},
 		{name: "deleted_go_file", extra: q, changed: []string{"internal/old/removed.go"}, want: "FULL*"},
 		{name: "rename_as_delete_and_add", extra: q, changed: []string{"x/x.go", "docs/a.md"}, want: "FULL*"},
@@ -540,9 +540,9 @@ func TestDeletedDeciderCasesArePlanned(t *testing.T) {
 		{name: "near_miss_of_check_go", extra: q, changed: []string{"ci/check_go.sh.bak"}, want: "FULL shared change*"},
 		{name: "python_source", extra: q, changed: []string{"src/dev_health_ops/api/routes.py"}, want: nonGo},
 		{name: "regex_special_characters_in_a_path", extra: q, changed: []string{"x/a+b(c)/x.txt"}, want: nonGo},
-		{name: "non_ascii_paths", extra: q, changed: []string{"docs/r\u00e9sum\u00e9.md"}, want: nonGo},
+		{name: "non_ascii_paths", extra: q, changed: []string{"docs/r\u00e9sum\u00e9.md"}, want: "AFFECTED 1", keys: []string{"a"}},
 		{name: "workflow_file_itself", extra: q, changed: []string{".github/workflows/go-quality.yml"}, want: "FULL planner input*"},
-		{name: "dotfile_entry", extra: q, changed: []string{".dockerignore"}, want: nonGo},
+		{name: "dotfile_entry", extra: q, changed: []string{".dockerignore"}, want: "NONE"},
 		{name: "empty_change_set", extra: q, changed: nil, want: "FULL empty change set*"},
 	})
 }

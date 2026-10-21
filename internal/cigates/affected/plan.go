@@ -1,8 +1,9 @@
 // Package affected decides which Go test packages a change set can affect: one verdict for the integration plan job of
 // go.yml and for the go-quality legs. A pull request whose every changed path is a .go file plans AFFECTED: the changed
-// packages' reverse import closure. Any other path (data, tsv, yaml, docs, workflows, scripts, testdata) plans FULL, as do
-// shared inputs and every push to main, merge group, schedule or manual run. NONE is part of the contract (check_go.sh and
-// go-quality.yml accept it) but no change set plans it: bounding which tests read a non-Go file is separate work.
+// packages' reverse import closure. A non-Go path plans the packages that read it (reads.tsv by class, walks.tsv, dynreads.tsv
+// and edges.tsv, generated from the code and checked by cigate plan-reads), or NONE when no package reads it; a non-Go path
+// in no declared class plans FULL, as do shared inputs and every push to main, merge group, schedule or manual run. Any
+// doubt plans FULL.
 package affected
 
 import (

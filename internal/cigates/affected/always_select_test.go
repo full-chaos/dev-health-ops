@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -12,9 +11,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cigates/affected"
 )
 
-// Packages whose tests read or run other packages' files (a DDL scan of every _test.go, `go run` of a command) are
-// selected by every .go-only integration plan: the import closure cannot see those reads.
-var alwaysSelected = []string{"internal/fixturescli", "internal/pgmigrate", "internal/queryapi/scancensus", "internal/queryapi/server"}
+// always.tsv holds no package: the tests that read or run other packages' files (a DDL scan of every _test.go, `go run` of
+// a command) are bounded by the walks, dynreads and edges tables, and the repros below plan them without a row.
+var alwaysSelected []string
 
 func TestAlwaysSelectListHoldsExactlyItsPackages(t *testing.T) {
 	var rows []string
@@ -23,7 +22,7 @@ func TestAlwaysSelectListHoldsExactlyItsPackages(t *testing.T) {
 			rows = append(rows, line)
 		}
 	}
-	if !reflect.DeepEqual(rows, alwaysSelected) {
+	if len(rows) != 0 || len(alwaysSelected) != 0 {
 		t.Fatalf("always.tsv rows %q, want %q", rows, alwaysSelected)
 	}
 }

@@ -133,6 +133,17 @@ internal/cigates/docsprepare	docsprepare.go
 internal/cigates/docsprepare	docsprepare_test.go
 internal/cigates/docstools	a1_pyhelp.go
 internal/cigates/docstools	candidatefacts.go
+internal/cigates/docstools	candidatefacts_root_test.go
+internal/cigates/docstools	codeprereq.go
+internal/cigates/docstools	dc_args.go
+internal/cigates/docstools	dc_helpers_test.go
+internal/cigates/docstools	dc_links.go
+internal/cigates/docstools	dc_paths_test.go
+internal/cigates/docstools	dc_pyhelp.go
+internal/cigates/docstools	dc_search.go
+internal/cigates/docstools	docs_checks_nopython_test.go
+internal/cigates/docstools	docs_root_test.go
+internal/cigates/docstools	docsroot.go
 internal/cigates/docstools	drift_nopython_test.go
 internal/cigates/docstools	parity_test.go
 internal/cigates/docstools	provider_limits.go
@@ -158,6 +169,7 @@ internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go
 internal/cigates/scripts	local_validate_clickhouse_test.go
+internal/cigates/scripts	local_validate_stage_manifest_test.go
 internal/cigates/scripts	merge_tree_vet_script_test.go
 internal/cigates/scripts	oracle_selection_helpers_test.go
 internal/cigates/scripts	ported_contract_guards_test.go
@@ -177,6 +189,7 @@ internal/cigates/workflows	aggregate_gate_results_test.go
 internal/cigates/workflows	auth_compose_proof_test.go
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go
 internal/cigates/workflows	auth_corpus_external_test.go
+internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
@@ -187,6 +200,7 @@ internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
 internal/clicredentials	opensites_test.go
 internal/deploymentcontract	manifest.go
+internal/egressguard	egressguard_test.go
 internal/envelopemint	custody_unix.go
 internal/envelopemint	keygen.go
 internal/envelopemint	keygen_state_test.go

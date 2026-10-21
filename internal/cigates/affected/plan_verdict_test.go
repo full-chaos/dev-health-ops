@@ -291,6 +291,24 @@ func planVerdictRows() []verdictRow {
 		{name: "walk_skip_dir_is_not_read", changed: []string{"walked/skipme/f.txt"}, want: "NONE"},
 		{name: "walk_filter_selects_a_code_walker_and_its_importers", changed: []string{"filtered/a.json"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 		{name: "walk_filter_leaves_other_files", changed: []string{"filtered/a.txt"}, want: "NONE"},
+		{name: "undeclared_env_path_read_is_full", head: map[string]string{"x/x_dyn_test.go": fmt.Sprintf(plantedEnvReader, "x")},
+			changed: []string{"docs/a.md"}, want: `FULL dynreads.tsv differs from the tree (x: undeclared dynamic read: x/x_dyn_test.go:5 os.ReadFile(os.Getenv("FIXTURE_PATH"))*`},
+		{name: "generated_unexpressed_env_path_read_is_full", head: map[string]string{"x/x_dyn_test.go": fmt.Sprintf(plantedEnvReader, "x"),
+			"internal/cigates/affected/dynreads.tsv": "x\tx_dyn_test.go\tunexpressed\n"},
+			changed: []string{"docs/a.md"}, want: "FULL unexpressed dynamic read in x (x_dyn_test.go) can read docs/a.md"},
+		{name: "undeclared_manifest_driven_read_is_full", head: map[string]string{"x/x_dyn_test.go": fmt.Sprintf(plantedManifestReader, "x")},
+			changed: []string{".claude/x.json"}, want: "FULL dynreads.tsv differs from the tree (x: undeclared dynamic read: x/x_dyn_test.go:14 os.ReadFile(line)*"},
+		{name: "undeclared_struct_field_read_is_full", head: map[string]string{"b/b_dyn.go": fmt.Sprintf(plantedFieldReader, "b")},
+			changed: []string{"AGENTS.md"}, want: "FULL dynreads.tsv differs from the tree (b: undeclared dynamic read: b/b_dyn.go:7 os.ReadFile(c.Path)*"},
+		{name: "declared_dynamic_read_selects_its_package",
+			head: map[string]string{"x/x_dyn_test.go": fmt.Sprintf(plantedEnvReader, "x"),
+				"internal/cigates/affected/dynreads.tsv": "x\tx_dyn_test.go\tcontracts\n"},
+			changed: []string{"contracts/auth/v1/x.json"}, want: "AFFECTED 3", keys: []string{"b", "c", "x"}},
+		{name: "declared_dynamic_code_read_selects_its_importers",
+			head: map[string]string{"b/b_dyn.go": fmt.Sprintf(plantedFieldReader, "b"),
+				"internal/cigates/affected/dynreads.tsv": "b\tb_dyn.go\tdocs\n"},
+			changed: []string{"docs/a.md"}, want: "AFFECTED 3", keys: []string{"a", "b", "c"}},
+		{name: "dynreads_table_is_full", changed: []string{"internal/cigates/affected/dynreads.tsv"}, want: "FULL planner input*"},
 		{name: "unexpressed_walk_is_full",
 			head:    map[string]string{"internal/cigates/affected/walks.tsv": fixtureWalks + "d\ttest\td_test.go\tunexpressed\t-\t*\t-\n"},
 			changed: []string{"AGENTS.md"}, want: "FULL unexpressed walk in d (d_test.go)*"},
@@ -399,10 +417,13 @@ func planReads(t *testing.T, root string) cmdResult {
 }
 
 const (
-	plantedLiteralReader = "package p\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nfunc read() ([]byte, error) {\n\treturn os.ReadFile(filepath.Join(\"..\", \"docs\", \"a.md\"))\n}\n"
-	plantedSlashReader   = "package s\n\nvar doc = \"../../docs/a.md\"\n"
-	plantedRootWalker    = "package q\n\nimport (\n\t\"io/fs\"\n\t\"path/filepath\"\n)\n\nfunc repoRoot() string { return \"..\" }\n\nfunc walk() error {\n\treturn filepath.WalkDir(repoRoot(), func(string, fs.DirEntry, error) error { return nil })\n}\n"
-	plantedCodeReader    = "package r\n\nimport \"path/filepath\"\n\nvar Dir = filepath.Join(\"..\", \"contracts\")\n"
+	plantedEnvReader      = "package %s\n\nimport \"os\"\n\nfunc read() ([]byte, error) { return os.ReadFile(os.Getenv(\"FIXTURE_PATH\")) }\n"
+	plantedManifestReader = "package %s\n\nimport (\n\t\"os\"\n\t\"strings\"\n)\n\nfunc read() error {\n\traw, err := os.ReadFile(\"testdata/manifest.txt\")\n\tif err != nil {\n\t\treturn err\n\t}\n\tfor _, line := range strings.Split(string(raw), \"\\n\") {\n\t\tif _, err := os.ReadFile(line); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\treturn nil\n}\n"
+	plantedFieldReader    = "package %s\n\nimport \"os\"\n\ntype config struct{ Path string }\n\nfunc read(c config) ([]byte, error) { return os.ReadFile(c.Path) }\n"
+	plantedLiteralReader  = "package p\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nfunc read() ([]byte, error) {\n\treturn os.ReadFile(filepath.Join(\"..\", \"docs\", \"a.md\"))\n}\n"
+	plantedSlashReader    = "package s\n\nvar doc = \"../../docs/a.md\"\n"
+	plantedRootWalker     = "package q\n\nimport (\n\t\"io/fs\"\n\t\"path/filepath\"\n)\n\nfunc repoRoot() string { return \"..\" }\n\nfunc walk() error {\n\treturn filepath.WalkDir(repoRoot(), func(string, fs.DirEntry, error) error { return nil })\n}\n"
+	plantedCodeReader     = "package r\n\nimport \"path/filepath\"\n\nvar Dir = filepath.Join(\"..\", \"contracts\")\n"
 )
 
 func TestPlanReadsGuard(t *testing.T) {
@@ -435,6 +456,16 @@ func TestPlanReadsGuard(t *testing.T) {
 			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\nr\tcode\tcontracts\n", "internal/cigates/affected/walks.tsv": "q\ttest\tq_test.go\t.\t-\t*\tcontracts,docs\n"}, 0, nil},
 		{"outside_walk_reaches_nothing", map[string]string{"q/q_test.go": plantedRootWalker,
 			"internal/cigates/affected/walks.tsv": "q\ttest\tq_test.go\toutside\t-\t-\t-\n"}, 0, nil},
+		{"undeclared_env_path_read_is_named", map[string]string{"e/e_test.go": fmt.Sprintf(plantedEnvReader, "e")}, 1,
+			[]string{"e/e_test.go", "undeclared dynamic read", `os.ReadFile(os.Getenv("FIXTURE_PATH"))`, "e\te_test.go\tunexpressed"}},
+		{"undeclared_manifest_driven_read_is_named", map[string]string{"m/m_test.go": fmt.Sprintf(plantedManifestReader, "m")}, 1,
+			[]string{"m/m_test.go", "undeclared dynamic read", "os.ReadFile(line)"}},
+		{"undeclared_struct_field_read_is_named", map[string]string{"s/s.go": fmt.Sprintf(plantedFieldReader, "s")}, 1,
+			[]string{"s/s.go", "undeclared dynamic read", "os.ReadFile(c.Path)"}},
+		{"declared_dynamic_reads_pass", map[string]string{"e/e_test.go": fmt.Sprintf(plantedEnvReader, "e"), "m/m_test.go": fmt.Sprintf(plantedManifestReader, "m"),
+			"s/s.go": fmt.Sprintf(plantedFieldReader, "s"), "internal/cigates/affected/dynreads.tsv": "e\te_test.go\tdocs\nm\tm_test.go\t-\ns\ts.go\tcontracts\n"}, 0, nil},
+		{"dynreads_row_for_a_file_without_one_fails", map[string]string{"p/p_test.go": plantedLiteralReader,
+			"internal/cigates/affected/reads.tsv": "p\ttest\tdocs\n", "internal/cigates/affected/dynreads.tsv": "p\tp_test.go\tdocs\n"}, 1, []string{"p/p_test.go holds no read the generator keeps"}},
 		{"row_for_an_unknown_class_fails", map[string]string{"internal/cigates/affected/reads.tsv": "p\ttest\tnope\n"}, 1, []string{"nope"}},
 		{"row_for_a_package_with_no_go_file_fails", map[string]string{"internal/cigates/affected/reads.tsv": "gone\ttest\tdocs\n"}, 1, []string{"gone"}},
 		{"planted_non_ascii_literal_reader_is_named", map[string]string{"n/n_test.go": "package n\n\nvar doc = \"../docs/caf\u00e9.md\"\n"}, 1, []string{"n/n_test.go", "docs/caf\u00e9.md"}},
@@ -549,16 +580,22 @@ func TestDeletedDeciderCasesArePlanned(t *testing.T) {
 // A verdict that rests on a root walk says so in the job log: one stderr line per walker, its declared classes against the
 // classes the change reaches.
 func TestPlanVerdictLogsEachRootWalkDecision(t *testing.T) {
-	cases := []struct{ changed, want string }{
-		{"docs/a.md", "root walk in x: classes declared [walked], reachable [docs]; not selected"},
-		{"walked/f.txt", "root walk in x: classes declared [walked], reachable [walked]; selected"},
+	dyn := map[string]string{"x/x_dyn_test.go": fmt.Sprintf(plantedEnvReader, "x"), "internal/cigates/affected/dynreads.tsv": "x\tx_dyn_test.go\tcontracts\n"}
+	cases := []struct {
+		head          map[string]string
+		changed, want string
+	}{
+		{nil, "docs/a.md", "root walk in x: classes declared [walked], reachable [docs]; not selected"},
+		{nil, "walked/f.txt", "root walk in x: classes declared [walked], reachable [walked]; selected"},
+		{dyn, "contracts/auth/v1/x.json", "dynamic read in x: classes declared [contracts], reachable [contracts]; selected"},
+		{dyn, "docs/a.md", "dynamic read in x: classes declared [contracts], reachable [docs]; not selected"},
 	}
 	for _, c := range cases {
 		c := c
 		t.Run(c.changed, func(t *testing.T) {
 			t.Parallel()
 			work := t.TempDir()
-			f, err := newVerdictFixture(work, nil)
+			f, err := newVerdictFixture(work, c.head)
 			if err != nil {
 				t.Fatal(err)
 			}

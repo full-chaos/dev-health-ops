@@ -144,7 +144,8 @@ type planInput struct {
 	root, base  string
 	tables      *tables
 	goFilesFull bool
-	log         io.Writer // one line per root-walk decision; nil discards
+	log         io.Writer // one line per root-walk and dynamic-read decision; nil discards
+	dynDiff     []string  // differences between dynreads.tsv and the rows the tree calls for
 }
 
 // isPythonSource: a Python file outside a Go package's testdata or embed files has no declared reader; it plans FULL.
@@ -204,6 +205,7 @@ func plan(in planInput) (Verdict, error) {
 	hasGo := false
 	reached := map[string]bool{}      // classes the changed non-Go paths fall in
 	walkSelected := map[string]bool{} // walking packages a changed path selected
+	dynSelected := map[string]bool{}  // packages a dynreads.tsv row selected
 	for _, raw := range in.changed {
 		p := path.Clean(raw)
 		if strings.HasSuffix(p, ".go") {
@@ -223,6 +225,27 @@ func plan(in planInput) (Verdict, error) {
 			direct[importPath(k)] = true
 		}
 		if !strings.HasSuffix(p, ".go") {
+			if len(in.dynDiff) > 0 {
+				return full("dynreads.tsv differs from the tree (" + in.dynDiff[0] + ") and can miss " + p), nil
+			}
+			for _, d := range in.tables.dynReads {
+				if d.unexpressed() {
+					return full("unexpressed dynamic read in " + d.pkg + " (" + d.site + ") can read " + p), nil
+				}
+			}
+			pc, _ := in.tables.classesOf(p)
+			for _, d := range in.tables.dynReads {
+				for _, c := range d.classes {
+					if pc[c] {
+						dynSelected[d.pkg] = true
+						if d.scope() == scopeCode {
+							changedPackages[importPath(d.pkg)] = true
+						} else {
+							direct[importPath(d.pkg)] = true
+						}
+					}
+				}
+			}
 			for _, w := range in.tables.walkersOf(p) {
 				if w.root == walkUnexpressed {
 					return full("unexpressed walk in " + w.pkg + " (" + w.site + ") can read " + p), nil
@@ -272,6 +295,7 @@ func plan(in planInput) (Verdict, error) {
 		return full("Go source in the change set: every package runs"), nil
 	}
 	in.tables.logRootWalks(in.log, reached, walkSelected)
+	in.tables.logDynamicReads(in.log, reached, dynSelected)
 	if len(changedPackages) == 0 && len(direct) == 0 {
 		return Verdict{Kind: "NONE"}, nil
 	}
@@ -355,7 +379,13 @@ func PlanVerdict(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	v, err := plan(planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, base: *base, tables: tb, goFilesFull: *goFilesFull, log: stderr})
+	diff, err := planDynamic(*root, tb)
+	if err != nil {
+		fmt.Fprintln(stderr, "scan the Go sources for dynamic reads:", err)
+		return 1
+	}
+	v, err := plan(planInput{event: *event, changed: changed, golist: golist, keys: keys, root: *root, base: *base, tables: tb,
+		goFilesFull: *goFilesFull, log: stderr, dynDiff: diff})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

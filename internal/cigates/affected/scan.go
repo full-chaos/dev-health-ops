@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"io"
 	"io/fs"
@@ -38,13 +39,18 @@ type Read struct {
 	File    string // repository path of the Go file
 	Line    int
 	Test    bool   // the file is a _test.go file
-	Path    string // the repository path named; empty for a walk from the repository root
+	Path    string // the repository path named; empty for a walk from the repository root and for a dynamic read
 	Literal string
+	Dynamic bool   // a read, open or walk call whose path is not a compile-time constant (Literal holds the call)
+	Kind    string // for a dynamic read: temp, own, walk, walkpath or dyn (dynreads.go)
 }
 
 func (r Read) String() string {
 	what := fmt.Sprintf("names %s (literal %q)", r.Path, r.Literal)
-	if r.Path == "" {
+	switch {
+	case r.Dynamic:
+		what = fmt.Sprintf("reads a path that is not a compile-time constant (%s)", r.Literal)
+	case r.Path == "":
 		what = "walks from the repository root"
 	}
 	return fmt.Sprintf("%s:%d %s", r.File, r.Line, what)
@@ -92,7 +98,13 @@ func ScanReads(root string) ([]Read, error) {
 	if err != nil {
 		return nil, err
 	}
-	var reads []Read
+	type parsed struct {
+		rel  string
+		fset *token.FileSet
+		file *ast.File
+	}
+	var files []parsed
+	consts := map[string]map[string]bool{} // package dir -> its constant names
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -111,15 +123,35 @@ func ScanReads(root string) ([]Read, error) {
 		if err != nil {
 			return err
 		}
-		got, err := scanFile(p, filepath.ToSlash(rel), top)
+		rel = filepath.ToSlash(rel)
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
 		if err != nil {
 			return err
 		}
-		reads = append(reads, got...)
+		files = append(files, parsed{rel, fset, f})
+		dir := path.Dir(rel)
+		if consts[dir] == nil {
+			consts[dir] = map[string]bool{}
+		}
+		for _, decl := range f.Decls {
+			if g, ok := decl.(*ast.GenDecl); ok && g.Tok == token.CONST {
+				for _, spec := range g.Specs {
+					for _, n := range spec.(*ast.ValueSpec).Names {
+						consts[dir][n.Name] = true
+					}
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	var reads []Read
+	for _, pf := range files {
+		reads = append(reads, scanFile(pf.fset, pf.file, pf.rel, top, consts[path.Dir(pf.rel)])...)
+		reads = append(reads, dynamicReads(pf.fset, pf.file, pf.rel, consts[path.Dir(pf.rel)])...)
 	}
 	// A walk is a repository-root walk only when its package locates the root.
 	locates := map[string]bool{}
@@ -163,12 +195,51 @@ func callName(e ast.Expr) string {
 	return ""
 }
 
-func scanFile(file, rel string, top map[string]bool) ([]Read, error) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
+// dynamicCalls read, open or walk the path in their first argument (fs.* functions: the second).
+var dynamicCalls = map[string]bool{
+	"os.ReadFile": true, "os.Open": true, "os.OpenFile": true, "os.ReadDir": true, "os.Stat": true, "os.Lstat": true,
+	"os.DirFS": true, "filepath.WalkDir": true, "filepath.Walk": true, "filepath.Glob": true, "fs.WalkDir": true,
+	"fs.ReadFile": true, "fs.ReadDir": true, "fs.Glob": true, "fs.Sub": true, "ioutil.ReadFile": true, "ioutil.ReadDir": true,
+}
+
+// isConstPath: a string literal, a constant of the package, a sum of those, or a Join/Clean/FromSlash/ToSlash of those.
+func isConstPath(e ast.Expr, consts map[string]bool) bool {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		return x.Kind == token.STRING
+	case *ast.Ident:
+		return consts[x.Name]
+	case *ast.ParenExpr:
+		return isConstPath(x.X, consts)
+	case *ast.BinaryExpr:
+		return x.Op == token.ADD && isConstPath(x.X, consts) && isConstPath(x.Y, consts)
+	case *ast.CallExpr:
+		switch callName(x.Fun) {
+		case "filepath.Join", "path.Join", "filepath.Clean", "path.Clean", "filepath.FromSlash", "filepath.ToSlash":
+			for _, a := range x.Args {
+				if !isConstPath(a, consts) {
+					return false
+				}
+			}
+			return true
+		}
 	}
+	return false
+}
+
+func exprText(fset *token.FileSet, e ast.Expr) string {
+	var b strings.Builder
+	if err := printer.Fprint(&b, fset, e); err != nil {
+		return "?"
+	}
+	t := strings.Join(strings.Fields(b.String()), " ")
+	if len(t) > 80 {
+		t = t[:77] + "..."
+	}
+	return t
+}
+
+func scanFile(fset *token.FileSet, f *ast.File, rel string, top, consts map[string]bool) []Read {
 	pkg := path.Dir(rel)
 	test := strings.HasSuffix(rel, "_test.go")
 	var out []Read
@@ -193,6 +264,7 @@ func scanFile(file, rel string, top map[string]bool) ([]Read, error) {
 		if walkCalls[name] {
 			add(call.Pos(), "", "\x00walk")
 		}
+
 		if name == "filepath.Join" || name == "path.Join" {
 			joinLiterals(call, top, consumed, add)
 		}
@@ -234,7 +306,7 @@ func scanFile(file, rel string, top map[string]bool) ([]Read, error) {
 		}
 		return true
 	})
-	return out, nil
+	return out
 }
 
 // checkReads returns one line per defect: a read with no covering reads.tsv row, a code read declared only as test, a
@@ -267,6 +339,9 @@ func checkReads(root string, t *tables, reads []Read) []string {
 		if !r.Test {
 			scope = scopeCode
 		}
+		if r.Dynamic {
+			continue
+		}
 		if r.Path == "" {
 			k := siteKey{r.Package, path.Base(r.File)}
 			walkSites[k] = true
@@ -294,6 +369,10 @@ func checkReads(root string, t *tables, reads []Read) []string {
 		case scope == scopeCode && !t.covers(r.Path, codeOnly(declared[r.Package])):
 			report(fmt.Sprintf("%s: %s is read by non-test code, so the row must be %s\t%s\t%s (its importers' tests read it too)", r.Package, r, r.Package, scopeCode, class))
 		}
+	}
+	gen, samples := generateDynReads(reads, t)
+	for _, d := range dynDiff(gen, samples, t) {
+		report(d)
 	}
 	for _, w := range t.walks {
 		if !walkSites[siteKey{w.pkg, w.site}] {
@@ -376,7 +455,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "plan-reads: %d defect(s) in the declared-read table\n", len(defects))
 		return 1
 	}
-	fmt.Fprintf(stdout, "plan-reads: %d read(s) covered by %d reads row(s) and %d walks row(s)\n", len(reads), len(t.reads), len(t.walks))
+	fmt.Fprintf(stdout, "plan-reads: %d read(s) covered by %d reads row(s), %d walks row(s) and %d dynreads row(s)\n", len(reads), len(t.reads), len(t.walks), len(t.dynReads))
 	return 0
 }
 

@@ -36,9 +36,10 @@ type readRow struct {
 }
 
 type tables struct {
-	globs []classGlob
-	reads []readRow
-	walks []walkRow // walks.tsv: one measured row per walk call site (walks.go)
+	globs    []classGlob
+	reads    []readRow
+	walks    []walkRow // walks.tsv: one measured row per walk call site (walks.go)
+	dynReads []dynRow  // dynreads.tsv: one declared row per file with a non-constant read (dynreads.go)
 }
 
 func readTSV(file string, fields int) ([][]string, []int, error) {
@@ -94,6 +95,9 @@ func loadTables(dir string) (*tables, error) {
 		return nil, err
 	}
 	if t.walks, err = loadWalks(dir, known); err != nil {
+		return nil, err
+	}
+	if t.dynReads, err = loadDynReads(dir, known); err != nil {
 		return nil, err
 	}
 	return t, nil

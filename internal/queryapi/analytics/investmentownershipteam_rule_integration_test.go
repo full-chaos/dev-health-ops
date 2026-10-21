@@ -138,10 +138,10 @@ func TestInvestmentTeamSourceAppliesTheFirstRecordedOwnersBackward(t *testing.T)
 
 	beforeAll, atFirst, inGap, after := day(time.February, 15), day(time.March, 1), day(time.April, 15), day(time.June, 1)
 	want := map[string]map[string]float64{
-		"before every record": {"pair|team-a": 0.6, "pair|team-b": 0.4, "tie|team-a": 0.5, "tie|team-b": 0.5, "gap|team-a": 1, "gone|team-a": 1, "revoked|team-a": 1},
-		"at the first record": {"pair|team-a": 0.6, "pair|team-b": 0.4, "tie|team-a": 0.5, "tie|team-b": 0.5, "gap|team-a": 1, "gone|team-a": 1, "revoked|team-a": 1},
-		"in a gap":            {"pair|team-a": 0.6, "pair|team-b": 0.4, "tie|team-a": 0.5, "tie|team-b": 0.5, "gone|team-a": 1},
-		"after the records":   {"pair|team-a": 0.6, "pair|team-b": 0.4, "tie|team-a": 0.5, "tie|team-b": 0.5, "gap|team-c": 1, "gone|team-a": 1},
+		"before every record": {"pair|team-a": 0.6, "pair|team-b": 0.4, "tie|team-a": 0.5, "tie|team-b": 0.5, "gap|team-a": 1, "gone|team-a": 1, "revoked|team-a": 1, "future|team-a": 1},
+		"at the first record": {"pair|team-a": 0.6, "pair|team-b": 0.4, "tie|team-a": 0.5, "tie|team-b": 0.5, "gap|team-a": 1, "gone|team-a": 1, "revoked|team-a": 1, "future|team-a": 1},
+		"in a gap":            {"pair|team-a": 0.6, "pair|team-b": 0.4, "tie|team-a": 0.5, "tie|team-b": 0.5, "gone|team-a": 1, "future|team-a": 1},
+		"after the records":   {"pair|team-a": 0.6, "pair|team-b": 0.4, "tie|team-a": 0.5, "tie|team-b": 0.5, "gap|team-c": 1, "gone|team-a": 1, "future|team-a": 1},
 	}
 	instants := map[string]time.Time{"before every record": beforeAll, "at the first record": atFirst, "in a gap": inGap, "after the records": after}
 	for name, at := range instants {

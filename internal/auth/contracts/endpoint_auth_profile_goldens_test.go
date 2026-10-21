@@ -23,6 +23,10 @@ type endpointAuthProfileManifest struct {
 		ExpectKeyword          string `json:"expect_keyword"`
 		Why                    string `json:"why"`
 	} `json:"reject"`
+	RejectByClient []struct {
+		File string `json:"file"`
+		Why  string `json:"why"`
+	} `json:"reject_by_client"`
 }
 
 const (
@@ -84,6 +88,9 @@ func TestEndpointAuthProfileCorpusIsNotEmptyInEitherDirection(t *testing.T) {
 	if len(manifest.Reject) == 0 {
 		t.Error("manifest declares no reject fixtures")
 	}
+	if len(manifest.RejectByClient) == 0 {
+		t.Error("manifest declares no reject_by_client fixtures")
+	}
 }
 
 func TestEveryEndpointAuthProfileFixtureOnDiskIsClaimedByTheManifest(t *testing.T) {
@@ -104,6 +111,9 @@ func TestEveryEndpointAuthProfileFixtureOnDiskIsClaimedByTheManifest(t *testing.
 		claimed[a.File] = true
 	}
 	for _, r := range manifest.Reject {
+		claimed[r.File] = true
+	}
+	for _, r := range manifest.RejectByClient {
 		claimed[r.File] = true
 	}
 	var unclaimed, missing []string
@@ -165,6 +175,49 @@ func TestRejectedEndpointAuthProfileFixturesAreRejectedByTheDeclaredRule(t *test
 			if !strings.Contains(err.Error(), token) {
 				t.Fatalf("rejected, but not by %q. token %q absent from: %v",
 					entry.ExpectKeyword, token, err)
+			}
+		})
+	}
+}
+
+// endpointAuthProfileGateRefusals is the refusal each reject_by_client fixture
+// must draw from the profile gate. The schema accepts every one of them.
+var endpointAuthProfileGateRefusals = map[string]string{
+	"invalid-user-access-token-pins-the-envelope-typ.json":     `class "user_access_token" pins token_type "jwt"; its jwt_header_typ marker is "at+jwt"`,
+	"invalid-envelope-pins-the-access-token-typ.json":          `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
+	"invalid-tokens-envelope-and-user-token-typs-swapped.json": `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
+	"invalid-user-access-token-pins-hs256.json":                `class "user_access_token" pins algorithm "HS256"; its jwt_header_alg marker is "EdDSA"`,
+}
+
+func TestEndpointAuthProfileGateRefusalTableEqualsTheManifest(t *testing.T) {
+	inManifest := map[string]bool{}
+	for _, entry := range loadEndpointAuthProfileManifest(t).RejectByClient {
+		inManifest[entry.File] = true
+		if _, ok := endpointAuthProfileGateRefusals[entry.File]; !ok {
+			t.Errorf("reject_by_client fixture %s has no expected refusal", entry.File)
+		}
+	}
+	for file := range endpointAuthProfileGateRefusals {
+		if !inManifest[file] {
+			t.Errorf("expected refusal for %s, which the manifest does not file under reject_by_client", file)
+		}
+	}
+}
+
+func TestEndpointAuthProfileGateRefusesEachRejectByClientFixtureForItsOwnRule(t *testing.T) {
+	root := testRoot(t)
+	for _, entry := range loadEndpointAuthProfileManifest(t).RejectByClient {
+		t.Run(entry.File, func(t *testing.T) {
+			document := loadEndpointAuthProfileFixture(t, entry.File)
+			if err := Validate(root, EndpointAuthProfileSurface, document); err != nil {
+				t.Fatalf("the schema refused it, so the gate rule is not what refuses it: %v", err)
+			}
+			err := ValidateEndpointAuthProfile(root, document)
+			if err == nil {
+				t.Fatalf("the profile gate accepted it (%s)", entry.Why)
+			}
+			if want := endpointAuthProfileGateRefusals[entry.File]; !strings.Contains(err.Error(), want) {
+				t.Fatalf("refused, but not by its rule: want %q in %v", want, err)
 			}
 		})
 	}

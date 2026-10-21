@@ -27,6 +27,8 @@ func TestSAMLOutcomeReasonsUseTheSharedVocabulary(t *testing.T) {
 		saml.ErrNotEntitled:                             "not_entitled",
 		saml.ErrAccountDisabled:                         "principal_deactivated",
 		&saml.EmailConflictError{Method: "local"}:       "email_collision",
+		saml.ErrNotOrgMember:                            "membership_required",
+		saml.ErrIdentityAmbiguous:                       "identity_conflict",
 		saml.ErrEmailMissing:                            "malformed",
 		refusal(saml.ReasonSignatureMissing):            "bad_signature",
 		refusal(saml.ReasonSignatureAlgorithm):          "bad_signature",

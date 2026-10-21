@@ -1,0 +1,3 @@
+# seed
+devhealth_domain integration_credentials.updated_at UPDATE
+devhealth_domain worker_job_completion_fences.completion_key SELECT,INSERT

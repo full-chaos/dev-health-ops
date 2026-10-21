@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "{A}/render-dho-api-ch-users.py", line 118, in <module>
+    raise SystemExit(main(sys.argv))
+                     ^^^^^^^^^^^^^^
+  File "{A}/render-dho-api-ch-users.py", line 102, in main
+    xml = render(grants_from_manifest(manifest.read_text()), password)
+                                      ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/pathlib.py", line 1030, in read_text
+    return f.read()
+           ^^^^^^^^
+  File "<frozen codecs>", line 322, in decode
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 12232: invalid start byte

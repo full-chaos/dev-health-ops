@@ -41,6 +41,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -128,7 +129,7 @@ func compatRoutes(
 	}
 	socialService, err := social.New(social.Config{
 		Store:     identities,
-		Providers: &social.ProviderClient{HTTP: &http.Client{}, Endpoints: social.DefaultEndpoints, Clients: clients},
+		Providers: &social.ProviderClient{HTTP: &http.Client{Transport: httpguard.Transport()}, Endpoints: social.DefaultEndpoints, Clients: clients},
 		Logger:    logger,
 	})
 	if err != nil {

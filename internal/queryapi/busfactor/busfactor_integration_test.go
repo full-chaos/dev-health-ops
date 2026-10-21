@@ -210,14 +210,13 @@ func TestRealClickHouse_BusFactor(t *testing.T) {
 	if bad.EvidenceSampleCount != 6 || bad.Scope.RepoID != nil {
 		t.Errorf("malformed repo id: %#v", bad)
 	}
-	// Ownership that has expired before the request instant owns nothing.
+	// An instant before the first recorded ownership gives the repository to its first recorded owners (D5987 option C,
+	// CHAOS-9404): the team owns what it owned at its first record.
 	past, err := Resolve(ctx, client, "org-1", &model.BusFactorScopeInput{TeamID: sp("team-1")}, time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(past.Repos) != 0 {
-		t.Errorf("before valid_from: %#v", past)
-	}
+	eq("before the first record", names(past), names(team))
 }
 
 // The same repository id exists in two orgs with different names and

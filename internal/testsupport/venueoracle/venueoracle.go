@@ -578,9 +578,13 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 // (httpapi.AdminRoutes), only when the golden has no cache-control, and only for
 // exactly "no-store"; any other Go value, a golden that has the header, or an
 // admin-prefixed route of another package still compares.
+// adminNoStore is the serving router's own no-store decision, unbound: the
+// same decode, strict-path and mux-pattern steps as the api service.
+var adminNoStore = httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
+
 func intendedNoStore(request Request, py, gr Response) bool {
 	target, err := url.ParseRequestURI(request.Path)
-	if err != nil || !httpapi.MatchesAdminRoute(&http.Request{Method: request.Method, URL: target}) {
+	if err != nil || !adminNoStore.Matches(&http.Request{Method: request.Method, URL: target}) {
 		return false
 	}
 	if _, has := py.Headers["cache-control"]; has {

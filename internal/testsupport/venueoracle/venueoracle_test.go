@@ -89,6 +89,9 @@ func TestAdminNoStoreIsAnIntendedDivergenceOnlyWhenTheGoldenLacksIt(t *testing.T
 		{"admin-prefixed route of another package", Request{Method: "GET", Path: "/api/v1/admin/credentials"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
 		{"admin route with a path parameter", Request{Method: "GET", Path: "/api/v1/admin/integrations/pagerduty/webhook-bindings/abc"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
 		{"admin route, wrong method", Request{Method: "PATCH", Path: "/api/v1/admin/llm-settings/models"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"encoded slash that decodes to an admin route", Request{Method: "GET", Path: "/api%2Fv1/admin/llm-settings/models"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
+		{"encoded slash inside a parameter is a 404, not exempt", Request{Method: "GET", Path: "/api/v1/admin/users/a%2Fb"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
+		{"dot segment fills a parameter", Request{Method: "GET", Path: "/api/v1/admin/users/.."}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, true},
 		{"outside admin scope", Request{Method: "GET", Path: "/api/v1/other"}, map[string]string{"a": "1"}, map[string]string{"a": "1", "cache-control": "no-store"}, false},
 	}
 	for _, tc := range cases {

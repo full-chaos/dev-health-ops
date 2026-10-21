@@ -145,3 +145,67 @@ func TestAdminUnhandledErrorKeepsThePythonShapeWithoutNoStore(t *testing.T) {
 		t.Fatalf("body %q is not the generic 500 body", body)
 	}
 }
+
+// The no-store decision is the serving router's own: a literal "." or ".."
+// segment fills a {param} and reaches the admin guard (401), and a %2F in the
+// path is a separator, so both must agree with where the request is served.
+func TestNoStoreFollowsTheServingRoutersPathRules(t *testing.T) {
+	routes := admin.Routes(admin.Deps{Guard: policy.NewGuard(nil, nil)})
+	handler := noStoreServer(t, routes)
+	checked := 0
+	for _, route := range routes {
+		parts := strings.Split(route.Pattern, "/")
+		for index, part := range parts {
+			if !strings.HasPrefix(part, "{") {
+				continue
+			}
+			for _, dots := range []string{"..", "."} {
+				mutated := append([]string(nil), parts...)
+				for other := range mutated {
+					if strings.HasPrefix(mutated[other], "{") {
+						mutated[other] = "x"
+					}
+				}
+				mutated[index] = dots
+				path := strings.Join(mutated, "/")
+				var response *httptest.ResponseRecorder
+				func() {
+					defer func() { _ = recover() }()
+					response = serve(handler, httptest.NewRequest(route.Method, path, nil))
+				}()
+				if response == nil {
+					continue
+				}
+				checked++
+				served := response.Code != http.StatusNotFound && response.Code != http.StatusMethodNotAllowed && response.Code != http.StatusTemporaryRedirect
+				if served && response.Header().Get("Cache-Control") != "no-store" {
+					t.Errorf("%s %s: status %d served without no-store", route.Method, path, response.Code)
+				}
+			}
+		}
+	}
+	if checked < 50 {
+		t.Fatalf("only %d dot-segment requests checked", checked)
+	}
+}
+
+func TestNoStoreFollowsEncodedSlashRouting(t *testing.T) {
+	handler := noStoreServer(t, []httpapi.Route{
+		stubRoute(http.MethodGet, modelsPath, http.StatusOK),
+		stubRoute(http.MethodGet, "/api/v1/admin/users/{user_id}", http.StatusOK),
+	})
+	cases := []struct {
+		target string
+		status int
+		want   string
+	}{
+		{"/api%2Fv1/admin/llm-settings/models", http.StatusOK, "no-store"},
+		{"/api/v1/admin/users/a%2Fb", http.StatusNotFound, ""},
+	}
+	for _, tc := range cases {
+		response := serve(handler, httptest.NewRequest(http.MethodGet, tc.target, nil))
+		if response.Code != tc.status || response.Header().Get("Cache-Control") != tc.want {
+			t.Errorf("%s: status %d Cache-Control %q, want %d %q", tc.target, response.Code, response.Header().Get("Cache-Control"), tc.status, tc.want)
+		}
+	}
+}

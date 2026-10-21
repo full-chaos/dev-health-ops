@@ -90,7 +90,8 @@ jobs:
 
       # Fails OPEN: an unresolvable range (ci/go_relevant_diff.sh refuses the all-zeros sentinel and a
       # non-ancestor BASE_SHA rather than guess), a failed go list or a failed plan program is FULL.
-      # The planner is built from the merge base, so a pull request cannot change the program that judges it.
+      # The cigate binary is built from the merge base, so a pull request cannot change that binary; this step's
+      # text, ci/go_relevant_diff.sh and go list still run from the PR tree.
       - name: Plan the change set (NONE / AFFECTED / FULL)
         id: plan
         env:

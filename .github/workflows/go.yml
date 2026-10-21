@@ -687,8 +687,9 @@ jobs:
       # go-quality.yml) selects the changed Go packages' reverse closure when every
       # changed path is a .go file. Any other path (data, tsv, yaml, docs, workflows,
       # scripts, testdata), a shared change or any failure here selects the FULL suite;
-      # main, merge_group and manual runs never run this step. The planner is built from
-      # the merge base, so a pull request cannot change the program that judges it.
+      # main, merge_group and manual runs never run this step. The cigate binary is built
+      # from the merge base, so a pull request cannot change that binary; this step's text,
+      # ci/go_relevant_diff.sh, ci/check_go.sh and go list still run from the PR tree.
       - name: Select the integration packages the change can affect
         if: github.event_name == 'pull_request'
         env:

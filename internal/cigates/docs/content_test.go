@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// Ports of tests/tooling-free docs content contracts: test_audience_navigation.py (4), test_design_tokens.py (4),
+// Ports of the docs content contracts of tests/docs: test_audience_navigation.py (4), test_design_tokens.py (4),
 // test_ai_user_guide_source_accuracy.py (3), test_user_guides.py (3), test_user_guide_source_accuracy.py (1),
-// test_jira_service_management_contract.py (1), the content halves of test_investment_drift.py (1) and
-// test_queue_mapping_drift.py (1), and the publication-layout half of test_built_site_links.py (1).
+// test_jira_service_management_contract.py (1) and the publication-layout half of test_built_site_links.py (1).
+// The taxonomy-page and go-worker-runtime-page content tests moved with the drift guards to internal/cigates/docstools.
 
 // ---- navigation and home page (test_audience_navigation.py) -----------------------------------------------------------
 
@@ -328,66 +328,6 @@ func TestPublicJiraGuideOmitsTheInternalContract(t *testing.T) {
 		{"an internal API host leaks", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, "docs/admin/data-sources/jira-atlassian.md", "Connect and verify Jira", "Connect and verify Jira api.atlassian.com/jsm/incidents")
 		}, "api.atlassian.com/jsm/incidents"},
-	})
-}
-
-func investmentGuard(d docTree) []string {
-	var out []string
-	text, ok := readOrNote(&out, d, "docs/reference/taxonomies/investment.md")
-	if !ok {
-		return out
-	}
-	n := fold(text)
-	for _, want := range []string{"canonical", "not workspace-configurable", "must not define a competing vocabulary"} {
-		mustContain(&out, "the taxonomy page", n, want)
-	}
-	mustContain(&out, "the taxonomy page", text, taxonomySource)
-	for _, theme := range []string{"feature_delivery", "operational", "maintenance", "quality", "risk"} {
-		mustContain(&out, "the taxonomy page (a canonical theme key)", text, "`"+theme+"`")
-	}
-	return out
-}
-
-func TestCanonicalTaxonomyPageDocumentsTheVocabulary(t *testing.T) {
-	assertGuard(t, investmentGuard, []plantCase{
-		{"the page stops forbidding a competing vocabulary", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, "docs/reference/taxonomies/investment.md", "must not define a competing vocabulary", "may define a vocabulary")
-		}, "competing vocabulary"},
-		{"the page stops naming its source", func(t *testing.T, d docTree) docTree {
-			text, _ := d.read("docs/reference/taxonomies/investment.md")
-			s := strings.ReplaceAll(text, taxonomySource, "the registry")
-			return d.added("docs/reference/taxonomies/investment.md", s)
-		}, taxonomySource},
-	})
-}
-
-func workerRuntimeGuard(d docTree) []string {
-	var out []string
-	text, ok := readOrNote(&out, d, "docs/contribute/architecture/go-worker-runtime.md")
-	if !ok {
-		return out
-	}
-	mustContain(&out, "go-worker-runtime.md", text, "CHAOS-4054")
-	if !strings.Contains(text, "are **deleted**") && !strings.Contains(text, "surface is deleted") {
-		out = append(out, "go-worker-runtime.md: must state that the WORKER_*_ENABLED surface is deleted")
-	}
-	for _, phrase := range []string{"being retired", "is dying", "on its way out"} {
-		mustNotContain(&out, "go-worker-runtime.md (in-flight wording)", text, phrase)
-	}
-	if !strings.Contains(text, "IntegrationDataset.is_enabled") || !strings.Contains(text, "-Q") {
-		out = append(out, "go-worker-runtime.md: must name both replacement planes: intent (IntegrationDataset.is_enabled) and serving (-Q topology)")
-	}
-	return out
-}
-
-func TestGoWorkerRuntimeDoesNotEnshrineWorkerEnabledSwitches(t *testing.T) {
-	assertGuard(t, workerRuntimeGuard, []plantCase{
-		{"the switch surface is described as in flight", func(t *testing.T, d docTree) docTree {
-			return d.appended(t, "docs/contribute/architecture/go-worker-runtime.md", "\nThis surface is being retired.\n")
-		}, "being retired"},
-		{"a replacement plane is no longer named", func(t *testing.T, d docTree) docTree {
-			return d.editAll(t, "docs/contribute/architecture/go-worker-runtime.md", "IntegrationDataset.is_enabled", "the dataset flag")
-		}, "replacement planes"},
 	})
 }
 

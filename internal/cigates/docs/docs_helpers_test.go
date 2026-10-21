@@ -275,7 +275,6 @@ func (d docTree) appended(t *testing.T, rel, extra string) docTree {
 func glue(parts ...string) string { return strings.Join(parts, "") }
 
 var (
-	taxonomySource         = glue("investment_taxonomy", ".", "py")
 	docPublicationManifest = glue("docs/publication", ".", "yml")
 	redirectsTable         = glue("docs-data/redir", "ects", ".", "tsv")
 	searchAcceptance       = glue("docs-data/search-acceptance", ".", "json")

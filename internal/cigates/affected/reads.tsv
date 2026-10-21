@@ -43,6 +43,7 @@ internal/cigates/bigboy	test	ci
 internal/cigates/bigboy	test	compose.yml
 internal/cigates/bigboy	test	deploy
 internal/cigates/bigboy	test	docker
+internal/cigates/bigboyrender	test	ci
 internal/cigates/chartgates	test	alerts
 internal/cigates/chartgates	test	compose.yml
 internal/cigates/chartgates	test	contracts
@@ -50,6 +51,8 @@ internal/cigates/chartgates	test	deploy
 internal/cigates/chartgates	test	docker
 internal/cigates/chartgates	test	docs
 internal/cigates/checkgo	test	ci
+internal/cigates/docmaketargets	test	.github
+internal/cigates/docmaketargets	test	Makefile
 internal/cigates/docs	test	.github
 internal/cigates/docs	test	docs
 internal/cigates/docs	test	docs-data
@@ -59,11 +62,13 @@ internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs
 internal/cigates/docstools	code	mkdocs.yml
+internal/cigates/docstools	test	.github
 internal/cigates/docstools	test	Makefile
 internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci
 internal/cigates/nopython	test	ci
 internal/cigates/proofteardown	test	ci
+internal/cigates/raceunweighted	test	ci
 internal/cigates/routing	test	ci
 internal/cigates/routing	test	compose.yml
 internal/cigates/routing	test	deploy
@@ -97,6 +102,7 @@ internal/contractcheck	code	contracts
 internal/contractcheck	code	deploy
 internal/deploymentcontract	code	contracts
 internal/deploymentcontract	test	deploy
+internal/envelopemint	test	contracts
 internal/fixturescli	code	contracts
 internal/fixturescli	test	README.md
 internal/fixturescli	test	ci

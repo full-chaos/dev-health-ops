@@ -213,7 +213,14 @@ func docsGuardsGuard(d docTree) []string {
 	}
 	goSetup := false
 	for _, s := range steps {
-		goSetup = goSetup || strings.HasPrefix(asString(s["uses"]), "actions/setup-go@")
+		if !strings.HasPrefix(asString(s["uses"]), "actions/setup-go@") {
+			continue
+		}
+		if _, skippable := s["if"]; skippable {
+			out = append(out, "docs-guards setup-go step must not carry an if: a skipped setup leaves its Go checkers without Go")
+			continue
+		}
+		goSetup = true
 	}
 	if !goSetup {
 		out = append(out, "docs-guards must set up Go: its Go checkers run through cmd/cigate")
@@ -309,6 +316,16 @@ func TestDocsGuardsWorkflowContract(t *testing.T) {
 			}
 			return d.added(docsGuardsPath, text[:i]+text[i+strings.Index(text[i:], "      - name: Validate"):])
 		}, "must set up Go"},
+		{"the Go setup step is skipped by an if", func(t *testing.T, d docTree) docTree {
+			text, _ := d.read(docsGuardsPath)
+			i := strings.Index(text, "  docs-guards:\n    name: docs-guards")
+			anchor := "      - name: Set up Go\n        uses: actions/setup-go@"
+			j := strings.Index(text[i:], anchor)
+			if i < 0 || j < 0 {
+				t.Fatal("no Set up Go step in the docs-guards job")
+			}
+			return d.added(docsGuardsPath, text[:i+j]+"      - name: Set up Go\n        if: false\n        uses: actions/setup-go@"+text[i+j+len(anchor):])
+		}, "docs-guards setup-go step must not carry an if"},
 		{"a node runtime is set up", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsGuardsPath, "      - name: Install documentation dependencies", "      - uses: actions/setup-node@v4\n      - name: Install documentation dependencies")
 		}, "set up node"},
@@ -502,6 +519,9 @@ func cloudflareGuard(d docTree) []string {
 		for _, s := range workflowSteps(cwf, "preview-or-build") {
 			if strings.HasPrefix(asString(s["uses"]), "actions/setup-go@") {
 				goSetups++
+				if _, skippable := s["if"]; skippable {
+					out = append(out, "preview-or-build setup-go step must not carry an if: a skipped setup leaves the build without Go")
+				}
 			}
 		}
 		if goSetups != 1 {
@@ -554,6 +574,9 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 			}
 			return d.added(cloudflarePath, text[:i+j]+text[i:i+j]+text[i+j:])
 		}, "preview-or-build must set up Go exactly once, found 2"},
+		{"the preview setup-go step is skipped by an if", func(t *testing.T, d docTree) docTree {
+			return d.editFirst(t, cloudflarePath, "      - uses: actions/setup-go@", "      - if: false\n        uses: actions/setup-go@")
+		}, "preview-or-build setup-go step must not carry an if"},
 		{"preview-or-build loses its setup-go step", func(t *testing.T, d docTree) docTree {
 			text, _ := d.read(cloudflarePath)
 			i := strings.Index(text, "      - uses: actions/setup-go@")

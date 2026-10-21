@@ -282,51 +282,10 @@ func (s *Store) Create(ctx context.Context, principalID uuid.UUID, organizationI
 	if !validAMR(amr) {
 		return Issued{}, ErrInvalidAMR
 	}
-	credential, err := newCredential()
-	if err != nil {
-		return Issued{}, err
-	}
-	handle, err := newCredential()
-	if err != nil {
-		return Issued{}, err
-	}
-	var org *string
-	if organizationID != nil {
-		text := organizationID.String()
-		org = &text
-	}
 	var out Issued
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		// The session token_hash is a digest of a value never returned: there is
-		// no session bearer in wave 2, and the column is NOT NULL and unique.
-		// An uncapped session stores 'infinity'; the record reports the
-		// effective expiry (see sessionColumns).
-		var sessionID string
-		err := tx.QueryRow(ctx, `
-			INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr)
-			SELECT p.id, $2::uuid, $3, t.at, t.at, t.at,
-			       CASE WHEN $4::double precision > 0 THEN t.at + make_interval(secs => $4::double precision) ELSE 'infinity' END,
-			       t.at, $5
-			FROM `+s.q+`.principals p, (SELECT clock_timestamp() AS at) t
-			WHERE p.id = $1 AND p.disabled_at IS NULL
-			RETURNING id::text`,
-			principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr).Scan(&sessionID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrPrincipalUnavailable
-		}
-		if err != nil {
-			return err
-		}
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO `+s.q+`.refresh_credentials (session_id, principal_id, token_hash, expires_at)
-			SELECT s.id, s.principal_id, $2, LEAST(clock_timestamp() + make_interval(secs => $3::double precision), s.expires_at)
-			FROM `+s.q+`.sessions s WHERE s.id = $1
-			RETURNING expires_at`,
-			sessionID, hashCredential(credential), s.refreshTTL.Seconds(),
-		).Scan(&out.ExpiresAt); err != nil {
-			return err
-		}
-		out.Session, err = scanRecord(tx.QueryRow(ctx, `SELECT `+s.sessionColumns()+` FROM `+s.q+`.sessions s WHERE s.id = $1`, sessionID))
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		out, err = s.insertSession(ctx, tx, principalID, organizationID, amr)
 		return err
 	})
 	if err != nil {
@@ -335,7 +294,6 @@ func (s *Store) Create(ctx context.Context, principalID uuid.UUID, organizationI
 		}
 		return Issued{}, fmt.Errorf("%w: creating a session: %w", ErrStore, err)
 	}
-	out.Credential = credential
 	s.logger.DebugContext(ctx, "session created", "session_id", out.Session.ID.String())
 	return out, nil
 }

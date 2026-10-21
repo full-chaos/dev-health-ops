@@ -24,11 +24,9 @@ func sessionEnvironment(env map[string]string) map[string]string {
 	return env
 }
 
-// compatEnvironment is sessionEnvironment with go-api's compatibility routes
-// and login mounted too.
+// compatEnvironment is sessionEnvironment with the login route mounted too.
 func compatEnvironment(env map[string]string) map[string]string {
 	env = sessionEnvironment(env)
-	env[authconfig.EnvCompatRoutes] = "true"
 	env[authconfig.EnvLoginLockoutKey] = testLockoutKey
 	return env
 }

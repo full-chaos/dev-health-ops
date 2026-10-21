@@ -327,9 +327,6 @@ func dcSearchVerb(args []string, stdout, stderr io.Writer) int {
 	siteDir, queries, report := a1PathStr(flags["site-dir"]), a1PathStr(flags["queries"]), a1PathStr(flags["report"])
 	indexPath := dcJoin(dcJoin(siteDir, "search"), "search_index.json")
 	if fi, err := os.Stat(indexPath); err != nil || !fi.Mode().IsRegular() { // S164-166
-		if err != nil && !dcIgnorableStat(err) {
-			return dcFail(stderr, err)
-		}
 		fmt.Fprintf(stderr, "ERROR: search index not found: %s\n", indexPath)
 		return 1
 	}

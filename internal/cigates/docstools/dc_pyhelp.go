@@ -2,7 +2,6 @@ package docstools
 
 import (
 	_ "embed"
-	"errors"
 	"fmt"
 	"html"
 	"math"
@@ -13,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -21,7 +19,7 @@ import (
 
 // Helpers shared by the ported docs candidate checks. Each one is a Python standard-library call the former scripts
 // made (urllib.parse, html.unescape, str.lower, pathlib, posixpath.realpath, csv.writer, repr) and where Python and Go
-// differ it either follows Python or refuses (D6129). Python 3.12.3 (Unicode 15.0.0) is the reference; the tables
+// differ it either follows Python or refuses (D6129). Python 3.14.7 (Unicode 16.0.0, the Python the CI jobs run) is the reference; the tables
 // under pytables/ and the cases under testdata/ were recorded from it.
 
 //go:embed pytables/lower.tsv
@@ -91,7 +89,7 @@ func dcInRanges(r rune, set []dcRange) bool {
 	return i < len(set) && set[i].lo <= r
 }
 
-// dcLower is str.lower() for Python 3.12.3: the per-character table recorded from it, and the final-sigma rule for
+// dcLower is str.lower() for Python 3.14.7: the per-character table recorded from it, and the final-sigma rule for
 // U+03A3 (a cased letter before it and none after it, case-ignorable characters skipped on both sides).
 func dcLower(s string) string {
 	ascii := true
@@ -187,7 +185,7 @@ func dcUnescape(s string) (string, error) {
 // dcURL is urllib.parse.urlsplit's result.
 type dcURL struct{ scheme, netloc, path, query, fragment string }
 
-// dcURLSplit is urllib.parse.urlsplit (3.12.3). An error is the ValueError Python raised, or a refusal (STRICTER) for
+// dcURLSplit is urllib.parse.urlsplit (3.14.7). An error is the ValueError Python raised, or a refusal (STRICTER) for
 // a bracketed netloc, whose host Python validates as an IP address.
 func dcURLSplit(raw string) (dcURL, error) {
 	url := strings.TrimLeftFunc(raw, func(r rune) bool { return r <= 0x20 })
@@ -366,14 +364,15 @@ func dcInvalidSubpart(b []byte) int {
 	return n
 }
 
-// dcPathSuffix is PurePath.suffix of the last component of path.
+// dcPathSuffix is PurePath.suffix of the last component of path (3.14: leading dots are skipped, then the last dot starts
+// the suffix, so "a." has the suffix ".").
 func dcPathSuffix(p string) string {
 	parts := a1PathParts(p)
 	if len(parts) == 0 || parts[len(parts)-1] == "/" {
 		return ""
 	}
-	name := parts[len(parts)-1]
-	if i := strings.LastIndex(name, "."); i > 0 && i < len(name)-1 {
+	name := strings.TrimLeft(parts[len(parts)-1], ".")
+	if i := strings.LastIndex(name, "."); i != -1 {
 		return name[i:]
 	}
 	return ""
@@ -388,99 +387,55 @@ func dcJoin(parent, child string) string {
 	return a1PathStr(parent + "/" + child)
 }
 
-// dcRealpath is posixpath.realpath (non-strict) followed by abspath.
+// dcRealpath is posixpath.realpath(strict=False) of Python 3.14: the path made absolute, symlinks resolved, ".." taken
+// from the resolved prefix, a symlink loop left as the link path. A path with a NUL is the ValueError of os.lstat.
 func dcRealpath(filename string) (string, error) {
-	path, _, err := dcJoinRealpath("", filename, map[string]*string{})
-	if err != nil {
-		return "", err
+	if strings.IndexByte(filename, 0) >= 0 {
+		return "", dcValueError{"ValueError", "lstat: embedded null character in path"}
 	}
-	if !strings.HasPrefix(path, "/") {
-		cwd, werr := os.Getwd()
-		if werr != nil {
-			return "", werr
+	rest := strings.Split(filename, "/")
+	for i, j := 0, len(rest)-1; i < j; i, j = i+1, j-1 {
+		rest[i], rest[j] = rest[j], rest[i]
+	}
+	const resolvedMarker = "\x00marker"
+	partCount := len(rest)
+	path := "/"
+	if !strings.HasPrefix(filename, "/") {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", err
 		}
-		path = cwd + "/" + path
+		path = cwd
 	}
-	return dcNormpath(path), nil
-}
-
-func dcSplit(p string) (head, tail string) {
-	i := strings.LastIndex(p, "/") + 1
-	head, tail = p[:i], p[i:]
-	if head != "" && head != strings.Repeat("/", len(head)) {
-		head = strings.TrimRight(head, "/")
-	}
-	return head, tail
-}
-
-func dcPosixJoin(a, b string) string {
-	if strings.HasPrefix(b, "/") {
-		return b
-	}
-	if a == "" || strings.HasSuffix(a, "/") {
-		return a + b
-	}
-	return a + "/" + b
-}
-
-func dcNormpath(p string) string {
-	if p == "" {
-		return "."
-	}
-	initial := 0
-	if strings.HasPrefix(p, "/") {
-		initial = 1
-		if strings.HasPrefix(p, "//") && !strings.HasPrefix(p, "///") {
-			initial = 2
-		}
-	}
-	var comps []string
-	for _, c := range strings.Split(p, "/") {
-		if c == "" || c == "." {
+	seen := map[string]*string{}
+	for partCount > 0 {
+		name := rest[len(rest)-1]
+		rest = rest[:len(rest)-1]
+		if name == resolvedMarker {
+			link := rest[len(rest)-1]
+			rest = rest[:len(rest)-1]
+			resolved := path
+			seen[link] = &resolved
 			continue
 		}
-		if c != ".." || (initial == 0 && len(comps) == 0) || (len(comps) > 0 && comps[len(comps)-1] == "..") {
-			comps = append(comps, c)
-		} else if len(comps) > 0 {
-			comps = comps[:len(comps)-1]
-		}
-	}
-	out := strings.Join(comps, "/")
-	if initial > 0 {
-		out = strings.Repeat("/", initial) + out
-	}
-	if out == "" {
-		return "."
-	}
-	return out
-}
-
-func dcJoinRealpath(path, rest string, seen map[string]*string) (string, bool, error) {
-	if strings.HasPrefix(rest, "/") {
-		rest, path = rest[1:], "/"
-	}
-	for rest != "" {
-		var name string
-		name, rest, _ = strings.Cut(rest, "/")
+		partCount--
 		if name == "" || name == "." {
 			continue
 		}
 		if name == ".." {
-			if path != "" {
-				var tail string
-				path, tail = dcSplit(path)
-				if tail == ".." {
-					path = dcPosixJoin(dcPosixJoin(path, ".."), "..")
-				}
+			if i := strings.LastIndex(path, "/"); i > 0 {
+				path = path[:i]
 			} else {
-				path = ".."
+				path = "/"
 			}
 			continue
 		}
-		newpath := dcPosixJoin(path, name)
+		newpath := path + "/" + name
+		if path == "/" {
+			newpath = path + name
+		}
 		st, err := os.Lstat(newpath)
-		isLink := err == nil && st.Mode()&os.ModeSymlink != 0
-		if !isLink {
+		if err != nil || st.Mode()&os.ModeSymlink == 0 {
 			path = newpath
 			continue
 		}
@@ -489,47 +444,32 @@ func dcJoinRealpath(path, rest string, seen map[string]*string) (string, bool, e
 				path = *prev
 				continue
 			}
-			return dcPosixJoin(newpath, rest), false, nil
+			path = newpath
+			continue
 		}
-		seen[newpath] = nil
 		target, err := os.Readlink(newpath)
 		if err != nil {
-			return "", false, err
+			path = newpath
+			continue
 		}
-		resolved, ok, err := dcJoinRealpath(path, target, seen)
-		if err != nil {
-			return "", false, err
+		if strings.HasPrefix(target, "/") {
+			path = "/"
 		}
-		if !ok {
-			return dcPosixJoin(resolved, rest), false, nil
+		seen[newpath] = nil
+		rest = append(rest, newpath, resolvedMarker)
+		parts := strings.Split(target, "/")
+		for i := len(parts) - 1; i >= 0; i-- {
+			rest = append(rest, parts[i])
 		}
-		path = resolved
-		seen[newpath] = &resolved
+		partCount += len(parts)
 	}
-	return path, true, nil
+	return path, nil
 }
 
-// dcResolve is Path.resolve() (3.12): realpath, then a stat to turn a symlink loop into the RuntimeError.
-func dcResolve(p string) (string, error) {
-	if strings.IndexByte(p, 0) >= 0 {
-		return "", dcValueError{"ValueError", "embedded null byte"}
-	}
-	real, err := dcRealpath(p)
-	if err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(real); errors.Is(err, syscall.ELOOP) {
-		return "", dcValueError{"RuntimeError", "Symlink loop from " + a1Repr(real)}
-	}
-	return real, nil
-}
+// dcResolve is Path.resolve() (3.14).
+func dcResolve(p string) (string, error) { return dcRealpath(p) }
 
-// dcIgnorableStat is pathlib's _ignore_error.
-func dcIgnorableStat(err error) bool {
-	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.ELOOP)
-}
-
-// dcRglob lists the entries under root whose name ends in suffix, as Path.rglob("*"+suffix) does (3.12): any kind of
+// dcRglob lists the entries under root whose name ends in suffix, as Path.rglob("*"+suffix) does (3.14): any kind of
 // entry, directories reached through real directories only. The names are relative, "/"-separated, in Path order.
 func dcRglob(root, suffix string) []string {
 	var out []string

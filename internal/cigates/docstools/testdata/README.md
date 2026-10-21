@@ -157,7 +157,7 @@ key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-
 # Part c1: check-built-site-links, check-docs-search, check-docs-facts
 
 Cases `parity/links-*`, `parity/search-*`, `parity/facts-*` and the helper corpora under `helpers/`. Recorded once with
-Python 3.12.3 (`python3 -I -B`, Unicode 15.0.0) from `scripts/check_built_site_links.py`,
+Python 3.14.7 (`python3.14 -I -B`, Unicode 16.0.0: the Python the CI jobs run, set up as `python-version: '3.14'`) from `scripts/check_built_site_links.py`,
 `scripts/check_docs_candidate_search.py` and `scripts/check_docs_candidate_facts.py` at ops `a64af6106a44`
 (`git show a64af6106a44:scripts/<script>`). The three scripts, their tests under `tests/docs` and the `.py` registry the facts
 check read are not part of the recording.
@@ -180,9 +180,9 @@ instead. Three of those lines are edited on purpose: for `UnicodeDecodeError` Go
 
 Helper corpora (`helpers/*.jsonl`, rows `{"in", "out"}` or `{"in", "err"}`), each replayed by `dc_helpers_test.go`:
 `urlsplit` (4784 strings of URL pieces, control characters, brackets, fullwidth characters), `unquote` (4116, invalid UTF-8
-escapes), `unescape` (11394, every HTML5 entity name with and without `;` and with a suffix, numeric references), `lower` (6625,
-final-sigma contexts), `floatrepr` (523), `csvrow` (3000 rows, `csv.writer(delimiter="\t")`), `normalize` (34, `_normalize_url`).
-`pytables/lower.tsv` (every code point whose `str.lower()` differs from itself), `pytables/charref.tsv` (every numeric character
+escapes), `unescape` (11402, with the 4300-digit integer limit, every HTML5 entity name with and without `;` and with a suffix, numeric references), `lower` (6625,
+final-sigma contexts), `floatrepr` (523), `csvrow` (3000 rows, `csv.writer(delimiter="\t")`), `normalize` (34, `_normalize_url`), `jsonloads` (83: number forms, the 4300-digit limit with and without a sign, repeated keys, escapes, depth), `realpath` (one tree of 16 links, 60 queries relative and absolute: chains, loops, dangling, `..` after a link).
+The tables below and the corpora were recorded again with 3.14.7 after the first review round found that 3.12.3 differs from it in `Path.suffix` (a trailing dot is a suffix), `Path.resolve()` (a symlink loop is no error), `Path.exists()`/`is_dir()`/`is_file()` (any error is false) and the `os.lstat` NUL message. `pytables/lower.tsv` (every code point whose `str.lower()` differs from itself), `pytables/charref.tsv` (every numeric character
 reference whose `html.unescape` result differs from `chr(n)`) and `pytables/final_sigma.tsv` (Case_Ignorable and Cased ranges, probed
 through `str.lower()` of U+03A3) are the Python tables the Go helpers use directly; `TestHelperLowerTableCoversEveryCodePoint` and the corpora check them.
 
@@ -192,7 +192,7 @@ exit code, stdout and report bytes as Python for `check-built-site-links` (relat
 
 ## Stricter than Python, or different on purpose (RISK-NOTES)
 
-Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (98 rows, pinned) unless marked.
+Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (101 rows, pinned) unless marked.
 
 - Arguments: no abbreviation of an option, no `-h`/`--help` (exit 0 in Python, exit 2 here), no `--`, no value that starts with `-` (a
   negative number, `"-a b"`, `--site-dir=-x`), no empty value (`Path("")` is `.` in Python). Exit code 2 and a usage line; the text differs from argparse's.
@@ -206,10 +206,13 @@ Each row is in the refusal table `cmd/cigate/docs_checks_refusals_test.go` (98 r
 - `check-docs-facts` reads the Go registry (`internal/jobs/workgraph/units`, the source `check-investment-drift` reads) and not
   `src/dev_health_ops/investment_taxonomy.py`: the Python refusals "registry file missing", "not a set literal", "non-string literal",
   "not found" and a `SyntaxError` in that file have no Go counterpart (the vocabulary cannot be missing or malformed). Named gap; Go never refuses what Python accepted here.
-- A decimal character reference of more than 4300 digits is refused in the search text (Python 3.12's integer string limit raises `ValueError`).
+- A decimal character reference of more than 4300 digits is refused in the search text (the integer string limit, `sys.int_info.default_max_str_digits`, raises `ValueError`; it counts digits and leading zeros, not a sign; JSON integers of more than 4300 digits are refused the same way).
 - Drift that no test can pin: `repr()` of a string prints a code point as itself when Go's `unicode.IsPrint` (Unicode 17) says printable,
-  Python 3.12 (Unicode 15) escapes the newest ones (`'ᲊ'` against `'ᲊ'`), which only shows in the text of a failure line; `str.lower()`,
-  `html.unescape` numeric references and the final-sigma rule use the Python 3.12.3 tables recorded here (CI's Python 3.14 has a newer Unicode); named entities
+  Python 3.14 (Unicode 16) escapes the characters Unicode 17 added, which only shows in the text of a failure line; `str.lower()`,
+  `html.unescape` numeric references and the final-sigma rule use the Python 3.14.7 tables recorded here; named entities
   come from Go's table plus `nGt;` and `nLt;`, which it lacks (the corpus runs every Python entity name through both); `\w` before `href`, `src` and `id` is
   letters, numbers and `_` of Go's Unicode (17).
 - A file name or an input path with a non-UTF-8 byte is not compared for ordering with Python's surrogate escape (refused for page names; other paths are used as the OS gives them).
+- The built-site fixtures of the recorded cases sit in directories named `site`, `site2` and `.build`, which `.gitignore` ignores (`**/site**`, `.build/`);
+  the first commit lost 119 of them and the tests passed on the working tree that wrote them. `.gitignore` now ends with `!` rules for this testdata, and
+  `TestEveryFileOnDiskUnderARootIsKeptByGit` (internal/testsupport/recordedfiles) fails for any file under a testdata root that git does not keep.

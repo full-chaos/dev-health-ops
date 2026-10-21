@@ -1,1 +1,1 @@
-ValueError: embedded null byte
+ValueError: lstat: embedded null character in path

@@ -27,9 +27,6 @@ func dcFactsVerb(_ []string, stdout, stderr io.Writer) int {
 	}
 	docPath := filepath.Join(root, dcFactsDocRel)
 	if fi, serr := os.Stat(docPath); serr != nil || !fi.Mode().IsRegular() { // F48-50
-		if serr != nil && !dcIgnorableStat(serr) {
-			return dcFail(stderr, serr)
-		}
 		fmt.Fprintln(stdout, "ERROR: canonical taxonomy source or page is missing")
 		return 1
 	}

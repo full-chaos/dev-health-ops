@@ -27,7 +27,7 @@ type dcRow struct {
 	out   string
 }
 
-const dcRefusalRows = 98
+const dcRefusalRows = 101
 
 func dcPage(body string) string { return "<html><body>" + body + "</body></html>\n" }
 
@@ -83,8 +83,8 @@ func dcRefusalTable() []dcRow {
 		{name: "links netloc NFKC slash", ref: "L35 urlsplit _checknetloc: NFKC netloc gains /", files: page("<a href=\"//ex／ample/x\">1</a>"), args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "NFKC"},
 		{name: "links netloc NFKC colon", ref: "L35 urlsplit _checknetloc: NFKC netloc gains :", files: page("<a href=\"//ex：ample/x\">1</a>"), args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "NFKC"},
 		{name: "links netloc NFKC at", ref: "L35 urlsplit _checknetloc: NFKC netloc gains @", files: page("<a href=\"//u＠h/x\">1</a>"), args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "NFKC"},
-		{name: "links symlink loop in a target", ref: "L43 Path.resolve(): RuntimeError Symlink loop", files: page(`<a href="loop/x.html">1</a>`), links: [][2]string{{"site/loop", "loop"}}, args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "Symlink loop"},
-		{name: "links NUL in a target", ref: "L43 Path.resolve(): ValueError embedded null byte", files: page(`<a href="a%00b.html">1</a>`), args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "embedded null byte"},
+		{name: "links symlink loop in a target", ref: "L43,70-75 Path.resolve() (3.14) keeps a loop; exists() is false: errors.append missing built asset", files: page(`<a href="loop/x.html">1</a>`), links: [][2]string{{"site/loop", "loop"}}, args: dcLinksArgs("--site-dir", "site"), rc: 1, out: "loop/x.html: missing built asset"},
+		{name: "links NUL in a target", ref: "L43 Path.resolve() (3.14): ValueError lstat: embedded null character in path", files: page(`<a href="a%00b.html">1</a>`), args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "embedded null character"},
 		{name: "links broken target reported", ref: "L72-75 errors.append missing built asset, return 1", files: page(`<a href="nope.html">1</a>`), args: dcLinksArgs("--site-dir", "site"), rc: 1, out: "index.html -> nope.html: missing built asset"},
 		{name: "links missing anchor reported", ref: "L78-82 errors.append missing anchor, return 1", files: map[string]string{"site/index.html": dcPage(`<a href="b.html#z">b</a>`), "site/b.html": dcPage("x")}, args: dcLinksArgs("--site-dir", "site"), rc: 1, out: "missing anchor 'z'"},
 		{name: "links page name not UTF-8", ref: "L59 STRICTER: Python listed the page and printed its name with surrogateescape (a UnicodeEncodeError on error)", files: map[string]string{"site/bad\xffname.html": dcPage("x")}, args: dcLinksArgs("--site-dir", "site"), rc: 1, err: "not UTF-8"},
@@ -141,6 +141,9 @@ func dcRefusalTable() []dcRow {
 		dcCase("search expected with valid brackets", "S41 STRICTER: Python validated the bracketed host as an IP address", `{"queries": [{"query": "alpha", "expected": "//[::1]/x"}]}`, "STRICTER"),
 		dcCase("search query is a number", "S131 STRICTER: Python took str() of a truthy number", `{"queries": [{"query": 7, "expected": "/a/"}]}`, "query must be a string"),
 		dcCase("search expected is a number", "S132 STRICTER: Python took str() of a truthy number", `{"queries": [{"query": "alpha", "expected": 7}]}`, "expected must be a string"),
+		{name: "search max_rank integer over the digit limit", ref: "S123,134,171 json.loads: ValueError Exceeds the limit (4300 digits) -> ERROR, return 1", files: dcSearchFiles(dcIndexJSON, `{"queries": [{"query": "alpha", "expected": "/a/", "max_rank": `+strings.Repeat("9", 4301)+`}]}`), args: dcSearchArgs, rc: 1, err: "4300"},
+		{name: "search max_rank negative integer over the digit limit", ref: "S123,134,171 json.loads: ValueError Exceeds the limit (4300 digits); the sign does not count", files: dcSearchFiles(dcIndexJSON, `{"queries": [{"query": "alpha", "expected": "/a/", "max_rank": -`+strings.Repeat("9", 4301)+`}]}`), args: dcSearchArgs, rc: 1, err: "4300"},
+		{name: "search character reference with leading zeros over the digit limit", ref: "S52 html.unescape: int() counts leading zeros (4300 digits) -> ValueError", files: dcSearchFiles(`{"docs": [{"location": "a/", "title": "&#`+strings.Repeat("0", 4299)+`65;"}]}`, dcOKQuery), args: dcSearchArgs, rc: 1, err: "4300"},
 		dcCase("search max_rank is a numeric string", "S134 STRICTER: int('3') parsed the string", `{"queries": [{"query": "alpha", "expected": "/a/", "max_rank": "3"}]}`, "max_rank must be a number"),
 		dcCase("search max_rank is a word", "S134,171 int('abc') raises ValueError -> ERROR, return 1", `{"queries": [{"query": "alpha", "expected": "/a/", "max_rank": "abc"}]}`, "max_rank must be a number"),
 		dcCase("search max_rank is a list", "S134 int([1]) raises TypeError (uncaught)", `{"queries": [{"query": "alpha", "expected": "/a/", "max_rank": [1]}]}`, "TypeError"),

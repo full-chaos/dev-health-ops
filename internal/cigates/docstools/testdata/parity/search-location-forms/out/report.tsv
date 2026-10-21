@@ -6,4 +6,4 @@ delta	/f/g.html	1	5	/f/g.html	pass
 eps	/h.md	1	5	/h.md	pass
 zeta	/x/	1	5	/x/	pass
 eta	/i/./j/	1	5	/i/./j/	pass
-theta	/k../	1	5	/k../	pass
+theta	/k../	missing	5	/k..	fail

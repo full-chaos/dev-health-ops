@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-// A JSON reader with the grammar of Python's json.loads (3.12): NaN, Infinity and -Infinity are numbers, a repeated
+// A JSON reader with the grammar of Python's json.loads (3.14): NaN, Infinity and -Infinity are numbers, a repeated
 // object key keeps its first position and its last value, an integer has no size limit, and a lone surrogate escape is
 // a string. A lone surrogate is refused here (STRICTER: the Python str carries it, the Go string cannot), and so is
 // nesting deeper than dcJSONMaxDepth (Python raises RecursionError at about 990 levels).
@@ -227,7 +227,7 @@ func (p *dcJSONParser) number() (*dcJValue, error) {
 		f, _ := strconv.ParseFloat(text, 64)
 		return &dcJValue{kind: dcJFloat, f: f}, nil
 	}
-	if len(text) > 4300 {
+	if len(strings.TrimPrefix(text, "-")) > 4300 {
 		return nil, dcValueError{"ValueError", "Exceeds the limit (4300 digits) for integer string conversion"}
 	}
 	n := new(big.Int)

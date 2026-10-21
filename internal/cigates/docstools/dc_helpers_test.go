@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 )
 
 // The helpers port Python standard-library calls. Each corpus under testdata/helpers was recorded once from Python
-// 3.12.3 (see testdata/README.md); the Go helper must give the same result on every row, or refuse where the README
+// 3.14.7 (see testdata/README.md); the Go helper must give the same result on every row, or refuse where the README
 // names a STRICTER place.
 
 type helperRow struct {
@@ -98,8 +99,15 @@ func TestHelperUnquoteMatchesPython(t *testing.T) {
 
 func TestHelperUnescapeMatchesPython(t *testing.T) {
 	for _, r := range helperRows(t, "unescape") {
-		in, want := r.str(t, r.In), r.str(t, r.Out)
+		in := r.str(t, r.In)
 		got, err := dcUnescape(in)
+		if r.Err != nil {
+			if err == nil {
+				t.Errorf("unescape(%.40q): Python raised %q, Go gave %.40q", in, *r.Err, got)
+			}
+			continue
+		}
+		want := r.str(t, r.Out)
 		if err != nil || got != want {
 			t.Errorf("unescape(%q) = %q (%v), Python %q", in, got, err, want)
 		}
@@ -166,6 +174,79 @@ func TestHelperNormalizeURLMatchesPython(t *testing.T) {
 		}
 		if want := r.str(t, r.Out); err != nil || got != want {
 			t.Errorf("normalize(%q) = %q (%v), Python %q", in, got, err, want)
+		}
+	}
+}
+
+var dcSurrogateRepr = regexp.MustCompile(`\\\\ud[89a-f][0-9a-f]{2}`)
+
+func TestHelperJSONLoadsMatchesPython(t *testing.T) {
+	for _, r := range helperRows(t, "jsonloads") {
+		in := r.str(t, r.In)
+		v, err := dcParseJSON(in)
+		// Refused on purpose (README, "Stricter than Python"): a lone surrogate escape and nesting deeper than 500.
+		stricter := dcSurrogateRepr.MatchString(string(r.Out)) || strings.Count(in, "[") > dcJSONMaxDepth
+		switch {
+		case r.Err != nil:
+			if err == nil {
+				t.Errorf("json %.60q: Python raised %s, Go gave %s", in, *r.Err, v.repr())
+			}
+		case stricter && err != nil:
+		case err != nil:
+			t.Errorf("json %.60q: Go refused (%v), Python gave %.60s", in, err, r.str(t, r.Out))
+		case v.repr() != r.str(t, r.Out):
+			t.Errorf("json %.60q: Go %.60s, Python %.60s", in, v.repr(), r.str(t, r.Out))
+		}
+	}
+}
+
+func TestHelperRealpathMatchesPython(t *testing.T) {
+	rows := helperRows(t, "realpath")
+	var spec struct {
+		Links [][2]string `json:"links"`
+		Dirs  []string    `json:"dirs"`
+		Files []string    `json:"files"`
+	}
+	if err := json.Unmarshal(rows[0].In, &spec); err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		In   []string `json:"in"`
+		Out  string   `json:"out"`
+		Form string   `json:"form"`
+	}
+	if err := json.Unmarshal(rows[0].Out, &cases); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range spec.Dirs {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range spec.Files {
+		if err := os.WriteFile(filepath.Join(root, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, l := range spec.Links {
+		if err := os.Symlink(strings.ReplaceAll(l[1], "{ROOT}", root), filepath.Join(root, l[0])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(root)
+	for _, c := range cases {
+		arg := strings.ReplaceAll(c.In[0], "{ROOT}", root)
+		got, err := dcRealpath(arg)
+		if err != nil {
+			t.Errorf("realpath(%q): %v", c.In[0], err)
+			continue
+		}
+		if want := strings.ReplaceAll(c.Out, "{ROOT}", root); got != want {
+			t.Errorf("realpath(%q) = %q, Python %q", c.In[0], strings.ReplaceAll(got, root, "{ROOT}"), c.Out)
 		}
 	}
 }

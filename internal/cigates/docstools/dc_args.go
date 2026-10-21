@@ -83,25 +83,14 @@ func dcFail(stderr io.Writer, err error) int {
 	return a1Traceback(stderr, kind, msg)
 }
 
-// dcIsDirPy is Path.is_dir (3.12): errors pathlib ignores give false, the others are raised.
+// dcIsDirPy is Path.is_dir (3.14): os.path.isdir, any error is false.
 func dcIsDirPy(path string) (bool, error) {
 	fi, err := os.Stat(path)
-	if err != nil {
-		if dcIgnorableStat(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return fi.IsDir(), nil
+	return err == nil && fi.IsDir(), nil
 }
 
-// dcExistsPy is Path.exists (3.12).
+// dcExistsPy is Path.exists (3.14): os.path.exists, any error is false.
 func dcExistsPy(path string) (bool, error) {
-	if _, err := os.Stat(path); err != nil {
-		if dcIgnorableStat(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
+	_, err := os.Stat(path)
+	return err == nil, nil
 }

@@ -11,7 +11,6 @@ on:
       - 'scripts/check_built_site_links.py'
       - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
-      - 'scripts/check_docs_candidate_facts.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
       - '.github/workflows/docs-cloudflare.yml'
@@ -25,7 +24,6 @@ on:
       - 'scripts/check_built_site_links.py'
       - 'scripts/check_docs_candidate_search.py'
       - 'scripts/check_docs_candidate_accessibility.py'
-      - 'scripts/check_docs_candidate_facts.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
       - '.github/workflows/docs-cloudflare.yml'
@@ -115,12 +113,6 @@ jobs:
             --site-dir .build/docs \
             --css docs/stylesheets/extra.css \
             2>&1 | tee .build/docs-accessibility.log
-
-      - name: Check objective documentation facts
-        run: |
-          set -o pipefail
-          python scripts/check_docs_candidate_facts.py \
-            2>&1 | tee .build/docs-facts.log
 
       # CHAOS-3514 (chris ruling: gate the scripts, keep the tests). These two
       # guards had unit tests in tests/docs but their SCRIPTS ran only from

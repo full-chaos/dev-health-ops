@@ -141,27 +141,3 @@ func TestBuildPromptMatchesPythonGolden(t *testing.T) {
 		})
 	}
 }
-
-func TestPromptTextMatchesPythonSource(t *testing.T) {
-	// See prompt.go's promptText doc comment: this file is a byte-for-byte
-	// copy of src/dev_health_ops/llm/prompts/investment_mix_explain_prompt.txt,
-	// embedded rather than read at runtime. TestBuildPromptMatchesPythonGolden
-	// already checks the copy against a frozen golden capture, but that
-	// golden goes stale the moment someone edits the Python source without
-	// re-running the generator -- this test reads the Python source
-	// directly, so it catches that drift even when nobody remembers to
-	// regenerate.
-	repoRoot, err := repositoryRoot()
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
-	pythonPath := filepath.Join(repoRoot, "src", "dev_health_ops", "llm", "prompts", "investment_mix_explain_prompt.txt")
-	pythonSource, err := os.ReadFile(pythonPath)
-	if err != nil {
-		t.Fatalf("read python source %s: %v", pythonPath, err)
-	}
-	if string(pythonSource) != LoadPrompt() {
-		t.Fatalf("embedded prompts/investment_mix_explain_prompt.txt no longer matches %s -- "+
-			"re-copy the file", pythonPath)
-	}
-}

@@ -16,8 +16,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // check-external-links: every absolute http(s) link of a built docs site answers, unless an unexpired allowlist entry
@@ -25,7 +23,8 @@ import (
 // an expired allowlist entry fails even when the link answers. Was scripts/check_external_links.py. The fetcher is
 // urllib's, as the script used it: HEAD then GET, redirects only to http(s), 3 tries, and the URLs urllib's
 // http.client refuses (a control character or a non-ASCII byte in the path, a non-numeric port) stop the run as the
-// script's traceback did. It never uses a proxy from the environment (httpguard).
+// script's traceback did. It never uses a proxy from the environment: elTransport sets none (cigate does not link
+// internal/httpguard, whose fallback logs through slog, so the binary stays a silent one).
 
 func init() { register("check-external-links", externalLinksVerb) }
 
@@ -547,7 +546,7 @@ func elRedirectTarget(current, location string) (next string, allowed bool, err 
 }
 
 func externalLinksVerb(args []string, stdout, stderr io.Writer) int {
-	return externalLinksRun(args, stdout, stderr, frToday(), elHTTPFetcher(httpguard.SharedTransport(), 10*time.Second))
+	return externalLinksRun(args, stdout, stderr, frToday(), elHTTPFetcher(elTransport(), 10*time.Second))
 }
 
 func externalLinksRun(args []string, stdout, stderr io.Writer, today time.Time, fetch elFetcher) int {
@@ -593,4 +592,17 @@ func externalLinksRun(args []string, stdout, stderr io.Writer, today time.Time, 
 	}
 	fmt.Fprintln(stdout, "External link check passed")
 	return 0
+}
+
+// elTransport is net/http's default transport settings with no proxy (Proxy nil): HTTP_PROXY and HTTPS_PROXY are not
+// read, as internal/httpguard.Transport does.
+func elTransport() *http.Transport {
+	return &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 }

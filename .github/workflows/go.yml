@@ -177,6 +177,8 @@ on:
       - 'docs/robots.txt'
       # read by internal/cigates/docsprepare: the real redirect manifest must keep fitting the tool's narrow contract
       - 'docs-data/redirects.tsv'
+      - 'docs-data/freshness-inventory.yml'
+      - 'docs-data/external-link-allowlist.yml'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'
@@ -399,6 +401,8 @@ on:
       - 'docs/robots.txt'
       # read by internal/cigates/docsprepare: the real redirect manifest must keep fitting the tool's narrow contract
       - 'docs-data/redirects.tsv'
+      - 'docs-data/freshness-inventory.yml'
+      - 'docs-data/external-link-allowlist.yml'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'

@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"golang.org/x/text/unicode/norm"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 )
 
 // check-docs-links: every relative Markdown link and anchor under docs/ resolves. Was scripts/check_docs_links.py; the
@@ -36,7 +36,7 @@ var (
 func dlSlugify(heading string) string {
 	heading = dlTag.ReplaceAllString(heading, "")
 	heading = dlCode.ReplaceAllString(heading, "$1")
-	heading = norm.NFKD.String(heading)
+	heading = string(pyunicodedata.NFKD([]rune(heading)))
 	var b strings.Builder
 	for _, r := range heading {
 		if r < 0x80 {

@@ -11,7 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"golang.org/x/text/unicode/norm"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 )
 
 // Python 3.14 behaviour the link verbs (check-docs-links, check-external-links) rely on, prefix pu: urllib.parse.urlsplit
@@ -251,7 +251,7 @@ func puCheckNetloc(netloc string) error {
 		return nil
 	}
 	n := strings.NewReplacer("@", "", ":", "", "#", "", "?", "").Replace(netloc)
-	n2 := norm.NFKC.String(n)
+	n2 := string(pyunicodedata.NFKC([]rune(n)))
 	if n == n2 {
 		return nil
 	}

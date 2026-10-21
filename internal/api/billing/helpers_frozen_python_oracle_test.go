@@ -9,29 +9,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonHelpersProgram runs the REAL Python helpers the routes decide
-// with, over the same inputs the Go side sees. It sets the two settings the
-// checkout check reads itself, from its input.
-const pythonHelpersProgram = `
-import json, os, sys
-from fastapi import HTTPException
-from dev_health_ops.api.billing._helpers import normalize_billing_tier
-from dev_health_ops.api.billing.plan_sync_service import _slugify
-import importlib
-router = importlib.import_module("dev_health_ops.api.billing.router")
-cases = json.loads(sys.stdin.read())
-out = {"tier": [normalize_billing_tier(v) for v in cases["tier"]], "slug": [_slugify(v) for v in cases["slug"]], "url": []}
-os.environ["APP_BASE_URL"] = cases["app_base_url"]
-os.environ["ALLOWED_CHECKOUT_DOMAINS"] = cases["allowed"]
-for value in cases["url"]:
-    try:
-        router._validate_checkout_url(value)
-        out["url"].append("ok")
-    except HTTPException as exc:
-        out["url"].append(exc.detail)
-print(json.dumps(out))
-`
-
 // TestBillingHelpersMatchFrozenPython holds the tier normalizer, the slug
 // maker and the checkout address check to the frozen answers of the Python
 // helpers the billing routes decide with.
@@ -48,7 +25,7 @@ func TestBillingHelpersMatchFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenPython(t, "billing-helpers.golden.json", programoracle.Program{
-		Name: "billing helpers", Text: pythonHelpersProgram, Stdin: input,
+		Name: "billing helpers", Stdin: input,
 	})[0]
 	var want struct{ Tier, Slug, URL []string }
 	if err := json.Unmarshal([]byte(output), &want); err != nil {

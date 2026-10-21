@@ -45,15 +45,14 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 	goStripe := httptest.NewServer(fake.plane("go"))
 	t.Cleanup(goStripe.Close)
 	env := webhookEnv()
-	pythonEnv := []string{"VENUE_STRIPE_EVENT_AS_DICT=invoice.created,invoice.finalized,invoice.paid,invoice.payment_failed,invoice.voided,invoice.updated,invoice.marked_uncollectible",
-		"VENUE_PY_TRACEBACKS=1"}
+	var pythonEnv []string
 	for key, value := range env {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			if _, err := admin.Exec(ctx, `INSERT INTO subscriptions (id, org_id, billing_plan_id, billing_price_id, stripe_subscription_id,
@@ -302,9 +301,7 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 	for _, response := range python {
 		statuses[response.Status]++
 	}
-	pythonRows := golden.InspectRows(t, "invoice_count", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), `SELECT count(*) FROM invoices WHERE stripe_invoice_id LIKE 'in\_%'`)
-	})
+	pythonRows := golden.InspectRows(t, "invoice_count")
 	receipt += fmt.Sprintf("python plane (named divergence): answers %v, invoice rows %s\n", statuses, pythonRows)
 	if pythonRows != "0" {
 		t.Errorf("the Python plane wrote invoices (%s): the named divergence no longer holds; compare the planes instead", pythonRows)

@@ -66,7 +66,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, id)
 func TestSetUserPasswordRateLimitMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_ratelimit", t.Name(), "6badef88e31e233e752e6f9de81c5aa77050d26ae4a6aff5479b454067fef0ca"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("spr")
 	const jwtKey = "venue-oracle-test-secret-key-for-password-rate-limit-32-byt"
 	const adminPlaintextPassword = "correct horse battery staple rl"
@@ -127,7 +127,7 @@ func TestSetUserPasswordRateLimitMatchesThePythonAPI(t *testing.T) {
 func TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_ratelimit_independent", t.Name(), "d70ef40e30ca4dde6da16621a3a0f7d41472e085b943f26fc3e2ba9ceb410748"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("spri")
 	const jwtKey = "venue-oracle-test-secret-key-for-password-rl-independence-32"
 	const adminPlaintextPassword = "correct horse battery staple ind"
@@ -267,7 +267,7 @@ func TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly(t *testing.T) {
 func TestSetUserPasswordValidationBeforeLimitVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminGolden("setpassword_validation_before_limit", t.Name(), "11963c9d37d0b99550415145684d932096cea4b28c066a5f5e0d92ab84dc621b"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("spv")
 	const jwtKey = "venue-oracle-test-secret-key-for-password-validate-limit-32"
 	const adminPlaintextPassword = "correct horse battery staple vl"

@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -268,42 +266,6 @@ func runNetGoAll(t *testing.T, cases []netCase, dir string) []netResult {
 	return results
 }
 
-const pythonNetProgram = `
-import contextlib, io, json, os, sys
-from dev_health_ops import cli
-
-job = json.loads(sys.stdin.read())
-out = []
-for case in job["cases"]:
-    for key in list(os.environ):
-        if key.startswith("FULLCHAOS_"):
-            del os.environ[key]
-    os.environ.update(case.get("env") or {})
-    if case.get("file") is not None:
-        with open(case["filePath"], "wb") as handle:
-            handle.write(case["file"].encode("utf-8"))
-    stdin = io.TextIOWrapper(io.BytesIO(case.get("stdin", "").encode("utf-8")), encoding="utf-8")
-    stdout, stderr = io.StringIO(), io.StringIO()
-    real_stdin = sys.stdin
-    sys.stdin = stdin
-    code = 0
-    try:
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            try:
-                code = cli.main(["push"] + case["args"])
-            except SystemExit as exc:
-                code = exc.code if isinstance(exc.code, int) else 1
-            except BaseException as exc:
-                code = 70
-                print(type(exc).__name__ + ": " + str(exc)[:300], file=sys.stderr)
-    finally:
-        sys.stdin = real_stdin
-    out.append({"exit": code, "stdout": stdout.getvalue(), "stderr": stderr.getvalue()})
-    sys.stdout.write("DONE %d\n" % len(out))
-    sys.stdout.flush()
-print("RESULT" + json.dumps(out))
-`
-
 var (
 	netAuthScheme = regexp.MustCompile(`(?i)\b(bearer|basic)\s+([A-Za-z0-9._~+/=-]{8,})`)
 	netPushToken  = regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{16,}`)
@@ -357,44 +319,6 @@ const (
 	netOracleDir  = "/tmp/dho-net-oracle-dir"
 )
 
-// netPythonRun runs every case through the real dev-hops entry point against the Python plane's fake. The
-// jobs (input) name netOracleBase and netOracleDir; they are replaced by the live fake and a fresh directory.
-func netPythonRun(t *testing.T, producer *venueoracle.Producer, cases []netCase, input []byte) []netResult {
-	t.Helper()
-	fake := newNetFake(cases)
-	server := httptest.NewServer(fake)
-	defer server.Close()
-	dir := t.TempDir()
-	// The host alone is swapped: userinfo cases put "login:password@" between the scheme and the host.
-	live := bytes.ReplaceAll(bytes.ReplaceAll(input, []byte(netOracleHost), []byte(strings.TrimPrefix(server.URL, "http://"))), []byte(netOracleDir), []byte(dir))
-	command, err := producer.Command(context.Background(), pushPythonSettings, nil, "-c", pythonNetProgram)
-	if err != nil {
-		t.Fatal(err)
-	}
-	command.Stdin = bytes.NewReader(live)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("live python: %v", pyoracle.RunError(command.Path, err, output))
-	}
-	marker := strings.LastIndex(string(output), "RESULT")
-	if marker < 0 {
-		t.Fatalf("no result from python: %.400s", output)
-	}
-	var raw []netResult
-	if err := json.Unmarshal(output[marker+len("RESULT"):], &raw); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(raw) != len(cases) {
-		t.Fatalf("python answered %d of %d cases", len(raw), len(cases))
-	}
-	for index, c := range cases {
-		raw[index].Stdout = netNormalize(c, dir, raw[index].Stdout)
-		raw[index].Stderr = netNormalize(c, dir, netStderr(raw[index].Stderr))
-		raw[index].Requests = fake.requests(index)
-	}
-	return raw
-}
-
 func compareNet(t *testing.T, c netCase, got, want netResult, wantName string) bool {
 	t.Helper()
 	if want.Exit == pythonCrash {
@@ -441,17 +365,12 @@ const netPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 // netPythonBuild and are frozen in testdata/golden/push_net.json (the recipe regenerates them by
 // execution); the corpus (its scripted answers included) and the program are part of the golden's key.
 func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
-	_, file, _, _ := moduleroot.Caller(0)
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:                "testdata/golden/push_net.json",
 		PythonBuild:         netPythonBuild,
 		CredentialConstants: netCredentialConstants,
 		SHA256:              "e5963275756df4e55e3411632b1022833665b30fdd61bc59f3bb92be70e5faa1",
-		Recipe: "git worktree add --detach $DIR " + netPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pushcli/ -test '^TestPushNetMatchesTheFrozenPythonOutput$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	cases := netCorpus(t)
 	type job struct {
@@ -474,26 +393,8 @@ func TestPushNetMatchesTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("push net corpus", pythonNetProgram, append(append([]byte{}, input...), script...), pushPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		results := netPythonRun(t, producer, cases, input)
-		// The credentials the corpus sends are test constants shaped like credentials (declared in CredentialConstants): the
-		// recorder replaces them by their digest, so the producer returns the answers as Python made them. A credential-shaped
-		// value that is NOT a declared constant is an error here, before anything is stored.
-		for index := range results {
-			for _, text := range append([]string{results[index].Stdout, results[index].Stderr}, results[index].Requests...) {
-				if left := netUnscrubbed(golden.DigestDeclared(text)); len(left) != 0 {
-					t.Fatalf("case %d: %d credential-shaped value(s) outside netCredentialConstants reached an answer: name the constant or fix the corpus", index, len(left))
-				}
-			}
-		}
-		body, err := json.Marshal(results)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("push net corpus", append(append([]byte{}, input...), script...))
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var want []netResult
 	if err := json.Unmarshal([]byte(answers[0].Body), &want); err != nil {

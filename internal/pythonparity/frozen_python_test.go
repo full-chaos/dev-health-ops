@@ -37,7 +37,6 @@ var parityGoldenPins = map[string]string{
 
 // parityGoldens is the set of this package's frozen Python answers.
 var parityGoldens = programoracle.Set{
-	Package:  "./internal/pythonparity/",
 	Build:    parityPythonBuild,
 	Identity: parityProducerIdentity,
 	Pins:     parityGoldenPins,
@@ -53,7 +52,7 @@ var parityGoldens = programoracle.Set{
 // The caller compares by value and sends no JSON number through float64.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	return parityGoldens.Outputs(t, frozenRepositoryRoot(t), golden, programs...)
+	return parityGoldens.Outputs(t, golden, programs...)
 }
 
 // frozenRepositoryRoot is the repository root, from this file's own location.

@@ -851,17 +851,16 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name(), goldenDigest(t.Name())))
 	start := time.Now().UTC()
 	fake := newFakeStripe()
-	pyStripe, goStripe := httptest.NewServer(fake.plane("py")), httptest.NewServer(fake.plane("go"))
-	t.Cleanup(pyStripe.Close)
+	goStripe := httptest.NewServer(fake.plane("go"))
 	t.Cleanup(goStripe.Close)
-	pythonEnv := []string{"VENUE_STRIPE_API_BASE=" + pyStripe.URL}
+	var pythonEnv []string
 	for key, value := range billingEnv {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			return seed.tokenSpecs()
@@ -975,9 +974,7 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	sort.Strings(names)
 	for _, name := range names {
 		goRows := normalize(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), tables[name]))
-		pyRows := golden.CompareRows(t, "rows:"+name, func() string {
-			return normalizePython(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), tables[name]))
-		}, goRows)
+		pyRows := golden.CompareRows(t, "rows:"+name, goRows)
 		same := pyRows == goRows && pyRows != ""
 		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, venueoracle.Mark(same))
 		if pyRows == "" {
@@ -1015,11 +1012,10 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 	for key, value := range billingBareEnv {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
-	pythonEnv = append(pythonEnv, "VENUE_STRIPE_API_BASE=http://127.0.0.1:9/unreachable")
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			ledgerSeed(t, ctx, admin, seed)
@@ -1085,9 +1081,7 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 		`SELECT id::text, status, voided_at, updated_at FROM invoices ORDER BY id`,
 	} {
 		goRows := normalize(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table))
-		pyRows := golden.CompareRows(t, "rows:"+table, func() string {
-			return normalizePython(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table))
-		}, goRows)
+		pyRows := golden.CompareRows(t, "rows:"+table, goRows)
 		receipt += fmt.Sprintf("rows %.40s: %s\n", table, venueoracle.Mark(pyRows == goRows))
 	}
 	// Go-only: the refund route reaches Stripe only past its balance check,

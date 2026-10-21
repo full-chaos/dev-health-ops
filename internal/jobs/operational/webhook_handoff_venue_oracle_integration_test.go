@@ -18,33 +18,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// pythonSyncNowProgram runs the admin "Sync Now" producer,
-// create_sync_execution_trigger (triggered_by manual, mode incremental), for
-// each configuration and commits. The database is the Python plane's, named by
-// the environment of the run.
-const pythonSyncNowProgram = `
-import json, os, sys, uuid
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from sqlalchemy.pool import NullPool
-from dev_health_ops.models.settings import SyncConfiguration
-from dev_health_ops.sync.execution_trigger import create_sync_execution_trigger
-payload = json.loads(sys.stdin.read())
-engine = create_engine(os.environ["ORACLE_DATABASE_URI"], poolclass=NullPool)
-out = []
-for config_id in payload["configs"]:
-    with Session(engine) as session:
-        try:
-            config = session.get(SyncConfiguration, uuid.UUID(config_id))
-            result = create_sync_execution_trigger(session, config, str(config.org_id), triggered_by="manual", mode="incremental")
-            session.commit()
-            out.append("ok" if result is not None and result.awaiting_materialization else "not routed")
-        except Exception as exc:
-            out.append("raise " + type(exc).__name__)
-engine.dispose()
-print(json.dumps(out))
-`
-
 type handoffOracleCase struct {
 	name, configID, installation, repoID, fullName string
 	inactive                                       bool
@@ -81,10 +54,8 @@ func TestWebhookHandoffVenueOracleMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer := programoracle.Produce(t, golden, root, []programoracle.Program{{
-		Name: "sync now", Text: pythonSyncNowProgram, Stdin: input,
-		Env:    map[string]string{"OTEL_SDK_DISABLED": "true", "ENVIRONMENT": "test"},
-		PerRun: oracleDatabase(t, venue), PerRunNames: []string{oracleDatabaseEnv},
+	answer := programoracle.Produce(t, golden, []programoracle.Program{{
+		Name: "sync now", Stdin: input,
 	}})[0]
 	if answer.ExitCode != 0 {
 		t.Fatalf("the sync now program exited %d when it was recorded: %s", answer.ExitCode, answer.Stdout)
@@ -132,23 +103,16 @@ func TestWebhookHandoffVenueOracleMatchesFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
+	goDB := venue.AdminURI(t, venue.GoDB)
 	for _, c := range cases {
 		for _, table := range []string{"occurrence", "trigger", "job"} {
 			query := handoffRowQuery(table, c.configID)
 			goRows := venueoracle.TableRows(t, ctx, goDB, query)
-			golden.CompareRows(t, "rows:"+table+":"+c.name, func() string { return venueoracle.TableRows(t, ctx, source, query) }, goRows)
+			golden.CompareRows(t, "rows:"+table+":"+c.name, goRows)
 		}
-		// The Python plane's occurrence identity is checked against its own
-		// scheduled_for when the golden is recorded; the verdict is what is
-		// frozen. The Go plane's is checked on every run.
-		golden.InspectRows(t, "identity:python:"+c.name, func() string {
-			occurrenceID, scheduledFor := handoffOccurrence(t, ctx, source, c.configID)
-			if want := synchandoff.OccurrenceIdentity(c.configID, scheduledFor); occurrenceID != want {
-				return "occurrence_id is not the identity of its scheduled_for"
-			}
-			return "occurrence_id is the identity of its scheduled_for"
-		})
+		// The Python plane's occurrence identity verdict is frozen. The Go plane's
+		// is checked on every run.
+		golden.InspectRows(t, "identity:python:"+c.name)
 		occurrenceID, scheduledFor := handoffOccurrence(t, ctx, goDB, c.configID)
 		if want := synchandoff.OccurrenceIdentity(c.configID, scheduledFor); occurrenceID != want {
 			t.Errorf("%s go occurrence_id %s is not the identity of its scheduled_for (%s)", c.name, occurrenceID, want)

@@ -11,34 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonOrgFeatureProgram runs each case through licensing/gating.py's own
-// _check_org_feature_async over the real models on an in-memory async
-// SQLite database: the organization row (when the case has one), and an
-// optional org_licenses row whose features_override is the case's JSON.
-const pythonOrgFeatureProgram = `
-import asyncio, json, sys, uuid
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from dev_health_ops.models.licensing import OrgLicense
-from dev_health_ops.models.users import Organization
-from dev_health_ops.licensing.gating import _check_org_feature_async
-ORG = uuid.UUID("c6a38355-0000-4000-8000-000000000001")
-async def run(case):
-    engine = create_async_engine("sqlite+aiosqlite://")
-    async with engine.begin() as conn:
-        for model in (Organization, OrgLicense):
-            await conn.run_sync(model.__table__.create)
-        if case["org"]:
-            await conn.exec_driver_sql("INSERT INTO organizations (id, slug, name, settings, tier, managed_by, is_active, created_at, updated_at) VALUES (?, 's', 'n', '{}', ?, 'x', 1, '2026-01-01', '2026-01-01')", (ORG.hex, case["org_tier"]))
-        if case["license"] is not None:
-            await conn.exec_driver_sql("INSERT INTO org_licenses (id, org_id, tier, is_valid, license_type, managed_by, features_override, created_at, updated_at) VALUES (?, ?, ?, 1, 'x', 'x', ?, '2026-01-01', '2026-01-01')", (uuid.uuid4().hex, ORG.hex, case["license"]["tier"], case["license"]["override"]))
-    async with AsyncSession(engine) as session:
-        allowed = await _check_org_feature_async(case["feature"], {"session": session, "org_id": case["org_id"]})
-    await engine.dispose()
-    return allowed
-out = [asyncio.run(run(case)) for case in json.loads(sys.stdin.read())]
-print(json.dumps(out))
-`
-
 type orgFeatureCase struct {
 	OrgID   string             `json:"org_id"`
 	Org     bool               `json:"org"`
@@ -139,7 +111,7 @@ func TestOrgFeatureMatchesFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "org-feature.golden.json", programoracle.Program{Name: "org feature", Text: pythonOrgFeatureProgram, Stdin: input})[0]
+	output := frozenPython(t, "org-feature.golden.json", programoracle.Program{Name: "org feature", Stdin: input})[0]
 	var want []bool
 	if err := json.Unmarshal([]byte(output), &want); err != nil || len(want) != len(cases) {
 		t.Fatalf("decode: %v (%d of %d)\n%s", err, len(want), len(cases), output)

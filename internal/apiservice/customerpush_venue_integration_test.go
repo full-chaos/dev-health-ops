@@ -203,7 +203,7 @@ func TestVenueOracleCustomerPushReads(t *testing.T) {
 	t.Setenv("EXTERNAL_INGEST_MAX_RECORDS", " 2_500 ")
 	var seed customerPushFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: venueKey, Logger: quietLogger(),
+		Golden: golden, Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{"EXTERNAL_INGEST_MAX_RECORDS= 2_500 "},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = customerPushSeed(t, ctx, admin)

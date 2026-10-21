@@ -18,9 +18,7 @@ import (
 
 func TestLaunchDarklyNormalizationMatchesFrozenPythonFunctions(t *testing.T) {
 	output := frozenScriptAnswer(t, scriptOracle{
-		name:    "launchdarkly-normalization",
-		script:  "testdata/python_launchdarkly_normalization_oracle.py",
-		sources: []string{"src/dev_health_ops/processors/launchdarkly.py"},
+		name: "launchdarkly-normalization",
 	})
 	var want struct {
 		Flags  []launchDarklyFlagRow  `json:"flags"`

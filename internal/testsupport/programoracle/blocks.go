@@ -17,8 +17,8 @@ import (
 
 // An oracle that sweeps every code point has millions of answers: too many to
 // freeze as text. Such an oracle freezes one SHA-256 per block of answers
-// instead. The program writes one canonical line per answer and prints the
-// block digests (BlocksPython); the test writes the same line from the Go
+// instead. The program wrote one canonical line per answer and printed the
+// block digests; the test writes the same line from the Go
 // answer and compares digests (RequireBlocks). The comparison stays
 // exhaustive; a difference names the block, not the answer inside it.
 //
@@ -28,41 +28,10 @@ import (
 // (its UTF-8 in hexadecimal: text / AppendText), or a fixed ASCII token. So a
 // line is ASCII with no line break, and two different answers never give one
 // line. A block is BlockLines lines, each followed by a line feed; the last
-// block may be shorter. Both the format and the block size are in the program
-// text, so a golden recorded for another format is refused by its request key.
+// block may be shorter.
 
 // BlockLines is the number of canonical lines one digest covers.
 const BlockLines = 1024
-
-// BlocksPython is Python source for the head of an oracle program. It defines
-// code_points and text, the two fields of a canonical line, and block_digests,
-// whose result the program prints as JSON (see Blocks).
-const BlocksPython = `
-import hashlib, json
-
-BLOCK_LINES = 1024
-
-def code_points(values):
-    return ",".join(str(value) for value in values)
-
-def text(value):
-    # The string a JSON reader gives: an escaped surrogate pair is one code
-    # point, a lone surrogate is U+FFFD. The field is its UTF-8 in hexadecimal.
-    value = json.loads(json.dumps(value))
-    return "".join("\ufffd" if "\ud800" <= c <= "\udfff" else c for c in value).encode("utf-8").hex()
-
-def block_digests(lines):
-    blocks = []
-    for first in range(0, len(lines), BLOCK_LINES):
-        block = lines[first:first + BLOCK_LINES]
-        digest = hashlib.sha256()
-        for line in block:
-            if "\n" in line:
-                raise ValueError("a canonical line holds a line break")
-            digest.update(line.encode("ascii") + b"\n")
-        blocks.append({"first": first, "lines": len(block), "sha256": digest.hexdigest()})
-    return {"block_lines": BLOCK_LINES, "lines": len(lines), "block_count": len(blocks), "blocks": blocks}
-`
 
 // AppendCodePoints appends the canonical field of a list of code points: the
 // numbers in decimal, joined by commas. It is the Go half of Python's

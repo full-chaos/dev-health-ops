@@ -1,0 +1,58 @@
+{
+  "jobs": [
+    {
+      "kind": "investment.materialize",
+      "state": "celery_removed",
+      "route": "river",
+      "rollback_route": "none"
+    },
+    {
+      "kind": "metrics.a",
+      "state": "go_default",
+      "route": "river",
+      "rollback_route": "none"
+    },
+    {
+      "kind": "metrics.b",
+      "state": "go_default",
+      "route": "river",
+      "rollback_route": "none"
+    },
+    {
+      "kind": "reports.run",
+      "state": "go_default",
+      "route": "river",
+      "rollback_route": "none"
+    },
+    {
+      "kind": "workgraph.x",
+      "state": "go_default",
+      "route": "river",
+      "rollback_route": "none"
+    },
+    {
+      "kind": "coverage.c",
+      "state": "go_default",
+      "route": "river",
+      "rollback_route": "none"
+    },
+    {
+      "kind": "heartbeat.h",
+      "state": "go_default",
+      "route": "river",
+      "rollback_route": "none"
+    },
+    {
+      "kind": "webhooks.w",
+      "state": "go_default",
+      "route": "river",
+      "rollback_route": "none"
+    },
+    {
+      "kind": "sync.s",
+      "state": "go_default",
+      "route": "river",
+      "rollback_route": "none"
+    }
+  ]
+}

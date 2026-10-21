@@ -16,7 +16,6 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -28,7 +27,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -523,8 +521,6 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 		t.Fatal(err)
 	}
 	pemKey := generatePEM(t)
-	_, thisFile, _, _ := moduleroot.Caller(0)
-	siteDir := filepath.Join(filepath.Dir(thisFile), "testdata", "provider_stub")
 
 	previousClient, previousLookup := credentialProbeClient, credentialHostLookup
 	credentialProbeClient = &http.Client{Transport: rewriteToStub{target: stubURL},
@@ -543,14 +539,11 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 	var seed venueFixture
 	var ids map[string]string
 	rows := probeSeedRows(pemKey)
-	pythonRoot := golden.PythonRoot(t, venueRoot())
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   pythonRoot, JWTKey: venueKey, Logger: quietLogger(),
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + credentialsVenueKey,
-			"VENUE_PROVIDER_STUB_PORT=" + stub.port(),
-			"PYTHONPATH=" + siteDir + ":" + filepath.Join(pythonRoot, "src"),
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			seed = venueSeed(t, ctx, admin)
@@ -570,7 +563,7 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 	pythonResponses := golden.Python(t, venue, requests)
 	// What the Python plane asked the provider is part of what its executed
 	// build answered: frozen with the golden, compared with the Go plane's.
-	pythonProviderText := golden.InspectRows(t, "provider requests of the Python plane", func() string { return stripJWT(stub.take()) })
+	pythonProviderText := golden.InspectRows(t, "provider requests of the Python plane")
 	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{Golden: golden})
 	goProvider := stub.take()
 
@@ -619,7 +612,7 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 	}
 	goRows := renderRows(venue.AdminURI(t, venue.GoDB))
 	rowsByPlane := map[string]string{
-		"python": golden.CompareRows(t, "python last_test_* columns", func() string { return renderRows(venue.AdminURI(t, venue.SourceDB)) }, goRows),
+		"python": golden.CompareRows(t, "python last_test_* columns", goRows),
 		"go":     goRows,
 	}
 	rowsSame := rowsByPlane["python"] == rowsByPlane["go"]

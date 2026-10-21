@@ -3,7 +3,6 @@
 package authflowvenue_test
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -32,9 +31,5 @@ func venueGolden(file, test, digest string) venueoracle.GoldenSpec {
 		PythonBuild: venuePythonBuild,
 		SHA256:      digest,
 		Scrub:       venueoracle.ScrubRunValues(runFloor, runCeiling),
-		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/authflowvenue/ -test '^%s$' -python-root $DIR "+
-			"(records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-			venuePythonBuild, test),
 	}
 }

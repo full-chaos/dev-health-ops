@@ -50,26 +50,11 @@ func numericStringCorpus() []string {
 	return corpus
 }
 
-const pythonDatetimeProgram = `
-import json, sys
-from datetime import datetime
-from pydantic import TypeAdapter, ValidationError
-ta = TypeAdapter(datetime)
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        out.append({"ok": ta.dump_json(ta.validate_python(json.loads(text))).decode()[1:-1]})
-    except ValidationError as exc:
-        err = exc.errors()[0]
-        out.append({"type": err["type"], "msg": err["msg"]})
-print(json.dumps(out))
-`
-
 func TestParseDatetimeMatchesFrozenPydantic(t *testing.T) {
 	corpus := append(append([]string{}, datetimeCorpus...), numericStringCorpus()...)
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "parse-datetime.golden.json",
-		programoracle.Program{Name: "parse-datetime", Text: pythonDatetimeProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "parse-datetime", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct{ OK, Type, Msg string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -108,21 +93,6 @@ func TestParseDatetimeMatchesFrozenPydantic(t *testing.T) {
 	t.Logf("%d values compared", len(corpus))
 }
 
-const pythonDateProgram = `
-import json, sys
-from datetime import date
-from pydantic import TypeAdapter, ValidationError
-ta = TypeAdapter(date)
-out = []
-for text in json.loads(sys.stdin.read()):
-    try:
-        out.append({"ok": ta.validate_python(json.loads(text)).isoformat()})
-    except ValidationError as exc:
-        err = exc.errors()[0]
-        out.append({"type": err["type"], "msg": err["msg"], "reason": (err.get("ctx") or {}).get("error", "")})
-print(json.dumps(out))
-`
-
 // TestParseDateMatchesFrozenPydantic compares ParseDate with pydantic's
 // TypeAdapter(date) on the datetime corpus and the numeric-string corpus.
 // A non-numeric string that is neither a date nor a datetime is not
@@ -134,7 +104,7 @@ func TestParseDateMatchesFrozenPydantic(t *testing.T) {
 		`"2024-01-01T00:00:00+05:00"`, `"2024-01-01T00:00:01"`, `253402214400`, `253402300800`, `-62135596800`, `1e20`)
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "parse-date.golden.json",
-		programoracle.Program{Name: "parse-date", Text: pythonDateProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "parse-date", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct{ OK, Type, Msg, Reason string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
@@ -226,7 +196,7 @@ func TestDatetimeReasonMatchesFrozenPydantic(t *testing.T) {
 	}
 	input, _ := json.Marshal(quoted)
 	output := frozenPython(t, "datetime-reason.golden.json",
-		programoracle.Program{Name: "datetime-reason", Text: pythonDateProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "datetime-reason", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct{ OK, Type, Msg, Reason string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

@@ -100,7 +100,7 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	)
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root),
+		Golden: golden, Root: root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"GITHUB_WEBHOOK_SECRET=" + githubSecret,
@@ -260,14 +260,10 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	t.Log(receipt)
 
 	deliveriesQuery := `SELECT provider, event_type, raw_event_type, org_ref, repo_name FROM webhook_deliveries ORDER BY provider, delivery_key`
-	golden.CompareRows(t, "webhook_deliveries", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), deliveriesQuery)
-	}, venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), deliveriesQuery))
+	golden.CompareRows(t, "webhook_deliveries", venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), deliveriesQuery))
 
 	outboxQuery := `SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, dedupe_key`
-	golden.CompareRows(t, "worker_job_outbox", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), outboxQuery)
-	}, venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), outboxQuery))
+	golden.CompareRows(t, "worker_job_outbox", venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), outboxQuery))
 	// args is stored JSON, compared as raw text. dedupe_key (the
 	// content-derived idempotency key) orders both planes' rows alike. The
 	// delivery ids inside are random per plane: each plane's stored
@@ -281,9 +277,7 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 		return blankedJSONRows(venueoracle.TableRows(t, ctx, uri, argsQuery), strings.Fields(venueoracle.TableRows(t, ctx, uri, deliveryIDs)))
 	}
 	goArgs := planeArgs(venue.AdminURI(t, venue.GoDB))
-	pythonArgs := golden.CompareRows(t, "worker_job_outbox.args", func() string {
-		return strings.Join(planeArgs(venue.AdminURI(t, venue.SourceDB)), venueoracle.JSONRowSeparator)
-	}, strings.Join(goArgs, venueoracle.JSONRowSeparator))
+	pythonArgs := golden.CompareRows(t, "worker_job_outbox.args", strings.Join(goArgs, venueoracle.JSONRowSeparator))
 	if len(goArgs) == 0 || pythonArgs == "" {
 		t.Error("worker_job_outbox.args: no rows compared; the check measured nothing")
 	}
@@ -469,7 +463,7 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 	seed := newPagerDutyVenueSeed()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root),
+		Golden: golden, Root: root,
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + encryptionKey,
@@ -639,18 +633,12 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 
-	golden.CompareRows(t, "pagerduty-webhooks stream entries", func() string {
-		return venueoracle.StreamEntries(t, ctx, venue.PythonValkeyURI, "pagerduty-webhooks:*", "received_at")
-	}, venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "pagerduty-webhooks:*", "received_at"))
+	golden.CompareRows(t, "pagerduty-webhooks stream entries", venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "pagerduty-webhooks:*", "received_at"))
 
 	bindingsQuery := `SELECT provider_subscription_id, status FROM pagerduty_webhook_bindings ORDER BY provider_subscription_id`
-	golden.CompareRows(t, "pagerduty_webhook_bindings", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), bindingsQuery)
-	}, venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), bindingsQuery))
+	golden.CompareRows(t, "pagerduty_webhook_bindings", venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), bindingsQuery))
 
-	golden.CompareRows(t, "pagerduty-webhook-replay keys", func() string {
-		return replayKeys(t, ctx, venue.PythonValkeyURI, "pagerduty-webhook-replay:*")
-	}, replayKeys(t, ctx, venue.ValkeyURI, "pagerduty-webhook-replay:*"))
+	golden.CompareRows(t, "pagerduty-webhook-replay keys", replayKeys(t, ctx, venue.ValkeyURI, "pagerduty-webhook-replay:*"))
 	// venueoracle.Start already wrote this test's own proof file.
 	golden.Finish(t)
 }

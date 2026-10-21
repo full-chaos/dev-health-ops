@@ -294,28 +294,11 @@ func pick(headers map[string]string, names []string) map[string]string {
 func (r *runner) compareMail(label string) {
 	r.t.Helper()
 	planes := map[string][]sentMail{}
-	// The Python plane's messages are captured off its SMTP sink while recording
-	// and frozen with their link tokens: a later request carries the token the
-	// Python plane mailed, and the frozen token keeps that request the same bytes.
+	// The Python plane's messages are frozen with their link tokens: a later request
+	// carries the token the Python plane mailed, and the frozen token keeps that
+	// request the same bytes.
 	var pythonMails []recordedMail
-	var rawMails string
-	pythonText := r.golden.InspectRows(r.t, "python mails: "+label, func() string {
-		var recorded []recordedMail
-		for _, captured := range r.pySink.Drain(r.t) {
-			recorded = append(recorded, decodeMail(r.t, captured).record())
-		}
-		raw, err := json.Marshal(recorded)
-		if err != nil {
-			r.t.Fatal(err)
-		}
-		rawMails = string(raw)
-		return rawMails
-	})
-	if r.golden.Recording() {
-		// The links the Python plane mailed are followed by a later request of
-		// this recording; the golden holds them as a placeholder.
-		pythonText = rawMails
-	}
+	pythonText := r.golden.InspectRows(r.t, "python mails: "+label)
 	if err := json.Unmarshal([]byte(pythonText), &pythonMails); err != nil {
 		r.t.Fatalf("python mails %q: %v", label, err)
 	}
@@ -369,9 +352,7 @@ func keys(m map[string][]sentMail) []string {
 func (r *runner) rows(name, query string) {
 	r.t.Helper()
 	goRows := venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.GoDB), query)
-	pyRows := r.golden.CompareRows(r.t, name, func() string {
-		return venueoracle.TableRows(r.t, r.ctx, r.venue.AdminURI(r.t, r.venue.SourceDB), query)
-	}, goRows)
+	pyRows := r.golden.CompareRows(r.t, name, goRows)
 	same := pyRows == goRows && pyRows != ""
 	fmt.Fprintf(&r.receipt, "%s rows after the scenario: %s\n", name, venueoracle.Mark(same))
 	if pyRows == "" {
@@ -454,11 +435,6 @@ VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '2 hours')`, exp
 func TestAuthFlowVenueOracle(t *testing.T) {
 	spec := venueGolden("auth-flow-venue-oracle", t.Name(), "7783ad744176666041e916fb2a1f92d4337bee8a3cb46759dcb25079cfbb207b")
 	spec.Scrub, spec.KeyScrub = authScrub, requestKeyScrub
-	// Recording, the Python plane's answers reach the test unprojected here, in
-	// memory only: a later request carries the refresh token Python issued. The
-	// golden holds the projected answer.
-	rawPython := map[string]venueoracle.Response{}
-	spec.RawSink = func(request venueoracle.Request, answer venueoracle.Response) { rawPython[request.Name] = answer }
 	golden := venueoracle.OpenGolden(t, spec)
 	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
@@ -483,7 +459,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	pySink, goSink := smtpcapture.Start(t), smtpcapture.StartAt(t, smtpcapture.ListenAddr())
 	pyHost, pyPort := pySink.HostPort(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external,
-		Golden: golden, Root: golden.PythonRoot(t, venueRoot()), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Golden: golden, Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
 			"SMTP_HOST=" + pyHost, "SMTP_PORT=" + strconv.Itoa(pyPort), "APP_BASE_URL=" + appBaseURL},
 		Seed: seed,
@@ -673,9 +649,6 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 			index = 1
 		}
 		body := first["login: alice (a refresh token the reset revokes)"][index].Body
-		if plane == "python" && golden.Recording() {
-			body = rawPython["login: alice (a refresh token the reset revokes)"].Body
-		}
 		return sessionscenario.Field(body, "refresh_token")
 	}
 	r.batch("links", []step{
@@ -763,9 +736,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	t.Log("\n" + receipt)
 	golden.SkipDiff(t)
 	golden.Finish(t)
-	if !golden.Recording() {
-		venueoracle.WriteGoOnlyProof(t, "Go auth flow, e-mail and rows against the Python plane's answers frozen on build "+venuePythonBuild)
-	}
+	venueoracle.WriteGoOnlyProof(t, "Go auth flow, e-mail and rows against the Python plane's answers frozen on build "+venuePythonBuild)
 }
 
 func flushValkey(t *testing.T, ctx context.Context, uris ...string) {

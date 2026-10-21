@@ -778,7 +778,7 @@ but the E2E test's own helper module needs unit coverage:
 
 ### 6.3 Docs verification (CHAOS-2711)
 
-- `make docs:check` (runs `check_investment_docs_drift.py` + `check_docs_links.py`) must
+- `make docs:check` (ran `check_investment_docs_drift.py`, now deleted; its replacement is `cigate docs check-investment-drift` in `internal/cigates/docstools`; plus `check_docs_links.py`) must
   pass — catches broken relative links/anchors in the 5 new pages + ADR-003.
 - Manual `mkdocs build --strict` locally (not in CI per current `docs-guards.yml`, which
   only runs `make docs:check` — but `--strict` catches nav entries pointing at missing

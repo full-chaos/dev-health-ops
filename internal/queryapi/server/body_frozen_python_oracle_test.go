@@ -17,57 +17,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonBodyModelsProgram serves each query-api POST route's request model
-// (api/models/filters.py) from a bare FastAPI app: the body is validated
-// by FastAPI exactly as the real route does it (the real routes' own
-// bodies are Go-served stubs, and FastAPI validates the body before the
-// endpoint runs), then answered 200.
-const pythonBodyModelsProgram = `
-import json, sys
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from dev_health_ops.api.models.filters import (
-    DrilldownRequest, ExplainRequest, HomeRequest, InvestmentExplainRequest,
-    InvestmentFlowRequest, SankeyRequest, WorkUnitRequest,
-)
-from fastapi import HTTPException
-from dev_health_ops.api.services.filtering import time_window
-from dev_health_ops.api.services.sankey import _apply_window_to_filters
-app = FastAPI()
-# Each real route's first step after validation is time_window(filters),
-# inside its try: ... except Exception: raise HTTPException(503, "Data
-# unavailable"). Investment explain computes it inside its stream (a 200).
-def window(payload, filters=None):
-    try:
-        time_window(filters if filters is not None else payload.filters)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Data unavailable") from exc
-    return {"ok": True}
-@app.post("/DrilldownRequest")
-def drilldown(payload: DrilldownRequest): return window(payload)
-@app.post("/ExplainRequest")
-def explain(payload: ExplainRequest): return window(payload)
-@app.post("/HomeRequest")
-def home(payload: HomeRequest): return window(payload)
-@app.post("/InvestmentExplainRequest")
-def investment_explain(payload: InvestmentExplainRequest): return {"ok": True}
-@app.post("/InvestmentFlowRequest")
-def investment_flow(payload: InvestmentFlowRequest): return window(payload)
-@app.post("/SankeyRequest")
-def sankey(payload: SankeyRequest):
-    # build_sankey_response applies window_start/window_end to the filters
-    # first (services/sankey.py _apply_window_to_filters).
-    return window(payload, _apply_window_to_filters(payload.filters, payload.window_start, payload.window_end))
-@app.post("/WorkUnitRequest")
-def work_units(payload: WorkUnitRequest): return window(payload)
-client = TestClient(app, raise_server_exceptions=False)
-out = []
-for model, body in json.loads(sys.stdin.read()):
-    r = client.post("/" + model, content=body.encode("utf-8"), headers={"content-type": "application/json"})
-    out.append([r.status_code, r.text])
-print(json.dumps(out))
-`
-
 // bodyOracleValues is every JSON value the oracle puts at each field:
 // numbers at and past each representation edge (integral floats, the
 // int64 bounds, big ints, overflowing exponents, NaN/Infinity), strings
@@ -263,7 +212,7 @@ func TestQueryAPIBodiesMatchFrozenFastAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "query-bodies.golden.json", programoracle.Program{Name: "query-api bodies", Text: pythonBodyModelsProgram, Stdin: payload})[0]
+	output := frozenPython(t, "query-bodies.golden.json", programoracle.Program{Name: "query-api bodies", Stdin: payload})[0]
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var want [][2]any
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

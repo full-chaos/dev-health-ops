@@ -11,29 +11,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const pythonURLSplitProgram = `
-import json, sys
-from urllib.parse import urlsplit
-out = []
-for url in json.loads(sys.stdin.read()):
-    row = {}
-    try:
-        parts = urlsplit(url)
-    except ValueError as exc:
-        row["split_error"] = str(exc)
-        out.append(row)
-        continue
-    row["scheme"], row["netloc"], row["path"] = parts.scheme, parts.netloc, parts.path
-    row["userinfo"] = parts.username is not None
-    row["hostname"] = parts.hostname
-    try:
-        row["port"] = parts.port
-    except ValueError as exc:
-        row["port_error"] = str(exc)
-    out.append(row)
-print(json.dumps(out))
-`
-
 func urlSplitCorpus() []string {
 	corpus := []string{
 		"", "https://example.com", "https://Example.COM/v1", "HTTPS://Example.Invalid/v1", "https:", "https://", "https:///v1", "//host", "host",
@@ -71,7 +48,7 @@ func TestURLSplitMatchesFrozenPython(t *testing.T) {
 	corpus := urlSplitCorpus()
 	input, _ := json.Marshal(corpus)
 	output := frozenPython(t, "urlsplit.golden.json",
-		programoracle.Program{Name: "urlsplit", Text: pythonURLSplitProgram, Stdin: input})[0]
+		programoracle.Program{Name: "urlsplit", Stdin: input})[0]
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	// UseNumber: a port is compared by its literal text, never through
 	// float64.

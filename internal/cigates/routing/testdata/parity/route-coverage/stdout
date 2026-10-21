@@ -1,0 +1,2 @@
+ROUTE_COVERAGE plane=go-api routed=8 registered=6 missing=1 unexpected=1
+ROUTE_COVERAGE plane=query-api routed=4 registered=3 missing=1 unexpected=0

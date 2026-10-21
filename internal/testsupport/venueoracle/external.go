@@ -123,12 +123,6 @@ func startExternal(t *testing.T, ctx context.Context, options Options, v *Venue)
 	clickHouseDB, _ := stores.ClickHouseDatabase()
 	v.postgresURI, v.clickHouseURI, v.ValkeyURI, v.PythonValkeyURI = stores.PostgresURI, stores.ClickHouseURI, stores.ValkeyURI, stores.ValkeyURI
 	v.SourceDB, v.GoDB, v.PythonClickHouseDB, v.GoClickHouseDB = postgresDB, postgresDB, clickHouseDB, clickHouseDB
-	v.hostEnv = inheritedValues(map[string]string{})
-	perRun := map[string]string{}
-	for name, value := range v.hostEnv {
-		perRun[name] = value
-	}
-	v.pythonEnv = pythonPlaneEnv(options, perRun)
 	admin := OpenPool(t, ctx, stores.PostgresURI)
 	var specs map[string]map[string]any
 	if options.Seed != nil {

@@ -102,14 +102,10 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	t.Setenv("SYNC_WATERMARK_OVERLAP", "3600")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden,
-		Root:   golden.PythonRoot(t, root),
-		JWTKey: jwtKey,
-		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On ", "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS=5", "SYNC_WATERMARK_OVERLAP=3600",
-			// Both planes read the same instant: the run units freshness judges
-			// every watermark against it, so a recording made on another day
-			// answers what a frozen run does.
-			"VENUE_PINNED_NOW=" + readsPinnedNow, "VENUE_PINNED_NOW_MODULES=dev_health_ops.api.services.integrations"},
+		Golden:    golden,
+		Root:      root,
+		JWTKey:    jwtKey,
+		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On ", "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS=5", "SYNC_WATERMARK_OVERLAP=3600"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			seedSyncAdmin(t, ctx, admin, ids)
@@ -750,7 +746,7 @@ func startGoServerWith(t *testing.T, ctx context.Context, venue *venueoracle.Ven
 	return ts.URL
 }
 
-// repoRoot walks up from this file to the directory holding src/dev_health_ops.
+// repoRoot walks up from this file to the directory holding go.mod.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := moduleroot.Caller(0)
@@ -759,12 +755,12 @@ func repoRoot(t *testing.T) string {
 	}
 	directory := filepath.Dir(file)
 	for {
-		if info, err := os.Stat(filepath.Join(directory, "src", "dev_health_ops")); err == nil && info.IsDir() {
+		if info, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil && !info.IsDir() {
 			return directory
 		}
 		parent := filepath.Dir(directory)
 		if parent == directory {
-			t.Fatalf("no src/dev_health_ops above %s", file)
+			t.Fatalf("no go.mod above %s", file)
 		}
 		directory = parent
 	}

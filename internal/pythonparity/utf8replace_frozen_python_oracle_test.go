@@ -71,7 +71,7 @@ func TestDecodeUTF8ReplaceMatchesFrozenPython(t *testing.T) {
 	}
 	input, _ := json.Marshal(hexes)
 	output := frozenPython(t, "utf8replace.golden.json",
-		programoracle.Program{Name: "utf-8 replace", Text: pythonUTF8ReplaceProgram, Stdin: input})[0]
+		programoracle.Program{Name: "utf-8 replace", Stdin: input})[0]
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	var want []string
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

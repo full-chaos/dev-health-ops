@@ -1,7 +1,6 @@
 package sync
 
 import (
-	_ "embed"
 	"encoding/json"
 	"reflect"
 	"slices"
@@ -11,13 +10,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
-
-// plannerOracleScript runs the planner of the build it is executed on over the
-// cases on its input: planner._build_planned_units, loaded from the sources of
-// the checkout the script runs in.
-//
-//go:embed testdata/python_planner_oracle.py
-var plannerOracleScript string
 
 type plannerOracleSource struct {
 	ID         string `json:"id"`
@@ -614,7 +606,7 @@ func frozenPlannerOracle(t *testing.T, golden string, cases []plannerOracleCase)
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, golden, programoracle.Script("planner", "internal/scheduler/sync/testdata/python_planner_oracle.py", plannerOracleScript, encoded))[0]
+	output := frozenPython(t, golden, programoracle.Program{Name: "planner", Stdin: encoded})[0]
 	var result map[string][]map[string]any
 	decodeKeepingNumbers(t, []byte(output), &result)
 	if len(result) != len(cases) {

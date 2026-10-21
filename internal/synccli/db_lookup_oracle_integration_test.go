@@ -3,13 +3,11 @@
 package synccli
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -18,23 +16,9 @@ import (
 	"testing"
 	"time"
 
-	_ "embed"
-
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-//go:embed testdata/db_lookup_oracle.py
-var dbLookupOracleProgram string
-
-const upgradeProgram = `
-import argparse, os, sys
-from dev_health_ops.db import normalize_async_postgres_uri
-from dev_health_ops.migrate import _run_upgrade
-sys.exit(_run_upgrade(argparse.Namespace(db=normalize_async_postgres_uri(os.environ["DATABASE_URI"]), revision="head")))
-`
 
 type dbOrg struct {
 	ID        string `json:"id"`
@@ -212,11 +196,6 @@ func dbScenarios(keyFile string) []dbScenario {
 // still carried the Python CLI.
 const dbLookupPythonBuild = "a4847c5e93607451a0c987b314d37e02fc43ce85"
 
-// dbLookupPythonSettings are the variables that shape the producer's answers, as constants: the producer's
-// environment AND part of the golden's request key (a changed value fails the frozen replay). The database
-// address (DATABASE_URI, a launcher extra) is a per-run value, given by name.
-var dbLookupPythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-
 // dbKeyPlaceholder stands for the GitHub App key file some scenarios name (a per-run path).
 const dbKeyPlaceholder = "/tmp/dho-db-lookup-app-key.pem"
 
@@ -267,34 +246,19 @@ var dbLookupNamedDivergences = map[string]struct{ python, golang string }{
 func TestDBLookupsMatchFrozenPython(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/db_lookup.json",
 		PythonBuild: dbLookupPythonBuild,
 		SHA256:      "ff8873fab16a5c22ba64f1c5fff654280490a3350b2fd97ff8b154b6a440fe45",
-		Recipe: "git worktree add --detach $DIR " + dbLookupPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/synccli/ -test '^TestDBLookupsMatchFrozenPython$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	scenarios := dbScenarios(dbKeyPlaceholder)
 	keyBytes, err := json.Marshal(dbScenarioViews(scenarios))
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("db lookup scenarios", dbLookupOracleProgram, keyBytes, dbLookupPythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		produced := produceDBLookupAnswers(ctx, t, producer, scenarios)
-		body, err := json.Marshal(produced)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
-	})
+	request := venueoracle.ProgramRequest("db lookup scenarios", keyBytes)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen []map[string]any
 	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &frozen); err != nil {
@@ -404,108 +368,6 @@ func redactDBSecrets(value any) any {
 		return out
 	}
 	return value
-}
-
-// produceDBLookupAnswers runs the REAL Python producers over the scenarios against a database the Python side
-// migrates and seeds itself (core.encryption's own ciphertext), and returns one redacted answer per scenario.
-func produceDBLookupAnswers(ctx context.Context, t *testing.T, producer *venueoracle.Producer, scenarios []dbScenario) []any {
-	t.Helper()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-
-	// The database URL goes by environment (a launcher extra, DATABASE_URI), never argv (a process listing shows argv).
-	upgrade, err := producer.Command(ctx, dbLookupPythonSettings, []string{"DATABASE_URI=" + instance.URI}, "-c", upgradeProgram)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if output, err := upgrade.CombinedOutput(); err != nil {
-		t.Fatalf("python upgrade: %v", pyoracle.RunError(upgrade.Path, err, output))
-	}
-	parsed, err := url.Parse(instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed.RawQuery, parsed.Scheme = "", "postgresql+asyncpg"
-	baseURL := parsed.String()
-
-	keyFile := filepath.Join(t.TempDir(), "app-key.pem")
-	if err := os.WriteFile(keyFile, []byte("-----BEGIN KEY-----\nfrom-file\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	command, err := producer.Command(ctx, dbLookupPythonSettings, []string{"DATABASE_URI=" + baseURL}, "-c", dbLookupOracleProgram)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stderr strings.Builder
-	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = stdin.Close(); _ = command.Wait() })
-	reader := bufio.NewReaderSize(stdout, 1<<20)
-	ask := func(request map[string]any) map[string]any {
-		raw, _ := json.Marshal(request)
-		if _, err := io.WriteString(stdin, string(raw)+"\n"); err != nil {
-			t.Fatalf("python stdin: %v", err)
-		}
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			t.Fatalf("python answer: %v\n%s", err, stderr.String())
-		}
-		var answer map[string]any
-		if err := json.Unmarshal(line, &answer); err != nil {
-			t.Fatalf("python answer %q: %v", line, err)
-		}
-		return answer
-	}
-	produced := make([]any, 0, len(scenarios))
-	for _, scenario := range scenarios {
-		// The producer reads the key file by its real path: swap the placeholder in what it is sent.
-		creds := scenario.Creds
-		ask(map[string]any{"op": "seed", "orgs": scenario.Orgs, "creds": creds})
-		dbURL := baseURL
-		if scenario.DBURL != nil {
-			dbURL = scenario.DBURL(baseURL)
-		}
-		env := merge(scenario.Env)
-		args := append([]string{"git", "--provider", "github", "--owner", "a", "--repo", "b",
-			"--analytics-db", "clickhouse://ch:ch@localhost:8123/default"}, scenario.Args...)
-		for i, arg := range args {
-			args[i] = strings.ReplaceAll(arg, dbKeyPlaceholder, keyFile)
-		}
-		for name, value := range env {
-			env[name] = strings.ReplaceAll(value, dbKeyPlaceholder, keyFile)
-		}
-		switch {
-		case scenario.NoPG:
-		case scenario.Name == "--db flag":
-			args = append(args, "--db", dbURL)
-		default:
-			env["POSTGRES_URI"] = dbURL
-		}
-		env["CLICKHOUSE_URI"] = "clickhouse://ch:ch@localhost:8123/default"
-		answer := ask(map[string]any{"op": "resolve", "args": args, "env": env})
-		raw, _ := json.Marshal(answer)
-		produced = append(produced, redactDBSecrets(mustGenericAny(raw)))
-	}
-	return produced
-}
-
-func mustGenericAny(raw []byte) any {
-	var out any
-	_ = json.Unmarshal(raw, &out)
-	return out
 }
 
 // goDBResult runs BuildPlan and the executor's lookups the way the verb does

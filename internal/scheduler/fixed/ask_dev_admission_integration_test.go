@@ -4,7 +4,6 @@ package fixed
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"testing"
 	"time"
@@ -156,7 +155,6 @@ VALUES
 // feature policy of Build (licensing/feature_policy.py), executed once over the
 // cases. Identity names the interpreter that ran it.
 var askDevGoldens = programoracle.Set{
-	Package:  "./internal/scheduler/fixed/",
 	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
 	Identity: "python 3.14.7\nunicodedata 16.0.0",
 	// The goldenrecord verb writes the digest when it promotes a recording; a
@@ -166,12 +164,6 @@ var askDevGoldens = programoracle.Set{
 	},
 }
 
-// askDevFeatureScript decides the ask_dev feature for each case on its input
-// with decide_feature of the checkout the script runs in.
-//
-//go:embed testdata/python_ask_dev_feature_oracle.py
-var askDevFeatureScript string
-
 // frozenAskDevFeatureDecisions returns the Python policy's decision for each
 // case, by case id, from the golden. No Python runs.
 func frozenAskDevFeatureDecisions[T any](t *testing.T, cases []T) map[string]bool {
@@ -180,8 +172,7 @@ func frozenAskDevFeatureDecisions[T any](t *testing.T, cases []T) map[string]boo
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := askDevGoldens.Outputs(t, repositoryRoot(t), "ask-dev-feature.golden.json", programoracle.Script("ask dev feature",
-		"internal/scheduler/fixed/testdata/python_ask_dev_feature_oracle.py", askDevFeatureScript, encoded))[0]
+	output := askDevGoldens.Outputs(t, "ask-dev-feature.golden.json", programoracle.Program{Name: "ask dev feature", Stdin: encoded})[0]
 	var decisions map[string]bool
 	if err := json.Unmarshal([]byte(output), &decisions); err != nil {
 		t.Fatalf("decode the frozen Python Ask Dev feature answer: %v\n%s", err, output)

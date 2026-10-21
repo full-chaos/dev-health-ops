@@ -1,0 +1,64 @@
+{
+  "jobs": [
+    {
+      "kind": "investment.materialize",
+      "queue": "investment",
+      "timeout_seconds": 7200,
+      "max_attempts": 3
+    },
+    {
+      "kind": "metrics.a",
+      "queue": "metrics",
+      "timeout_seconds": 600,
+      "max_attempts": 5
+    },
+    {
+      "kind": "metrics.b",
+      "queue": "metrics",
+      "timeout_seconds": 900,
+      "max_attempts": 5
+    },
+    {
+      "kind": "reports.run",
+      "queue": "reports",
+      "timeout_seconds": 300,
+      "max_attempts": 3
+    },
+    {
+      "kind": "workgraph.x",
+      "queue": "workgraph",
+      "timeout_seconds": 120,
+      "max_attempts": 2
+    },
+    {
+      "kind": "coverage.c",
+      "queue": "coverage",
+      "timeout_seconds": 60,
+      "max_attempts": 1
+    },
+    {
+      "kind": "heartbeat.h",
+      "queue": "heartbeat",
+      "timeout_seconds": 30,
+      "max_attempts": 1
+    },
+    {
+      "kind": "webhooks.w",
+      "queue": "webhooks",
+      "timeout_seconds": 30,
+      "max_attempts": 4
+    },
+    {
+      "kind": "sync.s",
+      "queue": "sync",
+      "timeout_seconds": 3601,
+      "max_attempts": 3
+    },
+    {
+      "kind": "sync.provider_unit",
+      "queue": "sync_provider",
+      "timeout_seconds": 3600,
+      "max_attempts": 3
+    }
+  ]
+}

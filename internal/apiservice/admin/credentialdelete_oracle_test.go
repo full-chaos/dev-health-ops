@@ -31,7 +31,7 @@ const deleteRouteOracleGoldenDigest = "a3ca62cf86105653b606b6e6f310a6f5ebad5087c
 func TestCredentialDeleteVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, governanceGolden("credentialdelete", "TestCredentialDeleteVenueOracle", deleteRouteOracleGoldenDigest))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("cd")
 	const jwtKey = "venue-oracle-test-secret-key-for-credential-delete-32-by"
 
@@ -52,7 +52,6 @@ func TestCredentialDeleteVenueOracle(t *testing.T) {
 		PythonEnv: []string{
 			"PAGER_DUTY_CLIENT_ID=" + pagerDutyDisconnectVenueClientID,
 			"SETTINGS_ENCRYPTION_KEY=" + pagerDutyDisconnectVenueEncryptionKey,
-			"VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE=" + fakeServer.URL,
 		},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -183,9 +182,7 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`, nextID(), o
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		golden.CompareRows(t, name, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, goRows)
+		golden.CompareRows(t, name, goRows)
 	}
 	compare("integration_credentials rows", `SELECT org_id, provider, name, is_active, (credentials_encrypted IS NULL)::text FROM integration_credentials ORDER BY org_id, provider, name`)
 	compare("provider_oauth_credentials rows", `SELECT org_id, provider, credential_name FROM provider_oauth_credentials ORDER BY org_id, credential_name`)

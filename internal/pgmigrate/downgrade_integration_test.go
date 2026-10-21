@@ -10,8 +10,6 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"os/exec"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -24,7 +22,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -32,38 +29,9 @@ import (
 // the scenarios: a build that still carried the Python CLI.
 const downgradePythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
-// downgradePythonProgram is the entry point the producer runs: the real dev-hops CLI.
-const downgradePythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-
-// downgradePythonSettings are the variables that shape the downgrade producer's answers, as constants: the
-// producer's environment AND part of the golden's request key (a changed value fails the frozen replay).
-// upgradePythonSettings are the same for the Python upgrade the conflicting-0142 cell runs (it carries the River
-// cutover switch). The database address is a per-run value, appended by name.
-var (
-	downgradePythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false"}
-	upgradePythonSettings   = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1"}
-)
-
-// pythonDowngrade runs the real `dev-hops migrate postgres downgrade <target>` (Alembic's real downgrade,
-// `command.downgrade`) against uri.
-func pythonDowngrade(t *testing.T, producer *venueoracle.Producer, uri, target string) (code int, output string) {
-	t.Helper()
-	pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
-	command, err := producer.Command(context.Background(), downgradePythonSettings, []string{"POSTGRES_URI=" + pyURI, "DATABASE_URI=" + pyURI}, "-c", downgradePythonProgram, "migrate", "postgres", "downgrade", target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	err = command.Run()
-	exitCode := 0
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		exitCode = exitErr.ExitCode()
-	} else if err != nil {
-		t.Fatalf("running the python producer: %v", pyoracle.RunError(command.Path, err, []byte(stderr.String())))
-	}
-	return exitCode, stdout.String() + stderr.String()
-}
+// upgradePythonSettings and upgradeProgram are fields of the downgrade golden's request (their digest is part of the
+// golden key). Nothing executes them: no Python runs, the answers are frozen.
+var upgradePythonSettings = map[string]string{"PYTHONHASHSEED": "0", "OTEL_ENABLED": "false", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1"}
 
 // alembicVersions reads the recorded revision(s), so the test can prove Python's downgrade actually
 // moved them and Go's refusal left them untouched.
@@ -636,52 +604,6 @@ type recordedUpgrade struct {
 // downgradeTargets are the targets dho accepts, in the order the oracle walks them.
 var downgradeTargets = []string{"0144", "0141", "0139", "0138", "0145"}
 
-// produceDowngrade runs every cell of the oracle against the REAL Python producer (databases built by dho's own
-// upgrade, at the production shape) and returns what it left.
-func produceDowngrade(t *testing.T, producer *venueoracle.Producer) downgradeRecorded {
-	t.Helper()
-	d := newDownInstance(t)
-	chain, _ := pgmigrate.LoadChain()
-	recorded := downgradeRecorded{Targets: map[string]recordedTarget{}, Relative: map[string]int{}}
-	for _, target := range downgradeTargets {
-		uri := d.at(t, len(chain))
-		code, output := pythonDowngrade(t, producer, uri, target)
-		if code != 0 {
-			t.Fatalf("the real Python downgrade %s failed (exit %d): %s", target, code, output)
-		}
-		recorded.Targets[target] = recordedTarget{Code: code, Shape: schemaShape(t, uri), Versions: alembicVersions(t, uri)}
-	}
-	for _, target := range []string{"-1", "-2"} {
-		code, _ := pythonDowngrade(t, producer, d.at(t, len(chain)), target)
-		recorded.Relative[target] = code
-	}
-	failing := d.at(t, len(chain))
-	insertSetupRevocation(t, failing)
-	recorded.Failing.ShapeBefore = schemaShape(t, failing)
-	recorded.Failing.Code, _ = pythonDowngrade(t, producer, failing, "0140")
-	recorded.Failing.ShapeAfter = schemaShape(t, failing)
-	single := d.at(t, len(chain))
-	if _, err := connect(t, single).Exec(context.Background(), "DELETE FROM alembic_version WHERE version_num = '0066'"); err != nil {
-		t.Fatal(err)
-	}
-	recorded.SingleHead.Code, _ = pythonDowngrade(t, producer, single, "-1")
-	recorded.SingleHead.Shape = schemaShape(t, single)
-	up := d.at(t, 0)
-	if _, err := connect(t, up).Exec(context.Background(), "SELECT 1 AS conflict INTO webhook_sync_requests"); err != nil {
-		t.Fatal(err)
-	}
-	recorded.Upgrade.StartVersions = alembicVersions(t, up)
-	upgrade, err := producer.Command(context.Background(), upgradePythonSettings, nil, "-c", upgradeProgram, up, "head")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, upgradeErr := upgrade.CombinedOutput()
-	recorded.Upgrade.Failed = upgradeErr != nil
-	recorded.Upgrade.Versions = alembicVersions(t, up)
-	recorded.Upgrade.Shape = schemaShape(t, up)
-	return recorded
-}
-
 // TestDowngradeMatchesFrozenPythonDowngrade is the differential oracle against what the REAL Python verb
 // (`command.downgrade`, real Alembic) left: the same databases (built by dho's upgrade, at the production shape)
 // are downgraded by dho, and the resulting schema shape and alembic_version must be identical to the recorded
@@ -690,31 +612,18 @@ func produceDowngrade(t *testing.T, producer *venueoracle.Producer) downgradeRec
 // testdata/golden/downgrade.json (the recipe regenerates them by execution); the targets and the programs are
 // the golden's key.
 func TestDowngradeMatchesFrozenPythonDowngrade(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/downgrade.json",
 		PythonBuild: downgradePythonBuild,
 		SHA256:      "391aeffa16c855e51ad40117c31e57bcc6463d6af3f6ccdef1e933dc9b7cfbd6",
-		Recipe: "git worktree add --detach $DIR " + downgradePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestDowngradeMatchesFrozenPythonDowngrade$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 	input, err := json.Marshal(map[string]any{"targets": downgradeTargets, "relative": []string{"-1", "-2"}, "failing": "0140",
 		"upgradeProgram": upgradeProgram, "upgradeSettings": upgradePythonSettings})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("downgrade cells", downgradePythonProgram, input, downgradePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		body, err := json.Marshal(produceDowngrade(t, producer))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(body)}}
-	})
+	request := venueoracle.ProgramRequest("downgrade cells", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen downgradeRecorded
 	if err := json.Unmarshal([]byte(venueoracle.UnpackBody(t, answers[0].Body)), &frozen); err != nil {

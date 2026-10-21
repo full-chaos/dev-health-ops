@@ -3,7 +3,6 @@
 package admin_test
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -25,10 +24,6 @@ func adminGolden(file, test, digest string) venueoracle.GoldenSpec {
 		Path:        "testdata/admin/" + file + ".json",
 		PythonBuild: adminPythonBuild,
 		SHA256:      digest,
-		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/apiservice/admin/ -test '^%s$' -python-root $DIR "+
-			"(records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-			adminPythonBuild, test),
 	}
 }
 

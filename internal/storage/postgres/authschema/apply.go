@@ -35,6 +35,10 @@ type Options struct {
 	// RuntimeRole is the least-privilege role auth-service connects as. It is
 	// only ever the SUBJECT of a GRANT here; it never executes anything.
 	RuntimeRole string
+	// SessionReaderRoles are the roles of the services that end an access
+	// token when its session is revoked (go-api and query-api read
+	// SessionReaderColumns, and nothing else in the schema). Empty means none.
+	SessionReaderRoles []string
 	// Logger receives one structured line per applied migration. Optional.
 	Logger *slog.Logger
 	// AcknowledgeNarrowing is the one-shot operator acknowledgement of a
@@ -93,6 +97,17 @@ func (o Options) Validate(migrationRole string) error {
 	// owned by the runtime role, which holds DDL over its own objects
 	// permanently -- the exact posture the ADR forbids, established silently
 	// by a successful-looking migration. Refuse instead.
+	seen := map[string]bool{}
+	for _, reader := range o.SessionReaderRoles {
+		if err := ValidateIdentifier(reader); err != nil {
+			return err
+		}
+		if reader == o.RuntimeRole || (migrationRole != "" && reader == migrationRole) || seen[reader] {
+			return fmt.Errorf("%w: session reader role %q must differ from the runtime role, the migration role and every other reader",
+				ErrInvalidOptions, reader)
+		}
+		seen[reader] = true
+	}
 	if migrationRole != "" && migrationRole == o.RuntimeRole {
 		return fmt.Errorf(
 			"%w: the migration role and the runtime role must be distinct "+

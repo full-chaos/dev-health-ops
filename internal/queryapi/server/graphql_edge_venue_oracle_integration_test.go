@@ -348,9 +348,8 @@ func enterRepositoryRoot(t *testing.T, root string) (leave func()) {
 }
 
 // startEdgePlane builds query-api over the venue as prod does (the real Build over the real settings, the
-// real Listeners) and returns its settings, the base of its public listener and the environment the Python
-// plane needs to reach it.
-func startEdgePlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue, root string) (map[string]string, string, []string, func()) {
+// real Listeners) and returns its settings and the base of its public listener.
+func startEdgePlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue, root string) (map[string]string, string, func()) {
 	t.Helper()
 	// query-api: the real Build over the real settings, the real Listeners.
 	jwksPath, _ := edgeOracleJWKS(t)
@@ -382,16 +381,7 @@ func startEdgePlane(t *testing.T, ctx context.Context, venue *venueoracle.Venue,
 		t.Cleanup(func() { _ = listener.Shutdown(context.Background()) })
 	}
 	goBase := "http://" + public.Address()
-	pythonEnv := []string{
-		"GO_API_QUERY_API_URL=" + goBase,
-		"QUERY_API_INTERNAL_URL=http://" + internal.Address(),
-		"GO_API_PLANE_HEADER_ENABLED=true",
-		"GO_API_DISPATCH_TIMEOUT_SECONDS=60",
-		"VENUE_RESET_ATTRS_PER_REQUEST=dev_health_ops.api.graphql.go_api_dispatcher:_http_client,dev_health_ops.api.graphql.go_api_dispatcher:_internal_http_client",
-		"VENUE_PY_LOGGING=1",
-		"CORS_ALLOWED_ORIGINS=" + edgeOracleOrigin,
-	}
-	return settings, goBase, pythonEnv, leave
+	return settings, goBase, leave
 }
 
 // edgeSuite is the requests of the edge oracle and the documents its later phases use.

@@ -9,15 +9,7 @@ import (
 
 func TestProviderRequestPlansMatchFrozenPythonBudgetFunctions(t *testing.T) {
 	output := frozenScriptAnswer(t, scriptOracle{
-		name:   "provider-budget",
-		script: "testdata/python_provider_budget_oracle.py",
-		sources: []string{
-			"src/dev_health_ops/providers/github/budget.py",
-			"src/dev_health_ops/providers/gitlab/budget.py",
-			"src/dev_health_ops/providers/linear/budget.py",
-			"src/dev_health_ops/providers/jira/budget.py",
-			"src/dev_health_ops/providers/launchdarkly/budget.py",
-		},
+		name: "provider-budget",
 	})
 	var cases []struct {
 		Provider          string            `json:"provider"`

@@ -179,24 +179,11 @@ func (r Record) Wire() contracts.Session {
 	return out
 }
 
-// Issued is a session's live refresh credential, returned once.
-type Issued struct {
-	Session    Record
-	Credential contracts.SecretString
-	ExpiresAt  time.Time
-}
-
 // Result is the outcome of an exchange. Credential is set only when
 // Reason.Success().
 type Result struct {
 	Reason Reason
 	Issued
-}
-
-// Actor names who asked for a revocation or revision change, for the audit row.
-type Actor struct {
-	PrincipalID *uuid.UUID
-	RequestID   *string
 }
 
 // amrValues is session.v1's closed amr enum.
@@ -506,15 +493,11 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 	return s.revokeForReuse(ctx, reuse.Record, reusedFamily, hash)
 }
 
-func equalHash(a, b []byte) bool {
-	if len(a) != len(b) || len(a) == 0 {
-		return false
-	}
-	var diff byte
-	for i := range a {
-		diff |= a[i] ^ b[i]
-	}
-	return diff == 0
+// Issued is a session's live refresh credential, returned once.
+type Issued struct {
+	Session    Record
+	Credential contracts.SecretString
+	ExpiresAt  time.Time
 }
 
 // rotate inserts the successor and consumes the parent. The caller holds the

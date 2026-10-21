@@ -65,6 +65,9 @@
       "accepted_credential_classes": [
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
       "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
@@ -100,6 +103,9 @@
       "accepted_credential_classes": [
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
       "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
@@ -135,6 +141,9 @@
       "accepted_credential_classes": [
         "ops_access_token_hs256"
       ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
       "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",

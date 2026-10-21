@@ -1,0 +1,13 @@
+# Refusal inventory for cigate docs check-provider-limits. Source: tests/test_rate_limit_policy_doc.py at b5eb6bde (deleted).
+# Each row maps one Python refusal to the case a live-CLI test runs; a row with no case, or a case with no row, fails.
+# python_site	python_refusal	case	go_rc	go_stderr
+test_rate_limit_policy_doc.py:41	assert is_file(): page absent	page-absent	1	missing canonical provider limits page
+test_rate_limit_policy_doc.py:41	assert is_file(): page is a directory	page-is-dir	1	missing canonical provider limits page
+test_rate_limit_policy_doc.py:41	assert is_file(): page is a dangling symlink	page-dangling-symlink	1	missing canonical provider limits page
+test_rate_limit_policy_doc.py:45	read_text(): FileNotFoundError	mkdocs-absent	1	cannot read mkdocs.yml
+test_rate_limit_policy_doc.py:45	read_text(): IsADirectoryError	mkdocs-is-dir	1	cannot read mkdocs.yml
+test_rate_limit_policy_doc.py:45	read_text(): PermissionError	mkdocs-unreadable	1	cannot read mkdocs.yml
+test_rate_limit_policy_doc.py:45	read_text(): UnicodeDecodeError, invalid byte	mkdocs-invalid-utf8	1	mkdocs.yml is not valid UTF-8
+test_rate_limit_policy_doc.py:45	read_text(): UnicodeDecodeError, encoded surrogate	mkdocs-surrogate	1	mkdocs.yml is not valid UTF-8
+test_rate_limit_policy_doc.py:46	assert target in nav: target absent	nav-target-absent	1	not wired into the mkdocs.yml nav
+test_rate_limit_policy_doc.py:46	assert target in nav: case differs (in is case-sensitive)	nav-target-case-differs	1	not wired into the mkdocs.yml nav

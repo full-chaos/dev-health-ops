@@ -11,7 +11,7 @@ import (
 //
 // #2231 codex r1 established the gap: deleting `FINAL` from either loader query
 // would be accepted by BOTH the frozen compute golden
-// (compute_test.go) and the live rot guard (golden_rot_guard_test.go), because
+// (compute_test.go) and the live rot guard (golden_rot_guard_test.go, since deleted), because
 // neither exercises SQL loading at all -- the golden feeds already-materialized
 // rows straight into the compute function, and the rot guard only re-runs the
 // Python generator. A silent revert to raw reads would restore Python's

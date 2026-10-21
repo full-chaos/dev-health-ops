@@ -27,7 +27,7 @@ func TestTheDonorSetAppliesTheFirstRecordedOwnersBackward(t *testing.T) {
 	repoIDs := map[string]string{
 		"pair": "a1000000-0000-4000-8000-000000000001", "gap": "a1000000-0000-4000-8000-000000000002",
 		"grant-only": "a1000000-0000-4000-8000-000000000003", "revoked": "a1000000-0000-4000-8000-000000000004",
-		"tie": "a1000000-0000-4000-8000-000000000005",
+		"tie": "a1000000-0000-4000-8000-000000000005", "future": "a1000000-0000-4000-8000-000000000006",
 	}
 	for name, id := range repoIDs {
 		mustExec(t, ctx, conn, `INSERT INTO repos (id,repo,provider,org_id) VALUES (?,?,'github',?)`, id, "acme/"+name, orgAlpha)
@@ -59,6 +59,8 @@ func TestTheDonorSetAppliesTheFirstRecordedOwnersBackward(t *testing.T) {
 		// revoked: a row that ended before it began is never valid.
 		{"team-d", "revoked", false, 1, 1, day(time.February, 1), &endedJanuary},
 		{"team-a", "revoked", false, 1, 1, day(time.March, 1), nil},
+		// future: the only record begins after the run's bound (upTo), so the row that holds at the first record is read.
+		{"team-a", "future", false, 1, 1, day(time.October, 30), nil},
 		{"team-a", "tie", false, 1, 0.5, day(time.March, 1), nil},
 		{"team-b", "tie", false, 1, 0.5, day(time.March, 1), nil},
 	}
@@ -89,7 +91,7 @@ func TestTheDonorSetAppliesTheFirstRecordedOwnersBackward(t *testing.T) {
 	repoOf := func(name string) uuid.UUID { return uuid.MustParse(repoIDs[name]) }
 	for name, want := range map[string]time.Time{
 		"pair": day(time.March, 1), "gap": day(time.March, 1), "grant-only": day(time.March, 1),
-		"revoked": day(time.February, 1), "tie": day(time.March, 1),
+		"revoked": day(time.February, 1), "tie": day(time.March, 1), "future": day(time.October, 30),
 	} {
 		if got := set.FirstByRepo[repoOf(name)]; !got.Equal(want) {
 			t.Errorf("first record of %s = %v, want %v", name, got, want)
@@ -142,19 +144,19 @@ func TestTheDonorSetAppliesTheFirstRecordedOwnersBackward(t *testing.T) {
 	}{
 		{"before every record", beforeAll, []string{
 			key("team-a", "pair"), key("team-b", "pair"), key("team-a", "gap"), key("team-a", "grant-only"),
-			key("team-a", "tie"), key("team-b", "tie"),
+			key("team-a", "tie"), key("team-b", "tie"), key("team-a", "future"),
 		}},
 		{"at the first record", atFirst, []string{
 			key("team-a", "pair"), key("team-b", "pair"), key("team-a", "gap"), key("team-a", "grant-only"),
-			key("team-a", "revoked"), key("team-a", "tie"), key("team-b", "tie"),
+			key("team-a", "revoked"), key("team-a", "tie"), key("team-b", "tie"), key("team-a", "future"),
 		}},
 		{"in a gap between records", inGap, []string{
 			key("team-a", "pair"), key("team-b", "pair"), key("team-a", "grant-only"), key("team-a", "revoked"),
-			key("team-a", "tie"), key("team-b", "tie"),
+			key("team-a", "tie"), key("team-b", "tie"), key("team-a", "future"),
 		}},
 		{"after the records", later, []string{
 			key("team-a", "pair"), key("team-b", "pair"), key("team-c", "gap"), key("team-a", "grant-only"),
-			key("team-a", "revoked"), key("team-a", "tie"), key("team-b", "tie"),
+			key("team-a", "revoked"), key("team-a", "tie"), key("team-b", "tie"), key("team-a", "future"),
 		}},
 	} {
 		sort.Strings(tc.want)

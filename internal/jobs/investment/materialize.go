@@ -202,9 +202,10 @@ type Stats struct {
 
 // unitOwnershipAsOf is the instant a work unit takes the repositories of its
 // donor teams at: the end of the unit's own span, and never later than the
-// run. Ownership starts when it was first known and a later change does not
-// move the effort of a unit that ended before it; a unit whose span ends after
-// the run (a clock ahead of this host) reads no row the run could not see.
+// run. A later change of ownership does not move the effort of a unit that ended
+// before it; a unit that ended before the first record of a repository takes the
+// repository's first recorded owners (DonorsAt clamps the instant, D5987 option C);
+// a unit whose span ends after the run (a clock ahead of this host) is read at the run.
 func unitOwnershipAsOf(unitEnd, runAsOf time.Time) time.Time {
 	if unitEnd.IsZero() || unitEnd.After(runAsOf) {
 		return runAsOf

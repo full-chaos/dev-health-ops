@@ -532,3 +532,12 @@ func markerNames(class RegistryClass, kind string) []string {
 	}
 	return names
 }
+
+func TestTheProfileSchemaAcceptsAMediaTypeTypAsTheSelectorName(t *testing.T) {
+	root := testRoot(t)
+	profile := loadEndpointAuthProfileFixture(t, "valid-multi-class-envelope-vs-user-token-by-typ.json").(map[string]any)
+	profile["class_disambiguator"] = map[string]any{"kind": "jwt_header_typ", "name": "at+jwt"}
+	if err := ValidateEndpointAuthProfile(root, profile); err != nil {
+		t.Fatalf("refused jwt_header_typ/at+jwt as the selector for the envelope vs the user access token: %v", err)
+	}
+}

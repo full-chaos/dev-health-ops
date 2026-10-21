@@ -73,13 +73,19 @@ var (
 )
 
 func listRates(input, cached, output int64) Rates {
-	return Rates{Input: input, CachedInput: cached, Output: output}
+	return Rates{Input: input, CachedInput: cached, Output: output, CacheWriteInput: input}
+}
+
+// anthropicRates prices a cache-write prompt token at 1.25 times the input
+// rate (the five-minute cache).
+func anthropicRates(input, cached, output int64) Rates {
+	return Rates{Input: input, CachedInput: cached, Output: output, CacheWriteInput: input * 5 / 4}
 }
 
 var listPrices = []listPriceRow{
-	{provider: "anthropic", hosts: anthropicHosts, model: "claude-haiku-5-5", rates: listRates(500_000, 50_000, 2_500_000)},
-	{provider: "anthropic", hosts: anthropicHosts, model: "claude-sonnet-5-5", rates: listRates(2_000_000, 100_000, 10_000_000)},
-	{provider: "anthropic", hosts: anthropicHosts, model: "claude-opus-5-5", rates: listRates(4_000_000, 200_000, 20_000_000)},
+	{provider: "anthropic", hosts: anthropicHosts, model: "claude-haiku-5-5", rates: anthropicRates(500_000, 50_000, 2_500_000)},
+	{provider: "anthropic", hosts: anthropicHosts, model: "claude-sonnet-5-5", rates: anthropicRates(2_000_000, 100_000, 10_000_000)},
+	{provider: "anthropic", hosts: anthropicHosts, model: "claude-opus-5-5", rates: anthropicRates(4_000_000, 200_000, 20_000_000)},
 
 	{provider: "gemini", hosts: geminiHosts, model: "gemini-3.8-flash", rates: listRates(750_000, 75_000, 3_750_000)},
 	{provider: "gemini", hosts: geminiHosts, model: "gemini-3.8-flash", from: utcDay(2027, 1, 1), rates: listRates(1_500_000, 150_000, 7_500_000)},

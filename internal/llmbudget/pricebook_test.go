@@ -41,7 +41,11 @@ func TestListPricesMatchThePublishedPages(t *testing.T) {
 		if err != nil || price == nil || price.Version != ListPricingVersion {
 			t.Fatalf("%s: price %+v err %v, want version %s", name, price, err, ListPricingVersion)
 		}
-		if price.Rates != (Rates{Input: c.want.input, CachedInput: c.want.cached, Output: c.want.output}) {
+		write := c.want.input
+		if c.provider == "anthropic" {
+			write = c.want.input * 5 / 4
+		}
+		if price.Rates != (Rates{Input: c.want.input, CachedInput: c.want.cached, Output: c.want.output, CacheWriteInput: write}) {
 			t.Errorf("%s: %+v, want %+v", name, price.Rates, c.want)
 		}
 		for _, call := range []struct{ input, output, cached, want int64 }{
@@ -51,7 +55,7 @@ func TestListPricesMatchThePublishedPages(t *testing.T) {
 			// A small prompt is billed at the same row: never below the bill.
 			{1_000, 1_000, 0, (1_000*c.want.input + 1_000*c.want.output + 999_999) / 1_000_000},
 		} {
-			cost, err := CostMicroUSDAt(c.provider, c.model, c.baseURL, call.input, call.output, call.cached, c.at)
+			cost, err := CostMicroUSDAt(c.provider, c.model, c.baseURL, call.input, call.output, call.cached, 0, c.at)
 			if err != nil || cost == nil || *cost != call.want {
 				t.Errorf("%s: cost of %d in (%d cached) + %d out = %v (err %v), want %d", name, call.input, call.cached, call.output, cost, err, call.want)
 			}
@@ -90,7 +94,7 @@ func TestListPricesOnlyOnTheOfficialEndpoint(t *testing.T) {
 		if err != nil || price != nil {
 			t.Errorf("%s/%s at %q priced %+v (err %v), want unpriced", c.provider, c.model, c.baseURL, price, err)
 		}
-		if cost, _ := CostMicroUSDAt(c.provider, c.model, c.baseURL, 10, 10, 0, beforeChanges); cost != nil {
+		if cost, _ := CostMicroUSDAt(c.provider, c.model, c.baseURL, 10, 10, 0, 0, beforeChanges); cost != nil {
 			t.Errorf("%s/%s at %q cost %d, want unpriced", c.provider, c.model, c.baseURL, *cost)
 		}
 	}
@@ -99,7 +103,7 @@ func TestListPricesOnlyOnTheOfficialEndpoint(t *testing.T) {
 // The OpenAI book is unchanged and keeps its own version.
 func TestOpenAIPriceKeepsItsVersion(t *testing.T) {
 	price, err := PriceAt("openai", "gpt-5-nano", "", beforeChanges)
-	if err != nil || price == nil || price.Version != PricingVersion || price.Rates != (Rates{50_000, 50_000, 400_000}) {
+	if err != nil || price == nil || price.Version != PricingVersion || price.Rates != (Rates{Input: 50_000, CachedInput: 50_000, Output: 400_000, CacheWriteInput: 50_000}) {
 		t.Fatalf("openai nano: %+v, %v", price, err)
 	}
 }
@@ -132,5 +136,29 @@ func TestACallSettlesAtThePriceItWasReservedAt(t *testing.T) {
 	}
 	if len(store.settleReq) != 1 || store.settleReq[0].Cost == nil || *store.settleReq[0].Cost != 750_000 {
 		t.Fatalf("settles %+v, want the call settled at the price it was reserved at, 750000", store.settleReq)
+	}
+}
+
+func TestCacheWriteTokensBillAtTheWriteRate(t *testing.T) {
+	for _, c := range []struct {
+		name, provider, model                        string
+		input, output, cached, created, wantMicroUSD int64
+	}{
+		{"haiku write only", "anthropic", "claude-haiku-5-5", 1_000_000, 0, 0, 1_000_000, 625_000},
+		{"sonnet write only", "anthropic", "claude-sonnet-5-5", 1_000_000, 0, 0, 1_000_000, 2_500_000},
+		{"opus write only", "anthropic", "claude-opus-5-5", 1_000_000, 0, 0, 1_000_000, 5_000_000},
+		{"haiku read only", "anthropic", "claude-haiku-5-5", 1_000_000, 0, 1_000_000, 0, 50_000},
+		{"haiku mixed", "anthropic", "claude-haiku-5-5", 1_000_000, 1_000_000, 200_000, 300_000, 500_000*500_000/1_000_000 + 200_000*50_000/1_000_000 + 300_000*625_000/1_000_000 + 2_500_000},
+		{"gemini write is the input rate", "gemini", "gemini-3.5-flash-lite", 1_000_000, 0, 0, 1_000_000, 300_000},
+	} {
+		got, err := CostMicroUSDAt(c.provider, c.model, "", c.input, c.output, c.cached, c.created, beforeChanges)
+		if err != nil || got == nil || *got != c.wantMicroUSD {
+			t.Errorf("%s: cost = %v (err %v), want %d", c.name, got, err, c.wantMicroUSD)
+		}
+	}
+	for _, c := range []struct{ input, cached, created int64 }{{100, 60, 50}, {100, 0, 101}, {100, 0, -1}} {
+		if got, _ := CostMicroUSDAt("anthropic", "claude-haiku-5-5", "", c.input, 0, c.cached, c.created, beforeChanges); got != nil {
+			t.Errorf("input %d cached %d created %d priced as %d, want unpriced", c.input, c.cached, c.created, *got)
+		}
 	}
 }

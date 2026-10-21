@@ -16,7 +16,7 @@ import (
 )
 
 // CHAOS-10177: Go port of tests/tooling/test_go_workflow_path_filters.py (CHAOS-4834, 6801). `go.yml`'s `paths` is the
-// list ci/go_relevance.sh reads, so a fixture or Go input missing from it means a fixture-only change is judged
+// list GitHub reads to queue Go CI, so a fixture or Go input missing from it means a fixture-only change is judged
 // irrelevant and a required gate is skipped. The oracle is the tree, never a pattern: every non-Go file under a
 // testdata/ or fixtures/ directory, every file Go source NAMES (string literal, filepath.Join, //go:embed,
 // os.ReadDir) must match the filter or be excused with a reason. A literal that names a
@@ -50,7 +50,7 @@ func hasDataSuffix(s string) bool {
 	return false
 }
 
-// githubGlobToRegexp mirrors ci/go_relevance.sh's glob translation: `**/` is zero or more directories at any
+// githubGlobToRegexp mirrors GitHub's path-filter globs: `**/` is zero or more directories at any
 // position, `**` spans separators, `*` does not, and `?[]!` are refused rather than read as literal text.
 func githubGlobToRegexp(pattern string) (*regexp.Regexp, error) {
 	if i := strings.IndexAny(pattern, "?[]!"); i >= 0 {
@@ -585,6 +585,27 @@ func TestGlobTranslatorMatchesGithubSemantics(t *testing.T) {
 	}
 }
 
+// go.yml's real path lists queue Go CI for root-level Go inputs: `**/*.go` must match `root.go`, not only `dir/root.go`.
+// docs/README.md is the negative control.
+func TestRootLevelPathsMatchTheDoubleStarPrefix(t *testing.T) {
+	root := repoRoot(t)
+	for _, event := range []string{"push", "pull_request"} {
+		paths := goPaths(t, root, event)
+		for _, c := range []struct {
+			path string
+			want bool
+		}{
+			{"root.go", true}, {"go.mod", true}, {"go.sum", true}, {"internal/x/y.go", true},
+			{"cmd/dev-health-worker/main.go", true}, {"testdata/a.json", true}, {"internal/x/testdata/a.json", true},
+			{"docs/README.md", false},
+		} {
+			if got := matchesAny(t, c.path, paths); got != c.want {
+				t.Errorf("go.yml %s paths match %q = %v, want %v", event, c.path, got, c.want)
+			}
+		}
+	}
+}
+
 func TestGlobTranslatorRefusesWhatItCannotExpress(t *testing.T) {
 	for _, unsupported := range []string{"a?b", "a[bc]d", "!negated"} {
 		if _, err := githubGlobToRegexp(unsupported); err == nil {
@@ -713,7 +734,7 @@ func TestAGitignoredDirectoryIsNotCollectedAsARepoFixture(t *testing.T) {
 		fxDir + "real.json":                 "{}",
 		".uv-cache/pkg/fixtures/probe.json": "{}",
 	})
-	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "-c", "maintenance.auto=false", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
 		if _, err := runGitStripped(root, args...); err != nil {
 			t.Skipf("git unavailable for the control: %v", err)
 		}
@@ -739,7 +760,7 @@ func TestAGitignoredDirectoryIsNotCollectedAsARepoFixture(t *testing.T) {
 // filters match paths in a commit. Hosted CI went red on exactly this.
 func TestAnUntrackedScratchFileIsNotAnInput(t *testing.T) {
 	root := miniRepo(t, map[string]string{"internal/x/x_test.go": "package x\nvar _ = \"changed.txt\"\n"})
-	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=t", "-c", "maintenance.auto=false", "commit", "-q", "-m", "x", "--no-gpg-sign"}} {
 		if _, err := runGitStripped(root, args...); err != nil {
 			t.Skipf("git unavailable for the control: %v", err)
 		}

@@ -320,7 +320,7 @@ func TestLocalValidateClickhouseGuardsFirePerPlantedDefect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	anchor := `PYBIN="${ROOT}/.venv/bin/python"`
+	anchor := `DHO="${DHO:-${ROOT}/.build/dho}"`
 	cases := []struct{ name, old, new, want string }{
 		{"redaction leaks the tail", `"${rest#*"${authority%@*}"@}"`, `"${rest}"`, "credential survived redaction"},
 		{"a display site prints the raw DSN", anchor, anchor + "\nprintf '%s\\n' \"${SCRATCH_URI}\"", "displays SCRATCH_URI without redaction"},

@@ -9,8 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The relevance step of the venue-oracles workflow, EXECUTED in bash in a scratch repo with the real ci/go_relevant_diff.sh,
-// ci/go_relevance.sh and go.yml: a plain dispatch runs the full suite, an auth-corpus-only dispatch skips the shards, a push
+// The relevance step of the venue-oracles workflow, EXECUTED in bash in a scratch repo with the real ci/go_relevant_diff.sh
+// and go.yml: a plain dispatch runs the full suite, an auth-corpus-only dispatch skips the shards, a push
 // that changes the gate itself runs the suite (on that branch, not by failing open), and an unresolvable range fails open.
 
 type relevanceCase struct {
@@ -59,7 +59,7 @@ func runRelevanceCase(t *testing.T, step string, c relevanceCase) (output, stdou
 	t.Helper()
 	root := rootOf(t)
 	r := newGitRepo(t.TempDir())
-	for _, rel := range []string{"ci/go_relevant_diff.sh", "ci/go_relevance.sh", ".github/workflows/go.yml"} {
+	for _, rel := range []string{"ci/go_relevant_diff.sh", ".github/workflows/go.yml"} {
 		r.write(rel, readText(t, filepath.Join(root, filepath.FromSlash(rel))))
 	}
 	r.git("add", "-A")

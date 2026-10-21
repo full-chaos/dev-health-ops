@@ -168,7 +168,7 @@ func TestBranchesThatAddAndRetimeRowsMergeWithoutConflict(t *testing.T) {
 		t.Fatal(repo.err)
 	}
 	for _, name := range names {
-		res := cmdSpec{dir: repo.dir, env: gitEnv}.run("git", "-c", "commit.gpgsign=false", "merge", "--no-edit", "-q", name)
+		res := cmdSpec{dir: repo.dir, env: gitEnv}.run("git", "-c", "commit.gpgsign=false", "-c", "maintenance.auto=false", "merge", "--no-edit", "-q", name)
 		if res.code != 0 {
 			t.Fatalf("merging %s conflicted: %s%s", name, res.stdout, res.stderr)
 		}
@@ -293,7 +293,7 @@ func TestTheOldFlatLayoutConflictsOnTheSameEdits(t *testing.T) {
 		t.Fatal(repo.err)
 	}
 	merge := func(name string) int {
-		return cmdSpec{dir: repo.dir, env: gitEnv}.run("git", "-c", "commit.gpgsign=false", "merge", "--no-edit", "-q", name).code
+		return cmdSpec{dir: repo.dir, env: gitEnv}.run("git", "-c", "commit.gpgsign=false", "-c", "maintenance.auto=false", "merge", "--no-edit", "-q", name).code
 	}
 	if code := merge("a"); code != 0 {
 		t.Fatalf("control setup: the first branch must merge cleanly, exit %d", code)

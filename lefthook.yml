@@ -9,7 +9,9 @@ commit-msg:
       # Sisyphus / oh-my-openagent / Claude Code and similar agents inject
       # "Ultraworked with ..." and "Co-authored-by: <agent>" trailers despite
       # the repo rule; this hook strips them before the commit lands.
-      run: python3 scripts/strip_agent_attribution.py {1}
+      # A built binary, not `go run`: `go run` turns every nonzero exit into 1 and hides the usage status 2.
+      run: |
+        bin="$(mktemp -d)" && go build -o "$bin/strip" ./cmd/strip-agent-attribution && "$bin/strip" {1}; rc=$?; rm -rf "$bin"; exit "$rc"
 
 pre-push:
   parallel: true

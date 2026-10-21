@@ -366,12 +366,21 @@ func countRows(t *testing.T, ctx context.Context, st stack, query string, args .
 	return n
 }
 
-func assertNoRowsWritten(t *testing.T, ctx context.Context, st stack) {
+type rowCounts struct{ users, memberships, refresh int }
+
+func snapshotRows(t *testing.T, ctx context.Context, st stack) rowCounts {
 	t.Helper()
-	for _, table := range []string{"users", "memberships", "refresh_tokens"} {
-		if n := countRows(t, ctx, st, `SELECT count(*) FROM `+table); n != 0 {
-			t.Fatalf("%s has %d rows, want 0", table, n)
-		}
+	return rowCounts{
+		users:       countRows(t, ctx, st, `SELECT count(*) FROM users`),
+		memberships: countRows(t, ctx, st, `SELECT count(*) FROM memberships`),
+		refresh:     countRows(t, ctx, st, `SELECT count(*) FROM refresh_tokens`),
+	}
+}
+
+func assertNoRowsWritten(t *testing.T, ctx context.Context, st stack, before rowCounts) {
+	t.Helper()
+	if after := snapshotRows(t, ctx, st); after != before {
+		t.Fatalf("rows changed: before %+v, after %+v", before, after)
 	}
 }
 
@@ -422,11 +431,12 @@ func TestSAMLAutoProvisionOffRefusesANewAccountWithoutWrites(t *testing.T) {
 	const sp = "https://sp.test/saml/metadata"
 	providerID := seedSAMLOrgProviderAuto(t, ctx, st, idp, sp, false)
 
+	before := snapshotRows(t, ctx, st)
 	status, body := samlSignIn(t, st, idp, providerID, sp, "off.person@allowed.example", "off-subject")
 	if status < 400 || body["access_token"] != nil {
 		t.Fatalf("status=%d body=%v, want a refusal", status, body)
 	}
-	assertNoRowsWritten(t, ctx, st)
+	assertNoRowsWritten(t, ctx, st, before)
 }
 
 func TestSAMLAutoProvisionFailureLeavesNoRows(t *testing.T) {
@@ -438,11 +448,12 @@ func TestSAMLAutoProvisionFailureLeavesNoRows(t *testing.T) {
 	providerID := seedSAMLOrgProvider(t, ctx, st, idp, sp)
 	installMembershipInsertFailure(t, ctx, st)
 
+	before := snapshotRows(t, ctx, st)
 	status, body := samlSignIn(t, st, idp, providerID, sp, "fail.person@allowed.example", "fail-subject")
 	if status < 400 || body["access_token"] != nil {
 		t.Fatalf("status=%d body=%v, want a failure", status, body)
 	}
-	assertNoRowsWritten(t, ctx, st)
+	assertNoRowsWritten(t, ctx, st, before)
 }
 
 func TestSAMLAutoProvisionJoinsAnAccountWithNoMembership(t *testing.T) {
@@ -529,13 +540,14 @@ func TestOIDCAutoProvisionOffRefusesANewAccountWithoutWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before := snapshotRows(t, ctx, st)
 	idp.set(parsed.Query().Get("nonce"), "oidc.off@allowed.example", "Oidc Off", "oidc-off-subject")
 	status, body := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "test-auth-code", "state": authResp["state"]})
 	if status < 400 || body["access_token"] != nil {
 		t.Fatalf("status=%d body=%v, want a refusal", status, body)
 	}
-	assertNoRowsWritten(t, ctx, st)
+	assertNoRowsWritten(t, ctx, st, before)
 }
 
 func oauthJITStack(t *testing.T, ctx context.Context, auto bool, email, subject string) (stack, *fakeGitLab, uuid.UUID, uuid.UUID) {
@@ -575,11 +587,12 @@ func TestOAuthAutoProvisionOffRefusesANewAccountWithoutWrites(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	st, _, _, providerID := oauthJITStack(t, ctx, false, "oauth.off@allowed.example", "gl-off")
+	before := snapshotRows(t, ctx, st)
 	status, body := oauthSignIn(t, st, providerID)
 	if status < 400 || body["access_token"] != nil {
 		t.Fatalf("status=%d body=%v, want a refusal", status, body)
 	}
-	assertNoRowsWritten(t, ctx, st)
+	assertNoRowsWritten(t, ctx, st, before)
 }
 
 func TestOAuthAutoProvisionFailureLeavesNoRows(t *testing.T) {
@@ -587,11 +600,12 @@ func TestOAuthAutoProvisionFailureLeavesNoRows(t *testing.T) {
 	defer cancel()
 	st, _, _, providerID := oauthJITStack(t, ctx, true, "oauth.fail@allowed.example", "gl-fail")
 	installMembershipInsertFailure(t, ctx, st)
+	before := snapshotRows(t, ctx, st)
 	status, body := oauthSignIn(t, st, providerID)
 	if status < 400 || body["access_token"] != nil {
 		t.Fatalf("status=%d body=%v, want a failure", status, body)
 	}
-	assertNoRowsWritten(t, ctx, st)
+	assertNoRowsWritten(t, ctx, st, before)
 }
 
 func TestOAuthAutoProvisionJoinsAnAccountWithNoMembership(t *testing.T) {

@@ -379,6 +379,13 @@ func checkBracketedHost(netloc string) error {
 	return nil
 }
 
+func rawField(row []string, index map[string]int, name string) string {
+	if i := index[name]; i < len(row) {
+		return row[i]
+	}
+	return ""
+}
+
 func loadRedirects(path string) ([]redirect, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -391,6 +398,11 @@ func loadRedirects(path string) ([]redirect, error) {
 	r.Comma = '\t'
 	r.FieldsPerRecord = -1
 	r.LazyQuotes = true
+	// csv.DictReader takes the first line as the header even when it is empty (then the manifest is "missing" its
+	// columns); encoding/csv would skip the empty line and read the next one as the header.
+	if strings.HasPrefix(string(data), "\n") || strings.HasPrefix(string(data), "\r") {
+		return nil, fmt.Errorf("redirect manifest is missing ['source_path', 'target_path']: %s", path)
+	}
 	header, err := r.Read()
 	if err != nil && err != io.EOF {
 		return nil, err
@@ -404,12 +416,7 @@ func loadRedirects(path string) ([]redirect, error) {
 	if len(header) == 0 || !hasSource || !hasTarget {
 		return nil, fmt.Errorf("redirect manifest is missing ['source_path', 'target_path']: %s", path)
 	}
-	field := func(row []string, name string) string {
-		if i := index[name]; i < len(row) {
-			return pyStrip(row[i])
-		}
-		return ""
-	}
+	field := func(row []string, name string) string { return pyStrip(rawField(row, index, name)) }
 	var out []redirect
 	seen := map[string]bool{}
 	for line := 2; ; line++ {
@@ -426,6 +433,11 @@ func loadRedirects(path string) ([]redirect, error) {
 		}
 		if !strings.HasPrefix(source, "/") || !strings.HasPrefix(target, "/") {
 			return nil, fmt.Errorf("redirect paths must be site-relative at %s:%d: %s -> %s", path, line, pyRepr(source), pyRepr(target))
+		}
+		for _, name := range []string{"source_path", "target_path"} {
+			if raw := rawField(row, index, name); strings.IndexFunc(raw, unicode.IsControl) >= 0 {
+				return nil, fmt.Errorf("control character in redirect %s at %s:%d: %s", name, path, line, pyRepr(raw))
+			}
 		}
 		if source == target {
 			return nil, fmt.Errorf("self redirect at %s:%d: %s", path, line, source)

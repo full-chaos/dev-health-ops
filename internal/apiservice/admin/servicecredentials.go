@@ -29,8 +29,9 @@ import (
 
 // The internal services a credential can be issued to, and the scopes each may hold.
 const (
-	ServiceACR            = "acr"
-	ServiceWorkerOperator = "worker-operator"
+	ServiceACR               = "acr"
+	ServiceWorkerOperator    = "worker-operator"
+	ServiceAuthSessionIssuer = "auth-session-issuer"
 
 	acrTokenPrefix            = "svc_acr_"
 	workerOperatorTokenPrefix = "svc_worker_"

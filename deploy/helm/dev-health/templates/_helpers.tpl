@@ -138,6 +138,9 @@ creates <fullname>-hs256 (secrets.create). Only go-api reads it through the char
 */}}
 {{- define "dev-health.hs256SecretName" -}}
 {{- if .Values.hs256Secret.externalSecretName }}
+{{- if eq (lower (trim .Values.hs256Secret.externalSecretName)) (lower (trim (include "dev-health.secretName" .))) }}
+{{- fail "hs256Secret.externalSecretName must differ from the shared Secret name (CHAOS-10446): the worker groups envFrom the shared Secret, so the HS256 key would reach them" }}
+{{- end }}
 {{- .Values.hs256Secret.externalSecretName }}
 {{- else if .Values.secrets.create }}
 {{- include "dev-health.fullname" . }}-hs256

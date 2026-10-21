@@ -783,8 +783,9 @@ web:
     NODE_ENV: "production"
   # -- CHAOS-10446: where web's AUTH_SECRET (the Auth.js session secret) comes
   #    from: one Secret key, never the shared Secret and never JWT_SECRET_KEY.
-  #    REQUIRED when web.enabled unless web.env.AUTH_SECRET or
-  #    web.localDevelopment.enabled is set; the render fails otherwise.
+  #    REQUIRED when web.enabled unless web.env.AUTH_SECRET is set, or
+  #    web.localDevelopment.enabled is set with web.env.NODE_ENV not production;
+  #    the render fails otherwise.
   authSecret:
     secretName: ""
     key: AUTH_SECRET

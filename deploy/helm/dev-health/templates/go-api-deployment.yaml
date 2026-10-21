@@ -76,10 +76,9 @@ spec:
         rolls go-api through this hash. With an external hs256 Secret the include renders nothing:
         the hash is constant, and the operator rolls go-api by hand after changing that Secret.
         */}}
-        checksum/hs256: {{ include (print $.Template.BasePath "/hs256-secret.yaml") . | sha256sum }}
-        {{- with .Values.goApi.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        {{- /* merge: the first dict wins, so the chart's checksum beats a user annotation of the same name */}}
+        {{- $annotations := merge (dict "checksum/hs256" (include (print $.Template.BasePath "/hs256-secret.yaml") . | sha256sum)) (deepCopy (.Values.goApi.podAnnotations | default (dict))) }}
+        {{- toYaml $annotations | nindent 8 }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}

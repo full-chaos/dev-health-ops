@@ -21,52 +21,6 @@ import (
 	"regexp"
 )
 
-// pythonListProjectsProgram drives the api's own GitLabCodeClient.list_projects
-// (group_name=...) through an httpx.MockTransport that answers each
-// scenario's scripted responses in order, with asyncio.sleep made instant
-// (the retry delays are not compared, only the attempts). It reports each
-// request URL, then the projects as (id, name, full_name) or the raised
-// exception as "Class: str(exc)".
-const pythonListProjectsProgram = `
-import asyncio, base64, json, sys
-import httpx
-async def _no_sleep(_):
-    return None
-asyncio.sleep = _no_sleep
-from dev_health_ops.providers.gitlab.code_client import GitLabCodeClient
-async def run(scenario):
-    responses = list(scenario["responses"])
-    seen = []
-    def handler(request):
-        seen.append([str(request.url), request.headers.get("PRIVATE-TOKEN")])
-        status, headers, body = responses.pop(0) if responses else (599, [], "")
-        if status == -1:
-            raise httpx.ConnectError("boom", request=request)
-        if status == -2:
-            raise httpx.ReadTimeout("slow", request=request)
-        if status == -3:
-            raise httpx.RemoteProtocolError("bad framing", request=request)
-        if status == -4:
-            raise httpx.ReadError("cut", request=request)
-        return httpx.Response(status, headers=headers, content=base64.b64decode(body))
-    try:
-        async with GitLabCodeClient(private_token="tok", base_url=scenario["base"], transport=httpx.MockTransport(handler)) as client:
-            maximum = scenario.get("max")
-            projects = await client.list_projects(
-                group_name=scenario["group"],
-                search=scenario.get("search") or None,
-                pattern=scenario.get("pattern") or None,
-                membership=bool(scenario.get("membership")),
-                max_projects=int(maximum) if maximum is not None else None,
-            )
-        result = [[str(p.id), p.name, p.full_name, p.description, p.url] for p in projects]
-    except Exception as exc:
-        result = type(exc).__name__ + ": " + str(exc)
-    return {"requests": seen, "result": result}
-out = [asyncio.run(run(s)) for s in json.loads(sys.stdin.read())]
-print(json.dumps(out))
-`
-
 type scripted struct {
 	Status  int         `json:"-"`
 	Headers [][2]string `json:"-"`
@@ -324,7 +278,7 @@ func TestListProjectsVenueOracleMatchesFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenPython(t, "list-projects.golden.json",
-		programoracle.Program{Name: "list-projects", Text: pythonListProjectsProgram, Stdin: []byte(input)})[0]
+		programoracle.Program{Name: "list-projects", Stdin: []byte(input)})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct {
 		Requests [][2]*string    `json:"requests"`

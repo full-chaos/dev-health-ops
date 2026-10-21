@@ -175,7 +175,7 @@ func crossPlaneIdempotencyKey(body, original, renamed string) string {
 func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, venueGolden("external-ingest-payload-hash", t.Name(), "f40780b89d4ab0e4e52e9b83aea83123428da02ad78349ba88e689d80a8220b5"))
-	root := golden.PythonRoot(t, webhookintakeRepoRoot(t))
+	root := webhookintakeRepoRoot(t)
 
 	seed := newPayloadHashVenueSeed()
 
@@ -212,11 +212,6 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 	t.Cleanup(func() { _ = server.Shutdown(ctx) })
 	goBase := "http://" + server.Address()
 
-	sourceAdmin, err := pgxpool.New(ctx, venue.AdminURI(t, venue.SourceDB))
-	if err != nil {
-		t.Fatalf("open source admin pool: %v", err)
-	}
-	t.Cleanup(sourceAdmin.Close)
 	goAdmin, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
 	if err != nil {
 		t.Fatalf("open go admin pool: %v", err)
@@ -281,9 +276,7 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 			// would not be caught by that alone) and not deferred to one
 			// bulk diff at the end (which would not name the failing
 			// case).
-			pythonRow := frozenAcceptedRow(t, golden, "python row "+tc.idempotencyKey, func() acceptedBatchRow {
-				return readAcceptedRow(t, ctx, sourceAdmin, tc.idempotencyKey)
-			})
+			pythonRow := frozenAcceptedRow(t, golden, "python row "+tc.idempotencyKey)
 			goRow := readAcceptedRow(t, ctx, goAdmin, tc.idempotencyKey)
 			if pythonRow.PayloadHash != goRow.PayloadHash {
 				t.Fatalf("payload_hash digest differs: python=%s go=%s", pythonRow.PayloadHash, goRow.PayloadHash)
@@ -315,9 +308,7 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 			toGoBody := crossPlaneIdempotencyKey(tc.body, tc.idempotencyKey, toGoKey)
 			toGoRequest := venueoracle.Request{Name: tc.name + " to go", Method: "POST", Path: "/api/v1/external-ingest/batches", Headers: headersFor(tc.token), Body: venueoracle.B64(toGoBody)}
 			golden.Consumed(t, golden.Python(t, venue, []venueoracle.Request{toGoRequest})...)
-			planted := frozenAcceptedRow(t, golden, "python row "+toGoKey, func() acceptedBatchRow {
-				return readAcceptedRow(t, ctx, sourceAdmin, toGoKey)
-			})
+			planted := frozenAcceptedRow(t, golden, "python row "+toGoKey)
 			// A just-accepted row: the Go plane treats an accepted batch idle for
 			// EXTERNAL_INGEST_ACCEPTED_STALE_MINUTES as a retry, and a frozen row
 			// is as old as its recording.
@@ -331,11 +322,6 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 			toPythonBody := crossPlaneIdempotencyKey(tc.body, tc.idempotencyKey, toPythonKey)
 			toPythonRequest := venueoracle.Request{Name: tc.name + " to python", Method: "POST", Path: "/api/v1/external-ingest/batches", Headers: headersFor(tc.token), Body: venueoracle.B64(toPythonBody)}
 			venueoracle.Do(t, goBase, toPythonRequest)
-			if golden.Recording() {
-				// The Python plane's answer depends on the row the Go plane wrote;
-				// a frozen run holds that answer and has no Python database.
-				plantRow(t, ctx, sourceAdmin, readAcceptedRow(t, ctx, goAdmin, toPythonKey))
-			}
 			retry := golden.Python(t, venue, []venueoracle.Request{toPythonRequest})[0]
 			golden.Consumed(t, retry)
 			if retry.Status != 200 {
@@ -345,9 +331,7 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 	}
 
 	hashesQuery := `SELECT idempotency_key, payload_hash FROM external_ingest_batches ORDER BY idempotency_key`
-	golden.CompareRows(t, "external_ingest_batches.payload_hash", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), hashesQuery)
-	}, venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), hashesQuery))
+	golden.CompareRows(t, "external_ingest_batches.payload_hash", venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), hashesQuery))
 
 	// This test's comparison shape (digest VALUES read back per case, a
 	// same-plane replay check, and a cross-plane plant+retry both ways)
@@ -355,22 +339,13 @@ func TestExternalIngestPayloadHashVenueOracle(t *testing.T) {
 	// inspected (Consumed) where it is checked, so the lifecycle skips Diff.
 	golden.SkipDiff(t)
 	golden.Finish(t)
-	if !golden.Recording() {
-		venueoracle.WriteGoOnlyProof(t, "Go payload hash, replay and cross-plane retry against the Python plane's answers frozen on build "+venuePythonBuild)
-	}
+	venueoracle.WriteGoOnlyProof(t, "Go payload hash, replay and cross-plane retry against the Python plane's answers frozen on build "+venuePythonBuild)
 }
 
-// frozenAcceptedRow is the accepted row the Python plane wrote: read from its
-// database while recording, from the golden afterwards.
-func frozenAcceptedRow(t *testing.T, golden *venueoracle.Golden, name string, read func() acceptedBatchRow) acceptedBatchRow {
+// frozenAcceptedRow is the accepted row the Python plane wrote, read from the golden.
+func frozenAcceptedRow(t *testing.T, golden *venueoracle.Golden, name string) acceptedBatchRow {
 	t.Helper()
-	text := golden.InspectRows(t, name, func() string {
-		raw, err := json.Marshal(read())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(raw)
-	})
+	text := golden.InspectRows(t, name)
 	var row acceptedBatchRow
 	if err := json.Unmarshal([]byte(text), &row); err != nil {
 		t.Fatalf("%s: %v", name, err)

@@ -10,19 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-const pythonOperationalHostProgram = `
-import json, sys
-from dev_health_ops.models.operational_identity import normalized_operational_provider_instance as normalize
-cases = json.loads(sys.stdin.read())
-out = []
-for provider, raw in cases:
-    try:
-        out.append(normalize(provider, raw))
-    except ValueError as exc:
-        out.append({"raised": type(exc).__name__})
-print(json.dumps(out))
-`
-
 // operationalHostCorpus is hand-picked hosts and URLs covering every branch
 // of normalized_operational_provider_instance and the urlsplit parts it
 // reads, plus a seeded fuzz over a URL-ish alphabet.
@@ -86,7 +73,7 @@ func TestOperationalProviderInstanceMatchesFrozenPython(t *testing.T) {
 	}
 	input, _ := json.Marshal(cases)
 	output := frozenPython(t, "operational-provider-instance.golden.json",
-		programoracle.Program{Name: "operational-provider-instance", Text: pythonOperationalHostProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "operational-provider-instance", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []any
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {

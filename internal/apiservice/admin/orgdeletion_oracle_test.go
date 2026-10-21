@@ -37,7 +37,7 @@ import (
 func TestOrgDeletionMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion", t.Name(), "14b005709fee0b58eb76f201020e004e69da4c88b4dda0933776b7caf52bb562"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("od")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-flow-32-bytes!!"
 
@@ -134,9 +134,7 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), controlOrgID)
 	compareClickHouse := func(label string, org uuid.UUID, want string) {
 		t.Helper()
 		goCount := clickHouseCount(venue.GoClickHouseDB, org)
-		source := golden.CompareRows(t, "clickhouse backfill_log rows: "+label, func() string {
-			return clickHouseCount(venue.PythonClickHouseDB, org)
-		}, goCount)
+		source := golden.CompareRows(t, "clickhouse backfill_log rows: "+label, goCount)
 		if source != want {
 			t.Errorf("clickhouse backfill_log rows (%s) = %s, want %s", label, source, want)
 		}
@@ -193,9 +191,7 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), controlOrgID)
 		"SELECT count(*) FROM org_ip_allowlist WHERE org_id = '" + targetOrgID.String() + "'",
 	} {
 		got := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		source := golden.CompareRows(t, "post-dry-run row count: "+query, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
-		}, got)
+		source := golden.CompareRows(t, "post-dry-run row count: "+query, got)
 		if source != "1" {
 			t.Errorf("post-dry-run row count for target org (query %q) = %s, want 1 (dry_run must not delete)", query, source)
 		}
@@ -240,9 +236,7 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, nextID(), controlOrgID)
 	}
 	for _, c := range checks {
 		got := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), c.query)
-		golden.CompareRows(t, "post-delete row count: "+c.label, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), c.query)
-		}, got)
+		golden.CompareRows(t, "post-delete row count: "+c.label, got)
 		if got != c.wantTarget {
 			t.Errorf("post-delete row count (%s) = %s, want %s", c.label, got, c.wantTarget)
 		}

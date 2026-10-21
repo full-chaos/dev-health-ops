@@ -45,6 +45,9 @@ var (
 	// ErrInvalidLegacyMatch reports a LegacyMatch that does not fit the key's
 	// provider.
 	ErrInvalidLegacyMatch = errors.New("identity: legacy match does not fit the provider")
+	// ErrLegacyNotMember reports that the one legacy account of an SSO
+	// subject is not a member of the provider row's organization.
+	ErrLegacyNotMember = errors.New("identity: the legacy account is not a member of the provider organization")
 )
 
 const externalIdentityKeyIndex = "external_identities_issuer_provider_subject_key"
@@ -60,7 +63,9 @@ var errProjectedConcurrently = errors.New("identity: projected concurrently")
 // Social key: AuthProvider is the key's provider name and MembershipOrg is nil.
 // SSO key: AuthProvider is the public.users.auth_provider value of that login
 // (oidc, saml, or the OAuth provider type), and MembershipOrg is the org of the
-// key's sso_providers row; the user must be a member of that org.
+// key's sso_providers row. The stored subject counts in every org: more than
+// one user carrying it is ErrMultipleUsers. The one user must then be a member
+// of that org, else ErrLegacyNotMember.
 //
 // Subject, when set, is the raw value matched against
 // public.users.auth_provider_id, for a login whose key subject is not what
@@ -125,7 +130,8 @@ WHERE e.issuer = $1 AND e.provider = $2 AND e.subject = $3`, key.Issuer, string(
 	return p, true, nil
 }
 
-// legacyUser finds the one public.users row go-api provisioned for key.
+// legacyUser finds the one public.users row go-api provisioned for key. The
+// subject is counted across all users first; membership is checked after.
 func (s *Store) legacyUser(ctx context.Context, key ExternalKey, legacy LegacyMatch) (uuid.UUID, bool, error) {
 	var rows pgx.Rows
 	var err error
@@ -138,16 +144,17 @@ func (s *Store) legacyUser(ctx context.Context, key ExternalKey, legacy LegacyMa
 		if legacy.AuthProvider != string(key.Provider) || legacy.MembershipOrg != nil {
 			return uuid.Nil, false, ErrInvalidLegacyMatch
 		}
-		rows, err = s.pool.Query(ctx, `SELECT id FROM public.users WHERE auth_provider = $1 AND auth_provider_id = $2`,
+		rows, err = s.pool.Query(ctx, `SELECT id, true FROM public.users WHERE auth_provider = $1 AND auth_provider_id = $2`,
 			legacy.AuthProvider, stored)
 	default:
 		if legacy.AuthProvider == "" || legacy.MembershipOrg == nil {
 			return uuid.Nil, false, ErrInvalidLegacyMatch
 		}
-		rows, err = s.pool.Query(ctx, `SELECT u.id FROM public.users u
-WHERE u.auth_provider = $1 AND u.auth_provider_id = $2
-  AND EXISTS (SELECT 1 FROM public.sso_providers sp WHERE sp.id = $3::uuid AND sp.org_id = $4)
-  AND EXISTS (SELECT 1 FROM public.memberships m WHERE m.user_id = u.id AND m.org_id = $4)`,
+		rows, err = s.pool.Query(ctx, `SELECT u.id, EXISTS (SELECT 1 FROM public.sso_providers sp
+    JOIN public.memberships m ON m.org_id = sp.org_id
+    WHERE sp.id = $3::uuid AND sp.org_id = $4 AND m.user_id = u.id)
+FROM public.users u
+WHERE u.auth_provider = $1 AND u.auth_provider_id = $2`,
 			legacy.AuthProvider, stored, string(key.Provider), *legacy.MembershipOrg)
 	}
 	if err != nil {
@@ -155,9 +162,10 @@ WHERE u.auth_provider = $1 AND u.auth_provider_id = $2
 	}
 	defer rows.Close()
 	var found []uuid.UUID
+	var member bool
 	for rows.Next() {
 		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		if err := rows.Scan(&id, &member); err != nil {
 			return uuid.Nil, false, s.storeErr(ctx, "scan legacy user", err)
 		}
 		found = append(found, id)
@@ -165,13 +173,15 @@ WHERE u.auth_provider = $1 AND u.auth_provider_id = $2
 	if err := rows.Err(); err != nil {
 		return uuid.Nil, false, s.storeErr(ctx, "read legacy user", err)
 	}
-	switch len(found) {
-	case 0:
+	switch {
+	case len(found) == 0:
 		return uuid.Nil, false, nil
-	case 1:
-		return found[0], true, nil
+	case len(found) > 1:
+		return uuid.Nil, false, ErrMultipleUsers
+	case !member:
+		return uuid.Nil, false, ErrLegacyNotMember
 	}
-	return uuid.Nil, false, ErrMultipleUsers
+	return found[0], true, nil
 }
 
 // projectIdentity links key to the projected legacy user. A principal that

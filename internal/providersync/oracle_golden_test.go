@@ -2,23 +2,14 @@ package providersync
 
 import (
 	"bytes"
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/fs"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -52,27 +43,6 @@ var oraclePairLaterPythonBuilds = map[string]string{
 	"gitlab/work-items/epic-transition": oraclePairGitLabEpicRowsBuild,
 }
 
-// oracleHarnessFilesAfterBuild are the harness files added after
-// oraclePairPythonBuild, each by a pair of oraclePairLaterPythonBuilds. That
-// build lacks them, so the manifest of a pair answered there leaves them out:
-// adding a pair file then changes no key of a pair answered there. A pair
-// answered on a later build keys on every harness file.
-var oracleHarnessFilesAfterBuild = map[string]string{
-	"testdata/oracle_pairs/gitlab_work-items_sprint.py":         "gitlab/work-items/sprint",
-	"testdata/oracle_pairs/gitlab_work-items_issue-provider.py": "gitlab/work-items/issue-provider",
-}
-
-// oracleHarnessFilesAfterGitLabEpicBuild are the harness files added after
-// oraclePairGitLabEpicBuild, by the group-epic pairs (CHAOS-9857). The GitLab
-// issue, issue-provider and sprint pairs were answered on that build, which
-// never held these files, so their manifests leave them out; a pair answered on
-// oraclePairGitLabEpicRowsBuild or later keys on every harness file.
-var oracleHarnessFilesAfterGitLabEpicBuild = map[string]string{
-	"testdata/oracle_pairs/_gitlab_epic_common.py":               "gitlab/work-items/epic",
-	"testdata/oracle_pairs/gitlab_work-items_epic.py":            "gitlab/work-items/epic",
-	"testdata/oracle_pairs/gitlab_work-items_epic-transition.py": "gitlab/work-items/epic-transition",
-}
-
 // oraclePairBuild is the build that answered pairID.
 func oraclePairBuild(pairID string) string {
 	if build, later := oraclePairLaterPythonBuilds[pairID]; later {
@@ -85,75 +55,32 @@ func oraclePairBuild(pairID string) string {
 // for the cases of the one test (or subtest) that asks for it.
 const oraclePairGoldenDir = "testdata/oracle_golden"
 
-// oraclePairEnv is the environment that shapes a pair's answer. It is part of
-// the request, so an answer recorded under another environment is refused.
-var oraclePairEnv = map[string]string{"PYTHONHASHSEED": "0", "TZ": "UTC"}
-
-// oraclePairFileEnv names the environment variables that hand the producer a
-// file. Go reads the same file, so its content shapes both sides. The path is a
-// new temporary directory in every process, so the request holds the digest of
-// the content, and a recording passes the path through.
-var oraclePairFileEnv = []string{"IDENTITY_MAPPING_PATH"}
-
-// oraclePairConfigDirs are the testdata directories the pairs read at run time
-// besides their own sources. They are part of the producer, so they are part of
-// the request too.
-var oraclePairConfigDirs = []string{"testdata/investment_configs", "testdata/status_mapping_configs"}
-
 // oraclePairGoldensOpened records, per golden, the test run that last opened
 // it: one frozen answer stands in for one comparison of that run.
 var oraclePairGoldensOpened sync.Map
 
-// frozenPairAnswer returns what python_generic_row_oracle.py printed for pairID
-// over encodedCases.
-//
-// Frozen (every run but a recording): the answer comes from the pair's golden.
-// No Python runs. A golden that is missing, changed, recorded for other cases
-// or recorded from other harness sources fails the test.
-//
-// Recording (the goldenrecord verb): the runner is executed from the pinned
-// checkout, whose harness sources must equal this checkout's, and the answer is
-// written as a candidate.
+// frozenPairAnswer returns what python_generic_row_oracle printed for pairID
+// over encodedCases, from the pair's golden. No Python runs. A golden that is
+// missing, changed or recorded for other cases fails the test.
 func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	t.Helper()
-	_, currentFile, _, _ := moduleroot.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-	repoRoot := filepath.Dir(filepath.Dir(packageDir))
-
 	name := oraclePairGoldenName(pairID, t.Name())
 	build := oraclePairBuild(pairID)
 	if err := claimOraclePairGolden(&oraclePairGoldensOpened, name, t, pairID, t.Name()); err != nil {
 		t.Fatal(err)
 	}
-	recipe := fmt.Sprintf("pair %s: git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); "+
-		"then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/providersync/ "+
-		"-test '^%s$' -python-root $DIR", pairID, build, strings.SplitN(t.Name(), "/", 2)[0])
 	pin, pinned := oraclePairGoldenPins[name]
 	if !pinned {
-		t.Fatalf("pair %q in test %s has no frozen golden: oraclePairGoldenPins names no %s. "+
-			"A frozen oracle never runs Python and never skips. Add the entry with the value %q, then record: %s",
-			pairID, t.Name(), name, "PIN:"+strings.TrimSuffix(name, ".json"), recipe)
+		t.Fatalf("pair %q in test %s has no frozen golden: oraclePairGoldenPins names no %s", pairID, t.Name(), name)
 	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        filepath.Join(oraclePairGoldenDir, name),
 		PythonBuild: build,
 		SHA256:      pin,
-		Recipe:      recipe,
 		Scrub:       pairPerRunScrub(pairID),
 	})
-	root := golden.PythonRoot(t, repoRoot)
-
-	manifest := oracleHarnessManifest(t, packageDir, build)
-	keyed, passed := oraclePairEnvironment(t, pairID)
-	request := venueoracle.ProgramRequest(pairID, manifest, encodedCases, keyed)
-	answers := golden.Produce(t, root, []venueoracle.Request{request},
-		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-			output := runPinnedPairOracle(t, producer, root, manifest, pairID, encodedCases, passed)
-			if len(output) > oraclePairPackAbove {
-				return []venueoracle.Response{{Status: 0, Body: venueoracle.PackBody(output)}}
-			}
-			return []venueoracle.Response{{Status: 0, Body: string(output)}}
-		})
+	request := venueoracle.ProgramRequest(pairID, encodedCases)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	output := []byte(oraclePairAnswerText(t, answers[0].Body))
 	if err := untaggedLeafErr(output); err != nil {
@@ -165,34 +92,6 @@ func frozenPairAnswer(t *testing.T, pairID string, encodedCases []byte) []byte {
 	golden.SkipDiff(t)
 	golden.Finish(t)
 	return output
-}
-
-// oraclePairEnvironment is the environment of a pair's producer, twice: keyed
-// is what identifies the request (a file-valued variable by the digest of its
-// file), passed is what a recording hands the interpreter. Nothing else of the
-// test process's environment reaches the producer.
-func oraclePairEnvironment(t *testing.T, pairID string) (keyed map[string]string, passed []string) {
-	t.Helper()
-	keyed = map[string]string{}
-	for name, value := range oraclePairEnv {
-		keyed[name] = value
-		passed = append(passed, name+"="+value)
-	}
-	for _, name := range oraclePairFileEnv {
-		path := os.Getenv(name)
-		if path == "" {
-			continue
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("pair %q: %s names a file the producer would read: %v", pairID, name, err)
-		}
-		sum := sha256.Sum256(raw)
-		keyed[name] = "sha256:" + hex.EncodeToString(sum[:])
-		passed = append(passed, name+"="+path)
-	}
-	sort.Strings(passed)
-	return keyed, passed
 }
 
 // claimOraclePairGolden is an error when run already opened the golden name: a
@@ -230,149 +129,6 @@ func oraclePairGoldenName(pairID, testName string) string {
 		return unsafeGoldenNameRune.ReplaceAllString(strings.ReplaceAll(part, "/", "."), "_")
 	}
 	return strings.ReplaceAll(pairID, "/", "_") + "." + clean(testName) + ".golden.json"
-}
-
-// oracleHarnessManifest is the identity of the Python harness a pair runs
-// through: one "sha256  path" line per harness source (the runner, the
-// registry, the loader, the field reflection, every pair and pair helper) and
-// per pair configuration file. Pairs import each other and share helpers, so
-// the whole set is one producer. For a pair answered on oraclePairPythonBuild
-// the set leaves out the files added after that build
-// (oracleHarnessFilesAfterBuild): that build never held them.
-func oracleHarnessManifest(t *testing.T, packageDir, build string) string {
-	t.Helper()
-	var lines []string
-	err := fs.WalkDir(embeddedOracleSources, ".", func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".py") {
-			return walkErr
-		}
-		if _, added := oracleHarnessFilesAfterBuild[path]; added && build == oraclePairPythonBuild {
-			return nil
-		}
-		if _, added := oracleHarnessFilesAfterGitLabEpicBuild[path]; added &&
-			(build == oraclePairPythonBuild || build == oraclePairGitLabEpicBuild) {
-			return nil
-		}
-		raw, err := fs.ReadFile(embeddedOracleSources, path)
-		if err != nil {
-			return err
-		}
-		lines = append(lines, manifestLine(path, raw))
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("oracle harness manifest: %v", err)
-	}
-	for _, dir := range oraclePairConfigDirs {
-		err := filepath.WalkDir(filepath.Join(packageDir, dir), func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil || entry.IsDir() {
-				return walkErr
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			relative, err := filepath.Rel(packageDir, path)
-			if err != nil {
-				return err
-			}
-			lines = append(lines, manifestLine(filepath.ToSlash(relative), raw))
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("oracle harness manifest: %v", err)
-		}
-	}
-	if len(lines) == 0 {
-		t.Fatal("oracle harness manifest: no harness source found")
-	}
-	sort.Strings(lines)
-	return strings.Join(lines, "\n") + "\n"
-}
-
-func manifestLine(path string, raw []byte) string {
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]) + "  " + path
-}
-
-// runPinnedPairOracle executes the generic runner of the pinned checkout at
-// root for pairID and returns its stdout. The pinned harness must be the
-// harness this checkout holds (manifest): the pairs resolve the production
-// sources from their own location, so the runner has to run where the pinned
-// production code is.
-func runPinnedPairOracle(t *testing.T, producer *venueoracle.Producer, root, manifest, pairID string, encodedCases []byte, passed []string) []byte {
-	t.Helper()
-	assertPinnedHarness(t, "pair "+pairID, root, manifest)
-	producer.RequireDeployed()
-	requirePinnedSources(t, "pair "+pairID, producer, root, passed)
-
-	casesFile := filepath.Join(t.TempDir(), "oracle-cases.json")
-	if err := os.WriteFile(casesFile, encodedCases, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runner := filepath.Join(root, "internal", "providersync", "testdata", "python_generic_row_oracle.py")
-	command := pinnedCommand(t, producer, passed, runner, pairID, casesFile)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("recording pair %q: %v", pairID, pyoracle.RunError(command.Args[0], err, stderr.Bytes()))
-	}
-	return output
-}
-
-// assertPinnedHarness fails a recording unless every harness file of manifest
-// is, in the pinned checkout at root, the file this checkout holds: the answer
-// would otherwise come from a harness the golden does not name. what names the
-// oracle in the failure.
-func assertPinnedHarness(t *testing.T, what, root, manifest string) {
-	t.Helper()
-	pinnedPackage := filepath.Join(root, "internal", "providersync")
-	for _, line := range strings.Split(strings.TrimSuffix(manifest, "\n"), "\n") {
-		want, path, _ := strings.Cut(line, "  ")
-		raw, err := os.ReadFile(filepath.Join(pinnedPackage, filepath.FromSlash(path)))
-		if err != nil {
-			t.Fatalf("recording %s: the pinned checkout lacks the harness file %s: %v", what, path, err)
-		}
-		if got := strings.SplitN(manifestLine(path, raw), "  ", 2)[0]; got != want {
-			t.Fatalf("recording %s: harness file %s differs between this checkout (sha256 %s) and the pinned checkout %s (sha256 %s): "+
-				"the answer would come from a harness the golden does not name", what, path, want, root, got)
-		}
-	}
-}
-
-// pinnedCommand is a Python child of a recording: the record verb's launcher
-// (venueoracle.Producer.Command) in its closed environment, with the entries of
-// passed (NAME=value) declared. The launcher fixes the interpreter of the
-// pinned checkout; nothing of the test process's environment reaches the
-// child. The declared IDENTITY_MAPPING_PATH is a path: the request holds the
-// digest of the file it names, not the path.
-func pinnedCommand(t *testing.T, producer *venueoracle.Producer, passed []string, args ...string) *exec.Cmd {
-	t.Helper()
-	declared := make(map[string]string, len(passed))
-	for _, entry := range passed {
-		name, value, _ := strings.Cut(entry, "=")
-		declared[name] = value
-	}
-	command, err := producer.Command(context.Background(), declared, nil, args...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return command
-}
-
-// requirePinnedSources fails a recording unless the launcher's interpreter
-// imports dev_health_ops from the pinned checkout at root.
-func requirePinnedSources(t *testing.T, what string, producer *venueoracle.Producer, root string, passed []string) {
-	t.Helper()
-	locate := pinnedCommand(t, producer, passed, "-c",
-		"import importlib.util;s=importlib.util.find_spec('dev_health_ops');print(s.origin if s else '')")
-	origin, err := locate.Output()
-	source := filepath.Join(root, "src") + string(filepath.Separator)
-	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(origin)), source) {
-		t.Fatalf("recording %s: %s imports dev_health_ops from %q (%v), not from the pinned checkout %s",
-			what, locate.Args[0], strings.TrimSpace(string(origin)), err, source)
-	}
 }
 
 // untaggedLeafErr is an error when a runner answer holds a row value that is

@@ -404,17 +404,9 @@ func diffAgainstPythonRows(
 }
 
 // embeddedOracleSources holds every file a pair comparison depends on besides
-// the Go code: the Python harness sources, the frozen snapshots and the pair
-// goldens.
+// the Go code: the pair list, the frozen snapshots and the pair goldens.
 //
-// The harness sources (*.py) are the identity of the producer: the request a
-// pair golden is keyed on holds their digests (oracleHarnessManifest), so a
-// pair file that changes after its answer was recorded is refused instead of
-// being answered from a recording of other code. No test executes them; they
-// run only when the goldenrecord verb records from the pinned build.
-//
-// The snapshots (testdata/oracle_frozen) and the goldens (testdata/oracle_golden)
-// are read from disk at run time. Embedding them makes the compiled test
+// They are read from disk at run time. Embedding them makes the compiled test
 // binary, and therefore Go's test result cache key, sensitive to every byte of
 // them, so `go test` cannot serve a cached PASS after one changed.
 // assertOracleSourcesUnchangedSinceBuild is the second half: it re-reads the
@@ -422,7 +414,7 @@ func diffAgainstPythonRows(
 // embedded, which would only happen if this directive's file list drifted
 // from what the comparisons read.
 //
-//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/oracle_pairs/*.py testdata/oracle_frozen/*.json testdata/oracle_golden/*.json
+//go:embed testdata/oracle_pair_ids.txt testdata/oracle_frozen/*.json testdata/oracle_golden/*.json
 var embeddedOracleSources embed.FS
 
 // The comparison vocabulary below moved to internal/testsupport/oraclecompare

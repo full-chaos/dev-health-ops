@@ -3,14 +3,11 @@
 package remaining
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -182,7 +179,7 @@ func TestRecommendationsLoaderMatchesFrozenPythonAgainstClickHouse(t *testing.T)
 
 	// The Python loader's answers for every (team, org) this test compares: recorded once on the pinned build against this fixture
 	// by the record verb, frozen, and replayed here with no Python started.
-	python := frozenPythonSnapshots(t, frozen, dsn)
+	python := frozenPythonSnapshots(t, frozen)
 
 	loader, err := NewRecommendationsLoader(conn, loaderOrgID)
 	if err != nil {
@@ -524,16 +521,8 @@ func loaderGolden(test, digest string) venueoracle.GoldenSpec {
 		Path:        "testdata/golden/recommendations_loader_clickhouse.json",
 		PythonBuild: loaderPythonBuild,
 		SHA256:      digest,
-		Recipe: fmt.Sprintf("git worktree add --detach $DIR %s (with its .venv: uv sync --frozen --no-install-project); then from the repository root: "+
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/jobs/metrics/remaining/ -test '^%s$' -python-root $DIR "+
-			"(records on the pinned build, replays the candidate in a fresh process, and only then promotes it and pins its digest)",
-			loaderPythonBuild, test),
 	}
 }
-
-// loaderProducerEnv is the environment entries that shape the producer's answer; with PATH, HOME and the pinned sources on PYTHONPATH
-// they are the whole environment the producer gets.
-var loaderProducerEnv = map[string]string{"PYTHONHASHSEED": "0", "PYTHONUTF8": "1"}
 
 // loaderCases is every (team, org) pair the test compares with the Python loader, in the order they are asked and recorded.
 var loaderCases = [][2]string{
@@ -557,51 +546,20 @@ func (f frozenSnapshots) of(t *testing.T, team, org string) pythonSnapshot {
 	return snapshot
 }
 
-// frozenPythonSnapshots asks the golden for the Python loader's answers for loaderCases: replayed from the file (no Python started), or,
-// while the record verb records, produced by the shipped Python loader reading the SAME rows from the SAME database the Go loader reads.
-func frozenPythonSnapshots(t *testing.T, golden *venueoracle.Golden, dsn string) frozenSnapshots {
+// frozenPythonSnapshots asks the golden for the Python loader's answers for loaderCases, replayed from the file (no Python started).
+func frozenPythonSnapshots(t *testing.T, golden *venueoracle.Golden) frozenSnapshots {
 	t.Helper()
-	root, err := filepath.Abs("../../../..")
-	if err != nil {
-		t.Fatalf("resolve repo root: %v", err)
-	}
-	root = golden.PythonRoot(t, root)
-	program, err := os.ReadFile("testdata/run_recommendations_loader_against_clickhouse.py")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var requests []venueoracle.Request
-	var stdins [][]byte
 	for _, c := range loaderCases {
 		stdin, marshalErr := json.Marshal(map[string]string{
 			"team": c[0], "org": c[1], "window_start": loaderWindowStart, "window_end": loaderWindowEnd})
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
-		stdins = append(stdins, stdin)
 		requests = append(requests, venueoracle.ProgramRequest(
-			fmt.Sprintf("recommendations loader team=%s org=%s", c[0], c[1]), string(program), stdin, loaderProducerEnv))
+			fmt.Sprintf("recommendations loader team=%s org=%s", c[0], c[1]), stdin))
 	}
-	answers := golden.Produce(t, root, requests, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		producer.RequireDeployed()
-		live := make([]venueoracle.Response, 0, len(requests))
-		for index, c := range loaderCases {
-			command, commandErr := producer.Command(context.Background(), loaderProducerEnv, []string{"CLICKHOUSE_URI=" + dsn}, "-c", string(program))
-			if commandErr != nil {
-				t.Fatal(commandErr)
-			}
-			command.Dir = root
-			command.Stdin = bytes.NewReader(stdins[index])
-			var stdout, stderr bytes.Buffer
-			command.Stdout = &stdout
-			command.Stderr = &stderr
-			if runErr := command.Run(); runErr != nil {
-				t.Fatalf("python loader (%s, %s) failed: %v\nstdout:\n%s\nstderr:\n%s", c[0], c[1], runErr, stdout.Bytes(), stderr.Bytes())
-			}
-			live = append(live, venueoracle.Response{Status: 0, Body: lastJSONLine(t, stdout.String())})
-		}
-		return live
-	})
+	answers := golden.Produce(t, requests)
 	golden.Consumed(t, answers...)
 	snapshots := frozenSnapshots{}
 	for index, c := range loaderCases {
@@ -612,14 +570,6 @@ func frozenPythonSnapshots(t *testing.T, golden *venueoracle.Golden, dsn string)
 		snapshots[c[0]+"|"+c[1]] = snapshot
 	}
 	return snapshots
-}
-
-// lastJSONLine is the producer's answer: the script prints exactly one JSON object on its last non-empty line; anything the client library
-// logs before it is tolerated rather than assumed absent.
-func lastJSONLine(t *testing.T, output string) string {
-	t.Helper()
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	return lines[len(lines)-1]
 }
 
 func openLoaderClickHouse(t *testing.T, ctx context.Context, dsn string) driver.Conn {

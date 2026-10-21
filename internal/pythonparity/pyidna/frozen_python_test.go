@@ -1,10 +1,8 @@
 package pyidna_test
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -15,12 +13,8 @@ import (
 // source file of this repository, so Identity names them.
 // A golden recorded by another producer is refused.
 var idnaGoldens = programoracle.Set{
-	Package:       "./internal/pythonparity/pyidna/",
-	Build:         "a4847c5e93607451a0c987b314d37e02fc43ce85",
-	Identity:      "python 3.14.7\nunicodedata 16.0.0\nidna 3.20",
-	Distributions: []string{"idna"},
-	// The goldenrecord verb writes each digest when it promotes a recording; a
-	// new golden starts as "PIN:" + its file name without ".json".
+	Build:    "a4847c5e93607451a0c987b314d37e02fc43ce85",
+	Identity: "python 3.14.7\nunicodedata 16.0.0\nidna 3.20",
 	Pins: map[string]string{
 		"behaviour.golden.json": "93b5c472ff5a24f78361316db00d137b81fae0c58f9227f816d92650f9fc4c7c",
 		"codec.golden.json":     "7b8d4babc5d978a05857218669e702c036a65b9671190577fefb308e5e296b79",
@@ -34,10 +28,5 @@ var idnaGoldens = programoracle.Set{
 // fails the test; so does a program that exited non-zero when it was recorded.
 func frozenPython(t *testing.T, golden string, programs ...programoracle.Program) []string {
 	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	return idnaGoldens.Outputs(t, root, golden, programs...)
+	return idnaGoldens.Outputs(t, golden, programs...)
 }

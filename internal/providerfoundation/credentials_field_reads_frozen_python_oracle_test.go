@@ -27,39 +27,6 @@ type fieldReadResult struct {
 	Fields map[string]*string `json:"fields"`
 }
 
-const fieldReadProgram = `
-import json, os, sys, tempfile
-from dev_health_ops.credentials import resolver
-builders = {
-    "github": resolver.github_credentials_from_mapping,
-    "gitlab": resolver.gitlab_credentials_from_mapping,
-    "jira": resolver.jira_credentials_from_mapping,
-    "linear": resolver.linear_credentials_from_mapping,
-}
-request = json.load(sys.stdin)
-# The key files the cases name are made here, in a directory of this run, and
-# their paths replace the tokens in the bodies: a path of one run is in no
-# request and no answer.
-directory = tempfile.mkdtemp()
-paths = {}
-for token, content in request["files"].items():
-    paths[token] = os.path.join(directory, token.strip("@") + ".pem")
-    if token != "@MISSING@":
-        with open(paths[token], "w") as handle:
-            handle.write(content)
-out = []
-for case in request["cases"]:
-    for token, path in paths.items():
-        case["body"] = case["body"].replace('"' + token + '"', json.dumps(path))
-    credential = builders[case["provider"]](json.loads(case["body"]))
-    fields = {}
-    for name in case["fields"]:
-        value = getattr(credential, name, None) if credential is not None else None
-        fields[name] = None if value is None else (str(value) if value else "")
-    out.append({"built": credential is not None, "fields": fields})
-print(json.dumps(out))
-`
-
 // TestCredentialFieldReadsMatchFrozenPython (CHAOS-6770) feeds every payload
 // shape to the real Python resolver builders and to decodeCredential +
 // ValidateCredentialShape, and compares whether a credential is built and the
@@ -181,7 +148,7 @@ func TestCredentialFieldReadsMatchFrozenPython(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := frozenPython(t, "credential-field-reads.golden.json",
-		programoracle.Program{Name: "credential-field-reads", Text: fieldReadProgram, Stdin: []byte(input)})[0]
+		programoracle.Program{Name: "credential-field-reads", Stdin: []byte(input)})[0]
 	var results []fieldReadResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &results); err != nil || len(results) != len(cases) {
 		t.Fatalf("decode the Python answer (%d results for %d cases): %v\n%s", len(results), len(cases), err, output)

@@ -10,59 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonTierLimitsProgram runs each case through the api's own
-// TierLimitService over the real models on an in-memory SQLite database:
-// the organization, an optional org_licenses row whose limits_override is
-// stored as the case's raw JSON text, and the case's tier_limits rows. It
-// reports get_limit's value as repr and check_limit for each current value,
-// or the exception class either raised.
-const pythonTierLimitsProgram = `
-import json, sys, uuid
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from dev_health_ops.models.licensing import OrgLicense, TierLimit
-from dev_health_ops.models.users import Organization
-from dev_health_ops.api.services.licensing import TierLimitService
-out = []
-for case in json.loads(sys.stdin.read()):
-    engine = create_engine("sqlite://")
-    for model in (Organization, OrgLicense, TierLimit):
-        model.__table__.create(engine)
-    org = uuid.UUID("c6a38355-0000-4000-8000-000000000001")
-    with engine.begin() as conn:
-        if case["org_tier"] is not None:
-            conn.exec_driver_sql("INSERT INTO organizations (id, slug, name, settings, tier, managed_by, is_active, created_at, updated_at) VALUES (?, 's', 'n', '{}', ?, 'x', 1, '2026-01-01', '2026-01-01')", (org.hex, case["org_tier"]))
-        if case["license"] is not None:
-            conn.exec_driver_sql("INSERT INTO org_licenses (id, org_id, tier, is_valid, license_type, managed_by, limits_override, created_at, updated_at) VALUES (?, ?, ?, 1, 'x', 'x', ?, '2026-01-01', '2026-01-01')", (uuid.uuid4().hex, org.hex, case["license"]["tier"], case["license"]["override"]))
-        for key, value in case["rows"] or []:
-            conn.exec_driver_sql("INSERT INTO tier_limits (id, tier, limit_key, limit_value, created_at, updated_at) VALUES (?, ?, ?, ?, '2026-01-01', '2026-01-01')", (uuid.uuid4().hex, case["row_tier"], key, value))
-    result = {}
-    with Session(engine) as session:
-        service = TierLimitService(session)
-        try:
-            result["limit"] = repr(service.get_limit(org, case["key"]))
-        except Exception as exc:
-            result["limit"] = "raise " + type(exc).__name__
-        checks = []
-        for current in case["currents"] or []:
-            try:
-                allowed, reason = service.check_limit(org, case["key"], current)
-                checks.append([allowed, reason])
-            except Exception as exc:
-                checks.append("raise " + type(exc).__name__)
-        result["checks"] = checks
-        backfills = []
-        for requested in case.get("requested") or []:
-            try:
-                allowed, reason = service.check_backfill_limit(org, int(requested))
-                backfills.append([allowed, reason])
-            except Exception as exc:
-                backfills.append("raise " + type(exc).__name__)
-        result["backfills"] = backfills
-    out.append(result)
-print(json.dumps(out))
-`
-
 type tierLimitCase struct {
 	OrgTier  *string           `json:"org_tier"`
 	License  *tierLimitLicense `json:"license"`
@@ -150,7 +97,7 @@ func TestTierLimitsMatchFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "tier-limits.golden.json", programoracle.Program{Name: "tier limits", Text: pythonTierLimitsProgram, Stdin: input})[0]
+	output := frozenPython(t, "tier-limits.golden.json", programoracle.Program{Name: "tier limits", Stdin: input})[0]
 	var want []struct {
 		Limit     string            `json:"limit"`
 		Checks    []json.RawMessage `json:"checks"`

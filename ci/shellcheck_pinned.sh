@@ -106,8 +106,6 @@ fi
 # the relaxation as coverage. Every file below is clean under BOTH versions.
 FILES=(
   # the set CI already linted before this change
-  "${ROOT}/tests/compatibility/river/run.sh"
-  "${ROOT}/tests/compatibility/river/record.sh"
   "${ROOT}/ci/check_go.sh"
   "${ROOT}/ci/check_river_compat_static.sh"
   # CHAOS-6584: the venue-oracles registry check. check_go.sh sources the lib,
@@ -142,8 +140,6 @@ FILES=(
   "${ROOT}/ci/auth_corpus_set_env.sh"
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
-  "${ROOT}/scripts/run_py_tool.sh"
-  "${ROOT}/tests/compatibility/provider/run.sh"
   "${ROOT}/.github/docs-legacy/examples/customer-push/generic-runner.sh"
 )
 

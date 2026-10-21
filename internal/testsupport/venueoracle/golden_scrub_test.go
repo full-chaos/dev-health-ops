@@ -37,11 +37,7 @@ func TestScrubRunValuesBlanksGeneratedIDsAndRunTimesOnly(t *testing.T) {
 }
 
 func TestGoldenProjectAppliesTheSpecsProjectionToAGoPlaneResponse(t *testing.T) {
-	golden, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it",
-		Scrub: ScrubRunValues(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), time.Date(2030, 12, 1, 0, 0, 0, 0, time.UTC))}, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	golden := &Golden{spec: GoldenSpec{Path: "g.json", PythonBuild: goldenBuild, Scrub: ScrubRunValues(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), time.Date(2030, 12, 1, 0, 0, 0, 0, time.UTC))}}
 	token := mintJWT(`{"alg":"HS256"}`, `{"sub":"u1","iat":7}`, "sig")
 	got := golden.Project(t, Response{Status: 200, Headers: map[string]string{"x-request-id": "r-1", "x-keep": "k"},
 		Body: `{"t":"` + token + `","id":"3f2a9c10-7b1e-4c55-9d02-1a2b3c4d5e6f","at":"2026-10-01T12:00:00Z"}`})
@@ -55,10 +51,7 @@ func TestGoldenProjectAppliesTheSpecsProjectionToAGoPlaneResponse(t *testing.T) 
 
 func TestContentLengthIsAPlaceholderOnlyWhenTheProjectionChangedTheBody(t *testing.T) {
 	scrub := ScrubRunValues(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC), time.Date(2030, 12, 1, 0, 0, 0, 0, time.UTC))
-	golden, err := openGolden(GoldenSpec{Path: t.TempDir() + "/g.json", PythonBuild: goldenBuild, Recipe: "record it", Scrub: scrub}, "TestSample", true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	golden := &Golden{spec: GoldenSpec{Path: "g.json", PythonBuild: goldenBuild, Scrub: scrub}}
 	changed, err := golden.projectResponse(Response{Headers: map[string]string{"content-length": "49"}, Body: `{"id":"0192f3a4-5b6c-7d8e-8f90-a1b2c3d4e5f6"}`})
 	if err != nil {
 		t.Fatal(err)

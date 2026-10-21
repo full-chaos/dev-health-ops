@@ -97,9 +97,12 @@ func getJSON(client *http.Client, req *http.Request, out any) error {
 }
 
 // exchangeCode calls the token endpoint. The client secret and the code ride
-// the body, so no redirect is followed.
+// the body, so no redirect is followed. An empty verifier sends no PKCE.
 func exchangeCode(ctx context.Context, client *http.Client, cfg oauth2.Config, code, verifier string) (*oauth2.Token, error) {
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpguard.NoRedirects(client))
+	if verifier == "" {
+		return cfg.Exchange(ctx, code)
+	}
 	return cfg.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 }
 

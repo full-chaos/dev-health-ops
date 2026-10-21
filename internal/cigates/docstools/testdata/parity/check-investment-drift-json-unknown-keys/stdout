@@ -1,0 +1,5 @@
+ERROR: b.md JSON example #1 unknown themes keys: ['nope']
+ERROR: b.md JSON example #1 unknown subcategories keys: ['operational.external']
+ERROR: b.md JSON example #2 unknown subcategories keys: ['aa.bot', 'zz.top']
+ERROR: sub/a.md JSON example #1 unknown themes keys: ['x']
+ERROR: sub/a.md JSON example #1 unknown themes keys: ['other']

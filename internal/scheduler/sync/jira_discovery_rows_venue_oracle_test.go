@@ -81,7 +81,7 @@ func TestJiraDiscoveryRowsMatchFrozenPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := frozenPython(t, "jira-discovery-rows.golden.json", programoracle.Program{Name: "jira discovery rows", Text: pythonJiraDiscoveryRowsProgram, Stdin: input})[0]
+	output := frozenPython(t, "jira-discovery-rows.golden.json", programoracle.Program{Name: "jira discovery rows", Stdin: input})[0]
 	var want [][][5]string
 	if err := json.Unmarshal([]byte(output), &want); err != nil || len(want) != len(cases) {
 		t.Fatalf("decode: %v\n%s", err, output)

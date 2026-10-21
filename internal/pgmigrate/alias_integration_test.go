@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -142,17 +141,6 @@ func normalizeAlias(s aliasScenario, text string) string {
 	return text
 }
 
-func pythonAlias(t *testing.T, producer *venueoracle.Producer, uri string, s aliasScenario) (int, string) {
-	t.Helper()
-	// The cutover switch is part of the scenario; the hash seed is pinned in pgmigratePythonSettings (it
-	// orders Alembic's sets).
-	var env []string
-	if s.cutover {
-		env = append(env, "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1")
-	}
-	return pythonCLI(t, producer, pgmigratePythonSettings, env, uri, append([]string{"migrate"}, s.args...)...)
-}
-
 // aliasPythonBuild is the build whose Python CLI answered the scenarios: a build that still carried it.
 const aliasPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 
@@ -162,18 +150,11 @@ const aliasPythonBuild = "de4bc686e35308fb20670ad6ce8333952e2b43e6"
 // testdata/golden/alias.json (the recipe regenerates them by execution); the scenarios are part of the
 // golden's key.
 func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/alias.json",
 		PythonBuild: aliasPythonBuild,
 		SHA256:      "a643899ee922ff6937f71ce038907d3cd7978c84074e833484fa76fc8ffdeb0f",
-		Recipe: "git worktree add --detach $DIR " + aliasPythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
-			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestAliasesMatchTheFrozenPythonOutput$' -python-root $DIR",
 	})
-	root := golden.PythonRoot(t, repoRoot)
 
 	scenarios := make([]map[string]any, len(aliasScenarios))
 	for index, scenario := range aliasScenarios {
@@ -183,26 +164,8 @@ func TestAliasesMatchTheFrozenPythonOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := venueoracle.ProgramRequest("alias scenarios", pythonCLIProgram, input, pgmigratePythonSettings)
-	answers := golden.Produce(t, root, []venueoracle.Request{request}, func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-		uri, exec := revisionsDatabase(t)
-		exec("CREATE TABLE alembic_version_saved AS SELECT * FROM alembic_version")
-		var results []aliasResult
-		for _, scenario := range aliasScenarios {
-			if scenario.setup != "" {
-				exec(aliasSetup(t, scenario.setup))
-			}
-			code, text := pythonAlias(t, producer, uri, scenario)
-			results = append(results, aliasResult{Name: scenario.name, Exit: code, Stdout: normalizeAlias(scenario, text)})
-			exec("DROP TABLE IF EXISTS alembic_version")
-			exec("CREATE TABLE alembic_version AS SELECT * FROM alembic_version_saved")
-		}
-		body, err := json.Marshal(results)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return []venueoracle.Response{{Status: 0, Body: string(body)}}
-	})
+	request := venueoracle.ProgramRequest("alias scenarios", input)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var frozen []aliasResult
 	if err := json.Unmarshal([]byte(answers[0].Body), &frozen); err != nil {

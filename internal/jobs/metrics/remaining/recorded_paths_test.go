@@ -264,24 +264,3 @@ func TestLoaderQueriesSeenAreTheTablesTheCaseSupplies(t *testing.T) {
 		}
 	}
 }
-
-// TestSignalsGeneratorIsTheNamedRecorder pins the signals golden's `_generator` as TEXT: it must
-// name the recorder under this package's testdata. It deliberately does NOT stat the file: the
-// recorder imports the Python tree, which CHAOS-6264 deletes, and a claim here must hold after
-// that tree is gone and with no Python or Python file present at test time.
-func TestSignalsGeneratorIsTheNamedRecorder(t *testing.T) {
-	raw, err := os.ReadFile("testdata/recommendations_signals_golden.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document struct {
-		Generator string `json:"_generator"`
-	}
-	if err := json.Unmarshal(raw, &document); err != nil {
-		t.Fatal(err)
-	}
-	const want = "internal/jobs/metrics/remaining/testdata/generate_recommendations_signals_golden.py"
-	if document.Generator != want {
-		t.Fatalf("_generator = %q, want %q", document.Generator, want)
-	}
-}

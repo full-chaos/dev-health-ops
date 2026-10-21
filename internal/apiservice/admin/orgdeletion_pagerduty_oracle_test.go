@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"sync"
 	"testing"
 
@@ -70,7 +69,7 @@ func (f *fakePagerDutyRevokeServer) count() int {
 func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("orgdeletion_pagerduty", t.Name(), "daa6e6fec2494fa8dbafcf75620ecefa7d96401886843ce57f091be60a19f828"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("odpd")
 	const jwtKey = "venue-oracle-test-secret-key-for-org-deletion-pd-flow-32-byt"
 
@@ -93,7 +92,6 @@ func TestOrgDeletionRevokesPagerDutyOnBothPlanes(t *testing.T) {
 		PythonEnv: []string{
 			"PAGER_DUTY_CLIENT_ID=" + orgDeletionVenuePagerDutyID,
 			"SETTINGS_ENCRYPTION_KEY=" + orgDeletionVenueEncryptionKey,
-			"VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE=" + fakeServer.URL,
 		},
 		Seed: func(t *testing.T, ctx context.Context, adminPool *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
@@ -168,7 +166,7 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 	// The Python plane's revoke calls, counted while it answered (recorded
 	// with its answers; a frozen run reads them back). The Go plane's are
 	// counted from here on.
-	pythonCalls := golden.InspectRows(t, "pagerduty revoke calls by the python plane", func() string { return strconv.Itoa(fake.count()) })
+	pythonCalls := golden.InspectRows(t, "pagerduty revoke calls by the python plane")
 	beforeGo := fake.count()
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
@@ -209,9 +207,7 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 		{"control", controlOrgID, "1"},
 	} {
 		got := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), credentialQuery(check.org))
-		golden.CompareRows(t, "pagerduty credential row count: "+check.label, func() string {
-			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), credentialQuery(check.org))
-		}, got)
+		golden.CompareRows(t, "pagerduty credential row count: "+check.label, got)
 		if got != check.want {
 			t.Errorf("pagerduty credential row count for %s org = %s, want %s", check.label, got, check.want)
 		}

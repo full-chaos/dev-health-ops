@@ -78,12 +78,6 @@ func ttlAttribute(statement string, re *regexp.Regexp) (tables []string, matches
 	return tables, matches
 }
 
-var (
-	ttlSQLLineComment = regexp.MustCompile(`--[^\n]*`)
-	ttlBlockComment   = regexp.MustCompile(`(?s)/\*.*?\*/`)
-	ttlPyCommentLine  = regexp.MustCompile(`(?m)^[ \t]*#[^\n]*`)
-)
-
 // ttlStripSQLComments blanks SQL line and block comments outside string literals and quoted identifiers, so a TTL clause that
 // is only commented out does not count as enforced and a `--` inside a string literal does not hide a real clause. The inside
 // of a single-quoted string literal is blanked too, so a COMMENT or DEFAULT text that quotes a TTL clause is not a clause.
@@ -131,17 +125,6 @@ func ttlStripSQLComments(text string) string {
 	return out.String()
 }
 
-// ttlStripComments applies the SQL stripper to .sql files. A .py migration holds its DDL inside Python strings, so there the
-// line and block comment markers are blanked by pattern and Python comment lines are dropped.
-func ttlStripComments(path, text string) string {
-	if filepath.Ext(path) == ".sql" {
-		return ttlStripSQLComments(text)
-	}
-	text = ttlBlockComment.ReplaceAllString(text, "")
-	text = ttlSQLLineComment.ReplaceAllString(text, "")
-	return ttlPyCommentLine.ReplaceAllString(text, "")
-}
-
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -162,7 +145,7 @@ func ttlMigrationFiles(t *testing.T, dirs ...string) []string {
 		}
 		before := len(out)
 		for _, e := range entries {
-			if ext := filepath.Ext(e.Name()); !e.IsDir() && (ext == ".sql" || ext == ".py") {
+			if ext := filepath.Ext(e.Name()); !e.IsDir() && ext == ".sql" {
 				out = append(out, filepath.Join(dir, e.Name()))
 			}
 		}
@@ -182,7 +165,7 @@ func ttlScan(t *testing.T, dirs ...string) (precise map[string]ttlRetention, coa
 		if err != nil {
 			t.Fatal(err)
 		}
-		text := ttlStripComments(path, string(raw))
+		text := ttlStripSQLComments(string(raw))
 		for _, m := range ttlAlterModify.FindAllStringSubmatch(text, -1) {
 			coarse[m[1]] = true
 		}
@@ -323,7 +306,7 @@ func TestTTLCeilingsSurviveTheShelfLife(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, m := range ttlHorizonLine.FindAllStringSubmatch(ttlStripComments(path, string(raw)), -1) {
+		for _, m := range ttlHorizonLine.FindAllStringSubmatch(ttlStripSQLComments(string(raw)), -1) {
 			days, _ := strconv.Atoi(m[1])
 			if cur, ok := horizons[path]; !ok || days < cur {
 				horizons[path] = days
@@ -385,14 +368,6 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 			t.Fatal("known TTL tables without a TTL clause must fail")
 		}
 	})
-	t.Run("a .py migration TTL is found", func(t *testing.T) {
-		dir := t.TempDir()
-		writeFile(t, filepath.Join(dir, "1.py"), "DDL = \"\"\"\nCREATE TABLE py_sourced_ttl_table (\n x Int8\n) ENGINE=M TTL ts + INTERVAL 45 DAY DELETE\n\"\"\"\n")
-		p, c := ttlScan(t, dir)
-		if p["py_sourced_ttl_table"].days != 45 || !c["py_sourced_ttl_table"] {
-			t.Fatalf("py migration TTL missed: %+v %v", p, c)
-		}
-	})
 	t.Run("ALTER TABLE MODIFY TTL is seen by the coarse sweep", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "1.sql"), "ALTER TABLE existing_table MODIFY TTL ts + INTERVAL 10 DAY;")
@@ -403,7 +378,7 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 	})
 	t.Run("multi-table chunk without semicolons attributes to the second table", func(t *testing.T) {
 		dir := t.TempDir()
-		writeFile(t, filepath.Join(dir, "1.py"), "A = \"\"\"CREATE TABLE first_table (\n x Int8\n) ENGINE=M\n\nCREATE TABLE second_table (\n y Int8\n) ENGINE=M TTL ts + INTERVAL 20 DAY\"\"\"")
+		writeFile(t, filepath.Join(dir, "1.sql"), "A = \"\"\"CREATE TABLE first_table (\n x Int8\n) ENGINE=M\n\nCREATE TABLE second_table (\n y Int8\n) ENGINE=M TTL ts + INTERVAL 20 DAY\"\"\"")
 		p, c := ttlScan(t, dir)
 		if p["second_table"].days != 20 || c["first_table"] || !c["second_table"] {
 			t.Fatalf("misattributed: %+v %v", p, c)
@@ -411,7 +386,7 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 	})
 	t.Run("coarse sweep ignores prose and identifiers containing TTL or Interval", func(t *testing.T) {
 		dir := t.TempDir()
-		writeFile(t, filepath.Join(dir, "1.py"), "\"\"\"Run SHOW CREATE TABLE to get the DDL; the table name in a CREATE TABLE statement.\"\"\"\nX = 'toIntervalDay THROTTLED'\n")
+		writeFile(t, filepath.Join(dir, "1.sql"), "\"\"\"Run SHOW CREATE TABLE to get the DDL; the table name in a CREATE TABLE statement.\"\"\"\nX = 'toIntervalDay THROTTLED'\n")
 		_, c := ttlScan(t, dir)
 		if len(c) != 0 {
 			t.Fatalf("prose produced phantom tables: %v", c)
@@ -421,7 +396,6 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE dropped_ttl (\n x Int8\n) ENGINE=M\n-- TTL ts + INTERVAL 30 DAY DELETE\n;")
 		writeFile(t, filepath.Join(dir, "2.sql"), "CREATE TABLE block_commented (\n x Int8\n) ENGINE=M /* TTL ts + INTERVAL 30 DAY DELETE */;")
-		writeFile(t, filepath.Join(dir, "3.py"), "DDL = \"\"\"CREATE TABLE py_commented (\n x Int8\n) ENGINE=M\n\"\"\"\n# TTL ts + INTERVAL 30 DAY DELETE\n")
 		p, c := ttlScan(t, dir)
 		if len(p) != 0 || len(c) != 0 {
 			t.Fatalf("commented-out TTL counted: precise=%v coarse=%v", p, c)

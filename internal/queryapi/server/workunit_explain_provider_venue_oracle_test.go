@@ -3,7 +3,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -20,36 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
-
-// pythonProviderResolutionProgram runs the REAL get_provider for each case
-// with the venue's Python database (the org's stored LLM settings) and
-// answers as POST /api/v1/work-units/{id}/explain did before it moved to
-// the query-api (main.py, work_unit_explain_endpoint): get_provider runs
-// first, and `except (ValueError, LLMError) as exc: raise
-// HTTPException(status_code=422, detail=str(exc))`. A provider that
-// resolves lets the route go on to its work-unit read, which on this empty
-// store is the route's own 404 "Work unit {id} not found".
-const pythonProviderResolutionProgram = `
-import sys
-# The answer is the only thing on stdout: whatever the services (or the libraries they import) print goes to stderr.
-answer_stream, sys.stdout = sys.stdout, sys.stderr
-import json
-from dev_health_ops.llm.providers import get_provider
-from dev_health_ops.llm.errors import LLMError
-
-out = []
-for case in json.loads(sys.stdin.read()):
-    try:
-        get_provider(case["llm_provider"], model=None, org_id=case["org_id"])
-    except (ValueError, LLMError) as exc:
-        detail = str(exc)
-        status = 422
-    else:
-        detail = "Work unit " + case["work_unit_id"] + " not found"
-        status = 404
-    out.append({"status": status, "body": json.dumps({"detail": detail}, ensure_ascii=False, separators=(",", ":"))})
-answer_stream.write("RESULT " + json.dumps(out) + "\n")
-`
 
 // llmEnvironment is every variable get_provider or its Go port reads to
 // pick or configure a platform provider. The oracle clears all of them on
@@ -88,7 +57,7 @@ func TestVenueOracleWorkUnitExplainProviderResolution(t *testing.T) {
 	keyless, bare, usableLocal := stableVenueID("provider/keyless-openai"), stableVenueID("provider/bare-openai"), stableVenueID("provider/usable-local")
 	golden := venueoracle.OpenGolden(t, venueGolden("workunit-explain-provider", t.Name(), providerGoldenPin))
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: golden.PythonRoot(t, root),
+		Golden: golden, Root: root,
 		// No route here checks a token; the key is the one the other venue oracles of this package use.
 		JWTKey: oracleJWTKey,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
@@ -184,24 +153,8 @@ VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(
 	}
 	// The launcher form: the harness's own producer starts the program in the closed environment (no LLM variable reaches it); the address of the
 	// run's own Python database is the one per-run entry, passed as an extra (it is not part of the request's key).
-	request := venueoracle.ProgramRequest("provider resolution", pythonProviderResolutionProgram, payload, providerDeclared)
-	answers := golden.Produce(t, golden.PythonRoot(t, root), []venueoracle.Request{request},
-		func(producer *venueoracle.Producer, _ []venueoracle.Request) []venueoracle.Response {
-			async := strings.Replace(venue.AdminURI(t, venue.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
-			async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
-			command, err := producer.Command(context.Background(), providerDeclared, []string{"POSTGRES_URI=" + async}, "-c", pythonProviderResolutionProgram)
-			if err != nil {
-				t.Fatal(err)
-			}
-			command.Dir = producer.Root
-			command.Stdin = bytes.NewReader(payload)
-			var stdout, stderr bytes.Buffer
-			command.Stdout, command.Stderr = &stdout, &stderr
-			if err := command.Run(); err != nil {
-				t.Fatalf("python: %v\n%s", err, strings.ReplaceAll(stderr.String(), async, "<POSTGRES_URI>"))
-			}
-			return []venueoracle.Response{{Status: 0, Body: stdout.String()}}
-		})
+	request := venueoracle.ProgramRequest("provider resolution", payload)
+	answers := golden.Produce(t, []venueoracle.Request{request})
 	golden.Consumed(t, answers...)
 	var python []struct {
 		Status int    `json:"status"`

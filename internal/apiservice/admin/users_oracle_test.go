@@ -26,7 +26,7 @@ func TestUserCRUDAndPasswordChangeMatchesThePythonAPI(t *testing.T) {
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, adminRunValuesGolden("users", t.Name(), "de576d358c41c012c6bc4d8eecaed870d6cb3306c3032242650fb6b335c72cf4"))
-	root := golden.PythonRoot(t, repoRoot(t))
+	root := repoRoot(t)
 	nextID := goldenIDs("usr")
 	const jwtKey = "venue-oracle-test-secret-key-for-user-crud-flow-32-bytes!!"
 	const adminPlaintextPassword = "correct horse battery staple 9"
@@ -232,9 +232,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, memberID)
 	t.Log(receipt)
 
 	goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), userPasswordAuditQuery(orgID, adminID))
-	golden.CompareRows(t, "audit_logs rows", func() string {
-		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), userPasswordAuditQuery(orgID, adminID))
-	}, goRows)
+	golden.CompareRows(t, "audit_logs rows", goRows)
 	compareAuditJSONWithSpacingGapGoFiltered(t, ctx, golden, venue, fmt.Sprintf("org_id = '%s' AND user_id = '%s'", orgID, adminID), goOnlyUserCreateAudit, "request_metadata")
 	golden.Finish(t)
 }

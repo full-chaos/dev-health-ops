@@ -12,23 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// The scheme uvicorn's ProxyHeadersMiddleware leaves in an http scope.
-const pythonForwardedProgram = `
-import asyncio, json, sys
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-out = []
-for case in json.loads(sys.stdin.read()):
-    seen = {}
-    async def app(scope, receive, send):
-        seen["scheme"] = scope["scheme"]
-    headers = [(b"x-forwarded-proto", value.encode("latin-1")) for value in (case["headers"] or [])]
-    host, port = case["peer"]
-    scope = {"type": "http", "scheme": "https" if case["tls"] else "http", "client": (host, port), "headers": headers}
-    asyncio.run(ProxyHeadersMiddleware(app, trusted_hosts=case["allow"])(scope, None, None))
-    out.append(seen["scheme"])
-print(json.dumps(out))
-`
-
 func TestForwardedSchemeMatchesFrozenUvicorn(t *testing.T) {
 	type forwardedCase struct {
 		Allow   string   `json:"allow"`
@@ -48,7 +31,7 @@ func TestForwardedSchemeMatchesFrozenUvicorn(t *testing.T) {
 	}
 	input, _ := json.Marshal(cases)
 	output := frozenPython(t, "forwarded-scheme.golden.json",
-		programoracle.Program{Name: "forwarded-scheme", Text: pythonForwardedProgram, Stdin: []byte(string(input))})[0]
+		programoracle.Program{Name: "forwarded-scheme", Stdin: []byte(string(input))})[0]
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []string
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil || len(want) != len(cases) {

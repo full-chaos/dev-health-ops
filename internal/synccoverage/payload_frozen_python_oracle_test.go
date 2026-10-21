@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,11 +17,6 @@ import (
 )
 
 const perturbOracleEnvironment = "DEV_HEALTH_SYNC_COVERAGE_ORACLE_PERTURB"
-
-// payloadOracleScript is the place of the oracle script under the repository
-// root. It reads the case from the file argv[1] names; the program hands it
-// the case on its input (/dev/stdin), so the case is part of the request.
-const payloadOracleScript = "internal/synccoverage/testdata/python_payload_oracle.py"
 
 type payloadOracleFixture struct {
 	Config struct {
@@ -77,11 +71,7 @@ type payloadOracleFixture struct {
 var payloadOracleCases = []string{"payload_oracle_case.json", "payload_oracle_case_daily.json", "payload_oracle_case_unscheduled.json"}
 
 func TestPayloadMatchesFrozenPythonProduction(t *testing.T) {
-	fixturePath, helperPath, _ := oraclePaths(t)
-	script, err := os.ReadFile(helperPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fixturePath := oraclePath(t)
 	fixtures := make([]payloadOracleFixture, len(payloadOracleCases))
 	programs := make([]programoracle.Program, len(payloadOracleCases))
 	for index, name := range payloadOracleCases {
@@ -104,9 +94,7 @@ func TestPayloadMatchesFrozenPythonProduction(t *testing.T) {
 		if index > 0 {
 			programName += ": " + name
 		}
-		program := programoracle.Script(programName, payloadOracleScript, string(script), rawFixture)
-		program.Text = "import sys\nsys.argv = [" + strconv.Quote(payloadOracleScript) + ", '/dev/stdin']\n" + program.Text
-		programs[index] = program
+		programs[index] = programoracle.Program{Name: programName, Stdin: rawFixture}
 	}
 	outputs := frozenPython(t, "payload.golden.json", programs...)
 	staleness := map[string]bool{}
@@ -214,16 +202,13 @@ func canonicalJSON(t *testing.T, raw []byte) []byte {
 	return encoded
 }
 
-func oraclePaths(t *testing.T) (string, string, string) {
+func oraclePath(t *testing.T) string {
 	t.Helper()
 	_, currentFile, _, ok := moduleroot.Caller(0)
 	if !ok {
 		t.Fatal("locate sync coverage oracle test")
 	}
-	packageDir := filepath.Dir(currentFile)
-	repositoryRoot := filepath.Clean(filepath.Join(packageDir, "..", ".."))
-	return filepath.Join(packageDir, "testdata", "payload_oracle_case.json"),
-		filepath.Join(packageDir, "testdata", "python_payload_oracle.py"), repositoryRoot
+	return filepath.Join(filepath.Dir(currentFile), "testdata", "payload_oracle_case.json")
 }
 
 func mustUUID(t *testing.T, raw string) uuid.UUID {
@@ -245,7 +230,7 @@ func mustTime(t *testing.T, raw string) time.Time {
 }
 
 func TestOracleFixturePinsRequiredSemantics(t *testing.T) {
-	fixturePath, _, _ := oraclePaths(t)
+	fixturePath := oraclePath(t)
 	raw, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatal(err)

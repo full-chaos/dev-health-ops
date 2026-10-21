@@ -12,24 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
-// pythonErrorTextProgram runs json.loads over each body as bytes (what httpx's
-// Response.json does) and reports "ok", the JSONDecodeError text, or
-// "other:<ExceptionName>".
-const pythonErrorTextProgram = `
-import base64, json, sys
-out = []
-for item in json.loads(sys.stdin.read()):
-    body = base64.b64decode(item)
-    try:
-        json.loads(body)
-        out.append("ok")
-    except json.JSONDecodeError as error:
-        out.append("err:" + str(error))
-    except Exception as error:
-        out.append("other:" + type(error).__name__)
-print(json.dumps(out, ensure_ascii=False))
-`
-
 func syntaxTextCorpus() [][]byte {
 	valid := []string{
 		`{"login":"octocat","id":1,"name":"Octo Cat"}`, `[1,2.5,-3e+2,true,false,null,"x"]`,
@@ -96,7 +78,7 @@ func TestSyntaxErrorTextMatchesFrozenPython(t *testing.T) {
 	}
 	input, _ := json.Marshal(encoded)
 	output := frozenPython(t, "syntax-error-text.golden.json",
-		programoracle.Program{Name: "json.loads error text", Text: pythonErrorTextProgram, Stdin: input})[0]
+		programoracle.Program{Name: "json.loads error text", Stdin: input})[0]
 	var want []string
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &want); err != nil {
 		t.Fatalf("decode: %v", err)

@@ -51,8 +51,18 @@ done
 
 # The corpus's signing key and mail identity (sessionscenario.Key, authflowvenue fromAddress): the project is
 # started with them, and ci/auth_corpus_set_env.sh sources the same state file on every recreate.
+# A loopback port nothing listens on: a random port in the ephemeral range whose connect is refused.
 free_port() {
-  python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+  local port tries=0
+  while [ "${tries}" -lt 200 ]; do
+    port=$((32768 + RANDOM % 28000))
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+      printf '%s\n' "${port}"
+      return 0
+    fi
+    tries=$((tries + 1))
+  done
+  die "no free loopback port after 200 tries"
 }
 API_PORT="$(free_port)"
 OPERATOR_PORT="$(free_port)"

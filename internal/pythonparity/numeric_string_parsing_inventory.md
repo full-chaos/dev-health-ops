@@ -87,7 +87,7 @@ real ones"). Treat PARITY? rows as "check this first", not "this is broken".
 
 ## Atoi (`strconv.Atoi` is `ParseInt(s, 10, 0)`; same class)
 
-46 non-test call sites total. **44 are INFRA**: pagination cursors
+45 non-test call sites total. **43 are INFRA**: pagination cursors
 (GitHub/GitLab/Jira/PagerDuty API page numbers), HTTP headers,
 cron-expression fields (`internal/scheduler/sync/cron.go`), CLI/env config
 (`internal/platform/config/config.go`), job-contract registry version keys

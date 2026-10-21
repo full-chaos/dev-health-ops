@@ -101,7 +101,7 @@ grants back exactly the manifest. Highlights:
   session and revoke a reused token's go-api family. The posture reports a
   missing or wider privilege on that table. CHAOS-10408 removes the grant when
   no live go-api refresh token is left.
-- Every session row stores `legacy_token_version` (migration 0015), the
+- Every session row stores `legacy_token_version` (migration 0016), the
   user's `public.users.token_version` when the session was created. A refresh
   of a session whose pin differs from the current version is revoked and
   refused (`revision_stale`), so a go-api password reset ends auth-service

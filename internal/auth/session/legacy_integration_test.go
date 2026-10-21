@@ -234,7 +234,7 @@ func TestExchangeLegacyRefusesWithoutChangingAnything(t *testing.T) {
 	}
 }
 
-// A session row without a pin (older than migration 0015) is refused under its
+// A session row without a pin (older than migration 0016) is refused under its
 // lock before anything is written: its credential is neither consumed nor
 // revoked, and the session stays as it was.
 func TestExchangeRefusesAPinlessSessionWithoutRotating(t *testing.T) {

@@ -12,7 +12,7 @@ type pinVerdict int
 
 const (
 	pinCurrent pinVerdict = iota
-	// pinMissing is a session row from before migration 0015: it is refused
+	// pinMissing is a session row from before migration 0016: it is refused
 	// and left as it is.
 	pinMissing
 	// pinStale is a session created before the user's token_version moved (a

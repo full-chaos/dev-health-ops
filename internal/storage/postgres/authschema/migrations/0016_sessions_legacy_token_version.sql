@@ -1,4 +1,4 @@
--- 0015 the go-api token_version a session was created at. ADDITIVE ONLY. See
+-- 0016 the go-api token_version a session was created at. ADDITIVE ONLY. See
 -- 0001's header.
 --
 -- An access token auth-service mints carries tv, which go-api's readers check

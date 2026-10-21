@@ -157,7 +157,7 @@ type Record struct {
 	ExpiresAt      time.Time
 	RevokedAt      *time.Time
 	// LegacyTokenVersion is public.users.token_version when the session was
-	// created; nil on a session row older than migration 0015.
+	// created; nil on a session row older than migration 0016.
 	LegacyTokenVersion *int64
 }
 

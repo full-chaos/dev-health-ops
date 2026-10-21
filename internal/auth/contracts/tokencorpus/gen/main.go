@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -20,16 +21,25 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	corpus, err := tokencorpus.Generate(nil)
-	if err != nil {
+	if err := run(root, filepath.Join(root, tokencorpus.Dir), nil); err != nil {
 		fail(err)
+	}
+}
+
+// run generates a corpus with keys from random (crypto/rand when nil), checks
+// that every vector gets its manifest decision, and writes it to out.
+func run(root, out string, random io.Reader) error {
+	if _, err := contracts.RepoRoot(root); err != nil {
+		return err
+	}
+	corpus, err := tokencorpus.Generate(random)
+	if err != nil {
+		return err
 	}
 	if err := tokencorpus.VerifyAll(root, corpus); err != nil {
-		fail(err)
+		return err
 	}
-	if err := tokencorpus.Write(filepath.Join(root, tokencorpus.Dir), corpus); err != nil {
-		fail(err)
-	}
+	return tokencorpus.Write(out, corpus)
 }
 
 func fail(err error) {

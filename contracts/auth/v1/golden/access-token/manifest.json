@@ -13,7 +13,7 @@
       "alg": "EdDSA",
       "use": "sig",
       "kid": "auth-example-2026-04",
-      "x": "NqumOpoFXmvP4dw3IEH3k0taDNZ4Ytb37_imTz7XgKQ"
+      "x": "IAjddQsjpBaJt1a8CUHkZuCRkTOvY8UEhfvJYHTfpWI"
     }
   ],
   "decision_order": [
@@ -223,6 +223,47 @@
       "expect": "reject",
       "reason": "not_yet_valid",
       "why": "One second before nbf."
+    },
+    {
+      "file": "invalid-order-audience-over-expiry.json",
+      "now": 1760000600,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "Two failures: the wrong audience for the verifier and a token that has expired. The audience refusal comes first."
+    },
+    {
+      "file": "invalid-order-audience-over-not-yet-valid.json",
+      "now": 1759999999,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "Two failures: the wrong audience for the verifier and a clock before nbf. The audience refusal comes first."
+    },
+    {
+      "file": "invalid-order-contract-over-unknown-kid.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "Two failures: typ JWT and a kid never published. The contract refusal comes first."
+    },
+    {
+      "file": "invalid-order-issuer-over-audience.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "issuer",
+      "why": "Two failures: another issuer and the wrong audience for the verifier. The issuer refusal comes first."
+    },
+    {
+      "file": "invalid-order-signature-over-issuer.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "Two failures: another issuer and a signature by a key outside the set. The signature refusal comes first."
     },
     {
       "file": "invalid-principal-type-workload.json",

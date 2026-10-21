@@ -342,3 +342,80 @@ func TestRemovedKeyIsRefusedEvenWhenAStaleCacheStillHoldsIt(t *testing.T) {
 		}
 	}
 }
+
+func TestFileNamesCannotEscapeTheCorpusDirectory(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "a", "b")
+	c := mustGenerate(t, "a")
+	if err := Write(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"../../outside.json", "../x.json", "sub/x.json", `..\x.json`, "..", ".", "", "x.txt"} {
+		bad := *c
+		bad.Vectors = map[string]Vector{name: c.Vectors["valid-api.json"]}
+		if err := Write(filepath.Join(base, "w"), &bad); err == nil {
+			t.Errorf("Write accepted the vector name %q", name)
+		}
+		loaded := *c
+		loaded.Manifest.Vectors = []Entry{{File: name}}
+		if err := writeJSON(filepath.Join(dir, "manifest.json"), loaded.Manifest); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(dir); err == nil {
+			t.Errorf("Load accepted the manifest file name %q", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(base, "outside.json")); err == nil {
+		t.Error("a file was written outside the corpus directory")
+	}
+}
+
+func TestWriteRemovesVectorsTheCorpusNoLongerHas(t *testing.T) {
+	dir := t.TempDir()
+	c := mustGenerate(t, "a")
+	if err := Write(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, "vectors", "invalid-retired-vector.json")
+	if err := os.WriteFile(stale, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Fatal("Write left a vector the corpus no longer has")
+	}
+	if _, err := Load(dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Each broken reader below swaps two neighbouring decisions. A swap no vector
+// can tell apart is a decision order the corpus does not pin. nbf and exp
+// never both fail (the contract requires nbf before exp), so that pair cannot
+// be told apart by any token.
+func TestTheCorpusPinsTheDecisionOrder(t *testing.T) {
+	root := testRoot(t)
+	c, err := Load(filepath.Join(root, Dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := c.Manifest.ReasonOrder
+	if strings.Join(order, ",") != strings.Join(DecisionOrder, ",") {
+		t.Fatalf("manifest decision_order %v is not %v", order, DecisionOrder)
+	}
+	for i := 0; i+1 < len(order); i++ {
+		a, b := order[i], order[i+1]
+		if a == ReasonNotYetValid && b == ReasonExpired {
+			continue
+		}
+		t.Run(a+" before "+b, func(t *testing.T) {
+			swapped := append([]string{}, order...)
+			swapped[i], swapped[i+1] = swapped[i+1], swapped[i]
+			if err := verifyAllIn(root, c, swapped, ""); err == nil {
+				t.Fatalf("a reader that decides %s before %s passed every vector", b, a)
+			}
+		})
+	}
+}

@@ -261,6 +261,17 @@ func Generate(random io.Reader) (*Corpus, error) {
 		return ed25519.Sign(activeKey, Vector{HeaderJSON: good, PayloadJSON: api.text()}.SigningInput())
 	}, reject(now, AudienceAPI, ReasonSignature, "A payload changed by one byte after signing."))
 
+	b.add("invalid-order-contract-over-unknown-kid", headerText("EdDSA", "JWT", KidUnknown), api.text(), edSigner(strangerKey),
+		contractRefusal("schema", "Two failures: typ JWT and a kid never published. The contract refusal comes first."))
+	b.add("invalid-order-signature-over-issuer", good, otherIss.text(), edSigner(strangerKey),
+		reject(now, AudienceAPI, ReasonSignature, "Two failures: another issuer and a signature by a key outside the set. The signature refusal comes first."))
+	b.add("invalid-order-issuer-over-audience", good, otherIss.text(), edSigner(activeKey),
+		reject(now, AudienceAuth, ReasonIssuer, "Two failures: another issuer and the wrong audience for the verifier. The issuer refusal comes first."))
+	b.add("invalid-order-audience-over-not-yet-valid", good, api.text(), edSigner(activeKey),
+		reject(api.nbf-1, AudienceAuth, ReasonAudience, "Two failures: the wrong audience for the verifier and a clock before nbf. The audience refusal comes first."))
+	b.add("invalid-order-audience-over-expiry", good, api.text(), edSigner(activeKey),
+		reject(api.exp, AudienceAuth, ReasonAudience, "Two failures: the wrong audience for the verifier and a token that has expired. The audience refusal comes first."))
+
 	sort.Slice(b.entries, func(i, j int) bool { return b.entries[i].File < b.entries[j].File })
 	x := func(p ed25519.PublicKey) string { return base64.RawURLEncoding.EncodeToString(p) }
 	return &Corpus{
@@ -271,7 +282,7 @@ func Generate(random io.Reader) (*Corpus, error) {
 			LeewaySeconds: 0,
 			RemovedKids:   []string{KidRemoved},
 			RemovedKeys:   []JwkKey{{Kty: "OKP", Crv: "Ed25519", Alg: "EdDSA", Use: "sig", Kid: KidRemoved, X: x(removedPub)}},
-			ReasonOrder:   []string{ReasonContract, ReasonUnknownKid, ReasonSignature, ReasonIssuer, ReasonAudience, ReasonNotYetValid, ReasonExpired},
+			ReasonOrder:   append([]string{}, DecisionOrder...),
 			Vectors:       b.entries,
 		},
 		Jwks: Jwks{Keys: []JwkKey{

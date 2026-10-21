@@ -133,6 +133,9 @@ func Load(dir string) (*Corpus, error) {
 	}
 	c.Vectors = map[string]Vector{}
 	for _, e := range c.Manifest.Vectors {
+		if err := checkFileName(e.File); err != nil {
+			return nil, err
+		}
 		var v Vector
 		if err := readJSON(filepath.Join(dir, "vectors", e.File), &v); err != nil {
 			return nil, err
@@ -155,6 +158,9 @@ func Write(dir string, c *Corpus) error {
 	}
 	names := make([]string, 0, len(c.Vectors))
 	for name := range c.Vectors {
+		if err := checkFileName(name); err != nil {
+			return err
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -162,6 +168,26 @@ func Write(dir string, c *Corpus) error {
 		if err := writeJSON(filepath.Join(dir, "vectors", name), c.Vectors[name]); err != nil {
 			return err
 		}
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "vectors"))
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if _, kept := c.Vectors[e.Name()]; !kept && !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			if err := os.Remove(filepath.Join(dir, "vectors", e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkFileName refuses a vector name that is not one plain .json file name
+// inside the vectors directory.
+func checkFileName(name string) error {
+	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, `/\`) || !strings.HasSuffix(name, ".json") || strings.HasPrefix(name, ".") {
+		return fmt.Errorf("tokencorpus: %q is not a plain vector file name", name)
 	}
 	return nil
 }

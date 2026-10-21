@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"io"
 	"net/netip"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 var securityHeaders = []string{
@@ -38,28 +39,57 @@ type Options struct {
 	Source, Output, Mode, Redirects, CanonicalOrigin, SourceRevision string
 }
 
-// Run is the `cigate docs-prepare` entry point. Exit 1 on a validation or I/O error, 2 on a usage error.
-func Run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("docs-prepare", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	var o Options
-	fs.StringVar(&o.Source, "source", "", "built documentation directory")
-	fs.StringVar(&o.Output, "output", "", "prepared asset directory")
-	fs.StringVar(&o.Mode, "mode", "", "preview or production")
-	fs.StringVar(&o.Redirects, "redirects", "", "redirect manifest TSV")
-	fs.StringVar(&o.CanonicalOrigin, "canonical-origin", "https://docs.fullchaos.dev", "canonical HTTPS origin")
-	fs.StringVar(&o.SourceRevision, "source-revision", "", "source revision recorded in the manifest")
-	if err := fs.Parse(args); err != nil {
-		return 2
+const usage = "usage: cigate docs-prepare --source DIR --output DIR --mode {preview,production} --redirects FILE [--canonical-origin URL] [--source-revision REV]"
+
+// parseArgs accepts exactly what the former argparse command line accepted, minus its leniency: only the six long
+// options spelled in full, as "--name value" or "--name=value", no positional argument, no value that looks like an
+// option, no empty required value. Anything else is a usage error (exit 2).
+func parseArgs(args []string) (Options, string) {
+	o := Options{CanonicalOrigin: "https://docs.fullchaos.dev"}
+	targets := map[string]*string{
+		"source": &o.Source, "output": &o.Output, "mode": &o.Mode, "redirects": &o.Redirects,
+		"canonical-origin": &o.CanonicalOrigin, "source-revision": &o.SourceRevision,
 	}
-	for name, v := range map[string]string{"source": o.Source, "output": o.Output, "mode": o.Mode, "redirects": o.Redirects} {
-		if v == "" {
-			fmt.Fprintf(stderr, "docs-prepare: the following arguments are required: --%s\n", name)
-			return 2
+	seen := map[string]bool{}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		name, value, hasValue := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		target, known := targets[name]
+		if !strings.HasPrefix(arg, "--") || !known {
+			return o, fmt.Sprintf("unrecognized arguments: %s", arg)
+		}
+		if !hasValue {
+			if i+1 >= len(args) || (strings.HasPrefix(args[i+1], "-") && len(args[i+1]) > 1) {
+				return o, fmt.Sprintf("argument --%s: expected one argument", name)
+			}
+			i++
+			value = args[i]
+		}
+		*target = value
+		seen[name] = true
+	}
+	for _, name := range []string{"source", "output", "mode", "redirects"} {
+		if !seen[name] || *targets[name] == "" {
+			return o, fmt.Sprintf("the following arguments are required: --%s", name)
 		}
 	}
 	if o.Mode != "preview" && o.Mode != "production" {
-		fmt.Fprintf(stderr, "docs-prepare: argument --mode: invalid choice: %s (choose from preview, production)\n", pyRepr(o.Mode))
+		return o, fmt.Sprintf("argument --mode: invalid choice: %s (choose from 'preview', 'production')", pyRepr(o.Mode))
+	}
+	return o, ""
+}
+
+// Run is the `cigate docs-prepare` entry point. Exit 1 on a validation or I/O error, 2 on a usage error.
+func Run(args []string, stdout, stderr io.Writer) int {
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			fmt.Fprintln(stdout, usage)
+			return 0
+		}
+	}
+	o, problem := parseArgs(args)
+	if problem != "" {
+		fmt.Fprintf(stderr, "%s\ndocs-prepare: error: %s\n", usage, problem)
 		return 2
 	}
 	origin, err := validOrigin(o.CanonicalOrigin)
@@ -99,8 +129,11 @@ func Prepare(o Options) (manifestInfo, error) {
 	if err != nil {
 		return manifestInfo{}, err
 	}
-	if _, serr := os.Lstat(o.Output); serr == nil {
-		if fi, _ := os.Stat(o.Output); fi == nil || !fi.IsDir() {
+	if lfi, serr := os.Lstat(o.Output); serr == nil {
+		if lfi.Mode()&os.ModeSymlink != 0 {
+			return manifestInfo{}, fmt.Errorf("Cannot call rmtree on a symbolic link")
+		}
+		if !lfi.IsDir() {
 			return manifestInfo{}, fmt.Errorf("[Errno 20] Not a directory: %s", pyRepr(o.Output))
 		}
 		if err := os.RemoveAll(o.Output); err != nil {
@@ -115,6 +148,9 @@ func Prepare(o Options) (manifestInfo, error) {
 	}
 	if err := writeText(filepath.Join(o.Output, "_headers"), headersText(o.Mode)); err != nil {
 		return manifestInfo{}, err
+	}
+	if o.Mode == "production" && !utf8.ValidString(o.CanonicalOrigin) {
+		return manifestInfo{}, fmt.Errorf("'utf-8' codec can't encode characters: surrogates not allowed")
 	}
 	if err := writeText(filepath.Join(o.Output, "robots.txt"), robotsText(o.Mode, o.CanonicalOrigin)); err != nil {
 		return manifestInfo{}, err
@@ -332,10 +368,35 @@ func validOrigin(value string) (string, error) {
 	if netloc == "" || (tail != "" && tail != "/") {
 		return "", bad
 	}
+	if err := checkNetlocNFKC(netloc); err != nil {
+		return "", err
+	}
 	if err := checkBracketedHost(netloc); err != nil {
 		return "", err
 	}
 	return strings.TrimRight(value, "/"), nil
+}
+
+// checkNetlocNFKC mirrors urllib's _checknetloc: a non-ASCII netloc whose NFKC form gains a URL delimiter is refused.
+func checkNetlocNFKC(netloc string) error {
+	ascii := true
+	for i := 0; i < len(netloc); i++ {
+		if netloc[i] >= 0x80 {
+			ascii = false
+		}
+	}
+	if ascii {
+		return nil
+	}
+	n := strings.NewReplacer("@", "", ":", "", "#", "", "?", "").Replace(netloc)
+	normalized := norm.NFKC.String(n)
+	if n == normalized {
+		return nil
+	}
+	if strings.ContainsAny(normalized, "/?#@:") {
+		return fmt.Errorf("netloc %s contains invalid characters under NFKC normalization", pyRepr(netloc))
+	}
+	return nil
 }
 
 // checkBracketedHost mirrors urlsplit: when a netloc holds brackets, unbalanced or misplaced brackets and a host that
@@ -379,6 +440,18 @@ func checkBracketedHost(netloc string) error {
 	return nil
 }
 
+// csvFieldLimit is Python's csv.field_size_limit default: a longer field is a csv.Error, reported as ERROR.
+const csvFieldLimit = 131072
+
+func checkFieldLimit(row []string) error {
+	for _, f := range row {
+		if len(f) > csvFieldLimit && utf8.RuneCountInString(f) > csvFieldLimit {
+			return fmt.Errorf("field larger than field limit (%d)", csvFieldLimit)
+		}
+	}
+	return nil
+}
+
 func rawField(row []string, index map[string]int, name string) string {
 	if i := index[name]; i < len(row) {
 		return row[i]
@@ -407,6 +480,9 @@ func loadRedirects(path string) ([]redirect, error) {
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
+	if err := checkFieldLimit(header); err != nil {
+		return nil, err
+	}
 	index := map[string]int{}
 	for i, name := range header {
 		index[name] = i
@@ -425,6 +501,9 @@ func loadRedirects(path string) ([]redirect, error) {
 			return out, nil
 		}
 		if err != nil {
+			return nil, err
+		}
+		if err := checkFieldLimit(row); err != nil {
 			return nil, err
 		}
 		source, target := field(row, "source_path"), field(row, "target_path")
@@ -550,11 +629,11 @@ func copyTree(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
 	des, err := os.ReadDir(src)
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
 	for _, de := range des {

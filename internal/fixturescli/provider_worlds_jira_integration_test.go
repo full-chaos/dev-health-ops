@@ -433,8 +433,5 @@ var jiraWorld = providerWorld{
 			Datasets:       workItemDatasets,
 			DatasetOptions: map[string]any{"fetch_dev_status": true}},
 		{Kind: "work_graph"},
-		// The next sync of the catalog, after the work is synced: each link starts at its evidence (CHAOS-10521).
-		{Kind: "team_catalog", Provider: "jira", Credential: jiraCredential, Config: jiraConfig,
-			Sources: [][2]string{{jiraPAY.Key, jiraPAY.Name}, {jiraOPS.Key, jiraOPS.Name}}},
 	},
 }

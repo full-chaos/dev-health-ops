@@ -1398,35 +1398,62 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 	}
 
 	t.Run("sync-time valid_from on a catalog writer", func(t *testing.T) {
-		// The catalog writers start a link at its evidence (CHAOS-10521): each cell that judges the start of a
-		// link is green on the produced state.
-		for _, cell := range [][2]string{
-			{"github", "membership_starts_at_its_evidence"}, {"gitlab", "membership_starts_at_its_evidence"},
-			{"linear", "membership_starts_at_its_evidence"}, {"github", "repository_ownership_starts_at_its_evidence"},
-			{"gitlab", "project_ownership_starts_at_its_evidence"}, {"jira", "project_ownership_starts_at_its_evidence"},
-			{"linear", "project_ownership_starts_at_its_evidence"},
-		} {
-			provider, check := cell[0], cell[1]
-			if result := judge(provider, check, facts, readers); len(result.Violations) > 0 {
-				t.Fatalf("%s/%s is red on the produced state: %v", provider, check, result.Violations)
+		// As the producers write it: the ownership starts at the sync (known red, CHAOS-10521).
+		if result := judge("jira", "project_ownership_starts_at_its_evidence", facts, readers); len(result.Violations) == 0 {
+			t.Fatal("the sync-time start of the Jira project ownership is not found")
+		}
+		// The defect removed: the rows start at the first item of their project. The cell turns green.
+		fixed := withFacts("jira", func(f *matrixFacts) {
+			rows := append([]ownershipRow{}, f.projOwners...)
+			for index := range rows {
+				var first time.Time
+				for _, item := range f.items {
+					if item.ProjectID == rows[index].joinID() && (first.IsZero() || item.CreatedAt.Before(first)) {
+						first = item.CreatedAt
+					}
+				}
+				if !first.IsZero() {
+					rows[index].ValidFrom = first
+				}
 			}
-			// The defect planted: every open row starts at the sync, as the writers stamped it before. The cell
-			// turns red.
-			planted := withFacts(provider, func(f *matrixFacts) {
-				atTheSync := func(rows []ownershipRow) []ownershipRow {
-					out := append([]ownershipRow{}, rows...)
-					for index := range out {
-						if out[index].ValidTo == nil {
-							out[index].ValidFrom = f.now.Add(-time.Hour)
+			f.projOwners = rows
+		})
+		if result := judge("jira", "project_ownership_starts_at_its_evidence", fixed, readers); len(result.Violations) > 0 {
+			t.Fatalf("the check stays red on ownership that starts at its evidence: %v", result.Violations)
+		}
+		// The same for a membership (CHAOS-10521): the produced rows start at the sync, and the membership cell,
+		// which judges the first row of each link and skips an empty interval, is red on them.
+		if result := judge("github", "membership_starts_at_its_evidence", facts, readers); len(result.Violations) == 0 {
+			t.Fatal("the sync-time start of the GitHub memberships is not found")
+		}
+		// The defect removed: each membership's first row starts at the member's first work, and the row the
+		// writer retires at the sync is an empty interval. The cell turns green.
+		atEvidence := withFacts("github", func(f *matrixFacts) {
+			var rows []ownershipRow
+			for _, row := range f.memberships {
+				member := strings.ToLower(row.RepoName[strings.Index(row.RepoName, ":")+1:])
+				var first time.Time
+				for _, item := range f.items {
+					for _, person := range append([]string{item.Reporter}, item.Assignees...) {
+						person = strings.ToLower(person)
+						if person != "" && (strings.HasSuffix(person, ":"+member) || strings.HasPrefix(person, member+"@") || person == member) &&
+							(first.IsZero() || item.CreatedAt.Before(first)) {
+							first = item.CreatedAt
 						}
 					}
-					return out
 				}
-				f.memberships, f.repoOwners, f.projOwners = atTheSync(f.memberships), atTheSync(f.repoOwners), atTheSync(f.projOwners)
-			})
-			if result := judge(provider, check, planted, readers); len(result.Violations) == 0 {
-				t.Fatalf("%s/%s does not find links that start at the sync", provider, check)
+				if !first.IsZero() && first.Before(row.ValidFrom) {
+					retired := row
+					retired.ValidTo = &retired.ValidFrom
+					rows = append(rows, retired)
+					row.ValidFrom = first
+				}
+				rows = append(rows, row)
 			}
+			f.memberships = rows
+		})
+		if result := judge("github", "membership_starts_at_its_evidence", atEvidence, readers); len(result.Violations) > 0 {
+			t.Fatalf("the membership check stays red on memberships that start at their evidence: %v", result.Violations)
 		}
 	})
 

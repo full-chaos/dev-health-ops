@@ -79,6 +79,8 @@ type gitHubTreeWalker struct {
 	paths     []string
 	sizes     map[string]*int
 	stats     gitHubTreeWalkStats
+	metrics   *providerfoundation.Metrics
+	nearWarn  map[string]bool
 }
 
 // gitHubWalkTree recovers a complete blob inventory when the recursive tree
@@ -106,11 +108,29 @@ func gitHubWalkTreeLimited(
 	walker := &gitHubTreeWalker{
 		ctx: ctx, root: root, limits: limits, startedAt: limits.now(),
 		ancestors: map[string]bool{}, sizes: map[string]*int{},
+		metrics: client.Metrics, nearWarn: map[string]bool{},
 	}
 	if err := walker.walk(client, sha, prefix, 0); err != nil {
 		return nil, nil, walker.stats, err
 	}
 	return walker.paths, walker.sizes, walker.stats, nil
+}
+
+// noteNearCeiling says, once per walk and ceiling, that a walk reached half of
+// that ceiling (inclusive): a WARN and a counter, both labelled by the ceiling's
+// closed name only. A repository growing toward a ceiling shows here long
+// before a walk is stopped.
+func (walker *gitHubTreeWalker) noteNearCeiling(limit string, value, ceiling int) {
+	if ceiling <= 0 || value*2 < ceiling || walker.nearWarn[limit] {
+		return
+	}
+	walker.nearWarn[limit] = true
+	walker.metrics.RecordTreeWalkNearCeiling(limit)
+	slog.Warn(
+		"github tree walk passed half of a ceiling",
+		"limit", limit, "value", value, "ceiling", ceiling,
+		"dirs", walker.stats.dirs, "depth", walker.stats.depth, "entries", walker.stats.entries,
+	)
 }
 
 func (walker *gitHubTreeWalker) stop(limit string, value int) error {
@@ -136,6 +156,9 @@ func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha,
 	}
 	walker.stats.dirs++
 	walker.stats.depth = max(walker.stats.depth, depth)
+	walker.noteNearCeiling(GitHubTreeWalkLimitDepth, depth, walker.limits.maxDepth)
+	walker.noteNearCeiling(GitHubTreeWalkLimitDirs, walker.stats.dirs, walker.limits.maxDirs)
+	walker.noteNearCeiling(GitHubTreeWalkLimitTime, int(now.Sub(walker.startedAt)/time.Second), int(walker.limits.budget/time.Second))
 	var tree gitHubTreePayload
 	if err := fetchObjectRoute(walker.ctx, client, githubTreeRoute, walker.root+"/git/trees/"+url.PathEscape(sha), &tree); err != nil {
 		return fmt.Errorf("path=%q: %w", prefix, err)
@@ -144,6 +167,7 @@ func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha,
 		return fmt.Errorf("path=%q: %w", prefix, ErrGitHubFilesSubtreeTruncated)
 	}
 	walker.stats.entries += len(tree.Tree)
+	walker.noteNearCeiling(GitHubTreeWalkLimitEntries, walker.stats.entries, walker.limits.maxEntries)
 	if walker.stats.entries > walker.limits.maxEntries {
 		return walker.stop(GitHubTreeWalkLimitEntries, walker.limits.maxEntries)
 	}

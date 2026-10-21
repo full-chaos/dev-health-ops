@@ -347,3 +347,123 @@ func TestGitHubBlameWarnsForASingleFileAboveTheWriteBound(t *testing.T) {
 		t.Fatalf("WARN lines=%d, want one per file (3): %s", warns, logs.String())
 	}
 }
+
+// walkEntriesTotal builds a tree whose directories list exactly `total`
+// entries: a root of 50 directories, 49 of 1,000 blobs and one with the rest.
+func walkEntriesTotal(total int) *walkTreeFake {
+	fake := &walkTreeFake{trees: map[string][]walkEntry{}}
+	root := make([]walkEntry, 0, 50)
+	remaining := total - 50
+	for dir := 0; dir < 50; dir++ {
+		sha := fmt.Sprintf("n%d", dir)
+		root = append(root, walkEntry{path: fmt.Sprintf("p%d", dir), kind: "tree", sha: sha})
+		count := 1000
+		if dir == 49 {
+			count = remaining
+		}
+		remaining -= count
+		blobs := make([]walkEntry, 0, count)
+		for file := 0; file < count; file++ {
+			blobs = append(blobs, walkEntry{path: fmt.Sprintf("f%d.go", file), kind: "blob"})
+		}
+		fake.trees[sha] = blobs
+	}
+	fake.trees["root"] = root
+	return fake
+}
+
+func nearCeilingWarns(logs *bytes.Buffer, limit string) int {
+	count := 0
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, "passed half of a ceiling") && strings.Contains(line, " limit="+limit+" ") {
+			count++
+		}
+	}
+	return count
+}
+
+func nearCeilingCounter(t *testing.T, metrics *providerfoundation.Metrics, limit string) int {
+	t.Helper()
+	var out bytes.Buffer
+	if err := metrics.WritePrometheus(&out); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		prefix := fmt.Sprintf("dev_health_github_tree_walk_near_ceiling_total{limit=%q} ", limit)
+		if strings.HasPrefix(line, prefix) {
+			var count int
+			fmt.Sscanf(strings.TrimPrefix(line, prefix), "%d", &count)
+			return count
+		}
+	}
+	return 0
+}
+
+// A walk that reaches half of a ceiling says so once, by the ceiling's closed
+// name, long before it is stopped: one below half is silent, half and above
+// fire. The numbers are the real ceilings (5,000 / 100,000 / 64 / 12 min).
+func TestGitHubTreeWalkWarnsOncePerCeilingAtHalf(t *testing.T) {
+	type tc struct {
+		limit string
+		name  string
+		fake  func() *walkTreeFake
+		clock func() func() time.Time
+		want  int
+	}
+	start := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	after := func(elapsed time.Duration) func() func() time.Time {
+		return func() func() time.Time {
+			calls := 0
+			return func() time.Time {
+				calls++
+				if calls == 1 {
+					return start
+				}
+				return start.Add(elapsed)
+			}
+		}
+	}
+	cases := []tc{
+		{GitHubTreeWalkLimitDirs, "dirs 2,499", func() *walkTreeFake { return walkWide(2499) }, nil, 0},
+		{GitHubTreeWalkLimitDirs, "dirs 2,500", func() *walkTreeFake { return walkWide(2500) }, nil, 1},
+		{GitHubTreeWalkLimitDirs, "dirs 2,501", func() *walkTreeFake { return walkWide(2501) }, nil, 1},
+		{GitHubTreeWalkLimitDirs, "dirs 2,600 still once", func() *walkTreeFake { return walkWide(2600) }, nil, 1},
+		{GitHubTreeWalkLimitEntries, "entries 49,999", func() *walkTreeFake { return walkEntriesTotal(49_999) }, nil, 0},
+		{GitHubTreeWalkLimitEntries, "entries 50,000", func() *walkTreeFake { return walkEntriesTotal(50_000) }, nil, 1},
+		{GitHubTreeWalkLimitEntries, "entries 51,000", func() *walkTreeFake { return walkEntriesTotal(51_000) }, nil, 1},
+		{GitHubTreeWalkLimitDepth, "depth 31", func() *walkTreeFake { return walkChain(31) }, nil, 0},
+		{GitHubTreeWalkLimitDepth, "depth 32", func() *walkTreeFake { return walkChain(32) }, nil, 1},
+		{GitHubTreeWalkLimitDepth, "depth 33", func() *walkTreeFake { return walkChain(33) }, nil, 1},
+		{GitHubTreeWalkLimitTime, "time 5m59s", func() *walkTreeFake { return walkWide(5) }, after(5*time.Minute + 59*time.Second), 0},
+		{GitHubTreeWalkLimitTime, "time 6m00s", func() *walkTreeFake { return walkWide(5) }, after(6 * time.Minute), 1},
+		{GitHubTreeWalkLimitTime, "time 6m01s", func() *walkTreeFake { return walkWide(5) }, after(6*time.Minute + time.Second), 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			logs := captureWalkLog(t)
+			fake := c.fake()
+			client := fake.client(t)
+			metrics := providerfoundation.NewMetrics()
+			client.Metrics = metrics
+			limits := defaultGitHubTreeWalkLimits()
+			if c.clock != nil {
+				limits.now = c.clock()
+			}
+			if _, _, _, err := gitHubWalkTreeLimited(context.Background(), client, "/repos/acme/api", "root", "", limits); err != nil {
+				t.Fatal(err)
+			}
+			if got := nearCeilingWarns(logs, c.limit); got != c.want {
+				t.Fatalf("%s WARN lines=%d want %d: %s", c.limit, got, c.want, logs.String())
+			}
+			if got := nearCeilingCounter(t, metrics, c.limit); got != c.want {
+				t.Fatalf("%s counter=%d want %d", c.limit, got, c.want)
+			}
+			for _, line := range strings.Split(logs.String(), "\n") {
+				if strings.Contains(line, "passed half of a ceiling") &&
+					(strings.Contains(line, "acme") || strings.Contains(line, "root") || strings.Contains(line, "p1")) {
+					t.Fatalf("WARN carries the repository or a path: %s", line)
+				}
+			}
+		})
+	}
+}

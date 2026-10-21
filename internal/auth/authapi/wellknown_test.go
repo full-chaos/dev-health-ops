@@ -147,14 +147,19 @@ func TestJWKSAnswers304ForAMatchingETagAndHEADHasNoBody(t *testing.T) {
 	set, _ := twoKeySet(t)
 	deps := WellKnownDeps{Keys: keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil })}
 	etag := serve(t, deps, http.MethodGet, PatternJWKS, nil).Header().Get("ETag")
-	for name, header := range map[string]string{"exact": etag, "list": `"other", ` + etag, "star": "*"} {
+	for name, header := range map[string]string{"exact": etag, "list": `"other", ` + etag, "star": "*", "weak": "W/" + etag, "weak in a list": `W/"other", W/` + etag} {
 		rec := serve(t, deps, http.MethodGet, PatternJWKS, http.Header{"If-None-Match": {header}})
 		if rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
 			t.Fatalf("%s: status %d body %d bytes, want 304 and none", name, rec.Code, rec.Body.Len())
 		}
 	}
-	if rec := serve(t, deps, http.MethodGet, PatternJWKS, http.Header{"If-None-Match": {`"stale"`}}); rec.Code != http.StatusOK {
-		t.Fatalf("stale ETag status %d, want 200", rec.Code)
+	for name, header := range map[string]string{"stale": `"stale"`, "weak stale": `W/"stale"`, "empty": ""} {
+		if rec := serve(t, deps, http.MethodGet, PatternJWKS, http.Header{"If-None-Match": {header}}); rec.Code != http.StatusOK {
+			t.Fatalf("%s ETag status %d, want 200", name, rec.Code)
+		}
+	}
+	if rec := serve(t, deps, http.MethodHead, PatternJWKS, http.Header{"If-None-Match": {"W/" + etag}}); rec.Code != http.StatusNotModified {
+		t.Fatalf("HEAD with a weak matching tag status %d, want 304", rec.Code)
 	}
 	head := serve(t, deps, http.MethodHead, PatternJWKS, nil)
 	if head.Code != http.StatusOK || head.Body.Len() != 0 || head.Header().Get("Content-Length") == "" || head.Header().Get("ETag") != etag {

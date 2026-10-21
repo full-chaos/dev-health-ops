@@ -138,10 +138,12 @@ func writeCacheable(w http.ResponseWriter, r *http.Request, body any) {
 	}
 }
 
+// etagMatches is the weak comparison RFC 9110 section 13.1.2 prescribes for
+// If-None-Match: a W/ prefix on a presented tag is ignored.
 func etagMatches(values []string, etag string) bool {
 	for _, value := range values {
 		for _, candidate := range strings.Split(value, ",") {
-			candidate = strings.TrimSpace(candidate)
+			candidate = strings.TrimPrefix(strings.TrimSpace(candidate), "W/")
 			if candidate == "*" || candidate == etag {
 				return true
 			}

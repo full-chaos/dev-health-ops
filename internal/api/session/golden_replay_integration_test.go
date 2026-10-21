@@ -107,12 +107,15 @@ type stack struct {
 
 func startStack(t *testing.T, ctx context.Context) stack {
 	t.Helper()
-	return startStackWith(t, ctx, nil)
+	return startStackWith(t, ctx, nil, nil)
 }
 
-// startStackWith is startStack with issuer as session.Deps.Issuer: non-nil,
-// auth-service owns sessions (AUTH_PROXY_SESSIONS).
-func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issuer) stack {
+// startStackWith is startStack with issuer as session.Deps.Issuer (non-nil:
+// auth-service owns sessions, AUTH_PROXY_SESSIONS) and, when routePool is
+// set, the routes on the pool it returns for the seeded database instead of
+// the admin pool.
+func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issuer,
+	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool) stack {
 	t.Helper()
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -173,13 +176,17 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	routesPool := pool
+	if routePool != nil {
+		routesPool = routePool(t, ctx, pool, pg.URI)
+	}
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: routesPool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
 	oauth := oauthprovider.NewClient()
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
-	routes := session.Routes(session.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
+	routes := session.Routes(session.Deps{Pool: routesPool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
 		Signer: signer, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger,
 		Issuer: issuer})
 	mux := http.NewServeMux()

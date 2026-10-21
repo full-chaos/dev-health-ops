@@ -362,8 +362,7 @@ func (reader *Reader) readFirstRecords(ctx context.Context, query, organizationI
 	return first, nil
 }
 
-// FetchTeamRepoDonors tests the ownership window at the instant alone, with no first-owners-backward clamp (no
-// production caller: the materializer reads FetchTeamRepoDonorSet).
+// FetchTeamRepoDonors: pre-D5987 plain window; tests/proofs only; production uses TeamRepoDonorSet.DonorsAt.
 // FetchTeamRepoDonors reads only the latest primary attribution snapshot and
 // live, sync-derived repository ownership. It never resolves person membership
 // or accepts a manual mapping. linked_issue is excluded because its persisted

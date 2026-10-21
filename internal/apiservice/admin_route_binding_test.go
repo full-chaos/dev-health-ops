@@ -179,12 +179,13 @@ func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
 			methods[route.Pattern] = append(methods[route.Pattern], route.Method)
 		}
 	}
-	checked := 0
+	checked, tableGets := 0, 0
 	for _, entry := range httpapi.AdminRoutes {
 		method, pattern, _ := strings.Cut(entry, " ")
 		if method != http.MethodGet {
 			continue
 		}
+		tableGets++
 		set := append([]string(nil), methods[pattern]...)
 		if len(set) == 0 {
 			t.Errorf("GET %s is in the admin table but not mounted", pattern)
@@ -198,12 +199,13 @@ func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
 			t.Errorf("HEAD %s: status %d Allow %q Cache-Control %q; want 405, Allow %q, no-store", pattern, response.Code, response.Header().Get("Allow"), response.Header().Get("Cache-Control"), want)
 		}
 	}
-	if checked != headCheckedRoutes {
-		t.Fatalf("%d admin GET routes checked, want %d (update the pin with the table)", checked, headCheckedRoutes)
+	if checked != tableGets || checked < headCheckedFloor {
+		t.Fatalf("%d admin GET routes checked of %d in the table, want all and at least %d", checked, tableGets, headCheckedFloor)
 	}
 }
 
-const headCheckedRoutes = 60
+// headCheckedFloor keeps the walk from passing on a table that shrank; the table grows with main, so the count is not pinned.
+const headCheckedFloor = 60
 
 // The all-methods Allow is the HEAD refusal's only: the 405 of any other method keeps the path's declared Allow, the
 // first FastAPI route's (frozen goldens pin it).

@@ -19,33 +19,13 @@ func init() {
 	register("check-candidate-facts", candFactsVerb)
 }
 
-// candFactsPagePath finds the taxonomy page from the physical working directory upward: the Python took its root from its
-// own file path, so a run from any directory inside the repo found the page. The nearest ancestor holding the page wins.
-// With no page on the way up it returns the page path under the working directory, which the caller refuses as missing.
-func candFactsPagePath(cwd string) string {
-	dir := cwd
-	if physical, err := filepath.EvalSymlinks(cwd); err == nil {
-		dir = physical
-	}
-	for d := dir; ; d = filepath.Dir(d) {
-		page := filepath.Join(d, invTxDocRel)
-		if info, err := os.Stat(page); err == nil && info.Mode().IsRegular() {
-			return page
-		}
-		if filepath.Dir(d) == d {
-			break
-		}
-	}
-	return filepath.Join(dir, invTxDocRel)
-}
-
 func candFactsVerb(_ []string, stdout, stderr io.Writer) int {
-	cwd, err := os.Getwd()
+	root, err := docsRoot(invTxDocRel)
 	if err != nil {
 		fmt.Fprintln(stderr, "check-candidate-facts:", err)
 		return 1
 	}
-	page := candFactsPagePath(cwd)
+	page := filepath.Join(root, invTxDocRel)
 	if info, statErr := os.Stat(page); statErr != nil || !info.Mode().IsRegular() {
 		fmt.Fprintln(stdout, "ERROR: canonical taxonomy source or page is missing")
 		return 1

@@ -122,7 +122,7 @@ func codeqlMatrixProblem(languages []string) string {
 	if reflect.DeepEqual(languages, []string{"go"}) {
 		return ""
 	}
-	return fmt.Sprintf("CodeQL language matrix = %v, want [go]: the repository keeps no Python to scan, and a changed configuration set needs the admin step on main's code-scanning analyses, or the code_scanning ruleset blocks every pull request", languages)
+	return fmt.Sprintf("CodeQL language matrix = %v, want [go]: Python is out of the CodeQL scan, and a changed configuration set needs the admin step on main's code-scanning analyses, or the code_scanning ruleset blocks every pull request", languages)
 }
 
 func TestWorkflowPathFiltersCodeQLMatrixIsGoOnly(t *testing.T) {

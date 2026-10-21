@@ -22,6 +22,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -110,6 +111,14 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 		}
 	}
 	return cfg, nil
+}
+
+// sessionIssuer is the client of auth-service's session issue route when
+// auth-service owns sessions, built from AUTH_SESSION_ISSUE_TOKEN; nil when
+// go-api owns them. Sessions on without a usable token is a start-up error:
+// every sign-in would answer 503.
+func sessionIssuer(AuthProxyConfig, func(string) (string, bool)) (sessionissue.Issuer, error) {
+	return nil, nil
 }
 
 // logAuthProxyRouting states, at Info, the routing go-api starts with: each

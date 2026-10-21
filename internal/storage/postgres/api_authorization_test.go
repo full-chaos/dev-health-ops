@@ -16,9 +16,9 @@ import "testing"
 // place; it never appends a second one.
 func TestAPIPostureHasNoDuplicateTable(t *testing.T) {
 	seen := map[string]bool{}
-	for _, table := range apiPosture().RequiredTables {
+	for _, table := range apiPosture(false).RequiredTables {
 		if seen[table.TableName] {
-			t.Fatalf("apiPosture() declares %q more than once -- merge the entries, don't append a second", table.TableName)
+			t.Fatalf("apiPosture(false) declares %q more than once -- merge the entries, don't append a second", table.TableName)
 		}
 		seen[table.TableName] = true
 	}

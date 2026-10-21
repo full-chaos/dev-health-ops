@@ -39,7 +39,15 @@ import (
 // role once the role exists (riverstore.MigrationOptions.APIRole, derived
 // from APIPosture in internal/rivermigrate), so the grant side and
 // this readiness side are one list.
-func apiPosture() RolePosture {
+func apiPosture(sessionsOwnedByAuth bool) RolePosture {
+	refreshTokens := TablePrivilege{"refresh_tokens", true, true, true}
+	columns := []ColumnPrivilege{
+		// A permanent user delete (CHAOS-10019) keeps the billing audit rows and
+		// sets their actor to null. The write is the one column, never the
+		// table: the audit text and state stay out of reach of an UPDATE.
+		{"billing_audit_log", "actor_id", "UPDATE"},
+	}
+	_ = sessionsOwnedByAuth
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			// Read root for GET /api/v1/internal/acr/entitlements/{org_id}:
@@ -141,7 +149,7 @@ func apiPosture() RolePosture {
 			// change. A purge target, delete added. The session routes
 			// (login, switch-org, social login, refresh rotation) insert a
 			// row per issued refresh token. Widened in place.
-			{"refresh_tokens", true, true, true},
+			refreshTokens,
 			// The login route's failed-attempt lockout
 			// (services/login_attempts.py): read, insert the first failure,
 			// update the count and lock, delete on a successful login.
@@ -335,12 +343,7 @@ func apiPosture() RolePosture {
 			// month's reservations: read only, the runtime guard is the writer.
 			{"byo_llm_budget_reservations", false, false, false},
 		},
-		// A permanent user delete (CHAOS-10019) keeps the billing audit rows and
-		// sets their actor to null. The write is the one column, never the
-		// table: the audit text and state stay out of reach of an UPDATE.
-		ColumnScoped: []ColumnPrivilege{
-			{"billing_audit_log", "actor_id", "UPDATE"},
-		},
+		ColumnScoped: columns,
 	}
 }
 
@@ -351,8 +354,12 @@ func apiPosture() RolePosture {
 // own provisioning/rollout step once dho api exists) derives its GRANT
 // statements from this SAME declaration, never a second hand-maintained
 // list.
-func APIPosture() RolePosture {
-	return apiPosture()
+//
+// sessionsOwnedByAuth is AUTH_PROXY_SESSIONS: the river migration grants and
+// go-api's readiness check read the same flag, so the REVOKE follows it and a
+// rollback is the flag off plus a migrate run.
+func APIPosture(sessionsOwnedByAuth bool) RolePosture {
+	return apiPosture(sessionsOwnedByAuth)
 }
 
 // CheckAPIAuthorization is the dho api Service's readiness check: it binds
@@ -365,6 +372,6 @@ func APIPosture() RolePosture {
 // dho api registers this behind its own health.Registry entry (internal/
 // apiservice/service.go) once that package exists; this function has no
 // dependency on it and can be called, and tested, standing alone.
-func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
-	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, apiPosture())
+func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessionsOwnedByAuth bool) error {
+	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, apiPosture(sessionsOwnedByAuth))
 }

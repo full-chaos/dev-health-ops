@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -106,6 +107,13 @@ type stack struct {
 
 func startStack(t *testing.T, ctx context.Context) stack {
 	t.Helper()
+	return startStackWith(t, ctx, nil)
+}
+
+// startStackWith is startStack with issuer as session.Deps.Issuer: non-nil,
+// auth-service owns sessions (AUTH_PROXY_SESSIONS).
+func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issuer) stack {
+	t.Helper()
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +180,8 @@ func startStack(t *testing.T, ctx context.Context) stack {
 	oauth := oauthprovider.NewClient()
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
 	routes := session.Routes(session.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
-		Signer: signer, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger})
+		Signer: signer, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger,
+		Issuer: issuer})
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)

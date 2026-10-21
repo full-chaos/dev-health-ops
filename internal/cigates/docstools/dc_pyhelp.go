@@ -380,7 +380,7 @@ func dcPathSuffix(p string) string {
 // dcJoin is Path / child for the str forms the scripts use: an absolute child replaces the parent, "." and empty
 // components drop out (a1PathStr).
 func dcJoin(parent, child string) string {
-	if strings.HasPrefix(child, "/") {
+	if strings.HasPrefix(child, "/") || parent == "" {
 		return a1PathStr(child)
 	}
 	return a1PathStr(parent + "/" + child)

@@ -83,14 +83,23 @@ func dcRelativeTo(path, base string) bool {
 }
 
 func dcParent(p string) string {
-	parts := a1PathParts(p)
-	if len(parts) <= 1 {
-		if strings.HasPrefix(p, "/") {
-			return "/"
-		}
-		return "."
+	s := a1PathStr(p)
+	root := ""
+	switch {
+	case strings.HasPrefix(s, "//"):
+		root = "//"
+	case strings.HasPrefix(s, "/"):
+		root = "/"
 	}
-	return a1PathStr(strings.Join(parts[:len(parts)-1], "/"))
+	rest := strings.TrimLeft(s, "/")
+	i := strings.LastIndex(rest, "/")
+	switch {
+	case i >= 0:
+		return root + rest[:i]
+	case root != "":
+		return root
+	}
+	return "."
 }
 
 func dcLinksVerb(args []string, stdout, stderr io.Writer) int {

@@ -1,0 +1,119 @@
+{"name": "str-0", "op": "str", "in": [""], "out": "."}
+{"name": "parent-0", "op": "parent", "in": [""], "out": "."}
+{"name": "suffix-0", "op": "suffix", "in": [""], "out": ""}
+{"name": "str-1", "op": "str", "in": ["."], "out": "."}
+{"name": "parent-1", "op": "parent", "in": ["."], "out": "."}
+{"name": "suffix-1", "op": "suffix", "in": ["."], "out": ""}
+{"name": "str-2", "op": "str", "in": [".."], "out": ".."}
+{"name": "parent-2", "op": "parent", "in": [".."], "out": "."}
+{"name": "suffix-2", "op": "suffix", "in": [".."], "out": ""}
+{"name": "str-3", "op": "str", "in": ["/"], "out": "/"}
+{"name": "parent-3", "op": "parent", "in": ["/"], "out": "/"}
+{"name": "suffix-3", "op": "suffix", "in": ["/"], "out": ""}
+{"name": "str-4", "op": "str", "in": ["//"], "out": "//"}
+{"name": "parent-4", "op": "parent", "in": ["//"], "out": "//"}
+{"name": "suffix-4", "op": "suffix", "in": ["//"], "out": ""}
+{"name": "str-5", "op": "str", "in": ["///x"], "out": "/x"}
+{"name": "parent-5", "op": "parent", "in": ["///x"], "out": "/"}
+{"name": "suffix-5", "op": "suffix", "in": ["///x"], "out": ""}
+{"name": "str-6", "op": "str", "in": ["a"], "out": "a"}
+{"name": "parent-6", "op": "parent", "in": ["a"], "out": "."}
+{"name": "suffix-6", "op": "suffix", "in": ["a"], "out": ""}
+{"name": "str-7", "op": "str", "in": ["a/"], "out": "a"}
+{"name": "parent-7", "op": "parent", "in": ["a/"], "out": "."}
+{"name": "suffix-7", "op": "suffix", "in": ["a/"], "out": ""}
+{"name": "str-8", "op": "str", "in": ["a//b"], "out": "a/b"}
+{"name": "parent-8", "op": "parent", "in": ["a//b"], "out": "a"}
+{"name": "suffix-8", "op": "suffix", "in": ["a//b"], "out": ""}
+{"name": "str-9", "op": "str", "in": ["a/./b"], "out": "a/b"}
+{"name": "parent-9", "op": "parent", "in": ["a/./b"], "out": "a"}
+{"name": "suffix-9", "op": "suffix", "in": ["a/./b"], "out": ""}
+{"name": "str-10", "op": "str", "in": ["a/../b"], "out": "a/../b"}
+{"name": "parent-10", "op": "parent", "in": ["a/../b"], "out": "a/.."}
+{"name": "suffix-10", "op": "suffix", "in": ["a/../b"], "out": ""}
+{"name": "str-11", "op": "str", "in": ["a/b/.."], "out": "a/b/.."}
+{"name": "parent-11", "op": "parent", "in": ["a/b/.."], "out": "a/b"}
+{"name": "suffix-11", "op": "suffix", "in": ["a/b/.."], "out": ""}
+{"name": "str-12", "op": "str", "in": ["link/../site"], "out": "link/../site"}
+{"name": "parent-12", "op": "parent", "in": ["link/../site"], "out": "link/.."}
+{"name": "suffix-12", "op": "suffix", "in": ["link/../site"], "out": ""}
+{"name": "str-13", "op": "str", "in": ["link/../site/"], "out": "link/../site"}
+{"name": "parent-13", "op": "parent", "in": ["link/../site/"], "out": "link/.."}
+{"name": "suffix-13", "op": "suffix", "in": ["link/../site/"], "out": ""}
+{"name": "str-14", "op": "str", "in": ["./a"], "out": "a"}
+{"name": "parent-14", "op": "parent", "in": ["./a"], "out": "."}
+{"name": "suffix-14", "op": "suffix", "in": ["./a"], "out": ""}
+{"name": "str-15", "op": "str", "in": ["./"], "out": "."}
+{"name": "parent-15", "op": "parent", "in": ["./"], "out": "."}
+{"name": "suffix-15", "op": "suffix", "in": ["./"], "out": ""}
+{"name": "str-16", "op": "str", "in": ["../a"], "out": "../a"}
+{"name": "parent-16", "op": "parent", "in": ["../a"], "out": ".."}
+{"name": "suffix-16", "op": "suffix", "in": ["../a"], "out": ""}
+{"name": "str-17", "op": "str", "in": ["../.."], "out": "../.."}
+{"name": "parent-17", "op": "parent", "in": ["../.."], "out": ".."}
+{"name": "suffix-17", "op": "suffix", "in": ["../.."], "out": ""}
+{"name": "str-18", "op": "str", "in": ["/a/../b"], "out": "/a/../b"}
+{"name": "parent-18", "op": "parent", "in": ["/a/../b"], "out": "/a/.."}
+{"name": "suffix-18", "op": "suffix", "in": ["/a/../b"], "out": ""}
+{"name": "str-19", "op": "str", "in": ["/a/./b/"], "out": "/a/b"}
+{"name": "parent-19", "op": "parent", "in": ["/a/./b/"], "out": "/a"}
+{"name": "suffix-19", "op": "suffix", "in": ["/a/./b/"], "out": ""}
+{"name": "str-20", "op": "str", "in": ["x/."], "out": "x"}
+{"name": "parent-20", "op": "parent", "in": ["x/."], "out": "."}
+{"name": "suffix-20", "op": "suffix", "in": ["x/."], "out": ""}
+{"name": "str-21", "op": "str", "in": ["x/.."], "out": "x/.."}
+{"name": "parent-21", "op": "parent", "in": ["x/.."], "out": "x"}
+{"name": "suffix-21", "op": "suffix", "in": ["x/.."], "out": ""}
+{"name": "str-22", "op": "str", "in": ["a/b/c.html"], "out": "a/b/c.html"}
+{"name": "parent-22", "op": "parent", "in": ["a/b/c.html"], "out": "a/b"}
+{"name": "suffix-22", "op": "suffix", "in": ["a/b/c.html"], "out": ".html"}
+{"name": "str-23", "op": "str", "in": ["a/b/.hidden"], "out": "a/b/.hidden"}
+{"name": "parent-23", "op": "parent", "in": ["a/b/.hidden"], "out": "a/b"}
+{"name": "suffix-23", "op": "suffix", "in": ["a/b/.hidden"], "out": ""}
+{"name": "str-24", "op": "str", "in": [".html"], "out": ".html"}
+{"name": "parent-24", "op": "parent", "in": [".html"], "out": "."}
+{"name": "suffix-24", "op": "suffix", "in": [".html"], "out": ""}
+{"name": "str-25", "op": "str", "in": ["a b/c"], "out": "a b/c"}
+{"name": "parent-25", "op": "parent", "in": ["a b/c"], "out": "a b"}
+{"name": "suffix-25", "op": "suffix", "in": ["a b/c"], "out": ""}
+{"name": "str-26", "op": "str", "in": ["\u00e9/\u00fc"], "out": "\u00e9/\u00fc"}
+{"name": "parent-26", "op": "parent", "in": ["\u00e9/\u00fc"], "out": "\u00e9"}
+{"name": "suffix-26", "op": "suffix", "in": ["\u00e9/\u00fc"], "out": ""}
+{"name": "str-27", "op": "str", "in": ["a/../.."], "out": "a/../.."}
+{"name": "parent-27", "op": "parent", "in": ["a/../.."], "out": "a/.."}
+{"name": "suffix-27", "op": "suffix", "in": ["a/../.."], "out": ""}
+{"name": "str-28", "op": "str", "in": ["/.."], "out": "/.."}
+{"name": "parent-28", "op": "parent", "in": ["/.."], "out": "/"}
+{"name": "suffix-28", "op": "suffix", "in": ["/.."], "out": ""}
+{"name": "str-29", "op": "str", "in": ["/../a"], "out": "/../a"}
+{"name": "parent-29", "op": "parent", "in": ["/../a"], "out": "/.."}
+{"name": "suffix-29", "op": "suffix", "in": ["/../a"], "out": ""}
+{"name": "join-0", "op": "join", "in": ["", "x"], "out": "x"}
+{"name": "join-1", "op": "join", "in": [".", "x"], "out": "x"}
+{"name": "join-2", "op": "join", "in": ["a", "b"], "out": "a/b"}
+{"name": "join-3", "op": "join", "in": ["a/", "b/"], "out": "a/b"}
+{"name": "join-4", "op": "join", "in": ["a/..", "b"], "out": "a/../b"}
+{"name": "join-5", "op": "join", "in": ["link/../site", "sub/index.html"], "out": "link/../site/sub/index.html"}
+{"name": "join-6", "op": "join", "in": ["a/b", "../c"], "out": "a/b/../c"}
+{"name": "join-7", "op": "join", "in": ["a", "/abs"], "out": "/abs"}
+{"name": "join-8", "op": "join", "in": ["/r", "x/../y"], "out": "/r/x/../y"}
+{"name": "join-9", "op": "join", "in": ["a", ""], "out": "a"}
+{"name": "join-10", "op": "join", "in": ["", ""], "out": "."}
+{"name": "join-11", "op": "join", "in": ["a", "."], "out": "a"}
+{"name": "join-12", "op": "join", "in": ["a", ".."], "out": "a/.."}
+{"name": "join-13", "op": "join", "in": ["//x", "y"], "out": "//x/y"}
+{"name": "join-14", "op": "join", "in": ["a/b", "./c//d"], "out": "a/b/c/d"}
+{"name": "relative-to-0", "op": "relative_to", "in": ["a/b", "a"], "out": true}
+{"name": "relative-to-1", "op": "relative_to", "in": ["a", "a/b"], "out": false}
+{"name": "relative-to-2", "op": "relative_to", "in": ["/a/b", "/a"], "out": true}
+{"name": "relative-to-3", "op": "relative_to", "in": ["/a/b", "a"], "out": false}
+{"name": "relative-to-4", "op": "relative_to", "in": ["a/b", "/a"], "out": false}
+{"name": "relative-to-5", "op": "relative_to", "in": ["/a/../b", "/a"], "out": true}
+{"name": "relative-to-6", "op": "relative_to", "in": ["/link/../site/index.html", "/other/site"], "out": false}
+{"name": "relative-to-7", "op": "relative_to", "in": ["/other/site/index.html", "/other/site"], "out": true}
+{"name": "relative-to-8", "op": "relative_to", "in": ["/a/b", "/a/b"], "out": true}
+{"name": "relative-to-9", "op": "relative_to", "in": ["a/./b", "a"], "out": true}
+{"name": "relative-to-10", "op": "relative_to", "in": ["", ""], "out": true}
+{"name": "relative-to-11", "op": "relative_to", "in": [".", "."], "out": true}
+{"name": "relative-to-12", "op": "relative_to", "in": ["/a//b", "/a"], "out": true}
+{"name": "relative-to-13", "op": "relative_to", "in": ["site/index.html", "/abs/site"], "out": false}

@@ -3,6 +3,7 @@ package docstools
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -248,5 +249,61 @@ func TestHelperRealpathMatchesPython(t *testing.T) {
 		if want := strings.ReplaceAll(c.Out, "{ROOT}", root); got != want {
 			t.Errorf("realpath(%q) = %q, Python %q", c.In[0], strings.ReplaceAll(got, root, "{ROOT}"), c.Out)
 		}
+	}
+}
+
+const dcPathOpRows = 119
+
+// The string forms the ported checks use for paths, against pathlib's (str, parent, suffix, "/", relative_to): the table
+// of "path string -> Python result" that guards the class of finding "Go cleaned a path that Python keeps". Unique row
+// names, pinned count.
+func TestHelperPathOpsMatchPython(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "helpers", "pathops.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	seen := map[string]bool{}
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var row struct {
+			Name string          `json:"name"`
+			Op   string          `json:"op"`
+			In   []string        `json:"in"`
+			Out  json.RawMessage `json:"out"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
+			t.Fatal(err)
+		}
+		if seen[row.Name] {
+			t.Fatalf("repeated row name %q", row.Name)
+		}
+		seen[row.Name] = true
+		var got, want string
+		switch row.Op {
+		case "str":
+			got = a1PathStr(row.In[0])
+		case "parent":
+			got = dcParent(row.In[0])
+		case "suffix":
+			got = dcPathSuffix(row.In[0])
+		case "join":
+			got = dcJoin(row.In[0], row.In[1])
+		case "relative_to":
+			got = fmt.Sprint(dcRelativeTo(row.In[0], row.In[1]))
+		default:
+			t.Fatalf("row %s: unknown op %q", row.Name, row.Op)
+		}
+		if row.Op == "relative_to" {
+			want = strings.TrimSpace(string(row.Out))
+		} else if err := json.Unmarshal(row.Out, &want); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%s: %s(%q) = %q, Python %q", row.Name, row.Op, row.In, got, want)
+		}
+	}
+	if len(seen) != dcPathOpRows {
+		t.Fatalf("the table has %d rows, pinned %d", len(seen), dcPathOpRows)
 	}
 }

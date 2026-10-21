@@ -6,16 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"io"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"golang.org/x/text/unicode/norm"
 )
 
 var securityHeaders = []string{
@@ -344,104 +342,17 @@ func pyRepr(s string) string {
 	return b.String()
 }
 
-// validOrigin mirrors urlparse: https scheme, a non-empty netloc, and an empty or "/" path.
+// validOrigin is the former helper's check on top of the shared urlsplit port (pythonparity.SplitURL): https scheme, a
+// non-empty netloc, and an empty or "/" path.
 func validOrigin(value string) (string, error) {
-	bad := fmt.Errorf("canonical origin must be an HTTPS origin: %s", value)
-	u := strings.TrimLeftFunc(value, func(r rune) bool { return r <= 0x20 })
-	u = strings.NewReplacer("\t", "", "\r", "", "\n", "").Replace(u)
-	colon := strings.IndexByte(u, ':')
-	if colon <= 0 || strings.ToLower(u[:colon]) != "https" {
-		return "", bad
-	}
-	rest := u[colon+1:]
-	if !strings.HasPrefix(rest, "//") {
-		return "", bad
-	}
-	rest = rest[2:]
-	end := strings.IndexAny(rest, "/?#")
-	netloc, tail := rest, ""
-	if end >= 0 {
-		netloc, tail = rest[:end], rest[end:]
-	}
-	if i := strings.IndexAny(tail, "?#"); i >= 0 {
-		tail = tail[:i]
-	}
-	if netloc == "" || (tail != "" && tail != "/") {
-		return "", bad
-	}
-	if err := checkNetlocNFKC(netloc); err != nil {
+	split, err := pythonparity.SplitURL(value)
+	if err != nil {
 		return "", err
 	}
-	if err := checkBracketedHost(netloc); err != nil {
-		return "", err
+	if split.Scheme != "https" || split.Netloc == "" || (split.Path != "" && split.Path != "/") {
+		return "", fmt.Errorf("canonical origin must be an HTTPS origin: %s", value)
 	}
 	return strings.TrimRight(value, "/"), nil
-}
-
-// checkNetlocNFKC mirrors urllib's _checknetloc: a non-ASCII netloc whose NFKC form gains a URL delimiter is refused.
-func checkNetlocNFKC(netloc string) error {
-	ascii := true
-	for i := 0; i < len(netloc); i++ {
-		if netloc[i] >= 0x80 {
-			ascii = false
-		}
-	}
-	if ascii {
-		return nil
-	}
-	n := strings.NewReplacer("@", "", ":", "", "#", "", "?", "").Replace(netloc)
-	normalized := norm.NFKC.String(n)
-	if n == normalized {
-		return nil
-	}
-	if strings.ContainsAny(normalized, "/?#@:") {
-		return fmt.Errorf("netloc %s contains invalid characters under NFKC normalization", pyRepr(netloc))
-	}
-	return nil
-}
-
-// checkBracketedHost mirrors urlsplit: when a netloc holds brackets, unbalanced or misplaced brackets and a host that
-// is no IPv6 address or IPvFuture literal raise ValueError there, which the Python script reported as ERROR.
-func checkBracketedHost(netloc string) error {
-	open, closed := strings.Contains(netloc, "["), strings.Contains(netloc, "]")
-	if open != closed {
-		return fmt.Errorf("Invalid IPv6 URL")
-	}
-	if !open {
-		return nil
-	}
-	hostPort := netloc[strings.LastIndexByte(netloc, '@')+1:]
-	var host string
-	if before, bracketed, found := strings.Cut(hostPort, "["); found {
-		if before != "" {
-			return fmt.Errorf("Invalid IPv6 URL")
-		}
-		var rest string
-		host, rest, _ = strings.Cut(bracketed, "]")
-		if rest != "" && !strings.HasPrefix(rest, ":") {
-			return fmt.Errorf("Invalid IPv6 URL")
-		}
-	} else {
-		host, _, _ = strings.Cut(hostPort, ":")
-	}
-	if strings.HasPrefix(host, "v") {
-		dot := strings.IndexByte(host, '.')
-		if dot < 2 || dot == len(host)-1 || strings.Trim(host[1:dot], "0123456789abcdefABCDEF") != "" {
-			return fmt.Errorf("IPvFuture address is invalid")
-		}
-		return nil
-	}
-	if _, scope, hasScope := strings.Cut(host, "%"); hasScope && (scope == "" || strings.Contains(scope, "%")) {
-		return fmt.Errorf("%s does not appear to be an IPv4 or IPv6 address", pyRepr(host))
-	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return fmt.Errorf("%s does not appear to be an IPv4 or IPv6 address", pyRepr(host))
-	}
-	if addr.Is4() {
-		return fmt.Errorf("An IPv4 address cannot be in brackets")
-	}
-	return nil
 }
 
 // fieldLimit is the longest redirect-manifest field accepted, in characters (the former helper's csv field size limit).

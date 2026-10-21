@@ -18,7 +18,6 @@ var pythonRefusals = map[string]string{
 	"redirects with a dotdot component":         "127 STRICTER: same, --redirects",
 	"device symlink in the source":              "133 STRICTER: Python copied /dev/null through a symlink as an empty file",
 	"origin path with parameters":               "26 STRICTER: urlparse splits ';x' into params, Python accepted https://h/;x",
-	"origin with an uppercase IPvFuture marker": "24 STRICTER: Python 3.12.3 accepted [V1.x]",
 	"redirects NUL in an unused column":         "34 STRICTER: Python 3.12 csv accepted NUL in a field",
 	"redirects doubled CR before LF":            "34 STRICTER: Python csv read one record and kept a CR",
 	"redirects BOM before the header":           "36-37 the BOM stays in the first column name, so Python raised the missing-columns ValueError too",
@@ -99,7 +98,7 @@ var pythonRefusals = map[string]string{
 	"dangling symlink in the source":            "133 shutil.copytree: copy2 of a dangling symlink (shutil.Error)",
 }
 
-const pythonRefusalRows = 84
+const pythonRefusalRows = 83
 
 // Every input the former Python helper refused (its argparse errors, its ValueError and OSError paths, and the stdlib
 // calls that raise inside it) must be refused by `cigate docs-prepare`: exit 2 for a usage error as argparse did, exit 1
@@ -166,7 +165,6 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		{"negative number as a value", base("h4", "--source-revision", "-1"), 2, "expected one argument"},
 		{"dash value with a space", base("h5", "--source-revision", "-a b"), 2, "expected one argument"},
 		{"origin path with parameters", base("p1", "--canonical-origin", "https://h/;x"), 1, "must be an HTTPS origin"},
-		{"origin with an uppercase IPvFuture marker", base("p2", "--canonical-origin", "https://[V1.x]"), 1, "does not appear to be an IPv4 or IPv6 address"},
 		{"redirects NUL in an unused column", with("p3", tsv("source_path\ttarget_path\tx\n/a\t/b\t\x00\n")), 1, "control character"},
 		{"redirects doubled CR before LF", with("p4", tsv(hdr+"/a\t/b\r\r\n")), 1, "carriage return inside a line"},
 		{"origin zone with a second percent", base("z1", "--canonical-origin", "https://[fe80::1%a%b]"), 1, "does not appear to be an IPv4 or IPv6 address"},

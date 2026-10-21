@@ -514,7 +514,8 @@ func Descriptor(
 		descriptor.Destinations = []string{"git_files"}
 		descriptor.RouteReady = true
 		descriptor.Plannable = true
-		descriptor.PreparedManifestRecovery = true
+		descriptor.Chunked = true
+		descriptor.ChunkPolicy = GitHubFilesChunkPolicy()
 	case provider == "github" && dataset == "commit-stats":
 		descriptor.Destinations = []string{"git_commit_stats"}
 		descriptor.RouteReady = true

@@ -292,3 +292,80 @@ func withMember(object map[string]any, key string, value any) map[string]any {
 	out[key] = value
 	return out
 }
+
+// TestAnAccessTokenRefusalCarriesNoMemberValue: a refusal is logged by its
+// caller, and the members of a token are credential material, so no error of
+// ParseAccessToken may repeat a header or claims value, even a duplicate's.
+func TestAnAccessTokenRefusalCarriesNoMemberValue(t *testing.T) {
+	root := testRoot(t)
+	manifest := loadAccessTokenManifest(t)
+	var files []string
+	for _, r := range manifest.Reject {
+		files = append(files, r.File)
+	}
+	for _, r := range manifest.RejectByClient {
+		files = append(files, r.File)
+	}
+	for _, file := range files {
+		t.Run(file, func(t *testing.T) {
+			raw := loadAccessTokenFixture(t, file)
+			_, err := ParseAccessToken(root, raw)
+			if err == nil {
+				t.Fatal("a refused fixture was accepted")
+			}
+			for _, value := range memberValues(t, raw) {
+				if strings.Contains(err.Error(), value) {
+					t.Fatalf("the refusal repeats the member value %q: %v", value, err)
+				}
+			}
+		})
+	}
+}
+
+// memberValues returns every scalar value token of raw (never a member name),
+// as its literal text, duplicates included. Values under four characters are
+// skipped: they match ordinary words of any message.
+func memberValues(t *testing.T, raw []byte) []string {
+	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.UseNumber()
+	var values []string
+	type frame struct{ object, expectKey bool }
+	var stack []frame
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		isKey := len(stack) > 0 && stack[len(stack)-1].object && stack[len(stack)-1].expectKey
+		if len(stack) > 0 && stack[len(stack)-1].object {
+			stack[len(stack)-1].expectKey = !stack[len(stack)-1].expectKey
+		}
+		switch v := tok.(type) {
+		case json.Delim:
+			switch v {
+			case '{':
+				stack = append(stack, frame{object: true, expectKey: true})
+			case '[':
+				stack = append(stack, frame{})
+			default:
+				stack = stack[:len(stack)-1]
+				if len(stack) > 0 && stack[len(stack)-1].object {
+					stack[len(stack)-1].expectKey = true
+				}
+			}
+		case string:
+			if !isKey && len(strings.TrimSpace(v)) >= 4 {
+				values = append(values, strings.TrimSpace(v))
+			}
+		case json.Number:
+			if len(v.String()) >= 4 {
+				values = append(values, v.String())
+			}
+		}
+	}
+	if len(values) == 0 {
+		t.Fatal("no member value found; the check would pass vacuously")
+	}
+	return values
+}

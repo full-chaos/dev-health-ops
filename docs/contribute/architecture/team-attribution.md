@@ -2341,11 +2341,12 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
 > `internal/ownershipwindow` (CHAOS-9404): the instant a reader tests an ownership row at is clamped up to the
 > repository's first record, so the rows valid at the first record are the owners. It is rendered by the shared
 > readers (`OwnedRepoIDs`, `OwnersByRepo`, `OwnerSharesByRepo` and `AuthoritativeOwnersByRepo` of
-> `internal/teamownership`) and by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`). The
+> `internal/teamownership`), by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`) and by the
+> work-item cascade `LoadRepos` (CHAOS-10517; it keeps the rows of an inactive team, the cascade drops them). The
 > first record of a repository is the earliest `valid_from` of its rows of ACTIVE teams (an inactive team owns
 > nothing, section 0.4g rule 1, so it does not set it, in `teamscope` too); an instant at or after the first record
-> reads as before, and an instant in a gap between two records has no owner. Not yet applying it: the work-item
-> cascade `LoadRepos` (CHAOS-10517), the investment materialize fallback (CHAOS-10518), `work_item_attribution`
+> reads as before, and an instant in a gap between two records has no owner. Not yet applying it: the investment
+> materialize fallback (CHAOS-10518), `work_item_attribution`
 > (CHAOS-10519) and the investment team ownership read of `queryapi/analytics` (CHAOS-10520); the `valid_from` of
 > the catalog writers (the sync time) is CHAOS-10521; the `valid_from` of the inferred derivation is CHAOS-9403.
 

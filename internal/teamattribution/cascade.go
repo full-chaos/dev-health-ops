@@ -24,6 +24,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
+	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
@@ -1871,6 +1872,56 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 	return result, nil
 }
 
+// loadReposOwnershipWindow is the validity test of an ownership row at {as_of}: the one rule of package ownershipwindow
+// (the first recorded owners apply before a repository's first record, D5987 option C, CHAOS-10517), the window of
+// teamownership's readers. An inactive team's row is not filtered here: the cascade drops it
+// (dropInactiveTeamCandidates) and the fragment keeps it out of the first record.
+var loadReposOwnershipWindow = ownershipwindow.Window(ownershipwindow.Names{Org: "org_id", AsOf: "as_of"})
+
+// loadReposQuery is the LoadRepos statement with the ownership window rendered into it.
+func loadReposQuery(window string) string {
+	return `
+SELECT g.provider, g.team_id, ifNull(nullIf(t.name, ''), g.team_id),
+       toString(g.repo_id), g.repo_full_name, g.is_primary, g.specificity, g.priority, g.updated_at
+FROM (
+  SELECT o.org_id, o.provider, o.repo_full_name, o.team_id,
+         (argMax(tuple(o.repo_id), (o.version_at, o.valid_from))).1 AS repo_id,
+         argMax(o.is_primary, (o.version_at, o.valid_from)) AS is_primary,
+         argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity,
+         argMax(o.priority, (o.version_at, o.valid_from)) AS priority,
+         max(o.version_at) AS updated_at
+  FROM (
+    SELECT v.org_id, v.provider, v.repo_full_name, v.team_id, v.source, v.valid_from,
+           (argMax(tuple(v.repo_id), v.updated_at)).1 AS repo_id,
+           (argMax(tuple(v.valid_to), v.updated_at)).1 AS valid_to,
+           argMax(v.is_primary, v.updated_at) AS is_primary,
+           argMax(v.specificity, v.updated_at) AS specificity,
+           argMax(v.priority, v.updated_at) AS priority,
+           max(v.updated_at) AS version_at
+    FROM team_repo_ownership AS v
+    WHERE v.org_id = {org_id:String}
+    GROUP BY v.org_id, v.provider, v.repo_full_name, v.team_id, v.source, v.valid_from
+  ) AS o
+  LEFT JOIN (
+    SELECT org_id, provider, id, repo, 1 AS matched
+    FROM repos FINAL
+    WHERE org_id = {org_id:String}
+  ) AS r
+    ON r.org_id = o.org_id
+       AND r.provider = o.provider
+       AND lower(r.repo) = lower(o.repo_full_name)
+  WHERE ` + window + `
+  GROUP BY o.org_id, o.provider, o.repo_full_name, o.team_id
+) AS g
+LEFT JOIN (
+  SELECT org_id, id, argMax(name, (updated_at, last_synced, name)) AS name
+  FROM teams
+  GROUP BY org_id, id
+) AS t ON t.org_id = g.org_id AND t.id = g.team_id
+ORDER BY g.provider, g.repo_full_name, g.team_id
+LIMIT {row_limit:UInt64}`
+}
+
 // team_repo_ownership.repo_id is Nullable(UUID); tuple-wrapped below so
 // argMax cannot skip the newest row when it carries NULL.
 //
@@ -1898,38 +1949,7 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 func (source ClickHouseFactSource) LoadRepos(
 	ctx context.Context, orgID string, asOf time.Time,
 ) ([]GithubWorkItemDerivationRepoFact, error) {
-	rows, err := source.Conn.Query(ctx, `
-SELECT g.provider, g.team_id, ifNull(nullIf(t.name, ''), g.team_id),
-       toString(g.repo_id), g.repo_full_name, g.is_primary, g.specificity, g.priority, g.updated_at
-FROM (
-  SELECT o.org_id, o.provider, o.repo_full_name, o.team_id,
-         (argMax(tuple(o.repo_id), (o.version_at, o.valid_from))).1 AS repo_id,
-         argMax(o.is_primary, (o.version_at, o.valid_from)) AS is_primary,
-         argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity,
-         argMax(o.priority, (o.version_at, o.valid_from)) AS priority,
-         max(o.version_at) AS updated_at
-  FROM (
-    SELECT v.org_id, v.provider, v.repo_full_name, v.team_id, v.source, v.valid_from,
-           (argMax(tuple(v.repo_id), v.updated_at)).1 AS repo_id,
-           (argMax(tuple(v.valid_to), v.updated_at)).1 AS valid_to,
-           argMax(v.is_primary, v.updated_at) AS is_primary,
-           argMax(v.specificity, v.updated_at) AS specificity,
-           argMax(v.priority, v.updated_at) AS priority,
-           max(v.updated_at) AS version_at
-    FROM team_repo_ownership AS v
-    WHERE v.org_id = {org_id:String}
-    GROUP BY v.org_id, v.provider, v.repo_full_name, v.team_id, v.source, v.valid_from
-  ) AS o
-  WHERE o.valid_from <= {as_of:DateTime64(3, 'UTC')} AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
-  GROUP BY o.org_id, o.provider, o.repo_full_name, o.team_id
-) AS g
-LEFT JOIN (
-  SELECT org_id, id, argMax(name, (updated_at, last_synced, name)) AS name
-  FROM teams
-  GROUP BY org_id, id
-) AS t ON t.org_id = g.org_id AND t.id = g.team_id
-ORDER BY g.provider, g.repo_full_name, g.team_id
-LIMIT {row_limit:UInt64}`,
+	rows, err := source.Conn.Query(ctx, loadReposQuery(loadReposOwnershipWindow),
 		clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", asOf.UTC().Format("2006-01-02 15:04:05.000")),
 		clickhouse.Named("row_limit", uint64(GithubWorkItemDerivationContextLimit+1)))
 	if err != nil {

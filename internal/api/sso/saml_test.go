@@ -121,3 +121,23 @@ func TestSAMLACSOverridePathRefusalParityAndLog(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeSAMLConfigNamesTheProviderAndRuleForAMalformedEscape(t *testing.T) {
+	const host = "malformed-host.invalid"
+	for _, override := range []string{
+		"https://" + host + "/%zz/saml/" + samlTestProviderID + "/acs",
+		"https://" + host + "/saml/" + samlTestProviderID + "/acs%",
+	} {
+		raw := `{"sp_acs_url":"` + override + `"}`
+		_, err := decodeSAMLConfig(&raw, samlTestProviderID)
+		if err == nil {
+			t.Fatalf("override=%q: want an error", override)
+		}
+		if !strings.Contains(err.Error(), samlTestProviderID) || !strings.Contains(err.Error(), "sp_acs_url must end with /saml/") {
+			t.Fatalf("override=%q: error lacks the provider id or the path rule: %v", override, err)
+		}
+		if strings.Contains(err.Error(), host) {
+			t.Fatalf("override=%q: error carries the configured value: %v", override, err)
+		}
+	}
+}

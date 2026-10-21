@@ -107,7 +107,7 @@ func DefaultRetryable(r Response) bool {
 func (c Core) Get(ctx context.Context, target, operation string) (Response, error) {
 	supplied := c.HTTP
 	if supplied == nil {
-		supplied = &http.Client{Timeout: DefaultTimeout}
+		supplied = &http.Client{Timeout: DefaultTimeout, Transport: httpguard.SharedTransport()}
 	}
 	// The one guard layer: whatever client came in (a caller's, or this default), the credential never follows a redirect.
 	httpClient := httpguard.NoRedirects(supplied)
@@ -278,7 +278,7 @@ type redirectWitness struct {
 func (w *redirectWitness) RoundTrip(request *http.Request) (*http.Response, error) {
 	base := w.base
 	if base == nil {
-		base = http.DefaultTransport
+		base = httpguard.SharedTransport()
 	}
 	response, err := base.RoundTrip(request)
 	if err == nil && response != nil && response.StatusCode >= 300 && response.StatusCode < 400 && response.Header.Get("Location") != "" {

@@ -166,7 +166,7 @@ func pagerDutyFormClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
 // other supplied doer is refused (it sends nothing).
 func pagerDutyValidationClient(doer HTTPDoer, timeout time.Duration) HTTPDoer {
 	if doer == nil {
-		return &http.Client{Timeout: timeout, CheckRedirect: DropCredentialsOnHostChange}
+		return &http.Client{Timeout: timeout, Transport: httpguard.SharedTransport(), CheckRedirect: DropCredentialsOnHostChange}
 	}
 	if supplied, ok := doer.(*http.Client); ok {
 		copied := *supplied

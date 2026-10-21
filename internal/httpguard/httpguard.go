@@ -12,6 +12,7 @@ package httpguard
 
 import (
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -73,10 +74,26 @@ func NoRedirectsDoer[D interface {
 
 func httpClientOrNil(client *http.Client) *http.Client { return NoRedirects(client) }
 
-// NewClient is the client a production binary builds when it has no client of its own to guard: the given timeout and
-// no redirect followed (a 3xx is returned as the response).
+// Transport is the transport of every outbound client: a connection pool of its own and never a proxy from the process
+// environment (HTTP_PROXY, HTTPS_PROXY), so a credential on a request reaches only the host the request names. A nil
+// Transport would be http.DefaultTransport, which honours those variables. internal/cigates/outboundtransport fails a
+// client of production code built without one.
+func Transport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return transport
+}
+
+var sharedTransport = sync.OnceValue(Transport)
+
+// SharedTransport is one process-wide Transport(): the connection pool a client that customises nothing shares, as such a
+// client shared http.DefaultTransport before. A client that changes a field of its transport takes Transport() instead.
+func SharedTransport() *http.Transport { return sharedTransport() }
+
+// NewClient is the client a production binary builds when it has no client of its own to guard: the given timeout, no
+// redirect followed (a 3xx is returned as the response) and SharedTransport().
 func NewClient(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, CheckRedirect: refuseRedirects}
+	return &http.Client{Timeout: timeout, Transport: SharedTransport(), CheckRedirect: refuseRedirects}
 }
 
 // Guardable is the ALLOW-LIST BY REACHABILITY (CHAOS-7910): a provider client constructor accepts a doer only if the guard can be

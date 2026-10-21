@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -25,7 +26,7 @@ const maxGuardedBody = 32 << 20
 // partial data into failures.)
 func CompletePagesOnly(next http.RoundTripper) http.RoundTripper {
 	if next == nil {
-		next = http.DefaultTransport
+		next = httpguard.SharedTransport()
 	}
 	return completePages{next: next}
 }
@@ -102,7 +103,7 @@ func GatewayHTTPClient(timeout time.Duration) *http.Client {
 	return GatewayHTTPClientOver(timeout, nil)
 }
 
-// GatewayHTTPClientOver is GatewayHTTPClient over the given transport (nil: the default one), for a
+// GatewayHTTPClientOver is GatewayHTTPClient over the given transport (nil: httpguard.SharedTransport()), for a
 // caller that must answer the gateway itself (the fixture world producer replays recorded answers).
 func GatewayHTTPClientOver(timeout time.Duration, base http.RoundTripper) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: CompletePagesOnly(base), CheckRedirect: RefuseRedirects}

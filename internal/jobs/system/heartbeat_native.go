@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -72,7 +73,7 @@ func NewNativeHeartbeatDispatcher(
 		return nil, errors.New("heartbeat dispatcher requires a database pool")
 	}
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Transport: httpguard.SharedTransport()}
 	}
 	if strings.TrimSpace(instanceID) == "" {
 		instanceID = "unknown"

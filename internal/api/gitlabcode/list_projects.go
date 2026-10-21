@@ -20,6 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/restcore"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -218,7 +219,7 @@ func (c Client) core() restcore.Core {
 func (c Client) request(ctx context.Context, target, operation, extra string, page *big.Int) (restcore.Response, error) {
 	core := c.core()
 	if core.HTTP == nil {
-		core.HTTP = &http.Client{Timeout: DefaultTimeout} // restcore.Core.Get guards it
+		core.HTTP = &http.Client{Timeout: DefaultTimeout, Transport: httpguard.SharedTransport()} // restcore.Core.Get guards it
 	}
 	return core.Get(ctx, fmt.Sprintf("%s?%spage=%s&per_page=%d", target, extra, page.String(), perPage), operation)
 }

@@ -193,8 +193,8 @@ type originState struct {
 // originGuardedAtConstruction guards the supplied doer ONCE, where the origin is known, before any route decorates the
 // client (a route's counting decorator wraps client.Doer: the guard is already inside it, so no decorator has to opt in).
 // An *http.Client is copied with a CheckRedirect that stops at the first hop that leaves the request's credential origin
-// (the original policy decides every same-origin hop); a Wrapper is rebuilt around its guarded inner doer; any other doer is
-// a test's transport and is returned as it is.
+// (the original policy decides every same-origin hop), and given httpguard.SharedTransport() when it has no transport; a
+// Wrapper is rebuilt around its guarded inner doer; any other doer is a test's transport and is returned as it is.
 func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 	if wrapper, ok := doer.(httpguard.Wrapper); ok {
 		if rebuilt, ok := wrapper.Rewrap(originGuardedAtConstruction(wrapper.Unwrap())).(HTTPDoer); ok {
@@ -207,6 +207,11 @@ func originGuardedAtConstruction(doer HTTPDoer) HTTPDoer {
 		return doer
 	}
 	guarded := *hc
+	// A supplied client with no transport would dial through http.DefaultTransport and so through a proxy from the
+	// environment: the credential reaches the provider host only.
+	if guarded.Transport == nil {
+		guarded.Transport = httpguard.SharedTransport()
+	}
 	inner := hc.CheckRedirect
 	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		// The client's own policy decides first: a client that refuses the hop answers the 3xx to the caller (a route that

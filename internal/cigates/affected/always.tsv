@@ -1,0 +1,5 @@
+# Packages every AFFECTED integration plan selects: their tests read or run other packages' files (a DDL scan of every
+# _test.go, `go run` of a command), which the import closure cannot see. Bounding these reads is CHAOS-10475.
+internal/fixturescli
+internal/pgmigrate
+internal/queryapi/server

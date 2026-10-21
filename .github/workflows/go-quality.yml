@@ -90,6 +90,7 @@ jobs:
 
       # Fails OPEN: an unresolvable range (ci/go_relevant_diff.sh refuses the all-zeros sentinel and a
       # non-ancestor BASE_SHA rather than guess), a failed go list or a failed plan program is FULL.
+      # The planner is built from the merge base, so a pull request cannot change the program that judges it.
       - name: Plan the change set (NONE / AFFECTED / FULL)
         id: plan
         env:
@@ -107,7 +108,11 @@ jobs:
             full "go list -test failed"
           else
             sed -e "s#^${modpath}/##" -e "s#^${modpath}\$#.#" "${RUNNER_TEMP}/packages.txt" > "${RUNNER_TEMP}/keys.txt"
-            if ! go run -trimpath -mod=readonly ./cmd/cigate plan-verdict --event "${EVENT_NAME}" --go-files-full \
+            if ! mb="$(git merge-base "${BASE_SHA}" HEAD)" \
+              || ! git worktree add --detach "${RUNNER_TEMP}/planbase" "${mb}" \
+              || ! go -C "${RUNNER_TEMP}/planbase" build -trimpath -mod=readonly -o "${RUNNER_TEMP}/cigate-base" ./cmd/cigate; then
+              full "could not build the planner at the merge base"
+            elif ! "${RUNNER_TEMP}/cigate-base" plan-verdict --event "${EVENT_NAME}" --go-files-full \
               --changed "${RUNNER_TEMP}/changed.txt" --golist "${RUNNER_TEMP}/golist.json" --keys "${RUNNER_TEMP}/keys.txt" \
               --root "${GITHUB_WORKSPACE}" --base "${BASE_SHA}" > "${out}"; then
               full "plan program failed"

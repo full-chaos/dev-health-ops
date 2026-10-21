@@ -25,9 +25,6 @@ var securityHeaders = []string{
 	"Permissions-Policy: camera=(), geolocation=(), microphone=(), payment=(), usb=()",
 }
 
-// robotsName is built, not spelled, so the workflow path-filter guard does not read it as a docs/ input file.
-const robotsName = "robots" + ".txt"
-
 type redirect struct{ source, target string }
 
 type fileRecord struct {
@@ -119,7 +116,7 @@ func Prepare(o Options) (manifestInfo, error) {
 	if err := writeText(filepath.Join(o.Output, "_headers"), headersText(o.Mode)); err != nil {
 		return manifestInfo{}, err
 	}
-	if err := writeText(filepath.Join(o.Output, robotsName), robotsText(o.Mode, o.CanonicalOrigin)); err != nil {
+	if err := writeText(filepath.Join(o.Output, "robots.txt"), robotsText(o.Mode, o.CanonicalOrigin)); err != nil {
 		return manifestInfo{}, err
 	}
 	entries, err := walk(o.Output)

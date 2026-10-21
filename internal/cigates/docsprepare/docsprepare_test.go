@@ -73,7 +73,7 @@ func TestPrepareMatchesPythonGolden(t *testing.T) {
 				t.Errorf("stdout = %q, want %q", stdout, want)
 			}
 			for out, golden := range map[string]string{
-				"cloudflare-build-manifest.json": "manifest", "_redirects": "redirects", "_headers": "headers", robotsName: "robots",
+				"cloudflare-build-manifest.json": "manifest", "_redirects": "redirects", "_headers": "headers", "robots.txt": "robots",
 			} {
 				got, err := os.ReadFile(filepath.Join(outDir, out))
 				if err != nil {

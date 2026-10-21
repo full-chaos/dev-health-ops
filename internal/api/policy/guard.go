@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"path"
+	"strings"
 )
 
 // Authz is a route's authorization level. Every level above Public first
@@ -111,6 +113,10 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
+		if user.OrgID == "" && !user.IsSuperuser && !orglessMayReach(r.URL.Path) {
+			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
+			return
+		}
 		switch level {
 		case Admin, AdminOrg:
 			// Org-scoped admin routes act in the effective org (CHAOS-9510):
@@ -137,6 +143,15 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 	})
+}
+
+// orglessAuthPrefix is where a signed-in caller with no organization may go:
+// the onboarding, invite and session routes. Every other route needs an
+// organization on the token.
+const orglessAuthPrefix = "/api/v1/auth/"
+
+func orglessMayReach(requestPath string) bool {
+	return strings.HasPrefix(path.Clean(requestPath), orglessAuthPrefix)
 }
 
 // currentUser is get_current_user. It writes the refusal itself.

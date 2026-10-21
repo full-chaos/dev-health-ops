@@ -65,7 +65,6 @@ func TestRaceLegsOnThePoolRunWithoutRyukAndAssertAnEmptyDaemonAtStart(t *testing
 	for name, over := range map[string]map[string]string{
 		"static":   {"matrix.pool": ""},
 		"test":     {"matrix.pool": ""},
-		"race-1":   {"matrix.pool": ""},
 		"pull req": {"github.event_name": "pull_request", "github.ref": "refs/pull/1/merge"},
 	} {
 		if evalRacePoolTerm(t, ryukArm, poolContext(over)) {
@@ -236,8 +235,8 @@ func TestRaceLegsTurnSetupGoCacheOffOnThePool(t *testing.T) {
 	t.Fatal("no setup-go step in go-quality-leg")
 }
 
-// Only race-2 and race-3 are budgeted for the pool (ops pool share, MCP GO): race-1, static and test stay hosted.
-func TestOnlyRace2AndRace3CarryThePoolFlag(t *testing.T) {
+// Only the three race legs are budgeted for the pool (queue measured 7-10 min hosted vs under 1 min pool): static and test stay hosted.
+func TestOnlyTheThreeRaceLegsCarryThePoolFlag(t *testing.T) {
 	leg := goQualityLeg(t)
 	strategy, _ := leg["strategy"].(map[string]any)
 	matrix, _ := strategy["matrix"].(map[string]any)
@@ -250,8 +249,8 @@ func TestOnlyRace2AndRace3CarryThePoolFlag(t *testing.T) {
 			got[name] = true
 		}
 	}
-	want := map[string]bool{"race-2-of-3": true, "race-3-of-3": true}
-	if len(got) != len(want) || !got["race-2-of-3"] || !got["race-3-of-3"] {
-		t.Fatalf("pool-flagged legs = %v, want exactly race-2-of-3 and race-3-of-3", got)
+	want := map[string]bool{"race-1-of-3": true, "race-2-of-3": true, "race-3-of-3": true}
+	if len(got) != len(want) || !got["race-1-of-3"] || !got["race-2-of-3"] || !got["race-3-of-3"] {
+		t.Fatalf("pool-flagged legs = %v, want exactly race-1-of-3, race-2-of-3 and race-3-of-3", got)
 	}
 }

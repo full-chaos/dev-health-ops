@@ -529,7 +529,7 @@ check_test_shard_wall_guard() {
 check_test_shard_unweighted_guard() {
   local shard="${1:-}" count="${2:-}" log="${3:-}" plan
   check_test_shard_args "${shard}" "${count}"
-  [ -f "${log}" ] || die "test-shard-unweighted-guard needs the shard's go test log, got '${log}'"
+  { [ -f "${log}" ] && [ -r "${log}" ]; } || die "test-shard-unweighted-guard needs the shard's go test log as a readable file, got '${log}'"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
   awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" \
     -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}"

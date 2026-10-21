@@ -6,7 +6,8 @@
 # "ok"/"FAIL" summary lines are "<status><TAB><package><TAB><seconds>s" (a cached package has no seconds and is skipped).
 # Weights rows are read as ci/go_race_shard.awk reads them: TAB-split, column 1, exact key, no comment or blank row. The failure
 # prints the row to add (the measured seconds, rounded) so it can be pasted into the weights file.
-# Exit 0 clean, 1 a package is named, 2 the weights or the plan are unusable.
+# Fail closed: a log with no package summary line, or with none for a package of the plan (a truncated log), cannot prove coverage
+# and is refused. Exit 0 clean, 1 a package is named, 2 the weights, the plan or the log are unusable.
 BEGIN {
   FS = "\t"
   if (weights == "") { print "go_test_unweighted_slow: weights file not given" > "/dev/stderr"; bad = 2; exit 2 }
@@ -22,10 +23,11 @@ BEGIN {
   close(weights)
   if (nrows == 0) { print "go_test_unweighted_slow: weights file holds no row: " weights > "/dev/stderr"; bad = 2; exit 2 }
 }
-FNR == NR {
+FILENAME == ARGV[1] {
   if (NF >= 3) { key[$2] = $3; nplan++ }
   next
 }
+$1 ~ /^(ok|FAIL|\?)[ ]*$/ && NF >= 3 { nsummary++; seen[$2] = 1 }
 $1 ~ /^(ok|FAIL)[ ]*$/ && ($2 in key) && $3 ~ /^[0-9]+(\.[0-9]+)?s$/ {
   sec = substr($3, 1, length($3) - 1) + 0
   if (sec >= thresh + 0 && !(key[$2] in w) && !(key[$2] in named)) {
@@ -37,5 +39,11 @@ $1 ~ /^(ok|FAIL)[ ]*$/ && ($2 in key) && $3 ~ /^[0-9]+(\.[0-9]+)?s$/ {
 END {
   if (bad) exit bad
   if (nplan == 0) { print "go_test_unweighted_slow: the shard plan is empty: the guard read no package" > "/dev/stderr"; exit 2 }
+  if (nsummary == 0) { print "go_test_unweighted_slow: the go test log holds no package summary line: the guard saw nothing" > "/dev/stderr"; exit 2 }
+  for (p in key) if (!(p in seen)) { nmissing++; if (nmissing <= 5) missing = missing (missing == "" ? "" : ", ") p }
+  if (nmissing > 0) {
+    printf "go_test_unweighted_slow: the go test log has no summary line for %d of %d package(s) of the plan (truncated log?): %s%s\n", nmissing, nplan, missing, (nmissing > 5 ? ", ..." : "") > "/dev/stderr"
+    rc = 2
+  }
   exit rc
 }

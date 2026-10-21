@@ -229,11 +229,14 @@ func ivGlob(dir, pattern string) ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if !utf8.ValidString(e.Name()) {
-			return nil, ivStricter(fmt.Sprintf("a file name in %s is not UTF-8", ivPath(dir)))
+		if utf8.ValidString(e.Name()) {
+			if pythonparity.FnMatch(e.Name(), pattern) {
+				names = append(names, e.Name())
+			}
+			continue
 		}
-		if pythonparity.FnMatch(e.Name(), pattern) {
-			names = append(names, e.Name())
+		if pythonparity.FnMatch(ivSurrogateView(e.Name()), pattern) {
+			return nil, ivStricter(fmt.Sprintf("a file name in %s that %s matches is not UTF-8", ivPath(dir), pattern))
 		}
 	}
 	sort.Strings(names)
@@ -242,6 +245,22 @@ func ivGlob(dir, pattern string) ([]string, error) {
 		out[i] = ivJoin(dir, n)
 	}
 	return out, nil
+}
+
+// ivSurrogateView is the name as Python's str of it, with each undecodable byte (one surrogateescape code point there)
+// as one U+FFFD; the glob patterns here name neither, so ? and * see the same code points.
+func ivSurrogateView(name string) string {
+	var b strings.Builder
+	for i := 0; i < len(name); {
+		r, size := utf8.DecodeRuneInString(name[i:])
+		if r == utf8.RuneError && size == 1 {
+			b.WriteRune(utf8.RuneError)
+		} else {
+			b.WriteString(name[i : i+size])
+		}
+		i += size
+	}
+	return b.String()
 }
 
 // ---- factual views ----

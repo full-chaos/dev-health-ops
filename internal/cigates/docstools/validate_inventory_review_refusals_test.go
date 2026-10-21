@@ -173,8 +173,11 @@ func TestValidateInventoryStricterThanPython(t *testing.T) {
 			s = strings.Replace(s, `"row_count": 4`, `"row_count": 5`, 1)
 			ivSetJSON(t, strings.Replace(s, `"rows": [`, `"rows": [[["source_repo", "x"]],`, 1))
 		}},
-		{"non-UTF-8 IA file name", "rc 0", func(t *testing.T, s string) {
+		{"non-UTF-8 IA file name the glob matches", "rc 0", func(t *testing.T, s string) {
 			writeTree(t, "docs-data/ia/\xff.tsv", "url\n/x/\n", 0o644)
+		}},
+		{"non-UTF-8 split file name the glob matches", "rc 0", func(t *testing.T, s string) {
+			writeTree(t, "docs-data/inventory/ops-\xff\xfe.tsv", "x\n", 0o644)
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -184,5 +187,18 @@ func TestValidateInventoryStricterThanPython(t *testing.T) {
 				t.Errorf("rc %d stdout %q stderr %q; want rc 1, no stdout, one stricter-refusal line (Python: %s)", code, stdout, stderr, c.python)
 			}
 		})
+	}
+}
+
+// A non-UTF-8 name the glob does not match is skipped, as Python skips it (Python 3.14.7 printed the Validated line).
+func TestValidateInventoryIgnoresNonUTF8NamesTheGlobMisses(t *testing.T) {
+	run := runCigate(t)
+	ivLiveTree(t)
+	writeTree(t, "docs-data/inventory/unrelated-\xff.txt", "x\n", 0o644)
+	writeTree(t, "docs-data/inventory/ops-\xff.tsvx", "x\n", 0o644)
+	writeTree(t, "docs-data/ia/\xff\xfe.md", "x\n", 0o644)
+	code, stdout, stderr := run("validate-inventory-review")
+	if want := "Validated 4 factual ops rows and 439 reviewed dispositions against the locked IA.\n"; code != 0 || stdout != want || stderr != "" {
+		t.Errorf("rc %d stdout %q stderr %q; Python rc 0, stdout %q", code, stdout, stderr, want)
 	}
 }

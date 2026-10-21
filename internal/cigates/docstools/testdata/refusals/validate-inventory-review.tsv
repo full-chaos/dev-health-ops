@@ -19,7 +19,7 @@ f"- `{name}`: {count}" for name, count in sorted(artifact_types.items())	case	va
 f"- `{name}`: {count}" for name, count in sorted(artifact_types.items())#stricter	go	TestValidateInventoryStricterThanPython
 f"- `{row['source_path']}` — {row.get('notes') or ''}" for row in gaps	case	val-x-gap-no-source-path;val-x-ok-value-shapes
 for path in sorted(ia_dir.glob("*.tsv")):	case	val-x-ia-dir-named-tsv;val-x-ia-hidden-tsv;val-x-ia-two-files;val-no-ia-dir
-for path in sorted(ia_dir.glob("*.tsv")):#stricter	go	TestValidateInventoryStricterThanPython
+for path in sorted(ia_dir.glob("*.tsv")):#stricter	go	TestValidateInventoryStricterThanPython;TestValidateInventoryIgnoresNonUTF8NamesTheGlobMisses
 url = row.get("url", "").strip()	case	val-x-ia-none-url;val-x-ia-short-url
 if actual.read_bytes() != expected.read_bytes():	case	val-x-committed-tsv-missing;val-missing-committed
 raise ValueError(	case	val-stale-json;val-stale-tsv;val-stale-summary
@@ -44,6 +44,7 @@ row for row in disposition if row["source_repo"] == "full-chaos/dev-health-web"	
 raise ValueError(#4	case	val-ops-count;val-web-count
 raise ValueError(#5	case	val-x-web-count
 for path in sorted(inventory_dir.glob("ops-*.tsv"))	case	val-x-split-dir-named-tsv;val-x-split-dangling-link;val-x-split-glob-misses;val-x-split-later-file-wins;val-x-split-later-file-differs;val-split-missing-file
+for path in sorted(inventory_dir.glob("ops-*.tsv"))#stricter	go	TestValidateInventoryStricterThanPython;TestValidateInventoryIgnoresNonUTF8NamesTheGlobMisses
 ops_by_path = {row["source_path"]: row for row in ops_rows}	case	val-split-duplicate-row-file
 reviewed_ops_by_path = {row["source_path"]: row for row in reviewed_ops_rows}	case	val-split-differs;val-x-split-later-file-wins
 raise ValueError("Ops disposition matrix differs from its reviewed split files")	case	val-split-differs;val-x-tsv-extra-fields-differ;val-x-tsv-extra-fields-one-side;val-x-tsv-duplicate-header

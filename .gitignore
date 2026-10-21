@@ -62,6 +62,8 @@ index.txt
 .worktrees/**
 .codegraph/
 .build/
+# validate-inventory-review parity cases record their .build inputs and outputs
+!internal/cigates/docstools/testdata/parity/**/.build/
 .wrangler/
 
 # Agent tool scratch output (browser automation, session memory). These are

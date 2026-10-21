@@ -215,4 +215,4 @@ The Go verb refuses these (exit 1, no stdout, one stderr line `cigate: refused (
 | `publication_classification` / `artifact_type` values of mixed types (None next to str) | rc 1, `TypeError: '<' not supported ...` |
 | two or more numeric (bool/int/float) classification or artifact-type values | sorts them; rc 0 when the snapshots match |
 | `rows` a str, an empty str, or an object; a row given as a list of pairs | iterates it (`dict()` of the items); rc 0 or rc 1 by shape |
-| a non-UTF-8 file name matched by `ops-*.tsv` or `*.tsv` | rc 0 |
+| a non-UTF-8 file name the `ops-*.tsv` or `*.tsv` glob matches (one it does not match is skipped, as Python skips it) | rc 0 |

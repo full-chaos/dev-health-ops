@@ -199,12 +199,12 @@ func codePrereqParseArgs(args []string, stdout, stderr io.Writer) (docsRoot, sco
 	return root, scope, 0, false
 }
 
-// codePrereqOptionLike is argparse's test for "this argument string is an option, not a value".
+var codePrereqNegativeNumberRe = regexp.MustCompile(`^-\p{Nd}+$|^-\p{Nd}*\.\p{Nd}+$`)
+
+// codePrereqOptionLike is argparse's _parse_optional for an argument that is no known option: only "-", a negative
+// number of the form -1 or -.5, and an argument with a space are values.
 func codePrereqOptionLike(a string) bool {
-	if len(a) < 2 || a[0] != '-' || strings.Contains(a, " ") {
-		return false
-	}
-	if _, err := strconv.ParseFloat(a, 64); err == nil {
+	if len(a) < 2 || a[0] != '-' || codePrereqNegativeNumberRe.MatchString(a) || strings.Contains(a, " ") {
 		return false
 	}
 	return true
@@ -310,22 +310,55 @@ var codePrereqSafeTags = map[string]bool{
 	"!!seq": true, "!!map": true, "!!set": true, "!!omap": true, "!!pairs": true,
 }
 
-// codePrereqHasUnsafeTag reports a tag yaml.safe_load refuses (a custom tag, a !!python tag, a plain scalar the safe
-// constructors have no constructor for: "<<" and "=").
+// codePrereqHasUnsafeTag reports a node yaml.safe_load refuses: a custom or !!python tag, a safe tag on a node of the
+// wrong kind (a mapping tag on a sequence), and a plain scalar the safe constructors have no constructor for ("<<", "=").
+// Aliases may form a cycle, so each node is visited once.
 func codePrereqHasUnsafeTag(n *yaml.Node) bool {
+	return codePrereqUnsafe(n, map[*yaml.Node]bool{})
+}
+
+func codePrereqUnsafe(n *yaml.Node, seen map[*yaml.Node]bool) bool {
 	n = codePrereqResolve(n)
-	if n.Style&yaml.TaggedStyle != 0 && !codePrereqSafeTags[n.Tag] {
-		return true
+	if seen[n] {
+		return false
+	}
+	seen[n] = true
+	if n.Style&yaml.TaggedStyle != 0 {
+		if !codePrereqSafeTags[n.Tag] || !codePrereqTagFitsKind(n) {
+			return true
+		}
 	}
 	if n.Kind == yaml.ScalarNode && n.Style&yaml.TaggedStyle == 0 && codePrereqPlain(n) && (n.Value == "<<" || n.Value == "=") {
 		return true
 	}
 	for _, c := range n.Content {
-		if codePrereqHasUnsafeTag(c) {
+		if codePrereqUnsafe(c, seen) {
 			return true
 		}
 	}
 	return false
+}
+
+// codePrereqTagFitsKind is the node-kind check of the PyYAML safe constructors for an explicit tag.
+func codePrereqTagFitsKind(n *yaml.Node) bool {
+	switch n.Tag {
+	case "!!seq":
+		return n.Kind == yaml.SequenceNode
+	case "!!map", "!!set":
+		return n.Kind == yaml.MappingNode
+	case "!!omap", "!!pairs":
+		if n.Kind != yaml.SequenceNode {
+			return false
+		}
+		for _, c := range n.Content {
+			c = codePrereqResolve(c)
+			if c.Kind != yaml.MappingNode || len(c.Content) != 2 {
+				return false
+			}
+		}
+		return true
+	}
+	return n.Kind == yaml.ScalarNode
 }
 
 func codePrereqPlain(n *yaml.Node) bool {
@@ -361,9 +394,6 @@ func codePrereqFalsy(n *yaml.Node) (bool, int) {
 	}
 	switch n.Kind {
 	case yaml.SequenceNode, yaml.MappingNode:
-		if n.Style&yaml.TaggedStyle != 0 && n.Tag != "!!seq" && n.Tag != "!!map" {
-			return false, scopeOK
-		}
 		return len(n.Content) == 0, scopeOK
 	case yaml.ScalarNode:
 		return codePrereqScalarFalsy(n), scopeOK
@@ -395,6 +425,8 @@ func codePrereqScalarFalsy(n *yaml.Node) bool {
 		return v == ""
 	case "!!null":
 		return true
+	case "!!binary":
+		return strings.TrimSpace(v) == ""
 	case "!!bool":
 		low := strings.ToLower(v)
 		return low == "no" || low == "false" || low == "off"

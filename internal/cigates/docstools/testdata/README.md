@@ -167,3 +167,5 @@ abbreviated option is refused (`TestCodePrerequisitesRefusesAbbreviatedOptions`)
 `help` case stdout is hand-written). Scope scalars are resolved with the PyYAML 1.1 implicit resolvers (yes/no/on/off, ints
 including 0x, 0b, octal and sexagesimal, floats, null and timestamps are not strings). Unicode rows: U+00E9 and U+0663 before
 the variable name (not a credential), U+00A0, U+001C and U+001F before it (a credential), `_` before it (not a credential).
+The callers run the verb through `go run`, which adds the line `exit status 1` to stderr when the verb exits non-zero; the verb itself prints nothing on stderr for a missing link. This holds for every `cigate` caller, so it is not specific to this verb.
+Root values with an empty result (`value or []`): a `!!set`, `!!omap`, `!!pairs` or `!!binary` that is empty counts as empty, a safe tag on a node of the wrong kind (`!!map` on a sequence) is a load error, and an alias cycle is a non-string item (recursion over aliases visits each node once).

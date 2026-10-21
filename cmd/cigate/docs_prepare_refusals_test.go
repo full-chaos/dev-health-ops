@@ -13,6 +13,14 @@ import (
 // line of scripts/prepare_docs_cloudflare.py at the merge base (9127c3728d51) that refuses it (STRICTER = Go refuses what
 // Python accepted, allowed by the port rule). Removing a row, or a refusal from the table, fails the test.
 var pythonRefusals = map[string]string{
+	"source with a dotdot component":            "121 STRICTER: pathlib keeps '..', the kernel resolves it through symlinks and missing directories; Go refuses the component",
+	"output with a dotdot component":            "132 STRICTER: same, --output nox/../out",
+	"redirects with a dotdot component":         "127 STRICTER: same, --redirects",
+	"device symlink in the source":              "133 STRICTER: Python copied /dev/null through a symlink as an empty file",
+	"origin path with parameters":               "26 STRICTER: urlparse splits ';x' into params, Python accepted https://h/;x",
+	"origin with an uppercase IPvFuture marker": "24 STRICTER: Python 3.12.3 accepted [V1.x]",
+	"redirects NUL in an unused column":         "34 STRICTER: Python 3.12 csv accepted NUL in a field",
+	"redirects doubled CR before LF":            "34 STRICTER: Python csv read one record and kept a CR",
 	"redirects BOM before the header":           "36-37 the BOM stays in the first column name, so Python raised the missing-columns ValueError too",
 	"redirects control character in a source":   "65 STRICTER: control character in a redirect field",
 	"redirects DEL in a target":                 "65 STRICTER: control character in a redirect field",
@@ -91,11 +99,11 @@ var pythonRefusals = map[string]string{
 	"dangling symlink in the source":            "133 shutil.copytree: copy2 of a dangling symlink (shutil.Error)",
 }
 
-const pythonRefusalRows = 76
+const pythonRefusalRows = 84
 
 // Every input the former Python helper refused (its argparse errors, its ValueError and OSError paths, and the stdlib
 // calls that raise inside it) must be refused by `cigate docs-prepare`: exit 2 for a usage error as argparse did, exit 1
-// with "ERROR:" for everything else. lanes/lane-10431/refusals.md maps each row to the Python raise and the Go line.
+// with "ERROR:" for everything else.
 func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 	dir := t.TempDir()
 	write := func(t *testing.T, dir, name, text string) string {
@@ -157,6 +165,10 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		{"help flag alone", []string{"-h"}, 2, "unrecognized"},
 		{"negative number as a value", base("h4", "--source-revision", "-1"), 2, "expected one argument"},
 		{"dash value with a space", base("h5", "--source-revision", "-a b"), 2, "expected one argument"},
+		{"origin path with parameters", base("p1", "--canonical-origin", "https://h/;x"), 1, "must be an HTTPS origin"},
+		{"origin with an uppercase IPvFuture marker", base("p2", "--canonical-origin", "https://[V1.x]"), 1, "does not appear to be an IPv4 or IPv6 address"},
+		{"redirects NUL in an unused column", with("p3", tsv("source_path\ttarget_path\tx\n/a\t/b\t\x00\n")), 1, "control character"},
+		{"redirects doubled CR before LF", with("p4", tsv(hdr+"/a\t/b\r\r\n")), 1, "carriage return inside a line"},
 		{"origin zone with a second percent", base("z1", "--canonical-origin", "https://[fe80::1%a%b]"), 1, "does not appear to be an IPv4 or IPv6 address"},
 		{"origin zone that is empty", base("z2", "--canonical-origin", "https://[fe80::1%]"), 1, "does not appear to be an IPv4 or IPv6 address"},
 		// the canonical origin (urlsplit and its NFKC netloc check)
@@ -228,6 +240,13 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		write(t, dangling, f, "x")
 	}
 	_ = os.Symlink(filepath.Join(dir, "gone"), filepath.Join(dangling, "bad"))
+	devSite := filepath.Join(dir, "devsite")
+	for _, f := range []string{"index.html", "404.html"} {
+		write(t, devSite, f, "x")
+	}
+	if err := os.Symlink("/dev/null", filepath.Join(devSite, "null")); err != nil {
+		t.Fatal(err)
+	}
 	fifoSite := filepath.Join(dir, "fifosite")
 	for _, f := range []string{"index.html", "404.html"} {
 		write(t, fifoSite, f, "x")
@@ -245,6 +264,10 @@ func TestDocsPrepareRefusesEverythingTheFormerHelperRefused(t *testing.T) {
 		row{"markdown file in the output", mk(mdSite, out("md1")), 1, "Markdown source"},
 		row{"directory named .md in the output", mk(mdDir, out("md2")), 1, "Markdown source"},
 		row{"dangling symlink in the source", mk(dangling, out("dl")), 1, ""},
+		row{"source with a dotdot component", []string{"--source", site + "/../site", "--redirects", ok, "--output", out("d1"), "--mode", "preview"}, 1, "'..' component"},
+		row{"output with a dotdot component", []string{"--source", site, "--redirects", ok, "--output", dir + "/nox/../out-d2", "--mode", "preview"}, 1, "'..' component"},
+		row{"redirects with a dotdot component", []string{"--source", site, "--redirects", site + "/../" + filepath.Base(ok), "--output", out("d3"), "--mode", "preview"}, 1, "'..' component"},
+		row{"device symlink in the source", mk(devSite, out("dv")), 1, "special file"},
 		row{"output is a symlink with a trailing slash", mk(site, link+"/"), 1, "symbolic link"},
 		row{"named pipe in the source", mk(fifoSite, out("ff")), 1, "special file"},
 	)

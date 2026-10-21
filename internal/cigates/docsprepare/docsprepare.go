@@ -106,6 +106,14 @@ type manifestInfo struct {
 
 // Prepare copies Source to Output and writes the Cloudflare files and the build manifest.
 func Prepare(o Options) (manifestInfo, error) {
+	for _, arg := range []struct{ name, path string }{{"--source", o.Source}, {"--output", o.Output}, {"--redirects", o.Redirects}} {
+		for _, part := range strings.Split(arg.path, "/") {
+			if part == ".." {
+				return manifestInfo{}, fmt.Errorf("%s contains a '..' component, which the kernel resolves through symlinks and missing directories: %s", arg.name, arg.path)
+			}
+		}
+	}
+	o.Source, o.Output, o.Redirects = filepath.Clean(o.Source), filepath.Clean(o.Output), filepath.Clean(o.Redirects)
 	if !isDir(o.Source) {
 		return manifestInfo{}, fmt.Errorf("built documentation directory not found: %s", o.Source)
 	}

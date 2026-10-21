@@ -143,7 +143,6 @@ on:
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
-      - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
       - 'internal/cigates/affected/*.tsv'
       - 'internal/cigates/outboundtransport/*.tsv'
@@ -360,7 +359,6 @@ on:
       # CHAOS-6926: the per-package venue weights the legs are balanced by.
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
-      - 'ci/kept_python_tests.txt'
       - 'internal/httpguard/*.tsv'
       - 'internal/cigates/affected/*.tsv'
       - 'internal/cigates/outboundtransport/*.tsv'

@@ -153,7 +153,7 @@ var accessTokenClientRefusals = map[string]string{
 	"client-rejected-lifetime-over-the-ceiling.json": "over the HS256-compat ceiling",
 	"client-rejected-exp-equals-nbf.json":            "exp is not after nbf",
 	"client-rejected-nbf-before-iat.json":            "nbf precedes iat",
-	"client-rejected-exp-before-iat.json":            "nbf precedes iat",
+	"client-rejected-exp-before-iat.json":            "exp is not after nbf",
 	"client-rejected-duplicate-claim-aud.json":       "duplicate object member \"aud\"",
 	"client-rejected-duplicate-header-alg.json":      "duplicate object member \"alg\"",
 	"client-rejected-exp-decimal-form.json":          "cannot unmarshal number 1760000600.0",

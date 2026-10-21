@@ -1188,12 +1188,12 @@ Celery side of the table is now a purely hand-curated historical record
 (`CELERY_CORRESPONDENCE`, cited inline): CHAOS-5589 deleted the Celery `-Q`
 service definitions outright from every compose surface, so there is no
 longer a producer file to derive or cross-check it against. The table below
-is rendered by `scripts/gen_queue_mapping_docs.py`; the generator still
+is rendered by `cigate docs gen-queue-mapping`; the generator still
 asserts every Go process and every registered kind is accounted for, and
 fails the build rather than silently dropping or mislabeling a row when a
 producer changes. `docs:check-fast` /
-`tests/docs/test_queue_mapping_drift.py` fail if this block is stale — run
-`python scripts/gen_queue_mapping_docs.py` and commit the result after
+`cigate docs check-queue-mapping-drift` fail if this block is stale — run
+`make docs:generate-queue-map` and commit the result after
 changing any of the source files.
 
 <!-- BEGIN GENERATED QUEUE MAP -->

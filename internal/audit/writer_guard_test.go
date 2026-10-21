@@ -30,7 +30,7 @@ var guardedTables = []string{"auth_outbox_events", "security_audit_events"}
 var permittedWriters = map[string]string{
 	"internal/storage/postgres/authschema/capability_integration_test.go":     "the grant probe: it must INSERT to prove the runtime role HOLDS Insert on both tables",
 	"internal/storage/postgres/authschema/posture_integration_test.go":        "the posture control: its INSERT exercises the SEQUENCE grant as well as the table grant, so it must write rather than assert",
-	"internal/storage/postgres/authschema/migration_0014_integration_test.go": "the 0014 column control: its INSERT proves the runtime role writes user_agent of any length and NULL",
+	"internal/storage/postgres/authschema/migration_0015_integration_test.go": "the 0015 column control: its INSERT proves the runtime role writes user_agent of any length and NULL",
 }
 
 // guardPattern is the ONE definition of what counts as a write, shared by the

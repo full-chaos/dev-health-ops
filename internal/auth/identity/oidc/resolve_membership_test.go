@@ -209,3 +209,17 @@ func wantRefused(t *testing.T, failure *Error, status int, reason Reason) {
 		t.Fatalf("failure %+v, want %d %s", failure, status, reason)
 	}
 }
+
+func TestResolveMatchedAccountOfAnotherOrganizationIsRefusedEvenWithJIT(t *testing.T) {
+	for _, protocol := range []string{"oidc", "oauth"} {
+		t.Run(protocol, func(t *testing.T) {
+			ids := &resolveIdentities{err: ErrNotOrgMember}
+			jit := &resolveJIT{}
+			_, failure, sessions := resolveRun(protocol, ids, resolveMembers{}, jit)
+			wantRefused(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+			if len(jit.calls) != 0 || len(sessions.issued) != 0 {
+				t.Fatalf("jit calls %d sessions %d, want 0 and 0", len(jit.calls), len(sessions.issued))
+			}
+		})
+	}
+}

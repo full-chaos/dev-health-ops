@@ -14,12 +14,11 @@ import (
 // a path a Go test reads, and these files are not inputs of any Go test.
 // Anything under tests/tooling/ and tests/docs/ is allowed as a whole.
 var testsPyAllowed = map[string]bool{
-	"__init__":                             true,
-	"conftest":                             true,
-	"_env_isolation":                       true,
-	"test_go_api_routing_digest_checker":   true,
-	"test_go_api_routing_operator_text":    true,
-	"scripts/test_strip_agent_attribution": true,
+	"__init__":                           true,
+	"conftest":                           true,
+	"_env_isolation":                     true,
+	"test_go_api_routing_digest_checker": true,
+	"test_go_api_routing_operator_text":  true,
 }
 
 func testsTreeRoot(t *testing.T) string {

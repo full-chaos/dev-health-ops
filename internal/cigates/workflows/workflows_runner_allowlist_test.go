@@ -62,17 +62,17 @@ var draftGatedJobs = [][2]string{
 
 var requiredContextJobs = map[string][]string{
 	"go-quality.yml": {"go-quality-leg", "go-quality"},
-	"test.yml":       {"changes", "docs-tests", "tooling-tests", "test"},
+	"test.yml":       {"changes", "docs-tests", "chart-started", "test"},
 	"live-e2e.yml":   {"changes", "metrics-executed-proof"},
 }
 
-var cacheNegationJobs = map[string]string{"go-quality.yml": "go-quality-leg", "test.yml": "tooling-tests", "live-e2e.yml": "metrics-executed-proof"}
+var cacheNegationJobs = map[string]string{"go-quality.yml": "go-quality-leg", "test.yml": "chart-started", "live-e2e.yml": "metrics-executed-proof"}
 
 type cachePathSite struct{ job, step, ifWant string }
 
 var cachePathSites = map[string]cachePathSite{
 	"go-quality.yml": {"go-quality-leg", "Configure self-hosted Go cache paths", "steps.relevance.outputs.relevant == 'true' && ((" + allowlistCondition + ") || (" + racePoolTerm + "))"},
-	"test.yml":       {"tooling-tests", "Configure self-hosted Go cache paths", allowlistCondition},
+	"test.yml":       {"chart-started", "Configure self-hosted Go cache paths", allowlistCondition},
 	"live-e2e.yml":   {"metrics-executed-proof", "Configure self-hosted Go cache paths", allowlistCondition},
 }
 
@@ -327,7 +327,7 @@ func TestSelfHostedRunnerAllowlistPlantedDefects(t *testing.T) {
 		{"routing ternary gains a merge_group term (test.yml)", []mutation{{test_, "github.event_name == 'schedule')", merge}}, []string{"test.yml", "does not EXACTLY match the routing ternary"}},
 		{"deny-list fragment returns beside SELF_HOSTED_RUNNERS", []mutation{{live, "(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'", "(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name != 'pull_request'"}}, []string{"EXACTLY", "SELF_HOSTED_RUNNERS"}},
 		{"a go.yml job loses its draft gate", []mutation{{goYml, "if: " + draftGate + " && (vars.SELF_HOSTED_RUNNERS", "if: (vars.SELF_HOSTED_RUNNERS"}}, []string{"go.yml", "lost the draft gate"}},
-		{"a job gains ci:full without being pinned", []mutation{{test_, "|| needs.changes.outputs.code == 'true'\n    # Same ARC", "|| needs.changes.outputs.code == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:full')\n    # Same ARC"}}, []string{"draft-gated job set drifted", "test.yml:tooling-tests"}},
+		{"a job gains ci:full without being pinned", []mutation{{test_, "|| needs.changes.outputs.code == 'true'\n    # Same ARC", "|| needs.changes.outputs.code == 'true' || contains(github.event.pull_request.labels.*.name, 'ci:full')\n    # Same ARC"}}, []string{"draft-gated job set drifted", "test.yml:chart-started"}},
 		{"hosted twin stops being the literal negation", []mutation{{goYml, "go-container-reproducibility:\n", "go-container-reproducibility:\n    # planted\n"}, {goYml, "!(vars.SELF_HOSTED_RUNNERS == 'enabled'", "(vars.SELF_HOSTED_RUNNERS != 'enabled'"}}, []string{"literal negation"}},
 		{"setup-go cache negation loses its negation", []mutation{{test_, "cache: ${{ !(vars.SELF_HOSTED_RUNNERS", "cache: ${{ (vars.SELF_HOSTED_RUNNERS"}}, []string{"cache negation does not EXACTLY match"}},
 		{"cache-path step gets a prepended disjunct", []mutation{{test_, "if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'", "if: github.event_name == 'merge_group' || vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request'"}}, []string{"Configure self-hosted Go cache paths", "does not EXACTLY match the expected condition"}},

@@ -9,21 +9,10 @@
 #   NO live-ClickHouse execution proof (clickhouse-marked tests are opt-in / skipped).
 #   This gate closes BOTH gaps.
 #
-# WHAT IT DOES (a LOCAL gate; hosted CI no longer runs ruff, mypy (this gate no longer runs it either: CHAOS-8616) or the Python
-# test matrix: it runs the Go gates, the tooling and docs tests and the kept list
-# ci/kept_python_tests.txt):
-#   0. preflight also installs requirements-docs.txt into .venv so
-#      tests/docs/*.py's `mkdocs build --strict` shells don't false-fail with
-#      "No module named mkdocs" in a freshly `uv sync`'d worktree venv.
-#   1. ruff format --check .
-#   2. ruff check .
-#   3. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
-#   4. the hosted Python test selection (tests/docs, tests/tooling and
-#      ci/kept_python_tests.txt, as test.yml runs it, CHAOS-8352), with
-#      the local socks5h proxy neutralized.
-#   5. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
-#      apply the schema to a SCRATCH db, run the clickhouse-marked attribution
-#      tests, AND execute the new argMax query against a real engine. The scratch
+# WHAT IT DOES (a LOCAL gate; hosted CI runs no Python, and this gate runs none):
+#   1. the fast Go gate (format, vet, test; race remains in the dedicated Go CI)
+#   2. an ISOLATED live-ClickHouse stage that the CI unit/ci tiers never run:
+#      apply the schema to a SCRATCH db with dho and prove it is current. The scratch
 #      db is DROPPED on exit via a trap.
 #
 # *** SAFETY CONTRACT ***
@@ -56,16 +45,15 @@
 #
 #   That per-worktree scratch db fixed ClickHouse-state collisions across
 #   worktrees, but every worktree still shares ONE ClickHouse container and ONE
-#   host's CPU/RAM (gate_unit_suite alone forks 4 pytest-xdist workers per run).
+#   host's CPU/RAM (the dho migrations and every Go build of a concurrent gate compete for it).
 #   See the SINGLE-FLIGHT LOCK section below (CHAOS-3403) for the mutex this
 #   script now takes on that shared resource before doing any work.
 #
 # USAGE:
-#   Run from the worktree ROOT (the dir containing ci/run_tests.sh) using its .venv:
+#   Run from the worktree ROOT (the dir containing ci/run_tests.sh):
 #     bash ci/local_validate.sh
-#   Skip the live-ClickHouse stage (pure-Python gates only, e.g. no docker) --
-#   this is now the ONLY way to run without them; see STAGE MANIFEST below:
-#     SKIP_CLICKHOUSE=1 bash ci/local_validate.sh
+#   SKIP_CLICKHOUSE=1 is refused: the live-ClickHouse stages are the only stages this gate has, so a run
+#   without them would declare nothing and still report a pass; see STAGE MANIFEST below.
 #   Force a specific scratch db name (rarely needed — the default is already
 #   unique per worktree):
 #     SCRATCH_DB=my_custom_scratch bash ci/local_validate.sh
@@ -95,15 +83,14 @@
 #   A machine-readable `GATE_STAGE_MANIFEST ... declared=<N> executed=<N>
 #   declared_ids=... executed_ids=...` log line carries the literal counts and
 #   ids, and the human verdict line carries the same information formatted as
-#   `[executed/declared: ids]` (`GATE PASSED. [6/6: lint_format,lint_check,
-#   ch_probe,ch_scratch_create,ch_migrate,unit_suite]
-#   safe to push.`, or `[3/3: ...]` under SKIP_CLICKHOUSE=1) -- a degraded run
+#   `[executed/declared: ids]` (`GATE PASSED. [3/3: ch_probe,ch_scratch_create,
+#   ch_migrate] safe to push.`) -- a degraded run
 #   cannot produce a verdict line indistinguishable from a full one, even in a
 #   copy-pasted PR quote. `verify_stage_manifest()` additionally self-checks
 #   that the set of stages that actually ran equals the declared set and fails
 #   the gate on ANY mismatch, even if every stage that did run passed -- an independent
 #   backstop against this exact class of bug recurring, not just a fix for this
-#   one instance of it. See tests/tooling/test_local_validate_stage_manifest.py.
+#   one instance of it.
 #
 set -uo pipefail
 
@@ -114,18 +101,6 @@ cd "${ROOT}" || {
   echo "FATAL: cannot cd to worktree root ${ROOT}"
   exit 2
 }
-
-# --- Per-worktree uv cache (CHAOS-4411) ---------------------------------------------
-# uv's default cache dir is ~/.cache/uv, shared machine-wide. Every worktree's own
-# `.venv` is already isolated, but a shared cache means concurrent `uv sync` runs in
-# different worktrees serialize on ~/.cache/uv/.lock (and the editable sdist build
-# lock under ~/.cache/uv/sdists-v9/editable/<hash>/.lock) -- costing lanes 30+ minutes
-# waiting on each other. Redirect to a per-worktree, gitignored cache dir, same
-# isolation pattern as SCRATCH_DB above. This only affects a `uv` invocation that
-# inherits this script's environment; it does NOT change what `uv sync` you run
-# yourself before this gate (see the preflight die() message below -- export the
-# same var there).
-export UV_CACHE_DIR="${UV_CACHE_DIR:-${ROOT}/.uv-cache}"
 
 # --- Config (override via env). ----------------------------------------------------
 # CH_CONTAINER names the Compose container AND -- see LOCK_DIR below -- doubles
@@ -327,8 +302,6 @@ redact_uri() {
   esac
 }
 
-PYBIN="${ROOT}/.venv/bin/python"
-RUFF="${ROOT}/.venv/bin/ruff"
 # Overridable (CHAOS-3571): every real caller gets the identical computed
 # default (env unset), so this changes no production behavior. It lets a test
 # point DHO at a deliberately-missing path to exercise ch_ensure_dho()'s
@@ -341,128 +314,10 @@ DHO_BUILD_ON_DEMAND=0
 [ -n "${DHO:-}" ] || DHO_BUILD_ON_DEMAND=1
 DHO="${DHO:-${ROOT}/.build/dho}"
 
-# Neutralize the local socks5h proxy for every pytest/python invocation. Without
-# this, httpx-based tests fail with 'socksio not installed' — false negatives, not
-# real defects.
-#
-# Also neutralize two operator-shell env vars (CHAOS-3439 interim; the durable fix
-# is CHAOS-3402's tests/conftest.py scrubbing in the suite itself — this is
-# belt-and-braces at the gate):
-#   - LOG_LEVEL: if an operator's shell exports LOG_LEVEL=debug, configure_logging()
-#     takes the root level from it, and aiosqlite (not in logging_config.py's quiet
-#     list) logs the raw SQL INSERT with bind parameters at DEBUG. Two
-#     log-sanitization tests sweep ALL caplog records, so the planted malicious
-#     string in that SQL statement gets captured and the sanitization assertion
-#     goes red on unmodified code — false negative, not a real defect. Deterministic
-#     both directions: LOG_LEVEL=debug fails, unset/info passes.
-#   - GITHUB_APP_PRIVATE_KEY_PATH: an operator's shell may export this as a RELATIVE
-#     path (./github-app-local.pem) that only resolves from the primary checkout's
-#     CWD; resolver.py opens it directly, so any gate run from a worktree (the
-#     team's standing practice) resolves it to a directory that never contains the
-#     file and goes red on clean main with no code change.
-#   - GITHUB_APP_ID: measured empirically (CHAOS-3439), not just inferred, and
-#     the base matters — this was bisected by SUBTRACTING from an already
-#     fully-populated ops/.env shell (GITHUB_APP_ID/CLIENT_ID/CLIENT_SECRET/
-#     SLUG/CALLBACK_URL all live throughout, matching the operational case a
-#     gate actually runs in), not by adding one var at a time to a clean
-#     `env -i` base. From that populated base: unsetting ONLY
-#     GITHUB_APP_PRIVATE_KEY_PATH left 3 of 4 known-false-red tests in
-#     tests/test_credential_resolver.py still failing; unsetting ONLY
-#     GITHUB_APP_ID (path still live) fixed NONE of the 4; only unsetting BOTH
-#     cleared all 4. A live GITHUB_APP_ID with the path absent makes the
-#     env-fallback path attempt github-app auth with a partial credential
-#     instead of falling through to GITHUB_TOKEN, which is what those tests
-#     actually exercise. (A clean-base bisection that adds only
-#     GITHUB_APP_PRIVATE_KEY_PATH to `env -i` may reproduce all 4 failures from
-#     that var alone — the two experiments start from different bases and are
-#     not in tension; CLIENT_ID/CLIENT_SECRET/SLUG being simultaneously live
-#     here plausibly changes which partial-credential branch is reached. Both
-#     vars are neutralized here regardless of which base is authoritative.)
-#
-# The three below were found by an actual end-to-end gate run (CHAOS-3403), not
-# inferred — 10 unit-suite failures on an unmodified checkout, all traced to
-# ops/.env's ambient values and confirmed with a red/green pair each:
-#   - AUTH_AUTO_CREATE_ORG_ON_REGISTER: dev/.env sets this "false" (a real
-#     product feature flag — auth/config.py's auth_auto_create_org_on_register()
-#     — for local guided-onboarding testing). The default is True, and
-#     tests/api/auth/test_register.py + tests/api/test_new_user_journey.py
-#     assert the True (auto-create) behavior. With "false" live, registration
-#     silently skips org/membership creation ("registered without organization
-#     for first-run onboarding") and every org_id-shaped assertion in those
-#     tests fails — 8 of the 10 observed failures.
-#   - LICENSE_PRIVATE_KEY: dev/.env sets this to a real dev signing key.
-#     tests/test_cli_preflight.py::test_admin_license_create_is_not_a_postgres_preflight_false_positive
-#     expects the CLI to fail with "LICENSE_PRIVATE_KEY" in stdout (i.e. the var
-#     absent); the test's own _run_cli() already scrubs CLICKHOUSE_URI/
-#     POSTGRES_URI/DATABASE_URI/DATABASE_URL/ORG_ID for exactly this reason but
-#     LICENSE_PRIVATE_KEY was missing from that list, so the live key reaches
-#     the subprocess and the CLI fails on "seed must be exactly 32 bytes" instead.
-#   - REDIS_URL: dev/.env points this at the real shared valkey container. Unlike
-#     the other two, this is a cross-TEST pollution mechanism, not a single
-#     wrong-branch call: tests/test_linear_provider.py::test_429_backoff_grows_exponentially
-#     passes in total isolation but fails when run with its sibling tests in the
-#     same file/worker, because a live Redis carries rate-limit state between
-#     tests that an isolated/fake backend would not. Confirmed red running the
-#     whole file with REDIS_URL live, green with it unset — matches the same
-#     class already fixed for web/ci/run_tests.sh's rate-limit.test.ts.
-#     CHECKED, not assumed, before unsetting this unconditionally:
-#     tests/test_external_ingest_customer_push_live.py reads REDIS_URL at
-#     import and skipif's its WHOLE MODULE when absent (it needs live
-#     CLICKHOUSE_URI + POSTGRES_URI + REDIS_URL together — the only module in
-#     the repo that does), so an unconditional unset here could silently
-#     convert "runs" into "skips" if this gate ever selected it. It does not:
-#     that module is pytest.mark.clickhouse-marked, gate_unit_suite() below
-#     runs only `-m "not benchmark and not clickhouse"`, and ch_tests() below
-#     never runs a broader `-m clickhouse` pytest pass (only the direct
-#     ch_argmax_proof script) — confirmed with --collect-only against this
-#     gate's exact invocation (zero matches) and absent from full gate run
-#     logs entirely (no pass/fail/skip line, meaning never collected, not
-#     silently skipped). The module's own skip message says as much: "run via
-#     ci/run_live_backend_e2e.sh, not ci/local_validate.sh". If this gate ever
-#     starts selecting clickhouse-marked tests, this unset needs the
-#     conditional-keep shape used elsewhere for the live-e2e lane (scrub by
-#     default, retain when LIVE_E2E_BASE_URL is also set) instead of staying
-#     unconditional.
-#
-#     A SEPARATE Codex-review concern on this same var was investigated and
-#     REFUTED (recorded here, not silently dropped, so it isn't re-raised):
-#     that unsetting REDIS_URL might remove distributed/Redis-backed rate-limit
-#     coverage, leaving the suite green while a real Redis-backed code path is
-#     broken. It does not. .github/workflows/test.yml's unit-tier `env:` block
-#     (CLICKHOUSE_URI/POSTGRES_URI/DATABASE_URI/SECONDARY_DATABASE_URI/
-#     OTEL_ENABLED/PYTEST_XDIST_WORKERS/PYTEST_ADDOPTS) sets no REDIS_URL —
-#     CI's unit tier has ALWAYS run the rate limiter on memory://, never on a
-#     live Redis backend. The tests that actually assert the Redis-backend
-#     contract (tests/api/test_rate_limit_config.py's `_reload_rate_limit()`
-#     helper, tests/test_distributed_rate_limit.py) build their OWN
-#     REDIS_URL via monkeypatch/patch.dict and importlib.reload the module
-#     under it, independent of whatever the ambient shell provides — so they
-#     assert real Redis-backend behavior with or without this unset, and pass
-#     55/55 under `env -i` with no REDIS_URL anywhere in the process
-#     (confirmed independently, including a mutation kill: forcing
-#     rate_limit.py's backend selection to unconditional memory:// makes two
-#     of those assertions fail). Unsetting REDIS_URL here does not remove
-#     coverage; it removes a DIVERGENCE — a developer's local run silently
-#     exercising a real shared Redis that CI's unit tier never did, which is
-#     exactly what made test_429_backoff_grows_exponentially fail locally and
-#     pass in CI in the first place.
-#   - GO_PROVIDER_ROUTES / DEV_HEALTH_ENV (CHAOS-3988): ops/.env's direnv setup
-#     exports GO_PROVIDER_ROUTES=all and DEV_HEALTH_ENV=local for local `dev-hops`
-#     CLI convenience. _provider_route_environment()
-#     (workers/provider_unit_route.py:107-135) treats that pair as the "local
-#     all-routes" preset and setdefaults every WORKER_<provider>_<dataset>_ENABLED
-#     switch to true. tests/test_sync_units.py has 20 tests asserting the
-#     default-OFF behavior of that same switch; with the preset live every one
-#     goes red — an ambient-env artifact, not a real defect. `ci/check_go.sh`'s
-#     live-Python-oracle stage inherits the same pair (it shells out to python3
-#     with the ambient environment attached) and produces a matching false-red in
-#     a live planner oracle; see check_go.sh's own
-#     GO_ENV_OFF for that side. Confirmed by two lanes in one morning
-#     (2026-08-21): one false-GREEN that masked a real switch-off case, one
-#     35-test false-RED across the full gate — both traced to this exact pair,
-#     both cleared the moment it was unset. CHAOS-3986 and CHAOS-3987 were filed
-#     and cancelled from this same contamination before the cause was found.
-# TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX (CHAOS-5024): bigboy's login shell exports it, rewriting the image names test_go_integration_sharding.py::test_prepull_* observe pulled -- unset it here.
+# Scrub the ambient environment of every dho invocation: the local socks5h proxy variables (a proxy in the
+# way is a false negative, not a real defect), and the operator-shell variables (dev/.env, direnv) that polluted
+# the Python test suite this gate used to run. The list is kept as it was; pruning it is its own change.
+# TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX (CHAOS-5024): bigboy's login shell exports it, rewriting the image names a Go test observes pulled -- unset it here.
 PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX)
 
 # --- Single-flight lock (CHAOS-3403). -----------------------------------------------
@@ -481,9 +336,8 @@ PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_p
 # ReplicatedMergeTree/ZooKeeper coordination — so two gates from DIFFERENT
 # worktrees no longer corrupt each other's ClickHouse schema; that collision is
 # fixed. What is NOT fixed: every worktree still shares the ONE ClickHouse
-# container (${CH_CONTAINER}) and ONE host's CPU/RAM/disk. gate_unit_suite() alone
-# forks 4 pytest-xdist workers; N concurrent gates fork 4N, plus N concurrent mypy
-# and ruff invocations. The actual collision mechanism is host resource
+# container (${CH_CONTAINER}) and ONE host's CPU/RAM/disk. N concurrent gates run N dho
+# migrations and N Go builds at once. The actual collision mechanism is host resource
 # exhaustion severe enough that a test's real completion signal never fires within
 # its timeout (see AGENTS.md's "Timeout-fallback masquerade") — not ClickHouse
 # corruption. A run from the SAME worktree path launched twice (e.g. an agent
@@ -810,11 +664,8 @@ CH_READY=0 # set to 1 by ch_provision() once the scratch CH is migrated
 #
 # DECLARED_STAGE_IDS is the full set of stage ids this run is committed to
 # executing, decided ONCE up front (see run_declared_stages) -- never narrowed
-# later by a stage's own runtime discovery that it "can't" run. The only
-# sanctioned way to shrink it is the explicit, caller-supplied SKIP_CLICKHOUSE=1
-# opt-out, which removes the CH-dependent ids from the declaration itself
-# BEFORE anything runs, rather than letting a stage quietly not show up after
-# the fact. EXECUTED_STAGE_IDS is appended to ONLY by run_stage() and the two
+# later by a stage's own runtime discovery that it "can't" run. There is no way
+# to shrink it: SKIP_CLICKHOUSE=1 is refused in main(). EXECUTED_STAGE_IDS is appended to ONLY by run_stage() and the two
 # manual ch_provision() call sites that record a result outside of run_stage
 # (see ch_provision below) -- i.e. it reflects what actually ran, regardless of
 # pass/fail. verify_stage_manifest() (near main()) diffs the two sets and fails
@@ -929,90 +780,17 @@ run_stage() {
   return "$rc"
 }
 
-# --- Preflight: must run from the worktree with its .venv. --------------------------
-# CI-parity for pip installs: the docs-tests and tooling-tests jobs of
-# .github/workflows/test.yml install requirements-docs.txt too.
-# gate_unit_suite() below runs tests/docs, and those
-# tests shell out to `python -m mkdocs build --strict`. `uv sync --all-extras
-# --dev` (requirements.txt / -e .[dev]) does NOT pull in requirements-docs.txt
-# (mkdocs-material lives outside pyproject.toml on purpose, per docs-guards.yml
-# installing it separately), so a venv built the documented way is missing it.
-# Without this step the gate reports "No module named mkdocs" — a red CI would
-# never produce, since CI always provisions it. Install it here too, exactly
-# like CI, rather than letting the docs tests fail or silently skip.
-ensure_docs_deps() {
-  local reqs="${ROOT}/requirements-docs.txt"
-  [ -f "${reqs}" ] || die "requirements-docs.txt not found at ${reqs} (repo layout changed?)."
-  local pip_log
-  pip_log="$(mktemp)"
-  printf '   installing %s (mirrors CI test.yml pip install step)...\n' "$(basename "${reqs}")"
-  if "${PYBIN}" -m pip install -q -r "${reqs}" >"${pip_log}" 2>&1; then
-    rm -f "${pip_log}"
-  else
-    cat "${pip_log}" >&2
-    rm -f "${pip_log}"
-    die "could not install requirements-docs.txt into ${PYBIN} (pip output above). Run manually:
-      ${PYBIN} -m pip install -r requirements-docs.txt
-   tests/docs/*.py shell out to 'python -m mkdocs build --strict' and WILL
-   false-fail with 'No module named mkdocs' until this succeeds — do not
-   reinterpret that failure as a real docs regression without this installed."
-  fi
-}
-
+# --- Preflight: must run from the worktree root. ----------------------------------
 preflight() {
   banner "preflight"
   [ -f "${ROOT}/ci/run_tests.sh" ] || die "not a worktree root (no ci/run_tests.sh at ${ROOT})."
-  [ -x "${PYBIN}" ] || die "missing venv interpreter ${PYBIN}. Create it from the worktree.
-   SAFE recipe (recommended first — cannot hang; pytest.ini's pythonpath=src covers imports,
-   ruff/mypy don't need the project installed):
-      UV_CACHE_DIR=\"\$(git rev-parse --show-toplevel)/.uv-cache\" SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \\
-        uv sync --all-extras --dev --no-install-project
-      SKIP_CLICKHOUSE=1 bash ci/local_validate.sh   # skips the ClickHouse-dependent stages
-                                                     # (they need a ClickHouse and a Go toolchain)
-   FULL recipe (only if you need dev-hops / the ClickHouse-dependent stages locally instead of
-   via CI — CAN hang forever at 0% CPU on a wedged 'git check-attr' child, the known
-   setuptools_scm worktree deadlock, CHAOS-4181/4407, unrelated to this gate):
-      UV_CACHE_DIR=\"\$(git rev-parse --show-toplevel)/.uv-cache\" uv sync --all-extras --dev
-   (requirements.txt is '-e .[dev]'; pytest-asyncio tests mislead-fail without a fresh sync.
-   UV_CACHE_DIR keeps either recipe off the shared ~/.cache/uv/.lock other worktrees hold —
-   CHAOS-4411.)"
-  [ -x "${RUFF}" ] || die "missing ${RUFF}; install the [dev] extra into .venv."
-  ensure_docs_deps
   printf '   worktree root : %s\n' "${ROOT}"
-  printf '   interpreter   : %s\n' "${PYBIN}"
   printf '   %s\n' "$(c_green 'preflight OK')"
 }
 
-# --- Pure-Python CI-parity gates (no services). ------------------------------------
-gate_lint_format() { "${RUFF}" format --check .; }
-gate_lint_check() { "${RUFF}" check .; }
+# --- Go CI-parity gates (no services). ---------------------------------------------
 gate_go_fast() { bash "${ROOT}/ci/check_go.sh" fast; }
 gate_river_compat_static() { bash "${ROOT}/ci/check_river_compat_static.sh"; }
-
-# --- The unit step: the HOSTED selection (CHAOS-8352 removed the full-suite matrix). --
-# Same three pytest invocations as the `tooling-tests` and `docs-tests` jobs of
-# .github/workflows/test.yml (and tests:docs / tests:tooling in .gitlab-ci.yml):
-# tests/docs, tests/tooling, and the explicit list in ci/kept_python_tests.txt,
-# read from that file so the gate cannot drift from the hosted job. Running the
-# whole tests/ dir is no longer the standard: it collects tests of the deleted
-# Python api tree and is red by construction.
-# -n 4 mirrors the hosted jobs.
-gate_unit_suite() {
-  local nw="${PYTEST_XDIST_WORKERS:-4}"
-  local list="${ROOT}/ci/kept_python_tests.txt"
-  local kept=()
-  [ -f "${list}" ] || die "missing ${list}: the hosted kept-test list."
-  mapfile -t kept < <(grep -v '^[[:space:]]*#' "${list}" | grep -v '^[[:space:]]*$')
-  # Same guard as test.yml: a short or empty list would run nothing.
-  [ "${#kept[@]}" -ge 1 ] || die "${list} lists only ${#kept[@]} files (hosted jobs require >= 1)."
-  printf '   kept files: %s\n' "${#kept[@]}"
-  OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/docs -q || return 1
-  OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest tests/tooling -q -n "${nw}" || return 1
-  OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" -m pytest "${kept[@]}" -q -rs -n "${nw}"
-}
 
 # --- Live-ClickHouse stage, ISOLATED to a scratch db (dropped on exit). ------------
 #
@@ -1047,19 +825,12 @@ gate_unit_suite() {
 #   4  docker + container confirmed present, but the dho binary the CH
 #      stages shell out to is missing and could not be built (ch_ensure_dho).
 #
-# CHAOS-3571 policy (decided in ch_provision(), not here): ONLY an explicit,
-# caller-supplied SKIP_CLICKHOUSE=1 may turn "CH stages did not run" into a
-# clean, gate-passing SKIP. Every code below (1-4) is a HARD FAILURE of the
-# gate when SKIP_CLICKHOUSE is not set -- including case 3, which the
-# CHAOS-3571 ticket's own proposed direction treats as legitimate to skip.
-# This script deliberately does NOT take that half of the proposal: a merge
-# gate that trusts an unattended runtime probe's "confirmed not running" enough
-# to silently pass is exactly the shape of tool this ticket was filed against,
-# and the whole point of (a)/(c) below is that NOTHING short of the caller's
-# own explicit, logged opt-in may shrink what "PASSED" claims to have run.
-# CH_PROBE_DETAIL still names case 3 distinctly from case 2 in the failure
-# message, so a human fixing this after a HARD FAIL is told the true
-# mechanism, not a fabricated one -- that half of the ticket's ask is honored.
+# CHAOS-3571 policy (decided in ch_provision(), not here): every code below (1-4) is a HARD FAILURE of the
+# gate -- including case 3, which the CHAOS-3571 ticket's own proposed direction treats as legitimate to skip.
+# This script deliberately does NOT take that half of the proposal: a merge gate that trusts an unattended runtime
+# probe's "confirmed not running" enough to silently pass is exactly the shape of tool this ticket was filed
+# against. CH_PROBE_DETAIL still names case 3 distinctly from case 2 in the failure message, so a human fixing
+# this after a HARD FAIL is told the true mechanism, not a fabricated one.
 CH_PROBE_DETAIL=""
 
 # Builds (once) the dho binary the migration stage runs, from THIS tree. Sets
@@ -1071,16 +842,16 @@ ch_ensure_dho() {
   # naming the mechanism -- not deep in the migration stage, and never by migrating a
   # different (plaintext) endpoint than the one the gate was pointed at.
   if [ "${CH_HTTP_SCHEME}" = "https" ]; then
-    CH_PROBE_DETAIL="CH_HTTP_SCHEME=https is not supported by this gate: dho migrate clickhouse (the only ClickHouse migrator) speaks the native protocol on CH_NATIVE_PORT and no TLS native connection is wired here; use a plaintext lane endpoint or run with SKIP_CLICKHOUSE=1"
+    CH_PROBE_DETAIL="CH_HTTP_SCHEME=https is not supported by this gate: dho migrate clickhouse (the only ClickHouse migrator) speaks the native protocol on CH_NATIVE_PORT and no TLS native connection is wired here; use a plaintext lane endpoint"
     return 1
   fi
   [ -x "${DHO}" ] && return 0
   if [ "${DHO_BUILD_ON_DEMAND}" != "1" ]; then
-    CH_PROBE_DETAIL="dho missing at ${DHO} (DHO was set by the caller, so it is not built), or run with SKIP_CLICKHOUSE=1"
+    CH_PROBE_DETAIL="dho missing at ${DHO} (DHO was set by the caller, so it is not built)"
     return 1
   fi
   if ! command -v go >/dev/null 2>&1; then
-    CH_PROBE_DETAIL="dho missing at ${DHO} and no Go toolchain on PATH to build it (go build -o ${DHO} ./cmd/dho), or run with SKIP_CLICKHOUSE=1"
+    CH_PROBE_DETAIL="dho missing at ${DHO} and no Go toolchain on PATH to build it (go build -o ${DHO} ./cmd/dho)"
     return 1
   fi
   local build_log
@@ -1287,16 +1058,8 @@ ch_migrate() {
 # appears in RESULTS / the summary) and `fail_fast` (so it stops the gate
 # immediately, the same contract run_stage gives every other stage) instead of
 # the old `skip ...; return 0`, which is the exact mechanism that let a FAILED
-# docker probe read as a clean, gate-passing result. The ONLY remaining `skip`
-# path left in this function is the top one: an explicit, caller-supplied
-# SKIP_CLICKHOUSE=1. That is a loud, logged, opt-in decision the caller made on
-# purpose -- categorically different from the gate silently deciding on its own
-# that it "can't" run these stages, which is what CHAOS-3571 was filed against.
+# docker probe read as a clean, gate-passing result. There is no `skip` path left in this function.
 ch_provision() {
-  if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
-    skip "clickhouse provisioning (scratch db)" "SKIP_CLICKHOUSE=1 — CH stages explicitly excluded by caller (see DECLARED_STAGE_IDS)"
-    return 0
-  fi
   banner "clickhouse provisioning (isolated scratch db: ${SCRATCH_DB})"
   if ! ch_probe_docker; then
     record "clickhouse: docker probe (${CH_PROBE_DETAIL})" 1
@@ -1375,26 +1138,16 @@ verify_stage_manifest() {
 
 # run_declared_stages() (CHAOS-3571): DECLARED_STAGE_IDS is decided HERE, in
 # full, BEFORE any stage runs -- not derived after the fact from whatever
-# happened to execute. The only branch is the explicit SKIP_CLICKHOUSE=1
-# opt-out; every other reason a CH stage might not run (docker missing, the
+# happened to execute. Every reason a CH stage might not run (docker missing, the
 # probe failing, the container confirmed absent, dho missing) is a
-# ch_provision() hard failure against the FULL 6-id declaration, never a
-# reason to shrink it at runtime. Factored out of main() so the CHAOS-3571
-# `--stage-manifest-probe` test-only hook near the bottom of this file can
-# exercise this exact sequencing (with the expensive leaf stages stubbed).
+# ch_provision() hard failure against the FULL declaration, never a reason to
+# shrink it at runtime.
 run_declared_stages() {
-  if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
-    DECLARED_STAGE_IDS=(lint_format lint_check unit_suite)
-  else
-    DECLARED_STAGE_IDS=(lint_format lint_check ch_probe ch_scratch_create ch_migrate unit_suite)
-  fi
+  DECLARED_STAGE_IDS=(ch_probe ch_scratch_create ch_migrate)
 
-  run_stage "lint: ruff format --check" lint_format gate_lint_format
-  run_stage "lint: ruff check" lint_check gate_lint_check
   # run_stage "go: format + vet + test"     go_fast    gate_go_fast
   # run_stage "river: static compatibility harness" river_compat gate_river_compat_static
-  ch_provision # scratch db + migrations; exports CLICKHOUSE_URI when available
-  run_stage "unit suite (hosted selection)" unit_suite gate_unit_suite
+  ch_provision # scratch db + migrations; exports CLICKHOUSE_URI
 
   verify_stage_manifest
 
@@ -1426,86 +1179,15 @@ run_declared_stages() {
 
 # ===================================================================================
 main() {
+  [ "${SKIP_CLICKHOUSE:-0}" != "1" ] || die "SKIP_CLICKHOUSE=1 is refused: the live-ClickHouse stages are the only stages this gate has, so a run without them declares nothing and would still report a pass."
   acquire_lock # CHAOS-3403 single-flight mutex — before any work is done
   preflight
   run_declared_stages
 }
 
-# Test-only harness hook (CHAOS-3571): exercises the REAL ch_probe_docker()
-# function in isolation -- no lock, no preflight, no lint/mypy/unit suite, no
-# scratch db. Prints its return code and CH_PROBE_DETAIL so a test can plant a
-# specific docker failure mode (missing binary, `docker ps` erroring, a clean
-# "container absent" result) via a PATH-shadowing stub `docker` binary, and
-# assert the exact distinguishing message CHAOS-3571 was filed over -- a probe
-# FAILURE reported as a confirmed "not running" fact. Never invoked by main();
-# only by tests/tooling/test_local_validate_stage_manifest.py.
-if [ "${1:-}" = "--ch-probe-only" ]; then
-  shift
-  ch_probe_docker
-  ch_probe_rc=$?
-  printf 'ch-probe-result: rc=%s detail=%s\n' "${ch_probe_rc}" "${CH_PROBE_DETAIL}"
-  exit "${ch_probe_rc}"
-fi
-
-# Test-only harness hook (CHAOS-3571): exercises the REAL stage-declaration /
-# stage-execution / verify_stage_manifest / verdict-line bookkeeping in
-# run_declared_stages() end-to-end, with every expensive or environment-
-# dependent LEAF stage swapped for a trivial stand-in (eight functions are
-# overridden). This is deliberately NOT a test of any individual
-# gate's correctness (lint/mypy/pytest are not being exercised here at all);
-# it is a test that the manifest machinery itself -- the part CHAOS-3571 was
-# actually about -- correctly declares, tracks, diffs, and reports, without
-# paying for the ~15-minute real gate or touching a real docker/ClickHouse.
-# Never invoked by main(); only by
-# tests/tooling/test_local_validate_stage_manifest.py.
-if [ "${1:-}" = "--stage-manifest-probe" ]; then
-  shift
-  gate_lint_format() { return 0; }
-  gate_lint_check() { return 0; }
-  gate_unit_suite() { return 0; }
-  ch_probe_docker() {
-    CH_PROBE_DETAIL="stubbed: available"
-    return 0
-  }
-  # NOTE: does NOT set SCRATCH_CREATED=1 -- the real cleanup_scratch() (run
-  # unconditionally by the on_exit EXIT trap registered near the top of this
-  # script, which this hook does not disable) gates its `docker exec ...
-  # DROP DATABASE` on that flag. Leaving it unset means on_exit's real
-  # cleanup_scratch() call is a guaranteed no-op here, so this hook makes
-  # zero docker calls end to end -- consistent with "no docker commands
-  # against real containers" for a probe whose whole point is to test the
-  # manifest bookkeeping, not ClickHouse.
-  ch_create_scratch() { return 0; }
-  ch_migrate() { return 0; }
-  run_declared_stages
-fi
-
-# Test-only harness hook (CHAOS-3571): exercises verify_stage_manifest() in
-# total isolation from run_declared_stages -- feeds it a DECLARED_STAGE_IDS /
-# EXECUTED_STAGE_IDS pair with a deliberate gap (something declared that never
-# "ran") and confirms it fails loudly by name, rather than trusting that a
-# normal gate run can ever actually produce a mismatch to test against (under
-# the CHAOS-3571 fix it structurally can't -- run_stage/ch_provision append to
-# EXECUTED_STAGE_IDS unconditionally on every path, so the only way to observe
-# this function's own refusal logic is to hand it a gap directly). Reads the
-# fake declared/executed id lists from argv so a test can vary them freely.
-# Never invoked by main(); only by
-# tests/tooling/test_local_validate_stage_manifest.py.
-if [ "${1:-}" = "--stage-manifest-mismatch-probe" ]; then
-  shift
-  declared_csv="${1:?declared csv required}"
-  executed_csv="${2:?executed csv required}"
-  IFS=',' read -r -a DECLARED_STAGE_IDS <<<"${declared_csv}"
-  IFS=',' read -r -a EXECUTED_STAGE_IDS <<<"${executed_csv}"
-  verify_stage_manifest
-  printf 'stage-manifest-mismatch-probe: no mismatch detected (unexpected)\n'
-  exit 0
-fi
-
 # CHAOS-4457: lets a test drive ch_query() for real -- asserting which transport
 # it actually uses -- instead of grepping this file for a string, which would
-# pass against a script that still shelled out to docker at runtime. Same
-# argument-hook convention as --stage-manifest-mismatch-probe above.
+# pass against a script that still shelled out to docker at runtime.
 # Test-only hook: runs the REAL ch_migrate() (with a stub DHO the test supplies) so a
 # test can assert the exact dho invocations and the environment they receive.
 if [ "${1:-}" = "--ch-migrate-probe" ]; then

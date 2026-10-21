@@ -63,53 +63,13 @@ jobs:
               - 'ci/**'
               - 'migrations/**'
               - 'requirements.txt'
-              # CHAOS-4346: test-matrix's install step now runs `uv sync
-              # --frozen`, which consumes uv.lock directly (pyproject.toml
-              # was already covered above). Without this, a PR touching only
-              # uv.lock -- an ordinary dependency bump -- would get
-              # code=false, skip test-matrix entirely, and the required
-              # `test` check would go green having run no tests against the
-              # new lock. internal/cigates/workflows/aggregate_gate_results_test.go's
-              # TestPathsFilterCoversEveryFileTheGatedJobsInstall
-              # derives this requirement from the `uv sync` invocation itself
-              # and fails if it is missing.
+              # Python manifests the docs-tests job still reads; they leave with that job.
               - 'uv.lock'
-              # Both test jobs `pip install -r requirements-docs.txt` before
-              # running anything, so it is part of the test environment. It
-              # was missing here until CHAOS-3482 Codex round 2: a PR touching
-              # only this file got code=false, skipped both test jobs, and the
-              # aggregator -- correctly, by its own rule -- called that a
-              # legitimate docs-only skip and reported the required check
-              # green. TestPathsFilterCoversEveryFileTheGatedJobsInstall
-              # derives this list from the jobs' own install commands.
               - 'requirements-docs.txt'
-              # The guards for these live in this workflow's suite
-              # (internal/cigates/workflows/aggregate_gate_results_test.go), so a PR
-              # touching only one of them must not skip that suite --
-              # otherwise the check that would notice a collapsed lint or
-              # typecheck scope is the one that does not run
-              # (CHAOS-3513 Codex round 2).
               - '.gitignore'
               - '.ignore'
-              # CHAOS-4843, round 2 of #2169's peer review, P2b: this
-              # workflow's own tooling suite carries
-              # test_lefthook_glob_matches_typecheck_relevance_patterns,
-              # which fails loud the moment lefthook.yml's mypy glob
-              # diverges from ci/typecheck_relevance.py's RELEVANT_PATTERNS.
-              # Without this entry, a PR touching ONLY lefthook.yml (e.g.
-              # narrowing that glob, or reverting the mypy command to a bare
-              # `mypy`) got code=false, skipped test-matrix entirely, and
-              # the one guard built to catch exactly that regression never
-              # ran -- the same "the guard's own trigger scope is the gap"
-              # shape as the .gitignore/.ignore entries above.
               - 'lefthook.yml'
-              - 'ruff.toml'
-              - '.ruff.toml'
-              - 'mypy.ini'
-              - '.mypy.ini'
-              - 'setup.cfg'
               - 'pyproject.toml'
-              - 'pytest.ini'
               - 'alembic.ini'
               - 'Makefile'
               - 'scripts/**'
@@ -117,37 +77,13 @@ jobs:
               - 'compose.yml'
               - 'docker/**'
               - 'deploy/**'
-              # CHAOS-3948: this filter had no Go paths at all, so a Go-only
-              # PR (internal/**, cmd/**, *.go, go.mod, go.sum -- 722 + 57
-              # files) reported code=false, skipped test-matrix/coverage
-              # entirely, and the required `test` check went green having run
-              # nothing. That is not a harmless skip: tests/tooling/*.py
-              # (already selected by 'tests/**' above, but only when a PR ALSO
-              # touches a Python file) polices Go artifacts directly --
-              # test_go_integration_sharding.py asserts the live Go package
-              # inventory against ci/go_integration_shards.d/,
-              # internal/cigates/workflows/workflows_image_publishing_test.go asserts published image names
-              # against deploy/ renderers, test_go_worker_stop_hook_packaging.py
-              # asserts the Dockerfile's staged binary path -- and a Go-only
-              # PR is exactly the PR that can break what those tests check
-              # while never running them. contracts/** and go.mod/go.sum are
-              # not covered by any existing pattern above (they sit outside
-              # src/, tests/, ci/, docker/, deploy/), so they are listed
-              # explicitly.
+              # Go paths: a Go-only change selects the gated jobs.
               - '**/*.go'
               - 'go.mod'
               - 'go.sum'
               - 'internal/**'
               - 'cmd/**'
               - 'contracts/**'
-              # CHAOS-6930: tests/tooling walks the WHOLE tree (test_go_workflow_
-              # path_filters reads every tracked fixture file, whatever its
-              # directory), and tools/ holds tracked fixtures and the shell proofs
-              # for the review wrapper. #3288 changed only tools/**, this filter
-              # had no entry for it, the tooling suite did not run and the
-              # required `test` check went green over a guard that was red on main.
-              # test_paths_filter_selects_every_directory_the_tooling_suite_reads
-              # derives the directories that need an entry from the tracked fixtures.
               - 'tools/**'
 
   docs-tests:
@@ -200,14 +136,12 @@ jobs:
       - name: Run the docs guards
         run: pytest tests/docs -q
 
-  # tests/tooling guards the Go CI wiring (workflow shape, path filters, shard
-  # inventories, bigboy cut scripts, gate aggregation). Until the Python unit
-  # matrix was removed (CHAOS-8352) it ran inside that matrix, which no longer
-  # exists, so it has its own job. PATH-FILTERED (CHAOS-10176): the `code` filter
-  # above lists every path the suite reads, and the aggregate fails a skip of it
-  # unless the filter decided `code == 'false'`.
-  tooling-tests:
-    name: tooling-tests
+  # CHAOS-9202: the one tooling guard that STARTS something: the chart's rendered ClickHouse config.d mounts are
+  # mounted into the real image and /ping is probed from another container. The Python tooling suite that used to
+  # share this job is gone; this job keeps only the Go test. PATH-FILTERED (CHAOS-10176): the `code` filter above
+  # lists every path it reads, and the aggregate fails a skip of it unless the filter decided `code == 'false'`.
+  chart-started:
+    name: chart-started
     needs: [changes]
     if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || needs.changes.outputs.code == 'true'
     # Same ARC routing as `changes` above.
@@ -216,10 +150,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # tests/tooling shells out to go (ci/check_go.sh, go-built probes) and
-      # helm (the bigboy router and chart tests). The oci-arc-runners image
-      # ships neither, so both are set up per job, as the removed unit matrix
-      # did. Cache handling mirrors go-quality.yml's self-hosted leg: setup-go's
+      # The started-chart test renders the chart with helm and runs it with go. The
+      # oci-arc-runners image ships neither, so both are set up per job. Cache handling mirrors go-quality.yml's self-hosted leg: setup-go's
       # own cache must stay off against the pool's shared hostPath.
       - name: Configure self-hosted Go cache paths
         if: vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')
@@ -239,39 +171,6 @@ jobs:
         with:
           version: 'v3.21.4'
 
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          python-version: '3.14'
-      # tests/tooling imports the package (test_contract_artifact_packaging)
-      # and the metrics executed-proof helpers, so it needs the locked env.
-      - name: Install tooling test dependencies
-        run: |
-          uv sync --frozen --all-extras --dev
-          uv pip install --python .venv/bin/python -r requirements-docs.txt
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-      # Drift in any Python file fails here, on every PR, instead of surfacing later in
-      # a local gate (ruff pinned by uv.lock).
-      - name: Check Python formatting
-        run: ruff format --check .
-      - name: Run the tooling tests
-        env:
-          OTEL_ENABLED: "false"
-        run: pytest tests/tooling -q -n 4
-      # The Python tests that pin things which stay after the Python source is
-      # deleted (Helm chart, compose, alerts, ci scripts, Go contracts). An
-      # explicit list, not a negative filter: a new file is not picked up unseen.
-      - name: Run the kept Python tests
-        env:
-          OTEL_ENABLED: "false"
-        run: |
-          set -euo pipefail
-          mapfile -t kept < <(grep -v '^[[:space:]]*#' ci/kept_python_tests.txt | grep -v '^[[:space:]]*$')
-          if [ "${#kept[@]}" -lt 1 ]; then
-            echo "ci/kept_python_tests.txt lists only ${#kept[@]} files: a short or empty list would run nothing (or everything)" >&2
-            exit 1
-          fi
-          printf 'kept files: %s\n' "${#kept[@]}"
-          pytest "${kept[@]}" -q -rs -n 4
       # CHAOS-9202: START the real ClickHouse image with the chart's rendered mounts and probe /ping from
       # another container. CHART_STARTED_TEST_REQUIRED makes a missing helm or docker compose a FAILURE,
       # never a skip: a measurement that did not happen must not read as a pass (the 2026-10-10 incident
@@ -282,8 +181,8 @@ jobs:
         run: go test -mod=readonly -trimpath -count=1 -v -run '^TestClickHouseConfigdStartsAndAnswersOnThePodAddress$' ./deploy/helm/dev-health
 
   # Required-status-check gate. Branch protection requires a check named
-  # exactly "test". It judges docs-tests and tooling-tests through
-  # ci/aggregate_gate_results.sh. docs-tests is `unconditional`; tooling-tests is
+  # exactly "test". It judges docs-tests and chart-started through
+  # ci/aggregate_gate_results.sh. docs-tests is `unconditional`; chart-started is
   # `path-filtered` (CHAOS-10176): a docs-only skip passes, while a job the `code`
   # filter selected that skipped, was cancelled or failed fails the gate (a
   # measurement that did not happen must fail). The verdict is driven through its result matrix by
@@ -297,7 +196,7 @@ jobs:
     # Cancellation has to be reported by a job that actually ran, so this job
     # runs unconditionally and the script fails the gate on `cancelled`.
     if: always()
-    needs: [changes, docs-tests, tooling-tests]
+    needs: [changes, docs-tests, chart-started]
     # Same ARC routing as `changes` above.
     runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     steps:
@@ -310,7 +209,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           CHANGES_CODE: ${{ needs.changes.outputs.code }}
           GATED_JOB_1: docs-tests|unconditional|${{ needs.docs-tests.result }}
-          GATED_JOB_2: tooling-tests|path-filtered|${{ needs.tooling-tests.result }}
+          GATED_JOB_2: chart-started|path-filtered|${{ needs.chart-started.result }}
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh

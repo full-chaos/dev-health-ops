@@ -169,8 +169,8 @@ type OutboxEvent struct {
 const OffStreamSessionLifecycle = "session_lifecycle"
 
 // OffStreamLinkCredentialLifecycle marks the consume of a single-use link
-// credential (a reissue deletes the prior unconsumed rows, which is not a
-// mutation of its own): the credential's own lifecycle is not a
+// credential (a reissue deletes the prior unconsumed rows in the issuing
+// transaction, with no audit.Commit of its own): the credential's own lifecycle is not a
 // provisioning event. The account change it authorizes (a verified e-mail, a
 // new password) is a provisioning event written by the identity store.
 const OffStreamLinkCredentialLifecycle = "link_credential_lifecycle"

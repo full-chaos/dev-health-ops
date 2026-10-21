@@ -228,12 +228,12 @@ make docs:check-fast
 ```
 
 Production documentation deployment is intentionally separate:
-
+Production documentation deployment is owned by Cloudflare Workers Builds (worker `dev-health-docs`, from `main`). The local target below is a manual fallback:
 ```bash
 make docs:deploy
 ```
 
-`make docs:build` uses the canonical `mkdocs.yml` configuration. The Cloudflare targets add redirects, headers, preview-version upload, deployment, and rollback behavior around that same canonical build.
+`make docs:build` uses the canonical `mkdocs.yml` configuration. The Cloudflare targets add redirects, headers, preview-version upload, deployment, and rollback behavior around that same canonical build for local use. GitHub Actions only builds and validates the docs; it never uploads or deploys them. To roll back production, use the Cloudflare dashboard or `make docs:rollback VERSION_ID=<version>`.
 
 ## Inspect CLI commands before changing state
 

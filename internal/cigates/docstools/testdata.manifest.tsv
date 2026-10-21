@@ -1,5 +1,5 @@
 # Every file under internal/cigates/docstools/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 7b1840b57dd0d7b0a9cd39d24fceb08d272ad49da27f333df588616b413bb478 (948 files)
+# python-recorded set: 0034dc079800989ee3e1f8f7ea37feb6a710adfcc5bd8b0424623f975f34bffc (948 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 89c507a8bec003d21a7be86f3929be586e5d3f29bd52ea4e12c40e1b09b782f8	hand-written	README.md
 0f0c4bf5e5009999b6d5f6b87f7ae119b583442f6db3bd29b65fce0962828459	python-recorded	helpers/csvrow.jsonl
@@ -928,7 +928,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded
 6ef8b9ad86c7b3f921009bb3ee9149bc8114719b9252bd4890cb159fce50f87d	python-recorded	parity/links-path-sort-order/stdout
 2a437b65d3934443368e0a05e8da74c54d4a5d2cae400dcedece137e09e9d2ec	python-recorded	parity/links-percent-encoded/args
 249fac96ec8a4d9f285c6c0eec3c1fcbb7edab33416f20a3d1980b981043c6ad	python-recorded	parity/links-percent-encoded/in/site/a b.html.fixture
-f7842d2eafa00070ec797495b92b28c791fb97811acf1f38f41fc9c34261210d	python-recorded	parity/links-percent-encoded/in/site/café.html.fixture
+f7842d2eafa00070ec797495b92b28c791fb97811acf1f38f41fc9c34261210d	python-recorded	parity/links-percent-encoded/in/site/caf{E9}.html.fixture
 20d2ef7adac6a634d9f6cac8df51a053766b07bde0cb6ab35f0952c2a62c0556	python-recorded	parity/links-percent-encoded/in/site/index.html.fixture
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-percent-encoded/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-percent-encoded/stderr
@@ -1031,8 +1031,8 @@ c43ff44a809a9bd2d3396432e5e61fd584dd654ac7e2e3a4fa8e783988187bc4	python-recorded
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-trailing-dot-and-slash-targets/stderr
 3494c5f1e6eed8b1ecfbb38ec94249cc40dc21a8c84f2e4b3d0892011b7a7c13	python-recorded	parity/links-trailing-dot-and-slash-targets/stdout
 2a437b65d3934443368e0a05e8da74c54d4a5d2cae400dcedece137e09e9d2ec	python-recorded	parity/links-unicode-file-names/args
-c43ff44a809a9bd2d3396432e5e61fd584dd654ac7e2e3a4fa8e783988187bc4	python-recorded	parity/links-unicode-file-names/in/site/café/index.html.fixture
-d9767b8a065e090a665cd32fc9f4dd4f97e223d498b3fbb1ea6941788effe285	python-recorded	parity/links-unicode-file-names/in/site/über/index.html.fixture
+c43ff44a809a9bd2d3396432e5e61fd584dd654ac7e2e3a4fa8e783988187bc4	python-recorded	parity/links-unicode-file-names/in/site/caf{E9}/index.html.fixture
+d9767b8a065e090a665cd32fc9f4dd4f97e223d498b3fbb1ea6941788effe285	python-recorded	parity/links-unicode-file-names/in/site/{FC}ber/index.html.fixture
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-unicode-file-names/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-unicode-file-names/stderr
 4f6d181d608e7708ac8e23e9d56d60b07cfc1faec07b6755d2d4dfde32a29c79	python-recorded	parity/links-unicode-file-names/stdout

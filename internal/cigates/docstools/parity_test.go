@@ -49,7 +49,7 @@ func replayCase(t *testing.T, dir string) {
 	_ = filepath.Walk(in, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(in, path)
-			rel = strings.ReplaceAll(strings.TrimSuffix(rel, ".fixture"), "{E9}", "é")
+			rel = caseName(strings.TrimSuffix(rel, ".fixture"))
 			expected[rel] = true
 			writeTree(t, filepath.Join(work, rel), mustRead(t, path), info.Mode().Perm())
 		} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
@@ -102,7 +102,7 @@ func replayCase(t *testing.T, dir string) {
 	_ = filepath.Walk(out, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(out, path)
-			rel = strings.ReplaceAll(rel, "{E9}", "é")
+			rel = caseName(rel)
 			expected[rel] = true
 			if got, want := mustRead(t, filepath.Join(work, rel)), mustRead(t, path); got != want {
 				t.Errorf("%s differs from the recording\ngot:\n%q\nrecorded:\n%q", rel, got, want)
@@ -124,6 +124,12 @@ func replayCase(t *testing.T, dir string) {
 	if len(left) > 0 {
 		t.Errorf("the verb left files the Python script did not: %v", left)
 	}
+}
+
+// caseName turns the placeholders of a stored file name into the characters they stand for: git quotes a non-ASCII name,
+// and the workflow path-filter guards read file names from `git ls-files`.
+func caseName(rel string) string {
+	return strings.NewReplacer("{E9}", "é", "{FC}", "ü").Replace(rel)
 }
 
 func mustRead(t *testing.T, path string) string {

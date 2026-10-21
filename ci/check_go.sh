@@ -2941,7 +2941,7 @@ load_affected_selection() {
     "NONE")
       [ "$(wc -l < "${file}")" -le 1 ] || die "INTEGRATION_AFFECTED_FILE ${file}: a NONE selection lists no package"
       AFFECTED_FILTER_ACTIVE=1
-      printf 'integration affected selection: NONE -- no Go test reads the changed paths\n'
+      printf 'integration affected selection: NONE -- no integration package runs\n'
       return 0
       ;;
     "FULL "*)

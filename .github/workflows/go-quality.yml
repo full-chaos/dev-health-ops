@@ -27,12 +27,12 @@
 # pins that the legs together run exactly the steps of `ci`.
 #
 # ONE PLAN VERDICT (go-quality-plan). `cmd/cigate plan-verdict --go-files-full`, the
-# program go.yml's integration plan job runs, judges the change set once: NONE (every
-# changed path is in a class no Go test reads: the test and race legs skip), AFFECTED
-# (no .go file changed: the test and race legs run only the declared readers of the
-# changed paths and their importers' tests) or FULL (a .go file, a shared input, an
-# undeclared path, any push to main, merge group, schedule or manual run, or any failure
-# of the plan: every package runs). The static leg and the fan-in always run and report.
+# program go.yml's integration plan job runs, judges the change set once. Here it is
+# FULL for every change set (with --go-files-full a .go file is FULL, and any other path
+# is FULL), for any push to main, merge group, schedule or manual run, and for any failure
+# of the plan: every package runs. A NONE verdict would skip the test and race legs, and
+# an AFFECTED one would run only its packages; no change set plans either today. The
+# static leg and the fan-in always run and report.
 name: Go quality
 
 on:
@@ -227,7 +227,7 @@ jobs:
           fi
           case "${PLAN_VERDICT}" in
             NONE)
-              echo "plan verdict NONE: no Go test reads a changed path; this leg is skipped"
+              echo "plan verdict NONE: this leg is skipped"
               printf 'relevant=false\n' >> "${GITHUB_OUTPUT}"
               ;;
             AFFECTED)
@@ -245,8 +245,7 @@ jobs:
         if: steps.relevance.outputs.relevant != 'true'
         run: |
           echo "skipped: the go-quality-plan verdict is NONE (or this is a draft's heavy leg)."
-          echo "The verdict comes from cmd/cigate plan-verdict over the declared-read"
-          echo "table internal/cigates/affected/reads.tsv. This job still REPORTS, so the"
+          echo "The verdict comes from cmd/cigate plan-verdict. This job still REPORTS, so the"
           echo "required check is satisfied honestly rather than by a second workflow."
 
       - name: Configure self-hosted Go cache paths

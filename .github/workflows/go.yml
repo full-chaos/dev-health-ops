@@ -696,12 +696,10 @@ jobs:
 
       # CHAOS-9947: a pull request runs only the integration shards whose test
       # binaries a change can reach: `cmd/cigate plan-verdict` (one verdict with
-      # go-quality.yml) selects the changed Go packages' reverse closure plus the
-      # declared readers of changed non-Go paths (internal/cigates/affected/reads.tsv),
-      # NONE when every path is in a class no test reads. --base compares this file and
-      # ci/check_go.sh at the merge base: only an edit the integration jobs or verbs can
-      # see is FULL. A shared change, an undeclared path or any failure here selects the
-      # FULL suite; main, merge_group and manual runs never run this step.
+      # go-quality.yml) selects the changed Go packages' reverse closure when every
+      # changed path is a .go file. Any other path (data, tsv, yaml, docs, workflows,
+      # scripts, testdata), a shared change or any failure here selects the FULL suite;
+      # main, merge_group and manual runs never run this step.
       - name: Select the integration packages the change can affect
         if: github.event_name == 'pull_request'
         env:

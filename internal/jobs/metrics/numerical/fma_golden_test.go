@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// fmaGoldenFixture is the shape of tests/fixtures/fma_golden.json, generated
-// by tests/fixtures/generate_fma_golden.py by IMPORTING and calling the real
+// fmaGoldenFixture is the shape of tests/fixtures/fma_golden.json, was generated
+// by generate_fma_golden (generator deleted, golden frozen) by IMPORTING and calling the real
 // production Python functions. CHAOS-4818: Go's spec permits fusing an
 // unguarded `x*y + z` into a single fused-multiply-add on arm64 (one
 // rounding), where CPython always rounds the multiply and the add
@@ -51,7 +51,7 @@ func loadFMAGolden(t *testing.T) fmaGoldenFixture {
 	return fixture
 }
 
-// bitsFromHex parses "0x<16 hex digits>" (as generate_fma_golden.py's
+// bitsFromHex parses "0x<16 hex digits>" (as generate_fma_golden (generator deleted, golden frozen)'s
 // bits_hex writes it) into the uint64 math.Float64bits would return for the
 // same value.
 func bitsFromHex(t *testing.T, hex string) uint64 {

@@ -40,8 +40,7 @@ func loadWhitespaceGolden(t *testing.T) whitespaceGolden {
 		"../../tests/fixtures/python_whitespace_python_golden.json",
 	))
 	if err != nil {
-		t.Fatalf("read whitespace golden: %v (regenerate with: uv run python "+
-			"tests/fixtures/generate_python_whitespace_golden.py)", err)
+		t.Fatalf("read whitespace golden: %v (the golden is frozen: its generator is deleted)", err)
 	}
 	var golden whitespaceGolden
 	if err := json.Unmarshal(raw, &golden); err != nil {

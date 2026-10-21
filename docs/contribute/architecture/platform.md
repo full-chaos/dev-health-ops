@@ -4,8 +4,6 @@ summary: Current route, provider, execution, storage, and deployment responsibil
 content_type: architecture
 owner: engineering
 source_of_truth:
-  - docs/architecture.md
-  - docs/architecture/canonical-operational-model.md
   - current deployment and service entry points
   - TRD: Ask Dev — constrained agent runtime, graph query layer, and web experience
   - Amendment TRD v2 — Ask Dev Wave 3.1: Deterministic investigation, health synthesis, and safe outcomes

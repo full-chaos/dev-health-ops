@@ -4,7 +4,6 @@ summary: Define the scope, time window, filters, comparison, and data state that
 content_type: landing
 owner: product-analytics
 source_of_truth:
-  - docs/user-guide/how-to-read-dev-health.md
   - current product navigation and filter controls
 applicability: current
 lifecycle: active

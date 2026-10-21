@@ -9,18 +9,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// testsPyAllowed is the closed list of Python files that may stay under tests/, as the path under tests/ without the
-// ".py" suffix. Stems, not file names: a literal file name would make the go.yml path-filter guard treat each file as
-// a path a Go test reads, and these files are not inputs of any Go test.
-// Anything under tests/tooling/ and tests/docs/ is allowed as a whole.
-var testsPyAllowed = map[string]bool{
-	"__init__":                           true,
-	"conftest":                           true,
-	"_env_isolation":                     true,
-	"test_go_api_routing_digest_checker": true,
-	"test_go_api_routing_operator_text":  true,
-}
-
 func testsTreeRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := moduleroot.Caller(0)
@@ -36,15 +24,9 @@ func testsTreePythonFiles(t *testing.T, root string) []string {
 	return trackedFiles(t, root, "tests/*.py")
 }
 
+// testsTreeStray returns every Python file under tests/: none is allowed.
 func testsTreeStray(files []string) []string {
-	var stray []string
-	for _, f := range files {
-		if testsPyAllowed[strings.TrimSuffix(strings.TrimPrefix(f, "tests/"), ".py")] || strings.HasPrefix(f, "tests/tooling/") || strings.HasPrefix(f, "tests/docs/") {
-			continue
-		}
-		stray = append(stray, f)
-	}
-	return stray
+	return append([]string(nil), files...)
 }
 
 func TestNoPythonUnderTests(t *testing.T) {
@@ -53,13 +35,13 @@ func TestNoPythonUnderTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stray := testsTreeStray(testsTreePythonFiles(t, root)); len(stray) > 0 {
-		t.Fatalf("Python is dead; %d .py file(s) under tests/ outside the allow list, first: %s", len(stray), stray[0])
+		t.Fatalf("Python is dead; %d .py file(s) under tests/, first: %s", len(stray), stray[0])
 	}
 }
 
 func TestNoPythonUnderTestsFiresOnPlantedFile(t *testing.T) {
 	stray := testsTreeStray([]string{"tests/tooling/x.py", "tests/test_planted.py"})
-	if len(stray) != 1 || stray[0] != "tests/test_planted.py" {
+	if len(stray) != 2 || stray[0] != "tests/tooling/x.py" || stray[1] != "tests/test_planted.py" {
 		t.Fatalf("guard did not name the planted file: %v", stray)
 	}
 }
@@ -74,7 +56,6 @@ type pyOwnedEntry struct {
 
 var pyOwnedEntries = []pyOwnedEntry{
 	{"scripts/", "CHAOS-10386/10387/10388 (docs tooling leaves)"},
-	{"tests/tooling/", "fcs tooling/docs leaves"},
 }
 
 func (e pyOwnedEntry) covers(stem string) bool {
@@ -116,7 +97,7 @@ func pyDeadVerdict(files []string) (outside []string, emptied []string) {
 				covered = true
 			}
 		}
-		if !covered && !(strings.HasPrefix(f, "tests/") && len(testsTreeStray([]string{f})) == 0) {
+		if !covered {
 			outside = append(outside, f)
 		}
 	}

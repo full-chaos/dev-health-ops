@@ -4,7 +4,6 @@ summary: Deploy with the supported Helm chart, preserve migration ordering, and 
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
-  - docs/ops/deployment-guide.md
   - deploy/helm/dev-health/
   - deploy/go-workers/
 applicability: current

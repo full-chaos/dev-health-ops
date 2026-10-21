@@ -18,8 +18,9 @@ import (
 // planted edit, so the same guard runs on the real tree (must find nothing) and on a defective tree (must name the defect).
 
 type docTree struct {
-	root string
-	over map[string]*string // nil value = file removed
+	root    string
+	over    map[string]*string // nil value = file removed
+	tracked []string           // git ls-files -z, repository-relative, that exist on disk
 }
 
 func realTree(t *testing.T) docTree {
@@ -30,7 +31,7 @@ func realTree(t *testing.T) docTree {
 	}
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return docTree{root: dir, over: map[string]*string{}}
+			return docTree{root: dir, over: map[string]*string{}, tracked: trackedFiles(t, dir)}
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -45,7 +46,7 @@ func (d docTree) clone() docTree {
 	for k, v := range d.over {
 		over[k] = v
 	}
-	return docTree{root: d.root, over: over}
+	return docTree{root: d.root, over: over, tracked: d.tracked}
 }
 
 func (d docTree) read(rel string) (string, error) {

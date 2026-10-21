@@ -5,8 +5,6 @@ content_type: task-guide
 owner: platform-api
 source_of_truth:
   - current external-ingest REST routes
-  - docs/customer-push-ingestion/examples.md
-  - docs/customer-push-ingestion/ci-cd.md
 applicability: current
 lifecycle: active
 ---

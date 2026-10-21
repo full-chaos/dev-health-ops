@@ -5,7 +5,6 @@ content_type: task-guide
 owner: product-analytics
 source_of_truth:
   - current SavedReport and ReportRun GraphQL contracts
-  - docs/user-guide/reports.md
 applicability: current
 lifecycle: active
 ---

@@ -3,8 +3,6 @@ page_id: int-push-overview
 summary: Decide whether Customer Push or a managed connector owns a source.
 content_type: concept
 owner: platform-api
-source_of_truth:
-  - docs/customer-push-ingestion/overview.md
 applicability: current
 lifecycle: active
 ---

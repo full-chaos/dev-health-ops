@@ -23,9 +23,10 @@ var refusalSite = regexp.MustCompile(`raise |SystemExit|sys\.exit|\.read_text\(|
 
 type refusalRow struct{ kind, refs string }
 
-func refusalInventory(t *testing.T) map[string]refusalRow {
+// refusalInventory reads testdata/refusals/<name>: site TAB kind TAB refs.
+func refusalInventory(t *testing.T, name string) map[string]refusalRow {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "refusals", "check-candidate-facts.tsv"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "refusals", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,16 +47,18 @@ func refusalInventory(t *testing.T) map[string]refusalRow {
 	return rows
 }
 
-func pythonRefusalSites(t *testing.T) []string {
+// pythonRefusalSites lists the lines of a frozen script that siteRe matches; the Nth repeat of a line (and every
+// "return 1") gets "#N".
+func pythonRefusalSites(t *testing.T, frozen string, siteRe *regexp.Regexp) []string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "refusals", "check_docs_candidate_facts.py.frozen"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "refusals", frozen))
 	if err != nil {
 		t.Fatal(err)
 	}
 	seen := map[string]int{}
 	var sites []string
 	for _, line := range strings.Split(string(raw), "\n") {
-		if !refusalSite.MatchString(line) {
+		if !siteRe.MatchString(line) {
 			continue
 		}
 		text := strings.TrimSpace(line)
@@ -67,6 +70,38 @@ func pythonRefusalSites(t *testing.T) []string {
 		sites = append(sites, key)
 	}
 	return sites
+}
+
+// checkRefusalInventory fails on a refusing site with no row, a row with no Go answer, and a row that matches no
+// site (rows ending in an extraSuffix name a second answer for a site, such as "#unreadable").
+func checkRefusalInventory(t *testing.T, inventory map[string]refusalRow, sites []string, extraSuffixes ...string) {
+	t.Helper()
+	if len(sites) == 0 {
+		t.Fatal("the frozen script has no refusing site: the scanner is broken")
+	}
+	listed := map[string]bool{}
+	for _, site := range sites {
+		listed[site] = true
+		row, ok := inventory[site]
+		if !ok {
+			t.Errorf("Python refusal %q has no row in the refusal inventory", site)
+			continue
+		}
+		if row.refs == "" {
+			t.Errorf("row %q names no Go answer", site)
+		}
+	}
+	for site := range inventory {
+		extra := false
+		for _, suffix := range extraSuffixes {
+			if strings.HasSuffix(site, suffix) && listed[strings.TrimSuffix(site, suffix)] {
+				extra = true
+			}
+		}
+		if !listed[site] && !extra {
+			t.Errorf("inventory row %q matches no refusing site of the frozen script", site)
+		}
+	}
 }
 
 func buildCigate(t *testing.T) string {
@@ -133,32 +168,12 @@ func runLiveCase(t *testing.T, bin, name string) {
 }
 
 func TestEveryPythonRefusalOfCandidateFactsHasAGoRow(t *testing.T) {
-	inventory := refusalInventory(t)
-	sites := pythonRefusalSites(t)
-	if len(sites) == 0 {
-		t.Fatal("the frozen script has no refusing site: the scanner is broken")
-	}
-	listed := map[string]bool{}
-	for _, site := range sites {
-		listed[site] = true
-		row, ok := inventory[site]
-		if !ok {
-			t.Errorf("Python refusal %q has no row in the refusal inventory", site)
-			continue
-		}
-		if row.refs == "" {
-			t.Errorf("row %q names no Go answer", site)
-		}
-	}
-	for site := range inventory {
-		if !listed[site] && !strings.HasSuffix(site, "#unreadable") {
-			t.Errorf("inventory row %q matches no refusing site of the frozen script", site)
-		}
-	}
+	checkRefusalInventory(t, refusalInventory(t, "check-candidate-facts.tsv"),
+		pythonRefusalSites(t, "check_docs_candidate_facts.py.frozen", refusalSite), "#unreadable")
 }
 
 func TestCandidateFactsRefusalRowsRunLiveThroughTheCLI(t *testing.T) {
-	inventory := refusalInventory(t)
+	inventory := refusalInventory(t, "check-candidate-facts.tsv")
 	bin := buildCigate(t)
 	tests, err := filepath.Glob("*_test.go")
 	if err != nil {

@@ -9,7 +9,9 @@ internal/auth/passwordhash
 internal/auth/sessionid
 internal/chmigrate
 internal/cli
+internal/egressguard
 internal/httpguard
+internal/netclass
 internal/operationalordering
 internal/pgmigrate
 internal/platform/config
@@ -32,7 +34,9 @@ internal/storage/clickhouse
 internal/storage/postgres
 internal/storage/river
 internal/storage/roleacl
+internal/syncdispatchruntime/synclog
 internal/testsupport/containers
+internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/programoracle
 internal/testsupport/proxycapture

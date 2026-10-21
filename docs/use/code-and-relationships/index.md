@@ -6,8 +6,6 @@ owner: product-analytics
 source_of_truth:
   - current Code and Complexity product surfaces
   - current /diagnose/work-graph product surface
-  - docs/user-guide/views/code-hotspots.md
-  - docs/user-guide/views/work-graph.md
 applicability: current
 lifecycle: active
 hide:

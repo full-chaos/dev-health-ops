@@ -135,10 +135,19 @@ func postPagerDutyTokenForm(ctx context.Context, doer HTTPDoer, config PagerDuty
 	return pagerDutyTokensFromPayload(body, now)
 }
 
-// refusedDoer is what a PagerDuty entry point uses in place of a supplied doer the allow-list refused: it sends nothing.
-type refusedDoer struct{}
+// refusedDoer sends nothing: a PagerDuty entry point uses it in place of a supplied doer the allow-list refused (err nil:
+// ErrCredentialInvalid), and the egress guard in place of a doer it cannot reach into (errUnguardedDoer).
+type refusedDoer struct{ err error }
 
-func (refusedDoer) Do(*http.Request) (*http.Response, error) { return nil, ErrCredentialInvalid }
+func (d refusedDoer) Do(request *http.Request) (*http.Response, error) {
+	if request != nil && request.Body != nil {
+		_ = request.Body.Close()
+	}
+	if d.err != nil {
+		return nil, d.err
+	}
+	return nil, ErrCredentialInvalid
+}
 
 // pagerDutyAdmitted is the supplied doer when the allow-list admits it (an *http.Client, or a Wrapper chain ending at one), or a
 // doer that sends nothing (the same construction refusal, loud, as the provider client constructors): the PagerDuty entry

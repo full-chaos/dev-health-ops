@@ -10,7 +10,6 @@ source_of_truth:
   - internal/cigates/scope.go
   - ci/auth_gate_scope_exempt.txt
   - ci/check_go_containers.sh
-  - tests/tooling/test_go_auth_service_workflow.py
 applicability: current
 lifecycle: active
 ---
@@ -65,7 +64,7 @@ tree still reports its old path.
 Relevance is decided inside the workflow, not in the trigger, so `auth-gate`
 reports a conclusion on every pull request and can be a required check without
 blocking unrelated ones. No job reuses a required context name (`test`, `lint`,
-`go-quality`, `metrics-executed-proof`); `tests/tooling/test_go_auth_service_workflow.py`
+`go-quality`, `metrics-executed-proof`); `tests/tooling/test_go_auth_service_workflow.py` (removed with the Python api)
 pins the names, the fuzz matrix against the registry and the fan-in.
 
 ## Release checks for the images and Compose

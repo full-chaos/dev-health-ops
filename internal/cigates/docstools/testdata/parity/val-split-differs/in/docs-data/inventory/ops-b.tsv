@@ -1,0 +1,2 @@
+source_repo	source_path	artifact_type	publication_classification	proposed_disposition	target_section	target_page_type	canonical_owner	source_of_truth	migration_phase	reason	reviewer	target_url
+full-chaos/dev-health-ops	scripts/tool.py	markdown-page	supporting-artifact	retain-internal	Guide	task	docs	repo	Phase 1	changed	rev	

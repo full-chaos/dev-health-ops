@@ -4,8 +4,6 @@ summary: Connect GitHub with the supported app or credential path and verify rep
 content_type: task-guide
 owner: platform-product
 source_of_truth:
-  - docs/user-guide/github-app-auth.md
-  - docs/user-guide/github-app-setup.md
   - current GitHub App implementation
 applicability: current
 lifecycle: active

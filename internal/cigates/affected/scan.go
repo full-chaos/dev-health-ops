@@ -42,17 +42,20 @@ type Read struct {
 	Test    bool   // the file is a _test.go file
 	Path    string // the repository path named; empty for a walk from the repository root and for a dynamic read
 	Literal string
-	Dynamic bool   // a read, open or walk call whose path is not a compile-time constant (Literal holds the call)
-	Kind    string // for a dynamic read: temp, own, walk, walkpath or dyn (dynreads.go)
+	Dynamic bool   // a read whose path the tool cannot resolve (Literal holds the call)
+	Kind    string // for a dynamic read: walkpath or dyn (dynreads.go)
+	Walk    bool   // a walk call: Root and Depth as dynreads.go derives them
+	Root    string
+	Depth   string
 }
 
 func (r Read) String() string {
 	what := fmt.Sprintf("names %s (literal %q)", r.Path, r.Literal)
 	switch {
 	case r.Dynamic:
-		what = fmt.Sprintf("reads a path that is not a compile-time constant (%s)", r.Literal)
-	case r.Path == "":
-		what = "walks from the repository root"
+		what = fmt.Sprintf("reads a path the tool cannot resolve (%s)", r.Literal)
+	case r.Walk:
+		what = fmt.Sprintf("walks %s (%s, %s)", r.Root, r.Depth, r.Literal)
 	}
 	return fmt.Sprintf("%s:%d %s", r.File, r.Line, what)
 }
@@ -181,7 +184,8 @@ func ScanReads(root string) ([]Read, error) {
 		file *ast.File
 	}
 	var files []parsed
-	consts := map[string]map[string]bool{} // package dir -> its constant names
+	consts := map[string]map[string]bool{}      // package dir -> its constant names
+	constVals := map[string]map[string]string{} // package dir -> its string constants' literal values
 	sources, err := goSources(root, tracked)
 	if err != nil {
 		return nil, err
@@ -197,11 +201,22 @@ func ScanReads(root string) ([]Read, error) {
 		if consts[dir] == nil {
 			consts[dir] = map[string]bool{}
 		}
+		if constVals[dir] == nil {
+			constVals[dir] = map[string]string{}
+		}
 		for _, decl := range f.Decls {
 			if g, ok := decl.(*ast.GenDecl); ok && g.Tok == token.CONST {
 				for _, spec := range g.Specs {
-					for _, n := range spec.(*ast.ValueSpec).Names {
+					vs := spec.(*ast.ValueSpec)
+					for i, n := range vs.Names {
 						consts[dir][n.Name] = true
+						if i < len(vs.Values) {
+							if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+								if v, err := strconv.Unquote(lit.Value); err == nil {
+									constVals[dir][n.Name] = v
+								}
+							}
+						}
 					}
 				}
 			}
@@ -210,28 +225,9 @@ func ScanReads(root string) ([]Read, error) {
 	var reads []Read
 	for _, pf := range files {
 		reads = append(reads, scanFile(pf.fset, pf.file, pf.rel, top, consts[path.Dir(pf.rel)])...)
-		reads = append(reads, dynamicReads(pf.fset, pf.file, pf.rel, consts[path.Dir(pf.rel)])...)
+		reads = append(reads, dynamicReads(pf.fset, pf.file, pf.rel, consts[path.Dir(pf.rel)], constVals[path.Dir(pf.rel)], top)...)
 	}
-	// A walk is a repository-root walk only when its package locates the root.
-	locates := map[string]bool{}
-	for _, r := range reads {
-		if r.Literal == "\x00root" {
-			locates[r.Package] = true
-		}
-	}
-	var out []Read
-	for _, r := range reads {
-		switch r.Literal {
-		case "\x00root":
-			continue
-		case "\x00walk":
-			if !locates[r.Package] {
-				continue
-			}
-			r.Literal = ""
-		}
-		out = append(out, r)
-	}
+	out := reads
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
 			return out[i].File < out[j].File
@@ -313,17 +309,6 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top, consts map[stri
 			return true
 		}
 		name := callName(call.Fun)
-		short := name
-		if i := strings.LastIndexByte(name, '.'); i >= 0 {
-			short = name[i+1:]
-		}
-		if rootLocator.MatchString(short) {
-			add(call.Pos(), "", "\x00root")
-		}
-		if walkCalls[name] {
-			add(call.Pos(), "", "\x00walk")
-		}
-
 		if name == "filepath.Join" || name == "path.Join" {
 			joinLiterals(call, top, consumed, add)
 		}
@@ -346,10 +331,6 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top, consts map[stri
 		}
 		v, err := strconv.Unquote(lit.Value)
 		if err != nil {
-			return true
-		}
-		if v == "go.mod" && inReadCall[lit] {
-			add(lit.Pos(), "", "\x00root")
 			return true
 		}
 		p := normalizeRepoPath(v)
@@ -378,13 +359,6 @@ func checkReads(root string, t *tables, reads []Read) []string {
 		}
 		declared[r.pkg][r.class] = r.scope
 	}
-	type siteKey struct{ pkg, site string }
-	walkRows := map[siteKey][]walkRow{}
-	for _, w := range t.walks {
-		k := siteKey{w.pkg, w.site}
-		walkRows[k] = append(walkRows[k], w)
-	}
-	walkSites := map[siteKey]bool{}
 	var out []string
 	seen := map[string]bool{}
 	report := func(s string) {
@@ -398,24 +372,7 @@ func checkReads(root string, t *tables, reads []Read) []string {
 		if !r.Test {
 			scope = scopeCode
 		}
-		if r.Dynamic {
-			continue
-		}
-		if r.Path == "" {
-			k := siteKey{r.Package, path.Base(r.File)}
-			walkSites[k] = true
-			rows := walkRows[k]
-			if len(rows) == 0 {
-				report(fmt.Sprintf("%s: undeclared walker: %s; add a walks.tsv row %s\t%s\t%s\t<root>\t<skip>\t<filter>\t<classes> measuring this walk", r.Package, r, r.Package, scope, k.site))
-			}
-			for _, w := range rows {
-				if w.scope == scopeStatic && w.pkg+"/" != plannerDir {
-					report(fmt.Sprintf("walks.tsv:%d: scope %s is reserved for the planner's own guard (%s); %s must be %s or %s", w.line, scopeStatic, plannerDir, w.pkg, scopeTest, scopeCode))
-				}
-				if scope == scopeCode && w.scope == scopeTest {
-					report(fmt.Sprintf("walks.tsv:%d: %s is a walk in non-test code, so the row must be %s\t%s\t%s\t... (its importers' tests walk too)", w.line, r, r.Package, scopeCode, k.site))
-				}
-			}
+		if r.Dynamic || r.Walk {
 			continue
 		}
 		class := t.suggest(r.Path)
@@ -429,29 +386,12 @@ func checkReads(root string, t *tables, reads []Read) []string {
 			report(fmt.Sprintf("%s: %s is read by non-test code, so the row must be %s\t%s\t%s (its importers' tests read it too)", r.Package, r, r.Package, scopeCode, class))
 		}
 	}
-	gen, samples := generateDynReads(reads, t)
-	for _, d := range dynDiff(gen, samples, t) {
-		report(d)
+	diff, err := generatedDiff(root, reads, t)
+	if err != nil {
+		report("generate walks.tsv and dynreads.tsv: " + err.Error())
 	}
-	for _, w := range t.walks {
-		if !walkSites[siteKey{w.pkg, w.site}] {
-			report(fmt.Sprintf("walks.tsv:%d: %s/%s holds no walk of a package that locates the repository root", w.line, w.pkg, w.site))
-			continue
-		}
-		got, err := t.reach(root, w)
-		if err != nil {
-			report(fmt.Sprintf("walks.tsv:%d: %s/%s: %v", w.line, w.pkg, w.site, err))
-			continue
-		}
-		want := append([]string{}, w.classes...)
-		sort.Strings(want)
-		if strings.Join(got, ",") != strings.Join(want, ",") {
-			gotCol := strings.Join(got, ",")
-			if gotCol == "" {
-				gotCol = "-"
-			}
-			report(fmt.Sprintf("walks.tsv:%d: %s/%s root=%s: classes declared %v, computed from the tree %v; the classes column must be %s", w.line, w.pkg, w.site, w.root, want, got, gotCol))
-		}
+	for _, d := range diff {
+		report(d)
 	}
 	for _, r := range t.reads {
 		entries, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(r.pkg)))
@@ -531,9 +471,6 @@ func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.Bas
 					consumed[l] = true
 				}
 				add(lits[0].Pos(), p, strings.Join(parts, ", "))
-				if p == "go.mod" {
-					add(lits[0].Pos(), "", "\x00root")
-				}
 			}
 		}
 		parts, lits = nil, nil

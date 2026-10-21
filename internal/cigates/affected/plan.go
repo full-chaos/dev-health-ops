@@ -232,10 +232,10 @@ func plan(in planInput) (Verdict, error) {
 			for _, d := range in.tables.dynReads {
 				switch {
 				case d.unexpressed():
-					// The tool cannot bound the path: the package can read any file, so every non-Go change selects it.
-					// Only a test-support library also selects its importers; elsewhere only the package's own tests read it.
+					// The tool cannot bound the path: the package can read any file, so every non-Go change selects it, and
+					// a read in non-test code selects the tests of every package that links it.
 					dynSelected[d.pkg] = true
-					if d.scope() == scopeCode && strings.HasPrefix(d.pkg+"/", sharedPrefixes[0]) {
+					if d.scope() == scopeCode {
 						changedPackages[importPath(d.pkg)] = true
 					} else {
 						direct[importPath(d.pkg)] = true
@@ -254,11 +254,8 @@ func plan(in planInput) (Verdict, error) {
 				}
 			}
 			for _, w := range in.tables.walkersOf(p) {
-				if w.root == walkUnexpressed {
-					return full("unexpressed walk in " + w.pkg + " (" + w.site + ") can read " + p), nil
-				}
 				walkSelected[w.pkg] = true
-				if w.scope == scopeCode {
+				if w.scope() == scopeCode {
 					changedPackages[importPath(w.pkg)] = true
 				} else {
 					direct[importPath(w.pkg)] = true

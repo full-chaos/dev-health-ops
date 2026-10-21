@@ -171,7 +171,6 @@ type SignIn struct {
 	ProviderID     uuid.UUID
 	AMR            []string
 	AuthTime       time.Time
-	Created        bool
 }
 
 // Consume resolves the provider and completes a sign-in.
@@ -204,6 +203,9 @@ func (s *Service) BoundToRoute(ctx context.Context, p Provider, routeID uuid.UUI
 // resolves the account. cookie returns a request cookie value by name (""
 // when absent). On an identity key hit the account signs in from its stored
 // state and the assertion's email is not read; only a miss needs the email.
+// Every sign-in ends in the provider's organization: an account that is not
+// a member after the membership seam ran is ErrNotOrgMember, and a miss never
+// creates an account (see newAccountRefusal).
 func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, cookie func(string) string) (SignIn, error) {
 	raw, err := DecodeResponse(posted)
 	if err != nil {
@@ -237,15 +239,13 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 	id := Identity{Issuer: v.Issuer, Provider: p.ID.String(), Subject: subject}
 	legacy := &LegacyMatch{AuthProvider: "saml", Subject: v.NameID.Value, MembershipOrg: p.OrgID}
 	principal, found, err := s.Store.IdentityBySubject(ctx, id, legacy)
+	if errors.Is(err, ErrNotOrgMember) || errors.Is(err, ErrIdentityAmbiguous) {
+		return SignIn{}, s.refuse(ctx, p, err)
+	}
 	if err != nil {
 		return SignIn{}, err
 	}
-	created := false
-	if found {
-		if principal.Disabled {
-			return SignIn{}, s.refuse(ctx, p, ErrAccountDisabled)
-		}
-	} else {
+	if !found {
 		email := s.email(p, v)
 		if email == "" {
 			return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
@@ -256,32 +256,40 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		if !p.DomainAllowed(email) {
 			return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
 		}
-		principal.ID, err = s.provision(ctx, p, id, email, s.displayName(p, v))
-		if err != nil {
-			return SignIn{}, s.refuse(ctx, p, err)
-		}
-		created = true
+		return SignIn{}, s.refuse(ctx, p, s.newAccountRefusal(ctx, p, email))
 	}
-
-	out := SignIn{PrincipalID: principal.ID, ProviderID: p.ID, AMR: []string{AMRFederated}, AuthTime: now, Created: created}
-	member, err := s.Memberships.Member(ctx, principal.ID, p.OrgID)
-	if err != nil {
+	if principal.Disabled {
+		return SignIn{}, s.refuse(ctx, p, ErrAccountDisabled)
+	}
+	if err := s.requireMember(ctx, p, principal.ID); err != nil {
 		return SignIn{}, err
 	}
+
+	org := p.OrgID
+	s.logger().InfoContext(ctx, "auth saml: sign-in accepted", "provider_id", p.ID, "org_id", org)
+	return SignIn{PrincipalID: principal.ID, OrganizationID: &org, ProviderID: p.ID, AMR: []string{AMRFederated}, AuthTime: now}, nil
+}
+
+// requireMember refuses an existing account that is not a member of the
+// provider's organization after the membership seam (when set) tried to join
+// it.
+func (s *Service) requireMember(ctx context.Context, p Provider, principalID uuid.UUID) error {
+	member, err := s.Memberships.Member(ctx, principalID, p.OrgID)
+	if err != nil {
+		return err
+	}
 	if !member && s.JIT != nil {
-		if err := s.JIT.JoinOnSignIn(ctx, principal.ID, p); err != nil {
-			return SignIn{}, err
+		if err := s.JIT.JoinOnSignIn(ctx, principalID, p); err != nil {
+			return err
 		}
-		if member, err = s.Memberships.Member(ctx, principal.ID, p.OrgID); err != nil {
-			return SignIn{}, err
+		if member, err = s.Memberships.Member(ctx, principalID, p.OrgID); err != nil {
+			return err
 		}
 	}
-	if member {
-		org := p.OrgID
-		out.OrganizationID = &org
+	if !member {
+		return s.refuse(ctx, p, ErrNotOrgMember)
 	}
-	s.logger().InfoContext(ctx, "auth saml: sign-in accepted", "provider_id", p.ID, "created", created, "member", member)
-	return out, nil
+	return nil
 }
 
 // matchRequest binds a response to its stored request and browser. A response
@@ -306,35 +314,28 @@ func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cook
 	return s.Flows.ConsumeFlow(ctx, p.ID, v.InResponseTo, bindingHash(nonce), now)
 }
 
-func (s *Service) provision(ctx context.Context, p Provider, id Identity, email, name string) (uuid.UUID, error) {
+// newAccountRefusal is the refusal of a sign-in that would need a new account.
+// An asserted email another account holds is an EmailConflictError naming its
+// sign-in method; a provider without auto-provisioning is
+// ErrAutoProvisionDisabled. Every other new account is ErrNotOrgMember: no
+// account is created until an account and its membership can be written in
+// one transaction. It writes nothing.
+func (s *Service) newAccountRefusal(ctx context.Context, p Provider, email string) error {
 	normalized, err := s.Store.NormalizeEmail(email)
 	if err != nil {
-		return uuid.Nil, ErrInvalidEmailAddress
+		return ErrInvalidEmailAddress
 	}
 	owner, taken, err := s.Store.PrincipalByEmail(ctx, normalized)
 	if err != nil {
-		return uuid.Nil, err
+		return err
 	}
 	if taken {
-		return uuid.Nil, &EmailConflictError{Method: owner.Method}
+		return &EmailConflictError{Method: owner.Method}
 	}
 	if !p.AutoProvision {
-		return uuid.Nil, ErrAutoProvisionDisabled
+		return ErrAutoProvisionDisabled
 	}
-	principalID, err := s.Store.ProvisionFederated(ctx, NewFederatedUser{
-		Email: normalized, DisplayName: name, Identity: id, AuditRequestID: auditRequestID(ctx),
-	})
-	switch {
-	case errors.Is(err, ErrEmailTaken):
-		conflict := &EmailConflictError{}
-		if owner, ok, lookupErr := s.Store.PrincipalByEmail(ctx, normalized); lookupErr == nil && ok {
-			conflict.Method = owner.Method
-		}
-		return uuid.Nil, conflict
-	case err != nil:
-		return uuid.Nil, err
-	}
-	return principalID, nil
+	return ErrNotOrgMember
 }
 
 func (s *Service) email(p Provider, v Verified) string {
@@ -346,15 +347,6 @@ func (s *Service) email(p Provider, v Verified) string {
 	}
 	if strings.Contains(v.NameID.Value, "@") {
 		return v.NameID.Value
-	}
-	return ""
-}
-
-func (s *Service) displayName(p Provider, v Verified) string {
-	for _, target := range []string{"full_name", "name"} {
-		if src, ok := p.Config.AttributeMapping[target]; ok && v.Attributes[src] != "" {
-			return v.Attributes[src]
-		}
 	}
 	return ""
 }
@@ -395,6 +387,10 @@ func OutcomeReason(err error) string {
 		return "not_entitled"
 	case errors.Is(err, ErrAccountDisabled):
 		return "principal_deactivated"
+	case errors.Is(err, ErrNotOrgMember):
+		return "membership_required"
+	case errors.Is(err, ErrIdentityAmbiguous):
+		return "identity_conflict"
 	case errors.Is(err, ErrEmailMissing), errors.Is(err, ErrEmailMalformed), errors.Is(err, ErrInvalidEmailAddress):
 		return "malformed"
 	}

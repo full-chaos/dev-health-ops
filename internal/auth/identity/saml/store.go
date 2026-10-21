@@ -89,25 +89,21 @@ type EmailOwner struct {
 	Method      string
 }
 
-// NewFederatedUser is the account ProvisionFederated creates. AuditRequestID
-// is the server-issued request id for the audit actor (nil without one).
-type NewFederatedUser struct {
-	Email          string
-	DisplayName    string
-	Identity       Identity
-	AuditRequestID *string
-}
-
 var (
 	// ErrSignupNotAvailable: new accounts are not created by auth-service until
 	// it owns the users aggregate. The identity store returns it (wrapped or not).
 	ErrSignupNotAvailable = identity.ErrSignupNotAvailable
-	// ErrIdentityTaken: the identity belongs to another principal.
-	ErrIdentityTaken = identity.ErrIdentityTaken
 	// ErrEmailTaken: the email belongs to an existing account.
 	ErrEmailTaken = identity.ErrEmailTaken
 	// ErrInvalidEmailAddress: the asserted email is not an address.
 	ErrInvalidEmailAddress = identity.ErrInvalidEmail
+	// ErrNotOrgMember: the account is not a member of the provider's
+	// organization, or the sign-in would need a new account (none is created
+	// on sign-in).
+	ErrNotOrgMember = errors.New("saml: the account is not a member of the provider organization")
+	// ErrIdentityAmbiguous: more than one go-api account, in any
+	// organization, carries the NameID.
+	ErrIdentityAmbiguous = errors.New("saml: more than one account carries the NameID")
 )
 
 // Store is the identity store this package needs (internal/auth/identity).
@@ -115,13 +111,12 @@ var (
 type Store interface {
 	// IdentityBySubject resolves the identity key only. With legacy set, a
 	// miss also tries the go-api account and, on a hit, projects the identity
-	// under audit.Commit. It never matches by email.
+	// under audit.Commit. It never matches by email. A go-api account outside
+	// the provider's organization is ErrNotOrgMember; more than one go-api
+	// account carrying the NameID is ErrIdentityAmbiguous.
 	IdentityBySubject(ctx context.Context, id Identity, legacy *LegacyMatch) (Principal, bool, error)
 	NormalizeEmail(raw string) (string, error)
 	PrincipalByEmail(ctx context.Context, email string) (EmailOwner, bool, error)
-	// ProvisionFederated creates the principal, user and identity in one
-	// audited transaction, or returns ErrSignupNotAvailable.
-	ProvisionFederated(ctx context.Context, user NewFederatedUser) (uuid.UUID, error)
 }
 
 // Memberships reads organization membership (go-api writes it until Wave 4).
@@ -129,8 +124,12 @@ type Memberships interface {
 	Member(ctx context.Context, principalID, orgID uuid.UUID) (bool, error)
 }
 
-// MembershipJIT is the seam for organization membership on first sign-in.
-// go-api owns membership writes until Wave 4; a nil MembershipJIT adds none.
+// MembershipJIT is the seam for organization membership on sign-in. go-api
+// owns membership writes until Wave 4; with a nil MembershipJIT no membership
+// is added and a sign-in that needs one is refused before any write. No
+// account is created on sign-in until an account and its membership can be
+// written in one transaction.
 type MembershipJIT interface {
+	// JoinOnSignIn adds an existing account to the provider's organization.
 	JoinOnSignIn(ctx context.Context, principalID uuid.UUID, p Provider) error
 }

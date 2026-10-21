@@ -16,8 +16,8 @@ automated proof, and explicit completion action.
 | CHAOS-2317 | Regression baseline | `docs/user-guide/how-to-read-dev-health.md` | Language and terminology guard | Retain regression coverage |
 | CHAOS-2318 | Regression baseline | `docs/user-guide/journeys/investment-view.md` | Screenshot and link crawl | Retain regression coverage |
 | CHAOS-2319 | Regression baseline | `docs/publication.yml` | Publication manifest classification test | Retain regression coverage |
-| CHAOS-2320 | Regression baseline | `scripts/gen_taxonomy_docs.py` | Idempotent generator test | Retain regression coverage |
-| CHAOS-2321 | Regression baseline | `scripts/check_investment_docs_drift.py` | Stale-key negative test | Retain regression coverage |
+| CHAOS-2320 | Regression baseline | `cigate docs gen-taxonomy` (`internal/cigates/docstools`; the Python `scripts/gen_taxonomy_docs.py` is deleted) | Idempotent generator test (`internal/cigates/docstools` `TestCLIOutputParityRecordedPair`, `gen-taxonomy-idempotent`; the Python `tests/docs/test_investment_drift.py` is deleted) | Retain regression coverage |
+| CHAOS-2321 | Regression baseline | `cigate docs check-investment-drift` (`internal/cigates/docstools`; the Python `scripts/check_investment_docs_drift.py` is deleted) | Stale-key negative test (`internal/cigates/docstools` `check-investment-drift-*` parity cases; the Python `tests/docs/test_investment_drift.py` is deleted) | Retain regression coverage |
 | CHAOS-2322 | Regression baseline | `scripts/check_docs_links.py` | Built-site and cross-repository link tests | Retain regression coverage |
 | CHAOS-2323 | Regression baseline | `docs/publication.yml` | Canonical terminology guard | Retain regression coverage |
 | CHAOS-2324 | Regression baseline | `docs/llm/categorization-contract.md` | Documentation/config parity test | Retain regression coverage |

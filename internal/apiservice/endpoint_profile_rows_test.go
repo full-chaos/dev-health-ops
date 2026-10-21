@@ -241,6 +241,7 @@ func TestEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 	}
 	for _, row := range loadGoAPIRows(t) {
 		walk(row["primary_validator"], rowKey(t, row)+"/primary_validator")
+		walk(row["reachable_validators"], rowKey(t, row)+"/reachable_validators")
 	}
 	if checked < 200 {
 		t.Fatalf("only %d anchors were checked: the walk stopped seeing them", checked)
@@ -300,5 +301,73 @@ func TestEveryGuardedRowRefusesAnAnonymousCaller(t *testing.T) {
 	}
 	if checked < 150 {
 		t.Fatalf("only %d guarded rows were probed", checked)
+	}
+}
+
+// scopeValidators are the two middlewares the api listener wraps around every
+// route (service.go configureWith): OrgScope and Impersonation authenticate any
+// Bearer token a request carries, whatever the route's own guard is, so they
+// are validators that can observe the credential on every api-listener row. The
+// internal and billing-edge listeners install neither.
+var scopeValidators = []string{"func (s *Scope) OrgScope", "func (s *Scope) Impersonation"}
+
+func TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators(t *testing.T) {
+	checked := 0
+	for _, row := range loadGoAPIRows(t) {
+		key := rowKey(t, row)
+		reachable, _ := row["reachable_validators"].([]any)
+		if !strings.HasSuffix(key, "@api") {
+			if len(reachable) != 0 {
+				t.Errorf("%s: a listener without the scope middlewares lists %d reachable validators", key, len(reachable))
+			}
+			continue
+		}
+		notes := map[string]bool{}
+		for _, item := range reachable {
+			entry := item.(map[string]any)
+			anchor, _ := entry["anchor"].(map[string]any)
+			note, _ := anchor["note"].(string)
+			notes[note] = true
+			if entry["reachable_but_not_owner"] != true || entry["is_intended_validator"] != false {
+				t.Errorf("%s: reachable validator %q must be marked reachable_but_not_owner and not intended: %v", key, note, entry)
+			}
+		}
+		for _, want := range scopeValidators {
+			if !notes[want] {
+				t.Errorf("%s: no reachable validator anchored at %q", key, want)
+			}
+		}
+		checked++
+	}
+	if checked < 200 {
+		t.Fatalf("only %d api-listener rows were checked", checked)
+	}
+}
+
+// TestTheScopeMiddlewaresAreWrappedAroundTheAPIListener pins the fact the
+// reachable validators state: the api listener is built with OrgScope and
+// Impersonation, the internal and billing-edge listeners with neither.
+func TestTheScopeMiddlewaresAreWrappedAroundTheAPIListener(t *testing.T) {
+	raw, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "protected.scope.OrgScope, protected.scope.Impersonation}") {
+		t.Fatal("the api listener no longer installs OrgScope and Impersonation: the rows' reachable validators are stale")
+	}
+	if !strings.Contains(text, "NewServer(cfg, logger, Routes(deps, logger), scope...)") {
+		t.Fatal("the api listener is no longer built with the scope middlewares")
+	}
+	for _, listener := range []string{"func NewInternalServer", "func NewEdgeServer"} {
+		start := strings.Index(text, listener)
+		if start < 0 {
+			t.Fatalf("%s not found", listener)
+		}
+		end := strings.Index(text[start:], "\n}\n")
+		body := text[start : start+end]
+		if strings.Contains(body, "OrgScope") || strings.Contains(body, "Impersonation") || strings.Contains(body, "scope") {
+			t.Errorf("%s now takes scope middleware: the rows' reachable validators for its listener are stale", listener)
+		}
 	}
 }

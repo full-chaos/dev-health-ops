@@ -78,23 +78,13 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		if !row.AutoProvision {
 			return nil, nil, ssoErr("User not found and auto-provisioning disabled")
 		}
-		newID := uuid.New()
-		var fullNamePtr, externalIDPtr *string
-		if name != "" {
-			fullNamePtr = &name
-		}
-		if externalID != "" {
-			externalIDPtr = &externalID
-		}
-		if _, err := h.Pool.Exec(ctx, `INSERT INTO users
-	(id, email, full_name, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version,
-	 last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, true, true, false, 0, $6, $6, $6)`,
-			newID, email, fullNamePtr, authProviderValue, externalIDPtr, now); err != nil {
-			return nil, nil, err
-		}
-		return &provisionedUser{id: newID, email: email, fullName: fullNamePtr, tokenVersion: 0}, nil, nil
+		return nil, nil, errMembershipRequired
 	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	membership, err := h.requireMembership(ctx, id, row.OrgID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -105,29 +95,6 @@ VALUES ($1, $2, $3, $4, $5, true, true, false, 0, $6, $6, $6)`,
 	}
 	if _, err := h.Pool.Exec(ctx, `UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3 WHERE id = $1::uuid`,
 		id, newFullName, now); err != nil {
-		return nil, nil, err
-	}
-
-	providerOrgID, err := pythonparity.ParseUUID(row.OrgID)
-	if err != nil {
-		return nil, nil, err
-	}
-	var membership *provisionedMembership
-	var membershipOrgID uuid.UUID
-	var role *string
-	err = h.Pool.QueryRow(ctx, `SELECT org_id, role FROM memberships WHERE user_id = $1::uuid AND org_id = $2::uuid`,
-		id, providerOrgID).Scan(&membershipOrgID, &role)
-	switch {
-	case err == nil:
-		roleText := "member"
-		if role != nil {
-			roleText = *role
-		}
-		membership = &provisionedMembership{orgID: membershipOrgID, role: roleText}
-	case errors.Is(err, pgx.ErrNoRows):
-		// No membership: onboarding required, matching Python's own log
-		// line and nil membership.
-	default:
 		return nil, nil, err
 	}
 
@@ -183,5 +150,39 @@ func identityConflictDetail() *pyjson.Object {
 	detail := pyjson.NewObject()
 	detail.Set("message", "This account is bound to another sign-in identity")
 	detail.Set("reason", "identity_conflict")
+	return detail
+}
+
+// errMembershipRequired: the account has no membership in the provider's
+// organization; an organization's SSO never issues a session without one.
+var errMembershipRequired = errors.New("membership required")
+
+func (h handlers) requireMembership(ctx context.Context, userID uuid.UUID, orgID string) (*provisionedMembership, error) {
+	providerOrgID, err := pythonparity.ParseUUID(orgID)
+	if err != nil {
+		return nil, err
+	}
+	var membershipOrgID uuid.UUID
+	var role *string
+	err = h.Pool.QueryRow(ctx, `SELECT org_id, role FROM memberships WHERE user_id = $1::uuid AND org_id = $2::uuid`,
+		userID, providerOrgID).Scan(&membershipOrgID, &role)
+	switch {
+	case err == nil:
+		roleText := "member"
+		if role != nil {
+			roleText = *role
+		}
+		return &provisionedMembership{orgID: membershipOrgID, role: roleText}, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, errMembershipRequired
+	default:
+		return nil, err
+	}
+}
+
+func membershipRequiredDetail() *pyjson.Object {
+	detail := pyjson.NewObject()
+	detail.Set("message", "A membership in this organization is required")
+	detail.Set("reason", "membership_required")
 	return detail
 }

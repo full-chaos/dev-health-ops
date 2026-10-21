@@ -206,5 +206,4 @@ test\:live-e2e:
 	@./ci/run_tests.sh live-e2e
 
 install:
-	pip install -r requirements.txt
 	lefthook install

@@ -15,6 +15,10 @@ import (
 // Python toolchain is installed, no script it reaches starts a Python interpreter, and its path filter does not
 // trigger on Python-only files.
 
+const e2eWorkflow = "live-e2e.yml"
+
+var e2eJobs = []string{"live-e2e", "metrics-executed-proof"}
+
 var (
 	pythonUseRe      = regexp.MustCompile(`\bpython3?\b|\brun_python\b|PY_PROG|py_program|\.py\b|\buv\b|\bpipx?3?\b|\.venv|PYTHONPATH|UV_`)
 	pythonOnlyFilter = regexp.MustCompile(`^(pyproject\.toml|requirements.*\.txt|uv\.lock|pytest\.ini|alembic\.ini|Makefile|tests/.*)$`)

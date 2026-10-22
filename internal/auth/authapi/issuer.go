@@ -12,6 +12,7 @@
 package authapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -25,9 +26,12 @@ import (
 // AccessExpiresIn is refresh-response.v1 expires_in: go-api's accessExpiresIn.
 const AccessExpiresIn = int(edgetoken.AccessLifetime / time.Second)
 
-// Issuer mints and verifies the compatibility access token.
+// Issuer verifies the compatibility access token and mints exactly one class
+// of access token: the HS256 compatibility token (signer set) or the EdDSA
+// access-token.v1 token (eddsa set). The constructors set one, never both.
 type Issuer struct {
 	signer   *edgetoken.Signer
+	eddsa    *eddsaMinter
 	verifier *edgetoken.Verifier
 	now      func() time.Time
 }
@@ -57,14 +61,28 @@ type Grant struct {
 // errIssue wraps a failure to mint an access token.
 var errIssue = errors.New("authapi: access token could not be minted")
 
-// Access mints the access token of grant: go-api's claims (create_access_token,
-// internal/api/session/tokens.go accessClaims) plus sid.
-func (i *Issuer) Access(grant Grant) (string, error) {
+// Access mints the access token of grant in the Issuer's one class. A failure
+// of that class is final: there is no fallback to the other class.
+func (i *Issuer) Access(ctx context.Context, grant Grant) (string, error) {
 	// go-api and query-api end a token when its session is revoked (the sid
 	// check in policy.Authenticator), so no token is minted without one.
 	if grant.SessionID == uuid.Nil || grant.PrincipalID == uuid.Nil {
 		return "", fmt.Errorf("%w: a grant needs its principal and its session", errIssue)
 	}
+	switch {
+	case i.signer != nil && i.eddsa != nil:
+		return "", fmt.Errorf("%w: both access token classes are configured", errIssue)
+	case i.eddsa != nil:
+		return i.eddsa.mint(ctx, grant, i.now())
+	case i.signer == nil:
+		return "", fmt.Errorf("%w: no access token class is configured", errIssue)
+	}
+	return i.hs256Access(grant)
+}
+
+// hs256Access mints go-api's claims (create_access_token,
+// internal/api/session/tokens.go accessClaims) plus sid.
+func (i *Issuer) hs256Access(grant Grant) (string, error) {
 	org := ""
 	if grant.OrganizationID != nil {
 		org = grant.OrganizationID.String()

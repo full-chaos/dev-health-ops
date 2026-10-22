@@ -206,7 +206,7 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
 		return
 	}
-	access, err := h.Issuer.Access(Grant{
+	access, err := h.Issuer.Access(ctx, Grant{
 		PrincipalID: req.principal, OrganizationID: req.organization, Role: role, SessionID: issued.Session.ID, User: user,
 	})
 	if err != nil {

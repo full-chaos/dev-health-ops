@@ -16,7 +16,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 66,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -185,7 +185,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 66,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -237,7 +237,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 66,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -323,7 +323,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 66,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -381,7 +381,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 66,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },

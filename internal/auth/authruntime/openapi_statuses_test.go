@@ -88,7 +88,7 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bearer, err := issuer.Access(authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New(), Role: "member"})
+	bearer, err := issuer.Access(context.Background(), authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New(), Role: "member"})
 	if err != nil {
 		t.Fatal(err)
 	}

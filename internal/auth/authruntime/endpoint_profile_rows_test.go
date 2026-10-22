@@ -90,7 +90,7 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}

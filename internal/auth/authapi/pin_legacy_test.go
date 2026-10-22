@@ -1,6 +1,7 @@
 package authapi
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -150,7 +151,7 @@ func TestCompatRefreshRefusesAGoAPIRefreshTokenItCannotVerify(t *testing.T) {
 			return legacyToken(t, f, f.org.String(), "another-key-0123456789abcdef-0123456")
 		},
 		"an access token": func(f *compatFixture) string {
-			access, err := f.issuer.Access(Grant{PrincipalID: f.principal, SessionID: f.record.ID, User: f.users.users[f.principal]})
+			access, err := f.issuer.Access(context.Background(), Grant{PrincipalID: f.principal, SessionID: f.record.ID, User: f.users.users[f.principal]})
 			if err != nil {
 				t.Fatal(err)
 			}

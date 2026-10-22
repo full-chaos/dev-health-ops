@@ -186,6 +186,11 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newFixtureWith(t, issuer)
+}
+
+func newFixtureWith(t *testing.T, issuer *Issuer) *fixture {
+	t.Helper()
 	principal, org := uuid.New(), uuid.New()
 	now := time.Now().UTC()
 	pin := int64(4)
@@ -233,7 +238,7 @@ func (f *fixture) do(method, path, body string, header map[string]string) *httpt
 }
 
 func (f *fixture) bearer(grant Grant) map[string]string {
-	token, err := f.issuer.Access(grant)
+	token, err := f.issuer.Access(context.Background(), grant)
 	if err != nil {
 		f.t.Fatal(err)
 	}

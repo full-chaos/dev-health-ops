@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
 func str(s string) *string { return &s }
@@ -230,7 +231,8 @@ func TestMapCarriesSuperuserTokenVersionAndLastLogin(t *testing.T) {
 }
 
 func TestPlatformAdminRoleNameIsTheCatalogName(t *testing.T) {
-	if identity.PlatformAdminRole != "platform_admin" {
-		t.Fatal("role key differs from contracts/auth/v1/vocabulary/roles.v1.json")
+	role, err := policycatalog.Default().Role(identity.PlatformAdminRole)
+	if err != nil || role.Scope != policycatalog.ScopePlatform {
+		t.Fatalf("role key is not a platform role of the catalog: %+v %v", role, err)
 	}
 }

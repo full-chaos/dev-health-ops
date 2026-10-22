@@ -518,6 +518,7 @@ services:
       # CLICKHOUSE_DB to another name must mount its own file, or go-api is
       # never ready.
       - ./docker/clickhouse-users.d/dho_api_ch.xml:/etc/clickhouse-server/users.d/dho_api_ch.xml:ro
+      - ./docker/clickhouse-config.d/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
     healthcheck:
       test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8123/ping" ]
       interval: 10s

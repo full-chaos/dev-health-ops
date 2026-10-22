@@ -314,6 +314,7 @@ internal/httpguard	redirect_sites_test.go
 internal/identityalias	resolver.go
 internal/ingressplanes	checkedin_test.go
 internal/ingressplanes	compose_stack_test.go
+internal/ingressplanes	compose_system_logs_test.go
 internal/ingressplanes	contract.go
 internal/ingressplanes	contract_test.go
 internal/ingressplanes	real_nginx_integration_test.go

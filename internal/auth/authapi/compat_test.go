@@ -1097,3 +1097,47 @@ func TestAnEmailCollisionsRefusalRowNamesTheAccountThatHoldsTheEmail(t *testing.
 		t.Fatalf("audit row %+v, want the account that holds the email and its organization", event)
 	}
 }
+
+func TestCompatSocialLoginWithoutAMembershipReturnsNoUsableRefreshCredential(t *testing.T) {
+	f, fake := newSocialFixture(t)
+	delete(f.users.memberships, f.principal)
+	state := f.users.users[f.principal]
+	state.IsSuperuser = false
+	f.users.users[f.principal] = state
+	f.buildCompat()
+	fake.result = social.ExchangeResult{PrincipalID: f.principal, Created: true}
+	response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"gho_test"}`, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", response.Code, response.Body)
+	}
+	body := decodeObject(t, response.Body.Bytes())
+	created := f.sessions.created[0]
+	refresh, _ := body["refresh_token"].(string)
+	if body["needs_onboarding"] != true || created.org != nil {
+		t.Fatalf("needs_onboarding %v, session org %v", body["needs_onboarding"], created.org)
+	}
+	if refresh == created.issued.Credential.Reveal() || !refreshCredentialPattern.MatchString(refresh) {
+		t.Fatalf("refresh_token %q: want an unstored credential-shaped value, not the session's", refresh)
+	}
+}
+
+func TestCompatSocialLoginOfAMemberOrASuperuserKeepsTheSessionCredential(t *testing.T) {
+	for name, superuser := range map[string]bool{"member": false, "org-less superuser": true} {
+		t.Run(name, func(t *testing.T) {
+			f, fake := newSocialFixture(t)
+			if superuser {
+				delete(f.users.memberships, f.principal)
+			}
+			state := f.users.users[f.principal]
+			state.IsSuperuser = superuser
+			f.users.users[f.principal] = state
+			f.buildCompat()
+			fake.result = social.ExchangeResult{PrincipalID: f.principal}
+			response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"gho_test"}`, nil)
+			body := decodeObject(t, response.Body.Bytes())
+			if body["refresh_token"] != f.sessions.created[0].issued.Credential.Reveal() {
+				t.Fatalf("refresh_token is not the session's credential: %s", response.Body)
+			}
+		})
+	}
+}

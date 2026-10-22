@@ -17,9 +17,12 @@
 # Probes run through every phase: a read probe on go-api's public Service (every 0.25 s), a grant probe
 # on refresh_tokens (every second), and a pod sampler (every second). Each phase reports the old-pod
 # window: from the REVOKE (or re-GRANT) commit to the last old pod gone, with the read failures and the
-# seconds with no Ready go-api pod. A read failure is a FINDING, printed and put in the job summary;
-# it fails the job only with REHEARSAL_STRICT=1. A broken mechanism (an end state not Ready, a grant not
-# applied) always fails.
+# seconds with no Ready go-api pod. A CONTROL upgrade (a pod annotation, no flag change) runs first so the
+# read-drop shape of a plain pod handover is on record beside the flip. Read drops are a named class (F-A):
+# per upgrade status 000 only, at most 4 probes, inside one window of 1 s at the pod handover; anything else
+# (a 5xx, another answer, more probes, outside the handover) is a FINDING, and REHEARSAL_STRICT=1 fails the
+# job on a FINDING. `helm rollback` not re-granting is a KNOWN finding (F-B), recorded, not failed. A broken
+# mechanism (an end state not Ready, a grant not applied) always fails.
 #
 # CI only (needs docker, kind, kubectl, helm). Test Secrets are made in the cluster by this script and
 # die with it. The two-upgrade form of the flip (migrate first, flag second) is NOT run: the river hook
@@ -183,9 +186,16 @@ note() {
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf -- '- %s\n' "$1" >>"${GITHUB_STEP_SUMMARY}"; fi
 }
 
-# analyse <phase> <t0> <t1> <revoke|regrant>: the old-pod window and the probe results of one phase.
+# The read-drop class (F-A), as ruled: per upgrade, failures are status 000 only (no 5xx, no answer
+# other than the baseline answer), at most 4 probes, inside ONE window of at most 1 s that overlaps the pod
+# handover (first new pod Ready .. last old pod gone, 2 s slack). Anything else is a hard finding.
+ROWS=()
+EXPECT_CODE=""
+
+# analyse <phase> <t0> <t1> <revoke|regrant|none>: the old-pod window and the probe results of one phase.
+# kind none: no grant change is expected in the phase (the control, the helm rollback).
 analyse() {
-  local name="$1" t0="$2" t1="$3" kind="$4" end change old_gone first_new reads fails first_fail last_fail zero trans
+  local name="$1" t0="$2" t1="$3" kind="$4" end change old_gone first_new reads fails five wrong first_fail last_fail zero trans before lo hi class window
   end=$((t1 + 8))
   K logs probe-read >"${WORK}/read.log" 2>/dev/null || true
   K logs probe-grant >"${WORK}/grant.log" 2>/dev/null || true
@@ -193,9 +203,12 @@ analyse() {
   if [ "${kind}" = regrant ]; then want="t"; fi
   change="$(awk -v a="${t0}" -v w="${want}" '$1>=a && $2==w {print $1; exit}' "${WORK}/grant.log")"
   trans="$(awk -v a="${t0}" -v b="${end}" '$1>=a && $1<=b && $2 ~ /^[tf]$/ {if (p != "" && $2 != p) n++; p=$2} END {print n+0}' "${WORK}/grant.log")"
-  read -r reads fails first_fail last_fail < <(awk -v a="${t0}" -v b="${end}" '$1>=a && $1<=b {n++; if ($2=="000" || $2>=500) {f++; if (!ff) ff=$1; lf=$1}} END {print n+0, f+0, ff+0, lf+0}' "${WORK}/read.log")
-  # Old pods are the ones listed at the last sample before the phase began.
-  local before
+  read -r reads fails five wrong first_fail last_fail < <(awk -v a="${t0}" -v b="${end}" -v ok="${EXPECT_CODE}" '
+    $1>=a && $1<=b {n++
+      if ($2=="000") {f++; if (!ff) ff=$1; lf=$1}
+      else if ($2>=500) {v++; if (!ff) ff=$1; lf=$1}
+      else if ($2!=ok) {w++; if (!ff) ff=$1; lf=$1}}
+    END {print n+0, f+0, v+0, w+0, ff+0, lf+0}' "${WORK}/read.log")
   before="$(awk -v a="${t0}" '$1<a {t=$1} END {print t}' "${WORK}/pods.log")"
   old_gone="$(awk -v a="${t0}" -v b="${end}" -v before="${before}" '
     $1==before && $2!="_tick" {old[$2]=1}
@@ -208,20 +221,40 @@ analyse() {
     $1>=a && $1<=b {seen[$1]=1; if ($2!="_tick" && $3=="True") ready[$1]=1}
     END {for (s in seen) if (!(s in ready)) n++; print n+0}' "${WORK}/pods.log")"
   printf '\n=== %s ===\n' "${name}"
-  note "${name}: phase ${t0}..${t1} (${kind}); ${kind} committed at ${change:-never}"
-  if [ -n "${change}" ]; then
-    note "${name}: hook start to ${kind} commit: $((change - t0)) s"
-    if [ "${old_gone}" -gt 0 ]; then note "${name}: OLD-POD WINDOW (${kind} commit to last old pod gone): $((old_gone - change)) s"; fi
-    if [ -n "${first_new}" ]; then note "${name}: ${kind} commit to first new pod Ready: $((first_new - change)) s"; fi
+  note "${name}: phase ${t0}..${t1} (${kind})"
+  window="n/a"
+  if [ "${kind}" != none ]; then
+    note "${name}: ${kind} committed at ${change:-never}"
+    if [ -n "${change}" ]; then
+      note "${name}: hook start to ${kind} commit: $((change - t0)) s"
+      if [ "${old_gone}" -gt 0 ]; then window="$((old_gone - change)) s"; note "${name}: OLD-POD WINDOW (${kind} commit to last old pod gone): ${window}"; fi
+      if [ -n "${first_new}" ]; then note "${name}: ${kind} commit to first new pod Ready: $((first_new - change)) s"; fi
+    fi
+  elif [ "${old_gone}" -gt 0 ] && [ -n "${first_new}" ]; then
+    window="$((old_gone - first_new)) s handover"
+    note "${name}: pod handover (first new pod Ready to last old pod gone): ${window}"
   fi
   note "${name}: seconds with no Ready go-api pod: ${zero}"
-  note "${name}: read probes ${reads}, failed ${fails} (000 or 5xx), first ${first_fail} last ${last_fail}"
-  note "${name}: grant transitions in the phase: ${trans}"
-  if [ "${fails}" -gt 0 ]; then
-    finding "${name}: ${fails} of ${reads} read probes failed between ${first_fail} and ${last_fail}"
+  note "${name}: read probes ${reads}: status 000 ${fails}, 5xx ${five}, other answer ${wrong} (baseline answer ${EXPECT_CODE}); first ${first_fail} last ${last_fail}"
+  class="clean"
+  if [ $((fails + five + wrong)) -gt 0 ]; then
+    lo="${first_new:-${old_gone}}"
+    hi="${old_gone}"
+    if [ "${five}" -gt 0 ] || [ "${wrong}" -gt 0 ] || [ "${fails}" -gt 4 ] || [ $((last_fail - first_fail)) -gt 1 ] \
+      || [ "${hi}" -eq 0 ] || [ "${first_fail}" -lt $((lo - 2)) ] || [ "${last_fail}" -gt $((hi + 2)) ]; then
+      class="HARD"
+      finding "${name}: read drops outside the named class F-A: 000=${fails} 5xx=${five} other=${wrong}, ${first_fail}..${last_fail}, handover ${lo}..${hi}"
+    else
+      class="F-A"
+      note "${name}: NAMED CLASS F-A: ${fails} probe(s) with status 000 inside one window of $((last_fail - first_fail + 1)) s at the pod handover (${lo}..${hi})"
+    fi
   fi
-  if [ "${trans}" -gt 1 ]; then finding "${name}: the refresh_tokens grant changed ${trans} times (want 1)"; fi
-  if [ -z "${change}" ]; then die "${name}: the ${kind} never showed in the grant probe"; fi
+  ROWS+=("| ${name} | ${window} | ${zero} | ${fails} / ${five} / ${wrong} | ${class} |")
+  if [ "${kind}" != none ]; then
+    note "${name}: grant transitions in the phase: ${trans}"
+    if [ "${trans}" -gt 1 ]; then finding "${name}: the refresh_tokens grant changed ${trans} times (want 1)"; fi
+    if [ -z "${change}" ]; then die "${name}: the ${kind} never showed in the grant probe"; fi
+  fi
 }
 
 # phase <name> <revoke|regrant> <helm args...>
@@ -267,6 +300,17 @@ K wait --for=condition=Ready pod/probe-read pod/probe-grant --timeout=180s
 sample_pods &
 SAMPLER_PID=$!
 sleep 5
+EXPECT_CODE="$(K logs probe-read | awk '{print $2}' | sort | uniq -c | sort -rn | awk 'NR==1 {print $2}')"
+printf 'read probe baseline answer: %s\n' "${EXPECT_CODE}"
+case "${EXPECT_CODE}" in 000 | 5??) die "the read probe path does not answer (${EXPECT_CODE})" ;; esac
+
+printf 'step 3b: CONTROL: an upgrade that rolls go-api with no flag change (a pod annotation only)\n'
+T0="$(date +%s)"
+helm upgrade "${HELM_BASE[@]}" --set goApi.podAnnotations.rehearsal=control --wait --timeout 8m
+T1="$(date +%s)"
+sleep 10
+analyse CONTROL "${T0}" "${T1}" none
+assert_state CONTROL unset t t
 
 # --- prep, as the chris-word flip steps do it, but in the cluster only ----------------------------------
 printf 'step 4: the successor-key Secret and the issuer token (test values, this cluster only)\n'
@@ -317,8 +361,8 @@ sleep 10
 RB_INSERT="$(priv insert)"
 note "ROLLBACK_HELM: helm rollback rc=${ROLLBACK_RC}; api role INSERT on refresh_tokens afterwards: ${RB_INSERT}; go-api env AUTH_PROXY_SESSIONS: $(go_api_env); go-api ready replicas: $(go_api_ready)"
 if [ "${RB_INSERT}" = f ]; then
-  finding "ROLLBACK_HELM: helm rollback alone did not re-GRANT (the hooks run on pre-install and pre-upgrade only); a flag-off upgrade is needed after it"
-  analyse ROLLBACK_HELM "${T0}" "${T1}" revoke
+  note "KNOWN FINDING F-B: helm rollback alone did not re-GRANT (the hooks run on pre-install and pre-upgrade only): the prod rollback is a helm upgrade with the flag off, never helm rollback"
+  analyse ROLLBACK_HELM "${T0}" "${T1}" none
   printf 'step 10: FIXUP: helm upgrade, sessions=false, after the helm rollback\n'
   phase FIXUP regrant --set goApi.authProxy.sessions=false
   assert_state FIXUP unset t t
@@ -335,8 +379,17 @@ SAMPLER_PID=""
 printf 'step 11: helm uninstall leaves no object of the release behind\n'
 K delete pod probe-read probe-grant --ignore-not-found --wait=true >/dev/null
 helm uninstall "${RELEASE}" --kube-context "kind-${CLUSTER}" --namespace "${NS}" --wait
-left="$(K get deploy,svc,job,configmap -l "app.kubernetes.io/instance=${RELEASE}" -o name || true)"
+release_objects="$(K get deploy,svc,job,configmap -l "app.kubernetes.io/instance=${RELEASE}" -o json)"
+hooks="$(jq -r '.items[]|select((.metadata.annotations // {})["helm.sh/hook"] != null)|(.kind|ascii_downcase)+"/"+.metadata.name' <<<"${release_objects}")"
+left="$(jq -r '.items[]|select((.metadata.annotations // {})["helm.sh/hook"] == null)|(.kind|ascii_downcase)+"/"+.metadata.name' <<<"${release_objects}")"
+printf 'hook objects helm does not delete (excluded from the check): [%s]\n' "$(tr '\n' ' ' <<<"${hooks}")"
 [ -z "${left}" ] || die "objects of the release remain after uninstall: ${left}"
 
+printf '\n| phase | old-pod window | s with no Ready pod | reads 000 / 5xx / other | class |\n|---|---|---|---|---|\n'
+printf '%s\n' "${ROWS[@]}"
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  printf '\n| phase | old-pod window | s with no Ready pod | reads 000 / 5xx / other | class |\n|---|---|---|---|---|\n' >>"${GITHUB_STEP_SUMMARY}"
+  printf '%s\n' "${ROWS[@]}" >>"${GITHUB_STEP_SUMMARY}"
+fi
 printf '\nREHEARSAL DONE: %s finding(s)\n' "${FINDINGS}"
 if [ "${STRICT}" = 1 ] && [ "${FINDINGS}" -gt 0 ]; then die "REHEARSAL_STRICT=1 and ${FINDINGS} finding(s)"; fi

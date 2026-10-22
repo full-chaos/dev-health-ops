@@ -120,8 +120,9 @@ func (o Outcome) Valid() bool {
 //
 // Attributes must carry no credential material. The lineage's naming guard
 // does not inspect jsonb contents, so that rule is the writer's to keep and
-// PR 2's allowlist is what will enforce it (G-65). The row's client_ip is the
-// client address bound to the context (internal/auth/clientaddr), or NULL.
+// PR 2's allowlist is what will enforce it (G-65). The row's client_ip and
+// user_agent are the client address and user agent bound to the context
+// (internal/auth/clientaddr), or NULL.
 type AuditEvent struct {
 	EventType          string
 	Outcome            Outcome
@@ -167,8 +168,9 @@ type OutboxEvent struct {
 // provisioning stream has no session aggregate).
 const OffStreamSessionLifecycle = "session_lifecycle"
 
-// OffStreamLinkCredentialLifecycle marks the consume or supersede of a
-// single-use link credential: the credential's own lifecycle is not a
+// OffStreamLinkCredentialLifecycle marks the consume of a single-use link
+// credential (a reissue deletes the prior unconsumed rows in the issuing
+// transaction, with no audit.Commit of its own): the credential's own lifecycle is not a
 // provisioning event. The account change it authorizes (a verified e-mail, a
 // new password) is a provisioning event written by the identity store.
 const OffStreamLinkCredentialLifecycle = "link_credential_lifecycle"
@@ -542,14 +544,24 @@ func insertAuditEvent(ctx context.Context, tx pgx.Tx, schema authschema.Validate
 	_, err = tx.Exec(ctx, `
 		INSERT INTO `+authschema.Quote(schema)+`.security_audit_events
 		    (event_type, outcome, actor_principal_id, subject_principal_id,
-		     organization_id, policy_revision, attributes, request_id, client_ip)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::inet)`,
+		     organization_id, policy_revision, attributes, request_id, client_ip, user_agent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::inet, $10)`,
 		a.EventType, string(a.Outcome), a.ActorPrincipalID, a.SubjectPrincipalID,
-		a.OrganizationID, a.PolicyRevision, attributes, a.RequestID, clientaddr.Text(ctx))
+		a.OrganizationID, a.PolicyRevision, attributes, a.RequestID, clientaddr.Text(ctx), userAgent(ctx))
 	if err != nil {
 		return fmt.Errorf("%w: inserting the audit row: %w", ErrMutationFailed, err)
 	}
 	return nil
+}
+
+// userAgent is the request's user agent bound to ctx (the value the session
+// records too), or nil.
+func userAgent(ctx context.Context) *string {
+	agent, ok := clientaddr.UserAgent(ctx)
+	if !ok {
+		return nil
+	}
+	return &agent
 }
 
 func orEmpty(m map[string]any) map[string]any {

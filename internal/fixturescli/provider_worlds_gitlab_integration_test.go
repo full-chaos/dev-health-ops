@@ -451,5 +451,8 @@ var gitlabWorld = providerWorld{
 		{Kind: "sync", Provider: "gitlab", Credential: gitlabToken, DepthDays: 180, Sources: gitlabSources,
 			Datasets: []string{"repo-metadata", "prs", "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},
 		{Kind: "work_graph"},
+		// The next sync of the catalog, after the work is synced: each link starts at its evidence (CHAOS-10521).
+		{Kind: "team_catalog", Provider: "gitlab", Credential: gitlabToken, Sources: gitlabSources,
+			SyncOptions: map[string]any{"group_path": gitlabRoot}, Phase: "second"},
 	},
 }

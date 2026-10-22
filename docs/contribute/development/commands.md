@@ -1,6 +1,6 @@
 ---
 page_id: con-commands
-summary: Run the repository's Python, Go, container, documentation, migration, fixture, and validation commands from a source checkout.
+summary: Run the repository's Go, container, documentation, migration, fixture, and validation commands from a source checkout.
 content_type: task-guide
 owner: engineering
 source_of_truth:
@@ -25,18 +25,17 @@ The `dho` CLI is a Go binary. A Go toolchain is required.
 go build -o dho ./cmd/dho && ./dho help
 ```
 
-## Format, lint, and type-check Python
+## Format and vet Go
 
 ```bash
-ruff format --check .
-ruff check .
+gofmt -l .
+go vet ./...
 ```
 
-Apply formatting or safe lint fixes deliberately, then review the diff:
+Apply formatting deliberately, then review the diff:
 
 ```bash
-ruff format .
-ruff check --fix .
+gofmt -w .
 git diff --check
 ```
 
@@ -55,11 +54,11 @@ The live backend e2e harness:
 make test:live-e2e
 ```
 
-Use `pytest` directly for a narrow development loop on the remaining Python tests:
+Use `go test` directly for a narrow development loop on one package or test:
 
 ```bash
-pytest tests/path/to/test_module.py -q
-pytest tests/path/to/test_module.py::test_name -q
+go test ./internal/path/to/package -count=1
+go test ./internal/path/to/package -run TestName -count=1
 ```
 
 A narrow command does not replace the repository aggregate contract.
@@ -228,12 +227,12 @@ make docs:check-fast
 ```
 
 Production documentation deployment is intentionally separate:
-
+Production documentation deployment is owned by Cloudflare Workers Builds (worker `dev-health-docs`, from `main`). The local target below is a manual fallback:
 ```bash
 make docs:deploy
 ```
 
-`make docs:build` uses the canonical `mkdocs.yml` configuration. The Cloudflare targets add redirects, headers, preview-version upload, deployment, and rollback behavior around that same canonical build.
+`make docs:build` uses the canonical `mkdocs.yml` configuration. The Cloudflare targets add redirects, headers, preview-version upload, deployment, and rollback behavior around that same canonical build for local use. GitHub Actions only builds and validates the docs; it never uploads or deploys them. To roll back production, use the Cloudflare dashboard or `make docs:rollback VERSION_ID=<version>`.
 
 ## Inspect CLI commands before changing state
 

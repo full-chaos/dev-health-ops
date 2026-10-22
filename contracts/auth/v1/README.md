@@ -323,8 +323,9 @@ visible in the file layout, not in a conditionally present field:
   the list items equal to the entry and the receipt's credential a stricter
   subset. `crd_` is a new id prefix introduced here.
 * ACR and External Push appear only as metadata projections (`domain_owner`,
-  `external_reference`), never as validators (ACP-ADR-08/09). No pagination is
-  specified for the list (TRD §15 names no parameters).
+  `external_reference`), never as validators (ACP-ADR-08/09). The list is
+  paged by an opaque cursor (CHAOS-10136): at most 100 items a page, `next_cursor`
+  absent on the last page, order created_at then id ascending.
 
 ### JWKS and discovery: one issuer, one key use (CHAOS-4930)
 
@@ -425,6 +426,10 @@ Three categories, and the third is load-bearing:
   `expect_keyword`. Each fixture violates exactly **one** instance location, so
   Go (which stops at the first violation) and Python (which reports all) agree
   on which rule fired.
+  The Go validator reports no instance location, so
+  `internal/auth/contracts/reject_location_test.go` holds every `reject` entry
+  of every manifest to its declared keyword and location through a second
+  validator that does.
 - `reject_by_client` — **validates against the schema** and every client must
   refuse it. For rules JSON Schema cannot express: a duration bound, a
   cross-field consistency check, anything needing context the validator never

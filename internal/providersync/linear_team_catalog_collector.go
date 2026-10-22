@@ -182,8 +182,15 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 			dropped: droppedTeams, teamListing: teamListing,
 			teamLookups: NewTeamAbsenceLookups(ctx, LinearAbsenceProver{Client: client}),
 		})
+		// CHAOS-10521: a membership starts at the member's earliest work item.
+		memberStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
+			CatalogEvidenceScope{Table: CatalogEvidenceMemberships, Provider: linearMembershipWriter.Provider, Source: linearMembershipWriter.Source, Lease: collector.Sink.Lease}, normalizedAt)
+		observedMemberships := StartCatalogRows(memberStarts, batch.Rows.Memberships, linearReferenceMembershipRow.evidenceFact,
+			func(r *linearReferenceMembershipRow) *time.Time { return &r.ValidFrom })
+		keptMemberships = StartCatalogRows(memberStarts, keptMemberships, linearReferenceMembershipRow.evidenceFact,
+			func(r *linearReferenceMembershipRow) *time.Time { return &r.ValidFrom })
 		membershipRows, membershipOutcome, err := linearMembershipWriter.Snapshot(
-			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
+			ctx, collector.Sink.Conn, ref.OrgID, observedMemberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
 			decision.membershipProver(linearInactiveAbsence{inactive: batch.Rows.InactiveMemberKeys}), decision.membershipSnapshot(LinearTeamMembershipKind))
 		if err != nil {
 			return result, err
@@ -226,8 +233,16 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		// walk of ITS kind proved its end and found at least one row of the
 		// kind. A new stamp at each sync would add one more open row for the
 		// same fact.
+		// CHAOS-10521: a project link starts at the project's earliest work item.
+		projectStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
+			CatalogEvidenceScope{Table: CatalogEvidenceProjectOwnership, Provider: "linear", Source: "native", Lease: collector.Sink.Lease}, normalizedAt)
+		freshOwnership := StartCatalogRows(projectStarts, batch.Rows.Ownership,
+			func(r linearReferenceOwnershipRow) CatalogEvidenceFact {
+				return ProjectEvidenceFact(r.TeamID, r.ProjectID)
+			},
+			func(r *linearReferenceOwnershipRow) *time.Time { return &r.ValidFrom })
 		ownershipRows, plan, err := collector.Sink.SnapshotOwnership(
-			ctx, ref.OrgID, batch.Rows.Ownership, normalizedAt.UTC().Truncate(time.Millisecond),
+			ctx, ref.OrgID, freshOwnership, normalizedAt.UTC().Truncate(time.Millisecond),
 			linearOwnershipKindSnapshots(ctx, ref.OrgID, ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, "linear", ref.IntegrationID),
 				batch.Evidence, batch.Result, LinearAbsenceProver{Client: client}.OwnershipAbsence(ref.OrgID))...)
 		if err != nil {

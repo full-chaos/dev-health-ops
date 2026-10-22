@@ -78,6 +78,9 @@ func gPtr[T any](p *T) any {
 var goldenLimit = regexp.MustCompile(`\{limit:UInt32\}`)
 
 func TestComplexityTimeseriesMatchesTheFrozenGolden(t *testing.T) {
+	// The frozen Python reference had no clip; its window ends are read at a clock after every one of them. The clip of an
+	// end of today is the declared stricter Go divergence (D6083, D6101), pinned in window_clip_test.go.
+	pinWindowToday(t, "2099-01-01T00:00:00Z")
 	raw, err := os.ReadFile("testdata/complexity_timeseries_golden.json")
 	if err != nil {
 		t.Fatal(err)

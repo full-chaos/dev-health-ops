@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -208,5 +209,9 @@ func providerResponse(p *providerRow) (*pyjson.Object, error) {
 // fail logs a failure with its step and writes the Python api's bare 500.
 func (h handlers) fail(w http.ResponseWriter, r *http.Request, step string, err error) {
 	h.Logger.ErrorContext(r.Context(), "api sso route failed", "path", r.URL.Path, "step", step, "error", err.Error())
+	if errors.Is(err, sessionissue.ErrUnavailable) {
+		policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(sessionissue.UnavailableText), nil)
+		return
+	}
 	policy.WriteInternal(w)
 }

@@ -63,16 +63,20 @@ import (
 // re-checks that -- matching Python's own unchecked
 // `batch.breakdowns[0].date_range` access, which relies on the same
 // upstream guarantee (Strawberry input validation on the Python side).
-func analyticsQualityWindow(batch model.AnalyticsRequestInput) (start, end graphqldate.Date, ok bool) {
-	if len(batch.Breakdowns) > 0 {
-		dr := batch.Breakdowns[0].DateRange
-		return dr.StartDate, dr.EndDate, true
+//
+// The end it returns is the exclusive end every reader binds (windowEndExclusive, D6101).
+func analyticsQualityWindow(batch model.AnalyticsRequestInput) (start, end graphqldate.Date, ok bool, err error) {
+	var dr *model.DateRangeInput
+	switch {
+	case len(batch.Breakdowns) > 0:
+		dr = batch.Breakdowns[0].DateRange
+	case len(batch.Timeseries) > 0:
+		dr = batch.Timeseries[0].DateRange
+	default:
+		return graphqldate.Date{}, graphqldate.Date{}, false, nil
 	}
-	if len(batch.Timeseries) > 0 {
-		dr := batch.Timeseries[0].DateRange
-		return dr.StartDate, dr.EndDate, true
-	}
-	return graphqldate.Date{}, graphqldate.Date{}, false
+	start, end, err = dateRangeBounds(dr)
+	return start, end, err == nil, err
 }
 
 // resolveEvidenceQualityStats ports _resolve_evidence_quality_stats
@@ -97,7 +101,10 @@ func resolveEvidenceQualityStats(ctx context.Context, client QueryClient, orgID 
 	if !useInvestment {
 		return nil, nil
 	}
-	startDate, endDate, ok := analyticsQualityWindow(batch)
+	startDate, endDate, ok, err := analyticsQualityWindow(batch)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -220,7 +227,10 @@ func resolveEvidenceQualityByGroup(ctx context.Context, client QueryClient, orgI
 	if !selected {
 		return nil, nil
 	}
-	startDate, endDate, ok := analyticsQualityWindow(batch)
+	startDate, endDate, ok, err := analyticsQualityWindow(batch)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, nil
 	}

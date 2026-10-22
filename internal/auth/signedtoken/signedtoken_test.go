@@ -1,6 +1,7 @@
 package signedtoken
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -45,5 +46,37 @@ func TestValidRefusesALoneHighByteInTheSignature(t *testing.T) {
 		if ok, err := Valid(token, "k"); ok || err != ErrNonASCIISignature {
 			t.Errorf("Valid(%q) = (%v, %v), want (false, ErrNonASCIISignature)", token, ok, err)
 		}
+	}
+}
+
+func TestValidAnyAcceptsATokenSignedWithAnyListedSecret(t *testing.T) {
+	id := uuid.New()
+	oldToken, _ := Build(id, "old-secret")
+	newToken, _ := Build(id, "new-secret")
+	for name, tc := range map[string]struct {
+		token   string
+		secrets []string
+		want    bool
+	}{
+		"signed with the first":     {newToken, []string{"new-secret", "old-secret"}, true},
+		"signed with the second":    {oldToken, []string{"new-secret", "old-secret"}, true},
+		"signed with neither":       {oldToken, []string{"new-secret", "other"}, false},
+		"no secrets":                {oldToken, nil, false},
+		"empty secrets are skipped": {oldToken, []string{"", "old-secret"}, true},
+		"only empty secrets":        {oldToken, []string{"", ""}, false},
+		"malformed token":           {"nodot", []string{"old-secret"}, false},
+	} {
+		got, err := ValidAny(tc.token, tc.secrets)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: ValidAny = %v, %v; want %v", name, got, err, tc.want)
+		}
+	}
+}
+
+func TestValidAnyKeepsTheNonASCIISignatureError(t *testing.T) {
+	id := uuid.New()
+	token := idHex(id) + ".é"
+	if _, err := ValidAny(token, []string{"a", "b"}); !errors.Is(err, ErrNonASCIISignature) {
+		t.Fatalf("ValidAny err = %v, want ErrNonASCIISignature", err)
 	}
 }

@@ -90,3 +90,20 @@ func Valid(token, secret string) (bool, error) {
 	}
 	return hmac.Equal([]byte(signature), []byte(sign(id, secret))), nil
 }
+
+// ValidAny is Valid against each non-empty secret in turn: the token is valid
+// when any of them signs it. It is how a link signing secret rotates without
+// breaking links already sent. A token whose signature holds a non-ASCII
+// character is ErrNonASCIISignature, whatever the secrets.
+func ValidAny(token string, secrets []string) (bool, error) {
+	for _, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		ok, err := Valid(token, secret)
+		if err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
+}

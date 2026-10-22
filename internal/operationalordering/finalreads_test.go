@@ -41,6 +41,8 @@ var classifiedDynamicFinalReads = map[string]struct {
 		"the contract-1 branch of currentOperationalRowsSQL, taken only when OPERATIONAL_ORDERING_CONTRACT=1; the worker's boot guard refuses contract 1 against contract-2 tables (workerservice/daily.go DORA refusal), and contract 2 delegates to operationalordering"},
 	"operationalbackfill/write.go": {1,
 		"the contract-1 branch of currentRowsSQL for `dho operational backfill`, whose GuardTables refuses a contract that disagrees with the tables; contract 2 delegates to operationalordering"},
+	"providersync/catalog_evidence_start.go": {1,
+		"the read of one catalog writer's link rows, from the fixed spec of team_memberships, team_project_ownership and team_repo_ownership; no operational table"},
 	"queryapi/quadrant/quadrant.go": {1,
 		"the FROM of a metric read whose table comes from the fixed per-metric table list (user, repo and team metric rollups); no operational table is in it"},
 	"queryapi/people/metricconfig.go": {1,

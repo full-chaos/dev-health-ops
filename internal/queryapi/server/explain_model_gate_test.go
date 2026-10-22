@@ -55,6 +55,11 @@ func (c *countingResolver) Model(context.Context, string, string) (string, error
 	return "", nil
 }
 
+func (c *countingResolver) StoredBaseURLCarriesKey(context.Context, string, string) (bool, error) {
+	c.calls.Add(1)
+	return false, nil
+}
+
 func (c *countingResolver) RawBaseURL(context.Context, string, string) (string, bool, error) {
 	c.calls.Add(1)
 	return "", false, nil

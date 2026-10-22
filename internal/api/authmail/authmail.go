@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,6 +37,12 @@ type Config struct {
 	// the fallback. The caller resolves that chain; "" here also falls back
 	// to the last resort.
 	TokenSecret string
+	// LinkSecret is the link-token signing key (LINK_TOKEN_SECRET). Set, it
+	// signs every new link; unset, links are signed with the TokenSecret chain.
+	LinkSecret string
+	// PreviousLinkSecret (LINK_TOKEN_SECRET_PREVIOUS) is a retired signing key
+	// that is still accepted while links signed with it are in flight.
+	PreviousLinkSecret string
 	// AppBaseURL is APP_BASE_URL as the process sees it, "" when unset
 	// (os.getenv("APP_BASE_URL", "http://localhost:3000") -- an unset
 	// variable takes the default, a set-but-empty one does not, which is why
@@ -44,8 +51,29 @@ type Config struct {
 	AppBaseURLSet bool
 }
 
-// Secret is the signing key for a link token.
-func (c Config) Secret() string { return signedtoken.Secret(c.TokenSecret, "") }
+// Secret is the signing key for a new link token: the link secret when set,
+// else the TokenSecret chain with its last-resort default.
+func (c Config) Secret() string {
+	if c.LinkSecret != "" {
+		return c.LinkSecret
+	}
+	return signedtoken.Secret(c.TokenSecret, "")
+}
+
+// AcceptSecrets are the keys a presented link token is checked against, signing
+// key first: the signing key, the previous link secret, and the TokenSecret
+// chain value while one is configured (so links sent before the link secret
+// was set stay valid; removing that key ends their validity). Blanks and
+// repeats are left out.
+func (c Config) AcceptSecrets() []string {
+	out := []string{c.Secret()}
+	for _, secret := range []string{c.PreviousLinkSecret, c.TokenSecret} {
+		if secret != "" && !slices.Contains(out, secret) {
+			out = append(out, secret)
+		}
+	}
+	return out
+}
 
 // BaseURL is the web app origin links start with, trailing "/" stripped.
 func (c Config) BaseURL() string {

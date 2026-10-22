@@ -150,7 +150,7 @@ func TestMigrateRolesThenRiverLeavesEveryRoleHoldingExactlyItsManifest(t *testin
 				return postgresstore.CheckCoordinatorAuthorization(checkCtx, loginPool(names["coordinator"], coordinatorPass), names["coordinator"], "river")
 			},
 			"api": func() error {
-				return postgresstore.CheckAPIAuthorization(checkCtx, loginPool(names["api"], apiPass), names["api"], "river")
+				return postgresstore.CheckAPIAuthorization(checkCtx, loginPool(names["api"], apiPass), names["api"], "river", false)
 			},
 			"query_api": func() error {
 				return postgresstore.CheckQueryAPIAuthorization(checkCtx, loginPool(names["query_api"], queryAPIPass), names["query_api"], "river")

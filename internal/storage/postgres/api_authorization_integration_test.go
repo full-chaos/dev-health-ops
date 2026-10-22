@@ -94,18 +94,18 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 	// The grants derive from apiPosture() itself, as the River migration's
 	// api leg derives its GRANT statements; a declared table this helper
 	// does not model gets a stand-in.
-	for _, table := range apiPosture().RequiredTables {
+	for _, table := range APIPosture(false).RequiredTables {
 		if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS "+table.TableName+" (id uuid PRIMARY KEY)"); err != nil {
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
 		}
 	}
 	// a column-scoped privilege needs its column: the stand-in table has only id
-	for _, column := range apiPosture().ColumnScoped {
+	for _, column := range APIPosture(false).ColumnScoped {
 		if _, err := admin.Exec(ctx, "ALTER TABLE "+column.TableName+" ADD COLUMN IF NOT EXISTS "+column.ColumnName+" uuid"); err != nil {
 			t.Fatalf("stand-in column %s.%s: %v", column.TableName, column.ColumnName, err)
 		}
 	}
-	for _, table := range apiPosture().RequiredTables {
+	for _, table := range APIPosture(false).RequiredTables {
 		privileges := "SELECT"
 		if table.AllowInsert {
 			privileges += ", INSERT"
@@ -120,7 +120,7 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 			t.Fatalf("grant on %s: %v", table.TableName, err)
 		}
 	}
-	for _, column := range apiPosture().ColumnScoped {
+	for _, column := range APIPosture(false).ColumnScoped {
 		if _, err := admin.Exec(ctx, "GRANT "+column.Privilege+" ("+column.ColumnName+") ON "+column.TableName+" TO "+role); err != nil {
 			t.Fatalf("grant on %s.%s: %v", column.TableName, column.ColumnName, err)
 		}
@@ -231,7 +231,7 @@ func TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap(t *testing.T) {
 	externalIngestTables(t, ctx, admin, role)
 
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("baseline-bootstrapped api role failed readiness: %v", err)
 	}
 }
@@ -274,7 +274,7 @@ func TestCheckAPIAuthorizationRefusesTheBareBaselineNow(t *testing.T) {
 	bootstrapAPIRole(t, ctx, admin, dbName, role)
 
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	err = CheckAPIAuthorization(ctx, api, role, grantSchema)
+	err = CheckAPIAuthorization(ctx, api, role, grantSchema, false)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("bare-baseline api role readiness error = %v, want ErrUnavailable", err)
 	}
@@ -319,7 +319,7 @@ func TestCheckAPIAuthorizationRefusesAnExtraPrivilege(t *testing.T) {
 	acrEntitlementTables(t, ctx, admin, role)
 	externalIngestTables(t, ctx, admin, role)
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("baseline-bootstrapped api role failed readiness before the extra grant: %v", err)
 	}
 
@@ -334,7 +334,7 @@ func TestCheckAPIAuthorizationRefusesAnExtraPrivilege(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = CheckAPIAuthorization(ctx, api, role, grantSchema)
+	err = CheckAPIAuthorization(ctx, api, role, grantSchema, false)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("api authorization with an extra table grant error = %v, want ErrUnavailable", err)
 	}
@@ -379,7 +379,7 @@ func TestCheckAPIAuthorizationRefusesAMissingBaselinePrivilege(t *testing.T) {
 	acrEntitlementTables(t, ctx, admin, role)
 	externalIngestTables(t, ctx, admin, role)
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("baseline-bootstrapped api role failed readiness before the revoke: %v", err)
 	}
 
@@ -394,7 +394,7 @@ func TestCheckAPIAuthorizationRefusesAMissingBaselinePrivilege(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = CheckAPIAuthorization(ctx, api, role, grantSchema)
+	err = CheckAPIAuthorization(ctx, api, role, grantSchema, false)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("api authorization missing public-schema USAGE error = %v, want ErrUnavailable", err)
 	}
@@ -470,7 +470,7 @@ func TestProvisionScriptAPIRoleOptInMatchesTheDeclaredPosture(t *testing.T) {
 	}
 
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	err = CheckAPIAuthorization(ctx, api, role, grantSchema)
+	err = CheckAPIAuthorization(ctx, api, role, grantSchema, false)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("provision_river_roles.sql's api_role opt-in readiness error = %v, want ErrUnavailable", err)
 	}
@@ -485,7 +485,7 @@ func TestProvisionScriptAPIRoleOptInMatchesTheDeclaredPosture(t *testing.T) {
 	// script's output.
 	acrEntitlementTables(t, ctx, admin, role)
 	externalIngestTables(t, ctx, admin, role)
-	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("provision_river_roles.sql's api_role opt-in failed readiness after the missing grants were added: %v", err)
 	}
 }
@@ -727,7 +727,7 @@ func TestProvisionScriptAPIRoleRefusedWhenPublicHoldsCreate(t *testing.T) {
 	}
 
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	err = CheckAPIAuthorization(ctx, api, role, grantSchema)
+	err = CheckAPIAuthorization(ctx, api, role, grantSchema, false)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("api readiness with PUBLIC CREATE granted before provisioning: error = %v, want ErrUnavailable", err)
 	}
@@ -748,7 +748,7 @@ func TestProvisionScriptAPIRoleRefusedWhenPublicHoldsCreate(t *testing.T) {
 	}
 	acrEntitlementTables(t, ctx, admin, role)
 	externalIngestTables(t, ctx, admin, role)
-	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("api role failed readiness after PUBLIC's CREATE grant was revoked: %v", err)
 	}
 }
@@ -795,14 +795,14 @@ func TestCheckAPIAuthorizationRefusesAMissingDeclaredGrant(t *testing.T) {
 	bootstrapAPIRole(t, ctx, admin, dbName, role)
 	acrEntitlementTables(t, ctx, admin, role)
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("fully granted api role failed readiness: %v", err)
 	}
-	for _, table := range apiPosture().RequiredTables {
+	for _, table := range APIPosture(false).RequiredTables {
 		if _, err := admin.Exec(ctx, "REVOKE ALL ON TABLE public."+table.TableName+" FROM "+role); err != nil {
 			t.Fatal(err)
 		}
-		if err := CheckAPIAuthorization(ctx, api, role, grantSchema); !errors.Is(err, ErrPostureRefused) {
+		if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); !errors.Is(err, ErrPostureRefused) {
 			t.Fatalf("api role missing its %s grant: readiness error %v, want ErrPostureRefused", table.TableName, err)
 		}
 		acrEntitlementTables(t, ctx, admin, role)
@@ -842,11 +842,11 @@ func TestCheckAPIAuthorizationRefusesAWithheldBackfillJobsInsert(t *testing.T) {
 	bootstrapAPIRole(t, ctx, admin, dbName, role)
 	acrEntitlementTables(t, ctx, admin, role)
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("fully granted api role failed readiness: %v", err)
 	}
 	declared := false
-	for _, table := range apiPosture().RequiredTables {
+	for _, table := range APIPosture(false).RequiredTables {
 		if table.TableName == "backfill_jobs" {
 			declared = table.AllowInsert
 		}
@@ -857,7 +857,7 @@ func TestCheckAPIAuthorizationRefusesAWithheldBackfillJobsInsert(t *testing.T) {
 	if _, err := admin.Exec(ctx, "REVOKE INSERT ON TABLE public.backfill_jobs FROM "+role); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); !errors.Is(err, ErrPostureRefused) {
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); !errors.Is(err, ErrPostureRefused) {
 		t.Fatalf("api role without INSERT on backfill_jobs: readiness error %v, want ErrPostureRefused", err)
 	}
 }
@@ -911,7 +911,7 @@ func TestCheckAPIAuthorizationHoldsTheBillingAuditActorColumnExactly(t *testing.
 	}
 	baseline()
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("the api role holding exactly INSERT+DELETE+SELECT and UPDATE (actor_id) on billing_audit_log is not ready: %v", err)
 	}
 
@@ -921,11 +921,11 @@ func TestCheckAPIAuthorizationHoldsTheBillingAuditActorColumnExactly(t *testing.
 		{"a second column UPDATE granted", "GRANT UPDATE (description) ON TABLE public.billing_audit_log TO " + role},
 	} {
 		exec(refusal.change)
-		if err := CheckAPIAuthorization(ctx, api, role, grantSchema); !errors.Is(err, ErrPostureRefused) {
+		if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); !errors.Is(err, ErrPostureRefused) {
 			t.Fatalf("%s: readiness error %v, want ErrPostureRefused", refusal.name, err)
 		}
 		baseline()
-		if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+		if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 			t.Fatalf("after %s was undone the role is not ready again: %v", refusal.name, err)
 		}
 	}

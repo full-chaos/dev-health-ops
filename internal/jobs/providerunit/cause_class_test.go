@@ -447,6 +447,8 @@ func TestCauseClassVocabularyIsClosedAndWrapSafe(t *testing.T) {
 		{"auth", &providerfoundation.ProviderError{Class: providerfoundation.ErrorAuthentication}, false, AuthCategory},
 		{"rate limited", &providerfoundation.ProviderError{Class: providerfoundation.ErrorRateLimited}, false, "provider_rate_limited"},
 		{"budget", providerfoundation.ErrBudgetContended, false, causeClassBudgetContended},
+		{"checkpoint conflict", providersync.ErrChunkCheckpointConflict, false, CheckpointConflictCategory},
+		{"checkpoint store error", providersync.NewChunkStoreError(errors.New("db")), false, causeClassCheckpointStoreError},
 		{"nil", nil, false, providersync.CauseClassUnclassified},
 		{"plain", errors.New("x"), false, providersync.CauseClassUnclassified},
 	}
@@ -612,5 +614,30 @@ func TestEgressRefusedIsTerminalOnTheFirstAttemptWithItsClass(t *testing.T) {
 			}
 			assertOneSafeWarning(t, logs.String(), EgressRefusedCategory)
 		})
+	}
+}
+
+// A bare checkpoint conflict is a state mismatch: the same persisted state
+// gives the same conflict on every attempt, so it ends the unit on the first
+// one. A database error that the store flattened into the conflict is
+// transient: it keeps the retry policy and gets its own class.
+func TestCheckpointConflictIsTerminalButStoreErrorIsNot(t *testing.T) {
+	category, deterministic := deterministicTerminalCategory(providersync.ErrChunkCheckpointConflict)
+	if !deterministic || category != CheckpointConflictCategory {
+		t.Fatalf("bare conflict = %q, %v; want %q, true", category, deterministic, CheckpointConflictCategory)
+	}
+	wrapped := fmt.Errorf("unit: %w", providersync.ErrChunkCheckpointConflict)
+	if category, deterministic := deterministicTerminalCategory(wrapped); !deterministic || category != CheckpointConflictCategory {
+		t.Fatalf("wrapped bare conflict = %q, %v", category, deterministic)
+	}
+	storeErr := providersync.NewChunkStoreError(context.DeadlineExceeded)
+	if category, deterministic := deterministicTerminalCategory(storeErr); deterministic {
+		t.Fatalf("store error = %q, true; want not terminal", category)
+	}
+	if got := causeClass(storeErr, false); got != causeClassCheckpointStoreError {
+		t.Fatalf("causeClass(store error) = %q, want %q", got, causeClassCheckpointStoreError)
+	}
+	if !errors.Is(storeErr, providersync.ErrChunkCheckpointConflict) || !errors.Is(storeErr, context.DeadlineExceeded) {
+		t.Fatal("store error must match both the conflict and its cause")
 	}
 }

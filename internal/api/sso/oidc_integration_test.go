@@ -43,6 +43,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -198,6 +199,13 @@ type stack struct {
 
 func startStack(t *testing.T, ctx context.Context) stack {
 	t.Helper()
+	return startStackWith(t, ctx, nil)
+}
+
+// startStackWith is startStack with issuer as sso.Deps.Issuer: non-nil,
+// auth-service owns sessions (AUTH_PROXY_SESSIONS).
+func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issuer) stack {
+	t.Helper()
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -242,6 +250,7 @@ func startStack(t *testing.T, ctx context.Context) stack {
 		// tested; this override exists only so the fixture IdP is
 		// reachable, not to weaken what a real deployment dials.
 		HTTPClient: &http.Client{Timeout: 10 * time.Second},
+		Issuer:     issuer,
 	})
 	// session.Routes mounts /api/v1/auth/refresh -- needed so a test can
 	// prove an OIDC-issued refresh_token is actually usable there (r1
@@ -360,6 +369,7 @@ func TestOIDCAuthorizeAndCallbackFullRoundTrip(t *testing.T) {
 
 	const testEmail = "new.user@allowed.example"
 	idp.set(nonce, testEmail, "New User", "idp-subject-1")
+	seedMember(t, ctx, st.pool, orgID, testEmail, "oidc", "idp-subject-1")
 
 	status, cbResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "test-auth-code", "state": state})
@@ -739,6 +749,7 @@ func TestOIDCTwoConcurrentAuthorizeFlowsBothComplete(t *testing.T) {
 	}
 
 	const sharedEmail = "concurrent-flows@allowed.example"
+	seedMember(t, ctx, st.pool, orgID, sharedEmail, "oidc", "idp-subject-shared")
 	complete := func(state, nonce, code string) {
 		t.Helper()
 		idp.set(nonce, sharedEmail, "Shared User", "idp-subject-shared")
@@ -1003,6 +1014,7 @@ func TestOIDCLoginRefreshTokenIsUsable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedMember(t, ctx, st.pool, orgID, "refresh.user@allowed.example", "oidc", "idp-subject-refresh")
 	idp.set(parsed.Query().Get("nonce"), "refresh.user@allowed.example", "Refresh User", "idp-subject-refresh")
 
 	status, cbResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",

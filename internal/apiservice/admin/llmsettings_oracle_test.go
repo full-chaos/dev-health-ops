@@ -116,14 +116,14 @@ const (
 )
 
 func TestLLMSettingsRoutesVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "4aee5ee34a4ed71e310e62b4c167688c4f547acc8af861cf74f2426d3621a166")
+	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "192204b949f4c0d12747eca19862807ea78653712f715fb6c16467625ad7b6f0")
 }
 
 // TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
 // planes with no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting raises in
 // Python, an unhandled 500.
 func TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest, "4aee5ee34a4ed71e310e62b4c167688c4f547acc8af861cf74f2426d3621a166")
+	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest, "c9ac676eeef9aabd35d190c52ebfe975e7ea1032ec9492f8212fceb3186f5d2f")
 }
 
 func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest string) {
@@ -500,7 +500,7 @@ func checkBudgetLockSerializes(t *testing.T, ctx context.Context, venue *venueor
 	done := make(chan answer, 1)
 	go func() {
 		request, _ := http.NewRequest(http.MethodPut, goBase+"/api/v1/admin/llm-settings",
-			strings.NewReader(`{"provider":"openai","budget_limit_micro_usd":1234}`))
+			strings.NewReader(`{"provider":"openai","model":"m","budget_limit_micro_usd":1234}`))
 		request.Header.Set("Authorization", "Bearer "+token)
 		request.Header.Set("Content-Type", "application/json")
 		response, err := http.DefaultClient.Do(request)

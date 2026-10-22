@@ -34,7 +34,7 @@ func DefaultConfig(dsn string) Config {
 		DSN:             dsn,
 		MaxOpenConns:    4,
 		MaxIdleConns:    4,
-		DialTimeout:     DefaultDialTimeout,
+		DialTimeout:     PoolDialTimeout(),
 		ReadTimeout:     30 * time.Second,
 		ConnMaxLifetime: PoolConnMaxLifetime(),
 	}
@@ -111,5 +111,5 @@ func Open(ctx context.Context, config Config) (driver.Conn, error) {
 	if config.MaxIdleConns > 1 {
 		WarmPool(ctx, connection.Ping, config.MaxIdleConns)
 	}
-	return newSpanConn(connection, dbspan.NewEmitter(dbspan.SystemClickHouse, "")), nil
+	return newSpanConn(retryConn{connection}, dbspan.NewEmitter(dbspan.SystemClickHouse, "")), nil
 }

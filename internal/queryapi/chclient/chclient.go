@@ -44,7 +44,7 @@ func Options(dsn string) dhclickhouse.Options {
 		MaxOpenConns:    PoolMaxOpenConns,
 		MaxIdleConns:    PoolMaxIdleConns,
 		ConnMaxLifetime: chstorage.PoolConnMaxLifetime(),
-		DialTimeout:     chstorage.DefaultDialTimeout,
+		DialTimeout:     chstorage.PoolDialTimeout(),
 		TransportFunc: func(t *http.Transport) (http.RoundTripper, error) {
 			chstorage.KeepIdleConns(t, PoolMaxIdleConns)
 			return t, nil

@@ -11,13 +11,24 @@ import (
 // ConnMaxLifetimeEnv overrides the lifetime of a pooled ClickHouse connection (a Go duration, e.g. "4m").
 const ConnMaxLifetimeEnv = "DEV_HEALTH_CLICKHOUSE_CONN_MAX_LIFETIME"
 
-// DefaultConnMaxLifetime sits under the ~5 minute idle cutoff assumed for ClickHouse Cloud, so a pooled connection is
-// retired by us before the server or a load balancer drops it. A dropped connection costs a redial (TCP + TLS handshake,
-// several round trips) at ~55 ms RTT.
-const DefaultConnMaxLifetime = 4 * time.Minute
+// DefaultConnMaxLifetime sits under the 15 minute idle scaling of the ClickHouse Cloud service (open connections drop when it sleeps), so a pooled connection is
+// retired by us before a drop. A dropped connection costs a redial (TCP + TLS handshake,
+// several round trips) at ~20 ms RTT. No app-level keepalive query: that would keep a sleeping Cloud service awake (cost); TCP keepalive only.
+const DefaultConnMaxLifetime = 5 * time.Minute
 
-// DefaultDialTimeout covers a TCP + TLS handshake at ~55 ms RTT with headroom.
+// DialTimeoutEnv overrides the dial timeout (a Go duration).
+const DialTimeoutEnv = "DEV_HEALTH_CLICKHOUSE_DIAL_TIMEOUT"
+
+// DefaultDialTimeout covers a TCP + TLS handshake at ~20 ms RTT with ample headroom.
 const DefaultDialTimeout = 10 * time.Second
+
+// PoolDialTimeout is DefaultDialTimeout, or the value of DialTimeoutEnv when it parses to a positive duration.
+func PoolDialTimeout() time.Duration {
+	if parsed, err := time.ParseDuration(os.Getenv(DialTimeoutEnv)); err == nil && parsed > 0 {
+		return parsed
+	}
+	return DefaultDialTimeout
+}
 
 // WarmBudget bounds the whole warm-up; it never fails a start.
 const WarmBudget = 5 * time.Second

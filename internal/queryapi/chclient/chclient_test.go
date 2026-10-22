@@ -91,8 +91,8 @@ func TestOptionsKeepASmallWarmPoolUnderTheCloudIdleCutoff(t *testing.T) {
 	if options.MaxIdleConns != PoolMaxIdleConns || options.MaxOpenConns != PoolMaxOpenConns || options.MaxIdleConns > options.MaxOpenConns {
 		t.Fatalf("pool = open %d idle %d", options.MaxOpenConns, options.MaxIdleConns)
 	}
-	if options.ConnMaxLifetime <= 0 || options.ConnMaxLifetime >= 5*time.Minute {
-		t.Fatalf("lifetime %v not under the 5 minute idle cutoff", options.ConnMaxLifetime)
+	if options.ConnMaxLifetime <= 0 || options.ConnMaxLifetime >= 15*time.Minute {
+		t.Fatalf("lifetime %v not under the 15 minute Cloud idle scaling", options.ConnMaxLifetime)
 	}
 	if options.DialTimeout < 10*time.Second {
 		t.Fatalf("dial timeout %v", options.DialTimeout)

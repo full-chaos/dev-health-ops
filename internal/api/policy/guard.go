@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"path"
 )
 
 // Authz is a route's authorization level. Every level above Public first
@@ -112,7 +111,7 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
-		if user.OrgID == "" && !user.IsSuperuser && !orglessMayReach(r.Method, r.URL.Path) {
+		if user.OrgID == "" && !user.IsSuperuser && !OrglessMayReach(r.Method, r.URL.Path) {
 			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 			return
 		}
@@ -142,30 +141,6 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 	})
-}
-
-// orglessRoutes are the only method and path pairs a signed-in caller with no
-// organization may reach on a guarded route: onboarding, invite acceptance and
-// that caller's own account routes. Every other route, and every other method
-// on a listed path, needs an organization on the token, so a route added later
-// is refused for such a caller until it is listed here. The session routes that
-// are Public (refresh, logout, validate) never reach this check.
-var orglessRoutes = map[string]bool{
-	"POST /api/v1/auth/onboard":                     true,
-	"GET /api/v1/auth/onboarding/state":             true,
-	"HEAD /api/v1/auth/onboarding/state":            true,
-	"POST /api/v1/auth/onboarding/skip-integration": true,
-	"POST /api/v1/auth/accept-invite":               true,
-	"GET /api/v1/auth/me":                           true,
-	"HEAD /api/v1/auth/me":                          true,
-	"GET /api/v1/auth/me/organizations":             true,
-	"HEAD /api/v1/auth/me/organizations":            true,
-	"POST /api/v1/auth/switch-org":                  true,
-	"POST /api/v1/auth/change-password":             true,
-}
-
-func orglessMayReach(method, requestPath string) bool {
-	return orglessRoutes[method+" "+path.Clean(requestPath)]
 }
 
 // currentUser is get_current_user. It writes the refusal itself.

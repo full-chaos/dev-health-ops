@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/adminops"
 	"github.com/full-chaos/dev-health-ops/internal/aicli"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/auth/usersbackfill"
 	"github.com/full-chaos/dev-health-ops/internal/billingcli"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/contractcheck"
@@ -45,6 +46,7 @@ func commands() []cli.Command {
 		adminops.Command(),
 		aicli.Command(),
 		apiservice.Command(),
+		usersbackfill.Command(),
 		billingcli.Command(),
 		contractcheck.Command(),
 		fixturescli.Command(),

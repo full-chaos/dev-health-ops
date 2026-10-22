@@ -72,7 +72,7 @@ func TestWorkItemAttributionAppliesTheFirstRecordedOwnersBackward(t *testing.T) 
 		{"team-a", "revoked-first", 1, 1, day(time.March, 1), nil},
 		// only-future: its one row starts after today.
 		{"team-a", "only-future", 1, 1, now.AddDate(0, 0, 30), nil},
-		// tie: two main owners at the same first record (D5990).
+		// tie: two main owners at the same first record (D5990); the cascade keeps one primary row and the tied team as co-owner row.
 		{"team-a", "tie", 1, 0.5, day(time.March, 1), nil},
 		{"team-b", "tie", 1, 0.5, day(time.March, 1), nil},
 	}
@@ -163,9 +163,12 @@ func TestWorkItemAttributionAppliesTheFirstRecordedOwnersBackward(t *testing.T) 
 	want("pair@before-first", true, "team-a")
 	want("pair@at-first", true, "team-a")
 	want("pair@after-first", true, "team-a")
-	want("tie@before-first", true, "team-a", "team-b")
-	want("tie@at-first", true, "team-a", "team-b")
-	want("tie@after-first", true, "team-a", "team-b")
+	want("tie@before-first", true, "team-a")
+	want("tie@before-first", false, "team-a", "team-b")
+	want("tie@at-first", true, "team-a")
+	want("tie@at-first", false, "team-a", "team-b")
+	want("tie@after-first", true, "team-a")
+	want("tie@after-first", false, "team-a", "team-b")
 	// Shares: the rows before the first record are the rows of the first record, and the co-owner stays a co-owner.
 	for _, label := range []string{"before-first", "at-first"} {
 		if got, wantRows := owners["pair@"+label], owners["pair@after-first"]; !reflect.DeepEqual(got, wantRows) {
@@ -178,7 +181,7 @@ func TestWorkItemAttributionAppliesTheFirstRecordedOwnersBackward(t *testing.T) 
 	want("pair@before-first", false, "team-a", "team-b")
 	// A gap between two records has no owner.
 	want("gap@before-first", true, "team-a")
-	want("gap@in-gap", true)
+	want("gap@in-gap", false)
 	want("gap@after-gap", true, "team-c")
 	// An inactive team's earlier row does not set the first record.
 	want("inactive-first@before-the-inactive-row", true, "team-a")
@@ -186,7 +189,7 @@ func TestWorkItemAttributionAppliesTheFirstRecordedOwnersBackward(t *testing.T) 
 	want("inactive-first@after-first", true, "team-a")
 	// A row revoked before the next owner began is still the first record.
 	want("revoked-first@before-first", true, "team-x")
-	want("revoked-first@after-revoke-before-next", true)
+	want("revoked-first@after-revoke-before-next", false)
 	want("revoked-first@after-next-start", true, "team-a")
 	// A repository whose only record starts in the future has those owners for today and for the past.
 	want("only-future@not-completed", true, "team-a")

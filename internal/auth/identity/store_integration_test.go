@@ -832,7 +832,7 @@ func TestAProjectionChecksTheProviderIdentitiesUnderTheAccountLock(t *testing.T)
 		t.Fatal(err)
 	}
 	defer func() { _ = holder.Rollback(context.Background()) }()
-	if _, err := holder.Exec(ctx, `SELECT 1 FROM auth.principals WHERE id = $1 FOR UPDATE`, user); err != nil {
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM auth.principals WHERE id = $1 FOR NO KEY UPDATE`, user); err != nil {
 		t.Fatal(err)
 	}
 	type result struct {
@@ -852,9 +852,19 @@ func TestAProjectionChecksTheProviderIdentitiesUnderTheAccountLock(t *testing.T)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if _, err := holder.Exec(ctx, `INSERT INTO auth.external_identities (id, principal_id, issuer, provider, subject) VALUES ($1, $2, $3, 'github', $4)`,
-		uuid.New(), user, issuer, held); err != nil {
-		t.Fatal(err)
+	linked, principal := uuid.NewString(), user.String()
+	if err := audit.Commit(ctx, e.runtime, e.store.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.external_identities (id, principal_id, issuer, provider, subject) VALUES ($1, $2, $3, 'github', $4)`,
+				linked, user, issuer, held)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.identity.linked", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal,
+			Attributes: map[string]any{"reason_code": "identity_linked", "target_kind": "external_identity", "target_id": linked}},
+		Events: []audit.OutboxEvent{{AggregateType: "external_identity", AggregateID: "idn_" + linked, EventType: "external_identity.linked",
+			Change: map[string]any{"provider": "github", "principal_id": "prn_" + principal}}},
+	}); err != nil {
+		t.Fatalf("commit the competing link: %v", err)
 	}
 	if err := holder.Commit(ctx); err != nil {
 		t.Fatal(err)

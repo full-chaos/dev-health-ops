@@ -37,6 +37,10 @@ func TestGitLabDescriptionReferencesUseTheOneParser(t *testing.T) {
 				rows[0].RelationshipTypeRaw != tc.wantRaw {
 				t.Fatalf("%q gave %+v, want the item %q with raw %q", tc.description, rows, tc.wantTarget, tc.wantRaw)
 			}
+			// acr relationcurrent.go:48-65 reads the raw only when relation_writer is empty.
+			if rows[0].RelationWriter == nil || *rows[0].RelationWriter == "" {
+				t.Fatalf("%q gave a text row with no relation_writer: %+v", tc.description, rows[0])
+			}
 		})
 	}
 }

@@ -169,6 +169,8 @@ func (s *Service) Login(ctx context.Context, c Credentials) (Outcome, error) {
 	if provider == "local" && !user.IsVerified {
 		return Outcome{Kind: KindEmailUnverified, Reason: ReasonEmailUnverified, PrincipalID: user.ID}, nil
 	}
+	// The password verified before this projection, which mirrors go-api's own
+	// user row idempotently; a refusal after it (the session) leaves that row.
 	if err := s.users.Project(ctx, user.ID); err != nil {
 		return Outcome{}, fmt.Errorf("local: projecting the principal: %w", err)
 	}

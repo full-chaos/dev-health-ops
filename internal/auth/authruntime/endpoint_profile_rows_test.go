@@ -42,7 +42,7 @@ var probeMethods = []string{
 // unreachable, so no probe reaches a store.
 func servedAuthRoutes(t *testing.T) map[string]bool {
 	t.Helper()
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(compatEnvironment(map[string]string{
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:        "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:     "/nonexistent",
 		authconfig.EnvSigningKeyID:       "rows-test",
@@ -50,7 +50,7 @@ func servedAuthRoutes(t *testing.T) map[string]bool {
 		authconfig.EnvRateLimitBurst:     "100000",
 		authconfig.EnvAPIAddress:         "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:    "127.0.0.1:1",
-	}))})
+	})))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 // servedAuthRouteCount is every route the probe serves: four session routes,
 // four compatibility routes, the session issue route and the three operator
 // paths on GET and HEAD.
-const servedAuthRouteCount = 15
+const servedAuthRouteCount = 23
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.

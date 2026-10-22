@@ -150,7 +150,15 @@ func compatRoutes(
 			LockoutKey: contracts.NewSecretString(cfg.Session.LockoutKey.Reveal()),
 		}
 	}
-	return authapi.CompatRoutes(deps)
+	routes, err := authapi.CompatRoutes(deps)
+	if err != nil {
+		return nil, err
+	}
+	sso, err := ssoRoutes(cfg, logger, pool, schema, identities, deps)
+	if err != nil {
+		return nil, err
+	}
+	return append(routes, sso...), nil
 }
 
 // Main runs the command and exits with its status.

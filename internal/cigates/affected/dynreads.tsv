@@ -180,6 +180,9 @@ internal/cigates/nopython	tests_python_test.go
 internal/cigates/nopython	trackedfiles_test.go
 internal/cigates/proofteardown	harness_test.go
 internal/cigates/proofteardown	teardown_test.go
+internal/cigates/queuecreds	gate_test.go
+internal/cigates/queuecreds	scan.go
+internal/cigates/queuecreds	scan_test.go
 internal/cigates/raceunweighted	raceunweighted_test.go
 internal/cigates/releasetag	parity_test.go
 internal/cigates/releasetag	releasetag.go
@@ -558,6 +561,7 @@ internal/workerservice	reports_test.go
 internal/workerservice	rescue_workers_test.go
 internal/workerservice	river_soft_stop_integration_test.go
 internal/workerservice	river_soft_stop_test.go
+internal/workerservice	schema_gate_test.go
 internal/workerservice	sync_claim_taps_integration_test.go
 internal/workerservice	sync_dispatch_integration_test.go
 internal/workerservice	sync_dispatch_test.go

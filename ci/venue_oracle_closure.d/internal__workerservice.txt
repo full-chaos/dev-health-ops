@@ -83,6 +83,8 @@ internal/netclass
 internal/operationalordering
 internal/ownershipwindow
 internal/pgmigrate
+internal/pgmigrate/schemagate
+internal/pgmigrate/schemagate/schemagatetest
 internal/platform/config
 internal/platform/dbphase
 internal/platform/dbspan

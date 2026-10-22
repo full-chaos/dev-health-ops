@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // `admin llm-settings get|set|delete` are compared with the real Python verbs on
@@ -25,6 +26,8 @@ const (
 	communityOrg = "bbbbbbbb-0000-4000-8000-00000000000b"
 	llmKeySecret = "oracle-settings-key-not-real"
 	llmSalt      = "oracle-salt"
+	// llmGoPinDigest is the digest the Go pin run printed, never computed by hand.
+	llmGoPinDigest = "PENDING-RECORD"
 )
 
 type llmStep struct {
@@ -184,22 +187,46 @@ func llmSession(t *testing.T) []llmResult {
 	return out
 }
 
-func compareLLM(t *testing.T, got, want []llmResult, wantName string) {
+// llmRetired names what of one step the model rule (CHAOS-10594) changes: the Python verb saved a
+// BYO provider without a model; the Go verb refuses it. A flagged field is pinned to Go's own answer
+// (GoPin); every other field stays compared with Python.
+type llmRetired struct{ exit, stdout, state bool }
+
+// llmModelRetired lists the steps of llmScript, by index. Steps 9, 14 and 20 are the refusals; 23
+// refuses the model before the missing encryption key Python reported; 10, 11 and 21 differ only
+// because the refused step wrote nothing (the rows and what a read of them shows).
+var llmModelRetired = map[int]llmRetired{
+	9:  {exit: true, stdout: true, state: true},
+	10: {stdout: true, state: true},
+	11: {state: true},
+	14: {exit: true, stdout: true, state: true},
+	20: {exit: true, stdout: true, state: true},
+	21: {stdout: true, state: true},
+	23: {stdout: true},
+}
+
+const llmModelRuling = "CHAOS-10594 D6107: a BYO provider without a model is refused (the route's rule)"
+
+func compareLLM(t *testing.T, got, want []llmResult, wantName string, retired map[int]llmRetired, pin *venueoracle.GoPin) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("%d steps, %s has %d", len(got), wantName, len(want))
 	}
 	for index := range got {
 		label := strings.Join(got[index].Args, " ")
-		if got[index].Exit != want[index].Exit {
-			t.Errorf("step %d (%s): exit %d, %s exit %d", index, label, got[index].Exit, wantName, want[index].Exit)
+		skip := retired[index]
+		check := func(field string, pinned bool, gotValue, wantValue string) {
+			if pinned {
+				pin.Check(t, fmt.Sprintf("step %02d %s", index, field), gotValue)
+				return
+			}
+			if gotValue != wantValue {
+				t.Errorf("step %d (%s): %s\n%s\n%s %s\n%s", index, label, field, gotValue, wantName, field, wantValue)
+			}
 		}
-		if got[index].Stdout != want[index].Stdout {
-			t.Errorf("step %d (%s): stdout\n%s\n%s stdout\n%s", index, label, got[index].Stdout, wantName, want[index].Stdout)
-		}
-		if got[index].State != want[index].State {
-			t.Errorf("step %d (%s): rows\n%s\n%s rows\n%s", index, label, got[index].State, wantName, want[index].State)
-		}
+		check("exit", skip.exit, fmt.Sprint(got[index].Exit), fmt.Sprint(want[index].Exit))
+		check("stdout", skip.stdout, got[index].Stdout, want[index].Stdout)
+		check("rows", skip.state, got[index].State, want[index].State)
 	}
 }
 
@@ -229,7 +256,8 @@ func TestLLMSettingsMatchTheFrozenPythonOutput(t *testing.T) {
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
 	}
-	compareLLM(t, llmSession(t), frozen, "frozen Python")
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/golden/llmsettings.go-pin.json", SHA256: llmGoPinDigest, Ruling: llmModelRuling})
+	compareLLM(t, llmSession(t), frozen, "frozen Python", llmModelRetired, pin)
 	// A script that stored nothing, or refused nothing, passes for any implementation.
 	stored, refused := 0, 0
 	for _, item := range frozen {
@@ -244,6 +272,7 @@ func TestLLMSettingsMatchTheFrozenPythonOutput(t *testing.T) {
 		t.Fatalf("the golden has %d steps with a stored secret and %d refusals: it measures too little", stored, refused)
 	}
 	golden.SkipDiff(t)
+	pin.Finish(t)
 	golden.Finish(t)
 }
 

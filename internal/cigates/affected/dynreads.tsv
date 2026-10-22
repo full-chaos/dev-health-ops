@@ -205,6 +205,7 @@ internal/cigates/routing	tools_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go
+internal/cigates/scripts	heredoc_budget_test.go
 internal/cigates/scripts	local_validate_clickhouse_test.go
 internal/cigates/scripts	local_validate_stage_manifest_test.go
 internal/cigates/scripts	merge_tree_vet_script_test.go

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -346,14 +347,27 @@ func collectGitHubBlame(
 	if treeRef == "" {
 		return gitHubBlameBatch(claim, repoPayload.FullName, nil, nil, requests, 0, 0, 0)
 	}
-	paths, fromFiles := gitHubBlameFilesInventoryPaths(
-		ctx, claim, coverage, repoID, limits.now(), requireCompleteInventory, recoveryGeneration,
-	)
-	if !fromFiles {
-		paths, err = gitHubBlameInventory(ctx, client, root, treeRef, &requests)
-		if err != nil {
-			return CompleteRouteBatch{}, err
+	fromFiles := false
+	banked := func() ([]string, bool) {
+		inventory, usable := gitHubBlameFilesInventoryPaths(
+			ctx, claim, coverage, repoID, limits.now(), requireCompleteInventory, recoveryGeneration,
+		)
+		if !usable {
+			return nil, false
 		}
+		if reason := gitHubBlameInventoryCoversRoot(ctx, client, root, treeRef, inventory); reason != "" {
+			slog.Info(
+				"github blame file list source", "source", "tree", "fallback_reason", reason,
+				"paths", len(inventory),
+			)
+			return nil, false
+		}
+		fromFiles = true
+		return inventory, true
+	}
+	paths, err := gitHubBlameInventoryWith(ctx, client, root, treeRef, &requests, banked)
+	if err != nil {
+		return CompleteRouteBatch{}, err
 	}
 	if requireCompleteInventory && len(paths) > maxFiles {
 		return CompleteRouteBatch{}, fmt.Errorf(
@@ -544,27 +558,75 @@ func gitHubBlameFilesInventoryPaths(
 	if !ok || coverage == nil {
 		return nil, false
 	}
-	fallback := func(reason string) ([]string, bool) {
-		slog.Info("github blame file list source", "source", "tree", "fallback_reason", reason)
+	fallback := func(reason string, paths int, age time.Duration) ([]string, bool) {
+		slog.Info(
+			"github blame file list source", "source", "tree", "fallback_reason", reason,
+			"paths", paths, "inventory_age_seconds", int(age/time.Second),
+		)
 		return nil, false
 	}
 	if requireCompleteInventory || recoveryGeneration != "" {
 		return nil, false
 	}
 	result, err := reader.FilesInventory(ctx, claim, repoID, gitHubBlameFilesInventoryWindow)
+	age := now.Sub(result.NewestSyncedAt)
 	switch {
 	case err != nil:
-		return fallback("reader_error")
+		return fallback("reader_error", 0, 0)
 	case len(result.Paths) == 0:
-		return fallback("no_inventory")
-	case result.NewestSyncedAt.After(now) || now.Sub(result.NewestSyncedAt) > gitHubBlameFilesInventoryMaxAge:
-		return fallback("stale_inventory")
+		return fallback("no_inventory", 0, 0)
+	case result.NewestSyncedAt.After(now) || age > gitHubBlameFilesInventoryMaxAge:
+		return fallback("stale_inventory", len(result.Paths), age)
 	}
 	slog.Info(
 		"github blame file list source", "source", "files_inventory", "paths", len(result.Paths),
-		"inventory_age_seconds", int(now.Sub(result.NewestSyncedAt)/time.Second),
+		"inventory_age_seconds", int(age/time.Second),
 	)
 	return result.Paths, true
+}
+
+// gitHubBlameInventoryCoversRoot says why a banked file list cannot stand in for
+// the tree of treeRef, or "" when it can. The files dataset writes its chunks
+// in sorted path order, so a partial or older inventory is a prefix of the
+// tree: it lacks whole top-level entries. Every top-level entry of the tree
+// (one non-recursive listing) must be present in the list (a file by its path, a
+// directory by at least one path below it); anything else walks the tree. A list
+// that also holds paths the tree no longer has is accepted: blame asks GitHub
+// for each, and gets nothing back for a deleted one.
+func gitHubBlameInventoryCoversRoot(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	root, treeRef string,
+	paths []string,
+) string {
+	var tree gitHubTreePayload
+	if err := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(treeRef), &tree); err != nil {
+		return "root_listing_failed"
+	}
+	if tree.Truncated || len(tree.Tree) == 0 {
+		return "root_listing_unusable"
+	}
+	top := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if head, _, nested := strings.Cut(path, "/"); nested {
+			top[head+"/"] = struct{}{}
+		} else {
+			top[path] = struct{}{}
+		}
+	}
+	for _, entry := range tree.Tree {
+		switch entry.Type {
+		case "blob":
+			if _, ok := top[entry.Path]; !ok {
+				return "top_level_uncovered"
+			}
+		case "tree":
+			if _, ok := top[entry.Path+"/"]; !ok {
+				return "top_level_uncovered"
+			}
+		}
+	}
+	return ""
 }
 
 // gitHubBlameInventory returns every blob path of treeRef. It reads the
@@ -580,6 +642,21 @@ func gitHubBlameInventory(
 	client *providerfoundation.HTTPClient,
 	root, treeRef string,
 	requests *int,
+) ([]string, error) {
+	return gitHubBlameInventoryWith(ctx, client, root, treeRef, requests, nil)
+}
+
+// gitHubBlameInventoryWith is gitHubBlameInventory with an optional source for
+// the case the recursive listing cannot answer: banked returns a file list that
+// replaces the directory walk, or false to walk. It is never asked while the
+// recursive listing is usable, so a repository that fits one response always
+// gets the exact list of its tree.
+func gitHubBlameInventoryWith(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	root, treeRef string,
+	requests *int,
+	banked func() ([]string, bool),
 ) ([]string, error) {
 	var tree gitHubTreePayload
 	treeErr := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
@@ -601,6 +678,12 @@ func gitHubBlameInventory(
 			}
 		}
 		return paths, nil
+	}
+	if banked != nil {
+		if inventory, ok := banked(); ok {
+			slog.Info("github blame file list fell back to the banked files inventory", "class", class, "paths", len(inventory))
+			return inventory, nil
+		}
 	}
 	before := *requests
 	paths, _, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", defaultGitHubTreeWalkLimits())

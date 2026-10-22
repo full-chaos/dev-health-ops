@@ -52,6 +52,11 @@ internal/cigates/bigboy	test	deploy
 internal/cigates/bigboy	test	docker
 internal/cigates/bigboyrender	test	ci
 internal/cigates/cachepoison	test	.github
+internal/cigates/chpin	test	.github
+internal/cigates/chpin	test	.gitlab-ci.yml
+internal/cigates/chpin	test	ci
+internal/cigates/chpin	test	compose.yml
+internal/cigates/chpin	test	deploy
 internal/cigates/chartgates	test	alerts
 internal/cigates/chartgates	test	compose.yml
 internal/cigates/chartgates	test	contracts

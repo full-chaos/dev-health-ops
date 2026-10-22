@@ -86,6 +86,9 @@ func workerGroupsRenderOnlyTheirClassDSNSecrets(g *guard) {
 	}{
 		{"dsn-class-default", nil},
 		{"dsn-class-pooled", poolGoValues},
+		// The bundled PostgreSQL adds a database DSN alias to the shared Secret
+		// every worker group reads through envFrom.
+		{"dsn-class-bundled-pg", join(poolGoValues, set("postgresql.enabled=true"))},
 	} {
 		docs := g.docs(release.name, release.args...)
 		names := dsnNamesByGroup(g, docs)
@@ -142,6 +145,9 @@ func TestDSNClassGuardsPlantedDefects(t *testing.T) {
 		{"stream-groups-render-the-queue-dsn-again", chartAndManifest,
 			mut(chartFile(workers), "            {{- if not $group.runtimeProfile }}\n            - name: WORKER_DATABASE_URI", "            {{- if true }}\n            - name: WORKER_DATABASE_URI"),
 			workerGroupsRenderOnlyTheirClassDSNSecrets, "outside its class"},
+		{"bundled-postgres-alias-returns-to-the-shared-secret", chartAndManifest,
+			mut(chartFile("templates/_helpers.tpl"), "{{- /* No database DSN alias is derived here: this Secret is read through envFrom by every\n   worker group, and each worker class holds only the DSN variables of its own class. */}}\n", "{{- if and .Values.postgresql.enabled (not (index .Values.secrets.data \"DATABASE_URI\")) }}\nDATABASE_URI: {{ include \"dev-health.postgresURI\" . | quote }}\n{{- end }}\n"),
+			workerGroupsRenderOnlyTheirClassDSNSecrets, "carries DATABASE_URI outside its class"},
 		{"river-groups-render-the-coordinator-dsn", chartAndManifest,
 			mut(chartFile(workers), "            {{- if $coordinator }}\n            - name: COORDINATOR_DATABASE_URI", "            {{- if true }}\n            - name: COORDINATOR_DATABASE_URI"),
 			workerGroupsRenderOnlyTheirClassDSNSecrets, "outside its class"},

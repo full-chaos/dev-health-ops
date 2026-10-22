@@ -19,9 +19,10 @@ type SankeyRequest struct {
 	Path      []Dimension
 	Measure   Measure
 	StartDate graphqldate.Date
-	EndDate   graphqldate.Date
-	MaxNodes  int
-	MaxEdges  int
+	// EndDate is the EXCLUSIVE end of the window (windowEndExclusive): the day after the last day the request names.
+	EndDate  graphqldate.Date
+	MaxNodes int
+	MaxEdges int
 }
 
 // validateSankeyPath ports validate_sankey_path (sql/validate.py:286-325):
@@ -63,11 +64,15 @@ func SankeyRequestFromInput(input model.SankeyRequestInput) (SankeyRequest, erro
 		return SankeyRequest{}, newValidationError("dateRange", nil, "sankey.dateRange is required")
 	}
 	maxNodes, maxEdges := input.MaxNodes, input.MaxEdges
+	start, end, err := dateRangeBounds(input.DateRange)
+	if err != nil {
+		return SankeyRequest{}, err
+	}
 	return SankeyRequest{
 		Path:      path,
 		Measure:   measure,
-		StartDate: input.DateRange.StartDate,
-		EndDate:   input.DateRange.EndDate,
+		StartDate: start,
+		EndDate:   end,
 		MaxNodes:  maxNodes,
 		MaxEdges:  maxEdges,
 	}, nil

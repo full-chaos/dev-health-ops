@@ -586,6 +586,11 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 				identityConflictDetail(), "oauth", "provisioning")
 			return
 		}
+		if errors.Is(err, errMembershipRequired) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
+				membershipRequiredDetail(), "oauth", "provisioning")
+			return
+		}
 		h.fail(w, r, "oauth provisioning", err)
 		return
 	}
@@ -724,8 +729,7 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		if !row.AutoProvision {
 			return nil, nil, errOAuthAutoProvisionDisabled
 		}
-		newID := uuid.New()
-		var fullNamePtr, avatarURLPtr, externalIDPtr *string
+		var fullNamePtr, avatarURLPtr, externalIDPtr, usernamePtr *string
 		if claims.fullName != "" {
 			fullNamePtr = &claims.fullName
 		}
@@ -735,19 +739,19 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		if claims.externalID != "" {
 			externalIDPtr = &claims.externalID
 		}
-		var usernamePtr *string
 		if claims.username != "" {
 			usernamePtr = &claims.username
 		}
-		if _, err := h.Pool.Exec(ctx, `INSERT INTO users
-	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, is_active, is_verified, is_superuser,
-	 token_version, last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, false, 0, $8, $8, $8)`,
-			newID, claims.email, usernamePtr, fullNamePtr, avatarURLPtr, authProviderValue, externalIDPtr, now); err != nil {
-			return nil, nil, err
-		}
-		return &provisionedUser{id: newID, email: claims.email, username: usernamePtr, fullName: fullNamePtr, tokenVersion: 0}, nil, nil
+		return h.createAccountAndMembership(ctx, row, ssoNewAccount{
+			email: claims.email, authProvider: authProviderValue, externalID: externalIDPtr,
+			fullName: fullNamePtr, username: usernamePtr, avatarURL: avatarURLPtr,
+		})
 	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	membership, err := h.membershipOrJoin(ctx, row, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -763,29 +767,6 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, false, 0, $8, $8, $8)`,
 	if _, err := h.Pool.Exec(ctx, `UPDATE users SET avatar_url = $2, full_name = $3,
 	last_login_at = $4, updated_at = $4 WHERE id = $1::uuid`,
 		id, newAvatarURL, newFullName, now); err != nil {
-		return nil, nil, err
-	}
-
-	providerOrgID, err := pythonparity.ParseUUID(row.OrgID)
-	if err != nil {
-		return nil, nil, err
-	}
-	var membership *provisionedMembership
-	var membershipOrgID uuid.UUID
-	var role *string
-	err = h.Pool.QueryRow(ctx, `SELECT org_id, role FROM memberships WHERE user_id = $1::uuid AND org_id = $2::uuid`,
-		id, providerOrgID).Scan(&membershipOrgID, &role)
-	switch {
-	case err == nil:
-		roleText := "member"
-		if role != nil {
-			roleText = *role
-		}
-		membership = &provisionedMembership{orgID: membershipOrgID, role: roleText}
-	case errors.Is(err, pgx.ErrNoRows):
-		// No membership: onboarding required, matching Python's own log
-		// line and nil membership (router.py:1269-1274).
-	default:
 		return nil, nil, err
 	}
 

@@ -1,0 +1,4 @@
+nav:
+  - "a\tb": index.md
+  - 'q"uote': reference.md
+  - "multi\nline": guide/intro.md

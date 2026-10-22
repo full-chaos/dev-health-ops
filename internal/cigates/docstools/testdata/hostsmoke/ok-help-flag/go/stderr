@@ -1,0 +1,2 @@
+usage: cigate docs host-smoke --origin ORIGIN --redirects REDIRECTS
+cigate docs host-smoke: error: unrecognized arguments: -h

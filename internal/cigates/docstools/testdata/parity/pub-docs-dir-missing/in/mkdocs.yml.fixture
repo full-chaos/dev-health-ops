@@ -1,0 +1,8 @@
+site_name: T
+docs_dir: nothing
+nav:
+  - Home: index.md
+  - Guide:
+      - Intro: guide/intro.md
+      - Advanced: guide/advanced/index.md
+  - Reference: reference.md

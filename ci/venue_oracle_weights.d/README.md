@@ -10,7 +10,7 @@ Measured seconds of one venue-oracles registry `run` row (CHAOS-6891): the weigh
 ci/venue_oracle_shard.awk balances the venue legs by (longest-processing-time
 assignment). Columns: package dir, test, seconds. Edit a row by hand from a saved run log (gh run view <RUN_ID> --log; read the test's seconds).
 A stale weight costs balance, never coverage (the legs always partition the run
-rows); tests/tooling/test_venue_oracle_shards.py fails a PR whose registry has a run
+rows); the Go tooling checks fail a PR whose registry has a run
 row with no weight here, a weight for a test that left the registry, or a heaviest
 leg over the leg's test-time budget. A row no log has measured carries the
 provisional weight (600, above the slowest row ever measured) and the marker

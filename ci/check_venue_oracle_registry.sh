@@ -2,7 +2,7 @@
 # Static venue-oracles registry check (CHAOS-6584, Trap #392): every venue test
 # is in ci/venue_oracle_registry.d/ and every registry row names a real test.
 # No Go toolchain, containers or Python: runs on every PR through
-# tests/tooling/test_venue_oracle_registry.py. The hosted venue-oracles job
+# the Go tooling checks. The hosted venue-oracles job
 # (main + workflow_dispatch) runs the same check first, via ci/check_go.sh.
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"

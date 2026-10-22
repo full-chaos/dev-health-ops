@@ -70,9 +70,9 @@ GitHub, and Linear for teams, projects, members, and issues.
 
 The public documentation site is `https://docs.fullchaos.dev`; the separately
 hosted product demo is `https://demo.fullchaos.dev`. Both use Cloudflare Workers Static Assets.
-GitHub Actions is the only deployment authority and
-Workers Builds remains disabled. Previews use a shared Cloudflare Access
-service-token policy; production custom domains are anonymously readable.
+Cloudflare Workers Builds (worker `dev-health-docs`) builds and deploys
+production from `main`; GitHub Actions only builds, validates, and smoke-tests.
+Production custom domains are anonymously readable.
 
 Use `wrangler@4.107.0` with compatibility date `2026-07-16`. Preserve
 deterministic version artifacts, deployment metadata, security headers,

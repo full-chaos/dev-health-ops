@@ -360,6 +360,7 @@ func TestOIDCAuthorizeAndCallbackFullRoundTrip(t *testing.T) {
 
 	const testEmail = "new.user@allowed.example"
 	idp.set(nonce, testEmail, "New User", "idp-subject-1")
+	seedMember(t, ctx, st.pool, orgID, testEmail, "oidc", "idp-subject-1")
 
 	status, cbResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
 		map[string]any{"code": "test-auth-code", "state": state})
@@ -739,6 +740,7 @@ func TestOIDCTwoConcurrentAuthorizeFlowsBothComplete(t *testing.T) {
 	}
 
 	const sharedEmail = "concurrent-flows@allowed.example"
+	seedMember(t, ctx, st.pool, orgID, sharedEmail, "oidc", "idp-subject-shared")
 	complete := func(state, nonce, code string) {
 		t.Helper()
 		idp.set(nonce, sharedEmail, "Shared User", "idp-subject-shared")
@@ -1003,6 +1005,7 @@ func TestOIDCLoginRefreshTokenIsUsable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedMember(t, ctx, st.pool, orgID, "refresh.user@allowed.example", "oidc", "idp-subject-refresh")
 	idp.set(parsed.Query().Get("nonce"), "refresh.user@allowed.example", "Refresh User", "idp-subject-refresh")
 
 	status, cbResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",

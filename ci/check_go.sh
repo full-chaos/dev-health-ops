@@ -134,7 +134,7 @@ usage() {
          by name before starting anything.
          The static half of that validation is ci/check_venue_oracle_registry.sh
          (no Go toolchain, containers or Python), run on every PR by
-         tests/tooling/test_venue_oracle_registry.py.
+         the Go tooling checks.
          `venue-oracles SHARD COUNT` (CHAOS-6574) runs the SHARD-th of COUNT
          slices of the registry rows marked run, cost-balanced by the measured
          seconds in ci/venue_oracle_weights.d/ (ci/venue_oracle_shard.awk, the
@@ -1020,7 +1020,7 @@ check_ci_leg() {
 # The registry functions (VENUE_ORACLE_LOCAL_ONLY_MARKER, discovery,
 # check_venue_oracle_registry) live in ci/lib/venue_oracle_registry.sh so the
 # static check runs on a host with no Go toolchain (ci/check_venue_oracle_
-# registry.sh, called by tests/tooling/test_venue_oracle_registry.py).
+# registry.sh, called by the Go tooling checks).
 # shellcheck source=ci/lib/venue_oracle_registry.sh
 . "${ROOT}/ci/lib/venue_oracle_registry.sh"
 
@@ -1032,7 +1032,7 @@ check_ci_leg() {
 # assignment ci/go_race_shard.awk uses) by the measured seconds in
 # ci/venue_oracle_weights.d/ (edit a row by hand from a run log). A wrong or
 # missing weight costs balance, never coverage: the legs always partition the run
-# rows. tests/tooling/test_venue_oracle_shards.py fails a PR whose registry rows
+# rows. the Go tooling checks fail a PR whose registry rows
 # lack a weight or whose heaviest leg would exceed the leg's test-time budget.
 # The weights are a DIRECTORY of per-package row files named like the registry's
 # (CHAOS-6926), so two PRs that add venue rows in different packages do not conflict.

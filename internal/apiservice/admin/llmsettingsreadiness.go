@@ -6,12 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // CHAOS-6976: POST /llm-settings/readiness (settings.py:352-466,
@@ -43,15 +45,23 @@ import (
 // See llmreadinessprobe.go's file doc comment for the probe wire shape and
 // the PINNED fingerprint divergence.
 
-// certifiedByoAgentProviders mirrors policy.py's
-// CERTIFIED_BYO_AGENT_PROVIDERS: only "openai" is a certifiable BYO agent
-// provider, a NARROWER set than llmorgsettings.IsKnownProvider (which also
-// accepts anthropic/gemini/qwen/local/ollama/lmstudio/... for the generic
-// BYO LLM credential surface GET/PUT/DELETE llm-settings serve). A saved
-// BYO config on any other provider is a real, known configuration that is
-// simply not certifiable here -- reported as model_not_supported, not
-// "unconfigured".
-var certifiedByoAgentProviders = map[string]struct{}{"openai": {}}
+// certifiedByoAgentProviders are the BYO providers with a readiness prober: openai (Chat Completions)
+// and anthropic (the Messages API acr runs). It is narrower than llmorgsettings.IsKnownProvider, which
+// also accepts gemini/qwen/local/ollama/lmstudio for the generic BYO credential surface. A saved
+// config on any other provider is a real configuration the preflight cannot check yet.
+var certifiedByoAgentProviders = map[string]struct{}{"openai": {}, "anthropic": {}}
+
+// readinessProberFor returns the readiness prober of a certified provider; doer is the test override
+// (nil in production).
+func readinessProberFor(provider string, doer providerfoundation.HTTPDoer) (readinessProber, bool) {
+	switch provider {
+	case "openai":
+		return newOpenAICompatibleReadinessProber(doer), true
+	case "anthropic":
+		return newAnthropicReadinessProber(doer), true
+	}
+	return nil, false
+}
 
 // readinessCredentialHash is a stable, non-reversible discriminator over an
 // api_key (deliberately reusing hashedLogValue's shape -- sha256 hex,
@@ -77,9 +87,17 @@ func readinessFingerprint(provider, model, baseURL, apiKey string) string {
 // sites (byo is None; byo.certified but not byo.usable).
 const readinessNoBYOConfigMessage = "No BYO LLM configuration is saved for this organization."
 
-// readinessModelNotSupportedMessage is the same route's other 404 message
-// (byo.certified is False -- a known-but-uncertifiable provider).
-const readinessModelNotSupportedMessage = "The configured Ask Dev model is not supported."
+// readinessProviderUnavailableMessage is the 404 for a provider without a readiness prober. It names
+// the provider, not the model; a provider string that is not a plain lowercase name is shown as
+// "unknown".
+func readinessProviderUnavailableMessage(provider string) string {
+	if !readinessProviderNameRe.MatchString(provider) {
+		provider = "unknown"
+	}
+	return "BYO preflight is not available yet for provider " + provider + "."
+}
+
+var readinessProviderNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,39}$`)
 
 // readinessBYOConfig is the four raw settings rows _byo_candidate reads,
 // mirroring production_runtime.py's plain-string reads (no "auto"
@@ -149,8 +167,9 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 	if resolvedProvider == "" {
 		resolvedProvider = "openai"
 	}
-	if _, certified := certifiedByoAgentProviders[resolvedProvider]; !certified {
-		policy.WriteDetail(w, http.StatusNotFound, readinessModelNotSupportedMessage, nil)
+	prober, certified := readinessProberFor(resolvedProvider, h.upstreamDoer)
+	if !certified {
+		policy.WriteDetail(w, http.StatusNotFound, readinessProviderUnavailableMessage(resolvedProvider), nil)
 		return
 	}
 	validURL, _, err := llmorgsettings.ValidateBaseURLChecked(ctx, cfg.baseURL)
@@ -164,11 +183,8 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// h.upstreamDoer is Deps.HTTPDoer AS GIVEN (nil in production; a route
-	// success-path test sets it via adminDepsExtra) -- same injection point
-	// pagerduty_oauth_callback.go's calls already use, see
-	// newOpenAICompatibleReadinessProber's own doc comment.
-	var prober readinessProber = newOpenAICompatibleReadinessProber(h.upstreamDoer)
+	// h.upstreamDoer is Deps.HTTPDoer AS GIVEN (nil in production; a route success-path test sets it via
+	// adminDepsExtra), handed to the prober of the resolved provider above.
 	outcome, safeErrorCode := prober.probe(ctx, resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey.Reveal())
 
 	record := agentReadinessRecord{

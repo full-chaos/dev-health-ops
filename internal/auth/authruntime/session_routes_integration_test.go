@@ -410,10 +410,17 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if _, err := e.edge.Verify(ctx, fifthTokens.AccessToken.Reveal()); err == nil || !policy.IsRefusal(err) {
 		t.Fatalf("query-api accepted a stale token (err %v): the two checks disagree", err)
 	}
-	// A refresh after the bump mints the new token_version, which query-api accepts.
-	renewed, got := e.refresh(t, fifthTokens.RefreshCredential.Reveal())
+	// The session was pinned to the old token_version: a refresh after the
+	// bump is refused and ends it. A session started after the bump is pinned
+	// to the new version and mints tokens query-api accepts.
+	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(fifthTokens.RefreshCredential.Reveal()), ""), 401, "revision_stale")
+	if e.revokedAt(t, ctx, fifthTokens.SessionID) == nil {
+		t.Fatal("a session pinned to the old token_version stayed live after the bump")
+	}
+	sixth := e.start(t, ctx, user, &org)
+	renewed, got := e.refresh(t, sixth.Credential.Reveal())
 	if renewed == nil {
-		t.Fatalf("refresh after the bump = %d %s", got.status, got.body)
+		t.Fatalf("refresh of a session started after the bump = %d %s", got.status, got.body)
 	}
 	if _, err := e.edge.Verify(ctx, renewed.AccessToken.Reveal()); err != nil {
 		t.Fatalf("query-api refused the renewed token: %v", err)

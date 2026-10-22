@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -92,7 +93,11 @@ func repinWrite(g *guard, p, content string, mode os.FileMode) {
 		g.failf("mkdir %s: %v", p, err)
 		return
 	}
-	if err := os.WriteFile(p, []byte(content), mode); err != nil {
+	// ForkLock keeps a parallel test's fork from inheriting this write fd and failing the exec with ETXTBSY (golang/go#22315).
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(p, []byte(content), mode)
+	syscall.ForkLock.RUnlock()
+	if err != nil {
 		g.failf("write %s: %v", p, err)
 	}
 }

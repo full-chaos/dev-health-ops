@@ -327,7 +327,45 @@ func immutableValue(body ast.Node, name string) bool {
 		}
 		return ok
 	})
-	return ok
+	return ok && !valueEscapes(body, name)
+}
+
+// valueEscapes reports whether name is used other than to read one of its fields, define it in a range statement or
+// copy it to itself (`tc := tc`): an alias (`p := tc`), a call argument or a stored or returned copy can change a
+// field of a pointer element out of sight.
+func valueEscapes(body ast.Node, name string) bool {
+	escaped := false
+	var stack []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return false
+		}
+		if id, ok := n.(*ast.Ident); ok && id.Name == name && len(stack) > 0 {
+			switch p := stack[len(stack)-1].(type) {
+			case *ast.SelectorExpr:
+				if p.X != id {
+					escaped = true
+				}
+			case *ast.RangeStmt:
+				if p.Key != id && p.Value != id {
+					escaped = true
+				}
+			case *ast.AssignStmt:
+				self := p.Tok == token.DEFINE && len(p.Lhs) == 1 && len(p.Rhs) == 1
+				if l, isID := p.Lhs[0].(*ast.Ident); !self || !isID || l.Name != name {
+					escaped = true
+				} else if r, isID := p.Rhs[0].(*ast.Ident); !isID || r.Name != name {
+					escaped = true
+				}
+			default:
+				escaped = true
+			}
+		}
+		stack = append(stack, n)
+		return !escaped
+	})
+	return escaped
 }
 
 // boundChdirs clears chdirOpen when every directory change of the package goes to a temp directory: a relative read

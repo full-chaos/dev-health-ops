@@ -500,7 +500,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// its projected columns unchanged; only the FROM source's row
 		// multiplicity across duplicate generations changes.
 		baseTable = workItemCompletionDedupSource
-		dateFilter = "day >= {start_date:Date} AND day <= {end_date:Date}"
+		dateFilter = "day >= {start_date:Date} AND day < {end_date:Date}"
 		orgFilter = "org_id = {org_id:String}"
 	}
 

@@ -175,6 +175,10 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 		}
 	}
 
+	// One request, one clock: every dateRange of the batch is read at the same instant of UTC, so a request that crosses
+	// midnight reads one window in all its parts (CHAOS-10118).
+	batch = snapshotWindows(batch)
+
 	// batch-level useInvestment resolution: timeseries/breakdown ALWAYS
 	// coerce to a concrete bool (analytics.py:554 `bool(batch.use_investment)`,
 	// None -> false) -- never left as None, which is exactly why their

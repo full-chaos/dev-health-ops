@@ -317,3 +317,30 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 		})
 	}
 }
+
+// Leg acp stores go-api's session issue credential and applies the sessions-owned grants before go-api first
+// restarts with the sessions flag, and no call line carries the token.
+func TestAuthCorpusAcpLegStoresTheIssueCredentialAndGrantsBeforeTheSessionsFlag(t *testing.T) {
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout",
+		"FAKE_METRICS=devhealth_api_auth_proxy_requests_total{aggregate=\"sessions\",outcome=\"forwarded\"} 3")
+	if err != nil {
+		t.Fatalf("leg acp failed: %v\n%s", err, out)
+	}
+	calls := fake.calls(t)
+	if strings.Contains(calls, "svc_authsess_") || strings.Contains(out, "svc_authsess_") {
+		t.Fatalf("the session issue token reached a docker argument or the output:\n%s\n%s", calls, out)
+	}
+	lines := strings.Split(calls, "\n")
+	index := func(part string) int {
+		for i, line := range lines {
+			if strings.Contains(line, part) {
+				return i
+			}
+		}
+		return -1
+	}
+	store, grants, flag := index("exec -T postgres psql"), index("run --rm --no-deps -e AUTH_PROXY_SESSIONS=true go-river-migrate"), index("--force-recreate")
+	if store < 0 || grants < 0 || flag < 0 || !(store < flag && grants < flag) {
+		t.Fatalf("want the credential store (%d) and the grants (%d) before the first go-api recreate (%d):\n%s", store, grants, flag, calls)
+	}
+}

@@ -323,7 +323,7 @@ func linearGraphQL(ctx context.Context, client *providerfoundation.HTTPClient, q
 	}
 	response, err := client.Do(ctx, "POST", "/graphql", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, linearTransportFailure(err)
 	}
 	raw, err := readBody(response)
 	if err != nil {
@@ -334,6 +334,11 @@ func linearGraphQL(ctx context.Context, client *providerfoundation.HTTPClient, q
 		return nil, err
 	}
 	if errs, ok := payload.Get("errors"); ok && truthy(errs) {
+		for _, entry := range linearErrorsFromBody(raw) {
+			if entry.linearNotFound() {
+				return nil, errLinearGraphQLNotFound()
+			}
+		}
 		return nil, fmt.Errorf("linear graphql error: %s", pythonStr(errs))
 	}
 	data, _ := payload.Get("data")
@@ -770,7 +775,7 @@ func (h handlers) discoverMembers(w http.ResponseWriter, r *http.Request) {
 		members, err = discoverMembersJira(ctx, jira, projectKey)
 	}
 	if err != nil {
-		h.internal(w, r, "discover team members", err)
+		h.providerFailure(w, r, "discover team members", err)
 		return
 	}
 

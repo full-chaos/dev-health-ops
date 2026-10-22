@@ -29,6 +29,7 @@ func TestTeamRepoDonorsExcludeStaleForeignAndNonOwnershipSources(t *testing.T) {
 	repoForeign := "44444444-4444-4444-8444-444444444444"
 	repoZero := "00000000-0000-0000-0000-000000000000"
 	repoByID := "55555555-5555-4555-8555-555555555555"
+	repoEarly := "66666666-6666-4666-8666-666666666666"
 	for _, org := range []string{orgAlpha, orgBeta} {
 		mustExec(t, ctx, conn, `INSERT INTO teams (id,team_uuid,name,provider,is_active,updated_at,org_id) VALUES ('team',generateUUIDv4(),'Team','linear',1,?,?)`, at, org)
 	}
@@ -48,6 +49,10 @@ func TestTeamRepoDonorsExcludeStaleForeignAndNonOwnershipSources(t *testing.T) {
 	mustExec(t, ctx, conn, `INSERT INTO repos (id,repo,provider,org_id) VALUES (?,'acme/foreign-repo','github',?)`, repoForeign, orgBeta)
 	mustExec(t, ctx, conn, `INSERT INTO repos (id,repo,provider,org_id) VALUES (?,'acme/zero','github',?)`, repoZero, orgAlpha)
 	mustExec(t, ctx, conn, `INSERT INTO repos (id,repo,provider,org_id) VALUES (?,'acme/id-only','github',?)`, repoByID, orgAlpha)
+	// A repository whose one ownership row began three hours before the bound and ended 45 minutes before it: its first
+	// record is early, so the donor set tests every instant below at the instant itself, and the row tells the instants
+	// before and after 45 minutes before the bound apart.
+	mustExec(t, ctx, conn, `INSERT INTO repos (id,repo,provider,org_id) VALUES (?,'acme/early','github',?)`, repoEarly, orgAlpha)
 	ownership := func(org, team, name, source string, from time.Time, to any, updated time.Time) {
 		mustExec(t, ctx, conn, `INSERT INTO team_repo_ownership (org_id,provider,team_id,repo_full_name,match_type,source,valid_from,valid_to,updated_at) VALUES (?,'github',?,?,'exact',?,?,?,?)`, org, team, name, source, from, to, updated)
 	}
@@ -62,6 +67,7 @@ func TestTeamRepoDonorsExcludeStaleForeignAndNonOwnershipSources(t *testing.T) {
 	ownership(orgAlpha, "team", "acme/other", "inferred", at.Add(-time.Hour), at.Add(-time.Second), at)
 	ownership(orgAlpha, "team", "acme/other", "provider_access", at.Add(time.Hour), nil, at)
 	ownership(orgAlpha, "team", "acme/other", "manual", at.Add(-time.Hour), nil, at)
+	ownership(orgAlpha, "team", "acme/early", "provider_access", at.Add(-3*time.Hour), at.Add(-45*time.Minute), at)
 	ownership(orgAlpha, "team", "acme/not-imported", "provider_access", at.Add(-time.Hour), nil, at)
 	ownership(orgAlpha, "team", "acme/foreign-repo", "provider_access", at.Add(-time.Hour), nil, at)
 	ownership(orgAlpha, "team", "acme/zero", "provider_access", at.Add(-time.Hour), nil, at)
@@ -124,10 +130,11 @@ func TestTeamRepoDonorsExcludeStaleForeignAndNonOwnershipSources(t *testing.T) {
 	}
 
 	// The donor set, read ONCE with the same bound, gives for every instant at
-	// or before the bound what the as-of query gives for that instant. The
-	// corpus holds a row that ends one second before the bound, rows that begin
-	// one hour before it, and a row that begins after it, so the instants
-	// below do not all give the same donors.
+	// or after the first record of the repository what the as-of query gives for
+	// that instant (before it, the first owners apply: see the first-owners test).
+	// The corpus holds a row that ends one second before the bound, rows that begin
+	// one hour before it, a row that ends 45 minutes before it and a row that
+	// begins after it, so the instants below do not all give the same donors.
 	set, err := reader.FetchTeamRepoDonorSet(ctx, ids, orgAlpha, at)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +158,7 @@ func TestTeamRepoDonorsExcludeStaleForeignAndNonOwnershipSources(t *testing.T) {
 	}
 	distinct := map[string]bool{}
 	for _, instant := range []time.Time{
-		at.Add(-2 * time.Hour), at.Add(-time.Hour), at.Add(-30 * time.Minute),
+		at.Add(-time.Hour), at.Add(-30 * time.Minute),
 		at.Add(-time.Second), at.Add(-500 * time.Millisecond), at,
 	} {
 		asOf, err := reader.FetchTeamRepoDonors(ctx, ids, orgAlpha, instant)

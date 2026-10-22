@@ -3,12 +3,16 @@ package social
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
@@ -18,11 +22,12 @@ import (
 type refusingStore struct {
 	stubStore
 	lookupErr error
+	lookupID  uuid.UUID
 	linkErr   error
 }
 
 func (s refusingStore) IdentityBySubject(context.Context, string, identity.Provider, string, *identity.LegacyMatch) (identity.Principal, bool, error) {
-	return identity.Principal{}, false, s.lookupErr
+	return identity.Principal{ID: s.lookupID}, false, s.lookupErr
 }
 
 func (refusingStore) ListIdentities(context.Context, uuid.UUID) ([]identity.Identity, error) {
@@ -65,6 +70,66 @@ func TestLinkRefusalsCarryTheirReasonCodes(t *testing.T) {
 			}
 			if !strings.Contains(logs.String(), "reason_code="+c.reason) {
 				t.Fatalf("log has no reason_code=%s: %s", c.reason, logs.String())
+			}
+		})
+	}
+}
+
+// A link of a subject whose go-api account holds another subject at the
+// provider answers identity_conflict when that account is another principal's,
+// and provider_already_linked when it is the signed-in principal's own.
+func TestLinkOfAnotherAccountsSubjectIsAnIdentityConflict(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	signedIn, other := uuid.New(), uuid.New()
+	cases := []struct {
+		name    string
+		holder  uuid.UUID
+		reason  string
+		wantErr error
+	}{
+		{"the subject's account is another principal's", other, "identity_conflict", identity.ErrIdentityConflict},
+		{"the subject's account is the signed-in principal's", signedIn, "provider_already_linked", ErrProviderLinked},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeProviders(t)
+			var logs bytes.Buffer
+			store := refusingStore{lookupErr: identity.ErrProviderAlreadyLinked, lookupID: c.holder}
+			reader := sdkmetric.NewManualReader()
+			svc, err := New(Config{Store: store, Providers: f.client(), Now: func() time.Time { return now },
+				Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+				Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			token := f.token(t.Name(), account{provider: GitHub, id: 9301, email: "conflict@example.com", verified: true, public: true})
+			_, err = svc.Link(context.Background(), SignedIn{PrincipalID: signedIn, AuthTime: now}, GitHub, token)
+			if !errors.Is(err, c.wantErr) {
+				t.Fatalf("err = %v, want %v", err, c.wantErr)
+			}
+			if !strings.Contains(logs.String(), "reason_code="+c.reason) {
+				t.Fatalf("log has no reason_code=%s: %s", c.reason, logs.String())
+			}
+			var collected metricdata.ResourceMetrics
+			if err := reader.Collect(context.Background(), &collected); err != nil {
+				t.Fatal(err)
+			}
+			got := map[string]int64{}
+			for _, scope := range collected.ScopeMetrics {
+				for _, m := range scope.Metrics {
+					sum, ok := m.Data.(metricdata.Sum[int64])
+					if m.Name != "auth.social.outcomes" || !ok {
+						continue
+					}
+					for _, point := range sum.DataPoints {
+						reason, _ := point.Attributes.Value("reason_code")
+						operation, _ := point.Attributes.Value("operation")
+						got[operation.AsString()+"/"+reason.AsString()] += point.Value
+					}
+				}
+			}
+			if want := map[string]int64{string(OperationLink) + "/" + c.reason: 1}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("outcome counter = %v, want %v", got, want)
 			}
 		})
 	}

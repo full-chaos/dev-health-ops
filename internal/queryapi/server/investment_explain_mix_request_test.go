@@ -82,8 +82,8 @@ func TestExplainOptionsDefaultToThePagesMeasureAndTakeItsWindow(t *testing.T) {
 	if absolute.Measure != investmentexplain.MeasureCount {
 		t.Errorf("measure = %q, want COUNT (THROUGHPUT is COUNT on the investment path)", absolute.Measure)
 	}
-	if !absolute.StartTS.Equal(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)) || !absolute.EndTS.Equal(time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)) {
-		t.Errorf("absolute window = [%s, %s), want the page's [2026-09-30, 2026-10-14) over filters.time", absolute.StartTS, absolute.EndTS)
+	if !absolute.StartTS.Equal(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)) || !absolute.EndTS.Equal(time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("absolute window = [%s, %s), want the page's days 2026-09-30 to 2026-10-14, both counted (D6101), i.e. [2026-09-30, 2026-10-15), over filters.time", absolute.StartTS, absolute.EndTS)
 	}
 
 	// Scope level org and team with no ids read the same rows: neither narrows the mix.
@@ -111,5 +111,39 @@ func TestExplainRequestAcceptsIssueSizeAndNamesItInTheRefusal(t *testing.T) {
 	_, errs = decodeExplainBodyForTest(t, `{"measure":"HOURS"}`)
 	if len(errs) != 1 || errs[0].Type != "literal_error" || !strings.Contains(errs[0].Msg, "'ISSUE_SIZE'") || !strings.Contains(errs[0].Msg, "'COUNT'") || !strings.Contains(errs[0].Msg, "'THROUGHPUT'") {
 		t.Fatalf("HOURS refusal = %+v, want one literal_error naming ISSUE_SIZE, COUNT and THROUGHPUT", errs)
+	}
+}
+
+// TestExplainDateRangeEndIsInclusiveAndNeverToday pins D6101 on the explain route: the page's dateRange names its last day,
+// that day counts, and an end of today or later is the same window as an end of yesterday: [start, today).
+func TestExplainDateRangeEndIsInclusiveAndNeverToday(t *testing.T) {
+	reader, err := investmentexplain.NewReader(unusedQueryClient{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	start := today.AddDate(0, 0, -30)
+	for _, c := range []struct {
+		name    string
+		end     time.Time
+		wantEnd time.Time
+	}{
+		{"two days ago counts that day", today.AddDate(0, 0, -2), today.AddDate(0, 0, -1)},
+		{"yesterday", today.AddDate(0, 0, -1), today},
+		{"today is not in the window", today, today},
+		{"tomorrow is clipped", today.AddDate(0, 0, 1), today},
+	} {
+		body := `{"date_range":{"start_date":"` + start.Format(time.DateOnly) + `","end_date":"` + c.end.Format(time.DateOnly) + `"},"filters":{"scope":{"level":"org","ids":[]}}}`
+		decoded, errs := decodeExplainBodyForTest(t, body)
+		if len(errs) > 0 {
+			t.Fatalf("%s: errors: %+v", c.name, errs)
+		}
+		opts, err := buildExplainOptions(context.Background(), reader, "org-1", decoded, "auto", false)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if !opts.EndTS.Equal(c.wantEnd) || !opts.StartTS.Equal(start) {
+			t.Errorf("%s: window [%s, %s), want [%s, %s)", c.name, opts.StartTS.Format(time.DateOnly), opts.EndTS.Format(time.DateOnly), start.Format(time.DateOnly), c.wantEnd.Format(time.DateOnly))
+		}
 	}
 }

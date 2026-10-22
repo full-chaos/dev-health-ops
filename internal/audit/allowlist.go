@@ -29,6 +29,8 @@ var allowedAttributeKeys = map[string]struct{}{
 	"credential_class":    {},
 	"credential_id":       {},
 	"display_prefix":      {},
+	"source":              {},
+	"amr":                 {},
 }
 
 // ValidateAttributes refuses an audit attribute map that has a key outside the
@@ -138,6 +140,11 @@ var attributeVocabulary = map[string][]string{
 	"provider":         {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
 	"client_service":   {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
 	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key"},
+	// source names who started an auth-service record: go-api-delegated is a
+	// session go-api signed the user in for and asked auth-service to issue.
+	"source": {"go-api-delegated"},
+	// amr is session.v1's closed authentication-method set.
+	"amr": {"pwd", "otp", "mfa", "hwk", "swk", "fed"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
 		"scopes", "audiences", "organization_id",

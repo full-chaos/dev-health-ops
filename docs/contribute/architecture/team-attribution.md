@@ -531,9 +531,9 @@ means the ClickHouse `teams` dimension is empty.
 > `team_repo_ownership_derivation.superseded_by_evidence_start`, stats `Superseded`). The next derive run after
 > deploy therefore rewrites the history of every inferred claim; a read of a past day (the landscape, team risk)
 > sees the owner the evidence shows. The other ownership writers (GitHub team access, GitLab group projects,
-> Jira/Linear team projects) have no grant time in their APIs and still start at the first sync that saw the link,
-> as the Python reference did; see the first-known-ownership fallback (F2) for days before a repository's first
-> recorded ownership.
+> Jira/Linear team projects) have no grant time in their APIs: since CHAOS-10521 they start a link at its earliest
+> evidence by the same supersede (section 0.4b, "A catalog link starts at its evidence"); see the
+> first-known-ownership fallback (F2) for days before a repository's first recorded ownership.
 
 > **CHAOS-4458 part (b) (fixed): the derivation's Linear arm never resolved, because
 > `team_project_ownership`'s Linear rows and `work_items.project_id` for a Linear item were two
@@ -670,7 +670,7 @@ means the ClickHouse `teams` dimension is empty.
 | An author beats a real `linked_issue` donor | precedence | `_SOURCE_ORDER` has `author_membership=6` (below `linked_issue=5`)? did a fix accidentally fold it back into `assignee_membership=4`? | restore rank — author is a PERSON signal, never above a real linked_issue donor (CHAOS-4244, chris's 2026-08-24 ruling) |
 | A bare prefix (e.g. `CHAOS`) attributes as `linked_issue` | 5 vs 7 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
 | A PR inherits via `linked_issue` from a donor that only has an `author_membership` or `manual_fallback` rule | 5 (donor) | is the donor's *primary* source in 0–4? a rank-6/7 fallback must never be relabeled rank-5 | donors gated to `_DONOR_SOURCES` (0–4) in `build_linked_issue_team_resolver`; an author-only or manual-only donor is never a linked_issue donor (done CS3; author exclusion CHAOS-4244) |
-| Same scope shows duplicate ownership candidates / bloats over time | RMT read | `valid_from` is in the ownership tables' `ORDER BY`, so `FINAL` cannot collapse re-imports (each daily run is a new sort key) | reads dedup per *logical* scope via `argMax((updated_at, valid_from))`, NOT `FINAL` (done CS3, `load_team_attribution_context`); manual-fallback read keeps `FINAL` (its sort key has no `valid_from`) |
+| Same scope shows duplicate ownership candidates / bloats over time | RMT read | `valid_from` is in the `ORDER BY` of the ownership AND membership tables (`team_repo_ownership`, `team_project_ownership`, `team_memberships`; section 0.4b), so `FINAL` cannot collapse re-imports (each daily run is a new sort key) | reads dedup per *logical* scope via `argMax((updated_at, valid_from))`, NOT `FINAL` (done CS3, `load_team_attribution_context`); manual-fallback read keeps `FINAL` (its sort key has no `valid_from`) |
 | A retracted ownership/membership (a new row, same sort key, `valid_to` set) still attributes until the RMT pair merges | RMT read | the retraction is a second physical row under the same sort key until a merge; a loader that filtered `valid_to` first dropped it and kept the older open row | the three Go loaders (`LoadProjects`, `LoadRepos`, `LoadProviderMembers`) resolve the newest row per full sort key first (`argMax` by `updated_at`), THEN apply `valid_from`/`valid_to`, then dedup per logical scope; asserted by `TestLoadersHonorARetractionBeforeTheRowPairMerges` (CHAOS-6637). Readers that already use `FINAL` before the window (`teamownership`, `teamscope`) are correct for this class |
 | Team flips / stale team lingers after a re-org | write side | ownership writers set `valid_from=now` but never `valid_to`, so a reassigned scope keeps the old-team row active; readers can't tell stale from co-ownership | needs writer-side `valid_to` expiry on re-derivation — tracked **CHAOS-2610** (read-side `argMax` already makes the newest the primary by recency tiebreak) |
 | `manual_fallback` resolves the wrong team | scope match | which `manual_attribution_fallbacks` row matched (repo/project/member/issue_key_prefix)? | check `_manual_fallback_candidates` scope match + rule `priority`; manual is rank 7 (done CS3; renumbered from 6 by CHAOS-4244) |
@@ -728,9 +728,10 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record (D5987,
 option C); the shared ownership readers are judged against that rule at now and on every item day, and apply the
-first owners backward (CHAOS-9404). Known red today: ownership and membership start at the sync (CHAOS-10521),
-and GitLab ownership names the project by path (CHAOS-8883). The inferred repository owner starts at its earliest
-linked evidence since CHAOS-9403 (#4049): its cell is pass. The GitHub cell of a pull request's `linked_issue` row
+first owners backward (CHAOS-9404). No cell is known red: the catalog writers start a link at its evidence
+(CHAOS-10521, section 0.4b), and each provider world runs its team catalog again after its sync (CHAOS-10566), the
+next catalog run that moves each link to its evidence; GitLab ownership names the catalog project since CHAOS-8883.
+The inferred repository owner starts at its earliest linked evidence since CHAOS-9403 (#4049): its cell is pass. The GitHub cell of a pull request's `linked_issue` row
 is pass since CHAOS-9409: owners tied at the top rank with no main row (two `provider_access` grants) are all the
 donor's team on that day (`tiedOwnersAt`, §0.4d).
 A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own on
@@ -855,6 +856,41 @@ project's items by id. Now:
   project only when its ownership changed after the last run. The `...Written` counters of a catalog result keep
   counting the rows the run found; `OwnershipUnchanged` and `RepoOwnershipUnchanged` say how many of them were not
   written again.
+- **A catalog link starts at its evidence** (CHAOS-10521; `providersync.CarryCatalogEvidenceStarts`,
+  `catalog_evidence_start.go`). No provider gives the time of a team grant or of a membership, so the catalog writers
+  (GitHub team access and memberships, GitLab group projects and memberships, the Jira legacy links, the Atlassian
+  Teams links and memberships, the Linear team projects and memberships) take the start of a link from its earliest
+  evidence: for a repository, its earliest pull request (`git_pull_requests.created_at`, by `repo_id`, else by full
+  name, of a `repos` row of the writer's provider); for a project, its earliest work item (`work_items.created_at` of
+  the same `project_id` and of the writer's provider); for a member, of any provider, the earliest work item the
+  member reported or is assigned (the member id after its provider prefix is equal to the person, follows a `:` of it
+  or comes before an `@` of it, the rule of the attribution matrix's membership cell; or an identity facet, raw id or
+  email of the member is equal to it after `NormalizeDerivationIdentity`). A zero or epoch `created_at` is no evidence
+  and is left out in the read itself. `valid_from` = min(evidence, first seen, run): evidence pulls a start earlier,
+  never later, and evidence after the run is no evidence. `valid_from` is a key column of all three tables
+  (`team_memberships` (org_id, provider, team_id, member_id, source, valid_from), `team_project_ownership` (org_id,
+  provider, project_id, team_id, source, valid_from), `team_repo_ownership` (org_id, provider, repo_full_name,
+  team_id, source, valid_from)), so a start that moves is a new row. Before its own read of its open rows, each writer
+  reads every row of its scope (org, provider, source, narrowed to the rows the writer itself reads: GitHub grants
+  under its GitHub org, GitLab rows of the teams under its root group, Atlassian Teams rows of its teams) and the
+  evidence. The FIRST row of each link (open or closed; a closed row keeps its `valid_to`) starts at min(its
+  `valid_from`, evidence): a first row that already starts before the evidence keeps its start, so evidence never
+  moves a start later. A first row that moves is written again at the evidence, and the writer retires the old key as
+  an empty interval (`valid_to = valid_from`, the supersede of the inferred rows, section 0.2), all in one insert
+  (logged `catalog_evidence_start_carried`), after the writer's lease is asserted (GitLab, Jira, Linear). The
+  first-seen rule above then gives the fresh row the evidence start and the repeat rule below leaves it out, so the
+  next run writes nothing. A later row of the same link (a member who came back, a grant given again) keeps the start
+  of the run that saw it. A new link (no row at all in the scope; an empty interval or a row written after the run
+  counts as a row, so a stale run never reopens a link a later run retracted) starts at min(evidence, run). A link
+  with no evidence keeps the start of its earliest row; a new one starts at the run. A failed read or write moves
+  nothing, logs WARN `catalog_evidence_start_skipped` (`reason` `rows_read_failed`, `evidence_read_failed`,
+  `lease_not_held`, `carry_write_failed`, or `row_newer_than_run` for a link a later run wrote) and never fails the
+  sync: a later run moves the start. A start moved back reaches the items on or after it through the backstop (section
+  0.4j). Tests (real ClickHouse, the real collectors): `TestGitHubCatalogStartsAtTheEvidence`,
+  `TestGitLabCatalogStartsAtTheEvidence`, `TestLinearCatalogStartsAtTheEvidence`,
+  `TestJiraLegacyLinksStartAtTheEvidence` (an open and a closed first row),
+  `TestAtlassianTeamsLinksStartAtTheEvidence` and `TestAFailedEvidenceReadKeepsTheStartAndTheSync`; the decision table
+  `TestCatalogEvidenceCarryMovesTheFirstRowOfAFact`.
 - **A row is closed only through its fact kind, on that kind's own proof** (`providersync.PlanSnapshot`,
   `ownership_snapshot.go`; CHAOS-8886). A writer gives the rule one typed snapshot for each kind of fact its
   table holds (`KindSnapshot`): the kind (`snapshot_kinds.go`: a name, the rows it holds, and what an empty
@@ -2341,13 +2377,15 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
 > `internal/ownershipwindow` (CHAOS-9404): the instant a reader tests an ownership row at is clamped up to the
 > repository's first record, so the rows valid at the first record are the owners. It is rendered by the shared
 > readers (`OwnedRepoIDs`, `OwnersByRepo`, `OwnerSharesByRepo` and `AuthoritativeOwnersByRepo` of
-> `internal/teamownership`) and by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`). The
+> `internal/teamownership`), by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`) and by the
+> work-item cascade `LoadRepos` (CHAOS-10517; it keeps the rows of an inactive team, the cascade drops them) and by the
+> investment materialize donor set (`TeamRepoDonorSet.DonorsAt`, CHAOS-10518; the one-shot `FetchTeamRepoDonors` keeps the
+> plain window and is tests-only). The
 > first record of a repository is the earliest `valid_from` of its rows of ACTIVE teams (an inactive team owns
 > nothing, section 0.4g rule 1, so it does not set it, in `teamscope` too); an instant at or after the first record
-> reads as before, and an instant in a gap between two records has no owner. Not yet applying it: the work-item
-> cascade `LoadRepos` (CHAOS-10517), the investment materialize fallback (CHAOS-10518), `work_item_attribution`
-> (CHAOS-10519) and the investment team ownership read of `queryapi/analytics` (CHAOS-10520); the `valid_from` of
-> the catalog writers (the sync time) is CHAOS-10521; the `valid_from` of the inferred derivation is CHAOS-9403.
+> reads as before, and an instant in a gap between two records has no owner. Not yet applying it: `work_item_attribution`
+> (CHAOS-10519) and the investment team ownership read of `queryapi/analytics` (CHAOS-10520). The catalog writers
+> start a link at its evidence (CHAOS-10521, section 0.4b), the inferred derivation at its own (CHAOS-9403).
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
   `completed_at`), and the start of the current day for an item that is not completed. A done item with no

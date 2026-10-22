@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "e11e0b6f53d709a4f3c271cbd686a936dcecebe7cc174dcaa6530e40cdbfcaea", Ruling: teamsRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "e29bf80b7e90865dd1288e6bad1efed4df94a63fa4b83504c7524b23d4861225", Ruling: teamsRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -124,8 +124,12 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	var receipt strings.Builder
 	pythonResponses := golden.Python(t, venue, requests)
 	golden.RetireRows(t, "python provider requests", teamsRuling)
+	var orglessRefused []string
 	receipt.WriteString(venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
 		Golden: golden,
+		// D6145: the org-less caller's refusals (me, patch) answer 403 where Python answered another status.
+		OrglessTokens: map[string]bool{venue.Tokens["no_org"]: true}, MaxOrglessRefusals: 2,
+		OnOrglessRefused: func(request venueoracle.Request) { orglessRefused = append(orglessRefused, request.Name) },
 		// Composes TWO independent normalizations, each scoped to its own
 		// known cause: normalizeRuled's own rules, and the team/identity
 		// admin timestamp blanking (CHAOS-6310 -- each plane mints its own
@@ -150,6 +154,9 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 			return request.Method == http.MethodHead && (request.Path == "/health" || request.Path == "/health/workers")
 		},
 	}))
+	if len(orglessRefused) != 2 {
+		t.Errorf("org-less refusals declared: %v, want exactly 2", orglessRefused)
+	}
 	// The provider traffic the member routes caused (method, path, sorted
 	// query): the member routes are retired, so Go's traffic is pinned.
 	goProviderRequests := members.take()

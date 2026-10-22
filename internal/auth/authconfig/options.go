@@ -174,6 +174,12 @@ var optionRegistry = []Option{
 			EnvSigningKeyFile + " and " + EnvSigningKeyID,
 	},
 	{
+		Flag: "token-issuer-url", Env: EnvTokenIssuerURL, Kind: KindString,
+		Group: GroupKeys,
+		Usage: "https issuer of the signed access tokens (their iss) and of the discovery document; " +
+			"unset, GET /.well-known/openid-configuration is not served (the JWKS still is)",
+	},
+	{
 		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
 			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Set together with " +
@@ -195,14 +201,9 @@ var optionRegistry = []Option{
 		Usage: "aud of the compatibility access token (go-api's JWT_AUDIENCE)",
 	},
 	{
-		Flag: "compat-routes", Env: EnvCompatRoutes, Kind: KindString, Default: "false", Group: GroupSession,
-		Usage: "true mounts go-api's POST /api/v1/auth/refresh, /logout and /social-login (and /login with " +
-			EnvLoginLockoutKey + ") beside the session routes; needs the session secrets",
-	},
-	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "32-byte login lockout key, base64url without padding; " + EnvLoginLockoutKey +
-			"_FILE reads it from a mounted file instead. With " + EnvCompatRoutes + "=true it mounts POST /api/v1/auth/login",
+			"_FILE reads it from a mounted file instead. With the session secrets it mounts POST /api/v1/auth/login",
 	},
 	{
 		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,

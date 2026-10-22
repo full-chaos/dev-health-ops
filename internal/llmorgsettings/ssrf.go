@@ -55,8 +55,12 @@ func ValidateBaseURL(ctx context.Context, baseURL string) (bool, string) {
 // does not catch -- a caller that answers as the Python api does answers its
 // unhandled-error response.
 func ValidateBaseURLChecked(ctx context.Context, baseURL string) (bool, string, error) {
-	return validateBaseURL(ctx, baseURL, defaultResolver)
+	return validateBaseURL(ctx, baseURL, hostResolver)
 }
+
+// hostResolver is the DNS lookup every validator call makes; tests swap it for
+// a spy to count lookups.
+var hostResolver resolver = defaultResolver
 
 func validateBaseURL(ctx context.Context, baseURL string, resolve resolver) (bool, string, error) {
 	if baseURL == "" {

@@ -235,12 +235,19 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 		req("deactivate: GET is 405", get, "/sso/providers/"+samlID+"/deactivate", "owner", ""),
 	}
 	python := golden.Python(t, venue, requests)
+	var orglessRefused []string
 	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue), requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		// D6145: the token without an org is refused 403 where Python answered 500 (activate).
+		OrglessTokens: map[string]bool{venue.Tokens["noorg"]: true}, MaxOrglessRefusals: 1,
+		OnOrglessRefused: func(request venueoracle.Request) { orglessRefused = append(orglessRefused, request.Name) },
 		Normalize: func(_ venueoracle.Request, body string) string {
 			return updatedAtPattern.ReplaceAllString(body, `"updated_at":"<stamped>"`)
 		},
 	})
+	if len(orglessRefused) != 1 {
+		t.Errorf("org-less refusals declared: %v, want exactly 1", orglessRefused)
+	}
 	rows := `SELECT id, org_id, name, protocol, status, is_default, allow_idp_initiated, auto_provision_users, default_role,
 		config::text, coalesce(encrypted_secrets::text, '<null>'), coalesce(allowed_domains::text, '<null>'),
 		created_at, updated_at > created_at FROM sso_providers ORDER BY id`

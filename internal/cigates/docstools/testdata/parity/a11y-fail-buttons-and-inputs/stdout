@@ -1,0 +1,4 @@
+ERROR: x.html: button has no accessible name
+ERROR: x.html: content input has no aria-label, aria-labelledby, or title
+ERROR: x.html: content input has no aria-label, aria-labelledby, or title
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

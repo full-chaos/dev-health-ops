@@ -30,12 +30,14 @@ import (
 // day before the run. One run materializes four units of different end times:
 //
 //   - a unit that ended ten days before the run, of the first team: the
-//     repository the team owned THEN;
+//     repository the team owned THEN, and the repository the team owns since
+//     the change (its first record is five days before the run, so its first
+//     owners apply before it, D5987 option C);
 //   - a unit that ended two days before the run, of the first team: the
 //     repository the team owns since the change;
-//   - a unit that ended ten days before the run, of the second team: nothing,
-//     the team owned no repository yet (ownership starts when it was first
-//     known);
+//   - a unit that ended ten days before the run, of the second team: the
+//     repository of its first record (the first recorded owners apply before
+//     the first record, D5987 option C);
 //   - a unit that ended at the run's reference time, of the second team: its
 //     repository.
 func TestTheOwnershipFallbackTakesTheRepositoriesOfTheUnitsEndTime(t *testing.T) {
@@ -98,9 +100,9 @@ func TestTheOwnershipFallbackTakesTheRepositoriesOfTheUnitsEndTime(t *testing.T)
 			ended           time.Time
 			want            []string
 		}{
-			{"ended before the change of the team's repositories", "before", team, longBefore, []string{rThen}},
+			{"ended before the change of the team's repositories", "before", team, longBefore, []string{rThen, rSince}},
 			{"ended after the change of the team's repositories", "after", team, lately, []string{rSince}},
-			{"ended before the team's ownership was first known", "first", lateTeam, longBefore, nil},
+			{"ended before the team's ownership was first known", "first", lateTeam, longBefore, []string{rLate}},
 			{"ended after the team's ownership was first known", "known", lateTeam, at, []string{rLate}},
 		} {
 			one, two := provider+":"+unit.key+"1", provider+":"+unit.key+"2"

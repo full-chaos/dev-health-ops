@@ -41,6 +41,12 @@ func newCredential() (contracts.SecretString, error) {
 	return encodeCredential(raw), nil
 }
 
+// NewUnstoredCredential returns a credential-shaped value no session holds: an
+// exchange of it finds no row. A response that must carry a refresh token the
+// caller cannot use (go-api records none for a sign-in without a membership)
+// carries this.
+func NewUnstoredCredential() (contracts.SecretString, error) { return newCredential() }
+
 // wellFormed reports whether s has the credential shape. It is checked before
 // any database read, so a malformed value costs no query.
 func wellFormed(s contracts.SecretString) bool {

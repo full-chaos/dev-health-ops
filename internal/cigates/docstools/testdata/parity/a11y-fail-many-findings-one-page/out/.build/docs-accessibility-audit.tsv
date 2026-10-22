@@ -1,0 +1,7 @@
+page	finding
+x.html	html element has no lang attribute
+x.html	document title is empty
+x.html	expected one main landmark, found 0
+x.html	expected one primary content article, found 0
+x.html	expected one content h1, found 0
+x.html	Material skip link was not found

@@ -198,6 +198,16 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 		"the registry names an auth-service issuer no row issues": func(_ []map[string]any, registry registryAnchors) {
 			registry.issuers["refresh_credential"][anchorKey(authHTTPLayer+"issuer.go", 1)] = true
 		},
+		"the issue row names a class the registry does not define": func(rows []map[string]any, _ registryAnchors) {
+			for _, row := range rows {
+				if row["route"] == "/internal/v1/sessions" {
+					row["accepted_credential_classes"] = []any{"internal_svc_authsess_tokens"}
+				}
+			}
+		},
+		"the registry loses the issue route's service credential consumer": func(_ []map[string]any, registry registryAnchors) {
+			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 133))
+		},
 	}
 	for name, plant := range cases {
 		rows, registry := fresh()

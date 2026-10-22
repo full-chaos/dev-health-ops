@@ -136,9 +136,8 @@ func (h *handlers) listOrganizations(w http.ResponseWriter, r *http.Request) {
 // getOrganization is orgs.py's get_organization.
 func (h *handlers) getOrganization(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	orgID, parseErr := uuid.Parse(r.PathValue("org_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	orgID, ok := pathOrgID(w, r)
+	if !ok {
 		return
 	}
 	org, err := h.store.orgByID(ctx, orgID)
@@ -158,6 +157,29 @@ func (h *handlers) getOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, obj, nil)
+}
+
+// pathOrgID reads the {org_id} path value. A value that is no UUID (for
+// example GET /api/v1/admin/orgs/current, which is not a route) answers the
+// same named 400 DELETE /orgs/{org_id} answers, never a 500.
+func pathOrgID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("org_id"))
+	if err != nil {
+		policy.WriteDetail(w, http.StatusBadRequest, "Invalid organization id", nil)
+		return uuid.UUID{}, false
+	}
+	return id, true
+}
+
+// pathUserID reads the {user_id} path value, answering a named 400 for a
+// value that is no UUID.
+func pathUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("user_id"))
+	if err != nil {
+		policy.WriteDetail(w, http.StatusBadRequest, "Invalid user id", nil)
+		return uuid.UUID{}, false
+	}
+	return id, true
 }
 
 // createOrganization is orgs.py's create_organization.
@@ -214,6 +236,17 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	// owner_user_id is checked before any store call: a malformed value
+	// answers the named 400 and nothing is written.
+	var ownerID uuid.UUID
+	if ownerUserID != "" {
+		parsed, parseErr := pythonparity.ParseUUID(ownerUserID)
+		if parseErr != nil {
+			writeInvalidID(w, invalidUserIDDetail)
+			return
+		}
+		ownerID = parsed
+	}
 	if slug == "" {
 		slug = slugify(name)
 	}
@@ -264,19 +297,6 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ownerUserID != "" {
-		// OrganizationService.create -> MembershipService.add_member:
-		// `uuid.UUID(owner_user_id)` is a bare, un-try/excepted call inside
-		// svc.create() itself -- a malformed value raises unhandled all the
-		// way out of the route, past the never-reached session.commit(),
-		// to FastAPI's generic 500. A live round found Go silently
-		// SKIPPING the membership insert instead and still committing the
-		// organization.
-		ownerID, parseErr := pythonparity.ParseUUID(ownerUserID)
-		if parseErr != nil {
-			h.logger.ErrorContext(ctx, "admin: create organization owner_user_id invalid", "error", parseErr)
-			policy.WriteInternal(w)
-			return
-		}
 		if _, err := h.store.insertMembershipTx(ctx, tx, org.ID, ownerID, "owner", nil); err != nil {
 			h.logger.ErrorContext(ctx, "admin: create organization owner membership failed", "error", err)
 			policy.WriteInternal(w)
@@ -301,9 +321,8 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 // updateOrganization is orgs.py's update_organization.
 func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	orgID, parseErr := uuid.Parse(r.PathValue("org_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	orgID, ok := pathOrgID(w, r)
+	if !ok {
 		return
 	}
 	body := bodyFromContext(ctx)
@@ -361,9 +380,8 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) listMembers(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgID, parseErr := uuid.Parse(r.PathValue("org_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	orgID, ok := pathOrgID(w, r)
+	if !ok {
 		return
 	}
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
@@ -393,9 +411,8 @@ func (h *handlers) listMembers(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgID, parseErr := uuid.Parse(r.PathValue("org_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	orgID, ok := pathOrgID(w, r)
+	if !ok {
 		return
 	}
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
@@ -468,17 +485,15 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgID, parseErr := uuid.Parse(r.PathValue("org_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	orgID, ok := pathOrgID(w, r)
+	if !ok {
 		return
 	}
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
 		return
 	}
-	targetUserID, parseErr := uuid.Parse(r.PathValue("user_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	targetUserID, ok := pathUserID(w, r)
+	if !ok {
 		return
 	}
 	body := bodyFromContext(ctx)
@@ -518,17 +533,15 @@ func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgID, parseErr := uuid.Parse(r.PathValue("org_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	orgID, ok := pathOrgID(w, r)
+	if !ok {
 		return
 	}
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
 		return
 	}
-	targetUserID, parseErr := uuid.Parse(r.PathValue("user_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	targetUserID, ok := pathUserID(w, r)
+	if !ok {
 		return
 	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "remove_member", func(g *superuserTx) func() {
@@ -569,9 +582,8 @@ func (h *handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) transferOwnership(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgID, parseErr := uuid.Parse(r.PathValue("org_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	orgID, ok := pathOrgID(w, r)
+	if !ok {
 		return
 	}
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {

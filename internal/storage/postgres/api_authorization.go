@@ -351,8 +351,26 @@ func apiPosture() RolePosture {
 // own provisioning/rollout step once dho api exists) derives its GRANT
 // statements from this SAME declaration, never a second hand-maintained
 // list.
-func APIPosture() RolePosture {
-	return apiPosture()
+//
+// sessionsOwnedByAuth is AUTH_PROXY_SESSIONS: auth-service owns sessions, so
+// go-api inserts and rotates no refresh token. The revoke-all writes are kept
+// under the flag (password reset, change, admin set-password, soft delete),
+// so UPDATE narrows to revoked_at. DELETE stays for the org purge and the
+// expired-token cleanup. The river migration grants and go-api's readiness
+// check read the same flag, so the REVOKE follows it and a rollback is the
+// flag off plus a migrate run.
+func APIPosture(sessionsOwnedByAuth bool) RolePosture {
+	posture := apiPosture()
+	if !sessionsOwnedByAuth {
+		return posture
+	}
+	for i := range posture.RequiredTables {
+		if posture.RequiredTables[i].TableName == "refresh_tokens" {
+			posture.RequiredTables[i] = TablePrivilege{"refresh_tokens", false, false, true}
+		}
+	}
+	posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"refresh_tokens", "revoked_at", "UPDATE"})
+	return posture
 }
 
 // CheckAPIAuthorization is the dho api Service's readiness check: it binds
@@ -365,6 +383,6 @@ func APIPosture() RolePosture {
 // dho api registers this behind its own health.Registry entry (internal/
 // apiservice/service.go) once that package exists; this function has no
 // dependency on it and can be called, and tested, standing alone.
-func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
-	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, apiPosture())
+func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessionsOwnedByAuth bool) error {
+	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, APIPosture(sessionsOwnedByAuth))
 }

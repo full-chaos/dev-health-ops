@@ -82,7 +82,7 @@ func TestPRReworkRatioTimeseries_SeededRealClickHouse_ReviewedPullRequestsOnly(t
 		t.Helper()
 		q, err := CompileTimeseries(TimeseriesRequest{
 			Dimension: DimensionRepo, Measure: MeasurePRReworkRatio, Interval: interval,
-			StartDate: mustGraphQLDate("2026-01-05"), EndDate: mustGraphQLDate("2026-01-06"),
+			StartDate: mustGraphQLDate("2026-01-05"), EndDate: mustGraphQLDate("2026-01-07"), // exclusive: the last day read is 2026-01-06
 		}, org, queryTimeoutSecs, false, nil)
 		if err != nil {
 			t.Fatalf("CompileTimeseries: %v", err)

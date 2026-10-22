@@ -30,6 +30,7 @@ func (h *handlers) governanceRoutes() []httpapi.Route {
 	out = append(out, h.llmSettingsRoutes()...)
 	out = append(out, h.serviceModelRoutes()...)
 	out = append(out, h.ownModelRoutes()...)
+	out = append(out, h.promptCacheRoutes()...)
 	out = append(out, h.setupStatusRoutes()...)
 	out = append(out, h.pagerDutyRoutes()...)
 	out = append(out, h.pagerDutyDisconnectRoutes()...)
@@ -124,6 +125,21 @@ func pydanticValueError(loc []pyjson.Value, input pyjson.Value, message string) 
 func pathUUID(r *http.Request, name string) (uuid.UUID, bool) {
 	id, err := pythonparity.ParseUUID(r.PathValue(name))
 	return id, err == nil
+}
+
+const (
+	invalidFeatureFlagIDDetail = "Invalid feature flag id"
+	invalidFeatureIDDetail     = "Invalid feature id"
+	invalidAuditLogIDDetail    = "Invalid audit log id"
+	invalidUserIDDetail        = "Invalid user id"
+	invalidIPEntryIDDetail     = "Invalid IP allowlist entry id"
+	invalidRetentionIDDetail   = "Invalid retention policy id"
+)
+
+// writeInvalidID answers a malformed id of the request's own input with a
+// fixed named 400 that carries none of the input text.
+func writeInvalidID(w http.ResponseWriter, detail string) {
+	policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
 }
 
 // jsonColumnValue decodes a stored `json` column as SQLAlchemy's JSON type

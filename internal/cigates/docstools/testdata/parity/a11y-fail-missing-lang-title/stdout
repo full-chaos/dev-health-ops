@@ -1,0 +1,3 @@
+ERROR: x.html: html element has no lang attribute
+ERROR: x.html: document title is empty
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

@@ -97,7 +97,7 @@ func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, 
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if err := postgres.CheckAPIAuthorization(ctx, pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema); err != nil {
+	if err := postgres.CheckAPIAuthorization(ctx, pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema, false); err != nil {
 		t.Fatalf("dho api not ready as the api role: %v %s", err, venue.DiagnoseAPIRole(t, ctx))
 	}
 	logger := slog.New(slog.NewTextHandler(venueLogs, &slog.HandlerOptions{Level: slog.LevelDebug}))

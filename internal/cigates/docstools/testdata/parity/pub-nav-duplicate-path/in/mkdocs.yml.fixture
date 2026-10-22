@@ -1,0 +1,6 @@
+site_name: T
+nav:
+  - A: index.md
+  - B: index.md
+  - C: guide/intro.md
+  - D: guide/intro.md

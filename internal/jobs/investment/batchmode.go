@@ -165,9 +165,10 @@ func (m *Materializer) categorizeBatch(
 			byID[result.CustomID] = result
 		}
 	}
-	opts := categorize.CategorizeOptions{Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model}
+	opts := categorize.CategorizeOptions{Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model, Telemetry: m.llmTelemetry}
 	m.forEachPending(ctx, limit, pending, account, func(ctx context.Context, entry preprocessed) (categorize.CategorizationOutcome, error) {
 		result, found := byID[batchCustomID(cfg.RunID, entry.index)]
+		m.observeBatchLine(cfg, model, result, found, time.Since(run.started))
 		if found && (result.Succeeded() || batchLineBilled(result)) {
 			logBatchLine(ctx, model, result)
 		}
@@ -182,6 +183,19 @@ func (m *Materializer) categorizeBatch(
 	})
 	run.log(ctx, batchOutcomeCompleted, state)
 	return true
+}
+
+// observeBatchLine is materialize.py's record_batch_completion for one line: a
+// line that is missing counts as a failure with no tokens.
+func (m *Materializer) observeBatchLine(cfg Config, model string, result categorize.BatchItemResult, found bool, elapsed time.Duration) {
+	observation := categorize.LLMBatchItemObservation{Provider: cfg.ProviderName, Model: model, Duration: elapsed}
+	if found {
+		observation.InputTokens = intValue(result.InputTokens)
+		observation.OutputTokens = intValue(result.OutputTokens)
+		observation.OutputChars = len([]rune(result.Text))
+		observation.Succeeded = result.Succeeded()
+	}
+	categorize.ObserveBatchItem(m.llmTelemetry, observation)
 }
 
 func batchLineBilled(result categorize.BatchItemResult) bool {
@@ -255,6 +269,11 @@ func (run *batchRun) wait(ctx context.Context, poll, timeout time.Duration) (cat
 // is one failed call, recorded once: it aborts the run, as the first such
 // failure of a synchronous call does.
 func (run *batchRun) failAll(pending []preprocessed, err error) {
+	for range pending {
+		categorize.ObserveBatchItem(run.m.llmTelemetry, categorize.LLMBatchItemObservation{
+			Provider: run.cfg.ProviderName, Model: run.model, Duration: time.Since(run.started),
+		})
+	}
 	if _, deterministic := llmFailureOf(err); deterministic && len(pending) > 0 {
 		run.account.record(pending[0].index, categorize.CategorizationOutcome{}, err)
 		return

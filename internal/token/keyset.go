@@ -24,6 +24,9 @@ const (
 	StateCompromised = keystore.StateCompromised
 )
 
+// Algorithm is the signing algorithm every key in a KeySet carries.
+const Algorithm = keystore.Algorithm
+
 // Key is one signing key's public description.
 type Key struct {
 	KeyID     string

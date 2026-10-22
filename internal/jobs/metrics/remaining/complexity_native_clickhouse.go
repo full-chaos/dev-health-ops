@@ -171,27 +171,6 @@ type complexityFileContent struct {
 	Contents string
 }
 
-// loadComplexityGitFiles ports _load_git_files (job_complexity_db.py:86-102).
-func loadComplexityGitFiles(
-	ctx context.Context, conn driver.Conn, repoID uuid.UUID, orgID string, limit *int,
-) ([]complexityFileContent, error) {
-	query := `
-		SELECT path, contents
-		FROM git_files
-		WHERE repo_id = {repo_id:UUID}
-		  AND org_id = {org_id:String}
-		  AND contents IS NOT NULL
-		  AND contents != ''
-		ORDER BY path
-	`
-	arguments := map[string]any{"repo_id": repoID.String(), "org_id": orgID}
-	if limit != nil {
-		query += " LIMIT {limit:UInt64}"
-		arguments["limit"] = uint64(*limit)
-	}
-	return queryFileContents(ctx, conn, query, arguments, "load git files")
-}
-
 // loadComplexityMissingPaths ports _load_missing_paths (job_complexity_db.py:105-121).
 func loadComplexityMissingPaths(
 	ctx context.Context, conn driver.Conn, repoID uuid.UUID, orgID string, limit *int,
@@ -224,39 +203,6 @@ func loadComplexityMissingPaths(
 		paths = append(paths, path)
 	}
 	return paths, rows.Err()
-}
-
-// loadComplexityBlameContents ports _load_blame_contents
-// (job_complexity_db.py:124-149): reconstructs file contents from git_blame
-// by concatenating each line in line_no order.
-func loadComplexityBlameContents(
-	ctx context.Context, conn driver.Conn, repoID uuid.UUID, orgID string, paths []string, limit *int,
-) ([]complexityFileContent, error) {
-	query := `
-		SELECT
-		  path,
-		  arrayStringConcat(
-		    arrayMap(
-		      x -> x.2,
-		      arraySort(groupArray((line_no, ifNull(line, ''))))
-		    ),
-		    '\n'
-		  ) AS contents
-		FROM git_blame
-		WHERE repo_id = {repo_id:UUID}
-		  AND org_id = {org_id:String}
-	`
-	arguments := map[string]any{"repo_id": repoID.String(), "org_id": orgID}
-	if len(paths) > 0 {
-		query += " AND path IN {paths:Array(String)}"
-		arguments["paths"] = paths
-	}
-	query += " GROUP BY path ORDER BY path"
-	if limit != nil {
-		query += " LIMIT {limit:UInt64}"
-		arguments["limit"] = uint64(*limit)
-	}
-	return queryFileContents(ctx, conn, query, arguments, "load blame contents")
 }
 
 func queryFileContents(

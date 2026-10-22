@@ -105,7 +105,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -134,7 +134,7 @@ usage() {
          by name before starting anything.
          The static half of that validation is ci/check_venue_oracle_registry.sh
          (no Go toolchain, containers or Python), run on every PR by
-         tests/tooling/test_venue_oracle_registry.py.
+         the Go tooling checks.
          `venue-oracles SHARD COUNT` (CHAOS-6574) runs the SHARD-th of COUNT
          slices of the registry rows marked run, cost-balanced by the measured
          seconds in ci/venue_oracle_weights.d/ (ci/venue_oracle_shard.awk, the
@@ -189,6 +189,9 @@ usage() {
          Log the wall seconds of a test shard and fail above 85% of the 30 min
          job cap (GO_TEST_SHARD_CAP_SECONDS), naming the shard and its three
          heaviest packages (measured in LOGFILE, else by weight).
+  test-shard-unweighted-guard SHARD COUNT LOGFILE
+         Fail when a package of the shard ran 30 s or more in LOGFILE (its go
+         test log) and has no row in ci/go_test_weights.tsv; prints the row.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -423,7 +426,7 @@ check_race_excluded_ran() {
     [ -n "${name}" ] && [ -n "${package}" ] && [ "${name}" != "${package}" ] || die "race_excluded_tests.tsv row is not <package><TAB><test>"
     quality_selected . "${package}" || continue
     [ -d "${ROOT}/${package}" ] || die "race-excluded package ${package} does not exist"
-    out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -v -run "^${name}\$" "./${package}" 2>&1)" \
+    out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -timeout 5m -v -run "^${name}\$" "./${package}" 2>&1)" \
       || { printf '%s\n' "${out}" | tail -n 40 >&2; die "race-excluded test ${package} ${name} failed in the non-race leg"; }
     printf '%s\n' "${out}" | grep -q -- "^--- PASS: ${name} (" || die "race-excluded test ${package} ${name} did not run in the non-race leg (no PASS line)"
     printf 'race-excluded-ran: %s %s PASS\n' "${package}" "${name}"
@@ -579,6 +582,18 @@ check_test_shard_wall_guard() {
   die "test shard ${shard}/${count} took ${wall}s, over ${GO_TEST_SHARD_WALL_PERCENT}% (${limit}s) of the ${GO_TEST_SHARD_CAP_SECONDS}s job cap; heaviest packages by ${basis}: ${top} -- rebalance ci/go_test_weights.tsv or add a shard"
 }
 
+# check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 30 s or more in
+# LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints the row to add. A package with no row weighs
+# 1, so an unweighted heavy package unbalances the shards without anyone seeing it; this makes it red on the leg that ran it.
+check_test_shard_unweighted_guard() {
+  local shard="${1:-}" count="${2:-}" log="${3:-}" partial="${4:-}" plan
+  check_test_shard_args "${shard}" "${count}"
+  { [ -f "${log}" ] && [ -r "${log}" ]; } || die "test-shard-unweighted-guard needs the shard's go test log as a readable file, got '${log}'"
+  plan="$(check_test_shard_plan "${shard}" "${count}")"
+  awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
+    -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}"
+}
+
 # check_test_shard SHARD COUNT: the SHARD-th of COUNT slices of the unit tests (what check_test runs as one). The slices
 # partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. Each shard also runs its slice of the
 # race-excluded census (check_race_excluded_ran SHARD COUNT): one run of the whole census took ~570 s and made shard 1 18.5 min.
@@ -595,19 +610,20 @@ check_test_shard() {
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${rest} 2>&1 | tee -a "${log}"
-      ) || { rm -f -- "${log}"; return 1; }
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -timeout 10m ${rest} 2>&1 | tee -a "${log}"
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}"; return 1; }
     fi
     if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 == heavy { found = 1 } END { exit !found }'; then
       printf 'go test (shard %s/%s, alone): %s\n' "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
       (
         cd "${ROOT}/${module_dir}"
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath "${SERIAL_HEAVY_TEST_PACKAGE}" 2>&1 | tee -a "${log}"
-      ) || { rm -f -- "${log}"; return 1; }
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}" 2>&1 | tee -a "${log}"
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}"; return 1; }
     fi
   done
   check_race_excluded_ran "${shard}" "${count}"
   wall=$(($(date +%s) - started))
+  (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}"; return 1; }
   (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}"; return 1; }
   rm -f -- "${log}"
 }
@@ -1020,7 +1036,7 @@ check_ci_leg() {
 # The registry functions (VENUE_ORACLE_LOCAL_ONLY_MARKER, discovery,
 # check_venue_oracle_registry) live in ci/lib/venue_oracle_registry.sh so the
 # static check runs on a host with no Go toolchain (ci/check_venue_oracle_
-# registry.sh, called by tests/tooling/test_venue_oracle_registry.py).
+# registry.sh, called by the Go tooling checks).
 # shellcheck source=ci/lib/venue_oracle_registry.sh
 . "${ROOT}/ci/lib/venue_oracle_registry.sh"
 
@@ -1032,7 +1048,7 @@ check_ci_leg() {
 # assignment ci/go_race_shard.awk uses) by the measured seconds in
 # ci/venue_oracle_weights.d/ (edit a row by hand from a run log). A wrong or
 # missing weight costs balance, never coverage: the legs always partition the run
-# rows. tests/tooling/test_venue_oracle_shards.py fails a PR whose registry rows
+# rows. the Go tooling checks fail a PR whose registry rows
 # lack a weight or whose heaviest leg would exceed the leg's test-time budget.
 # The weights are a DIRECTORY of per-package row files named like the registry's
 # (CHAOS-6926), so two PRs that add venue rows in different packages do not conflict.
@@ -3958,6 +3974,10 @@ case "${1:-all}" in
   test-shard-wall-guard)
     [ "$#" -eq 5 ] || die "test-shard-wall-guard accepts SHARD COUNT WALL LOGFILE"
     check_test_shard_wall_guard "$2" "$3" "$4" "$5"
+    ;;
+  test-shard-unweighted-guard)
+    [ "$#" -eq 4 ] || die "test-shard-unweighted-guard accepts SHARD COUNT LOGFILE"
+    check_test_shard_unweighted_guard "$2" "$3" "$4"
     ;;
   venue-oracle-plan)
     [ "$#" -eq 2 ] || die "venue-oracle-plan accepts COUNT"

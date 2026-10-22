@@ -26,24 +26,19 @@ type paramOutcome struct {
 
 // The server parses a {name:Type} parameter value as the text form of Type;
 // the native protocol adds one quoted layer around it. Every Array(String)
-// cell must round-trip byte-exact on both protocols. A top-level String
-// value is sent raw, so the server's escape reading still decodes a
-// backslash and stops at a tab or a newline: those cells name today's
-// answer, so a driver change that alters them fails here instead of in a
-// query.
+// and top-level String cell must round-trip byte-exact on both protocols.
 var parameterCharacterCases = []struct {
 	name  string
 	value string
-	known *paramOutcome
 }{
 	{name: "plain", value: "gh:abc"},
 	{name: "apostrophe", value: "gh:doesn't"},
-	{name: "backslash", value: `a\b`, known: &paramOutcome{got: "a\b"}},
-	{name: "backslash n", value: `a\nb`, known: &paramOutcome{got: "a\nb"}},
-	{name: "trailing backslash", value: `ab\`, known: &paramOutcome{code: 25}},
-	{name: "backslash apostrophe", value: `a\'b`, known: &paramOutcome{got: "a'b"}},
-	{name: "tab", value: "a\tb", known: &paramOutcome{code: 457}},
-	{name: "newline", value: "a\nb", known: &paramOutcome{code: 457}},
+	{name: "backslash", value: `a\b`},
+	{name: "backslash n", value: `a\nb`},
+	{name: "trailing backslash", value: `ab\`},
+	{name: "backslash apostrophe", value: `a\'b`},
+	{name: "tab", value: "a\tb"},
+	{name: "newline", value: "a\nb"},
 	{name: "carriage return", value: "a\rb"},
 	{name: "nul", value: "a\x00b"},
 	{name: "unicode", value: "é-日本-😀"},
@@ -72,9 +67,6 @@ func TestServerSideParameterCharactersOnBothProtocols(t *testing.T) {
 					}
 
 					want := paramOutcome{got: tc.value}
-					if tc.known != nil {
-						want = *tc.known
-					}
 					if got := stringParamOutcome(t, ctx, protocol.conn, tc.value); got != want {
 						t.Errorf("String = %+v, want %+v", got, want)
 					}

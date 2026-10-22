@@ -31,9 +31,8 @@ func (h *handlers) ipAllowlistRoutes() []httpapi.Route {
 		// fallback per path that net/http's mux refuses beside a
 		// method-specific wildcard. So the check route is mounted on the
 		// wildcard itself and told apart by the segment; any other POST on
-		// it is FastAPI's 405 (whose Allow names the first route that matched the
-		// path, the GET one).
-		{Method: http.MethodPost, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", Handler: h.checkOrMethodNotAllowed()},
+		// it is a 405 listing the path's served methods.
+		{Method: http.MethodPost, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", NotServed: true, Handler: h.checkOrMethodNotAllowed()},
 	}
 }
 
@@ -257,9 +256,13 @@ func (h *handlers) getIPAllowlistEntry(w http.ResponseWriter, r *http.Request) {
 // answers the 500 or 404 itself and returns false.
 func (h *handlers) loadIPEntry(ctx context.Context, w http.ResponseWriter, r *http.Request, orgID string) (*ipEntry, bool) {
 	org, orgErr := pythonparity.ParseUUID(orgID)
-	entryID, entryOK := pathUUID(r, "entry_id")
-	if orgErr != nil || !entryOK {
+	if orgErr != nil {
 		policy.WriteInternal(w)
+		return nil, false
+	}
+	entryID, entryOK := pathUUID(r, "entry_id")
+	if !entryOK {
+		writeInvalidID(w, invalidIPEntryIDDetail)
 		return nil, false
 	}
 	entry, err := scanIPEntry(h.store.Pool.QueryRow(ctx,
@@ -420,7 +423,8 @@ WHERE org_id = $1 AND is_active = true ORDER BY created_at LIMIT 1000`, org)
 
 // checkOrMethodNotAllowed answers POST /ip-allowlist/check with the guarded
 // check handler and every other POST on /ip-allowlist/{entry_id} with the 405
-// FastAPI gives a path that has no POST route.
+// FastAPI gives a path that has no POST route, listing the methods the path
+// serves (RFC 9110 10.2.1).
 func (h *handlers) checkOrMethodNotAllowed() http.Handler {
 	check := h.bodyFirst(policy.Admin, http.HandlerFunc(h.checkIPAllowed))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -428,7 +432,7 @@ func (h *handlers) checkOrMethodNotAllowed() http.Handler {
 			check.ServeHTTP(w, r)
 			return
 		}
-		w.Header().Set("Allow", "GET")
+		w.Header().Set("Allow", "DELETE, GET, PATCH")
 		policy.WriteDetail(w, http.StatusMethodNotAllowed, "Method Not Allowed", nil)
 	})
 }

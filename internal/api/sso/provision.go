@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -78,13 +79,22 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		if !row.AutoProvision {
 			return nil, nil, ssoErr("User not found and auto-provisioning disabled")
 		}
-		return nil, nil, errMembershipRequired
+		var fullNamePtr, externalIDPtr *string
+		if name != "" {
+			fullNamePtr = &name
+		}
+		if externalID != "" {
+			externalIDPtr = &externalID
+		}
+		return h.createAccountAndMembership(ctx, row, ssoNewAccount{
+			email: email, authProvider: authProviderValue, externalID: externalIDPtr, fullName: fullNamePtr,
+		})
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 
-	membership, err := h.requireMembership(ctx, id, row.OrgID)
+	membership, err := h.membershipOrJoin(ctx, row, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -185,4 +195,98 @@ func membershipRequiredDetail() *pyjson.Object {
 	detail.Set("message", "A membership in this organization is required")
 	detail.Set("reason", "membership_required")
 	return detail
+}
+
+type ssoNewAccount struct {
+	email, authProvider                       string
+	externalID, fullName, username, avatarURL *string
+}
+
+func jitRole(row *providerRow) string {
+	if row.DefaultRole == "" {
+		return "member"
+	}
+	return row.DefaultRole
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// createAccountAndMembership writes the account, its identity and its
+// membership in the provider's organization in one transaction.
+func (h handlers) createAccountAndMembership(ctx context.Context, row *providerRow, account ssoNewAccount) (*provisionedUser, *provisionedMembership, error) {
+	orgID, err := pythonparity.ParseUUID(row.OrgID)
+	if err != nil {
+		return nil, nil, err
+	}
+	now := h.Now().UTC()
+	newID := uuid.New()
+	tx, err := h.Pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, `INSERT INTO users
+	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, is_active, is_verified, is_superuser,
+	 token_version, last_login_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, false, 0, $8, $8, $8)`,
+		newID, account.email, account.username, account.fullName, account.avatarURL, account.authProvider, account.externalID, now); err != nil {
+		if isUniqueViolation(err) {
+			return nil, nil, errIdentityConflict
+		}
+		return nil, nil, err
+	}
+	role := jitRole(row)
+	if _, err := tx.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $5, $5)`, uuid.New(), orgID, newID, role, now); err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	return &provisionedUser{id: newID, email: account.email, username: account.username, fullName: account.fullName, tokenVersion: 0},
+		&provisionedMembership{orgID: orgID, role: role}, nil
+}
+
+// membershipOrJoin returns the account's membership in the provider's
+// organization. With auto-provision on, an account that has no membership in
+// any organization joins in one transaction; a member of another organization
+// only is refused.
+func (h handlers) membershipOrJoin(ctx context.Context, row *providerRow, userID uuid.UUID) (*provisionedMembership, error) {
+	membership, err := h.requireMembership(ctx, userID, row.OrgID)
+	if !errors.Is(err, errMembershipRequired) || !row.AutoProvision {
+		return membership, err
+	}
+	orgID, err := pythonparity.ParseUUID(row.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := h.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	var locked uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1::uuid FOR UPDATE`, userID).Scan(&locked); err != nil {
+		return nil, err
+	}
+	var memberships int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE user_id = $1::uuid`, userID).Scan(&memberships); err != nil {
+		return nil, err
+	}
+	if memberships > 0 {
+		return nil, errMembershipRequired
+	}
+	role := jitRole(row)
+	now := h.Now().UTC()
+	if _, err := tx.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $5, $5)`, uuid.New(), orgID, userID, role, now); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &provisionedMembership{orgID: orgID, role: role}, nil
 }

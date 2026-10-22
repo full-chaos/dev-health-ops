@@ -1,0 +1,4 @@
+duplicate navigation paths: ['']
+navigation targets do not exist: ['', '', 'x/index.md/']
+unclassified Markdown outside navigation: ['guide/intro.md', 'reference.md']
+canonical URLs outside the approved IA: ['//', '/x/index.md/']

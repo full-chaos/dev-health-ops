@@ -32,7 +32,10 @@ func TestGoAffectedIntegrationPlannerMatrixShrinksWithASelection(t *testing.T) {
 		return n, outputs
 	}
 	full, _ := legs("")
-	_, _, selFile := realSelection(t, root, []byte("internal/admincli/x.go\x00"))
+	selFile := filepath.Join(work, "one_package.txt")
+	if err := os.WriteFile(selFile, []byte("AFFECTED 1\ninternal/admincli\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	few, fewOut := legs(selFile)
 	if few < 1 || few >= full {
 		t.Fatalf("a one-package selection planned %d legs, the full plan %d: the matrix did not shrink", few, full)

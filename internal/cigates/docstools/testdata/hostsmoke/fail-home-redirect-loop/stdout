@@ -1,0 +1,4 @@
+ERROR: /: expected HTTP 200, received 302
+ERROR: /: X-Content-Type-Options is not nosniff
+ERROR: /: Referrer-Policy is not strict-origin-when-cross-origin
+ERROR: /: response body does not contain the Dev Health site identity

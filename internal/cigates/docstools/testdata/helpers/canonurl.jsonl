@@ -1,0 +1,32 @@
+{"in": "index.md", "out": "/"}
+{"in": "/index.md", "out": "/"}
+{"in": "a/index.md", "out": "/a/"}
+{"in": "a/b.md", "out": "/a/b/"}
+{"in": "a/b", "out": "/a/b/"}
+{"in": "a.md", "out": "/a/"}
+{"in": "a/", "out": "/a/"}
+{"in": "", "out": "//"}
+{"in": "/", "out": "//"}
+{"in": "//", "out": "//"}
+{"in": " a.md ", "out": "/a/"}
+{"in": "\ta/b.md\n", "out": "/a/b/"}
+{"in": "a//b.md", "out": "/a//b/"}
+{"in": "./a.md", "out": "/./a/"}
+{"in": "../a.md", "out": "/../a/"}
+{"in": "a/./b/index.md", "out": "/a/./b/"}
+{"in": "A B.md", "out": "/A B/"}
+{"in": "\u00e9.md", "out": "/\u00e9/"}
+{"in": "a.MD", "out": "/a.MD/"}
+{"in": "a.md.md", "out": "/a.md/"}
+{"in": ".md", "out": "//"}
+{"in": "a/.md", "out": "/a/"}
+{"in": "index.md/", "out": "/index.md/"}
+{"in": "x/index.md/index.md", "out": "/x/index.md/"}
+{"in": "a/index.md ", "out": "/a/"}
+{"in": "\u00a0a.md", "out": "/a/"}
+{"in": "a-b_c.md", "out": "/a-b_c/"}
+{"in": "x/y/z/index.md", "out": "/x/y/z/"}
+{"in": "https://x/y.md", "out": "/https://x/y/"}
+{"in": "a.html", "out": "/a.html/"}
+{"in": "docs/a.md#x", "out": "/docs/a.md#x/"}
+{"in": "a b/c d.md", "out": "/a b/c d/"}

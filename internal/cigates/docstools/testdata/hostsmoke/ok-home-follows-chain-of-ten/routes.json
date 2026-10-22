@@ -1,0 +1,17 @@
+{
+ "*": "HTTP/1.1 404 X\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx",
+ "/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /h1/\r\n\r\n",
+ "/h1/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /h2/\r\n\r\n",
+ "/h2/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /h3/\r\n\r\n",
+ "/h3/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /h4/\r\n\r\n",
+ "/h4/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /h5/\r\n\r\n",
+ "/h5/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /h6/\r\n\r\n",
+ "/h6/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /h7/\r\n\r\n",
+ "/h7/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /h8/\r\n\r\n",
+ "/h8/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /h9/\r\n\r\n",
+ "/h9/": "HTTP/1.1 200 X\r\nContent-Length: 25\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\n\r\n<title>Dev Health</title>",
+ "/old/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /new/\r\n\r\n",
+ "/phase-11-intentional-missing-page/": "HTTP/1.1 404 X\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnope",
+ "/reference/metrics/weighting-and-aggregation/": "HTTP/1.1 200 X\r\nContent-Length: 1\r\nConnection: close\r\n\r\nm",
+ "/use/": "HTTP/1.1 200 X\r\nContent-Length: 3\r\nConnection: close\r\n\r\nuse"
+}

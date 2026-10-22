@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -15,7 +16,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
@@ -38,6 +41,7 @@ const (
 type CompatSessions interface {
 	Sessions
 	RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor session.Actor) (bool, error)
+	ExchangeLegacy(ctx context.Context, legacy session.LegacyRefresh) (session.Result, error)
 	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
 }
 
@@ -267,15 +271,26 @@ func compatRefreshMessage(reason session.Reason) string {
 
 // compatRefresh is POST /api/v1/auth/refresh with go-api's wire
 // (internal/api/session/refresh.go): {"refresh_token"} in, the rotated opaque
-// credential and an access token out. Only the auth-service credential is
-// accepted; a go-api refresh JWT is an unknown credential.
+// credential and an access token out. A go-api refresh JWT is exchanged once
+// for a new session (session.Store.ExchangeLegacy); the answer then carries
+// the session's opaque credential.
 func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	token, ok := h.readRefreshToken(w, r, opCompatRefresh)
 	if !ok {
 		return
 	}
-	result, err := h.Sessions.Exchange(ctx, contracts.NewSecretString(token))
+	var (
+		result session.Result
+		err    error
+	)
+	if isJWT(token) {
+		if result, ok, err = h.exchangeLegacy(w, r, token); !ok {
+			return
+		}
+	} else {
+		result, err = h.Sessions.Exchange(ctx, contracts.NewSecretString(token))
+	}
 	if err != nil {
 		h.fail(w, r, opCompatRefresh, err)
 		return
@@ -300,6 +315,18 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonDeactivated, textDisabled)
+		return
+	}
+	switch checkPin(ctx, h.rec.logger, record, user) {
+	case pinMissing:
+		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textInvalidRefresh)
+		return
+	case pinStale:
+		if _, err := h.Sessions.Revoke(ctx, record.ID, session.Actor{RequestID: requestid.Audit(ctx)}); err != nil {
+			h.fail(w, r, opCompatRefresh, err)
+			return
+		}
+		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textRefreshReused)
 		return
 	}
 	role := roleText(nil, false)
@@ -328,6 +355,37 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	out.Set("expires_in", pyjson.IntOf(int64(AccessExpiresIn)))
 	out.Set("user", refreshUserInfo(record.PrincipalID, user, orgText, role))
 	writeCompatModel(w, out)
+}
+
+// isJWT reports a token in compact JWS form (three dot-separated parts). An
+// auth-service credential has no dot.
+func isJWT(token string) bool { return strings.Count(token, ".") == 2 }
+
+// exchangeLegacy verifies a go-api refresh JWT, projects its principal and
+// organization into the auth schema, and exchanges it once. It returns false
+// when it answered.
+func (h compatHandlers) exchangeLegacy(w http.ResponseWriter, r *http.Request, token string) (session.Result, bool, error) {
+	ctx := r.Context()
+	legacy, err := h.Issuer.VerifyLegacyRefresh(token)
+	if err != nil {
+		h.rec.logger.DebugContext(ctx, "legacy refresh token refused", "reason", edgetoken.ReasonOf(err))
+		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(session.ReasonRefreshUnknown), textInvalidRefresh)
+		return session.Result{}, false, nil
+	}
+	err = h.Projector.Project(ctx, legacy.PrincipalID)
+	if err == nil && legacy.OrganizationID != nil {
+		err = h.Projector.ProjectOrganization(ctx, *legacy.OrganizationID)
+	}
+	switch {
+	case errors.Is(err, identity.ErrUserNotFound), errors.Is(err, identity.ErrOrganizationNotFound):
+		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(session.ReasonRefreshUnknown), textInvalidRefresh)
+		return session.Result{}, false, nil
+	case err != nil:
+		h.fail(w, r, opCompatRefresh, err)
+		return session.Result{}, false, nil
+	}
+	result, err := h.Sessions.ExchangeLegacy(ctx, legacy)
+	return result, true, err
 }
 
 // refreshUserInfo is go-api's refresh UserInfo: username and full_name stay

@@ -181,6 +181,9 @@ var unguardedColumns = map[string]map[string]string{
 		"client_ip": "lifecycle", "user_agent": "lifecycle", "last_seen_at": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
 		"token_hash": "security", "expires_at": "security", "revoked_at": "security", "revoked_reason": "security",
 		"revision": "security", "auth_time": "security", "amr": "security",
+		// Written once at insert; its own trigger (0016) refuses any change,
+		// inside audit.Commit or not, so it has no UPDATE OF guard.
+		"legacy_token_version": "lifecycle",
 	},
 	"refresh_credentials": {
 		"id": "lifecycle", "session_id": "lifecycle", "principal_id": "lifecycle", "superseded_by": "lifecycle",

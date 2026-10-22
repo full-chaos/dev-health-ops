@@ -27,12 +27,12 @@
 # pins that the legs together run exactly the steps of `ci`.
 #
 # ONE PLAN VERDICT (go-quality-plan). `cmd/cigate plan-verdict --go-files-full`, the
-# program go.yml's integration plan job runs, judges the change set once. Here it is
-# FULL for every change set (with --go-files-full a .go file is FULL, and any other path
-# is FULL), for any push to main, merge group, schedule or manual run, and for any failure
-# of the plan: every package runs. A NONE verdict would skip the test and race legs, and
-# an AFFECTED one would run only its packages; no change set plans either today. The
-# static leg and the fan-in always run and report.
+# program go.yml's integration plan job runs, judges the change set once. With
+# --go-files-full a .go file is FULL, so is any path in no declared class, any push to
+# main, merge group, schedule or manual run, and any failure of the plan: every package
+# runs. A non-Go path in a declared class plans the packages that read it (AFFECTED) or
+# NONE when no package reads it; NONE skips the test and race legs, AFFECTED runs only its
+# packages. The static leg and the fan-in always run and report.
 name: Go quality
 
 on:
@@ -155,6 +155,7 @@ jobs:
           - name: race-1-of-3
             args: race 1 3
             heavy: true
+            pool: true
           - name: race-2-of-3
             args: race 2 3
             heavy: true
@@ -170,7 +171,7 @@ jobs:
     # restores the hosted runner with no code change. Fork PRs always stay
     # hosted -- same safety condition as go.yml's dual-leg jobs (a public
     # repo must never hand a fork's untrusted PR code a self-hosted runner).
-    # CHAOS-10294: the race legs flagged `pool` (race-2, race-3) run on the bigboy ARC pool
+    # CHAOS-10294: the race legs flagged `pool` (race-1, race-2, race-3) run on the bigboy ARC pool
     # named by the repo variable CI_RACE_RUNNER, on push to main of THIS repo only
     # (ops is public: a fork or PR event never reaches the pool through this term).
     # The variable unset or empty = hosted. SELF_HOSTED_RUNNERS keeps routing

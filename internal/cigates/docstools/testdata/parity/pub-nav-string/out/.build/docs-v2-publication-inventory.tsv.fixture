@@ -1,0 +1,2 @@
+page_id	canonical_url	source_path	nav_path	label	content_type	owner	lifecycle	publication_state
+	/some-page_name/	some-page_name.md	Some Page_Name	Some Page_Name		documentation	active	public-canonical

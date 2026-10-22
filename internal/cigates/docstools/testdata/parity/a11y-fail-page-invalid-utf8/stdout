@@ -1,0 +1,2 @@
+ERROR: bad.html: could not parse HTML: 'utf-8' codec can't decode byte 0xff in position 6: invalid start byte
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

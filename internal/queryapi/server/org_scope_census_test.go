@@ -67,8 +67,8 @@ var orgScopeReadsScopedElsewhere = map[string]orgScopeElsewhere{
 	"internal/queryapi/security/overview.go:readTopRepos":  orgScopeSecurityFilter,
 	"internal/queryapi/security/overview.go:readTrend":     orgScopeSecurityFilter,
 	"internal/queryapi/teamscope/teamscope.go:UnitScope": {
-		"its latestEffortSource is analytics.LatestWorkUnitRepoEffortSource, which scopes both of its reads",
-		[]orgScopeSite{{"internal/queryapi/analytics/investment.go", "LatestWorkUnitRepoEffortSource", "WHERE org_id = {org_id:String}"}},
+		"its latestEffortSource is analytics.LatestWorkUnitRepoEffortSource, which scopes its one read (CHAOS-9231: the source reads the table once)",
+		[]orgScopeSite{{"internal/queryapi/analytics/investment.go", "latestWorkUnitRepoEffortSource", "WHERE org_id = {org_id:String}"}},
 	},
 	"internal/queryapi/newestrow/newestrow.go:PerTeamPredicate": {
 		"its where is the caller's scope filter, which starts with the org_id predicate",

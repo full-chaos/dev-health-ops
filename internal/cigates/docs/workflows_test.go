@@ -26,11 +26,11 @@ type expectedCheck struct {
 }
 
 var docsGuardsChecks = []expectedCheck{
-	{"Validate publication inventory and IA placement", pyCmd("validate_docs_v2_publication"), nil},
+	{"Validate publication inventory and IA placement", goCmd("validate-publication"), nil},
 	{"Strict canonical build", "python -m mkdocs build --strict", []string{"--config-file mkdocs.yml"}},
 	{"Check rendered links, anchors, and assets", goCmd("check-built-site-links"), []string{"--site-dir .build/docs"}},
 	{"Check task-based search acceptance", goCmd("check-docs-search"), []string{"--site-dir .build/docs", "--queries " + searchAcceptance}},
-	{"Check structural accessibility invariants", pyCmd("check_docs_candidate_accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
+	{"Check structural accessibility invariants", goCmd("check-docs-accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
 	{"Check code prerequisites", goCmd("check-code-prerequisites"), nil},
 	{"Check freshness inventory", goCmd("check-freshness"), nil},
 }
@@ -45,7 +45,6 @@ const (
 var docsGuardsTriggerPaths = []string{
 	"docs/**", "mkdocs.yml", "docs-data/**", glue("requirements-docs", ".", "txt"),
 	".github/workflows/docs-guards.yml", ".github/workflows/docs-cloudflare.yml",
-	"scripts/" + "validate_docs_v2_publication" + "." + "py", "scripts/" + "check_docs_candidate_accessibility" + "." + "py",
 	"scripts/" + "check_freshness_inventory" + "." + "py",
 }
 
@@ -461,43 +460,42 @@ func cloudflareStep(d docTree, job, step string) (map[string]any, error) {
 
 func cloudflareGuard(d docTree) []string {
 	var out []string
-	status := func(script string, env ...string) int { return bashStatus(script, env...) }
-	deploy, err := cloudflareStep(d, "deploy-production", "Confirm production deployment is enabled")
-	if err != nil {
-		return []string{err.Error()}
+	raw, rerr := d.read(cloudflarePath)
+	if rerr != nil {
+		return []string{rerr.Error()}
 	}
-	script := asString(deploy["run"])
-	if status(script, "ENABLED=false", "CONFIRMATION=docs.fullchaos.dev") != 1 {
-		out = append(out, "the production deploy gate did not refuse a disabled flag")
+	for _, forbidden := range []string{"wrangler@", "wrangler deploy", "wrangler versions", "wrangler rollback", "WRANGLER_OUTPUT", "read_wrangler_output", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "deploy-production", "rollback-production", "docs-production", "pull-requests: write"} {
+		mustNotContain(&out, "the Cloudflare docs workflow (Workers Builds owns the deploy)", raw, forbidden)
 	}
-	if status(script, "ENABLED=true", "CONFIRMATION=nope") != 1 {
-		out = append(out, "the production deploy gate did not refuse a wrong confirmation")
+	if wf, err := parseYAML(d, cloudflarePath); err != nil {
+		return append(out, err.Error())
+	} else {
+		jobs := asMap(wf["jobs"])
+		if len(jobs) != 2 || jobs["preview-or-build"] == nil || jobs["smoke-production"] == nil {
+			out = append(out, fmt.Sprintf("%s must hold exactly the jobs preview-or-build and smoke-production, found %d jobs", cloudflarePath, len(jobs)))
+		}
+		smoke := asMap(jobs["smoke-production"])
+		mustContain(&out, "the smoke job condition", asString(smoke["if"]), "github.event_name == 'workflow_dispatch'")
+		mustContain(&out, "the smoke job condition", asString(smoke["if"]), "inputs.action == 'smoke'")
+		if smoke["environment"] != nil || smoke["env"] != nil {
+			out = append(out, "the smoke job must not carry an environment or env: it is read-only and holds no secrets")
+		}
 	}
-	if status(script, "ENABLED=true", "CONFIRMATION=docs.fullchaos.dev") != 0 {
-		out = append(out, "the production deploy gate refused a correct confirmation")
-	}
-	rollback, err := cloudflareStep(d, "rollback-production", "Validate rollback request")
+	smokeStep, err := cloudflareStep(d, "smoke-production", "Smoke-test the canonical domain")
 	if err != nil {
 		return append(out, err.Error())
 	}
-	rscript := asString(rollback["run"])
-	good := map[string]string{"ENABLED": "true", "CONFIRMATION": "docs.fullchaos.dev", "VERSION_ID": "abc123"}
-	envOf := func(skip string) []string {
-		var e []string
-		for k, v := range good {
-			if k == skip {
-				v = ""
-			}
-			e = append(e, k+"="+v)
-		}
-		return e
+	if smokeStep["env"] != nil {
+		out = append(out, "the smoke step must not carry env: it is read-only and holds no secrets")
 	}
-	if status(rscript, envOf("")...) != 0 {
-		out = append(out, "the rollback gate refused a complete request")
+	srun := asString(smokeStep["run"])
+	for _, want := range []string{"./cmd/cigate docs host-smoke", "--origin https://docs.fullchaos.dev", "--redirects docs-data/redirects.tsv"} {
+		mustContain(&out, "the smoke step", srun, want)
 	}
-	for _, missing := range []string{"ENABLED", "CONFIRMATION", "VERSION_ID"} {
-		if status(rscript, envOf(missing)...) != 1 {
-			out = append(out, "the rollback gate accepted a request without "+missing)
+	mustContain(&out, "the smoke step", srun, "exit 0")
+	for _, line := range strings.Split(srun, "\n") {
+		if strings.Contains(line, "docs host-smoke") && !strings.Contains(line, "go run ") {
+			out = append(out, "the smoke step must run host-smoke, not echo it")
 		}
 	}
 	preview, err := cloudflareStep(d, "preview-or-build", "Build and prepare validated preview assets")
@@ -528,28 +526,32 @@ func cloudflareGuard(d docTree) []string {
 			out = append(out, fmt.Sprintf("preview-or-build must set up Go exactly once, found %d: the build runs cmd/cigate, and a second setup-go step is redundant", goSetups))
 		}
 	}
-	record, err := cloudflareStep(d, "preview-or-build", "Record why a Cloudflare preview was not uploaded")
-	if err != nil {
-		return append(out, err.Error())
-	}
-	mustContain(&out, "the preview no-op record condition", asString(record["if"]), "steps.upload.outcome == 'skipped'")
-	rrun := asString(record["run"])
-	mustNotContain(&out, "the preview no-op record step", rrun, "wrangler")
-	mustContain(&out, "the preview no-op record step", rrun, "$GITHUB_STEP_SUMMARY")
 	return out
 }
 
 func TestCloudflareWorkflowGates(t *testing.T) {
 	assertGuard(t, cloudflareGuard, []plantCase{
-		{"the production flag check is removed", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, cloudflarePath, "          test \"$ENABLED\" = 'true' || {\n            echo 'DOCS_CLOUDFLARE_PRODUCTION_ENABLED is not true.'\n            exit 1\n          }\n          test \"$CONFIRMATION\" = 'docs.fullchaos.dev' || {\n            echo 'Production confirmation", "          test \"$CONFIRMATION\" = 'docs.fullchaos.dev' || {\n            echo 'Production confirmation")
-		}, "disabled flag"},
-		{"the production confirmation text is not checked", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, cloudflarePath, "test \"$CONFIRMATION\" = 'docs.fullchaos.dev' || {\n            echo 'Production confirmation", "test -n \"$CONFIRMATION\" || {\n            echo 'Production confirmation")
-		}, "wrong confirmation"},
-		{"the rollback version id is not required", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, cloudflarePath, "test -n \"$VERSION_ID\"", "test -z \"$VERSION_ID_UNUSED\"")
-		}, "VERSION_ID"},
+		{"a wrangler deploy step returns to the preview job", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "  smoke-production:\n", "  deploy-production:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npx --yes wrangler deploy\n\n  smoke-production:\n")
+		}, "wrangler"},
+		{"read_wrangler_output returns to the workflow", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "          sleep 10\n", "          sleep 10\n          python scripts/read_wrangler_output.py\n")
+		}, "read_wrangler_output"},
+		{"a Cloudflare secret returns to the smoke job", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "      - name: Smoke-test the canonical domain\n", "      - name: Smoke-test the canonical domain\n        env:\n          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n")
+		}, "CLOUDFLARE_API_TOKEN"},
+		{"the smoke job runs on every trigger", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "    if: github.event_name == 'workflow_dispatch' && inputs.action == 'smoke'\n", "")
+		}, "the smoke job condition"},
+		{"the smoke job gains an environment", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "  smoke-production:\n", "  smoke-production:\n    environment: docs-production\n")
+		}, "docs-production"},
+		{"the smoke check is replaced by an echo", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "            if go run -trimpath -mod=readonly ./cmd/cigate docs host-smoke", "            if echo ./cmd/cigate docs host-smoke")
+		}, "must run host-smoke"},
+		{"a third job is added", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cloudflarePath, "  smoke-production:\n", "  extra:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n\n  smoke-production:\n")
+		}, "exactly the jobs"},
 		{"the preview build status is masked by || true", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cloudflarePath, pyCmd("build_docs_cloudflare")+" --mode preview --full-check", pyCmd("build_docs_cloudflare")+" --mode preview --full-check || true")
 		}, `the preview build step "Build and prepare validated preview assets" masks a failing command status ("|| true")`},
@@ -586,8 +588,5 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 			}
 			return d.added(cloudflarePath, text[:i]+text[i+j:])
 		}, "preview-or-build must set up Go exactly once, found 0"},
-		{"the no-op record starts to deploy", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, cloudflarePath, "            echo '### Cloudflare preview not uploaded'", "            wrangler deploy\n            echo '### Cloudflare preview not uploaded'")
-		}, "wrangler"},
 	})
 }

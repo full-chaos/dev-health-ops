@@ -20,6 +20,7 @@ internal/jobs/metrics/workitemblockers
 internal/jobs/metrics/workitemengine
 internal/jobs/metrics/workitemmetrics
 internal/jobs/workgraph/linktier
+internal/jobs/workgraph/units
 internal/netclass
 internal/operationalordering
 internal/pgmigrate

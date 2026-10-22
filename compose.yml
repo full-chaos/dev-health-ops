@@ -518,6 +518,7 @@ services:
       # CLICKHOUSE_DB to another name must mount its own file, or go-api is
       # never ready.
       - ./docker/clickhouse-users.d/dho_api_ch.xml:/etc/clickhouse-server/users.d/dho_api_ch.xml:ro
+      - ./docker/clickhouse-config.d/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
     healthcheck:
       test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8123/ping" ]
       interval: 10s
@@ -1364,8 +1365,8 @@ services:
   # One-shot: applies the auth schema lineage and the runtime grants. It
   # connects as the database owner (the migration role), never as the runtime
   # login: auth-migrate refuses a connection that authenticates AS the runtime
-  # role. Run it again after an upgrade; `auth-migrate --check` reports whether
-  # the schema is at the embedded head without issuing DDL.
+  # role. `auth-migrate --check` reports whether the schema is at the embedded
+  # head without issuing DDL; the public-table grants come from auth-grants.
   auth-migrate:
     image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
     build:
@@ -1389,6 +1390,33 @@ services:
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     depends_on:
       auth-provision:
+        condition: service_completed_successfully
+
+  # One-shot: `auth-migrate grants` applies the runtime role's grants on the
+  # listed public application tables. It runs after the ops migrate (which
+  # creates those tables) and after auth-migrate (which creates the role's
+  # auth schema), as the Helm hook Job auth-grants does. Same image, hardening
+  # and credentials as auth-migrate. It is idempotent and fails loud when a
+  # listed public table is missing.
+  auth-grants:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command: ["grants"]
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      auth-migrate:
         condition: service_completed_successfully
 
   # The Auth Control Plane HTTP service. DORMANT: its API listener mounts no
@@ -1443,7 +1471,7 @@ services:
     depends_on:
       auth-keys-init:
         condition: service_completed_successfully
-      auth-migrate:
+      auth-grants:
         condition: service_completed_successfully
 
   # The Go query plane (`dho query-api`): /graphql and the /api/v1 read

@@ -80,6 +80,7 @@ internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci
 internal/cigates/nopython	test	ci
 internal/cigates/proofteardown	test	ci
+internal/cigates/queuecreds	code	contracts
 internal/cigates/raceunweighted	test	ci
 internal/cigates/routing	test	ci
 internal/cigates/routing	test	compose.yml

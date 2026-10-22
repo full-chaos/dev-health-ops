@@ -572,8 +572,11 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	if _, err := domainPool.Exec(ctx, "TRUNCATE public.worker_job_outbox"); err == nil {
 		t.Fatal("domain producer unexpectedly truncates relay-owned outbox state")
 	}
-	if _, err := domainPool.Exec(ctx, "SELECT * FROM public.alembic_version"); err == nil {
-		t.Fatal("domain role unexpectedly reads Alembic migration metadata")
+	if _, err := domainPool.Exec(ctx, "SELECT * FROM public.alembic_version"); err != nil {
+		t.Fatalf("domain role cannot read Alembic migration metadata for the schema gate: %v", err)
+	}
+	if _, err := domainPool.Exec(ctx, "UPDATE public.alembic_version SET version_num = version_num"); err == nil {
+		t.Fatal("domain role unexpectedly writes Alembic migration metadata")
 	}
 	if _, err := domainPool.Exec(ctx, "CREATE TABLE public.domain_ddl_forbidden (id bigint)"); err == nil {
 		t.Fatal("domain role unexpectedly has CREATE on public schema")

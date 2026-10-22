@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/externalrecompute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/pagerduty"
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -227,6 +228,11 @@ func (storage *productionStreamStorage) ClickHouseReady(ctx context.Context) err
 		return errStreamDependencyUnavailable
 	}
 	return nil
+}
+
+// RecordedRevisions is the schema gate's read: the domain role's SELECT on alembic_version.
+func (storage *productionStreamStorage) RecordedRevisions(ctx context.Context) ([]string, error) {
+	return schemagate.PoolRecorded(ctx, storage.domainPool)
 }
 
 func (storage *productionStreamStorage) DomainPostgresReady(ctx context.Context) error {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -118,6 +119,15 @@ func wrapSchedulerReadinessCheckWithLogging(logger *slog.Logger, check string, r
 		}
 		return err
 	}
+}
+
+// RecordedRevisions is the schema gate's read: the domain role's SELECT on
+// alembic_version, on the readiness pool.
+func (database *postgresSchedulerDatabase) RecordedRevisions(ctx context.Context) ([]string, error) {
+	if database == nil || database.pools == nil {
+		return nil, &schemagate.ReadError{Class: "no_pool"}
+	}
+	return schemagate.PoolRecorded(ctx, database.pools.ReadinessPool())
 }
 
 func (database *postgresSchedulerDatabase) DomainReady(ctx context.Context) error {
@@ -660,6 +670,9 @@ func buildSchedulerLoopWithSources(
 			database.Close()
 		}
 	}()
+	if schemagate.Enforce(ctx, logger, "scheduler", database) != nil {
+		return nil, dependencyUnavailable("scheduler_schema_behind")
+	}
 	domainCheck := database.DomainReady
 	if provider, ok := database.(domainPostureCheckProvider); ok {
 		if cached := provider.DomainPostureCheck(logger); cached != nil {

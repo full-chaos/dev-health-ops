@@ -781,6 +781,9 @@ type RolePosture struct {
 func domainPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
+			// CHAOS-8785: the schema gate at process start reads the recorded
+			// migration revisions (revision ids only, no write of any kind).
+			{"alembic_version", false, false, false},
 			{"integrations", false, false, false},
 			{"integration_sources", true, true, false},
 			{"integration_datasets", true, true, false},

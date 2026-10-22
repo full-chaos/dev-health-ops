@@ -40,3 +40,17 @@ func TestVerbWithoutADatabaseFailsWithoutRunning(t *testing.T) {
 		t.Fatal("no reason printed")
 	}
 }
+
+func TestVerbIgnoresTheSchemaOwnerDSN(t *testing.T) {
+	var stderr bytes.Buffer
+	lookup := func(k string) (string, bool) {
+		if k == "MIGRATION_DATABASE_URI" || k == "POSTGRES_URI" {
+			return "postgres://owner@127.0.0.1:1/db", true
+		}
+		return "", false
+	}
+	code := Command().Children[0].Run(context.Background(), cli.Env{Args: []string{"-dry-run"}, Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &stderr})
+	if code != cli.ExitFailure || !bytes.Contains(stderr.Bytes(), []byte("AUTH_DATABASE_URI")) {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+}

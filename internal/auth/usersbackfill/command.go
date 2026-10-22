@@ -10,13 +10,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-const schemaEnv = "AUTH_DATABASE_SCHEMA"
+// The auth-service runtime role: it writes auth.* and reads the PublicReadColumns of public.users.
+const (
+	schemaEnv = authconfig.EnvDatabaseSchema
+	dsnEnv    = authconfig.EnvDatabaseURI
+)
 
 // Command is the `auth` group of dho.
 func Command() cli.Command {
@@ -57,8 +62,9 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: AUTH_DATABASE_SCHEMA is not a valid schema name")
 		return cli.ExitFailure
 	}
-	dsn, _, ok := config.ResolveAdminDatabase(env.Lookup, env.Stderr)
-	if !ok {
+	dsn, configured, err := secrets.ResolveDSNSetting(dsnEnv, env.Lookup)
+	if err != nil || !configured {
+		fmt.Fprintln(env.Stderr, "users-backfill: AUTH_DATABASE_URI (or AUTH_DATABASE_URI_FILE) is required")
 		return cli.ExitFailure
 	}
 	pool, err := pgxpool.New(ctx, dsn.Reveal())

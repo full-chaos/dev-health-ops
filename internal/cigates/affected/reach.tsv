@@ -69,6 +69,7 @@ internal/auth/contracts	contracts.go	internal/auth/identity/local
 internal/auth/contracts	contracts.go	internal/auth/identity/oidc
 internal/auth/contracts	contracts.go	internal/auth/identity/saml
 internal/auth/contracts	contracts.go	internal/auth/identity/social
+internal/auth/contracts	contracts.go	internal/auth/linkmail
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts

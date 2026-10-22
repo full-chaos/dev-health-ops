@@ -80,6 +80,58 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 	}
 }
 
+// UsersWriteGrant is the switch-gated write access to public.users: the auth
+// runtime role projects each user it creates or changes to go-api's table in
+// the same transaction (AUTH_USERS_OWNED). INSERT and UPDATE on exactly these
+// columns, no DELETE, no TRUNCATE, no other table. token_version is inserted
+// as 0 and never updated: the flow that ends a user's sessions owns the bump.
+func UsersWriteGrant() (insert, update []string) {
+	return []string{
+			"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
+			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at",
+		},
+		[]string{"password_hash", "is_verified", "updated_at"}
+}
+
+// usersWriteStatements grants UsersWriteGrant when the switch is on. Off, the
+// REVOKE ALL that publicReadStatements issues on the table already removed any
+// write privilege.
+func usersWriteStatements(ctx context.Context, conn querier, options Options, logger *slog.Logger) ([]string, error) {
+	if !options.UsersOwned {
+		return nil, nil
+	}
+	exists, err := publicTableState(ctx, conn, "users")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		if options.RequirePublicTables {
+			return nil, fmt.Errorf("%w: %s.users", ErrPublicTableMissing, publicSchema)
+		}
+		return nil, nil
+	}
+	roleID, err := NewValidatedIdentifier(options.RuntimeRole)
+	if err != nil {
+		return nil, err
+	}
+	role := quoteIdentifier(roleID)
+	table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(mustValidatedIdentifier("users"))
+	insert, update := UsersWriteGrant()
+	insertColumns, err := quotedColumns(insert)
+	if err != nil {
+		return nil, err
+	}
+	updateColumns, err := quotedColumns(update)
+	if err != nil {
+		return nil, err
+	}
+	logger.InfoContext(ctx, "applying the users-owned write grant", "schema", publicSchema, "table", "users")
+	return []string{
+		fmt.Sprintf(`GRANT INSERT (%s) ON TABLE %s TO %s`, strings.Join(insertColumns, ", "), table, role),
+		fmt.Sprintf(`GRANT UPDATE (%s) ON TABLE %s TO %s`, strings.Join(updateColumns, ", "), table, role),
+	}, nil
+}
+
 // quotedColumns validates and quotes each name.
 func quotedColumns(names []string) ([]string, error) {
 	columns := make([]string, 0, len(names))
@@ -246,7 +298,42 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		writeDeclared["UPDATE"][column] = struct{}{}
 	}
 
+	usersInsert, usersUpdate := UsersWriteGrant()
+	usersDeclared := map[string]map[string]struct{}{"INSERT": {}, "UPDATE": {}}
+	for _, column := range usersInsert {
+		usersDeclared["INSERT"][column] = struct{}{}
+	}
+	for _, column := range usersUpdate {
+		usersDeclared["UPDATE"][column] = struct{}{}
+	}
+
 	var violations []Violation
+	if options.UsersOwned {
+		usersExist, err := publicTableState(ctx, conn, "users")
+		if err != nil {
+			return nil, err
+		}
+		if usersExist {
+			for _, privilege := range []string{"INSERT", "UPDATE"} {
+				for column := range usersDeclared[privilege] {
+					var held bool
+					if err := conn.QueryRow(ctx,
+						`SELECT has_column_privilege($1, format('%I.%I', $2::text, $3::text), $4, $5)`,
+						options.RuntimeRole, publicSchema, "users", column, privilege,
+					).Scan(&held); err != nil {
+						return nil, fmt.Errorf("%w: column %s.users.%s is missing or unreadable to the posture check",
+							ErrMigrationFailed, publicSchema, column)
+					}
+					if !held {
+						violations = append(violations, Violation{
+							Kind: "column", Schema: publicSchema, Object: "users." + column, Privilege: privilege,
+							Detail: "declared in UsersWriteGrant (the switch is on) but the runtime role does not hold it (missing grant)",
+						})
+					}
+				}
+			}
+		}
+	}
 	for _, entry := range PublicReadColumns() {
 		exists, err := publicTableState(ctx, conn, entry.Table)
 		if err != nil {
@@ -330,6 +417,11 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		}
 		if schema == publicSchema && table == write.Table && (kind == "r" || kind == "p") {
 			if _, ok := writeDeclared[privilege][column]; ok {
+				continue
+			}
+		}
+		if options.UsersOwned && schema == publicSchema && table == "users" && (kind == "r" || kind == "p") {
+			if _, ok := usersDeclared[privilege][column]; ok {
 				continue
 			}
 		}

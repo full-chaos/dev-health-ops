@@ -129,6 +129,13 @@ goApi:
 authService:
   enabled: false
   replicas: 1
+  # -- The users-owned switch (D3c, AUTH_USERS_OWNED). true: auth-service owns
+  #    user creation, projects each user to public.users in the same transaction,
+  #    mounts the password and e-mail verification routes, and does not become
+  #    ready while auth.users is incomplete; the auth-migrate and grants Jobs then
+  #    grant its runtime role INSERT/UPDATE on the projection columns of
+  #    public.users (false revokes them). The flip is a production decision.
+  usersOwned: false
   # -- The auth API listener. It mounts no route in Wave 1.
   port: 8095
   # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never

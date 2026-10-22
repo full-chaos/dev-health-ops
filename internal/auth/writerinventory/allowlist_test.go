@@ -87,6 +87,10 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Consume", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.insertOrganization", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.updateOrganization", Table: "auth.organizations", Verb: "UPDATE"},
+	// The users-owned projection (CHAOS-10630): written only inside the audit.Commit that writes the auth rows; the runtime role holds the matching column grants only while AUTH_USERS_OWNED is on.
+	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicUser", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/auth/identity/publicusers.go", Func: "updatePublicPassword", Table: "public.users", Verb: "UPDATE"},
+	{File: "internal/auth/identity/publicusers.go", Func: "updatePublicVerified", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},

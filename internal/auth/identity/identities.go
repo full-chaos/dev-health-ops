@@ -251,6 +251,15 @@ type ProvisionRequest struct {
 	Email    string
 	FullName string
 	Actor    Actor
+	// Username and LegacyFullName are the provider's own username and full
+	// name, written to public.users as go-api writes them (empty is NULL).
+	Username       string
+	LegacyFullName string
+	// LegacyProvider and LegacySubject are the public.users auth_provider and
+	// auth_provider_id of an SSO account (its key's provider is a provider row
+	// id); a social key derives both from itself.
+	LegacyProvider string
+	LegacySubject  string
 }
 
 // ProvisionFederated creates a user principal, its auth.users row and its
@@ -272,6 +281,10 @@ func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_
 		return uuid.Nil, err
 	}
 	principal, linkID := uuid.New(), uuid.New()
+	legacy, err := federatedPublicUser(principal, emailLower, req)
+	if err != nil {
+		return uuid.Nil, err
+	}
 	subject, target := principal.String(), linkID.String()
 	auditEvent := identityAudit("auth.principal.provisioned", "principal_provisioned", req.Key, target, subject, req.Actor)
 	auditEvent.Attributes["target_kind"], auditEvent.Attributes["target_id"] = "principal", subject
@@ -285,6 +298,9 @@ func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_
 VALUES ($1, $2, $3, clock_timestamp())`, principal, req.Email, emailLower); err != nil {
 				return err
 			}
+			if err := insertPublicUser(ctx, tx, legacy); err != nil {
+				return err
+			}
 			return s.attachIdentity(ctx, tx, linkID, req.Key, principal, true, ErrIdentityTaken, ErrIdentityTaken)
 		},
 		Audit: auditEvent,
@@ -295,7 +311,7 @@ VALUES ($1, $2, $3, clock_timestamp())`, principal, req.Email, emailLower); err 
 	})
 	switch {
 	case err == nil:
-	case isEmailCollision(err):
+	case isEmailCollision(err), isPublicEmailCollision(err):
 		return uuid.Nil, ErrEmailTaken
 	case errors.Is(err, ErrIdentityTaken), isUniqueViolation(err, externalIdentityKeyIndex):
 		return uuid.Nil, ErrIdentityTaken

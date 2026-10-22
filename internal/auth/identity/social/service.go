@@ -158,7 +158,7 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 	if name == "" {
 		name = profile.Username
 	}
-	id, err := s.store.ProvisionFederated(ctx, identity.ProvisionRequest{Key: profile.ExternalKey, Email: email, FullName: name, Actor: identity.SelfSignUp(requestID)})
+	id, err := s.store.ProvisionFederated(ctx, identity.ProvisionRequest{Key: profile.ExternalKey, Email: email, FullName: name, Actor: identity.SelfSignUp(requestID), Username: profile.Username, LegacyFullName: profile.FullName})
 	switch {
 	case err == nil:
 		return ExchangeResult{PrincipalID: id, Created: true}, nil

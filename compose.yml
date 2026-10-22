@@ -1387,6 +1387,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     depends_on:
       auth-provision:
@@ -1414,6 +1415,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     depends_on:
       migrate:
@@ -1453,6 +1455,7 @@ services:
       AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s
       AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
       AUTH_SIGNING_KEY_ID: ${AUTH_SIGNING_KEY_ID:-auth-signing-local}
     volumes:

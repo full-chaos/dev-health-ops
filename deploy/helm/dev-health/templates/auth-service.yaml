@@ -28,6 +28,7 @@ stage-signing-key init container exists.
 {{- if ge (int (trimSuffix "s" (toString $a.shutdownTimeout))) (int $a.terminationGracePeriodSeconds) }}{{- fail "authService.shutdownTimeout must be below authService.terminationGracePeriodSeconds: the kubelet kills the pod at the grace period, so a longer shutdown bound is never reached" }}{{- end }}
 {{- range $a.extraEnv }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_USERS_OWNED: use authService.usersOwned, which the auth-migrate and grants Jobs read too so the write grant on public.users follows the switch" }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
 {{- if eq (lower (trim .name)) "auth_signing_keyset_file" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEYSET_FILE: the chart stages one signing key (authService.signingKey) and renders its file and kid, which the service refuses beside a key-set manifest; key-set staging comes with the rotation leaf" }}{{- end }}
 {{- end }}
@@ -101,6 +102,10 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.hs256SecretName" . | quote }}, key: "JWT_SECRET_KEY"}}
             - name: AUTH_SESSION_SUCCESSOR_KEY
               valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.successor.secretName | quote }}, key: {{ $a.sessionKeys.successor.secretKey | quote }}}}
+          {{- end }}
+          {{- if $a.usersOwned }}
+            - name: AUTH_USERS_OWNED
+              value: "true"
           {{- end }}
           {{- with $a.extraEnv }}
             {{- toYaml . | nindent 12 }}

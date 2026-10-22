@@ -51,6 +51,10 @@ spec:
               value: {{ include "dev-health.authDatabaseSchema" . | quote }}
             - name: AUTH_RUNTIME_DATABASE_ROLE
               value: {{ $m.runtimeRole | quote }}
+            {{- if .Values.authService.usersOwned }}
+            - name: AUTH_USERS_OWNED
+              value: "true"
+            {{- end }}
             {{- $readers := concat $m.sessionReaderRoles (compact (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi)))) | uniq }}
             {{- with $readers }}
             - name: AUTH_SESSION_READER_ROLES

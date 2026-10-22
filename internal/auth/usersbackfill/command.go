@@ -54,6 +54,13 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
 		return cli.ExitUsage
 	}
+	if owned, err := authconfig.UsersOwnedFromLookup(env.Lookup); err != nil {
+		fmt.Fprintln(env.Stderr, "users-backfill: AUTH_USERS_OWNED must be true or false")
+		return cli.ExitFailure
+	} else if owned {
+		fmt.Fprintln(env.Stderr, "users-backfill: refused: AUTH_USERS_OWNED is true, auth.users is the authority and this command copies from public.users")
+		return cli.ExitRefused
+	}
 	schemaName := "auth"
 	if v, ok := env.Lookup(schemaEnv); ok && v != "" {
 		schemaName = v

@@ -51,6 +51,10 @@ type Options struct {
 	// the ops migration, so a missing table is a failed release, not an
 	// auth-only database.
 	RequirePublicTables bool
+	// UsersOwned is the users-owned switch (AUTH_USERS_OWNED): the runtime role
+	// holds UsersWriteGrant on public.users. Off, it holds no write privilege
+	// there, and the grants pass revokes any it held.
+	UsersOwned bool
 }
 
 // Result reports what a run did.

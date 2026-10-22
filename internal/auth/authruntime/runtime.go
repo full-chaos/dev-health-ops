@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
@@ -115,7 +116,7 @@ func compatRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	sessions *session.Store, issuer *authapi.Issuer,
 ) ([]httpapi.Route, error) {
-	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger})
+	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger, UsersOwnedByAuth: cfg.UsersOwned})
 	if err != nil {
 		return nil, err
 	}
@@ -390,6 +391,25 @@ func configureWithRoutes(
 	if err != nil {
 		closeStore()
 		return nil, err
+	}
+	if cfg.UsersOwned {
+		pool := store.Pool()
+		var usersReady atomic.Bool
+		if err := registry.RegisterRequired(CheckUsersOwned, func(ctx context.Context) error {
+			if usersReady.Load() {
+				return nil
+			}
+			guardErr := checkUsersOwned(ctx, pool, schemaID)
+			if guardErr != nil {
+				logger.ErrorContext(ctx, "readiness check failed", "check", CheckUsersOwned, "reason", guardErr.Error())
+				return guardErr
+			}
+			usersReady.Store(true)
+			return nil
+		}); err != nil {
+			closeStore()
+			return nil, err
+		}
 	}
 	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID)
 	if err != nil {

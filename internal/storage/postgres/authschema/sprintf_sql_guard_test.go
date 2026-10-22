@@ -45,6 +45,14 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "columns holds only quoteIdentifier results of validated manifest names",
 	},
 	{
+		file: "publicreads.go", fn: "usersWriteStatements", operand: `strings.Join(insertColumns, ", ")`,
+		reason: "insertColumns holds only quoteIdentifier results of the validated UsersWriteGrant names",
+	},
+	{
+		file: "publicreads.go", fn: "usersWriteStatements", operand: `strings.Join(updateColumns, ", ")`,
+		reason: "updateColumns holds only quoteIdentifier results of the validated UsersWriteGrant names",
+	},
+	{
 		file: "session_readers.go", fn: "sessionReaderStatements", operand: `strings.Join(columns, ", ")`,
 		reason: "columns holds only quoteIdentifier results of the validated SessionReaderColumns names",
 	},

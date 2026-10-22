@@ -229,9 +229,8 @@ func CheckFreshness(lastVerified string, commitDate, now time.Time, isAncestor b
 // Ancestry, not equality, is the rule on purpose. main moves on every push,
 // so a branch whose recorded merge-base has fallen behind the CURRENT
 // merge-base is the ordinary case -- it only means nobody has re-rendered
-// since main last moved, which the separate render-age budget (see
-// CheckRenderAge) already bounds, and failing it here would make every PR
-// that sat for more than a few minutes fail for no real reason. What
+// since main last moved, and failing it here would make every PR that sat
+// for more than a few minutes fail for no real reason. What
 // ancestry catches is the failure age cannot: a rebase that replays this
 // branch's commits onto a new base whose own history does not contain the
 // commit ops_sha names (most often because it was squashed into a

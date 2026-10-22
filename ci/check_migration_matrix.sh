@@ -138,7 +138,7 @@ merge replaces a branch's commits with one new commit, so the original is
 never reachable from main again and this check fails on main forever -- which
 is exactly what #2389 did. ops_sha must be the MERGE-BASE with main (the last
 main commit the render observed), which survives a squash; the render commit
-itself is recorded separately as render_commit and is deliberately NOT checked.
+is no longer recorded at all (CHAOS-8787).
 A shallow CI checkout (needs fetch-depth: 0) is the other, rarer cause.
 
 Re-verify, then commit:

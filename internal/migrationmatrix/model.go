@@ -191,6 +191,10 @@ func LoadRender(path string) (*Render, error) {
 		return nil, fmt.Errorf("read render snapshot: %w", err)
 	}
 	var render Render
+	raw, err = dropLegacyRenderFields(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&render); err != nil {
@@ -367,4 +371,17 @@ func LoadCatalog(path string) (Catalog, error) {
 		return Catalog{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return catalog, nil
+}
+
+// dropLegacyRenderFields removes the two stamps -render no longer writes
+// (CHAOS-8787) so a snapshot committed before that change still loads, and
+// `-render -fleet none` keeps its fleet reading instead of discarding it.
+func dropLegacyRenderFields(raw []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	delete(fields, "rendered_at")
+	delete(fields, "render_commit")
+	return json.Marshal(fields)
 }

@@ -418,3 +418,20 @@ func TestLoadCatalogOverItsInputDomain(t *testing.T) {
 		t.Logf("cell %-62s observed accepted=%-5v contract accepted=%v", c.name, err == nil, c.accept)
 	}
 }
+
+func TestLoadRenderAcceptsASnapshotCommittedBeforeTheStampsWereDropped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "last-render.json")
+	legacy := `{"schema_version":1,"rendered_at":"2026-10-20T20:45:19Z","ops_sha":"` + strings.Repeat("a", 40) +
+		`","render_commit":"` + strings.Repeat("b", 40) + `","schema_digest":"sha256:` + strings.Repeat("c", 64) +
+		`","fleet_read_at":"2026-10-15T21:07:21Z","fleet_source":"docker inspect x"}`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	render, err := LoadRender(path)
+	if err != nil {
+		t.Fatalf("a snapshot with the legacy stamps must still load: %v", err)
+	}
+	if render.FleetSource != "docker inspect x" || render.FleetReadAt.IsZero() {
+		t.Fatalf("the fleet reading must survive the load, got %q %v", render.FleetSource, render.FleetReadAt)
+	}
+}

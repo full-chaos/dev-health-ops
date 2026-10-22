@@ -138,6 +138,7 @@ internal/cigates/docstools	validate_inventory_review.go	cmd/cigate
 internal/cigates/docstools	validate_inventory_review.go	internal/cigates/docstools
 internal/cigates/livee2e	cli.go	cmd/cigate
 internal/cigates/livee2e	cli.go	internal/cigates/livee2e
+internal/cigates/queuecreds	scan.go	internal/cigates/queuecreds
 internal/cigates/releasetag	releasetag.go	cmd/cigate
 internal/cigates/releasetag	releasetag.go	internal/cigates/releasetag
 internal/cigates/routing	deps.go	cmd/cigate
@@ -207,6 +208,7 @@ internal/gqlgenguard	plan.go	internal/gqlgenguard
 internal/identityalias	resolver.go	cmd/dho
 internal/identityalias	resolver.go	deploy/helm/dev-health
 internal/identityalias	resolver.go	internal/atlassianteams
+internal/identityalias	resolver.go	internal/cigates/queuecreds
 internal/identityalias	resolver.go	internal/clicredentials
 internal/identityalias	resolver.go	internal/fixturescli
 internal/identityalias	resolver.go	internal/identityalias
@@ -249,6 +251,7 @@ internal/jobcontract	registry.go	internal/apiservice/externalingestvenue
 internal/jobcontract	registry.go	internal/apiservice/metricsvenue
 internal/jobcontract	registry.go	internal/apiservice/ownershipvenue
 internal/jobcontract	registry.go	internal/apiservice/ssovenue
+internal/jobcontract	registry.go	internal/cigates/queuecreds
 internal/jobcontract	registry.go	internal/clicredentials
 internal/jobcontract	registry.go	internal/contractcheck
 internal/jobcontract	registry.go	internal/deploymentcontract

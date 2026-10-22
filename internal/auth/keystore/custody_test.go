@@ -782,3 +782,47 @@ func TestACompromisedKeyLatchesBeforeAnyOtherEntryCanFail(t *testing.T) {
 		})
 	}
 }
+
+// The latch pass walks tokens, so no shape of a compromised entry escapes it:
+// a kid that is missing or not a string, a repeated state member, a repeated
+// keys member, a syntax error after the entry. Each ends with b, and b's key
+// copied under kid c, unable to sign.
+func TestTheLatchPassCatchesEveryShapeOfACompromisedEntry(t *testing.T) {
+	cases := map[string]string{
+		"kid not a string":             `{"keys":[{"kid":5,"state":"compromised","file":"b.pem"},{"kid":"a","state":"active","file":"a.pem"}]}`,
+		"no kid":                       `{"keys":[{"state":"compromised","file":"b.pem"},{"kid":"a","state":"active","file":"a.pem"}]}`,
+		"state repeated, last active":  `{"keys":[{"kid":"b","state":"compromised","state":"active","file":"b.pem"}]}`,
+		"state repeated, first active": `{"keys":[{"kid":"b","state":"active","state":"compromised","file":"b.pem"}]}`,
+		"keys repeated":                `{"keys":[{"kid":"b","state":"compromised","file":"b.pem"}],"keys":[{"kid":"b","state":"active","file":"b.pem"}]}`,
+		"syntax error after the entry": `{"keys":[{"kid":"b","state":"compromised","file":"b.pem"},{"kid":"a",}]}`,
+	}
+	for name, body := range cases {
+		for _, then := range []string{"b active", "b's key under c"} {
+			t.Run(name+"/"+then, func(t *testing.T) {
+				dir := t.TempDir()
+				writeKeyFile(t, dir, "a.pem")
+				writeKeyFile(t, dir, "b.pem")
+				custody := NewFileCustody(writeManifest(t, dir, body))
+				ctx := context.Background()
+				_, _ = custody.Keys(ctx)
+				kid := "b"
+				if then == "b's key under c" {
+					raw, err := os.ReadFile(filepath.Join(dir, "b.pem"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, "c.pem"), raw, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					writeManifest(t, dir, entries("a", "retiring", "c", "active"))
+					kid = "c"
+				} else {
+					writeManifest(t, dir, entries("a", "retiring", "b", "active"))
+				}
+				if _, err := custody.Sign(ctx, kid, []byte("m")); err == nil {
+					t.Fatalf("%s signed after a manifest named its key compromised", kid)
+				}
+			})
+		}
+	}
+}

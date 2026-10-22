@@ -201,11 +201,10 @@ type latch struct {
 	publics map[string]bool
 }
 
-// latchKey records one compromised key.
-func (l *latch) latchKey(kid string, public ed25519.PublicKey) {
+// latchPublic records one compromised public key.
+func (l *latch) latchPublic(public ed25519.PublicKey) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.kids[kid] = true
 	l.publics[string(public)] = true
 }
 
@@ -389,39 +388,134 @@ func (c *FileCustody) load(ctx context.Context) ([]manifestEntry, error) {
 	return parseManifest(raw)
 }
 
-// latchCompromisedEntries decodes the manifest's entries leniently, one at a
-// time, ignoring every error (a malformed sibling, trailing data, a missing
-// file), and latches each entry whose state is compromised: its kid, and the
-// public key of its key file when that file reads and parses. It runs before
-// the strict parse and before any other key file is read, so no refusal and
-// no entry order can skip a compromise.
+// latchCompromisedEntries walks the manifest token by token, before the
+// strict parse and before any other key file is read, and latches every entry
+// object it reads up to the first syntax error, across every "keys" member.
+// An entry is compromised when ANY of its "state" members is "compromised"
+// (a repeated member cannot hide it). It latches each string kid of the
+// entry, and the public key of each "file" that is a bare name whose file
+// reads and parses, whatever the kid (empty, not a string, missing). Every
+// other error is ignored. Not reached, and refused whole by the strict parse:
+// content after the first syntax error, a top level that is not an object, a
+// "keys" value that is not an array, a byte-order mark.
 func (c *FileCustody) latchCompromisedEntries(raw []byte) {
-	var document struct {
-		Keys []json.RawMessage `json:"keys"`
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return
 	}
-	_ = json.NewDecoder(bytes.NewReader(raw)).Decode(&document)
-	for _, item := range document.Keys {
-		var entry struct {
-			KeyID string `json:"kid"`
-			State string `json:"state"`
-			File  string `json:"file"`
-		}
-		_ = json.Unmarshal(item, &entry)
-		if State(entry.State) != StateCompromised || entry.KeyID == "" {
-			continue
-		}
-		c.compromised.latchKids([]manifestEntry{{KeyID: entry.KeyID, State: StateCompromised}})
-		if !bareFileName(entry.File) {
-			continue
-		}
-		pemBytes, err := readCustodiedFile(c.keyPath(manifestEntry{File: entry.File}), MaxKeyFileBytes)
+	for decoder.More() {
+		name, err := decoder.Token()
 		if err != nil {
+			return
+		}
+		if member, _ := name.(string); !strings.EqualFold(member, "keys") {
+			if skipValue(decoder) != nil {
+				return
+			}
 			continue
 		}
-		if public, err := parseEd25519Public(pemBytes); err == nil {
-			c.compromised.latchKey(entry.KeyID, public)
+		token, err := decoder.Token()
+		if err != nil {
+			return
+		}
+		if token != json.Delim('[') {
+			if skipRest(decoder, token) != nil {
+				return
+			}
+			continue
+		}
+		for decoder.More() {
+			if !c.latchEntry(decoder) {
+				return
+			}
+		}
+		if _, err := decoder.Token(); err != nil {
+			return
 		}
 	}
+}
+
+// latchEntry reads one keys[] element and latches it when it is a compromised
+// entry, also when a syntax error ends it early (then it returns false).
+func (c *FileCustody) latchEntry(decoder *json.Decoder) bool {
+	token, err := decoder.Token()
+	if err != nil {
+		return false
+	}
+	if token != json.Delim('{') {
+		return skipRest(decoder, token) == nil
+	}
+	var compromised bool
+	var kids, files []string
+	defer func() {
+		if !compromised {
+			return
+		}
+		for _, kid := range kids {
+			c.compromised.latchKids([]manifestEntry{{KeyID: kid, State: StateCompromised}})
+		}
+		for _, file := range files {
+			if !bareFileName(file) {
+				continue
+			}
+			pemBytes, err := readCustodiedFile(c.keyPath(manifestEntry{File: file}), MaxKeyFileBytes)
+			if err != nil {
+				continue
+			}
+			if public, err := parseEd25519Public(pemBytes); err == nil {
+				c.compromised.latchPublic(public)
+			}
+		}
+	}()
+	for decoder.More() {
+		name, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return false
+		}
+		member, _ := name.(string)
+		var text string
+		isString := json.Unmarshal(value, &text) == nil
+		switch {
+		case strings.EqualFold(member, "state") && isString && State(text) == StateCompromised:
+			compromised = true
+		case strings.EqualFold(member, "kid") && isString && text != "":
+			kids = append(kids, text)
+		case strings.EqualFold(member, "file") && isString:
+			files = append(files, text)
+		}
+	}
+	_, err = decoder.Token()
+	return err == nil
+}
+
+// skipValue reads and discards one JSON value.
+func skipValue(decoder *json.Decoder) error {
+	var value json.RawMessage
+	return decoder.Decode(&value)
+}
+
+// skipRest discards the rest of a value whose first token was read.
+func skipRest(decoder *json.Decoder, first json.Token) error {
+	if first != json.Delim('{') && first != json.Delim('[') {
+		return nil
+	}
+	for depth := 1; depth > 0; {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		switch token {
+		case json.Delim('{'), json.Delim('['):
+			depth++
+		case json.Delim('}'), json.Delim(']'):
+			depth--
+		}
+	}
+	return nil
 }
 
 // parseManifest decodes a closed manifest: an unknown member, trailing data,

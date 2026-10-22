@@ -19,7 +19,7 @@ func m19Seed(t *testing.T, ctx context.Context, env *authFixture) {
 	if _, err := env.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ('`+m19Principal+`', 'user', 'm19')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.admin.Exec(ctx, `INSERT INTO auth.organizations (id, slug, name) VALUES ('`+m19Org+`', 'm19-org', 'M19')`); err != nil {
+	if err := guardedExec(ctx, env.admin, `INSERT INTO auth.organizations (id, slug, name) VALUES ('`+m19Org+`', 'm19-org', 'M19')`); err != nil {
 		t.Fatal(err)
 	}
 }

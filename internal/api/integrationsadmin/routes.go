@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -110,8 +111,15 @@ func (h handlers) fail(w http.ResponseWriter, r *http.Request, step string, err 
 	}
 	h.Logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.URL.Path),
 		slog.String("step", step), slog.String("error", err.Error()))
+	if providersync.IsDeadlockDetected(err) {
+		// Backstop only: the selection lock hierarchy prevents the deadlock.
+		policy.WriteDetail(w, http.StatusConflict, concurrentChangeDetail, nil)
+		return
+	}
 	policy.WriteInternal(w)
 }
+
+const concurrentChangeDetail = "The dataset selection changed at the same time; retry the request"
 
 // inTx runs fn in one transaction, committed only when fn returns nil.
 func (h handlers) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
@@ -667,14 +675,25 @@ func (h handlers) updateDatasets(w http.ResponseWriter, r *http.Request) {
 		}
 		// One row object per key: a key repeated in the batch is the same ORM
 		// row twice, and the response shows its final state both times.
+		// The selection lock first (providersync.LockIntegrationSelection:
+		// the one hierarchy of every dataset writer), then the rows in key
+		// order. The response keeps the body's order.
+		if err := providersync.LockIntegrationSelection(r.Context(), tx, orgID, integrationID); err != nil {
+			return err
+		}
 		rows := map[string]*dataset{}
-		var updated []*dataset
-		for _, item := range items {
-			row, err := h.applyDataset(r.Context(), tx, orgID, current.Provider, integrationID, item, rows)
+		updated := make([]*dataset, len(items))
+		order := make([]int, len(items))
+		for index := range order {
+			order[index] = index
+		}
+		sort.SliceStable(order, func(a, b int) bool { return items[order[a]].key < items[order[b]].key })
+		for _, index := range order {
+			row, err := h.applyDataset(r.Context(), tx, orgID, current.Provider, integrationID, items[index], rows)
 			if err != nil {
 				return err
 			}
-			updated = append(updated, row)
+			updated[index] = row
 		}
 		// Rendered before the commit, from each row's final state.
 		out = make([]pyjson.Value, 0, len(updated))

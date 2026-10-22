@@ -78,8 +78,13 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 	// absent is {}, an explicit null (or any non-dict) is a dict_type
 	// error, never silently replaced by {} (schemas_flat.py:578-585).
 	associations := pyjson.NewObject()
-	if nested, ok := element.DefaultedAnyDict(object, "associations"); ok {
-		associations = nested
+	associationsValid := true
+	if _, present := object.Get("associations"); present {
+		if nested, ok := element.DefaultedAnyDict(object, "associations"); ok {
+			associations = nested
+		} else {
+			associationsValid = false
+		}
 	}
 	// The pybody helpers report loc ["body", <field>]; nest each under this
 	// element's own loc ("body", "teams", <index>, <field>).
@@ -87,7 +92,7 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 		e.Loc = append(append([]pyjson.Value(nil), loc...), e.Loc[1:]...)
 		problems = append(problems, e)
 	}
-	if len(problems) == 0 {
+	if associationsValid {
 		for _, key := range storedAssociationListKeys {
 			problems = append(problems, associationListProblems(associations, key, loc)...)
 		}

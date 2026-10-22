@@ -3,6 +3,7 @@ package llmorgsettings
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -22,11 +23,22 @@ func (c Credentials) LogValue() slog.Value { return secrets.LogRedacted(c.redact
 // print and log forms show the api_key as the redaction marker.
 type orgSettings map[string]string
 
+// redacted hides every api_key row (the default's and each purpose override's)
+// and any base_url row that carries a stored key, and drops the reserved
+// key-in-base_url mark so it never prints as a key.
 func (s orgSettings) redacted() map[string]string {
+	marked := keyInBaseURLMarked(s)
 	out := make(map[string]string, len(s))
 	for key, value := range s {
-		if key == keyAPIKey {
+		switch {
+		case key == keyInBaseURLMark:
+			continue
+		case key == keyAPIKey || strings.HasSuffix(key, ":"+keyAPIKey):
 			value = secrets.RedactString(value)
+		case key == keyBaseURL || strings.HasSuffix(key, ":"+keyBaseURL):
+			if marked || storedKeyInBaseURL(s, value) {
+				value = secrets.RedactString(value)
+			}
 		}
 		out[key] = value
 	}

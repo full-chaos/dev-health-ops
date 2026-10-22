@@ -259,6 +259,7 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	commentsLimit := jiraOptionInt(claim, "comments_limit", jiraAtlassianDefaultCommentsLimit)
 	commentsBudget := jiraAtlassianCommentsRowBudget(claim)
 	commentsBudgetSkipped, commentsTimeSkipped := 0, 0
+	var commentsPermanent jiraCommentPermanentSample
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
 	useGraphQL := jiraOptionBool(claim, "atlassian_gql_enabled", false)
 	fetchBoardSprints := jiraOptionBool(claim, "fetch_board_sprints", false)
@@ -538,6 +539,10 @@ func (handler JiraAtlassianRouteHandler) Collect(
 					// the issue's partial comments are dropped (the collector
 					// returns none on an error) and the issue is counted.
 					commentsTimeSkipped++
+				} else if commentErr != nil && ctx.Err() == nil && jiraCommentReadPermanent(commentErr) {
+					// CHAOS-8854: a re-read of the same window fails the same way; the
+					// issue is counted, not held.
+					commentsPermanent.add(commentErr)
 				} else if commentErr != nil {
 					optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
 					if ctx.Err() != nil {
@@ -651,10 +656,10 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
 	}
-	if commentsBudgetSkipped > 0 || commentsTimeSkipped > 0 {
+	if commentsBudgetSkipped > 0 || commentsTimeSkipped > 0 || commentsPermanent.Count > 0 {
 		// CHAOS-8806: NOT part of "incomplete": a held watermark would re-read the
 		// same window, reach the same budget and never move. Counts only.
-		markers := make([]string, 0, 2)
+		markers := make([]string, 0, 3)
 		cause := ""
 		if commentsBudgetSkipped > 0 {
 			markers = append(markers, "comments:budget:"+strconv.Itoa(commentsBudgetSkipped))
@@ -666,6 +671,11 @@ func (handler JiraAtlassianRouteHandler) Collect(
 				cause += "+"
 			}
 			cause += "time"
+		}
+		if commentsPermanent.Count > 0 {
+			markers = append(markers, "comments:permanent:"+strconv.Itoa(commentsPermanent.Count))
+			result["comments_permanent_skipped_issues"] = commentsPermanent.Count
+			commentsPermanent.log(claim)
 		}
 		result["incomplete_nonholding"] = markers
 		result["comments_budget_skipped_issues"] = commentsBudgetSkipped

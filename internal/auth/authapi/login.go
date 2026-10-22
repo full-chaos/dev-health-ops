@@ -215,6 +215,9 @@ func (h compatHandlers) loginUnverified(w http.ResponseWriter, r *http.Request, 
 // organization_id references.
 func (h compatHandlers) auditOrganization(ctx context.Context, principal uuid.UUID, requested *uuid.UUID) (*uuid.UUID, error) {
 	if requested != nil {
+		// Projected even when the sign-in is refused: the audit row's
+		// organization must exist, and the projection mirrors go-api's own
+		// organization row, idempotently.
 		err := h.Projector.ProjectOrganization(ctx, *requested)
 		switch {
 		case err == nil:
@@ -261,6 +264,9 @@ func (h compatHandlers) auditSignInFailed(ctx context.Context, principal uuid.UU
 		event.OrganizationID = &text
 	}
 	if principal != uuid.Nil {
+		// A refused sign-in still projects the go-api user: the audit row
+		// names the principal, the projection mirrors a go-api row that
+		// already exists, and it is idempotent.
 		err := h.Projector.Project(ctx, principal)
 		switch {
 		case err == nil:

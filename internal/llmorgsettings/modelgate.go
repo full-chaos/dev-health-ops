@@ -188,7 +188,7 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 	}
 	usable := false
 	if found && serviceModelOn && !cfg.GateClosed {
-		checked, checkErr := CheckConfig(ctx, cfg.Provider, cfg.APIKey.Reveal(), cfg.BaseURL)
+		checked, checkErr := CheckOrgConfig(ctx, cfg)
 		if checkErr != nil {
 			// A base_url the parser rejects is a verdict on the saved value, not an infrastructure error.
 			checked = ConfigInvalidBaseURL

@@ -88,6 +88,17 @@ func TestLLMConfigServesACleanBaseURL(t *testing.T) {
 	}
 }
 
+// A key under eight bytes is checked in its hex form too (a four-byte key).
+func TestLLMConfigRefusesAShortKeysHexFormInTheBaseURL(t *testing.T) {
+	source := configured()
+	source.cfg.APIKey = secrets.NewHidden("tiny")
+	source.cfg.BaseURL = "https://p.example.invalid/" + hex.EncodeToString([]byte("tiny"))
+	response, body := call(t, &fakeVerifier{}, source, io.Discard, testOrg, "Bearer "+testToken)
+	if response.StatusCode != http.StatusNotFound || response.Header.Get(NoConfigReasonHeader) != "byo_base_url_carries_key" {
+		t.Fatalf("status %d reason %q body %s", response.StatusCode, response.Header.Get(NoConfigReasonHeader), body)
+	}
+}
+
 // A key that is empty cannot be "carried": a url-only config is served as before.
 func TestLLMConfigServesAKeylessConfigUnchanged(t *testing.T) {
 	source := configured()

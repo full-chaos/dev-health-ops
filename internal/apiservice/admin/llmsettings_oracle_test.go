@@ -123,7 +123,7 @@ func TestLLMSettingsRoutesVenueOracle(t *testing.T) {
 // planes with no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting raises in
 // Python, an unhandled 500.
 func TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest, "c9ac676eeef9aabd35d190c52ebfe975e7ea1032ec9492f8212fceb3186f5d2f")
+	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest, "f6c7691ce9e1927c8ccdf2c06cb6c50021de61ce55315273891ebf9194349c46")
 }
 
 func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest string) {

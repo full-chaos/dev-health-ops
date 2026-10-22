@@ -165,7 +165,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/llmsettings.go",
-        "line": 46
+        "line": 47
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2466,7 +2466,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/llmsettings.go",
-        "line": 44
+        "line": 45
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2524,7 +2524,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/llmsettings.go",
-        "line": 50
+        "line": 51
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2582,7 +2582,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/llmsettings.go",
-        "line": 49
+        "line": 50
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2641,6 +2641,64 @@
       "source": {
         "file": "internal/apiservice/admin/ownmodel.go",
         "line": 26
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": "APIJWTAudience (go-api config)",
+        "issuer": "APIJWTIssuer (go-api config)",
+        "token_type": "HS256 JWT"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "classification": "protected",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/admin/llm-settings/prompt-cache [dev-health-ops-api @api]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 93,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Admin: a valid access token whose user is an admin (role admin or owner) or a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the first Bearer value, authenticates it as the ops access token and checks X-Org-Id against it, whatever the route accepts.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): authenticates the Bearer value for a superuser and may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "route": "/api/v1/admin/llm-settings/prompt-cache",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/promptcache.go",
+        "line": 25
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2756,7 +2814,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/llmsettings.go",
-        "line": 51
+        "line": 52
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2814,7 +2872,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/llmsettings.go",
-        "line": 47
+        "line": 48
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9086,7 +9144,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/ipallowlist.go",
-        "line": 36
+        "line": 35
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9144,7 +9202,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/llmsettings.go",
-        "line": 48
+        "line": 49
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -13146,7 +13204,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/admin/llmsettings.go",
-        "line": 45
+        "line": 46
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -13205,6 +13263,64 @@
       "source": {
         "file": "internal/apiservice/admin/ownmodel.go",
         "line": 27
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": "APIJWTAudience (go-api config)",
+        "issuer": "APIJWTIssuer (go-api config)",
+        "token_type": "HS256 JWT"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "classification": "protected",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "PUT /api/v1/admin/llm-settings/prompt-cache [dev-health-ops-api @api]",
+      "method": "PUT",
+      "primary_validator": {
+        "anchor": {
+          "line": 93,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Admin: a valid access token whose user is an admin (role admin or owner) or a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the first Bearer value, authenticates it as the ops access token and checks X-Org-Id against it, whatever the route accepts.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): authenticates the Bearer value for a superuser and may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "route": "/api/v1/admin/llm-settings/prompt-cache",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/promptcache.go",
+        "line": 26
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -13488,5 +13604,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "21080e24973949bdbeb7386f41e33299520e2e90"
+  "source_commit": "dda2febf4bbc4444bd03ca22f4a6542ad972c8c3"
 }

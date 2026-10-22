@@ -349,19 +349,24 @@ func collectGitHubBlame(
 	}
 	fromFiles := false
 	banked := func() ([]string, bool) {
-		inventory, usable := gitHubBlameFilesInventoryPaths(
+		inventory, age, usable := gitHubBlameFilesInventoryPaths(
 			ctx, claim, coverage, repoID, limits.now(), requireCompleteInventory, recoveryGeneration,
 		)
 		if !usable {
 			return nil, false
 		}
-		if reason := gitHubBlameInventoryCoversRoot(ctx, client, root, treeRef, inventory); reason != "" {
+		if reason, uncovered := gitHubBlameInventoryCoversRoot(ctx, client, root, treeRef, inventory); reason != "" {
 			slog.Info(
 				"github blame file list source", "source", "tree", "fallback_reason", reason,
-				"paths", len(inventory),
+				"paths", len(inventory), "inventory_age_seconds", int(age/time.Second),
+				"uncovered_top_level", len(uncovered), "uncovered_first", uncovered[:min(len(uncovered), 5)],
 			)
 			return nil, false
 		}
+		slog.Info(
+			"github blame file list source", "source", "files_inventory", "paths", len(inventory),
+			"inventory_age_seconds", int(age/time.Second),
+		)
 		fromFiles = true
 		return inventory, true
 	}
@@ -553,20 +558,20 @@ func gitHubBlameFilesInventoryPaths(
 	now time.Time,
 	requireCompleteInventory bool,
 	recoveryGeneration string,
-) ([]string, bool) {
+) ([]string, time.Duration, bool) {
 	reader, ok := coverage.(GitHubBlameFilesInventory)
 	if !ok || coverage == nil {
-		return nil, false
+		return nil, 0, false
 	}
-	fallback := func(reason string, paths int, age time.Duration) ([]string, bool) {
+	fallback := func(reason string, paths int, age time.Duration) ([]string, time.Duration, bool) {
 		slog.Info(
 			"github blame file list source", "source", "tree", "fallback_reason", reason,
 			"paths", paths, "inventory_age_seconds", int(age/time.Second),
 		)
-		return nil, false
+		return nil, 0, false
 	}
 	if requireCompleteInventory || recoveryGeneration != "" {
-		return nil, false
+		return nil, 0, false
 	}
 	result, err := reader.FilesInventory(ctx, claim, repoID, gitHubBlameFilesInventoryWindow)
 	age := now.Sub(result.NewestSyncedAt)
@@ -578,15 +583,11 @@ func gitHubBlameFilesInventoryPaths(
 	case result.NewestSyncedAt.After(now) || age > gitHubBlameFilesInventoryMaxAge:
 		return fallback("stale_inventory", len(result.Paths), age)
 	}
-	slog.Info(
-		"github blame file list source", "source", "files_inventory", "paths", len(result.Paths),
-		"inventory_age_seconds", int(age/time.Second),
-	)
-	return result.Paths, true
+	return result.Paths, age, true
 }
 
 // gitHubBlameInventoryCoversRoot says why a banked file list cannot stand in for
-// the tree of treeRef, or "" when it can. The files dataset writes its chunks
+// the tree of treeRef, or "" when it can, with the top-level names it lacks. The files dataset writes its chunks
 // in sorted path order, so a partial or older inventory is a prefix of the
 // tree: it lacks whole top-level entries. Every top-level entry of the tree
 // (one non-recursive listing) must be present in the list (a file by its path, a
@@ -598,13 +599,13 @@ func gitHubBlameInventoryCoversRoot(
 	client *providerfoundation.HTTPClient,
 	root, treeRef string,
 	paths []string,
-) string {
+) (string, []string) {
 	var tree gitHubTreePayload
 	if err := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(treeRef), &tree); err != nil {
-		return "root_listing_failed"
+		return "root_listing_failed", nil
 	}
 	if tree.Truncated || len(tree.Tree) == 0 {
-		return "root_listing_unusable"
+		return "root_listing_unusable", nil
 	}
 	top := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
@@ -614,19 +615,24 @@ func gitHubBlameInventoryCoversRoot(
 			top[path] = struct{}{}
 		}
 	}
+	var uncovered []string
 	for _, entry := range tree.Tree {
+		key := entry.Path
 		switch entry.Type {
 		case "blob":
-			if _, ok := top[entry.Path]; !ok {
-				return "top_level_uncovered"
-			}
 		case "tree":
-			if _, ok := top[entry.Path+"/"]; !ok {
-				return "top_level_uncovered"
-			}
+			key += "/"
+		default:
+			continue
+		}
+		if _, ok := top[key]; !ok {
+			uncovered = append(uncovered, entry.Path)
 		}
 	}
-	return ""
+	if len(uncovered) > 0 {
+		return "top_level_uncovered", uncovered
+	}
+	return "", nil
 }
 
 // gitHubBlameInventory returns every blob path of treeRef. It reads the
@@ -686,7 +692,7 @@ func gitHubBlameInventoryWith(
 		}
 	}
 	before := *requests
-	paths, _, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", defaultGitHubTreeWalkLimits())
+	paths, _, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", rootListedWalkLimits())
 	walkRequests := *requests - before
 	if walkErr != nil {
 		logGitHubTreeWalkStop(walkErr, stats)

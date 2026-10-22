@@ -29,6 +29,9 @@ func TestTheScopePinIsAppliedToTheRealWalk(t *testing.T) {
 	if len(problems) != 1 || !strings.Contains(problems[0], "SCOPE LIMIT changed") {
 		t.Fatalf("want exactly the SCOPE LIMIT problem, got %v", problems)
 	}
+	if realScanCount != 1 {
+		t.Fatalf("the real module was scanned %d times in this test binary, want once (each scan type-checks every package for two targets)", realScanCount)
+	}
 }
 
 // Every CONCRETE type that enters providerfoundation.HTTPDoer anywhere in production code (an argument, an assignment, a

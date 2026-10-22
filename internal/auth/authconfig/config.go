@@ -386,6 +386,14 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Session.AccessClass == AccessClassEdDSA {
+		// iss and aud are signed byte for byte: a value with surrounding
+		// whitespace is refused, never trimmed into a different claim.
+		for _, name := range []string{EnvTokenIssuerURL, EnvAccessTokenAudience} {
+			if raw := valueOf(lookup, name); raw != strings.TrimSpace(raw) {
+				return Config{}, fmt.Errorf("%s=%s needs %s without surrounding whitespace",
+					EnvAccessTokenClass, AccessClassEdDSA, name)
+			}
+		}
 		if cfg.TokenIssuerURL == "" {
 			return Config{}, fmt.Errorf("%s=%s needs %s", EnvAccessTokenClass, AccessClassEdDSA, EnvTokenIssuerURL)
 		}

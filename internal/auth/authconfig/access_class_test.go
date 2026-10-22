@@ -1,6 +1,9 @@
 package authconfig
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAccessTokenClassDefaultsToHS256Compat(t *testing.T) {
 	for name, set := range map[string]func(map[string]string){
@@ -77,6 +80,24 @@ func TestAccessTokenClassEdDSARefusesWhatCannotIssue(t *testing.T) {
 		if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
 			t.Errorf("%s: Load accepted it", name)
 		}
+	}
+}
+
+func TestAccessTokenClassEdDSARefusesWhitespaceAroundIssAndAud(t *testing.T) {
+	for _, name := range []string{EnvTokenIssuerURL, EnvAccessTokenAudience} {
+		base := map[string]string{EnvTokenIssuerURL: "https://auth.example.test", EnvAccessTokenAudience: "dev-health-api"}
+		for _, pad := range []string{" %s", "%s ", "\t%s", "%s\t", "\n%s", "%s\n", " %s\n", "\r\n%s"} {
+			env := eddsaEnv()
+			env[name] = strings.ReplaceAll(pad, "%s", base[name])
+			if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
+				t.Errorf("%s=%q: Load accepted it", name, env[name])
+			}
+		}
+	}
+	env := eddsaEnv()
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil || cfg.TokenIssuerURL != "https://auth.example.test" {
+		t.Fatalf("an exact issuer was refused or changed: %q, %v", cfg.TokenIssuerURL, err)
 	}
 }
 

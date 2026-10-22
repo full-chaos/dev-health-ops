@@ -32,7 +32,7 @@ func (h *handlers) ipAllowlistRoutes() []httpapi.Route {
 		// method-specific wildcard. So the check route is mounted on the
 		// wildcard itself and told apart by the segment; any other POST on
 		// it is a 405 listing the path's served methods.
-		{Method: http.MethodPost, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", Handler: h.checkOrMethodNotAllowed()},
+		{Method: http.MethodPost, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", NotServed: true, Handler: h.checkOrMethodNotAllowed()},
 	}
 }
 

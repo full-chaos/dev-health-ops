@@ -176,7 +176,7 @@ func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
 	}
 	methods := map[string][]string{}
 	for _, route := range routes {
-		if route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/") {
+		if (route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/")) && !route.NotServed {
 			methods[route.Pattern] = append(methods[route.Pattern], route.Method)
 		}
 	}
@@ -223,12 +223,10 @@ func TestAdminNonHeadMethodsAnswer405ListingEveryServedMethod(t *testing.T) {
 	}
 	served := map[string][]string{}
 	for _, route := range routes {
-		if route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/") {
+		if (route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/")) && !route.NotServed {
 			served[route.Pattern] = append(served[route.Pattern], route.Method)
 		}
 	}
-	// POST /ip-allowlist/{entry_id} is mounted for /check only; any other id is a 405 that does not list POST.
-	notServedPost := governanceIPAllowlistEntry
 	checked := 0
 	for pattern, methods := range served {
 		sort.Strings(methods)
@@ -247,13 +245,6 @@ func TestAdminNonHeadMethodsAnswer405ListingEveryServedMethod(t *testing.T) {
 			}
 			checked++
 		}
-		if pattern == notServedPost {
-			response := serve(server.Handler(), httptest.NewRequest(http.MethodPost, concrete(pattern), nil))
-			want := "DELETE, GET, PATCH"
-			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != want {
-				t.Errorf("POST %s: status %d Allow %q; want 405, Allow %q", pattern, response.Code, response.Header().Get("Allow"), want)
-			}
-		}
 	}
 	if checked < nonHeadCheckedFloor {
 		t.Fatalf("%d admin method refusals checked, want at least %d", checked, nonHeadCheckedFloor)
@@ -262,5 +253,3 @@ func TestAdminNonHeadMethodsAnswer405ListingEveryServedMethod(t *testing.T) {
 
 // nonHeadCheckedFloor keeps the walk from passing on a table that shrank.
 const nonHeadCheckedFloor = 150
-
-const governanceIPAllowlistEntry = adminPrefix + "/ip-allowlist/{entry_id}"

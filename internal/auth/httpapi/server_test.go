@@ -1003,10 +1003,11 @@ func TestNoStorePathAllowListsEveryServedMethod(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	server, err := NewServer(ServerOptions{
 		Address: "127.0.0.1:0", RequestTimeout: time.Second, MaxBodyBytes: 1024, ExplicitHead: true,
-		NoStore: NewNoStoreRoutes([]string{"GET /admin/a", "PATCH /admin/a"}),
+		NoStore: NewNoStoreRoutes([]string{"GET /admin/a", "PATCH /admin/a", "POST /admin/a"}),
 		Routes: []Route{
 			{Method: http.MethodGet, Pattern: "/admin/a", Handler: ok, Allow: http.MethodGet},
 			{Method: http.MethodPatch, Pattern: "/admin/a", Handler: ok},
+			{Method: http.MethodPost, Pattern: "/admin/a", Handler: ok, NotServed: true},
 			{Method: http.MethodGet, Pattern: "/open/a", Handler: ok, Allow: http.MethodGet},
 			{Method: http.MethodPatch, Pattern: "/open/a", Handler: ok},
 		},

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -317,7 +319,7 @@ func TestModelListRefusesAKeyInTheBaseURLBeforeResolution(t *testing.T) {
 	doer := &scriptedModelDoer{}
 	h.upstreamDoer = doer
 	cfg := readinessBYOConfig{provider: "openai", apiKey: secrets.NewHidden(key), baseURL: "https://" + key + ".example.invalid/v1"}
-	out, err := h.modelList(context.Background(), "org", cfg)
+	out, err := h.modelList(context.Background(), "org", cfg, "")
 	if err != nil || spy.calls != 0 || len(doer.requests) != 0 {
 		t.Fatalf("err=%v resolver calls=%d provider calls=%d", err, spy.calls, len(doer.requests))
 	}
@@ -329,7 +331,7 @@ func TestModelListRefusesAKeyInTheBaseURLBeforeResolution(t *testing.T) {
 	clean := readinessBYOConfig{provider: "openai", apiKey: secrets.NewHidden(key), baseURL: "https://p.example.invalid/v1"}
 	doer.responses = []string{`{"data":[{"id":"gpt-5"}]}`}
 	spy.valid = true
-	out, err = h.modelList(context.Background(), "org", clean)
+	out, err = h.modelList(context.Background(), "org", clean, "")
 	body, _ = out.MarshalJSON()
 	if err != nil || spy.calls != 1 || len(doer.requests) != 1 || !strings.Contains(string(body), `"source":"live"`) {
 		t.Fatalf("clean: err=%v resolver calls=%d provider calls=%d body=%s", err, spy.calls, len(doer.requests), body)
@@ -346,5 +348,192 @@ func TestListProviderModelsRefusesALaterPageWithoutTheListField(t *testing.T) {
 	ids, reason := listProviderModels(context.Background(), doer, "anthropic", "", "a-key-of-some-length")
 	if ids != nil || reason != llmModelsReasonInvalidResponse || len(doer.requests) != 2 {
 		t.Fatalf("ids=%v reason=%q requests=%d", ids, reason, len(doer.requests))
+	}
+}
+
+type modelListView struct {
+	provider string
+	source   string
+	reason   string
+	items    []string
+}
+
+func viewModelList(t *testing.T, out interface{ MarshalJSON() ([]byte, error) }) (modelListView, string) {
+	t.Helper()
+	raw, err := out.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Provider *string `json:"provider"`
+		Source   string  `json:"source"`
+		Reason   *string `json:"reason"`
+		Models   []struct {
+			ID       string `json:"id"`
+			Source   string `json:"source"`
+			Verified bool   `json:"verified"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("%s: %v", raw, err)
+	}
+	view := modelListView{source: decoded.Source}
+	if decoded.Provider != nil {
+		view.provider = *decoded.Provider
+	}
+	if decoded.Reason != nil {
+		view.reason = *decoded.Reason
+	}
+	for _, m := range decoded.Models {
+		view.items = append(view.items, m.ID+"/"+m.Source+"/"+strconv.FormatBool(m.Verified))
+	}
+	return view, string(raw)
+}
+
+func newModelListHandlers() (*handlers, *scriptedModelDoer) {
+	spy := &resolverSpy{valid: true}
+	h := newKeyGuardHandlers(spy, "")
+	doer := &scriptedModelDoer{}
+	h.upstreamDoer = doer
+	return h, doer
+}
+
+func TestModelListWithNoKeyIsTheCatalog(t *testing.T) {
+	h, doer := newModelListHandlers()
+	out, err := h.modelList(context.Background(), "org", readinessBYOConfig{provider: "anthropic", model: "claude-haiku-5-5"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, raw := viewModelList(t, out)
+	if view.provider != "anthropic" || view.source != "catalog" || view.reason != "" || len(doer.requests) != 0 {
+		t.Fatalf("view=%+v calls=%d body=%s", view, len(doer.requests), raw)
+	}
+	if got := strings.Join(view.items, ","); got != "claude-haiku-5-5/catalog/false,claude-opus-5-5/catalog/false,claude-sonnet-5-5/catalog/false" {
+		t.Fatalf("items=%s", got)
+	}
+	if !strings.Contains(raw, `"fetched_at":null`) {
+		t.Fatalf("body=%s", raw)
+	}
+}
+
+func TestModelListNeverSendsTheSavedKeyToAnotherProvider(t *testing.T) {
+	h, doer := newModelListHandlers()
+	key := "sk-saved-" + "0123456789"
+	cfg := readinessBYOConfig{provider: "openai", model: "gpt-5-mini", apiKey: secrets.NewHidden(key), baseURL: "https://gateway.example.invalid/v1"}
+	out, err := h.modelList(context.Background(), "org", cfg, "anthropic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, raw := viewModelList(t, out)
+	if len(doer.requests) != 0 || view.provider != "anthropic" || view.source != "catalog" || view.reason != "" {
+		t.Fatalf("view=%+v calls=%d", view, len(doer.requests))
+	}
+	for _, item := range view.items {
+		if strings.HasPrefix(item, "gpt-5-mini/") {
+			t.Fatalf("the saved openai model is listed under anthropic: %s", raw)
+		}
+	}
+	if strings.Contains(raw, key) {
+		t.Fatalf("body carries the key: %s", raw)
+	}
+}
+
+func TestModelListMergesTheLiveListIntoTheCatalog(t *testing.T) {
+	h, doer := newModelListHandlers()
+	doer.responses = []string{`{"data":[{"id":"claude-sonnet-4-5"},{"id":"claude-haiku-5-5"}],"has_more":false}`}
+	cfg := readinessBYOConfig{provider: "anthropic", model: "my-finetune", apiKey: secrets.NewHidden("sk-ant-" + "0123456789abcdef")}
+	out, err := h.modelList(context.Background(), "org", cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, raw := viewModelList(t, out)
+	if view.source != "live" || view.reason != "" || len(doer.requests) != 1 {
+		t.Fatalf("view=%+v calls=%d body=%s", view, len(doer.requests), raw)
+	}
+	want := "claude-haiku-5-5/live/true,claude-sonnet-4-5/live/true,claude-opus-5-5/catalog/false,claude-sonnet-5-5/catalog/false,my-finetune/saved/false"
+	if got := strings.Join(view.items, ","); got != want {
+		t.Fatalf("items=%s\nwant %s", got, want)
+	}
+	cached, err := h.modelList(context.Background(), "org", cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ = viewModelList(t, cached)
+	if view.source != "cache" || strings.Join(view.items, ",") != want || len(doer.requests) != 1 {
+		t.Fatalf("cached view=%+v calls=%d", view, len(doer.requests))
+	}
+}
+
+func TestModelListKeepsTheCatalogWhenTheLiveListFails(t *testing.T) {
+	h, doer := newModelListHandlers()
+	doer.status = 401
+	cfg := readinessBYOConfig{provider: "anthropic", apiKey: secrets.NewHidden("sk-ant-" + "0123456789abcdef")}
+	out, err := h.modelList(context.Background(), "org", cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, raw := viewModelList(t, out)
+	if view.source != "catalog" || view.reason != "provider_rejected" || len(view.items) != 3 {
+		t.Fatalf("view=%+v body=%s", view, raw)
+	}
+}
+
+func TestModelListIsUnavailableOnlyWhenThereIsNothingToList(t *testing.T) {
+	h, _ := newModelListHandlers()
+	for name, tc := range map[string]struct {
+		cfg    readinessBYOConfig
+		reason string
+	}{
+		"no provider":                     {readinessBYOConfig{}, "not_configured"},
+		"uncatalogued provider, no key":   {readinessBYOConfig{provider: "ollama"}, "base_url_required"},
+		"uncatalogued, keyed, no baseurl": {readinessBYOConfig{provider: "azure-openai", apiKey: secrets.NewHidden("k-0123456789")}, "base_url_required"},
+	} {
+		out, err := h.modelList(context.Background(), "org", tc.cfg, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		view, raw := viewModelList(t, out)
+		if view.source != "unavailable" || view.reason != tc.reason || len(view.items) != 0 || !strings.Contains(raw, `"models":[]`) {
+			t.Errorf("%s: view=%+v body=%s", name, view, raw)
+		}
+	}
+}
+
+func TestModelListListsTheSavedModelOfAnUncataloguedProvider(t *testing.T) {
+	h, _ := newModelListHandlers()
+	out, err := h.modelList(context.Background(), "org", readinessBYOConfig{provider: "ollama", model: "llama3"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ := viewModelList(t, out)
+	if view.source != "catalog" || strings.Join(view.items, ",") != "llama3/saved/false" {
+		t.Fatalf("view=%+v", view)
+	}
+}
+
+func TestMergeLLMModelsOrdersVerifiedFirstThenAlphabetical(t *testing.T) {
+	items := mergeLLMModels([]string{"z-live", "b-both"}, []string{"b-both", "a-cat", "y-cat"}, "m-saved")
+	var got []string
+	for _, item := range items {
+		got = append(got, item.id+"/"+item.source)
+	}
+	want := "b-both/live,z-live/live,a-cat/catalog,m-saved/saved,y-cat/catalog"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("got %v want %s", got, want)
+	}
+	if again := mergeLLMModels([]string{"z-live", "b-both"}, []string{"b-both", "a-cat", "y-cat"}, "a-cat"); len(again) != 4 {
+		t.Fatalf("a saved model already in the catalog must not repeat: %v", again)
+	}
+}
+
+func TestSavedModelListableFiltersLikeProviderIDs(t *testing.T) {
+	key := "sk-listed-" + "0123456789"
+	for model, want := range map[string]bool{
+		"gpt-5-mini": true, "": false, "has space": false, "sk-" + "abcdefghijklmnopqrst": false,
+		"Bearer x": false, strings.Repeat("a", 129): false, "prefix-" + key: false,
+	} {
+		if got := savedModelListable(model, key); got != want {
+			t.Errorf("%q: got %v want %v", model, got, want)
+		}
 	}
 }

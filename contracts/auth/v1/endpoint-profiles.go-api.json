@@ -674,7 +674,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 175
+        "line": 180
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -726,7 +726,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 156
+        "line": 161
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -4438,7 +4438,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 137
+        "line": 143
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -4496,7 +4496,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 138
+        "line": 144
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -4543,7 +4543,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 175
+        "line": 180
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -4595,7 +4595,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 156
+        "line": 162
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -4642,7 +4642,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 159
+        "line": 164
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -4694,7 +4694,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 152
+        "line": 157
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -4752,7 +4752,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 154
+        "line": 159
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -4799,7 +4799,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 145
+        "line": 151
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6270,7 +6270,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 175
+        "line": 180
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -6482,7 +6482,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 175
+        "line": 180
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -7346,7 +7346,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 175
+        "line": 180
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -7404,7 +7404,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 155
+        "line": 160
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -10420,7 +10420,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 154
+        "line": 160
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -10478,7 +10478,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 152
+        "line": 158
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -10523,7 +10523,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 149
+        "line": 155
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -10562,7 +10562,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 132
+        "line": 138
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -10586,7 +10586,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 142,
+          "line": 148,
           "note": "Pattern:",
           "path": "internal/api/session/session.go"
         },
@@ -10619,7 +10619,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 142
+        "line": 148
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",
@@ -10677,7 +10677,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 164
+        "line": 169
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -10724,7 +10724,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 175
+        "line": 180
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -10765,7 +10765,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 162
+        "line": 167
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -10806,7 +10806,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 163
+        "line": 168
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -10858,7 +10858,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 155
+        "line": 161
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -10916,7 +10916,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 157
+        "line": 163
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -10963,7 +10963,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 135
+        "line": 141
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -11002,7 +11002,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 143
+        "line": 149
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -11041,7 +11041,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 147
+        "line": 153
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -11082,7 +11082,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 151
+        "line": 157
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -11123,7 +11123,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 161
+        "line": 166
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -11164,7 +11164,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 160
+        "line": 165
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -11205,7 +11205,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 134
+        "line": 140
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -11257,7 +11257,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 153
+        "line": 158
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -11315,7 +11315,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 157
+        "line": 162
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -11373,7 +11373,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 158
+        "line": 163
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -11431,7 +11431,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 139
+        "line": 145
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -11456,7 +11456,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 140,
+          "line": 146,
           "note": "Pattern:",
           "path": "internal/api/session/session.go"
         },
@@ -11489,7 +11489,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/session/session.go",
-        "line": 140
+        "line": 146
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",
@@ -13539,7 +13539,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/sso/sso.go",
-        "line": 175
+        "line": 180
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -13604,5 +13604,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "dda2febf4bbc4444bd03ca22f4a6542ad972c8c3"
+  "source_commit": "55bf088b2ba46840db56ad67e415de80e396f90e"
 }

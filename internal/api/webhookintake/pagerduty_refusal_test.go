@@ -74,10 +74,17 @@ func (c *countingReader) Read(p []byte) (int, error) {
 }
 
 func (f *refusalFixture) send(id, subscription, signature string, body []byte) (*httptest.ResponseRecorder, int) {
+	return f.sendDeclared(id, subscription, signature, body, "")
+}
+
+func (f *refusalFixture) sendDeclared(id, subscription, signature string, body []byte, declared string) (*httptest.ResponseRecorder, int) {
 	reader := &countingReader{r: bytes.NewReader(body)}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/pagerduty/"+id, reader)
 	req.SetPathValue("binding_id", id)
 	req.Header.Del("Content-Length")
+	if declared != "" {
+		req.Header.Set("Content-Length", declared)
+	}
 	if subscription != "" {
 		req.Header.Set("X-Webhook-Subscription", subscription)
 	}
@@ -153,16 +160,24 @@ func TestPagerDutyRefusalsShareOneBodyAndLookupWork(t *testing.T) {
 			"missing subscription": run(f.bindingID, "", body),
 			"other subscription":   run(f.bindingID, "other", body),
 		} {
-			wantLoads := 1
-			if label == "id that is no uuid" {
-				wantLoads = 0
-			}
-			if got.code != known.code || got.body != known.body || got.read != known.read || got.loads != wantLoads {
+			if got.code != known.code || got.body != known.body || got.read != known.read || got.loads != 1 {
 				t.Errorf("%s, %s: %+v differs from the known binding's %+v", name, label, got, known)
 			}
 		}
 		if name == "oversized" && (known.code != http.StatusRequestEntityTooLarge || known.read <= maxWebhookBodyBytes) {
 			t.Errorf("oversized body: status %d after reading %d bytes", known.code, known.read)
+		}
+	}
+}
+
+func TestPagerDutySignatureVerificationAlwaysComputesTheHMAC(t *testing.T) {
+	body := []byte(`{"event":{}}`)
+	for name, header := range map[string]string{"empty header": "", "wrong signature": "v1=" + strings.Repeat("0", 64)} {
+		if verifyPagerDutySignature(body, header, []byte("k")) {
+			t.Errorf("%s verified", name)
+		}
+		if allocs := testing.AllocsPerRun(20, func() { verifyPagerDutySignature(body, header, []byte("k")) }); allocs < 5 {
+			t.Errorf("%s: %v allocations per run, the HMAC did not run", name, allocs)
 		}
 	}
 }
@@ -249,23 +264,56 @@ func TestLoadBindingIsAssignedOnlyByItsDeclaration(t *testing.T) {
 // Python receiver (pagerduty.py pagerduty_webhook, before CHAOS-8315) answered
 // and the status this handler answers. A row whose two columns differ is a
 // declared deviation (D6129): the Go answer is never more accepting.
+// retiredPythonStatus models the retired receiver's check order (parse the id,
+// require the subscription header, load the binding, compare the subscription,
+// read the bounded body) and every row's pythonStatus must equal it.
 var pagerdutyRefusalTable = []struct {
 	class                  string
-	id, subscription, sig  string // "known" and "other" are the fixture's binding and a wrong value
-	oversized              bool
+	id, subscription       string // id: known|unknown|unavailable|no-uuid; subscription: known|other|none
+	body, declared         string // body: ordinary|oversized; declared: Content-Length header or empty
 	pythonStatus, goStatus int
 }{
-	{"id that is no uuid", "no-uuid", "known", "bad", false, 404, 401},
-	{"unknown binding", "unknown", "known", "bad", false, 404, 401},
-	{"binding that is not receivable", "unavailable", "known", "bad", false, 404, 401},
-	{"missing subscription", "known", "", "bad", false, 401, 401},
-	{"other subscription", "known", "other", "bad", false, 401, 401},
-	{"bad signature", "known", "known", "bad", false, 401, 401},
-	{"oversized body, known binding and subscription", "known", "known", "bad", true, 413, 413},
-	{"oversized body, other subscription", "known", "other", "bad", true, 401, 413},
-	{"oversized body, missing subscription", "known", "", "bad", true, 401, 413},
-	{"oversized body, unknown binding", "unknown", "known", "bad", true, 404, 413},
-	{"oversized body, id that is no uuid", "no-uuid", "known", "bad", true, 404, 413},
+	{"id that is no uuid", "no-uuid", "known", "ordinary", "", 404, 401},
+	{"unknown binding", "unknown", "known", "ordinary", "", 404, 401},
+	{"binding that is not receivable", "unavailable", "known", "ordinary", "", 404, 401},
+	{"missing subscription", "known", "none", "ordinary", "", 401, 401},
+	{"missing subscription, unknown binding", "unknown", "none", "ordinary", "", 401, 401},
+	{"missing subscription, id that is no uuid", "no-uuid", "none", "ordinary", "", 404, 401},
+	{"other subscription", "known", "other", "ordinary", "", 401, 401},
+	{"bad signature", "known", "known", "ordinary", "", 401, 401},
+	{"oversized body, known binding and subscription", "known", "known", "oversized", "", 413, 413},
+	{"oversized body, other subscription", "known", "other", "oversized", "", 401, 413},
+	{"oversized body, missing subscription", "known", "none", "oversized", "", 401, 413},
+	{"oversized body, unknown binding", "unknown", "known", "oversized", "", 404, 413},
+	{"oversized body, id that is no uuid", "no-uuid", "known", "oversized", "", 404, 413},
+	{"declared length over the bound, known binding and subscription", "known", "known", "ordinary", "1048577", 413, 413},
+	{"declared length over the bound, other subscription", "known", "other", "ordinary", "1048577", 401, 413},
+	{"declared length over the bound, missing subscription", "known", "none", "ordinary", "1048577", 401, 413},
+	{"declared length over the bound, unknown binding", "unknown", "known", "ordinary", "1048577", 404, 413},
+	{"declared length over the bound, id that is no uuid", "no-uuid", "known", "ordinary", "1048577", 404, 413},
+	{"declared length not a number, known binding and subscription", "known", "known", "ordinary", "not-a-number", 400, 400},
+	{"declared length not a number, other subscription", "known", "other", "ordinary", "not-a-number", 401, 400},
+	{"declared length not a number, missing subscription", "known", "none", "ordinary", "not-a-number", 401, 400},
+	{"declared length not a number, unknown binding", "unknown", "known", "ordinary", "not-a-number", 404, 400},
+	{"declared length not a number, id that is no uuid", "no-uuid", "known", "ordinary", "not-a-number", 404, 400},
+}
+
+func retiredPythonStatus(id, subscription, body, declared string) int {
+	switch {
+	case id == "no-uuid":
+		return http.StatusNotFound
+	case subscription == "none":
+		return http.StatusUnauthorized
+	case id == "unknown" || id == "unavailable":
+		return http.StatusNotFound
+	case subscription != "known":
+		return http.StatusUnauthorized
+	case declared == "not-a-number":
+		return http.StatusBadRequest
+	case declared == "1048577" || body == "oversized":
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusUnauthorized
 }
 
 func TestPagerDutyRefusalTableMatchesTheHandler(t *testing.T) {
@@ -282,21 +330,24 @@ func TestPagerDutyRefusalTableMatchesTheHandler(t *testing.T) {
 	ordinary := []byte(`{"event":{}}`)
 	oversized := bytes.Repeat([]byte("x"), maxWebhookBodyBytes+10)
 	for _, row := range pagerdutyRefusalTable {
+		if want := retiredPythonStatus(row.id, row.subscription, row.body, row.declared); row.pythonStatus != want {
+			t.Errorf("%s: table says the retired receiver answered %d, its check order gives %d", row.class, row.pythonStatus, want)
+		}
 		id := map[string]string{"known": f.bindingID, "unknown": uuid.NewString(), "unavailable": unavailable, "no-uuid": "not-a-uuid"}[row.id]
-		subscription := map[string]string{"known": f.sub, "other": "other-" + f.sub, "": ""}[row.subscription]
+		subscription := map[string]string{"known": f.sub, "other": "other-" + f.sub, "none": ""}[row.subscription]
 		body := ordinary
-		if row.oversized {
+		if row.body == "oversized" {
 			body = oversized
 		}
-		got, _ := f.send(id, subscription, pagerdutySign("wrong-"+f.secret, ordinary), body)
+		got, _ := f.sendDeclared(id, subscription, pagerdutySign("wrong-"+f.secret, ordinary), body, row.declared)
 		if got.Code != row.goStatus {
 			t.Errorf("%s: status %d, table says %d", row.class, got.Code, row.goStatus)
 		}
-		if row.goStatus != http.StatusRequestEntityTooLarge && got.Body.String() != `{"detail":"Invalid signature"}` {
+		if row.goStatus == http.StatusUnauthorized && got.Body.String() != `{"detail":"Invalid signature"}` {
 			t.Errorf("%s: body %s", row.class, got.Body.String())
 		}
-		if row.goStatus == row.pythonStatus && row.pythonStatus == http.StatusNotFound {
-			t.Errorf("%s: a 404 row must be a declared deviation", row.class)
+		if row.goStatus != row.pythonStatus && row.goStatus < http.StatusBadRequest {
+			t.Errorf("%s: a changed status must still be a refusal", row.class)
 		}
 	}
 }

@@ -98,16 +98,13 @@ WHERE id = $1::uuid AND org_id = $2::uuid AND status = 'candidate'`, bindingID, 
 }
 
 func verifyPagerDutySignature(body []byte, header string, secret []byte) bool {
-	if header == "" {
-		return false
-	}
-	candidates := strings.Split(header, ",")
-	if len(candidates) > maxSignatureCandidates {
-		return false
-	}
 	mac := hmac.New(sha256.New, secret)
 	mac.Write(body)
 	expected := hex.EncodeToString(mac.Sum(nil))
+	candidates := strings.Split(header, ",")
+	if header == "" || len(candidates) > maxSignatureCandidates {
+		return false
+	}
 	valid := false
 	for _, candidate := range candidates {
 		trimmed := strings.TrimSpace(candidate)
@@ -492,25 +489,28 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 		refusal := ""
 		var binding pagerdutyBinding
 		canonicalBindingID := ""
-		if parsed, err := uuid.Parse(r.PathValue("binding_id")); err != nil {
+		lookupID := uuid.Nil.String()
+		parsed, parseErr := uuid.Parse(r.PathValue("binding_id"))
+		if parseErr == nil {
+			lookupID = parsed.String()
+			canonicalBindingID = lookupID
+		}
+		found, err := loadBinding(r.Context(), d.Pool, lookupID)
+		switch {
+		case err != nil && !errors.Is(err, errBindingNotFound):
+			d.logger().Error("pagerduty_webhook load binding failed", "binding_id", canonicalBindingID, "error", err)
+			policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
+			return
+		case parseErr != nil:
 			refusal = refusalInvalidBindingID
-		} else {
-			canonicalBindingID = parsed.String()
-			found, err := loadBinding(r.Context(), d.Pool, canonicalBindingID)
-			switch {
-			case errors.Is(err, errBindingNotFound):
-				refusal = refusalBindingUnavailable
-			case err != nil:
-				d.logger().Error("pagerduty_webhook load binding failed", "binding_id", canonicalBindingID, "error", err)
-				policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
-				return
-			case subscriptionHeader == "":
-				refusal = refusalSubscriptionMissing
-			case found.ID != canonicalBindingID || subscriptionHeader != found.ProviderSubscriptionID:
-				refusal = refusalSubscriptionMismatch
-			default:
-				binding = found
-			}
+		case errors.Is(err, errBindingNotFound):
+			refusal = refusalBindingUnavailable
+		case subscriptionHeader == "":
+			refusal = refusalSubscriptionMissing
+		case found.ID != canonicalBindingID || subscriptionHeader != found.ProviderSubscriptionID:
+			refusal = refusalSubscriptionMismatch
+		default:
+			binding = found
 		}
 		body, httpErr := readBodyLimited(r)
 		if httpErr != nil {
@@ -624,12 +624,9 @@ const (
 
 var mirrorSecret = []byte("pagerduty-refusal-mirror-key")
 
-// mirrorSignatureWork always computes one HMAC over the body with the fixed
-// key, then runs the same verification a known binding's secret gets.
+// mirrorSignatureWork runs the verification a known binding's secret gets,
+// with a fixed key; verification always computes the HMAC first.
 func mirrorSignatureWork(body []byte, signatureHeader string) {
-	mac := hmac.New(sha256.New, mirrorSecret)
-	mac.Write(body)
-	_ = mac.Sum(nil)
 	_ = verifyPagerDutySignature(body, signatureHeader, mirrorSecret)
 }
 

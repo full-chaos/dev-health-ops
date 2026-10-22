@@ -27,12 +27,12 @@
 # pins that the legs together run exactly the steps of `ci`.
 #
 # ONE PLAN VERDICT (go-quality-plan). `cmd/cigate plan-verdict --go-files-full`, the
-# program go.yml's integration plan job runs, judges the change set once. Here it is
-# FULL for every change set (with --go-files-full a .go file is FULL, and any other path
-# is FULL), for any push to main, merge group, schedule or manual run, and for any failure
-# of the plan: every package runs. A NONE verdict would skip the test and race legs, and
-# an AFFECTED one would run only its packages; no change set plans either today. The
-# static leg and the fan-in always run and report.
+# program go.yml's integration plan job runs, judges the change set once. With
+# --go-files-full a .go file is FULL, so is any path in no declared class, any push to
+# main, merge group, schedule or manual run, and any failure of the plan: every package
+# runs. A non-Go path in a declared class plans the packages that read it (AFFECTED) or
+# NONE when no package reads it; NONE skips the test and race legs, AFFECTED runs only its
+# packages. The static leg and the fan-in always run and report.
 name: Go quality
 
 on:

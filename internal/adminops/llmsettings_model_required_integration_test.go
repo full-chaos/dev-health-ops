@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // TestLLMSettingsSetRefusesABYOProviderWithoutAModel is the PUT route's model rule on the operator
@@ -87,4 +89,6 @@ VALUES ('%s', 'team-org', 'Team', 'team', 'manual', true, now(), now())`, teamOr
 	if code != 1 || strings.Contains(stdout, "model is required") || db.llmState(t) != baseURLBefore {
 		t.Errorf("an invalid base URL is refused before the model rule: exit %d, stdout %q", code, stdout)
 	}
+
+	venueoracle.WriteGoOnlyProof(t, "Go-only rule test: the Python verb saved a model-less BYO provider, so there is no Python answer to compare; the verb's refusals and the rows after them are asserted directly")
 }

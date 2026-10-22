@@ -27,7 +27,7 @@ const (
 	llmKeySecret = "oracle-settings-key-not-real"
 	llmSalt      = "oracle-salt"
 	// llmGoPinDigest is the digest the Go pin run printed, never computed by hand.
-	llmGoPinDigest = "PENDING-RECORD"
+	llmGoPinDigest = "ca09e54520d8479136008eafbdeed83bf9f87dddd576903c4eba9b5db759cb76"
 )
 
 type llmStep struct {
@@ -274,6 +274,7 @@ func TestLLMSettingsMatchTheFrozenPythonOutput(t *testing.T) {
 	golden.SkipDiff(t)
 	pin.Finish(t)
 	golden.Finish(t)
+	venueoracle.WriteGoOnlyProof(t, "the operator verbs' answers against the frozen Python session; the steps the model rule retires are pinned to Go's own answers")
 }
 
 // A refusal Python prints can carry text the operator typed: an unparsable base

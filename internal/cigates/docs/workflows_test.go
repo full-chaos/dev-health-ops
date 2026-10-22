@@ -26,11 +26,11 @@ type expectedCheck struct {
 }
 
 var docsGuardsChecks = []expectedCheck{
-	{"Validate publication inventory and IA placement", pyCmd("validate_docs_v2_publication"), nil},
+	{"Validate publication inventory and IA placement", goCmd("validate-publication"), nil},
 	{"Strict canonical build", "python -m mkdocs build --strict", []string{"--config-file mkdocs.yml"}},
 	{"Check rendered links, anchors, and assets", goCmd("check-built-site-links"), []string{"--site-dir .build/docs"}},
 	{"Check task-based search acceptance", goCmd("check-docs-search"), []string{"--site-dir .build/docs", "--queries " + searchAcceptance}},
-	{"Check structural accessibility invariants", pyCmd("check_docs_candidate_accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
+	{"Check structural accessibility invariants", goCmd("check-docs-accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
 	{"Check code prerequisites", goCmd("check-code-prerequisites"), nil},
 	{"Check freshness inventory", goCmd("check-freshness"), nil},
 }
@@ -45,7 +45,6 @@ const (
 var docsGuardsTriggerPaths = []string{
 	"docs/**", "mkdocs.yml", "docs-data/**", glue("requirements-docs", ".", "txt"),
 	".github/workflows/docs-guards.yml", ".github/workflows/docs-cloudflare.yml",
-	"scripts/" + "validate_docs_v2_publication" + "." + "py", "scripts/" + "check_docs_candidate_accessibility" + "." + "py",
 	"scripts/" + "check_freshness_inventory" + "." + "py",
 }
 

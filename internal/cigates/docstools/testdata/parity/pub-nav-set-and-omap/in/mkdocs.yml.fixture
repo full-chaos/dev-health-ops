@@ -1,0 +1,4 @@
+nav:
+  - !!omap [a: index.md]
+  - !!set {x}
+  - reference.md

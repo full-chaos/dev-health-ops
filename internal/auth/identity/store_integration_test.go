@@ -1302,10 +1302,17 @@ WHERE aggregate_id = 'prn_' || $1 ORDER BY id)`, id.String()).Scan(&outboxTypes)
 		got.AuthProvider == nil || *got.AuthProvider != "local" {
 		t.Fatalf("owned ByEmail = %+v, %v", got, err)
 	}
-	// Before the cutover the same key is read from public.users, where the
-	// projection of the owned account is present.
-	if got, err := e.store.ByEmail(ctx, key); err != nil || got == nil || got.ID != id || got.PasswordHash == nil || *got.PasswordHash != hash {
-		t.Fatalf("pre-cutover ByEmail did not read the projected public.users row: %+v, %v", got, err)
+	// The two stores read different tables: change the public.users verifier
+	// alone, and each store answers with its own table's value.
+	publicHash := testBcrypt + "-public-only"
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET password_hash = $2 WHERE id = $1`, id, publicHash); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.store.ByEmail(ctx, key); err != nil || got == nil || got.ID != id || got.PasswordHash == nil || *got.PasswordHash != publicHash {
+		t.Fatalf("pre-cutover ByEmail did not read public.users: %+v, %v", got, err)
+	}
+	if got, err := e.owned.ByEmail(ctx, key); err != nil || got == nil || got.PasswordHash == nil || *got.PasswordHash != hash {
+		t.Fatalf("post-cutover ByEmail did not read auth.users: %+v, %v", got, err)
 	}
 
 	if _, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: strings.ToUpper(email), PasswordHash: &hash}); !errors.Is(err, ErrEmailTaken) {
@@ -1378,8 +1385,14 @@ AND subject_principal_id::text = $1 AND attributes->>'reason_code' = 'email_veri
 	if has, err := e.owned.HasPassword(ctx, id); err != nil || !has {
 		t.Fatalf("owned HasPassword after = %v, %v", has, err)
 	}
-	if has, err := e.store.HasPassword(ctx, id); err != nil || !has {
-		t.Fatalf("pre-cutover HasPassword did not read the projected public.users row: %v, %v", has, err)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET password_hash = NULL WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := e.store.HasPassword(ctx, id); err != nil || has {
+		t.Fatalf("pre-cutover HasPassword did not read public.users (hash nulled there only): %v, %v", has, err)
+	}
+	if has, err := e.owned.HasPassword(ctx, id); err != nil || !has {
+		t.Fatalf("post-cutover HasPassword did not read auth.users (hash nulled in public only): %v, %v", has, err)
 	}
 	got, err := e.owned.ByEmail(ctx, email)
 	if err != nil || got == nil || !got.IsVerified || got.PasswordHash == nil || *got.PasswordHash != testBcrypt {
@@ -1586,8 +1599,15 @@ func TestByIDFollowsTheLiveReadRule(t *testing.T) {
 	if err != nil || got == nil || got.ID != owned || !got.IsActive || got.IsVerified || got.PasswordHash == nil || *got.PasswordHash != hash {
 		t.Fatalf("post-cutover ByID = %+v, %v", got, err)
 	}
-	if got, err := e.store.ByID(ctx, owned); err != nil || got == nil || got.ID != owned || got.PasswordHash == nil || *got.PasswordHash != hash {
-		t.Fatalf("pre-cutover ByID did not read the projected public.users row: %+v, %v", got, err)
+	publicHash := testBcrypt + "-public-only"
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET password_hash = $2 WHERE id = $1`, owned, publicHash); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.store.ByID(ctx, owned); err != nil || got == nil || got.ID != owned || got.PasswordHash == nil || *got.PasswordHash != publicHash {
+		t.Fatalf("pre-cutover ByID did not read public.users: %+v, %v", got, err)
+	}
+	if got, err := e.owned.ByID(ctx, owned); err != nil || got == nil || got.PasswordHash == nil || *got.PasswordHash != hash {
+		t.Fatalf("post-cutover ByID did not read auth.users: %+v, %v", got, err)
 	}
 	for _, s := range []*Store{e.store, e.owned} {
 		if got, err := s.ByID(ctx, uuid.New()); err != nil || got != nil {

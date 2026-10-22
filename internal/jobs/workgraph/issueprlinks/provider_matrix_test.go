@@ -126,6 +126,8 @@ func TestDeriveWithoutADonorRowWritesNoLink(t *testing.T) {
 	for name, raw := range map[string]string{
 		"external issue key":    "external_issue_key",
 		"description reference": "description_reference",
+		"text reference":        "explicit_text",
+		"text blocks keyword":   "explicit_text:blocks",
 		"blocks relation":       "blocks",
 	} {
 		t.Run(name, func(t *testing.T) {

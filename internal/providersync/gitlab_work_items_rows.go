@@ -3,6 +3,7 @@ package providersync
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math/big"
 	"regexp"
 	"sort"
@@ -928,7 +929,7 @@ func gitlabPriorityFromLabels(labels []string) (*string, *string) {
 }
 
 var (
-	gitlabIssueReferencePattern = regexp.MustCompile(`(?m)(?:^|[^\w])(?:(?:([\w/-]+))?#(\d+))`)
+	gitlabIssueReferencePattern = regexp.MustCompile(`(?m)(?:^|[^\w./-])([\w./-]*)#(\d+)`)
 	gitlabExternalKeyPattern    = regexp.MustCompile(`(?i)(depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|part\s+of|see)\s*:?\s*([A-Za-z]{2,}-\d+)\b`)
 )
 
@@ -965,6 +966,21 @@ func normalizeGitLabClosingMergeRequests(
 		}
 	}
 	return rows
+}
+
+// gitlabTextRelationRaw is the raw kind of a link read from description text; a keyword appends ":<keyword>". It is
+// distinct from every native /links kind ("blocks" is one), so a text row is never read as a native one.
+const gitlabTextRelationRaw = "explicit_text"
+
+func gitlabReferenceRejectClass(err error) string {
+	switch {
+	case errors.Is(err, errGitLabReferencePath):
+		return "path"
+	case errors.Is(err, errGitLabReferenceIID):
+		return "iid"
+	default:
+		return "shape"
+	}
 }
 
 func normalizeGitLabDependencies(
@@ -1020,12 +1036,18 @@ func normalizeGitLabDependencies(
 		}
 		appendRow(source, target, relationship, linkType, workitemmetrics.RelationWriterBoth, parseGitLabWorkItemTime(link.LinkCreatedAt))
 	}
+	rejectedReferences := map[string]int{}
 	for _, match := range gitlabIssueReferencePattern.FindAllStringSubmatch(description, -1) {
 		project := match[1]
 		if project == "" {
 			project = fullName
 		}
-		targetID := "gitlab:" + project + "#" + match[2]
+		reference, err := parseGitLabReference(project+"#"+match[2], gitlabIssueMarker)
+		if err != nil {
+			rejectedReferences[gitlabReferenceRejectClass(err)]++
+			continue
+		}
+		targetID := "gitlab:" + reference.Path + "#" + strconv.FormatUint(uint64(reference.IID), 10)
 		if targetID == workItemID {
 			continue
 		}
@@ -1038,10 +1060,10 @@ func normalizeGitLabDependencies(
 			start = 0
 		}
 		contextText := strings.ToLower(description[start : strings.Index(description[start:], match[0])+start+len(match[0])])
-		relationship, raw, source, target := "relates_to", "description_reference", workItemID, targetID
+		relationship, raw, source, target := "relates_to", gitlabTextRelationRaw, workItemID, targetID
 		for _, keyword := range []string{"blocked by", "is blocked by", "blocking", "blocks"} {
 			if strings.Contains(contextText, keyword) {
-				relationship, raw = "blocks", keyword
+				relationship, raw = "blocks", gitlabTextRelationRaw+":"+keyword
 				if strings.Contains(keyword, "by") {
 					source, target = targetID, workItemID
 				}
@@ -1049,6 +1071,9 @@ func normalizeGitLabDependencies(
 			}
 		}
 		appendRow(source, target, relationship, raw, writerOf(source), nil)
+	}
+	for class, count := range rejectedReferences {
+		slog.Warn("providersync.gitlab.description_reference_rejected", "org_id", claim.OrgID, "issue", workItemID, "reason", class, "count", count)
 	}
 	seenExternal := map[string]struct{}{}
 	for _, match := range gitlabExternalKeyPattern.FindAllStringSubmatch(description, -1) {

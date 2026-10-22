@@ -144,6 +144,7 @@ internal/gqlgenguard	test	.github
 internal/gqlgenguard	test	ci
 internal/gqlgenguard	test	docs
 internal/ingressplanes	code	contracts
+internal/ingressplanes	test	ci
 internal/ingressplanes	test	compose.yml
 internal/ingressplanes	test	docker
 internal/jobcontract	test	contracts

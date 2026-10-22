@@ -3,3 +3,4 @@ github.com/full-chaos/dev-health-ops/internal/api/audit	the shared audit_logs wr
 github.com/full-chaos/dev-health-ops/internal/api/authmail	signed-link e-mail of the existing login flows (org invite, e-mail verification, password reset), not the Auth Control Plane
 github.com/full-chaos/dev-health-ops/internal/apiservice/authflowvenue	venue oracle of the existing registration and login flows (integration-tagged)
 github.com/full-chaos/dev-health-ops/internal/queryapi/authctx	carries the query plane's verified effective-principal envelope through a request context; owned by the query plane
+github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary	go:embed carrier of the vocabulary JSON files (actions.v1, roles.v1); holds no logic and is imported only by internal/auth/policycatalog

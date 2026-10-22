@@ -279,3 +279,72 @@ func TestCustodyKeysIgnoresTheOverlay(t *testing.T) {
 		t.Fatal("CustodyKeys read the durable states")
 	}
 }
+
+// A compromise latches in the process whatever custody adapter signs: a
+// single key file seen compromised never signs again, when the source later
+// names it active (a restored backup) or holds no rows at all.
+func TestACompromiseLatchesForEveryCustody(t *testing.T) {
+	for _, layout := range []string{"single key file", "key-set manifest"} {
+		for _, after := range []string{"restored active", "empty table"} {
+			t.Run(layout+"/"+after, func(t *testing.T) {
+				dir := t.TempDir()
+				public := writeKey(t, dir, "one")
+				source := &fakeStates{rows: []KeyStateRow{{KeyID: "one", State: StateActive, PublicKey: public}}}
+				clock := &fakeClock{now: time.Unix(0, 0)}
+				config := FileConfig{KeyPath: dir + "/one.pem", KeyID: "one", States: newStates(source, clock)}
+				if layout == "key-set manifest" {
+					config = FileConfig{KeySetPath: writeSet(t, dir, "one", "active"), States: newStates(source, clock)}
+				}
+				signer := NewFileSigner(config)
+				ctx := context.Background()
+				if _, _, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err != nil {
+					t.Fatalf("Sign while active: %v", err)
+				}
+				source.set([]KeyStateRow{{KeyID: "one", State: StateCompromised, PublicKey: public}}, nil)
+				clock.advance(10 * time.Second)
+				if _, _, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err == nil {
+					t.Fatal("a compromised key signed")
+				}
+				rows := []KeyStateRow{{KeyID: "one", State: StateActive, PublicKey: public}}
+				if after == "empty table" {
+					rows = nil
+				}
+				source.set(rows, nil)
+				clock.advance(10 * time.Second)
+				if _, _, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err == nil {
+					t.Fatalf("a key seen compromised signed again after the source showed %s", after)
+				}
+				if set, err := signer.KeySet(ctx); err == nil {
+					for _, key := range set.Published() {
+						if key.PublicKey.Equal(public) {
+							t.Fatal("a key seen compromised is published again")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+// A compromised row latches its kid and public key even when custody does not
+// hold that key yet: a later manifest that adds it finds it denied.
+func TestACompromisedRowLatchesBeforeCustodyHoldsTheKey(t *testing.T) {
+	dir := t.TempDir()
+	publicA, publicB := writeKey(t, dir, "a"), writeKey(t, dir, "b")
+	source := &fakeStates{rows: []KeyStateRow{
+		{KeyID: "a", State: StateActive, PublicKey: publicA}, {KeyID: "b", State: StateCompromised, PublicKey: publicB},
+	}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	states := newStates(source, clock)
+	signer := NewFileSigner(FileConfig{KeySetPath: writeSet(t, dir, "a", "active"), States: states})
+	ctx := context.Background()
+	if _, kid, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err != nil || kid != "a" {
+		t.Fatalf("Sign = %q, %v", kid, err)
+	}
+	source.set(nil, nil)
+	clock.advance(10 * time.Second)
+	writeSet(t, dir, "a", "retiring", "b", "active")
+	if _, _, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err == nil {
+		t.Fatal("a key the table once marked compromised signed after the table emptied")
+	}
+}

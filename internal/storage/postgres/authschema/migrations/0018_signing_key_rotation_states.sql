@@ -71,7 +71,28 @@ CREATE TRIGGER signing_keys_key_immutable
                        OR OLD.public_key_jwk IS DISTINCT FROM NEW.public_key_jwk)
     EXECUTE FUNCTION signing_keys_key_immutable();
 
--- Every write goes through audit.Commit, with its audit row.
+-- Every write goes through audit.Commit, with its audit row. TRUNCATE skips
+-- row triggers, so it gets the statement guard 0006 gives every guarded
+-- table, and it is refused outright while a compromised row exists (inside
+-- audit.Commit too): a truncate would erase the deny list.
 CREATE TRIGGER signing_keys_commit_guard
     BEFORE INSERT OR UPDATE OR DELETE ON signing_keys
     FOR EACH ROW EXECUTE FUNCTION audit_commit_guard();
+CREATE TRIGGER signing_keys_truncate_guard
+    BEFORE TRUNCATE ON signing_keys
+    FOR EACH STATEMENT EXECUTE FUNCTION audit_commit_guard();
+
+CREATE FUNCTION signing_keys_compromised_no_truncate() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path FROM CURRENT AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM signing_keys WHERE status = 'compromised') THEN
+        RAISE EXCEPTION 'signing_keys holds compromised keys; it cannot be truncated'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE TRIGGER signing_keys_compromised_no_truncate
+    BEFORE TRUNCATE ON signing_keys
+    FOR EACH STATEMENT EXECUTE FUNCTION signing_keys_compromised_no_truncate();

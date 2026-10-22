@@ -148,7 +148,7 @@ var attributeVocabulary = map[string][]string{
 	"rotation_refusal": {
 		"table_not_empty", "table_empty", "key_unknown", "key_not_in_custody", "key_registered",
 		"custody_not_one_active", "wrong_state", "floor_not_reached", "compromised_terminal",
-		"successor_ineligible", "unknown_verb",
+		"successor_ineligible", "unknown_verb", "state_changed",
 	},
 	"provider":         {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
 	"client_service":   {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},

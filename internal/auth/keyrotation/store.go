@@ -250,22 +250,47 @@ func floorRemaining(request Request, rows []Row, now time.Time) time.Duration {
 
 // Apply plans request, then writes it in one audit.Commit transaction that
 // holds every signing_keys row: the moves, a compromise's session
-// revocations and one audit row. A refusal is recorded as a denied audit row
-// and returned as a *Refusal; nothing else is written.
+// revocations and one audit row. A refusal, at the plan or at the locked
+// re-decision, and a state change between the two are recorded as a denied
+// audit row and returned (*Refusal, ErrStateChanged); nothing else is written.
 func (o *Operator) Apply(ctx context.Context, request Request) (Result, error) {
 	planned, err := o.Plan(ctx, request)
-	var refusal *Refusal
-	if errors.As(err, &refusal) {
-		if appendErr := audit.Append(ctx, o.Pool, o.Schema, refusedEvent(request, refusal.Reason)); appendErr != nil {
-			return planned, errors.Join(err, appendErr)
-		}
-		return planned, err
+	if reason, refused := refusalReason(err); refused {
+		return planned, o.recordRefusal(ctx, request, reason, err)
 	}
 	if err != nil {
 		return Result{}, err
 	}
+	result, err := o.commit(ctx, request, planned)
+	if reason, refused := refusalReason(err); refused {
+		return Result{}, o.recordRefusal(ctx, request, reason, err)
+	}
+	return result, err
+}
+
+// refusalReason classifies err as a verb that did not apply: a *Refusal or
+// ErrStateChanged.
+func refusalReason(err error) (Reason, bool) {
+	var refusal *Refusal
+	switch {
+	case errors.As(err, &refusal):
+		return refusal.Reason, true
+	case errors.Is(err, ErrStateChanged):
+		return ReasonStateChanged, true
+	}
+	return "", false
+}
+
+func (o *Operator) recordRefusal(ctx context.Context, request Request, reason Reason, err error) error {
+	if appendErr := audit.Append(ctx, o.Pool, o.Schema, refusedEvent(request, reason)); appendErr != nil {
+		return errors.Join(err, appendErr)
+	}
+	return err
+}
+
+func (o *Operator) commit(ctx context.Context, request Request, planned Result) (Result, error) {
 	result := Result{Moves: planned.Moves}
-	err = audit.Commit(ctx, o.Pool, o.Schema, audit.Mutation{
+	err := audit.Commit(ctx, o.Pool, o.Schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('dev_health.signing_keys'))`); err != nil {
 				return err

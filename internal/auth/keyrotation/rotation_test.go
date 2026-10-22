@@ -244,7 +244,7 @@ func TestAuditVocabularyMatchesTheStateMachine(t *testing.T) {
 	for _, verb := range Verbs {
 		verbs = append(verbs, string(verb))
 	}
-	for _, reason := range Reasons {
+	for _, reason := range append(append([]Reason(nil), Reasons...), ReasonStateChanged) {
 		reasons = append(reasons, string(reason))
 	}
 	for name, pair := range map[string][2][]string{
@@ -289,7 +289,7 @@ func TestAuditVocabularyMatchesTheStateMachine(t *testing.T) {
 	if got := appliedEvent(requests[VerbActivate].request, []Move{move("A", active, retiring), move("P", pending, active)}).Attributes; got["key_id"] != "P" || got["related_key_id"] != "A" || got["previous_status"] != "pending" {
 		t.Errorf("activate audit attributes = %v", got)
 	}
-	for _, reason := range Reasons {
+	for _, reason := range append(append([]Reason(nil), Reasons...), ReasonStateChanged) {
 		for _, kid := range []string{"P", "", "not a kid"} {
 			event := refusedEvent(Request{Verb: VerbActivate, KeyID: kid}, reason)
 			if err := audit.ValidateAttributes(event.Attributes); err != nil {
@@ -340,7 +340,7 @@ func TestNoKeyMaterialReachesAnAuditAttribute(t *testing.T) {
 		}
 		events = append(events, appliedEvent(c.request, moves))
 	}
-	for _, reason := range Reasons {
+	for _, reason := range append(append([]Reason(nil), Reasons...), ReasonStateChanged) {
 		events = append(events, refusedEvent(Request{Verb: VerbRegister, KeyID: "N", Custody: custody}, reason))
 	}
 	for _, event := range events {

@@ -64,6 +64,18 @@ func TestMigration0018SigningKeyRules(t *testing.T) {
 	} {
 		m10Fail(t, m18Armed(t, ctx, env, sql), what)
 	}
+	// TRUNCATE skips row triggers: it is refused outside audit.Commit (the
+	// statement guard) and, while a compromised row exists, inside it too.
+	for what, truncate := range map[string]func() error{
+		"an unarmed truncate": func() error {
+			_, err := env.migration.Exec(ctx, `TRUNCATE auth.signing_keys`)
+			return err
+		},
+		"an armed truncate":         func() error { return m18Armed(t, ctx, env, `TRUNCATE auth.signing_keys`) },
+		"an armed cascade truncate": func() error { return m18Armed(t, ctx, env, `TRUNCATE auth.signing_keys CASCADE`) },
+	} {
+		m10Fail(t, truncate(), what+" of a table holding a compromised key")
+	}
 	var status string
 	if err := env.admin.QueryRow(ctx, `SELECT status FROM auth.signing_keys WHERE kid = 'k-compromised'`).Scan(&status); err != nil || status != "compromised" {
 		t.Fatalf("the compromised row = %q, %v", status, err)

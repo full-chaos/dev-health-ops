@@ -64,11 +64,21 @@ type KeyStates struct {
 	attemptAt time.Time
 	have      bool
 	attempted bool
+
+	// deniedKids and deniedPublics latch every compromise this process has
+	// seen, from a row or from custody, for its life: no later snapshot (a
+	// restored backup, an emptied table) and no custody adapter re-enables it.
+	latchMu       sync.Mutex
+	deniedKids    map[string]bool
+	deniedPublics map[string]bool
 }
 
 // NewKeyStates returns a snapshot cache over config.Source.
 func NewKeyStates(config KeyStatesConfig) *KeyStates {
-	states := &KeyStates{source: config.Source, refreshEvery: config.RefreshEvery, maxStale: config.MaxStale, now: config.Now}
+	states := &KeyStates{
+		source: config.Source, refreshEvery: config.RefreshEvery, maxStale: config.MaxStale, now: config.Now,
+		deniedKids: map[string]bool{}, deniedPublics: map[string]bool{},
+	}
 	if states.refreshEvery <= 0 {
 		states.refreshEvery = KeyStateRefresh
 	}
@@ -99,13 +109,36 @@ func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 	return s.rows, nil
 }
 
-// override is the custody StateOverride over this snapshot.
+// override is the custody StateOverride over this snapshot, with every
+// compromise seen so far latched.
 func (s *KeyStates) override(ctx context.Context, keys []keystore.Key) ([]keystore.Key, error) {
 	rows, err := s.Rows(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return applyKeyStates(keys, rows)
+	applied, err := applyKeyStates(keys, rows)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]keystore.Key(nil), applied...)
+	s.latchMu.Lock()
+	defer s.latchMu.Unlock()
+	for _, row := range rows {
+		if row.State == StateCompromised {
+			s.deniedKids[row.KeyID], s.deniedPublics[string(row.PublicKey)] = true, true
+		}
+	}
+	for _, key := range out {
+		if key.State == StateCompromised {
+			s.deniedKids[key.KeyID], s.deniedPublics[string(key.PublicKey)] = true, true
+		}
+	}
+	for i := range out {
+		if s.deniedKids[out[i].KeyID] || s.deniedPublics[string(out[i].PublicKey)] {
+			out[i].State = StateCompromised
+		}
+	}
+	return out, nil
 }
 
 // applyKeyStates gives custody's keys their effective states. With no rows

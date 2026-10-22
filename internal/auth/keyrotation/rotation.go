@@ -70,7 +70,11 @@ const (
 	ReasonUnknownVerb         Reason = "unknown_verb"
 )
 
-// Reasons is every refusal reason.
+// ReasonStateChanged: the key states changed between the plan and the locked
+// write (ErrStateChanged). Decide never returns it; Apply records it.
+const ReasonStateChanged Reason = "state_changed"
+
+// Reasons is every refusal reason Decide returns.
 var Reasons = []Reason{
 	ReasonTableNotEmpty, ReasonTableEmpty, ReasonKeyUnknown, ReasonKeyNotInCustody, ReasonKeyRegistered,
 	ReasonCustodyNotOneActive, ReasonWrongState, ReasonFloorNotReached, ReasonCompromisedTerminal,

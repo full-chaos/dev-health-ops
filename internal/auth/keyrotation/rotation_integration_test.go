@@ -628,9 +628,19 @@ func TestRaceConcurrentVerbsMoveAKeyOnce(t *testing.T) {
 	if active != 1 || applied < 1 {
 		t.Fatalf("after %d racing activations: %d applied, %d active keys; want at least 1 applied and exactly 1 active", racers, applied, active)
 	}
-	var audited int
+	var audited, denied int
 	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.signing_key.activated'`).
 		Scan(&audited); err != nil || audited != applied {
 		t.Fatalf("activation audit rows = %d, %v; want one per applied verb (%d)", audited, err, applied)
+	}
+	// Every racer that did not apply, refused at the plan or at the locked
+	// re-decision, left a denied row.
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events
+		WHERE event_type = 'auth.signing_key.refused' AND outcome = 'denied' AND attributes->>'rotation_verb' = 'activate'`).
+		Scan(&denied); err != nil || denied != racers-applied {
+		t.Fatalf("denied activation rows = %d, %v; want one per racer that did not apply (%d)", denied, err, racers-applied)
+	}
+	if applied == racers {
+		t.Fatal("every racer applied; the race proved nothing")
 	}
 }

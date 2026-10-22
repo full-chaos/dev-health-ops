@@ -3,7 +3,8 @@
 //
 // A ref counts as untrusted when its expression reads workflow_dispatch/workflow_call inputs, a workflow_run payload, a
 // repository_dispatch payload, or (under pull_request_target only) the pull request head. A plain pull_request head checkout is
-// allowed: that event runs with a PR-scoped cache that the default branch never restores.
+// allowed: that event runs with a PR-scoped cache that the default branch never restores. A ref copied through a step output, an
+// env value or a job output is followed back to what produced it; a script reading the event payload itself is not followed.
 //
 // A step counts as a cache writer when it is actions/cache or actions/cache/save, sets a non-empty cache-to, sets a setup action's
 // cache input, or omits that input on an action whose cache defaults ON (setup-go, setup-uv, setup-gradle). A writer is allowed
@@ -24,20 +25,26 @@ import (
 )
 
 type step struct {
+	ID   string         `yaml:"id"`
 	Name string         `yaml:"name"`
+	Run  string         `yaml:"run"`
+	Env  map[string]any `yaml:"env"`
 	Uses string         `yaml:"uses"`
 	If   string         `yaml:"if"`
 	With map[string]any `yaml:"with"`
 }
 
 type job struct {
-	Uses  string         `yaml:"uses"`
-	With  map[string]any `yaml:"with"`
-	Steps []step         `yaml:"steps"`
+	Uses    string            `yaml:"uses"`
+	Env     map[string]any    `yaml:"env"`
+	Outputs map[string]string `yaml:"outputs"`
+	With    map[string]any    `yaml:"with"`
+	Steps   []step            `yaml:"steps"`
 }
 
 type workflow struct {
 	On   any            `yaml:"on"`
+	Env  map[string]any `yaml:"env"`
 	Jobs map[string]job `yaml:"jobs"`
 }
 
@@ -54,11 +61,21 @@ func norm(s string) string {
 	return strings.Join(strings.Fields(bracketKey.ReplaceAllString(strings.ToLower(s), ".$1")), " ")
 }
 
-// gatedIf holds when the step runs only if no ref was supplied: the gate is present and nothing in the condition (an ||, a
-// negation, a status function such as always()) can make it true anyway.
+// gatedIf holds when the step runs only if no ref was supplied. The condition must be a plain conjunction: no parentheses (so
+// no inversion such as `(GATE) == false`), no ||, no status function, and one term that is exactly the gate. A conjunction can
+// only narrow when the step runs, so the other terms may be anything else.
 func gatedIf(cond string) bool {
-	c := norm(cond)
-	return strings.Contains(c, refGate) && !strings.Contains(c, "||") && !strings.Contains(c, "!") && !strings.Contains(c, "()")
+	c := strings.TrimSpace(norm(cond))
+	c = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(c, "${{"), "}}"))
+	if strings.ContainsAny(c, "()") || strings.Contains(c, "||") {
+		return false
+	}
+	for _, term := range strings.Split(c, "&&") {
+		if strings.TrimSpace(term) == refGate {
+			return true
+		}
+	}
+	return false
 }
 
 func gatedWith(v string) bool { return gatedValue.MatchString(norm(v)) }
@@ -103,9 +120,9 @@ func suppliesRef(ev map[string]bool) bool {
 	return false
 }
 
-func passesUntrustedRef(with map[string]any, ev map[string]bool) bool {
+func passesUntrustedRef(with map[string]any, wf workflow, ev map[string]bool, jobName string) bool {
 	for _, v := range with {
-		if untrustedRef(fmt.Sprint(v), ev) != "" {
+		if (tracer{wf: wf, ev: ev}).refReason(fmt.Sprint(v), jobName, 0) != "" {
 			return true
 		}
 	}
@@ -179,7 +196,7 @@ func violations(file string, raw []byte) ([]string, error) {
 	ev := events(wf.On)
 	var out []string
 	for name, j := range wf.Jobs {
-		if j.Uses != "" && (suppliesRef(ev) || passesUntrustedRef(j.With, ev)) {
+		if j.Uses != "" && (suppliesRef(ev) || passesUntrustedRef(j.With, wf, ev, name)) {
 			out = append(out, fmt.Sprintf("%s: job %s calls the reusable workflow %s under a trigger or input that can supply an untrusted ref, which this guard does not follow", file, name, j.Uses))
 		}
 		reason := ""
@@ -188,7 +205,7 @@ func violations(file string, raw []byte) ([]string, error) {
 				continue
 			}
 			ref, _ := withString(s, "ref")
-			if r := untrustedRef(ref, ev); r != "" {
+			if r := (tracer{wf: wf, ev: ev}).refReason(ref, name, 0); r != "" {
 				reason = r
 			}
 		}
@@ -288,6 +305,10 @@ func TestPlants(t *testing.T) {
 		{"plain pull_request head checkout is allowed", wf("pull_request", "\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n      - uses: actions/setup-go@dddd\n"), 0},
 		{"checkout without ref", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 0},
 		{"derived needs output ref", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ needs.build.outputs.sha }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 0},
+		{"inverted gate", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: ${{ (github.event.inputs.ref == '') == false }}\n        with:\n          path: x\n          key: k\n"), 1},
+		{"gate in parentheses", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: (github.event.inputs.ref == '')\n        with:\n          path: x\n          key: k\n"), 1},
+		{"gate wrapped in expression braces with a second term", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: ${{ github.event_name == 'push' && github.event.inputs.ref == '' }}\n        with:\n          path: x\n          key: k\n"), 0},
+		{"ref through a step output fed by an input", wf("workflow_dispatch", "\n      - id: pick\n        env:\n          REF: ${{ inputs.ref }}\n        run: echo \"ref=$REF\" >> \"$GITHUB_OUTPUT\"\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ steps.pick.outputs.ref }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 1},
 		{"if with || always() still runs", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: github.event.inputs.ref == '' || always()\n        with:\n          path: x\n          key: k\n"), 1},
 		{"if with always() and the gate still runs", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: always() && github.event.inputs.ref == ''\n        with:\n          path: x\n          key: k\n"), 1},
 		{"if negating the gate", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: ${{ !(github.event.inputs.ref == '') }}\n        with:\n          path: x\n          key: k\n"), 1},
@@ -328,6 +349,115 @@ func TestReusableWorkflowCalls(t *testing.T) {
 		{"workflow_run call", "on: [push, workflow_run]\n" + call, 1},
 		{"push call passing a dispatch input as the ref", "on: push\n" + call + "    with:\n      ref: ${{ inputs.ref }}\n", 1},
 		{"push call passing a constant", "on: push\n" + call + "    with:\n      ref: main\n", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := violations("plant.yml", []byte(c.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != c.want {
+				t.Fatalf("want %d violations, got %v", c.want, got)
+			}
+		})
+	}
+}
+
+var (
+	stepOutputRef = regexp.MustCompile(`steps\.([a-z0-9_-]+)\.outputs`)
+	envRef        = regexp.MustCompile(`\benv\.([a-z0-9_]+)`)
+	needsOutRef   = regexp.MustCompile(`needs\.([a-z0-9_-]+)\.outputs\.([a-z0-9_-]+)`)
+)
+
+// tracer follows a ref expression through step outputs, env values and job outputs to the expressions that produced it, so
+// that a ref copied from an input into an output is still seen as supplied from outside. Reads of the event payload by a
+// script (for example `jq` on $GITHUB_EVENT_PATH) are not followed.
+type tracer struct {
+	wf workflow
+	ev map[string]bool
+}
+
+func lowerKeys(m map[string]any, key string) (any, bool) {
+	for k, v := range m {
+		if strings.ToLower(k) == key {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+func (t tracer) refReason(expr, jobName string, depth int) string {
+	if depth > 6 {
+		return ""
+	}
+	if r := untrustedRef(expr, t.ev); r != "" {
+		return r
+	}
+	e := norm(expr)
+	j := t.wf.Jobs[jobName]
+	for _, m := range stepOutputRef.FindAllStringSubmatch(e, -1) {
+		for _, s := range j.Steps {
+			if strings.ToLower(s.ID) != m[1] {
+				continue
+			}
+			texts := []string{s.Run}
+			for _, v := range s.Env {
+				texts = append(texts, fmt.Sprint(v))
+			}
+			for _, v := range s.With {
+				texts = append(texts, fmt.Sprint(v))
+			}
+			for _, text := range texts {
+				if r := t.refReason(text, jobName, depth+1); r != "" {
+					return r + " (through the output of step " + s.ID + ")"
+				}
+			}
+		}
+	}
+	for _, m := range envRef.FindAllStringSubmatch(e, -1) {
+		scopes := []map[string]any{j.Env, t.wf.Env}
+		for _, s := range j.Steps {
+			scopes = append(scopes, s.Env)
+		}
+		for _, scope := range scopes {
+			if v, ok := lowerKeys(scope, m[1]); ok {
+				if r := t.refReason(fmt.Sprint(v), jobName, depth+1); r != "" {
+					return r + " (through env " + m[1] + ")"
+				}
+			}
+		}
+	}
+	for _, m := range needsOutRef.FindAllStringSubmatch(e, -1) {
+		for name, other := range t.wf.Jobs {
+			if strings.ToLower(name) != m[1] {
+				continue
+			}
+			for k, v := range other.Outputs {
+				if strings.ToLower(k) != m[2] {
+					continue
+				}
+				if r := t.refReason(v, name, depth+1); r != "" {
+					return r + " (through the output of job " + name + ")"
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func TestIndirectRefs(t *testing.T) {
+	const cache = "      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"
+	cases := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"ref through workflow env fed by an input", "on: workflow_dispatch\nenv:\n  R: ${{ github.event.inputs.ref }}\njobs:\n  build:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ env.R }}\n" + cache, 1},
+		{"ref through job env fed by an input", "on: workflow_dispatch\njobs:\n  build:\n    runs-on: x\n    env:\n      R: ${{ inputs.ref }}\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ env.r }}\n" + cache, 1},
+		{"ref through a job output fed by an input", "on: workflow_dispatch\njobs:\n  pick:\n    runs-on: x\n    outputs:\n      ref: ${{ steps.p.outputs.ref }}\n    steps:\n      - id: p\n        run: echo \"ref=${{ inputs.ref }}\" >> \"$GITHUB_OUTPUT\"\n  build:\n    needs: pick\n    runs-on: x\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ needs.pick.outputs.ref }}\n" + cache, 1},
+		{"ref through a step output fed by the default branch name", "on: workflow_dispatch\njobs:\n  build:\n    runs-on: x\n    steps:\n      - id: p\n        env:\n          BRANCH: ${{ github.head_ref || github.ref_name }}\n        run: echo \"ref=$BRANCH\" >> \"$GITHUB_OUTPUT\"\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ steps.p.outputs.ref }}\n" + cache, 0},
+		{"ref through a step output under pull_request_target head_ref", "on: pull_request_target\njobs:\n  build:\n    runs-on: x\n    steps:\n      - id: p\n        env:\n          BRANCH: ${{ github.head_ref }}\n        run: echo \"ref=$BRANCH\" >> \"$GITHUB_OUTPUT\"\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ steps.p.outputs.ref }}\n" + cache, 1},
+		{"ref through an output cycle terminates", "on: workflow_dispatch\nenv:\n  A: ${{ env.B }}\n  B: ${{ env.A }}\njobs:\n  build:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ env.A }}\n" + cache, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

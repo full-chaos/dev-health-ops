@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -53,7 +52,7 @@ func TestBuildResponseEmptyCurrentWindowIsNoData(t *testing.T) {
 		nil,
 		"org-1",
 		Filters{Time: TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))}, Scope: ScopeFilter{Level: "org"}},
-		time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC),
+		goldenNow,
 	)
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
@@ -107,7 +106,7 @@ func TestBuildResponseNoCurrentDataDoesNotTurnPriorDataIntoAClaim(t *testing.T) 
 		nil,
 		"org-1",
 		Filters{Time: TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))}, Scope: ScopeFilter{Level: "org"}},
-		time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC),
+		goldenNow,
 	)
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)

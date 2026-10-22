@@ -8,6 +8,7 @@ cmd/dev-health-migration-matrix	code	docs
 cmd/dho	test	compose.yml
 cmd/gqlgen-guard	test	contracts
 deploy/helm/dev-health	test	compose.yml
+deploy/helm/dev-health	test	deploy
 deploy/helm/dev-health	test	docs
 internal/api/webhookintake	test	contracts
 internal/apiservice	code	contracts

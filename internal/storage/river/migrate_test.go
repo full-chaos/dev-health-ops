@@ -488,7 +488,7 @@ func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T
 		"REVOKE CREATE ON SCHEMA public FROM \"domain_runtime\"",
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"domain_runtime\"",
 		"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM \"domain_runtime\"",
-		"DO $$ BEGIN IF to_regclass('public.alembic_version') IS NOT NULL THEN REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.alembic_version') IS NOT NULL THEN REVOKE ALL PRIVILEGES ON TABLE public.alembic_version FROM \"domain_runtime\"; GRANT SELECT ON TABLE public.alembic_version TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integrations') IS NOT NULL THEN GRANT SELECT ON TABLE public.integrations TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_datasets TO \"domain_runtime\"; END IF; END $$",

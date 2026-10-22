@@ -582,6 +582,12 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		return nil
 	}
 
+	var (
+		scope    InvestmentMembershipScopeState
+		scopeErr error
+		shared   bool
+	)
+
 	// analytics.py:867-869 -- the ONE sankey-adjacent
 	// record_stale_investment_membership_scope call site in Python lives
 	// HERE, inside the coverage try, gated on use_investment. resolve.go's
@@ -598,8 +604,90 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		// investmentContextFor does (now FINAL-deduped) -- see
 		// investmentrepojointelemetry.go.
 		RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
+		// The scope run the statement is pinned to is part of what it asks, so a
+		// coverage read is shared only between requests that pin the same run.
+		scope, scopeErr = resolveInvestmentMembershipScope(ctx, client, orgID, timeoutSeconds)
+		shared = scopeErr == nil
 	}
 
+	execute := func(ctx context.Context) (*model.SankeyCoverage, bool) {
+		return runSankeyCoverageQuery(ctx, client, orgID, req, useInvestment, query)
+	}
+	if shared {
+		return sankeyCoverageFlight.coverage(ctx, sankeyCoverageKey(orgID, timeoutSeconds, req, scope, filters), execute)
+	}
+	coverage, _ := execute(ctx)
+	return coverage
+}
+
+// sankeyCoverageKey names the question one coverage statement answers: every field the
+// statement reads, and the membership-scope run it is pinned to.
+func sankeyCoverageKey(orgID string, timeoutSeconds int, req SankeyRequest, state InvestmentMembershipScopeState, filters *model.FilterInput) string {
+	key := (&flightKey{}).str("sankey-coverage").str(orgID).num(int64(timeoutSeconds)).
+		str(string(req.Measure)).str(req.StartDate.String()).str(req.EndDate.String()).
+		num(int64(req.MaxNodes)).num(int64(req.MaxEdges)).
+		str(state.ScopeMode).str(state.RunID).filter(filters)
+	for _, dimension := range req.Path {
+		key.str(string(dimension))
+	}
+	return key.String()
+}
+
+// sankeyCoverageFlight shares one coverage statement between the concurrent
+// requests that ask the same question: the same organisation, window, measure,
+// path, filters, timeout and membership-scope run.
+var sankeyCoverageFlight = &coverageFlight{}
+
+type coverageFlight struct {
+	inflight[*model.SankeyCoverage]
+}
+
+// coverage returns the shared coverage; nil when the statement failed or measured nothing,
+// as resolveSankeyCoverage always has.
+func (f *coverageFlight) coverage(ctx context.Context, key string, run func(context.Context) (*model.SankeyCoverage, bool)) *model.SankeyCoverage {
+	cov, err := f.do(ctx, key, cloneSankeyCoverage, func(ctx context.Context) (*model.SankeyCoverage, error) {
+		cov, ok := run(ctx)
+		if !ok {
+			return nil, errSankeyCoverageFailed
+		}
+		return cov, nil
+	})
+	if err != nil {
+		return nil
+	}
+	return cov
+}
+
+var errSankeyCoverageFailed = errors.New("sankey coverage statement failed")
+
+func cloneSankeyCoverage(c *model.SankeyCoverage) *model.SankeyCoverage {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.DirectRepoCoverage = cloneFloat(c.DirectRepoCoverage)
+	out.TeamFallbackRepoCoverage = cloneFloat(c.TeamFallbackRepoCoverage)
+	out.RepoFanoutReposPerUnit = cloneFloat(c.RepoFanoutReposPerUnit)
+	out.SizingCoverage = cloneFloat(c.SizingCoverage)
+	if c.UnsizedUnitCount != nil {
+		n := *c.UnsizedUnitCount
+		out.UnsizedUnitCount = &n
+	}
+	return &out
+}
+
+func cloneFloat(f *float64) *float64 {
+	if f == nil {
+		return nil
+	}
+	v := *f
+	return &v
+}
+
+// runSankeyCoverageQuery sends the coverage statement and reads its one row. The bool is false
+// when the statement failed (reported through recordInvestmentCoverageFailure first); a nil
+// coverage with true means the statement measured nothing.
+func runSankeyCoverageQuery(ctx context.Context, client QueryClient, orgID string, req SankeyRequest, useInvestment bool, query compiledQuery) (*model.SankeyCoverage, bool) {
 	// CHAOS-6121: mint the query id ourselves and BIND it to the request
 	// via clickhousedriver.WithQueryID, rather than reading one back --
 	// clickhouse-go sends whatever ID is on the context verbatim
@@ -632,7 +720,7 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 			reportedQueryID = ""
 		}
 		reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageQuery, reportedQueryID, fmt.Errorf("query: %w", err))
-		return nil
+		return nil, false
 	}
 	defer rows.Close()
 
@@ -641,8 +729,9 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		// no error and no telemetry, because nothing failed.
 		if rowsErr := rows.Err(); rowsErr != nil {
 			reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, queryID, fmt.Errorf("rows: %w", rowsErr))
+			return nil, false
 		}
-		return nil
+		return nil, true
 	}
 
 	var total, assignedTeam, repoTotal, assignedRepo float64
@@ -657,11 +746,11 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 	var directRepo, teamFallbackRepo, fanoutReposPerUnit, sizedUnits, units *float64
 	if scanErr := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &directRepo, &teamFallbackRepo, &fanoutReposPerUnit, &sizedUnits, &units); scanErr != nil {
 		reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageScan, queryID, fmt.Errorf("scan: %w", scanErr))
-		return nil
+		return nil, false
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, queryID, fmt.Errorf("rows: %w", rowsErr))
-		return nil
+		return nil, false
 	}
 
 	// CHAOS-6129: nothing measurable is not 0 % covered. ClickHouse answers an
@@ -677,7 +766,7 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 	// field: the SDL types both fields non-nullable (SankeyCoverage.teamCoverage:
 	// Float!), so that case needs a schema change and is a separate change.
 	if total == 0 && repoTotal == 0 {
-		return nil
+		return nil, true
 	}
 	coverage := &model.SankeyCoverage{}
 	if total > 0 {
@@ -722,5 +811,5 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		coverage.UnsizedUnitCount = &unsized
 	}
 	slog.DebugContext(ctx, "analytics: sankey coverage sizing", "measure", string(req.Measure), "measured", coverage.SizingCoverage != nil)
-	return coverage
+	return coverage, true
 }

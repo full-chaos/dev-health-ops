@@ -94,18 +94,18 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 	// The grants derive from apiPosture() itself, as the River migration's
 	// api leg derives its GRANT statements; a declared table this helper
 	// does not model gets a stand-in.
-	for _, table := range apiPosture(false).RequiredTables {
+	for _, table := range APIPosture(false).RequiredTables {
 		if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS "+table.TableName+" (id uuid PRIMARY KEY)"); err != nil {
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
 		}
 	}
 	// a column-scoped privilege needs its column: the stand-in table has only id
-	for _, column := range apiPosture(false).ColumnScoped {
+	for _, column := range APIPosture(false).ColumnScoped {
 		if _, err := admin.Exec(ctx, "ALTER TABLE "+column.TableName+" ADD COLUMN IF NOT EXISTS "+column.ColumnName+" uuid"); err != nil {
 			t.Fatalf("stand-in column %s.%s: %v", column.TableName, column.ColumnName, err)
 		}
 	}
-	for _, table := range apiPosture(false).RequiredTables {
+	for _, table := range APIPosture(false).RequiredTables {
 		privileges := "SELECT"
 		if table.AllowInsert {
 			privileges += ", INSERT"
@@ -120,7 +120,7 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 			t.Fatalf("grant on %s: %v", table.TableName, err)
 		}
 	}
-	for _, column := range apiPosture(false).ColumnScoped {
+	for _, column := range APIPosture(false).ColumnScoped {
 		if _, err := admin.Exec(ctx, "GRANT "+column.Privilege+" ("+column.ColumnName+") ON "+column.TableName+" TO "+role); err != nil {
 			t.Fatalf("grant on %s.%s: %v", column.TableName, column.ColumnName, err)
 		}
@@ -798,7 +798,7 @@ func TestCheckAPIAuthorizationRefusesAMissingDeclaredGrant(t *testing.T) {
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema, false); err != nil {
 		t.Fatalf("fully granted api role failed readiness: %v", err)
 	}
-	for _, table := range apiPosture(false).RequiredTables {
+	for _, table := range APIPosture(false).RequiredTables {
 		if _, err := admin.Exec(ctx, "REVOKE ALL ON TABLE public."+table.TableName+" FROM "+role); err != nil {
 			t.Fatal(err)
 		}
@@ -846,7 +846,7 @@ func TestCheckAPIAuthorizationRefusesAWithheldBackfillJobsInsert(t *testing.T) {
 		t.Fatalf("fully granted api role failed readiness: %v", err)
 	}
 	declared := false
-	for _, table := range apiPosture(false).RequiredTables {
+	for _, table := range APIPosture(false).RequiredTables {
 		if table.TableName == "backfill_jobs" {
 			declared = table.AllowInsert
 		}

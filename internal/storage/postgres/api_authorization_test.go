@@ -3,7 +3,7 @@ package postgres
 import "testing"
 
 // TestAPIPostureHasNoDuplicateTable pins the real defect CHAOS-6250 hit:
-// apiPosture() declared "organizations" twice (once for the acr
+// APIPosture() declared "organizations" twice (once for the acr
 // entitlement route, once for the new admin org CRUD), and
 // riverstore.ValidateMigrationOptions -- exercised for real only inside
 // internal/testsupport/venueoracle.Start's migrate() step, live-DB-gated --
@@ -16,9 +16,9 @@ import "testing"
 // place; it never appends a second one.
 func TestAPIPostureHasNoDuplicateTable(t *testing.T) {
 	seen := map[string]bool{}
-	for _, table := range apiPosture(false).RequiredTables {
+	for _, table := range APIPosture(false).RequiredTables {
 		if seen[table.TableName] {
-			t.Fatalf("apiPosture(false) declares %q more than once -- merge the entries, don't append a second", table.TableName)
+			t.Fatalf("APIPosture(false) declares %q more than once -- merge the entries, don't append a second", table.TableName)
 		}
 		seen[table.TableName] = true
 	}

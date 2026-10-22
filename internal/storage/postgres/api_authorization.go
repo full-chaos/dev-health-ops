@@ -39,23 +39,7 @@ import (
 // role once the role exists (riverstore.MigrationOptions.APIRole, derived
 // from APIPosture in internal/rivermigrate), so the grant side and
 // this readiness side are one list.
-func apiPosture(sessionsOwnedByAuth bool) RolePosture {
-	refreshTokens := TablePrivilege{"refresh_tokens", true, true, true}
-	columns := []ColumnPrivilege{
-		// A permanent user delete (CHAOS-10019) keeps the billing audit rows and
-		// sets their actor to null. The write is the one column, never the
-		// table: the audit text and state stay out of reach of an UPDATE.
-		{"billing_audit_log", "actor_id", "UPDATE"},
-	}
-	if sessionsOwnedByAuth {
-		// AUTH_PROXY_SESSIONS: auth-service owns sessions, so go-api inserts
-		// and rotates no refresh token. The revoke-all writes are kept under
-		// the flag (password reset, change, admin set-password, soft delete),
-		// so UPDATE narrows to revoked_at. DELETE stays for the org purge and
-		// the expired-token cleanup.
-		refreshTokens = TablePrivilege{"refresh_tokens", false, false, true}
-		columns = append(columns, ColumnPrivilege{"refresh_tokens", "revoked_at", "UPDATE"})
-	}
+func apiPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			// Read root for GET /api/v1/internal/acr/entitlements/{org_id}:
@@ -157,7 +141,7 @@ func apiPosture(sessionsOwnedByAuth bool) RolePosture {
 			// change. A purge target, delete added. The session routes
 			// (login, switch-org, social login, refresh rotation) insert a
 			// row per issued refresh token. Widened in place.
-			refreshTokens,
+			{"refresh_tokens", true, true, true},
 			// The login route's failed-attempt lockout
 			// (services/login_attempts.py): read, insert the first failure,
 			// update the count and lock, delete on a successful login.
@@ -351,7 +335,12 @@ func apiPosture(sessionsOwnedByAuth bool) RolePosture {
 			// month's reservations: read only, the runtime guard is the writer.
 			{"byo_llm_budget_reservations", false, false, false},
 		},
-		ColumnScoped: columns,
+		// A permanent user delete (CHAOS-10019) keeps the billing audit rows and
+		// sets their actor to null. The write is the one column, never the
+		// table: the audit text and state stay out of reach of an UPDATE.
+		ColumnScoped: []ColumnPrivilege{
+			{"billing_audit_log", "actor_id", "UPDATE"},
+		},
 	}
 }
 
@@ -363,11 +352,25 @@ func apiPosture(sessionsOwnedByAuth bool) RolePosture {
 // statements from this SAME declaration, never a second hand-maintained
 // list.
 //
-// sessionsOwnedByAuth is AUTH_PROXY_SESSIONS: the river migration grants and
-// go-api's readiness check read the same flag, so the REVOKE follows it and a
-// rollback is the flag off plus a migrate run.
+// sessionsOwnedByAuth is AUTH_PROXY_SESSIONS: auth-service owns sessions, so
+// go-api inserts and rotates no refresh token. The revoke-all writes are kept
+// under the flag (password reset, change, admin set-password, soft delete),
+// so UPDATE narrows to revoked_at. DELETE stays for the org purge and the
+// expired-token cleanup. The river migration grants and go-api's readiness
+// check read the same flag, so the REVOKE follows it and a rollback is the
+// flag off plus a migrate run.
 func APIPosture(sessionsOwnedByAuth bool) RolePosture {
-	return apiPosture(sessionsOwnedByAuth)
+	posture := apiPosture()
+	if !sessionsOwnedByAuth {
+		return posture
+	}
+	for i := range posture.RequiredTables {
+		if posture.RequiredTables[i].TableName == "refresh_tokens" {
+			posture.RequiredTables[i] = TablePrivilege{"refresh_tokens", false, false, true}
+		}
+	}
+	posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"refresh_tokens", "revoked_at", "UPDATE"})
+	return posture
 }
 
 // CheckAPIAuthorization is the dho api Service's readiness check: it binds
@@ -381,5 +384,5 @@ func APIPosture(sessionsOwnedByAuth bool) RolePosture {
 // apiservice/service.go) once that package exists; this function has no
 // dependency on it and can be called, and tested, standing alone.
 func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessionsOwnedByAuth bool) error {
-	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, apiPosture(sessionsOwnedByAuth))
+	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, APIPosture(sessionsOwnedByAuth))
 }

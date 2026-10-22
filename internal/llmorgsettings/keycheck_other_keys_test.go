@@ -1,8 +1,12 @@
 package llmorgsettings
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
@@ -74,6 +78,45 @@ func TestStoreReadersRefuseABaseURLCarryingAKeyTheProjectionDropped(t *testing.T
 	}
 	if storedBaseURLCarriesKey(clean, "openai") {
 		t.Fatal("a clean url is not a key hit")
+	}
+}
+
+// A base_url that carries a stored key never prints: not in %v, not in slog, and
+// the reserved mark entry never shows as a log key. Purpose rows hide their key
+// and their key-bearing url the same way.
+func TestOrgSettingsPrintNoKeyBearingBaseURLAndNoMark(t *testing.T) {
+	const leakedURL = "https://canary-host.example.invalid/" + llmKeySentinel
+	const overrideKey = "override-key-8716-not-a-key"
+	projected := orgSettings{keyProvider: "openai", keyAPIKey: overrideKey, keyBaseURL: "https://canary-dropped.example.invalid/" + llmKeySentinel}
+	projected[keyInBaseURLMark] = "1"
+	stored := orgSettings{
+		keyProvider: "anthropic", keyAPIKey: llmKeySentinel, keyBaseURL: leakedURL,
+		PurposeKey(PurposeExplain, keyAPIKey):  overrideKey,
+		PurposeKey(PurposeExplain, keyBaseURL): "https://canary-purpose.example.invalid/" + overrideKey,
+		PurposeKey(PurposeExplain, keyModel):   "small-explain",
+	}
+	clean := orgSettings{keyProvider: "openai", keyBaseURL: "https://p.example.invalid/v1"}
+	for name, subject := range map[string]orgSettings{"projected and marked": projected, "stored with purpose rows": stored} {
+		var jsonLog, textLog bytes.Buffer
+		slog.New(slog.NewJSONHandler(&jsonLog, nil)).Info("m", slog.Any("s", subject))
+		slog.New(slog.NewTextHandler(&textLog, nil)).Info("m", slog.Any("s", subject))
+		outputs := []string{fmt.Sprintf("%v", subject), fmt.Sprintf("%+v", subject), fmt.Sprintf("%#v", subject), fmt.Sprintf("%q", []any{subject}), jsonLog.String(), textLog.String()}
+		for _, out := range outputs {
+			for _, leak := range []string{llmKeySentinel, overrideKey, "canary-host", "canary-dropped", "canary-purpose", "key_in_base_url", "\x00", `\u0000`} {
+				if strings.Contains(out, leak) {
+					t.Fatalf("%s: output carries %q: %s", name, leak, out)
+				}
+			}
+			if !strings.Contains(out, "REDACTED") {
+				t.Fatalf("%s: no redaction marker: %s", name, out)
+			}
+		}
+	}
+	if out := fmt.Sprint(clean); !strings.Contains(out, "p.example.invalid/v1") || strings.Contains(out, "REDACTED") {
+		t.Fatalf("a clean url must still print: %s", out)
+	}
+	if projected[keyInBaseURLMark] != "1" || stored[keyBaseURL] != leakedURL {
+		t.Fatal("redaction changed the stored values")
 	}
 }
 

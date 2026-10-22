@@ -465,3 +465,28 @@ func TestGrantsPassRefusesAnUnmigratedAuthSchema(t *testing.T) {
 		t.Fatalf("grants pass before auth-migrate = %v, want ErrMigrationFailed", err)
 	}
 }
+
+// CHAOS-10581 bug pin: the order the chart ran before the grants pass (auth-migrate,
+// then ops migrate, nothing after) leaves the runtime role without its read on
+// public.users. The grants pass is what fixes it.
+func TestAuthThenOpsMigrateWithoutAGrantsPassLeavesPublicUsersUnreadable(t *testing.T) {
+	f := newOrderFixture(t)
+	f.authMigrate(t, "auth")
+	if _, err := f.dhoMigrate(t); err != nil {
+		t.Fatalf("dho migrate: %v", err)
+	}
+	conn := orderConnect(t, f.ctx, f.uri)
+	var readable bool
+	if err := conn.QueryRow(f.ctx, `SELECT has_column_privilege($1, 'public.users', 'email', 'SELECT')`, f.role).Scan(&readable); err != nil {
+		t.Fatal(err)
+	}
+	if readable {
+		t.Fatal("public.users.email is readable without a grants pass: the gap CHAOS-10581 describes is gone, remove the grants hook")
+	}
+	if err := f.grantsPass(t, "auth"); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(f.ctx, `SELECT has_column_privilege($1, 'public.users', 'email', 'SELECT')`, f.role).Scan(&readable); err != nil || !readable {
+		t.Fatalf("public.users.email readable after the grants pass = %v, %v; want true", readable, err)
+	}
+}

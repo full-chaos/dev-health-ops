@@ -24,7 +24,9 @@ Do not store provider secrets, private keys, or infrastructure credentials in ge
 An organization administrator tests their own BYO LLM credentials with
 `POST /api/v1/admin/llm-settings/readiness`. This checks the organization's
 saved BYO configuration only, and it does so whether the own model is turned on or off; it never certifies or exposes information about
-the platform-owned (operator-configured) provider. Certifying the
+the platform-owned (operator-configured) provider. The check runs for the `openai` and
+`anthropic` providers; for any other provider it answers `404` with
+"BYO preflight is not available yet for provider <provider>." Certifying the
 platform-owned provider is a platform-administrator action, not an
 organization-administrator one, see
 [Configure the platform](../../operate/configure/index.md).

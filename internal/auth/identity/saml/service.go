@@ -204,8 +204,8 @@ func (s *Service) BoundToRoute(ctx context.Context, p Provider, routeID uuid.UUI
 // when absent). On an identity key hit the account signs in from its stored
 // state and the assertion's email is not read; only a miss needs the email.
 // Every sign-in ends in the provider's organization: an account that is not
-// a member after the membership seam ran is ErrNotOrgMember, and a miss never
-// creates an account (see newAccountRefusal).
+// a member after the membership seam ran is ErrNotOrgMember, and a miss
+// creates an account only through the membership seam (see provisionNew).
 func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, cookie func(string) string) (SignIn, error) {
 	raw, err := DecodeResponse(posted)
 	if err != nil {
@@ -256,7 +256,13 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		if !p.DomainAllowed(email) {
 			return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
 		}
-		return SignIn{}, s.refuse(ctx, p, s.newAccountRefusal(ctx, p, email))
+		principalID, err := s.provisionNew(ctx, p, id, email, s.fullName(p, v))
+		if err != nil {
+			return SignIn{}, err
+		}
+		org := p.OrgID
+		s.logger().InfoContext(ctx, "auth saml: sign-in accepted", "provider_id", p.ID, "org_id", org)
+		return SignIn{PrincipalID: principalID, OrganizationID: &org, ProviderID: p.ID, AMR: []string{AMRFederated}, AuthTime: now}, nil
 	}
 	if principal.Disabled {
 		return SignIn{}, s.refuse(ctx, p, ErrAccountDisabled)
@@ -314,28 +320,45 @@ func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cook
 	return s.Flows.ConsumeFlow(ctx, p.ID, v.InResponseTo, bindingHash(nonce), now)
 }
 
-// newAccountRefusal is the refusal of a sign-in that would need a new account.
-// An asserted email another account holds is an EmailConflictError naming its
-// sign-in method; a provider without auto-provisioning is
-// ErrAutoProvisionDisabled. Every other new account is ErrNotOrgMember: no
-// account is created until an account and its membership can be written in
-// one transaction. It writes nothing.
-func (s *Service) newAccountRefusal(ctx context.Context, p Provider, email string) error {
+// provisionNew handles a sign-in whose key matches no account. An asserted
+// email another account holds is an EmailConflictError naming its sign-in
+// method; a provider without auto-provisioning is ErrAutoProvisionDisabled; a
+// service without the membership seam is ErrNotOrgMember. All of these write
+// nothing. Otherwise the seam creates the account, its identity and its
+// membership in one transaction; the session is issued after it returns.
+func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, email, fullName string) (uuid.UUID, error) {
 	normalized, err := s.Store.NormalizeEmail(email)
 	if err != nil {
-		return ErrInvalidEmailAddress
+		return uuid.Nil, s.refuse(ctx, p, ErrInvalidEmailAddress)
 	}
 	owner, taken, err := s.Store.PrincipalByEmail(ctx, normalized)
 	if err != nil {
-		return err
+		return uuid.Nil, s.refuse(ctx, p, err)
 	}
 	if taken {
-		return &EmailConflictError{Method: owner.Method}
+		return uuid.Nil, s.refuse(ctx, p, &EmailConflictError{Method: owner.Method})
 	}
 	if !p.AutoProvision {
-		return ErrAutoProvisionDisabled
+		return uuid.Nil, s.refuse(ctx, p, ErrAutoProvisionDisabled)
 	}
-	return ErrNotOrgMember
+	if s.JIT == nil {
+		return uuid.Nil, s.refuse(ctx, p, ErrNotOrgMember)
+	}
+	principalID, err := s.JIT.ProvisionOnSignIn(ctx, NewAccount{Identity: id, Email: normalized, FullName: fullName}, p)
+	switch {
+	case err == nil:
+		return principalID, nil
+	case errors.Is(err, ErrEmailTaken):
+		return uuid.Nil, s.refuse(ctx, p, &EmailConflictError{})
+	}
+	return uuid.Nil, s.refuse(ctx, p, err)
+}
+
+func (s *Service) fullName(p Provider, v Verified) string {
+	if src, ok := p.Config.AttributeMapping["name"]; ok && v.Attributes[src] != "" {
+		return v.Attributes[src]
+	}
+	return v.Attributes["name"]
 }
 
 func (s *Service) email(p Provider, v Verified) string {

@@ -14,6 +14,11 @@ services:
     ports: !reset []
   migrate:
     container_name: !reset null
+  go-river-migrate:
+    # The sessions flag is on for go-api below, so its grant posture drops the api role's refresh_tokens INSERT and
+    # UPDATE (go-api's readiness check reads the same flag).
+    environment:
+      AUTH_PROXY_SESSIONS: "true"
   go-api:
     ports: !override ["127.0.0.1::8000", "127.0.0.1::8080"]
     networks: !override [default, auth_plane]

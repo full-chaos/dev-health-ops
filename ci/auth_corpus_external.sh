@@ -186,6 +186,13 @@ SQL
       || die "could not store the session issue credential"
     printf 'export AUTH_SESSION_ISSUE_TOKEN=%q\n' "${ISSUE_TOKEN}" >>"${STATE}"
     unset ISSUE_TOKEN
+    if [[ " ${FORWARDED[*]} " == *" sessions "* ]]; then
+      # The sessions flag drops the api role's refresh_tokens INSERT and UPDATE at migrate time, and go-api's
+      # readiness check reads the same flag: apply the grants for it before go-api restarts with it.
+      printf 'step 1d: grants for AUTH_PROXY_SESSIONS=true\n'
+      timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+        run --rm --no-deps -e AUTH_PROXY_SESSIONS=true go-river-migrate >/dev/null
+    fi
   fi
   for aggregate in "${FORWARDED[@]}"; do
     bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" "AUTH_PROXY_$(tr '[:lower:]' '[:upper:]' <<<"${aggregate}")" true

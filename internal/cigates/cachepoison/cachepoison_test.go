@@ -4,7 +4,9 @@
 // A ref counts as untrusted when its expression reads workflow_dispatch/workflow_call inputs, a workflow_run payload, a
 // repository_dispatch payload, or (under pull_request_target only) the pull request head. A plain pull_request head checkout is
 // allowed: that event runs with a PR-scoped cache that the default branch never restores. A ref copied through a step output, an
-// env value or a job output is followed back to what produced it; a script reading the event payload itself is not followed.
+// env value or a job output is followed back to what produced it. The guard fails closed: a trace deeper than six hops, a script
+// reading $GITHUB_EVENT_PATH and any github.event field outside a short trusted list count as untrusted. It does not look inside
+// composite actions or at refs a script fetches from other sources.
 //
 // A step counts as a cache writer when it is actions/cache or actions/cache/save, sets a non-empty cache-to, sets a setup action's
 // cache input, or omits that input on an action whose cache defaults ON (setup-go, setup-uv, setup-gradle). A writer is allowed
@@ -387,13 +389,19 @@ func lowerKeys(m map[string]any, key string) (any, bool) {
 }
 
 func (t tracer) refReason(expr, jobName string, depth int) string {
-	if depth > 6 {
-		return ""
+	if depth > maxTrace {
+		return "ref trace too deep to follow"
 	}
 	if r := untrustedRef(expr, t.ev); r != "" {
 		return r
 	}
 	e := norm(expr)
+	if strings.Contains(e, "github_event_path") {
+		return "event payload read by a script"
+	}
+	if tok := unclassifiedEvent(e); tok != "" {
+		return "unclassified event payload read " + tok
+	}
 	j := t.wf.Jobs[jobName]
 	for _, m := range stepOutputRef.FindAllStringSubmatch(e, -1) {
 		for _, s := range j.Steps {
@@ -457,7 +465,12 @@ func TestIndirectRefs(t *testing.T) {
 		{"ref through a job output fed by an input", "on: workflow_dispatch\njobs:\n  pick:\n    runs-on: x\n    outputs:\n      ref: ${{ steps.p.outputs.ref }}\n    steps:\n      - id: p\n        run: echo \"ref=${{ inputs.ref }}\" >> \"$GITHUB_OUTPUT\"\n  build:\n    needs: pick\n    runs-on: x\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ needs.pick.outputs.ref }}\n" + cache, 1},
 		{"ref through a step output fed by the default branch name", "on: workflow_dispatch\njobs:\n  build:\n    runs-on: x\n    steps:\n      - id: p\n        env:\n          BRANCH: ${{ github.head_ref || github.ref_name }}\n        run: echo \"ref=$BRANCH\" >> \"$GITHUB_OUTPUT\"\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ steps.p.outputs.ref }}\n" + cache, 0},
 		{"ref through a step output under pull_request_target head_ref", "on: pull_request_target\njobs:\n  build:\n    runs-on: x\n    steps:\n      - id: p\n        env:\n          BRANCH: ${{ github.head_ref }}\n        run: echo \"ref=$BRANCH\" >> \"$GITHUB_OUTPUT\"\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ steps.p.outputs.ref }}\n" + cache, 1},
-		{"ref through an output cycle terminates", "on: workflow_dispatch\nenv:\n  A: ${{ env.B }}\n  B: ${{ env.A }}\njobs:\n  build:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ env.A }}\n" + cache, 0},
+		{"env cycle fails closed", "on: workflow_dispatch\nenv:\n  A: ${{ env.B }}\n  B: ${{ env.A }}\njobs:\n  build:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ env.A }}\n" + cache, 1},
+		{"env chain of 3 ending in a constant", "on: workflow_dispatch\nenv:\n  E0: ${{ env.E1 }}\n  E1: ${{ env.E2 }}\n  E2: main\njobs:\n  build:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ env.E0 }}\n" + cache, 0},
+		{"env chain of 8 fails closed", "on: workflow_dispatch\nenv:\n  E0: ${{ env.E1 }}\n  E1: ${{ env.E2 }}\n  E2: ${{ env.E3 }}\n  E3: ${{ env.E4 }}\n  E4: ${{ env.E5 }}\n  E5: ${{ env.E6 }}\n  E6: ${{ env.E7 }}\n  E7: main\njobs:\n  build:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ env.E0 }}\n" + cache, 1},
+		{"output from a run reading GITHUB_EVENT_PATH", "on: workflow_dispatch\njobs:\n  build:\n    runs-on: x\n    steps:\n      - id: p\n        run: echo \"ref=$(jq -r .ref \"$GITHUB_EVENT_PATH\")\" >> \"$GITHUB_OUTPUT\"\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ steps.p.outputs.ref }}\n" + cache, 1},
+		{"env from an unclassified payload field", "on: [workflow_dispatch, release]\nenv:\n  T: ${{ github.event.release.tag_name }}\njobs:\n  build:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ env.T }}\n" + cache, 1},
+		{"output from a trusted payload field", "on: [workflow_dispatch, pull_request]\njobs:\n  build:\n    runs-on: x\n    steps:\n      - id: p\n        env:\n          N: ${{ github.event.pull_request.number }}\n        run: echo \"ref=refs/pull/$N/merge\" >> \"$GITHUB_OUTPUT\"\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ steps.p.outputs.ref }}\n" + cache, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -470,4 +483,35 @@ func TestIndirectRefs(t *testing.T) {
 			}
 		})
 	}
+}
+
+const maxTrace = 6
+
+var (
+	eventRead = regexp.MustCompile(`github\.event\.[a-z0-9_.-]+`)
+	// trustedEvent lists the payload fields that cannot name a ref an outside party chose. Everything else read from the
+	// payload is unclassified and counts as untrusted.
+	trustedEvent = []string{
+		"github.event.pull_request.base.", "github.event.pull_request.number", "github.event.number",
+		"github.event.repository.", "github.event.merge_group.", "github.event.pull_request.head.sha", "github.event.pull_request.head.ref",
+		"github.event.pull_request.draft", "github.event.pull_request.labels", "github.event.pull_request.merged", "github.event.pull_request.head.repo.full_name",
+	}
+)
+
+// unclassifiedEvent returns the first payload read that is neither a known-untrusted ref source (those are classified by
+// untrustedRef) nor in the trusted list.
+func unclassifiedEvent(e string) string {
+	for _, tok := range eventRead.FindAllString(e, -1) {
+		ok := false
+		for _, p := range trustedEvent {
+			if strings.HasPrefix(tok, p) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return tok
+		}
+	}
+	return ""
 }

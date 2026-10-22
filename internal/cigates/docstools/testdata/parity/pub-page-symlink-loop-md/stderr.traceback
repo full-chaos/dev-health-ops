@@ -1,0 +1,1 @@
+OSError: [Errno 40] Too many levels of symbolic links: '{WORK}/docs/loop.md'

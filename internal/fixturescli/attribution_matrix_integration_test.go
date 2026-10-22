@@ -107,6 +107,9 @@ type ownershipRow struct {
 
 func (row ownershipRow) joinID() string { return row.ProjectID }
 
+// empty is a row closed at its own start: a superseded row no read sees (team-attribution.md section 0.4c).
+func (row ownershipRow) empty() bool { return row.ValidTo != nil && !row.ValidTo.After(row.ValidFrom) }
+
 func (row ownershipRow) validAt(at time.Time) bool {
 	return !row.ValidFrom.After(at) && (row.ValidTo == nil || row.ValidTo.After(at))
 }
@@ -732,10 +735,25 @@ var matrixChecks = map[string]matrixCheck{
 		return r
 	}},
 	"membership_starts_at_its_evidence": {"members", func(f matrixFacts, p string, _ ownerReaders) (r checkResult) {
+		// A membership starts at its first row: an empty interval is a superseded row, and a later row of the
+		// same team and member (a member who came back) starts at the return, not at the member's first work.
+		firstRow := map[string]ownershipRow{}
+		var links []string
 		for _, row := range f.memberships {
-			if row.Provider != p {
+			if row.Provider != p || row.empty() {
 				continue
 			}
+			key := row.TeamID + "\x00" + row.RepoName
+			current, seen := firstRow[key]
+			if !seen {
+				links = append(links, key)
+			}
+			if !seen || row.ValidFrom.Before(current.ValidFrom) {
+				firstRow[key] = row
+			}
+		}
+		for _, key := range links {
+			row := firstRow[key]
 			member := strings.ToLower(row.RepoName[strings.Index(row.RepoName, ":")+1:])
 			var first time.Time
 			for _, item := range f.items {
@@ -1380,7 +1398,7 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 	}
 
 	t.Run("sync-time valid_from on a catalog writer", func(t *testing.T) {
-		// As the producers write it: the ownership starts at the sync (known red, CHAOS-9404).
+		// As the producers write it: the ownership starts at the sync (known red, CHAOS-10566).
 		if result := judge("jira", "project_ownership_starts_at_its_evidence", facts, readers); len(result.Violations) == 0 {
 			t.Fatal("the sync-time start of the Jira project ownership is not found")
 		}
@@ -1402,6 +1420,40 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 		})
 		if result := judge("jira", "project_ownership_starts_at_its_evidence", fixed, readers); len(result.Violations) > 0 {
 			t.Fatalf("the check stays red on ownership that starts at its evidence: %v", result.Violations)
+		}
+		// The same for a membership (CHAOS-10521): the produced rows start at the sync, and the membership cell,
+		// which judges the first row of each link and skips an empty interval, is red on them.
+		if result := judge("github", "membership_starts_at_its_evidence", facts, readers); len(result.Violations) == 0 {
+			t.Fatal("the sync-time start of the GitHub memberships is not found")
+		}
+		// The defect removed: each membership's first row starts at the member's first work, and the row the
+		// writer retires at the sync is an empty interval. The cell turns green.
+		atEvidence := withFacts("github", func(f *matrixFacts) {
+			var rows []ownershipRow
+			for _, row := range f.memberships {
+				member := strings.ToLower(row.RepoName[strings.Index(row.RepoName, ":")+1:])
+				var first time.Time
+				for _, item := range f.items {
+					for _, person := range append([]string{item.Reporter}, item.Assignees...) {
+						person = strings.ToLower(person)
+						if person != "" && (strings.HasSuffix(person, ":"+member) || strings.HasPrefix(person, member+"@") || person == member) &&
+							(first.IsZero() || item.CreatedAt.Before(first)) {
+							first = item.CreatedAt
+						}
+					}
+				}
+				if !first.IsZero() && first.Before(row.ValidFrom) {
+					retired := row
+					retired.ValidTo = &retired.ValidFrom
+					rows = append(rows, retired)
+					row.ValidFrom = first
+				}
+				rows = append(rows, row)
+			}
+			f.memberships = rows
+		})
+		if result := judge("github", "membership_starts_at_its_evidence", atEvidence, readers); len(result.Violations) > 0 {
+			t.Fatalf("the membership check stays red on memberships that start at their evidence: %v", result.Violations)
 		}
 	})
 
@@ -1525,12 +1577,6 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 	})
 
 	t.Run("readers that do not apply the first owners backward", func(t *testing.T) {
-		// As the readers are: no owner before the first record (known red, CHAOS-9404).
-		if result := judge("github", "readers_apply_first_owners_backward", facts, readers); len(result.Violations) == 0 {
-			t.Fatal("the readers' missing backward owners are not found")
-		}
-		// The defect removed: a reader that answers an instant before a repository's first record with
-		// the shared readers' answer at that first record. The cell turns green.
 		first := map[string]time.Time{}
 		for id := range facts["github"].repos {
 			for _, row := range facts["github"].repoOwnerRows(id) {
@@ -1539,8 +1585,10 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 				}
 			}
 		}
+		// The defect planted: a reader that gives no owner for an instant before a repository's first record (the
+		// rule before D5987 option C, CHAOS-9404).
 		production := readers["github"]
-		backward := ownerReaders{
+		forwardOnly := ownerReaders{
 			OwnersByRepo: func(at time.Time) (map[string][]string, error) {
 				out, err := production.OwnersByRepo(at)
 				if err != nil {
@@ -1548,11 +1596,7 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 				}
 				for id, start := range first {
 					if at.Before(start) {
-						later, err := production.OwnersByRepo(start)
-						if err != nil {
-							return nil, err
-						}
-						out[id] = later[id]
+						delete(out, id)
 					}
 				}
 				return out, nil
@@ -1564,25 +1608,23 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 				}
 				for id, start := range first {
 					if at.Before(start) {
-						later, err := production.Authoritative(start)
-						if err != nil {
-							return nil, err
-						}
-						if owners, ok := later[id]; ok {
-							out[id] = owners
-						}
+						delete(out, id)
 					}
 				}
 				return out, nil
 			},
 		}
-		fixed := map[string]ownerReaders{}
+		planted := map[string]ownerReaders{}
 		for key, value := range readers {
-			fixed[key] = value
+			planted[key] = value
 		}
-		fixed["github"] = backward
-		if result := judge("github", "readers_apply_first_owners_backward", facts, fixed); len(result.Violations) > 0 {
-			t.Fatalf("the check stays red on readers that apply the first owners backward: %v", result.Violations)
+		planted["github"] = forwardOnly
+		if result := judge("github", "readers_apply_first_owners_backward", facts, planted); len(result.Violations) == 0 {
+			t.Fatal("readers that give no owner before a repository's first record are not found")
+		}
+		// The shared readers apply the first owners backward: the cell is green on them.
+		if result := judge("github", "readers_apply_first_owners_backward", facts, readers); len(result.Violations) > 0 {
+			t.Fatalf("the check is red on the shared readers: %v", result.Violations)
 		}
 	})
 

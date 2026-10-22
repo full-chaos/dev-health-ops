@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -585,14 +586,16 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 // deleteLLMSettingsRows is the one delete both the HTTP route and the
 // `admin llm-settings delete` operator path run (CHAOS-6975). The org's
 // readiness record and every role certification row are derived from the
-// credentials, so they go in the same statement (Python left them behind).
+// credentials, so they go in the same statement (Python left them behind). The
+// prompt-cache opt-in goes in it too: it belongs to the saved config, and a
+// config saved later starts off.
 // It returns how many CREDENTIAL rows existed: orphan derived rows are cleared
 // but are not a credential, so a caller answers "not found" on zero.
 func (h *handlers) deleteLLMSettingsRows(ctx context.Context, orgID string) (int, error) {
 	rows, err := h.store.Pool.Query(ctx,
 		`DELETE FROM settings WHERE org_id = $1 AND category = $2
-		   AND (key = ANY($3) OR key = $4 OR starts_with(key, $5)) RETURNING key`,
-		orgID, llmCategory, llmSettingKeys, askDevAgentReadinessKey, llmRoleCertificationPrefix)
+		   AND (key = ANY($3) OR key = $4 OR starts_with(key, $5) OR key = $6) RETURNING key`,
+		orgID, llmCategory, llmSettingKeys, askDevAgentReadinessKey, llmRoleCertificationPrefix, llmorgsettings.KeyPromptCache)
 	if err != nil {
 		return 0, err
 	}

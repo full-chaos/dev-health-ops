@@ -1,0 +1,3 @@
+navigation targets do not exist: ['some-page_name.md']
+unclassified Markdown outside navigation: ['guide/advanced/index.md', 'guide/intro.md', 'index.md', 'reference.md']
+canonical URLs outside the approved IA: ['/some-page_name/']

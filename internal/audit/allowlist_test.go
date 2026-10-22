@@ -166,3 +166,24 @@ func b2i(b bool) int {
 	}
 	return 0
 }
+
+// The auth.session.issued row's attributes: its source, the session's amr
+// (as a list), and the service credential that asked.
+func TestSessionIssuedAttributesAreAllowed(t *testing.T) {
+	ok := map[string]any{
+		"reason_code": "accepted", "target_kind": "session", "source": "go-api-delegated",
+		"amr": []string{"pwd"}, "credential_id": "8f9dbc98-72f8-4f22-827b-eeb3c0ead8f0",
+	}
+	if err := ValidateAttributes(ok); err != nil {
+		t.Fatalf("the issued-session attributes are refused: %v", err)
+	}
+	for name, bad := range map[string]map[string]any{
+		"another source": {"source": "web"},
+		"unknown amr":    {"amr": []string{"password"}},
+		"empty amr":      {"amr": []string{}},
+	} {
+		if err := ValidateAttributes(bad); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

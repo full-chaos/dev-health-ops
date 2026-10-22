@@ -23,6 +23,8 @@ func TestEveryQueryAPIClickHouseClientIsBuiltFromTheSharedConstructor(t *testing
 	optionsTypeAllowed := map[string]bool{
 		"internal/queryapi/server/query_route.go": true, "internal/queryapi/server/mcp_route.go": true,
 		"internal/testsupport/chquery/chquery.go": true,
+		// the storage factory pins the driver's HTTP transport to no proxy; it is not a query-API read client
+		"internal/storage/clickhouse/factory.go": true,
 	}
 	literal := regexp.MustCompile(`(dhclickhouse|clickhouse)\.Options\{`)
 	checked := 0

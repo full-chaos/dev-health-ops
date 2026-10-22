@@ -1036,7 +1036,7 @@ func TestProvisionFederated(t *testing.T) {
 	key := ExternalKey{Issuer: "https://idp.example.com/" + uuid.NewString()[:8], Provider: Provider(uuid.NewString()), Subject: "new-" + uuid.NewString()}
 	email := "New.User-" + uuid.NewString()[:8] + "@Example.com"
 	request := uuid.NewString()
-	req := ProvisionRequest{Key: key, Email: email, FullName: "New User", Actor: SelfSignUp(&request)}
+	req := ProvisionRequest{Key: key, Email: email, FullName: "New User", Actor: SelfSignUp(&request), LegacyProvider: "oidc", LegacySubject: key.Subject}
 
 	if _, err := e.store.ProvisionFederated(ctx, req); !errors.Is(err, ErrSignupNotAvailable) {
 		t.Fatalf("provision before the cutover = %v, want ErrSignupNotAvailable", err)
@@ -1050,8 +1050,8 @@ func TestProvisionFederated(t *testing.T) {
 WHERE p.id = $1 AND p.kind = 'user' AND p.disabled_at IS NULL AND u.email_lower = $2 AND u.email_verified_at IS NOT NULL AND u.password_hash IS NULL`, id, want); n != 1 {
 		t.Fatal("provisioned principal/user rows wrong")
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM public.users WHERE id = $1`, id); n != 0 {
-		t.Fatal("ProvisionFederated wrote public.users")
+	if n := e.count(t, ctx, `SELECT count(*) FROM public.users WHERE id = $1 AND auth_provider = 'oidc' AND auth_provider_id = $2 AND is_verified AND password_hash IS NULL`, id, key.Subject); n != 1 {
+		t.Fatal("ProvisionFederated did not project the user to public.users")
 	}
 	if got, err := e.lookup(ctx, key); err != nil || got != id {
 		t.Fatalf("lookup of the provisioned key = %v, %v", got, err)
@@ -1062,18 +1062,18 @@ AND attributes->>'reason_code' = 'principal_provisioned'`, id.String(), request)
 		t.Fatalf("self sign-up audit rows (actor = the new principal) = %d, want 1", n)
 	}
 
-	if _, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: "again-" + uuid.NewString()[:8] + "@example.com"}); !errors.Is(err, ErrIdentityTaken) {
+	if _, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: "again-" + uuid.NewString()[:8] + "@example.com", LegacyProvider: "oidc", LegacySubject: key.Subject}); !errors.Is(err, ErrIdentityTaken) {
 		t.Fatalf("provision of a linked key = %v, want ErrIdentityTaken", err)
 	}
 	otherKey := key
 	otherKey.Subject = "other-" + uuid.NewString()
-	if _, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: otherKey, Email: strings.ToUpper(email)}); !errors.Is(err, ErrEmailTaken) {
+	if _, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: otherKey, Email: strings.ToUpper(email), LegacyProvider: "oidc", LegacySubject: otherKey.Subject}); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("provision of a held email = %v, want ErrEmailTaken", err)
 	}
 	if _, err := e.lookup(ctx, otherKey); !errors.Is(err, ErrNotFound) {
 		t.Fatal("ErrEmailTaken linked the key to the email's principal")
 	}
-	if _, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: otherKey, Email: "not an email"}); !errors.Is(err, ErrInvalidEmail) {
+	if _, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: otherKey, Email: "not an email", LegacyProvider: "oidc", LegacySubject: otherKey.Subject}); !errors.Is(err, ErrInvalidEmail) {
 		t.Fatalf("provision with a bad email = %v, want ErrInvalidEmail", err)
 	}
 }
@@ -1271,8 +1271,8 @@ WHERE p.id = $1 AND p.disabled_at IS NULL AND u.email = $2 AND u.email_lower = $
 AND u.password_algorithm = 'bcrypt' AND u.password_updated_at IS NOT NULL AND u.email_verified_at IS NULL`, id, key, hash); n != 1 {
 		t.Fatal("provisioned local rows wrong")
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM public.users WHERE id = $1 OR lower(email) = $2`, id, key); n != 0 {
-		t.Fatal("ProvisionLocal wrote public.users")
+	if n := e.count(t, ctx, `SELECT count(*) FROM public.users WHERE id = $1 AND email = $2 AND password_hash = $3 AND token_version = 0`, id, key, hash); n != 1 {
+		t.Fatal("ProvisionLocal did not project the user to public.users")
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.principal.provisioned'
 AND subject_principal_id::text = $1 AND actor_principal_id::text = $1 AND request_id::text = $2`, id.String(), request); n != 1 {
@@ -1302,9 +1302,10 @@ WHERE aggregate_id = 'prn_' || $1 ORDER BY id)`, id.String()).Scan(&outboxTypes)
 		got.AuthProvider == nil || *got.AuthProvider != "local" {
 		t.Fatalf("owned ByEmail = %+v, %v", got, err)
 	}
-	// Before the cutover the same key is read from public.users, where it is absent.
-	if got, err := e.store.ByEmail(ctx, key); err != nil || got != nil {
-		t.Fatalf("pre-cutover ByEmail read auth.users: %+v, %v", got, err)
+	// Before the cutover the same key is read from public.users, where the
+	// projection of the owned account is present.
+	if got, err := e.store.ByEmail(ctx, key); err != nil || got == nil || got.ID != id || got.PasswordHash == nil || *got.PasswordHash != hash {
+		t.Fatalf("pre-cutover ByEmail did not read the projected public.users row: %+v, %v", got, err)
 	}
 
 	if _, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: strings.ToUpper(email), PasswordHash: &hash}); !errors.Is(err, ErrEmailTaken) {
@@ -1377,8 +1378,8 @@ AND subject_principal_id::text = $1 AND attributes->>'reason_code' = 'email_veri
 	if has, err := e.owned.HasPassword(ctx, id); err != nil || !has {
 		t.Fatalf("owned HasPassword after = %v, %v", has, err)
 	}
-	if has, err := e.store.HasPassword(ctx, id); err != nil || has {
-		t.Fatalf("pre-cutover HasPassword read auth.users: %v, %v", has, err)
+	if has, err := e.store.HasPassword(ctx, id); err != nil || !has {
+		t.Fatalf("pre-cutover HasPassword did not read the projected public.users row: %v, %v", has, err)
 	}
 	got, err := e.owned.ByEmail(ctx, email)
 	if err != nil || got == nil || !got.IsVerified || got.PasswordHash == nil || *got.PasswordHash != testBcrypt {
@@ -1585,8 +1586,8 @@ func TestByIDFollowsTheLiveReadRule(t *testing.T) {
 	if err != nil || got == nil || got.ID != owned || !got.IsActive || got.IsVerified || got.PasswordHash == nil || *got.PasswordHash != hash {
 		t.Fatalf("post-cutover ByID = %+v, %v", got, err)
 	}
-	if got, err := e.store.ByID(ctx, owned); err != nil || got != nil {
-		t.Fatalf("pre-cutover ByID read auth.users: %+v, %v", got, err)
+	if got, err := e.store.ByID(ctx, owned); err != nil || got == nil || got.ID != owned || got.PasswordHash == nil || *got.PasswordHash != hash {
+		t.Fatalf("pre-cutover ByID did not read the projected public.users row: %+v, %v", got, err)
 	}
 	for _, s := range []*Store{e.store, e.owned} {
 		if got, err := s.ByID(ctx, uuid.New()); err != nil || got != nil {

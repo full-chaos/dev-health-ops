@@ -38,7 +38,7 @@ func insertPublicUser(ctx context.Context, tx audit.TxOps, u publicUser) error {
 	_, err := tx.Exec(ctx, `INSERT INTO public.users
 	(id, email, username, password_hash, full_name, auth_provider, auth_provider_id,
 	 is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7, true, $8, false, 0, clock_timestamp(), clock_timestamp())`,
+VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7, true, $8, false, 0, now(), now())`,
 		u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID, u.Verified)
 	return err
 }
@@ -47,7 +47,7 @@ VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7, true, $8, false, 0, 
 // never writes token_version: the flow that ends the user's sessions owns that
 // bump. A user with no public row fails the transaction.
 func updatePublicPassword(ctx context.Context, tx audit.TxOps, id uuid.UUID, hash string) error {
-	tag, err := tx.Exec(ctx, `UPDATE public.users SET password_hash = $2, updated_at = clock_timestamp() WHERE id = $1`, id, hash)
+	tag, err := tx.Exec(ctx, `UPDATE public.users SET password_hash = $2, updated_at = now() WHERE id = $1`, id, hash)
 	if err != nil {
 		return err
 	}
@@ -59,7 +59,7 @@ func updatePublicPassword(ctx context.Context, tx audit.TxOps, id uuid.UUID, has
 
 // updatePublicVerified marks the public.users row verified.
 func updatePublicVerified(ctx context.Context, tx audit.TxOps, id uuid.UUID) error {
-	tag, err := tx.Exec(ctx, `UPDATE public.users SET is_verified = true, updated_at = clock_timestamp() WHERE id = $1`, id)
+	tag, err := tx.Exec(ctx, `UPDATE public.users SET is_verified = true, updated_at = now() WHERE id = $1`, id)
 	if err != nil {
 		return err
 	}

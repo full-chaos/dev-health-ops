@@ -1390,6 +1390,8 @@ services:
     depends_on:
       auth-provision:
         condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
 
   # One-shot: `auth-migrate grants` applies the runtime role's grants on the
   # listed public application tables. It runs after the ops migrate (which

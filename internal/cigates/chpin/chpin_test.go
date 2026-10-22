@@ -56,8 +56,8 @@ func check(venues []venue, pinsText, exceptionsText string) []string {
 	}
 	exc := map[string]string{}
 	for _, r := range rows(exceptionsText) {
-		if len(r) != 4 || !ticketRe.MatchString(r[2]) || minorOf(r[1]+".0") != r[1] || strings.TrimSpace(r[3]) == "" {
-			bad = append(bad, fmt.Sprintf("exceptions.tsv row %q is not venue<TAB>major.minor<TAB>CHAOS-n<TAB>note", strings.Join(r, "\t")))
+		if len(r) != 4 || !ticketRe.MatchString(r[2]) || minorOf(r[1]) == "" || len(strings.Split(r[1], ".")) != 4 || strings.TrimSpace(r[3]) == "" {
+			bad = append(bad, fmt.Sprintf("exceptions.tsv row %q is not venue<TAB>exact-version<TAB>CHAOS-n<TAB>note", strings.Join(r, "\t")))
 			continue
 		}
 		exc[r[0]] = r[1]
@@ -70,13 +70,16 @@ func check(venues []venue, pinsText, exceptionsText string) []string {
 			continue
 		}
 		tag, digest := m[1], m[2]
-		_, excepted := exc[v.name]
+		want, excepted := exc[strings.SplitN(v.name, "#", 2)[0]]
 		if tag == "" || tag == "latest" && digest == "" {
 			bad = append(bad, fmt.Sprintf("%s: %q is untagged or an unpinned latest", v.name, v.ref))
 			continue
 		}
 		if v.runtime && digest == "" && !excepted {
 			bad = append(bad, fmt.Sprintf("%s: runtime pin %q has no digest", v.name, v.ref))
+		}
+		if excepted && tag != want {
+			bad = append(bad, fmt.Sprintf("%s: tag %s differs from the exact version %s of its exceptions.tsv row", v.name, tag, want))
 		}
 		minor := minorOf(tag)
 		if digest != "" {
@@ -101,8 +104,8 @@ func check(venues []venue, pinsText, exceptionsText string) []string {
 		return append(bad, "venue chart is missing: it defines the reference minor")
 	}
 	for name, minor := range minors {
-		if want, excepted := exc[name]; excepted {
-			if minor != want {
+		if want, excepted := exc[strings.SplitN(name, "#", 2)[0]]; excepted {
+			if minor != minorOf(want) {
 				bad = append(bad, fmt.Sprintf("%s: exception row says %s, venue is on %s", name, want, minor))
 			}
 			continue
@@ -143,20 +146,26 @@ func read(t *testing.T, root, rel string) string {
 }
 
 var (
-	imageLine   = regexp.MustCompile(`(?m)^\s*(?:image:|-\s*name:)\s*['"]?(\S*clickhouse/clickhouse-server\S*?)['"]?\s*$`)
+	imageLine   = regexp.MustCompile(`(?m)^\s*(?:image:|-\s*name:)\s*['"]?(\S*clickhouse/clickhouse-server\S*?)['"]?\s*(?:#.*)?$`)
 	harnessLine = regexp.MustCompile(`ClickHouseImage\s*=\s*"([^"]+)"`)
 )
 
-func lines(t *testing.T, name, text string, re *regexp.Regexp, runtime bool) []venue {
-	t.Helper()
+func scan(name, text string, re *regexp.Regexp, runtime bool) ([]venue, string) {
 	var out []venue
 	for i, m := range re.FindAllStringSubmatch(text, -1) {
 		out = append(out, venue{name: fmt.Sprintf("%s#%d", name, i+1), ref: m[1], runtime: runtime})
 	}
-	if len(out) == 0 {
-		t.Fatalf("%s names no ClickHouse image", name)
+	mentions := 0
+	for _, l := range strings.Split(text, "\n") {
+		trim := strings.TrimSpace(l)
+		if !strings.HasPrefix(trim, "#") && !strings.HasPrefix(trim, "//") && strings.Contains(l, "clickhouse/clickhouse-server") {
+			mentions++
+		}
 	}
-	return out
+	if len(out) == 0 || len(out) != mentions {
+		return nil, fmt.Sprintf("%s: %d ClickHouse image line(s) read, %d line(s) name the image: a venue is skipped", name, len(out), mentions)
+	}
+	return out, ""
 }
 
 func repoVenues(t *testing.T, root string) []venue {
@@ -175,7 +184,11 @@ func repoVenues(t *testing.T, root string) []venue {
 	img := chart.ClickHouse.Image
 	vs := []venue{{name: "chart", ref: img.Repository + ":" + img.Tag, runtime: true}}
 	one := func(name, rel string, re *regexp.Regexp, runtime bool) {
-		vs = append(vs, lines(t, name, read(t, root, rel), re, runtime)...)
+		got, problem := scan(name, read(t, root, rel), re, runtime)
+		if problem != "" {
+			t.Fatal(problem)
+		}
+		vs = append(vs, got...)
 	}
 	one("compose", "compose.yml", imageLine, true)
 	one("bigboy", "ci/bigboy/compose.bigboy.yml", imageLine, true)
@@ -188,9 +201,6 @@ func repoVenues(t *testing.T, root string) []venue {
 func TestRepoVenuesAgreeOnClickHouse(t *testing.T) {
 	root := repoRoot(t)
 	vs := repoVenues(t, root)
-	for i := range vs {
-		vs[i].name = strings.SplitN(vs[i].name, "#", 2)[0]
-	}
 	if bad := check(vs, read(t, root, "internal/cigates/chpin/pins.tsv"), read(t, root, "internal/cigates/chpin/exceptions.tsv")); len(bad) > 0 {
 		t.Fatalf("ClickHouse pins disagree:\n  %s", strings.Join(bad, "\n  "))
 	}
@@ -199,7 +209,7 @@ func TestRepoVenuesAgreeOnClickHouse(t *testing.T) {
 const (
 	d7 = "sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5"
 	pn = "sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5\t26.7.1.1315\n"
-	ex = "bigboy\t26.9\tCHAOS-1\tnote\n"
+	ex = "bigboy\t26.9.14.10\tCHAOS-1\tnote\n"
 )
 
 func TestCheckPlantedDefects(t *testing.T) {
@@ -239,6 +249,7 @@ func TestCheckPlantedDefects(t *testing.T) {
 		{"bigboy_without_row", good, pn, "", "no exceptions.tsv row"},
 		{"stale_exception", mutate("bigboy", "clickhouse/clickhouse-server:26.7"), pn, ex, "exception row says"},
 		{"exception_no_ticket", good, pn, "bigboy\t26.9\tTBD\tnote\n", "exceptions.tsv row"},
+		{"bigboy_patch_drift", mutate("bigboy", "clickhouse/clickhouse-server:26.9.14.11"), pn, ex, "differs from the exact version"},
 		{"foreign_registry", mutate("testimage", "quay.io/other/clickhouse/clickhouse-server:26.7"), pn, ex, "not a clickhouse"},
 	}
 	for _, c := range cases {
@@ -248,5 +259,31 @@ func TestCheckPlantedDefects(t *testing.T) {
 				t.Fatalf("want a refusal containing %q, got %q", c.wants, bad)
 			}
 		})
+	}
+}
+
+func TestScanReadsEveryImageLineOrRefuses(t *testing.T) {
+	text := "services:\n  a:\n    image: ghcr.io/full-chaos/clickhouse/clickhouse-server:26.8 # inline comment\n  b:\n    image: ghcr.io/full-chaos/clickhouse/clickhouse-server:26.7\n# image: clickhouse/clickhouse-server:25.1\n"
+	got, problem := scan("x", text, imageLine, false)
+	if problem != "" || len(got) != 2 || !strings.HasSuffix(got[0].ref, ":26.8") || !strings.HasSuffix(got[1].ref, ":26.7") {
+		t.Fatalf("got %v %q", got, problem)
+	}
+	flow := text + "  c: { image: clickhouse/clickhouse-server:26.8 }\n"
+	if _, problem := scan("x", flow, imageLine, false); !strings.Contains(problem, "skipped") {
+		t.Fatalf("a flow-mapping image line was not refused: %q", problem)
+	}
+	if _, problem := scan("x", "services: {}\n", imageLine, false); !strings.Contains(problem, "skipped") {
+		t.Fatalf("a file with no image line was not refused: %q", problem)
+	}
+}
+
+func TestSameFileVenuesAreCheckedSeparately(t *testing.T) {
+	vs := []venue{
+		{"chart", "clickhouse/clickhouse-server:latest@" + d7, true},
+		{"live-e2e#1", "clickhouse/clickhouse-server:26.8", false},
+		{"live-e2e#2", "clickhouse/clickhouse-server:26.7", false},
+	}
+	if bad := strings.Join(check(vs, pn, ""), "\n"); !strings.Contains(bad, "live-e2e#1 is on 26.8") {
+		t.Fatalf("first same-file venue was not checked: %q", bad)
 	}
 }

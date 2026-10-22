@@ -1,2 +1,2 @@
-# venue<TAB>major.minor<TAB>follow-up ticket<TAB>note. A venue listed here may differ from the reference minor (the prod chart) and may lack a digest.
-bigboy	26.9	CHAOS-10678	bigboy runs 26.9.14.10, prod 26.7.1.1315; a recreate on 26.7 would downgrade the real-data store. Remove this row when the ticket converges both. The bigboy compose guard bars digests outside images.env, so this pin is the exact tag only.
+# venue<TAB>exact version<TAB>follow-up ticket<TAB>note. A venue listed here may differ from the reference minor (the prod chart) and may lack a digest; its tag must equal the exact version, so a patch bump needs a new row.
+bigboy	26.9.14.10	CHAOS-10678	bigboy runs 26.9.14.10, prod 26.7.1.1315; a recreate on 26.7 would downgrade the real-data store. Remove this row when the ticket converges both. The bigboy compose guard bars digests outside images.env, so this pin is the exact tag only.

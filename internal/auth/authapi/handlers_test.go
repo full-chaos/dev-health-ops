@@ -61,6 +61,10 @@ type fakeSessions struct {
 	byCredentialErr error
 	created         []createdSession
 	createErr       error
+	// ExchangeLegacy.
+	legacy       []session.LegacyRefresh
+	legacyResult session.Result
+	legacyErr    error
 }
 
 // createdSession is one CreateAudited call.
@@ -93,6 +97,13 @@ func (f *fakeSessions) CreateAudited(_ context.Context, principal uuid.UUID, org
 	}
 	f.created = append(f.created, createdSession{principal: principal, org: org, amr: amr, event: event, issued: issued})
 	return issued, nil
+}
+
+func (f *fakeSessions) ExchangeLegacy(_ context.Context, legacy session.LegacyRefresh) (session.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.legacy = append(f.legacy, legacy)
+	return f.legacyResult, f.legacyErr
 }
 
 func (f *fakeSessions) Exchange(context.Context, contracts.SecretString) (session.Result, error) {
@@ -177,9 +188,11 @@ func newFixture(t *testing.T) *fixture {
 	}
 	principal, org := uuid.New(), uuid.New()
 	now := time.Now().UTC()
+	pin := int64(4)
 	record := session.Record{
 		ID: uuid.New(), PrincipalID: principal, OrganizationID: &org, Revision: 1,
 		AuthTime: now.Add(-time.Hour), AMR: []string{"pwd"}, CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(7 * 24 * time.Hour),
+		LegacyTokenVersion: &pin,
 	}
 	admin := "admin"
 	username := "ada"

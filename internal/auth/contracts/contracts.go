@@ -204,7 +204,9 @@ func Validator(root, surface string) (*jsonschema.Resolved, error) {
 // the SCHEMA rather than into the instance. Callers that need every
 // violation, or an instance location, must not infer either from this error.
 // The golden tests handle that asymmetry explicitly rather than pretending
-// it is not there.
+// it is not there: reject_location_test.go compiles the same schemas with a
+// second validator that reports instance locations, and holds every reject
+// fixture to the keyword and location its manifest declares.
 func Validate(root, surface string, document any) error {
 	resolved, err := Validator(root, surface)
 	if err != nil {

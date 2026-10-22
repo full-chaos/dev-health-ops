@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Records the Python side of the host-smoke parity cases (CHAOS-10434). Usage: record_host_smoke.py SCRIPT OUTDIR.
+SCRIPT is scripts/check_docs_cloudflare_host.py at the merge base. Needs python 3.14 and openssl. Each case under
+OUTDIR/<name>/: routes.json (path -> raw response; "*" = default), redirects.tsv, args (optional, {ORIGIN}), stdout,
+stderr, rc, requests (method path user-agent per request, in order)."""
+import json, os, shutil, socket, ssl, subprocess, sys, tempfile, threading, time
+
+script, outdir = sys.argv[1], sys.argv[2]
+work = tempfile.mkdtemp()
+subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", work + "/k.pem", "-out", work + "/c.pem",
+                "-days", "2", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost"], check=True,
+               capture_output=True)
+
+def raw(status, headers=None, body=b"", reason="X"):
+    if isinstance(body, str):
+        body = body.encode()
+    h = {"Content-Length": str(len(body)), "Connection": "close"}
+    h.update(headers or {})
+    head = f"HTTP/1.1 {status} {reason}\r\n" + "".join(f"{k}: {v}\r\n" for k, v in h.items()) + "\r\n"
+    return head.encode("latin-1") + body
+
+GOOD_HEADERS = {"X-Content-Type-Options": "nosniff", "Referrer-Policy": "strict-origin-when-cross-origin"}
+def good_routes():
+    page = raw(200, GOOD_HEADERS, "<title>Dev Health</title>")
+    return {
+        "/": page, "/use/": raw(200, {}, "use"), "/reference/metrics/weighting-and-aggregation/": raw(200, {}, "m"),
+        "/phase-11-intentional-missing-page/": raw(404, {}, "nope"),
+        "/old/": raw(301, {"Location": "/new/"}),
+        "*": raw(404, {}, "x"),
+    }
+TSV = "source_path\ttarget_path\tdisposition\tmigration_phase\tsource_file\n/old/\t/new/\tmove\tPhase 1\tdocs/old.md\n"
+cases = {}
+def case(name, routes=None, tsv=TSV, args=None, **patch):
+    r = good_routes()
+    r.update(routes or {})
+    cases[name] = dict(routes=r, tsv=tsv, args=args)
+
+def home(status=200, headers=GOOD_HEADERS, body="<title>Dev Health</title>"):
+    return raw(status, headers, body)
+
+case("ok")
+case("ok-308", {"/old/": raw(308, {"Location": "/new/"})})
+case("ok-location-absolute", {"/old/": raw(301, {"Location": "{ORIGIN}/new/"})})
+case("ok-location-no-slash", {"/old/": raw(301, {"Location": "/new"})})
+case("ok-location-extra-slashes", {"/old/": raw(301, {"Location": "/new///"})})
+case("ok-location-protocol-relative", {"/old/": raw(301, {"Location": "//{HOSTPORT}/new/"})})
+case("ok-location-upper-scheme", {"/old/": raw(301, {"Location": "HTTPS://{HOSTPORT}/new/"})})
+case("ok-location-relative-bare", {"/old/": raw(301, {"Location": "new/"})})
+case("ok-header-case-mixed", {"/": home(headers={"x-content-type-options": "NoSniff", "REFERRER-POLICY": "Strict-Origin-When-Cross-Origin"})})
+case("ok-robots-other", {"/": home(headers=dict(GOOD_HEADERS, **{"X-Robots-Tag": "all"}))})
+case("ok-header-duplicate-last-wins", {"/": raw(200, {}, "Dev Health").replace(b"\r\n\r\n", b"\r\nX-Content-Type-Options: bad\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\n\r\n", 1)})
+case("ok-target-without-leading-slash", tsv="source_path\ttarget_path\n/old/\tnew/\n", routes={"/old/": raw(301, {"Location": "/new/"})})
+case("ok-tsv-first-row-blank-skipped", tsv="source_path\ttarget_path\n\t/x/\n/old/\t\n  /old/ \t /new/ \n")
+case("ok-tsv-crlf", tsv="source_path\ttarget_path\r\n/old/\t/new/\r\n")
+case("ok-tsv-cr-only", tsv="source_path\ttarget_path\r/old/\t/new/\r")
+case("ok-tsv-quoted-fields", tsv='source_path\ttarget_path\n"/old/"\t"/new/"\n')
+case("ok-tsv-quoted-multiline-then-row", tsv='source_path\ttarget_path\n"a\nb"\t\n/old/\t/new/\n')
+case("ok-tsv-extra-columns-short-rows", tsv="a\tsource_path\ttarget_path\tz\n1\n1\t/old/\t/new/\n")
+case("ok-tsv-blank-lines-before-row", tsv="source_path\ttarget_path\n\n\n/old/\t/new/\n")
+case("ok-tsv-no-final-newline", tsv="source_path\ttarget_path\n/old/\t/new/")
+case("ok-tsv-duplicate-header-last-wins", tsv="source_path\tsource_path\ttarget_path\nX\t/old/\t/new/\n")
+case("ok-origin-uppercase-scheme", args="--origin HTTPS://{HOSTPORT} --redirects redirects.tsv")
+case("ok-origin-with-path-and-query", args="--origin https://{HOSTPORT}/ignored/path?q=1#f --redirects redirects.tsv")
+case("ok-origin-equals-form", args="--origin={ORIGIN} --redirects=redirects.tsv")
+case("ok-args-repeated-last-wins", args="--origin https://bad.invalid --origin {ORIGIN} --redirects nope.tsv --redirects redirects.tsv")
+case("ok-big-first-chunk-then-invalid", tsv="source_path\ttarget_path\n/old/\t/new/\n" + "y\n" * 4200 + "\x00")
+case("fail-home-status", {"/": home(503)})
+case("fail-use-status", {"/use/": raw(500, {}, "e")})
+case("fail-metrics-status", {"/reference/metrics/weighting-and-aggregation/": raw(404, {}, "e")})
+case("fail-missing-page-200", {"/phase-11-intentional-missing-page/": raw(200, {}, "e")})
+case("fail-all-statuses", {"/": home(503), "/use/": raw(500, {}, ""), "/reference/metrics/weighting-and-aggregation/": raw(404, {}, ""),
+                           "/phase-11-intentional-missing-page/": raw(200, {}, ""), "/old/": raw(200, {}, "")})
+case("fail-nosniff-missing", {"/": home(headers={"Referrer-Policy": "strict-origin-when-cross-origin"})})
+case("fail-nosniff-wrong", {"/": home(headers=dict(GOOD_HEADERS, **{"X-Content-Type-Options": "sniff"}))})
+case("fail-nosniff-trailing-space", {"/": home(headers=dict(GOOD_HEADERS, **{"X-Content-Type-Options": "nosniff "}))})
+case("fail-referrer-missing", {"/": home(headers={"X-Content-Type-Options": "nosniff"})})
+case("fail-referrer-wrong", {"/": home(headers=dict(GOOD_HEADERS, **{"Referrer-Policy": "no-referrer"}))})
+case("fail-noindex", {"/": home(headers=dict(GOOD_HEADERS, **{"X-Robots-Tag": "all, NoIndex"}))})
+case("fail-body-identity", {"/": home(body="Dev  Health")})
+case("fail-all-home-headers", {"/": home(headers={"X-Robots-Tag": "noindex"}, body="x")})
+case("fail-home-redirects-to-ok", {"/": raw(302, {"Location": "/use/"})})
+case("ok-home-redirected-to-good-page", {"/": raw(302, {"Location": "/home2/"}), "/home2/": home()})
+case("fail-redirect-302", {"/old/": raw(302, {"Location": "/new/"})})
+case("fail-redirect-307", {"/old/": raw(307, {"Location": "/new/"})})
+case("fail-redirect-303", {"/old/": raw(303, {"Location": "/new/"})})
+case("fail-redirect-200", {"/old/": raw(200, {}, "x")})
+case("fail-redirect-404", {"/old/": raw(404, {}, "x")})
+case("fail-redirect-301-no-location", {"/old/": raw(301)})
+case("fail-redirect-308-wrong-host", {"/old/": raw(308, {"Location": "https://example.com/new/"})})
+case("fail-redirect-wrong-path", {"/old/": raw(301, {"Location": "/other/"})})
+case("fail-redirect-http-scheme", {"/old/": raw(301, {"Location": "http://{HOSTPORT}/new/"})})
+case("fail-redirect-query", {"/old/": raw(301, {"Location": "/new/?x=1"})})
+case("fail-redirect-chain-not-followed", {"/old/": raw(301, {"Location": "/hop/"}), "/hop/": raw(301, {"Location": "/new/"})})
+case("ok-home-follows-chain-of-ten", dict({"/": raw(301, {"Location": "/h1/"})}, **{f"/h{i}/": raw(301, {"Location": f"/h{i+1}/"}) for i in range(1, 9)}, **{"/h9/": home()}))
+case("fail-home-chain-too-long", dict({"/": raw(301, {"Location": "/h1/"})}, **{f"/h{i}/": raw(301, {"Location": f"/h{i+1}/"}) for i in range(1, 12)}))
+case("fail-home-redirect-loop", {"/": raw(302, {"Location": "/"})})
+case("fail-home-redirect-to-ftp", {"/": raw(302, {"Location": "ftp://127.0.0.1:1/x"})})
+case("fail-home-redirect-to-file", {"/": raw(302, {"Location": "file:///nonexistent-host-smoke"})})
+case("fail-home-gzip-body-not-decoded", {"/": raw(200, dict(GOOD_HEADERS, **{"Content-Encoding": "gzip"}), b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03")})
+case("fail-tsv-empty", tsv="")
+case("fail-tsv-header-only", tsv="source_path\ttarget_path\n")
+case("fail-tsv-blank-target", tsv="source_path\ttarget_path\n/old/\t \n")
+case("fail-tsv-blank-source", tsv="source_path\ttarget_path\n \t/new/\n")
+case("fail-tsv-missing-columns", tsv="a\tb\n/old/\t/new/\n")
+case("fail-tsv-bom-header", tsv="﻿source_path\ttarget_path\n/old/\t/new/\n")
+case("fail-tsv-blank-first-line-header", tsv="\nsource_path\ttarget_path\n/old/\t/new/\n")
+case("fail-tsv-space-delimited", tsv="source_path target_path\n/old/ /new/\n")
+case("fail-tsv-csv-field-limit", tsv="source_path\ttarget_path\n" + "a" * 131073 + "\t/new/\n")
+case("ok-tsv-field-at-limit-then-row", tsv="source_path\ttarget_path\n" + "a" * 131072 + "\t\n/old/\t/new/\n")
+case("fail-tsv-nul-field-not-blank", tsv="source_path\ttarget_path\n\x00\t/new/\n")
+case("fail-tsv-unterminated-quote", tsv='source_path\ttarget_path\n"/old/\t/new/\n')
+case("fail-origin-http", args="--origin http://{HOSTPORT} --redirects redirects.tsv")
+case("fail-origin-no-scheme", args="--origin {HOSTPORT} --redirects redirects.tsv")
+case("fail-origin-empty-netloc", args="--origin https:///x --redirects redirects.tsv")
+case("fail-origin-scheme-only", args="--origin https: --redirects redirects.tsv")
+case("fail-origin-and-redirects-both-bad-origin-wins", args="--origin ftp://x --redirects nope.tsv")
+case("fail-redirects-missing-file", args="--origin {ORIGIN} --redirects nope.tsv")
+case("fail-redirects-is-dir", args="--origin {ORIGIN} --redirects .")
+case("fail-redirects-empty-arg", args="--origin {ORIGIN} --redirects ''")
+case("fail-no-args", args="")
+case("fail-missing-redirects", args="--origin {ORIGIN}")
+case("fail-missing-origin", args="--redirects redirects.tsv")
+case("fail-unknown-arg", args="--origin {ORIGIN} --redirects redirects.tsv --extra")
+case("fail-positional-arg", args="--origin {ORIGIN} --redirects redirects.tsv stray")
+case("fail-origin-no-value", args="--redirects redirects.tsv --origin")
+case("fail-origin-connection-refused", args="--origin https://127.0.0.1:1 --redirects redirects.tsv")
+case("fail-tls-untrusted", args="--origin https://{HOSTPORT} --redirects redirects.tsv")
+
+case("ok-abbreviated-options", args="--o {ORIGIN} --r redirects.tsv")
+case("ok-help-flag", args="-h")
+case("ok-source-with-query", tsv="source_path\ttarget_path\n/old/?x=1\t/new/\n", routes={"/old/?x=1": raw(301, {"Location": "/new/"})})
+case("ok-target-dot-segments", tsv="source_path\ttarget_path\n/old/\t/a/../new/\n")
+case("ok-location-dot-segments", {"/old/": raw(301, {"Location": "/x/../new/"})})
+case("fail-location-empty-query", {"/old/": raw(301, {"Location": "/new/?"})})
+case("fail-source-has-space", tsv="source_path\ttarget_path\n/a b/\t/new/\n")
+case("fail-origin-port-too-large", args="--origin https://127.0.0.1:99999 --redirects redirects.tsv")
+case("fail-origin-ipv6-bracket", args="--origin https://[::1]:1 --redirects redirects.tsv")
+case("fail-origin-userinfo", args="--origin https://user@127.0.0.1:1 --redirects redirects.tsv")
+case("fail-redirect-loops-counted-per-request", {"/": raw(303, {"Location": "/use/"}), "/use/": raw(303, {"Location": "/use/"})})
+case("ok-target-double-slash", tsv="source_path\ttarget_path\n/old/\t/new//\n")
+case("ok-target-double-slash-inner", tsv="source_path\ttarget_path\n/old/\t/a//b/\n", routes={"/old/": raw(301, {"Location": "/a/b/"})})
+case("ok-source-double-slash-inner", tsv="source_path\ttarget_path\n/a//old/\t/new/\n", routes={"/a/old/": raw(301, {"Location": "/new/"})})
+case("fail-location-double-slash-absolute-path", {"/old/": raw(301, {"Location": "/a//b/"})}, tsv="source_path\ttarget_path\n/old/\t/a/b/\n")
+case("ok-location-dotdot-above-root", {"/old/": raw(301, {"Location": "/../../new/"})})
+case("ok-location-https-no-slashes-absolute-path", {"/old/": raw(301, {"Location": "https:/new/"})})
+case("ok-location-https-no-slashes-relative", {"/old/": raw(301, {"Location": "https:new/"})})
+case("fail-location-http-no-slashes", {"/old/": raw(301, {"Location": "http:/new/"})})
+case("ok-location-tab-inside", {"/old/": raw(301, {"Location": "/ne\tw/"})})
+case("fail-location-fragment", {"/old/": raw(301, {"Location": "/new/#top"})})
+case("fail-location-brackets-in-netloc", {"/old/": raw(301, {"Location": "//[::1/new/"})})
+case("ok-location-netloc-form-different-case", {"/old/": raw(301, {"Location": "//{HOSTPORT}/new/"})})
+case("ok-target-dotdot-trailing", tsv="source_path\ttarget_path\n/old/\t/new/x/..\n")
+def hraw(headers_bytes, body=b"Dev Health"):
+    return b"HTTP/1.1 200 OK\r\nContent-Length: " + str(len(body)).encode() + b"\r\nConnection: close\r\n" + headers_bytes + b"\r\n" + body
+GH = b"Referrer-Policy: strict-origin-when-cross-origin\r\n"
+case("fail-nosniff-trailing-tab", {"/": hraw(b"X-Content-Type-Options: nosniff\t\r\n" + GH)})
+case("fail-referrer-trailing-space", {"/": hraw(b"X-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin \r\n")})
+case("fail-location-trailing-space", {"/old/": raw(301, {"Location": "/new/ "})})
+case("ok-header-leading-space-and-tab", {"/": hraw(b"X-Content-Type-Options: \t nosniff\r\n" + GH)})
+case("ok-header-no-space-after-colon", {"/": hraw(b"X-Content-Type-Options:nosniff\r\n" + GH)})
+case("fail-nosniff-obs-fold", {"/": hraw(b"X-Content-Type-Options: nosniff\r\n  \r\n" + GH)})
+case("fail-nosniff-folded-value", {"/": hraw(b"X-Content-Type-Options: nosniff\r\n x\r\n" + GH)})
+case("ok-header-bare-lf-endings", {"/": b"HTTP/1.1 200 OK\nContent-Length: 10\nConnection: close\nX-Content-Type-Options: nosniff\nReferrer-Policy: strict-origin-when-cross-origin\n\nDev Health"})
+case("fail-header-space-before-colon-ends-headers", {"/": hraw(b"X-Junk : 1\r\nX-Content-Type-Options: nosniff\r\n" + GH)})
+case("fail-header-line-without-colon-ends-headers", {"/": hraw(b"garbage\r\nX-Content-Type-Options: nosniff\r\n" + GH)})
+case("ok-header-continuation-before-first-header-ignored", {"/": hraw(b" stray\r\nX-Content-Type-Options: nosniff\r\n" + GH)})
+case("ok-header-from-line-skipped", {"/": hraw(b"From someone\r\nX-Content-Type-Options: nosniff\r\n" + GH)})
+case("ok-header-duplicate-later-good-wins", {"/": hraw(b"X-Content-Type-Options: sniff\r\nX-Content-Type-Options: nosniff\r\n" + GH)})
+case("fail-header-duplicate-later-bad-wins", {"/": hraw(b"X-Content-Type-Options: nosniff\r\nX-Content-Type-Options: sniff\r\n" + GH)})
+case("ok-header-100-continue-skipped", {"/": b"HTTP/1.1 100 Continue\r\nX-A: 1\r\n\r\n" + hraw(b"X-Content-Type-Options: nosniff\r\n" + GH)})
+case("fail-header-count-100-lines-plus-blank", {"/": hraw(b"".join(b"X-%d: 1\r\n" % i for i in range(96)) + b"X-Content-Type-Options: nosniff\r\n" + GH)})
+case("ok-header-count-99-lines-plus-blank", {"/": hraw(b"".join(b"X-%d: 1\r\n" % i for i in range(95)) + b"X-Content-Type-Options: nosniff\r\n" + GH)})
+case("fail-header-count-101", {"/": hraw(b"".join(b"X-%d: 1\r\n" % i for i in range(97)) + b"X-Content-Type-Options: nosniff\r\n" + GH)})
+case("fail-header-line-over-65536", {"/": hraw(b"X-Long: " + b"a" * 65600 + b"\r\nX-Content-Type-Options: nosniff\r\n" + GH)})
+case("ok-server-offers-only-h2-alpn")
+case("ok-nosniff-uppercase-with-latin1-bytes-elsewhere", {"/": hraw(b"X-Other: caf\xe9\r\nX-Content-Type-Options: NOSNIFF\r\n" + GH)})
+case("fail-nosniff-nbsp-value", {"/": hraw(b"X-Content-Type-Options: nosniff\xa0\r\n" + GH)})
+ALPN_H2 = {"ok-server-offers-only-h2-alpn"}
+def good_home():
+    return raw(200, GOOD_HEADERS, "<title>Dev Health</title>")
+case("ok-followed-location-empty-query", {"/": raw(302, {"Location": "/new/?"}), "/new/": good_home()})
+case("ok-followed-location-space", {"/": raw(302, {"Location": "/a b/"}), "/a%20b/": good_home()})
+case("ok-followed-location-latin1-byte", {"/": raw(302, {"Location": "/caf\xe9/"}), "/caf%E9/": good_home()})
+case("ok-followed-location-uppercase-scheme", {"/": raw(302, {"Location": "HTTPS://{HOSTPORT}/new/"}), "/new/": good_home()})
+case("ok-followed-location-trailing-space", {"/": raw(302, {"Location": "/new/ "}), "/new/%20": good_home()})
+case("ok-followed-location-control-char", {"/": raw(302, {"Location": "/ne\x01w/"}), "/ne%01w/": good_home()})
+HEAD = "source_path\ttarget_path\n/old/\t/new/\n"
+case("fail-tsv-invalid-utf8-first-chunk", tsv=HEAD.encode() + b"\xff\n")
+case("fail-tsv-invalid-utf8-last-byte-of-first-chunk", tsv=(HEAD.encode() + b"y\n" * 4080)[:8191] + b"\xff\n")
+case("ok-tsv-invalid-utf8-first-byte-of-second-chunk", tsv=(HEAD.encode() + b"y\n" * 4080)[:8192] + b"\xff\n")
+case("fail-tsv-truncated-multibyte-at-eof", tsv=HEAD.encode() + b"\xe2\x82")
+case("ok-tsv-multibyte-straddles-chunk", tsv=(HEAD.encode() + b"y\n" * 4080)[:8190] + "\u20ac\n".encode() + b"y\n")
+HANGS = {"fail-request-timeout"}
+case("fail-request-timeout", {"/use/": b"HANG"})
+case("fail-reset-mid-headers", {"/use/": b"RESET"})
+case("fail-short-body", {"/use/": raw(200, {"Content-Length": "50"}, "short")})
+TRUST_FAIL = {"fail-tls-untrusted"}
+
+class Server(threading.Thread):
+    def __init__(self, routes, h2=False):
+        super().__init__(daemon=True)
+        self.routes, self.log = routes, []
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(work + "/c.pem", work + "/k.pem")
+        if h2: ctx.set_alpn_protocols(["h2"])
+        self.sock = socket.socket(); self.sock.bind(("127.0.0.1", 0)); self.sock.listen(32)
+        self.port = self.sock.getsockname()[1]
+        self.ctx = ctx
+        self.start()
+    def run(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.handle, args=(conn,), daemon=True).start()
+    def handle(self, conn):
+        try:
+            conn.settimeout(30)
+            tls = self.ctx.wrap_socket(conn, server_side=True)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = tls.recv(4096)
+                if not chunk:
+                    return
+                data += chunk
+            lines = data.decode("latin-1").split("\r\n")
+            method, path, _ = lines[0].split(" ")
+            ua = ""
+            for l in lines[1:]:
+                if l.lower().startswith("user-agent:"):
+                    ua = l.split(":", 1)[1].strip()
+            self.log.append(f"{method} {path} {ua}")
+            resp = self.routes.get(path, self.routes["*"])
+            if resp == b"HANG":
+                time.sleep(25); return
+            if resp == b"RESET":
+                tls.sendall(b"HTTP/1.1 200 OK\r\nX-A: b"); tls.close(); return
+            tls.sendall(resp.replace(b"{ORIGIN}", f"https://127.0.0.1:{self.port}".encode()).replace(b"{HOSTPORT}", f"127.0.0.1:{self.port}".encode()))
+            tls.close()
+        except Exception:
+            pass
+
+shutil.rmtree(outdir, ignore_errors=True)
+for name, c in cases.items():
+    srv = Server({k: v for k, v in c["routes"].items()}, name in ALPN_H2)
+    wd = tempfile.mkdtemp(dir=work)
+    tsvb = c["tsv"] if isinstance(c["tsv"], bytes) else c["tsv"].encode("utf-8")
+    open(wd + "/redirects.tsv", "wb").write(tsvb)
+    hostport = f"127.0.0.1:{srv.port}"
+    if c["args"] is None:
+        argline = "--origin {ORIGIN} --redirects redirects.tsv"
+    else:
+        argline = c["args"]
+    import shlex
+    argv = shlex.split(argline.replace("{ORIGIN}", f"https://{hostport}").replace("{HOSTPORT}", hostport))
+    env = {"PATH": os.environ["PATH"]}
+    if name not in TRUST_FAIL:
+        env["SSL_CERT_FILE"] = work + "/c.pem"
+    p = subprocess.run([sys.executable, "-I", script] + argv, cwd=wd, env=env, capture_output=True, timeout=120)
+    srv.sock.close()
+    d = os.path.join(outdir, name); os.makedirs(d)
+    sub = lambda s: s.replace(f"https://{hostport}", "{ORIGIN}").replace(hostport, "{HOSTPORT}")
+    def jroutes(r):
+        return {k: (v.decode("latin-1") if v not in (b"HANG", b"RESET") else v.decode()) for k, v in r.items()}
+    json.dump(jroutes(c["routes"]), open(d + "/routes.json", "w"), indent=1, sort_keys=True)
+    open(d + "/redirects.tsv", "wb").write(tsvb)
+    if c["args"] is not None:
+        open(d + "/args", "w").write(argline + "\n")
+    open(d + "/stdout", "w").write(sub(p.stdout.decode()))
+    open(d + "/stderr", "w").write(sub(p.stderr.decode()))
+    if name in TRUST_FAIL: open(d + "/untrusted", "w").write("system roots only, no SSL_CERT_FILE\n")
+    if name in ALPN_H2: open(d + "/alpn-h2", "w").write("server offers only h2 in ALPN\n")
+    if name in HANGS: open(d + "/hang", "w").write("server never answers /use/; replayed in-process with a short timeout\n")
+    open(d + "/rc", "w").write(f"{p.returncode}\n")
+    open(d + "/requests", "w").write("".join(sub(l) + "\n" for l in srv.log))
+    print(name, p.returncode, repr(sub(p.stdout.decode()))[:100], repr(sub(p.stderr.decode()))[-90:])

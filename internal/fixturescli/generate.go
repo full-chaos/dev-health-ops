@@ -63,10 +63,10 @@ var frozenWorldDigests = map[string]string{
 	"testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz":               "317334daef77b2599258ee9701a04beef37b328e12492c768b4c0c8a6b12f8eb",
 	"testdata/generate/synthetic_ci-metrics-executed-proof__repo_r1_7d_c5_p20_t1_s4276_raw.json.gz": "8470b539f55e1ecd22b8ba9b52dd0921a9b51222dfd6a7d5a8050139e9f2abd8",
 	// The provider worlds (producedWorlds).
-	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "f98553415321df613b811763024ed200dfec570c99188c88197278a42b60b840",
-	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "8caad356246435346041a78afd9ff09bdc9cf8f0bd3f0f0544fc61b20019f206",
-	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "b215c3948955c2ad0097385e6f15a7639ead28431f83f55055bc7f1fe212dffc",
-	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "c71db98114171f64bc4eea161abf41b61edcac267e9d20bc8416bca82650cba9",
+	"testdata/generate/linear_chaos-fx__ENG_r2_160d_c0_p4_t4_s1_raw.json.gz":                "897facabb980e3e7f4d627aa373d60e1bd2856f0157d65f46b82f49f9e9b4afa",
+	"testdata/generate/jira_chaos-fx__PAY_r2_180d_c0_p4_t4_s1_raw.json.gz":                  "4f2c2141c6730777379138785679a4fce94bfb8337e59f8d28a7cc4205b5174d",
+	"testdata/generate/gitlab_chaos-gl__billing-service_r2_160d_c0_p3_t4_s1_raw.json.gz":    "b309332229abd941ec2991bb599572ffa86ae1793987d398a8794619bc189d27",
+	"testdata/generate/github_chaos-fixtures__payments-api_r2_120d_c0_p6_t4_s1_raw.json.gz": "d7a09a2d59f714e645181ac4b468d55a0275ddac892ffaf3f2197a570c5c367c",
 	// The mixed-provider demo world (provider_worlds_demo_*).
 	"testdata/generate/mixed_chaos-fixtures__shared-api_r18_180d_c0_p189_t8_s9440_raw.json.gz": "b0395375a13207831d44f2b3fe241cc8f319b3ff569699cc938faae2e11e67a3",
 }

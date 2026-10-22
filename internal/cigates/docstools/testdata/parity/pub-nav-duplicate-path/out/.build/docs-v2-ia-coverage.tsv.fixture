@@ -1,0 +1,6 @@
+page_id	canonical_url	label	kind	state
+home	/	Home	landing	implemented
+f1	/future/	Future	guide	withheld
+g2	/guide/advanced/	Advanced	guide	withheld
+g1	/guide/intro/	Intro	guide	implemented
+r1	/reference/	Reference	reference	withheld

@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 const readerStorePassword = "reader-store-test-only-not-a-credential"
@@ -79,6 +80,8 @@ func TestPolicyStoreReadsTheSessionAsAReaderRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	// A session pins public.users.token_version, so Create reads go-api's tables.
+	pgschema.Apply(ctx, t, admin)
 	roles := map[string]string{}
 	for _, base := range []string{"store_runtime", "store_reader"} {
 		role, err := containers.RoleName(base, instance)

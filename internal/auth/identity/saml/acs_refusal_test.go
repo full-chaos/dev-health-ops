@@ -61,10 +61,25 @@ func (m *memberSet) Member(_ context.Context, principalID, _ uuid.UUID) (bool, e
 // joinSeam is the membership seam: JoinOnSignIn adds a principal to members
 // (unless noJoin) or fails with joinErr.
 type joinSeam struct {
-	members *memberSet
-	joinErr error
-	noJoin  bool
-	joins   int
+	members      *memberSet
+	joinErr      error
+	noJoin       bool
+	joins        int
+	provisionErr error
+	provisioned  []saml.NewAccount
+	newID        uuid.UUID
+}
+
+// ProvisionOnSignIn is all-or-nothing like the real seam: on provisionErr no
+// account and no membership exist afterwards.
+func (j *joinSeam) ProvisionOnSignIn(_ context.Context, account saml.NewAccount, _ saml.Provider) (uuid.UUID, error) {
+	if j.provisionErr != nil {
+		return uuid.Nil, j.provisionErr
+	}
+	j.newID = uuid.New()
+	j.provisioned = append(j.provisioned, account)
+	j.members.ids[j.newID] = true
+	return j.newID, nil
 }
 
 func (j *joinSeam) JoinOnSignIn(_ context.Context, principalID uuid.UUID, _ saml.Provider) error {
@@ -124,10 +139,15 @@ type acsRun struct {
 // asserted email) through the real ACS handler.
 func postACS(t *testing.T, store *lookupStore, members *memberSet, jit saml.MembershipJIT) acsRun {
 	t.Helper()
+	return postACSAuto(t, store, members, jit, true)
+}
+
+func postACSAuto(t *testing.T, store *lookupStore, members *memberSet, jit saml.MembershipJIT, autoProvision bool) acsRun {
+	t.Helper()
 	idp := newTestIdP(t)
 	p := saml.Provider{
 		ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active",
-		AllowIdPInitiated: true, AutoProvision: true,
+		AllowIdPInitiated: true, AutoProvision: autoProvision,
 		Config: saml.Config{EntityID: idp.entityID, Certificate: encodeCert(idp)},
 	}
 	sessions := &sessionsSpy{}
@@ -188,8 +208,12 @@ func TestSAMLACSRefusesANonMemberAndASharedNameIDLikeOIDC(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			members := &memberSet{ids: map[uuid.UUID]bool{}}
-			run := postACS(t, &lookupStore{err: tc.lookup}, members, &joinSeam{members: members})
+			seam := &joinSeam{members: members}
+			run := postACS(t, &lookupStore{err: tc.lookup}, members, seam)
 			run.refused(t, tc.status, tc.detail, tc.reason)
+			if seam.joins != 0 || len(seam.provisioned) != 0 || len(members.ids) != 0 {
+				t.Fatalf("joins %d, provisions %d, members %d with JIT on; want none", seam.joins, len(seam.provisioned), len(members.ids))
+			}
 			if run.store.normalize+run.store.byEmail+run.members.reads != 0 {
 				t.Fatalf("normalize %d, email lookups %d, membership reads %d; want none",
 					run.store.normalize, run.store.byEmail, run.members.reads)
@@ -219,12 +243,12 @@ func TestSAMLACSIssuesAnOrgSessionToAMember(t *testing.T) {
 	}
 }
 
-// TestSAMLACSRefusesANewAccountWithoutWrites: a sign-in that would need a new
-// account is refused with 403 membership_required before any account or
-// membership write, with or without a membership seam, whatever the seam
-// would answer; a linked account the seam leaves outside the organization is
-// refused with 403, and a seam error is a 500. No session is issued.
-func TestSAMLACSRefusesANewAccountWithoutWrites(t *testing.T) {
+// TestSAMLACSRefusesWithoutWrites: a sign-in that would need a new account is
+// refused with 403 membership_required before any account or membership write
+// when no membership seam is set; a linked account the seam leaves outside the
+// organization is refused with 403, and a seam error is a 500. No session is
+// issued.
+func TestSAMLACSRefusesWithoutWrites(t *testing.T) {
 	down := errors.New("membership store down")
 	for name, tc := range map[string]struct {
 		hit    bool
@@ -233,9 +257,6 @@ func TestSAMLACSRefusesANewAccountWithoutWrites(t *testing.T) {
 		detail string
 	}{
 		"new account, no seam":                   {status: http.StatusForbidden, detail: detailNotMember},
-		"new account, the join would fail":       {seam: &joinSeam{joinErr: down}, status: http.StatusForbidden, detail: detailNotMember},
-		"new account, the join would not join":   {seam: &joinSeam{noJoin: true}, status: http.StatusForbidden, detail: detailNotMember},
-		"new account, the join would succeed":    {seam: &joinSeam{}, status: http.StatusForbidden, detail: detailNotMember},
 		"linked account, not a member, no seam":  {hit: true, status: http.StatusForbidden, detail: detailNotMember},
 		"linked account, the join does not join": {hit: true, seam: &joinSeam{noJoin: true}, status: http.StatusForbidden, detail: detailNotMember},
 		"linked account, the join fails":         {hit: true, seam: &joinSeam{joinErr: down}, status: http.StatusInternalServerError, detail: "Internal Server Error"},
@@ -255,15 +276,79 @@ func TestSAMLACSRefusesANewAccountWithoutWrites(t *testing.T) {
 			if run.status != tc.status || run.detail != tc.detail {
 				t.Fatalf("ACS = %d detail %q, want %d detail %q", run.status, run.detail, tc.status, tc.detail)
 			}
-			if run.store.provisioned != 0 || len(run.sessions.got) != 0 {
-				t.Fatalf("accounts written %d, sessions %d; want none", run.store.provisioned, len(run.sessions.got))
+			if run.store.provisioned != 0 || len(run.sessions.got) != 0 || len(members.ids) != 0 {
+				t.Fatalf("accounts written %d, sessions %d, members %d; want none", run.store.provisioned, len(run.sessions.got), len(members.ids))
 			}
-			if !tc.hit && tc.seam != nil && tc.seam.joins != 0 {
-				t.Fatalf("membership joins %d for a refused new account, want none", tc.seam.joins)
+			if tc.seam != nil && len(tc.seam.provisioned) != 0 {
+				t.Fatalf("provisions %d for a linked account, want none", len(tc.seam.provisioned))
 			}
 			if tc.status == http.StatusForbidden && !strings.Contains(run.logs, `"reason_code":"membership_required"`) {
 				t.Fatalf("refusal log lacks reason_code membership_required: %s", run.logs)
 			}
 		})
+	}
+}
+
+// TestSAMLACSProvisionsANewAccountWhenJITIsOn: a new account with the seam
+// set is created, joined and signed in to the provider's organization; the
+// seam gets the asserted email and the identity key.
+func TestSAMLACSProvisionsANewAccountWhenJITIsOn(t *testing.T) {
+	members := &memberSet{ids: map[uuid.UUID]bool{}}
+	seam := &joinSeam{members: members}
+	run := postACS(t, &lookupStore{}, members, seam)
+	if run.status != http.StatusOK || len(seam.provisioned) != 1 || seam.joins != 0 {
+		t.Fatalf("ACS = %d provisions %d joins %d, want 200, 1, 0", run.status, len(seam.provisioned), seam.joins)
+	}
+	if len(run.sessions.got) != 1 || run.sessions.got[0].PrincipalID != seam.newID ||
+		run.sessions.got[0].OrganizationID == nil || *run.sessions.got[0].OrganizationID != run.org {
+		t.Fatalf("sessions %+v, want one in org %s for the new account", run.sessions.got, run.org)
+	}
+	acct := seam.provisioned[0]
+	if !strings.HasPrefix(acct.Email, "free-") || acct.Identity.Subject == "" || acct.Identity.Provider == "" || acct.Identity.Issuer == "" {
+		t.Fatalf("seam account %+v lacks email or identity key", acct)
+	}
+}
+
+// TestSAMLACSProvisionFailureWritesNothing: a seam that fails answers its
+// mapped status, leaves no account, membership or session.
+func TestSAMLACSProvisionFailureWritesNothing(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+		detail string
+		reason string
+	}{
+		"store down":       {errors.New("store down"), http.StatusInternalServerError, "Internal Server Error", "dependency_unavailable"},
+		"sign-up closed":   {saml.ErrSignupNotAvailable, http.StatusForbidden, "Sign-up through SSO is not available", "signup_unavailable"},
+		"email now in use": {saml.ErrEmailTaken, http.StatusConflict, "", "email_collision"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			members := &memberSet{ids: map[uuid.UUID]bool{}}
+			seam := &joinSeam{members: members, provisionErr: tc.err}
+			run := postACS(t, &lookupStore{}, members, seam)
+			if run.status != tc.status || (tc.detail != "" && run.detail != tc.detail) {
+				t.Fatalf("ACS = %d detail %q, want %d detail %q", run.status, run.detail, tc.status, tc.detail)
+			}
+			if len(run.sessions.got) != 0 || len(members.ids) != 0 || len(seam.provisioned) != 0 || run.store.provisioned != 0 {
+				t.Fatalf("status %d sessions %d members %d provisions %d; want no writes",
+					run.status, len(run.sessions.got), len(members.ids), len(seam.provisioned))
+			}
+			if !strings.Contains(run.logs, `"reason_code":"`+tc.reason+`"`) {
+				t.Fatalf("log lacks reason_code %s: %s", tc.reason, run.logs)
+			}
+		})
+	}
+}
+
+// TestSAMLACSNewAccountWithJITOnAndProviderAutoProvisionOffIsRefused: the
+// provider's own auto-provisioning switch still gates a new account; the seam
+// is never called.
+func TestSAMLACSNewAccountWithProviderAutoProvisionOffIsRefused(t *testing.T) {
+	members := &memberSet{ids: map[uuid.UUID]bool{}}
+	seam := &joinSeam{members: members}
+	run := postACSAuto(t, &lookupStore{}, members, seam, false)
+	if run.status != http.StatusBadRequest || len(seam.provisioned) != 0 || len(run.sessions.got) != 0 || len(members.ids) != 0 {
+		t.Fatalf("ACS = %d provisions %d sessions %d members %d; want 400 and no writes",
+			run.status, len(seam.provisioned), len(run.sessions.got), len(members.ids))
 	}
 }

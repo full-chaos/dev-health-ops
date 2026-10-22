@@ -7,6 +7,7 @@ source_of_truth:
   - compose.yml
   - deploy/helm/dev-health/templates/auth-service.yaml
   - deploy/helm/dev-health/templates/auth-migrate-job.yaml
+  - deploy/helm/dev-health/templates/auth-grants-job.yaml
   - deploy/helm/dev-health/values.yaml
   - ci/check_auth_compose.sh
   - docker/go-worker.Dockerfile
@@ -45,7 +46,7 @@ That runs four services in order:
 | --- | --- |
 | `auth-keys-init` | One-shot. Writes the platform signing key (Ed25519, mode 0400, uid 65532) and its JWKS into its **own** `auth_signing_keys` volume with `dho mint envelope-keys --skip-existing`, with its own key id (`AUTH_SIGNING_KEY_ID`, default `auth-signing-local`). |
 | `auth-provision` | One-shot. Creates the unprivileged runtime login (default `devhealth_auth`) and, on **every run**, resets it to `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, so an elevated login cannot survive a re-provision. |
-| `auth-migrate` | One-shot. Applies the auth schema as the database owner and grants the runtime login its table privileges. Run it again after an upgrade. |
+| `auth-migrate` | One-shot. Applies the auth schema as the database owner and grants the runtime login its table privileges. Run it again after an upgrade. `auth-migrate grants` is the grant-only pass: the Helm chart runs it after the ops migrate Job and it fails when a listed public table is missing. |
 | `auth-service` | The service, started last as the unprivileged login. The signing key is mounted read-only from the `private/` subpath of the volume. |
 
 Things that are easy to get wrong:

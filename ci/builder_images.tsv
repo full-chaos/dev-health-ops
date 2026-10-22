@@ -2,6 +2,9 @@
 # job sets up a builder (CHAOS-9064). Both default to Docker Hub, and an
 # anonymous pull from a hosted runner fails once the shared IP uses up Docker
 # Hub's rate limit. CI takes them from the ghcr.io mirror instead, by digest.
+# The golang row is the Go builder base of docker/go-worker.Dockerfile and
+# docker/go-api-tools.Dockerfile (CHAOS-10366): mirror.gcr.io returned 429s and
+# resolve flakes, so the Dockerfiles pull ghcr.io/<owner>/library/golang instead.
 #
 # <name><TAB><upstream ref: repo:tag@sha256:<digest of the multi-arch INDEX>>
 #
@@ -16,3 +19,4 @@
 # (it runs on a push to main that touches this file, or dispatch it on the branch).
 buildkit	moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 binfmt	tonistiigi/binfmt:latest@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+golang	library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd

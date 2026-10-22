@@ -16,7 +16,7 @@ import (
 
 const builderOwner = "full-chaos"
 
-var builderFiles = []string{"ci/builder_images.sh", "ci/builder_images.tsv"}
+var builderFiles = []string{"ci/builder_images.sh", "ci/builder_images.tsv", "docker/go-worker.Dockerfile", "docker/go-api-tools.Dockerfile"}
 
 func builderDeclared(t *testing.T, root string) (map[string]string, string, int) {
 	t.Helper()
@@ -73,8 +73,14 @@ func builderViolations(t *testing.T, root string) []string {
 		return []string{"ci/builder_images.sh failed: " + stderr}
 	}
 	var out []string
-	if len(declared) != 2 || declared["buildkit"] == "" || declared["binfmt"] == "" {
-		out = append(out, fmt.Sprintf("ci/builder_images.tsv must name exactly buildkit and binfmt, got %v", declared))
+	if len(declared) != 3 || declared["buildkit"] == "" || declared["binfmt"] == "" || declared["golang"] == "" {
+		out = append(out, fmt.Sprintf("ci/builder_images.tsv must name exactly buildkit, binfmt and golang, got %v", declared))
+	}
+	for _, df := range []string{"docker/go-worker.Dockerfile", "docker/go-api-tools.Dockerfile"} {
+		want := "ARG GO_BUILD_IMAGE=\"" + declared["golang"] + "\""
+		if !strings.Contains(readFile(t, filepath.Join(root, df)), want) {
+			out = append(out, fmt.Sprintf("%s: the Go builder base must be `%s` (the ghcr.io mirror row in ci/builder_images.tsv), not a mirror.gcr.io or Docker Hub ref", df, want))
+		}
 	}
 	steps := builderSetupSteps(t, root)
 	if len(steps) < 12 {
@@ -138,6 +144,8 @@ func TestBuilderImagesPlantedDefects(t *testing.T) {
 	}{
 		{"buildx falls back to the Docker Hub default", []mutation{{victim, line, strings.Replace(line, "image=ghcr.io", "image=docker.io", 1)}}, []string{"docker/setup-buildx-action must set"}},
 		{"qemu points at an unpinned image", []mutation{{qemuFile, qemuLine, "image: tonistiigi/binfmt:latest"}}, []string{"docker/setup-qemu-action must set"}},
+		{"go-worker builder base back on mirror.gcr.io", []mutation{{"docker/go-worker.Dockerfile", "ghcr.io/full-chaos/library/golang@", "mirror.gcr.io/library/golang:1.27.3-alpine@"}}, []string{"docker/go-worker.Dockerfile: the Go builder base must be"}},
+		{"go-api-tools builder digest drifts from the tsv", []mutation{{"docker/go-api-tools.Dockerfile", "golang@sha256:f2c8", "golang@sha256:0000"}}, []string{"docker/go-api-tools.Dockerfile: the Go builder base must be"}},
 		{"tsv ref loses its digest pin", []mutation{{"ci/builder_images.tsv", "moby/buildkit:buildx-stable-1@sha256:", "moby/buildkit:buildx-stable-1@sha1:"}}, []string{"builder_images.sh failed", "@sha256"}},
 	}
 	for _, c := range cases {

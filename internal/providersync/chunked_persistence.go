@@ -33,8 +33,9 @@ var (
 	ErrChunkContinuation       = errors.New("provider sync chunk continuation is durable and attempt-neutral")
 )
 
-// ChunkStoreError is a database error the chunk store flattened into the
-// conflict sentinel. It matches ErrChunkCheckpointConflict and its cause with
+// ChunkStoreError is a transient error (a database error, a cancelled context,
+// a provider page that changed between attempts) flattened into the conflict
+// sentinel. It matches ErrChunkCheckpointConflict and its cause with
 // errors.Is, and errors.As tells it apart from a real state mismatch, which
 // returns the bare sentinel.
 type ChunkStoreError struct{ Cause error }

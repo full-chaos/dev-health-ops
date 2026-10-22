@@ -425,6 +425,10 @@ Three categories, and the third is load-bearing:
   `expect_keyword`. Each fixture violates exactly **one** instance location, so
   Go (which stops at the first violation) and Python (which reports all) agree
   on which rule fired.
+  The Go validator reports no instance location, so
+  `internal/auth/contracts/reject_location_test.go` holds every `reject` entry
+  of every manifest to its declared keyword and location through a second
+  validator that does.
 - `reject_by_client` — **validates against the schema** and every client must
   refuse it. For rules JSON Schema cannot express: a duration bound, a
   cross-field consistency check, anything needing context the validator never

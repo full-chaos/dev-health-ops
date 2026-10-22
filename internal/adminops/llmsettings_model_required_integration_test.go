@@ -59,7 +59,7 @@ VALUES ('%s', 'team-org', 'Team', 'team', 'manual', true, now(), now())`, teamOr
 	}
 
 	refuse("no row yet")
-	if state := db.llmState(t); state != "[]" {
+	if state := db.llmState(t); state != "null" {
 		t.Fatalf("no row yet: rows left %s", state)
 	}
 

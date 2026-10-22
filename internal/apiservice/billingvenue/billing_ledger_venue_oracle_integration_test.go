@@ -343,6 +343,9 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	inspected, entitlementsInspected, stripeFailures := 0, 0, 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		// D6145: the org-less caller's entitlements and invoice-list reads answer 403 where Python answered another
+		// status or body; neither request writes a row or calls Stripe.
+		OrglessTokens: map[string]bool{venue.Tokens["noOrg"]: true}, MaxOrglessRefusals: 2,
 		// The Python answers are reduced before Diff, so the lengths of the reduced and the
 		// original Stripe 502 bodies differ; the raw Go body is checked in Inspect.
 		SkipContentLength: func(request venueoracle.Request) bool { return request.Name == "void: stripe fails" },

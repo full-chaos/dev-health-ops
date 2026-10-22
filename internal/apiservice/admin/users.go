@@ -157,7 +157,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 	case xOrgID != "":
 		orgID, parseErr := uuid.Parse(xOrgID)
 		if parseErr != nil {
-			policy.WriteInternal(w)
+			policy.WriteDetail(w, http.StatusBadRequest, "Invalid organization id", nil)
 			return
 		}
 		if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
@@ -199,9 +199,8 @@ func (h *handlers) getUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	targetID, err := uuid.Parse(r.PathValue("user_id"))
-	if err != nil {
-		policy.WriteInternal(w)
+	targetID, ok := pathUserID(w, r)
+	if !ok {
 		return
 	}
 	target, err := h.store.fullUserByID(ctx, targetID)
@@ -396,9 +395,8 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	targetID, parseErr := uuid.Parse(r.PathValue("user_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	targetID, ok := pathUserID(w, r)
+	if !ok {
 		return
 	}
 	existing, err := h.store.fullUserByID(ctx, targetID)
@@ -486,9 +484,8 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	targetID, parseErr := uuid.Parse(r.PathValue("user_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	targetID, ok := pathUserID(w, r)
+	if !ok {
 		return
 	}
 
@@ -630,9 +627,8 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	targetID, parseErr := uuid.Parse(r.PathValue("user_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	targetID, ok := pathUserID(w, r)
+	if !ok {
 		return
 	}
 	mode := DeleteSoft

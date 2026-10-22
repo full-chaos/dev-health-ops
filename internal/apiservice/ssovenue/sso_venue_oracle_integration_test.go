@@ -237,6 +237,8 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	python := golden.Python(t, venue, requests)
 	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue), requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		// D6145: the token without an org is refused 403 where Python answered 500 (activate).
+		OrglessTokens: map[string]bool{venue.Tokens["noorg"]: true}, MaxOrglessRefusals: 1,
 		Normalize: func(_ venueoracle.Request, body string) string {
 			return updatedAtPattern.ReplaceAllString(body, `"updated_at":"<stamped>"`)
 		},

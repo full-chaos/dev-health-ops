@@ -249,6 +249,7 @@ func TestLLMConfigCountsEachOutcome(t *testing.T) {
 		{"unreadable", "unreadable", &fakeVerifier{}, &fakeSource{err: unreadable}, testOrg, bearer},
 		{"store_unavailable", "store_unavailable", &fakeVerifier{}, &fakeSource{err: errors.New("db down")}, testOrg, bearer},
 		{"not_found", "not_found", &fakeVerifier{}, &fakeSource{}, testOrg, bearer},
+		{"byo_base_url_carries_key", "byo_base_url_carries_key", &fakeVerifier{}, sourceWithBaseURL("https://p.example.invalid/" + testKey), testOrg, bearer},
 		{"unconfigured", "unconfigured", nil, configured(), testOrg, bearer},
 	}
 	acrMetricReader()

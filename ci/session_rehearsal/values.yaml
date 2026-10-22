@@ -1,0 +1,37 @@
+# Release values for ci/check_session_cutover_rehearsal.sh. Prod-shaped for the pieces the
+# session cutover touches: goApi probes and args as in the prod values, and the session-reader
+# roles from the deploy repo's prod values (authService.migrate.sessionReaders, deploy prep leaf).
+# Everything the cutover does not touch is off. Credentials never appear here: the script writes
+# them to a mode-0600 values file it creates itself.
+web: {enabled: false}
+goWorkers: {enabled: false}
+valkey: {enabled: true}
+postgresql: {enabled: true}
+clickhouse: {enabled: true}
+secrets: {create: true}
+goApi:
+  enabled: true
+  replicas: 1
+  image: {repository: rehearsal/dho, tag: local, pullPolicy: Never}
+  extraArgs: ["--health-check-timeout=10s"]
+  readinessProbe: {timeoutSeconds: 10}
+  livenessProbe: {timeoutSeconds: 10}
+  extraEnv:
+    - {name: VALKEY_URI, value: "redis://ap-dev-health-valkey:6379/1"}
+authService:
+  enabled: true
+  database: {secretName: auth-db}
+  networkPolicy: {enabled: false}
+  signingKey: {secretName: auth-key, keyId: rehearsal}
+  image: {repository: rehearsal/auth-service, tag: local, pullPolicy: Never}
+  migrate:
+    secretName: auth-migrate-db
+    image: {repository: rehearsal/auth-migrate, tag: local, pullPolicy: Never}
+    sessionReaders: {goApi: devhealth_api, queryApi: devhealth}
+migrations:
+  hook:
+    image: rehearsal/dho:local
+    pullPolicy: Never
+    provisionRoles: {enabled: true, image: "rehearsal/dho:local", pullPolicy: Never}
+    riverMigrate: {enabled: true, image: "rehearsal/dho:local", pullPolicy: Never}
+    routeActivate: {enabled: false, image: "rehearsal/dho:local", pullPolicy: Never}

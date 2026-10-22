@@ -96,6 +96,10 @@ func execute(
 		fmt.Fprintln(stderr, "argument error: positional arguments are not accepted")
 		return 2
 	}
+	if *check && grantsOnly {
+		fmt.Fprintln(stderr, "argument error: -check does not apply to grants")
+		return 2
+	}
 	if *showVersion {
 		if err := version.Current(serviceName).WriteJSON(stdout); err != nil {
 			fmt.Fprintln(stderr, "could not write version metadata")
@@ -136,10 +140,6 @@ func execute(
 	}
 	defer pool.Close()
 
-	if *check && grantsOnly {
-		fmt.Fprintln(stderr, "argument error: -check does not apply to grants")
-		return 2
-	}
 	if *check {
 		current, head, checkErr := authschema.Check(ctx, pool, schema)
 		if checkErr != nil {

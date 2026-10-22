@@ -33,6 +33,29 @@ var (
 	ErrChunkContinuation       = errors.New("provider sync chunk continuation is durable and attempt-neutral")
 )
 
+// ChunkStoreError is a database error the chunk store flattened into the
+// conflict sentinel. It matches ErrChunkCheckpointConflict and its cause with
+// errors.Is, and errors.As tells it apart from a real state mismatch, which
+// returns the bare sentinel.
+type ChunkStoreError struct{ Cause error }
+
+// NewChunkStoreError wraps a database error raised by the chunk store.
+func NewChunkStoreError(cause error) error { return &ChunkStoreError{Cause: cause} }
+
+func (err *ChunkStoreError) Error() string {
+	if err.Cause == nil {
+		return ErrChunkCheckpointConflict.Error()
+	}
+	return ErrChunkCheckpointConflict.Error() + ": " + err.Cause.Error()
+}
+
+func (err *ChunkStoreError) Unwrap() []error {
+	if err.Cause == nil {
+		return []error{ErrChunkCheckpointConflict}
+	}
+	return []error{ErrChunkCheckpointConflict, err.Cause}
+}
+
 // ChunkPolicy is checked-in route policy. It is deliberately not loaded from
 // a process-global environment switch: changing a limit changes persistence
 // and recovery semantics and must go through a reviewed route change.

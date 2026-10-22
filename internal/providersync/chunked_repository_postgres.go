@@ -79,7 +79,7 @@ func (repository *PostgresRepository) LoadChunkCheckpoint(
 		return ChunkCheckpoint{}, ErrChunkCheckpointNotFound
 	}
 	if err != nil {
-		return ChunkCheckpoint{}, ErrChunkCheckpointConflict
+		return ChunkCheckpoint{}, NewChunkStoreError(err)
 	}
 	if len(aggregateRaw) > 0 {
 		if decodeResultObjectExact(aggregateRaw, &checkpoint.AggregateResult) != nil {
@@ -243,7 +243,7 @@ func prepareChunkInTx(
 			aggregateRaw, checkpoint.AggregateDigest, checkpoint.Owner,
 			checkpoint.LeaseExpiresAt, checkpoint.CreatedAt, checkpoint.UpdatedAt,
 		); err != nil {
-			return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+			return PreparedProviderChunk{}, NewChunkStoreError(err)
 		}
 	} else if err != nil {
 		return PreparedProviderChunk{}, err
@@ -267,10 +267,10 @@ func prepareChunkInTx(
 			chunk.InventoryComplete, payloadRaw, ledgerRaw, chunk.PayloadBytes,
 			chunk.ManifestDigest, now.UTC(), now.UTC(),
 		); err != nil {
-			return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+			return PreparedProviderChunk{}, NewChunkStoreError(err)
 		}
 	case err != nil:
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, NewChunkStoreError(err)
 	case existingDigest != chunk.ManifestDigest:
 		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
 	case chunk.Ordinal < checkpoint.PreparedChunks:
@@ -288,7 +288,7 @@ func prepareChunkInTx(
 		chunk.TotalChunks, chunk.InventoryComplete, chunk.CursorAfter,
 		chunk.Result, chunkResultDigest(chunk.Result), now.UTC(),
 	); err != nil {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, NewChunkStoreError(err)
 	}
 	return chunk, nil
 }
@@ -329,7 +329,7 @@ func loadPreparedChunkRow(
 		return PreparedProviderChunk{}, ErrPreparedChunkNotFound
 	}
 	if err != nil {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, NewChunkStoreError(err)
 	}
 	if json.Unmarshal(payloadRaw, &chunk) != nil || json.Unmarshal(ledgerRaw, &chunk.Ledger) != nil ||
 		(status != "pending" && status != "writing" && status != "committed") ||

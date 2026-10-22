@@ -17,6 +17,8 @@ internal/apiservice/billingvenue	test	contracts
 internal/audit	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/contracts	code	contracts
+internal/auth/contracts/tokencorpus	code	contracts
+internal/auth/contracts/tokencorpus	test	README.md
 internal/bigboycompose	test	ci
 internal/bigboycompose	test	compose.yml
 internal/cacheinvalidation	test	contracts
@@ -89,6 +91,10 @@ internal/cigates/scripts	test	docs
 internal/cigates/splitshards	test	ci
 internal/cigates/testshard	test	.github
 internal/cigates/testshard	test	ci
+internal/cigates/webproxyproof	test	.github
+internal/cigates/webproxyproof	test	ci
+internal/cigates/webproxyproof	test	compose.yml
+internal/cigates/webproxyproof	test	deploy
 internal/cigates/weightsfiles	test	ci
 internal/cigates/workflowpaths	test	.github
 internal/cigates/workflowpaths	test	contracts

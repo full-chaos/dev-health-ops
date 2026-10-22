@@ -31,6 +31,8 @@ internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-
 internal/auth/contracts	schema_dialect_test.go	unexpressed	-
 internal/auth/contracts	session_goldens_test.go	unexpressed	-
 internal/auth/contracts	transport_error_goldens_test.go	unexpressed	-
+internal/auth/contracts/tokencorpus	corpus.go	unexpressed	-
+internal/auth/contracts/tokencorpus	corpus_test.go	unexpressed	-
 internal/auth/identity	externalkey_test.go	internal/auth/identity	dir
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir
 internal/auth/writerinventory	scan_test.go	unexpressed	-
@@ -95,6 +97,7 @@ internal/cigates/testshard	trimpath_test.go	unexpressed	-
 internal/cigates/weightsfiles	race_weights_files_test.go	unexpressed	-
 internal/cigates/weightsfiles	support_test.go	unexpressed	-
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed	-
+internal/cigates/workflows	race_json_artifact_test.go	unexpressed	-
 internal/cigates/workflows	ttl_registry_test.go	unexpressed	-
 internal/cigates/workflows	workflows_common_test.go	unexpressed	-
 internal/cigates/workflows	workflows_go_resolver_test.go	unexpressed	-

@@ -144,3 +144,26 @@ log entry with the actor and the old and new value.
 The setup checks do not follow the toggle: `POST /api/v1/admin/llm-settings/readiness` and
 the model list `GET /api/v1/admin/llm-settings/models` keep using the saved key while the
 toggle is off, so an administrator can check a key before turning the own model back on.
+
+## Prompt cache for an Anthropic model
+
+An organization that brings its own Anthropic model can ask Anthropic to cache
+the long, fixed instructions that Ask Dev sends at the start of each question.
+It is off until an organization owner or administrator turns it on, and it
+applies only while the model Ask Dev uses is on the `anthropic` provider; for
+any other provider the setting has no effect.
+
+The cache has a price. Anthropic charges about 25% more than the normal input price
+to write the cached part, and about a tenth of it to read the cached part back
+within five minutes. An organization that asks several questions within five
+minutes of each other pays less; an organization whose questions are always
+more than five minutes apart pays about 25% more on that fixed part. The question
+itself and the answer are priced as before.
+
+Admin API: `GET /api/v1/admin/llm-settings/prompt-cache` reads `enabled`,
+`configured` (a saved BYO configuration exists) and `anthropic` (the saved
+configuration Ask Dev uses is on the `anthropic` provider); `PUT` with
+`{"enabled": true}` or `{"enabled": false}` stores the state. The change
+reaches investigations within about 15 seconds. Each change writes an audit log
+entry with the actor and the old and new value. Deleting the BYO settings also
+clears this setting, so a configuration saved later starts with it off.

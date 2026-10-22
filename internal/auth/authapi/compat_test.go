@@ -237,6 +237,7 @@ type compatFixture struct {
 	appended   []audit.AuditEvent
 	appendErr  error
 	social     SocialExchange
+	creds      *fakeServiceCredentials
 	orgB       uuid.UUID
 	orgD       uuid.UUID
 }
@@ -248,7 +249,8 @@ const (
 
 func newCompatFixture(t *testing.T) *compatFixture {
 	t.Helper()
-	f := &compatFixture{fixture: newFixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New()}
+	f := &compatFixture{fixture: newFixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New(),
+		creds: &fakeServiceCredentials{id: uuid.NewString()}}
 	hash := "hash:" + compatPassword
 	f.loginUsers = &fakeLoginUsers{byEmail: map[string]*local.User{
 		compatEmail: {ID: f.principal, IsActive: true, IsVerified: true, PasswordHash: &hash},
@@ -267,6 +269,10 @@ func newCompatFixture(t *testing.T) *compatFixture {
 }
 
 func (f *compatFixture) buildCompat() {
+	var creds ServiceCredentials
+	if f.creds != nil {
+		creds = f.creds
+	}
 	routes, err := CompatRoutes(CompatDeps{
 		Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
 		Logger:    slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -280,6 +286,7 @@ func (f *compatFixture) buildCompat() {
 			f.appended = append(f.appended, event)
 			return f.appendErr
 		},
+		ServiceCredentials: creds,
 		Login: &LoginConfig{
 			Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey),
 			Compare: func(hash, password string) bool { return hash == "hash:"+password },

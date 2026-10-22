@@ -15,9 +15,10 @@ func TestPublicReadColumnsMatchTheReviewedList(t *testing.T) {
 		"memberships": {"user_id", "org_id", "role", "joined_at", "created_at"},
 		"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
 			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
-		"organizations":          {"id", "slug", "name", "is_active", "tier"},
-		"saml_assertion_replays": {"provider_id", "assertion_id", "expires_at"},
-		"org_licenses":           {"org_id", "tier", "features_override"},
+		"organizations":                {"id", "slug", "name", "is_active", "tier"},
+		"saml_assertion_replays":       {"provider_id", "assertion_id", "expires_at"},
+		"org_licenses":                 {"org_id", "tier", "features_override"},
+		"internal_service_credentials": {"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"},
 	}
 	got := map[string][]string{}
 	for _, entry := range PublicReadColumns() {

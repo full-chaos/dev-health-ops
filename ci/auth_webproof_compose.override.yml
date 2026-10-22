@@ -1,0 +1,44 @@
+# Proof-only override for ci/check_auth_web_proxy_compose.sh (CHAOS-10230). It overlays
+# ci/auth_compose_proof.override.yml (postgres without a fixed name or host port) and adds what a
+# go-api in the proof needs to be private to its project: no fixed container_name, no published
+# host port, and no attachment to the `planes` network (its fixed subnet is host-global).
+#
+# The auth proxy flags are ON here and nowhere else. compose.yml and the chart keep them OFF.
+# The AUTH_PROXY_* names are D1's. Sign-up (credentials) stays on go-api until D3.
+services:
+  clickhouse:
+    container_name: !reset null
+    ports: !reset []
+  valkey:
+    container_name: !reset null
+    ports: !reset []
+  migrate:
+    container_name: !reset null
+  go-api:
+    ports: !override ["127.0.0.1::8000", "127.0.0.1::8080"]
+    networks: !override [default, auth_plane]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Mail goes to a capturing SMTP sink on the runner (ci/auth_webproof_smtp_sink.mjs): the
+      # console provider logs no link, so the verification token is read from the captured message.
+      EMAIL_PROVIDER: smtp
+      SMTP_HOST: host.docker.internal
+      SMTP_PORT: ${AUTH_PROOF_SMTP_PORT}
+      SMTP_USE_TLS: "false"
+      # D1 flags: login, refresh and logout go to auth-service. Registration stays on go-api
+      # (auth-service sign-up is gated until D3).
+      AUTH_PROXY_URL: http://auth-service:8095
+      AUTH_PROXY_SESSIONS: "true"
+      AUTH_PROXY_LOCAL_LOGIN: "true"
+      AUTH_PROXY_CREDENTIALS: "false"
+      AUTH_PROXY_SOCIAL: "false"
+      AUTH_PROXY_OIDC: "false"
+      AUTH_PROXY_SAML: "false"
+  auth-service:
+    environment:
+      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
+      AUTH_SESSION_SUCCESSOR_KEY: ${AUTH_SESSION_SUCCESSOR_KEY}
+      # Mounts go-api's login, refresh and logout wire on auth-service (#4602), only in this proof.
+      AUTH_LOGIN_LOCKOUT_KEY: ${AUTH_LOGIN_LOCKOUT_KEY}
+      AUTH_SERVICE_COMPAT_ROUTES: "true"

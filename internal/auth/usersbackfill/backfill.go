@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -26,6 +27,9 @@ type Row struct {
 	Verified       bool
 	AuthProvider   *string
 	AuthProviderID *string
+	Superuser      bool
+	TokenVersion   int64
+	LastLoginAt    *time.Time
 }
 
 // Skip classes. A skipped user is counted, not written, and fails the run.
@@ -37,9 +41,6 @@ const (
 	SkipInvalidIdentity     = "invalid_identity"
 	SkipStoreError          = "store_error"
 )
-
-// NotCarried names the public.users fields that have no auth-side column.
-var NotCarried = []string{"is_superuser", "token_version", "last_login_at"}
 
 // Source pages public.users in id order. A nil after starts at the first row,
 // so the all-zero id is an ordinary key.
@@ -62,6 +63,9 @@ type Report struct {
 	IdentityLinked   int
 	IdentityNotCarry int
 	DisplayNameDrift int
+	LastLoginDrift   int
+	RoleGranted      int
+	RoleRevoked      int
 	Skipped          map[string]int
 }
 
@@ -89,6 +93,9 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("identity_linked=%d", r.IdentityLinked),
 		fmt.Sprintf("identity_not_carried=%d", r.IdentityNotCarry),
 		fmt.Sprintf("display_name_drift=%d", r.DisplayNameDrift),
+		fmt.Sprintf("last_login_drift=%d", r.LastLoginDrift),
+		fmt.Sprintf("platform_role_granted=%d", r.RoleGranted),
+		fmt.Sprintf("platform_role_revoked=%d", r.RoleRevoked),
 		fmt.Sprintf("skipped=%d", r.SkippedTotal()),
 	}
 	classes := make([]string, 0, len(r.Skipped))
@@ -99,7 +106,6 @@ func (r Report) Lines() []string {
 	for _, c := range classes {
 		lines = append(lines, fmt.Sprintf("skipped.%s=%d", c, r.Skipped[c]))
 	}
-	lines = append(lines, "not_carried="+strings.Join(NotCarried, ","))
 	return lines
 }
 
@@ -158,6 +164,15 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 			if res.DisplayNameDrift {
 				rep.DisplayNameDrift++
 			}
+			if res.LastLoginDrift {
+				rep.LastLoginDrift++
+			}
+			if res.RoleGranted {
+				rep.RoleGranted++
+			}
+			if res.RoleRevoked {
+				rep.RoleRevoked++
+			}
 		}
 		last := rows[len(rows)-1].ID
 		after = &last
@@ -181,7 +196,8 @@ func classify(err error) string {
 // row is writable); notCarried is set when the user's provider identity is not
 // copied (any provider outside the social set, whose issuer is fixed).
 func Map(row Row) (target identity.BackfillTarget, class string, notCarried bool) {
-	target = identity.BackfillTarget{ID: row.ID, Email: row.Email, Active: row.Active, Verified: row.Verified}
+	target = identity.BackfillTarget{ID: row.ID, Email: row.Email, Active: row.Active, Verified: row.Verified,
+		Superuser: row.Superuser, TokenVersion: row.TokenVersion, LastLoginAt: row.LastLoginAt}
 	if row.FullName != nil {
 		target.DisplayName = *row.FullName
 	}

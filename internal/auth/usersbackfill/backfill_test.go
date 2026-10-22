@@ -6,11 +6,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
 func str(s string) *string { return &s }
@@ -199,7 +201,7 @@ func TestReportLinesCarryCountsOnly(t *testing.T) {
 			t.Fatal("report line carries row data")
 		}
 	}
-	if !strings.Contains(out, "not_carried=is_superuser,token_version,last_login_at") || !strings.Contains(out, "skipped.unknown_hash_format=1") {
+	if !strings.Contains(out, "platform_role_granted=0") || !strings.Contains(out, "skipped.unknown_hash_format=1") {
 		t.Fatalf("report incomplete:\n%s", out)
 	}
 }
@@ -213,5 +215,24 @@ func TestRunCopiesTheAllZeroID(t *testing.T) {
 	}
 	if _, ok := sink.seen[uuid.Nil]; !ok {
 		t.Fatal("all-zero id row was not written")
+	}
+}
+
+func TestMapCarriesSuperuserTokenVersionAndLastLogin(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	target, class, _ := Map(Row{ID: uuid.New(), Email: "a@example.test", Active: true, Superuser: true, TokenVersion: 4, LastLoginAt: &at})
+	if class != "" || !target.Superuser || target.TokenVersion != 4 || target.LastLoginAt == nil || !target.LastLoginAt.Equal(at) {
+		t.Fatalf("not carried: %+v class %q", target, class)
+	}
+	plain, _, _ := Map(Row{ID: uuid.New(), Email: "b@example.test", Active: true})
+	if plain.Superuser || plain.TokenVersion != 0 || plain.LastLoginAt != nil {
+		t.Fatalf("defaults wrong: %+v", plain)
+	}
+}
+
+func TestPlatformAdminRoleNameIsTheCatalogName(t *testing.T) {
+	role, err := policycatalog.Default().Role(identity.PlatformAdminRole)
+	if err != nil || role.Scope != policycatalog.ScopePlatform {
+		t.Fatalf("role key is not a platform role of the catalog: %+v %v", role, err)
 	}
 }

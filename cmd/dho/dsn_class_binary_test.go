@@ -57,6 +57,9 @@ func TestDhoWorkerProcessesRefuseDatabaseDSNsOutsideTheirClass(t *testing.T) {
 		{"worker", "POSTGRES_URL", "secret-x"},
 		{"worker", "APP_DATABASE_DSN", "secret-x"},
 		{"worker", "SOME_SETTING", "postgres://foreign:secret-x@invalid.example/db"},
+		{"worker", "SOME_SETTING", "postgresql+asyncpg://foreign:secret-x@invalid.example/db"},
+		{"worker", "MY-DSN", "postgres://foreign:secret-x@invalid.example/db"},
+		{"worker", "MY_PG_DSN", "secret-x"},
 		{"reconciler", "API_DATABASE_URI", "postgresql://foreign:secret-x@invalid.example/db"},
 		{"scheduler", "API_DATABASE_URI", "postgresql://foreign:secret-x@invalid.example/db"},
 		{"stream-runner", "WORKER_DATABASE_URI", "postgresql://foreign:secret-x@invalid.example/db"},
@@ -65,9 +68,13 @@ func TestDhoWorkerProcessesRefuseDatabaseDSNsOutsideTheirClass(t *testing.T) {
 	for _, row := range foreign {
 		t.Run(row.command+"/"+row.variable, func(t *testing.T) {
 			code, output := run(t, row.command, row.variable+"="+row.value)
-			if code != 1 || !strings.Contains(output, "start refused") || !strings.Contains(output, row.variable) ||
+			shown := row.variable
+			if strings.ContainsAny(shown, "- ") {
+				shown = "<invalid>" // a name that is not a plain identifier is never echoed
+			}
+			if code != 1 || !strings.Contains(output, "start refused") || !strings.Contains(output, shown) ||
 				!strings.Contains(output, "process class "+commands[row.command].class) {
-				t.Fatalf("exit code %d, output %q: want exit 1 and a refusal naming %s and the class", code, output, row.variable)
+				t.Fatalf("exit code %d, output %q: want exit 1 and a refusal naming %s and the class", code, output, shown)
 			}
 			if strings.Contains(output, "secret-x") {
 				t.Fatalf("the refusal carries a value: %q", output)
@@ -80,6 +87,7 @@ func TestDhoWorkerProcessesRefuseDatabaseDSNsOutsideTheirClass(t *testing.T) {
 		{"worker", "COORDINATOR_DATABASE_URI", ""},
 		{"reconciler", "COORDINATOR_DATABASE_URI", "postgresql://u:secret-x@invalid.example/db"},
 		{"stream-runner", "DATABASE_URL", ""},
+		{"worker", "UPGRADE_URL", "https://example.test"},
 	}
 	for _, row := range passing {
 		t.Run("allowed/"+row.command+"/"+row.variable, func(t *testing.T) {

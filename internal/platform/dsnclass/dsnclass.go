@@ -39,7 +39,7 @@ func Allowed(class string) []string {
 // Secret names the DSN secret an environment variable name stands for, and
 // reports whether it stands for one. The pattern is exactly: the name, with an
 // optional "_FILE" suffix removed, ends in "_URI", "_URL" or "_DSN" and contains
-// DATABASE, POSTGRES or PG. A new connection secret therefore falls under the
+// DATABASE or POSTGRES, or has PG as a whole underscore-delimited token. A new connection secret therefore falls under the
 // table until it is added to it. Component-form variables (DEV_HEALTH_PG_*) are
 // not matched.
 func Secret(name string) (string, bool) {
@@ -47,7 +47,7 @@ func Secret(name string) (string, bool) {
 	if !hasAnySuffix(base, "_URI", "_URL", "_DSN") {
 		return "", false
 	}
-	if !containsAny(base, "DATABASE", "POSTGRES", "PG") {
+	if !containsAny(base, "DATABASE", "POSTGRES") && !pgToken.MatchString(base) {
 		return "", false
 	}
 	return base, true
@@ -75,7 +75,12 @@ func containsAny(name string, parts ...string) bool {
 // scheme. The value is read for this test only and never kept or reported.
 func postgresValue(value string) bool {
 	lower := strings.ToLower(value)
-	return strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://")
+	for _, scheme := range postgresSchemes {
+		if strings.HasPrefix(lower, scheme+"://") {
+			return true
+		}
+	}
+	return false
 }
 
 // Foreign returns the names that stand for a DSN secret outside the class's
@@ -102,31 +107,55 @@ func (refusal *Refusal) Error() string {
 		refusal.Class, strings.Join(refusal.Names, ", "))
 }
 
+// postgresSchemes is the one list of URL schemes that name a PostgreSQL
+// connection: config.Load validates its DSN settings against it, and the start
+// guard recognises a connection URL under any name by it.
+var postgresSchemes = []string{
+	"postgres",
+	"postgresql",
+	"postgres+asyncpg",
+	"postgresql+asyncpg",
+	"postgresql+psycopg",
+	"postgresql+psycopg2",
+}
+
+// PostgresSchemes returns a copy of the PostgreSQL URL schemes.
+func PostgresSchemes() []string { return slices.Clone(postgresSchemes) }
+
+var pgToken = regexp.MustCompile("(^|_)PG(_|$)")
+
 var validName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
 // CheckEnviron refuses an environment (os.Environ form, "NAME=value") in which a
 // variable with a non-empty value either stands for a DSN secret outside the
-// class's set (Secret), or carries a postgres:// or postgresql:// URL under a
-// name that is not one of the class's allowed names. An allowed name passes
-// whatever its value. An empty value counts as absent. A PostgreSQL connection
-// in libpq key=value form under a foreign name is not recognised (a named limit). A name that is not a plain identifier
-// cannot stand for a DSN secret and is ignored, so no free text reaches a log.
+// class's set (Secret), or carries a PostgreSQL connection URL (a scheme of
+// PostgresSchemes, any case) under a name that is not one of the class's allowed
+// names. The value test runs for every such name, whatever the name looks like.
+// An allowed name passes whatever its value. An empty value counts as absent. A
+// name that is not a plain identifier is reported as "<invalid>", so no free text
+// reaches a log. A PostgreSQL connection in libpq key=value form under a foreign
+// name is not recognised, and neither are the PG* variables pgx reads as
+// connection fallbacks (a named limit).
 func CheckEnviron(class string, environ []string) error {
 	var foreign []string
 	for _, entry := range environ {
 		name, value, found := strings.Cut(entry, "=")
-		if !found || value == "" || !validName.MatchString(name) {
+		if !found || value == "" {
 			continue
 		}
+		refused := false
 		if secret, ok := Secret(name); ok {
-			if !slices.Contains(allowed[class], secret) {
-				foreign = append(foreign, name)
-			}
+			refused = !slices.Contains(allowed[class], secret)
+		} else {
+			refused = postgresValue(value)
+		}
+		if !refused {
 			continue
 		}
-		if postgresValue(value) {
-			foreign = append(foreign, name)
+		if !validName.MatchString(name) {
+			name = "<invalid>"
 		}
+		foreign = append(foreign, name)
 	}
 	if len(foreign) == 0 {
 		return nil

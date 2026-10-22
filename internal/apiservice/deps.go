@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -64,6 +65,15 @@ func (e apiDependencyError) DependencyReason() string { return e.reason }
 // credential component of the DSN redacted (secrets.WithRedactedCause), and the
 // other sites return configuration or contract messages that never format a
 // secret.
+// apiSchemaRecorder reads alembic_version through the api pool (the api role holds SELECT on it); a test swaps it.
+var apiSchemaRecorder = func(pool *pgxpool.Pool) schemagate.Recorder { return poolRecorder{pool: pool} }
+
+type poolRecorder struct{ pool *pgxpool.Pool }
+
+func (recorder poolRecorder) RecordedRevisions(ctx context.Context) ([]string, error) {
+	return schemagate.PoolRecorded(ctx, recorder.pool)
+}
+
 func dependencyFailure(ctx context.Context, logger *slog.Logger, dependency, reason string, err error) error {
 	if logger != nil {
 		logger.LogAttrs(ctx, slog.LevelError, "api dependency configuration failed",
@@ -318,6 +328,11 @@ func buildDeps(
 		pool, err := postgres.New(ctx, postgres.DefaultConfig(cfg.APIDatabaseURI.Reveal()))
 		if err != nil {
 			return Deps{}, nil, dependencyFailure(ctx, logger, "api_postgres", "api_postgres_open_failed", err)
+		}
+		// A database behind this build is refused before anything is registered; the gate logs its own line.
+		if err := schemagate.Enforce(ctx, logger, "api", apiSchemaRecorder(pool)); err != nil {
+			pool.Close()
+			return Deps{}, nil, dependencyFailure(ctx, nil, "api_postgres", "api_schema_behind", err)
 		}
 		deps.Pool = pool
 		components = append(components, &pgxpoolComponent{pool: pool})

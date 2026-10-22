@@ -184,7 +184,7 @@ services:
       - -q
       - http://localhost:8123/ping
       timeout: 5s
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:26.9.14.10
     networks:
       dev-health: null
       dho-clickhouse-readers: null

@@ -1020,6 +1020,7 @@ func createKernelIntegrationFixture(
 		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_instances (instance_id uuid PRIMARY KEY)",
+		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE TABLE public.worker_posture_manifest_applied (manifest_digest text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now(), migrate_build text NOT NULL)",
 		`CREATE TABLE public.sync_dispatch_transport_routes (
 			kind text PRIMARY KEY,

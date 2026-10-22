@@ -175,6 +175,7 @@ var unguardedColumns = map[string]map[string]string{
 		"principal_id": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
 		"email": "security", "email_lower": "security", "email_verified_at": "security",
 		"password_hash": "security", "password_algorithm": "security", "password_updated_at": "security",
+		"legacy_token_version": "security", "last_login_at": "lifecycle",
 	},
 	"sessions": {
 		"id": "lifecycle", "principal_id": "lifecycle", "organization_id": "lifecycle", "issued_at": "lifecycle",

@@ -1,0 +1,117 @@
+{
+  "schema_version": "actions.v1",
+  "catalog_version": 1,
+  "description": "The closed action vocabulary. An action absent from this list is refused everywhere (ACP-ADR-05 decision 1). Names are dotted and namespaced; a bare single segment is not an action. No action means 'all actions'.",
+  "actions": [
+    {
+      "action": "analytics.read",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "analytics.export",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "metrics.read",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "metrics.compute",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "work_items.read",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "work_items.sync",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "git.read",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "git.sync",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "teams.read",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "teams.write",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "settings.read",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "settings.write",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "integrations.read",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "integrations.write",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "members.read",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "members.invite",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "members.manage",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "org.read",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "org.write",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "org.delete",
+      "scope": "organization",
+      "resource_kind": "organization"
+    },
+    {
+      "action": "admin.users",
+      "scope": "platform",
+      "resource_kind": "platform"
+    },
+    {
+      "action": "admin.orgs",
+      "scope": "platform",
+      "resource_kind": "platform"
+    }
+  ]
+}

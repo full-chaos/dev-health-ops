@@ -42,6 +42,7 @@ func TestEveryPostureCheckSiteUsesTheSharedIdentityPredicate(t *testing.T) {
 	known := map[string]string{
 		"storage/postgres/domain_authorization.go": "IdentityPredicateSQL",
 		"storage/postgres/queue_authorization.go":  "IdentityPredicateSQL",
+		"storage/postgres/posture_shared_sql.go":   "IdentityPredicateSQL",
 		"storage/postgres/role_identity.go":        "IdentityPredicateSQL",
 		"storage/roleacl/roleacl.go":               "IdentityPredicateSQL", // the definition
 	}

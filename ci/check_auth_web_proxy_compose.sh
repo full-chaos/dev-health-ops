@@ -163,17 +163,14 @@ USER_ID="$(psql_one "SELECT id FROM public.users WHERE email = '${EMAIL}'")"
 [[ "${USER_ID}" =~ ^[0-9a-f-]{36}$ ]] || die "the seeded user has no id (${USER_ID})"
 printf 'seeded user %s\n' "${USER_ID}"
 
-# auth-migrate ran before the application schema existed, so its public read grants were skipped
-# (the table did not exist); a second run, as compose.yml documents, applies them.
-compose --profile auth run --rm --no-deps auth-migrate
 printf 'step 2b: the auth runtime role holds the public read grants and nothing wider (CHAOS-10224)\n'
 ROLE="${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}"
-for col in id email password_hash full_name username auth_provider auth_provider_id is_active is_verified is_superuser token_version; do
+for col in id email password_hash full_name username auth_provider auth_provider_id is_active is_verified is_superuser token_version last_login_at; do
   can="$(psql_one "SELECT has_column_privilege('${ROLE}', 'public.users', '${col}', 'SELECT')")"
   printf 'SELECT public.users.%s: %s\n' "${col}" "${can}"
   [ "${can}" = t ] || die "the auth runtime role cannot read public.users.${col}"
 done
-for col in avatar_url last_login_at created_at updated_at; do
+for col in avatar_url created_at updated_at; do
   can="$(psql_one "SELECT has_column_privilege('${ROLE}', 'public.users', '${col}', 'SELECT')")"
   printf 'SELECT public.users.%s: %s\n' "${col}" "${can}"
   [ "${can}" = f ] || die "the auth runtime role can read public.users.${col}, outside the 10224 manifest"

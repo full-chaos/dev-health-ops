@@ -17,6 +17,10 @@ follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442),
 and `transport-error.v1` (CHAOS-10392), the body auth-service's shared
 transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
+The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) live in
+`vocabulary/` with `action-catalog.v1` and `role-catalog.v1` schemas; the Go package
+`internal/auth/policycatalog` embeds and validates them.
+
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists
 today. These describe what the new service emits.

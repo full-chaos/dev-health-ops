@@ -2378,12 +2378,14 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
 > repository's first record, so the rows valid at the first record are the owners. It is rendered by the shared
 > readers (`OwnedRepoIDs`, `OwnersByRepo`, `OwnerSharesByRepo` and `AuthoritativeOwnersByRepo` of
 > `internal/teamownership`), by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`) and by the
-> work-item cascade `LoadRepos` (CHAOS-10517; it keeps the rows of an inactive team, the cascade drops them). The
+> work-item cascade `LoadRepos` (CHAOS-10517; it keeps the rows of an inactive team, the cascade drops them), which is the
+> only ownership read of `work_item_attribution` (the backstop and the daily family, at the item's day, CHAOS-10519), and by the
+> investment materialize donor set (`TeamRepoDonorSet.DonorsAt`, CHAOS-10518; the one-shot `FetchTeamRepoDonors` keeps the
+> plain window and is tests-only). The
 > first record of a repository is the earliest `valid_from` of its rows of ACTIVE teams (an inactive team owns
 > nothing, section 0.4g rule 1, so it does not set it, in `teamscope` too); an instant at or after the first record
-> reads as before, and an instant in a gap between two records has no owner. Not yet applying it: the investment
-> materialize fallback (CHAOS-10518), `work_item_attribution`
-> (CHAOS-10519) and the investment team ownership read of `queryapi/analytics` (CHAOS-10520). The catalog writers
+> reads as before, and an instant in a gap between two records has no owner. Not yet applying it: the investment team
+> ownership read of `queryapi/analytics` (CHAOS-10520). The catalog writers
 > start a link at its evidence (CHAOS-10521, section 0.4b), the inferred derivation at its own (CHAOS-9403).
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a

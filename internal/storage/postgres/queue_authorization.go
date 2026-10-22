@@ -80,7 +80,7 @@ WITH river_tables AS (
 	SELECT role.oid
 	FROM pg_catalog.pg_roles AS role
 	WHERE role.rolname <> current_user
-)
+` + governedRelationsCTESQL + `)
 SELECT
 	` + roleacl.IdentityPredicateSQL + `
 	AND EXISTS (
@@ -213,10 +213,9 @@ SELECT
 		SELECT 1 FROM member_roles
 		WHERE pg_has_role(current_user, oid, 'MEMBER')
 	)
-	AND NOT has_database_privilege(current_user, current_database(), 'CREATE')
+` + ownsNothingPredicateSQL + `	AND NOT has_database_privilege(current_user, current_database(), 'CREATE')
 	AND NOT has_database_privilege(current_user, current_database(), 'TEMPORARY')
-	AND has_schema_privilege(current_user, 'public', 'USAGE')
-	AND NOT has_schema_privilege(current_user, 'public', 'CREATE')
+` + ambientGrantOptionSQL + `	AND NOT has_schema_privilege(current_user, 'public', 'CREATE')
 	AND EXISTS (
 		SELECT 1
 		FROM pg_catalog.pg_class AS class
@@ -364,6 +363,7 @@ SELECT
 		WHERE has_function_privilege(current_user, oid, 'EXECUTE')
 	)
 	AND has_schema_privilege(current_user, $2, 'USAGE')
+	AND NOT has_schema_privilege(current_user, $2, 'USAGE WITH GRANT OPTION')
 	AND NOT has_schema_privilege(current_user, $2, 'CREATE')
 	AND EXISTS (SELECT 1 FROM river_tables)
 	AND NOT EXISTS (
@@ -394,6 +394,35 @@ SELECT
 		SELECT 1
 		FROM river_functions
 		WHERE NOT has_function_privilege(current_user, oid, 'EXECUTE')
+	)
+	-- No privilege on any relation of the public or River schema may be held
+	-- WITH GRANT OPTION, at table or column level: the declared posture never
+	-- lets this role re-delegate a privilege it holds.
+	AND NOT EXISTS (
+		SELECT 1
+		FROM relation_held AS held
+		CROSS JOIN LATERAL unnest(held.privileges) AS item(held_privilege)
+		WHERE item.held_privilege LIKE '% WITH GRANT OPTION'
+	)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM column_held AS held
+		CROSS JOIN LATERAL unnest(held.privileges) AS item(held_privilege)
+		WHERE item.held_privilege LIKE '% WITH GRANT OPTION'
+	)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM (
+			SELECT oid FROM river_functions
+			UNION ALL
+			SELECT oid FROM public_functions
+		) AS scoped
+		JOIN pg_catalog.pg_proc AS procedure ON procedure.oid = scoped.oid
+		CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+			procedure.proacl, pg_catalog.acldefault('f'::"char", procedure.proowner)
+		)) AS entry
+		WHERE entry.is_grantable
+			AND entry.grantee IN (0, (SELECT oid FROM current_role_identity))
 	)`
 
 // CheckQueueAuthorization is a read-only readiness check for the dedicated

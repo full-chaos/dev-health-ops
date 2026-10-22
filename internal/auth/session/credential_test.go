@@ -287,3 +287,16 @@ func TestCredentialsAndKeyAreNeverPrinted(t *testing.T) {
 		t.Error("no redaction marker printed; the probe printed nothing useful")
 	}
 }
+
+func TestLegacyFirstCredentialIsDerivedFromTheJTI(t *testing.T) {
+	_, key := testKey(t)
+	id := uuid.New()
+	jti := contracts.NewSecretString("legacy-jti")
+	first := deriveSuccessor(key, id, jti)
+	if !wellFormed(first) || deriveSuccessor(key, id, jti).Reveal() != first.Reveal() {
+		t.Fatal("the credential derived from a jti is not a stable, well-formed value")
+	}
+	if deriveSuccessor(key, id, contracts.NewSecretString("other-jti")).Reveal() == first.Reveal() {
+		t.Fatal("two jtis derived the same credential")
+	}
+}

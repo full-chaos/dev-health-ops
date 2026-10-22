@@ -120,7 +120,7 @@ func replayCaseWith(t *testing.T, dir string, run func(args ...string) (int, str
 	_ = filepath.Walk(out, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(out, path)
-			rel = caseRel(rel)
+			rel = caseRel(strings.TrimSuffix(rel, ".fixture"))
 			expected[rel] = true
 			if got, want := mustRead(t, filepath.Join(work, rel)), mustRead(t, path); got != want {
 				t.Errorf("%s differs from the recording\ngot:\n%q\nrecorded:\n%q", rel, got, want)

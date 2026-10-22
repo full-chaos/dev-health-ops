@@ -128,14 +128,13 @@ func TestAGateWaitLongerThanTheContextDeadlineEndsTheTryAtOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	started := time.Now()
 	_, err := client.Do(ctx, http.MethodGet, "/items", nil)
 	var providerErr *ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Class != ErrorRateLimited || providerErr.RetryAfter != time.Minute {
 		t.Fatalf("err = %v, want rate_limited carrying 1m", err)
 	}
-	if time.Since(started) > 100*time.Millisecond {
-		t.Fatalf("slept %s towards a wait the deadline could not outlast", time.Since(started))
+	if calls := gate.calls.Load(); calls != 1 || requests.Load() != 0 {
+		t.Fatalf("gate read %d times and %d requests, want one read, no sleep and no request towards a wait the deadline could not outlast", calls, requests.Load())
 	}
 }
 
@@ -165,21 +164,28 @@ func (g *reportingGate) Penalize(_ context.Context, delay time.Duration) error {
 // and the deadline decide before any sleep, and the lease is checked after it.
 func TestInPlaceGateWaitRereadsAnExtendedPenalty(t *testing.T) {
 	t.Parallel()
-	gate := &reportingGate{}
-	_ = gate.Penalize(context.Background(), 60*time.Millisecond)
+	// Event order, not elapsed time: the first read owes 20ms, the second read
+	// (after that sleep) owes 40ms because a sibling extended the penalty, the
+	// third owes nothing. The request must go out only after the third read.
+	gate := &scriptedGate{remaining: []time.Duration{20 * time.Millisecond, 40 * time.Millisecond}}
 	var requests atomic.Int32
-	client := gateWaitClient(t, gate, &requests)
+	var readsAtRequest atomic.Int32
+	policy := RetryPolicy{MaxAttempts: 1, InitialWait: time.Millisecond, MaxWait: time.Millisecond}
+	client := newTestHTTPClient(t, fakehttp.Client(HTTPDoerFunc(func(request *http.Request) (*http.Response, error) {
+		requests.Add(1)
+		readsAtRequest.Store(gate.calls.Load())
+		return testHTTPResponse(request, http.StatusOK, http.Header{}, `{}`), nil
+	})), policy)
+	client.Gate = gate
 	client.GateWaitMax = time.Second
-	time.AfterFunc(20*time.Millisecond, func() { _ = gate.Penalize(context.Background(), 150*time.Millisecond) })
 
-	started := time.Now()
 	response, err := client.Do(context.Background(), http.MethodGet, "/items", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	if elapsed := time.Since(started); elapsed < 150*time.Millisecond {
-		t.Fatalf("request went out after %s, before the extended penalty (>= 150ms from t=20ms) ended", elapsed)
+	if requests.Load() != 1 || readsAtRequest.Load() != 3 {
+		t.Fatalf("requests = %d, gate reads at the request = %d, want one request after the gate was reread past the extended penalty (3 reads)", requests.Load(), readsAtRequest.Load())
 	}
 }
 

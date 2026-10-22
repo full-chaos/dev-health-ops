@@ -31,7 +31,7 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			var err error
-			out, err = s.insertSession(ctx, tx, principalID, organizationID, amr)
+			out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
 			return err
 		},
 		Audit:     event,
@@ -50,9 +50,11 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 // insertSession writes a session and its first refresh credential, the rows
 // Create writes, inside the caller's transaction. The session's client_ip is
 // the request's client address and its user_agent the request's user agent,
-// when they are bound.
-func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string) (Issued, error) {
-	credential, err := newCredential()
+// when they are bound. legacyJTI, when set, is the go-api refresh jti the
+// first credential was exchanged for (see firstCredential).
+func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
+	legacyJTI contracts.SecretString) (Issued, error) {
+	credential, credentialID, legacyDigest, err := s.firstCredential(legacyJTI)
 	if err != nil {
 		return Issued{}, err
 	}
@@ -71,11 +73,13 @@ func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uu
 	// effective expiry (see sessionColumns).
 	var sessionID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr, client_ip, user_agent)
+		INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr, client_ip, user_agent,
+			legacy_token_version)
 		SELECT p.id, $2::uuid, $3, t.at, t.at, t.at,
 		       CASE WHEN $4::double precision > 0 THEN t.at + make_interval(secs => $4::double precision) ELSE 'infinity' END,
-		       t.at, $5, $6::inet, $7
-		FROM `+s.q+`.principals p, (SELECT clock_timestamp() AS at) t
+		       t.at, $5, $6::inet, $7, `+legacyTokenVersion+`
+		FROM `+s.q+`.principals p CROSS JOIN (SELECT clock_timestamp() AS at) t
+		LEFT JOIN public.users u ON u.id = p.id
 		WHERE p.id = $1 AND p.disabled_at IS NULL
 		RETURNING id::text`,
 		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr, clientaddr.Text(ctx), userAgentOf(ctx)).Scan(&sessionID)
@@ -87,11 +91,11 @@ func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uu
 	}
 	var out Issued
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO `+s.q+`.refresh_credentials (session_id, principal_id, token_hash, expires_at)
-		SELECT s.id, s.principal_id, $2, LEAST(clock_timestamp() + make_interval(secs => $3::double precision), s.expires_at)
+		INSERT INTO `+s.q+`.refresh_credentials (id, session_id, principal_id, token_hash, expires_at, legacy_jti_hash)
+		SELECT $5::uuid, s.id, s.principal_id, $2, LEAST(clock_timestamp() + make_interval(secs => $3::double precision), s.expires_at), $4
 		FROM `+s.q+`.sessions s WHERE s.id = $1
 		RETURNING expires_at`,
-		sessionID, hashCredential(credential), s.refreshTTL.Seconds(),
+		sessionID, hashCredential(credential), s.refreshTTL.Seconds(), legacyDigest, credentialID.String(),
 	).Scan(&out.ExpiresAt); err != nil {
 		return Issued{}, err
 	}

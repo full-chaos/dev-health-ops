@@ -15,9 +15,9 @@ import (
 
 var errNotRedeemable = errors.New("local: the credential is not redeemable")
 
-// PGLinks is Links over auth.link_credentials (0010). A consume or a
-// supersede writes consumed_at, a security column: it commits through
-// audit.Commit. An insert is unguarded.
+// PGLinks is Links over auth.link_credentials (0010). A consume writes
+// consumed_at, a security column: it commits through audit.Commit. An insert
+// is unguarded, and a reissue deletes the prior unconsumed rows.
 type PGLinks struct {
 	pool   *pgxpool.Pool
 	schema authschema.ValidatedIdentifier
@@ -110,6 +110,9 @@ func (l *PGLinks) Redeem(ctx context.Context, req RedeemRequest) (uuid.UUID, boo
 	hash := req.TokenHash[:]
 	var principal string
 	// Cheap read first: a garbage secret never opens a Commit (which logs its failures).
+	// A reissue that deletes this row between the read and the consume leaves the
+	// consume with no row: the answer and the audit rows equal the unknown-
+	// credential path, and Commit logs that one failure.
 	err := l.pool.QueryRow(ctx, `SELECT principal_id::text FROM `+l.q+`.link_credentials
 WHERE token_hash = $1 AND purpose = $2 AND consumed_at IS NULL AND expires_at > now()`, hash, string(req.Purpose)).Scan(&principal)
 	if errors.Is(err, pgx.ErrNoRows) {

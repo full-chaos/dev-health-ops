@@ -29,6 +29,7 @@ internal/api/ratelimit
 internal/api/recordvalidation
 internal/api/restcore
 internal/api/session
+internal/api/sessionissue
 internal/api/sso
 internal/api/teamsidentity
 internal/api/telemetry
@@ -59,11 +60,13 @@ internal/jobs/metrics/workitemblockers
 internal/jobs/metrics/workitemengine
 internal/jobs/metrics/workitemmetrics
 internal/jobs/workgraph/linktier
+internal/jobs/workgraph/units
 internal/llmbudget
 internal/llmorgsettings
 internal/mail
 internal/netclass
 internal/operationalordering
+internal/ownershipwindow
 internal/pgmigrate
 internal/platform/buildstamp
 internal/platform/config

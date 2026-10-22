@@ -24,10 +24,17 @@ type OrgConfig struct {
 	Model    string
 	BaseURL  string
 	APIKey   secrets.Hidden
+	// PromptCache is the org's opt-in to the Anthropic prompt cache; it is true
+	// only when the effective provider is anthropic.
+	PromptCache bool
 	// Version is the hex sha256 over the org's BYO rows, sorted by key, each as
 	// (key, updated_at, sha256 of the stored value): any write, delete or
 	// value change moves it, including a delete of a row that was not the newest.
+	// The prompt-cache row is one of them, so a flip of the opt-in moves it.
 	Version string
+	// KeyInBaseURL is set when the served BaseURL carries any api key the org
+	// stores (the default row's or a purpose override's), not only the served one.
+	KeyInBaseURL bool
 	// GateClosed is set only with found=false: BYO settings are stored but the
 	// byo_llm gate is closed, so the org runs on the platform default.
 	GateClosed bool
@@ -67,7 +74,7 @@ func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, er
 	afterRowsRead()
 	// Only the BYO keys count: the llm category also holds unrelated settings
 	// (platform certification profiles) that outlive a BYO delete.
-	candidateKeys := append([]string{}, byoKeys...)
+	candidateKeys := append([]string{KeyPromptCache}, byoKeys...)
 	if s.purpose != "" {
 		candidateKeys = append(candidateKeys, PurposeKeys(s.purpose)...)
 	}
@@ -77,10 +84,6 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 		orgID, settingsCategoryLLM, candidateKeys)
 	if err != nil {
 		return OrgConfig{}, false, fmt.Errorf("query org llm settings version: %w", err)
-	}
-	type versionRow struct {
-		key, value string
-		updated    time.Time
 	}
 	var versioned []versionRow
 	storedKeys := map[string]bool{}
@@ -126,18 +129,7 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 	// decrypted ones: an override whose key cannot be read must fail, never
 	// fall back to the default.
 	source := sourceKeys(func(key string) bool { return storedKeys[key] }, func(key string) string { return raw[key] }, s.purpose)
-	digest := sha256.New()
-	var stored []string
-	for _, row := range versioned {
-		if !slices.Contains(source, row.key) {
-			continue
-		}
-		valueHash := sha256.Sum256([]byte(row.value))
-		fmt.Fprintf(digest, "%s\x00%s\x00%x\n", row.key, row.updated.UTC().Format(time.RFC3339Nano), valueHash)
-		if row.value != "" {
-			stored = append(stored, row.key)
-		}
-	}
+	version, stored := versionDigest(versioned, source)
 	// loadRawSettings skips a row it cannot decrypt (wrong key, corrupt row).
 	// Every other reader tolerates that; this one serves the key itself, so a
 	// stored setting that did not come back is a failure, never a thinner
@@ -183,14 +175,60 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 	if provider == "auto" || provider == "mock" || provider == "none" {
 		return s.notResolved(ctx, orgID)
 	}
-	version := hex.EncodeToString(digest.Sum(nil))
 	return OrgConfig{
-		Provider: provider,
-		Model:    settings[keyModel],
-		BaseURL:  settings[keyBaseURL],
-		APIKey:   secrets.NewHidden(settings[keyAPIKey]),
-		Version:  version,
+		Provider:    provider,
+		Model:       settings[keyModel],
+		BaseURL:     settings[keyBaseURL],
+		APIKey:      secrets.NewHidden(settings[keyAPIKey]),
+		PromptCache: promptCacheOptIn(raw, provider),
+		Version:     version,
+
+		KeyInBaseURL: storedKeyInBaseURL(raw, settings[keyBaseURL]),
 	}, true, nil
+}
+
+// storedKeyInBaseURL is whether baseURL carries any api key stored for the org,
+// the default row's or a purpose override's.
+func storedKeyInBaseURL(raw orgSettings, baseURL string) bool {
+	if baseURL == "" {
+		return false
+	}
+	keys := []string{keyAPIKey}
+	for _, purpose := range Purposes {
+		keys = append(keys, PurposeKey(purpose, keyAPIKey))
+	}
+	for _, key := range keys {
+		if BaseURLCarriesKey(baseURL, raw[key]) {
+			return true
+		}
+	}
+	return false
+}
+
+// versionRow is one stored BYO row as the version digest reads it.
+type versionRow struct {
+	key, value string
+	updated    time.Time
+}
+
+// versionDigest is the hex sha256 over the rows of the effective source and the
+// prompt-cache row, in the order given, each as (key, updated_at, sha256 of the
+// stored value). stored lists the source keys that hold a value; the
+// prompt-cache row is not a source key.
+func versionDigest(rows []versionRow, source []string) (version string, stored []string) {
+	digest := sha256.New()
+	for _, row := range rows {
+		optIn := row.key == KeyPromptCache
+		if !optIn && !slices.Contains(source, row.key) {
+			continue
+		}
+		valueHash := sha256.Sum256([]byte(row.value))
+		fmt.Fprintf(digest, "%s\x00%s\x00%x\n", row.key, row.updated.UTC().Format(time.RFC3339Nano), valueHash)
+		if !optIn && row.value != "" {
+			stored = append(stored, row.key)
+		}
+	}
+	return hex.EncodeToString(digest.Sum(nil)), stored
 }
 
 // notResolved is OrgConfig's "nothing resolves for this purpose" answer. A

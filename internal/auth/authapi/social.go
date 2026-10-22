@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 // socialProviderPattern is go-api's SocialLoginRequest provider pattern
@@ -117,7 +118,16 @@ func (h compatHandlers) socialSignedIn(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	created := result.Created
+	needsOnboarding := membership == nil && !user.IsSuperuser
+	refresh := issued.Credential
+	if needsOnboarding {
+		// go-api records no refresh token for a sign-in without a membership.
+		if refresh, err = session.NewUnstoredCredential(); err != nil {
+			h.fail(w, r, opSocialLogin, err)
+			return
+		}
+	}
 	h.rec.record(ctx, opSocialLogin, "success", reasonAccepted, nil)
-	writeCompatModel(w, loginResponse(access, issued, membership == nil && !user.IsSuperuser,
+	writeCompatModel(w, loginResponse(access, refresh, needsOnboarding,
 		userInfo(principalID, user, membership), &created))
 }

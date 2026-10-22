@@ -131,8 +131,7 @@ func (s Store) loadGatedSettings(ctx context.Context, orgID string) (orgSettings
 	if err != nil {
 		return nil, err
 	}
-	turnedOff := ownModelTurnedOff(settings)
-	delete(settings, KeyOwnModelEnabled)
+	settings, turnedOff := withoutControlRows(settings)
 	gated, err := s.applyGate(ctx, orgID, settings)
 	if err != nil {
 		return nil, err
@@ -141,8 +140,24 @@ func (s Store) loadGatedSettings(ctx context.Context, orgID string) (orgSettings
 	if turnedOff {
 		return orgSettings{}, nil
 	}
-	return project(gated, s.purpose), nil
+	return markKeyInBaseURL(gated, project(gated, s.purpose)), nil
 }
+
+// keyInBaseURLMark is the reserved entry markKeyInBaseURL adds to the projected
+// settings; it is no stored key and no setting name can equal it.
+const keyInBaseURLMark = "\x00key_in_base_url"
+
+// markKeyInBaseURL flags projected settings whose base_url carries any api key
+// the org stores (the default row's or a purpose override's), including a key
+// the projection dropped; the readers below refuse such a url before a lookup.
+func markKeyInBaseURL(stored, projected orgSettings) orgSettings {
+	if projected != nil && storedKeyInBaseURL(stored, projected[keyBaseURL]) {
+		projected[keyInBaseURLMark] = "1"
+	}
+	return projected
+}
+
+func keyInBaseURLMarked(settings orgSettings) bool { return settings[keyInBaseURLMark] != "" }
 
 // byoGateClosed reports whether the byo_llm gate is closed for an org that holds saved BYO settings.
 func (s Store) byoGateClosed(ctx context.Context, orgID string) (bool, error) {
@@ -177,4 +192,13 @@ func (s Store) applyGate(ctx context.Context, orgID string, settings orgSettings
 		return map[string]string{}, nil
 	}
 	return settings, nil
+}
+
+// withoutControlRows removes the rows that switch a saved BYO config instead of
+// being part of it, so an org holding only those is not read as a BYO org.
+func withoutControlRows(settings orgSettings) (rest orgSettings, turnedOff bool) {
+	turnedOff = ownModelTurnedOff(settings)
+	delete(settings, KeyOwnModelEnabled)
+	delete(settings, KeyPromptCache)
+	return settings, turnedOff
 }

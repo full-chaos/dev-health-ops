@@ -32,12 +32,19 @@ var inviteCases = []inviteCase{
 
 func seedInviteSubject(t *testing.T, ctx context.Context, st stack, tc inviteCase) (userID, userEmail, token string) {
 	t.Helper()
+	return seedInviteSubjectSignedWith(t, ctx, st, tc, signedtoken.Secret("", ""))
+}
+
+// seedInviteSubjectSignedWith is seedInviteSubject with the invite token signed
+// with secret.
+func seedInviteSubjectSignedWith(t *testing.T, ctx context.Context, st stack, tc inviteCase, secret string) (userID, userEmail, token string) {
+	t.Helper()
 	tag := uuid.NewString()[:8]
 	userEmail = strings.ReplaceAll(strings.ReplaceAll(tc.userEmail, "ada", "ada"+tag), "Ada", "Ada"+tag)
 	inviteEmail := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(tc.inviteEmail, "ada", "ada"+tag), "ADA", "ADA"+tag), "grace", "grace"+tag)
 	userID = uuid.NewString()
 	inviteID := uuid.New()
-	token, hash := signedtoken.Build(inviteID, signedtoken.Secret("", ""))
+	token, hash := signedtoken.Build(inviteID, secret)
 	for _, statement := range []struct {
 		sql  string
 		args []any

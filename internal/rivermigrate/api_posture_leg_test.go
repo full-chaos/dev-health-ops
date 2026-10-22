@@ -11,7 +11,7 @@ import (
 // them: a posture the migrator refuses fails EVERY migrate run (the api role defaults to a name, so the leg is always built).
 func TestTheDeclaredAPIPostureValidatesAsMigrationOptions(t *testing.T) {
 	t.Parallel()
-	grants, columns, sequences := postureGrants(postgresstore.APIPosture())
+	grants, columns, sequences := postureGrants(postgresstore.APIPosture(false))
 	if len(grants) == 0 || len(columns) == 0 {
 		t.Fatalf("the api posture yielded %d table grants and %d column grants, want both", len(grants), len(columns))
 	}

@@ -166,7 +166,7 @@ test("the row schema (strict ajv) holds the HS256 opt-in to the class list on ev
   addFormats(ajv);
   const validate = ajv.compile(JSON.parse(readFileSync(path.join(v1, "endpoint-profile.schema.json"), "utf8")));
   const accessClasses = ["ops_access_token_hs256", "user_access_token"];
-  for (const file of ["endpoint-profiles.auth-service.json", "endpoint-profiles.query-api.json"]) {
+  for (const file of ["endpoint-profiles.auth-service.json", "endpoint-profiles.query-api.json", "endpoint-profiles.go-api.json"]) {
     const read = () => JSON.parse(readFileSync(path.join(v1, file), "utf8"));
     assert.equal(validate(read()), true, `${file}: ${JSON.stringify(validate.errors)}`);
     const legacy = read().rows.findIndex((r) => r.accepted_credential_classes.includes("ops_access_token_hs256"));

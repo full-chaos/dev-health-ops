@@ -22,7 +22,8 @@ const inviteMailHTTPTimeout = 30 * time.Second
 // inviteConfig builds create_org_invite's configuration from the process
 // environment the way invites.py reads it at send time: the token secret is
 // JWT_SECRET_KEY, else SETTINGS_ENCRYPTION_KEY (else the route's own
-// last-resort default); the accept link base is APP_BASE_URL; the email
+// last-resort default) until LINK_TOKEN_SECRET is set, which then signs new
+// links while LINK_TOKEN_SECRET_PREVIOUS and that chain value stay accepted; the accept link base is APP_BASE_URL; the email
 // sender is chosen by EMAIL_PROVIDER exactly as the worker's billing sender
 // is (internal/mail).
 //
@@ -37,6 +38,8 @@ func inviteConfig(cfg config.Config, logger *slog.Logger, lookup func(string) (s
 	} else if key := cfg.SettingsEncryptionKey.Reveal(); key != "" {
 		out.TokenSecret = key
 	}
+	out.LinkSecret = cfg.LinkTokenSecret.Reveal()
+	out.PreviousLinkSecret = cfg.LinkTokenSecretPrevious.Reveal()
 	out.AppBaseURL, out.AppBaseURLSet = lookup("APP_BASE_URL")
 	sender, err := mail.NewSenderFromEnv(&http.Client{Timeout: inviteMailHTTPTimeout, Transport: httpguard.SharedTransport()})
 	if err != nil {

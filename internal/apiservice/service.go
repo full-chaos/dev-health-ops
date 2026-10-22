@@ -212,7 +212,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
-		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner,
+		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner, Issuer: deps.SessionIssuer,
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
@@ -247,6 +247,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// a distinct key from it, state.go) -- no new secret material
 			// either way.
 			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer, Inner: proxy.inner,
+			Issuer: deps.SessionIssuer,
 		})...)
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
@@ -361,9 +362,18 @@ func configureWith(
 	logger *slog.Logger,
 	adjust func(*Deps),
 ) ([]lifecycle.Component, error) {
-	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger)
+	authProxy, err := ParseAuthProxyConfig(envsecrets.ProcessLookup)
+	if err != nil {
+		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+	}
+	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger, authProxy)
 	if err != nil {
 		return nil, err
+	}
+	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {
@@ -409,11 +419,6 @@ func configureWith(
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_register_limit_invalid", err)
-	}
-	deps.AuthProxy, err = ParseAuthProxyConfig(envsecrets.ProcessLookup)
-	if err != nil {
-		closeComponents(depComponents)
-		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 	}
 	logAuthProxyRouting(ctx, logger, deps.AuthProxy)
 	if adjust != nil {

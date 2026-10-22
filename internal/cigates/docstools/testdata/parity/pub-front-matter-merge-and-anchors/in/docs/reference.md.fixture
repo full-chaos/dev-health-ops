@@ -1,0 +1,5 @@
+---
+base: &b {owner: o1, lifecycle: l1}
+<<: *b
+page_id: &p p9
+---

@@ -1,0 +1,27 @@
+{"in": "a.md", "out": "A", "stem": "a"}
+{"in": "foo-bar.md", "out": "Foo Bar", "stem": "foo-bar"}
+{"in": "a/b.md", "out": "B", "stem": "b"}
+{"in": "a/b-c/d.md", "out": "D", "stem": "d"}
+{"in": "", "out": "", "stem": ""}
+{"in": ".", "out": "", "stem": ""}
+{"in": "/", "out": "", "stem": ""}
+{"in": "a/", "out": "A", "stem": "a"}
+{"in": "a.b.c", "out": "A.B", "stem": "a.b"}
+{"in": ".hidden", "out": ".Hidden", "stem": ".hidden"}
+{"in": "..", "out": "..", "stem": ".."}
+{"in": "x.", "out": "X", "stem": "x"}
+{"in": "a..b", "out": "A.", "stem": "a."}
+{"in": "\u00e9-a.md", "out": "\u00c9 A", "stem": "\u00e9-a"}
+{"in": "A-B", "out": "A B", "stem": "A-B"}
+{"in": "weird name.md", "out": "Weird Name", "stem": "weird name"}
+{"in": "-.md", "out": " ", "stem": "-"}
+{"in": "index.md", "out": "Index", "stem": "index"}
+{"in": "/x/y-z.md", "out": "Y Z", "stem": "y-z"}
+{"in": "a/../b-c.md", "out": "B C", "stem": "b-c"}
+{"in": "\u01c6-a.md", "out": "\u01c5 A", "stem": "\u01c6-a"}
+{"in": "\u0391\u03a3-\u03a3.md", "out": "\u0391\u03c2 \u03a3", "stem": "\u0391\u03a3-\u03a3"}
+{"in": "a.\u0301b", "out": "A", "stem": "a"}
+{"in": "dir.d/file", "out": "File", "stem": "file"}
+{"in": "x.tar.gz", "out": "X.Tar", "stem": "x.tar"}
+{"in": "..a", "out": "..A", "stem": "..a"}
+{"in": "a..", "out": "A.", "stem": "a."}

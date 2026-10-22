@@ -92,6 +92,20 @@ grants back exactly the manifest. Highlights:
 - `platform_role_assignments` has no update: an elevation changes by revoke then
   grant, leaving two audit rows.
 - There is no field in the manifest type for a DDL privilege.
+- In the ops (`public`) schema the role reads the columns of
+  `authschema.PublicReadColumns()` and nothing else, with one temporary
+  exception, `authschema.LegacyRefreshTokenGrant()`: column `SELECT` on
+  `refresh_tokens` (`token_hash`, `user_id`, `org_id`, `family_id`,
+  `expires_at`, `revoked_at`) and `UPDATE (revoked_at)`. It lets
+  `compatRefresh` exchange a go-api refresh token once for an auth-service
+  session and revoke a reused token's go-api family. The posture reports a
+  missing or wider privilege on that table. CHAOS-10408 removes the grant when
+  no live go-api refresh token is left.
+- Every session row stores `legacy_token_version` (migration 0016), the
+  user's `public.users.token_version` when the session was created. A refresh
+  of a session whose pin differs from the current version is revoked and
+  refused (`revision_stale`), so a go-api password reset ends auth-service
+  sessions too. A session row without a pin is refused and left as it is.
 
 Live tests (`posture_integration_test.go`) prove the role holds exactly this and
 cannot escalate (for example by `SET ROLE` to the schema owner).

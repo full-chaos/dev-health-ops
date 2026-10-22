@@ -8,6 +8,7 @@ internal/apiservice/admin	TestLLMSettingsDeleteClearsDerivedRows	60
 internal/apiservice/admin	TestLLMSettingsModelsRouteServesListCachesAndDropsOnDelete	82
 internal/apiservice/admin	TestLLMSettingsPerPurposeOverrides	60
 internal/apiservice/admin	TestLLMSettingsReadinessRouteSuccessPath	82
+internal/apiservice/admin	TestLLMSettingsRefusesABYOProviderWithoutAModel	91
 internal/apiservice/admin	TestLLMSettingsRoutesVenueOracle	91
 internal/apiservice/admin	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	69
 internal/apiservice/admin	TestLLMSettingsStatusRouteVenueOracle	88
@@ -28,6 +29,7 @@ internal/apiservice/admin	TestPagerDutyServicesVenueOracle	172
 internal/apiservice/admin	TestPagerDutyServicesWithoutOAuthAppVenueOracle	79
 internal/apiservice/admin	TestPagerDutyStatusAndPreflightVenueOracle	59
 internal/apiservice/admin	TestPagerDutyWebhookBindingsVenueOracle	79
+internal/apiservice/admin	TestPromptCacheOptIn	600	unmeasured
 internal/apiservice/admin	TestRateLimitPathCardinalityVenueOracle	157
 internal/apiservice/admin	TestRetentionRoutesVenueOracle	73
 internal/apiservice/admin	TestServiceModelSelfServiceToggle	60

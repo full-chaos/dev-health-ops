@@ -83,8 +83,23 @@ func loadGolden(t *testing.T, name string) Response {
 	if err := dec.Decode(&resp); err != nil {
 		t.Fatalf("decode golden %s: %v", name, err)
 	}
+	// The recordings were taken at 2024-01-08 12:00 for the window ending on that day. A window ends yesterday at the
+	// latest (D6101), so the tests run one day later; the one thing the clock reaches in the answer is the events'
+	// ts (the instant of the request), which moves with it.
+	for i := range resp.Events {
+		if time.Time(resp.Events[i].TS).Equal(goldenRecordedNow) {
+			resp.Events[i].TS = MicroDateTime(goldenNow)
+		}
+	}
 	return resp
 }
+
+// goldenRecordedNow is the instant the Python goldens were recorded at; goldenNow is the clock the tests of them run at,
+// one day later, so that the recorded end day (2024-01-08) is a day that is over (D6101).
+var (
+	goldenRecordedNow = time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC)
+	goldenNow         = time.Date(2024, 1, 9, 12, 0, 0, 0, time.UTC)
+)
 
 func bindingValue(bindings []dhclickhouse.Binding, name string) (any, bool) {
 	for _, b := range bindings {
@@ -277,7 +292,7 @@ func TestGoldenOrgScopeDefault(t *testing.T) {
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
 		Scope: ScopeFilter{Level: "org"},
 	}
-	now := time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC)
+	now := goldenNow
 
 	got, err := BuildResponse(context.Background(), client, nil, "org-1", f, now)
 	if err != nil {
@@ -338,7 +353,7 @@ func TestChangeFailureEvidenceIsServedWithTheRate(t *testing.T) {
 	got, err := BuildResponse(context.Background(), client, nil, "org-1", Filters{
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
 		Scope: ScopeFilter{Level: "org"},
-	}, time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC))
+	}, goldenNow)
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
@@ -388,7 +403,7 @@ func TestChangeFailureEvidenceOfAWindowWithNothingStoredNamesTheReason(t *testin
 	got, err := BuildResponse(context.Background(), client, nil, "org-1", Filters{
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
 		Scope: ScopeFilter{Level: "org"},
-	}, time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC))
+	}, goldenNow)
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
@@ -415,7 +430,7 @@ func TestChangeFailureEvidenceOfAWindowWithNothingStoredNamesTheReason(t *testin
 // rows carry the measure and the sizing of the fixture (3 of 10 units sized); an unknown name is the default.
 func TestTileMeasureIssueSizeCarriesTheSizingOfTheUnits(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: orgGoldenHandler(t)}
-	now := time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC)
+	now := goldenNow
 	for measure, want := range map[string]string{"ISSUE_SIZE": "ISSUE_SIZE", "": "WORK_UNITS", "CHURN_LOC": "WORK_UNITS"} {
 		got, err := BuildResponse(context.Background(), client, nil, "org-1", Filters{
 			Time:        TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},

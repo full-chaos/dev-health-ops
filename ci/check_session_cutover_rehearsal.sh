@@ -252,10 +252,14 @@ BASE_REV="$(rev)"
 printf 'baseline revision %s\n' "${BASE_REV}"
 K rollout status deploy/"${FULL}-go-api" --timeout=240s
 assert_state baseline unset t t
-for role in devhealth_api devhealth; do
-  [ "$(PSU -c "SELECT has_table_privilege('${role}','auth.sessions','SELECT')")" = t ] || die "baseline: reader ${role} cannot SELECT auth.sessions"
-done
-printf 'baseline: both session readers can SELECT auth.sessions\n'
+reader_ok() { # <role>: SELECT on exactly the session columns the cutover reads (a column-level grant)
+  local col
+  for col in id principal_id revoked_at; do
+    [ "$(PSU -c "SELECT has_column_privilege('$1','auth.sessions','${col}','SELECT')")" = t ] || die "$2: reader $1 cannot SELECT auth.sessions.${col}"
+  done
+  printf '%s: reader %s can SELECT auth.sessions(id, principal_id, revoked_at)\n' "$2" "$1"
+}
+reader_ok devhealth_api baseline
 
 K_RENDER "${SCRIPT_DIR}/session_rehearsal/probe-read.yaml" | K apply -f -
 K_RENDER "${SCRIPT_DIR}/session_rehearsal/probe-grant.yaml" | K apply -f -
@@ -293,6 +297,8 @@ assert_state FLIP true f f
 [ "$(col_update)" = t ] || die "FLIP: the api role lost UPDATE on refresh_tokens.revoked_at (the posture keeps it)"
 [ "$(priv insert)" = f ] || die "FLIP: INSERT not revoked"
 printf 'FLIP: column UPDATE(revoked_at) kept\n'
+reader_ok devhealth_api FLIP
+reader_ok devhealth_query FLIP
 
 printf 'step 7: ROLLBACK_UP: helm upgrade, sessions=false (the re-GRANT)\n'
 phase ROLLBACK_UP regrant "${HELM_SESSION[@]}" --set goApi.authProxy.sessions=false

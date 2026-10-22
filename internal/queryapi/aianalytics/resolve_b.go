@@ -29,6 +29,10 @@ func RiskBreakdown(ctx context.Context, client QueryClient, orgID string, dr mod
 	if client == nil {
 		return nil, fmt.Errorf("aianalytics: clickhouse client is required")
 	}
+	dr, err := clippedRange(ctx, dr)
+	if err != nil {
+		return nil, err
+	}
 	rows, sc, err := loadRows(ctx, client, orgID, dr, in)
 	if err != nil {
 		return nil, err
@@ -165,7 +169,8 @@ func AttributedPrs(ctx context.Context, client QueryClient, orgID string, dr mod
 	if client == nil {
 		return nil, fmt.Errorf("aianalytics: clickhouse client is required")
 	}
-	if err := validateRange(dr); err != nil {
+	dr, err := clippedRange(ctx, dr)
+	if err != nil {
 		return nil, err
 	}
 	sc, err := normalizeScope(ctx, client, orgID, in)
@@ -273,7 +278,8 @@ func AttributionOverview(ctx context.Context, client QueryClient, orgID string, 
 	if client == nil {
 		return nil, fmt.Errorf("aianalytics: clickhouse client is required")
 	}
-	if err := validateRange(dr); err != nil {
+	dr, err := clippedRange(ctx, dr)
+	if err != nil {
 		return nil, err
 	}
 	var scopeIn *model.AIScopeInput

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -175,7 +176,7 @@ func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
 	}
 	methods := map[string][]string{}
 	for _, route := range routes {
-		if route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/") {
+		if (route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/")) && !route.NotServed {
 			methods[route.Pattern] = append(methods[route.Pattern], route.Method)
 		}
 	}
@@ -207,28 +208,48 @@ func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
 // headCheckedFloor keeps the walk from passing on a table that shrank; the table grows with main, so the count is not pinned.
 const headCheckedFloor = 60
 
-// The all-methods Allow is the HEAD refusal's only: the 405 of any other method keeps the path's declared Allow, the
-// first FastAPI route's (frozen goldens pin it).
-func TestAdminDeclaredAllowIsKeptForNonHeadMethods(t *testing.T) {
+// The 405 of a method an admin path does not serve lists every method the path serves (RFC 9110 10.2.1); Starlette
+// named only the first route's, which the goldens froze and which the venue tests retire (CHAOS-10555).
+func TestAdminNonHeadMethodsAnswer405ListingEveryServedMethod(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), "postgres://binding@127.0.0.1:1/binding?connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}}, quietLogger()))
+	routes := Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}}, quietLogger())
+	server, err := NewServer(apiTestConfig(), quietLogger(), routes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for target, c := range map[string]struct{ method, allow string }{
-		"/api/v1/admin/credentials":                {http.MethodPut, "GET"},
-		"/api/v1/admin/customer-push/sources":      {http.MethodPut, "POST"},
-		"/api/v1/admin/settings/general/site_name": {http.MethodPost, "GET"},
-		"/api/v1/admin/teams/eng":                  {http.MethodPut, "DELETE"},
-	} {
-		want := c.allow
-		response := serve(server.Handler(), httptest.NewRequest(c.method, target, nil))
-		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != want {
-			t.Errorf("%s: status %d Allow %q; want 405, Allow %q", c.method+" "+target, response.Code, response.Header().Get("Allow"), want)
+	served := map[string][]string{}
+	for _, route := range routes {
+		if (route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/")) && !route.NotServed {
+			served[route.Pattern] = append(served[route.Pattern], route.Method)
 		}
 	}
+	checked := 0
+	for pattern, methods := range served {
+		sort.Strings(methods)
+		// The sync-configs prefix guard refuses with 401 before routing reaches any method check.
+		if strings.Contains(pattern, "/sync-configs") {
+			continue
+		}
+		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+			if slices.Contains(methods, method) {
+				continue
+			}
+			want := strings.Join(methods, ", ")
+			response := serve(server.Handler(), httptest.NewRequest(method, concrete(pattern), nil))
+			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != want {
+				t.Errorf("%s %s: status %d Allow %q; want 405, Allow %q", method, pattern, response.Code, response.Header().Get("Allow"), want)
+			}
+			checked++
+		}
+	}
+	if checked < nonHeadCheckedFloor {
+		t.Fatalf("%d admin method refusals checked, want at least %d", checked, nonHeadCheckedFloor)
+	}
 }
+
+// nonHeadCheckedFloor keeps the walk from passing on a table that shrank.
+const nonHeadCheckedFloor = 150

@@ -315,6 +315,7 @@ func TestLoadRejectsAnUndeclaredOverride(t *testing.T) {
 // site reads is exactly the four-surface drift CHAOS-3942 was.
 func TestEveryDeclaredOptionResolves(t *testing.T) {
 	distinct := map[string]string{
+		EnvUsersOwned:             "true",
 		EnvLogLevel:               "debug",
 		EnvShutdownTimeout:        "42s",
 		EnvHealthCheckTimeout:     "1500ms",
@@ -339,6 +340,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		"SOCIAL_GOOGLE_CLIENT_ID": "google-client",
 	}
 	read := map[string]func(Config) string{
+		EnvUsersOwned:             func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
 		EnvLogLevel:               func(c Config) string { return c.LogLevel.String() },
 		EnvShutdownTimeout:        func(c Config) string { return c.ShutdownTimeout.String() },
 		EnvHealthCheckTimeout:     func(c Config) string { return c.HealthCheckTimeout.String() },
@@ -481,5 +483,15 @@ func TestIssuerURLPatternIsTheDiscoverySchemaPattern(t *testing.T) {
 	}
 	if schema.Properties.Issuer.Pattern != issuerURLPattern.String() {
 		t.Fatalf("issuer pattern drifted from discovery.v1: %q vs %q", issuerURLPattern.String(), schema.Properties.Issuer.Pattern)
+	}
+}
+
+func TestUsersOwnedRefusesAnythingButTrueOrFalse(t *testing.T) {
+	for _, value := range []string{"yes", "1", "on"} {
+		env := baseEnv()
+		env[EnvUsersOwned] = value
+		if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
+			t.Fatalf("%s=%s loaded; want a refusal", EnvUsersOwned, value)
+		}
 	}
 }

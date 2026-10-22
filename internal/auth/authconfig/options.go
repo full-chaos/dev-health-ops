@@ -206,6 +206,10 @@ var optionRegistry = []Option{
 			"_FILE reads it from a mounted file instead. With the session secrets it mounts POST /api/v1/auth/login",
 	},
 	{
+		Flag: "users-owned", Env: EnvUsersOwned, Kind: KindString, Default: "false", Group: GroupSession,
+		Usage: "true when auth-service owns user creation and local credential links; with the session secrets it mounts the password and e-mail verification routes",
+	},
+	{
 		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,
 		Usage: "GitHub OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
 	},

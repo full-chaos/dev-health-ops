@@ -89,6 +89,9 @@ const (
 	// padding): the HMAC key of the lockout identifier (local.Config). Set,
 	// with the session secrets, it mounts the login route. Secret.
 	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
+
+	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
+	EnvUsersOwned = "AUTH_USERS_OWNED"
 	// EnvTrustedProxies lists the proxies whose X-Forwarded-For names the
 	// client (internal/auth/clientaddr).
 	EnvTrustedProxies = clientaddr.Env
@@ -188,6 +191,10 @@ type Config struct {
 	// Social is each social provider's OAuth client, keyed by provider. A
 	// provider without both values answers go-api's 503.
 	Social map[string]SocialClient
+
+	// UsersOwned is AUTH_USERS_OWNED: auth-service owns user creation and the
+	// local credential links.
+	UsersOwned bool
 
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
@@ -376,6 +383,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Social, err = socialClients(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.UsersOwned, err = usersOwned(lookup); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -721,4 +731,16 @@ func tokenIssuerURL(lookup secrets.LookupEnv) (string, error) {
 		return "", fmt.Errorf("%s must be an https URL with a lowercase host, no trailing slash, userinfo, query or fragment", EnvTokenIssuerURL)
 	}
 	return value, nil
+}
+
+// usersOwned reads AUTH_USERS_OWNED: unset or empty is false; anything but
+// true or false is refused.
+func usersOwned(lookup secrets.LookupEnv) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvUsersOwned))) {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be true or false", EnvUsersOwned)
 }

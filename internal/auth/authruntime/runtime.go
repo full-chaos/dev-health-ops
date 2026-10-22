@@ -391,6 +391,19 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
+	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	routes = append(routes, credRoutes...)
+	closeStoreOnly := closeStore
+	closeStore = func() {
+		for _, component := range credComponents {
+			_ = component.Shutdown(context.WithoutCancel(ctx))
+		}
+		closeStoreOnly()
+	}
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
 		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
 	})...)
@@ -416,13 +429,14 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	return []lifecycle.Component{
-		store,
+	components := []lifecycle.Component{store}
+	components = append(components, credComponents...)
+	return append(components,
 		outboxLoop,
 		announcedListener{listener: operatorHTTP, logger: logger},
 		announcedListener{listener: apiHTTP, logger: logger},
 		health.Gate{Registry: registry},
-	}, nil
+	), nil
 }
 
 // listener is the surface a socket-binding component exposes: its lifecycle,

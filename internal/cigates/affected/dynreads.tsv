@@ -241,6 +241,7 @@ internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	workflows_common_test.go
+internal/cigates/workflows	workflows_go_integration_pr_scope_test.go
 internal/cigates/workflows	workflows_go_resolver_test.go
 internal/cigates/workflows	workflows_path_filters_test.go
 internal/clicredentials	opensites_test.go

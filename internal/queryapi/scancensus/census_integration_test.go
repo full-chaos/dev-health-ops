@@ -522,8 +522,8 @@ internal/queryapi/aianalytics/flow_opportunities.go|loadTeamFlowRows|*string,*ui
 internal/queryapi/aianalytics/loaders.go|loadLabels|*string,*string|8ab0086629ab|spliced-select-list
 internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|*string,**float64|c64156aa3194|statement-not-static
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|b97cd2e421d3|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,*string,*string,**float64|99296deaf547|statement-not-static
-internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,*string,**float64|a7d2ecaf3421|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,*string,*string,**float64|a19dc243308f|statement-not-static
+internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,*string,**float64|86e5d5b721b7|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|441cf34157b6|statement-not-static
 internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64|3a00ba4c26b9|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|resolveSankeyCoverage|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|73b9758617bf|statement-not-static

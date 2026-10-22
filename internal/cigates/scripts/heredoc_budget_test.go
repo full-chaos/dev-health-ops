@@ -33,37 +33,37 @@ func scanHeredocs(text string) ([]heredoc, error) {
 			i++
 			continue
 		}
-		loc := heredocLoc(line)
-		if loc == nil {
-			i++
-			continue
-		}
-		delim := loc[2]
-		size, j := 0, i+1
-		for j < len(lines) && strings.TrimSpace(lines[j]) != delim {
-			size += len(lines[j]) + 1
+		delims := heredocDelims(line)
+		j := i + 1
+		for _, delim := range delims {
+			size := 0
+			for j < len(lines) && strings.TrimSpace(lines[j]) != delim {
+				size += len(lines[j]) + 1
+				j++
+			}
+			if j >= len(lines) {
+				return nil, fmt.Errorf("unterminated here-document <<%s opened at line %d", delim, i+1)
+			}
+			found = append(found, heredoc{line: i + 1, delim: delim, bytes: size})
 			j++
 		}
-		if j >= len(lines) {
-			return nil, fmt.Errorf("unterminated here-document <<%s opened at line %d", delim, i+1)
-		}
-		found = append(found, heredoc{line: i + 1, delim: delim, bytes: size})
-		i = j + 1
+		i = j
 	}
 	return found, nil
 }
 
-// heredocLoc returns the first non-here-string "<<[-]DELIM" match as [full, quote, delim].
-func heredocLoc(line string) []string {
+// heredocDelims returns every "<<[-]DELIM" delimiter on the line, in order; here-strings are skipped. Bash reads the bodies one after another.
+func heredocDelims(line string) []string {
+	var out []string
 	for _, idx := range heredocStart.FindAllStringIndex(line, -1) {
 		if idx[0] > 0 && line[idx[0]-1] == '<' {
 			continue
 		}
 		if m := heredocDelimiter.FindStringSubmatch(line[idx[0]:]); m != nil && m[1] == m[3] {
-			return m
+			out = append(out, m[2])
 		}
 	}
-	return nil
+	return out
 }
 
 func oversized(t *testing.T, name, text string) []string {
@@ -177,5 +177,13 @@ func TestHeredocBudgetFailsOnOversizedHeredocPlantedInRunTests(t *testing.T) {
 	planted := string(b) + "\ncat <<'PLANTED'\n" + strings.Repeat("y", 400) + "\nPLANTED\n"
 	if bad := oversized(t, "ci/run_tests.sh", planted); len(bad) != 1 {
 		t.Fatalf("a 401-byte here-document planted in ci/run_tests.sh must fail the guard, got %v", bad)
+	}
+}
+
+func TestHeredocScannerSizesEveryHeredocOnOneCommandLine(t *testing.T) {
+	text := "cat <<A <<'B'\nsmall\nA\n" + strings.Repeat("z", heredocBudgetBytes) + "\nB\necho after\n"
+	found, err := scanHeredocs(text)
+	if err != nil || len(found) != 2 || found[0].delim != "A" || found[1].delim != "B" || found[1].bytes <= heredocBudgetBytes || found[0].bytes >= heredocBudgetBytes {
+		t.Fatalf("second heredoc on the same line not sized: %+v err=%v", found, err)
 	}
 }

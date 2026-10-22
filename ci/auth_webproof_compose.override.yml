@@ -30,6 +30,7 @@ services:
       # (auth-service sign-up is gated until D3).
       AUTH_PROXY_URL: http://auth-service:8095
       AUTH_PROXY_SESSIONS: "true"
+      AUTH_SESSION_ISSUE_TOKEN: ${AUTH_SESSION_ISSUE_TOKEN}
       AUTH_PROXY_LOCAL_LOGIN: "true"
       AUTH_PROXY_CREDENTIALS: "false"
       AUTH_PROXY_SOCIAL: "false"

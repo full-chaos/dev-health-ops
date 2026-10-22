@@ -687,8 +687,8 @@ jobs:
           if ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
             full "could not compute the changed-file list"
           # CHAOS-10700: a pull request runs shards only for a trigger path or the ci:integration label; main push runs all.
-          # A label change starts no run (no `labeled` trigger): it applies at the next push. A script failure falls through to the planner.
-          elif scope="$(PR_LABELS="$(jq -r ".[]" <<<"${PR_LABELS_JSON}")" bash ci/integration_pr_scope.sh "${RUNNER_TEMP}/changed.txt")" && [ "${scope%% *}" = skip ]; then
+          # A label change starts no run (no `labeled` trigger): it applies at the next push. Any script failure (bad labels JSON, malformed list) falls through to the planner.
+          elif scope="$(PR_LABELS_JSON="${PR_LABELS_JSON}" bash ci/integration_pr_scope.sh "${RUNNER_TEMP}/changed.txt")" && [ "${scope%% *}" = skip ]; then
             printf "NONE\n" > "${out}"
             echo "::notice title=INTEGRATION SHARDS SKIPPED ON THIS PULL REQUEST::${scope#skip } (they run on the main push; label ci:integration runs them here)"
           elif ! bash ci/check_go.sh integration-coverage | sed -n 's/^  RUN  //p' > "${RUNNER_TEMP}/keys.txt" \

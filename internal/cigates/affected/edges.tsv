@@ -44,6 +44,7 @@ internal/auth/identity/oidc	environment_proxy_test.go	unexpressed
 internal/cigates	governance.go	unexpressed
 internal/cigates/affected	ci_script_helpers_test.go	unexpressed
 internal/cigates/affected	plan.go	unexpressed
+internal/cigates/affected	reach.go	unexpressed
 internal/cigates/affected	scan.go	unexpressed
 internal/cigates/affectedmatrix	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedmodule	ci_script_helpers_test.go	unexpressed

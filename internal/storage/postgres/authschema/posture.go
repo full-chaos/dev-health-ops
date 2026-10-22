@@ -414,13 +414,13 @@ func functionViolations(ctx context.Context, conn *pgx.Conn, options Options) ([
 		JOIN pg_roles owner ON owner.oid = p.proowner
 		WHERE `+systemSchemaFilter+`
 		  AND p.prosecdef
-		  AND NOT (n.nspname = $2 AND p.proname = ANY($3::text[]))
+		  AND p.oid NOT IN (SELECT to_regprocedure(sig)::oid FROM unnest($3::text[]) AS sig WHERE to_regprocedure(sig) IS NOT NULL)
 		  AND (
 		        owner.rolname = current_user
 		     OR owner.oid = (SELECT nspowner FROM pg_namespace WHERE nspname = $2)
 		  )
 		  AND has_function_privilege($1, p.oid, 'EXECUTE')`,
-		options.RuntimeRole, options.Schema, declaredFunctionNames(),
+		options.RuntimeRole, options.Schema, declaredFunctionSignatures(options.Schema),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading effective function privileges", ErrMigrationFailed)
@@ -447,12 +447,20 @@ func functionViolations(ctx context.Context, conn *pgx.Conn, options Options) ([
 	return violations, nil
 }
 
-func declaredFunctionNames() []string {
-	names := make([]string, 0, len(RuntimeFunctions()))
+// declaredFunctionSignatures are the exact signatures RuntimeFunctions
+// declares, schema-qualified and quoted: a same-named overload is not one of
+// them and stays subject to the general check.
+func declaredFunctionSignatures(schema string) []string {
+	signatures := make([]string, 0, len(RuntimeFunctions()))
 	for _, function := range RuntimeFunctions() {
-		names = append(names, function.Name)
+		signatures = append(signatures, functionSignature(schema, function))
 	}
-	return names
+	return signatures
+}
+
+func functionSignature(schema string, function DefinerFunction) string {
+	return Quote(mustValidatedIdentifier(schema)) + "." + Quote(mustValidatedIdentifier(function.Name)) +
+		"(" + Quote(mustValidatedIdentifier(function.ArgType)) + ")"
 }
 
 // declaredFunctionViolations checks each function RuntimeFunctions declares in
@@ -471,9 +479,9 @@ func declaredFunctionViolations(ctx context.Context, conn *pgx.Conn, options Opt
 			       p.prosecdef,
 			       EXISTS (SELECT 1 FROM unnest(COALESCE(p.proconfig, '{}')) c WHERE c LIKE 'search_path=%'),
 			       pg_has_role($1, p.proowner, 'MEMBER')
-			FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-			WHERE n.nspname = $2 AND p.proname = $3`,
-			options.RuntimeRole, options.Schema, function.Name,
+			FROM pg_proc p
+			WHERE p.oid = to_regprocedure($2)`,
+			options.RuntimeRole, functionSignature(options.Schema, function),
 		).Scan(&found, &runtimeExecutes, &publicExecutes, &definer, &pinned, &runtimeOwns)
 		if errors.Is(err, pgx.ErrNoRows) {
 			violations = append(violations, Violation{
@@ -514,9 +522,9 @@ func declaredFunctionViolations(ctx context.Context, conn *pgx.Conn, options Opt
 			var owns bool
 			if err := conn.QueryRow(ctx, `
 				SELECT has_column_privilege(p.proowner, $1::regclass, $2, 'UPDATE')
-				FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-				WHERE n.nspname = $3 AND p.proname = $4`,
-				publicSchema+"."+target.Table, target.Column, options.Schema, function.Name,
+				FROM pg_proc p
+				WHERE p.oid = to_regprocedure($3)`,
+				publicSchema+"."+target.Table, target.Column, functionSignature(options.Schema, function),
 			).Scan(&owns); err != nil {
 				return nil, fmt.Errorf("%w: reading the owner's privilege on %s", ErrMigrationFailed, target.Table)
 			}

@@ -1,7 +1,9 @@
 package affected_test
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -36,6 +38,28 @@ var (
 // realPlanSlots lets four real-tree plan verdicts (each one core, about 19 s) run at once: one at a time they queue the
 // package past its go test timeout beside the other packages of the shard.
 var realPlanSlots = make(chan struct{}, 4)
+
+// runRealPlanVerdict is cmdSpec.run under realPlanSlots instead of the one-process cap of the helper (whose copy must stay
+// byte-identical across packages).
+func runRealPlanVerdict(dir string, env []string, name string, args ...string) cmdResult {
+	realPlanSlots <- struct{}{}
+	defer func() { <-realPlanSlots }()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = withNoPythonShims(env)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	code := 0
+	if err := cmd.Run(); err != nil {
+		code = -1
+		if exit, ok := err.(*exec.ExitError); ok {
+			code = exit.ExitCode()
+		} else {
+			errb.WriteString(err.Error())
+		}
+	}
+	return cmdResult{code: code, stdout: out.String(), stderr: errb.String()}
+}
 
 func removeRealPlanDir() {
 	if realPlanDir != "" {
@@ -86,7 +110,7 @@ func realPlan(t *testing.T, changed string) []string {
 	if err := os.WriteFile(list, []byte(changed+"\x00"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res := cmdSpec{dir: root, env: inheritedEnv([]string{"GOFLAGS"}, "GOFLAGS="), slots: realPlanSlots}.run(cigate(t), "plan-verdict", "--event", "pull_request",
+	res := runRealPlanVerdict(root, inheritedEnv([]string{"GOFLAGS"}, "GOFLAGS="), cigate(t), "plan-verdict", "--event", "pull_request",
 		"--changed", list, "--golist", in.golist, "--keys", in.keys, "--root", root)
 	if res.code != 0 {
 		t.Fatalf("plan-verdict exited %d: %s", res.code, res.stderr)

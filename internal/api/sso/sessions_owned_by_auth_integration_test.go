@@ -137,12 +137,12 @@ func samlLogin(t *testing.T, ctx context.Context, st stack, email string) (int, 
 	idp := newSAMLIdP(t)
 	const (
 		spEntityID = "https://sp.test/saml/metadata"
-		acsURL     = "https://sp.test/saml/acs"
+		acsURL     = "https://sp.test/api/v1/auth/saml/{provider_id}/acs"
 	)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":%q,"sp_acs_url":%q}`,
 		idp.idp.MetadataURL.String(), idp.certConfigValue(), spEntityID, acsURL)
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
-	response := idp.signedSAMLResponse(t, samlResponseOpts{spEntityID: spEntityID, acsURL: acsURL, email: email, fullName: "SAML User", nameID: email})
+	response := idp.signedSAMLResponse(t, samlResponseOpts{spEntityID: spEntityID, acsURL: samlACSOverrideFor(providerID), email: email, fullName: "SAML User", nameID: email})
 	return postJSON(t, st.server, "/api/v1/auth/saml/"+providerID.String()+"/acs", map[string]any{"SAMLResponse": response})
 }
 

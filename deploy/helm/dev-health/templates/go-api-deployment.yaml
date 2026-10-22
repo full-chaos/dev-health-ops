@@ -63,6 +63,33 @@ route (its own default is off). The URL is this release's auth-service.
 {{- fail (printf "goApi.authProxy.sessions needs the auth-service session keys: unset %s (the access-token key is go-api's JWT_SECRET_KEY Secret)" (join ", " $miss)) }}
 {{- end }}
 {{- end }}
+{{- /*
+CHAOS-10718: the old go-api pod keeps serving while its endpoint is removed. kubelet sends SIGTERM and
+the endpoint removal in parallel, and the pod closes its listener at SIGTERM, so a few new connections
+reached a closed port at every rollout (status 000 in the CHAOS-10407 rehearsal). preStop runs BEFORE
+SIGTERM and counts inside terminationGracePeriodSeconds, so the grace must cover the sleep, the
+shutdown timeout the chart passes (--shutdown-timeout, below) and 5 s. The image is distroless (no
+shell, no sleep binary): the native sleep action, a Kubernetes >= 1.30 feature (on by default).
+*/}}
+{{- $drain := .Values.goApi.drain }}
+{{- $sleepRaw := toString $drain.preStopSeconds }}
+{{- if not (regexMatch "^[0-9]+$" $sleepRaw) }}{{- fail (printf "goApi.drain.preStopSeconds must be whole seconds, 0 or more (0 renders no drain hook), got %q" $sleepRaw) }}{{- end }}
+{{- $shutdownRaw := toString .Values.goApi.shutdownTimeout }}
+{{- if not (regexMatch "^[1-9][0-9]*s$" $shutdownRaw) }}{{- fail (printf "goApi.shutdownTimeout must be whole seconds such as 30s, above zero, got %q" $shutdownRaw) }}{{- end }}
+{{- $graceRaw := toString .Values.goApi.terminationGracePeriodSeconds }}
+{{- if not (regexMatch "^[1-9][0-9]*$" $graceRaw) }}{{- fail (printf "goApi.terminationGracePeriodSeconds must be whole seconds above zero, got %q" $graceRaw) }}{{- end }}
+{{- $sleep := int $sleepRaw }}
+{{- $shutdown := int (trimSuffix "s" $shutdownRaw) }}
+{{- $minGrace := add $sleep $shutdown 5 }}
+{{- if lt (int $graceRaw) $minGrace }}
+{{- fail (printf "goApi.terminationGracePeriodSeconds=%s is below goApi.drain.preStopSeconds (%d) + goApi.shutdownTimeout (%d) + 5 = %d: kubelet counts the preStop hook inside the grace period and kills the pod when it ends, so the ordered shutdown would be cut" $graceRaw $sleep $shutdown $minGrace) }}
+{{- end }}
+{{- range .Values.goApi.extraArgs }}
+{{- if regexMatch "^--?shutdown-timeout" . }}{{- fail "goApi.extraArgs must not set --shutdown-timeout: goApi.shutdownTimeout owns it, and the grace-period guard reads that value" }}{{- end }}
+{{- end }}
+{{- range .Values.goApi.extraEnv }}
+{{- if eq .name "DEV_HEALTH_SHUTDOWN_TIMEOUT" }}{{- fail "goApi.extraEnv must not set DEV_HEALTH_SHUTDOWN_TIMEOUT: goApi.shutdownTimeout owns it, and the grace-period guard reads that value" }}{{- end }}
+{{- end }}
 {{- range .Values.goApi.extraEnv }}
 {{- if hasPrefix "AUTH_PROXY_" .name }}{{- fail "goApi.extraEnv must not set AUTH_PROXY_*: use goApi.authProxy, which the chart checks" }}{{- end }}
 {{- end }}
@@ -97,15 +124,23 @@ spec:
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ $graceRaw }}
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: go-api
           image: {{ include "dev-health.goApiImage" . }}
           imagePullPolicy: {{ .Values.goApi.image.pullPolicy }}
+          {{- if gt $sleep 0 }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ $sleep }}
+          {{- end }}
           args:
             - api
             - {{ printf "--api-addr=:%v" .Values.goApi.port | quote }}
             - {{ printf "--http-addr=:%v" .Values.goApi.operatorPort | quote }}
+            - {{ printf "--shutdown-timeout=%s" $shutdownRaw | quote }}
             {{- if .Values.goApi.internal.enabled }}
             - {{ printf "--api-internal-addr=:%v" .Values.goApi.internal.port | quote }}
             {{- end }}

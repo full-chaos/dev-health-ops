@@ -28,6 +28,14 @@ on:
         description: 'Fail the job on a finding (1) or only report it (0)'
         required: false
         default: '0'
+      zero_drops:
+        description: 'CONTROL and FLIP must show no dropped read (1), or only the named F-A bound (0)'
+        required: false
+        default: '0'
+      pre_stop_seconds:
+        description: 'goApi.drain.preStopSeconds for the run; empty keeps the chart default, 0 is the drain-off contrast'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -47,4 +55,6 @@ jobs:
       - name: Rehearse the sessions flip and its rollback in a kind cluster
         env:
           REHEARSAL_STRICT: ${{ github.event.inputs.strict || '0' }}
+          REHEARSAL_ZERO_DROPS: ${{ github.event.inputs.zero_drops || '0' }}
+          REHEARSAL_PRESTOP: ${{ github.event.inputs.pre_stop_seconds || '' }}
         run: bash ci/check_session_cutover_rehearsal.sh

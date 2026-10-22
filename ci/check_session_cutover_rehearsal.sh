@@ -47,6 +47,10 @@ readonly CLUSTER="rehearsal-$$"
 readonly RELEASE="ap"
 readonly FULL="ap-dev-health"
 readonly STRICT="${REHEARSAL_STRICT:-0}"
+# REHEARSAL_ZERO_DROPS=1: CONTROL and FLIP must show no dropped read at all (the go-api handover drain bar).
+readonly ZERO_DROPS="${REHEARSAL_ZERO_DROPS:-0}"
+# REHEARSAL_PRESTOP: goApi.drain.preStopSeconds for the whole run; unset keeps the chart default, 0 is the drain-off contrast.
+readonly PRESTOP="${REHEARSAL_PRESTOP:-}"
 WORK="$(mktemp -d)"
 readonly WORK
 SAMPLER_PID=""
@@ -121,6 +125,10 @@ for image in rehearsal/dho:local rehearsal/auth-service:local rehearsal/auth-mig
   "${WORK}/kind" load docker-image "${image}" --name "${CLUSTER}"
 done
 kubectl --context "kind-${CLUSTER}" create namespace "${NS}"
+KUBE_SERVER="$(kubectl --context "kind-${CLUSTER}" version -o json | jq -r .serverVersion.gitVersion)"
+printf 'kind node kube version: %s (the native preStop sleep needs >= 1.30)\n' "${KUBE_SERVER}"
+KUBE_MINOR="$(sed -E 's/^v[0-9]+\.([0-9]+).*/\1/' <<<"${KUBE_SERVER}")"
+[ "${KUBE_MINOR}" -ge 30 ] || die "kind node ${KUBE_SERVER} is older than 1.30: the drain hook would be silently dropped"
 
 # --- credentials: test values, mode 0600 files, never argv ----------------------------------------
 API_PASSWORD="$(openssl rand -hex 12)"
@@ -136,6 +144,10 @@ printf 'authService:\n  migrate:\n    sessionReaders:\n      queryApi: devhealth
 CHART="${ROOT}/deploy/helm/dev-health"
 HELM_BASE=("${RELEASE}" "${CHART}" --kube-context "kind-${CLUSTER}" --namespace "${NS}"
   -f "${SCRIPT_DIR}/session_rehearsal/rehearsal-release.yaml" -f "${WORK}/secrets-base.yaml")
+if [ -n "${PRESTOP}" ]; then
+  case "${PRESTOP}" in *[!0-9]*) die "REHEARSAL_PRESTOP must be whole seconds, got ${PRESTOP}" ;; esac
+  HELM_BASE+=(--set "goApi.drain.preStopSeconds=${PRESTOP}")
+fi
 HELM_SESSION=(-f "${WORK}/secrets-session.yaml" -f "${WORK}/successor.yaml")
 
 # --- rev 1: objects only, no hooks, so PostgreSQL exists before the hooks need it -------------------
@@ -256,6 +268,10 @@ analyse() {
       note "${name}: NAMED CLASS F-A: ${fails} probe(s) with status 000 inside one window of $((last_fail - first_fail + 1)) s at the pod handover (${lo}..${hi})"
     fi
   fi
+  if [ "${ZERO_DROPS}" = 1 ] && { [ "${name}" = CONTROL ] || [ "${name}" = FLIP ]; } && [ $((fails + five + wrong)) -gt 0 ]; then
+    class="HARD"
+    finding "${name}: the zero-drop bar (go-api handover drain) is not met: 000=${fails} 5xx=${five} other=${wrong}"
+  fi
   ROWS+=("| ${name} | ${window} | ${zero} | ${fails} / ${five} / ${wrong} | ${class} |")
   if [ "${kind}" != none ]; then
     note "${name}: grant transitions in the phase: ${trans}"
@@ -292,6 +308,15 @@ BASE_REV="$(rev)"
 printf 'baseline revision %s\n' "${BASE_REV}"
 K rollout status deploy/"${FULL}-go-api" --timeout=240s
 assert_state baseline unset t t
+EXPECT_SLEEP="${PRESTOP:-$(helm show values "${CHART}" | awk '/^  drain:/ {f=1} f && /preStopSeconds:/ {print $2; exit}')}"
+LIVE_SLEEP="$(K get deploy/"${FULL}-go-api" -o jsonpath='{.spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds}')"
+LIVE_GRACE="$(K get deploy/"${FULL}-go-api" -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}')"
+printf 'go-api drain in the live Deployment: preStop sleep [%s], terminationGracePeriodSeconds %s (expected sleep %s)\n' "${LIVE_SLEEP}" "${LIVE_GRACE}" "${EXPECT_SLEEP}"
+if [ "${EXPECT_SLEEP}" = 0 ]; then
+  [ -z "${LIVE_SLEEP}" ] || die "drain is off but the live Deployment has a preStop sleep (${LIVE_SLEEP})"
+else
+  [ "${LIVE_SLEEP}" = "${EXPECT_SLEEP}" ] || die "the live Deployment's preStop sleep is [${LIVE_SLEEP}], want ${EXPECT_SLEEP}: the cluster dropped the hook"
+fi
 reader_ok() { # <role>: SELECT on exactly the session columns the cutover reads (a column-level grant)
   local col
   for col in id principal_id revoked_at; do

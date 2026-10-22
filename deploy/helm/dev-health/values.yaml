@@ -79,6 +79,15 @@ goApi:
   #    --log-level=debug). Credentials never go here: an argument is visible
   #    to anyone who can read the Pod spec.
   extraArgs: []
+  # -- CHAOS-10718: the old pod keeps serving for preStopSeconds while its endpoint is removed, then
+  #    gets SIGTERM. 0 renders no hook. Native sleep action: Kubernetes >= 1.30 (the image has no shell).
+  drain:
+    preStopSeconds: 10
+  # -- The graceful-shutdown budget the chart passes to go-api (--shutdown-timeout). Whole seconds.
+  shutdownTimeout: 30s
+  # -- Must be at least drain.preStopSeconds + shutdownTimeout + 5: kubelet counts the preStop hook
+  #    inside it. The render fails below that.
+  terminationGracePeriodSeconds: 45
   # -- Probe timing. The probe targets (/healthz, /readyz on the operator
   #    port) are fixed in the template.
   livenessProbe:

@@ -76,6 +76,8 @@ internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-
 internal/cigates/nopython	tests_python_test.go	unexpressed	-
 internal/cigates/outboundtransport	outboundtransport_test.go	.	tree
+internal/cigates/queuecreds	scan.go	unexpressed	-
+internal/cigates/queuecreds	scan_test.go	contracts/jobs/v1	tree
 internal/cigates/raceunweighted	raceunweighted_test.go	unexpressed	-
 internal/cigates/releasetag	parity_test.go	unexpressed	-
 internal/cigates/releasetag	refusals_test.go	unexpressed	-

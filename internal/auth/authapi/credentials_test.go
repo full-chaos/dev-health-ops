@@ -11,9 +11,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -36,6 +38,7 @@ type credFakes struct {
 	password  string
 	pwdSet    int
 	revoked   int
+	revokeErr error
 	created   int
 	issueErr  error
 	principal uuid.UUID
@@ -116,7 +119,7 @@ func (c *credFakes) RevokeAll(context.Context, uuid.UUID, session.Actor) (int, e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.revoked++
-	return 1, nil
+	return 1, c.revokeErr
 }
 
 const credKnownEmail = "member@example.com"
@@ -284,7 +287,7 @@ func TestChangePasswordNeedsTheBearerAndTheCurrentPassword(t *testing.T) {
 		t.Fatalf("change: %d writes %d revokes %d sessions %d; %s", done.Code, c.fakes.pwdSet, c.fakes.revoked, c.fakes.created, done.Body)
 	}
 	answer := jsonBody(t, done)
-	if answer["access_token"] == "" || answer["refresh_token"] == nil || answer["token_type"] != "bearer" {
+	if token, _ := answer["access_token"].(string); token == "" || answer["refresh_token"] == nil || answer["token_type"] != "bearer" {
 		t.Fatalf("change answer lacks the new session: %v", answer)
 	}
 	if done.Header().Get("Cache-Control") != "no-store" {
@@ -403,5 +406,48 @@ func TestCredentialRoutePatternsAreGoAPIs(t *testing.T) {
 		if !got[want] {
 			t.Fatalf("route %q is not mounted", want)
 		}
+	}
+}
+
+func TestChangePasswordRefusesAnImpersonatedBearer(t *testing.T) {
+	c := newCredFixture(t)
+	grant := c.grant()
+	other := uuid.NewString()
+	token, err := c.issuer.signer.Access(edgetoken.AccessClaims{
+		UserID: grant.PrincipalID.String(), Email: grant.User.Email, OrgID: grant.OrganizationID.String(), Role: grant.Role,
+		TokenVersion: grant.User.TokenVersion, SessionID: ptr(session.WireSessionID(grant.SessionID)), ImpersonatingUserID: &other,
+	}, time.Now(), uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := c.call(http.MethodPost, PatternChangePassword, `{"current_password":"current-password-1","new_password":"Brand-new-pass-77!"}`,
+		map[string]string{"Authorization": "Bearer " + token})
+	if r.Code != http.StatusForbidden || c.fakes.pwdSet != 0 || c.fakes.revoked != 0 {
+		t.Fatalf("impersonated bearer = %d, writes %d", r.Code, c.fakes.pwdSet)
+	}
+}
+
+func TestChangePasswordReadsTheBodyBeforeTheBearer(t *testing.T) {
+	c := newCredFixture(t)
+	r := c.call(http.MethodPost, PatternChangePassword, `{not json`, nil)
+	if r.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("malformed body without a bearer = %d, want go-api's 422", r.Code)
+	}
+	if r := c.call(http.MethodPost, PatternChangePassword, `{}`, nil); r.Code != http.StatusUnauthorized {
+		t.Fatalf("decodable body without a bearer = %d, want 401", r.Code)
+	}
+}
+
+func TestFailedRevocationIsCountedAndTheAnswerStaysGoAPIs(t *testing.T) {
+	c := newCredFixture(t)
+	c.fakes.revokeErr = errors.New("sessions store down")
+	c.call(http.MethodPost, PatternForgotPassword, `{"email":"`+credKnownEmail+`"}`, nil)
+	secret, _ := c.linkFor(local.PurposePasswordReset)
+	r := c.call(http.MethodPost, PatternResetPassword, `{"token":"`+secret+`","new_password":"another-password-1"}`, nil)
+	if r.Code != http.StatusOK {
+		t.Fatalf("reset = %d", r.Code)
+	}
+	if !strings.Contains(c.logs.String(), reasonSessionsNotRevoked) || strings.Contains(c.logs.String(), "sessions store down") {
+		t.Fatal("the failed revocation must be logged by reason code only")
 	}
 }

@@ -31,6 +31,23 @@ func (linkMailComponent) Name() string                         { return "auth-li
 func (linkMailComponent) Start(context.Context) error          { return nil }
 func (c linkMailComponent) Shutdown(ctx context.Context) error { return c.sender.Close(ctx) }
 
+// withheldRecipient hides the recipient from the console provider, which logs
+// it: a development stack must not write an address to a log line.
+type withheldRecipient struct{ mail.Sender }
+
+func (w withheldRecipient) Send(ctx context.Context, message mail.Message) error {
+	message.To = "recipient-withheld"
+	return w.Sender.Send(ctx, message)
+}
+
+// quietProvider wraps the console provider and leaves every other one alone.
+func quietProvider(provider mail.Sender) mail.Sender {
+	if provider.Name() == "console" {
+		return withheldRecipient{provider}
+	}
+	return provider
+}
+
 // credentialRoutes mounts go-api's password and e-mail verification routes
 // when the session secrets and AUTH_USERS_OWNED are set, and nothing
 // otherwise. The returned component closes the link-mail sender.
@@ -61,7 +78,7 @@ func credentialRoutes(
 	}
 	baseURL, baseURLSet := os.LookupEnv("APP_BASE_URL")
 	sender, err := linkmail.New(linkmail.Config{
-		Mail:   provider,
+		Mail:   quietProvider(provider),
 		Links:  authmail.Config{AppBaseURL: baseURL, AppBaseURLSet: baseURLSet},
 		Logger: logger,
 	})

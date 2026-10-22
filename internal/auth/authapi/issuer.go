@@ -92,6 +92,8 @@ type Bearer struct {
 	PrincipalID  uuid.UUID
 	SessionID    uuid.UUID
 	TokenVersion int64
+	// Impersonated is set when the token carries impersonating_user_id.
+	Impersonated bool
 }
 
 // errBearerShape is a verified token whose sub, sid or tv this service cannot
@@ -120,7 +122,8 @@ func (i *Issuer) Verify(token string) (Bearer, string, error) {
 	if !ok || tv != float64(int64(tv)) {
 		return Bearer{}, reasonMalformed, errBearerShape
 	}
-	return Bearer{PrincipalID: principal, SessionID: sessionID, TokenVersion: int64(tv)}, "", nil
+	_, impersonated := claims["impersonating_user_id"].(string)
+	return Bearer{PrincipalID: principal, SessionID: sessionID, TokenVersion: int64(tv), Impersonated: impersonated}, "", nil
 }
 
 // roleText is go-api's role claim for a membership lookup: "member" without

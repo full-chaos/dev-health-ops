@@ -46,6 +46,7 @@ const (
 	textChangeInvalid         = "Invalid password change request"
 	textPasswordValidation    = "Password validation failed"
 	reasonCredentialsRefusal  = "invalid_token"
+	reasonSessionsNotRevoked  = "sessions_not_revoked"
 	reasonPasswordPolicy      = "password_policy"
 	reasonCurrentRejected     = "current_password_rejected"
 	reasonManagedElsewhere    = "password_managed_elsewhere"
@@ -92,6 +93,7 @@ type credentialHandlers struct {
 type (
 	credentialInputKey struct{}
 	changeAuthKey      struct{}
+	changeBodyKey      struct{}
 )
 
 // credentialInput is one validated request: the secret or e-mail, the
@@ -296,6 +298,9 @@ func (h credentialHandlers) resetPassword(flows CredentialFlows) http.Handler {
 		}
 		switch outcome.Kind {
 		case local.FlowOK:
+			if outcome.RevokeErr != nil {
+				h.compat.rec.record(r.Context(), opResetPassword, "error", reasonSessionsNotRevoked, outcome.RevokeErr)
+			}
 			h.compat.rec.record(r.Context(), opResetPassword, "success", reasonAccepted, nil)
 			writeCompatModel(w, verifyModel(textResetDone, false))
 		case local.FlowPolicy:
@@ -307,15 +312,21 @@ func (h credentialHandlers) resetPassword(flows CredentialFlows) http.Handler {
 	})
 }
 
-// authenticatedChange resolves the bearer before the body is read, as go-api's
-// Authenticated guard does.
+// authenticatedChange reads the body, then resolves the bearer, as go-api's
+// BodyFirst(Authenticated) does: a body that does not decode is answered
+// before the bearer is looked at.
 func (h credentialHandlers) authenticatedChange() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := h.compat.readCompatBody(w, r, opChangePassword, nil)
+		if !ok {
+			return
+		}
 		bearer, record, ok := h.authenticate(w, r, opChangePassword)
 		if !ok {
 			return
 		}
 		ctx := context.WithValue(r.Context(), changeAuthKey{}, changeCaller{bearer: bearer, record: record})
+		ctx = context.WithValue(ctx, changeBodyKey{}, body)
 		h.change.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -323,10 +334,7 @@ func (h credentialHandlers) authenticatedChange() http.Handler {
 // validateChange is the request model: a current password of 1 to 128
 // characters and a new one of 8 to 128. The detail never echoes a field.
 func (h credentialHandlers) validateChange(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
-	body, ok := h.compat.readCompatBody(w, r, opChangePassword, nil)
-	if !ok {
-		return nil, false
-	}
+	body, _ := r.Context().Value(changeBodyKey{}).(pybody.Body)
 	var errs pybody.Errors
 	var input credentialInput
 	if object, ok := errs.Object(body); ok {
@@ -346,7 +354,7 @@ func (h credentialHandlers) changePassword(w http.ResponseWriter, r *http.Reques
 	input := inputOf(r)
 	outcome, err := h.flows.Change(ctx, local.ChangeRequest{
 		PrincipalID: caller.bearer.PrincipalID, OrganizationID: caller.record.OrganizationID,
-		Current: input.current, New: input.password,
+		Current: input.current, New: input.password, Impersonated: caller.bearer.Impersonated,
 		Actor: session.Actor{PrincipalID: &caller.bearer.PrincipalID, RequestID: requestid.Audit(ctx)},
 	})
 	if err != nil {
@@ -355,6 +363,9 @@ func (h credentialHandlers) changePassword(w http.ResponseWriter, r *http.Reques
 	}
 	switch outcome.Kind {
 	case local.FlowOK:
+		if outcome.RevokeErr != nil {
+			h.compat.rec.record(ctx, opChangePassword, "error", reasonSessionsNotRevoked, outcome.RevokeErr)
+		}
 		h.changed(w, r, caller, outcome)
 	case local.FlowPolicy:
 		h.compat.rec.record(ctx, opChangePassword, "denied", reasonPasswordPolicy, nil)

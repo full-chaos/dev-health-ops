@@ -1,6 +1,7 @@
 package authruntime
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -58,5 +60,25 @@ func TestCredentialRoutesMountOnlyWithTheSessionSecretsAndUsersOwned(t *testing.
 	}
 	if err := components[0].Shutdown(context.Background()); err != nil {
 		t.Fatalf("second shutdown: %v", err)
+	}
+}
+
+func TestTheConsoleProviderNeverLogsTheRecipient(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	provider, err := mail.NewSenderFromEnv(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name() != "console" {
+		t.Skip("the test environment selects another provider")
+	}
+	if err := quietProvider(provider).Send(context.Background(), mail.Message{To: "probe-address@example.com", Subject: "s", HTML: "h"}); err != nil {
+		t.Fatal(err)
+	}
+	if logs.Len() == 0 || bytes.Contains(logs.Bytes(), []byte("probe-address")) {
+		t.Fatalf("console provider output %q: want a line without the address", logs.String())
 	}
 }

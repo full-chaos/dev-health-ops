@@ -15,7 +15,8 @@ var authProxyFlags = map[string]string{
 }
 
 func goAPIWithAuth(sets ...string) []string {
-	return append(append([]string{"--set", "goApi.enabled=true"}, authBase...), sets...)
+	base := append(append([]string{"--set", "goApi.enabled=true"}, authBase...), sessionReaders...)
+	return append(append(base, sessionSuccessor...), sets...)
 }
 
 func proxyEnv(t *testing.T, docs []map[string]any) map[string]string {

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/url"
 
@@ -77,19 +78,16 @@ func truthyQuery(values url.Values, name string) string {
 	return value
 }
 
-// pageParams validates the limit (ge=1, le=maxLimit) and offset (ge=0) query
-// parameters as FastAPI's Query() does, appending any error to errs.
+// pageParams validates the limit (ge=1, le=maxLimit) and offset (ge=0, and
+// within int64: the page query binds it as a bigint) query parameters as
+// FastAPI's Query() does, appending any error to errs.
 func pageParams(errs *pybody.Errors, values url.Values, defaultLimit, maxLimit int64) (limit, offset int64) {
-	one, zero := int64(1), int64(0)
+	one, zero, maxOffset := int64(1), int64(0), int64(math.MaxInt64)
 	if value, ok := errs.QueryInt("limit", queryPtr(values, "limit"), defaultLimit, &one, &maxLimit); ok {
 		limit = value.Int64()
 	}
-	if value, ok := errs.QueryInt("offset", queryPtr(values, "offset"), 0, &zero, nil); ok {
-		if value.IsInt64() {
-			offset = value.Int64()
-		} else {
-			offset = -1
-		}
+	if value, ok := errs.QueryInt("offset", queryPtr(values, "offset"), 0, &zero, &maxOffset); ok {
+		offset = value.Int64()
 	}
 	return limit, offset
 }

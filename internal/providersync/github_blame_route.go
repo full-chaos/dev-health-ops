@@ -161,6 +161,35 @@ type GitHubBlameCoverage interface {
 	Progress(context.Context, Claim, string, string, string) (GitHubBlameProgressState, error)
 }
 
+// Bounds of the banked files inventory a blame unit may take its file list from.
+const (
+	// gitHubBlameFilesInventoryMaxAge is how old the newest inventory write may
+	// be: beyond it the list may miss files added since, so the tree is walked.
+	// 48 hours, not 14 days: the files dataset syncs hourly, so two days means
+	// it has failed about 48 times in a row, and every file added in that time
+	// would be silently absent from blame; the tree walk then takes over again.
+	gitHubBlameFilesInventoryMaxAge = 48 * time.Hour
+	// gitHubBlameFilesInventoryWindow is how far behind the newest write a row
+	// may be and still count. Every sync rewrites every path it lists, so a path
+	// deleted since stops being rewritten and leaves the window after one cycle.
+	gitHubBlameFilesInventoryWindow = 3 * time.Hour
+)
+
+// GitHubBlameFilesInventoryResult is the file list the files dataset banked for
+// one repository, and the newest write instant among its rows.
+type GitHubBlameFilesInventoryResult struct {
+	Paths          []string
+	NewestSyncedAt time.Time
+}
+
+// GitHubBlameFilesInventory is an optional capability of a GitHubBlameCoverage:
+// the blob paths the files dataset banked within the window behind its newest
+// write. Blame needs only the path list, so a repository too large to walk in
+// one attempt does not have to be walked by blame as well.
+type GitHubBlameFilesInventory interface {
+	FilesInventory(ctx context.Context, claim Claim, repoID string, window time.Duration) (GitHubBlameFilesInventoryResult, error)
+}
+
 type GitHubBlameGenerationProgressProbe interface {
 	HasGenerationProgress(context.Context, Claim, string) (bool, error)
 }
@@ -317,9 +346,14 @@ func collectGitHubBlame(
 	if treeRef == "" {
 		return gitHubBlameBatch(claim, repoPayload.FullName, nil, nil, requests, 0, 0, 0)
 	}
-	paths, err := gitHubBlameInventory(ctx, client, root, treeRef, &requests)
-	if err != nil {
-		return CompleteRouteBatch{}, err
+	paths, fromFiles := gitHubBlameFilesInventoryPaths(
+		ctx, claim, coverage, repoID, limits.now(), requireCompleteInventory, recoveryGeneration,
+	)
+	if !fromFiles {
+		paths, err = gitHubBlameInventory(ctx, client, root, treeRef, &requests)
+		if err != nil {
+			return CompleteRouteBatch{}, err
+		}
 	}
 	if requireCompleteInventory && len(paths) > maxFiles {
 		return CompleteRouteBatch{}, fmt.Errorf(
@@ -470,10 +504,67 @@ func collectGitHubBlame(
 		rows = append(rows, fileRows...)
 		usedBytes += fileBytes
 	}
+	if fromFiles {
+		// A path the inventory still lists but the tree no longer has costs one
+		// blame request per run until a files sync stops rewriting it and the
+		// window drops it: paths_empty and paths_retryable make that cost visible.
+		pathsEmpty := 0
+		for _, progress := range progressRows {
+			if progress.Outcome == gitHubBlameOutcomeEmpty {
+				pathsEmpty++
+			}
+		}
+		slog.Info(
+			"github blame unit file list result", "source", "files_inventory", "paths_listed", len(paths),
+			"paths_blamed", len(progressRows), "paths_empty", pathsEmpty,
+			"paths_retryable", retryableFailures, "paths_remaining", remainingPaths,
+		)
+	}
 	return gitHubBlameBatch(
 		claim, repoPayload.FullName, rows, progressRows, requests, 1,
 		remainingPaths, retryableFailures,
 	)
+}
+
+// gitHubBlameFilesInventoryPaths returns the file list banked by the files
+// dataset when it can be used, and false when blame must read the tree. It is
+// never used by a recovery run (that replays the exact paths of a crashed run)
+// or by a complete-inventory parity run. Any failure falls back to the tree:
+// the walk is today's behaviour. One INFO line says which source was used.
+func gitHubBlameFilesInventoryPaths(
+	ctx context.Context,
+	claim Claim,
+	coverage GitHubBlameCoverage,
+	repoID string,
+	now time.Time,
+	requireCompleteInventory bool,
+	recoveryGeneration string,
+) ([]string, bool) {
+	reader, ok := coverage.(GitHubBlameFilesInventory)
+	if !ok || coverage == nil {
+		return nil, false
+	}
+	fallback := func(reason string) ([]string, bool) {
+		slog.Info("github blame file list source", "source", "tree", "fallback_reason", reason)
+		return nil, false
+	}
+	if requireCompleteInventory || recoveryGeneration != "" {
+		return nil, false
+	}
+	result, err := reader.FilesInventory(ctx, claim, repoID, gitHubBlameFilesInventoryWindow)
+	switch {
+	case err != nil:
+		return fallback("reader_error")
+	case len(result.Paths) == 0:
+		return fallback("no_inventory")
+	case result.NewestSyncedAt.After(now) || now.Sub(result.NewestSyncedAt) > gitHubBlameFilesInventoryMaxAge:
+		return fallback("stale_inventory")
+	}
+	slog.Info(
+		"github blame file list source", "source", "files_inventory", "paths", len(result.Paths),
+		"inventory_age_seconds", int(now.Sub(result.NewestSyncedAt)/time.Second),
+	)
+	return result.Paths, true
 }
 
 // gitHubBlameInventory returns every blob path of treeRef. It reads the

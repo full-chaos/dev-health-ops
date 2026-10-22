@@ -64,6 +64,7 @@ var columnsAfterTheCapture = map[string]map[string]string{
 	// load leaves it NULL ("not recorded" = complete).
 	"work_unit_investments": {
 		"evidence_quote_count": "106_work_unit_investment_quote_count.sql",
+		"effort_basis":         "140_work_unit_investment_effort_basis.sql",
 	},
 	// When a project's target date was last read (CHAOS-9613), and how many
 	// other open dated entries it had: no captured project was read.

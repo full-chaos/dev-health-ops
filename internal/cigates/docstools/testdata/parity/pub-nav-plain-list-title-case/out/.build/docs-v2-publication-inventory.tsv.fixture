@@ -1,0 +1,5 @@
+page_id	canonical_url	source_path	nav_path	label	content_type	owner	lifecycle	publication_state
+home-001	/	index.md	Index	Index	landing	team-a	active	public-canonical
+	/guide/o'neil's-x/	guide/o'neil's-x.md	O'Neil'S X	O'Neil'S X		documentation	active	public-canonical
+	/guide/the-quick_start-guide/	guide/the-quick_start-guide.md	The Quick_Start Guide	The Quick_Start Guide		documentation	active	public-canonical
+	/guide/ß-it/	guide/ß-it.md	Ss It	Ss It		documentation	active	public-canonical

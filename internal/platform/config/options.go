@@ -540,6 +540,8 @@ var coreOptions = []Option{
 	{Env: "DEV_HEALTH_CH_API_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "api Service ClickHouse password (component form)"},
 	{Env: "VALKEY_URI", Secret: true, Group: GroupCredentials, Usage: "Valkey/Redis DSN"},
 	{Env: "JWT_SECRET_KEY", Secret: true, Group: GroupCredentials, Usage: "access-token signing key the api verifies with (the Python api's JWT_SECRET_KEY); required by the api binary"},
+	{Env: "LINK_TOKEN_SECRET", Secret: true, Group: GroupCredentials, Usage: "signing key of invite, e-mail verification and password reset links; unset, links are signed with JWT_SECRET_KEY (else SETTINGS_ENCRYPTION_KEY); LINK_TOKEN_SECRET_FILE reads it from a mounted file"},
+	{Env: "LINK_TOKEN_SECRET_PREVIOUS", Secret: true, Group: GroupCredentials, Usage: "retired link signing key still accepted while links signed with it are in flight; LINK_TOKEN_SECRET_PREVIOUS_FILE reads it from a mounted file"},
 	{Env: "SETTINGS_ENCRYPTION_KEY", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption key"},
 	{Env: "SETTINGS_ENCRYPTION_SALT", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption salt"},
 	{Env: "PAGER_DUTY_CLIENT_ID", Secret: true, Group: GroupCredentials, Usage: "PagerDuty OAuth client id"},

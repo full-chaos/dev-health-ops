@@ -1,0 +1,3 @@
+ERROR: x.html: link has no accessible name: y
+ERROR: x.html: content image has empty alt text without being marked decorative
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

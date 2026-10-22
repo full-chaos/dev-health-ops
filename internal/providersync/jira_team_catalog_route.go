@@ -875,6 +875,14 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// closed in this write, and a row it still holds keeps the valid_from
 		// it was first seen with. valid_from is a key column, so a new stamp
 		// at each sync would add one more open row for the same fact.
+		// CHAOS-10521: a legacy link starts at the project's earliest work item.
+		legacyStarts := CarryCatalogEvidenceStarts(ctx, collector.Sink.Conn, ref.OrgID,
+			CatalogEvidenceScope{Table: CatalogEvidenceProjectOwnership, Provider: jiraTeamCatalogProvider, Source: jiraTeamCatalogLegacySource, Lease: collector.Sink.Lease}, normalizedAt)
+		for index := range ownership {
+			if ownership[index].Source == jiraTeamCatalogLegacySource {
+				ownership[index].ValidFrom = legacyStarts.Start(ProjectEvidenceFact(ownership[index].TeamID, ownership[index].ProjectID), ownership[index].ValidFrom)
+			}
+		}
 		open, openErr := jiraOpenCatalogOwnership(ctx, collector.Sink.Conn, ref.OrgID)
 		if openErr != nil {
 			return result, openErr

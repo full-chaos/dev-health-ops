@@ -1,0 +1,4 @@
+check-docs-accessibility
+--site-dir=site
+--css=extra.css
+--report=r.tsv

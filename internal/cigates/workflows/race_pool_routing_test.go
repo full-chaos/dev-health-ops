@@ -65,7 +65,6 @@ func TestRaceLegsOnThePoolRunWithoutRyukAndAssertAnEmptyDaemonAtStart(t *testing
 	for name, over := range map[string]map[string]string{
 		"static":   {"matrix.pool": ""},
 		"test":     {"matrix.pool": ""},
-		"race-1":   {"matrix.pool": ""},
 		"pull req": {"github.event_name": "pull_request", "github.ref": "refs/pull/1/merge"},
 	} {
 		if evalRacePoolTerm(t, ryukArm, poolContext(over)) {
@@ -74,9 +73,6 @@ func TestRaceLegsOnThePoolRunWithoutRyukAndAssertAnEmptyDaemonAtStart(t *testing
 	}
 	if !evalRacePoolTerm(t, ryukArm, poolContext(nil)) {
 		t.Fatal("the pool legs must run with Ryuk disabled")
-	}
-	if got, _ := env["DEV_HEALTH_GO_RACE_TEST_TIMEOUT"].(string); !strings.Contains(got, "'25m'") {
-		t.Fatalf("the pool race path needs a per-package go test timeout above the 600 s default, got %q", got)
 	}
 	steps, _ := leg["steps"].([]any)
 	found := false
@@ -236,8 +232,8 @@ func TestRaceLegsTurnSetupGoCacheOffOnThePool(t *testing.T) {
 	t.Fatal("no setup-go step in go-quality-leg")
 }
 
-// Only race-2 and race-3 are budgeted for the pool (ops pool share, MCP GO): race-1, static and test stay hosted.
-func TestOnlyRace2AndRace3CarryThePoolFlag(t *testing.T) {
+// Only the three race legs are budgeted for the pool (queue measured 7-10 min hosted vs under 1 min pool): static and test stay hosted.
+func TestOnlyTheThreeRaceLegsCarryThePoolFlag(t *testing.T) {
 	leg := goQualityLeg(t)
 	strategy, _ := leg["strategy"].(map[string]any)
 	matrix, _ := strategy["matrix"].(map[string]any)
@@ -250,8 +246,83 @@ func TestOnlyRace2AndRace3CarryThePoolFlag(t *testing.T) {
 			got[name] = true
 		}
 	}
-	want := map[string]bool{"race-2-of-3": true, "race-3-of-3": true}
-	if len(got) != len(want) || !got["race-2-of-3"] || !got["race-3-of-3"] {
-		t.Fatalf("pool-flagged legs = %v, want exactly race-2-of-3 and race-3-of-3", got)
+	want := map[string]bool{"race-1-of-3": true, "race-2-of-3": true, "race-3-of-3": true}
+	if len(got) != len(want) || !got["race-1-of-3"] || !got["race-2-of-3"] || !got["race-3-of-3"] {
+		t.Fatalf("pool-flagged legs = %v, want exactly race-1-of-3, race-2-of-3 and race-3-of-3", got)
+	}
+}
+
+const raceTimeoutPool, raceTimeoutDefault = "'25m'", "'10m'"
+
+func raceTimeoutExpr(term, pool, other string) string {
+	return "${{ (" + term + ") && " + pool + " || " + other + " }}"
+}
+
+func raceTimeoutValue(t *testing.T, expr string, ctx map[string]string) string {
+	t.Helper()
+	term, rest, ok := strings.Cut(strings.TrimPrefix(expr, "${{ ("), ") && ")
+	if !ok || !strings.HasPrefix(expr, "${{ (") {
+		return "unparsed"
+	}
+	pool, other, ok := strings.Cut(strings.TrimSuffix(rest, " }}"), " || ")
+	if !ok {
+		return "unparsed"
+	}
+	if evalRacePoolTerm(t, term, ctx) {
+		return pool
+	}
+	return other
+}
+
+// raceTimeoutProblems pins the exact expression, then evaluates it per leg and event.
+func raceTimeoutProblems(t *testing.T, expr string) []string {
+	t.Helper()
+	var bad []string
+	if want := raceTimeoutExpr(racePoolTerm, raceTimeoutPool, raceTimeoutDefault); expr != want {
+		bad = append(bad, "not the pinned expression: "+expr)
+	}
+	for _, c := range []struct {
+		name string
+		over map[string]string
+		want string
+	}{
+		{"race leg on push to main of this repo", nil, raceTimeoutPool},
+		{"static leg", map[string]string{"matrix.pool": ""}, raceTimeoutDefault},
+		{"test leg", map[string]string{"matrix.pool": ""}, raceTimeoutDefault},
+		{"race leg on pull request", map[string]string{"github.event_name": "pull_request", "github.ref": "refs/pull/1/merge"}, raceTimeoutDefault},
+		{"race leg on push to another branch", map[string]string{"github.ref": "refs/heads/feature"}, raceTimeoutDefault},
+		{"race leg on another repository", map[string]string{"github.repository": "someone/dev-health-ops"}, raceTimeoutDefault},
+		{"race leg with the variable unset", map[string]string{"vars.CI_RACE_RUNNER": ""}, raceTimeoutDefault},
+		{"race leg on workflow dispatch", map[string]string{"github.event_name": "workflow_dispatch"}, raceTimeoutDefault},
+		{"race leg on schedule", map[string]string{"github.event_name": "schedule"}, raceTimeoutDefault},
+	} {
+		if v := raceTimeoutValue(t, expr, poolContext(c.over)); v != c.want {
+			bad = append(bad, c.name+": timeout "+v+", want "+c.want)
+		}
+	}
+	return bad
+}
+
+func TestRaceTestTimeoutIsPinnedPerLeg(t *testing.T) {
+	env, _ := goQualityLeg(t)["env"].(map[string]any)
+	got, _ := env["DEV_HEALTH_GO_RACE_TEST_TIMEOUT"].(string)
+	for _, p := range raceTimeoutProblems(t, got) {
+		t.Error(p)
+	}
+}
+
+func TestRaceTestTimeoutPlantedMutantsAreRed(t *testing.T) {
+	noPush := strings.Replace(racePoolTerm, "github.event_name == 'push' && ", "", 1)
+	noRepo := strings.Replace(racePoolTerm, " && github.repository == 'full-chaos/dev-health-ops'", "", 1)
+	for name, mutant := range map[string]string{
+		"unconditional 25m":    "${{ '25m' }}",
+		"25m on both arms":     raceTimeoutExpr(racePoolTerm, raceTimeoutPool, raceTimeoutPool),
+		"inverted arms":        raceTimeoutExpr(racePoolTerm, raceTimeoutDefault, raceTimeoutPool),
+		"no push clause":       raceTimeoutExpr(noPush, raceTimeoutPool, raceTimeoutDefault),
+		"no repository clause": raceTimeoutExpr(noRepo, raceTimeoutPool, raceTimeoutDefault),
+	} {
+		if len(raceTimeoutProblems(t, mutant)) == 0 {
+			t.Errorf("%s: the planted mutant passes the timeout pin", name)
+		}
 	}
 }

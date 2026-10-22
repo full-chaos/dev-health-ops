@@ -91,7 +91,7 @@ func TestResolveSankey_CoverageUsesRawThreeStateFlagNotAutoRoute(t *testing.T) {
 
 	t.Run("both flags omitted -> coverage reads the DAILY table", func(t *testing.T) {
 		client := &recordingClient{}
-		if _, err := resolveSankey(context.Background(), client, "org-1", input, nil, nil, true); err != nil {
+		if _, err := resolveSankey(context.Background(), client, "org-1", input, nil, nil, true, true); err != nil {
 			t.Fatalf("resolveSankey: %v", err)
 		}
 		got := client.coverageStatement(t)
@@ -108,7 +108,7 @@ func TestResolveSankey_CoverageUsesRawThreeStateFlagNotAutoRoute(t *testing.T) {
 		explicit := true
 		withFlag := input
 		withFlag.UseInvestment = &explicit
-		if _, err := resolveSankey(context.Background(), client, "org-1", withFlag, nil, nil, true); err != nil {
+		if _, err := resolveSankey(context.Background(), client, "org-1", withFlag, nil, nil, true, true); err != nil {
 			t.Fatalf("resolveSankey: %v", err)
 		}
 		got := client.coverageStatement(t)
@@ -123,7 +123,7 @@ func TestResolveSankey_CoverageUsesRawThreeStateFlagNotAutoRoute(t *testing.T) {
 	t.Run("batch-level flag is honoured when the sankey flag is omitted", func(t *testing.T) {
 		client := &recordingClient{}
 		batchTrue := true
-		if _, err := resolveSankey(context.Background(), client, "org-1", input, &batchTrue, nil, true); err != nil {
+		if _, err := resolveSankey(context.Background(), client, "org-1", input, &batchTrue, nil, true, true); err != nil {
 			t.Fatalf("resolveSankey: %v", err)
 		}
 		got := client.coverageStatement(t)
@@ -137,7 +137,7 @@ func TestResolveSankey_CoverageUsesRawThreeStateFlagNotAutoRoute(t *testing.T) {
 		explicitFalse := false
 		withFlag := input
 		withFlag.UseInvestment = &explicitFalse
-		if _, err := resolveSankey(context.Background(), client, "org-1", withFlag, nil, nil, true); err != nil {
+		if _, err := resolveSankey(context.Background(), client, "org-1", withFlag, nil, nil, true, true); err != nil {
 			t.Fatalf("resolveSankey: %v", err)
 		}
 		got := client.coverageStatement(t)

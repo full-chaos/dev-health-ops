@@ -210,6 +210,10 @@ FROM (SELECT * FROM projects FINAL WHERE org_id = %s AND id = %s LIMIT 1)`,
 			"CAST(NULL AS Nullable(DateTime64(3))) AS started_at",
 			fmt.Sprintf("if(isNull(completed_at), CAST(NULL AS Nullable(DateTime64(3))), %s) AS completed_at", sqlTime(issueDone, 3)),
 			fmt.Sprintf("if(isNull(closed_at), CAST(NULL AS Nullable(DateTime64(3))), %s) AS closed_at", sqlTime(issueDone, 3)),
+			// No person: the catalog writers that froze the world never saw this issue, so it is no evidence of
+			// a membership start (CHAOS-10566); a person on it would date a member's first work before the world did.
+			"'' AS reporter",
+			"CAST([] AS Array(String)) AS assignees",
 		}
 		if seed.IssuesInRepo {
 			replace = append(replace, fmt.Sprintf("toUUID(%s) AS repo_id", sqlQuote(seed.RepoID)))

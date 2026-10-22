@@ -166,6 +166,15 @@ CREATE TABLE repos (
 ) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (org_id, id);
 
+CREATE TABLE teams (
+    id String,
+    org_id String,
+    is_active UInt8 DEFAULT 1,
+    updated_at DateTime64(6) DEFAULT now64(6),
+    last_synced DateTime64(6) DEFAULT now64(6)
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (org_id, id);
+
 CREATE TABLE team_repo_ownership (
     org_id String,
     provider String,

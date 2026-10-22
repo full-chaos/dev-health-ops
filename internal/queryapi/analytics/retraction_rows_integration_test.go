@@ -53,9 +53,10 @@ VALUES (?, ?, ?, '', 1, 1, 0, 10, 4, ?)`,
 	}
 	read := func(org string) answers {
 		t.Helper()
+		// A BreakdownRequest built by hand carries the EXCLUSIVE end (windowEndExclusive): the day after the last day read.
 		request := BreakdownRequest{
 			Dimension: DimensionTeam, Measure: MeasureCount, TopN: 50,
-			StartDate: mustGraphQLDate(first.Format("2006-01-02")), EndDate: mustGraphQLDate(last.Format("2006-01-02")),
+			StartDate: mustGraphQLDate(first.Format("2006-01-02")), EndDate: mustGraphQLDate(last.AddDate(0, 0, 1).Format("2006-01-02")),
 		}
 		query, err := CompileBreakdown(request, org, queryTimeoutSecs, false, nil)
 		if err != nil {

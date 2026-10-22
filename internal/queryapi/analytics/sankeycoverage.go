@@ -14,11 +14,9 @@ package analytics
 // name. The dev-health-go v0.4.0 ClickHouse client requires a literal
 // SELECT as the first token and REJECTS a leading WITH
 // (clickhouse/client.go:190), so every named CTE becomes an inlined
-// `(SELECT ...)` subquery here -- and `latest_work_unit_repo_effort`,
-// referenced twice in Python (the `wure` join and the `wure_counts`
-// aggregate), is therefore embedded twice. That is textual duplication
-// with identical semantics, not a divergence; the same trade-off
-// investmentContextFor already makes for the team-vote subquery.
+// `(SELECT ...)` subquery here. `latest_work_unit_repo_effort` is referenced
+// twice in Python (the `wure` join and the `wure_counts` aggregate); here it is
+// read once, the counts being window columns of the same rows (CHAOS-9231).
 //
 // TWO deliberate divergences from Python on the non-investment path,
 // both because Go is held to Go's own correctness, not to matching a
@@ -271,7 +269,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// which joins other org_id-carrying tables.
 		orgFilter = "work_unit_investments.org_id = {org_id:String}"
 
-		repoEffortSrc := LatestWorkUnitRepoEffortSource()
+		repoEffortSrc := latestWorkUnitRepoEffortWithTotalsSource()
 		joins = append(joins,
 			fmt.Sprintf("LEFT JOIN %s AS wure ON wure.org_id = work_unit_investments.org_id AND wure.work_unit_id = work_unit_investments.work_unit_id", repoEffortSrc),
 			// GO-ONLY DIVERGENCE (CHAOS-4773): same unguarded-join defect
@@ -283,7 +281,6 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 			// on this same fix for the executed repro. Python keeps the
 			// defect until CHAOS-2600 retires this read path.
 			"LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(wure.repo_id) AND r.org_id = {org_id:String}",
-			fmt.Sprintf("LEFT JOIN (SELECT org_id, work_unit_id, count() AS repo_row_count, sum(repo_effort_value) AS repo_effort_sum FROM %s GROUP BY org_id, work_unit_id) AS wure_counts ON wure_counts.org_id = work_unit_investments.org_id AND wure_counts.work_unit_id = work_unit_investments.work_unit_id", repoEffortSrc),
 		)
 
 		// CHAOS-4241 (analytics.py:713-760): coverage must be weighted the
@@ -295,15 +292,16 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// counted once per repo -- are avoided by aggregating through the
 		// fan-out-safe weighted sum and testing the RAW repo id.
 		//
-		// The 1.0 / wure_counts.repo_row_count arm is CHAOS-4241
+		// The 1.0 / wure.repo_row_count arm is CHAOS-4241
 		// codex round 2: effort_value <= 0 made every repo-allocation
 		// row divide to 0 and the unit vanished from the denominator
 		// even though the Sankey's SUM(subcategory_kv.2) still counts
 		// it as exactly 1. A window function cannot be nested inside
-		// sum() (ClickHouse ILLEGAL_AGGREGATION), hence the joined
-		// wure_counts aggregate above.
+		// sum() (ClickHouse ILLEGAL_AGGREGATION), hence the counts are
+		// window columns of the source (latestWorkUnitRepoEffortWithTotalsSource),
+		// not window calls here.
 		repoEffortCol := "if(wure.work_unit_id != '', " +
-			allocationWeightExpr("wure", "wure_counts") + ", " +
+			allocationWeightExpr("wure", "wure") + ", " +
 			"1.0)"
 		// CHAOS-9629 (D5988): under a team scope every weighted column of coverage is weighed by the share of the
 		// unit's repository the teams in view hold (teamscope.RepoShare, the expression the chart's measure and the
@@ -502,7 +500,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// its projected columns unchanged; only the FROM source's row
 		// multiplicity across duplicate generations changes.
 		baseTable = workItemCompletionDedupSource
-		dateFilter = "day >= {start_date:Date} AND day <= {end_date:Date}"
+		dateFilter = "day >= {start_date:Date} AND day < {end_date:Date}"
 		orgFilter = "org_id = {org_id:String}"
 	}
 

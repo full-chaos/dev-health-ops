@@ -1,0 +1,4 @@
+nav:
+  - A: ./index.md
+  - B: guide/../reference.md
+  - C: ../docs/guide/intro.md

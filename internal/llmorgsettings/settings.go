@@ -131,8 +131,7 @@ func (s Store) loadGatedSettings(ctx context.Context, orgID string) (orgSettings
 	if err != nil {
 		return nil, err
 	}
-	turnedOff := ownModelTurnedOff(settings)
-	delete(settings, KeyOwnModelEnabled)
+	settings, turnedOff := withoutControlRows(settings)
 	gated, err := s.applyGate(ctx, orgID, settings)
 	if err != nil {
 		return nil, err
@@ -177,4 +176,13 @@ func (s Store) applyGate(ctx context.Context, orgID string, settings orgSettings
 		return map[string]string{}, nil
 	}
 	return settings, nil
+}
+
+// withoutControlRows removes the rows that switch a saved BYO config instead of
+// being part of it, so an org holding only those is not read as a BYO org.
+func withoutControlRows(settings orgSettings) (rest orgSettings, turnedOff bool) {
+	turnedOff = ownModelTurnedOff(settings)
+	delete(settings, KeyOwnModelEnabled)
+	delete(settings, KeyPromptCache)
+	return settings, turnedOff
 }

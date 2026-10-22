@@ -6,13 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -158,37 +159,97 @@ func TestAdminNoStoreBindingPlantedTablesAreCaught(t *testing.T) {
 	}
 }
 
-// HEAD on an admin GET route answers 405 with Allow, as the Python api did (FastAPI routes no HEAD there; frozen goldens
-// "HEAD schemas" and "me: HEAD" are 405, Allow: GET), and keeps Cache-Control: no-store: the real mux matches HEAD to the
-// GET pattern, so it falls under the declared admin no-store divergence.
+// HEAD on an admin GET route answers 405 (FastAPI routes no HEAD there; frozen goldens "HEAD schemas" and "me: HEAD" are
+// 405) with an Allow that lists every method the path serves (RFC 9110 10.2.1; Starlette named only the first route's),
+// and keeps Cache-Control: no-store: the real mux matches HEAD to the GET pattern, so it falls under the declared admin
+// no-store divergence. The walk covers the full mounted set (every admin-prefixed package, ClickHouse stub included).
 func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), "postgres://binding@127.0.0.1:1/binding?connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger())}, quietLogger()))
+	routes := Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}}, quietLogger())
+	server, err := NewServer(apiTestConfig(), quietLogger(), routes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	checked := 0
-	adminRoute := map[string]bool{}
-	for _, route := range admin.Routes(admin.Deps{Guard: policy.NewGuard(nil, nil)}) {
-		adminRoute[route.Method+" "+route.Pattern] = true
+	methods := map[string][]string{}
+	for _, route := range routes {
+		if (route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/")) && !route.NotServed {
+			methods[route.Pattern] = append(methods[route.Pattern], route.Method)
+		}
 	}
+	checked, tableGets := 0, 0
 	for _, entry := range httpapi.AdminRoutes {
 		method, pattern, _ := strings.Cut(entry, " ")
-		if method != http.MethodGet || !adminRoute[entry] {
+		if method != http.MethodGet {
 			continue
 		}
+		tableGets++
+		set := append([]string(nil), methods[pattern]...)
+		if len(set) == 0 {
+			t.Errorf("GET %s is in the admin table but not mounted", pattern)
+			continue
+		}
+		sort.Strings(set)
+		want := strings.Join(set, ", ")
 		checked++
 		response := serve(server.Handler(), httptest.NewRequest(http.MethodHead, concrete(pattern), nil))
-		allow := response.Header().Get("Allow")
-		if response.Code != http.StatusMethodNotAllowed || !strings.Contains(", "+allow+",", " GET,") || response.Header().Get("Cache-Control") != "no-store" {
-			t.Errorf("HEAD %s: status %d Allow %q Cache-Control %q; want 405, Allow with GET, no-store", pattern, response.Code, allow, response.Header().Get("Cache-Control"))
+		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != want || response.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("HEAD %s: status %d Allow %q Cache-Control %q; want 405, Allow %q, no-store", pattern, response.Code, response.Header().Get("Allow"), response.Header().Get("Cache-Control"), want)
 		}
 	}
-	if checked < 30 {
-		t.Fatalf("only %d admin GET routes checked", checked)
+	if checked != tableGets || checked < headCheckedFloor {
+		t.Fatalf("%d admin GET routes checked of %d in the table, want all and at least %d", checked, tableGets, headCheckedFloor)
 	}
 }
+
+// headCheckedFloor keeps the walk from passing on a table that shrank; the table grows with main, so the count is not pinned.
+const headCheckedFloor = 60
+
+// The 405 of a method an admin path does not serve lists every method the path serves (RFC 9110 10.2.1); Starlette
+// named only the first route's, which the goldens froze and which the venue tests retire (CHAOS-10555).
+func TestAdminNonHeadMethodsAnswer405ListingEveryServedMethod(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://binding@127.0.0.1:1/binding?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	routes := Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}}, quietLogger())
+	server, err := NewServer(apiTestConfig(), quietLogger(), routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := map[string][]string{}
+	for _, route := range routes {
+		if (route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/")) && !route.NotServed {
+			served[route.Pattern] = append(served[route.Pattern], route.Method)
+		}
+	}
+	checked := 0
+	for pattern, methods := range served {
+		sort.Strings(methods)
+		// The sync-configs prefix guard refuses with 401 before routing reaches any method check.
+		if strings.Contains(pattern, "/sync-configs") {
+			continue
+		}
+		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+			if slices.Contains(methods, method) {
+				continue
+			}
+			want := strings.Join(methods, ", ")
+			response := serve(server.Handler(), httptest.NewRequest(method, concrete(pattern), nil))
+			if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != want {
+				t.Errorf("%s %s: status %d Allow %q; want 405, Allow %q", method, pattern, response.Code, response.Header().Get("Allow"), want)
+			}
+			checked++
+		}
+	}
+	if checked < nonHeadCheckedFloor {
+		t.Fatalf("%d admin method refusals checked, want at least %d", checked, nonHeadCheckedFloor)
+	}
+}
+
+// nonHeadCheckedFloor keeps the walk from passing on a table that shrank.
+const nonHeadCheckedFloor = 150

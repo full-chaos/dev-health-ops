@@ -24,6 +24,8 @@ internal/api/syncadmin	repositories_write_venue_oracle_integration_test.go
 internal/api/syncadmin	unoffered_target_table_integration_test.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go
 internal/api/teamsidentity	team_id_writer_census_test.go
+internal/apiservice	endpoint_profile_rows_test.go
+internal/apiservice	endpoint_profile_scan_test.go
 internal/apiservice	githubapp_config.go
 internal/apiservice/admin	routeguard_test.go
 internal/apiservice/billingvenue	billing_refund_webhook_integration_test.go
@@ -51,6 +53,7 @@ internal/auth/contracts	endpoint_profile_access_token_validation_test.go
 internal/auth/contracts	endpoint_profile_source_commit_history_test.go
 internal/auth/contracts	endpoint_profile_source_commit_test.go
 internal/auth/contracts	endpoint_profiles_auth_service_test.go
+internal/auth/contracts	endpoint_profiles_go_api_test.go
 internal/auth/contracts	endpoint_profiles_query_api_test.go
 internal/auth/contracts	endpoint_profiles_registry_reconcile_test.go
 internal/auth/contracts	error_envelope_goldens_test.go

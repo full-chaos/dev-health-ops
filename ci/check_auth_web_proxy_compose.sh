@@ -95,6 +95,8 @@ assert_project_prefixed() {
 
 AUTH_SESSION_SUCCESSOR_KEY="${AUTH_SESSION_SUCCESSOR_KEY:-$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')}"
 export AUTH_SESSION_SUCCESSOR_KEY
+AUTH_LOGIN_LOCKOUT_KEY="${AUTH_LOGIN_LOCKOUT_KEY:-$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')}"
+export AUTH_LOGIN_LOCKOUT_KEY
 WEB_DIR="${AUTH_PROOF_WEB_DIR:?AUTH_PROOF_WEB_DIR must name a dev-health-web checkout}"
 [ -f "${WEB_DIR}/vitest.auth-proxy.config.ts" ] || die "${WEB_DIR} has no vitest.auth-proxy.config.ts (the web side of CHAOS-10230)"
 

@@ -2,13 +2,27 @@
 -- (internal/auth/keyrotation, ACP-ADR-02 §6). Nothing wrote this table before:
 -- the runtime role holds SELECT only and no operator path existed.
 --
--- status takes the five rotation states of the key-set manifest. 'revoked'
--- becomes 'compromised' (revoked_at keeps recording when, as 0003 intended),
--- and a compromised row is terminal: it is never updated or deleted, so no
--- rollback re-enables it. A kid, its algorithm and its public key never change.
-UPDATE signing_keys
-SET status = 'compromised', revoked_at = COALESCE(revoked_at, now())
-WHERE status = 'revoked' OR revoked_at IS NOT NULL;
+-- status takes the five rotation states of the key-set manifest; 'revoked'
+-- is replaced by 'compromised', and revoked_at records when a key was
+-- compromised. A compromised row is terminal: it is never updated or deleted,
+-- so no rollback re-enables it. A kid, its algorithm and its public key never
+-- change.
+--
+-- A row already 'revoked' (or carrying revoked_at) was written outside any
+-- product path, since nothing wrote this table before. The migration refuses
+-- it rather than guess its meaning: an operator reviews the row, removes it and
+-- migrates again (`auth-migrate keys` then records the key's state).
+DO $$
+DECLARE
+    revoked_rows bigint;
+BEGIN
+    SELECT count(*) INTO revoked_rows FROM signing_keys WHERE status = 'revoked' OR revoked_at IS NOT NULL;
+    IF revoked_rows > 0 THEN
+        RAISE EXCEPTION 'migration 0018 refused: signing_keys holds % revoked row(s); review and remove them, then migrate again', revoked_rows
+            USING ERRCODE = 'object_not_in_prerequisite_state';
+    END IF;
+END
+$$;
 
 ALTER TABLE signing_keys DROP CONSTRAINT signing_keys_status_check;
 ALTER TABLE signing_keys ADD CONSTRAINT signing_keys_status_check

@@ -4,6 +4,7 @@ package authschema
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,11 +108,10 @@ func TestMigration0018SigningKeyRules(t *testing.T) {
 	}
 }
 
-// TestMigration0018TurnsRevokedRowsCompromised: a row 0003 allowed as
-// 'revoked' becomes 'compromised' with its revoked_at kept (or set).
-func TestMigration0018TurnsRevokedRowsCompromised(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+// m18Apply applies the lineage up to 0017 on a fresh database, runs seed,
+// then applies 0018 and returns its error.
+func m18Apply(t *testing.T, ctx context.Context, seed string) (*migrationOnlyFixture, error) {
+	t.Helper()
 	env := newAuthMigrationOnly(t, ctx)
 	migrations, err := Migrations()
 	if err != nil {
@@ -119,40 +119,76 @@ func TestMigration0018TurnsRevokedRowsCompromised(t *testing.T) {
 	}
 	for _, migration := range migrations {
 		if migration.Version == 18 {
-			if _, err := env.conn.Exec(ctx, `
-				INSERT INTO auth.signing_keys (kid, algorithm, public_key_jwk, custody_ref, custody_kind, status, revoked_at)
-				VALUES ('old-revoked', 'EdDSA', '{"x":"a"}'::jsonb, 'r', 'file', 'revoked', NULL),
-				       ('old-active-revoked-at', 'EdDSA', '{"x":"b"}'::jsonb, 'r', 'file', 'active', '2026-01-01T00:00:00Z'),
-				       ('old-pending', 'EdDSA', '{"x":"c"}'::jsonb, 'r', 'file', 'pending', NULL)`); err != nil {
-				t.Fatalf("seed 0017 rows: %v", err)
+			if seed != "" {
+				if _, err := env.conn.Exec(ctx, seed); err != nil {
+					t.Fatalf("seed 0017 rows: %v", err)
+				}
 			}
+			return env, applyOne(ctx, env.conn, env.options, migration)
 		}
 		if err := applyOne(ctx, env.conn, env.options, migration); err != nil {
 			t.Fatalf("apply %04d: %v", migration.Version, err)
 		}
-		if migration.Version == 18 {
-			break
-		}
 	}
-	rows, err := env.conn.Query(ctx, `SELECT kid, status, revoked_at IS NOT NULL FROM auth.signing_keys ORDER BY kid`)
-	if err != nil {
+	t.Fatal("the lineage has no migration 0018")
+	return nil, nil
+}
+
+func m18Recorded(t *testing.T, ctx context.Context, env *migrationOnlyFixture) bool {
+	t.Helper()
+	var recorded bool
+	if err := env.conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM auth.schema_migrations WHERE version = 18)`).Scan(&recorded); err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	want := map[string]string{"old-active-revoked-at": "compromised", "old-pending": "pending", "old-revoked": "compromised"}
-	seen := 0
-	for rows.Next() {
-		var kid, status string
-		var revoked bool
-		if err := rows.Scan(&kid, &status, &revoked); err != nil {
-			t.Fatal(err)
-		}
-		seen++
-		if status != want[kid] || revoked != (status == "compromised") {
-			t.Errorf("%s = %s (revoked_at set %t), want %s", kid, status, revoked, want[kid])
-		}
+	return recorded
+}
+
+// TestMigration0018OnAnEmptyTableAndOnPlainRows: 0018 applies over an empty
+// signing_keys and over rows in the states it keeps.
+func TestMigration0018OnAnEmptyTableAndOnPlainRows(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env, err := m18Apply(t, ctx, "")
+	if err != nil || !m18Recorded(t, ctx, env) {
+		t.Fatalf("0018 over an empty table = %v", err)
 	}
-	if err := rows.Err(); err != nil || seen != 3 {
-		t.Fatalf("read %d rows, %v", seen, err)
+	env, err = m18Apply(t, ctx, `
+		INSERT INTO auth.signing_keys (kid, algorithm, public_key_jwk, custody_ref, custody_kind, status)
+		VALUES ('old-active', 'EdDSA', '{"x":"a"}'::jsonb, 'r', 'file', 'active'),
+		       ('old-pending', 'EdDSA', '{"x":"b"}'::jsonb, 'r', 'file', 'pending')`)
+	if err != nil || !m18Recorded(t, ctx, env) {
+		t.Fatalf("0018 over plain rows = %v", err)
+	}
+	var states string
+	if err := env.conn.QueryRow(ctx, `SELECT string_agg(kid || '=' || status, ',' ORDER BY kid) FROM auth.signing_keys`).Scan(&states); err != nil ||
+		states != "old-active=active,old-pending=pending" {
+		t.Fatalf("rows after 0018 = %q, %v", states, err)
+	}
+}
+
+// TestMigration0018RefusesARevokedRow: a table holding a 'revoked' row (or a
+// row with revoked_at) is refused with a clear error, and nothing changes.
+func TestMigration0018RefusesARevokedRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	for name, seed := range map[string]string{
+		"a revoked row": `INSERT INTO auth.signing_keys (kid, algorithm, public_key_jwk, custody_ref, custody_kind, status)
+			VALUES ('old-revoked', 'EdDSA', '{"x":"a"}'::jsonb, 'r', 'file', 'revoked')`,
+		"an active row with revoked_at": `INSERT INTO auth.signing_keys (kid, algorithm, public_key_jwk, custody_ref, custody_kind, status, revoked_at)
+			VALUES ('old-revoked', 'EdDSA', '{"x":"a"}'::jsonb, 'r', 'file', 'active', '2026-01-01T00:00:00Z')`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			env, err := m18Apply(t, ctx, seed)
+			if err == nil || !strings.Contains(err.Error(), "migration 0018 refused: signing_keys holds 1 revoked row(s)") {
+				t.Fatalf("0018 over %s = %v, want the refusal", name, err)
+			}
+			if m18Recorded(t, ctx, env) {
+				t.Fatal("a refused 0018 was recorded as applied")
+			}
+			var count int
+			if err := env.conn.QueryRow(ctx, `SELECT count(*) FROM auth.signing_keys WHERE kid = 'old-revoked'`).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("the refused row = %d, %v; want it unchanged", count, err)
+			}
+		})
 	}
 }

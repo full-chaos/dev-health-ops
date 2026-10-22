@@ -3,9 +3,13 @@ package keyrotation
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -291,6 +295,71 @@ func TestAuditVocabularyMatchesTheStateMachine(t *testing.T) {
 			if err := audit.ValidateAttributes(event.Attributes); err != nil {
 				t.Errorf("refused row (%s, %q) refused: %v", reason, kid, err)
 			}
+		}
+	}
+}
+
+// keyMaterialForms is every printable form of a key's bytes an attribute could
+// carry.
+func keyMaterialForms(raw []byte) []string {
+	return []string{
+		string(raw), hex.EncodeToString(raw), base64.StdEncoding.EncodeToString(raw),
+		base64.RawStdEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(raw), base64.URLEncoding.EncodeToString(raw),
+	}
+}
+
+// TestNoKeyMaterialReachesAnAuditAttribute: the audit rows of every verb and
+// every refusal carry kids and states only, never a key's bytes in any
+// encoding.
+func TestNoKeyMaterialReachesAnAuditAttribute(t *testing.T) {
+	f := newFixture(t)
+	newKey := publicKey(t)
+	var forms []string
+	for _, public := range f.publics {
+		forms = append(forms, keyMaterialForms(public)...)
+	}
+	forms = append(forms, keyMaterialForms(newKey)...)
+	custody := []token.Key{{KeyID: "N", State: pending, PublicKey: newKey}}
+	adopt := []token.Key{{KeyID: "a", State: active, PublicKey: f.publics["A"]}, {KeyID: "x", State: compromised, PublicKey: f.publics["X"]}}
+	var events []audit.AuditEvent
+	for _, c := range []struct {
+		request Request
+		rows    []Row
+		now     time.Time
+	}{
+		{Request{Verb: VerbAdopt, Custody: adopt}, nil, t0},
+		{Request{Verb: VerbRegister, KeyID: "N", Custody: custody}, f.rows, t0},
+		{Request{Verb: VerbActivate, KeyID: "P"}, f.rows, t0.Add(PendingFloor)},
+		{Request{Verb: VerbRetire, KeyID: "R"}, f.rows, t0.Add(RetiringFloor)},
+		{Request{Verb: VerbRollback, KeyID: "D"}, f.rows, t0},
+		{Request{Verb: VerbCompromise, KeyID: "A", Successor: "P"}, f.rows, t0.Add(PendingFloor)},
+	} {
+		moves, err := Decide(c.request, c.rows, c.now)
+		if err != nil {
+			t.Fatalf("%s: %v", c.request.Verb, err)
+		}
+		events = append(events, appliedEvent(c.request, moves))
+	}
+	for _, reason := range Reasons {
+		events = append(events, refusedEvent(Request{Verb: VerbRegister, KeyID: "N", Custody: custody}, reason))
+	}
+	for _, event := range events {
+		encoded, err := json.Marshal(event.Attributes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for key, value := range event.Attributes {
+			if _, ok := value.(string); !ok {
+				t.Errorf("%s attribute %s is %T; only strings are written", event.EventType, key, value)
+			}
+		}
+		for _, form := range forms {
+			if strings.Contains(string(encoded), form) {
+				t.Fatalf("%s attributes carry key material: %s", event.EventType, encoded)
+			}
+		}
+		if strings.Contains(string(encoded), "PRIVATE") || strings.Contains(string(encoded), "-----") {
+			t.Fatalf("%s attributes carry PEM text: %s", event.EventType, encoded)
 		}
 	}
 }

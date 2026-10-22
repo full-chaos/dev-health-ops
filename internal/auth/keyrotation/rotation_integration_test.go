@@ -428,6 +428,34 @@ func TestLiveRotation(t *testing.T) {
 			t.Errorf("audit %s = %d, want %d (all: %v)", key, counts[key], n, counts)
 		}
 	}
+	// No key material, public or private, in any encoding, reaches the trail.
+	var trail string
+	if err := e.admin.QueryRow(ctx, `SELECT COALESCE(string_agg(attributes::text, ' '), '') FROM auth.security_audit_events
+		WHERE event_type LIKE 'auth.signing_key.%'`).Scan(&trail); err != nil || trail == "" {
+		t.Fatalf("audit trail = %q, %v", trail, err)
+	}
+	for _, name := range []string{"a.pem", "b.pem", "c.pem", "b2.pem"} {
+		pemBytes, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		block, _ := pem.Decode(pemBytes)
+		private, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key := private.(ed25519.PrivateKey)
+		for _, raw := range [][]byte{key.Seed(), key.Public().(ed25519.PublicKey), block.Bytes} {
+			for _, form := range keyMaterialForms(raw) {
+				if strings.Contains(trail, form) {
+					t.Fatalf("the audit trail carries key material of %s", name)
+				}
+			}
+		}
+	}
+	if strings.Contains(trail, "PRIVATE") || strings.Contains(trail, dir) {
+		t.Fatal("the audit trail carries PEM text or a key path")
+	}
 	var attributes map[string]any
 	if err := e.admin.QueryRow(ctx, `SELECT attributes FROM auth.security_audit_events WHERE event_type = 'auth.signing_key.compromised'`).
 		Scan(&attributes); err != nil {

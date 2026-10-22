@@ -29,19 +29,22 @@ import (
 
 // The internal services a credential can be issued to, and the scopes each may hold.
 const (
-	ServiceACR            = "acr"
-	ServiceWorkerOperator = "worker-operator"
+	ServiceACR               = "acr"
+	ServiceWorkerOperator    = "worker-operator"
+	ServiceAuthSessionIssuer = "auth-session-issuer"
 
-	acrTokenPrefix            = "svc_acr_"
-	workerOperatorTokenPrefix = "svc_worker_"
+	acrTokenPrefix               = "svc_acr_"
+	workerOperatorTokenPrefix    = "svc_worker_"
+	authSessionIssuerTokenPrefix = "svc_authsess_"
 
 	// MaxOverlapSeconds is how long a rotated credential may stay valid beside its replacement.
 	MaxOverlapSeconds = 3600
 )
 
 var serviceScopes = map[string][]string{
-	ServiceACR:            {"entitlements:read", "llm_config:read"},
-	ServiceWorkerOperator: {"workers:read", "workers:operate"},
+	ServiceACR:               {"entitlements:read", "llm_config:read"},
+	ServiceWorkerOperator:    {"workers:read", "workers:operate"},
+	ServiceAuthSessionIssuer: {"sessions:issue"},
 }
 
 // ServiceNames are the services `--service` accepts, sorted as argparse's choices are.
@@ -146,6 +149,8 @@ func generateServiceToken(service string) (string, error) {
 	switch service {
 	case ServiceWorkerOperator:
 		prefix = workerOperatorTokenPrefix
+	case ServiceAuthSessionIssuer:
+		prefix = authSessionIssuerTokenPrefix
 	}
 	return prefix + base64.RawURLEncoding.EncodeToString(random), nil
 }

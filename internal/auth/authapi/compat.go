@@ -83,6 +83,9 @@ type CompatDeps struct {
 	Login *LoginConfig
 	// Social mounts POST /api/v1/auth/social-login; nil leaves it unmounted.
 	Social SocialExchange
+	// ServiceCredentials mounts POST /internal/v1/sessions, the session issue
+	// route go-api calls; nil leaves it unmounted.
+	ServiceCredentials ServiceCredentials
 }
 
 type compatHandlers struct {
@@ -125,6 +128,9 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 		h.login = login
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin),
 			ErrorWriter: h.signInTransportRefusal(providerLocal)})
+	}
+	if deps.ServiceCredentials != nil {
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternIssueSession, Handler: http.HandlerFunc(h.issueSession)})
 	}
 	if deps.Social != nil {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin),

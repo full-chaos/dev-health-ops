@@ -53,7 +53,7 @@ const linearPseudoProjectCleanupSelectQuery = `SELECT org_id, id, name, is_activ
 
 const linearPseudoProjectCleanupSelectQueryScoped = linearPseudoProjectCleanupSelectQuery + ` AND org_id = {org_id:String}`
 
-// mutations_sync=1 makes this ALTER TABLE DELETE block until ClickHouse has
+// mutations_sync=2 makes this ALTER TABLE DELETE block until ClickHouse has
 // actually applied it, rather than merely queuing an async mutation --
 // deliberate for a rare, deliberate operator action: the caller's reported
 // row count must describe rows that are ACTUALLY gone by the time this
@@ -128,9 +128,7 @@ func RetireLinearPseudoProjectRows(ctx context.Context, conn driver.Conn, orgID 
 	if dryRun || len(outcome.Rows) == 0 {
 		return outcome, nil
 	}
-	syncCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
-		"mutations_sync": "1",
-	}))
+	syncCtx := clickhouse.Context(ctx, clickhouse.WithSettings(cleanupDeleteSettings()))
 	if err := conn.Exec(syncCtx, mutation, namedArgs...); err != nil {
 		return outcome, err
 	}

@@ -135,8 +135,6 @@ type StatusLedger struct {
 // shas of the reading it came from.
 type Render struct {
 	SchemaVersion int `json:"schema_version"`
-	// RenderedAt is when -render ran.
-	RenderedAt time.Time `json:"rendered_at"`
 	// OpsSha is the MERGE-BASE with main at render time -- the last commit
 	// on main that the render observed -- NOT the commit the render ran on.
 	//
@@ -149,10 +147,6 @@ type Render struct {
 	// already on main), and it still bounds staleness, because a render made
 	// from a long-stale branch has a correspondingly old merge-base.
 	OpsSha string `json:"ops_sha"`
-	// RenderCommit is the commit actually checked out when -render ran.
-	// Recorded for the audit trail and NEVER ancestry-checked, precisely
-	// because a branch commit legitimately stops existing after a squash.
-	RenderCommit string `json:"render_commit,omitempty"`
 	// SchemaDigest is the current contracts/graphql/v1/schema-digest.json pin.
 	SchemaDigest string `json:"schema_digest"`
 	// FleetReadAt is when the image labels were read (zero if not read).

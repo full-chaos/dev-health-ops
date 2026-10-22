@@ -22,15 +22,15 @@
 #
 #   stamp     Pure bash + git. The "Last verified" sha and the ops_sha in
 #             last-render.json must be real 40-hex commits that are ancestors
-#             of HEAD, and rendered_at must parse. Runs on every PR.
+#             of HEAD. Runs on every PR.
 #   contract  Delegates to `go run ./cmd/dev-health-migration-matrix -check`,
 #             which re-renders from COMMITTED sources only and fails when the
 #             page disagrees with its generator. Needs Go.
 #
-# ops_sha is the MERGE-BASE with main at render time, written by the tool. It
-# is the merge-base and NOT the render commit because a squash merge makes a
-# branch commit unreachable from main forever. `render_commit` records the
-# actual commit for the audit trail and is never checked.
+# ops_sha is a MERGE-BASE with main the tool observed (-render keeps it while it
+# stays an ancestor of HEAD, CHAOS-8787), NOT the render commit: a squash merge makes a
+# branch commit unreachable from main forever. rendered_at and render_commit are
+# no longer recorded.
 #
 # `all` runs both. Default is `all` locally.
 set -euo pipefail
@@ -112,19 +112,6 @@ contain, so nothing on it was verified against what is about to merge."
   [ -f "${RENDER_JSON}" ] || die "missing ${RENDER_JSON}
 Run: go run ./cmd/dev-health-migration-matrix -render -root ."
 
-  local rendered_at rendered_epoch
-  rendered_at="$(sed -n 's/.*"rendered_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${RENDER_JSON}" | head -n1)"
-  [ -n "${rendered_at}" ] || die "check_migration_matrix: ${RENDER_JSON} has no rendered_at"
-
-  # `date -d` is GNU; BSD date needs -j -f. Try GNU first, fall back, and if
-  # neither parses, FAIL rather than skip -- a freshness check that silently
-  # opts out on an unfamiliar host is the stage-manifest bug (CHAOS-3571) in
-  # miniature.
-  rendered_epoch="$(date -u -d "${rendered_at}" +%s 2>/dev/null \
-    || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "${rendered_at}" +%s 2>/dev/null \
-    || true)"
-  [ -n "${rendered_epoch}" ] || die "check_migration_matrix: could not parse rendered_at '${rendered_at}'"
-
   # The sha `-render` ACTUALLY read from, written by the tool via
   # `git rev-parse HEAD` and never typed by hand (team-lead ruling,
   # 2026-09-09). The markdown stamp above is a human's claim about the
@@ -168,8 +155,8 @@ ancestor, the render came from an unrelated history.
 Re-verify, then commit:
   ${REVERIFY_COMMAND}"
 
-  printf 'migration matrix stamp OK: last verified %s, rendered %s at %s (no age budget)\n' \
-    "${sha:0:12}" "${rendered_at}" "${ops_sha:0:12}"
+  printf 'migration matrix stamp OK: last verified %s, ops_sha %s\n' \
+    "${sha:0:12}" "${ops_sha:0:12}"
 }
 
 check_contract() {

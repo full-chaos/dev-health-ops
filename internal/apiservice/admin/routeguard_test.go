@@ -17,7 +17,7 @@ import (
 // the whole route table this Service mounts under that prefix, so this list is also the test's own coverage statement.
 // The list is not trusted: TestAdminRouteGuardListsCoverEveryRouteTable parses every non-test file of the package and
 // fails for a table in a file that is not listed, and for a listed file that holds none.
-var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go", "platformstats.go", "featureflags.go", "auditlogs.go", "ipallowlist.go", "retention.go", "settings.go", "llmsettings.go", "pagerduty.go", "pagerduty_disconnect.go", "pagerduty_authorize.go", "pagerduty_callback.go", "pagerduty_manual.go", "pagerduty_bindings.go", "credentialdelete.go", "pagerduty_services.go", "ownmodel.go", "servicemodel.go", "setupstatus.go"}
+var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go", "platformstats.go", "featureflags.go", "auditlogs.go", "ipallowlist.go", "retention.go", "settings.go", "llmsettings.go", "pagerduty.go", "pagerduty_disconnect.go", "pagerduty_authorize.go", "pagerduty_callback.go", "pagerduty_manual.go", "pagerduty_bindings.go", "credentialdelete.go", "pagerduty_services.go", "ownmodel.go", "promptcache.go", "servicemodel.go", "setupstatus.go"}
 
 // adminRouteGuardFuncs names the methods parsed for a Route table. Like the file list it is checked against the package
 // source (every method holding a Route literal must be named, every name must match one): a route table registered
@@ -43,6 +43,7 @@ var adminRouteGuardFuncs = map[string]bool{
 	"credentialDeleteRoutes":    true,
 	"pagerDutyServicesRoutes":   true,
 	"ownModelRoutes":            true,
+	"promptCacheRoutes":         true,
 	"serviceModelRoutes":        true,
 	"setupStatusRoutes":         true,
 }

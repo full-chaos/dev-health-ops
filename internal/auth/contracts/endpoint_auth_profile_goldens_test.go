@@ -183,10 +183,11 @@ func TestRejectedEndpointAuthProfileFixturesAreRejectedByTheDeclaredRule(t *test
 // endpointAuthProfileGateRefusals is the refusal each reject_by_client fixture
 // must draw from the profile gate. The schema accepts every one of them.
 var endpointAuthProfileGateRefusals = map[string]string{
-	"invalid-user-access-token-pins-the-envelope-typ.json":     `class "user_access_token" pins token_type "jwt"; its jwt_header_typ marker is "at+jwt"`,
-	"invalid-envelope-pins-the-access-token-typ.json":          `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
-	"invalid-tokens-envelope-and-user-token-typs-swapped.json": `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
-	"invalid-user-access-token-pins-hs256.json":                `class "user_access_token" pins algorithm "HS256"; its jwt_header_alg marker is "EdDSA"`,
+	"invalid-user-access-token-pins-the-envelope-typ.json":         `class "user_access_token" pins token_type "jwt"; its jwt_header_typ marker is "at+jwt"`,
+	"invalid-envelope-pins-the-access-token-typ.json":              `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
+	"invalid-tokens-envelope-and-user-token-typs-swapped.json":     `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
+	"invalid-user-access-token-pins-hs256.json":                    `class "user_access_token" pins algorithm "HS256"; its jwt_header_alg marker is "EdDSA"`,
+	"invalid-content-type-selector-no-accepted-class-owns-it.json": `selector content_type/application/x-www-form-urlencoded is declared by none of the accepted classes`,
 }
 
 func TestEndpointAuthProfileGateRefusalTableEqualsTheManifest(t *testing.T) {

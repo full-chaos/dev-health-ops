@@ -10,3 +10,11 @@
 ALTER TABLE users
     ADD COLUMN legacy_token_version bigint NOT NULL DEFAULT 0,
     ADD COLUMN last_login_at timestamptz;
+
+-- legacy_token_version changes who may act (a bump ends every token minted
+-- before it), so like users' other security columns it is written only inside
+-- audit.Commit. last_login_at is a high-rate lifecycle column and is not
+-- guarded.
+CREATE TRIGGER users_token_version_guard
+    BEFORE UPDATE OF legacy_token_version ON users
+    FOR EACH ROW EXECUTE FUNCTION audit_commit_guard();

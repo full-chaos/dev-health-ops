@@ -522,8 +522,8 @@ goWorkers:
   #    and Secret in go-workers.yaml's envFrom list, same rule and same
   #    order as queryApi.extraEnvFrom -- Kubernetes resolves a duplicate
   #    key in favour of the LAST envFrom source, so this loses to the
-  #    chart's own config/secret on any key both set. Shared by every
-  #    worker group; there is no per-group override.
+  #    chart's own config/secret on any key both set. Shared by every non-stream
+  #    worker group (a stream group reads only the chart's own sources); no per-group override.
   extraEnvFrom: []
   # The production Go topology has three distinct PostgreSQL endpoints.
   # Domain traffic uses a bounded transaction pool. River queue control and

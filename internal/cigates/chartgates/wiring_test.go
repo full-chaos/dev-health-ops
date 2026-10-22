@@ -257,6 +257,12 @@ func envFromSharedAcrossGroups(g *guard) {
 	g.expect(len(deps) >= 2, "expected more than one worker-group Deployment, got %d", len(deps))
 	for _, d := range deps {
 		refs := envFromRefs(containers(d)[0])
+		if label(d, "dev-health.io/worker-group") != "" && strings.HasPrefix(label(d, "dev-health.io/worker-group"), "stream-") {
+			// A stream group reads only the chart's own sources: an operator-supplied
+			// Secret has keys no render can see, and the stream class carries one DSN.
+			g.expect(len(refs) == 2 && refs[0][0] == "configMapRef" && refs[1][0] == "secretRef", "%s must read only the chart's own config and secret sources: %v", name(d), refs)
+			continue
+		}
 		g.expect(len(refs) > 0 && refs[0] == [2]string{"secretRef", "local-dotenv"}, "%s did not get the shared extraEnvFrom entry first: %v", name(d), refs)
 	}
 }
@@ -380,6 +386,10 @@ func TestWiringGuardsRealTree(t *testing.T) {
 	)
 }
 
+// sharedEnvFromBlock is the template text that starts a group's envFrom list from the shared
+// extraEnvFrom, for every group except a stream group.
+const sharedEnvFromBlock = "{{- $groupEnvFrom := list }}\n          {{- if not $group.runtimeProfile }}\n          {{- $groupEnvFrom = $.Values.goWorkers.extraEnvFrom | default (list) }}\n          {{- end }}"
+
 func TestWiringGuardsPlantedDefects(t *testing.T) {
 	const helpers = "templates/_helpers.tpl"
 	const workers = "templates/go-workers.yaml"
@@ -419,13 +429,13 @@ func TestWiringGuardsPlantedDefects(t *testing.T) {
 			mut(chartFile(workers), `{{- if and $group.autoscaling $group.autoscaling.enabled (gt (int $group.autoscaling.minReplicas) 1) }}`, `{{- if false }}`),
 			kedaMinimumAboveOneRefused, "an autoscaled group with minReplicas above 1"},
 		{"envfrom-extra-renders-after-the-chart-sources", chartOnly,
-			all(mut(chartFile(workers), `{{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}`, `{{- $groupEnvFrom := list }}`),
+			all(mut(chartFile(workers), sharedEnvFromBlock, `{{- $groupEnvFrom := list }}`),
 				mut(chartFile(workers), `{{- $groupEnvFrom = append $groupEnvFrom (dict "secretRef" (dict "name" (include "dev-health.secretName" $))) }}`,
 					`{{- $groupEnvFrom = append $groupEnvFrom (dict "secretRef" (dict "name" (include "dev-health.secretName" $))) }}
           {{- $groupEnvFrom = concat $groupEnvFrom ($.Values.goWorkers.extraEnvFrom | default (list)) }}`)),
 			envFromExtraFirst, "must render first"},
 		{"envfrom-extra-dropped-for-all-but-one-group", chartOnly,
-			mut(chartFile(workers), `{{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}`, `{{- $groupEnvFrom := ternary ($.Values.goWorkers.extraEnvFrom | default (list)) (list) (eq $group.name "heavy") }}`),
+			mut(chartFile(workers), sharedEnvFromBlock, `{{- $groupEnvFrom := ternary ($.Values.goWorkers.extraEnvFrom | default (list)) (list) (eq $group.name "heavy") }}`),
 			envFromSharedAcrossGroups, "did not get the shared extraEnvFrom entry"},
 		{"envfrom-default-gains-an-entry", chartOnly,
 			mut(chartFile(workers), cmRef+" }}\n", cmRef+" }}\n          {{- $groupEnvFrom = append $groupEnvFrom (dict \"secretRef\" (dict \"name\" \"extra\")) }}\n"),

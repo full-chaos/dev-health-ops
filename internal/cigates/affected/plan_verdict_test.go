@@ -357,7 +357,7 @@ func TestPlanVerdictReviewedWrongWayCasesPlanTheReader(t *testing.T) {
 	runRows(t, []verdictRow{
 		// 0b4d992e9b: AFFECTED 1 [b]; c, whose test calls b.Load, was skipped.
 		{name: "importer_of_an_env_reader", head: map[string]string{"b/b_dyn.go": fmt.Sprintf(plantedEnvReader, "b"),
-			"internal/cigates/affected/dynreads.tsv": "b\tb_dyn.go\n"},
+			"internal/cigates/affected/dynreads.tsv": "b\tb_dyn.go\n", "internal/cigates/affected/reach.tsv": "b\tb_dyn.go\t*\n"},
 			changed: []string{"AGENTS.md"}, want: "AFFECTED 2", keys: []string{"b", "c"}},
 		// 0b4d992e9b: AFFECTED 1 [a]; x, reading ../docs through READ_PATH, was skipped.
 		{name: "own_join_escape", head: map[string]string{"x/x_own_test.go": plantedOwnJoin},

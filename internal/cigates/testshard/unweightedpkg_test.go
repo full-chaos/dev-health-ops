@@ -267,7 +267,8 @@ func TestThePackagesMeasuredHeavyOnMainHaveRows(t *testing.T) {
 	}
 	for _, key := range []string{"internal/cigates/outboundtransport", "internal/cigates/raceunweighted", "internal/cigates/bigboy",
 		"internal/syncdispatchruntime", "internal/testsupport/venueoracle/goldenhygiene", "internal/queryapiservice",
-		"internal/auth/contracts", "internal/cigates/affected"} {
+		"internal/auth/contracts", "internal/cigates/affected",
+		"internal/storage/clickhouse", "internal/cigates/docstools", "internal/platform/tracing"} {
 		if !weighted[key] {
 			t.Errorf("%s ran >= 20 s in a main test leg and has no row in ci/go_test_weights.tsv", key)
 		}

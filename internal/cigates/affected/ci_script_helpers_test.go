@@ -27,6 +27,7 @@ type cmdSpec struct {
 	dir   string
 	env   []string
 	stdin []byte
+	slots chan struct{}
 }
 
 // subprocessSlots caps how many child processes of this package run at once: every guard is parallel, and an uncapped
@@ -34,8 +35,12 @@ type cmdSpec struct {
 var subprocessSlots = make(chan struct{}, 1)
 
 func (c cmdSpec) run(name string, args ...string) cmdResult {
-	subprocessSlots <- struct{}{}
-	defer func() { <-subprocessSlots }()
+	slots := c.slots
+	if slots == nil {
+		slots = subprocessSlots
+	}
+	slots <- struct{}{}
+	defer func() { <-slots }()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = c.dir
 	cmd.Env = withNoPythonShims(c.env)

@@ -33,6 +33,10 @@ var (
 	realPlanDir string
 )
 
+// realPlanSlots lets four real-tree plan verdicts (each one core, about 19 s) run at once: one at a time they queue the
+// package past its go test timeout beside the other packages of the shard.
+var realPlanSlots = make(chan struct{}, 4)
+
 func removeRealPlanDir() {
 	if realPlanDir != "" {
 		_ = os.RemoveAll(realPlanDir)
@@ -82,7 +86,7 @@ func realPlan(t *testing.T, changed string) []string {
 	if err := os.WriteFile(list, []byte(changed+"\x00"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res := cmdSpec{dir: root, env: inheritedEnv([]string{"GOFLAGS"}, "GOFLAGS=")}.run(cigate(t), "plan-verdict", "--event", "pull_request",
+	res := cmdSpec{dir: root, env: inheritedEnv([]string{"GOFLAGS"}, "GOFLAGS="), slots: realPlanSlots}.run(cigate(t), "plan-verdict", "--event", "pull_request",
 		"--changed", list, "--golist", in.golist, "--keys", in.keys, "--root", root)
 	if res.code != 0 {
 		t.Fatalf("plan-verdict exited %d: %s", res.code, res.stderr)
@@ -92,6 +96,7 @@ func realPlan(t *testing.T, changed string) []string {
 
 // One row per executed repro of a test that reads another package's files.
 func TestAlwaysSelectedPackagesRunOnGoOnlyChanges(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ changed, want string }{
 		// pgmigrate's hand-written-DDL guard scans every *_test.go in the module.
 		{"internal/jobruntime/worker_presence_integration_test.go", "internal/pgmigrate"},
@@ -122,6 +127,7 @@ func TestAlwaysSelectedPackagesRunOnGoOnlyChanges(t *testing.T) {
 // The planner's code, its compiled-in data and the steps that run it plan FULL: a pull request that edits them must not
 // be planned by the closure it changes.
 func TestPlannerInputsPlanFull(t *testing.T) {
+	t.Parallel()
 	for _, changed := range []string{
 		"cmd/cigate/main.go",
 		"internal/cigates/affected/plan.go",

@@ -11,7 +11,7 @@ internal/api/syncadmin	37
 internal/api/teamsidentity	47
 internal/atlassianteams	17
 internal/auth/contracts	25
-internal/cigates/affected	195
+internal/cigates/affected	150
 internal/cigates/affectedmatrix	102
 internal/cigates/affectedmodule	32
 internal/cigates/affectedreject	173

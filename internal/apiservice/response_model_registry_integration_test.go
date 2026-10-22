@@ -37,6 +37,8 @@ var goRoutesWithoutPython = map[string]string{
 	"PUT /api/v1/admin/llm-settings/service-model":        "Go-only self-service acr_service_model toggle (CHAOS-10243); no Python ancestor",
 	"GET /api/v1/admin/llm-settings/own-model":            "Go-only org-admin own-model on/off toggle; no Python ancestor",
 	"PUT /api/v1/admin/llm-settings/own-model":            "Go-only org-admin own-model on/off toggle; no Python ancestor",
+	"GET /api/v1/admin/llm-settings/prompt-cache":         "Go-only org-admin BYO prompt-cache opt-in; no Python ancestor",
+	"PUT /api/v1/admin/llm-settings/prompt-cache":         "Go-only org-admin BYO prompt-cache opt-in; no Python ancestor",
 	"POST /api/v1/billing/plans/{plan_id}":                "answers 405 for every id; POST /api/v1/billing/plans/pull-stripe is its own pattern",
 	"HEAD /api/v1/billing/plans/pull-stripe":              "answers the 405 FastAPI gives a HEAD there (Allow: POST); without it the GET /plans/{plan_id} route's 405 would answer",
 	"GET /api/v1/auth/oauth/{first}/{second}":             "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",

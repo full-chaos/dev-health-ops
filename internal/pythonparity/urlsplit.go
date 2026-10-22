@@ -21,7 +21,7 @@ const urlSchemeChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123
 var urlIPvFuture = regexp.MustCompile(`\A[vV][a-fA-F0-9]+\..+\z`)
 
 // URLSplit is the part of urllib.parse.SplitResult (CPython 3.14, the
-// interpreter uv.lock pins) that callers read: the scheme (lower-cased), the
+// interpreter the Go port follows) that callers read: the scheme (lower-cased), the
 // netloc and the path.
 type URLSplit struct {
 	Scheme, Netloc, Path string

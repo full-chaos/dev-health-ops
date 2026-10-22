@@ -185,3 +185,52 @@ func TestEdgeVerifier_UsersRowRefusalsLogTheReasonNotTheSubject(t *testing.T) {
 		})
 	}
 }
+
+func TestEdgeVerifier_OrglessTokenNeedsALiveSuperuserRow(t *testing.T) {
+	t.Run("non-superuser is refused with the org-required error", func(t *testing.T) {
+		claims, err := verifyWithUsers(t, activeUserStore(), func(c map[string]any) { delete(c, "org_id") })
+		if claims != nil {
+			t.Fatalf("claims = %+v, want nil", claims)
+		}
+		var orgErr *OrgRequiredError
+		if !errors.As(err, &orgErr) {
+			t.Fatalf("err = %v, want *OrgRequiredError", err)
+		}
+		if policy.IsRefusal(err) {
+			t.Fatalf("err must not read as an invalid-credential refusal")
+		}
+	})
+	t.Run("empty org claim is refused too", func(t *testing.T) {
+		_, err := verifyWithUsers(t, activeUserStore(), func(c map[string]any) { c["org_id"] = "" })
+		var orgErr *OrgRequiredError
+		if !errors.As(err, &orgErr) {
+			t.Fatalf("err = %v, want *OrgRequiredError", err)
+		}
+	})
+	t.Run("token superuser claim does not lift it", func(t *testing.T) {
+		_, err := verifyWithUsers(t, activeUserStore(), func(c map[string]any) {
+			delete(c, "org_id")
+			c["is_superuser"] = true
+		})
+		var orgErr *OrgRequiredError
+		if !errors.As(err, &orgErr) {
+			t.Fatalf("err = %v, want *OrgRequiredError", err)
+		}
+	})
+	t.Run("live superuser row is served", func(t *testing.T) {
+		users := &fakeUsers{state: policy.UserState{IsActive: true, IsSuperuser: true}, found: true}
+		claims, err := verifyWithUsers(t, users, func(c map[string]any) { delete(c, "org_id") })
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if claims.OrgID != "" {
+			t.Fatalf("OrgID = %q, want empty", claims.OrgID)
+		}
+	})
+	t.Run("token with an org is served", func(t *testing.T) {
+		claims, err := verifyWithUsers(t, activeUserStore(), nil)
+		if err != nil || claims.OrgID != "org-42" {
+			t.Fatalf("claims=%+v err=%v", claims, err)
+		}
+	})
+}

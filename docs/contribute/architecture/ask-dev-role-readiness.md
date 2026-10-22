@@ -241,11 +241,11 @@ request shape.
 ## The live convergence gate
 
 `tests/api/dev/test_live_openai_smoke.py` (removed with the Python api) exercises the real adapter against
-a real OpenAI-compatible endpoint when live credentials are configured. By
-default, a missing credential is a `pytest.skip` -- an ordinary local run
-without live credentials configured is not an error. Setting
-`ASK_DEV_LIVE_GATE=1` marks the run as the actual convergence gate: under
-that flag, a missing credential becomes a `pytest.fail` instead. A gate that
+a real OpenAI-compatible endpoint when live credentials were configured. By
+default, a missing credential was a `pytest.skip` -- an ordinary local run
+without live credentials configured was not an error. Setting
+`ASK_DEV_LIVE_GATE=1` marked the run as the actual convergence gate: under
+that flag, a missing credential became a `pytest.fail` instead. A gate that
 can silently skip its own measurement reads as passing coverage it never
 took; the flag exists so that failure is loud rather than invisible. Under
 that flag the gate also runs the real `certify_legacy_agent` probe against

@@ -1,0 +1,4 @@
+check-freshness
+--inv=inv.yml
+--d
+docs/

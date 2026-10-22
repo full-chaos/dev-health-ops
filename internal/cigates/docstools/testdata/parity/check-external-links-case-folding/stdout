@@ -1,0 +1,2 @@
+ERROR: index.html: missing built page for https://i̇.example/x/
+ERROR: index.html: allowlist entry for https://I.example/y/ expired on 2000-01-01 (owner: a, reason: b)

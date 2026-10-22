@@ -7,8 +7,6 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
-      - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_docs_candidate_accessibility.py'
       - 'scripts/check_freshness_inventory.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
@@ -19,8 +17,6 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'requirements-docs.txt'
-      - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_docs_candidate_accessibility.py'
       - 'scripts/check_freshness_inventory.py'
       - 'docs-data/**'
       - '.github/workflows/docs-guards.yml'
@@ -86,7 +82,7 @@ jobs:
         run: |
           mkdir -p .build
           set -o pipefail
-          python scripts/validate_docs_v2_publication.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs validate-publication \
             2>&1 | tee .build/docs-publication-validation.log
 
       - name: Strict canonical build
@@ -113,7 +109,7 @@ jobs:
       - name: Check structural accessibility invariants
         run: |
           set -o pipefail
-          python scripts/check_docs_candidate_accessibility.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-docs-accessibility \
             --site-dir .build/docs \
             --css docs/stylesheets/extra.css \
             2>&1 | tee .build/docs-accessibility.log
@@ -134,7 +130,7 @@ jobs:
       - name: Check freshness inventory
         run: |
           set -o pipefail
-          python scripts/check_freshness_inventory.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-freshness \
             2>&1 | tee .build/docs-freshness-inventory.log
 
       - name: Upload documentation quality evidence

@@ -143,7 +143,9 @@ CREATE TABLE teams (
     id String,
     name String,
     is_active UInt8 DEFAULT 1,
-    org_id String
+    org_id String,
+    updated_at DateTime64(6) DEFAULT now64(6),
+    last_synced DateTime64(6) DEFAULT now64(6)
 ) ENGINE = ReplacingMergeTree()
 ORDER BY (org_id, id);
 `

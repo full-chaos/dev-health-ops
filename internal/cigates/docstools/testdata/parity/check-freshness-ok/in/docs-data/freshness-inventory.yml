@@ -1,0 +1,9 @@
+- page: guide.md
+  disposition: refresh
+  owner: docs-team
+  last-reviewed: '2999-07-01'
+- page: guide.md
+  disposition: retire
+  owner: ''
+  last-reviewed: "2999-W01"
+  replacement: replacement.md

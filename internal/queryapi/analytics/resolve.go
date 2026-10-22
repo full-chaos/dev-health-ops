@@ -97,6 +97,9 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 //   - the evidence quality by group (one statement, when the batch names a
 //     group).
 //   - the coverage of a sankey (one statement beside the grouped sankey).
+//   - the flow of a sankey (nodes and edges: the grouped sankey statement and
+//     its telemetry probes). An operation that selects only the coverage of a
+//     sankey does not send them.
 //
 // The zero value selects nothing. A caller that does not know the selection
 // uses EverythingSelected.
@@ -105,6 +108,7 @@ type Selection struct {
 	EvidenceQualityStats   bool
 	EvidenceQualityByGroup bool
 	SankeyCoverage         bool
+	SankeyFlow             bool
 	// TimeseriesScope: the operation selects timeseries.scope, so it can tell the org series from a dimension series.
 	// An operation that does not select it is served the dimension series only (CHAOS-9736).
 	TimeseriesScope bool
@@ -112,7 +116,7 @@ type Selection struct {
 
 // EverythingSelected is the selection of a caller that reads every part.
 func EverythingSelected() Selection {
-	return Selection{Breakdowns: true, EvidenceQualityStats: true, EvidenceQualityByGroup: true, SankeyCoverage: true, TimeseriesScope: true}
+	return Selection{Breakdowns: true, EvidenceQualityStats: true, EvidenceQualityByGroup: true, SankeyCoverage: true, SankeyFlow: true, TimeseriesScope: true}
 }
 
 // ResolveSelected is Resolve for an operation whose selection is known: the
@@ -170,6 +174,10 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 			return nil, err
 		}
 	}
+
+	// One request, one clock: every dateRange of the batch is read at the same instant of UTC, so a request that crosses
+	// midnight reads one window in all its parts (CHAOS-10118).
+	batch = snapshotWindows(batch)
 
 	// batch-level useInvestment resolution: timeseries/breakdown ALWAYS
 	// coerce to a concrete bool (analytics.py:554 `bool(batch.use_investment)`,
@@ -240,7 +248,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	// is a failed execute (CHAOS-8186).
 	var sankeyResult *model.SankeyResult
 	if batch.Sankey != nil {
-		result, err := resolveSankey(ctx, client, orgID, *batch.Sankey, batch.UseInvestment, resolvedFilters, selected.SankeyCoverage)
+		result, err := resolveSankey(ctx, client, orgID, *batch.Sankey, batch.UseInvestment, resolvedFilters, selected.SankeyCoverage, selected.SankeyFlow)
 		if err != nil {
 			return nil, fmt.Errorf("analytics: sankey: %w", err)
 		}
@@ -409,7 +417,7 @@ func pathAutoRoutesToInvestment(path []Dimension) bool {
 	return false
 }
 
-func resolveSankey(ctx context.Context, client QueryClient, orgID string, input model.SankeyRequestInput, batchUseInvestment *bool, filters *model.FilterInput, coverageSelected bool) (*model.SankeyResult, error) {
+func resolveSankey(ctx context.Context, client QueryClient, orgID string, input model.SankeyRequestInput, batchUseInvestment *bool, filters *model.FilterInput, coverageSelected, flowSelected bool) (*model.SankeyResult, error) {
 	req, err := SankeyRequestFromInput(input)
 	if err != nil {
 		return nil, err
@@ -455,7 +463,7 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	if err != nil {
 		return nil, err
 	}
-	if useInvestment {
+	if useInvestment && flowSelected {
 		// CHAOS-4759 transition guard (codex round-2 P1 fix): unlike
 		// RecordStaleInvestmentMembershipScope below -- deliberately absent
 		// here to mirror Python's _execute_sankey_inner, which has no
@@ -538,9 +546,12 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	)
 	// The coverage is its own statement: it is sent only for an operation that
 	// selected sankey.coverage.
-	sankeyReads := 1
+	sankeyReads := 0
+	if flowSelected {
+		sankeyReads++
+	}
 	if coverageSelected {
-		sankeyReads = 2
+		sankeyReads++
 		coverageConcurrent.Add(1)
 		go func() {
 			defer coverageConcurrent.Done()
@@ -548,7 +559,9 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 			coverageElapsed = time.Since(started)
 		}()
 	}
-	nodes, edges, execErr = executeSankeyGrouped(ctx, client, groupedQuery)
+	if flowSelected {
+		nodes, edges, execErr = executeSankeyGrouped(ctx, client, groupedQuery)
+	}
 	sankeyElapsed = time.Since(started)
 	coverageConcurrent.Wait()
 	if execErr != nil {

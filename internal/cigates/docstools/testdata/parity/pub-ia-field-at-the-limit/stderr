@@ -1,0 +1,3 @@
+canonical URLs outside the approved IA: ['/', '/guide/advanced/', '/guide/intro/', '/reference/']
+redirect target outside approved IA: /old/ -> /guide/intro/
+redirect target outside approved IA: /older/ -> /reference/

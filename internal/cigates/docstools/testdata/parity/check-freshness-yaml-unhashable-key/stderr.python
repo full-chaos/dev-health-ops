@@ -1,0 +1,8 @@
+yaml.constructor.ConstructorError: while constructing a mapping
+  in "<unicode string>", line 1, column 3:
+    - ? [a]
+      ^
+found unhashable key
+  in "<unicode string>", line 1, column 5:
+    - ? [a]
+        ^

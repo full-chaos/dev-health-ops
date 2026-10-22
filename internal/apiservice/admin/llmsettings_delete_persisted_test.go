@@ -37,6 +37,7 @@ func TestLLMSettingsDeleteClearsDerivedRows(t *testing.T) {
 		{"llm", "api_key", true},
 		{"llm", "base_url", true},
 		{"llm", "concurrency", true},
+		{"llm", "prompt_cache", true},
 		{"llm", "ask_dev_agent_readiness", true},
 		{"llm", "ask_dev_role_certification_profile:legacy_agent", true},
 		{"llm", "ask_dev_role_certification_profile:intent_classification", true},

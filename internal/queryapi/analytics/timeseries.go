@@ -123,9 +123,9 @@ func joinColumns(cols []string) string {
 func nonInvestmentSourceAndDateFilter(measure Measure) (source, alias, dateFilter string) {
 	if table := measureSourceTable(measure); table != "" {
 		src, al := dedupFromMeasureSource(table)
-		return src, al, "day >= {start_date:Date} AND day <= {end_date:Date}"
+		return src, al, "day >= {start_date:Date} AND day < {end_date:Date}"
 	}
-	return workItemCompletionDedupSource, "work_item_completion_daily", "day >= {start_date:Date} AND day <= {end_date:Date}"
+	return workItemCompletionDedupSource, "work_item_completion_daily", "day >= {start_date:Date} AND day < {end_date:Date}"
 }
 
 // TimeseriesRequest is the Go port of compiler.py's TimeseriesRequest
@@ -140,7 +140,8 @@ type TimeseriesRequest struct {
 	Measure   Measure
 	Interval  BucketInterval
 	StartDate graphqldate.Date
-	EndDate   graphqldate.Date
+	// EndDate is the EXCLUSIVE end of the window (windowEndExclusive): the day after the last day the request names.
+	EndDate graphqldate.Date
 }
 
 func intervalFromInput(i model.BucketIntervalInput) (BucketInterval, error) {
@@ -174,12 +175,16 @@ func TimeseriesRequestFromInput(input model.TimeseriesRequestInput) (TimeseriesR
 	if input.DateRange == nil {
 		return TimeseriesRequest{}, newValidationError("dateRange", nil, "timeseries.dateRange is required")
 	}
+	start, end, err := dateRangeBounds(input.DateRange)
+	if err != nil {
+		return TimeseriesRequest{}, err
+	}
 	return TimeseriesRequest{
 		Dimension: dim,
 		Measure:   measure,
 		Interval:  interval,
-		StartDate: input.DateRange.StartDate,
-		EndDate:   input.DateRange.EndDate,
+		StartDate: start,
+		EndDate:   end,
 	}, nil
 }
 

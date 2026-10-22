@@ -40,6 +40,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -561,6 +562,9 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 	if intendedNoStore(request, py, gr) {
 		skip = withSkipped(skip, "cache-control")
 	}
+	if intendedAllowWidening(request, py, gr) {
+		skip = withSkipped(skip, "allow")
+	}
 	compared := headerUnion(py.Headers, gr.Headers, skip)
 	for _, header := range compared {
 		pv, pok := py.Headers[header]
@@ -591,6 +595,26 @@ func intendedNoStore(request Request, py, gr Response) bool {
 		return false
 	}
 	return gr.Headers["cache-control"] == "no-store"
+}
+
+// intendedAllowWidening is the declared divergence "admin 405 Allow lists every served method" (chris, CHAOS-10555,
+// RFC 9110 10.2.1): Starlette named only the first matching route's methods, which the frozen goldens carry; Go lists
+// every method the path serves (internal/apiservice pins the exact list). It applies only to a 405 on an admin path
+// whose Go Allow is a strict superset of the frozen one; any other Allow difference still compares.
+func intendedAllowWidening(request Request, py, gr Response) bool {
+	if py.Status != http.StatusMethodNotAllowed || gr.Status != http.StatusMethodNotAllowed || !strings.HasPrefix(request.Path, "/api/v1/admin/") {
+		return false
+	}
+	pyAllow, goAllow := strings.Split(py.Headers["allow"], ", "), strings.Split(gr.Headers["allow"], ", ")
+	if py.Headers["allow"] == "" || len(goAllow) <= len(pyAllow) {
+		return false
+	}
+	for _, method := range pyAllow {
+		if !slices.Contains(goAllow, method) {
+			return false
+		}
+	}
+	return true
 }
 
 func withSkipped(skip map[string]bool, name string) map[string]bool {

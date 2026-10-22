@@ -1,0 +1,5 @@
+ERROR: missing.md: freshness inventory references a missing page
+ERROR: guide.md: retired pages must name a replacement page
+ERROR: guide.md: retired pages must name a replacement page
+ERROR: guide.md: replacement page gone.md does not exist
+ERROR: /etc/hostname-not-here.md: freshness inventory references a missing page

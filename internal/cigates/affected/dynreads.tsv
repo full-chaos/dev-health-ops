@@ -424,6 +424,7 @@ internal/queryapi/quadrant	golden_test.go
 internal/queryapi/quadrant	identity.go
 internal/queryapi/recommendations	goldens_frozen_python_oracle_test.go
 internal/queryapi/reports/writeproofcases	cases_test.go
+internal/queryapi/rowview	census_test.go
 internal/queryapi/sankey	golden_test.go
 internal/queryapi/scancensus	census_test.go
 internal/queryapi/server	build_routes_integration_test.go

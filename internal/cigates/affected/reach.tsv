@@ -669,9 +669,11 @@ internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle/goldenhygiene
 internal/testsupport/venueoracle	golden_walk.go	internal/workerservice
 internal/testsupport/venueoracle	gopin.go	internal/adminops
+internal/testsupport/venueoracle	gopin.go	internal/api/syncadmin
 internal/testsupport/venueoracle	gopin.go	internal/api/teamsidentity/adminstampvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/admin
+internal/testsupport/venueoracle	gopin.go	internal/apiservice/billingvenue
 internal/testsupport/venueoracle	gopin.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	opened.go	internal/admincli
 internal/testsupport/venueoracle	opened.go	internal/adminops

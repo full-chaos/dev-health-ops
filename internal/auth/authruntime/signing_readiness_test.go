@@ -41,6 +41,7 @@ func writeSigningKey(t *testing.T, dir, name string) {
 // manifest with two active keys: the signing_key check fails closed with the
 // key-set reason, which only the token signer's check produces.
 func TestReadinessProvesTheKeySetThroughTheSigner(t *testing.T) {
+	useKeyStates(t, staticKeyStates(nil))
 	dir := t.TempDir()
 	writeSigningKey(t, dir, "a.pem")
 	writeSigningKey(t, dir, "b.pem")

@@ -12,6 +12,10 @@
 // bookkeeping all live in internal/storage/postgres/authschema, so this binary
 // can be re-hosted as a subcommand later without moving any of them.
 //
+// `auth-migrate keys` runs the signing-key rotation verbs (keys.go,
+// internal/auth/keyrotation) as the same migration role: the runtime role
+// reads key states and never writes them.
+//
 // # Roles
 //
 // Two distinct PostgreSQL roles are involved and the distinction is the whole
@@ -75,6 +79,9 @@ func execute(
 	stdout io.Writer,
 	stderr io.Writer,
 ) int {
+	if len(args) > 0 && args[0] == "keys" {
+		return executeKeys(parent, args[1:], lookup, stdout, stderr)
+	}
 	grantsOnly := len(args) > 0 && args[0] == "grants"
 	if grantsOnly {
 		args = args[1:]

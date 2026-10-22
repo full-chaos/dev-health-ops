@@ -281,6 +281,12 @@ var additiveExemptions = []additiveExemption{
 		reason: "credential_class admits internal_svc_authsess_token; the redefined list is the old list plus " +
 			"that one value, so it only widens (CHAOS-10465)",
 	},
+	{
+		version:    18,
+		regression: `constraint signing_keys.signing_keys_status_check redefined "CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'retiring'::text, 'revoked'::text])))" -> "CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'retiring'::text, 'retired'::text, 'compromised'::text])))"`,
+		reason: "signing_keys.status takes the five rotation states; 'revoked' rows become 'compromised' in the same " +
+			"migration, and no writer of the table existed before it (signing-key rotation state machine)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

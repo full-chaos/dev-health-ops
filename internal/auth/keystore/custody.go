@@ -73,16 +73,28 @@ type Custody interface {
 	Sign(ctx context.Context, kid string, message []byte) ([]byte, error)
 }
 
-// Keys describes the single key as an active one-key set.
+// StateOverride replaces each key's state with its effective state from a
+// durable state source (the rotation state machine). It returns the keys in
+// the same order with only State changed, or an error that refuses the set.
+type StateOverride func(ctx context.Context, keys []Key) ([]Key, error)
+
+// Keys describes the single key as an active one-key set, in its effective
+// state when States is set.
 func (s FileSource) Keys(ctx context.Context) ([]Key, error) {
 	metadata, err := s.Describe(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return []Key{{KeyID: metadata.KeyID, State: StateActive, Algorithm: Algorithm, PublicKey: metadata.PublicKey}}, nil
+	keys := []Key{{KeyID: metadata.KeyID, State: StateActive, Algorithm: Algorithm, PublicKey: metadata.PublicKey}}
+	if s.States == nil {
+		return keys, nil
+	}
+	return s.States(ctx, keys)
 }
 
-// Sign signs with the single key, re-reading it under the file contract.
+// Sign signs with the single key, re-reading it under the file contract. With
+// States set, the key signs only while its effective state is active, both
+// before and after the signature is made.
 func (s FileSource) Sign(ctx context.Context, kid string, message []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -96,7 +108,35 @@ func (s FileSource) Sign(ctx context.Context, kid string, message []byte) ([]byt
 	if kid != s.KeyID {
 		return nil, failure(ReasonKeyUnknown, nil)
 	}
-	return signWithFile(s.Path, message)
+	if s.States == nil {
+		return signWithFile(s.Path, message)
+	}
+	key, err := s.effectiveActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	signature, signer, err := signWithFileKey(s.Path, message)
+	if err != nil {
+		return nil, err
+	}
+	if !signer.Equal(key.PublicKey) {
+		return nil, failure(ReasonKeyNotActive, nil)
+	}
+	if _, err := s.effectiveActive(ctx); err != nil {
+		return nil, err
+	}
+	return signature, nil
+}
+
+func (s FileSource) effectiveActive(ctx context.Context) (Key, error) {
+	keys, err := s.Keys(ctx)
+	if err != nil {
+		return Key{}, err
+	}
+	if len(keys) != 1 || keys[0].State != StateActive {
+		return Key{}, failure(ReasonKeyNotActive, nil)
+	}
+	return keys[0], nil
 }
 
 func signWithFile(path string, message []byte) ([]byte, error) {
@@ -134,15 +174,23 @@ func signWithFileKey(path string, message []byte) ([]byte, ed25519.PublicKey, er
 //
 // A kid this value has seen compromised stays compromised for its life, even
 // when a later manifest names it in another state. The durable deny list is
-// the rotation state machine's.
+// the rotation state machine's: with a StateOverride, each key's state is the
+// one it returns, and a compromise it reports latches here too.
 type FileCustody struct {
 	manifestPath string
+	states       StateOverride
 	compromised  *latch
 }
 
 // NewFileCustody returns custody for the manifest at path.
 func NewFileCustody(path string) *FileCustody {
-	return &FileCustody{manifestPath: path, compromised: &latch{kids: map[string]bool{}, publics: map[string]bool{}}}
+	return NewFileCustodyWithStates(path, nil)
+}
+
+// NewFileCustodyWithStates returns custody for the manifest at path whose key
+// states come from states (nil: the manifest's own).
+func NewFileCustodyWithStates(path string, states StateOverride) *FileCustody {
+	return &FileCustody{manifestPath: path, states: states, compromised: &latch{kids: map[string]bool{}, publics: map[string]bool{}}}
 }
 
 var _ Custody = (*FileCustody)(nil)
@@ -218,6 +266,11 @@ func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, erro
 		}
 		publics[string(public)] = true
 		keys = append(keys, Key{KeyID: entry.KeyID, State: entry.State, Algorithm: Algorithm, PublicKey: public})
+	}
+	if c.states != nil {
+		if keys, err = c.states(ctx, keys); err != nil {
+			return nil, nil, err
+		}
 	}
 	return entries, c.compromised.apply(keys), nil
 }

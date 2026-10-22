@@ -487,3 +487,104 @@ func TestManifestMemberNamesAreExactAndUnique(t *testing.T) {
 		}
 	}
 }
+
+// overrideTo returns a StateOverride that sets each named kid's state.
+func overrideTo(states map[string]State, err error) StateOverride {
+	return func(_ context.Context, keys []Key) ([]Key, error) {
+		if err != nil {
+			return nil, err
+		}
+		out := append([]Key(nil), keys...)
+		for i := range out {
+			if state, ok := states[out[i].KeyID]; ok {
+				out[i].State = state
+			}
+		}
+		return out, nil
+	}
+}
+
+// With a StateOverride the durable states decide which key signs, whatever the
+// manifest says.
+func TestStateOverrideDecidesWhichKeySigns(t *testing.T) {
+	dir := t.TempDir()
+	writeKeyFile(t, dir, "a.pem")
+	_, publicB := writeKeyFile(t, dir, "b.pem")
+	manifest := writeManifest(t, dir, entries("a", "active", "b", "pending"))
+	custody := NewFileCustodyWithStates(manifest, overrideTo(map[string]State{"a": StateRetiring, "b": StateActive}, nil))
+	ctx := context.Background()
+	keys, err := custody.Keys(ctx)
+	if err != nil || keys[0].State != StateRetiring || keys[1].State != StateActive {
+		t.Fatalf("Keys = %+v, %v", keys, err)
+	}
+	signature, err := custody.Sign(ctx, "b", []byte("m"))
+	if err != nil || !ed25519.Verify(publicB, []byte("m"), signature) {
+		t.Fatalf("Sign(b) = %v", err)
+	}
+	if _, err := custody.Sign(ctx, "a", []byte("m")); err == nil || reasonOf(t, err) != ReasonKeyNotActive {
+		t.Fatalf("Sign(a) = %v, want %s", err, ReasonKeyNotActive)
+	}
+
+	failing := NewFileCustodyWithStates(manifest, overrideTo(nil, errors.New("states unavailable")))
+	if _, err := failing.Keys(ctx); err == nil {
+		t.Fatal("Keys succeeded with the state source failing")
+	}
+	if _, err := failing.Sign(ctx, "a", []byte("m")); err == nil {
+		t.Fatal("Sign succeeded with the state source failing")
+	}
+}
+
+// A compromise the override reports latches: a later override that names the
+// kid active again does not re-enable it.
+func TestAnOverrideCompromiseLatches(t *testing.T) {
+	dir := t.TempDir()
+	writeKeyFile(t, dir, "a.pem")
+	manifest := writeManifest(t, dir, entries("a", "active"))
+	states := map[string]State{"a": StateCompromised}
+	var mu sync.Mutex
+	custody := NewFileCustodyWithStates(manifest, func(ctx context.Context, keys []Key) ([]Key, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return overrideTo(states, nil)(ctx, keys)
+	})
+	ctx := context.Background()
+	if _, err := custody.Sign(ctx, "a", []byte("m")); err == nil {
+		t.Fatal("a compromised key signed")
+	}
+	mu.Lock()
+	states = map[string]State{"a": StateActive}
+	mu.Unlock()
+	keys, err := custody.Keys(ctx)
+	if err != nil || keys[0].State != StateCompromised {
+		t.Fatalf("Keys after the override un-compromised a = %+v, %v", keys, err)
+	}
+	if _, err := custody.Sign(ctx, "a", []byte("m")); err == nil {
+		t.Fatal("a key seen compromised signed again")
+	}
+}
+
+// A single key file signs only while its durable state is active.
+func TestFileSourceFollowsTheStateOverride(t *testing.T) {
+	dir := t.TempDir()
+	path, public := writeKeyFile(t, dir, "one.pem")
+	ctx := context.Background()
+	active := FileSource{Path: path, KeyID: "one", States: overrideTo(map[string]State{"one": StateActive}, nil)}
+	signature, err := active.Sign(ctx, "one", []byte("m"))
+	if err != nil || !ed25519.Verify(public, []byte("m"), signature) {
+		t.Fatalf("Sign while active = %v", err)
+	}
+	for _, state := range []State{StatePending, StateRetiring, StateRetired, StateCompromised} {
+		source := FileSource{Path: path, KeyID: "one", States: overrideTo(map[string]State{"one": state}, nil)}
+		keys, err := source.Keys(ctx)
+		if err != nil || keys[0].State != state {
+			t.Fatalf("Keys under %s = %+v, %v", state, keys, err)
+		}
+		if _, err := source.Sign(ctx, "one", []byte("m")); err == nil || reasonOf(t, err) != ReasonKeyNotActive {
+			t.Errorf("Sign under %s = %v, want %s", state, err, ReasonKeyNotActive)
+		}
+	}
+	failing := FileSource{Path: path, KeyID: "one", States: overrideTo(nil, errors.New("states unavailable"))}
+	if _, err := failing.Sign(ctx, "one", []byte("m")); err == nil {
+		t.Fatal("Sign succeeded with the state source failing")
+	}
+}

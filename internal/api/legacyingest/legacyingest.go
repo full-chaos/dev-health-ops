@@ -137,9 +137,11 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
+			h.countMalformed()
 			policy.WriteDetail(w, http.StatusRequestEntityTooLarge, "Request Entity Too Large", nil)
 			return
 		}
+		h.countMalformed()
 		h.logger.ErrorContext(r.Context(), "legacy ingest: read body failed", slog.String("error", err.Error()))
 		policy.WriteInternal(w)
 		return
@@ -147,15 +149,18 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 	body, outcome, failure, err := pybody.Read(r)
 	if err != nil {
+		h.countMalformed()
 		h.logger.ErrorContext(r.Context(), "legacy ingest: read body failed", slog.String("error", err.Error()))
 		policy.WriteInternal(w)
 		return
 	}
 	switch outcome {
 	case pybody.DecodeFailed:
+		h.countMalformed()
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}), nil)
 		return
 	case pybody.ParseFailed:
+		h.countMalformed()
 		policy.WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)
 		return
 	}

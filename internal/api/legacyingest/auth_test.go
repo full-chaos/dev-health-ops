@@ -47,6 +47,16 @@ func TestUsageCounterByRouteAndKeyClass(t *testing.T) {
 		}
 		t.Fatalf("no route %s", path)
 	}
+	callBody := func(path string, values map[string]string, body string) {
+		t.Helper()
+		for _, route := range Routes(Deps{Metrics: metrics, Getenv: env(values), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}) {
+			if route.Pattern == "/api/v1/ingest/"+path {
+				request := httptest.NewRequest(http.MethodPost, route.Pattern, strings.NewReader(body))
+				request.Header.Set("Content-Type", "application/json")
+				route.Handler.ServeHTTP(httptest.NewRecorder(), request)
+			}
+		}
+	}
 	keyed := map[string]string{"INGEST_API_KEYS": "k1"}
 	signed := map[string]string{"INGEST_SIGNING_SECRET": "s"}
 	both := map[string]string{"INGEST_API_KEYS": "k1", "INGEST_SIGNING_SECRET": "s"}
@@ -57,6 +67,8 @@ func TestUsageCounterByRouteAndKeyClass(t *testing.T) {
 	call("telemetry", signed, nil)
 	call("incidents", both, map[string]string{"X-API-Key": "k1", "X-Signature-256": sign("s", commitsBody)})
 	call("incidents", nil, nil)
+	callBody("commits", keyed, "{")
+	callBody("commits", keyed, "{")
 
 	var out bytes.Buffer
 	if err := metrics.WritePrometheus(&out); err != nil {
@@ -70,13 +82,14 @@ func TestUsageCounterByRouteAndKeyClass(t *testing.T) {
 		`devhealth_ingest_legacy_requests_total{route="telemetry",key_class="signature",outcome="rejected"}`:         "1",
 		`devhealth_ingest_legacy_requests_total{route="incidents",key_class="api_key_signature",outcome="accepted"}`: "1",
 		`devhealth_ingest_legacy_requests_total{route="incidents",key_class="none",outcome="rejected"}`:              "1",
+		`devhealth_ingest_legacy_requests_total{route="commits",key_class="api_key",outcome="malformed"}`:            "2",
 		`devhealth_ingest_legacy_requests_total{route="work-items",key_class="none",outcome="rejected"}`:             "0",
 	} {
 		if !strings.Contains(text, series+" "+want+"\n") {
 			t.Errorf("missing %s %s in\n%s", series, want, text)
 		}
 	}
-	if got := strings.Count(text, "\ndevhealth_ingest_legacy_requests_total{"); got != 6*7 {
-		t.Errorf("%d request series, want %d (fixed vocabulary)", got, 6*7)
+	if got := strings.Count(text, "\ndevhealth_ingest_legacy_requests_total{"); got != 6*11 {
+		t.Errorf("%d request series, want %d (fixed vocabulary)", got, 6*11)
 	}
 }

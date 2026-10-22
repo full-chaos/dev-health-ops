@@ -42,7 +42,7 @@ const requestsName = "devhealth_ingest_legacy_requests_total"
 // outcome is accepted (every configured check passed) or rejected.
 var (
 	keyClasses = []string{"api_key", "signature", "api_key_signature", "none"}
-	outcomes   = []string{"accepted", "rejected"}
+	outcomes   = []string{"accepted", "rejected", "malformed"}
 )
 
 type requestSeries struct{ route, keyClass, outcome string }
@@ -184,6 +184,12 @@ func apiKeys(getenv func(string) string) []string {
 func (h handler) reject(w http.ResponseWriter, reason, detail string) {
 	h.metrics.count(reason)
 	policy.WriteDetail(w, http.StatusUnauthorized, detail, nil)
+}
+
+// countMalformed counts a request whose body was refused before any
+// credential check.
+func (h handler) countMalformed() {
+	h.metrics.countRequest(h.route.kind, keyClass(apiKeys(h.getenv), h.getenv("INGEST_SIGNING_SECRET")), "malformed")
 }
 
 // keyClass names the configured checks.

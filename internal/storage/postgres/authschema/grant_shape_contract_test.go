@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -27,8 +26,21 @@ func grantShapeMigration(t *testing.T) string {
 
 func schemaPattern(t *testing.T, file string, path ...string) string {
 	t.Helper()
-	_, here, _, _ := runtime.Caller(0)
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(here), "..", "..", "..", "..", "contracts", "auth", "v1", "jsonschema", file))
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, statErr := os.Stat(filepath.Join(dir, "contracts", "auth", "v1", "jsonschema")); statErr == nil {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no ancestor holds contracts/auth/v1/jsonschema")
+		}
+		dir = parent
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "contracts", "auth", "v1", "jsonschema", file))
 	if err != nil {
 		t.Fatal(err)
 	}

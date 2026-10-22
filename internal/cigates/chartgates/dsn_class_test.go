@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 )
 
 // Every worker-group Deployment of the rendered chart may carry only the
@@ -16,15 +16,6 @@ import (
 // gives its process, and the allowed set is deploymentcontract's own table.
 
 func dsnNamesByGroup(g *guard, docs []doc) map[string][]string {
-	names, _ := scanWorkerEnv(docs)
-	return names
-}
-
-// scanWorkerEnv returns, per worker group, the env names it can see (container
-// env plus the keys of every rendered ConfigMap or Secret it reads through
-// envFrom) and the envFrom sources it reads that the chart does not render,
-// whose keys are not visible to a render.
-func scanWorkerEnv(docs []doc) (map[string][]string, map[string][]string) {
 	keys := map[string][]string{}
 	for _, d := range docs {
 		switch kind(d) {
@@ -42,7 +33,6 @@ func scanWorkerEnv(docs []doc) (map[string][]string, map[string][]string) {
 		}
 	}
 	out := map[string][]string{}
-	unresolved := map[string][]string{}
 	for _, d := range ofKind(docs, "Deployment") {
 		group := label(d, "dev-health.io/worker-group")
 		if group == "" {
@@ -54,18 +44,10 @@ func scanWorkerEnv(docs []doc) (map[string][]string, map[string][]string) {
 			}
 			for _, ref := range list(c["envFrom"]) {
 				if n := str(at(ref, "configMapRef", "name")); n != "" {
-					if _, rendered := keys["configmap/"+n]; rendered {
-						out[group] = append(out[group], keys["configmap/"+n]...)
-					} else {
-						unresolved[group] = append(unresolved[group], "configmap/"+n)
-					}
+					out[group] = append(out[group], keys["configmap/"+n]...)
 				}
 				if n := str(at(ref, "secretRef", "name")); n != "" {
-					if _, rendered := keys["secret/"+n]; rendered {
-						out[group] = append(out[group], keys["secret/"+n]...)
-					} else {
-						unresolved[group] = append(unresolved[group], "secret/"+n)
-					}
+					out[group] = append(out[group], keys["secret/"+n]...)
 				}
 			}
 		}
@@ -74,7 +56,7 @@ func scanWorkerEnv(docs []doc) (map[string][]string, map[string][]string) {
 		sort.Strings(out[group])
 		out[group] = slices.Compact(out[group])
 	}
-	return out, unresolved
+	return out
 }
 
 func dsnClassViolations(g *guard, docs []doc) []string {
@@ -83,20 +65,13 @@ func dsnClassViolations(g *guard, docs []doc) []string {
 		runtimes[str(p["name"])] = str(p["runtime"])
 	}
 	var out []string
-	names, unresolved := scanWorkerEnv(docs)
-	for group, names := range names {
+	for group, names := range dsnNamesByGroup(g, docs) {
 		class, known := runtimes[group]
 		if !known {
 			out = append(out, "worker group "+group+" is not a process of the deployment manifest")
 			continue
 		}
-		// A stream group is the one class whose whole environment must be visible to
-		// the render: it reads no envFrom source the chart does not render, so no
-		// operator-supplied Secret can carry a DSN into it unseen.
-		if class == "stream" && len(unresolved[group]) > 0 {
-			out = append(out, "worker group "+group+" (class stream) reads envFrom source "+strings.Join(unresolved[group], ", ")+" the chart does not render")
-		}
-		if foreign := deploymentcontract.ForeignDSNSecrets(class, names); len(foreign) > 0 {
+		if foreign := dsnclass.Foreign(class, names); len(foreign) > 0 {
 			out = append(out, "worker group "+group+" (class "+class+") carries "+strings.Join(foreign, ", ")+" outside its class")
 		}
 	}
@@ -149,24 +124,10 @@ func workerGroupsScanSeesSharedDSNNames(g *guard) {
 		"a WORKER_DATABASE_URI key of the shared ConfigMap was not found on a stream group")
 }
 
-// A shared operator-supplied envFrom source must not reach a stream group;
-// it still reaches the other classes, so the check is not vacuous.
-func streamGroupsReadOnlyChartRenderedEnvFrom(g *guard) {
-	docs := g.docs("dsn-class-external", join(poolGoValues, set(
-		"goWorkers.extraEnvFrom[0].secretRef.name=external-worker-dsns",
-		"goWorkers.extraEnvFrom[1].configMapRef.name=external-worker-config"))...)
-	for _, v := range dsnClassViolations(g, docs) {
-		g.failf("%s", v)
-	}
-	_, unresolved := scanWorkerEnv(docs)
-	g.expect(sortedHas(unresolved["reconciler"], "secret/external-worker-dsns"), "the shared envFrom Secret no longer reaches the reconciler group, so the check measured nothing: %v", unresolved["reconciler"])
-}
-
 func TestDSNClassGuardsRealTree(t *testing.T) {
 	runReal(t,
 		check{"worker-groups-render-only-their-class-dsn-secrets", workerGroupsRenderOnlyTheirClassDSNSecrets},
 		check{"scan-sees-shared-dsn-names", workerGroupsScanSeesSharedDSNNames},
-		check{"stream-groups-read-only-chart-rendered-envfrom", streamGroupsReadOnlyChartRenderedEnvFrom},
 	)
 }
 
@@ -181,9 +142,6 @@ func TestDSNClassGuardsPlantedDefects(t *testing.T) {
 		{"stream-groups-render-the-queue-dsn-again", chartAndManifest,
 			mut(chartFile(workers), "            {{- if not $group.runtimeProfile }}\n            - name: WORKER_DATABASE_URI", "            {{- if true }}\n            - name: WORKER_DATABASE_URI"),
 			workerGroupsRenderOnlyTheirClassDSNSecrets, "outside its class"},
-		{"stream-groups-read-the-shared-external-envfrom", chartAndManifest,
-			mut(chartFile(workers), "{{- $groupEnvFrom := list }}\n          {{- if not $group.runtimeProfile }}\n          {{- $groupEnvFrom = $.Values.goWorkers.extraEnvFrom | default (list) }}\n          {{- end }}", "{{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}"),
-			streamGroupsReadOnlyChartRenderedEnvFrom, "reads envFrom source secret/external-worker-dsns"},
 		{"river-groups-render-the-coordinator-dsn", chartAndManifest,
 			mut(chartFile(workers), "            {{- if $coordinator }}\n            - name: COORDINATOR_DATABASE_URI", "            {{- if true }}\n            - name: COORDINATOR_DATABASE_URI"),
 			workerGroupsRenderOnlyTheirClassDSNSecrets, "outside its class"},

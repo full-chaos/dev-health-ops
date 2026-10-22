@@ -305,16 +305,10 @@ spec:
           Kubernetes resolves a duplicate envFrom key in favour of the LAST
           source, so an operator-supplied source (e.g. a local dotenv
           Secret) belongs before these two chart-owned sources, not after.
-          Shared across every group except a stream group (one with a
-          runtimeProfile): its environment is the chart's own config and secret
-          plus its own extraEnv entries, whose names a render can read. An
-          operator-supplied source has keys a render cannot see, and a stream
-          group carries one database DSN. There is no per-group extraEnvFrom.
+          Shared across every group in this range; there is no per-group
+          extraEnvFrom.
           */}}
-          {{- $groupEnvFrom := list }}
-          {{- if not $group.runtimeProfile }}
-          {{- $groupEnvFrom = $.Values.goWorkers.extraEnvFrom | default (list) }}
-          {{- end }}
+          {{- $groupEnvFrom := $.Values.goWorkers.extraEnvFrom | default (list) }}
           {{- $groupEnvFrom = append $groupEnvFrom (dict "configMapRef" (dict "name" (include "dev-health.configMapName" $))) }}
           {{- $groupEnvFrom = append $groupEnvFrom (dict "secretRef" (dict "name" (include "dev-health.secretName" $))) }}
           envFrom:

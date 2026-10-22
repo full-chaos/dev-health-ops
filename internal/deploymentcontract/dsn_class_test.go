@@ -1,9 +1,10 @@
 package deploymentcontract
 
 import (
-	"slices"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 )
 
 const (
@@ -70,10 +71,10 @@ func TestCheckedInManifestCarriesOnlyItsClassDSNSecrets(t *testing.T) {
 		t.Fatalf("the checked-in manifest is refused: %v", err)
 	}
 	for _, process := range manifest.Processes {
-		if foreign := ForeignDSNSecrets(process.Runtime, process.SecretEnv); len(foreign) > 0 {
+		if foreign := dsnclass.Foreign(process.Runtime, process.SecretEnv); len(foreign) > 0 {
 			t.Errorf("process %s carries %v outside class %s", process.Name, foreign, process.Runtime)
 		}
-		if len(AllowedDSNSecrets(process.Runtime)) == 0 {
+		if len(dsnclass.Allowed(process.Runtime)) == 0 {
 			t.Errorf("no allowed DSN set for class %s", process.Runtime)
 		}
 	}
@@ -81,57 +82,8 @@ func TestCheckedInManifestCarriesOnlyItsClassDSNSecrets(t *testing.T) {
 		"operator":  manifest.OperatorCLI.SecretEnv,
 		"migration": manifest.MigrationJob.SecretEnv,
 	} {
-		if foreign := ForeignDSNSecrets(class, secrets); len(foreign) > 0 {
+		if foreign := dsnclass.Foreign(class, secrets); len(foreign) > 0 {
 			t.Errorf("class %s carries %v outside its set", class, foreign)
 		}
-	}
-}
-
-func TestDatabaseDSNNamePattern(t *testing.T) {
-	for name, want := range map[string]bool{
-		"POSTGRES_URI":                 true,
-		"WORKER_DATABASE_URI":          true,
-		"COORDINATOR_DATABASE_URI":     true,
-		"MIGRATION_DATABASE_URI_FILE":  true,
-		"GO_API_REGISTRY_POSTGRES_URI": true,
-		"AUTH_DATABASE_URI":            true,
-		"CLICKHOUSE_URI":               false,
-		"VALKEY_URI":                   false,
-		"SETTINGS_ENCRYPTION_KEY":      false,
-		"RIVER_DATABASE_SCHEMA":        false,
-	} {
-		if got := databaseDSNName(name); got != want {
-			t.Errorf("DatabaseDSNSecret(%q) = %v, want %v", name, got, want)
-		}
-	}
-	if allowed := AllowedDSNSecrets("stream"); !slices.Equal(allowed, []string{"POSTGRES_URI"}) {
-		t.Errorf("stream allowed set = %v", allowed)
-	}
-	if AllowedDSNSecrets("nonexistent") != nil {
-		t.Error("an unknown class must have no allowed DSN secrets")
-	}
-}
-
-func databaseDSNName(name string) bool {
-	_, ok := DatabaseDSNSecret(name)
-	return ok
-}
-
-func TestComponentFormVariablesBelongToTheirDSNSecret(t *testing.T) {
-	for name, want := range map[string]string{
-		"DEV_HEALTH_PG_QUEUE_HOST":           "WORKER_DATABASE_URI",
-		"DEV_HEALTH_PG_COORDINATOR_PASSWORD": "COORDINATOR_DATABASE_URI",
-		"DEV_HEALTH_PG_DOMAIN_USER":          "POSTGRES_URI",
-		"WORKER_DATABASE_URI_FILE":           "WORKER_DATABASE_URI",
-	} {
-		if got, ok := DatabaseDSNSecret(name); !ok || got != want {
-			t.Errorf("DatabaseDSNSecret(%q) = %q, %v, want %q", name, got, ok, want)
-		}
-	}
-	if _, ok := DatabaseDSNSecret("DEV_HEALTH_PG_DB"); ok {
-		t.Error("the shared database name belongs to no DSN secret")
-	}
-	if foreign := ForeignDSNSecrets("stream", []string{"DEV_HEALTH_PG_QUEUE_HOST", "DEV_HEALTH_PG_DOMAIN_HOST"}); !slices.Equal(foreign, []string{"DEV_HEALTH_PG_QUEUE_HOST"}) {
-		t.Errorf("stream foreign component variables = %v", foreign)
 	}
 }

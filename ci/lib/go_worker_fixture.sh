@@ -295,6 +295,9 @@ start_worker_stack() {
 
   echo "==> starting dho worker (queues: metrics, sync)"
   (
+    # The worker holds the domain and queue-control DSNs only; a caller's other
+    # database variables must not reach it (the process refuses to start with them).
+    unset DATABASE_URI DATABASE_URL API_DATABASE_URI COORDINATOR_DATABASE_URI MIGRATION_DATABASE_URI
     export POSTGRES_URI="postgresql://${RIVER_DOMAIN_ROLE}:${RIVER_DOMAIN_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
     export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_ROLE}:${RIVER_QUEUE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
     export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
@@ -353,6 +356,7 @@ start_worker_stack() {
 
   echo "==> starting dho reconciler"
   (
+    unset DATABASE_URI DATABASE_URL API_DATABASE_URI MIGRATION_DATABASE_URI
     export POSTGRES_URI="postgresql://${RIVER_DOMAIN_ROLE}:${RIVER_DOMAIN_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
     export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_ROLE}:${RIVER_QUEUE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
     export COORDINATOR_DATABASE_URI="postgresql://${RIVER_COORDINATOR_ROLE}:${RIVER_COORDINATOR_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"

@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -53,7 +54,12 @@ type Spec struct {
 	// TraceServiceName, when set, is the default OTEL service.name for this
 	// process (OTEL_SERVICE_NAME still wins). Empty keeps tracing.Init's
 	// shared default, which every pre-dho service relies on.
-	TraceServiceName                string
+	TraceServiceName string
+	// DSNClass, when set, is the process class (dsnclass.River, Control or
+	// Stream) whose database DSN variables this process may hold. Execute
+	// refuses to start when its environment carries a DSN variable outside the
+	// class, before any configuration is read.
+	DSNClass                        string
 	Profiles                        []string
 	DefaultProfile                  string
 	RequireQueues                   bool
@@ -64,6 +70,9 @@ type Spec struct {
 type IO struct {
 	Stdout io.Writer
 	Stderr io.Writer
+	// Environ is the process environment in os.Environ form, read by the DSN
+	// class guard. Main sets it; a nil Environ skips the guard (tests).
+	Environ []string
 }
 
 // optionValue is the flag.Value backing every declared option.
@@ -215,11 +224,21 @@ func warnEnvOnlySettings(logger *slog.Logger, cfg config.Config) {
 	)
 }
 
+// CheckDSNClass is the start-up guard: nil when the spec has no DSN class or the
+// environment holds no DSN variable outside it. A nil environ is not checked.
+func CheckDSNClass(spec Spec, environ []string) error {
+	if spec.DSNClass == "" || environ == nil {
+		return nil
+	}
+	return dsnclass.CheckEnviron(spec.DSNClass, environ)
+}
+
 // Main runs a production command and exits with its status.
 func Main(spec Spec) {
 	os.Exit(Execute(context.Background(), spec, os.Args[1:], envsecrets.ProcessLookup, IO{
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
+		Environ: os.Environ(),
 	}))
 }
 
@@ -308,6 +327,12 @@ func Execute(
 			return 1
 		}
 		return 0
+	}
+
+	if err := CheckDSNClass(spec, streams.Environ); err != nil {
+		// The refusal names variables and the class, never a value.
+		fmt.Fprintf(streams.Stderr, "start refused: %s\n", err)
+		return 1
 	}
 
 	profile, err := resolveProfile(spec, selectedProfile, lookup)

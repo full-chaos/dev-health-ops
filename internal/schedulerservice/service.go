@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
@@ -21,6 +22,7 @@ import (
 )
 
 var schedulerSpec = shell.Spec{
+	DSNClass:                        dsnclass.Control,
 	Service:                         "dev-health-scheduler",
 	ConfigureDependenciesWithLogger: configureSchedulerDependencies,
 }

@@ -218,10 +218,24 @@ func TestVenueOracleCustomerPushReads(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := customerPushRequests(seed, venue.Tokens)
-	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{Golden: golden})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads.go-pin.json", SHA256: customerPushReadsPinSHA256, Ruling: customerPushReadsRuling})
+	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{Golden: golden, Retire: retiredCustomerPushReadsRequest, Pin: pin})
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	pin.Finish(t)
 	golden.Finish(t)
+}
+
+// customerPushReadsRuling retired the Python reference of the two requests
+// that carry an offset past int64: Python answered an unhandled 500, the Go api
+// answers the pinned 422 range refusal of every other bad offset.
+const customerPushReadsRuling = "CHAOS-10656 (fcs lead decision 2026-10-22): an offset past int64 answers the pinned 422 range refusal, not the old Python 500"
+
+// customerPushReadsPinSHA256 is the digest of testdata/venue/customer-push-reads.go-pin.json.
+const customerPushReadsPinSHA256 = "7c2dac5fc24f5a1383933238554b1f0e407ba46583e2c5288a25504159e185e2"
+
+func retiredCustomerPushReadsRequest(request venueoracle.Request) bool {
+	return request.Name == "batches huge offset" || request.Name == "batch offset huge"
 }

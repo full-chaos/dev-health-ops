@@ -1,0 +1,4 @@
+{
+  "get batch errorOffset past int64": "422 {\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"errorOffset\"],\"msg\":\"Input should be less than or equal to 9223372036854775807\"}]}",
+  "list batches offset past int64": "422 {\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be less than or equal to 9223372036854775807\"}]}"
+}

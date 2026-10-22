@@ -1,0 +1,26 @@
+# Grant probe: once a second, the api role's INSERT and UPDATE privilege on public.refresh_tokens
+# (t or f), read as the database owner. Each log line is "<epoch seconds> <insert> <update>". The
+# first f is the moment the REVOKE committed; the first t after it is the re-GRANT.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probe-grant
+  labels: {app: rehearsal-probe}
+spec:
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: probe
+      image: ${LOCAL_PG}
+      env:
+        - name: PGPASSWORD
+          valueFrom: {secretKeyRef: {name: pg-probe, key: password}}
+      command:
+        - sh
+        - -c
+        - |
+          while true; do
+            row="$(psql -h ap-dev-health-postgresql -U devhealth -d devhealth -At -F ' ' -c "SELECT has_table_privilege('devhealth_api','public.refresh_tokens','INSERT'), has_table_privilege('devhealth_api','public.refresh_tokens','UPDATE')" 2>/dev/null || echo 'x x')"
+            echo "$(date +%s) ${row}"
+            sleep 1
+          done

@@ -101,3 +101,9 @@ func TestSignatureOnlyRouteSkipsScopeOnlyForExactRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestNewServerRefusesANilScopeLayerWithoutPanicking(t *testing.T) {
+	if _, err := NewServer(apiTestConfig(), quietLogger(), nil, nil); err == nil {
+		t.Fatal("a nil scope layer was accepted")
+	}
+}

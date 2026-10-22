@@ -28,6 +28,9 @@ func MarkSignatureOnly(next http.Handler) http.Handler {
 
 // skipScope runs mw for every request except a marked signature-only one.
 func skipScope(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	if mw == nil {
+		return nil
+	}
 	return func(next http.Handler) http.Handler {
 		guarded := mw(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

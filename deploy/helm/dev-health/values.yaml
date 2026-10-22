@@ -169,12 +169,8 @@ authService:
   #    Secret). Both keys render together or not at all; goApi.authProxy.sessions
   #    fails the render while the successor key is unset.
   sessionKeys:
-    # -- AUTH_JWT_SECRET_KEY, the HS256 access-token key. Empty name/key use the
-    #    Secret and key go-api reads as JWT_SECRET_KEY (hs256Secret), so the two
-    #    cannot differ.
-    accessToken:
-      secretName: ""
-      secretKey: ""
+    # -- AUTH_JWT_SECRET_KEY is not set here: it is always the Secret and key
+    #    go-api reads as JWT_SECRET_KEY (hs256Secret), so the two cannot differ.
     # -- AUTH_SESSION_SUCCESSOR_KEY: 32 bytes, base64url without padding.
     successor:
       secretName: ""

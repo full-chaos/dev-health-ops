@@ -98,7 +98,7 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ $a.database.secretName | quote }}, key: {{ $a.database.secretKey | quote }}}}
           {{- if $a.sessionKeys.successor.secretName }}
             - name: AUTH_JWT_SECRET_KEY
-              valueFrom: {secretKeyRef: {name: {{ default (include "dev-health.hs256SecretName" .) $a.sessionKeys.accessToken.secretName | quote }}, key: {{ default "JWT_SECRET_KEY" $a.sessionKeys.accessToken.secretKey | quote }}}}
+              valueFrom: {secretKeyRef: {name: {{ include "dev-health.hs256SecretName" . | quote }}, key: "JWT_SECRET_KEY"}}
             - name: AUTH_SESSION_SUCCESSOR_KEY
               valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.successor.secretName | quote }}, key: {{ $a.sessionKeys.successor.secretKey | quote }}}}
           {{- end }}

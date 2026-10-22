@@ -422,7 +422,23 @@ type DiffOptions struct {
 	// and declares the Python answer retired (Golden.Retired), uncompared.
 	Retire func(request Request) bool
 	Pin    *GoPin
+	// OrglessTokens are the access tokens (not their labels) of the seeded callers that carry no organization
+	// and are not superusers. Only a request sent with one of them can be a D6145 org-less refusal
+	// (intendedOrglessRefusal); nil turns the rule off.
+	OrglessTokens map[string]bool
+	// MaxOrglessRefusals bounds how many requests of this Diff the rule may declare refused: the rule cannot widen
+	// silently. A test pins the exact set it expects once the guard is on main.
+	MaxOrglessRefusals int
+	// OnOrglessRefused is told, in request order and before the next request is compared, of each request the rule
+	// declared refused.
+	OnOrglessRefused func(request Request)
+	// NormalizePython runs on the Python body only, after OnOrglessRefused, for a value a declared divergence shifts
+	// on the Python plane alone (a counter a Python-only side effect advanced).
+	NormalizePython func(request Request, body string) string
 }
+
+// OrglessRefusalBody is the exact answer D6145 gives a caller with no organization on a guarded route.
+const OrglessRefusalBody = `{"detail":"Organization context required"}`
 
 // Diff sends each request to the Go api at goBase, compares it with the
 // matching Python response, reports each difference with t.Errorf, and
@@ -450,12 +466,22 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 		t.Fatal("diff: Retire needs a Pin and a Golden")
 	}
 	var receipt strings.Builder
+	orglessRefused := 0
 	for index, request := range requests {
 		goResponse := Do(t, goBase, request)
 		if options.Inspect != nil {
 			options.Inspect(request, goResponse)
 		}
+		if intendedOrglessRefusal(request, python[index], goResponse, options) {
+			orglessRefused++
+			if options.OnOrglessRefused != nil {
+				options.OnOrglessRefused(request)
+			}
+		}
 		pythonResponse, compareOptions := python[index], options
+		if options.NormalizePython != nil {
+			pythonResponse.Body = options.NormalizePython(request, pythonResponse.Body)
+		}
 		if options.Golden != nil {
 			// A golden stores no token value: both planes are compared as
 			// projected, and a projected body has another length.
@@ -493,6 +519,12 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 			t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", request.Name, python[index].Status, pyShown.Body,
 				pick(pyShown.Headers, compared), goResponse.Status, goShown.Body, pick(goShown.Headers, compared))
 		}
+	}
+	if orglessRefused > options.MaxOrglessRefusals {
+		t.Errorf("diff: %d requests declared org-less refusals (D6145), at most %d expected", orglessRefused, options.MaxOrglessRefusals)
+	}
+	if options.OrglessTokens != nil {
+		fmt.Fprintf(&receipt, "org-less refusals declared (D6145): %d\n", orglessRefused)
 	}
 	// Every Go handler must have written each body with the writer its
 	// route's ResponseModel flag allows (policy.WriteModel for a FastAPI
@@ -562,6 +594,9 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 	if intendedNoStore(request, py, gr) {
 		skip = withSkipped(skip, "cache-control")
 	}
+	if intendedOrglessRefusal(request, python, goResponse, options) {
+		return true, nil, py, gr
+	}
 	if intendedAllowWidening(request, py, gr) {
 		skip = withSkipped(skip, "allow")
 	}
@@ -615,6 +650,27 @@ func intendedAllowWidening(request Request, py, gr Response) bool {
 		}
 	}
 	return true
+}
+
+// intendedOrglessRefusal is the declared divergence "org-less refusal" (D6145; stricter than Python is allowed,
+// D6129): a caller whose token carries no organization and who is no superuser reaches only the listed routes
+// (policy.OrglessMayReach); on any other guarded route Go answers 403 where the frozen Python answer was another status
+// or body. It applies only when the request was sent with one of the options' org-less tokens, the route is not one the
+// caller may reach, and Go's answer is exactly 403 OrglessRefusalBody; every other difference still compares, and no
+// request of an org-bearing caller can match.
+func intendedOrglessRefusal(request Request, python, goResponse Response, options DiffOptions) bool {
+	if len(options.OrglessTokens) == 0 || goResponse.Status != http.StatusForbidden || goResponse.Body != OrglessRefusalBody {
+		return false
+	}
+	if python.Status == goResponse.Status && python.Body == goResponse.Body {
+		return false
+	}
+	bearer, ok := strings.CutPrefix(request.Headers["Authorization"], "Bearer ")
+	if !ok || !options.OrglessTokens[bearer] {
+		return false
+	}
+	target, err := url.ParseRequestURI(request.Path)
+	return err == nil && !policy.OrglessMayReach(request.Method, target.Path)
 }
 
 func withSkipped(skip map[string]bool, name string) map[string]bool {

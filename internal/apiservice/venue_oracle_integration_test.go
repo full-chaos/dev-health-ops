@@ -126,6 +126,8 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	golden.RetireRows(t, "python provider requests", teamsRuling)
 	receipt.WriteString(venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
 		Golden: golden,
+		// D6145: the org-less caller's refusals (me, patch) answer 403 where Python answered another status.
+		OrglessTokens: map[string]bool{venue.Tokens["no_org"]: true}, MaxOrglessRefusals: 2,
 		// Composes TWO independent normalizations, each scoped to its own
 		// known cause: normalizeRuled's own rules, and the team/identity
 		// admin timestamp blanking (CHAOS-6310 -- each plane mints its own

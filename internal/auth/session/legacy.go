@@ -165,6 +165,21 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (resul
 	return revoked, err
 }
 
+// firstCredential is the first refresh credential of a session, with its row id
+// and, for a legacy exchange, the digest of the jti. A legacy credential is
+// derived from the jti, as a rotated one is from its parent, so a second
+// presentation of the jti inside the grace window recomputes the same value.
+func (s *Store) firstCredential(legacyJTI contracts.SecretString) (credential contracts.SecretString, id uuid.UUID, legacyDigest []byte, err error) {
+	if id, err = uuid.NewRandom(); err != nil {
+		return contracts.SecretString{}, uuid.UUID{}, nil, err
+	}
+	if legacyJTI.Reveal() == "" {
+		credential, err = newCredential()
+		return credential, id, nil, err
+	}
+	return deriveSuccessor(s.key, id, legacyJTI), id, legacyJTIDigest(legacyJTI), nil
+}
+
 // legacyReplay is the decision on a jti revoked inside the grace window: the
 // credential to answer again, a deactivated principal, or neither (reuse).
 type legacyReplay struct {

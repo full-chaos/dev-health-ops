@@ -51,21 +51,11 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 // Create writes, inside the caller's transaction. The session's client_ip is
 // the request's client address and its user_agent the request's user agent,
 // when they are bound. legacyJTI, when set, is the go-api refresh jti the
-// first credential was exchanged for: the credential is derived from it, as a
-// rotated one is from its parent, so a second presentation of the jti inside
-// the grace window recomputes the same credential.
+// first credential was exchanged for (see firstCredential).
 func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
 	legacyJTI contracts.SecretString) (Issued, error) {
-	credentialID, err := uuid.NewRandom()
+	credential, credentialID, legacyDigest, err := s.firstCredential(legacyJTI)
 	if err != nil {
-		return Issued{}, err
-	}
-	var credential contracts.SecretString
-	var legacyDigest []byte
-	if legacyJTI.Reveal() != "" {
-		credential = deriveSuccessor(s.key, credentialID, legacyJTI)
-		legacyDigest = legacyJTIDigest(legacyJTI)
-	} else if credential, err = newCredential(); err != nil {
 		return Issued{}, err
 	}
 	handle, err := newCredential()

@@ -1,4 +1,4 @@
-# Bounded exceptions for scripts/check_external_links.py.
+# Bounded exceptions for `cigate docs check-external-links`.
 #
 # Every entry MUST carry an owner, a reason, and an `expires` date. An
 # expired entry fails the guard even if the underlying URL happens to be
@@ -13,6 +13,6 @@
 # focusedobjective.com/w/monte-carlo-simulation) was linked only from pages that were
 # removed in the canonical `docs/` restructure, and none appears anywhere under `docs/`
 # today. The file is kept in place, rather than deleted, so the guard's allowlist path
-# resolves to a real file: `load_allowlist` returns an empty mapping for a missing path,
+# resolves to a real file: the checker treats a missing allowlist as empty,
 # which would make a mistyped or stale `--allowlist` argument silently no-op.
 []

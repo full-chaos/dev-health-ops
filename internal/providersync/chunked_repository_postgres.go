@@ -79,7 +79,7 @@ func (repository *PostgresRepository) LoadChunkCheckpoint(
 		return ChunkCheckpoint{}, ErrChunkCheckpointNotFound
 	}
 	if err != nil {
-		return ChunkCheckpoint{}, ErrChunkCheckpointConflict
+		return ChunkCheckpoint{}, NewChunkStoreError(err)
 	}
 	if len(aggregateRaw) > 0 {
 		if decodeResultObjectExact(aggregateRaw, &checkpoint.AggregateResult) != nil {
@@ -243,7 +243,7 @@ func prepareChunkInTx(
 			aggregateRaw, checkpoint.AggregateDigest, checkpoint.Owner,
 			checkpoint.LeaseExpiresAt, checkpoint.CreatedAt, checkpoint.UpdatedAt,
 		); err != nil {
-			return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+			return PreparedProviderChunk{}, NewChunkStoreError(err)
 		}
 	} else if err != nil {
 		return PreparedProviderChunk{}, err
@@ -267,10 +267,10 @@ func prepareChunkInTx(
 			chunk.InventoryComplete, payloadRaw, ledgerRaw, chunk.PayloadBytes,
 			chunk.ManifestDigest, now.UTC(), now.UTC(),
 		); err != nil {
-			return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+			return PreparedProviderChunk{}, NewChunkStoreError(err)
 		}
 	case err != nil:
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, NewChunkStoreError(err)
 	case existingDigest != chunk.ManifestDigest:
 		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
 	case chunk.Ordinal < checkpoint.PreparedChunks:
@@ -288,7 +288,7 @@ func prepareChunkInTx(
 		chunk.TotalChunks, chunk.InventoryComplete, chunk.CursorAfter,
 		chunk.Result, chunkResultDigest(chunk.Result), now.UTC(),
 	); err != nil {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, NewChunkStoreError(err)
 	}
 	return chunk, nil
 }
@@ -329,7 +329,7 @@ func loadPreparedChunkRow(
 		return PreparedProviderChunk{}, ErrPreparedChunkNotFound
 	}
 	if err != nil {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, NewChunkStoreError(err)
 	}
 	if json.Unmarshal(payloadRaw, &chunk) != nil || json.Unmarshal(ledgerRaw, &chunk.Ledger) != nil ||
 		(status != "pending" && status != "writing" && status != "committed") ||
@@ -418,7 +418,7 @@ func (repository *PostgresRepository) ResolveChunkEffect(
 		return ErrChunkCheckpointConflict
 	}
 	if _, err := tx.Exec(ctx, updateChunkLedgerSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, encoded, current); err != nil {
-		return ErrChunkCheckpointConflict
+		return NewChunkStoreError(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
@@ -476,7 +476,7 @@ func (repository *PostgresRepository) mutateChunkEffect(
 		return ErrChunkCheckpointConflict
 	}
 	if _, err := tx.Exec(ctx, updateChunkLedgerSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, encoded, current); err != nil {
-		return ErrChunkCheckpointConflict
+		return NewChunkStoreError(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrInvalidConfiguration
@@ -516,7 +516,7 @@ func (repository *PostgresRepository) MarkChunkCommitted(
 	// any other state must not silently advance the checkpoint.
 	command, err := tx.Exec(ctx, markChunkCommittedSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal, now.UTC())
 	if err != nil {
-		return ErrChunkCheckpointConflict
+		return NewChunkStoreError(err)
 	}
 	rows := int64(0)
 	if command.RowsAffected() == 1 {
@@ -526,13 +526,18 @@ func (repository *PostgresRepository) MarkChunkCommitted(
 	} else {
 		var status string
 		if scanErr := tx.QueryRow(ctx, chunkStatusSQL,
-			claim.OrgID, claim.ID, claim.GenerationKey(), ordinal).Scan(&status); scanErr != nil ||
-			status != "committed" {
+			claim.OrgID, claim.ID, claim.GenerationKey(), ordinal).Scan(&status); scanErr != nil {
+			return NewChunkStoreError(scanErr)
+		}
+		if status != "committed" {
 			return ErrChunkCheckpointConflict
 		}
 	}
 	command, err = tx.Exec(ctx, advanceChunkCheckpointSQL, claim.OrgID, claim.ID, claim.GenerationKey(), ordinal+1, chunk.CursorAfter, now.UTC(), rows)
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
+		return NewChunkStoreError(err)
+	}
+	if command.RowsAffected() != 1 {
 		return ErrChunkCheckpointConflict
 	}
 	return tx.Commit(ctx)
@@ -563,11 +568,14 @@ func (repository *PostgresRepository) MarkInventoryComplete(
 	total := checkpoint.PreparedChunks
 	if _, err := tx.Exec(ctx, finalizePreparedChunksSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(), total, now.UTC()); err != nil {
-		return ErrChunkCheckpointConflict
+		return NewChunkStoreError(err)
 	}
 	command, err := tx.Exec(ctx, finalizeChunkCheckpointSQL,
 		claim.OrgID, claim.ID, claim.GenerationKey(), total, now.UTC())
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
+		return NewChunkStoreError(err)
+	}
+	if command.RowsAffected() != 1 {
 		return ErrChunkCheckpointConflict
 	}
 	return tx.Commit(ctx)
@@ -587,7 +595,7 @@ FOR UPDATE OF unit`, claim.OrgID, claim.ID, claim.Owner, now).Scan(&present)
 		return ErrLeaseLost
 	}
 	if err != nil {
-		return ErrChunkCheckpointConflict
+		return NewChunkStoreError(err)
 	}
 	return nil
 }
@@ -614,7 +622,7 @@ func loadChunkCheckpointTx(ctx context.Context, tx pgx.Tx, claim Claim, now time
 		return ChunkCheckpoint{}, ErrChunkCheckpointNotFound
 	}
 	if err != nil {
-		return ChunkCheckpoint{}, ErrChunkCheckpointConflict
+		return ChunkCheckpoint{}, NewChunkStoreError(err)
 	}
 	if len(aggregateRaw) > 0 && decodeResultObjectExact(aggregateRaw, &checkpoint.AggregateResult) != nil {
 		return ChunkCheckpoint{}, ErrChunkCheckpointConflict

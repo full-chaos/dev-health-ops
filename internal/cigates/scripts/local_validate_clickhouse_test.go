@@ -28,6 +28,8 @@ func lvFunc(src, name string) (string, bool) {
 
 func lvBash(script string, args ...string) (string, error) {
 	cmd := exec.Command("bash", append([]string{"-c", script, "_"}, args...)...)
+	// The gate's uri_encode is character-indexed, so its non-ASCII output depends on the locale; the ARC pool runs in the C locale.
+	cmd.Env = append(os.Environ(), "LC_ALL=C.UTF-8")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

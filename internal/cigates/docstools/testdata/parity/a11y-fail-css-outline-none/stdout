@@ -1,0 +1,2 @@
+ERROR: extra.css: outline is removed without an alternative visible focus style
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

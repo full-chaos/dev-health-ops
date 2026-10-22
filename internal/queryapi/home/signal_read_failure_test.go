@@ -42,7 +42,7 @@ func signalReadFilters(level string, ids ...string) (Filters, time.Time) {
 	return Filters{
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
 		Scope: ScopeFilter{Level: level, IDs: ids},
-	}, time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC)
+	}, goldenNow
 }
 
 func signalIDsWithPrefix(signals []Signal, prefix string) []string {

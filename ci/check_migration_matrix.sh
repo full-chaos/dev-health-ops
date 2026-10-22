@@ -52,7 +52,7 @@ REVERIFY_COMMAND="go run ./cmd/dev-health-migration-matrix -render -root ."
 # also holds the read end of, so a payload at or above the measured ~400-byte
 # budget hangs the script forever on a host with a small pipe buffer
 # (CHAOS-3362) -- and `cat >file <<EOF` is the same pipe, so it is not a fix.
-# tests/tooling/test_local_validate_heredocs.py enforces this over all of ci/.
+# the Go heredoc guard enforces this over all of ci/.
 usage() {
   printf '%s\n' \
     'usage: ci/check_migration_matrix.sh [stamp|contract|all]' \

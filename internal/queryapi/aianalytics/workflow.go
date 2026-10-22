@@ -16,7 +16,9 @@ import (
 // (reruns insert new versions of the same deterministic edge ids) and each
 // repeating the frontier-id predicate on its own key columns so the key
 // condition prunes before the merge. Every branch filters its table on the
-// org.
+// org. The work_graph_issue_pr branch keeps only the best provenance tier of a
+// pull request's links (native > explicit_text > heuristic), so a pull request
+// with no AI edge still walks to its issue.
 const workflowEdgeStatement = `SELECT * FROM
 (
     SELECT
@@ -106,6 +108,42 @@ const workflowEdgeStatement = `SELECT * FROM
     FROM work_graph_deployment_incident_edges FINAL
     WHERE org_id = {org_id:String}
       AND (deployment_id IN {deployment_ids:Array(String)} OR incident_id IN {incident_ids:Array(String)})
+    UNION ALL
+
+    SELECT
+        concat('issue_pr:', toString(repo_id), ':', toString(pr_number), ':', work_item_id) AS edge_id,
+        'pr' AS source_type,
+        concat(toString(repo_id), ':', toString(pr_number)) AS source_id,
+        'issue' AS target_type,
+        work_item_id AS target_id,
+        'implements' AS edge_type,
+        confidence,
+        provenance AS source,
+        evidence,
+        'work_graph' AS provider,
+        toString(repo_id) AS repo_id
+    FROM
+    (
+        SELECT
+            repo_id, work_item_id, pr_number, confidence, provenance, evidence, tier_rank,
+            max(tier_rank) OVER (PARTITION BY repo_id, pr_number) AS best_rank
+        FROM
+        (
+            SELECT
+                repo_id, work_item_id, pr_number, confidence, provenance, evidence,
+                multiIf(provenance = 'native', 3, provenance = 'explicit_text', 2, provenance = 'heuristic', 1, 0) AS tier_rank
+            FROM work_graph_issue_pr FINAL
+            WHERE org_id = {org_id:String}
+              AND (
+                  concat(toString(repo_id), ':', toString(pr_number)) IN {pr_ids:Array(String)}
+                  OR (repo_id, pr_number) IN (
+                      SELECT repo_id, pr_number FROM work_graph_issue_pr FINAL
+                      WHERE org_id = {org_id:String} AND work_item_id IN {issue_ids:Array(String)}
+                  )
+              )
+        )
+    )
+    WHERE tier_rank = best_rank
 )
 WHERE
     (source_type IN {node_types:Array(String)} AND source_id IN {node_ids:Array(String)})

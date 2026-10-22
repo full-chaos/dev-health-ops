@@ -159,18 +159,151 @@ func guardedDial(inner dialFunc) dialFunc {
 		if len(candidates) == 0 {
 			return nil, &net.DNSError{Err: "no address for the network", Name: host, IsNotFound: true}
 		}
-		var last error
-		for _, addr := range candidates {
-			conn, err := inner(ctx, network, net.JoinHostPort(addr.String(), port))
-			if err == nil {
-				return conn, nil
+		ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
+		return dialParallel(ctx, inner, network, port, candidates)
+	}
+}
+
+// dialTimeout and fallbackDelay mirror the net.Dialer the guard builds when the source transport has no DialContext
+// (and http.DefaultTransport): a 30 s budget for the whole dial, and the stdlib default FallbackDelay of 300 ms
+// (net/dial.go fallbackDelay, GOROOT go1.27). A custom source DialContext is an opaque func: its own Dialer fields are
+// not visible here, so the race always runs for it.
+const (
+	dialTimeout   = 30 * time.Second
+	fallbackDelay = 300 * time.Millisecond
+)
+
+var errDialBudget = errors.New("dial: out of time")
+
+// partition splits the checked addresses by the family of the first one (net/ipsock.go partition): that family is the
+// primary, the other the fallback.
+func partition(addrs []netip.Addr) (primaries, fallbacks []netip.Addr) {
+	primaryIs4 := addrs[0].Is4()
+	for _, addr := range addrs {
+		if addr.Is4() == primaryIs4 {
+			primaries = append(primaries, addr)
+		} else {
+			fallbacks = append(fallbacks, addr)
+		}
+	}
+	return primaries, fallbacks
+}
+
+// partialDeadline is net/dial.go partialDeadline: with several addresses pending, each gets an equal share of the time
+// left, never below 2 s (or what remains), so one dead address cannot eat the whole budget.
+func partialDeadline(now, deadline time.Time, addrsRemaining int) (time.Time, error) {
+	remaining := deadline.Sub(now)
+	if remaining <= 0 {
+		return time.Time{}, errDialBudget
+	}
+	timeout := remaining / time.Duration(addrsRemaining)
+	const saneMinimum = 2 * time.Second
+	if timeout < saneMinimum {
+		if remaining < saneMinimum {
+			timeout = remaining
+		} else {
+			timeout = saneMinimum
+		}
+	}
+	return now.Add(timeout), nil
+}
+
+// dialSerial is net/dial.go dialSerial over checked literals: the first connection wins, the first error is returned.
+func dialSerial(ctx context.Context, inner dialFunc, network, port string, addrs []netip.Addr) (net.Conn, error) {
+	var firstErr error
+	for i, addr := range addrs {
+		if err := ctx.Err(); err != nil {
+			if firstErr == nil {
+				firstErr = err
 			}
-			last = err
-			if ctx.Err() != nil {
+			break
+		}
+		dialCtx := ctx
+		if deadline, ok := ctx.Deadline(); ok {
+			share, err := partialDeadline(time.Now(), deadline, len(addrs)-i)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
 				break
 			}
+			if share.Before(deadline) {
+				var cancel context.CancelFunc
+				dialCtx, cancel = context.WithDeadline(ctx, share)
+				defer cancel()
+			}
 		}
-		return nil, last
+		conn, err := inner(dialCtx, network, net.JoinHostPort(addr.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return nil, firstErr
+}
+
+// dialParallel is net/dial.go dialParallel: the primary family dials at once, the other family starts after
+// fallbackDelay (or at once when the primary fails first); the first connection wins and the other is cancelled and
+// closed. Only addresses that passed check ever reach inner.
+func dialParallel(ctx context.Context, inner dialFunc, network, port string, candidates []netip.Addr) (net.Conn, error) {
+	primaries, fallbacks := partition(candidates)
+	if len(fallbacks) == 0 {
+		return dialSerial(ctx, inner, network, port, primaries)
+	}
+	returned := make(chan struct{})
+	defer close(returned)
+	type result struct {
+		conn    net.Conn
+		err     error
+		primary bool
+		done    bool
+	}
+	results := make(chan result)
+	race := func(ctx context.Context, primary bool) {
+		addrs := primaries
+		if !primary {
+			addrs = fallbacks
+		}
+		conn, err := dialSerial(ctx, inner, network, port, addrs)
+		select {
+		case results <- result{conn: conn, err: err, primary: primary, done: true}:
+		case <-returned:
+			if conn != nil {
+				_ = conn.Close()
+			}
+		}
+	}
+	var primary, fallback result
+	primaryCtx, primaryCancel := context.WithCancel(ctx)
+	defer primaryCancel()
+	go race(primaryCtx, true)
+	timer := time.NewTimer(fallbackDelay)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			fallbackCtx, fallbackCancel := context.WithCancel(ctx)
+			defer fallbackCancel()
+			go race(fallbackCtx, false)
+		case res := <-results:
+			if res.err == nil {
+				return res.conn, nil
+			}
+			if res.primary {
+				primary = res
+			} else {
+				fallback = res
+			}
+			if primary.done && fallback.done {
+				return nil, primary.err
+			}
+			if res.primary && timer.Stop() {
+				timer.Reset(0)
+			}
+		}
 	}
 }
 

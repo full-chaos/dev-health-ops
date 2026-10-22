@@ -371,9 +371,14 @@ type Config struct {
 	// APIJWTSecret, APIJWTIssuer and APIJWTAudience verify the access token
 	// (dho api only): JWT_SECRET_KEY, JWT_ISSUER and JWT_AUDIENCE, the same
 	// variables the Python api reads.
-	APIJWTSecret   secrets.Value
-	APIJWTIssuer   string
-	APIJWTAudience string
+	APIJWTSecret secrets.Value
+	// LinkTokenSecret signs invite, verification and reset link tokens;
+	// LinkTokenSecretPrevious is a retired signing key still accepted during a
+	// rotation overlap (dho api only). Both are optional.
+	LinkTokenSecret         secrets.Value
+	LinkTokenSecretPrevious secrets.Value
+	APIJWTIssuer            string
+	APIJWTAudience          string
 	// APIExpectedWorkerGroups is EXPECTED_WORKER_GROUPS for the api's
 	// /health/workers (dho api only): nil when the variable is unset (no Go
 	// fleet declared), else its comma-separated, trimmed, non-empty entries
@@ -981,6 +986,14 @@ func Load(spec Spec) (Config, error) {
 		cfg.CORSAllowedOrigins = parseCORSOrigins(corsOrigins)
 		cfg.PagerDutyOAuthRedirectURI, _ = lookup("PAGER_DUTY_REDIRECT_URI")
 		cfg.APIJWTSecret, _, err = secrets.ResolveSecret("JWT_SECRET_KEY", lookup)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.LinkTokenSecret, _, err = secrets.ResolveSecret("LINK_TOKEN_SECRET", lookup)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.LinkTokenSecretPrevious, _, err = secrets.ResolveSecret("LINK_TOKEN_SECRET_PREVIOUS", lookup)
 		if err != nil {
 			return Config{}, err
 		}

@@ -1,0 +1,12 @@
+- page: nope.md
+  disposition: refresh
+  owner: a
+  last-reviewed: '2999-01-01'
+  page: guide.md
+- page: guide.md
+  1: a
+  1.0: b
+  true: c
+  .nan: d
+  .NaN: e
+  page: 5

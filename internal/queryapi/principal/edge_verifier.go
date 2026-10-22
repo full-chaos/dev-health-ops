@@ -22,7 +22,14 @@ const EdgeAlgorithm = edgetoken.Algorithm
 const (
 	ReasonUserRefused      = "user_refused"
 	ReasonUserLookupFailed = "user_lookup_failed"
+	ReasonOrgMissing       = "org_missing"
 )
+
+// OrgRequiredError is Verify's refusal of a valid token that names no
+// organization when the live users row is not a superuser's.
+type OrgRequiredError struct{}
+
+func (*OrgRequiredError) Error() string { return "principal: edge: organization context required" }
 
 // EdgeClaims is the narrow set of claims this verifier's caller needs --
 // today, only the org id an authenticated REST request is scoped to,
@@ -98,7 +105,8 @@ func (v *EdgeVerifier) Verify(ctx context.Context, tokenString string) (*EdgeCla
 		v.reject(ctx, edgetoken.ReasonOf(err), claims, meta)
 		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
-	if _, err := v.auth.CheckClaims(ctx, claims); err != nil {
+	user, err := v.auth.CheckClaims(ctx, claims)
+	if err != nil {
 		reason := ReasonUserRefused
 		if !policy.IsRefusal(err) {
 			reason = ReasonUserLookupFailed
@@ -106,8 +114,12 @@ func (v *EdgeVerifier) Verify(ctx context.Context, tokenString string) (*EdgeCla
 		v.reject(ctx, reason, claims, meta)
 		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
-	recordEdgeVerifyOutcome("verified")
 	orgID, _ := claims["org_id"].(string)
+	if orgID == "" && !user.IsSuperuser {
+		v.reject(ctx, ReasonOrgMissing, claims, meta)
+		return nil, &OrgRequiredError{}
+	}
+	recordEdgeVerifyOutcome("verified")
 	return &EdgeClaims{OrgID: orgID}, nil
 }
 

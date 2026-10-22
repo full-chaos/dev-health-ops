@@ -62,3 +62,23 @@ func TestInviteConfigUnusableProviderDoesNotFailStartup(t *testing.T) {
 		t.Fatal("an unusable provider's sender accepted a message")
 	}
 }
+
+func TestInviteConfigCarriesTheLinkSecrets(t *testing.T) {
+	t.Setenv("EMAIL_PROVIDER", "console")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := config.Config{
+		APIJWTSecret: secrets.NewValue("jwt-key"), LinkTokenSecret: secrets.NewValue("link-new"),
+		LinkTokenSecretPrevious: secrets.NewValue("link-old"),
+	}
+	got := inviteConfig(cfg, logger, inviteLookup(nil))
+	if got.Secret() != "link-new" {
+		t.Errorf("signing secret %q, want the link secret", got.Secret())
+	}
+	if accepts := got.AcceptSecrets(); len(accepts) != 3 || accepts[0] != "link-new" || accepts[1] != "link-old" || accepts[2] != "jwt-key" {
+		t.Errorf("accepted secrets %v, want link-new, link-old, jwt-key", accepts)
+	}
+	unset := inviteConfig(config.Config{APIJWTSecret: secrets.NewValue("jwt-key")}, logger, inviteLookup(nil))
+	if unset.Secret() != "jwt-key" {
+		t.Errorf("with no link secret the signing secret is %q, want the access key", unset.Secret())
+	}
+}

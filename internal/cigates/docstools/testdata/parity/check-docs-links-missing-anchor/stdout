@@ -1,0 +1,3 @@
+ERROR: docs/index.md -> other.md#nope: missing anchor
+ERROR: docs/index.md -> #nope: missing anchor
+ERROR: docs/index.md -> sub/x.md: missing file

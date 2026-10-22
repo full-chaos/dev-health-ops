@@ -134,6 +134,7 @@ func TestOAuthGitLabFullRoundTrip(t *testing.T) {
 	gitlab := startFakeGitLab(t)
 	gitlab.email = "new.gitlab.user@allowed.example"
 	gitlab.avatarURL = "https://gitlab.example/avatar.png"
+	seedMember(t, ctx, st.pool, orgID, gitlab.email, "gitlab", gitlab.userID)
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
 		clientSecretEncryptedFallback: "gitlab-secret",
@@ -211,6 +212,7 @@ func TestOAuthTwoConcurrentAuthorizeFlowsBothComplete(t *testing.T) {
 	st := startStack(t, ctx)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	gitlab := startFakeGitLab(t)
+	seedMember(t, ctx, st.pool, orgID, gitlab.email, "gitlab", gitlab.userID)
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
 	})

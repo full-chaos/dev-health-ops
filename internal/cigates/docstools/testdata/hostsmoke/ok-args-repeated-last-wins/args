@@ -1,0 +1,1 @@
+--origin https://bad.invalid --origin {ORIGIN} --redirects nope.tsv --redirects redirects.tsv

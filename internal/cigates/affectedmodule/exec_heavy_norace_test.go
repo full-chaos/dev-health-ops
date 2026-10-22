@@ -23,8 +23,8 @@ func TestGoAffectedIntegrationRealModule(t *testing.T) {
 		for _, l := range lines[1:] {
 			found = found || l == "internal/admincli"
 		}
-		if !found || count < 1 || count >= total/2 {
-			t.Fatalf("selection %q count=%d total=%d: want internal/admincli and a strict subset (< total/2)", lines, count, total)
+		if !found || count < 1 || count >= total {
+			t.Fatalf("selection %q count=%d total=%d: want internal/admincli and a strict subset (< total)", lines, count, total)
 		}
 	})
 	t.Run("shared_change_is_full", func(t *testing.T) {

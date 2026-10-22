@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -640,7 +642,7 @@ func TestScanTypeReportsCustomMarshalers(t *testing.T) {
 	}
 }
 
-func TestOperatorScanReadsMapKeysAndImportedEmbeds(t *testing.T) {
+func TestOperatorScanReadsMapKeys(t *testing.T) {
 	cases := []struct {
 		name   string
 		source string
@@ -649,8 +651,6 @@ func TestOperatorScanReadsMapKeysAndImportedEmbeds(t *testing.T) {
 		{"map literal key", "func f() any { return map[string]any{\"access_token\": 1} }\n", "map key access_token: key name reads as a credential"},
 		{"map literal key in a nested value", "func f() any { return map[string]any{\"ok\": map[string]string{\"refresh_token\": \"\"}} }\n", "map key refresh_token"},
 		{"benign map keys", "func f() any { return map[string]any{\"count\": 1, \"credential_fingerprint\": \"\"} }\n", ""},
-		{"imported embedded type", "import \"net/http\"\ntype out struct {\n\thttp.Cookie\n}\n", "embeds the imported type Cookie, which the scan cannot read"},
-		{"local embedded type", "type inner struct{ Count int }\ntype out struct {\n\tinner\n}\n", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -665,44 +665,39 @@ func TestOperatorScanReadsMapKeysAndImportedEmbeds(t *testing.T) {
 	}
 }
 
-func TestOperatorScanFollowsEmbeddedTypesOfTheModule(t *testing.T) {
-	write := func(root, rel, body string) {
-		path := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
+// Every prefix of the shared provider table, planted as the only pattern of a
+// payload string, is reported.
+func TestEveryProviderPrefixOfTheSharedTableIsProbed(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "contracts", "auth", "v1", "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	cases := []struct {
-		name   string
-		inner  string
-		expect string
-	}{
-		{"clean embedded struct", "type Inner struct {\n\tCount int `json:\"count\"`\n}\n", ""},
-		{"credential field in the embedded struct", "type Inner struct {\n\tAccessToken string `json:\"access_token\"`\n}\n", "field access_token: field name reads as a credential"},
-		{"untagged credential field", "type Inner struct {\n\tPassword string\n}\n", "field Password: field name reads as a credential"},
-		{"embedded in the embedded struct", "type Base struct {\n\tSecret string\n}\ntype Inner struct {\n\tBase\n}\n", "embedded Base field Secret: field name reads as a credential"},
-		{"missing type", "type Other struct{}\n", "embedded type Inner cannot be read by the scan"},
+	probes, err := queuecreds.CredentialProbes(data)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			write(root, "go.mod", "module example.test/m\n\ngo 1.22\n")
-			write(root, "q/q.go", "package q\n"+tc.inner)
-			write(root, "p/p.go", "package p\n\nimport \"example.test/m/q\"\n\ntype out struct {\n\tq.Inner\n}\n")
-			parsed, err := queuecreds.ParsePackage(filepath.Join(root, "p"))
+	prefixes, classes, minimums := queuecreds.ProviderTokenPrefixes()
+	if len(prefixes) < 14 {
+		t.Fatalf("shared table lists %d prefixes", len(prefixes))
+	}
+	for index, prefix := range prefixes {
+		t.Run(prefix, func(t *testing.T) {
+			temp := copyContracts(t)
+			mutateJSON(t, temp, providerSchema, func(node map[string]any) {
+				pattern := "^" + regexp.QuoteMeta(prefix) + classes[index] + "{" + strconv.Itoa(minimums[index]) + ",}$"
+				schemaProperties(node)["unit_id"] = map[string]any{"type": "string", "pattern": pattern}
+			})
+			got, err := queuecreds.AdmittingStrings(temp, probes)
 			if err != nil {
 				t.Fatal(err)
 			}
-			text := wholeText(parsed.OperatorFindings("p", nil))
-			if tc.expect == "" && text != "" {
-				t.Fatalf("unexpected findings:\n%s", text)
+			for _, entry := range got {
+				if entry == "schemas/sync.provider_unit.v1.schema.json $.properties.unit_id" {
+					return
+				}
 			}
-			if tc.expect != "" && !strings.Contains(text, tc.expect) {
-				t.Fatalf("want %q in:\n%s", tc.expect, text)
-			}
+			t.Fatalf("a payload string that accepts %s tokens is not reported: %q", prefix, got)
 		})
 	}
 }

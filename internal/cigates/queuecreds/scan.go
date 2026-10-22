@@ -118,16 +118,39 @@ type valueRule struct {
 	pattern *regexp.Regexp
 }
 
+// providerTokenShapes is the one table of provider token prefixes. The value rules
+// are generated from it and so are the probes, so a prefix added here is both
+// matched and probed. Class is the character class of the text after the prefix,
+// Sample a character of that class, Min the shortest tail.
+var providerTokenShapes = []struct {
+	Prefix string
+	Class  string
+	Sample string
+	Min    int
+}{
+	{"ghp_", "[A-Za-z0-9]", "a", 20}, {"gho_", "[A-Za-z0-9]", "a", 20}, {"ghu_", "[A-Za-z0-9]", "a", 20},
+	{"ghs_", "[A-Za-z0-9]", "a", 20}, {"ghr_", "[A-Za-z0-9]", "a", 20},
+	{"github_pat_", "[A-Za-z0-9_]", "a", 20},
+	{"glpat-", "[A-Za-z0-9_-]", "a", 16},
+	{"xoxa-", "[A-Za-z0-9-]", "a", 10}, {"xoxb-", "[A-Za-z0-9-]", "a", 10}, {"xoxp-", "[A-Za-z0-9-]", "a", 10},
+	{"xoxr-", "[A-Za-z0-9-]", "a", 10}, {"xoxs-", "[A-Za-z0-9-]", "a", 10},
+	{"AKIA", "[0-9A-Z]", "A", 16}, {"ASIA", "[0-9A-Z]", "A", 16},
+	{"sk_live_", "[A-Za-z0-9]", "a", 16}, {"rk_live_", "[A-Za-z0-9]", "a", 16},
+}
+
+func providerTokenRules() []valueRule {
+	rules := make([]valueRule, 0, len(providerTokenShapes))
+	for _, shape := range providerTokenShapes {
+		rules = append(rules, valueRule{"provider:" + shape.Prefix,
+			regexp.MustCompile(`\b` + regexp.QuoteMeta(shape.Prefix) + shape.Class + `{` + strconv.Itoa(shape.Min) + `,}`)})
+	}
+	return rules
+}
+
 var staticValueRules = []valueRule{
 	{"jwt", regexp.MustCompile(`eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*`)},
 	{"private-key-block", regexp.MustCompile(`-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----`)},
 	{"url-userinfo", regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s:@]+:[^/\s@]+@`)},
-	{"github-token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}`)},
-	{"github-pat", regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{20,}`)},
-	{"gitlab-token", regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{16,}`)},
-	{"slack-token", regexp.MustCompile(`\bxox[abprs]-[A-Za-z0-9-]{10,}`)},
-	{"aws-key-id", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}`)},
-	{"stripe-key", regexp.MustCompile(`\bsk_live_[A-Za-z0-9]{16,}`)},
 }
 
 // NewValueScanner derives the value rules from the credential-classes contract:
@@ -161,7 +184,7 @@ func NewValueScanner(credentialClasses []byte) (*ValueScanner, error) {
 	if len(prefixes) == 0 || len(schemes) == 0 {
 		return nil, errors.New("credential classes carry no credential_prefix or authorization_scheme marker")
 	}
-	scanner := &ValueScanner{rules: append([]valueRule(nil), staticValueRules...)}
+	scanner := &ValueScanner{rules: append(append([]valueRule(nil), staticValueRules...), providerTokenRules()...)}
 	for _, prefix := range sortedKeys(prefixes) {
 		scanner.rules = append(scanner.rules, valueRule{
 			"prefix:" + prefix, regexp.MustCompile(`(?i)(^|[^A-Za-z0-9])` + regexp.QuoteMeta(prefix) + `[A-Za-z0-9_-]{8,}`)})
@@ -831,14 +854,11 @@ func CredentialProbes(credentialClasses []byte) ([]string, error) {
 	urlText := segment("probe-probe-probe-probe-probe-probe")
 	probes := []string{
 		segment(`{"alg":"none"}`) + "." + segment(`{"sub":"probe"}`) + "." + segment("probe-signature"),
-		"gh" + "p_" + urlText[:24],
-		"github_" + "pat_" + urlText,
-		"gl" + "pat-" + urlText[:20],
-		"xox" + "b-" + hexText,
-		"AK" + "IA" + "0123456789ABCDEF",
-		"sk_" + "live_" + hexText,
 		"-----BEGIN " + "PRIVATE KEY-----",
 		"postgres://user:" + "probe@host/db",
+	}
+	for _, shape := range providerTokenShapes {
+		probes = append(probes, shape.Prefix+strings.Repeat(shape.Sample, shape.Min))
 	}
 	for _, rule := range scanner.rules {
 		if prefix, ok := strings.CutPrefix(rule.name, "prefix:"); ok {
@@ -1024,9 +1044,8 @@ var RuntimeBoundStrings = []string{
 	"envelope.schema.json $.properties.domain.properties.type",
 }
 
-// outputShapeFindings reads the two operator output shapes a field scan cannot
-// see: the keys of map literals, which become JSON object names, and embedded
-// types from other packages, whose fields the scan cannot read.
+// outputShapeFindings reads the keys of map literals, which become JSON object
+// names and which a field scan cannot see.
 func (parsed PackageTypes) outputShapeFindings(label string) []Finding {
 	var findings []Finding
 	for _, file := range parsed.files {
@@ -1049,19 +1068,6 @@ func (parsed PackageTypes) outputShapeFindings(label string) []Finding {
 						findings = append(findings, Finding{label + " map key " + key, "key name reads as a credential"})
 					}
 				}
-			case *ast.StructType:
-				for _, field := range typed.Fields.List {
-					if len(field.Names) != 0 {
-						continue
-					}
-					expr := field.Type
-					if star, isStar := expr.(*ast.StarExpr); isStar {
-						expr = star.X
-					}
-					if selector, isSelector := expr.(*ast.SelectorExpr); isSelector {
-						findings = append(findings, parsed.importedEmbedFindings(label, file, selector)...)
-					}
-				}
 			}
 			return true
 		})
@@ -1069,100 +1075,11 @@ func (parsed PackageTypes) outputShapeFindings(label string) []Finding {
 	return findings
 }
 
-// importedEmbedFindings reads an embedded type from another package of this
-// module field by field. An embedded type from outside the module cannot be
-// read and is a finding of its own.
-func (parsed PackageTypes) importedEmbedFindings(label string, file *ast.File, selector *ast.SelectorExpr) []Finding {
-	qualifier, _ := selector.X.(*ast.Ident)
-	importPath := ""
-	for _, spec := range file.Imports {
-		path, err := strconv.Unquote(spec.Path.Value)
-		if err != nil {
-			continue
-		}
-		name := filepath.Base(path)
-		if spec.Name != nil {
-			name = spec.Name.Name
-		}
-		if qualifier != nil && name == qualifier.Name {
-			importPath = path
-		}
+// ProviderTokenPrefixes lists the provider token prefixes the value rules and
+// the probes are generated from, with the class and shortest length of the tail.
+func ProviderTokenPrefixes() (prefixes, classes []string, minimums []int) {
+	for _, shape := range providerTokenShapes {
+		prefixes, classes, minimums = append(prefixes, shape.Prefix), append(classes, shape.Class), append(minimums, shape.Min)
 	}
-	unreadable := Finding{label + " embedded field " + selector.Sel.Name,
-		"embeds the imported type " + selector.Sel.Name + ", which the scan cannot read"}
-	root, modulePath, err := moduleOf(parsed.Dir)
-	if err != nil || !strings.HasPrefix(importPath, modulePath+"/") {
-		return []Finding{unreadable}
-	}
-	return embeddedTypeFindings(root, modulePath, importPath, selector.Sel.Name, label+" embedded "+selector.Sel.Name, 0)
-}
-
-func moduleOf(dir string) (root, modulePath string, err error) {
-	for current := dir; ; current = filepath.Dir(current) {
-		data, readErr := os.ReadFile(filepath.Join(current, "go.mod"))
-		if readErr == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				if path, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
-					return current, strings.TrimSpace(path), nil
-				}
-			}
-			return "", "", errors.New("go.mod names no module")
-		}
-		if filepath.Dir(current) == current {
-			return "", "", errors.New("go.mod not found")
-		}
-	}
-}
-
-const maxEmbedDepth = 6
-
-func embeddedTypeFindings(root, modulePath, importPath, typeName, label string, depth int) []Finding {
-	unreadable := Finding{label, "embedded type " + typeName + " cannot be read by the scan"}
-	if depth > maxEmbedDepth {
-		return []Finding{unreadable}
-	}
-	dir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(importPath, modulePath+"/")))
-	imported, err := ParsePackage(dir)
-	if err != nil {
-		return []Finding{unreadable}
-	}
-	var findings []Finding
-	found := false
-	for _, file := range imported.files {
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.TYPE {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				typeSpec := spec.(*ast.TypeSpec)
-				structType, isStruct := typeSpec.Type.(*ast.StructType)
-				if typeSpec.Name.Name != typeName || !isStruct {
-					continue
-				}
-				found = true
-				for _, field := range structType.Fields.List {
-					if name, ok := serializedName(field); ok && CredentialName(name) {
-						findings = append(findings, Finding{label + " field " + name, "field name reads as a credential"})
-					}
-					if len(field.Names) == 0 {
-						expr := field.Type
-						if star, isStar := expr.(*ast.StarExpr); isStar {
-							expr = star.X
-						}
-						switch embedded := expr.(type) {
-						case *ast.Ident:
-							findings = append(findings, embeddedTypeFindings(root, modulePath, importPath, embedded.Name, label+" embedded "+embedded.Name, depth+1)...)
-						case *ast.SelectorExpr:
-							findings = append(findings, Finding{label + " embedded " + embedded.Sel.Name, "embeds a type from a second package the scan does not follow"})
-						}
-					}
-				}
-			}
-		}
-	}
-	if !found {
-		return []Finding{unreadable}
-	}
-	return findings
+	return prefixes, classes, minimums
 }

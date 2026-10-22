@@ -151,6 +151,7 @@ internal/jobs/investment	test	deploy
 internal/jobs/investment	test	docs
 internal/jobs/metrics/complexity	test	README.md
 internal/jobs/metrics/daily	test	contracts
+internal/jobs/metrics/remaining	test	README.md
 internal/jobs/metrics/remaining	test	contracts
 internal/jobs/report	test	contracts
 internal/jobs/workgraph	test	contracts

@@ -23,6 +23,7 @@ internal/jobs/workgraph/linktier
 internal/jobs/workgraph/units
 internal/netclass
 internal/operationalordering
+internal/ownershipwindow
 internal/pgmigrate
 internal/platform/config
 internal/platform/dbphase

@@ -119,9 +119,8 @@ func (h *handlers) createOrgInvite(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	input, _ := ctx.Value(inviteInputKey{}).(inviteInput)
-	orgID, parseErr := uuid.Parse(r.PathValue("org_id"))
-	if parseErr != nil {
-		policy.WriteInternal(w)
+	orgID, ok := pathOrgID(w, r)
+	if !ok {
 		return
 	}
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {

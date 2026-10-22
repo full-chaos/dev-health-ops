@@ -106,6 +106,23 @@ type handlers struct {
 	logger      *slog.Logger
 }
 
+// providerNotFoundDetail is the fixed 404 text for a provider that answered
+// "not found" (an unknown Jira project, GitHub org or team, GitLab group). It
+// never carries the request path or the provider's own words.
+const providerNotFoundDetail = "The provider reported that the requested project, group or team was not found"
+
+// providerFailure answers a failed provider call: a provider "not found" is a
+// client error naming that, anything else stays a 500.
+func (h handlers) providerFailure(w http.ResponseWriter, r *http.Request, what string, err error) {
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorNotFound {
+		h.logger.WarnContext(r.Context(), "provider reported not found", slog.String("path", r.URL.Path), slog.String("step", what))
+		policy.WriteDetail(w, http.StatusNotFound, providerNotFoundDetail, nil)
+		return
+	}
+	h.internal(w, r, what, err)
+}
+
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
 	h.logger.ErrorContext(r.Context(), "api route failed", slog.String("path", r.URL.Path),
 		slog.String("step", what), slog.String("error", err.Error()))
@@ -483,7 +500,7 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.internal(w, r, "discover teams", err)
+		h.providerFailure(w, r, "discover teams", err)
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, teamDiscoverResponseJSON(provider, teams, truncated, warnings), nil)

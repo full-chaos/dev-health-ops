@@ -70,9 +70,7 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// org_deletion.py's _uuid_org_id: a malformed org_id is caught by the
 	// ROUTER as ValueError -> HTTPException(400, "Invalid organization
-	// id") -- unlike getOrganization's bare uuid.Parse (that route has no
-	// such try/except and answers the generic 500 instead). The two
-	// routes genuinely differ here; this is not a copy of the other.
+	// id"); every other org route answers this same 400 (pathOrgID).
 	orgUUID, parseErr := uuid.Parse(r.PathValue("org_id"))
 	if parseErr != nil {
 		policy.WriteDetail(w, http.StatusBadRequest, "Invalid organization id", nil)

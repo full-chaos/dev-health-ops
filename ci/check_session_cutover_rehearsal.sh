@@ -210,12 +210,15 @@ analyse() {
       else if ($2!=ok) {w++; if (!ff) ff=$1; lf=$1}}
     END {print n+0, f+0, v+0, w+0, ff+0, lf+0}' "${WORK}/read.log")
   before="$(awk -v a="${t0}" '$1<a {t=$1} END {print t}' "${WORK}/pods.log")"
+  # Serving pods = those Ready at the last sample before the phase. old_gone: the last second one of them is
+  # still listed. first_new: the first second a Ready pod appears that was not Ready before the phase (a new
+  # pod, or a pod that was stuck NotReady and recovers).
   old_gone="$(awk -v a="${t0}" -v b="${end}" -v before="${before}" '
-    $1==before && $2!="_tick" {old[$2]=1}
+    $1==before && $2!="_tick" && $3=="True" {old[$2]=1}
     $1>=a && $1<=b && ($2 in old) {last=$1}
     END {print last ? last + 1 : 0}' "${WORK}/pods.log")"
   first_new="$(awk -v a="${t0}" -v before="${before}" '
-    $1==before && $2!="_tick" {old[$2]=1}
+    $1==before && $2!="_tick" && $3=="True" {old[$2]=1}
     $1>=a && $2!="_tick" && !($2 in old) && $3=="True" {print $1; exit}' "${WORK}/pods.log")"
   zero="$(awk -v a="${t0}" -v b="${t1}" '
     $1>=a && $1<=b {seen[$1]=1; if ($2!="_tick" && $3=="True") ready[$1]=1}

@@ -421,6 +421,9 @@ func validateMigrationJob(job MigrationJob, budget PostgresBudget) error {
 	if contains(job.SecretEnv, "WORKER_DATABASE_URI") || contains(job.SecretEnv, "POSTGRES_URI") {
 		return errors.New("migration job must not receive runtime database DSNs")
 	}
+	if len(ForeignDSNSecrets("migration", job.SecretEnv)) > 0 {
+		return errors.New("migration job carries a database DSN secret outside its class")
+	}
 	return nil
 }
 
@@ -589,6 +592,9 @@ func validateProcess(process Process, coverage map[string]queueCoverage, state D
 		}
 	default:
 		return errors.New("runtime is invalid")
+	}
+	if len(ForeignDSNSecrets(process.Runtime, process.SecretEnv)) > 0 {
+		return errors.New("process carries a database DSN secret outside its class")
 	}
 	return nil
 }

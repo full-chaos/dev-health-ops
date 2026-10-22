@@ -274,13 +274,17 @@ spec:
             {{- end }}
             {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
-            # Every Go worker group uses the bounded domain transaction pool plus
-            # the River queue session pool. Only coordinator binaries receive
-            # the separate coordinator lock session endpoint.
+            # Every Go worker group uses the bounded domain transaction pool. River
+            # worker and coordinator groups also use the River queue session pool;
+            # a stream group (one with a runtimeProfile) opens no queue pool and
+            # receives no queue DSN. Only coordinator binaries receive the
+            # separate coordinator lock session endpoint.
             - name: POSTGRES_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: POSTGRES_URI}}
+            {{- if not $group.runtimeProfile }}
             - name: WORKER_DATABASE_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: WORKER_DATABASE_URI}}
+            {{- end }}
             {{- if $coordinator }}
             - name: COORDINATOR_DATABASE_URI
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: COORDINATOR_DATABASE_URI}}

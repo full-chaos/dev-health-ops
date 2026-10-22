@@ -480,12 +480,20 @@ func pgScopesRoleDSNsAndPreservesDirectMigrations(g *guard) {
 	}
 	sort.Strings(wn)
 	g.expect(equal(wn, allNineNames), "worker groups %v, want %v", wn, allNineNames)
+	streamGroups := map[string]bool{}
+	for _, p := range processes(g) {
+		streamGroups[str(p["name"])] = str(p["runtime"]) == "stream"
+	}
 	for grp, d := range workers {
 		c := containers(d)[0]
 		env := envMap(c)
 		args := strs(c["args"])
 		g.expect(str(at(env["POSTGRES_URI"], "valueFrom", "secretKeyRef", "key")) == "POSTGRES_URI", "%s POSTGRES_URI must be a secretKeyRef to POSTGRES_URI", grp)
-		g.expect(str(at(env["WORKER_DATABASE_URI"], "valueFrom", "secretKeyRef", "key")) == "WORKER_DATABASE_URI", "%s WORKER_DATABASE_URI must be a secretKeyRef to WORKER_DATABASE_URI", grp)
+		if streamGroups[grp] {
+			g.expect(!has(env, "WORKER_DATABASE_URI"), "%s receives the queue-control DSN", grp)
+		} else {
+			g.expect(str(at(env["WORKER_DATABASE_URI"], "valueFrom", "secretKeyRef", "key")) == "WORKER_DATABASE_URI", "%s WORKER_DATABASE_URI must be a secretKeyRef to WORKER_DATABASE_URI", grp)
+		}
 		g.expect(sortedHas(args, "--queue-database-mode=session") && sortedHas(args, "--domain-transaction-pooler=true"), "%s lacks the pool-mode flags: %v", grp, args)
 		for _, n := range []string{"WORKER_DATABASE_MODE", "PGBOUNCER_TRANSACTION_MODE", "MIGRATION_DATABASE_URI", "MIGRATION_DATABASE_URI_FILE"} {
 			g.expect(!has(env, n), "%s sets %s in its environment", grp, n)

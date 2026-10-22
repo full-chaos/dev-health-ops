@@ -42,7 +42,7 @@ var (
 	ttlHorizonLine  = regexp.MustCompile(`(?i)TTL\s+.*?\+\s*INTERVAL\s+(\d+)\s+DAY\s+DELETE`)
 )
 
-// A plain backticked name stays visible so the CREATE/ALTER regexes can read table names; any other backtick identifier is blanked like a literal. Double-quoted text stays visible: legacy fixtures wrap whole DDL chunks in triple quotes.
+// A plain backticked name stays visible so the CREATE/ALTER regexes can read table names; every other quoted span is blanked. A triple quote is the legacy fixtures' whole-chunk wrapper, not a quoted span.
 var ttlPlainIdent = regexp.MustCompile(`^[A-Za-z_]\w*$`)
 
 type ttlRetention struct {
@@ -89,6 +89,9 @@ func ttlStripSQLComments(text string) string {
 	for i := 0; i < n; {
 		c := text[i]
 		switch {
+		case c == '"' && strings.HasPrefix(text[i:], `"""`):
+			out.WriteString(`"""`)
+			i += 3
 		case c == '\'' || c == '"' || c == '`':
 			j := i + 1
 			for j < n && text[j] != c {
@@ -100,7 +103,7 @@ func ttlStripSQLComments(text string) string {
 			if j >= n {
 				j = n - 1
 			}
-			if c == '\'' || (c == '`' && !ttlPlainIdent.MatchString(text[i+1:j])) {
+			if c != '`' || !ttlPlainIdent.MatchString(text[i+1:j]) {
 				out.WriteByte(c)
 				out.WriteString(strings.Repeat(" ", j-i-1))
 				out.WriteByte(c)
@@ -359,6 +362,14 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 		p, c := ttlScan(t, dir)
 		if _, ok := p["lit_text"]; ok || c["lit_text"] {
 			t.Fatalf("literal text registered as a table TTL: precise=%v coarse=%v", p, c)
+		}
+	})
+	t.Run("TTL text inside a double-quoted identifier is not a table TTL", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE dq_ident (\n \"TTL event_ts + INTERVAL 90 DAY\" DateTime,\n \"a\\\" TTL d + toIntervalDay(180)\" DateTime\n) ENGINE=MergeTree ORDER BY tuple();")
+		p, c := ttlScan(t, dir)
+		if _, ok := p["dq_ident"]; ok || c["dq_ident"] {
+			t.Fatalf("double-quoted text registered as a table TTL: precise=%v coarse=%v", p, c)
 		}
 	})
 	t.Run("a real table TTL after quoted TTL-like text still registers", func(t *testing.T) {

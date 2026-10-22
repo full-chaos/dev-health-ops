@@ -1,0 +1,51 @@
+{
+  "description": "The golden corpus for the actions.v1 catalog. No client-only rule: every rule is a schema rule.",
+  "accept": [
+    {
+      "file": "valid-organization-action.json",
+      "why": "One organization action with a dotted name."
+    },
+    {
+      "file": "valid-platform-action.json",
+      "why": "An organization and a platform action."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-action-single-segment.json",
+      "expect_instance_location": "/actions/0/action",
+      "expect_keyword": "pattern",
+      "why": "A bare single-segment name is not an action."
+    },
+    {
+      "file": "invalid-action-wildcard.json",
+      "expect_instance_location": "/actions/0/action",
+      "expect_keyword": "pattern",
+      "why": "A wildcard is not an action."
+    },
+    {
+      "file": "invalid-scope-unknown.json",
+      "expect_instance_location": "/actions/0/scope",
+      "expect_keyword": "enum",
+      "why": "A scope outside the closed set."
+    },
+    {
+      "file": "invalid-actions-empty.json",
+      "expect_instance_location": "/actions",
+      "expect_keyword": "minItems",
+      "why": "A catalog with no action."
+    },
+    {
+      "file": "invalid-schema-version.json",
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "why": "A schema version other than actions.v1."
+    },
+    {
+      "file": "invalid-top-level-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "An extra top-level member."
+    }
+  ]
+}

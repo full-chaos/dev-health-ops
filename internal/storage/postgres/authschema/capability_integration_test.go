@@ -36,7 +36,7 @@ func insertFixtures(ids map[string]string) []struct {
 		{"organizations", `INSERT INTO auth.organizations (id, slug, name) VALUES ($1, 'cap-org', 'Cap Org')`, []any{ids["org"]}},
 		{"users", `INSERT INTO auth.users (principal_id, email, email_lower) VALUES ($1, 'Cap@example.com', 'cap@example.com')`, []any{ids["principal"]}},
 		{"external_identities", `INSERT INTO auth.external_identities (principal_id, provider, subject) VALUES ($1, 'cap-idp', 'cap-subject')`, []any{ids["principal"]}},
-		{"memberships", `INSERT INTO auth.memberships (organization_id, principal_id) VALUES ($1, $2)`, []any{ids["org"], ids["principal"]}},
+		{"memberships", `INSERT INTO auth.memberships (organization_id, principal_id, role) VALUES ($1, $2, 'member')`, []any{ids["org"], ids["principal"]}},
 		{"platform_role_assignments", `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'cap.platform')`, []any{ids["principal"]}},
 		{"service_accounts", `INSERT INTO auth.service_accounts (principal_id, organization_id, name) VALUES ($1, $2, 'cap-svc')`, []any{ids["svcPrincipal"], ids["org"]}},
 		{"workloads", `INSERT INTO auth.workloads (principal_id, organization_id, name, trust_domain, issuer, namespace, service_account_name, audience) VALUES ($1, $2, 'cap-wl', 'td', 'iss', 'ns', 'sa', 'aud')`, []any{ids["wlPrincipal"], ids["org"]}},

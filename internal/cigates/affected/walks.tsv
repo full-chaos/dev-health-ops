@@ -51,6 +51,7 @@ internal/cigates/bigboy	harness_test.go	unexpressed	-
 internal/cigates/bigboy	repin_old8_guard_test.go	unexpressed	-
 internal/cigates/bigboy	repin_support_test.go	unexpressed	-
 internal/cigates/bigboyrender	guards_test.go	unexpressed	-
+internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testdata/parity	dir
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-
 internal/cigates/cachepoison	cachepoison_test.go	.github/workflows	dir
 internal/cigates/chartgates	helpers_test.go	unexpressed	-
@@ -80,8 +81,9 @@ internal/cigates/outboundtransport	outboundtransport_test.go	.	tree
 internal/cigates/queuecreds	scan.go	unexpressed	-
 internal/cigates/queuecreds	scan_test.go	contracts/jobs/v1	tree
 internal/cigates/raceunweighted	raceunweighted_test.go	unexpressed	-
+internal/cigates/releasetag	parity_test.go	internal/cigates/releasetag/testdata/parity	dir
 internal/cigates/releasetag	parity_test.go	unexpressed	-
-internal/cigates/releasetag	refusals_test.go	unexpressed	-
+internal/cigates/releasetag	refusals_test.go	internal/cigates/releasetag	dir
 internal/cigates/routing	chart_test.go	unexpressed	-
 internal/cigates/scripts	chmigrate_history_frozen_test.go	internal/chmigrate/history	dir
 internal/cigates/scripts	helper_copies_drift_test.go	internal/cigates	tree
@@ -179,7 +181,7 @@ internal/operationalordering	one_resolver_test.go	.	tree
 internal/ownershipwindow	ownershipwindow_test.go	internal/ownershipwindow	dir
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree
 internal/platform/config	route_switch_absence_test.go	unexpressed	-
-internal/platform/secrets	declared_fields_test.go	unexpressed	-
+internal/platform/secrets	declared_fields_test.go	internal	tree
 internal/platform/secrets	envreads_test.go	.	tree
 internal/processreadiness	readiness_timeout_test.go	internal/processreadiness	dir
 internal/providerfoundation	classify_call_sites_test.go	unexpressed	-
@@ -226,6 +228,7 @@ internal/queryapi/investmentexplain	llm_token_usage_golden_test.go	internal/quer
 internal/queryapi/investmentexplain	parser_golden_test.go	internal/queryapi/investmentexplain/testdata	dir
 internal/queryapi/investmentexplain	prompt_golden_test.go	internal/queryapi/investmentexplain/testdata	dir
 internal/queryapi/investmentexplain	resolve_model_name_golden_test.go	internal/queryapi/investmentexplain/testdata	dir
+internal/queryapi/rowview	census_test.go	unexpressed	-
 internal/queryapi/server	build_routes_integration_test.go	unexpressed	-
 internal/queryapi/server	direct_env_reads_test.go	unexpressed	-
 internal/queryapi/server	edge_users_test.go	unexpressed	-
@@ -259,8 +262,8 @@ internal/storedversion	writers_test.go	unexpressed	-
 internal/streamhandlers	stored_version_invariant_test.go	unexpressed	-
 internal/streamrunnerservice	readiness_timeout_test.go	internal/streamrunnerservice	dir
 internal/synccli	print_sites_test.go	internal/synccli	dir
+internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime	dir
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime/synclog	dir
-internal/syncdispatchruntime	log_error_text_test.go	unexpressed	-
 internal/syncdispatchruntime	post_sync_failure_test.go	internal/syncdispatchruntime	dir
 internal/synchandoff	trigger_writer_census_test.go	.	tree
 internal/syncreconciler	no_celery_test.go	unexpressed	-
@@ -286,6 +289,7 @@ internal/testsupport/venueoracle	known_defects_test.go	unexpressed	-
 internal/testsupport/venueoracle	opened.go	unexpressed	-
 internal/testsupport/venueoracle	opened_test.go	unexpressed	-
 internal/token	boundary_test.go	unexpressed	-
+internal/workersctl	operator_authority_inventory_test.go	unexpressed	-
 internal/workerservice	dependencies_test.go	unexpressed	-
 internal/workerservice	reports_test.go	unexpressed	-
 internal/workerservice	venue_golden_address_test.go	unexpressed	-

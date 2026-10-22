@@ -113,6 +113,33 @@ func RuntimePosture() []TablePrivilege {
 	}
 }
 
+// DefinerFunction is a SECURITY DEFINER function in the auth schema that the
+// runtime role may EXECUTE: a narrow, named write path to something the role
+// holds no table privilege on. It is TEMPORARY and removed by RemovedBy.
+type DefinerFunction struct {
+	Name string
+	// ArgType is the type of the function's one argument.
+	ArgType string
+	// Writes names the ops-schema column the function updates; its owner must
+	// hold UPDATE on it.
+	Writes    []ColumnTarget
+	RemovedBy string
+}
+
+// ColumnTarget is one column of an ops-schema table.
+type ColumnTarget struct{ Table, Column string }
+
+// RuntimeFunctions is the complete list of SECURITY DEFINER functions the
+// runtime role may execute. bump_legacy_token_version (migration 0018) can only
+// add one to go-api's users.token_version, so a password change ends go-api's
+// access tokens without giving the role UPDATE on public.users, where a column
+// grant could write a lower value and make old tokens valid again.
+func RuntimeFunctions() []DefinerFunction {
+	return []DefinerFunction{
+		{Name: "bump_legacy_token_version", ArgType: "uuid", Writes: []ColumnTarget{{Table: "users", Column: "token_version"}}, RemovedBy: "CHAOS-10630"},
+	}
+}
+
 // runtimeSequences are the sequences the runtime must be able to advance.
 //
 // A bigserial column's INSERT privilege is not sufficient on its own: the
@@ -183,6 +210,7 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		// Wipe the slate so the manifest is authoritative in both directions.
 		fmt.Sprintf(`REVOKE ALL ON ALL TABLES IN SCHEMA %s FROM %s`, schema, role),
 		fmt.Sprintf(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA %s FROM %s`, schema, role),
+		fmt.Sprintf(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %s FROM %s`, schema, role),
 		fmt.Sprintf(`REVOKE ALL ON SCHEMA %s FROM %s`, schema, role),
 		// USAGE lets the role resolve names in the schema. CREATE is
 		// deliberately NOT granted: without it the role cannot create,
@@ -217,6 +245,20 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		}
 		statements = append(statements, fmt.Sprintf(
 			`GRANT USAGE, SELECT ON SEQUENCE %s.%s TO %s`, schema, quoteIdentifier(sequenceID), role,
+		))
+	}
+
+	for _, function := range RuntimeFunctions() {
+		functionID, err := NewValidatedIdentifier(function.Name)
+		if err != nil {
+			return err
+		}
+		argID, err := NewValidatedIdentifier(function.ArgType)
+		if err != nil {
+			return err
+		}
+		statements = append(statements, fmt.Sprintf(
+			`GRANT EXECUTE ON FUNCTION %s.%s(%s) TO %s`, schema, quoteIdentifier(functionID), quoteIdentifier(argID), role,
 		))
 	}
 

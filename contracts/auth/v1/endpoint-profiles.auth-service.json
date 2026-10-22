@@ -438,7 +438,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/credentials.go",
-        "line": 143
+        "line": 142
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -456,7 +456,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/credentials.go",
-        "line": 144
+        "line": 143
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -474,7 +474,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/credentials.go",
-        "line": 145
+        "line": 144
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -492,7 +492,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/credentials.go",
-        "line": 146
+        "line": 145
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -554,7 +554,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/credentials.go",
-        "line": 147
+        "line": 146
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",

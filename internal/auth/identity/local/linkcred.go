@@ -90,6 +90,16 @@ func (l *PGLinks) WithPrincipalLock(ctx context.Context, principalID uuid.UUID, 
 	return nil
 }
 
+// EndResetLinksInTx deletes the principal's unconsumed password-reset
+// credentials inside the caller's transaction, so a link issued before a
+// password change is unknown after it. Verification links stay: they change no
+// password. The statement is the one Issue uses to replace a prior credential.
+func (l *PGLinks) EndResetLinksInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `DELETE FROM `+l.q+`.link_credentials
+WHERE principal_id = $1::uuid AND purpose = $2 AND consumed_at IS NULL`, principalID.String(), string(PurposePasswordReset))
+	return err
+}
+
 var _ Links = (*PGLinks)(nil)
 var _ Locker = (*PGLinks)(nil)
 

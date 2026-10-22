@@ -273,7 +273,7 @@ func (a *liveAccounts) ProvisionLocal(context.Context, ProvisionLocalRequest) (u
 	return uuid.Nil, identity.ErrEmailTaken
 }
 func (a *liveAccounts) SetEmailVerified(context.Context, uuid.UUID) error { return nil }
-func (a *liveAccounts) SetPasswordHash(context.Context, uuid.UUID, string) error {
+func (a *liveAccounts) SetPasswordEndingSessions(context.Context, uuid.UUID, string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.hashes++
@@ -346,8 +346,8 @@ func TestRaceResetReplay(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	if ok.Load() != 1 || accounts.hashes != 1 || len(sessions.revoked) != 1 {
-		t.Fatalf("successes %d, password writes %d, revokes %d; want 1 each", ok.Load(), accounts.hashes, len(sessions.revoked))
+	if ok.Load() != 1 || accounts.hashes != 1 {
+		t.Fatalf("successes %d, password writes %d; want 1 each", ok.Load(), accounts.hashes)
 	}
 	markRace(t)
 }
@@ -644,19 +644,19 @@ func (s *stateSessions) Create(_ context.Context, _ uuid.UUID, _ *uuid.UUID, _ [
 	return session.Issued{Session: session.Record{ID: id}}, nil
 }
 
-func (s *stateSessions) RevokeAll(context.Context, uuid.UUID, session.Actor) (int, error) {
+func (s *stateSessions) endAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id := range s.live {
 		s.live[id] = false
 	}
-	return len(s.live), nil
 }
 
 // statefulAccounts keeps one password hash; ByID reads it live.
 type statefulAccounts struct {
-	mu   sync.Mutex
-	user *User
+	mu       sync.Mutex
+	user     *User
+	sessions *stateSessions
 }
 
 func (a *statefulAccounts) ByEmail(context.Context, string) (*User, error) { return nil, nil }
@@ -670,10 +670,11 @@ func (a *statefulAccounts) ProvisionLocal(context.Context, ProvisionLocalRequest
 	return uuid.Nil, identity.ErrEmailTaken
 }
 func (a *statefulAccounts) SetEmailVerified(context.Context, uuid.UUID) error { return nil }
-func (a *statefulAccounts) SetPasswordHash(_ context.Context, _ uuid.UUID, hash string) error {
+func (a *statefulAccounts) SetPasswordEndingSessions(_ context.Context, _ uuid.UUID, hash string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.user.PasswordHash = &hash
+	a.sessions.endAll()
 	return nil
 }
 
@@ -686,8 +687,8 @@ func TestRaceConcurrentChangeKeepsTheReturnedSession(t *testing.T) {
 	p := env.principal(t, ctx)
 	start0 := "hash-of:" + flowPassword
 	provider := "local"
-	accounts := &statefulAccounts{user: &User{ID: p, IsActive: true, PasswordHash: &start0, AuthProvider: &provider}}
 	sessions := &stateSessions{live: map[uuid.UUID]bool{uuid.New(): true}}
+	accounts := &statefulAccounts{user: &User{ID: p, IsActive: true, PasswordHash: &start0, AuthProvider: &provider}, sessions: sessions}
 	f, err := NewFlows(FlowsConfig{Accounts: accounts, Links: links, Sessions: sessions, Mail: &liveMail{}, Locker: links, UsersOwnedByAuth: true,
 		Hash:    func(pw string) (string, error) { time.Sleep(20 * time.Millisecond); return "hash-of:" + pw, nil },
 		Compare: func(h, pw string) bool { return h == "hash-of:"+pw }})

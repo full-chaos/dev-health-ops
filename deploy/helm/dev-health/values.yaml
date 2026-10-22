@@ -231,6 +231,14 @@ authService:
     sessionReaders:
       goApi: ""
       queryApi: ""
+    # -- Acknowledges ONE deliberate narrowing of the runtime role's grants: the
+    #    16-hex digest a refused auth-migrate run prints. Rendered as
+    #    `-ack-grant-narrowing=<digest>` into the auth-migrate Job and the
+    #    auth-grants Job, only when set. Set it for the one deploy that carries a
+    #    migration which removes a grant (0019 drops DELETE on memberships) and
+    #    clear it in the next deploy change: a run that narrows nothing ignores
+    #    it, a run that narrows a different set is refused.
+    acknowledgeGrantNarrowing: ""
     hookEvents: [pre-install, pre-upgrade]
     # -- CHAOS-10581: the grants-only pass (`auth-migrate grants`) after the ops
     #    migrate Job, on migrations.hook.events. It fails the release when a

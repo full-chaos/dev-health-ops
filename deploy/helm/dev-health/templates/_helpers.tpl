@@ -706,6 +706,20 @@ The auth schema's name: ONE source for the auth migrator, the auth service and
 the ops migrator (the ops migrator exempts exactly this schema from its
 foreign-database check, so all three must read the same value).
 */}}
+{{- /*
+The auth-migrate grant-narrowing acknowledgement (authService.migrate.acknowledgeGrantNarrowing):
+empty renders nothing; otherwise the value must be the 16 lowercase hex characters of the
+digest a refused run prints, or the render fails. The result is the one flag, shared by the
+schema Job and the grants Job.
+*/ -}}
+{{- define "dev-health.authAckGrantNarrowing" -}}
+{{- $ack := trim (toString (default "" .Values.authService.migrate.acknowledgeGrantNarrowing)) -}}
+{{- if $ack -}}
+{{- if not (regexMatch "^[0-9a-f]{16}$" $ack) }}{{- fail "authService.migrate.acknowledgeGrantNarrowing must be the 16 lowercase hex characters of the digest a refused auth-migrate run prints" }}{{- end -}}
+-ack-grant-narrowing={{ $ack }}
+{{- end -}}
+{{- end }}
+
 {{- define "dev-health.authDatabaseSchema" -}}
 {{- default "auth" .Values.authService.database.schema -}}
 {{- end }}

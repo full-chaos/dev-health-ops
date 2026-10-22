@@ -19,6 +19,7 @@ internal/jobs/metrics/workitemblockers
 internal/jobs/metrics/workitemengine
 internal/jobs/metrics/workitemmetrics
 internal/jobs/workgraph/linktier
+internal/jobs/workgraph/units
 internal/mail
 internal/netclass
 internal/operationalordering

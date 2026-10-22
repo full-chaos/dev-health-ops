@@ -1,6 +1,6 @@
 -- 0017 credential_registry.credential_class admits internal_svc_authsess_token
 -- (CHAOS-10465). NOT ADDITIVE in one place, on purpose: it REDEFINES one CHECK,
--- and only WIDENS it.
+-- and only WIDENS it (widening only: nothing is removed from the 0008 list).
 --
 -- 0008 closed credential_class to the vocabulary principal.v1 carries, and said
 -- a new class is a migration: unknown denies. internal_svc_authsess_token is

@@ -57,6 +57,10 @@ const legacyRowQuery = `
 // go-api's own lookup refuses as well.
 var errMultipleLegacyRows = errors.New("session: more than one public.refresh_tokens row for a jti")
 
+// errDeactivatedFirstExchange rolls back a first exchange whose principal is
+// disabled or missing, so the family is revoked in a transaction of its own.
+var errDeactivatedFirstExchange = errors.New("session: first legacy exchange for an unavailable principal")
+
 func readLegacyRow(ctx context.Context, tx queryer, hexDigest string) (*legacyRow, error) {
 	rows, err := tx.Query(ctx, legacyRowQuery, hexDigest, GraceWindow.Seconds())
 	if err != nil {
@@ -97,8 +101,9 @@ type queryer interface {
 // successor key changed) is ErrGraceUnavailable, a retry that revokes nothing.
 // Any other revoked row is reuse: its go-api family and every session
 // exchanged from a jti of that family are revoked (ReasonRefreshReused). A
-// replay for a deactivated principal revokes the same family and answers
-// ReasonPrincipalDeactivated.
+// first exchange or a replay for a deactivated (or missing) principal revokes
+// the same family and answers ReasonPrincipalDeactivated, as go-api's
+// allowActive does.
 func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (result Result, err error) {
 	defer func() { s.recordExchange(ctx, result, err) }()
 	digest := legacyJTIDigest(legacy.JTI)
@@ -141,6 +146,10 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (resul
 				return fmt.Errorf("revoking the go-api refresh token changed %d rows under its lock", tag.RowsAffected())
 			}
 			issued, err := s.insertSession(ctx, tx, legacy.PrincipalID, legacy.OrganizationID, legacyAMR, legacy.JTI)
+			if errors.Is(err, ErrPrincipalUnavailable) {
+				reusedFamily, deactivated = &row.familyID, true
+				return errDeactivatedFirstExchange
+			}
 			if err != nil {
 				return err
 			}
@@ -151,11 +160,12 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (resul
 	switch {
 	case errors.Is(err, ErrGraceUnavailable):
 		return Result{Reason: ReasonDependency}, err
-	case errors.Is(err, ErrPrincipalUnavailable):
-		return Result{Reason: ReasonPrincipalDeactivated}, nil
+	case errors.Is(err, errDeactivatedFirstExchange):
+		err = nil
 	case err != nil:
 		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: legacy refresh exchange: %w", ErrStore, err)
-	case reusedFamily == nil:
+	}
+	if reusedFamily == nil {
 		return result, nil
 	}
 	revoked, err := s.revokeLegacyFamily(ctx, legacy.PrincipalID, *reusedFamily)

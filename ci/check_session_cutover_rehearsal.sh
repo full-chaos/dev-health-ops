@@ -132,7 +132,7 @@ printf 'authService:\n  sessionKeys:\n    successor:\n      secretName: auth-ses
 
 CHART="${ROOT}/deploy/helm/dev-health"
 HELM_BASE=("${RELEASE}" "${CHART}" --kube-context "kind-${CLUSTER}" --namespace "${NS}"
-  -f "${SCRIPT_DIR}/session_rehearsal/values.yaml" -f "${WORK}/secrets-base.yaml")
+  -f "${SCRIPT_DIR}/session_rehearsal/rehearsal-release.yaml" -f "${WORK}/secrets-base.yaml")
 HELM_SESSION=(-f "${WORK}/secrets-session.yaml" -f "${WORK}/successor.yaml")
 
 # --- rev 1: objects only, no hooks, so PostgreSQL exists before the hooks need it -------------------
@@ -272,7 +272,7 @@ printf 'step 5: guards: sessions=true is refused while a setting is unset\n'
 guard() { # <must-name> <helm --set...>
   local must="$1" out
   shift
-  if out="$(helm template "${RELEASE}" "${CHART}" --namespace "${NS}" -f "${SCRIPT_DIR}/session_rehearsal/values.yaml" -f "${WORK}/secrets-base.yaml" "$@" 2>&1)"; then
+  if out="$(helm template "${RELEASE}" "${CHART}" --namespace "${NS}" -f "${SCRIPT_DIR}/session_rehearsal/rehearsal-release.yaml" -f "${WORK}/secrets-base.yaml" "$@" 2>&1)"; then
     die "guard: the render passed; it must name ${must}"
   fi
   grep -q "${must}" <<<"${out}" || die "guard: the refusal does not name ${must}: ${out:0:400}"

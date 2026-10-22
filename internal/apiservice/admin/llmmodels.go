@@ -399,7 +399,7 @@ func mergeLLMModels(live, catalog []string, saved string) []llmModelItem {
 // filters the provider's ids pass, and never one that carries the saved key.
 func savedModelListable(model, apiKey string) bool {
 	return model != "" && len(model) <= llmModelIDMaxLen && llmModelIDShape.MatchString(model) &&
-		!llmModelIDSecretShape.MatchString(model) && !carriesKey(keyLeakForms(apiKey), model)
+		!llmModelIDSecretShape.MatchString(model) && !llmorgsettings.CarriesKey(llmorgsettings.KeyLeakForms(apiKey), model)
 }
 
 // getLLMSettingsModels serves a provider's model list: the platform catalog,

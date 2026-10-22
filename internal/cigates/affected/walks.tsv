@@ -284,6 +284,7 @@ internal/testsupport/venueoracle	known_defects_test.go	unexpressed	-
 internal/testsupport/venueoracle	opened.go	unexpressed	-
 internal/testsupport/venueoracle	opened_test.go	unexpressed	-
 internal/token	boundary_test.go	unexpressed	-
+internal/workersctl	operator_authority_inventory_test.go	unexpressed	-
 internal/workerservice	dependencies_test.go	unexpressed	-
 internal/workerservice	reports_test.go	unexpressed	-
 internal/workerservice	venue_golden_address_test.go	unexpressed	-

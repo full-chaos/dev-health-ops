@@ -574,6 +574,7 @@ internal/websmoke	smoke.go
 internal/websmoke	smoke_test.go
 internal/workersctl	compact_ownership_intervals_integration_test.go
 internal/workersctl	main_test.go
+internal/workersctl	operator_authority_inventory_test.go
 internal/workersctl	run_marker_open_test.go
 internal/workerservice	daily_native_family_registration_test.go
 internal/workerservice	daily_no_repository_partition_integration_test.go

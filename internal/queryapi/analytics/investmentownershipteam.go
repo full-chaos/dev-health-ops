@@ -27,7 +27,14 @@ const ownershipShareExpr = "if(ut.owner_matched = 1, ut.owner_share, 1.0)"
 // ownershipTeamSource is the derived table the `ut` alias names on the investment path. Its columns keep the names
 // the consumers already use (ut.team_label, ut.team_id) next to the owner share.
 func ownershipTeamSource(orgID string, scopedTeams []string) (string, []clickhouse.Binding) {
-	shares, bindings := teamscope.OwnerShares(orgID, scopedTeams, time.Now().UTC())
+	return ownershipTeamSourceAt(orgID, scopedTeams, time.Now().UTC())
+}
+
+// ownershipTeamSourceAt is ownershipTeamSource at one instant. The owners are those of teamscope.OwnerShares, which
+// renders the one ownership rule of internal/ownershipwindow (D5987 option C, CHAOS-9404): for an instant before a
+// repository's first recorded ownership its first recorded owners apply, an inactive team owns nothing.
+func ownershipTeamSourceAt(orgID string, scopedTeams []string, asOf time.Time) (string, []clickhouse.Binding) {
+	shares, bindings := teamscope.OwnerShares(orgID, scopedTeams, asOf)
 	return `(
         SELECT
             owner_repo_id,

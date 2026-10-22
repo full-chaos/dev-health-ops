@@ -1,0 +1,3 @@
+ERROR: x.html: link has no accessible name: a"b	c
+d
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

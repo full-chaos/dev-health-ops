@@ -67,7 +67,11 @@ func newPublicReadsFixture(t *testing.T, ctx context.Context, hide ...string) *p
 		if _, err := conn.Exec(ctx, fmt.Sprintf(`GRANT CREATE ON SCHEMA public TO %s`, Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 			t.Fatal(err)
 		}
+		owned := []string{LegacyRefreshTokenGrant().Table}
 		for table := range publicReadOracle {
+			owned = append(owned, table)
+		}
+		for _, table := range owned {
 			if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`,
 				Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 				t.Fatalf("hand public.%s to the migration login: %v", table, err)

@@ -240,7 +240,8 @@ it reaches. The denominator is unchanged. The TEAM grouping of the Investment fl
 (CHAOS-9297): each effort row takes the owner of its repository, a co-owned repository is shared among its
 owners by their linked share (the main owner by its share, each lesser owner by its own lesser share; equally only on a tie or when no share is measured), and a repository with no owner is `unassigned`, so the unassigned share of the flow is `1 - teamCoverage`
 except for a unit that spans an owned and an unowned repository (the coverage assigns it whole, the flow splits its
-effort). Only the work-unit team list still shows the vote.
+effort). The owners are those at the present, by the one ownership rule of `internal/ownershipwindow` (D5987 option C): a repository whose
+first recorded ownership starts later has its first recorded owners now, and a team that is inactive owns nothing. Only the work-unit team list still shows the vote.
 
 ## Repository coverage: two numbers, not one
 

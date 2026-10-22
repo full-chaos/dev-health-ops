@@ -1,0 +1,10 @@
+page	finding
+x.html	positive tabindex is not allowed: 1
+x.html	invalid tabindex value: abc
+x.html	positive tabindex is not allowed:  3 
+x.html	positive tabindex is not allowed: 1_0
+x.html	invalid tabindex value: 1__0
+x.html	positive tabindex is not allowed: ٣
+x.html	invalid tabindex value: 1.5
+x.html	positive tabindex is not allowed:  7
+x.html	invalid tabindex value: 7

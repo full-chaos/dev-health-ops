@@ -93,7 +93,7 @@ func newEnv(t *testing.T) (*env, error) {
 		return nil, fmt.Errorf("create role: %w", err)
 	}
 	closers = append(closers, func() { containers.DropRole(admin, role, func(string, ...any) {}) })
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: true}); err != nil {
 		return nil, fmt.Errorf("authschema.Apply: %w", err)
 	}
 	for _, grant := range []string{

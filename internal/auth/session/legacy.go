@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -88,15 +89,22 @@ type queryer interface {
 // credential records the jti's digest (legacy_jti_hash), in one transaction.
 // The session's pin is the user's token_version, as for every session.
 //
-// A revoked row presented within GraceWindow of its revocation is refused
-// (ReasonSessionRevoked) and revokes nothing: there is no successor to replay.
-// A revoked row presented later is reuse: its go-api family and every session
-// exchanged from a jti of that family are revoked (ReasonRefreshReused).
+// The session's first credential is derived from the jti (deriveSuccessor), so
+// a jti presented again within GraceWindow of its exchange, while that
+// credential is unused and its session live, is answered with the same
+// credential and nothing is written (ReasonGraceReplay), as go-api replays a
+// successor. A derived credential that no longer matches the stored one (the
+// successor key changed) is ErrGraceUnavailable, a retry that revokes nothing.
+// Any other revoked row is reuse: its go-api family and every session
+// exchanged from a jti of that family are revoked (ReasonRefreshReused). A
+// replay for a deactivated principal revokes the same family and answers
+// ReasonPrincipalDeactivated.
 func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (result Result, err error) {
 	defer func() { s.recordExchange(ctx, result, err) }()
 	digest := legacyJTIDigest(legacy.JTI)
 	hexDigest := hex.EncodeToString(digest)
 	var reusedFamily *uuid.UUID
+	var deactivated bool
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		row, err := readLegacyRow(ctx, tx, hexDigest)
 		if err != nil {
@@ -106,7 +114,18 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (resul
 		case row == nil || row.userID != legacy.PrincipalID || !sameOrganization(row.orgID, legacy.OrganizationID):
 			result.Reason = ReasonRefreshUnknown
 		case row.revoked && row.revokedGrace:
-			result.Reason = ReasonSessionRevoked
+			replay, err := s.replayLegacy(ctx, tx, digest, legacy.JTI)
+			if err != nil {
+				return err
+			}
+			switch {
+			case replay.deactivated:
+				reusedFamily, deactivated = &row.familyID, true
+			case replay.issued != nil:
+				result = Result{Reason: ReasonGraceReplay, Issued: *replay.issued}
+			default:
+				reusedFamily = &row.familyID
+			}
 		case row.revoked:
 			family := row.familyID
 			reusedFamily = &family
@@ -121,7 +140,7 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (resul
 			if tag.RowsAffected() != 1 {
 				return fmt.Errorf("revoking the go-api refresh token changed %d rows under its lock", tag.RowsAffected())
 			}
-			issued, err := s.insertSession(ctx, tx, legacy.PrincipalID, legacy.OrganizationID, legacyAMR, digest)
+			issued, err := s.insertSession(ctx, tx, legacy.PrincipalID, legacy.OrganizationID, legacyAMR, legacy.JTI)
 			if err != nil {
 				return err
 			}
@@ -130,6 +149,8 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (resul
 		return nil
 	})
 	switch {
+	case errors.Is(err, ErrGraceUnavailable):
+		return Result{Reason: ReasonDependency}, err
 	case errors.Is(err, ErrPrincipalUnavailable):
 		return Result{Reason: ReasonPrincipalDeactivated}, nil
 	case err != nil:
@@ -137,7 +158,59 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (resul
 	case reusedFamily == nil:
 		return result, nil
 	}
-	return s.revokeLegacyFamily(ctx, legacy.PrincipalID, *reusedFamily)
+	revoked, err := s.revokeLegacyFamily(ctx, legacy.PrincipalID, *reusedFamily)
+	if err == nil && deactivated {
+		revoked.Reason = ReasonPrincipalDeactivated
+	}
+	return revoked, err
+}
+
+// legacyReplay is the decision on a jti revoked inside the grace window: the
+// credential to answer again, a deactivated principal, or neither (reuse).
+type legacyReplay struct {
+	issued      *Issued
+	deactivated bool
+}
+
+// replayLegacy reads the credential exchanged from a jti under its session
+// lock and recomputes it. It writes nothing.
+func (s *Store) replayLegacy(ctx context.Context, tx pgx.Tx, digest []byte, jti contracts.SecretString) (legacyReplay, error) {
+	var sessionID, credentialID string
+	var storedHash []byte
+	var live bool
+	var expires time.Time
+	err := tx.QueryRow(ctx, fmt.Sprintf(`
+		SELECT c.session_id::text, c.id::text, c.token_hash,
+		       c.consumed_at IS NULL AND c.revoked_at IS NULL AND c.expires_at > clock_timestamp(), c.expires_at
+		FROM %[1]s.refresh_credentials c WHERE c.legacy_jti_hash = $1`, s.q), digest).Scan(&sessionID, &credentialID, &storedHash, &live, &expires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return legacyReplay{}, nil
+	}
+	if err != nil {
+		return legacyReplay{}, err
+	}
+	locked, err := s.lockSession(ctx, tx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return legacyReplay{}, nil
+	}
+	if err != nil {
+		return legacyReplay{}, err
+	}
+	if !live || locked.RevokedAt != nil || locked.expired || locked.LegacyTokenVersion == nil {
+		return legacyReplay{}, nil
+	}
+	if locked.principalDisabled {
+		return legacyReplay{deactivated: true}, nil
+	}
+	id, err := uuid.Parse(credentialID)
+	if err != nil {
+		return legacyReplay{}, err
+	}
+	credential := deriveSuccessor(s.key, id, jti)
+	if !equalHash(hashCredential(credential), storedHash) {
+		return legacyReplay{}, ErrGraceUnavailable
+	}
+	return legacyReplay{issued: &Issued{Session: locked.Record, Credential: credential, ExpiresAt: expires}}, nil
 }
 
 func sameOrganization(a, b *uuid.UUID) bool {

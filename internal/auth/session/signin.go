@@ -31,7 +31,7 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			var err error
-			out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, nil)
+			out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
 			return err
 		},
 		Audit:     event,
@@ -50,12 +50,22 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 // insertSession writes a session and its first refresh credential, the rows
 // Create writes, inside the caller's transaction. The session's client_ip is
 // the request's client address and its user_agent the request's user agent,
-// when they are bound. legacyJTI, when set, is the digest of the go-api
-// refresh jti the first credential was exchanged for.
+// when they are bound. legacyJTI, when set, is the go-api refresh jti the
+// first credential was exchanged for: the credential is derived from it, as a
+// rotated one is from its parent, so a second presentation of the jti inside
+// the grace window recomputes the same credential.
 func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
-	legacyJTI []byte) (Issued, error) {
-	credential, err := newCredential()
+	legacyJTI contracts.SecretString) (Issued, error) {
+	credentialID, err := uuid.NewRandom()
 	if err != nil {
+		return Issued{}, err
+	}
+	var credential contracts.SecretString
+	var legacyDigest []byte
+	if legacyJTI.Reveal() != "" {
+		credential = deriveSuccessor(s.key, credentialID, legacyJTI)
+		legacyDigest = legacyJTIDigest(legacyJTI)
+	} else if credential, err = newCredential(); err != nil {
 		return Issued{}, err
 	}
 	handle, err := newCredential()
@@ -91,11 +101,11 @@ func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uu
 	}
 	var out Issued
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO `+s.q+`.refresh_credentials (session_id, principal_id, token_hash, expires_at, legacy_jti_hash)
-		SELECT s.id, s.principal_id, $2, LEAST(clock_timestamp() + make_interval(secs => $3::double precision), s.expires_at), $4
+		INSERT INTO `+s.q+`.refresh_credentials (id, session_id, principal_id, token_hash, expires_at, legacy_jti_hash)
+		SELECT $5::uuid, s.id, s.principal_id, $2, LEAST(clock_timestamp() + make_interval(secs => $3::double precision), s.expires_at), $4
 		FROM `+s.q+`.sessions s WHERE s.id = $1
 		RETURNING expires_at`,
-		sessionID, hashCredential(credential), s.refreshTTL.Seconds(), legacyJTI,
+		sessionID, hashCredential(credential), s.refreshTTL.Seconds(), legacyDigest, credentialID.String(),
 	).Scan(&out.ExpiresAt); err != nil {
 		return Issued{}, err
 	}

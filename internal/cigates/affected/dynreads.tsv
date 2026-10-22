@@ -491,6 +491,7 @@ internal/storage/postgres	posture_cache_cadence_test.go
 internal/storage/postgres	posture_identity_sites_test.go
 internal/storage/postgres	provision_script_integration_test.go
 internal/storage/postgres	venue_posture_coverage_test.go
+internal/storage/postgres/authschema	grant_shape_contract_test.go
 internal/storedversion	writers_test.go
 internal/streamhandlers	external_clickhouse_test.go
 internal/streamhandlers	stored_version_invariant_test.go

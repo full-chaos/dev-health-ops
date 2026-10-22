@@ -175,14 +175,8 @@ type legacyReplay struct {
 // replayLegacy reads the credential exchanged from a jti under its session
 // lock and recomputes it. It writes nothing.
 func (s *Store) replayLegacy(ctx context.Context, tx pgx.Tx, digest []byte, jti contracts.SecretString) (legacyReplay, error) {
-	var sessionID, credentialID string
-	var storedHash []byte
-	var live bool
-	var expires time.Time
-	err := tx.QueryRow(ctx, fmt.Sprintf(`
-		SELECT c.session_id::text, c.id::text, c.token_hash,
-		       c.consumed_at IS NULL AND c.revoked_at IS NULL AND c.expires_at > clock_timestamp(), c.expires_at
-		FROM %[1]s.refresh_credentials c WHERE c.legacy_jti_hash = $1`, s.q), digest).Scan(&sessionID, &credentialID, &storedHash, &live, &expires)
+	var sessionID string
+	err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT c.session_id::text FROM %[1]s.refresh_credentials c WHERE c.legacy_jti_hash = $1`, s.q), digest).Scan(&sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return legacyReplay{}, nil
 	}
@@ -190,6 +184,20 @@ func (s *Store) replayLegacy(ctx context.Context, tx pgx.Tx, digest []byte, jti 
 		return legacyReplay{}, err
 	}
 	locked, err := s.lockSession(ctx, tx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return legacyReplay{}, nil
+	}
+	if err != nil {
+		return legacyReplay{}, err
+	}
+	var credentialID string
+	var storedHash []byte
+	var live bool
+	var expires time.Time
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
+		SELECT c.id::text, c.token_hash,
+		       c.consumed_at IS NULL AND c.revoked_at IS NULL AND c.expires_at > clock_timestamp(), c.expires_at
+		FROM %[1]s.refresh_credentials c WHERE c.legacy_jti_hash = $1 AND c.session_id = $2`, s.q), digest, sessionID).Scan(&credentialID, &storedHash, &live, &expires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return legacyReplay{}, nil
 	}

@@ -90,6 +90,7 @@ Design docs (read the guardrails at minimum):
 | `refresh_credential` | active | human | |
 | `user_access_token` | **unconsumed** | human | |
 | `internal_svc_authsess_token` | active | service_account | |
+| `link_credential` | active | human | |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -124,6 +125,18 @@ carry other prefixes, services and scopes. auth-service is its only validator
 rotate and revoke it. The route and go-api's four compatibility routes
 (`/api/v1/auth/{login,refresh,logout,social-login}`) have rows in
 `contracts/auth/v1/endpoint-profiles.auth-service.json`.
+
+**`link_credential` (CHAOS-10688).** The one-time e-mail link token of the
+auth-service local flows (e-mail verification, password reset): 32 random bytes,
+base64url, stored as its SHA-256 only in `link_credentials`, bound to one
+purpose, single use, expiry by the database clock (24 h verification, 1 h
+reset). auth-service verify and reset accept only this class, never the go-api
+signed tokens (`email_verification_token`, `password_reset_token`), so a go-api
+link issued before the cutover lapses and the user asks for a new one. A
+password change does not delete other outstanding links; they lapse at expiry.
+Purpose binding is proven by `TestVerifyAndResetRedeemOnlyTheirOwnPurpose` and
+`TestLinkCredentialOfAnotherPurposeIsNotRedeemedBothWays`. Its routes get
+profile rows when they are mounted.
 
 **`user_access_token` (CHAOS-10442).** The EdDSA user access token of TRD
 section 11, the successor of `ops_access_token_hs256`. It is class 33. Its wire

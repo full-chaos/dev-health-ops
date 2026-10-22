@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
@@ -41,7 +40,7 @@ func keysOf(t *testing.T, states ...[2]string) (token.KeySet, map[string]ed25519
 	for _, pair := range states {
 		public := publicKey(t)
 		publics[pair[0]] = public
-		keys = append(keys, token.Key{KeyID: pair[0], State: token.State(pair[1]), Algorithm: keystore.Algorithm, PublicKey: public})
+		keys = append(keys, token.Key{KeyID: pair[0], State: token.State(pair[1]), Algorithm: token.Algorithm, PublicKey: public})
 	}
 	set, err := token.NewKeySet(keys)
 	if err != nil {

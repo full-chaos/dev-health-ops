@@ -70,10 +70,8 @@ var llmModelRetired = map[string]bool{
 	"W put concurrency float":                     true,
 	"W put concurrency bool":                      true,
 	"W put concurrency null keeps":                true,
-	"W base_url open bracket":                     true,
 	"W base_url percent host":                     true,
 	"W base_url percent suffix host":              true,
-	"W base_url bad ipv6 literal":                 true,
 	"W base_url empty":                            true,
 	"W base_url null":                             true,
 	"W base_url public literal":                   true,
@@ -118,14 +116,14 @@ const (
 )
 
 func TestLLMSettingsRoutesVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "2960699efb4fab8c31eb01b8a082c67ffa5a2137ca78aefa0745c0849293c172")
+	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "4aee5ee34a4ed71e310e62b4c167688c4f547acc8af861cf74f2426d3621a166")
 }
 
 // TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
 // planes with no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting raises in
 // Python, an unhandled 500.
 func TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest, "2960699efb4fab8c31eb01b8a082c67ffa5a2137ca78aefa0745c0849293c172")
+	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest, "4aee5ee34a4ed71e310e62b4c167688c4f547acc8af861cf74f2426d3621a166")
 }
 
 func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest string) {

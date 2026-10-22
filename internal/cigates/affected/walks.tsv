@@ -30,6 +30,8 @@ internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-
 internal/auth/contracts	schema_dialect_test.go	unexpressed	-
 internal/auth/contracts	session_goldens_test.go	unexpressed	-
 internal/auth/contracts	transport_error_goldens_test.go	unexpressed	-
+internal/auth/contracts/tokencorpus	corpus.go	unexpressed	-
+internal/auth/contracts/tokencorpus	corpus_test.go	unexpressed	-
 internal/auth/identity	externalkey_test.go	internal/auth/identity	dir
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir
 internal/auth/writerinventory	scan_test.go	unexpressed	-

@@ -73,6 +73,8 @@ internal/auth/contracts	session_goldens_test.go
 internal/auth/contracts	session_hardening_test.go
 internal/auth/contracts	transport_error_goldens_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
+internal/auth/contracts/tokencorpus	corpus.go
+internal/auth/contracts/tokencorpus	corpus_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity/local	corpus_helpers_integration_test.go

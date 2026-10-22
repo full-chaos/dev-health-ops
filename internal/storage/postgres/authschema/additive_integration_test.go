@@ -282,7 +282,42 @@ var additiveExemptions = []additiveExemption{
 			"that one value, so it only widens (CHAOS-10465)",
 	},
 	{
-		version:    18,
+		version:    19,
+		regression: `constraint memberships.memberships_status_check redefined "CHECK ((status = ANY (ARRAY['invited'::text, 'active'::text, 'suspended'::text])))" -> "CHECK ((status = ANY (ARRAY['invited'::text, 'active'::text, 'suspended'::text, 'removed'::text])))"`,
+		reason:     "membership status admits removed; the redefined list is the old list plus that one value, so it only widens (CHAOS-10638)",
+	},
+	{
+		version:    19,
+		regression: `constraint memberships.memberships_organization_id_fkey redefined "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE CASCADE" -> "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still has a membership is refused instead of deleting the memberships (CHAOS-10638)",
+	},
+	{
+		version:    19,
+		regression: `constraint memberships.memberships_principal_id_fkey redefined "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE CASCADE" -> "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still has a membership is refused instead of deleting the memberships (CHAOS-10638)",
+	},
+	{
+		version:    20,
+		regression: `constraint resource_grants.resource_grants_organization_id_fkey redefined "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE CASCADE" -> "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still owns security state is refused instead of deleting it (CHAOS-10639)",
+	},
+	{
+		version:    20,
+		regression: `constraint resource_grants.resource_grants_principal_id_fkey redefined "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE CASCADE" -> "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still owns security state is refused instead of deleting it (CHAOS-10639)",
+	},
+	{
+		version:    20,
+		regression: `constraint service_accounts.service_accounts_organization_id_fkey redefined "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE CASCADE" -> "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still owns security state is refused instead of deleting it (CHAOS-10639)",
+	},
+	{
+		version:    20,
+		regression: `constraint workloads.workloads_organization_id_fkey redefined "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE CASCADE" -> "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still owns security state is refused instead of deleting it (CHAOS-10639)",
+	},
+	{
+		version:    21,
 		regression: `constraint credential_registry.credential_registry_credential_class_closed redefined "CHECK ((credential_class = ANY (ARRAY['acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'legacy_ingest_api_key'::text, 'legacy_ingest_hmac_signature'::text, 'license_key'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_token'::text])))" -> "CHECK ((credential_class = ANY (ARRAY['acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'legacy_ingest_api_key'::text, 'legacy_ingest_hmac_signature'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_token'::text])))"`,
 		reason: "credential_class admits link_credential; the redefined list is the old list plus " +
 			"that one value, so it only widens (CHAOS-10688)",

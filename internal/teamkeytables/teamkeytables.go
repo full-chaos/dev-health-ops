@@ -108,11 +108,26 @@ type Table struct {
 	Where string
 }
 
+// RowView is the last sorting-key column of the three aggregate work-item daily
+// tables (migration 141, CHAOS-8863): the view a row counts in. The empty
+// string is a legacy row (every view), 'org' counts each item once in the organization, 'scope'
+// counts each item once in each work scope. A key of the stale-key rule holds it
+// as its last value.
+var RowView = KeyColumn{"row_view", KeyString}
+
+// The values of row_view. LegacyRowView is the empty string: the implicit
+// default of the column, so a row of a writer that does not name it is legacy.
+const (
+	LegacyRowView = ""
+	OrgRowView    = "org"
+	ScopeRowView  = "scope"
+)
+
 // The team-keyed daily tables that take the shared rule. All lists them.
 var (
 	WorkItemMetricsDaily = Table{
 		Table: "work_item_metrics_daily", Family: "work_item", DayColumn: "day",
-		Keys:       []KeyColumn{{"provider", KeyString}, {"work_scope_id", KeyString}, {"team_id", KeyString}},
+		Keys:       []KeyColumn{{"provider", KeyString}, {"work_scope_id", KeyString}, {"team_id", KeyString}, RowView},
 		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
 		Counts: []string{"items_started", "items_completed", "items_started_unassigned", "items_completed_unassigned", "wip_count_end_of_day", "wip_unassigned_end_of_day", "new_bugs_count", "new_items_count"},
 		Measures: []string{
@@ -128,7 +143,7 @@ var (
 	WorkItemStateDurationsDaily = Table{
 		Table: "work_item_state_durations_daily", Family: "work_item_state", DayColumn: "day",
 		Keys: []KeyColumn{
-			{"provider", KeyString}, {"work_scope_id", KeyString}, {"team_id", KeyString}, {"status", KeyString},
+			{"provider", KeyString}, {"work_scope_id", KeyString}, {"team_id", KeyString}, {"status", KeyString}, RowView,
 		},
 		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
 		Counts:   []string{"items_touched"},
@@ -247,7 +262,7 @@ var (
 	WorkItemUserMetricsDaily = Table{
 		Table: "work_item_user_metrics_daily", Family: "work_item", DayColumn: "day",
 		Keys: []KeyColumn{
-			{"provider", KeyString}, {"work_scope_id", KeyString}, {"user_identity", KeyString},
+			{"provider", KeyString}, {"work_scope_id", KeyString}, {"user_identity", KeyString}, RowView,
 		},
 		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
 		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyString}, {"team_name", KeyString}},

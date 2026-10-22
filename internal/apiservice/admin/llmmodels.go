@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -59,60 +58,6 @@ var llmModelIDShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$`)
 // llmCursorShape is the same allowlist plus the base64 characters real page
 // tokens use; a cursor outside it is never copied into a request.
 var llmCursorShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@+=-]*$`)
-
-func baseURLCarriesKey(baseURL, apiKey string) bool {
-	return carriesKey(keyLeakForms(apiKey), baseURL)
-}
-
-// checkBaseURL refuses a base url that carries any of the keys BEFORE the
-// validator can resolve its host, so a key in a hostname never reaches DNS.
-func checkBaseURL(ctx context.Context, baseURL string, keys []string, validate func(context.Context, string) (bool, string, error)) (valid bool, reason string, keyHit bool, err error) {
-	for _, key := range keys {
-		if baseURLCarriesKey(baseURL, key) {
-			return false, "Invalid LLM base_url", true, nil
-		}
-	}
-	valid, reason, err = validate(ctx, baseURL)
-	return valid, reason, false, err
-}
-
-// keyLeakForms are the lower-cased forms in which the saved key could be
-// echoed back by a provider: raw, percent-escaped, hex, and base64 at each of
-// the three byte alignments (std and url alphabets, no padding).
-func keyLeakForms(apiKey string) []string {
-	if apiKey == "" {
-		return nil
-	}
-	forms := []string{strings.ToLower(apiKey)}
-	if len(apiKey) < 8 {
-		return forms
-	}
-	forms = append(forms, url.QueryEscape(apiKey), url.PathEscape(apiKey), hex.EncodeToString([]byte(apiKey)))
-	for shift := 0; shift < 3; shift++ {
-		raw := append(make([]byte, shift), apiKey...)
-		for _, enc := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
-			text := enc.EncodeToString(raw)
-			start := []int{0, 2, 3}[shift]
-			if len(text) > start+2 {
-				forms = append(forms, text[start:len(text)-2])
-			}
-		}
-	}
-	for index, form := range forms {
-		forms[index] = strings.ToLower(form)
-	}
-	return forms
-}
-
-func carriesKey(forms []string, text string) bool {
-	lowered := strings.ToLower(text)
-	for _, form := range forms {
-		if form != "" && strings.Contains(lowered, form) {
-			return true
-		}
-	}
-	return false
-}
 
 type llmModelListCache struct {
 	mu      sync.Mutex
@@ -194,7 +139,7 @@ type llmModelListRequest struct {
 // llmModelListFirstRequest builds the provider's list-models request, or a
 // reason code when the saved configuration cannot make one.
 func llmModelListFirstRequest(provider, baseURL, apiKey string) (llmModelListRequest, string) {
-	if carriesKey(keyLeakForms(apiKey), baseURL) {
+	if llmorgsettings.CarriesKey(llmorgsettings.KeyLeakForms(apiKey), baseURL) {
 		return llmModelListRequest{}, llmModelsReasonInvalidBaseURL
 	}
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
@@ -319,7 +264,7 @@ func listProviderModels(ctx context.Context, client providerfoundation.HTTPDoer,
 		return nil, reason
 	}
 	doer := httpguard.NoRedirectsDoer(client)
-	forms := keyLeakForms(apiKey)
+	forms := llmorgsettings.KeyLeakForms(apiKey)
 	seen := map[string]struct{}{}
 	var ids []string
 	var joined strings.Builder
@@ -352,7 +297,7 @@ func listProviderModels(ctx context.Context, client providerfoundation.HTTPDoer,
 			return nil, llmModelsReasonInvalidResponse
 		}
 		for _, id := range page.ids {
-			if carriesKey(forms, id) {
+			if llmorgsettings.CarriesKey(forms, id) {
 				continue
 			}
 			joined.WriteString(id)
@@ -364,11 +309,11 @@ func listProviderModels(ctx context.Context, client providerfoundation.HTTPDoer,
 				ids = append(ids, id)
 			}
 		}
-		if carriesKey(forms, joined.String()) {
+		if llmorgsettings.CarriesKey(forms, joined.String()) {
 			return nil, llmModelsReasonInvalidResponse
 		}
 		target = ""
-		if page.next != "" && len(page.next) <= llmCursorMaxLen && llmCursorShape.MatchString(page.next) && !carriesKey(forms, page.next) {
+		if page.next != "" && len(page.next) <= llmCursorMaxLen && llmCursorShape.MatchString(page.next) && !llmorgsettings.CarriesKey(forms, page.next) {
 			target = llmModelListNextURL(provider, first.url, page.next)
 		}
 	}
@@ -533,7 +478,7 @@ func (h *handlers) modelList(ctx context.Context, orgID string, cfg readinessBYO
 		}
 		return respond(nil, llmModelsSourceCatalog, reason, nil), nil
 	}
-	valid, _, _, err := checkBaseURL(ctx, cfg.baseURL, []string{apiKey}, h.baseURLValidator())
+	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, apiKey)
 	if err != nil {
 		return nil, err
 	}
@@ -554,11 +499,14 @@ func (h *handlers) modelList(ctx context.Context, orgID string, cfg readinessBYO
 	return respond(models, llmModelsSourceLive, "", &now), nil
 }
 
-func (h *handlers) baseURLValidator() func(context.Context, string) (bool, string, error) {
+// checkBaseURL is the one door to the base url validator for every reader in
+// this package: a url holding any of the keys is refused before a lookup.
+func (h *handlers) checkBaseURL(ctx context.Context, baseURL string, keys ...string) (valid bool, reason string, keyHit bool, err error) {
+	validate := llmorgsettings.BaseURLValidator(llmorgsettings.ValidateBaseURLChecked)
 	if h.validateURL != nil {
-		return h.validateURL
+		validate = h.validateURL
 	}
-	return llmorgsettings.ValidateBaseURLChecked
+	return llmorgsettings.CheckBaseURL(ctx, baseURL, keys, validate)
 }
 
 func (h *handlers) storedLLMKey(ctx context.Context, orgID string) (string, error) {

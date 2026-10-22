@@ -323,8 +323,9 @@ visible in the file layout, not in a conditionally present field:
   the list items equal to the entry and the receipt's credential a stricter
   subset. `crd_` is a new id prefix introduced here.
 * ACR and External Push appear only as metadata projections (`domain_owner`,
-  `external_reference`), never as validators (ACP-ADR-08/09). No pagination is
-  specified for the list (TRD §15 names no parameters).
+  `external_reference`), never as validators (ACP-ADR-08/09). The list is
+  paged by an opaque cursor (CHAOS-10136): at most 100 items a page, `next_cursor`
+  absent on the last page, order created_at then id ascending.
 
 ### JWKS and discovery: one issuer, one key use (CHAOS-4930)
 

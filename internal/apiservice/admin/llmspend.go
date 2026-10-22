@@ -204,13 +204,19 @@ func (h *handlers) orgLLMActive(ctx context.Context, orgID string) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	if orEmpty(apiKey) == "" && orEmpty(baseURL) == "" {
+	return h.byoConfigUsable(ctx, provider, orEmpty(apiKey), orEmpty(baseURL))
+}
+
+// byoConfigUsable is the credentials half of orgLLMActive: credential material
+// present and complete, and a base url with no key in it that passes the SSRF guard.
+func (h *handlers) byoConfigUsable(ctx context.Context, provider, apiKey, baseURL string) (bool, error) {
+	if apiKey == "" && baseURL == "" {
 		return false, nil
 	}
-	if !llmorgsettings.CredentialsComplete(provider, orEmpty(apiKey)) {
+	if !llmorgsettings.CredentialsComplete(provider, apiKey) {
 		return false, nil
 	}
-	ok, _, err := llmorgsettings.ValidateBaseURLChecked(ctx, orEmpty(baseURL))
+	ok, _, _, err := h.checkBaseURL(ctx, baseURL, apiKey)
 	if err != nil {
 		return false, err
 	}

@@ -87,6 +87,11 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 		e.Loc = append(append([]pyjson.Value(nil), loc...), e.Loc[1:]...)
 		problems = append(problems, e)
 	}
+	if len(problems) == 0 {
+		for _, key := range storedAssociationListKeys {
+			problems = append(problems, associationListProblems(associations, key, loc)...)
+		}
+	}
 	if len(problems) > 0 {
 		return discoveredTeam{}, problems
 	}
@@ -98,6 +103,39 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 		team.Description = &description
 	}
 	return team, nil
+}
+
+// storedAssociationListKeys are the associations the catalog insert stores as
+// Array(String) (catalogStringList).
+var storedAssociationListKeys = []string{"project_keys", "repo_patterns"}
+
+// associationListProblems refuses, before any write, an association list the
+// catalog cannot store: a non-string element, or a number or bool in place of
+// the list. Absent, null, a string, a dict and a list of strings stay accepted.
+// The loc is already the full body path.
+func associationListProblems(associations *pyjson.Object, key string, loc []pyjson.Value) pybody.Errors {
+	raw, ok := associations.Get(key)
+	if !ok {
+		return nil
+	}
+	fieldLoc := append(append([]pyjson.Value(nil), loc...), "associations", key)
+	switch value := raw.(type) {
+	case nil, string, *pyjson.Object:
+		return nil
+	case []pyjson.Value:
+		var problems pybody.Errors
+		for index, item := range value {
+			if _, isString := item.(string); !isString {
+				problems = append(problems, pybody.Error{
+					Type: "string_type", Loc: append(append([]pyjson.Value(nil), fieldLoc...), int64(index)),
+					Msg: "Input should be a valid string", Input: item,
+				})
+			}
+		}
+		return problems
+	default:
+		return pybody.Errors{{Type: "list_type", Loc: fieldLoc, Msg: "Input should be a valid list or string", Input: raw}}
+	}
 }
 
 // importTeamsJSON mirrors TeamImportResponse (schemas_flat.py:602-606).

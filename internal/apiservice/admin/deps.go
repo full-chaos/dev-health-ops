@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -157,6 +158,8 @@ type handlers struct {
 	// validateURL and storedKey replace the base url validator and the stored key read in tests.
 	validateURL func(context.Context, string) (bool, string, error)
 	storedKey   func(context.Context, string) (string, error)
+	// storedPurposeKey replaces the stored purpose override key read in tests.
+	storedPurposeKey func(context.Context, string, llmorgsettings.Purpose) (string, error)
 	// write renders this area's own directly-written errors (the keyed
 	// rate limiter's 429) in the same wire shape every other error uses.
 	write httpapi.ErrorWriter

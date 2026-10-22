@@ -997,6 +997,37 @@ func TestAllowOverrideAndExplicitHead(t *testing.T) {
 	}
 }
 
+// TestNoStorePathAllowListsEveryServedMethod: a path of the no-store (admin) table answers 405 with every method it
+// serves, whatever the first route declared (RFC 9110 10.2.1); any other path keeps its declared Allow.
+func TestNoStorePathAllowListsEveryServedMethod(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	server, err := NewServer(ServerOptions{
+		Address: "127.0.0.1:0", RequestTimeout: time.Second, MaxBodyBytes: 1024, ExplicitHead: true,
+		NoStore: NewNoStoreRoutes([]string{"GET /admin/a", "PATCH /admin/a"}),
+		Routes: []Route{
+			{Method: http.MethodGet, Pattern: "/admin/a", Handler: ok, Allow: http.MethodGet},
+			{Method: http.MethodPatch, Pattern: "/admin/a", Handler: ok},
+			{Method: http.MethodGet, Pattern: "/open/a", Handler: ok, Allow: http.MethodGet},
+			{Method: http.MethodPatch, Pattern: "/open/a", Handler: ok},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ method, path, allow string }{
+		{http.MethodPut, "/admin/a", "GET, PATCH"},
+		{http.MethodHead, "/admin/a", "GET, PATCH"},
+		{http.MethodPut, "/open/a", "GET"},
+		{http.MethodHead, "/open/a", "GET"},
+	} {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(c.method, c.path, nil))
+		if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != c.allow {
+			t.Errorf("%s %s: %d Allow=%q, want 405 %q", c.method, c.path, recorder.Code, recorder.Header().Get("Allow"), c.allow)
+		}
+	}
+}
+
 // TestUndeclaredBodyAtTheMaximumLimitReachesTheHandler: at MaxBodyBytes =
 // math.MaxInt64 the one-byte-past probe cannot be limit+1 (it wraps
 // negative and reads nothing); the body must still arrive whole.

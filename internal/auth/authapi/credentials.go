@@ -300,6 +300,8 @@ func (h credentialHandlers) resetPassword(flows CredentialFlows) http.Handler {
 		case local.FlowOK:
 			if outcome.RevokeErr != nil {
 				h.compat.rec.record(r.Context(), opResetPassword, "error", reasonSessionsNotRevoked, outcome.RevokeErr)
+				policy.WriteInternal(w)
+				return
 			}
 			h.compat.rec.record(r.Context(), opResetPassword, "success", reasonAccepted, nil)
 			writeCompatModel(w, verifyModel(textResetDone, false))
@@ -365,6 +367,8 @@ func (h credentialHandlers) changePassword(w http.ResponseWriter, r *http.Reques
 	case local.FlowOK:
 		if outcome.RevokeErr != nil {
 			h.compat.rec.record(ctx, opChangePassword, "error", reasonSessionsNotRevoked, outcome.RevokeErr)
+			policy.WriteInternal(w)
+			return
 		}
 		h.changed(w, r, caller, outcome)
 	case local.FlowPolicy:

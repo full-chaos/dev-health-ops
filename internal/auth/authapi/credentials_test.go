@@ -438,14 +438,21 @@ func TestChangePasswordReadsTheBodyBeforeTheBearer(t *testing.T) {
 	}
 }
 
-func TestFailedRevocationIsCountedAndTheAnswerStaysGoAPIs(t *testing.T) {
+func TestFailedRevocationFailsClosedOnResetAndChange(t *testing.T) {
 	c := newCredFixture(t)
 	c.fakes.revokeErr = errors.New("sessions store down")
 	c.call(http.MethodPost, PatternForgotPassword, `{"email":"`+credKnownEmail+`"}`, nil)
 	secret, _ := c.linkFor(local.PurposePasswordReset)
 	r := c.call(http.MethodPost, PatternResetPassword, `{"token":"`+secret+`","new_password":"another-password-1"}`, nil)
-	if r.Code != http.StatusOK {
-		t.Fatalf("reset = %d", r.Code)
+	if r.Code != http.StatusInternalServerError || strings.Contains(r.Body.String(), "another-password") {
+		t.Fatalf("reset with failed revocation = %d, want go-api's 500", r.Code)
+	}
+	c = newCredFixture(t)
+	c.fakes.revokeErr = errors.New("sessions store down")
+	header := c.bearer(c.grant())
+	r = c.call(http.MethodPost, PatternChangePassword, `{"current_password":"current-password-1","new_password":"Brand-new-pass-77!"}`, header)
+	if r.Code != http.StatusInternalServerError || strings.Contains(r.Body.String(), "access_token") {
+		t.Fatalf("change with failed revocation = %d %s, want a 500 without a token", r.Code, r.Body)
 	}
 	if !strings.Contains(c.logs.String(), reasonSessionsNotRevoked) || strings.Contains(c.logs.String(), "sessions store down") {
 		t.Fatal("the failed revocation must be logged by reason code only")

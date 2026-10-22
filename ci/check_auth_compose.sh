@@ -65,6 +65,9 @@ export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-auth-compose-proof}"
 export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-su#per@pw/1:2?3%4&5=6}"
 export AUTH_RUNTIME_DATABASE_PASSWORD="${AUTH_RUNTIME_DATABASE_PASSWORD:-au#th@pw/1:2?3%4&5=6 x}"
 export COMMIT="${COMMIT:-0000000000000000000000000000000000000000}"
+command -v jq >/dev/null 2>&1 || die "jq is required"
+AUTH_PROOF_POSTGRES_URI="postgresql://${POSTGRES_USER:-postgres}:$(jq -rn --arg p "${POSTGRES_PASSWORD}" '$p | @uri')@postgres:5432/${POSTGRES_DB:-postgres}"
+export AUTH_PROOF_POSTGRES_URI
 
 compose() {
   docker compose -p "${PROJECT}" -f "${ROOT}/compose.yml" -f "${SCRIPT_DIR}/auth_compose_proof.override.yml" "$@"
@@ -75,7 +78,7 @@ cleanup() {
   if [ "${status}" -ne 0 ]; then
     printf '\n--- auth services at failure ---\n' >&2
     compose --profile auth ps --all >&2 || true
-    compose --profile auth logs --no-color --tail 60 "${AUTH_SERVICES[@]}" >&2 || true
+    compose --profile auth logs --no-color --tail 60 "${AUTH_SERVICES[@]}" migrate >&2 || true
   fi
   compose --profile auth down --volumes --remove-orphans >/dev/null 2>&1 || true
   exit "${status}"

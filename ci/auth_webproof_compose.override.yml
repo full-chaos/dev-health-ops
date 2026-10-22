@@ -6,14 +6,9 @@
 # The auth proxy flags are ON here and nowhere else. compose.yml and the chart keep them OFF.
 # The AUTH_PROXY_* names are D1's. Sign-up (credentials) stays on go-api until D3.
 services:
-  clickhouse:
-    container_name: !reset null
-    ports: !reset []
   valkey:
     container_name: !reset null
     ports: !reset []
-  migrate:
-    container_name: !reset null
   go-river-migrate:
     # The sessions flag is on for go-api below, so its grant posture drops the api role's refresh_tokens INSERT and
     # UPDATE (go-api's readiness check reads the same flag).

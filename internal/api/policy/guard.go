@@ -111,6 +111,10 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
+		if user.OrgID == "" && !user.IsSuperuser && !OrglessMayReach(r.Method, r.URL.Path) {
+			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
+			return
+		}
 		switch level {
 		case Admin, AdminOrg:
 			// Org-scoped admin routes act in the effective org (CHAOS-9510):

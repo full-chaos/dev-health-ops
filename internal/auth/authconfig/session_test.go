@@ -89,14 +89,12 @@ func TestSessionSecretsAndTheirFilesAreMutuallyExclusive(t *testing.T) {
 var testLockoutKey = base64.RawURLEncoding.EncodeToString([]byte("login-config-lockout-key-0032-ab"))
 
 func compatEnv() map[string]string {
-	env := sessionEnv(testAccessSecret, testSuccessorKey)
-	env[EnvCompatRoutes] = "true"
-	return env
+	return sessionEnv(testAccessSecret, testSuccessorKey)
 }
 
 func TestTheLoginRouteNeedsTheLockoutKeyAndTheSessionSecrets(t *testing.T) {
 	cfg, err := Load(Spec{LookupEnv: lookupFrom(compatEnv())})
-	if err != nil || cfg.Session.LoginEnabled || !cfg.Session.CompatRoutes {
+	if err != nil || cfg.Session.LoginEnabled {
 		t.Fatalf("without the lockout key: err %v, login enabled %v", err, cfg.Session.LoginEnabled)
 	}
 	env := compatEnv()
@@ -110,7 +108,6 @@ func TestTheLoginRouteNeedsTheLockoutKeyAndTheSessionSecrets(t *testing.T) {
 	}
 	for name, env := range map[string]map[string]string{
 		"lockout key without the session secrets": {EnvLoginLockoutKey: testLockoutKey},
-		"lockout key without the compat routes":   {EnvLoginLockoutKey: testLockoutKey, EnvCompatRoutes: "false"},
 		"lockout key 31 bytes":                    {EnvLoginLockoutKey: base64.RawURLEncoding.EncodeToString(make([]byte, 31))},
 		"lockout key padded":                      {EnvLoginLockoutKey: base64.URLEncoding.EncodeToString(make([]byte, 32))},
 	} {
@@ -163,19 +160,19 @@ func TestSocialClientSecretsNeverReachTheStartupLine(t *testing.T) {
 	}
 }
 
-func TestTheCompatRoutesAreOffByDefaultAndNeedTheSessionSecrets(t *testing.T) {
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(sessionEnv(testAccessSecret, testSuccessorKey))})
-	if err != nil || cfg.Session.CompatRoutes {
-		t.Fatalf("default: err %v, compat routes %v", err, cfg.Session.CompatRoutes)
+func TestTheCompatSwitchIsGone(t *testing.T) {
+	for _, option := range Options() {
+		if option.Env == "AUTH_SERVICE_COMPAT_ROUTES" {
+			t.Fatal("AUTH_SERVICE_COMPAT_ROUTES is still a registered option")
+		}
 	}
-	env := baseEnv()
-	env[EnvCompatRoutes] = "true"
-	if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
-		t.Fatal("compat routes without the session secrets were accepted")
+	env := compatEnv()
+	env["AUTH_SERVICE_COMPAT_ROUTES"] = "false"
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil || !cfg.Session.Enabled {
+		t.Fatalf("a leftover AUTH_SERVICE_COMPAT_ROUTES value changed the load: err %v", err)
 	}
-	env = compatEnv()
-	env[EnvCompatRoutes] = "yes please"
-	if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
-		t.Fatal("a compat routes value that is not a boolean was accepted")
+	if strings.Contains(fmt.Sprint(slog.GroupValue(cfg.SafeAttrs()...)), "compat_routes_enabled") {
+		t.Fatal("the safe attributes still report the switch")
 	}
 }

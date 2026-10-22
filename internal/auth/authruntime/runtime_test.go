@@ -715,7 +715,8 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 
 // TestRoutesAreEmptyWithoutTheSessionSecrets is the dormancy assertion at the
 // call site: without the session secrets the service mounts nothing
-// (CHAOS-4881), and with them exactly the four session routes (CHAOS-10228).
+// (CHAOS-4881), and with them the four session routes (CHAOS-10228) and
+// go-api's compatibility routes, login too with the lockout key.
 // A route mounted any other way is a deliberate change this test names.
 func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 	schema, err := authschema.NewValidatedIdentifier("auth")
@@ -756,17 +757,14 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		}
 		return strings.Join(got, ",")
 	}
-	sessionOnly := "POST /v1/token/refresh,GET /v1/sessions/current,POST /v1/sessions/revoke,POST /v1/sessions/revoke-all"
-	if got := mountedBy(load(sessionEnvironment)); got != sessionOnly {
-		t.Fatalf("with the session secrets: mounted %s, want %s", got, sessionOnly)
+	sessionRoutesText := "POST /v1/token/refresh,GET /v1/sessions/current,POST /v1/sessions/revoke,POST /v1/sessions/revoke-all"
+	withoutLogin := sessionRoutesText + ",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login"
+	if got := mountedBy(load(sessionEnvironment)); got != withoutLogin {
+		t.Fatalf("with the session secrets: mounted %s, want %s", got, withoutLogin)
 	}
-	compat := load(compatEnvironment)
-	if got, want := mountedBy(compat), sessionOnly+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login"; got != want {
-		t.Fatalf("with the compat routes: mounted %s, want %s", got, want)
-	}
-	compat.Session.LoginEnabled = false
-	if got, want := mountedBy(compat), sessionOnly+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login"; got != want {
-		t.Fatalf("without the lockout key: mounted %s, want %s", got, want)
+	withLogin := load(compatEnvironment)
+	if got, want := mountedBy(withLogin), sessionRoutesText+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login"; got != want {
+		t.Fatalf("with the lockout key: mounted %s, want %s", got, want)
 	}
 }
 

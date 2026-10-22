@@ -15,6 +15,7 @@ internal/apiservice	code	contracts
 internal/apiservice	test	ci
 internal/apiservice/billingvenue	test	contracts
 internal/audit	test	contracts
+internal/auth/authconfig	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/contracts	code	contracts
 internal/auth/contracts/tokencorpus	code	contracts
@@ -150,6 +151,7 @@ internal/jobs/investment	test	deploy
 internal/jobs/investment	test	docs
 internal/jobs/metrics/complexity	test	README.md
 internal/jobs/metrics/daily	test	contracts
+internal/jobs/metrics/remaining	test	README.md
 internal/jobs/metrics/remaining	test	contracts
 internal/jobs/report	test	contracts
 internal/jobs/workgraph	test	contracts

@@ -116,6 +116,17 @@ func (doer *gitHubBigTreeDoer) Do(request *http.Request) (*http.Response, error)
 		entries := make([]string, 0, doer.dirs)
 		for dir := 0; dir < doer.dirs; dir++ {
 			entries = append(entries, fmt.Sprintf(`{"path":"d%03d","type":"tree","sha":"dir-%03d"}`, dir, dir))
+			if !recursive {
+				continue
+			}
+			for file := 0; file < doer.filesPerDir; file++ {
+				entries = append(entries, fmt.Sprintf(
+					`{"path":"d%03d/file%04d.go","type":"blob","sha":"%040x","size":120}`, dir, file, dir*100000+file))
+			}
+		}
+		if recursive && (doer.recursive == "truncateddir" || doer.recursive == "bigdir") {
+			body = `{"truncated":true,"tree":[` + entries[0] + `]}`
+			break
 		}
 		body = `{"truncated":false,"tree":[` + strings.Join(entries, ",") + `]}`
 	case strings.HasPrefix(request.URL.Path, "/repos/acme/api/git/trees/dir-"):
@@ -244,8 +255,8 @@ func TestGitHubBlameRouteWalksAFileListAboveTheResponseCapAndFinishesOverRuns(t 
 			t.Fatalf("run %d remaining=%v want %d", run, batch.Result["remaining_paths"], wantRemaining)
 		}
 		if run == 0 {
-			// 1 repo + 1 commits + 1 recursive + (1 root + 1 pkg + 60 dirs) walk + 500 blame.
-			if want := 1 + 1 + 1 + 62 + 500; batch.Evidence.Requests != want {
+			// 1 repo + 1 commits + 1 recursive + (1 root + 1 pkg recursive over the cap + 1 pkg + 60 leaf dirs) walk + 500 blame.
+			if want := 1 + 1 + 1 + 63 + 500; batch.Evidence.Requests != want {
 				t.Fatalf("requests=%d want %d", batch.Evidence.Requests, want)
 			}
 		}
@@ -256,7 +267,7 @@ func TestGitHubBlameRouteWalksAFileListAboveTheResponseCapAndFinishesOverRuns(t 
 		t.Fatalf("blamed %d distinct paths over the runs, want all %d", len(done), len(want))
 	}
 	if !strings.Contains(logs.String(), "class=recursive_over_cap") ||
-		!strings.Contains(logs.String(), "walk_requests=62") {
+		!strings.Contains(logs.String(), "walk_requests=63") {
 		t.Fatalf("logs=%q, want one WARN with the class and the walk request count", logs.String())
 	}
 	if strings.Contains(logs.String(), "acme") || strings.Contains(logs.String(), "pkg/d") {
@@ -303,8 +314,9 @@ func TestGitHubBlameRouteEndsWithAClassWhenOneDirectoryIsAboveTheCap(t *testing.
 			if len(batch.Effects) != 0 || doer.counts["blame"] != 0 {
 				t.Fatalf("effects=%d blame requests=%d, want none", len(batch.Effects), doer.counts["blame"])
 			}
-			// One walk, then stop: root + pkg + the directories up to the bad one.
-			if doer.counts["dir"] != 2+8 {
+			// One walk, then stop: root + pkg (recursive answer refused, then listed)
+			// + 7 leaf directories + the bad one (recursive, then listed).
+			if doer.counts["dir"] != 1+2+7+2 {
 				t.Fatalf("directory requests=%d, want the walk to stop at the bad directory", doer.counts["dir"])
 			}
 			if strings.Count(logs.String(), "class="+variant.class) != 1 {

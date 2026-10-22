@@ -1,0 +1,17 @@
+{
+  "step 09 exit": "1",
+  "step 09 rows": "null",
+  "step 09 stdout": "Error: model is required when a BYO LLM provider is saved\n",
+  "step 10 rows": "null",
+  "step 10 stdout": "{\n  \"api_key\": null,\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": null,\n  \"provider\": null\n}\n",
+  "step 11 rows": "null",
+  "step 14 exit": "1",
+  "step 14 rows": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2bb9728725e7|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|claude-x|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|anthropic|false|BYO LLM provider for this organization\"]",
+  "step 14 stdout": "Error: model is required when a BYO LLM provider is saved\n",
+  "step 20 exit": "1",
+  "step 20 rows": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|modèle-日本-😀|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|ünï|false|BYO LLM provider for this organization\"]",
+  "step 20 stdout": "Error: model is required when a BYO LLM provider is saved\n",
+  "step 21 rows": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|modèle-日本-😀|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|ünï|false|BYO LLM provider for this organization\"]",
+  "step 21 stdout": "{\n  \"api_key\": \"\\u043a\\u043b\\u044e\\u0447\\u20266789\",\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": \"mod\\u00e8le-\\u65e5\\u672c-\\ud83d\\ude00\",\n  \"provider\": \"\\u00fcn\\u00ef\"\n}\n",
+  "step 23 stdout": "Error: model is required when a BYO LLM provider is saved\n"
+}

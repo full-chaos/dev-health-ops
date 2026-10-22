@@ -71,6 +71,8 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// The job's selection narrows the plan of a child check_go.sh; these tests judge the whole module, so no child inherits it.
+	os.Unsetenv("GO_QUALITY_SELECTION_FILE")
 	dir, err := os.MkdirTemp("", "testshard-golist-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

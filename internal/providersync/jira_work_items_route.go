@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -126,6 +127,7 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 		Projects:           make([]projectmembership.CatalogRow, 0),
 	}
 	optionalIncomplete := make([]string, 0)
+	var commentsPermanent jiraCommentPermanentSample
 	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
 	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
 	sprintIDs := make(map[string]struct{})
@@ -220,7 +222,9 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 			comments, _, commentErr := collectJiraIssueComments(
 				budgetAccount(ctx, jiraCommentsFamily(claim)), client, item.WorkItemID, maxPages, perPage, commentsLimit,
 			)
-			if commentErr != nil {
+			if commentErr != nil && ctx.Err() == nil && jiraCommentReadPermanent(commentErr) {
+				commentsPermanent.add(commentErr)
+			} else if commentErr != nil {
 				optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
 			} else {
 				rows.Interactions = append(rows.Interactions,
@@ -296,6 +300,11 @@ func (handler JiraWorkItemsRouteHandler) Collect(
 	}
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
+	}
+	if commentsPermanent.Count > 0 {
+		result["incomplete_nonholding"] = []string{"comments:permanent:" + strconv.Itoa(commentsPermanent.Count)}
+		result["comments_permanent_skipped_issues"] = commentsPermanent.Count
+		commentsPermanent.log(claim)
 	}
 	var watermark *time.Time
 	if len(optionalIncomplete) == 0 {
@@ -691,4 +700,64 @@ func jiraCommentsFamily(claim Claim) string {
 		return "jira_comments"
 	}
 	return "jira_issue_enrichment"
+}
+
+// jiraCommentReadPermanent reports whether a per-issue comment read failed in
+// a way that a re-read of the same window cannot change: 404, 403 (the issue
+// is restricted for this credential; the search with it already succeeded),
+// other 4xx, and a malformed body. 401, 408, 429, 5xx, transport failures and
+// context ends keep the watermark held. A 403 on a site-level read is not
+// routed here.
+func jiraCommentReadPermanent(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) {
+		switch providerErr.Class {
+		case providerfoundation.ErrorNotFound, providerfoundation.ErrorConflict:
+			return true
+		case providerfoundation.ErrorAuthentication:
+			return providerErr.StatusCode == http.StatusForbidden
+		case providerfoundation.ErrorPermanent:
+			if providerErr.StatusCode != 0 {
+				return providerErr.StatusCode != http.StatusRequestTimeout
+			}
+			switch providerErr.Reason {
+			case providerfoundation.ReasonBodyDecode, providerfoundation.ReasonBodyShape, providerfoundation.ReasonBodyTooLarge:
+				return true
+			}
+			return false
+		}
+		return false
+	}
+	return errors.Is(err, providerfoundation.ErrNormalizationInvalid)
+}
+
+// jiraCommentPermanentSample keeps the first permanent comment read failure of
+// a run, as closed-set fields only, for the operator log line.
+type jiraCommentPermanentSample struct {
+	Count  int
+	Class  string
+	Status int
+	Reason string
+}
+
+func (sample *jiraCommentPermanentSample) add(err error) {
+	sample.Count++
+	if sample.Count > 1 {
+		return
+	}
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) {
+		sample.Class, sample.Status, sample.Reason = string(providerErr.Class), providerErr.StatusCode, providerErr.Reason
+		return
+	}
+	sample.Class = "normalization_invalid"
+}
+
+func (sample jiraCommentPermanentSample) log(claim Claim) {
+	slog.Warn("providersync.jira.comments_read_permanent",
+		"org_id", claim.OrgID, "unit_id", claim.ID, "skipped_issues", sample.Count,
+		"first_class", sample.Class, "first_status", sample.Status, "first_reason", sample.Reason)
 }

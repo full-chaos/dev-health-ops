@@ -136,6 +136,9 @@ func usableProviderOf(ctx context.Context, settings orgSettings) (string, error)
 	if !credentialsComplete(provider, creds.APIKey.Reveal()) {
 		return "", nil
 	}
+	if keyInBaseURLMarked(settings) {
+		return "", nil
+	}
 	// An escaped ValueError (a malformed IPv6 bracket) raises in Python; it is
 	// an error here, not a fallback.
 	ok, _, _, verr := ValidateBaseURLForKeys(ctx, creds.BaseURL, creds.APIKey.Reveal())
@@ -178,6 +181,9 @@ func credentialsOf(ctx context.Context, settings orgSettings, provider string) (
 		return Credentials{}, false, nil
 	}
 	if !credentialsComplete(requested, creds.APIKey.Reveal()) {
+		return Credentials{}, false, nil
+	}
+	if keyInBaseURLMarked(settings) {
 		return Credentials{}, false, nil
 	}
 	ok, _, _, verr := ValidateBaseURLForKeys(ctx, creds.BaseURL, creds.APIKey.Reveal())
@@ -287,7 +293,7 @@ func storedBaseURLCarriesKey(settings orgSettings, provider string) bool {
 	if requested != "auto" && requested != configured {
 		return false
 	}
-	return BaseURLCarriesKey(settings[keyBaseURL], settings[keyAPIKey])
+	return keyInBaseURLMarked(settings) || BaseURLCarriesKey(settings[keyBaseURL], settings[keyAPIKey])
 }
 
 // StoredBaseURLCarriesKey is storedBaseURLCarriesKey over the org's gated rows.

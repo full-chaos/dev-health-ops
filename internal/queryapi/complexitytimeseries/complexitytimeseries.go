@@ -45,6 +45,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // MaxRows mirrors Python's MAX_ROWS -- the hard cap on the caller-supplied
@@ -437,7 +438,10 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 	}
 
 	sinceDate := dateOnly(sinceUtc)
-	untilDate := dateOnly(untilUtc)
+	untilDate, err := timewindow.ClipLastDay(dateOnly(untilUtc), timewindow.RequestToday(ctx, windowToday))
+	if err != nil {
+		return nil, fmt.Errorf("complexitytimeseries: until_utc is out of range: %w", err)
+	}
 	buckets := bucketCount(sinceDate, untilDate, granularity)
 	effLimit := effectiveLimit(limit, buckets)
 	sinceDay := sinceDate.Format(graphqldate.Layout)
@@ -508,3 +512,6 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 		TotalScope: len(scopeIDs),
 	}, nil
 }
+
+// windowToday is the clock of the window when no GraphQL operation carries one. A test replaces it.
+var windowToday = func() time.Time { return time.Now().UTC() }

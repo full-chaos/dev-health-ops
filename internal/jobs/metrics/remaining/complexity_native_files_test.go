@@ -144,7 +144,7 @@ func TestAnalyzeRepoFilesMatchesOneShotResultsAndCap(t *testing.T) {
 		source.gitRows = append(source.gitRows, fakePythonFile(fmt.Sprintf("src/f%02d.py", index), 4000))
 	}
 	source.gitRows = append(source.gitRows,
-		fakePythonFile("skip/x.py", 100), complexityFileContent{Path: "notes.txt", Contents: "text"},
+		fakePythonFile("skip/x.py", 100), complexityFileContent{Path: "README.md", Contents: "text"},
 		fakePythonFile("src/f05.py", 2000)) // duplicate path row, as ClickHouse can return
 
 	for _, maxFiles := range []*int{nil, intPtr(7), intPtr(100)} {
@@ -155,7 +155,7 @@ func TestAnalyzeRepoFilesMatchesOneShotResultsAndCap(t *testing.T) {
 		}
 	}
 	if got := len(runAnalyze(t, &fakeComplexitySource{gitRows: source.gitRows}, intPtr(7), 9000)); got != 5 {
-		// LIMIT 7 runs before the filter: notes.txt and skip/x.py sort first and are dropped.
+		// LIMIT 7 runs before the filter: README.md and skip/x.py sort first and are dropped.
 		t.Fatalf("capped results = %d, want 5", got)
 	}
 }

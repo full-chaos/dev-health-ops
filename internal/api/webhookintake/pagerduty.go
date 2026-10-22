@@ -52,6 +52,9 @@ type pagerdutyBinding struct {
 
 func loadReceivableBinding(ctx context.Context, pool *pgxpool.Pool, bindingID string) (pagerdutyBinding, error) {
 	var binding pagerdutyBinding
+	if pool == nil {
+		return pagerdutyBinding{}, errors.New("pagerduty webhook store is not configured")
+	}
 	err := pool.QueryRow(ctx, `
 SELECT id::text, org_id::text, status, provider_subscription_id, signing_secret_encrypted
 FROM public.pagerduty_webhook_bindings
@@ -486,14 +489,6 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 			return
 		}
 		subscriptionHeader := r.Header.Get("X-Webhook-Subscription")
-		if subscriptionHeader == "" {
-			refusePagerDuty(w, r, d.logger(), refusalSubscriptionMissing)
-			return
-		}
-		if d.Pool == nil {
-			policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
-			return
-		}
 		refusal := ""
 		var binding pagerdutyBinding
 		canonicalBindingID := ""
@@ -509,6 +504,8 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 				d.logger().Error("pagerduty_webhook load binding failed", "binding_id", canonicalBindingID, "error", err)
 				policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
 				return
+			case subscriptionHeader == "":
+				refusal = refusalSubscriptionMissing
 			case found.ID != canonicalBindingID || subscriptionHeader != found.ProviderSubscriptionID:
 				refusal = refusalSubscriptionMismatch
 			default:
@@ -627,7 +624,12 @@ const (
 
 var mirrorSecret = []byte("pagerduty-refusal-mirror-key")
 
+// mirrorSignatureWork always computes one HMAC over the body with the fixed
+// key, then runs the same verification a known binding's secret gets.
 func mirrorSignatureWork(body []byte, signatureHeader string) {
+	mac := hmac.New(sha256.New, mirrorSecret)
+	mac.Write(body)
+	_ = mac.Sum(nil)
 	_ = verifyPagerDutySignature(body, signatureHeader, mirrorSecret)
 }
 

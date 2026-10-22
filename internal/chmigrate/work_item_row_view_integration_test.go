@@ -74,6 +74,14 @@ func TestWorkItemRowViewMigration(t *testing.T) {
 		}
 	}
 
+	// The exact engine_full that live reports: the primary key stays at the old prefix after MODIFY ORDER BY. The
+	// acr devhealthschema accepts this string verbatim (CHAOS-10668), so it is pinned here, where it can be measured.
+	const wantEngineFull = "ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, day, work_scope_id, team_id) " +
+		"ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view) SETTINGS index_granularity = 8192"
+	if got := str("SELECT engine_full FROM system.tables WHERE database = currentDatabase() AND name = 'work_item_metrics_daily'"); got != wantEngineFull {
+		t.Fatalf("work_item_metrics_daily engine_full = %q, want %q", got, wantEngineFull)
+	}
+
 	file, err := os.ReadFile("sql/141_work_item_row_view.sql")
 	if err != nil {
 		t.Fatal(err)

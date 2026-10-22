@@ -85,7 +85,7 @@ func TestMigration0020GrantServiceAccountWorkloadShape(t *testing.T) {
 	}
 
 	org := `'` + m20Org + `'`
-	for _, bad := range []string{`'{*}'`, `'{Acr.Read}'`, `'{acr}'`, `'{acr.read,acr.read}'`, `'{acr.read, acr.write }'`} {
+	for _, bad := range []string{`'{*}'`, `'{Acr.Read}'`, `'{acr}'`, `'{acr.read,acr.read}'`, `'{"acr.read","acr.write "}'`} {
 		m10Fail(t, exec(m20Workload(m20WlPrin, org, "wl", bad)), "workload allowed_actions "+bad)
 	}
 	if err := exec(m20Workload(m20WlPrin, org, "wl", `'{acr.context.read,acr.context.write}'`)); err != nil {

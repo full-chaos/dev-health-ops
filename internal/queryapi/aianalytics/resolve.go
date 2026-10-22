@@ -47,9 +47,6 @@ func filterBuckets(rows []dailyRow, buckets []string) []dailyRow {
 }
 
 func loadRows(ctx context.Context, client QueryClient, orgID string, dr model.AIDateRangeInput, in *model.AIScopeInput) ([]dailyRow, scope, error) {
-	if err := validateRange(dr); err != nil {
-		return nil, scope{}, err
-	}
 	sc, err := normalizeScope(ctx, client, orgID, in)
 	if err != nil {
 		return nil, sc, err
@@ -300,6 +297,10 @@ func ImpactSummary(ctx context.Context, client QueryClient, orgID string, dr mod
 	if client == nil {
 		return nil, fmt.Errorf("aianalytics: clickhouse client is required")
 	}
+	dr, err := clippedRange(ctx, dr)
+	if err != nil {
+		return nil, err
+	}
 	rows, sc, err := loadRows(ctx, client, orgID, dr, in)
 	if err != nil {
 		return nil, err
@@ -386,6 +387,10 @@ func aggregateSide(rows []dailyRow, label string) *model.AIComparisonSide {
 func Comparison(ctx context.Context, client QueryClient, orgID string, dr model.AIDateRangeInput, in *model.AIScopeInput) (*model.AIComparison, error) {
 	if client == nil {
 		return nil, fmt.Errorf("aianalytics: clickhouse client is required")
+	}
+	dr, err := clippedRange(ctx, dr)
+	if err != nil {
+		return nil, err
 	}
 	all, _, err := loadRows(ctx, client, orgID, dr, in)
 	if err != nil {
@@ -488,6 +493,10 @@ func loadEngagementSlices(ctx context.Context, client QueryClient, orgID string,
 func ReviewLoad(ctx context.Context, client QueryClient, orgID string, dr model.AIDateRangeInput, in *model.AIScopeInput) (*model.AIReviewLoadResult, error) {
 	if client == nil {
 		return nil, fmt.Errorf("aianalytics: clickhouse client is required")
+	}
+	dr, err := clippedRange(ctx, dr)
+	if err != nil {
+		return nil, err
 	}
 	rows, sc, err := loadRows(ctx, client, orgID, dr, in)
 	if err != nil {

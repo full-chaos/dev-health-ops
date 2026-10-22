@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -56,13 +57,29 @@ type gitHubTreeWalkLimits struct {
 	maxDepth, maxDirs, maxEntries int
 	budget, deadlineMargin        time.Duration
 	now                           func() time.Time
+	// recursiveSubtrees asks GitHub for each directory's whole subtree in one
+	// request and descends per directory only below an answer that is truncated
+	// or over the object cap. Off, the walk costs one request per directory.
+	recursiveSubtrees bool
+	// rootListed says the caller already asked for the recursive listing of the
+	// root and it failed, so the root is listed alone at once.
+	rootListed bool
 }
 
 func defaultGitHubTreeWalkLimits() gitHubTreeWalkLimits {
 	return gitHubTreeWalkLimits{
 		maxDepth: gitHubTreeWalkMaxDepth, maxDirs: gitHubTreeWalkMaxDirs, maxEntries: gitHubTreeWalkMaxEntries,
 		budget: gitHubTreeWalkBudget, deadlineMargin: gitHubTreeWalkDeadlineMargin, now: time.Now,
+		recursiveSubtrees: true,
 	}
+}
+
+// rootListedWalkLimits are the default limits for a walk that starts after the
+// root's recursive listing was truncated or over the cap.
+func rootListedWalkLimits() gitHubTreeWalkLimits {
+	limits := defaultGitHubTreeWalkLimits()
+	limits.rootListed = true
+	return limits
 }
 
 // gitHubTreeWalkStats are the counts of one finished or stopped walk.
@@ -182,6 +199,12 @@ func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha,
 	if deadline, ok := walker.ctx.Deadline(); ok && deadline.Sub(now) <= walker.limits.deadlineMargin {
 		return walker.stop(GitHubTreeWalkLimitTime, int(walker.limits.deadlineMargin/time.Second))
 	}
+	if walker.limits.recursiveSubtrees && !(depth == 0 && walker.limits.rootListed) {
+		done, err := walker.walkSubtree(client, sha, prefix, depth)
+		if err != nil || done {
+			return err
+		}
+	}
 	walker.stats.dirs++
 	walker.stats.depth = max(walker.stats.depth, depth)
 	walker.noteNearCeiling(GitHubTreeWalkLimitDirs, walker.stats.dirs, walker.limits.maxDirs)
@@ -221,6 +244,59 @@ func (walker *gitHubTreeWalker) walk(client *providerfoundation.HTTPClient, sha,
 		}
 	}
 	return nil
+}
+
+// walkSubtree reads the whole subtree of sha in one recursive request. It
+// returns false, with nothing recorded, when GitHub marks the answer truncated
+// or it is above the object cap: the caller then lists the directory alone and
+// descends. The same ceilings apply as to a per-directory walk: every directory
+// of the answer counts as one, so a walk stops at the same repository size.
+func (walker *gitHubTreeWalker) walkSubtree(client *providerfoundation.HTTPClient, sha, prefix string, depth int) (bool, error) {
+	var tree gitHubTreePayload
+	err := fetchObjectRoute(walker.ctx, client, githubTreeRoute, walker.root+"/git/trees/"+url.PathEscape(sha)+"?recursive=true", &tree)
+	var tooLarge *providerfoundation.ObjectTooLargeError
+	switch {
+	case errors.As(err, &tooLarge):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("path=%q: %w", prefix, err)
+	case tree.Truncated:
+		return false, nil
+	}
+	dirs, deepest := 1, depth
+	for _, entry := range tree.Tree {
+		if entry.Type == "tree" && entry.Path != "" {
+			dirs++
+			deepest = max(deepest, depth+1+strings.Count(entry.Path, "/"))
+		}
+	}
+	walker.noteNearCeiling(GitHubTreeWalkLimitDepth, deepest, walker.limits.maxDepth)
+	if deepest > walker.limits.maxDepth {
+		return false, walker.stop(GitHubTreeWalkLimitDepth, walker.limits.maxDepth)
+	}
+	walker.stats.dirs += dirs
+	walker.noteNearCeiling(GitHubTreeWalkLimitDirs, walker.stats.dirs, walker.limits.maxDirs)
+	if walker.stats.dirs > walker.limits.maxDirs {
+		return false, walker.stop(GitHubTreeWalkLimitDirs, walker.limits.maxDirs)
+	}
+	walker.stats.entries += len(tree.Tree)
+	walker.noteNearCeiling(GitHubTreeWalkLimitEntries, walker.stats.entries, walker.limits.maxEntries)
+	if walker.stats.entries > walker.limits.maxEntries {
+		return false, walker.stop(GitHubTreeWalkLimitEntries, walker.limits.maxEntries)
+	}
+	walker.stats.depth = max(walker.stats.depth, deepest)
+	for _, entry := range tree.Tree {
+		if entry.Type != "blob" || entry.Path == "" {
+			continue
+		}
+		fullPath := entry.Path
+		if prefix != "" {
+			fullPath = prefix + "/" + entry.Path
+		}
+		walker.paths = append(walker.paths, fullPath)
+		walker.sizes[fullPath] = entry.Size
+	}
+	return true, nil
 }
 
 // logGitHubTreeWalkStop writes the one WARN of a walk a ceiling stopped. Closed

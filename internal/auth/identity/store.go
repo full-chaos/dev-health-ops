@@ -208,7 +208,14 @@ type projected struct {
 // what differs; each commits through audit.Commit with one audit row and one
 // provisioning event per created aggregate or changed field. An unchanged user writes
 // nothing. The password verifier is never copied.
-func (s *Store) Project(ctx context.Context, userID uuid.UUID) (err error) {
+func (s *Store) Project(ctx context.Context, userID uuid.UUID) error {
+	return s.projectChecked(ctx, userID, nil)
+}
+
+// projectChecked is Project; with key set, the update holds the principal row
+// lock and refuses with ErrProviderAlreadyLinked, writing nothing, when the
+// principal already holds another subject at key's issuer and provider.
+func (s *Store) projectChecked(ctx context.Context, userID uuid.UUID, key *ExternalKey) (err error) {
 	outcome := "unchanged"
 	defer func() {
 		if err != nil {
@@ -240,7 +247,7 @@ func (s *Store) Project(ctx context.Context, userID uuid.UUID) (err error) {
 	if len(changed) == 0 {
 		return nil
 	}
-	if err := s.applyProjectionChange(ctx, userID, src, cur, changed); err != nil {
+	if err := s.applyProjectionChange(ctx, userID, src, cur, changed, key); err != nil {
 		return err
 	}
 	outcome = "updated"
@@ -367,7 +374,7 @@ func changedFields(src source, cur projected) []string {
 	return changed
 }
 
-func (s *Store) applyProjectionChange(ctx context.Context, id uuid.UUID, src source, cur projected, changed []string) error {
+func (s *Store) applyProjectionChange(ctx context.Context, id uuid.UUID, src source, cur projected, changed []string, key *ExternalKey) error {
 	reason := "principal_projected"
 	switch {
 	case cur.disabled && src.active:
@@ -378,6 +385,14 @@ func (s *Store) applyProjectionChange(ctx context.Context, id uuid.UUID, src sou
 	principal := id.String()
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if key != nil {
+				if err := s.lockPrincipal(ctx, tx, id, false); err != nil {
+					return err
+				}
+				if err := s.oneIdentityPerProvider(ctx, tx, *key, id); err != nil {
+					return err
+				}
+			}
 			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.principals
 SET disabled_at = CASE WHEN $2::boolean THEN NULL ELSE clock_timestamp() END, updated_at = clock_timestamp()
 WHERE id = $1 AND (disabled_at IS NULL) IS DISTINCT FROM $2::boolean`, id, src.active); err != nil {
@@ -411,6 +426,8 @@ WHERE principal_id = $1 AND (email_verified_at IS NOT NULL) IS DISTINCT FROM $2:
 		return nil
 	case isEmailCollision(err):
 		return ErrEmailCollision
+	case errors.Is(err, ErrProviderAlreadyLinked):
+		return ErrProviderAlreadyLinked
 	}
 	return s.storeErr(ctx, "update projection", err)
 }
@@ -464,6 +481,8 @@ func projectionOutcome(err error) string {
 		return "invalid_email"
 	case errors.Is(err, ErrPrincipalKind):
 		return "principal_kind"
+	case errors.Is(err, ErrProviderAlreadyLinked):
+		return "provider_already_linked"
 	}
 	return "error"
 }

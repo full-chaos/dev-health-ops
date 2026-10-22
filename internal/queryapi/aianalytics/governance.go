@@ -165,7 +165,8 @@ func GovernanceSummary(ctx context.Context, client QueryClient, orgID string, dr
 	if client == nil {
 		return nil, fmt.Errorf("aianalytics: clickhouse client is required")
 	}
-	if err := validateRange(dr); err != nil {
+	dr, err := clippedRange(ctx, dr)
+	if err != nil {
 		return nil, err
 	}
 	sc, err := normalizeScope(ctx, client, orgID, in)

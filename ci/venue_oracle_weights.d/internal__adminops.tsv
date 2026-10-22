@@ -1,0 +1,2 @@
+internal/adminops	TestLLMSettingsMatchTheFrozenPythonOutput	60
+internal/adminops	TestLLMSettingsSetRefusesABYOProviderWithoutAModel	30

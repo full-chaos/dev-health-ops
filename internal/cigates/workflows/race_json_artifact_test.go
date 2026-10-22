@@ -2,6 +2,8 @@ package workflows_test
 
 import (
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -112,5 +114,49 @@ func TestRaceJSONArtifactGuardPlantedDefectsAreCaught(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			expectViolation(t, raceJSONArtifactViolations(t, plantTree(t, root, files, c.m)), c.want)
 		})
+	}
+}
+
+// A test that runs `ci/check_go.sh ci-leg race` with a stand-in go writes the stand-in's fake go test -json into the leg's
+// go-test-json/ unless it points GO_TEST_JSON_DIR elsewhere: on the hosted race leg that runs the test, the fake file replaces
+// the leg's real artifact. A test file that starts a race leg must set GO_TEST_JSON_DIR, or go through the testshard harness
+// runCheckGo, which sets it.
+func raceLegWithoutOwnJSONDir(files map[string]string) []string {
+	var out []string
+	for name, text := range files {
+		if !strings.Contains(text, `"ci-leg", "race"`) {
+			continue
+		}
+		if !strings.Contains(text, "GO_TEST_JSON_DIR") && !strings.Contains(text, "runCheckGo(") {
+			out = append(out, fmt.Sprintf("%s runs ci-leg race without its own GO_TEST_JSON_DIR: its stand-in go test -json would replace the race leg's real artifact", name))
+		}
+	}
+	return out
+}
+
+func TestNoTestRunsARaceLegIntoTheRepoGoTestJSONDir(t *testing.T) {
+	root := rootOf(t)
+	files := map[string]string{}
+	err := filepath.WalkDir(filepath.Join(root, "internal"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, "_test.go") {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		files[strings.TrimPrefix(p, root+"/")] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectNoViolations(t, raceLegWithoutOwnJSONDir(files))
+	if !strings.Contains(files["internal/cigates/testshard/standin_test.go"], "GO_TEST_JSON_DIR") {
+		t.Error("the testshard harness runCheckGoIn no longer sets GO_TEST_JSON_DIR")
+	}
+	expectViolation(t, raceLegWithoutOwnJSONDir(map[string]string{"x_test.go": `run("ci-leg", "race", "1", "3")`}), "without its own GO_TEST_JSON_DIR")
+	if v := raceLegWithoutOwnJSONDir(map[string]string{"x_test.go": `env := []string{"GO_TEST_JSON_DIR=" + d}; run("ci-leg", "race", "1", "3")`}); len(v) != 0 {
+		t.Errorf("a file that sets GO_TEST_JSON_DIR was flagged: %v", v)
 	}
 }

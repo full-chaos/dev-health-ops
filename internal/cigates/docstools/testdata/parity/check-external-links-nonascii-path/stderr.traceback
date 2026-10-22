@@ -1,0 +1,1 @@
+UnicodeEncodeError: 'ascii' codec can't encode character '\xe9' in position 9: ordinal not in range(128)

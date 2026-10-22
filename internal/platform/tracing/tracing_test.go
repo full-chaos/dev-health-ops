@@ -99,18 +99,18 @@ func TestInitAcceptsTheURLShapedEndpointEveryDeploymentActuallySets(t *testing.T
 func TestDialOptionsChoosesByEndpointShape(t *testing.T) {
 	for _, endpoint := range []string{"localhost:4317", "otel-collector:4317"} {
 		t.Run("bare/"+endpoint, func(t *testing.T) {
-			if got := len(dialOptions(endpoint)); got != 2 {
+			if got := len(dialOptions(endpoint)); got != 3 {
 				t.Fatalf("bare host:port must produce [WithEndpoint, WithInsecure], got %d options", got)
 			}
 		})
 	}
 	t.Run("http scheme is insecure", func(t *testing.T) {
-		if got := len(dialOptions("http://otel-collector:4317")); got != 2 {
+		if got := len(dialOptions("http://otel-collector:4317")); got != 3 {
 			t.Fatalf("http:// must produce [WithEndpointURL, WithInsecure], got %d options", got)
 		}
 	})
 	t.Run("https scheme is not forced insecure", func(t *testing.T) {
-		if got := len(dialOptions("https://otel-collector:4317")); got != 1 {
+		if got := len(dialOptions("https://otel-collector:4317")); got != 2 {
 			t.Fatalf("https:// must produce only [WithEndpointURL], got %d options", got)
 		}
 	})

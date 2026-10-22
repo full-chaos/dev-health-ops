@@ -1,0 +1,10 @@
+ERROR: x.html: positive tabindex is not allowed: 1
+ERROR: x.html: invalid tabindex value: abc
+ERROR: x.html: positive tabindex is not allowed:  3 
+ERROR: x.html: positive tabindex is not allowed: 1_0
+ERROR: x.html: invalid tabindex value: 1__0
+ERROR: x.html: positive tabindex is not allowed: ٣
+ERROR: x.html: invalid tabindex value: 1.5
+ERROR: x.html: positive tabindex is not allowed:  7
+ERROR: x.html: invalid tabindex value: 7
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

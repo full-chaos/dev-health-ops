@@ -98,8 +98,8 @@ var (
 	// ErrInvalidEmailAddress: the asserted email is not an address.
 	ErrInvalidEmailAddress = identity.ErrInvalidEmail
 	// ErrNotOrgMember: the account is not a member of the provider's
-	// organization, or the sign-in would need a new account (none is created
-	// on sign-in).
+	// organization, or the sign-in would need a new account and no membership
+	// seam is set.
 	ErrNotOrgMember = errors.New("saml: the account is not a member of the provider organization")
 	// ErrIdentityAmbiguous: more than one go-api account, in any
 	// organization, carries the NameID.
@@ -124,12 +124,24 @@ type Memberships interface {
 	Member(ctx context.Context, principalID, orgID uuid.UUID) (bool, error)
 }
 
-// MembershipJIT is the seam for organization membership on sign-in. go-api
-// owns membership writes until Wave 4; with a nil MembershipJIT no membership
-// is added and a sign-in that needs one is refused before any write. No
-// account is created on sign-in until an account and its membership can be
-// written in one transaction.
+// NewAccount is a brand-new account a sign-in asks the membership seam to
+// create: the identity key, the asserted email and the display name ("" when
+// the assertion carries none).
+type NewAccount struct {
+	Identity Identity
+	Email    string
+	FullName string
+}
+
+// MembershipJIT is the seam that turns just-in-time membership on. With a nil
+// MembershipJIT no account or membership is written and a sign-in that needs
+// one is refused before any write. The session is issued by the caller after
+// the seam returns.
 type MembershipJIT interface {
 	// JoinOnSignIn adds an existing account to the provider's organization.
 	JoinOnSignIn(ctx context.Context, principalID uuid.UUID, p Provider) error
+	// ProvisionOnSignIn creates the account, its identity and its membership in
+	// the provider's organization in one transaction and returns the new
+	// account's id. A failure writes nothing.
+	ProvisionOnSignIn(ctx context.Context, account NewAccount, p Provider) (uuid.UUID, error)
 }

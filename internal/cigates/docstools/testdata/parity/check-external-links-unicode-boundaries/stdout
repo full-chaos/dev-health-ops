@@ -1,0 +1,3 @@
+ERROR: index.html: allowlist entry for https://nbsp.example/ expired on 2000-01-01 (owner: a, reason: b)
+ERROR: index.html: allowlist entry for https://spaced.example/ expired on 2000-01-01 (owner: a, reason: b)
+ERROR: index.html: missing anchor 'wordid' for https://docs.fullchaos.dev/p/#wordid

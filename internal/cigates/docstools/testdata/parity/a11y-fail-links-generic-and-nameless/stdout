@@ -1,0 +1,8 @@
+ERROR: x.html: generic link text is not descriptive: 'here'
+ERROR: x.html: generic link text is not descriptive: 'Click Here'
+ERROR: x.html: generic link text is not descriptive: 'READ MORE'
+ERROR: x.html: link has no accessible name: d
+ERROR: x.html: link has no accessible name: [no href]
+ERROR: x.html: link has no accessible name: q"uo	te
+x
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

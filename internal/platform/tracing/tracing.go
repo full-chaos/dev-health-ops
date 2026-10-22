@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"google.golang.org/grpc"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dbspan"
 )
@@ -202,9 +203,10 @@ func dialOptions(endpoint string) []otlptracegrpc.Option {
 		return []otlptracegrpc.Option{
 			otlptracegrpc.WithEndpoint(endpoint),
 			otlptracegrpc.WithInsecure(),
+			otlptracegrpc.WithDialOption(grpc.WithNoProxy()),
 		}
 	}
-	options := []otlptracegrpc.Option{otlptracegrpc.WithEndpointURL(endpoint)}
+	options := []otlptracegrpc.Option{otlptracegrpc.WithEndpointURL(endpoint), otlptracegrpc.WithDialOption(grpc.WithNoProxy())}
 	if !strings.EqualFold(scheme, "https") {
 		options = append(options, otlptracegrpc.WithInsecure())
 	}

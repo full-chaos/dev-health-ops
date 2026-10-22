@@ -1,0 +1,5 @@
+- page: guide.md
+  disposition: refresh
+  owner: yes
+  last-reviewed: 2026-07-16
+  extra: [1, 1.5, 1e5, .inf, -.Inf, .NaN, 0x1F, 0o7, 017, 0b101, 1_000, 1:30, ~, null, '', 2026-01-01 10:00:00.5+01:30, 2026-01-01t10:00:00Z, "caf\xe9\xa0"]

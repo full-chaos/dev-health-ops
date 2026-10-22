@@ -107,15 +107,15 @@ func TestScopesDoNotMix(t *testing.T) {
 }
 
 func TestLoadRefusesMalformedCatalogs(t *testing.T) {
-	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization"}]}`
+	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization"},{"action":"a.c","scope":"organization","resource_kind":"organization"}]}`
 	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
 	if _, err := Load([]byte(okA), []byte(okR)); err != nil {
 		t.Fatalf("well-formed catalog refused: %v", err)
 	}
 	bad := map[string][2]string{
-		"role lists unknown action": {okA, strings.Replace(okR, `["a.b"]`, `["a.c"]`, 1)},
+		"role lists unknown action": {okA, strings.Replace(okR, `["a.b"]`, `["a.z"]`, 1)},
 		"single segment action":     {strings.Replace(okA, `"a.b"`, `"ab"`, 1), strings.Replace(okR, `["a.b"]`, `["ab"]`, 1)},
-		"duplicate action":          {strings.Replace(okA, `}]}`, `},{"action":"a.b","scope":"organization","resource_kind":"organization"}]}`, 1), okR},
+		"duplicate action":          {strings.Replace(okA, `"a.c"`, `"a.b"`, 1), okR},
 		"duplicate role":            {okA, strings.Replace(okR, `}]}`, `},{"role":"r","scope":"organization","actions":[]}]}`, 1)},
 		"duplicate role action":     {okA, strings.Replace(okR, `["a.b"]`, `["a.b","a.b"]`, 1)},
 		"wildcard action":           {strings.Replace(okA, `"a.b"`, `"a.*"`, 1), strings.Replace(okR, `["a.b"]`, `["a.*"]`, 1)},
@@ -125,11 +125,9 @@ func TestLoadRefusesMalformedCatalogs(t *testing.T) {
 		"wrong schema version":      {strings.Replace(okA, `actions.v1`, `actions.v2`, 1), okR},
 		"zero catalog version":      {strings.Replace(okA, `"catalog_version":1`, `"catalog_version":0`, 1), okR},
 		"version mismatch":          {okA, strings.Replace(okR, `"catalog_version":1`, `"catalog_version":2`, 1)},
-		"role holds every action":   {okA, okR},
 		"not json":                  {"{", okR},
 		"trailing data":             {okA + "{}", okR},
 	}
-	delete(bad, "role holds every action")
 	for name, in := range bad {
 		if _, err := Load([]byte(in[0]), []byte(in[1])); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v, want ErrInvalid", name, err)

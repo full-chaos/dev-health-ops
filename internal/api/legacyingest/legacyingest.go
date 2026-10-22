@@ -5,8 +5,8 @@
 // org and kind (ingest:{org}:{kind}) that the stream runner's
 // InternalIngestHandler consumes, and answers 202. Authentication is the
 // route's own, not the api's: an API key and/or an HMAC of the raw body
-// from the environment, failing closed when neither is configured outside
-// a development environment (CHAOS-4720).
+// from the environment, failing closed when neither is configured, in every
+// environment (CHAOS-4720).
 //
 // The order is FastAPI's: the body is read and decoded first (a decode
 // failure is answered before any dependency), then authentication (401),

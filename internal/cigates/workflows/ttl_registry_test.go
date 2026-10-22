@@ -42,6 +42,9 @@ var (
 	ttlHorizonLine  = regexp.MustCompile(`(?i)TTL\s+.*?\+\s*INTERVAL\s+(\d+)\s+DAY\s+DELETE`)
 )
 
+// A plain backticked name stays visible so the CREATE/ALTER regexes can read table names; any other backtick identifier is blanked like a literal. Double-quoted text stays visible: legacy fixtures wrap whole DDL chunks in triple quotes.
+var ttlPlainIdent = regexp.MustCompile(`^[A-Za-z_]\w*$`)
+
 type ttlRetention struct {
 	column string
 	days   int
@@ -89,7 +92,7 @@ func ttlStripSQLComments(text string) string {
 		case c == '\'' || c == '"' || c == '`':
 			j := i + 1
 			for j < n && text[j] != c {
-				if text[j] == '\\' && c != '`' {
+				if text[j] == '\\' {
 					j++
 				}
 				j++
@@ -97,7 +100,7 @@ func ttlStripSQLComments(text string) string {
 			if j >= n {
 				j = n - 1
 			}
-			if c == '\'' {
+			if c == '\'' || (c == '`' && !ttlPlainIdent.MatchString(text[i+1:j])) {
 				out.WriteByte(c)
 				out.WriteString(strings.Repeat(" ", j-i-1))
 				out.WriteByte(c)
@@ -340,6 +343,30 @@ func TestTTLScanPlantedDefects(t *testing.T) {
 		p := scan(map[string]string{"1.sql": "CREATE TABLE a (\n x DateTime\n) ENGINE=M TTL toDateTime(occurred_at) + INTERVAL 42 DAY DELETE;\nCREATE TABLE b (\n day Date\n) ENGINE=M TTL day + INTERVAL 99 DAY;"})
 		if p["a"] != (ttlRetention{"occurred_at", 42}) || p["b"] != (ttlRetention{"day", 99}) {
 			t.Fatalf("forms not parsed: %+v", p)
+		}
+	})
+	t.Run("TTL text inside an escaped backtick identifier is not a table TTL", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE esc_ident (\n `x\\` TTL d + INTERVAL 180 DAY` DateTime,\n `y\\` TTL d + toIntervalDay(180)` DateTime\n) ENGINE=MergeTree ORDER BY tuple();")
+		p, c := ttlScan(t, dir)
+		if _, ok := p["esc_ident"]; ok || c["esc_ident"] {
+			t.Fatalf("identifier text registered as a table TTL: precise=%v coarse=%v", p, c)
+		}
+	})
+	t.Run("TTL text inside a string literal is not a table TTL", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE lit_text (\n x DateTime COMMENT 'TTL d + toIntervalDay(180) and TTL d + INTERVAL 180 DAY',\n y DateTime COMMENT 'it\\'s TTL d + INTERVAL 90 DAY'\n) ENGINE=MergeTree ORDER BY tuple();")
+		p, c := ttlScan(t, dir)
+		if _, ok := p["lit_text"]; ok || c["lit_text"] {
+			t.Fatalf("literal text registered as a table TTL: precise=%v coarse=%v", p, c)
+		}
+	})
+	t.Run("a real table TTL after quoted TTL-like text still registers", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "1.sql"), "CREATE TABLE real_ttl (\n `x\\` TTL d + INTERVAL 180 DAY` DateTime,\n y DateTime COMMENT 'TTL d + INTERVAL 7 DAY'\n) ENGINE=MergeTree ORDER BY tuple() TTL y + INTERVAL 42 DAY DELETE;")
+		p, c := ttlScan(t, dir)
+		if p["real_ttl"] != (ttlRetention{"y", 42}) || !c["real_ttl"] {
+			t.Fatalf("real TTL lost: precise=%v coarse=%v", p, c)
 		}
 	})
 	t.Run("table without TTL is not registered", func(t *testing.T) {

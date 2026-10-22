@@ -6191,7 +6191,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/check_docs_candidate_accessibility.py",
+      "source_path": "internal/cigates/docstools/dc_a11y.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],
@@ -6559,7 +6559,7 @@
     },
     {
       "source_repo": "full-chaos/dev-health-ops",
-      "source_path": "scripts/validate_docs_v2_publication.py",
+      "source_path": "internal/cigates/docstools/dc_pub.go",
       "artifact_type": "tooling",
       "current_url": null,
       "current_nav_location": [],

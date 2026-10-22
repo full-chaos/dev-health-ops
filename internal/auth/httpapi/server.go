@@ -40,6 +40,10 @@ type Route struct {
 	// header of that pattern's 405. Empty means every registered method of
 	// the pattern, sorted.
 	Allow string
+	// NotServed marks a compatibility mount that refuses every request on its
+	// pattern but one literal path (a wildcard mounted for POST /x/check): the
+	// path does not serve its method, so the pattern's 405 Allow omits it.
+	NotServed bool
 	// ResponseModel says the Python route this one ports writes its success
 	// body as a FastAPI response_model (pydantic-core dump_json), not as a
 	// JSONResponse (json.dumps). The handler sees a writer that reports the
@@ -328,6 +332,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	mux := http.NewServeMux()
 
 	methodsByPattern := make(map[string][]string)
+	servedByPattern := make(map[string][]string)
 	allowByPattern := make(map[string]string)
 	for _, route := range options.Routes {
 		if route.Handler == nil {
@@ -357,6 +362,9 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 			}
 		}
 		methodsByPattern[route.Pattern] = append(methodsByPattern[route.Pattern], route.Method)
+		if !route.NotServed {
+			servedByPattern[route.Pattern] = append(servedByPattern[route.Pattern], route.Method)
+		}
 	}
 
 	// The 405 fallbacks live in their own method-free mux, consulted only
@@ -367,10 +375,10 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	pathMux := http.NewServeMux()
 	notAllowedByPattern := make(map[string]http.Handler, len(methodsByPattern))
 	for pattern, methods := range methodsByPattern {
-		sorted := append([]string(nil), methods...)
+		sorted := append([]string(nil), servedByPattern[pattern]...)
 		sort.Strings(sorted)
 		allow := strings.Join(sorted, ", ")
-		if explicit, ok := allowByPattern[pattern]; ok {
+		if explicit, ok := allowByPattern[pattern]; ok && !options.noStorePattern(pattern, methods) {
 			allow = explicit
 		}
 		notAllowed := &methodNotAllowed{allow: allow, write: write, pattern: pattern}
@@ -391,11 +399,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		// conflict with a literal GET sibling of a wildcard (GET /a/literal
 		// beside HEAD /a/{id}), which net/http refuses to register.
 		if options.ExplicitHead && route.Method == http.MethodGet {
-			headRefusal := notAllowedByPattern[route.Pattern]
-			if options.NoStore != nil && options.NoStore.patterns[route.Method+" "+route.Pattern] {
-				headRefusal = allMethodsNotAllowed(headRefusal, methodsByPattern[route.Pattern])
-			}
-			handler = refuseHead(handler, headRefusal)
+			handler = refuseHead(handler, notAllowedByPattern[route.Pattern])
 		}
 		mux.Handle(route.Method+" "+route.Pattern, handler)
 	}
@@ -691,15 +695,17 @@ func canonicalPath(p string) string {
 	return cleaned
 }
 
-// allMethodsNotAllowed is the HEAD refusal of a no-store (admin) GET path: its
-// Allow lists every method the path serves (RFC 9110 10.2.1), where the 405 of
-// another method keeps the path's declared Allow.
-func allMethodsNotAllowed(base http.Handler, methods []string) http.Handler {
-	m, ok := base.(*methodNotAllowed)
-	if !ok {
-		return base
+// noStorePattern reports whether a path is an admin (no-store) path: its 405
+// lists every method the path serves (RFC 9110 10.2.1), where the declared
+// Allow of any other path is the first route's, as FastAPI answered.
+func (o ServerOptions) noStorePattern(pattern string, methods []string) bool {
+	if o.NoStore == nil {
+		return false
 	}
-	sorted := append([]string(nil), methods...)
-	sort.Strings(sorted)
-	return &methodNotAllowed{allow: strings.Join(sorted, ", "), write: m.write, pattern: m.pattern}
+	for _, method := range methods {
+		if o.NoStore.patterns[method+" "+pattern] {
+			return true
+		}
+	}
+	return false
 }

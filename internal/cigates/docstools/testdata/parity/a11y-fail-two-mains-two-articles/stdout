@@ -1,0 +1,4 @@
+ERROR: x.html: expected one main landmark, found 2
+ERROR: x.html: expected one primary content article, found 2
+ERROR: x.html: expected one content h1, found 2
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

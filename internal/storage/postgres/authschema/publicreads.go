@@ -43,6 +43,10 @@ func PublicReadColumns() []ColumnGrant {
 		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier"}},
 		{Table: "saml_assertion_replays", Columns: []string{"provider_id", "assertion_id", "expires_at"}},
 		{Table: "org_licenses", Columns: []string{"org_id", "tier", "features_override"}},
+		// The session issue route checks go-api's auth-session-issuer
+		// service credential by its hash (last_used_at is not read or
+		// stamped).
+		{Table: "internal_service_credentials", Columns: []string{"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"}},
 	}
 }
 
@@ -50,6 +54,43 @@ func PublicReadColumns() []ColumnGrant {
 // schema: column-level, on the sessions table only.
 func SessionReaderColumns() ColumnGrant {
 	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at"}}
+}
+
+// TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema
+// table, outside PublicReadColumns' read-only rule.
+type TableWriteGrant struct {
+	Table  string
+	Select []string
+	Update []string
+	// RemovedBy names the ticket that removes the grant.
+	RemovedBy string
+}
+
+// LegacyRefreshTokenGrant is TEMPORARY: the auth runtime role reads go-api's
+// refresh tokens and revokes them (revoked_at only) while a go-api refresh
+// token can still be exchanged once for an auth-service session
+// (session.Store.ExchangeLegacy). CHAOS-10408 removes it when no live go-api
+// refresh token is left.
+func LegacyRefreshTokenGrant() TableWriteGrant {
+	return TableWriteGrant{
+		Table:     "refresh_tokens",
+		Select:    []string{"token_hash", "user_id", "org_id", "family_id", "expires_at", "revoked_at"},
+		Update:    []string{"revoked_at"},
+		RemovedBy: "CHAOS-10408",
+	}
+}
+
+// quotedColumns validates and quotes each name.
+func quotedColumns(names []string) ([]string, error) {
+	columns := make([]string, 0, len(names))
+	for _, name := range names {
+		columnID, err := NewValidatedIdentifier(name)
+		if err != nil {
+			return nil, err
+		}
+		columns = append(columns, quoteIdentifier(columnID))
+	}
+	return columns, nil
 }
 
 // rowQuerier1 is the slice of a connection the relation lookup needs.
@@ -144,6 +185,38 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 		logger.InfoContext(ctx, "applying public read grants",
 			"schema", publicSchema, "table", entry.Table, "columns", len(entry.Columns))
 	}
+	write := LegacyRefreshTokenGrant()
+	exists, err := publicTableState(ctx, conn, write.Table)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		logger.WarnContext(ctx, "skipped the legacy refresh token grant: the table does not exist",
+			"schema", publicSchema, "table", write.Table)
+		return statements, nil
+	}
+	tableID, err := NewValidatedIdentifier(write.Table)
+	if err != nil {
+		return nil, err
+	}
+	table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
+	statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+	{
+		columns, err := quotedColumns(write.Select)
+		if err != nil {
+			return nil, err
+		}
+		statements = append(statements, fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role))
+	}
+	{
+		columns, err := quotedColumns(write.Update)
+		if err != nil {
+			return nil, err
+		}
+		statements = append(statements, fmt.Sprintf(`GRANT UPDATE (%s) ON TABLE %s TO %s`, strings.Join(columns, ", "), table, role))
+	}
+	logger.InfoContext(ctx, "applying the temporary legacy refresh token grant",
+		"schema", publicSchema, "table", write.Table, "removed_by", write.RemovedBy)
 	return statements, nil
 }
 
@@ -160,6 +233,14 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 			columns[column] = struct{}{}
 		}
 		declared[entry.Table] = columns
+	}
+	write := LegacyRefreshTokenGrant()
+	writeDeclared := map[string]map[string]struct{}{"SELECT": {}, "UPDATE": {}}
+	for _, column := range write.Select {
+		writeDeclared["SELECT"][column] = struct{}{}
+	}
+	for _, column := range write.Update {
+		writeDeclared["UPDATE"][column] = struct{}{}
 	}
 
 	var violations []Violation
@@ -185,6 +266,31 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 					Kind: "column", Schema: publicSchema, Object: entry.Table + "." + column, Privilege: "SELECT",
 					Detail: "declared in PublicReadColumns but the runtime role cannot read it (missing grant)",
 				})
+			}
+		}
+	}
+
+	writeExists, err := publicTableState(ctx, conn, write.Table)
+	if err != nil {
+		return nil, err
+	}
+	if writeExists {
+		for _, privilege := range []string{"SELECT", "UPDATE"} {
+			for column := range writeDeclared[privilege] {
+				var held bool
+				if err := conn.QueryRow(ctx,
+					`SELECT has_column_privilege($1, format('%I.%I', $2::text, $3::text), $4, $5)`,
+					options.RuntimeRole, publicSchema, write.Table, column, privilege,
+				).Scan(&held); err != nil {
+					return nil, fmt.Errorf("%w: column %s.%s.%s is missing or unreadable to the posture check",
+						ErrMigrationFailed, publicSchema, write.Table, column)
+				}
+				if !held {
+					violations = append(violations, Violation{
+						Kind: "column", Schema: publicSchema, Object: write.Table + "." + column, Privilege: privilege,
+						Detail: "declared in LegacyRefreshTokenGrant (" + write.RemovedBy + ") but the runtime role does not hold it (missing grant)",
+					})
+				}
 			}
 		}
 	}
@@ -216,6 +322,11 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		}
 		if schema == publicSchema && privilege == "SELECT" && (kind == "r" || kind == "p") {
 			if _, ok := declared[table][column]; ok {
+				continue
+			}
+		}
+		if schema == publicSchema && table == write.Table && (kind == "r" || kind == "p") {
+			if _, ok := writeDeclared[privilege][column]; ok {
 				continue
 			}
 		}

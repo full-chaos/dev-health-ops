@@ -729,13 +729,29 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		if !row.AutoProvision {
 			return nil, nil, errOAuthAutoProvisionDisabled
 		}
-		return nil, nil, errMembershipRequired
+		var fullNamePtr, avatarURLPtr, externalIDPtr, usernamePtr *string
+		if claims.fullName != "" {
+			fullNamePtr = &claims.fullName
+		}
+		if claims.avatarURL != "" {
+			avatarURLPtr = &claims.avatarURL
+		}
+		if claims.externalID != "" {
+			externalIDPtr = &claims.externalID
+		}
+		if claims.username != "" {
+			usernamePtr = &claims.username
+		}
+		return h.createAccountAndMembership(ctx, row, ssoNewAccount{
+			email: claims.email, authProvider: authProviderValue, externalID: externalIDPtr,
+			fullName: fullNamePtr, username: usernamePtr, avatarURL: avatarURLPtr,
+		})
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 
-	membership, err := h.requireMembership(ctx, id, row.OrgID)
+	membership, err := h.membershipOrJoin(ctx, row, id)
 	if err != nil {
 		return nil, nil, err
 	}

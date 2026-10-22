@@ -71,6 +71,7 @@ type llmConfigResponse struct {
 	Model         string `json:"model"`
 	BaseURL       string `json:"base_url"`
 	APIKey        string `json:"api_key"`
+	PromptCache   bool   `json:"prompt_cache,omitempty"`
 	Version       string `json:"version"`
 }
 
@@ -78,7 +79,7 @@ func llmConfigBody(orgID string, cfg llmorgsettings.OrgConfig) llmConfigResponse
 	return llmConfigResponse{
 		SchemaVersion: llmConfigSchemaVersion, OrgID: orgID,
 		Provider: cfg.Provider, Model: cfg.Model, BaseURL: cfg.BaseURL,
-		APIKey: cfg.APIKey.Reveal(), Version: cfg.Version,
+		APIKey: cfg.APIKey.Reveal(), PromptCache: cfg.PromptCache, Version: cfg.Version,
 	}
 }
 
@@ -190,6 +191,11 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 		out.Set("base_url", body.BaseURL)
 		out.Set("api_key", body.APIKey)
 		out.Set("version", body.Version)
+		// Sent only for an org that opted in: acr's decoder rejects fields it
+		// does not know, so a body without it stays valid for every other org.
+		if body.PromptCache {
+			out.Set("prompt_cache", true)
+		}
 		// A Go-only route has no response model: the JSONResponse writer, not WriteModel.
 		policy.WriteJSON(w, http.StatusOK, out, http.Header{"X-Content-Type-Options": {"nosniff"}})
 	})

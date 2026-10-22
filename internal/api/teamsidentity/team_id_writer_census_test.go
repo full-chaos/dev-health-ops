@@ -51,6 +51,7 @@ var teamIDDynamicWriters = map[string]struct {
 	route string
 }{
 	"internal/providersync/team_id_carry.go":                 {1, "the carry: keyed ids only (teamIDCarryGuard)"},
+	"internal/providersync/catalog_evidence_start.go":        {1, "CHAOS-10521 evidence start: stored link rows written again (at the evidence, and the old key as an empty interval), the team id is the stored one"},
 	"internal/providersync/ownership_interval_compaction.go": {3, "CHAOS-9556 compaction and restore: stored ownership rows written again under their own key (valid_to, updated_at), the team id is the stored one; plus the backup table copy"},
 	"internal/providersync/work_item_dependency_drain.go":    {2, "CHAOS-9706 drain restore and backup copy: work_item_dependencies rows copied whole (every column) from the backup, no team column is built"},
 	"internal/chmigrate/apply.go":                            {2, "schema migrations: no team row"},

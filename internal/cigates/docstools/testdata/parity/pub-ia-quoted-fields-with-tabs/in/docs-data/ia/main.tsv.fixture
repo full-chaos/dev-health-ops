@@ -1,0 +1,8 @@
+url	id	label	kind
+/	home	Home	landing
+/guide/intro/	g1	Intro	guide
+/guide/advanced/	g2	Advanced	guide
+/reference/	r1	Reference	reference
+/future/	f1	Future	guide
+"/q/"	"a	b"	"two
+lines"	"say ""hi"""

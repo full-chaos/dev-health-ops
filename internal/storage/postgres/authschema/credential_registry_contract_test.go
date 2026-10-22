@@ -63,7 +63,8 @@ func TestCredentialScopeShapeMatchesThePrincipalContract(t *testing.T) {
 }
 
 // TestCredentialClassCheckEqualsThePrincipalContractsVocabulary: migration 0008
-// closes credential_class to the vocabulary principal.v1 carries, so a stored
+// closes credential_class (the last migration that redefines the CHECK, 0017,
+// is the one compared) to the vocabulary principal.v1 carries, so a stored
 // class always has a wire name. The list is copied into SQL, so it is compared
 // here, both directions.
 func TestCredentialClassCheckEqualsThePrincipalContractsVocabulary(t *testing.T) {
@@ -95,13 +96,13 @@ func TestCredentialClassCheckEqualsThePrincipalContractsVocabulary(t *testing.T)
 	}
 	var sql string
 	for _, m := range migrations {
-		if m.Version == 8 {
+		if strings.Contains(m.SQL, "ADD CONSTRAINT credential_registry_credential_class_closed") {
 			sql = m.SQL
 		}
 	}
-	start := strings.Index(sql, "credential_registry_credential_class_closed")
+	start := strings.Index(sql, "ADD CONSTRAINT credential_registry_credential_class_closed")
 	if start < 0 {
-		t.Fatal("migration 0008 does not close credential_class")
+		t.Fatal("no migration closes credential_class")
 	}
 	body := sql[start:]
 	body = body[strings.Index(body, "IN (")+len("IN ("):]
@@ -112,11 +113,11 @@ func TestCredentialClassCheckEqualsThePrincipalContractsVocabulary(t *testing.T)
 	}
 	for _, class := range want {
 		if !got[class] {
-			t.Errorf("principal.v1 class %q is missing from the 0008 CHECK", class)
+			t.Errorf("principal.v1 class %q is missing from the credential_class CHECK", class)
 		}
 		delete(got, class)
 	}
 	for extra := range got {
-		t.Errorf("the 0008 CHECK admits %q, which principal.v1 does not carry", extra)
+		t.Errorf("the credential_class CHECK admits %q, which principal.v1 does not carry", extra)
 	}
 }

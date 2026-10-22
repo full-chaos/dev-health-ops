@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -82,5 +83,22 @@ func TestBoundHitSeesARealSocketReadTimeout(t *testing.T) {
 		fmt.Errorf("query processing: failed to read packet from %s (conn_id=%d): %w", conn.RemoteAddr(), 1, readErr))
 	if bound, _ := BoundHit(wrapped); bound != BoundTime {
 		t.Errorf("a real socket read timeout (%T %v): BoundHit = %q, want %q", errors.Unwrap(errors.Unwrap(wrapped)), readErr, bound, BoundTime)
+	}
+}
+
+func TestOptionsKeepASmallWarmPoolUnderTheCloudIdleCutoff(t *testing.T) {
+	options := Options("clickhouse://u:p@ch.example.invalid:9440/db?secure=true")
+	if options.MaxIdleConns != PoolMaxIdleConns || options.MaxOpenConns != PoolMaxOpenConns || options.MaxIdleConns > options.MaxOpenConns {
+		t.Fatalf("pool = open %d idle %d", options.MaxOpenConns, options.MaxIdleConns)
+	}
+	if options.ConnMaxLifetime <= 0 || options.ConnMaxLifetime >= 5*time.Minute {
+		t.Fatalf("lifetime %v not under the 5 minute idle cutoff", options.ConnMaxLifetime)
+	}
+	if options.DialTimeout < 10*time.Second {
+		t.Fatalf("dial timeout %v", options.DialTimeout)
+	}
+	transport := &http.Transport{}
+	if _, err := options.TransportFunc(transport); err != nil || transport.MaxIdleConnsPerHost != PoolMaxIdleConns {
+		t.Fatalf("transport idle %d err %v", transport.MaxIdleConnsPerHost, err)
 	}
 }

@@ -9,10 +9,22 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"os"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+)
+
+// Connection budget. One client (pool) per query-API route, built once at start: a pod holds up to
+// routes x PoolMaxIdleConns idle connections (22 x 2 = 44 at the time of writing) and routes x PoolMaxOpenConns under
+// load; with P query-API pods the cluster holds P x 44 idle. Keep P x routes x PoolMaxOpenConns under the ClickHouse
+// connection limit. Idle is small on purpose: 22 pools share one traffic stream, so most routes use one connection.
+const (
+	PoolMaxOpenConns = 8
+	PoolMaxIdleConns = 2
 )
 
 // MaxResultRows is the result-row bound of every query-API read: this process
@@ -28,15 +40,28 @@ func Options(dsn string) dhclickhouse.Options {
 	maxBytesToRead := uint64(0)
 	maxResultRows := MaxResultRows
 	return dhclickhouse.Options{
-		DSN:            dsn,
+		DSN:             dsn,
+		MaxOpenConns:    PoolMaxOpenConns,
+		MaxIdleConns:    PoolMaxIdleConns,
+		ConnMaxLifetime: chstorage.PoolConnMaxLifetime(),
+		DialTimeout:     chstorage.DefaultDialTimeout,
+		TransportFunc: func(t *http.Transport) (http.RoundTripper, error) {
+			chstorage.KeepIdleConns(t, PoolMaxIdleConns)
+			return t, nil
+		},
 		MaxBytesToRead: &maxBytesToRead,
 		MaxResultRows:  &maxResultRows,
 	}
 }
 
-// New builds a query-API read client.
+// New builds a query-API read client and warms its idle pool in the background; a failed warm-up is ignored.
 func New(dsn string) (*dhclickhouse.Client, error) {
-	return dhclickhouse.NewClickHouseQueryClientWithOptions(Options(dsn))
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(Options(dsn))
+	if err != nil {
+		return nil, err
+	}
+	go chstorage.WarmPool(context.Background(), client.Ping, PoolMaxIdleConns)
+	return client, nil
 }
 
 // ClickHouse error codes that mean "a bound was hit", not "the store is down".

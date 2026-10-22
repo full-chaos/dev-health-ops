@@ -169,6 +169,24 @@ if [ "${LEG}" = "acp" ]; then
     FORWARDED=("${SERVED[@]}")
   fi
   printf 'leg acp forwards: %s\n' "${FORWARDED[*]:-none (sessions is not served; every route stays in go-api)}"
+  if [ "${#FORWARDED[@]}" -gt 0 ]; then
+    # go-api asks auth-service's issue route for the sessions of the sign-in flows it still serves, with an
+    # auth-session-issuer service credential: mint one into the project's database and hand go-api the token through
+    # the state file, before the sessions flag turns on (go-api refuses to start with the flag and no credential).
+    ISSUE_TOKEN="svc_authsess_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+    [[ "${ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "could not build a session issue credential"
+    {
+      printf '\\set token %s\n' "'${ISSUE_TOKEN}'"
+      cat <<'SQL'
+INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
+VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'), left(:'token', 16),
+        '["sessions:issue"]', now());
+SQL
+    } | compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
+      || die "could not store the session issue credential"
+    printf 'export AUTH_SESSION_ISSUE_TOKEN=%q\n' "${ISSUE_TOKEN}" >>"${STATE}"
+    unset ISSUE_TOKEN
+  fi
   for aggregate in "${FORWARDED[@]}"; do
     bash "${SCRIPT_DIR}/auth_corpus_set_env.sh" "AUTH_PROXY_$(tr '[:lower:]' '[:upper:]' <<<"${aggregate}")" true
   done

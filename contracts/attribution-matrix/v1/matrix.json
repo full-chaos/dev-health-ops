@@ -29,9 +29,7 @@
       "provider": "github",
       "entity": "members",
       "check": "membership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-10566",
-      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
+      "state": "pass"
     },
     {
       "provider": "github",
@@ -55,9 +53,7 @@
       "provider": "github",
       "entity": "repositories",
       "check": "repository_ownership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-10566",
-      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
+      "state": "pass"
     },
     {
       "provider": "github",
@@ -105,17 +101,13 @@
       "provider": "github",
       "entity": "issues",
       "check": "owned_history_is_attributed",
-      "state": "known_red",
-      "ticket": "CHAOS-10566",
-      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
+      "state": "pass"
     },
     {
       "provider": "github",
       "entity": "issues",
       "check": "every_active_owner_takes_the_item",
-      "state": "known_red",
-      "ticket": "CHAOS-10566",
-      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
+      "state": "pass"
     },
     {
       "provider": "github",
@@ -151,9 +143,7 @@
       "provider": "gitlab",
       "entity": "members",
       "check": "membership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-10566",
-      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
+      "state": "pass"
     },
     {
       "provider": "gitlab",
@@ -255,9 +245,7 @@
       "provider": "gitlab",
       "entity": "projects",
       "check": "project_ownership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-10566",
-      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
+      "state": "pass"
     },
     {
       "provider": "jira",
@@ -359,9 +347,7 @@
       "provider": "jira",
       "entity": "projects",
       "check": "project_ownership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-10566",
-      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
+      "state": "pass"
     },
     {
       "provider": "linear",
@@ -391,9 +377,7 @@
       "provider": "linear",
       "entity": "members",
       "check": "membership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-10566",
-      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
+      "state": "pass"
     },
     {
       "provider": "linear",
@@ -465,9 +449,7 @@
       "provider": "linear",
       "entity": "projects",
       "check": "project_ownership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-10566",
-      "why": "the frozen worlds run the team catalog only before the sync, so the writers see no evidence and the links start at the sync"
+      "state": "pass"
     }
   ],
   "not_applicable": [

@@ -103,3 +103,19 @@ func TestControlRowsAloneLeaveNoSavedConfig(t *testing.T) {
 		t.Fatalf("rest = %v, want only the provider", rest)
 	}
 }
+
+func TestEffectiveProviderIsTheInvestigateOverrideElseTheDefault(t *testing.T) {
+	for _, tc := range []struct{ name, defaultProvider, override, want string }{
+		{"default only", "anthropic", "", "anthropic"},
+		{"override replaces the default", "anthropic", "openai", "openai"},
+		{"override on anthropic over another default", "openai", "anthropic", "anthropic"},
+		{"case and padding", " Anthropic ", "", "anthropic"},
+		{"nothing stored reads as auto", "", "", "auto"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := effectiveProvider(tc.defaultProvider, tc.override); got != tc.want {
+				t.Fatalf("effectiveProvider(%q, %q) = %q, want %q", tc.defaultProvider, tc.override, got, tc.want)
+			}
+		})
+	}
+}

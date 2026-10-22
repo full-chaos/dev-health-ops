@@ -775,3 +775,45 @@ func gitBlameEffect(t *testing.T, row gitBlameRow) EffectBatch {
 	}
 	return effect
 }
+
+func TestGitHubBlameFilesInventoryReadsTheNewestWindowOfOneTenantAndRepository(t *testing.T) {
+	ctx, sink := newGitHubBlameIntegrationSink(t)
+	if err := sink.Conn.Exec(ctx, gitFilesDDL); err != nil {
+		t.Fatal(err)
+	}
+	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
+	otherRepo := "d7198fbc-1945-3717-05d8-eb78866b4e79"
+	newest := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	insert := func(orgID, repo, path string, syncedAt time.Time) {
+		t.Helper()
+		if err := sink.Conn.Exec(ctx,
+			`INSERT INTO git_files (repo_id, path, executable, contents, last_synced, org_id) VALUES (?, ?, false, NULL, ?, ?)`,
+			repo, path, syncedAt, orgID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim := nativeTestClaim("github", "blame")
+	claim.OrgID = "org-a"
+	insert("org-a", repoID, "src/kept.go", newest)
+	insert("org-a", repoID, "src/also_kept.go", newest.Add(-time.Hour))
+	insert("org-a", repoID, "src/deleted_long_ago.go", newest.Add(-gitHubBlameFilesInventoryWindow-time.Minute))
+	insert("org-a", otherRepo, "src/other_repo.go", newest.Add(time.Hour))
+	insert("org-b", repoID, "src/other_tenant.go", newest.Add(2*time.Hour))
+	coverage := GitHubBlameClickHouseCoverage{Conn: sink.Conn, Lease: sink.Lease}
+	result, err := coverage.FilesInventory(ctx, claim, repoID, gitHubBlameFilesInventoryWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(result.Paths)
+	if !slices.Equal(result.Paths, []string{"src/also_kept.go", "src/kept.go"}) || !result.NewestSyncedAt.Equal(newest) {
+		t.Fatalf("paths=%v newest=%v, want the two rows inside the window of this tenant and repository", result.Paths, result.NewestSyncedAt)
+	}
+	empty, err := coverage.FilesInventory(ctx, claim, "e7198fbc-1945-3717-05d8-eb78866b4e79", gitHubBlameFilesInventoryWindow)
+	if err != nil || len(empty.Paths) != 0 {
+		t.Fatalf("unknown repository: paths=%v err=%v, want none", empty.Paths, err)
+	}
+	bounded := GitHubBlameClickHouseCoverage{Conn: sink.Conn, Lease: sink.Lease, MaxPaths: 1}
+	if _, err := bounded.FilesInventory(ctx, claim, repoID, gitHubBlameFilesInventoryWindow); !errors.Is(err, ErrGitHubBlameProgressUnavailable) {
+		t.Fatalf("over-bound error=%v, want ErrGitHubBlameProgressUnavailable", err)
+	}
+}

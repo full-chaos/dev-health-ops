@@ -426,7 +426,7 @@ check_race_excluded_ran() {
     [ -n "${name}" ] && [ -n "${package}" ] && [ "${name}" != "${package}" ] || die "race_excluded_tests.tsv row is not <package><TAB><test>"
     quality_selected . "${package}" || continue
     [ -d "${ROOT}/${package}" ] || die "race-excluded package ${package} does not exist"
-    out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -v -run "^${name}\$" "./${package}" 2>&1)" \
+    out="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -timeout 5m -v -run "^${name}\$" "./${package}" 2>&1)" \
       || { printf '%s\n' "${out}" | tail -n 40 >&2; die "race-excluded test ${package} ${name} failed in the non-race leg"; }
     printf '%s\n' "${out}" | grep -q -- "^--- PASS: ${name} (" || die "race-excluded test ${package} ${name} did not run in the non-race leg (no PASS line)"
     printf 'race-excluded-ran: %s %s PASS\n' "${package}" "${name}"
@@ -610,14 +610,14 @@ check_test_shard() {
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${rest} 2>&1 | tee -a "${log}"
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -timeout 10m ${rest} 2>&1 | tee -a "${log}"
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}"; return 1; }
     fi
     if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 == heavy { found = 1 } END { exit !found }'; then
       printf 'go test (shard %s/%s, alone): %s\n' "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
       (
         cd "${ROOT}/${module_dir}"
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath "${SERIAL_HEAVY_TEST_PACKAGE}" 2>&1 | tee -a "${log}"
+        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}" 2>&1 | tee -a "${log}"
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}"; return 1; }
     fi
   done

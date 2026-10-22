@@ -54,7 +54,7 @@ func openTeamAttributionSchema(ctx context.Context, t *testing.T) stdclickhouse.
 			last_synced DateTime64(3, 'UTC') DEFAULT now64(3)
 		) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id)`,
 		`CREATE TABLE teams (
-			org_id String, id String, name String,
+			org_id String, id String, name String, is_active UInt8 DEFAULT 1,
 			updated_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')
 		) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 		`CREATE TABLE team_project_ownership (

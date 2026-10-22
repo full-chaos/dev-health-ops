@@ -563,7 +563,7 @@ func (m *Materializer) categorizeEntry(ctx context.Context, cfg Config, entry pr
 		return m.served.categorize(ctx, cfg, entry)
 	}
 	return categorize.CategorizeTextBundle(ctx, entry.result.Bundle, categorize.CategorizeOptions{
-		Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model,
+		Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model, Telemetry: m.llmTelemetry,
 	})
 }
 

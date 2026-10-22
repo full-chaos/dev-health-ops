@@ -91,6 +91,7 @@ internal/cigates/routing	deps.go	unexpressed
 internal/cigates/routing	pinned_test.go	unexpressed
 internal/cigates/scripts	ci_script_helpers_test.go	unexpressed
 internal/cigates/scripts	free_run_test.go	unexpressed
+internal/cigates/scripts	heredoc_budget_test.go	unexpressed
 internal/cigates/scripts	local_validate_clickhouse_test.go	unexpressed
 internal/cigates/scripts	local_validate_stage_manifest_test.go	unexpressed
 internal/cigates/scripts	oracle_triggers_script_test.go	unexpressed

@@ -155,9 +155,8 @@ func (e *env) signInRows(t *testing.T, ctx context.Context, id uuid.UUID) []any 
 	return values
 }
 
-// Create and CreateAudited are two writers of the same rows until CHAOS-10411
-// makes Create call insertSession: for the same input they write the same
-// session and credential, column for column.
+// Create and CreateAudited share insertSession: for the same input they write
+// the same session and credential, column for column.
 func TestCreateAndCreateAuditedWriteTheSameRows(t *testing.T) {
 	ctx := testContext(t)
 	e := newEnv(t, ctx)

@@ -127,6 +127,21 @@ func pathUUID(r *http.Request, name string) (uuid.UUID, bool) {
 	return id, err == nil
 }
 
+const (
+	invalidFeatureFlagIDDetail = "Invalid feature flag id"
+	invalidFeatureIDDetail     = "Invalid feature id"
+	invalidAuditLogIDDetail    = "Invalid audit log id"
+	invalidUserIDDetail        = "Invalid user id"
+	invalidIPEntryIDDetail     = "Invalid IP allowlist entry id"
+	invalidRetentionIDDetail   = "Invalid retention policy id"
+)
+
+// writeInvalidID answers a malformed id of the request's own input with a
+// fixed named 400 that carries none of the input text.
+func writeInvalidID(w http.ResponseWriter, detail string) {
+	policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
+}
+
 // jsonColumnValue decodes a stored `json` column as SQLAlchemy's JSON type
 // does; SQL NULL and a JSON null are both nil.
 func jsonColumnValue(raw []byte) (pyjson.Value, error) {

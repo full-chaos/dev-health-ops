@@ -103,8 +103,16 @@ func TestGitHubBlameRefusesAnInventoryThatMissesATopLevelEntry(t *testing.T) {
 	if doer.counts["dir"] < 2 || len(progressPaths(t, batch)) != 3 {
 		t.Fatalf("dir=%d blamed=%d, want the walk used and all 3 tree paths blamed", doer.counts["dir"], len(progressPaths(t, batch)))
 	}
-	if !strings.Contains(logs.String(), "fallback_reason=top_level_uncovered") {
-		t.Fatalf("logs=%q", logs.String())
+	// The fixture's tree holds the top-level directory pkg; the list lacks it.
+	for _, want := range []string{
+		"fallback_reason=top_level_uncovered", "uncovered_top_level=1", "uncovered_first=[pkg]", "inventory_age_seconds=60",
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("logs=%q, want %q", logs.String(), want)
+		}
+	}
+	if strings.Contains(logs.String(), "source=files_inventory") {
+		t.Fatalf("logs=%q, a refused inventory must not be logged as the source", logs.String())
 	}
 }
 

@@ -53,6 +53,7 @@ internal/cigates/bigboy	repin_support_test.go	unexpressed	-
 internal/cigates/bigboyrender	guards_test.go	unexpressed	-
 internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testdata/parity	dir
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-
+internal/cigates/cachepoison	cachepoison_test.go	.github/workflows	dir
 internal/cigates/chartgates	helpers_test.go	unexpressed	-
 internal/cigates/checkgo	support_test.go	unexpressed	-
 internal/cigates/docs	docs_helpers_test.go	unexpressed	-

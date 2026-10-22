@@ -479,7 +479,7 @@ func gitHubFilesInventory(
 		return nil, nil, false, continueGitHubFilesTraversal(treeErr, fullName)
 	}
 	if treeCapExceeded || tree.Truncated {
-		paths, sizes, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", defaultGitHubTreeWalkLimits())
+		paths, sizes, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", rootListedWalkLimits())
 		if walkErr != nil {
 			logGitHubTreeWalkStop(walkErr, stats)
 			return nil, nil, true, continueGitHubFilesTraversal(fmt.Errorf("ref=%s: %w", treeRef, walkErr), fullName)

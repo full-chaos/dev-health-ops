@@ -266,8 +266,11 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
 
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/admin/orgs_crud.go-pin.json", SHA256: orgsCrudPinSHA256, Ruling: orgsCrudOwnerRuling})
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		Retire: func(request venueoracle.Request) bool { return request.Name == "create org malformed owner id" },
+		Pin:    pin,
 		Normalize: func(request venueoracle.Request, body string) string {
 			// joined_at: a fresh add-member INSERT sets it independently on
 			// each plane (now(), genuinely wall-clock-different), same
@@ -285,6 +288,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 		},
 	})
 	t.Log(receipt)
+	pin.Finish(t)
 
 	// Finding: OrganizationService.create's org insert and its owner
 	// membership insert are one transaction -- a failed owner insert (a
@@ -330,3 +334,11 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 	}
 	golden.Finish(t)
 }
+
+// orgsCrudOwnerRuling retired the Python reference of the create-org request
+// whose owner_user_id is no UUID: Python answered 500 after its own org insert,
+// the Go api checks the id first and answers a named 400, writing nothing.
+const orgsCrudOwnerRuling = "CHAOS-10609 (fcs lead decision 2026-10-22): a malformed owner_user_id answers a named 400 before any write, not the old Python 500"
+
+// orgsCrudPinSHA256 is the digest of testdata/admin/orgs_crud.go-pin.json.
+const orgsCrudPinSHA256 = "2143cad3a77d9d1e577f1259df7a6c35f52da727b2af9512af7bd4e970cc3e6d"

@@ -126,6 +126,7 @@ internal/cigates/bigboyrender	helpers_test.go
 internal/cigates/bigboyrender	nopython_test.go
 internal/cigates/bigboyrender	parity_test.go
 internal/cigates/bigboyrender	posture.go
+internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
 internal/cigates/checkgo	check_go_script_test.go
@@ -192,6 +193,7 @@ internal/cigates/routing	tools_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go
+internal/cigates/scripts	heredoc_budget_test.go
 internal/cigates/scripts	local_validate_clickhouse_test.go
 internal/cigates/scripts	merge_tree_vet_script_test.go
 internal/cigates/scripts	oracle_selection_helpers_test.go

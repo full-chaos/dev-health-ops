@@ -72,9 +72,9 @@ type IO struct {
 const maxInFlightRequests = 64
 
 // sessionRoutes is the service's mounted route set when cfg.Session is
-// enabled, and nothing otherwise: the session routes (CHAOS-10228) and, with
-// AUTH_SERVICE_COMPAT_ROUTES=true, go-api's compatibility refresh, logout and
-// social-login, and login when the lockout key is set too. Without the session
+// enabled, and nothing otherwise: the session routes (CHAOS-10228) and
+// go-api's compatibility refresh, logout and social-login, and login when the
+// lockout key is set too. Without the session
 // secrets the service stays as CHAOS-4881 built it, dormant: every path
 // receives the 404 envelope and no token is issued. No deployed stack sets
 // those secrets yet, and go-api routes to these only behind its AUTH_PROXY_*
@@ -99,8 +99,8 @@ func sessionRoutes(
 	routes, err := authapi.Routes(authapi.Deps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
 	})
-	if err != nil || !cfg.Session.CompatRoutes {
-		return routes, err
+	if err != nil {
+		return nil, err
 	}
 	compat, err := compatRoutes(cfg, logger, pool, schema, sessions, issuer)
 	if err != nil {

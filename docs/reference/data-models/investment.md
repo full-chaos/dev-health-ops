@@ -63,15 +63,15 @@ Each active donor team contributes all its live, sync-derived
 `provider_access`, and `inferred` ownership sources. It validates the ownership
 interval at the END of the work unit's own span (`to_ts`), never later than the
 materialization timestamp, and joins to this organization's current repository
-catalog. A unit that ended before a team's first ownership row of a repository gets
-no share of that repository on main today; the rule of record (chris 2026-10-12, D5987
-option C) is that the repository's first recorded owners apply backward, tracked in
-CHAOS-10518 (the shared readers of `internal/teamownership` and `internal/queryapi/teamscope`
-apply it since CHAOS-9404). A later change of a team's repositories does not move the effort of a unit that
+catalog. A unit that ended before a repository's first
+ownership record takes the repository's first recorded owners (the rule of record, chris 2026-10-12, D5987 option C,
+`internal/ownershipwindow`, CHAOS-10518): the reader tests a row at the later of the unit's end time and the first
+record of its repository, which is the earliest start of that repository's rows of active teams (an inactive team does
+not set it). A unit that ended in a gap between two records has no owner. A later change of a team's repositories does not move the effort of a unit that
 ended before the change. One run holds units of many end times, so the reader
-loads the donor teams of the issues, and the ownership rows of those donor teams
-that began at or before the materialization timestamp, once; each unit selects
-the rows valid at its own end time. The ownership rows of a team that is no
+loads the donor teams of the issues, the ownership rows of those donor teams
+and the first record of each repository, once; each unit selects the rows valid
+at its own end time (at the first record of the repository when that is later). The ownership rows of a team that is no
 donor of the run's issues are not read. Name-only ownership resolves by provider and
 case-insensitive full repository name. Missing, expired, future, manual,
 foreign-organization, and unmatched repository records cannot supply a share.

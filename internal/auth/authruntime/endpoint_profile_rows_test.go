@@ -36,13 +36,13 @@ var probeMethods = []string{
 
 // servedAuthRoutes returns every "METHOD path@listener" auth-service SERVES:
 // each path registered on the API route table (sessionRoutes, with the session
-// secrets set) and on the operator mux (internal/platform/health) is probed
+// secrets, the compatibility switch and the lockout key set) and on the operator mux (internal/platform/health) is probed
 // with every method in probeMethods through the handlers configure builds, and
 // every answer other than 404 or 405 is a served route. The database is
 // unreachable, so no probe reaches a store.
 func servedAuthRoutes(t *testing.T) map[string]bool {
 	t.Helper()
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(sessionEnvironment(map[string]string{
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:        "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:     "/nonexistent",
 		authconfig.EnvSigningKeyID:       "rows-test",
@@ -165,8 +165,29 @@ func loadAuthServiceRows(t *testing.T) []map[string]any {
 // nothing serves, per method and listener.
 func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T) {
 	served := servedAuthRoutes(t)
+	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
+	if len(missing) > 0 {
+		t.Errorf("served with no endpoint-profile row (contracts/auth/v1/endpoint-profiles.auth-service.json): %v", missing)
+	}
+	if len(stale) > 0 {
+		t.Errorf("endpoint-profile rows for routes nothing serves: %v", stale)
+	}
+	if len(served) != servedAuthRouteCount {
+		t.Fatalf("%d served routes found, want %d: a mount was dropped or added without a row", len(served), servedAuthRouteCount)
+	}
+}
+
+// servedAuthRouteCount is every route the probe serves: four session routes,
+// four compatibility routes, the session issue route and the three operator
+// paths on GET and HEAD.
+const servedAuthRouteCount = 15
+
+// compareServedToRows returns the served routes with no row and the rows for
+// routes nothing serves, per method and listener.
+func compareServedToRows(t *testing.T, served map[string]bool, rowDocs []map[string]any) (missing, stale []string) {
+	t.Helper()
 	rows := map[string]bool{}
-	for _, row := range loadAuthServiceRows(t) {
+	for _, row := range rowDocs {
 		id, _ := row["id"].(string)
 		match := authRowID.FindStringSubmatch(id)
 		if match == nil {
@@ -179,7 +200,6 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 			rows[match[1]+" "+match[2]+"@"+listener] = true
 		}
 	}
-	var missing, stale []string
 	for key := range served {
 		if !rows[key] {
 			missing = append(missing, key)
@@ -192,14 +212,48 @@ func TestEveryServedAuthRouteHasAnEndpointProfileRowAndNoRowIsStale(t *testing.T
 	}
 	sort.Strings(missing)
 	sort.Strings(stale)
-	if len(missing) > 0 {
-		t.Errorf("served with no endpoint-profile row (contracts/auth/v1/endpoint-profiles.auth-service.json): %v", missing)
+	return missing, stale
+}
+
+var compatServedRoutes = []string{
+	"POST /api/v1/auth/login@api", "POST /api/v1/auth/refresh@api", "POST /api/v1/auth/logout@api",
+	"POST /api/v1/auth/social-login@api", "POST /internal/v1/sessions@api",
+}
+
+// TestTheRowGateRefusesAPlantedMissingRowForEachCompatibilityRoute deletes each
+// compatibility row from the real rows file in memory and runs the comparison
+// the gate runs: it must name exactly that route.
+func TestTheRowGateRefusesAPlantedMissingRowForEachCompatibilityRoute(t *testing.T) {
+	served := servedAuthRoutes(t)
+	for _, key := range compatServedRoutes {
+		if !served[key] {
+			t.Fatalf("probe does not serve %s: the compatibility mounts are missing from the probe", key)
+		}
+		var kept []map[string]any
+		for _, row := range loadAuthServiceRows(t) {
+			id, _ := row["id"].(string)
+			match := authRowID.FindStringSubmatch(id)
+			if match != nil && match[1]+" "+match[2]+"@"+match[3] == key {
+				continue
+			}
+			kept = append(kept, row)
+		}
+		missing, stale := compareServedToRows(t, served, kept)
+		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
+			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
+		}
 	}
-	if len(stale) > 0 {
-		t.Errorf("endpoint-profile rows for routes nothing serves: %v", stale)
-	}
-	if len(served) < 7 {
-		t.Fatalf("only %d served routes found: the probe stopped seeing the route table or the operator mux", len(served))
+}
+
+// TestTheRowGateRefusesARowForARouteNothingServes is the stale-row control: a
+// row for an unmounted route is reported.
+func TestTheRowGateRefusesARowForARouteNothingServes(t *testing.T) {
+	served := servedAuthRoutes(t)
+	rows := loadAuthServiceRows(t)
+	ghost := map[string]any{"id": "POST /api/v1/auth/unmounted [dev-health-auth-service @api]", "method": "POST", "route": "/api/v1/auth/unmounted"}
+	_, stale := compareServedToRows(t, served, append(rows, ghost))
+	if len(stale) != 1 || stale[0] != "POST /api/v1/auth/unmounted@api" {
+		t.Errorf("stale = %v, want the unmounted route", stale)
 	}
 }
 

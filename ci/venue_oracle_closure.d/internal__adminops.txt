@@ -30,6 +30,7 @@ internal/httpguard
 internal/jobcontract
 internal/joboutbox
 internal/jobruntime
+internal/jobs/workgraph/units
 internal/llmbudget
 internal/llmorgsettings
 internal/mail

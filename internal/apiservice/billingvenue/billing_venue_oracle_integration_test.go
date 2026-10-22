@@ -929,10 +929,10 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 			return shiftSessionNumbers(body, refusedCheckouts)
 		},
 	})
-	for _, name := range refusedNames {
-		if name != "checkout: no org" && name != "portal: no org" && name != "sub: no org" {
-			t.Errorf("%q was declared an org-less refusal; only the three no-org billing requests may be", name)
-		}
+	// Diff declares a refusal only when Go answered exactly 403 {"detail":"Organization context required"}; the
+	// declared set is pinned to the three no-org billing requests, each once.
+	if want := []string{"checkout: no org", "portal: no org", "sub: no org"}; strings.Join(refusedNames, "|") != strings.Join(want, "|") {
+		t.Errorf("org-less refusals declared: %q, want exactly %q", refusedNames, want)
 	}
 	// The deviation requests' Python answers are inspected below (their status
 	// goes in the receipt), not compared by Diff.

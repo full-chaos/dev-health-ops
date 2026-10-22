@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -67,9 +68,10 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: AUTH_DATABASE_URI (or AUTH_DATABASE_URI_FILE) is required")
 		return cli.ExitFailure
 	}
+	boundary := pgstorage.Boundary(dsn.Reveal())
 	pool, err := pgxpool.New(ctx, dsn.Reveal())
 	if err != nil {
-		fmt.Fprintln(env.Stderr, "users-backfill: could not open the database pool")
+		fmt.Fprintf(env.Stderr, "users-backfill: could not open the database pool: %v\n", boundary.Redact(err))
 		return cli.ExitFailure
 	}
 	defer pool.Close()

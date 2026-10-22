@@ -244,3 +244,59 @@ func TestLoadBindingIsAssignedOnlyByItsDeclaration(t *testing.T) {
 		t.Errorf("want exactly one loadBinding declaration, found %d", declarations)
 	}
 }
+
+// pagerdutyRefusalTable records, per input class, the status the retired
+// Python receiver (pagerduty.py pagerduty_webhook, before CHAOS-8315) answered
+// and the status this handler answers. A row whose two columns differ is a
+// declared deviation (D6129): the Go answer is never more accepting.
+var pagerdutyRefusalTable = []struct {
+	class                  string
+	id, subscription, sig  string // "known" and "other" are the fixture's binding and a wrong value
+	oversized              bool
+	pythonStatus, goStatus int
+}{
+	{"id that is no uuid", "no-uuid", "known", "bad", false, 404, 401},
+	{"unknown binding", "unknown", "known", "bad", false, 404, 401},
+	{"binding that is not receivable", "unavailable", "known", "bad", false, 404, 401},
+	{"missing subscription", "known", "", "bad", false, 401, 401},
+	{"other subscription", "known", "other", "bad", false, 401, 401},
+	{"bad signature", "known", "known", "bad", false, 401, 401},
+	{"oversized body, known binding and subscription", "known", "known", "bad", true, 413, 413},
+	{"oversized body, other subscription", "known", "other", "bad", true, 401, 413},
+	{"oversized body, missing subscription", "known", "", "bad", true, 401, 413},
+	{"oversized body, unknown binding", "unknown", "known", "bad", true, 404, 413},
+	{"oversized body, id that is no uuid", "no-uuid", "known", "bad", true, 404, 413},
+}
+
+func TestPagerDutyRefusalTableMatchesTheHandler(t *testing.T) {
+	f := newRefusalFixture(t, "active")
+	unavailable := uuid.NewString()
+	inner := loadBinding
+	loadBinding = func(ctx context.Context, pool *pgxpool.Pool, id string) (pagerdutyBinding, error) {
+		if id == unavailable {
+			return pagerdutyBinding{}, errBindingNotFound
+		}
+		return inner(ctx, pool, id)
+	}
+	t.Cleanup(func() { loadBinding = inner })
+	ordinary := []byte(`{"event":{}}`)
+	oversized := bytes.Repeat([]byte("x"), maxWebhookBodyBytes+10)
+	for _, row := range pagerdutyRefusalTable {
+		id := map[string]string{"known": f.bindingID, "unknown": uuid.NewString(), "unavailable": unavailable, "no-uuid": "not-a-uuid"}[row.id]
+		subscription := map[string]string{"known": f.sub, "other": "other-" + f.sub, "": ""}[row.subscription]
+		body := ordinary
+		if row.oversized {
+			body = oversized
+		}
+		got, _ := f.send(id, subscription, pagerdutySign("wrong-"+f.secret, ordinary), body)
+		if got.Code != row.goStatus {
+			t.Errorf("%s: status %d, table says %d", row.class, got.Code, row.goStatus)
+		}
+		if row.goStatus != http.StatusRequestEntityTooLarge && got.Body.String() != `{"detail":"Invalid signature"}` {
+			t.Errorf("%s: body %s", row.class, got.Body.String())
+		}
+		if row.goStatus == row.pythonStatus && row.pythonStatus == http.StatusNotFound {
+			t.Errorf("%s: a 404 row must be a declared deviation", row.class)
+		}
+	}
+}

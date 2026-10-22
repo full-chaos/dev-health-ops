@@ -362,6 +362,7 @@ internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/linktier	linktier_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
+internal/llmorgsettings	baseurl_reader_guard_test.go
 internal/localgit	blame.go
 internal/localgit	git.go
 internal/localgit	localgit_test.go

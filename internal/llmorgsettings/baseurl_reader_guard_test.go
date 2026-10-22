@@ -27,14 +27,22 @@ const llmorgsettingsImport = "github.com/full-chaos/dev-health-ops/internal/llmo
 
 var guardedValidators = map[string]bool{"ValidateBaseURL": true, "ValidateBaseURLChecked": true, "validateBaseURL": true}
 
-// guardAllowList holds every file that may name a guarded validator, with why.
-var guardAllowList = map[string]string{
-	"internal/llmorgsettings/ssrf.go":     "defines the validators",
-	"internal/llmorgsettings/keycheck.go": "ValidateBaseURLForKeys is the guarded door: the key compare runs before the validator",
-	"internal/apiservice/admin/llmmodels.go": "handlers.checkBaseURL hands the validator to CheckBaseURL as its validate argument; " +
-		"every admin reader goes through checkBaseURL",
-	"internal/queryapi/investmentexplain/provider_org.go": "validateRawBaseURL is called only after StoredBaseURLCarriesKey " +
-		"in the fallback log; a key hit logs the refusal class and returns",
+// guardRow is one allow-listed file: why, and exactly how many mentions it may
+// hold (0 = the package's own door files, any count), so a second call added to
+// an allow-listed file fails the guard.
+type guardRow struct {
+	reason string
+	hits   int
+}
+
+// guardAllowList holds every file that may name a guarded validator.
+var guardAllowList = map[string]guardRow{
+	"internal/llmorgsettings/ssrf.go":     {"defines the validators", 0},
+	"internal/llmorgsettings/keycheck.go": {"ValidateBaseURLForKeys is the guarded door: the key compare runs before the validator", 0},
+	"internal/apiservice/admin/llmmodels.go": {"handlers.checkBaseURL hands the validator to CheckBaseURL as its validate argument; " +
+		"every admin reader goes through checkBaseURL", 1},
+	"internal/queryapi/investmentexplain/provider_org.go": {"validateRawBaseURL is called only after StoredBaseURLCarriesKey " +
+		"in the fallback log; a key hit logs the refusal class and returns", 1},
 }
 
 type guardHit struct {
@@ -100,7 +108,7 @@ func guardRoot(t *testing.T) string {
 
 func TestOnlyAllowListedFilesNameTheBaseURLValidators(t *testing.T) {
 	root := guardRoot(t)
-	hitFiles := map[string]bool{}
+	hitFiles := map[string]int{}
 	var unlisted []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -142,8 +150,9 @@ func TestOnlyAllowListedFilesNameTheBaseURLValidators(t *testing.T) {
 		if len(hits) == 0 {
 			return nil
 		}
-		hitFiles[rel] = true
-		if _, ok := guardAllowList[rel]; !ok {
+		hitFiles[rel] = len(hits)
+		row, ok := guardAllowList[rel]
+		if !ok || (row.hits != 0 && row.hits != len(hits)) {
 			unlisted = append(unlisted, rel)
 		}
 		return nil
@@ -153,10 +162,10 @@ func TestOnlyAllowListedFilesNameTheBaseURLValidators(t *testing.T) {
 	}
 	sort.Strings(unlisted)
 	if len(unlisted) > 0 {
-		t.Fatalf("these files name a base_url validator outside the key-checked door (use llmorgsettings.ValidateBaseURLForKeys or CheckBaseURL with the key in hand), or add an allow-list row with a reason: %v", unlisted)
+		t.Fatalf("these files name a base_url validator outside the key-checked door (use llmorgsettings.ValidateBaseURLForKeys or CheckBaseURL with the key in hand), or add an allow-list row with a reason, or fix the mention count of a listed file: %v", unlisted)
 	}
 	for file := range guardAllowList {
-		if !hitFiles[file] {
+		if hitFiles[file] == 0 {
 			t.Fatalf("allow-list row %q no longer names a validator; delete it", file)
 		}
 	}

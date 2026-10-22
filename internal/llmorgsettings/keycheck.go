@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -67,13 +68,55 @@ func KeyLeakForms(apiKey string) []string {
 	return forms
 }
 
-// CarriesKey is whether text holds any of the lower-cased key forms.
+// CarriesKey is whether text holds any of the lower-cased key forms, as written
+// or once its percent-escapes are decoded (a server reads %73k as sk).
 func CarriesKey(forms []string, text string) bool {
-	lowered := strings.ToLower(text)
-	for _, form := range forms {
-		if form != "" && strings.Contains(lowered, form) {
-			return true
+	for _, candidate := range percentDecodings(text) {
+		lowered := strings.ToLower(candidate)
+		for _, form := range forms {
+			if form != "" && strings.Contains(lowered, form) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// maxPercentDecodings bounds how many layers of escaping are peeled off.
+const maxPercentDecodings = 4
+
+// percentDecodings is text, then text with every well-formed %XX replaced by its
+// byte, repeated until nothing changes: a malformed escape elsewhere in the
+// string never stops the decoding of the rest.
+func percentDecodings(text string) []string {
+	out := []string{text}
+	for len(out) <= maxPercentDecodings {
+		next := decodePercentPairs(out[len(out)-1])
+		if next == out[len(out)-1] {
+			break
+		}
+		out = append(out, next)
+	}
+	return out
+}
+
+func decodePercentPairs(text string) string {
+	if !strings.Contains(text, "%") {
+		return text
+	}
+	var out strings.Builder
+	for i := 0; i < len(text); i++ {
+		if text[i] == '%' && i+2 < len(text) && isHexDigit(text[i+1]) && isHexDigit(text[i+2]) {
+			high, _ := strconv.ParseUint(text[i+1:i+3], 16, 8)
+			out.WriteByte(byte(high))
+			i += 2
+			continue
+		}
+		out.WriteByte(text[i])
+	}
+	return out.String()
+}
+
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }

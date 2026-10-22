@@ -2,7 +2,9 @@ package llmorgsettings
 
 import (
 	"context"
+	"encoding/hex"
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +33,43 @@ func TestBaseURLCarriesKeyAtWriteTime(t *testing.T) {
 	if BaseURLCarriesKey("https://p.example.invalid/v1", "sk-live-0123456789") || BaseURLCarriesKey("https://p.example.invalid/v1", "") {
 		t.Fatal("a clean base url must pass")
 	}
+}
+
+// A key written with percent-escapes on characters URI syntax leaves bare (the
+// letter s, a hyphen, a digit) is the same key once a server decodes the url.
+func TestBaseURLCarriesKeyThroughPercentEscapes(t *testing.T) {
+	for name, text := range map[string]string{
+		"one letter escaped":          "https://p.example.invalid/%73k-stored-0123456789",
+		"hyphen escaped":              "https://p.example.invalid/sk%2Dstored-0123456789",
+		"digit escaped, upper hex":    "https://p.example.invalid/sk-stored-%30123456789",
+		"every byte escaped":          "https://p.example.invalid/" + percentEscapeAll(storedTestKey),
+		"double escaped":              "https://p.example.invalid/%2573k-stored-0123456789",
+		"bad escape beside the key":   "https://p.example.invalid/%zz/%73k-stored-0123456789",
+		"escaped in the host":         "https://%73k-stored-0123456789.example.invalid/v1",
+		"escaped in the query string": "https://p.example.invalid/v1?k=%73k-stored-0123456789",
+	} {
+		if !BaseURLCarriesKey(text, storedTestKey) {
+			t.Fatalf("%s: %q must be a key hit", name, text)
+		}
+	}
+	for name, text := range map[string]string{
+		"clean":                  "https://p.example.invalid/v1",
+		"escapes, not the key":   "https://p.example.invalid/%73k-other-0123456789",
+		"half the key escaped":   "https://p.example.invalid/%73k-stored",
+		"percent sign, no pairs": "https://p.example.invalid/100%",
+	} {
+		if BaseURLCarriesKey(text, storedTestKey) {
+			t.Fatalf("%s: %q must not be a key hit", name, text)
+		}
+	}
+}
+
+func percentEscapeAll(s string) string {
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		out.WriteString("%" + strings.ToUpper(hex.EncodeToString([]byte{s[i]})))
+	}
+	return out.String()
 }
 
 func TestCheckBaseURLRefusesAKeyBeforeAnyResolution(t *testing.T) {

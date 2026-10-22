@@ -147,10 +147,44 @@ func workerGroupsBlankSharedDSNNames(g *guard) {
 	}
 }
 
+// A container env list that names a variable twice leaves the value to the last
+// entry (a blank and a secretKeyRef on one name), so no worker container may do it.
+func workerContainersRenderNoDuplicateEnvNames(g *guard) {
+	for _, release := range []struct {
+		name string
+		args []string
+	}{
+		{"dsn-env-default", nil},
+		{"dsn-env-pooled", poolGoValues},
+		{"dsn-env-bundled-pg", join(poolGoValues, set("postgresql.enabled=true"))},
+	} {
+		docs := g.docs(release.name, release.args...)
+		seen := 0
+		for _, d := range ofKind(docs, "Deployment") {
+			group := label(d, "dev-health.io/worker-group")
+			if group == "" {
+				continue
+			}
+			for _, c := range containers(d) {
+				seen++
+				count := map[string]int{}
+				for _, e := range list(c["env"]) {
+					count[str(at(e, "name"))]++
+				}
+				for n, k := range count {
+					g.expect(k == 1, "%s: worker group %s names env %s %d times", release.name, group, n, k)
+				}
+			}
+		}
+		g.expect(seen == len(processes(g)), "%s: %d worker containers rendered, the manifest lists %d", release.name, seen, len(processes(g)))
+	}
+}
+
 func TestDSNClassGuardsRealTree(t *testing.T) {
 	runReal(t,
 		check{"worker-groups-render-only-their-class-dsn-secrets", workerGroupsRenderOnlyTheirClassDSNSecrets},
 		check{"shared-dsn-names-are-blanked-on-every-group", workerGroupsBlankSharedDSNNames},
+		check{"worker-containers-render-no-duplicate-env-names", workerContainersRenderNoDuplicateEnvNames},
 	)
 }
 
@@ -165,6 +199,9 @@ func TestDSNClassGuardsPlantedDefects(t *testing.T) {
 		{"stream-groups-render-the-queue-dsn-again", chartAndManifest,
 			mut(chartFile(workers), "            {{- if not $group.runtimeProfile }}\n            - name: WORKER_DATABASE_URI", "            {{- if true }}\n            - name: WORKER_DATABASE_URI"),
 			workerGroupsRenderOnlyTheirClassDSNSecrets, "outside its class"},
+		{"blank-and-secret-ref-on-one-name", chartAndManifest,
+			mut(chartFile(workers), "{{- if not $coordinator }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}\n            {{- end }}", "{{- if true }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}\n            {{- end }}"),
+			workerContainersRenderNoDuplicateEnvNames, "names env COORDINATOR_DATABASE_URI 2 times"},
 		{"workers-stop-blanking-the-other-roles-dsn-names", chartAndManifest,
 			mut(chartFile(workers), `list "DATABASE_URI" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI"`, `list`),
 			workerGroupsBlankSharedDSNNames, "carries API_DATABASE_URI"},

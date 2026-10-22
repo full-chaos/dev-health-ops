@@ -1,6 +1,9 @@
 package providersync
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,6 +26,9 @@ func TestGitLabDescriptionReferencesUseTheOneParser(t *testing.T) {
 		"leading slash path":  {"see /#4", "", ""},
 		"empty path segment":  {"see a//b#4", "", ""},
 		"dot segment":         {"see a/../b#4", "", ""},
+		"plus in the path":    {"this blocks foo+bar#4", "", ""},
+		"tilde in the path":   {"see foo~bar#4", "", ""},
+		"in parentheses":      {"(see #3)", "gitlab:acme/api#3", "explicit_text"},
 		"zero iid":            {"see #0", "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -51,5 +57,31 @@ func TestGitLabDescriptionKeywordRawDiffersFromTheNativeLinkKind(t *testing.T) {
 	rows := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", "this blocks #7", nil, time.Now())
 	if len(rows) != 1 || rows[0].RelationshipTypeRaw == "blocks" {
 		t.Fatalf("a text keyword row must not carry the native raw kind: %+v", rows)
+	}
+}
+
+// Not parallel: it swaps the process-wide slog default.
+func TestGitLabDescriptionRejectsAreLoggedOncePerClassWithoutText(t *testing.T) {
+	var out bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&out, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	claim := nativeTestClaim("gitlab", "work-items")
+	description := "secret words see a//b#4 and c//d#5 and #012 and #0"
+	rows := normalizeGitLabDependencies(claim, "gitlab:acme/api#5", "acme/api", description, nil, time.Now())
+	if len(rows) != 0 {
+		t.Fatalf("rows = %+v, want none", rows)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d log lines, want one per reason class (path, iid): %s", len(lines), out.String())
+	}
+	for _, want := range []string{"reason=path", "count=2", "reason=iid"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("log %q lacks %q", out.String(), want)
+		}
+	}
+	if strings.Contains(out.String(), "secret") || strings.Contains(out.String(), "a//b") {
+		t.Fatalf("log holds description text: %s", out.String())
 	}
 }

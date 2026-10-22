@@ -929,7 +929,7 @@ func gitlabPriorityFromLabels(labels []string) (*string, *string) {
 }
 
 var (
-	gitlabIssueReferencePattern = regexp.MustCompile(`(?m)(?:^|[^\w./-])([\w./-]*)#(\d+)`)
+	gitlabIssueReferencePattern = regexp.MustCompile(`(?m)(?:^|[\s(\[{,;:"'<>])([^\s#()\[\]{},;:"'<>]*)#(\d+)`)
 	gitlabExternalKeyPattern    = regexp.MustCompile(`(?i)(depends\s+on|blocked\s+by|blocks|fixes|closes|resolves|relates\s+to|part\s+of|see)\s*:?\s*([A-Za-z]{2,}-\d+)\b`)
 )
 

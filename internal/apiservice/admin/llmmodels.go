@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -20,8 +21,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 const (
@@ -34,7 +37,9 @@ const (
 
 	llmModelsSourceLive        = "live"
 	llmModelsSourceCache       = "cache"
+	llmModelsSourceCatalog     = "catalog"
 	llmModelsSourceUnavailable = "unavailable"
+	llmModelsSourceSaved       = "saved"
 
 	llmModelsReasonNotConfigured    = "not_configured"
 	llmModelsReasonAPIKeyRequired   = "api_key_required"
@@ -376,12 +381,27 @@ func listProviderModels(ctx context.Context, client providerfoundation.HTTPDoer,
 	return ids, ""
 }
 
-func llmModelsResponse(models []string, source, reason string, fetchedAt *time.Time) *pyjson.Object {
+// llmModelItem is one entry of the model list: where the id came from and
+// whether the provider's own list confirmed it.
+type llmModelItem struct {
+	id       string
+	source   string
+	verified bool
+}
+
+func llmModelsResponse(provider string, models []llmModelItem, source, reason string, fetchedAt *time.Time) *pyjson.Object {
 	out := pyjson.NewObject()
+	if provider == "" {
+		out.Set("provider", nil)
+	} else {
+		out.Set("provider", provider)
+	}
 	list := make([]pyjson.Value, 0, len(models))
-	for _, id := range models {
+	for _, model := range models {
 		item := pyjson.NewObject()
-		item.Set("id", id)
+		item.Set("id", model.id)
+		item.Set("source", model.source)
+		item.Set("verified", model.verified)
 		list = append(list, item)
 	}
 	out.Set("models", list)
@@ -399,8 +419,48 @@ func llmModelsResponse(models []string, source, reason string, fetchedAt *time.T
 	return out
 }
 
-// getLLMSettingsModels serves the saved provider's model ids. The request
-// carries no key: the saved, decrypted key is the only credential used.
+// mergeLLMModels is the list a select shows: the provider's own ids first
+// (verified), then the platform catalog and the saved model, each id once; the
+// verified ids and the rest are each in alphabetical order.
+func mergeLLMModels(live, catalog []string, saved string) []llmModelItem {
+	seen := map[string]struct{}{}
+	var items []llmModelItem
+	add := func(id, source string, verified bool) {
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		items = append(items, llmModelItem{id: id, source: source, verified: verified})
+	}
+	for _, id := range live {
+		add(id, llmModelsSourceLive, true)
+	}
+	for _, id := range catalog {
+		add(id, llmModelsSourceCatalog, false)
+	}
+	if saved != "" {
+		add(saved, llmModelsSourceSaved, false)
+	}
+	sort.SliceStable(items, func(a, b int) bool {
+		if items[a].verified != items[b].verified {
+			return items[a].verified
+		}
+		return items[a].id < items[b].id
+	})
+	return items
+}
+
+// savedModelListable is whether the saved model may be listed: the same id
+// filters the provider's ids pass, and never one that carries the saved key.
+func savedModelListable(model, apiKey string) bool {
+	return model != "" && len(model) <= llmModelIDMaxLen && llmModelIDShape.MatchString(model) &&
+		!llmModelIDSecretShape.MatchString(model) && !carriesKey(keyLeakForms(apiKey), model)
+}
+
+// getLLMSettingsModels serves a provider's model list: the platform catalog,
+// merged with the provider's own list when the saved key belongs to that
+// provider. The request carries no key: the saved, decrypted key is the only
+// credential used, and only for the saved provider.
 func (h *handlers) getLLMSettingsModels(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	orgID, ok := adminOrgID(w, policy.UserFrom(ctx))
@@ -410,12 +470,23 @@ func (h *handlers) getLLMSettingsModels(w http.ResponseWriter, r *http.Request) 
 	if !h.requireBYOLLMAccess(ctx, w, orgID, false) {
 		return
 	}
+	requested := ""
+	if values, present := r.URL.Query()["provider"]; present {
+		requested = pythonparity.Lower(pythonparity.Strip(values[len(values)-1]))
+	}
+	if requested != "" && !slices.Contains(llmbudget.CatalogProviders(), requested) {
+		llmDetail(http.StatusBadRequest, w,
+			"error", "unknown_provider",
+			"feature", byoLLMFeature,
+			"message", "provider must be one of "+strings.Join(llmbudget.CatalogProviders(), ", "))
+		return
+	}
 	cfg, err := h.loadReadinessBYOConfig(ctx, orgID)
 	if err != nil {
 		h.internalError(ctx, w, "read byo llm config", err)
 		return
 	}
-	out, err := h.modelList(ctx, orgID, cfg)
+	out, err := h.modelList(ctx, orgID, cfg, requested)
 	if err != nil {
 		h.internalError(ctx, w, "validate byo base url", err)
 		return
@@ -423,42 +494,64 @@ func (h *handlers) getLLMSettingsModels(w http.ResponseWriter, r *http.Request) 
 	policy.WriteJSON(w, http.StatusOK, out, nil)
 }
 
-// modelList answers the model list for a loaded BYO config; the base url is
-// vetted against the key before any resolution.
-func (h *handlers) modelList(ctx context.Context, orgID string, cfg readinessBYOConfig) (*pyjson.Object, error) {
-	provider := cfg.provider
-	if provider == "" && cfg.apiKey.Configured() {
-		provider = "openai"
+// modelList answers the model list for a loaded BYO config and an optional
+// requested provider (blank = the saved one). The saved key and base url go to
+// the saved provider only; the base url is vetted against the key before any
+// resolution.
+func (h *handlers) modelList(ctx context.Context, orgID string, cfg readinessBYOConfig, requested string) (*pyjson.Object, error) {
+	saved := cfg.provider
+	if saved == "" && cfg.apiKey.Configured() {
+		saved = "openai"
+	}
+	provider := saved
+	if requested != "" {
+		provider = requested
 	}
 	apiKey := cfg.apiKey.Reveal()
-	unavailable := func(reason string) (*pyjson.Object, error) {
-		return llmModelsResponse(nil, llmModelsSourceUnavailable, reason, nil), nil
-	}
 	if provider == "" {
-		return unavailable(llmModelsReasonNotConfigured)
+		return llmModelsResponse("", nil, llmModelsSourceUnavailable, llmModelsReasonNotConfigured, nil), nil
+	}
+	catalog := llmbudget.CatalogModels(provider)
+	savedModel := ""
+	if provider == saved && savedModelListable(cfg.model, apiKey) {
+		savedModel = cfg.model
+	}
+	respond := func(live []string, source, reason string, fetchedAt *time.Time) *pyjson.Object {
+		models := mergeLLMModels(live, catalog, savedModel)
+		if len(models) == 0 {
+			return llmModelsResponse(provider, nil, llmModelsSourceUnavailable, reason, nil)
+		}
+		return llmModelsResponse(provider, models, source, reason, fetchedAt)
+	}
+	if provider != saved {
+		return respond(nil, llmModelsSourceCatalog, "", nil), nil
 	}
 	if !llmorgsettings.CredentialsComplete(provider, apiKey) {
-		return unavailable(llmModelsReasonAPIKeyRequired)
+		reason := ""
+		if len(catalog) == 0 && savedModel == "" {
+			reason = llmModelsReasonAPIKeyRequired
+		}
+		return respond(nil, llmModelsSourceCatalog, reason, nil), nil
 	}
 	valid, _, _, err := checkBaseURL(ctx, cfg.baseURL, []string{apiKey}, h.baseURLValidator())
 	if err != nil {
 		return nil, err
 	}
 	if !valid {
-		return unavailable(llmModelsReasonInvalidBaseURL)
+		return respond(nil, llmModelsSourceCatalog, llmModelsReasonInvalidBaseURL, nil), nil
 	}
 	now := h.store.now().UTC()
 	key := llmModelListKey(orgID, provider, cfg.baseURL, apiKey)
 	if entry, hit := h.modelCache.get(key, now); hit {
-		return llmModelsResponse(entry.models, llmModelsSourceCache, "", &entry.fetchedAt), nil
+		return respond(entry.models, llmModelsSourceCache, "", &entry.fetchedAt), nil
 	}
 	client := newOpenAICompatibleReadinessProber(h.upstreamDoer).client
 	models, reason := listProviderModels(ctx, client, provider, cfg.baseURL, apiKey)
 	if reason != "" {
-		return unavailable(reason)
+		return respond(nil, llmModelsSourceCatalog, reason, nil), nil
 	}
 	h.modelCache.put(key, llmModelListEntry{orgID: orgID, models: models, fetchedAt: now}, now)
-	return llmModelsResponse(models, llmModelsSourceLive, "", &now), nil
+	return respond(models, llmModelsSourceLive, "", &now), nil
 }
 
 func (h *handlers) baseURLValidator() func(context.Context, string) (bool, string, error) {

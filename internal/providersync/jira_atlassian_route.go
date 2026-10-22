@@ -678,12 +678,14 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			commentsPermanent.log(claim)
 		}
 		result["incomplete_nonholding"] = markers
-		result["comments_budget_skipped_issues"] = commentsBudgetSkipped
-		result["comments_time_skipped_issues"] = commentsTimeSkipped
-		slog.Warn("providersync.jira.comments_budget_reached",
-			"org_id", claim.OrgID, "unit_id", claim.ID, "cause", cause, "row_budget", commentsBudget,
-			"interaction_rows", len(rows.Interactions), "skipped_issues_rows", commentsBudgetSkipped,
-			"skipped_issues_time", commentsTimeSkipped)
+		if commentsBudgetSkipped > 0 || commentsTimeSkipped > 0 {
+			result["comments_budget_skipped_issues"] = commentsBudgetSkipped
+			result["comments_time_skipped_issues"] = commentsTimeSkipped
+			slog.Warn("providersync.jira.comments_budget_reached",
+				"org_id", claim.OrgID, "unit_id", claim.ID, "cause", cause, "row_budget", commentsBudget,
+				"interaction_rows", len(rows.Interactions), "skipped_issues_rows", commentsBudgetSkipped,
+				"skipped_issues_time", commentsTimeSkipped)
+		}
 	}
 	rows.MembershipCreation.result("jira", result)
 	// The watermark is the end of the window whose raw rows this unit stored

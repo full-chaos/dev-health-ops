@@ -118,7 +118,9 @@ retired value:
   headers and CORS, then the route (with its own rate limit, body bound, deadline and recovery).
 
 Every row's `service` field says which app serves it. `reachable_validators`
-is derived from the middleware that app mounts.
+is derived from the middleware that app mounts. A route listed in `signatureOnlyRoutes`
+(`internal/apiservice/scopeexempt.go`) skips the org scope and impersonation policy, so its row lists no
+reachable validators; its handler's signature check is the first check.
 
 ## Classification summary
 

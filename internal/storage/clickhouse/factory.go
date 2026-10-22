@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -63,11 +64,7 @@ func (c Config) SafeAttributes() map[string]any {
 	}
 }
 
-func Open(ctx context.Context, config Config) (driver.Conn, error) {
-	if err := config.Validate(); err != nil {
-		return nil, err
-	}
-
+func clickHouseOptions(config Config) (*clickhouse.Options, error) {
 	options, err := clickhouse.ParseDSN(config.DSN)
 	if err != nil {
 		return nil, ErrInvalidConfig
@@ -80,6 +77,24 @@ func Open(ctx context.Context, config Config) (driver.Conn, error) {
 	options.Debug = false
 	options.Debugf = nil
 	options.Logger = nil
+	// The driver builds its own http.Transport for http(s) DSNs with the environment proxy; credentials must not ride it.
+	options.HTTPProxyURL = nil
+	options.TransportFunc = func(t *http.Transport) (http.RoundTripper, error) {
+		t.Proxy = nil
+		return t, nil
+	}
+	return options, nil
+}
+
+func Open(ctx context.Context, config Config) (driver.Conn, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+
+	options, err := clickHouseOptions(config)
+	if err != nil {
+		return nil, err
+	}
 
 	// The login and password the driver settled on (it parses the DSN itself, by
 	// its own rules) are redacted with the DSN's components.

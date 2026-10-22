@@ -1,0 +1,10 @@
+ERROR: index.html: html element has no lang attribute
+ERROR: index.html: document title is empty
+ERROR: index.html: expected one main landmark, found 0
+ERROR: index.html: expected one primary content article, found 0
+ERROR: index.html: expected one content h1, found 0
+ERROR: index.html: Material skip link was not found
+ERROR: extra.css: custom CSS has no visible-focus rule
+ERROR: extra.css: custom CSS has no reduced-motion handling
+ERROR: extra.css: outline is removed without an alternative visible focus style
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

@@ -1,0 +1,484 @@
+[
+ {
+  "verb": "check-freshness",
+  "args": [],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: {WORK}/docs-data/freshness-inventory.yml\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "-h"
+  ],
+  "rc": 0,
+  "help": true
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--help"
+  ],
+  "rc": 0,
+  "help": true
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "-hx"
+  ],
+  "rc": 0,
+  "help": true
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "-hh"
+  ],
+  "rc": 0,
+  "help": true
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "-h=x"
+  ],
+  "rc": 2,
+  "error": "argument -h/--help: ignored explicit argument 'x'"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--help=x"
+  ],
+  "rc": 2,
+  "error": "argument -h/--help: ignored explicit argument 'x'"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--he"
+  ],
+  "rc": 0,
+  "help": true
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inventory"
+  ],
+  "rc": 2,
+  "error": "argument --inventory: expected one argument"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inventory",
+   "--docs-root"
+  ],
+  "rc": 2,
+  "error": "argument --inventory: expected one argument"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inventory",
+   "--"
+  ],
+  "rc": 2,
+  "error": "argument --inventory: expected one argument"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inventory=",
+   "x"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: x"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--bogus"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: --bogus"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "pos"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: pos"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--",
+   "x"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: -- x"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: --"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inv",
+   "-5"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: -5\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inv",
+   "-.5x"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: -.5x\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inv",
+   "-٣"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: -٣\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inv",
+   "-²"
+  ],
+  "rc": 2,
+  "error": "argument --inventory: expected one argument"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inv",
+   "-x"
+  ],
+  "rc": 2,
+  "error": "argument --inventory: expected one argument"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inv",
+   "-a b"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: -a b\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inv",
+   "a b"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: a b\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--d",
+   "x"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: {WORK}/docs-data/freshness-inventory.yml\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "-i",
+   "x"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: -i x"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inv=a",
+   "--inv=b"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: b\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inventory",
+   "x",
+   "-h"
+  ],
+  "rc": 0,
+  "help": true
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inv",
+   "x",
+   "--bad",
+   "-h"
+  ],
+  "rc": 0,
+  "help": true
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inventory=x=y"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: x=y\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "-",
+   "x"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: - x"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--docs-root=",
+   "--inventory",
+   ""
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: .\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--invé",
+   "x"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: --invé x"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "-é"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: -é"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "--inventory",
+   "-"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: missing freshness inventory: -\n"
+ },
+ {
+  "verb": "check-freshness",
+  "args": [
+   "x",
+   "--inventory"
+  ],
+  "rc": 2,
+  "error": "argument --inventory: expected one argument"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [],
+  "rc": 2,
+  "error": "the following arguments are required: --built-site"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "-h"
+  ],
+  "rc": 0,
+  "help": true
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site"
+  ],
+  "rc": 2,
+  "error": "argument --built-site: expected one argument"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site",
+   "site"
+  ],
+  "rc": 0,
+  "stdout": "External link check passed\n",
+  "stderr": ""
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--b",
+   "site"
+  ],
+  "rc": 0,
+  "stdout": "External link check passed\n",
+  "stderr": ""
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site",
+   "site",
+   "extra"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: extra"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site",
+   "-h"
+  ],
+  "rc": 2,
+  "error": "argument --built-site: expected one argument"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "-h",
+   "--built-site"
+  ],
+  "rc": 0,
+  "help": true
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--site",
+   "x",
+   "--built-site",
+   "site"
+  ],
+  "rc": 0,
+  "stdout": "External link check passed\n",
+  "stderr": ""
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site=site",
+   "--allow",
+   "nope.yml"
+  ],
+  "rc": 0,
+  "stdout": "External link check passed\n",
+  "stderr": ""
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site",
+   "-5"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: built site directory not found: -5\n"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site",
+   "site",
+   "--site-url"
+  ],
+  "rc": 2,
+  "error": "argument --site-url: expected one argument"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site",
+   "site",
+   "--site-url",
+   "-x"
+  ],
+  "rc": 2,
+  "error": "argument --site-url: expected one argument"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site",
+   "site",
+   "--site-url",
+   "-1"
+  ],
+  "rc": 0,
+  "stdout": "External link check passed\n",
+  "stderr": ""
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built-site",
+   "site",
+   "--",
+   "x"
+  ],
+  "rc": 2,
+  "error": "unrecognized arguments: -- x"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--a",
+   "x"
+  ],
+  "rc": 2,
+  "error": "the following arguments are required: --built-site"
+ },
+ {
+  "verb": "check-external-links",
+  "args": [
+   "--built",
+   "site",
+   "--built",
+   "nope"
+  ],
+  "rc": 1,
+  "stdout": "",
+  "stderr": "ERROR: built site directory not found: nope\n"
+ }
+]

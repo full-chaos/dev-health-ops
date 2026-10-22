@@ -36,7 +36,7 @@ var noSetupGoCacheJobs = [][2]string{
 	{"go-auth-service.yml", "auth-changes"},
 	{"go.yml", "graphql-wire-parity"},
 	{"docs-cloudflare.yml", "preview-or-build"},
-	{"docs-cloudflare.yml", "deploy-production"},
+	{"docs-cloudflare.yml", "smoke-production"},
 	{"auth-k8s-proof.yml", "auth-k8s-proof"},
 }
 

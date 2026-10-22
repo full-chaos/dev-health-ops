@@ -1,0 +1,41 @@
+Traceback (most recent call last):
+  File "/var/lib/oci-cache/lane-scratch/lane-10434/rec/check_docs_cloudflare_host.py", line 148, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ~~~~^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/lane-10434/rec/check_docs_cloudflare_host.py", line 117, in main
+    redirect_result = _request(
+        urljoin(origin, redirect_source.lstrip("/")), follow_redirects=False
+    )
+  File "/var/lib/oci-cache/lane-scratch/lane-10434/rec/check_docs_cloudflare_host.py", line 32, in _request
+    with opener.open(request, timeout=20) as response:
+         ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 487, in open
+    response = self._open(req, data)
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 504, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+                              '_open', req)
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 464, in _call_chain
+    result = func(*args)
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 1368, in https_open
+    return self.do_open(http.client.HTTPSConnection, req,
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        context=self._context)
+                        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 1320, in do_open
+    h.request(req.get_method(), req.selector, req.data, headers,
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+              encode_chunked=req.has_header('Transfer-encoding'))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 1386, in request
+    self._send_request(method, url, body, headers, encode_chunked)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 1397, in _send_request
+    self.putrequest(method, url, **skips)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 1231, in putrequest
+    self._validate_path(url)
+    ~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 1331, in _validate_path
+    raise InvalidURL(f"URL can't contain control characters. {url!r} "
+                     f"(found at least {match.group()!r})")
+http.client.InvalidURL: URL can't contain control characters. '/a b/' (found at least ' ')

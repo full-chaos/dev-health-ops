@@ -62,14 +62,14 @@ func TestOptionsFromEnv(t *testing.T) {
 }
 
 func TestDialOptionsPicksByEndpointShape(t *testing.T) {
-	if got := len(dialOptions("collector:4317")); got != 2 {
-		t.Errorf("bare host:port options = %d, want endpoint + insecure", got)
+	if got := len(dialOptions("collector:4317")); got != 3 {
+		t.Errorf("bare host:port options = %d, want endpoint + insecure + no proxy", got)
 	}
-	if got := len(dialOptions("http://collector.example:4317")); got != 2 {
-		t.Errorf("http URL options = %d, want url + insecure", got)
+	if got := len(dialOptions("http://collector.example:4317")); got != 3 {
+		t.Errorf("http URL options = %d, want url + insecure + no proxy", got)
 	}
-	if got := len(dialOptions("https://collector:4317")); got != 1 {
-		t.Errorf("https URL options = %d, want url only (TLS)", got)
+	if got := len(dialOptions("https://collector:4317")); got != 2 {
+		t.Errorf("https URL options = %d, want url + no proxy (TLS)", got)
 	}
 }
 

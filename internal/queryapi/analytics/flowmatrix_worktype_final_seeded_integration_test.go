@@ -60,9 +60,9 @@ const (
 	// items form edges at all.
 	flowMatrixSeedRepoID = "11111111-1111-1111-1111-111111111111"
 
-	// Window: 2026-09-01..2026-09-07 inclusive.
+	// Window: 2026-09-01..2026-09-07 inclusive; a request built by hand carries the EXCLUSIVE end, the day after.
 	flowMatrixSeedWindowStart = "2026-09-01"
-	flowMatrixSeedWindowEnd   = "2026-09-07"
+	flowMatrixSeedWindowEnd   = "2026-09-08"
 
 	// The day every LIVE row sits on -- inside the window.
 	flowMatrixSeedLiveDay = "2026-09-03"

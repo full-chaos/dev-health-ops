@@ -157,6 +157,9 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 		if err != nil {
 			return nil, err
 		}
+		if !exists && options.RequirePublicTables {
+			return nil, fmt.Errorf("%w: %s.%s", ErrPublicTableMissing, publicSchema, entry.Table)
+		}
 		if !exists {
 			logger.WarnContext(ctx, "skipped public read grants: the table does not exist",
 				"schema", publicSchema, "table", entry.Table)
@@ -186,6 +189,9 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 	exists, err := publicTableState(ctx, conn, write.Table)
 	if err != nil {
 		return nil, err
+	}
+	if !exists && options.RequirePublicTables {
+		return nil, fmt.Errorf("%w: %s.%s", ErrPublicTableMissing, publicSchema, write.Table)
 	}
 	if !exists {
 		logger.WarnContext(ctx, "skipped the legacy refresh token grant: the table does not exist",

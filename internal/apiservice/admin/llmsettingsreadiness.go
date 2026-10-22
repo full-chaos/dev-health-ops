@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -133,6 +132,13 @@ func (h *handlers) loadReadinessBYOConfig(ctx context.Context, orgID string) (re
 	return cfg, nil
 }
 
+// readinessURLValid vets the saved base url against the saved key and the SSRF
+// guard before any prober (OpenAI or Anthropic) sees it.
+func (h *handlers) readinessURLValid(ctx context.Context, cfg readinessBYOConfig) (bool, error) {
+	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, cfg.apiKey.Reveal())
+	return valid, err
+}
+
 // postLLMSettingsReadiness is run_llm_settings_readiness.
 func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -172,7 +178,7 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 		policy.WriteDetail(w, http.StatusNotFound, readinessProviderUnavailableMessage(resolvedProvider), nil)
 		return
 	}
-	validURL, _, err := llmorgsettings.ValidateBaseURLChecked(ctx, cfg.baseURL)
+	validURL, err := h.readinessURLValid(ctx, cfg)
 	if err != nil {
 		h.internalError(ctx, w, "validate byo base url", err)
 		return

@@ -24,6 +24,8 @@ internal/api/syncadmin	repositories_write_venue_oracle_integration_test.go
 internal/api/syncadmin	unoffered_target_table_integration_test.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go
 internal/api/teamsidentity	team_id_writer_census_test.go
+internal/apiservice	endpoint_profile_rows_test.go
+internal/apiservice	endpoint_profile_scan_test.go
 internal/apiservice	githubapp_config.go
 internal/apiservice/admin	routeguard_test.go
 internal/apiservice/billingvenue	billing_refund_webhook_integration_test.go
@@ -51,6 +53,7 @@ internal/auth/contracts	endpoint_profile_access_token_validation_test.go
 internal/auth/contracts	endpoint_profile_source_commit_history_test.go
 internal/auth/contracts	endpoint_profile_source_commit_test.go
 internal/auth/contracts	endpoint_profiles_auth_service_test.go
+internal/auth/contracts	endpoint_profiles_go_api_test.go
 internal/auth/contracts	endpoint_profiles_query_api_test.go
 internal/auth/contracts	endpoint_profiles_registry_reconcile_test.go
 internal/auth/contracts	error_envelope_goldens_test.go
@@ -68,6 +71,7 @@ internal/auth/contracts	principal_contract_goldens_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
+internal/auth/contracts	reject_location_test.go
 internal/auth/contracts	schema_dialect_test.go
 internal/auth/contracts	session_goldens_test.go
 internal/auth/contracts	session_hardening_test.go
@@ -364,6 +368,7 @@ internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/linktier	linktier_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
+internal/llmorgsettings	baseurl_reader_guard_test.go
 internal/localgit	blame.go
 internal/localgit	git.go
 internal/localgit	localgit_test.go

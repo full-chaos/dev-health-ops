@@ -728,12 +728,10 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record (D5987,
 option C); the shared ownership readers are judged against that rule at now and on every item day, and apply the
-first owners backward (CHAOS-9404). Known red today (CHAOS-10566): the cells of the start of a membership, a
-repository ownership and a project ownership, and the two GitHub issue cells that follow from them. The writers start a
-link at its evidence (section 0.4b), but each frozen world runs its team catalog only BEFORE its sync, so no evidence
-exists when the writers run; the cells pass once the worlds run the catalog again after the sync (CHAOS-10566). GitLab ownership
-names the catalog project since CHAOS-8883. The inferred repository owner starts at its earliest
-linked evidence since CHAOS-9403 (#4049): its cell is pass. The GitHub cell of a pull request's `linked_issue` row
+first owners backward (CHAOS-9404). No cell is known red: the catalog writers start a link at its evidence
+(CHAOS-10521, section 0.4b), and each provider world runs its team catalog again after its sync (CHAOS-10566), the
+next catalog run that moves each link to its evidence; GitLab ownership names the catalog project since CHAOS-8883.
+The inferred repository owner starts at its earliest linked evidence since CHAOS-9403 (#4049): its cell is pass. The GitHub cell of a pull request's `linked_issue` row
 is pass since CHAOS-9409: owners tied at the top rank with no main row (two `provider_access` grants) are all the
 donor's team on that day (`tiedOwnersAt`, §0.4d).
 A pull request's `linked_issue` row must name the team an issue it is actually linked to holds on its own on

@@ -1,7 +1,9 @@
 package devhealth_test
 
 import (
+	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -392,7 +394,87 @@ func TestOnlyTheMigrationJobIsAHook(t *testing.T) {
 			t.Errorf("%v %s is a Helm hook; only the migration Job may be, or uninstall leaks it", doc["kind"], name)
 		}
 	}
-	if hooks != 1 {
-		t.Errorf("want exactly one auth hook (the migration Job), found %d", hooks)
+	if hooks != 2 {
+		t.Errorf("want exactly two auth hooks (the migration Job and the grants Job), found %d", hooks)
+	}
+}
+
+// CHAOS-10581: the grants pass runs after ops migrate on the same events, with
+// a strictly greater weight, and the schema hook is not reordered.
+func TestAuthGrantsJobRunsAfterOpsMigrate(t *testing.T) {
+	for name, events := range map[string]string{
+		"default": "pre-install,pre-upgrade",
+		"prod":    "post-install,pre-upgrade",
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := append([]string{}, authBase...)
+			if name == "prod" {
+				args = append(args, "--set-json", `migrations.hook.events=["post-install","pre-upgrade"]`,
+					"--set", "migrations.hook.localBundledPostgres=true", "--set", "postgresql.enabled=true")
+			}
+			docs, out, err := renderAuth(t, args...)
+			if err != nil {
+				t.Fatalf("render failed: %v\n%.600s", err, out)
+			}
+			grants := authDoc(docs, "Job", "a-dev-health-auth-grants")
+			migrate := authDoc(docs, "Job", "a-dev-health-migrate")
+			authMigrate := authDoc(docs, "Job", "a-dev-health-auth-migrate")
+			if grants == nil || migrate == nil || authMigrate == nil {
+				t.Fatalf("missing Job: grants=%v migrate=%v auth-migrate=%v", grants != nil, migrate != nil, authMigrate != nil)
+			}
+			if hook := at(grants, "metadata", "annotations", "helm.sh/hook"); hook != events {
+				t.Errorf("grants hook events = %v, want %s", hook, events)
+			}
+			if hook := at(grants, "metadata", "annotations", "helm.sh/hook"); hook != at(migrate, "metadata", "annotations", "helm.sh/hook") {
+				t.Errorf("grants events %v differ from ops migrate's %v", hook, at(migrate, "metadata", "annotations", "helm.sh/hook"))
+			}
+			gw := fmt.Sprint(at(grants, "metadata", "annotations", "helm.sh/hook-weight"))
+			mw := fmt.Sprint(at(migrate, "metadata", "annotations", "helm.sh/hook-weight"))
+			gi, _ := strconv.Atoi(gw)
+			mi, _ := strconv.Atoi(mw)
+			if gi <= mi {
+				t.Errorf("grants weight %s is not greater than ops migrate's %s", gw, mw)
+			}
+			if w := at(authMigrate, "metadata", "annotations", "helm.sh/hook-weight"); fmt.Sprint(w) != "0" {
+				t.Errorf("the schema hook was reordered: weight %v", w)
+			}
+			if hook := at(authMigrate, "metadata", "annotations", "helm.sh/hook"); hook != "pre-install,pre-upgrade" {
+				t.Errorf("the schema hook events changed: %v", hook)
+			}
+			container := at(grants, "spec", "template", "spec", "containers", 0)
+			if args := fmt.Sprint(at(container, "args")); args != "[grants]" {
+				t.Errorf("grants args = %s, want [grants]", args)
+			}
+			if !envNames(container)["AUTH_MIGRATION_DATABASE_URI"] || envNames(container)["AUTH_DATABASE_URI"] {
+				t.Errorf("grants Job has the wrong DSNs: %v", envNames(container))
+			}
+			if at(authMigrate, "spec", "template", "metadata", "labels", "app.kubernetes.io/component") != at(grants, "spec", "template", "metadata", "labels", "app.kubernetes.io/component") {
+				t.Error("grants pod labels differ from auth-migrate's, so its NetworkPolicy would not select it")
+			}
+		})
+	}
+}
+
+func TestAuthGrantsJobIsGated(t *testing.T) {
+	for name, extra := range map[string][]string{
+		"no ops migrate hook": {"--set", "migrations.hook.enabled=false"},
+		"escape hatch":        {"--set", "authService.migrate.grantsHook.enabled=false"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			docs, out, err := renderAuth(t, append(append([]string{}, authBase...), extra...)...)
+			if err != nil {
+				t.Fatalf("render failed: %v\n%.600s", err, out)
+			}
+			if authDoc(docs, "Job", "a-dev-health-auth-grants") != nil {
+				t.Error("the grants Job rendered")
+			}
+		})
+	}
+	docs, _, err := renderAuth(t, "--set", "migrations.hook.enabled=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authDoc(docs, "Job", "a-dev-health-auth-grants") != nil {
+		t.Error("the grants Job rendered with authService off")
 	}
 }

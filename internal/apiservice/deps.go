@@ -4,6 +4,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"net/http"
 
@@ -179,6 +180,10 @@ type Deps struct {
 	// AuthProxy routes /api/v1/auth/* aggregates to auth-service
 	// (AUTH_PROXY_*); the zero value serves every route in go-api.
 	AuthProxy AuthProxyConfig
+	// SessionIssuer issues the session and sso routes' token pairs at
+	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
+	// them in go-api.
+	SessionIssuer sessionissue.Issuer
 	// Limits is the rate-limit store every limited route counts through
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.
@@ -289,8 +294,9 @@ func buildDeps(
 	cfg config.Config,
 	registry *health.Registry,
 	logger *slog.Logger,
+	authProxy AuthProxyConfig,
 ) (Deps, []lifecycle.Component, error) {
-	var deps Deps
+	deps := Deps{AuthProxy: authProxy}
 	var components []lifecycle.Component
 
 	// LicenseManager.initialize() (CHAOS-6663): the process-wide install
@@ -321,7 +327,7 @@ func buildDeps(
 		// single-flight off the probe's deadline and serves a passing answer
 		// for a bounded window (see postgres.CachedPostureCheck).
 		postureCheck := postgres.NewCachedPostureCheck(
-			pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema, postgres.APIPosture(),
+			pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema, postgres.APIPosture(authProxy.Enabled(AuthSessions)),
 			postgres.PostureCheckOptions{Logger: logger},
 		)
 		if err := registry.RegisterRequired(apiDatabaseCheck, postureCheck.Check); err != nil {

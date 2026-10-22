@@ -118,6 +118,10 @@ func (s Store) ResolveUsableProvider(ctx context.Context, orgID string) (string,
 	if err != nil {
 		return "", err
 	}
+	return usableProviderOf(ctx, settings)
+}
+
+func usableProviderOf(ctx context.Context, settings orgSettings) (string, error) {
 	provider := normalizeProvider(settings[keyProvider])
 	if provider == "" || provider == "auto" || provider == "mock" || provider == "none" {
 		return "", nil
@@ -134,7 +138,7 @@ func (s Store) ResolveUsableProvider(ctx context.Context, orgID string) (string,
 	}
 	// An escaped ValueError (a malformed IPv6 bracket) raises in Python; it is
 	// an error here, not a fallback.
-	ok, _, verr := ValidateBaseURLChecked(ctx, creds.BaseURL)
+	ok, _, _, verr := ValidateBaseURLForKeys(ctx, creds.BaseURL, creds.APIKey.Reveal())
 	if verr != nil {
 		return "", verr
 	}
@@ -157,6 +161,10 @@ func (s Store) Credentials(ctx context.Context, orgID, provider string) (Credent
 	if err != nil {
 		return Credentials{}, false, err
 	}
+	return credentialsOf(ctx, settings, provider)
+}
+
+func credentialsOf(ctx context.Context, settings orgSettings, provider string) (Credentials, bool, error) {
 	configured := normalizeProvider(settings[keyProvider])
 	requested := normalizeRequestedProvider(provider)
 	// normalizeProvider never returns "" (an absent/empty stored provider
@@ -172,7 +180,7 @@ func (s Store) Credentials(ctx context.Context, orgID, provider string) (Credent
 	if !credentialsComplete(requested, creds.APIKey.Reveal()) {
 		return Credentials{}, false, nil
 	}
-	ok, _, verr := ValidateBaseURLChecked(ctx, creds.BaseURL)
+	ok, _, _, verr := ValidateBaseURLForKeys(ctx, creds.BaseURL, creds.APIKey.Reveal())
 	if verr != nil {
 		return Credentials{}, false, verr
 	}
@@ -255,6 +263,7 @@ type Resolver interface {
 	Matches(ctx context.Context, orgID, provider string) (bool, error)
 	Model(ctx context.Context, orgID, provider string) (string, error)
 	RawBaseURL(ctx context.Context, orgID, provider string) (baseURL string, configured bool, err error)
+	StoredBaseURLCarriesKey(ctx context.Context, orgID, provider string) (bool, error)
 }
 
 var _ Resolver = Store{}
@@ -269,3 +278,23 @@ func IsKnownProvider(provider string) bool { return isKnownProvider(provider) }
 // CredentialsComplete is _llm_credentials_complete for a provider and its
 // api_key.
 func CredentialsComplete(provider, apiKey string) bool { return credentialsComplete(provider, apiKey) }
+
+// storedBaseURLCarriesKey is whether the org's stored base_url for provider
+// holds the stored api_key; it never resolves a host.
+func storedBaseURLCarriesKey(settings orgSettings, provider string) bool {
+	configured := normalizeProvider(settings[keyProvider])
+	requested := normalizeRequestedProvider(provider)
+	if requested != "auto" && requested != configured {
+		return false
+	}
+	return BaseURLCarriesKey(settings[keyBaseURL], settings[keyAPIKey])
+}
+
+// StoredBaseURLCarriesKey is storedBaseURLCarriesKey over the org's gated rows.
+func (s Store) StoredBaseURLCarriesKey(ctx context.Context, orgID, provider string) (bool, error) {
+	settings, err := s.loadGatedSettings(ctx, orgID)
+	if err != nil {
+		return false, err
+	}
+	return storedBaseURLCarriesKey(settings, provider), nil
+}

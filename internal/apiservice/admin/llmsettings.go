@@ -399,7 +399,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	out, refusal, err := h.applyLLMSettings(ctx, orgID, llmUpsert{
 		provider: *provider, model: model, apiKey: apiKey, baseURL: baseURL,
-		concurrency: concurrency, budgetLimitMu: budgetLimitMu,
+		concurrency: concurrency, budgetLimitMu: budgetLimitMu, requireModel: true,
 	})
 	if err != nil {
 		var step *llmStepError
@@ -422,6 +422,20 @@ type llmUpsert struct {
 	provider                   string
 	model, apiKey, baseURL     *string
 	concurrency, budgetLimitMu *big.Int
+	// requireModel is the PUT route's rule: a BYO provider needs a model.
+	requireModel bool
+}
+
+// byoProviderNeedsModel is whether a default-row save names a BYO provider
+// (anything but the "no BYO" blank, auto, mock and none, as llmorgsettings reads them)
+// without a model: the row would hold no model, and a BYO org never draws the
+// platform model, so Ask Dev would refuse.
+func byoProviderNeedsModel(in llmUpsert) bool {
+	switch pythonparity.Lower(pythonparity.Strip(in.provider)) {
+	case "", "auto", "mock", "none":
+		return false
+	}
+	return in.model == nil || pythonparity.Strip(*in.model) == ""
 }
 
 // applyLLMSettings is llm_settings.py's upsert_llm_settings over settings.py's:
@@ -444,7 +458,7 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		}
 		keys = append(keys, stored)
 	}
-	valid, reason, keyHit, splitErr := checkBaseURL(ctx, baseURLText, keys, h.baseURLValidator())
+	valid, reason, keyHit, splitErr := h.checkBaseURL(ctx, baseURLText, keys...)
 	if keyHit {
 		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
 	}
@@ -457,6 +471,10 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 			reason = "Invalid LLM base_url"
 		}
 		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", reason), nil
+	}
+
+	if in.requireModel && byoProviderNeedsModel(in) {
+		return nil, newLLMRefusal(http.StatusBadRequest, "error", "model_required", "feature", byoLLMFeature, "message", "model is required when a BYO LLM provider is saved"), nil
 	}
 
 	tx, err := h.store.Pool.Begin(ctx)

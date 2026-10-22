@@ -21,15 +21,11 @@ func parseTrustedSCMHostEntries(raw string, defaults ...string) (map[string]stru
 			continue
 		}
 		hosts[host] = struct{}{}
-		root = strings.Trim(root, "/")
-		if root == "" {
-			if _, listed := roots[host]; listed {
-				continue
-			}
-			roots[host] = [][]string{nil}
-			continue
+		var segments []string
+		if root = strings.Trim(root, "/"); root != "" {
+			segments = strings.Split(root, "/")
 		}
-		roots[host] = appendSCMRoot(roots[host], strings.Split(root, "/"))
+		roots[host] = appendSCMRoot(roots[host], segments)
 	}
 	for host, list := range roots {
 		if len(list) == 1 && len(list[0]) == 0 {

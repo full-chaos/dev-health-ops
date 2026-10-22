@@ -46,6 +46,11 @@ type Options struct {
 	// the refusal (ErrRuntimeGrantsNarrowed). It binds to that exact set of
 	// lost grants, so any other narrowing refuses again. Empty means none.
 	AcknowledgeNarrowing string
+	// RequirePublicTables makes a PublicReadColumns table that does not exist an
+	// error instead of a logged skip. Grants sets it: the grants pass runs after
+	// the ops migration, so a missing table is a failed release, not an
+	// auth-only database.
+	RequirePublicTables bool
 }
 
 // Result reports what a run did.
@@ -65,6 +70,9 @@ var (
 	// underlying driver error is wrapped for errors.Is/As but never rendered
 	// into this message, because a pgx error can carry the DSN's host and user.
 	ErrMigrationFailed = errors.New("auth migration failed")
+	// ErrPublicTableMissing reports a PublicReadColumns table absent from the
+	// ops schema in a run that requires it (the grants pass).
+	ErrPublicTableMissing = errors.New("auth public read table is missing")
 )
 
 // ValidateIdentifier reports whether a schema or role name may be emitted as
@@ -231,6 +239,68 @@ func apply(ctx context.Context, pool migrationPool, options Options) (Result, er
 		)
 	}
 
+	return applyGrantsAndVerify(ctx, conn, options, logger, result)
+}
+
+// Grants re-applies the runtime and public read grants and re-verifies the
+// posture, and does nothing else: no DDL, no lineage rows. It requires the
+// auth lineage to be at the embedded head and every PublicReadColumns table
+// to exist, so it runs after the ops migration (CHAOS-10581).
+func Grants(ctx context.Context, pool *pgxpool.Pool, options Options) (Result, error) {
+	if pool == nil {
+		return Result{}, fmt.Errorf("%w: no connection pool", ErrInvalidOptions)
+	}
+	return grants(ctx, poolAdapter{pool}, options)
+}
+
+func grants(ctx context.Context, pool migrationPool, options Options) (Result, error) {
+	migrations, err := Migrations()
+	if err != nil {
+		return Result{}, err
+	}
+	migrationRole, err := currentUser(ctx, pool)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := options.Validate(migrationRole); err != nil {
+		return Result{}, err
+	}
+	schemaID, err := NewValidatedIdentifier(options.Schema)
+	if err != nil {
+		return Result{}, err
+	}
+	options.RequirePublicTables = true
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: acquiring a migration connection", ErrMigrationFailed)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, advisoryLockKey); err != nil {
+		return Result{}, fmt.Errorf("%w: acquiring the migration lock", ErrMigrationFailed)
+	}
+	defer func() {
+		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, advisoryLockKey)
+	}()
+	applied, err := appliedVersions(ctx, conn, schemaID)
+	if err != nil {
+		return Result{}, err
+	}
+	result := Result{CurrentVersion: highest(applied)}
+	for _, migration := range migrations {
+		if _, done := applied[migration.Version]; !done {
+			return result, fmt.Errorf("%w: the auth schema is at version %d, embedded head is %d; run auth-migrate first",
+				ErrMigrationFailed, result.CurrentVersion, migrations[len(migrations)-1].Version)
+		}
+	}
+	return applyGrantsAndVerify(ctx, conn, options, logger, result)
+}
+
+// applyGrantsAndVerify is the grant half of a run, shared by Apply and Grants.
+func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options, logger *slog.Logger, result Result) (Result, error) {
 	// Grants are re-applied on EVERY run, not only when a migration was
 	// applied. ApplyRuntimeGrants revokes and re-grants from the manifest, so
 	// running it unconditionally is what makes the manifest authoritative:

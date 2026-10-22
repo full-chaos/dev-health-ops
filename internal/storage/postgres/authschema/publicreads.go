@@ -116,6 +116,9 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 		if err != nil {
 			return nil, err
 		}
+		if !exists && options.RequirePublicTables {
+			return nil, fmt.Errorf("%w: %s.%s", ErrPublicTableMissing, publicSchema, entry.Table)
+		}
 		if !exists {
 			logger.WarnContext(ctx, "skipped public read grants: the table does not exist",
 				"schema", publicSchema, "table", entry.Table)

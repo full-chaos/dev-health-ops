@@ -354,3 +354,114 @@ func TestOpsMigrateRefusesWithTheCauseWhenItIsNotToldTheAuthSchema(t *testing.T)
 		t.Errorf("dho migrate with the variable set = %q, %v; want baseline_applied", result.Action, err)
 	}
 }
+
+func (f *orderFixture) grantsPass(t *testing.T, schema string) error {
+	t.Helper()
+	pool, err := pgxpool.New(f.ctx, f.uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	_, err = Grants(f.ctx, pool, Options{Schema: schema, RuntimeRole: f.role})
+	return err
+}
+
+// unreadablePublicColumns lists "table.column" for every PublicReadColumns
+// column the runtime role cannot SELECT (a missing table counts as unreadable).
+func (f *orderFixture) unreadablePublicColumns(t *testing.T) []string {
+	t.Helper()
+	conn := orderConnect(t, f.ctx, f.uri)
+	var missing []string
+	for _, entry := range PublicReadColumns() {
+		var exists bool
+		if err := conn.QueryRow(f.ctx, `SELECT to_regclass(format('public.%I', $1::text)) IS NOT NULL`, entry.Table).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		for _, column := range entry.Columns {
+			readable := false
+			if exists {
+				if err := conn.QueryRow(f.ctx, `SELECT has_column_privilege($1, format('public.%I', $2::text), $3, 'SELECT')`,
+					f.role, entry.Table, column).Scan(&readable); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !readable {
+				missing = append(missing, entry.Table+"."+column)
+			}
+		}
+	}
+	return missing
+}
+
+// CHAOS-10581: the chart runs auth-migrate before ops migrate, so the public
+// read grants are skipped. The grants pass after ops migrate closes the gap.
+func TestGrantsPassAfterAuthThenOpsMigrateGrantsPublicReads(t *testing.T) {
+	f := newOrderFixture(t)
+	f.authMigrate(t, "auth")
+	if _, err := f.dhoMigrate(t); err != nil {
+		t.Fatalf("dho migrate: %v", err)
+	}
+	if missing := f.unreadablePublicColumns(t); len(missing) == 0 {
+		t.Fatal("auth-migrate then ops migrate already granted every public read: the gap this test guards is gone")
+	}
+	if err := f.grantsPass(t, "auth"); err != nil {
+		t.Fatalf("grants pass: %v", err)
+	}
+	if missing := f.unreadablePublicColumns(t); len(missing) != 0 {
+		t.Fatalf("columns still unreadable after the grants pass: %v", missing)
+	}
+	if err := f.grantsPass(t, "auth"); err != nil {
+		t.Fatalf("second grants pass: %v", err)
+	}
+}
+
+// Upgrade: a listed table that the release's ops migration created has no
+// grant; the grants pass adds it without touching the lineage.
+func TestGrantsPassRestoresAMissingGrantOnUpgrade(t *testing.T) {
+	f := newOrderFixture(t)
+	f.authMigrate(t, "auth")
+	if _, err := f.dhoMigrate(t); err != nil {
+		t.Fatalf("dho migrate: %v", err)
+	}
+	if err := f.grantsPass(t, "auth"); err != nil {
+		t.Fatal(err)
+	}
+	conn := orderConnect(t, f.ctx, f.uri)
+	if _, err := conn.Exec(f.ctx, fmt.Sprintf(`REVOKE ALL ON TABLE public.org_licenses FROM %s`, Quote(mustValidatedIdentifier(f.role)))); err != nil {
+		t.Fatal(err)
+	}
+	if missing := f.unreadablePublicColumns(t); len(missing) == 0 {
+		t.Fatal("the revoke did not remove the grant")
+	}
+	rowsBefore := f.lineageRows(t, "auth")
+	if err := f.grantsPass(t, "auth"); err != nil {
+		t.Fatal(err)
+	}
+	if missing := f.unreadablePublicColumns(t); len(missing) != 0 {
+		t.Fatalf("still unreadable: %v", missing)
+	}
+	if rowsAfter := f.lineageRows(t, "auth"); rowsAfter != rowsBefore {
+		t.Errorf("the grants pass changed the lineage rows:\n%s\n%s", rowsBefore, rowsAfter)
+	}
+}
+
+// The grants pass is not the default run's skip-with-warn: a missing listed
+// table fails it, naming the table.
+func TestGrantsPassFailsLoudWhenAListedTableIsMissing(t *testing.T) {
+	f := newOrderFixture(t)
+	f.authMigrate(t, "auth")
+	err := f.grantsPass(t, "auth")
+	if !errors.Is(err, ErrPublicTableMissing) || !strings.Contains(err.Error(), "public.") {
+		t.Fatalf("grants pass on a database without ops tables = %v, want ErrPublicTableMissing naming the table", err)
+	}
+}
+
+func TestGrantsPassRefusesAnUnmigratedAuthSchema(t *testing.T) {
+	f := newOrderFixture(t)
+	if _, err := f.dhoMigrate(t); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.grantsPass(t, "auth"); err == nil || !errors.Is(err, ErrMigrationFailed) {
+		t.Fatalf("grants pass before auth-migrate = %v, want ErrMigrationFailed", err)
+	}
+}

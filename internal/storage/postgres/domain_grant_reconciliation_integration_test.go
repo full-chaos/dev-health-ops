@@ -61,6 +61,14 @@ type domainTable struct {
 func reconciliationTables() []domainTable {
 	return []domainTable{
 		{
+			// The schema gate's read (revision ids only).
+			name: "alembic_version",
+			ddl:  "CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
+			exercise: []string{
+				"SELECT version_num FROM public.alembic_version",
+			},
+		},
+		{
 			// Tightened under the Option B two-role split (role-partition
 			// manifest, removed in e23ede618; see git history at
 			// eda2d6b91): the domain-side call

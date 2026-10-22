@@ -782,6 +782,10 @@ func domainPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			{"integrations", false, false, false},
+			// CHAOS-8785: the schema gate reads the recorded migration revisions (revision ids
+			// only). It stays after integrations: the grant-matrix oracle takes the first rows
+			// and grants on their id column, which this table lacks.
+			{"alembic_version", false, false, false},
 			{"integration_sources", true, true, false},
 			{"integration_datasets", true, true, false},
 			// CHAOS-6747: SELECT table-wide; the one write is the column-scoped

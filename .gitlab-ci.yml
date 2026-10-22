@@ -12,7 +12,7 @@
 #   - Self-hosted runner labels, the ARC pool and its dind-smoke-test jobs, the
 #     SELF_HOSTED_RUNNERS switch, arc-runner-image.yml, mirror-test-images.yml.
 #   - OIDC, GitHub Releases and tagging: auto-release.yml, the PyPI upload of
-#     publish-pypi.yml (only its build step is mirrored), cloud-deploy.yml and
+#     publish-pypi.yml (only its build step is mirrored) and
 #     the Cloudflare publish of docs-cloudflare.yml (docs:guards runs the same
 #     strict build, link and accessibility checks).
 #   - mutation-battery.yml (a manual, secret-backed matrix).

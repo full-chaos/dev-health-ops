@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -11,12 +10,9 @@ import (
 )
 
 // BumpLegacyTokenVersionFunction is the increment-only function the runtime
-// role calls to raise go-api's users.token_version (migration 0022). The role
+// role calls to raise go-api's users.token_version (its migration). The role
 // holds no UPDATE on public.users, so a lower value cannot be written.
 const BumpLegacyTokenVersionFunction = "bump_legacy_token_version"
-
-// errLegacyUserMissing is a principal go-api's users table does not hold.
-var errLegacyUserMissing = errors.New("session: no go-api user row for the principal")
 
 // revokeAllLive revokes every effectively live session of the principal inside
 // tx and returns how many it revoked.
@@ -62,26 +58,27 @@ func (s *Store) revokeAllLive(ctx context.Context, tx audit.TxOps, principal str
 //
 //   - every live auth-service session and its refresh credentials;
 //   - go-api's users.token_version, raised by one through the increment-only
-//     function, which ends the access tokens go-api minted without a sid;
+//     function, which ends the access tokens go-api minted without a sid. A
+//     principal go-api's users table does not hold (an auth-owned account) has
+//     no such token, so there is nothing to raise and that is not an error;
 //   - the principal's go-api refresh_tokens rows (revoke_all_for_user), which
 //     ends the legacy refresh exchange.
 //
-// Any error is returned for the caller to roll the transaction back.
-func (s *Store) EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) error {
+// It returns how many sessions it revoked. Any error is returned for the
+// caller to roll the transaction back.
+func (s *Store) EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (int, error) {
 	principal := principalID.String()
-	if _, err := s.revokeAllLive(ctx, tx, principal); err != nil {
-		return fmt.Errorf("%w: revoking the sessions: %w", ErrStore, err)
+	revoked, err := s.revokeAllLive(ctx, tx, principal)
+	if err != nil {
+		return 0, fmt.Errorf("%w: revoking the sessions: %w", ErrStore, err)
 	}
 	var version *int64
 	if err := tx.QueryRow(ctx, `SELECT `+s.q+`.`+BumpLegacyTokenVersionFunction+`($1::uuid)`, principal).Scan(&version); err != nil {
-		return fmt.Errorf("%w: raising the go-api token version: %w", ErrStore, err)
-	}
-	if version == nil {
-		return fmt.Errorf("%w: %w", ErrStore, errLegacyUserMissing)
+		return 0, fmt.Errorf("%w: raising the go-api token version: %w", ErrStore, err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = clock_timestamp()
 		WHERE user_id = $1::uuid AND revoked_at IS NULL`, principal); err != nil {
-		return fmt.Errorf("%w: revoking the go-api refresh tokens: %w", ErrStore, err)
+		return 0, fmt.Errorf("%w: revoking the go-api refresh tokens: %w", ErrStore, err)
 	}
-	return nil
+	return revoked, nil
 }

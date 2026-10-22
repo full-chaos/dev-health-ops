@@ -21,7 +21,7 @@ type recordingStore struct {
 
 type recordingEnder struct{}
 
-func (recordingEnder) EndAllInTx(context.Context, audit.TxOps, uuid.UUID) error { return nil }
+func (recordingEnder) EndAllInTx(context.Context, audit.TxOps, uuid.UUID) (int, error) { return 0, nil }
 
 func (recordingEnder) EndResetLinksInTx(context.Context, audit.TxOps, uuid.UUID) error { return nil }
 

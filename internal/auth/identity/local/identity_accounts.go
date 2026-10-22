@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +24,7 @@ type IdentityStore interface {
 // SessionEnder ends every credential class of a principal inside a caller's
 // transaction (*session.Store.EndAllInTx).
 type SessionEnder interface {
-	EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) error
+	EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (int, error)
 }
 
 // ResetLinkEnder deletes a principal's unconsumed reset links inside a
@@ -91,12 +92,19 @@ func (a IdentityAccounts) SetEmailVerified(ctx context.Context, id uuid.UUID) er
 }
 
 func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, id uuid.UUID, hash string) error {
-	return a.Store.SetPasswordHashWith(ctx, id, hash, a.actor(ctx), func(ctx context.Context, tx audit.TxOps) error {
-		if err := a.Sessions.EndAllInTx(ctx, tx, id); err != nil {
+	revoked := 0
+	err := a.Store.SetPasswordHashWith(ctx, id, hash, a.actor(ctx), func(ctx context.Context, tx audit.TxOps) error {
+		n, err := a.Sessions.EndAllInTx(ctx, tx, id)
+		if err != nil {
 			return err
 		}
+		revoked = n
 		return a.Links.EndResetLinksInTx(ctx, tx, id)
 	})
+	if err == nil {
+		slog.InfoContext(ctx, "password changed; sessions ended", "principal_id", id.String(), "sessions", revoked)
+	}
+	return err
 }
 
 var _ Accounts = IdentityAccounts{}

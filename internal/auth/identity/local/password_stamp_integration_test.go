@@ -4,6 +4,9 @@ package local
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -68,14 +72,25 @@ func (r *endRig) account(t *testing.T, ctx context.Context, password string) uui
 	if err != nil {
 		t.Fatalf("ProvisionLocal: %v", err)
 	}
+	r.goAPIRows(t, ctx, id)
+	return id
+}
+
+// legacyJTI is the jti of the go-api refresh token seeded for a principal.
+const legacyJTI = "go-api-refresh-jti"
+
+// goAPIRows seeds go-api's users row (token_version 3) and one live refresh
+// token whose digest is that of legacyJTI.
+func (r *endRig) goAPIRows(t *testing.T, ctx context.Context, id uuid.UUID) {
+	t.Helper()
 	if _, err := r.env.admin.Exec(ctx, `INSERT INTO public.users (id, email, token_version) VALUES ($1, $2, 3)`, id, id.String()+"@go-api.example.com"); err != nil {
 		t.Fatalf("seed go-api user: %v", err)
 	}
+	digest := sha256.Sum256([]byte(legacyJTI))
 	if _, err := r.env.admin.Exec(ctx, `INSERT INTO public.refresh_tokens (id, user_id, org_id, token_hash, family_id, expires_at, created_at)
-		VALUES (gen_random_uuid(), $1, NULL, $2, gen_random_uuid(), now() + interval '1 day', now())`, id, strings.Repeat("ab", 32)); err != nil {
+		VALUES (gen_random_uuid(), $1, NULL, $2, gen_random_uuid(), now() + interval '1 day', now())`, id, hex.EncodeToString(digest[:])); err != nil {
 		t.Fatalf("seed go-api refresh token: %v", err)
 	}
-	return id
 }
 
 func (r *endRig) live(t *testing.T, ctx context.Context, issued session.Issued) bool {
@@ -140,6 +155,13 @@ func TestResetEndsEveryCredentialClass(t *testing.T) {
 	if n := rig.liveLegacyRows(t, ctx, id); n != 0 {
 		t.Errorf("%d go-api refresh rows are still live", n)
 	}
+	state, found, err := policy.PGStore{Pool: rig.env.runtime, AuthSchema: "auth"}.SessionState(ctx, old.Session.ID)
+	if err != nil || !found || !state.Revoked {
+		t.Errorf("policy SessionState of the old session = %+v found %v err %v; want revoked", state, found, err)
+	}
+	if res, err := rig.sessions.ExchangeLegacy(ctx, session.LegacyRefresh{PrincipalID: id, JTI: contracts.NewSecretString(legacyJTI)}); err != nil || res.Reason.Success() {
+		t.Errorf("ExchangeLegacy after the reset = %+v, %v; want a refusal", res, err)
+	}
 	time.Sleep(20 * time.Millisecond)
 	after, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
 	if err != nil || !rig.live(t, ctx, after) {
@@ -177,39 +199,81 @@ func TestChangeEndsEveryCredentialClassAndKeepsTheCallersNewSession(t *testing.T
 
 // When any step of the transaction fails the password is unchanged, the
 // sessions stay live and go-api's rows are untouched.
-func TestAFailedEndRollsTheWholePasswordChangeBack(t *testing.T) {
+func TestAFailedStepRollsTheWholePasswordChangeBack(t *testing.T) {
+	steps := map[string]string{
+		"the token version bump":   `REVOKE EXECUTE ON FUNCTION auth.bump_legacy_token_version(uuid) FROM PUBLIC, %s`,
+		"the refresh token revoke": `REVOKE UPDATE (revoked_at) ON public.refresh_tokens FROM %s`,
+	}
+	for name, revoke := range steps {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			rig := newEndRig(t, ctx)
+			id := rig.account(t, ctx, "Old-pass-12345")
+			old, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := rig.passwordHash(t, ctx, id)
+			var role string
+			if err := rig.env.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := rig.env.admin.Exec(ctx, fmt.Sprintf(revoke, `"`+role+`"`)); err != nil {
+				t.Fatal(err)
+			}
+			if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err == nil {
+				t.Fatal("Reset succeeded although a step failed")
+			}
+			if _, err := rig.flows.Change(ctx, ChangeRequest{PrincipalID: id, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err == nil {
+				t.Fatal("Change succeeded although a step failed")
+			}
+			if got := rig.passwordHash(t, ctx, id); got != before {
+				t.Error("the password changed although the transaction failed")
+			}
+			if !rig.live(t, ctx, old) {
+				t.Error("the session was revoked although the transaction failed")
+			}
+			if v := rig.tokenVersion(t, ctx, id); v != 3 {
+				t.Errorf("go-api token_version = %d, want 3 (unchanged)", v)
+			}
+			if n := rig.liveLegacyRows(t, ctx, id); n != 1 {
+				t.Errorf("%d go-api refresh rows are live, want the 1 seeded", n)
+			}
+		})
+	}
+}
+
+// An account auth-service owns has no go-api users row: a reset still sets the
+// password and ends the sessions.
+func TestAnAuthOwnedAccountWithoutAGoAPIRowCanReset(t *testing.T) {
 	ctx := context.Background()
 	rig := newEndRig(t, ctx)
-	id := rig.account(t, ctx, "Old-pass-12345")
-	old, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
+	hash, err := cheapHash("Old-pass-12345")
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := rig.passwordHash(t, ctx, id)
-	// No go-api user row: the version bump finds nobody and the transaction aborts.
-	if _, err := rig.env.admin.Exec(ctx, `DELETE FROM public.refresh_tokens WHERE user_id = $1`, id); err != nil {
+	id, err := rig.accounts.ProvisionLocal(ctx, ProvisionLocalRequest{Email: uuid.NewString() + "@example.com", PasswordHash: hash})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rig.env.admin.Exec(ctx, `DELETE FROM public.users WHERE id = $1`, id); err != nil {
+	old, err := rig.sessions.Create(ctx, id, nil, []string{"pwd"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := rig.links.Issue(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash("reset-secret"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err == nil {
-		t.Fatal("Reset succeeded although go-api's user row is missing")
+	if out, err := rig.flows.Reset(ctx, "reset-secret", "A-new-pass-77"); err != nil || out.Kind != FlowOK {
+		t.Fatalf("Reset = %+v, %v", out, err)
 	}
-	if got := rig.passwordHash(t, ctx, id); got != before {
-		t.Error("the password changed although the transaction failed")
+	if rig.live(t, ctx, old) {
+		t.Error("the session is live after the reset")
 	}
-	if !rig.live(t, ctx, old) {
-		t.Error("the session was revoked although the transaction failed")
-	}
-	if _, err := rig.flows.Change(ctx, ChangeRequest{PrincipalID: id, Current: "Old-pass-12345", New: "Brand-new-pass-42"}); err == nil {
-		t.Fatal("Change succeeded although go-api's user row is missing")
-	}
-	if got := rig.passwordHash(t, ctx, id); got != before {
-		t.Error("the password changed although the change failed")
+	if rig.passwordHash(t, ctx, id) == hash {
+		t.Error("the password did not change")
 	}
 }
 

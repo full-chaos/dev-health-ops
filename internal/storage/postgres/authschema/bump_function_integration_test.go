@@ -62,4 +62,21 @@ func TestTheDeclaredDefinerFunctionIsHeldToItsPosture(t *testing.T) {
 	if len(got) == 0 || !strings.Contains(strings.Join(got, "\n"), "missing grant") {
 		t.Errorf("a missing runtime grant was not reported: %v", got)
 	}
+
+	// A same-named overload that is SECURITY DEFINER and executable is not the
+	// declared function and is reported.
+	if _, err := f.admin.Exec(ctx, `GRANT EXECUTE ON FUNCTION auth.bump_legacy_token_version(uuid) TO `+Quote(mustValidatedIdentifier(f.runtimeRole))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.migration.Exec(ctx, `CREATE FUNCTION auth.bump_legacy_token_version(p_a uuid, p_b bigint) RETURNS bigint
+		LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT 1::bigint'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.admin.Exec(ctx, `GRANT EXECUTE ON FUNCTION auth.bump_legacy_token_version(uuid, bigint) TO `+Quote(mustValidatedIdentifier(f.runtimeRole))); err != nil {
+		t.Fatal(err)
+	}
+	got = functionViolationsOf()
+	if len(got) == 0 || !strings.Contains(strings.Join(got, "\n"), "SECURITY DEFINER owned by") {
+		t.Errorf("a same-named overload was hidden by the declared name: %v", got)
+	}
 }

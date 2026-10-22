@@ -36,10 +36,8 @@ var Allowlist = []Entry{
 	{File: "internal/api/sso/login.go", Func: "handlers.finishSSOLogin", Table: "public.refresh_tokens", Verb: "INSERT"},
 	{File: "internal/api/sso/login.go", Func: "handlers.finishSSOLogin", Table: "public.sso_providers", Verb: "UPDATE"},
 	{File: "internal/api/sso/login.go", Func: "handlers.recordSSOFailure", Table: "public.sso_providers", Verb: "UPDATE"},
-	{File: "internal/api/sso/oauth.go", Func: "handlers.oauthProvisionUser", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/api/sso/oauth.go", Func: "handlers.oauthProvisionUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/sso/providers.go", Func: "handlers.setStatus", Table: "public.sso_providers", Verb: "UPDATE"},
-	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertMembershipTx", Table: "public.memberships", Verb: "INSERT"},
@@ -86,6 +84,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.users", Verb: "INSERT"},
+	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
+	{File: "internal/auth/session/legacy.go", Func: "Store.ExchangeLegacy", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/auth/session/legacy.go", Func: "Store.revokeLegacyFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	// CHAOS-10411 moves Create onto insertSession and removes Create's two rows: one writer of each table.
 	{File: "internal/auth/session/signin.go", Func: "Store.insertSession", Table: "auth.refresh_credentials", Verb: "INSERT"},
 	{File: "internal/auth/session/signin.go", Func: "Store.insertSession", Table: "auth.sessions", Verb: "INSERT"},

@@ -21,6 +21,12 @@ jobs:
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
 
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
       - name: Build the canonical documentation
         run: python -m mkdocs build --strict --config-file mkdocs.yml
 
@@ -30,7 +36,7 @@ jobs:
         run: |
           mkdir -p .build
           set -o pipefail
-          python scripts/check_external_links.py \
+          go run -trimpath -mod=readonly ./cmd/cigate docs check-external-links \
             --built-site .build/docs \
             --allowlist docs-data/external-link-allowlist.yml \
             --site-url https://docs.fullchaos.dev \

@@ -1,0 +1,2 @@
+source_path	target_path	disposition	migration_phase	source_file
+/old/	/new/	move	Phase 1	docs/old.md

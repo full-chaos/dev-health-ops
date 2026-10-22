@@ -131,6 +131,7 @@ func TestSAMLRoutesAnswerConflictAndGate(t *testing.T) {
 // identity, membership or audit row.
 func TestSAMLRoutesRefuseANewAccountWithoutWrites(t *testing.T) {
 	h := newHarness(t, true)
+	h.withoutJoins()
 	h.ownUsers()
 	issuer := &recordingIssuer{}
 	mux := requestid.Middleware(h.mux(issuer))

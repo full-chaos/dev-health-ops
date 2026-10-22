@@ -1,4 +1,4 @@
-# Documentation freshness inventory, validated by scripts/check_freshness_inventory.py
+# Documentation freshness inventory, validated by `cigate docs check-freshness`
 # (`make docs:check-freshness`).
 #
 # Every tracked page needs an explicit disposition (`refresh` or `retire`), an owner,

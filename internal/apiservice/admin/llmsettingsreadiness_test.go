@@ -76,21 +76,28 @@ func TestReadinessFingerprintChangesOnInputChange(t *testing.T) {
 	}
 }
 
-// TestCertifiedByoAgentProvidersMatchesPython pins the set to policy.py's
-// CERTIFIED_BYO_AGENT_PROVIDERS = frozenset({"openai"}) -- narrower than
-// llmorgsettings.IsKnownProvider, which also accepts anthropic/gemini/qwen/
-// local/ollama/lmstudio for the generic (non-Ask-Dev) BYO LLM surface.
-func TestCertifiedByoAgentProvidersMatchesPython(t *testing.T) {
-	if _, ok := certifiedByoAgentProviders["openai"]; !ok {
-		t.Error(`"openai" must be certified`)
-	}
-	for _, other := range []string{"anthropic", "gemini", "qwen", "local", "ollama", "lmstudio", "", "auto", "mock", "none"} {
-		if _, ok := certifiedByoAgentProviders[other]; ok {
-			t.Errorf("%q must not be certified (Ask Dev binary-transport gate is openai-only)", other)
+// TestCertifiedByoAgentProvidersAreTheProvidersWithAProber pins the certifiable set to the providers
+// that have a readiness prober: openai (Chat Completions) and anthropic (Messages API, the
+// plane acr runs). It is narrower than llmorgsettings.IsKnownProvider.
+func TestCertifiedByoAgentProvidersAreTheProvidersWithAProber(t *testing.T) {
+	for _, want := range []string{"openai", "anthropic"} {
+		if _, ok := certifiedByoAgentProviders[want]; !ok {
+			t.Errorf("%q must be certified", want)
+		}
+		if _, ok := readinessProberFor(want, nil); !ok {
+			t.Errorf("%q is certified but has no prober", want)
 		}
 	}
-	if len(certifiedByoAgentProviders) != 1 {
-		t.Errorf("len(certifiedByoAgentProviders) = %d, want 1 (openai only)", len(certifiedByoAgentProviders))
+	for _, other := range []string{"gemini", "qwen", "local", "ollama", "lmstudio", "", "auto", "mock", "none"} {
+		if _, ok := certifiedByoAgentProviders[other]; ok {
+			t.Errorf("%q must not be certified (no readiness prober)", other)
+		}
+		if _, ok := readinessProberFor(other, nil); ok {
+			t.Errorf("%q must not have a prober", other)
+		}
+	}
+	if len(certifiedByoAgentProviders) != 2 {
+		t.Errorf("len(certifiedByoAgentProviders) = %d, want 2 (openai, anthropic)", len(certifiedByoAgentProviders))
 	}
 }
 
@@ -281,7 +288,14 @@ func TestReadinessMessagesMatchPython(t *testing.T) {
 	if readinessNoBYOConfigMessage != "No BYO LLM configuration is saved for this organization." {
 		t.Errorf("readinessNoBYOConfigMessage = %q", readinessNoBYOConfigMessage)
 	}
-	if readinessModelNotSupportedMessage != "The configured Ask Dev model is not supported." {
-		t.Errorf("readinessModelNotSupportedMessage = %q", readinessModelNotSupportedMessage)
+	for provider, want := range map[string]string{
+		"gemini":      "BYO preflight is not available yet for provider gemini.",
+		"Ge mini<x>":  "BYO preflight is not available yet for provider unknown.",
+		"":            "BYO preflight is not available yet for provider unknown.",
+		"local-model": "BYO preflight is not available yet for provider local-model.",
+	} {
+		if got := readinessProviderUnavailableMessage(provider); got != want {
+			t.Errorf("readinessProviderUnavailableMessage(%q) = %q, want %q", provider, got, want)
+		}
 	}
 }

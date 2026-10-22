@@ -24,6 +24,9 @@ var ddls = []string{
 	`CREATE TABLE git_commit_stats (repo_id UUID, commit_hash String, file_path String, additions Int32, deletions Int32,
       org_id String DEFAULT 'default', last_synced DateTime64(3, 'UTC'))
       ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, commit_hash, file_path)`,
+	`CREATE TABLE teams (id String, org_id String DEFAULT 'default', is_active UInt8 DEFAULT 1,
+      updated_at DateTime64(6) DEFAULT now64(6), last_synced DateTime64(6) DEFAULT now64(6))
+      ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 	`CREATE TABLE team_repo_ownership (org_id String, provider String, team_id String, repo_id Nullable(UUID),
       repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
       source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
@@ -207,14 +210,13 @@ func TestRealClickHouse_BusFactor(t *testing.T) {
 	if bad.EvidenceSampleCount != 6 || bad.Scope.RepoID != nil {
 		t.Errorf("malformed repo id: %#v", bad)
 	}
-	// Ownership that has expired before the request instant owns nothing.
+	// An instant before the first recorded ownership gives the repository to its first recorded owners (D5987 option C,
+	// CHAOS-9404): the team owns what it owned at its first record.
 	past, err := Resolve(ctx, client, "org-1", &model.BusFactorScopeInput{TeamID: sp("team-1")}, time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(past.Repos) != 0 {
-		t.Errorf("before valid_from: %#v", past)
-	}
+	eq("before the first record", names(past), names(team))
 }
 
 // The same repository id exists in two orgs with different names and

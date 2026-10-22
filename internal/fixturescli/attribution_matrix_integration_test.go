@@ -1380,7 +1380,7 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 	}
 
 	t.Run("sync-time valid_from on a catalog writer", func(t *testing.T) {
-		// As the producers write it: the ownership starts at the sync (known red, CHAOS-9404).
+		// As the producers write it: the ownership starts at the sync (known red, CHAOS-10521).
 		if result := judge("jira", "project_ownership_starts_at_its_evidence", facts, readers); len(result.Violations) == 0 {
 			t.Fatal("the sync-time start of the Jira project ownership is not found")
 		}
@@ -1525,12 +1525,6 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 	})
 
 	t.Run("readers that do not apply the first owners backward", func(t *testing.T) {
-		// As the readers are: no owner before the first record (known red, CHAOS-9404).
-		if result := judge("github", "readers_apply_first_owners_backward", facts, readers); len(result.Violations) == 0 {
-			t.Fatal("the readers' missing backward owners are not found")
-		}
-		// The defect removed: a reader that answers an instant before a repository's first record with
-		// the shared readers' answer at that first record. The cell turns green.
 		first := map[string]time.Time{}
 		for id := range facts["github"].repos {
 			for _, row := range facts["github"].repoOwnerRows(id) {
@@ -1539,8 +1533,10 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 				}
 			}
 		}
+		// The defect planted: a reader that gives no owner for an instant before a repository's first record (the
+		// rule before D5987 option C, CHAOS-9404).
 		production := readers["github"]
-		backward := ownerReaders{
+		forwardOnly := ownerReaders{
 			OwnersByRepo: func(at time.Time) (map[string][]string, error) {
 				out, err := production.OwnersByRepo(at)
 				if err != nil {
@@ -1548,11 +1544,7 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 				}
 				for id, start := range first {
 					if at.Before(start) {
-						later, err := production.OwnersByRepo(start)
-						if err != nil {
-							return nil, err
-						}
-						out[id] = later[id]
+						delete(out, id)
 					}
 				}
 				return out, nil
@@ -1564,25 +1556,23 @@ func rediscoverKnownDefects(ctx context.Context, t *testing.T, conn driver.Conn,
 				}
 				for id, start := range first {
 					if at.Before(start) {
-						later, err := production.Authoritative(start)
-						if err != nil {
-							return nil, err
-						}
-						if owners, ok := later[id]; ok {
-							out[id] = owners
-						}
+						delete(out, id)
 					}
 				}
 				return out, nil
 			},
 		}
-		fixed := map[string]ownerReaders{}
+		planted := map[string]ownerReaders{}
 		for key, value := range readers {
-			fixed[key] = value
+			planted[key] = value
 		}
-		fixed["github"] = backward
-		if result := judge("github", "readers_apply_first_owners_backward", facts, fixed); len(result.Violations) > 0 {
-			t.Fatalf("the check stays red on readers that apply the first owners backward: %v", result.Violations)
+		planted["github"] = forwardOnly
+		if result := judge("github", "readers_apply_first_owners_backward", facts, planted); len(result.Violations) == 0 {
+			t.Fatal("readers that give no owner before a repository's first record are not found")
+		}
+		// The shared readers apply the first owners backward: the cell is green on them.
+		if result := judge("github", "readers_apply_first_owners_backward", facts, readers); len(result.Violations) > 0 {
+			t.Fatalf("the check is red on the shared readers: %v", result.Violations)
 		}
 	})
 

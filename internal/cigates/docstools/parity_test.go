@@ -107,6 +107,12 @@ func replayCaseWith(t *testing.T, dir string, run func(args ...string) (int, str
 		if stderr != want {
 			t.Errorf("stderr is not the exception text that replaces the Python traceback\ngot:\n%q\nwant:\n%q", stderr, want)
 		}
+	} else if prefix, err := os.ReadFile(filepath.Join(dir, "stderr.prefix")); err == nil {
+		// Python died on an exception whose message Go does not reproduce word for word (stderr.python holds it): the
+		// verb prints one line that starts with this text, the exception's kind or module.
+		if want := subst(strings.TrimSuffix(string(prefix), "\n")); !strings.HasPrefix(stderr, want) || strings.Count(stderr, "\n") != 1 || !strings.HasSuffix(stderr, "\n") {
+			t.Errorf("stderr is not one error line starting with %q\ngot:\n%q", want, stderr)
+		}
 	} else if want := subst(mustRead(t, filepath.Join(dir, "stderr"))); stderr != want {
 		t.Errorf("stderr differs from the recording\ngot:\n%q\nrecorded:\n%q", stderr, want)
 	}
@@ -114,7 +120,7 @@ func replayCaseWith(t *testing.T, dir string, run func(args ...string) (int, str
 	_ = filepath.Walk(out, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(out, path)
-			rel = caseRel(rel)
+			rel = caseRel(strings.TrimSuffix(rel, ".fixture"))
 			expected[rel] = true
 			if got, want := mustRead(t, filepath.Join(work, rel)), mustRead(t, path); got != want {
 				t.Errorf("%s differs from the recording\ngot:\n%q\nrecorded:\n%q", rel, got, want)

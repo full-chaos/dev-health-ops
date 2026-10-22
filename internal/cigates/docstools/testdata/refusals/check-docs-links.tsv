@@ -1,0 +1,13 @@
+# Every refusing site of scripts/check_docs_links.py (frozen beside this file, at ops 8f2e19e471) and the Go answer: site<TAB>kind<TAB>refs.
+# site: the trimmed source line, "#N" for the Nth identical line ("return 1" is always numbered); kind case = recorded pairs run live through the cigate binary, go = a named Go test.
+ROOT = Path(__file__).resolve().parents[1]	case	check-docs-links-ok;check-docs-links-no-docs
+text = path.read_text(encoding="utf-8")	case	check-docs-links-dir-named-md;check-docs-links-symlink-outside
+text = path.read_text(encoding="utf-8")#2	case	check-docs-links-invalid-utf8;check-docs-links-missing-anchor
+parsed = urlsplit(target)	case	check-docs-links-ipv6-invalid;check-docs-links-ipv4-in-brackets;check-docs-links-netloc-nfkc;check-docs-links-scheme-rules
+parsed = urlsplit(raw_target)	case	check-docs-links-unicode;check-docs-links-scheme-rules
+destination = source if not target_path else (source.parent / target_path).resolve()	case	check-docs-links-nul-escape;check-docs-links-symlink-outside
+except ValueError:	case	check-docs-links-missing-anchor;check-docs-links-symlink-outside
+if not destination.exists():	case	check-docs-links-broken-source-link;check-docs-links-unicode
+for path in sorted(docs_root.rglob("*.md")):	case	check-docs-links-dot-md-name;check-docs-links-dir-named-md;check-docs-links-no-docs
+return 1#1	case	check-docs-links-broken-source-link;check-docs-links-slugs
+raise SystemExit(main())	go	TestCheckDocsLinksRefusesArguments;TestBrokenSourceLinkFails

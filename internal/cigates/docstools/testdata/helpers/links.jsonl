@@ -1,0 +1,33 @@
+{"in": "[a](b.md)", "out": [["b.md", "b.md"]]}
+{"in": "![i](x.png) [t](<u v.md> \"title\")", "out": [["x.png", "x.png"], ["<u v.md> \"title\"", "u"]]}
+{"in": "[a]()", "out": []}
+{"in": "[a]( )", "err": "IndexError: list index out of range"}
+{"in": "[a](\n)", "err": "IndexError: list index out of range"}
+{"in": "[a](\u00a0)", "err": "IndexError: list index out of range"}
+{"in": "[a](  x.md  )", "out": [["  x.md  ", "x.md"]]}
+{"in": "[a](<x>)", "out": [["<x>", "x"]]}
+{"in": "[a](<>)", "out": [["<>", ""]]}
+{"in": "[a](<<x>>)", "out": [["<<x>>", "x"]]}
+{"in": "[a]([b](c.md))", "out": [["[b](c.md", "[b](c.md"]]}
+{"in": "[a](b(c).md)", "out": [["b(c", "b(c"]]}
+{"in": "[[a]](b)", "out": []}
+{"in": "[a\nb](c d)", "out": [["c d", "c"]]}
+{"in": "!\n[a](b)", "out": [["b", "b"]]}
+{"in": "![a](b)![c](d)", "out": [["b", "b"], ["d", "d"]]}
+{"in": "[a](b\nc)", "out": [["b\nc", "b"]]}
+{"in": "[\u00e9](\u00fc.md#x)", "out": [["\u00fc.md#x", "\u00fc.md#x"]]}
+{"in": "[a](http://x/y)", "out": [["http://x/y", "http://x/y"]]}
+{"in": "[a](#frag)", "out": [["#frag", "#frag"]]}
+{"in": "[a](mailto:x@y)", "out": [["mailto:x@y", "mailto:x@y"]]}
+{"in": "[a](tel:123)", "out": [["tel:123", "tel:123"]]}
+{"in": "[a](a;b)", "out": [["a;b", "a;b"]]}
+{"in": "[a](a/b;c/d)", "out": [["a/b;c/d", "a/b;c/d"]]}
+{"in": "[a](a/b;c;d)", "out": [["a/b;c;d", "a/b;c;d"]]}
+{"in": "[a](x:y)", "out": [["x:y", "x:y"]]}
+{"in": "[a](/abs/p.md)", "out": [["/abs/p.md", "/abs/p.md"]]}
+{"in": "[a](../up.md)", "out": [["../up.md", "../up.md"]]}
+{"in": "[a](b.md?q=1#f)", "out": [["b.md?q=1#f", "b.md?q=1#f"]]}
+{"in": "[a](b%20c.md)", "out": [["b%20c.md", "b%20c.md"]]}
+{"in": "[a](<a b>)", "out": [["<a b>", "a"]]}
+{"in": "[a](\u2003x.md\u2003)", "out": [["\u2003x.md\u2003", "x.md"]]}
+{"in": "[a](x\u2003y)", "out": [["x\u2003y", "x"]]}

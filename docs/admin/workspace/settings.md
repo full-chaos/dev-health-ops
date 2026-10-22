@@ -23,8 +23,10 @@ Do not store provider secrets, private keys, or infrastructure credentials in ge
 
 An organization administrator tests their own BYO LLM credentials with
 `POST /api/v1/admin/llm-settings/readiness`. This checks the organization's
-saved BYO configuration only; it never certifies or exposes information about
-the platform-owned (operator-configured) provider. Certifying the
+saved BYO configuration only, and it does so whether the own model is turned on or off; it never certifies or exposes information about
+the platform-owned (operator-configured) provider. The check runs for the `openai` and
+`anthropic` providers; for any other provider it answers `404` with
+"BYO preflight is not available yet for provider <provider>." Certifying the
 platform-owned provider is a platform-administrator action, not an
 organization-administrator one, see
 [Configure the platform](../../operate/configure/index.md).
@@ -138,3 +140,7 @@ Admin API: `GET /api/v1/admin/llm-settings/own-model` reads `enabled` and
 `{"enabled": false}` or `{"enabled": true}` stores the state. The change
 reaches investigations within about 15 seconds. Each change writes an audit
 log entry with the actor and the old and new value.
+
+The setup checks do not follow the toggle: `POST /api/v1/admin/llm-settings/readiness` and
+the model list `GET /api/v1/admin/llm-settings/models` keep using the saved key while the
+toggle is off, so an administrator can check a key before turning the own model back on.

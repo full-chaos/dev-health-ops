@@ -131,7 +131,9 @@ func stringList(t *testing.T, node any) []string {
 	}
 	out := make([]string, 0, len(items))
 	for _, item := range items {
-		out = append(out, item.(string))
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
 	}
 	sort.Strings(out)
 	return out

@@ -93,6 +93,16 @@ func (c *chainClient) Query(ctx context.Context, query string, bindings []dhclic
 	if name == c.failOn {
 		return nil, c.failErr
 	}
+	if c.failOn != "" && (name == "quotes" || name == "scopes") {
+		select {
+		case <-ctx.Done():
+			c.mu.Lock()
+			c.cancelSeen[name] = true
+			c.mu.Unlock()
+			return nil, ctx.Err()
+		case <-time.After(c.headTimeout):
+		}
+	}
 
 	switch name {
 	case "units":
@@ -181,5 +191,10 @@ func TestBuildWorkUnitInvestmentsOneFailedLookupCancelsTheOthers(t *testing.T) {
 	}
 	if client.indexOf("start:assignments") >= 0 {
 		t.Errorf("assignments must not start after identities failed: %v", client.events)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if !client.cancelSeen["quotes"] || !client.cancelSeen["scopes"] {
+		t.Errorf("the quotes and scopes lookups must see their context cancelled: %v", client.cancelSeen)
 	}
 }

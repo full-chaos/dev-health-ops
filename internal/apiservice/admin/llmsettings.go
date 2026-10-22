@@ -458,7 +458,7 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		}
 		keys = append(keys, stored)
 	}
-	valid, reason, keyHit, splitErr := checkBaseURL(ctx, baseURLText, keys, h.baseURLValidator())
+	valid, reason, keyHit, splitErr := h.checkBaseURL(ctx, baseURLText, keys...)
 	if keyHit {
 		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", "Invalid LLM base_url"), nil
 	}

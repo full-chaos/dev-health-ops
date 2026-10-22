@@ -909,10 +909,31 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	rawPython := golden.Python(t, venue, all)
 	normalizePython := billingNormalizer(seeded, recordedAt(t, golden, start))
 	python := normalizeAnswers(rawPython, normalizePython)
+	// D6145: the org-less caller's checkout, portal and subscription reads answer 403 where Python answered 200, 404
+	// and 400. Python's no-org checkout was a real checkout: one Stripe call and one session number Go never spends,
+	// so each refused checkout removes exactly that call from Python's list and shifts Python's later session numbers
+	// down by one. Both are counted from the refusals Diff declares, never assumed.
+	var refusedNames []string
+	refusedCheckouts := 0
 	receipt := venueoracle.Diff(t, base, main, python[:len(main)], venueoracle.DiffOptions{
-		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
-		Golden:    golden,
+		Normalize:     func(_ venueoracle.Request, body string) string { return normalize(body) },
+		Golden:        golden,
+		OrglessTokens: map[string]bool{venue.Tokens["noOrg"]: true}, MaxOrglessRefusals: 3,
+		OnOrglessRefused: func(request venueoracle.Request) {
+			refusedNames = append(refusedNames, request.Name)
+			if request.Method == "POST" && strings.HasSuffix(request.Path, "/checkout") {
+				refusedCheckouts++
+			}
+		},
+		NormalizePython: func(_ venueoracle.Request, body string) string {
+			return shiftSessionNumbers(body, refusedCheckouts)
+		},
 	})
+	for _, name := range refusedNames {
+		if name != "checkout: no org" && name != "portal: no org" && name != "sub: no org" {
+			t.Errorf("%q was declared an org-less refusal; only the three no-org billing requests may be", name)
+		}
+	}
 	// The deviation requests' Python answers are inspected below (their status
 	// goes in the receipt), not compared by Diff.
 	golden.Consumed(t, python[len(main):]...)
@@ -922,7 +943,7 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	fake.mu.Lock()
 	goCalls := append([]string(nil), fake.calls["go"]...)
 	fake.mu.Unlock()
-	pyCalls := pythonCalls(t, golden, fake)
+	pyCalls := dropEmptyOrgCheckouts(t, pythonCalls(t, golden, fake), refusedCheckouts)
 	callsSame := len(pyCalls) >= len(goCalls) && strings.Join(pyCalls[:len(goCalls)], "\n") == strings.Join(goCalls, "\n")
 	if !callsSame {
 		t.Errorf("stripe calls differ:\n python %s\n go     %s", strings.Join(pyCalls, "\n        "), strings.Join(goCalls, "\n        "))
@@ -1101,4 +1122,47 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 	}
 	t.Log("\n" + receipt)
 	golden.Finish(t)
+}
+
+// emptyOrgCheckout marks the Stripe call of a checkout started with no organization: Python created that session, Go
+// refuses the caller (D6145) and calls nothing.
+const emptyOrgCheckout = "client_reference_id=&line_items[0][price]="
+
+// dropEmptyOrgCheckouts removes from Python's Stripe calls exactly the calls of the checkouts Go refused, and fails
+// the test when Python's list does not hold exactly that many: a refusal that removed another call, or none, is a
+// difference, not a declared divergence.
+func dropEmptyOrgCheckouts(t *testing.T, calls []string, refused int) []string {
+	t.Helper()
+	var kept []string
+	dropped := 0
+	for _, call := range calls {
+		if strings.HasPrefix(call, "POST /v1/checkout/sessions") && strings.Contains(call, emptyOrgCheckout) {
+			dropped++
+			if dropped <= refused {
+				continue
+			}
+		}
+		kept = append(kept, call)
+	}
+	if dropped < refused {
+		t.Errorf("go refused %d no-org checkouts, python made %d empty-org checkout calls", refused, dropped)
+	}
+	return kept
+}
+
+var checkoutSessionNumber = regexp.MustCompile(`cs_venue_(\d+)`)
+
+// shiftSessionNumbers renumbers Python's checkout session ids down by the checkouts Go refused so far: Go's fake
+// Stripe never minted those numbers.
+func shiftSessionNumbers(body string, refused int) string {
+	if refused == 0 {
+		return body
+	}
+	return checkoutSessionNumber.ReplaceAllStringFunc(body, func(match string) string {
+		number, err := strconv.Atoi(strings.TrimPrefix(match, "cs_venue_"))
+		if err != nil || number <= refused {
+			return match
+		}
+		return fmt.Sprintf("cs_venue_%d", number-refused)
+	})
 }

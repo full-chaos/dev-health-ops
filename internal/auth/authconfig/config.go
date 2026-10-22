@@ -31,6 +31,7 @@ import (
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
 	"net"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,6 +66,10 @@ const (
 	// EnvSigningKeySetFile names a key-set manifest (several keys, each with a
 	// kid and a rotation state) in place of the single key file and kid.
 	EnvSigningKeySetFile = "AUTH_SIGNING_KEYSET_FILE"
+	// EnvTokenIssuerURL is the https issuer the signed access tokens carry as
+	// iss and the discovery document names. Unset, the discovery route is not
+	// mounted (the JWKS route still is).
+	EnvTokenIssuerURL = "AUTH_TOKEN_ISSUER_URL"
 	// EnvSigningKeyDirect is the PROHIBITED spelling. ACP-ADR-02 §4:
 	// "Direct-value secret env vars are prohibited for signing material."
 	// Load rejects it when present rather than ignoring it, because an
@@ -168,6 +173,9 @@ type Config struct {
 	// SigningKeySetPath is the key-set manifest; when set, SigningKeyPath and
 	// SigningKeyID are empty.
 	SigningKeySetPath string
+
+	// TokenIssuerURL is EnvTokenIssuerURL, "" when unset.
+	TokenIssuerURL string
 
 	// Session holds the session routes' token settings. Session.Enabled is
 	// false when neither secret is set: the service then mounts no session
@@ -356,6 +364,9 @@ func Load(spec Spec) (Config, error) {
 	}
 
 	if cfg.SigningKeySetPath, cfg.SigningKeyPath, cfg.SigningKeyID, err = signingKey(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.TokenIssuerURL, err = tokenIssuerURL(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.Session, err = sessionTokens(lookup); err != nil {
@@ -691,4 +702,23 @@ func logLevel(lookup secrets.LookupEnv) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("%s must be one of debug, info, warn, error", EnvLogLevel)
 	}
+}
+
+// issuerURLPattern is discovery.v1's issuer pattern: an https origin with an
+// optional path prefix, a lowercase ASCII host, no trailing slash, userinfo,
+// query or fragment. TestIssuerURLPatternIsTheDiscoverySchemaPattern keeps it
+// equal to the schema's.
+var issuerURLPattern = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$`)
+
+// tokenIssuerURL reads EnvTokenIssuerURL: unset or blank is "", anything else
+// must fit the discovery issuer shape. The value is never echoed in the error.
+func tokenIssuerURL(lookup secrets.LookupEnv) (string, error) {
+	value := strings.TrimSpace(valueOf(lookup, EnvTokenIssuerURL))
+	if value == "" {
+		return "", nil
+	}
+	if !issuerURLPattern.MatchString(value) {
+		return "", fmt.Errorf("%s must be an https URL with a lowercase host, no trailing slash, userinfo, query or fragment", EnvTokenIssuerURL)
+	}
+	return value, nil
 }

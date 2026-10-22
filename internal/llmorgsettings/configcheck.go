@@ -41,7 +41,7 @@ func CheckCredentials(ctx context.Context, provider, apiKey, baseURL string) (Co
 	if !credentialsComplete(provider, apiKey) {
 		return ConfigMissingCredentials, nil
 	}
-	ok, _, err := ValidateBaseURLChecked(ctx, baseURL)
+	ok, _, _, err := ValidateBaseURLForKeys(ctx, baseURL, apiKey)
 	if err != nil {
 		return "", err
 	}

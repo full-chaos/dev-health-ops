@@ -1,0 +1,6 @@
+{
+  "W override create malformed org": "400 {\"detail\":\"Invalid organization id\"}",
+  "W override delete malformed": "400 {\"detail\":\"Invalid override id\"}",
+  "W override patch malformed id": "400 {\"detail\":\"Invalid override id\"}",
+  "overrides list malformed org": "400 {\"detail\":\"Invalid organization id\"}"
+}

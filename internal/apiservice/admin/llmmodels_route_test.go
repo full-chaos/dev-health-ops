@@ -91,7 +91,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), orgID.St
 	}
 
 	first := decode(doRouteRequest(t, base, "GET", "/api/v1/admin/llm-settings/models", auth("set")))
-	if first["source"] != "live" || ids(first) != "gpt-5,gpt-5-mini" || first["reason"] != nil {
+	if first["source"] != "live" || ids(first) != "gpt-5,gpt-5-mini,gpt-5-nano" || first["reason"] != nil || first["provider"] != "openai" {
 		t.Fatalf("first read = %v", first)
 	}
 	if lastAuth.Load() != "Bearer sk-models-route" || lastURL.Load() != "https://example.invalid/v1/models" || calls.Load() != 1 {
@@ -99,8 +99,17 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), orgID.St
 	}
 
 	second := decode(doRouteRequest(t, base, "GET", "/api/v1/admin/llm-settings/models", auth("set")))
-	if second["source"] != "cache" || ids(second) != "gpt-5,gpt-5-mini" || calls.Load() != 1 {
+	if second["source"] != "cache" || ids(second) != "gpt-5,gpt-5-mini,gpt-5-nano" || calls.Load() != 1 {
 		t.Fatalf("second read = %v calls=%d", second, calls.Load())
+	}
+
+	other := decode(doRouteRequest(t, base, "GET", "/api/v1/admin/llm-settings/models?provider=%20Anthropic%20", auth("set")))
+	if other["source"] != "catalog" || other["provider"] != "anthropic" || ids(other) != "claude-haiku-5-5,claude-opus-5-5,claude-sonnet-5-5" || other["reason"] != nil || calls.Load() != 1 {
+		t.Fatalf("another provider = %v calls=%d: the saved key must not reach it", other, calls.Load())
+	}
+	unknown := doRouteRequest(t, base, "GET", "/api/v1/admin/llm-settings/models?provider=ollama", auth("set"))
+	if unknown.status != 400 || strings.TrimSpace(unknown.body) != `{"detail":{"error":"unknown_provider","feature":"byo_llm","message":"provider must be one of anthropic, gemini, openai, qwen"}}` || calls.Load() != 1 {
+		t.Fatalf("unknown provider: status=%d body=%s calls=%d", unknown.status, unknown.body, calls.Load())
 	}
 
 	deleted := doRouteRequest(t, base, "DELETE", "/api/v1/admin/llm-settings", auth("set"))

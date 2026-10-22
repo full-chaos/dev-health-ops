@@ -174,6 +174,12 @@ var optionRegistry = []Option{
 			EnvSigningKeyFile + " and " + EnvSigningKeyID,
 	},
 	{
+		Flag: "token-issuer-url", Env: EnvTokenIssuerURL, Kind: KindString,
+		Group: GroupKeys,
+		Usage: "https issuer of the signed access tokens (their iss) and of the discovery document; " +
+			"unset, GET /.well-known/openid-configuration is not served (the JWKS still is)",
+	},
+	{
 		Env: EnvAccessTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "HS256 key of the compatibility access token (go-api's JWT_SECRET_KEY value, at least 32 characters); " +
 			EnvAccessTokenSecret + "_FILE reads it from a mounted file instead. Set together with " +

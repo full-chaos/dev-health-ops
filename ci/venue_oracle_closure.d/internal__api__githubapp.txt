@@ -28,6 +28,7 @@ internal/api/ratelimit
 internal/api/recordvalidation
 internal/api/restcore
 internal/api/session
+internal/api/sessionissue
 internal/api/sso
 internal/api/syncadmin
 internal/api/teamsidentity

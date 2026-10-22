@@ -88,12 +88,21 @@ at its maximum exposure for the current window. The service does not infer zero
 cost from a client timeout because the remote provider may still complete and
 bill the request.
 
-`GET /api/v1/admin/llm-settings/models` lists the model ids the saved provider
-offers, read with the saved key. The response carries the ids, a `source`
-(`live`, `cache` or `unavailable`) and a safe `reason` code when the list is
-unavailable. The service keeps a list for one hour per organization and
-configuration; saving or deleting the settings drops it, and a service restart
-reads it again. The model field stays free text when no list is available.
+`GET /api/v1/admin/llm-settings/models` lists the model ids a provider offers.
+It needs no key: without one it returns the platform catalog, the models the
+cost rate table prices for that provider (`anthropic`, `gemini`, `openai`,
+`qwen`). With a saved key it also reads the saved provider's own list and marks
+those ids `verified`. The optional `provider` query parameter names the provider
+to list (an unknown name answers 400 `unknown_provider`); the saved key and base
+URL are used only for the saved provider, never for another one. The saved model
+always appears in its provider's list. Each entry carries its `id`, a `source`
+(`live`, `catalog` or `saved`) and `verified`; verified ids come first, then
+alphabetical. The response carries a `source` (`live`, `cache`, `catalog` or
+`unavailable`) and a safe `reason` code when the provider's own list could not
+be read. `unavailable` means there is nothing to list. The service keeps the
+provider's list for one hour per organization and configuration; saving or
+deleting the settings drops it, and a service restart reads it again. The model
+field stays free text when no list is available.
 
 Budget values use integer micro-USD. `GET /api/v1/admin/llm-settings/budget`
 returns the used, limit, remaining, UTC reset timestamp, enforcement

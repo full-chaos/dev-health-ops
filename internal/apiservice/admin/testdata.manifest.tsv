@@ -11,6 +11,7 @@
 -	header	admin/org_deletion_targets.json
 -	header	admin/orgdeletion.json
 -	header	admin/orgdeletion_pagerduty.json
+2143cad3a77d9d1e577f1259df7a6c35f52da727b2af9512af7bd4e970cc3e6d	go-generated	admin/orgs_crud.go-pin.json
 -	header	admin/orgs_crud.json
 -	header	admin/ratelimit_path_cardinality.json
 -	header	admin/setpassword_ratelimit.json
@@ -19,12 +20,13 @@
 -	header	admin/sharedlimit.json
 -	header	admin/users.json
 a3ca62cf86105653b606b6e6f310a6f5ebad5087c687c55069627e290f7e3c7f	header-before-stamp	governance/credentialdelete.json
-fc9ec0db2ab1945eba364a875903d07c5c00c5b4d49158473f316e3d3ac2387f	go-generated	governance/governance.go-pin.json
+b73ac661d2af03ed9f74e3c88023cb2be9d6a5fc207b254fc25b8b8a0463cc12	go-generated	governance/governance.go-pin.json
 686d3bae4e71ab6b655b2d57dc647f86b8d907bfef485292a0a7dc151b0ecbcf	header-before-stamp	governance/governance.json
 192204b949f4c0d12747eca19862807ea78653712f715fb6c16467625ad7b6f0	go-generated	governance/llmsettings_keyed.go-pin.json
 8406fe1dbdd8b3bc7556426178e4dc7c43f7eab33f1a454c07ef3256d646f140	header-before-stamp	governance/llmsettings_keyed.json
 f6c7691ce9e1927c8ccdf2c06cb6c50021de61ce55315273891ebf9194349c46	go-generated	governance/llmsettings_nokey.go-pin.json
 d8df8c6f79575fcbc32c2295909dbe40e575935233acd667634f6c585f9f4d2d	header-before-stamp	governance/llmsettings_nokey.json
+58950e610e95ed81ae66ab6f2f556d190d85c45a3551ee12129f597241378090	go-generated	governance/retention.go-pin.json
 de6a34074ae06da8e8b928e79191d38d1a1b90831981fa7ada074a481780ba3d	header-before-stamp	governance/retention.json
 ac548730e699f7105fade5a7e11cc8afccea56d761bd48b37304255ad810bd5e	header-before-stamp	governance/settings_keyed.json
 3a998e6f57e3d134a8085c00c7895f88570b3bb9767b03a9cd29eea0d56a725a	header-before-stamp	governance/settings_nokey.json

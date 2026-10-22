@@ -335,8 +335,11 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 
 	var createdLedger createdByLedger
 	users := map[string]uuid.UUID{"ent": adminEnt, "comm": adminComm, "ovr": adminOvr, "tier": adminTier, "bogus": adminBogus, "fail": adminFail}
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/retention.go-pin.json", SHA256: retentionPinSHA256, Ruling: retentionIDRuling})
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		Retire: retiredRetentionRequest,
+		Pin:    pin,
 		Inspect: func(request venueoracle.Request, response venueoracle.Response) {
 			if request.Name == "execute database failure on delete" {
 				if strings.Contains(response.Body, "sentinel") || !runFailureText.MatchString(response.Body) {
@@ -383,6 +386,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		},
 	})
 	t.Log(receipt)
+	pin.Finish(t)
 	createdLedger.verifyThenReset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_retention_policies")
 
 	compare := func(name, query string) {
@@ -436,4 +440,20 @@ FROM org_retention_policies ORDER BY org_id::text, resource_type`))
 		}
 	}
 	golden.Finish(t)
+}
+
+// retentionIDRuling retired the Python reference of the requests that name a
+// malformed retention policy id: Python answered 500 for them, the Go api
+// answers a named 400 (the 500 was the bug).
+const retentionIDRuling = "CHAOS-10609 (fcs lead decision 2026-10-22): a malformed retention policy id answers a named 400, not the old Python 500"
+
+// retentionPinSHA256 is the digest of testdata/governance/retention.go-pin.json.
+const retentionPinSHA256 = "58950e610e95ed81ae66ab6f2f556d190d85c45a3551ee12129f597241378090"
+
+func retiredRetentionRequest(request venueoracle.Request) bool {
+	switch request.Name {
+	case "get malformed", "execute malformed id", "resource types delete is a uuid error", "W delete malformed":
+		return true
+	}
+	return false
 }

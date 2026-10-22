@@ -236,6 +236,17 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	// owner_user_id is checked before any store call: a malformed value
+	// answers the named 400 and nothing is written.
+	var ownerID uuid.UUID
+	if ownerUserID != "" {
+		parsed, parseErr := pythonparity.ParseUUID(ownerUserID)
+		if parseErr != nil {
+			writeInvalidID(w, invalidUserIDDetail)
+			return
+		}
+		ownerID = parsed
+	}
 	if slug == "" {
 		slug = slugify(name)
 	}
@@ -286,19 +297,6 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ownerUserID != "" {
-		// OrganizationService.create -> MembershipService.add_member:
-		// `uuid.UUID(owner_user_id)` is a bare, un-try/excepted call inside
-		// svc.create() itself -- a malformed value raises unhandled all the
-		// way out of the route, past the never-reached session.commit(),
-		// to FastAPI's generic 500. A live round found Go silently
-		// SKIPPING the membership insert instead and still committing the
-		// organization.
-		ownerID, parseErr := pythonparity.ParseUUID(ownerUserID)
-		if parseErr != nil {
-			h.logger.ErrorContext(ctx, "admin: create organization owner_user_id invalid", "error", parseErr)
-			policy.WriteInternal(w)
-			return
-		}
 		if _, err := h.store.insertMembershipTx(ctx, tx, org.ID, ownerID, "owner", nil); err != nil {
 			h.logger.ErrorContext(ctx, "admin: create organization owner membership failed", "error", err)
 			policy.WriteInternal(w)

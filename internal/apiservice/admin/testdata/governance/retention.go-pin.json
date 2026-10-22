@@ -1,0 +1,6 @@
+{
+  "W delete malformed": "400 {\"detail\":\"Invalid retention policy id\"}",
+  "execute malformed id": "400 {\"detail\":\"Invalid retention policy id\"}",
+  "get malformed": "400 {\"detail\":\"Invalid retention policy id\"}",
+  "resource types delete is a uuid error": "400 {\"detail\":\"Invalid retention policy id\"}"
+}

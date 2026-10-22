@@ -282,7 +282,7 @@ func (h *handlers) createFeatureOverride(w http.ResponseWriter, r *http.Request)
 	}
 	featureID, featureOK := pythonparity.ParseUUID(featureIDRaw)
 	if featureOK != nil {
-		policy.WriteInternal(w)
+		writeInvalidID(w, invalidFeatureIDDetail)
 		return
 	}
 	creator, err := pythonparity.ParseUUID(user.UserID)
@@ -523,7 +523,7 @@ func (h *handlers) updateFeatureFlag(w http.ResponseWriter, r *http.Request) {
 	}
 	flagID, idOK := pathUUID(r, "flag_id")
 	if !idOK {
-		policy.WriteInternal(w)
+		writeInvalidID(w, invalidFeatureFlagIDDetail)
 		return
 	}
 	flag, err := scanFeatureFlag(h.store.Pool.QueryRow(ctx, `SELECT `+featureFlagColumns+` FROM feature_flags WHERE id = $1`, flagID))

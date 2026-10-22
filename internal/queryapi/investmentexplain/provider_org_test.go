@@ -35,6 +35,9 @@ type fakeOrgResolver struct {
 	model    string
 	modelErr error
 
+	keyHit    bool
+	keyHitErr error
+
 	rawBaseURL       string
 	rawConfigured    bool
 	rawBaseURLErr    error
@@ -60,6 +63,10 @@ func (f *fakeOrgResolver) Matches(context.Context, string, string) (bool, error)
 
 func (f *fakeOrgResolver) Model(context.Context, string, string) (string, error) {
 	return f.model, f.modelErr
+}
+
+func (f *fakeOrgResolver) StoredBaseURLCarriesKey(context.Context, string, string) (bool, error) {
+	return f.keyHit, f.keyHitErr
 }
 
 func (f *fakeOrgResolver) RawBaseURL(context.Context, string, string) (string, bool, error) {
@@ -611,6 +618,60 @@ func TestLogOrgBaseURLSSRFFallback_LogContent(t *testing.T) {
 	}
 	if strings.Contains(output, badURL) {
 		t.Fatalf("log output leaked the FULL base_url verbatim: %q", output)
+	}
+}
+
+// A stored base_url that carries the stored api key is refused before any lookup
+// and logs the refusal class only: no url text, host or key text.
+func TestLogOrgBaseURLSSRFFallback_KeyInBaseURLIsRefusedBeforeAnyLookup(t *testing.T) {
+	const key = "sk-stored-0123456789"
+	keyURL := "https://" + key + ".example.invalid/v1/secret-path"
+	lookups := 0
+	orig := validateRawBaseURL
+	validateRawBaseURL = func(context.Context, string) (bool, string) { lookups++; return false, "spy" }
+	t.Cleanup(func() { validateRawBaseURL = orig })
+
+	var buf bytes.Buffer
+	origOutput, origFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(origOutput); log.SetFlags(origFlags) })
+
+	logOrgBaseURLSSRFFallback(context.Background(), &fakeOrgResolver{rawBaseURL: keyURL, rawConfigured: true, keyHit: true}, "org-canary-42", "openai")
+
+	output := buf.String()
+	if lookups != 0 {
+		t.Fatalf("a key-bearing base_url reached the lookup %d times", lookups)
+	}
+	if !strings.Contains(output, "org-canary-42") || !strings.Contains(output, "carried the api key") {
+		t.Fatalf("expected the refusal class and the org id in the log, got %q", output)
+	}
+	for _, leak := range []string{key, "example.invalid", "secret-path", "https://"} {
+		if strings.Contains(output, leak) {
+			t.Fatalf("log line leaked %q: %q", leak, output)
+		}
+	}
+
+	lookups, buf = 0, bytes.Buffer{}
+	logOrgBaseURLSSRFFallback(context.Background(), &fakeOrgResolver{rawBaseURL: "https://p.example.invalid/v1", rawConfigured: true}, "org-1", "openai")
+	if lookups != 1 {
+		t.Fatalf("a clean base_url made %d lookups, want 1", lookups)
+	}
+}
+
+func TestLogOrgBaseURLSSRFFallback_KeyReadErrorIsSilentAndMakesNoLookup(t *testing.T) {
+	lookups := 0
+	orig := validateRawBaseURL
+	validateRawBaseURL = func(context.Context, string) (bool, string) { lookups++; return false, "spy" }
+	t.Cleanup(func() { validateRawBaseURL = orig })
+	var buf bytes.Buffer
+	origOutput := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(origOutput) })
+
+	logOrgBaseURLSSRFFallback(context.Background(), &fakeOrgResolver{rawBaseURL: "https://p.example.invalid/v1", rawConfigured: true, keyHitErr: errNoSuchModel}, "org-1", "openai")
+	if lookups != 0 || buf.Len() != 0 {
+		t.Fatalf("lookups=%d log=%q, want none", lookups, buf.String())
 	}
 }
 

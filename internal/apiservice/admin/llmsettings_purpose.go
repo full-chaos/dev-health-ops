@@ -120,7 +120,25 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 	if in.baseURL != nil {
 		baseURLText = *in.baseURL
 	}
-	valid, reason, splitErr := llmorgsettings.ValidateBaseURLChecked(ctx, baseURLText)
+	var keys []string
+	if in.apiKey != nil {
+		keys = append(keys, *in.apiKey)
+	}
+	if baseURLText != "" {
+		stored, err := h.storedLLMKey(ctx, orgID)
+		if err != nil {
+			return nil, nil, &llmStepError{"read stored llm key", err}
+		}
+		storedPurpose, err := h.storedPurposeAPIKey(ctx, orgID, in.purpose)
+		if err != nil {
+			return nil, nil, &llmStepError{"read stored llm purpose key", err}
+		}
+		keys = append(keys, stored, storedPurpose)
+	}
+	valid, reason, keyHit, splitErr := h.checkBaseURL(ctx, baseURLText, keys...)
+	if keyHit {
+		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", llmorgsettings.BaseURLKeyRefusal), nil
+	}
 	if splitErr != nil {
 		return nil, nil, &llmStepError{"validate base url", splitErr}
 	}
@@ -172,6 +190,15 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 	}
 	committed = true
 	return out, nil, nil
+}
+
+// storedPurposeAPIKey is the decrypted api_key of one purpose override, "" when it has none.
+func (h *handlers) storedPurposeAPIKey(ctx context.Context, orgID string, purpose llmorgsettings.Purpose) (string, error) {
+	if h.storedPurposeKey != nil {
+		return h.storedPurposeKey(ctx, orgID, purpose)
+	}
+	text, err := h.settingText(ctx, orgID, llmCategory, llmorgsettings.PurposeKey(purpose, "api_key"))
+	return orEmpty(text), err
 }
 
 // deleteLLMPurposeRows removes one override and returns how many rows existed.

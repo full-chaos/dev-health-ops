@@ -203,7 +203,9 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, asOf
 	want := answers{
 		Points: map[string][]string{
 			"two": {"github:platform", "jira:ENG"}, "valid": {"jira:ENG"},
-			"closed": unassigned, "future": unassigned, "reopened": unassigned, "inactive": unassigned,
+			// The repository's first recorded owners apply before its first record (D5987 option C, CHAOS-9404):
+			// the day before the ownership of the future person's repository starts, its owner is the point.
+			"closed": unassigned, "future": {"github:platform"}, "reopened": unassigned, "inactive": unassigned,
 			"starts": {"github:platform"}, "ends": unassigned,
 			"mixed": {"gitlab:ops"}, "roster": unassigned, "none": unassigned,
 			"midday": {"jira:ENG"},
@@ -232,7 +234,7 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, asOf
 		t.Errorf("two days later:\n got  %+v\n want %+v", got, want)
 	}
 	// The earlier day is not changed by the later run.
-	want.Points["future"], want.Rows["future"] = unassigned, "unassigned"
+	want.Points["future"], want.Rows["future"] = []string{"github:platform"}, "unassigned"
 	if got := read(day); !reflect.DeepEqual(got, want) {
 		t.Errorf("the day, after the later run:\n got  %+v\n want %+v", got, want)
 	}

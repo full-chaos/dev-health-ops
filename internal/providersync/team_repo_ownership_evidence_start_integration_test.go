@@ -115,8 +115,10 @@ func TestInferredOwnershipStartsAtItsEarliestEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(before) != 0 {
-				t.Errorf("owned repositories of %s just before the evidence = %v, want none", team, before)
+			// The ownership starts at the evidence (the open rows above); before it the first recorded owners apply
+			// (D5987 option C, CHAOS-9404), so the reader answers with the repository.
+			if len(before) != 1 || before[0] != repo {
+				t.Errorf("owned repositories of %s just before the evidence = %v, want [%s] (the first owners apply backward)", team, before, repo)
 			}
 		})
 	}

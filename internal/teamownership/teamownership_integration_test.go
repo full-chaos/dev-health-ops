@@ -92,7 +92,8 @@ func TestOwnedRepoIDs(t *testing.T) {
 	insert(orgID, teamB, repoOwnedByBoth, before, nil)
 	// A row that EXPIRED before asOf -- must not count.
 	insert(orgID, teamA, repoExpired, before, &past)
-	// A row that has not ACTIVATED yet as of asOf -- must not count.
+	// A row that has not ACTIVATED yet as of asOf, and is the first record of its repository: the first recorded
+	// owners apply before the first record (D5987 option C, CHAOS-9404), so it counts.
 	insert(orgID, teamA, repoNotYetActive, future, nil)
 	// A pattern-unresolved row (repo_id NULL, repo_full_name a literal glob
 	// no real repo is ever named) -- must not count, and must not error the
@@ -123,7 +124,7 @@ func TestOwnedRepoIDs(t *testing.T) {
 		}
 	}
 
-	assertOwned(t, orgID, teamA, repoOwnedByA, repoOwnedByBoth)
+	assertOwned(t, orgID, teamA, repoOwnedByA, repoOwnedByBoth, repoNotYetActive)
 	assertOwned(t, orgID, teamB, repoOwnedByBoth)
 
 	// A team with no rows at all owns nothing -- and that must come back as
@@ -744,6 +745,8 @@ func TestOwnersByRepoIsTheRuleOfTheTeamGroupings(t *testing.T) {
 	want := map[string][]string{
 		shared.String(): {"team-a", "team-b"},
 		byName.String(): {"team-a"},
+		// Its only row starts after asOf: the first recorded owners apply before the first record (D5987 option C).
+		future.String(): {"team-a"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("OwnersByRepo = %v, want %v", got, want)

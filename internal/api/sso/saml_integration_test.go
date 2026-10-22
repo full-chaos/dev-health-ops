@@ -348,6 +348,7 @@ func TestSAMLACSFullRoundTrip(t *testing.T) {
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
 	const testEmail = "saml.user@allowed.example"
+	seedMember(t, ctx, st.pool, orgID, testEmail, "saml", testEmail)
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
 		spEntityID: spEntityID, acsURL: samlACSOverrideFor(providerID), email: testEmail, fullName: "SAML User", nameID: testEmail,
 	})
@@ -405,6 +406,7 @@ func TestSAMLACSRefusesAReplayedAssertion(t *testing.T) {
 		idp.idp.MetadataURL.String(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
+	seedMember(t, ctx, st.pool, orgID, "replay@example.test", "saml", "replay@example.test")
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
 		spEntityID: "https://sp.test/m", acsURL: samlACSOverrideFor(providerID),
 		email: "replay@example.test", fullName: "Replay", nameID: "replay@example.test",
@@ -783,6 +785,7 @@ func TestSAMLACSHonoursAllowIdpInitiatedFalse(t *testing.T) {
 	requestID := inflateAndExtractRequestID(t, redirectURL.Query().Get("SAMLRequest"))
 
 	const testEmail = "not-idp-initiated@example.test"
+	seedMember(t, ctx, st.pool, orgID, testEmail, "saml", testEmail)
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
 		spEntityID: "https://sp.test/m", acsURL: samlACSOverrideFor(providerID),
 		email: testEmail, fullName: "Not IdP Initiated", nameID: testEmail,
@@ -848,6 +851,7 @@ func TestSAMLTwoConcurrentInitiateFlowsBothComplete(t *testing.T) {
 
 	complete := func(email, relayState, requestID string) {
 		t.Helper()
+		seedMember(t, ctx, st.pool, orgID, email, "saml", email)
 		samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
 			spEntityID: "https://sp.test/m", acsURL: samlACSOverrideFor(providerID),
 			email: email, fullName: email, nameID: email, authnRequestID: requestID,

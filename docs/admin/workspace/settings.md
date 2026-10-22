@@ -23,8 +23,10 @@ Do not store provider secrets, private keys, or infrastructure credentials in ge
 
 An organization administrator tests their own BYO LLM credentials with
 `POST /api/v1/admin/llm-settings/readiness`. This checks the organization's
-saved BYO configuration only; it never certifies or exposes information about
-the platform-owned (operator-configured) provider. Certifying the
+saved BYO configuration only, and it does so whether the own model is turned on or off; it never certifies or exposes information about
+the platform-owned (operator-configured) provider. The check runs for the `openai` and
+`anthropic` providers; for any other provider it answers `404` with
+"BYO preflight is not available yet for provider <provider>." Certifying the
 platform-owned provider is a platform-administrator action, not an
 organization-administrator one, see
 [Configure the platform](../../operate/configure/index.md).
@@ -122,3 +124,23 @@ or `{"enabled": false}` stores an explicit on or off for the organization. The c
 a minute. When billing or support set this for the organization, `control` is
 `managed` and the toggle answers `409`; contact support to change it. Each
 change writes an audit log entry.
+
+## Own model on or off
+
+An organization owner or administrator can turn the organization's saved BYO
+model off, and on again, without deleting it. While it is off the
+organization has no usable own model: AI features other than categorization
+use the platform model only when a platform administrator granted platform
+model fallback, and are otherwise refused with the reason
+`own_model_turned_off`. The saved provider, model, key and base URL stay as
+they are, and deleting the BYO settings keeps the toggle.
+
+Admin API: `GET /api/v1/admin/llm-settings/own-model` reads `enabled` and
+`configured` (a saved BYO configuration exists); `PUT` with
+`{"enabled": false}` or `{"enabled": true}` stores the state. The change
+reaches investigations within about 15 seconds. Each change writes an audit
+log entry with the actor and the old and new value.
+
+The setup checks do not follow the toggle: `POST /api/v1/admin/llm-settings/readiness` and
+the model list `GET /api/v1/admin/llm-settings/models` keep using the saved key while the
+toggle is off, so an administrator can check a key before turning the own model back on.

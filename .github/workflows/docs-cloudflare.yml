@@ -9,31 +9,18 @@ on:
       - 'Makefile'
       - 'wrangler.jsonc'
       - 'scripts/build_docs_cloudflare.py'
-      - 'scripts/validate_docs_v2_publication.py'
-      - 'scripts/check_docs_candidate_accessibility.py'
-      - 'scripts/read_wrangler_output.py'
-      - 'scripts/check_docs_cloudflare_host.py'
       - 'docs-data/**'
       - '.github/workflows/docs-cloudflare.yml'
   workflow_dispatch:
     inputs:
       action:
-        description: Build evidence, deploy production, or roll back production
+        description: Build evidence, or smoke-test the live docs host
         required: true
         default: build
         type: choice
         options:
           - build
-          - deploy
-          - rollback
-      version_id:
-        description: Explicit Worker version ID for rollback
-        required: false
-        type: string
-      confirmation:
-        description: Enter docs.fullchaos.dev for deploy or rollback
-        required: false
-        type: string
+          - smoke
 
 concurrency:
   # CHAOS-4906 fleet audit (09-03, chris binding, incident-informed):
@@ -49,7 +36,6 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   preview-or-build:
@@ -71,15 +57,6 @@ jobs:
 
       - name: Install documentation dependencies
         run: pip install -r requirements-docs.txt
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
-          # CHAOS-10486: no setup-go cache here. Its key is shared by every workflow, and a job that compiles little or
-          # nothing saved it first and left the heavy jobs an empty entry.
-          cache: false
 
       - name: Build and prepare validated preview assets
         run: |
@@ -103,90 +80,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Check Cloudflare preview credentials
-        id: credentials
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
-            echo 'configured=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'configured=false' >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload an Access-protected Worker preview
-        id: upload
-        if: >-
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          vars.DOCS_CLOUDFLARE_PREVIEWS_ENABLED == 'true' &&
-          steps.credentials.outputs.configured == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          WRANGLER_OUTPUT_FILE_PATH: .build/wrangler-preview.ndjson
-        run: |
-          npx --yes wrangler@4.112.0 versions upload \
-            --config wrangler.jsonc \
-            --preview-alias "pr-${{ github.event.pull_request.number }}" \
-            --message "Documentation PR #${{ github.event.pull_request.number }} at $GITHUB_SHA" \
-            --tag "docs-pr-${{ github.event.pull_request.number }}"
-          python scripts/read_wrangler_output.py \
-            --input .build/wrangler-preview.ndjson \
-            --github-output "$GITHUB_OUTPUT"
-
-      - name: Comment with the preview URL
-        if: steps.upload.outputs.preview_url != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREVIEW_URL: ${{ steps.upload.outputs.preview_url }}
-          VERSION_ID: ${{ steps.upload.outputs.version_id }}
-        run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --body "$(cat <<EOF
-          ### Documentation preview
-
-          Access-protected Worker preview: ${PREVIEW_URL}
-
-          Worker version: \`${VERSION_ID:-not reported}\`
-
-          Built from \`${GITHUB_SHA}\` with preview \`noindex\` headers and the Phase 9 redirect inventory.
-          EOF
-          )"
-
-      - name: Record why a Cloudflare preview was not uploaded
-        if: >-
-          github.event_name == 'pull_request' &&
-          steps.upload.outcome == 'skipped'
-        run: |
-          {
-            echo '### Cloudflare preview not uploaded'
-            echo
-            echo 'The validated preview artifact is attached to this run.'
-            echo 'A live Worker preview requires a same-repository PR, Cloudflare secrets,'
-            echo 'Cloudflare Access on preview URLs, and DOCS_CLOUDFLARE_PREVIEWS_ENABLED=true.'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  deploy-production:
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy'
+  smoke-production:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'smoke'
     runs-on: ubuntu-latest
-    environment: docs-production
     steps:
-      - name: Confirm production deployment is enabled
-        env:
-          CONFIRMATION: ${{ inputs.confirmation }}
-          ENABLED: ${{ vars.DOCS_CLOUDFLARE_PRODUCTION_ENABLED }}
-        run: |
-          test "$ENABLED" = 'true' || {
-            echo 'DOCS_CLOUDFLARE_PRODUCTION_ENABLED is not true.'
-            exit 1
-          }
-          test "$CONFIRMATION" = 'docs.fullchaos.dev' || {
-            echo 'Production confirmation did not match docs.fullchaos.dev.'
-            exit 1
-          }
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -196,36 +93,10 @@ jobs:
           # nothing saved it first and left the heavy jobs an empty entry.
           cache: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-
-      - name: Install documentation dependencies
-        run: pip install -r requirements-docs.txt
-
-      - name: Build and prepare validated production assets
-        run: python scripts/build_docs_cloudflare.py --mode production
-
-      - name: Deploy the production Worker
-        id: deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          WRANGLER_OUTPUT_FILE_PATH: .build/wrangler-production.ndjson
-        run: |
-          test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
-          npx --yes wrangler@4.112.0 deploy \
-            --config wrangler.jsonc \
-            --message "Documentation production deployment at $GITHUB_SHA" \
-            --tag "docs-${GITHUB_SHA::12}"
-          python scripts/read_wrangler_output.py \
-            --input .build/wrangler-production.ndjson \
-            --github-output "$GITHUB_OUTPUT"
-
       - name: Smoke-test the canonical domain
         run: |
           for attempt in 1 2 3 4 5 6; do
-            if python scripts/check_docs_cloudflare_host.py \
+            if go run -trimpath -mod=readonly ./cmd/cigate docs host-smoke \
               --origin https://docs.fullchaos.dev \
               --redirects docs-data/redirects.tsv; then
               exit 0
@@ -234,64 +105,3 @@ jobs:
             sleep 10
           done
           exit 1
-
-      - name: Record the deployment
-        if: always()
-        env:
-          VERSION_ID: ${{ steps.deploy.outputs.version_id }}
-        run: |
-          {
-            echo '### Documentation production deployment'
-            echo
-            echo "- Source: \`${GITHUB_SHA}\`"
-            echo "- Worker version: \`${VERSION_ID:-not reported}\`"
-            echo '- Domain: https://docs.fullchaos.dev'
-            echo "- Result: \`${{ job.status }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  rollback-production:
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'rollback'
-    runs-on: ubuntu-latest
-    environment: docs-production
-    steps:
-      - name: Validate rollback request
-        env:
-          CONFIRMATION: ${{ inputs.confirmation }}
-          VERSION_ID: ${{ inputs.version_id }}
-          ENABLED: ${{ vars.DOCS_CLOUDFLARE_PRODUCTION_ENABLED }}
-        run: |
-          test "$ENABLED" = 'true' || {
-            echo 'DOCS_CLOUDFLARE_PRODUCTION_ENABLED is not true.'
-            exit 1
-          }
-          test "$CONFIRMATION" = 'docs.fullchaos.dev' || {
-            echo 'Rollback confirmation did not match docs.fullchaos.dev.'
-            exit 1
-          }
-          test -n "$VERSION_ID" || {
-            echo 'An explicit Worker version ID is required.'
-            exit 1
-          }
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-
-      - name: Roll back to the requested Worker version
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          VERSION_ID: ${{ inputs.version_id }}
-        run: |
-          test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
-          npx --yes wrangler@4.112.0 rollback "$VERSION_ID" \
-            --config wrangler.jsonc \
-            --message "Documentation rollback requested by $GITHUB_ACTOR from $GITHUB_SHA"
-
-      - name: Smoke-test the rolled-back deployment
-        run: |
-          python scripts/check_docs_cloudflare_host.py \
-            --origin https://docs.fullchaos.dev \
-            --redirects docs-data/redirects.tsv

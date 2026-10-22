@@ -1,0 +1,34 @@
+Traceback (most recent call last):
+  File "/var/lib/oci-cache/lane-scratch/lane-10434/rec/check_docs_cloudflare_host.py", line 148, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ~~~~^^^^^^^^^^^^^^
+  File "/var/lib/oci-cache/lane-scratch/lane-10434/rec/check_docs_cloudflare_host.py", line 90, in main
+    result = _request(urljoin(origin, path.lstrip("/")))
+  File "/var/lib/oci-cache/lane-scratch/lane-10434/rec/check_docs_cloudflare_host.py", line 32, in _request
+    with opener.open(request, timeout=20) as response:
+         ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 487, in open
+    response = self._open(req, data)
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 504, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+                              '_open', req)
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 464, in _call_chain
+    result = func(*args)
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 1368, in https_open
+    return self.do_open(http.client.HTTPSConnection, req,
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        context=self._context)
+                        ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/urllib/request.py", line 1324, in do_open
+    r = h.getresponse()
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 1478, in getresponse
+    response.begin()
+    ~~~~~~~~~~~~~~^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 365, in begin
+    self.headers = self.msg = parse_headers(self.fp)
+                              ~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 260, in parse_headers
+    headers = _read_headers(fp)
+  File "/home/ubuntu/.local/share/uv/python/cpython-3.14.7-linux-aarch64-gnu/lib/python3.14/http/client.py", line 238, in _read_headers
+    raise HTTPException("got more than %d headers" % _MAXHEADERS)
+http.client.HTTPException: got more than 100 headers

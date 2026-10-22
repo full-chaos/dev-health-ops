@@ -1,0 +1,8 @@
+{
+ "*": "HTTP/1.1 404 X\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx",
+ "/": "HTTP/1.1 200 OK\nContent-Length: 10\nConnection: close\nX-Content-Type-Options: nosniff\nReferrer-Policy: strict-origin-when-cross-origin\n\nDev Health",
+ "/old/": "HTTP/1.1 301 X\r\nContent-Length: 0\r\nConnection: close\r\nLocation: /new/\r\n\r\n",
+ "/phase-11-intentional-missing-page/": "HTTP/1.1 404 X\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnope",
+ "/reference/metrics/weighting-and-aggregation/": "HTTP/1.1 200 X\r\nContent-Length: 1\r\nConnection: close\r\n\r\nm",
+ "/use/": "HTTP/1.1 200 X\r\nContent-Length: 3\r\nConnection: close\r\n\r\nuse"
+}

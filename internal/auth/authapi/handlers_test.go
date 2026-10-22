@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
@@ -55,6 +56,54 @@ type fakeSessions struct {
 	revokedAll []uuid.UUID
 	actors     []session.Actor
 	revokeErr  error
+	// RevokeByCredential and CreateAudited.
+	byCredential    []string
+	byCredentialErr error
+	created         []createdSession
+	createErr       error
+	// ExchangeLegacy.
+	legacy       []session.LegacyRefresh
+	legacyResult session.Result
+	legacyErr    error
+}
+
+// createdSession is one CreateAudited call.
+type createdSession struct {
+	principal uuid.UUID
+	org       *uuid.UUID
+	amr       []string
+	event     audit.AuditEvent
+	issued    session.Issued
+}
+
+func (f *fakeSessions) RevokeByCredential(_ context.Context, credential contracts.SecretString, actor session.Actor) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.byCredential, f.actors = append(f.byCredential, credential.Reveal()), append(f.actors, actor)
+	return f.byCredentialErr == nil, f.byCredentialErr
+}
+
+func (f *fakeSessions) CreateAudited(_ context.Context, principal uuid.UUID, org *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.createErr != nil {
+		return session.Issued{}, f.createErr
+	}
+	now := time.Now().UTC()
+	issued := session.Issued{
+		Session: session.Record{ID: uuid.New(), PrincipalID: principal, OrganizationID: org, Revision: 1, AuthTime: now,
+			AMR: amr, CreatedAt: now, ExpiresAt: now.Add(7 * 24 * time.Hour)},
+		Credential: contracts.NewSecretString("dhr1_" + strings.Repeat("c", 43)), ExpiresAt: now.Add(7 * 24 * time.Hour),
+	}
+	f.created = append(f.created, createdSession{principal: principal, org: org, amr: amr, event: event, issued: issued})
+	return issued, nil
+}
+
+func (f *fakeSessions) ExchangeLegacy(_ context.Context, legacy session.LegacyRefresh) (session.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.legacy = append(f.legacy, legacy)
+	return f.legacyResult, f.legacyErr
 }
 
 func (f *fakeSessions) Exchange(context.Context, contracts.SecretString) (session.Result, error) {
@@ -89,10 +138,18 @@ func (f *fakeSessions) RevokeAll(_ context.Context, principal uuid.UUID, actor s
 }
 
 type fakeUsers struct {
-	users   map[uuid.UUID]UserState
-	roles   map[[2]uuid.UUID]*string
-	err     error
-	roleErr error
+	users       map[uuid.UUID]UserState
+	roles       map[[2]uuid.UUID]*string
+	memberships map[uuid.UUID][]Membership
+	err         error
+	roleErr     error
+}
+
+func (f fakeUsers) Memberships(_ context.Context, id uuid.UUID) ([]Membership, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.memberships[id], nil
 }
 
 func (f fakeUsers) State(_ context.Context, id uuid.UUID) (UserState, bool, error) {
@@ -131,9 +188,11 @@ func newFixture(t *testing.T) *fixture {
 	}
 	principal, org := uuid.New(), uuid.New()
 	now := time.Now().UTC()
+	pin := int64(4)
 	record := session.Record{
 		ID: uuid.New(), PrincipalID: principal, OrganizationID: &org, Revision: 1,
 		AuthTime: now.Add(-time.Hour), AMR: []string{"pwd"}, CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(7 * 24 * time.Hour),
+		LegacyTokenVersion: &pin,
 	}
 	admin := "admin"
 	username := "ada"

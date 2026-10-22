@@ -32,8 +32,8 @@ caller's `Apply` callback inside a transaction it owns, then writes the outbox
 events and the audit row in the same transaction. The outbox and audit inserts
 are unexported: there is no exported way to write one without the others, and a
 mutation that changes no state rolls back with `ErrNoStateChange` (state = a
-guarded row written, migration `0006`, or a new principal or user row, the
-`0013` create guard). Any failure rolls back **everything**.
+guarded row written, migration `0006`, or a new principal, user or session
+row, the `0013` create guard and its `0014` session trigger). Any failure rolls back **everything**.
 
 Each outbox row is a `provisioning-event.v1` event (the row is the envelope).
 The caller gives the aggregate type, its wire id (`prn_`, `org_`, `idn_` ...),
@@ -145,7 +145,7 @@ unpublished backlog is never reaped. Do not delete from the table by hand.
 
 ## Verified against
 
-- `internal/audit/audit.go` (`Commit`, `Mutation`, `OutboxEvent`, `insertOutboxEvents`) and `arm.go`; migrations `0006` and `0013`; `internal/auth/contracts/provisioning` (the vocabulary `Commit` checks).
+- `internal/audit/audit.go` (`Commit`, `Mutation`, `OutboxEvent`, `insertOutboxEvents`) and `arm.go`; migrations `0006`, `0013` and `0014`; `internal/auth/contracts/provisioning` (the vocabulary `Commit` checks).
 - `internal/audit/outboxloop.go` (`DefaultLoopConfig`, `CheckOutboxLoop`, `degradeAfter`, both gauges), `publisher.go` (counters, `AllFailureReasons`, backoff and timeout defaults), `reaper.go` (`Reap`).
 - `internal/auth/authruntime/runtime.go`: the sink-less `NewOutboxLoop` call and its comment.
 - `internal/audit/allowlist.go`: the attribute allowlist.

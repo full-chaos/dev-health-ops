@@ -1,0 +1,5 @@
+GET / dev-health-docs-smoke/1
+GET /use/ dev-health-docs-smoke/1
+GET /reference/metrics/weighting-and-aggregation/ dev-health-docs-smoke/1
+GET /phase-11-intentional-missing-page/ dev-health-docs-smoke/1
+GET /a/old/ dev-health-docs-smoke/1

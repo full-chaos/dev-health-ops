@@ -13,7 +13,9 @@ Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 `authorization_decision.v1` and the two batch forms (CHAOS-4932). All seven
 planned surfaces have shipped, and the Wave 2 session surfaces `session.v1`,
 `refresh-request.v1`, `refresh-response.v1` and `auth-outcome.v1` (CHAOS-10155)
-follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442).
+follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442),
+and `transport-error.v1` (CHAOS-10392), the body auth-service's shared
+transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
 Distinct from `credential-classes.json` and `endpoint-profiles.ops.json`, which
 are the Wave-0 **inventory** contract describing what authentication exists

@@ -1,0 +1,3 @@
+ERROR: index.html: missing built page for https://docs.fullchaos.dev/missing/
+ERROR: index.html: missing anchor 'nope' for https://docs.fullchaos.dev/guide/#nope
+ERROR: index.html: missing built page for https://docs.fullchaos.dev/../../etc/

@@ -214,8 +214,8 @@ func TestTheInvestmentPageSendsOnlyTheStatementsItsDocumentsSelect(t *testing.T)
 // with a statement of its own is sent exactly when its field is in the
 // selection (for the stats, also when the distribution that is made of it
 // is), whether the field is there plainly, under an alias, through a fragment,
-// or kept by a directive. A grouped sankey is sent whenever the batch holds a
-// sankey: it is one statement for the whole `sankey` field. And the answer of
+// or kept by a directive. A grouped sankey is sent when the batch holds a
+// sankey and the operation selects its nodes or edges. And the answer of
 // a field does not depend on what ELSE the document selects: its bytes are
 // the bytes of the same field in the document that selects everything.
 func TestAnAnalyticsPartIsComputedExactlyWhenItIsSelected(t *testing.T) {
@@ -238,24 +238,27 @@ func TestAnAnalyticsPartIsComputedExactlyWhenItIsSelected(t *testing.T) {
 		fields   map[string]string // field of the answer -> the field of the whole answer its bytes must equal
 	}{
 		{"the breakdowns", query(`breakdowns { dimension measure items { key value } }`),
-			map[string]int{statementBreakdown: 1, sankey: 1}, map[string]string{"breakdowns": "breakdowns"}},
+			map[string]int{statementBreakdown: 1}, map[string]string{"breakdowns": "breakdowns"}},
 		{"the stats", query(`evidenceQualityStats { mean stddev total bandCounts }`),
-			map[string]int{statementQualityStats: 1, sankey: 1}, map[string]string{"evidenceQualityStats": "evidenceQualityStats"}},
+			map[string]int{statementQualityStats: 1}, map[string]string{"evidenceQualityStats": "evidenceQualityStats"}},
 		{"the distribution only", query(`evidenceQualityDistribution`),
-			map[string]int{statementQualityStats: 1, sankey: 1}, map[string]string{"evidenceQualityDistribution": "evidenceQualityDistribution"}},
+			map[string]int{statementQualityStats: 1}, map[string]string{"evidenceQualityDistribution": "evidenceQualityDistribution"}},
 		{"the stats under an alias", query(`q: evidenceQualityStats { mean stddev total bandCounts }`),
-			map[string]int{statementQualityStats: 1, sankey: 1}, map[string]string{"q": "evidenceQualityStats"}},
+			map[string]int{statementQualityStats: 1}, map[string]string{"q": "evidenceQualityStats"}},
 		{"the stats through a fragment", query(`...F`) + ` fragment F on AnalyticsResult { evidenceQualityStats { mean stddev total bandCounts } }`,
-			map[string]int{statementQualityStats: 1, sankey: 1}, map[string]string{"evidenceQualityStats": "evidenceQualityStats"}},
+			map[string]int{statementQualityStats: 1}, map[string]string{"evidenceQualityStats": "evidenceQualityStats"}},
 		{"the groups", query(`evidenceQualityByGroup { key label mean total }`),
-			map[string]int{statementQualityByGroup: 1, sankey: 1}, map[string]string{"evidenceQualityByGroup": "evidenceQualityByGroup"}},
+			map[string]int{statementQualityByGroup: 1}, map[string]string{"evidenceQualityByGroup": "evidenceQualityByGroup"}},
 		{"the coverage through an inline fragment", query(`sankey { ... on SankeyResult { nodes { id label dimension value } edges { source target value } coverage { teamCoverage repoCoverage } unit } }`),
 			map[string]int{statementCoverage: 1, sankey: 1}, map[string]string{"sankey": "sankey"}},
-		{"a sankey with no coverage", query(`sankey { unit }`), map[string]int{sankey: 1}, nil},
+		{"a sankey with no coverage and no flow", query(`sankey { unit }`), map[string]int{}, nil},
+		{"a sankey with the coverage only", query(`sankey { coverage { teamCoverage repoCoverage } unit }`), map[string]int{statementCoverage: 1}, nil},
+		{"a sankey with the nodes only", query(`sankey { nodes { id label dimension value } unit }`), map[string]int{sankey: 1}, nil},
+		{"a sankey with the edges only", query(`sankey { edges { source target value } }`), map[string]int{sankey: 1}, nil},
 		{"the stats kept by a directive", `query Q($orgId: String!, $batch: AnalyticsRequestInput!, $with: Boolean = true) { analytics(orgId: $orgId, batch: $batch) { evidenceQualityStats @include(if: $with) { mean stddev total bandCounts } } }`,
-			map[string]int{statementQualityStats: 1, sankey: 1}, map[string]string{"evidenceQualityStats": "evidenceQualityStats"}},
+			map[string]int{statementQualityStats: 1}, map[string]string{"evidenceQualityStats": "evidenceQualityStats"}},
 		{"the stats left out by a directive", `query Q($orgId: String!, $batch: AnalyticsRequestInput!, $with: Boolean = false) { analytics(orgId: $orgId, batch: $batch) { evidenceQualityStats @include(if: $with) { mean } sankey { unit } } }`,
-			map[string]int{sankey: 1}, nil},
+			map[string]int{}, nil},
 		{"everything", everythingDocument,
 			map[string]int{statementBreakdown: 1, statementQualityStats: 1, statementQualityByGroup: 1, statementCoverage: 1, sankey: 1},
 			map[string]string{"breakdowns": "breakdowns", "evidenceQualityStats": "evidenceQualityStats", "evidenceQualityDistribution": "evidenceQualityDistribution", "evidenceQualityByGroup": "evidenceQualityByGroup", "sankey": "sankey"}},

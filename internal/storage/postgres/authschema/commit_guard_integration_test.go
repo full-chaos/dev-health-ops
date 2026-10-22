@@ -21,7 +21,7 @@ var guardedTables = []string{
 
 // unguardedTables are deliberately outside the guard, each with its reason.
 var unguardedTables = map[string]string{
-	"sessions":            "high-rate session lifecycle rows; a per-write outbox event and audit row would be noise",
+	"sessions":            "high-rate session lifecycle rows; a per-write outbox event and audit row would be noise; a new row inside audit.Commit is counted by the 0014 create guard",
 	"refresh_credentials": "high-rate rotation lifecycle rows, same reason as sessions",
 	"users":               "profile and lifecycle columns written at high rate; identity linking is guarded on external_identities; a new row inside audit.Commit is counted by the 0013 create guard",
 	"principals":          "identity root row, created with its user or service account; carries no grant; a new row inside audit.Commit is counted by the 0013 create guard",
@@ -181,6 +181,9 @@ var unguardedColumns = map[string]map[string]string{
 		"client_ip": "lifecycle", "user_agent": "lifecycle", "last_seen_at": "lifecycle", "created_at": "lifecycle", "updated_at": "lifecycle",
 		"token_hash": "security", "expires_at": "security", "revoked_at": "security", "revoked_reason": "security",
 		"revision": "security", "auth_time": "security", "amr": "security",
+		// Written once at insert; its own trigger (0016) refuses any change,
+		// inside audit.Commit or not, so it has no UPDATE OF guard.
+		"legacy_token_version": "lifecycle",
 	},
 	"refresh_credentials": {
 		"id": "lifecycle", "session_id": "lifecycle", "principal_id": "lifecycle", "superseded_by": "lifecycle",

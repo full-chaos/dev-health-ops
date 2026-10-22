@@ -1,0 +1,4 @@
+yaml.constructor.ConstructorError: could not determine a constructor for the tag 'tag:yaml.org,2002:value'
+  in "<unicode string>", line 2, column 6:
+      x: =
+         ^

@@ -38,13 +38,15 @@ import (
 // configure against a live PostgreSQL.
 const sessionRoutesMarker = "AUTH_SESSION_ROUTES_EXECUTED"
 
-// publicReadGrants is the read-only column set on go-api's tables the session
-// routes need until the users cutover: CHAOS-10224 as widened for C1.
-var publicReadGrants = []string{
-	`GRANT SELECT (id, email, username, full_name, password_hash, is_active, is_verified, is_superuser, token_version, auth_provider, auth_provider_id) ON public.users TO %q`,
-	`GRANT SELECT (user_id, org_id, role) ON public.memberships TO %q`,
-	`GRANT SELECT (id, org_id) ON public.sso_providers TO %q`,
-	`GRANT SELECT (id, slug, name, is_active) ON public.organizations TO %q`,
+// publicReadGrants is the runtime role's read-only access to go-api's tables,
+// exactly the production manifest (authschema.PublicReadColumns), so a route
+// that reads a column the manifest does not grant fails here.
+func publicReadGrants() []string {
+	var out []string
+	for _, entry := range authschema.PublicReadColumns() {
+		out = append(out, fmt.Sprintf("GRANT SELECT (%s) ON public.%s TO %%q", strings.Join(entry.Columns, ", "), entry.Table))
+	}
+	return out
 }
 
 type routesEnv struct {
@@ -94,7 +96,7 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
 		t.Fatalf("authschema.Apply: %v", err)
 	}
-	for _, grant := range publicReadGrants {
+	for _, grant := range publicReadGrants() {
 		if _, err := admin.Exec(ctx, fmt.Sprintf(grant, role)); err != nil {
 			t.Fatalf("grant: %v", err)
 		}
@@ -105,7 +107,7 @@ func newRoutesEnv(t *testing.T, ctx context.Context) *routesEnv {
 	}
 	dsn.User = url.UserPassword(role, password)
 
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(sessionEnvironment(map[string]string{
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:     dsn.String(),
 		authconfig.EnvDatabaseSchema:  "auth",
 		authconfig.EnvSigningKeyFile:  "/nonexistent",
@@ -408,10 +410,17 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	if _, err := e.edge.Verify(ctx, fifthTokens.AccessToken.Reveal()); err == nil || !policy.IsRefusal(err) {
 		t.Fatalf("query-api accepted a stale token (err %v): the two checks disagree", err)
 	}
-	// A refresh after the bump mints the new token_version, which query-api accepts.
-	renewed, got := e.refresh(t, fifthTokens.RefreshCredential.Reveal())
+	// The session was pinned to the old token_version: a refresh after the
+	// bump is refused and ends it. A session started after the bump is pinned
+	// to the new version and mints tokens query-api accepts.
+	e.refused(t, e.do(t, http.MethodPost, "/v1/token/refresh", refreshBody(fifthTokens.RefreshCredential.Reveal()), ""), 401, "revision_stale")
+	if e.revokedAt(t, ctx, fifthTokens.SessionID) == nil {
+		t.Fatal("a session pinned to the old token_version stayed live after the bump")
+	}
+	sixth := e.start(t, ctx, user, &org)
+	renewed, got := e.refresh(t, sixth.Credential.Reveal())
 	if renewed == nil {
-		t.Fatalf("refresh after the bump = %d %s", got.status, got.body)
+		t.Fatalf("refresh of a session started after the bump = %d %s", got.status, got.body)
 	}
 	if _, err := e.edge.Verify(ctx, renewed.AccessToken.Reveal()); err != nil {
 		t.Fatalf("query-api refused the renewed token: %v", err)

@@ -81,6 +81,7 @@ internal/llmbudget
 internal/mail
 internal/netclass
 internal/operationalordering
+internal/ownershipwindow
 internal/pgmigrate
 internal/platform/config
 internal/platform/dbphase

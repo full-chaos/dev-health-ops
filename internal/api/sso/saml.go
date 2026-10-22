@@ -849,6 +849,16 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 
 	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID)
 	if err != nil {
+		if errors.Is(err, errIdentityConflict) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
+				identityConflictDetail(), "saml", "provisioning")
+			return
+		}
+		if errors.Is(err, errMembershipRequired) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
+				membershipRequiredDetail(), "saml", "provisioning")
+			return
+		}
 		var processing ssoProcessing
 		if !asSSOProcessing(err, &processing) {
 			h.fail(w, r, "saml provisioning", err)

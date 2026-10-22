@@ -24,7 +24,7 @@ import (
 var publicReadOracle = map[string][]string{
 	"users": {"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
 		"is_active", "is_verified", "is_superuser", "token_version"},
-	"memberships": {"user_id", "org_id", "role"},
+	"memberships": {"user_id", "org_id", "role", "joined_at", "created_at"},
 	"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
 		"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
 	"organizations":          {"id", "slug", "name", "is_active", "tier"},
@@ -67,7 +67,11 @@ func newPublicReadsFixture(t *testing.T, ctx context.Context, hide ...string) *p
 		if _, err := conn.Exec(ctx, fmt.Sprintf(`GRANT CREATE ON SCHEMA public TO %s`, Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 			t.Fatal(err)
 		}
+		owned := []string{LegacyRefreshTokenGrant().Table}
 		for table := range publicReadOracle {
+			owned = append(owned, table)
+		}
+		for _, table := range owned {
 			if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`,
 				Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 				t.Fatalf("hand public.%s to the migration login: %v", table, err)

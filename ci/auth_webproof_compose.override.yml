@@ -47,4 +47,3 @@ services:
       AUTH_SESSION_SUCCESSOR_KEY: ${AUTH_SESSION_SUCCESSOR_KEY}
       # Mounts go-api's login, refresh and logout wire on auth-service (#4602), only in this proof.
       AUTH_LOGIN_LOCKOUT_KEY: ${AUTH_LOGIN_LOCKOUT_KEY}
-      AUTH_SERVICE_COMPAT_ROUTES: "true"

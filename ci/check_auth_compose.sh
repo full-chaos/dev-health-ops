@@ -30,7 +30,7 @@ ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 # The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
 # resource that already carries the project name, so the name must not be guessable.
 PROJECT="${AUTH_COMPOSE_PROOF_PROJECT:-authproof$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
-AUTH_SERVICES=(auth-service auth-migrate auth-provision auth-keys-init)
+AUTH_SERVICES=(auth-service auth-migrate auth-grants auth-provision auth-keys-init)
 
 die() {
   printf 'ERROR: %s\n' "$1" >&2
@@ -106,7 +106,7 @@ health="$(docker inspect --format '{{.State.Health.Status}}' "$(compose --profil
 printf 'auth-service container health: %s\n' "${health}"
 [ "${health}" = "healthy" ] || die "auth-service container health is ${health}, want healthy"
 
-for one_shot in auth-keys-init auth-provision auth-migrate; do
+for one_shot in auth-keys-init auth-provision auth-migrate auth-grants; do
   code="$(docker inspect --format '{{.State.ExitCode}}' "$(compose --profile auth ps -a -q "${one_shot}")")"
   printf '%s exit code: %s\n' "${one_shot}" "${code}"
   [ "${code}" = "0" ] || die "${one_shot} exited ${code}, want 0"
@@ -160,7 +160,7 @@ expected="$(compose --profile auth ps -q auth-service postgres | xargs docker in
 
 printf 'step 4d: no auth service is on the default network\n'
 compose --profile auth config --format json | jq -er '
-  [ "auth-keys-init", "auth-provision", "auth-migrate", "auth-service" ] as $names
+  [ "auth-keys-init", "auth-provision", "auth-migrate", "auth-grants", "auth-service" ] as $names
   | .services as $s
   | [ $names[] | . as $n | $s[$n]
       | { name: $n, nets: ((.networks // {}) | keys | sort), mode: (.network_mode // null) } ] as $rows
@@ -171,7 +171,7 @@ compose --profile auth config --format json | jq -er '
 
 printf 'step 4e: no secret reaches a process argument\n'
 compose --profile auth config --format json | jq -er '
-  [ "auth-keys-init", "auth-provision", "auth-migrate", "auth-service" ] as $names
+  [ "auth-keys-init", "auth-provision", "auth-migrate", "auth-grants", "auth-service" ] as $names
   | .services as $s
   | [ $names[] | . as $n | $s[$n]
       | ([ (.entrypoint // [])[], (.command // [])[] ] | join(" ")) as $text

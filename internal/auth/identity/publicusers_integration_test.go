@@ -57,7 +57,7 @@ func TestProvisionLocalWritesTheRowGoAPIRegisterWrites(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	hash := projectionHash(t, "projection-local-material")
-	email := uniqueEmail("proj-local")
+	email := uniqueEmailCom("proj-local")
 	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: strings.ToUpper(email), FullName: "Local Person", PasswordHash: &hash, Actor: SelfSignUp(nil)})
 	if err != nil {
 		t.Fatalf("ProvisionLocal: %v", err)
@@ -80,7 +80,7 @@ func TestProvisionFederatedWritesTheRowGoAPISocialLoginWrites(t *testing.T) {
 	defer cancel()
 	subject := "gh-" + uuid.NewString()
 	key := ExternalKey{Issuer: "https://github.com", Provider: ProviderGitHub, Subject: subject}
-	id, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: uniqueEmail("proj-social"), FullName: "Display", Username: "octo", LegacyFullName: "Octo Cat", Actor: SelfSignUp(nil)})
+	id, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: uniqueEmailCom("proj-social"), FullName: "Display", Username: "octo", LegacyFullName: "Octo Cat", Actor: SelfSignUp(nil)})
 	if err != nil {
 		t.Fatalf("ProvisionFederated: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestProvisionFederatedRefusesAnSSOAccountItCannotProject(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	email := uniqueEmail("proj-sso")
+	email := uniqueEmailCom("proj-sso")
 	key := ExternalKey{Issuer: "https://idp.example.test", Provider: Provider(uuid.NewString()), Subject: "sso-" + uuid.NewString()}
 	if _, err := e.owned.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: email, Actor: SelfSignUp(nil)}); !errors.Is(err, ErrLegacyProjection) {
 		t.Fatalf("err = %v, want ErrLegacyProjection", err)
@@ -123,7 +123,7 @@ func TestProvisionLocalRefusesAnAddressPublicUsersHolds(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	email := uniqueEmail("proj-taken")
+	email := uniqueEmailCom("proj-taken")
 	e.seedUser(t, ctx, email, true, true)
 	if _, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: email, Actor: SelfSignUp(nil)}); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("err = %v, want ErrEmailTaken", err)
@@ -140,7 +140,7 @@ func TestSetPasswordHashProjectsTheVerifierAndLeavesTokenVersionAlone(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	first := projectionHash(t, "projection-first-material")
-	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmail("proj-pw"), PasswordHash: &first, Actor: SelfSignUp(nil)})
+	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmailCom("proj-pw"), PasswordHash: &first, Actor: SelfSignUp(nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestSetEmailVerifiedProjectsToPublicUsers(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmail("proj-verify"), Actor: SelfSignUp(nil)})
+	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmailCom("proj-verify"), Actor: SelfSignUp(nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,4 +182,8 @@ func TestSetEmailVerifiedProjectsToPublicUsers(t *testing.T) {
 	if row, _ := e.publicUser(t, ctx, id); !row.IsVerified {
 		t.Fatalf("public row not verified: %+v", row)
 	}
+}
+
+func uniqueEmailCom(prefix string) string {
+	return prefix + "-" + uuid.NewString()[:8] + "@example.com"
 }

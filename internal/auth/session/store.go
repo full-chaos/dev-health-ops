@@ -156,6 +156,9 @@ type Record struct {
 	CreatedAt      time.Time
 	ExpiresAt      time.Time
 	RevokedAt      *time.Time
+	// LegacyTokenVersion is public.users.token_version when the session was
+	// created; nil on a session row older than migration 0016.
+	LegacyTokenVersion *int64
 }
 
 // Wire is the session.v1 document of the record.
@@ -176,24 +179,11 @@ func (r Record) Wire() contracts.Session {
 	return out
 }
 
-// Issued is a session's live refresh credential, returned once.
-type Issued struct {
-	Session    Record
-	Credential contracts.SecretString
-	ExpiresAt  time.Time
-}
-
 // Result is the outcome of an exchange. Credential is set only when
 // Reason.Success().
 type Result struct {
 	Reason Reason
 	Issued
-}
-
-// Actor names who asked for a revocation or revision change, for the audit row.
-type Actor struct {
-	PrincipalID *uuid.UUID
-	RequestID   *string
 }
 
 // amrValues is session.v1's closed amr enum.
@@ -220,7 +210,7 @@ func validAMR(amr []string) bool {
 // refresh lifetime, which is when its last credential expired.
 func (s *Store) sessionColumns() string {
 	return `s.id::text, s.principal_id::text, s.organization_id::text, s.revision,
-	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt()
+	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt() + `, s.legacy_token_version`
 }
 
 // effectiveRevokedAt is the expression for alias s's revoked_at as the record
@@ -249,7 +239,7 @@ func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 		id, principal     string
 		organization      *string
 		authTime          *time.Time
-		dest              = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt}
+		dest              = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt, &r.LegacyTokenVersion}
 		parseErr, scanErr error
 	)
 	if scanErr = row.Scan(append(dest, extra...)...); scanErr != nil {
@@ -276,6 +266,11 @@ func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 	return r, nil
 }
 
+// legacyTokenVersion is the pin a new session stores: go-api's readers take a
+// NULL token_version as 0, and a principal without a public.users row has no
+// go-api token to pin, so it is 0 rather than NULL.
+const legacyTokenVersion = `COALESCE(u.token_version, 0)`
+
 // Create starts a session for an active principal and issues its first
 // refresh credential, which starts a new family. auth_time is now.
 func (s *Store) Create(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string) (Issued, error) {
@@ -285,7 +280,7 @@ func (s *Store) Create(ctx context.Context, principalID uuid.UUID, organizationI
 	var out Issued
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
-		out, err = s.insertSession(ctx, tx, principalID, organizationID, amr)
+		out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
 		return err
 	})
 	if err != nil {
@@ -363,6 +358,9 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 // of a consumed credential is reuse: the family and the session are revoked,
 // audited and announced in one audit.Commit transaction (refresh_reused).
 //
+// A session without a legacy_token_version pin is refused (ReasonRevisionStale)
+// under its lock before anything is written.
+//
 // A refusal is a Result with a non-success Reason and a nil error. The error
 // is set only when the store failed or the grace successor could not be
 // recomputed; Result.Reason then says which.
@@ -407,6 +405,10 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 			result.Reason = ReasonSessionExpired
 		case locked.principalDisabled:
 			result.Reason = ReasonPrincipalDeactivated
+		case locked.LegacyTokenVersion == nil:
+			s.logger.WarnContext(ctx, "refresh refused: session has no token_version pin",
+				"session_id", sessionID, "reason_code", string(ReasonRevisionStale))
+			result.Reason = ReasonRevisionStale
 		case !p.consumed && p.expired:
 			result.Reason = ReasonRefreshExpired
 		case !p.consumed:
@@ -447,15 +449,11 @@ func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString)
 	return s.revokeForReuse(ctx, reuse.Record, reusedFamily, hash)
 }
 
-func equalHash(a, b []byte) bool {
-	if len(a) != len(b) || len(a) == 0 {
-		return false
-	}
-	var diff byte
-	for i := range a {
-		diff |= a[i] ^ b[i]
-	}
-	return diff == 0
+// Issued is a session's live refresh credential, returned once.
+type Issued struct {
+	Session    Record
+	Credential contracts.SecretString
+	ExpiresAt  time.Time
 }
 
 // rotate inserts the successor and consumes the parent. The caller holds the

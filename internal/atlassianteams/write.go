@@ -204,6 +204,14 @@ func Write(
 	var memberships []MembershipRow
 	var expiredMemberships []openMembership
 	if selections.Members {
+		// CHAOS-10521: a membership starts at the member's earliest work item.
+		memberStarts := providersync.CarryCatalogEvidenceStarts(ctx, conn, orgID, providersync.CatalogEvidenceScope{
+			Table: providersync.CatalogEvidenceMemberships, Provider: Provider, Source: Source, TeamIDs: append([]string{}, teams...)}, now)
+		freshMemberships = providersync.StartCatalogRows(memberStarts, freshMemberships,
+			func(r MembershipRow) providersync.CatalogEvidenceFact {
+				return providersync.MembershipEvidenceFact(r.TeamID, r.MemberID, optionalText(r.RawProviderUserID), nil, r.IdentityFacets)
+			},
+			func(r *MembershipRow) *time.Time { return &r.ValidFrom })
 		var plan providersync.SnapshotPlan
 		var newerSkipped int
 		if memberships, expiredMemberships, plan, newerSkipped, err = planMemberships(ctx, conn, orgID, teams, freshMemberships, now,
@@ -224,8 +232,16 @@ func Write(
 	var expiredOwnership []openOwnership
 	ownershipUnchanged := 0
 	if selections.Projects {
+		// CHAOS-10521: a project link starts at the project's earliest work item.
+		projectStarts := providersync.CarryCatalogEvidenceStarts(ctx, conn, orgID, providersync.CatalogEvidenceScope{
+			Table: providersync.CatalogEvidenceProjectOwnership, Provider: Provider, Source: Source, TeamIDs: append([]string{}, teams...)}, now)
+		freshOwnership := providersync.StartCatalogRows(projectStarts, rows.Ownership,
+			func(r OwnershipRow) providersync.CatalogEvidenceFact {
+				return providersync.ProjectEvidenceFact(r.TeamID, r.ProjectID)
+			},
+			func(r *OwnershipRow) *time.Time { return &r.ValidFrom })
 		var plan providersync.SnapshotPlan
-		if ownership, expiredOwnership, plan, err = planOwnership(ctx, conn, orgID, teams, rows.Ownership, now,
+		if ownership, expiredOwnership, plan, err = planOwnership(ctx, conn, orgID, teams, freshOwnership, now,
 			providersync.AtlassianTeamLinkKind(Source, rows.UnreadableProjectLinkTeams).Snapshot(scope, providersync.ProveSnapshot(
 				providersync.SnapshotTerm{Holds: rows.ProjectLinksComplete, Reason: snapshotLinkReadsNotEnded}),
 				providersync.AbsenceByListing[providersync.OwnershipSnapshotRow](nil, linkLookups(ctx, prover).Answer))); err != nil {

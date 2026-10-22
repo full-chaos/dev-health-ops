@@ -1,4 +1,4 @@
-# Documentation freshness inventory, validated by scripts/check_freshness_inventory.py
+# Documentation freshness inventory, validated by `cigate docs check-freshness`
 # (`make docs:check-freshness`).
 #
 # Every tracked page needs an explicit disposition (`refresh` or `retire`), an owner,
@@ -12,7 +12,7 @@
 # because they have no live successor by design:
 #   - user-guide/views/flame-diagrams.md  (no flame-diagram page in the canonical IA)
 #   - user-guide/views/ai-attribution.md  (withheld from the public IA; see
-#     tests/docs/test_ai_user_guide_source_accuracy.py::test_ai_attribution_has_no_public_page)
+#     the AI user-guide accuracy check)
 # `last-reviewed` is carried over from the legacy rows, which is conservative: the live
 # pages were authored after that date, so the cadence window closes no later than it
 # would have on the content the review actually covered.

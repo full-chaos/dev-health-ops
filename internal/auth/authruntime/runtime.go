@@ -40,6 +40,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -137,7 +138,7 @@ func compatRoutes(
 	}
 	deps := authapi.CompatDeps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
-		Projector: identities, Social: socialService,
+		Projector: identities, Social: socialService, ServiceCredentials: servicecred.PG{Pool: pool},
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, pool, schema, event)
 		},

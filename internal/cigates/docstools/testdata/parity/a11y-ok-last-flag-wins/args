@@ -1,0 +1,7 @@
+check-docs-accessibility
+--site-dir
+other
+--site-dir
+site
+--css
+extra.css

@@ -936,3 +936,30 @@ func TestGraphQLEdgeSinksStateANonHTMLTypeAndNosniff(t *testing.T) {
 		}
 	}
 }
+
+func TestGraphQLEdgeOrglessTokenNeedsALiveSuperuserRow(t *testing.T) {
+	targetOrg := uuid.MustParse("44444444-4444-4444-4444-444444444444")
+	session := &policy.Impersonation{AdminUserID: ecUser, TargetUserID: ecTarget, TargetOrgID: targetOrg, TargetRole: "viewer"}
+	for name, tc := range map[string]struct {
+		super   bool
+		session *policy.Impersonation
+		code    int
+		ran     int
+	}{
+		"orgless member is refused":         {false, nil, http.StatusUnauthorized, 0},
+		"orgless live superuser is served":  {true, nil, http.StatusOK, 1},
+		"impersonating superuser is served": {true, session, http.StatusOK, 1},
+	} {
+		store := &fakeEdgeStore{
+			states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: tc.super, TokenVersion: 5}},
+			found:    map[uuid.UUID]bool{ecUser: true},
+			sessions: map[uuid.UUID]*policy.Impersonation{ecUser: tc.session},
+		}
+		handler, seen := edgeClaimsHarness(t, store)
+		token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), role: "member", tokenVersion: 5})
+		recorder := edgePostAs(t, handler, token)
+		if recorder.Code != tc.code || len(*seen) != tc.ran {
+			t.Errorf("%s: %d ran=%d body=%q, want %d/%d", name, recorder.Code, len(*seen), recorder.Body.String(), tc.code, tc.ran)
+		}
+	}
+}

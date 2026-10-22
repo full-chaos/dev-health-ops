@@ -333,3 +333,48 @@ func TestWorkflowPathFiltersGoWorkflowDoesNotTriggerOnDocsSiteConfig(t *testing.
 		}
 	}
 }
+
+var deletedPythonManifests = []string{"uv.lock", "pyproject.toml", "requirements.txt", "pytest.ini"}
+
+func deletedManifestPathProblems(t *testing.T, wf map[string]any) []string {
+	t.Helper()
+	var problems []string
+	for _, event := range []string{"push", "pull_request"} {
+		trig := triggerMap(t, wf, event)
+		for _, key := range []string{"paths", "paths-ignore"} {
+			for _, p := range stringList(t, trig[key]) {
+				for _, name := range deletedPythonManifests {
+					if strings.TrimPrefix(p, "/") == name {
+						problems = append(problems, fmt.Sprintf("%s %s lists deleted Python manifest %s", event, key, name))
+					}
+				}
+			}
+		}
+	}
+	return problems
+}
+
+func TestWorkflowPathFiltersGoWorkflowNamesNoDeletedPythonManifest(t *testing.T) {
+	if problems := deletedManifestPathProblems(t, loadWorkflowMap(t, "go.yml")); len(problems) != 0 {
+		t.Errorf("go.yml path filters name deleted Python manifests: %v", problems)
+	}
+}
+
+func TestWorkflowPathFiltersDeletedPythonManifestPlants(t *testing.T) {
+	for _, name := range deletedPythonManifests {
+		for _, event := range []string{"push", "pull_request"} {
+			for _, key := range []string{"paths", "paths-ignore"} {
+				wf := map[string]any{"on": map[string]any{
+					event: map[string]any{key: []any{"internal/**", name}},
+				}}
+				if len(deletedManifestPathProblems(t, wf)) != 1 {
+					t.Errorf("planted %s in %s %s was not refused", name, event, key)
+				}
+			}
+		}
+	}
+	clean := map[string]any{"on": map[string]any{"push": map[string]any{"paths": []any{"internal/**", "go.mod"}}}}
+	if got := deletedManifestPathProblems(t, clean); len(got) != 0 {
+		t.Errorf("clean filter refused: %v", got)
+	}
+}

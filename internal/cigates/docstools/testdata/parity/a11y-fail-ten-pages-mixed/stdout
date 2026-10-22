@@ -1,0 +1,5 @@
+ERROR: p0.html: html element has no lang attribute
+ERROR: p3.html: html element has no lang attribute
+ERROR: p6.html: html element has no lang attribute
+ERROR: p9.html: html element has no lang attribute
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

@@ -109,6 +109,10 @@ func walkWithRetry(walk func() (walked, error), recorded func(revision string) b
 	for attempt := 0; ; attempt++ {
 		done, err := walk()
 		if err == nil {
+			if done.authSchema != "" {
+				logger.Info("ops migrate: the auth migrator's schema is not counted as foreign objects",
+					"schema", done.authSchema, "objects", done.authObjects)
+			}
 			return done, nil
 		}
 		if attempt == 0 && done.attempted != "" && recorded(done.attempted) {
@@ -129,6 +133,10 @@ type walked struct {
 	action    string
 	applied   []string
 	attempted string
+	// authSchema and authObjects are the auth migrator's schema and the number of
+	// its objects when the walk did not count them as foreign.
+	authSchema  string
+	authObjects int
 }
 
 // walkOnce is one transaction: plan under the lock, apply the baseline of an empty
@@ -146,8 +154,7 @@ func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Ch
 		}
 		plan := Decide(observation, baseline, chain, known)
 		if observation.AuthSchema != "" && !observation.HasVersionTable && observation.AuthObjects > 0 {
-			logger.Info("ops migrate: the auth migrator's schema is not counted as foreign objects",
-				"schema", observation.AuthSchema, "objects", observation.AuthObjects)
+			done.authSchema, done.authObjects = observation.AuthSchema, observation.AuthObjects
 		}
 		switch plan.State {
 		case StateAheadOfBuild:
@@ -290,6 +297,14 @@ func AuthSchemaUsable(name string) bool {
 	return pgident.Check(name) == pgident.OK && name != "public"
 }
 
+// authLineageSearchWanted is true when a database without a version table holds
+// objects and the configured schema holds no auth lineage: only then can a
+// lineage under another schema name be the cause (with a valid configured
+// lineage, a stale second one elsewhere is not what the operator should chase).
+func authLineageSearchWanted(observation Observation) bool {
+	return !observation.HasVersionTable && observation.Objects > 0 && observation.AuthSchema == ""
+}
+
 // configuredAuthName is the auth schema name this migrator was given, whether or
 // not it is usable.
 func configuredAuthName() string {
@@ -380,7 +395,7 @@ func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 			observation.AuthSchema = configured
 		}
 	}
-	if !observation.HasVersionTable && observation.Objects > 0 {
+	if authLineageSearchWanted(observation) {
 		// The auth migrator's lineage under another name than the configured one: the
 		// two migrators disagree about the schema, which is a cause of its own.
 		rows, err := tx.Query(ctx, "SELECT bn.nspname FROM pg_class bk JOIN pg_namespace bn ON bn.oid = bk.relnamespace "+

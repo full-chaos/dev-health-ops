@@ -1,0 +1,2 @@
+ERROR: extra.css: custom CSS has no visible-focus rule
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

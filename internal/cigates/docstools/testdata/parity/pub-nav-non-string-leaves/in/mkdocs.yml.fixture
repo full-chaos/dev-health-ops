@@ -1,0 +1,6 @@
+nav:
+  - A: 5
+  - B: ~
+  - C: [index.md, 7]
+  - D: {}
+  - E: reference.md

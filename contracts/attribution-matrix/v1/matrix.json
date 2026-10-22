@@ -29,9 +29,7 @@
       "provider": "github",
       "entity": "members",
       "check": "membership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-9404",
-      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+      "state": "pass"
     },
     {
       "provider": "github",
@@ -49,16 +47,13 @@
       "provider": "github",
       "entity": "repositories",
       "check": "readers_apply_first_owners_backward",
-      "state": "known_red",
-      "ticket": "CHAOS-9404"
+      "state": "pass"
     },
     {
       "provider": "github",
       "entity": "repositories",
       "check": "repository_ownership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-9404",
-      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+      "state": "pass"
     },
     {
       "provider": "github",
@@ -106,17 +101,13 @@
       "provider": "github",
       "entity": "issues",
       "check": "owned_history_is_attributed",
-      "state": "known_red",
-      "ticket": "CHAOS-9404",
-      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+      "state": "pass"
     },
     {
       "provider": "github",
       "entity": "issues",
       "check": "every_active_owner_takes_the_item",
-      "state": "known_red",
-      "ticket": "CHAOS-9404",
-      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+      "state": "pass"
     },
     {
       "provider": "github",
@@ -152,9 +143,7 @@
       "provider": "gitlab",
       "entity": "members",
       "check": "membership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-9404",
-      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+      "state": "pass"
     },
     {
       "provider": "gitlab",
@@ -172,8 +161,7 @@
       "provider": "gitlab",
       "entity": "repositories",
       "check": "readers_apply_first_owners_backward",
-      "state": "known_red",
-      "ticket": "CHAOS-9404"
+      "state": "pass"
     },
     {
       "provider": "gitlab",
@@ -257,9 +245,7 @@
       "provider": "gitlab",
       "entity": "projects",
       "check": "project_ownership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-9404",
-      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+      "state": "pass"
     },
     {
       "provider": "jira",
@@ -361,9 +347,7 @@
       "provider": "jira",
       "entity": "projects",
       "check": "project_ownership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-9404",
-      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+      "state": "pass"
     },
     {
       "provider": "linear",
@@ -393,9 +377,7 @@
       "provider": "linear",
       "entity": "members",
       "check": "membership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-9404",
-      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+      "state": "pass"
     },
     {
       "provider": "linear",
@@ -467,9 +449,7 @@
       "provider": "linear",
       "entity": "projects",
       "check": "project_ownership_starts_at_its_evidence",
-      "state": "known_red",
-      "ticket": "CHAOS-9404",
-      "why": "catalog writers stamp valid_from with the sync time; the readers do not yet apply the first recorded owners backward (D5987 option C)"
+      "state": "pass"
     }
   ],
   "not_applicable": [

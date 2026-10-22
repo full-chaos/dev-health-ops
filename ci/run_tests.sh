@@ -38,7 +38,7 @@ EXIT_FAILURE=10
 # is why the repro above uses `cat`.
 #
 # CONSTRAINT: this is a single-quoted shell string, so the text must contain no
-# single-quote character. tests/tooling/test_local_validate_heredocs.py enforces
+# single-quote character. the Go heredoc guard enforces
 # that, and budgets every here-document under ci/ at the measured 400 bytes.
 USAGE_TEXT='Usage: ci/run_tests.sh <tier>
 

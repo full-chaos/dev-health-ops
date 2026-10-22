@@ -237,6 +237,7 @@ type compatFixture struct {
 	appended   []audit.AuditEvent
 	appendErr  error
 	social     SocialExchange
+	creds      *fakeServiceCredentials
 	orgB       uuid.UUID
 	orgD       uuid.UUID
 }
@@ -248,7 +249,8 @@ const (
 
 func newCompatFixture(t *testing.T) *compatFixture {
 	t.Helper()
-	f := &compatFixture{fixture: newFixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New()}
+	f := &compatFixture{fixture: newFixture(t), attempts: &fakeAttempts{}, orgB: uuid.New(), orgD: uuid.New(),
+		creds: &fakeServiceCredentials{id: uuid.NewString()}}
 	hash := "hash:" + compatPassword
 	f.loginUsers = &fakeLoginUsers{byEmail: map[string]*local.User{
 		compatEmail: {ID: f.principal, IsActive: true, IsVerified: true, PasswordHash: &hash},
@@ -267,6 +269,10 @@ func newCompatFixture(t *testing.T) *compatFixture {
 }
 
 func (f *compatFixture) buildCompat() {
+	var creds ServiceCredentials
+	if f.creds != nil {
+		creds = f.creds
+	}
 	routes, err := CompatRoutes(CompatDeps{
 		Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
 		Logger:    slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
@@ -280,6 +286,7 @@ func (f *compatFixture) buildCompat() {
 			f.appended = append(f.appended, event)
 			return f.appendErr
 		},
+		ServiceCredentials: creds,
 		Login: &LoginConfig{
 			Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey),
 			Compare: func(hash, password string) bool { return hash == "hash:"+password },
@@ -1095,5 +1102,49 @@ func TestAnEmailCollisionsRefusalRowNamesTheAccountThatHoldsTheEmail(t *testing.
 	if event.Attributes["reason_code"] != "email_collision" || event.SubjectPrincipalID == nil || *event.SubjectPrincipalID != f.principal.String() ||
 		event.OrganizationID == nil || *event.OrganizationID != f.orgB.String() {
 		t.Fatalf("audit row %+v, want the account that holds the email and its organization", event)
+	}
+}
+
+func TestCompatSocialLoginWithoutAMembershipReturnsNoUsableRefreshCredential(t *testing.T) {
+	f, fake := newSocialFixture(t)
+	delete(f.users.memberships, f.principal)
+	state := f.users.users[f.principal]
+	state.IsSuperuser = false
+	f.users.users[f.principal] = state
+	f.buildCompat()
+	fake.result = social.ExchangeResult{PrincipalID: f.principal, Created: true}
+	response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"gho_test"}`, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", response.Code, response.Body)
+	}
+	body := decodeObject(t, response.Body.Bytes())
+	created := f.sessions.created[0]
+	refresh, _ := body["refresh_token"].(string)
+	if body["needs_onboarding"] != true || created.org != nil {
+		t.Fatalf("needs_onboarding %v, session org %v", body["needs_onboarding"], created.org)
+	}
+	if refresh == created.issued.Credential.Reveal() || !refreshCredentialPattern.MatchString(refresh) {
+		t.Fatalf("refresh_token %q: want an unstored credential-shaped value, not the session's", refresh)
+	}
+}
+
+func TestCompatSocialLoginOfAMemberOrASuperuserKeepsTheSessionCredential(t *testing.T) {
+	for name, superuser := range map[string]bool{"member": false, "org-less superuser": true} {
+		t.Run(name, func(t *testing.T) {
+			f, fake := newSocialFixture(t)
+			if superuser {
+				delete(f.users.memberships, f.principal)
+			}
+			state := f.users.users[f.principal]
+			state.IsSuperuser = superuser
+			f.users.users[f.principal] = state
+			f.buildCompat()
+			fake.result = social.ExchangeResult{PrincipalID: f.principal}
+			response := f.do(http.MethodPost, PatternCompatSocialLogin, `{"provider":"github","provider_access_token":"gho_test"}`, nil)
+			body := decodeObject(t, response.Body.Bytes())
+			if body["refresh_token"] != f.sessions.created[0].issued.Credential.Reveal() {
+				t.Fatalf("refresh_token is not the session's credential: %s", response.Body)
+			}
+		})
 	}
 }

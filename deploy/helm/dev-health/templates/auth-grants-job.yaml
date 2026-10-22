@@ -1,0 +1,61 @@
+{{- /*
+The Auth Control Plane grants pass (CHAOS-10581): `auth-migrate grants`, the
+grant-only half of auth-migrate (no DDL, no lineage rows). auth-migrate runs
+before the application schema exists on a fresh install and before ops migrate on
+a roll, so the public read grants for a table ops migrate creates are skipped.
+This hook runs AFTER the ops migrate Job (weight 1 > 0, the same hook events) and
+FAILS when a listed public table is still missing, so the release fails closed.
+The schema hook (auth-migrate-job.yaml) is not reordered. Same image, DSN and
+pod labels as auth-migrate, so its NetworkPolicy covers this pod. Rendered only
+where ops migrate runs in the same release: an auth-only database has none of
+the ops tables.
+*/ -}}
+{{- if and .Values.authService.enabled .Values.authService.migrate.enabled .Values.authService.migrate.grantsHook.enabled .Values.migrations.hook.enabled }}
+{{- $a := .Values.authService }}
+{{- $m := $a.migrate }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-grants
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," .Values.migrations.hook.events }}
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $m.backoffLimit }}
+  activeDeadlineSeconds: {{ $m.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-migrate" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      # No serviceAccountName: this Job is a pre-install hook and the release's
+      # ServiceAccount is a normal resource, not yet created on a fresh install.
+      # The namespace default account is enough: the pod mounts no token.
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: auth-grants
+          image: {{ include "dev-health.authMigrateImage" . }}
+          args: ["grants"]
+          imagePullPolicy: {{ $m.image.pullPolicy }}
+          env:
+            - name: AUTH_MIGRATION_DATABASE_URI
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $m.secretKey | quote }}}}
+            - name: AUTH_DATABASE_SCHEMA
+              value: {{ include "dev-health.authDatabaseSchema" . | quote }}
+            - name: AUTH_RUNTIME_DATABASE_ROLE
+              value: {{ $m.runtimeRole | quote }}
+            {{- with $m.sessionReaderRoles }}
+            - name: AUTH_SESSION_READER_ROLES
+              value: {{ join "," . | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml $m.resources | nindent 12 }}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+{{- end }}

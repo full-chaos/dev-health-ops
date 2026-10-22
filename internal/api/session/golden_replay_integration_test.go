@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
@@ -106,6 +107,13 @@ type stack struct {
 
 func startStack(t *testing.T, ctx context.Context) stack {
 	t.Helper()
+	return startStackWithMail(t, ctx, authmail.Config{})
+}
+
+// startStackWithMail is startStack with the link-mail configuration the
+// handlers sign and validate link tokens with.
+func startStackWithMail(t *testing.T, ctx context.Context, mail authmail.Config) stack {
+	t.Helper()
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +180,7 @@ func startStack(t *testing.T, ctx context.Context) stack {
 	oauth := oauthprovider.NewClient()
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
 	routes := session.Routes(session.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
-		Signer: signer, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger})
+		Signer: signer, Mail: mail, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger})
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)

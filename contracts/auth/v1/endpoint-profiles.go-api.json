@@ -12253,28 +12253,6 @@
         "description": "The Stripe webhook handler verifies the Stripe-Signature header over the raw body before it acts."
       },
       "public_rationale": null,
-      "reachable_validators": [
-        {
-          "anchor": {
-            "line": 128,
-            "note": "func (s *Scope) OrgScope",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the first Bearer value, authenticates it as the ops access token and checks X-Org-Id against it, whatever the route accepts.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        },
-        {
-          "anchor": {
-            "line": 221,
-            "note": "func (s *Scope) Impersonation",
-            "path": "internal/api/policy/scope.go"
-          },
-          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): authenticates the Bearer value for a superuser and may replace the effective organization on any api-listener route.",
-          "is_intended_validator": false,
-          "reachable_but_not_owner": true
-        }
-      ],
       "route": "/api/v1/billing/webhooks/stripe",
       "service": "dev-health-ops-api",
       "source": {

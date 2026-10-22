@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -56,12 +57,15 @@ type job struct {
 
 // Sender implements local.Mailer.
 type Sender struct {
-	cfg    Config
-	jobs   chan job
-	sends  metric.Int64Counter
-	wg     sync.WaitGroup
-	mu     sync.RWMutex
-	closed bool
+	cfg   Config
+	jobs  chan job
+	sends metric.Int64Counter
+	wg    sync.WaitGroup
+	// dropped is logged by the workers, never by Send, so a slow log handler
+	// cannot hold a request.
+	dropped atomic.Int64
+	mu      sync.RWMutex
+	closed  bool
 }
 
 var _ local.Mailer = (*Sender)(nil)
@@ -131,7 +135,7 @@ func (s *Sender) Send(ctx context.Context, msg local.Message) error {
 	case s.jobs <- job{purpose: msg.Purpose, message: mail.Message{To: msg.To, Subject: tpl.subject, HTML: html}}:
 	default:
 		s.count(ctx, msg.Purpose, OutcomeDropped)
-		s.cfg.Logger.WarnContext(ctx, "linkmail: pool full, message dropped", "purpose", string(msg.Purpose))
+		s.dropped.Add(1)
 	}
 	return nil
 }
@@ -140,7 +144,9 @@ func (s *Sender) work() {
 	defer s.wg.Done()
 	for j := range s.jobs {
 		s.deliver(j)
+		s.reportDropped()
 	}
+	s.reportDropped()
 }
 
 func (s *Sender) deliver(j job) {
@@ -158,6 +164,12 @@ func (s *Sender) deliver(j job) {
 		return
 	}
 	s.count(ctx, j.purpose, OutcomeSent)
+}
+
+func (s *Sender) reportDropped() {
+	if n := s.dropped.Swap(0); n > 0 {
+		s.cfg.Logger.Warn("linkmail: pool full, messages dropped", "count", n)
+	}
 }
 
 func (s *Sender) count(ctx context.Context, p local.Purpose, outcome string) {

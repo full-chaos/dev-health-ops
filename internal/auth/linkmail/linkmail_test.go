@@ -151,38 +151,27 @@ func TestFullPoolReturnsAtOnceAndCountsDropped(t *testing.T) {
 	}
 	close(p.gate)
 	closeIn(t, s)
-	var rm metricdata.ResourceMetrics
-	if err := rd.Collect(context.Background(), &rm); err != nil {
-		t.Fatal(err)
-	}
-	counts := map[string]int64{}
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name != MetricName {
-				continue
-			}
-			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
-				v, _ := dp.Attributes.Value("outcome")
-				counts[v.AsString()] += dp.Value
-			}
-		}
-	}
+	counts := outcomes(t, rd)
 	if counts[OutcomeDropped] < 7 || counts[OutcomeSent] < 1 || counts[OutcomeSent]+counts[OutcomeDropped] != 10 {
 		t.Fatalf("outcome counts %v do not add up to 10 sends with drops", counts)
 	}
 }
 
-func TestFailureLogsClassOnlyAndCountsFailed(t *testing.T) {
+func TestFailureLogsNoTextAndCountsFailed(t *testing.T) {
 	p := &fakeProvider{err: errors.New("relay refused who@example.test token secret-value-1")}
 	var logs bytes.Buffer
-	s := newSender(t, p, 1, 4, &logs, nil)
+	rd := metric.NewManualReader()
+	s := newSender(t, p, 1, 4, &logs, rd)
 	if err := s.Send(context.Background(), message(local.PurposeEmailVerification, true)); err != nil {
 		t.Fatal(err)
 	}
 	closeIn(t, s)
 	out := logs.String()
-	if !strings.Contains(out, "link mail not sent") {
-		t.Fatal("failure was not logged")
+	if !strings.Contains(out, "link mail not sent") || !strings.Contains(out, "error.class=") || !strings.Contains(out, "error.type=*errors.errorString") {
+		t.Fatal("failure was not logged with its class and type")
+	}
+	if c := outcomes(t, rd); c[OutcomeFailed] != 1 || c[OutcomeSent] != 0 {
+		t.Fatalf("outcome counts %v, want one failed", c)
 	}
 	for _, leak := range []string{"who@example.test", "secret-value-1", "app.example.test"} {
 		if strings.Contains(out, leak) {
@@ -243,4 +232,60 @@ func TestSendOutlivesACancelledRequest(t *testing.T) {
 	if p.count() != 1 {
 		t.Fatal("a cancelled request lost the send")
 	}
+}
+
+func outcomes(t *testing.T, rd *metric.ManualReader) map[string]int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := rd.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != MetricName {
+				continue
+			}
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				v, _ := dp.Attributes.Value("outcome")
+				counts[v.AsString()] += dp.Value
+			}
+		}
+	}
+	return counts
+}
+
+type blockingHandler struct{ gate chan struct{} }
+
+func (blockingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h blockingHandler) Handle(context.Context, slog.Record) error {
+	<-h.gate
+	return nil
+}
+func (h blockingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h blockingHandler) WithGroup(string) slog.Handler      { return h }
+
+func TestFullPoolDoesNotWaitOnALogHandler(t *testing.T) {
+	p := &fakeProvider{gate: make(chan struct{})}
+	h := blockingHandler{gate: make(chan struct{})}
+	s, err := New(Config{Mail: p, Workers: 1, Queue: 1, Logger: slog.New(h),
+		Links: authmail.Config{AppBaseURL: "https://app.example.test", AppBaseURLSet: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 10; i++ {
+			_ = s.Send(context.Background(), message(local.PurposePasswordReset, true))
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Send waited on the log handler")
+	}
+	close(p.gate)
+	close(h.gate)
+	closeIn(t, s)
 }

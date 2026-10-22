@@ -313,6 +313,7 @@ var scopeValidators = []string{"func (s *Scope) OrgScope", "func (s *Scope) Impe
 
 func TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators(t *testing.T) {
 	checked := 0
+	seenExempt := map[string]bool{}
 	for _, row := range loadGoAPIRows(t) {
 		key := rowKey(t, row)
 		reachable, _ := row["reachable_validators"].([]any)
@@ -320,6 +321,22 @@ func TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators(t *tes
 			if len(reachable) != 0 {
 				t.Errorf("%s: a listener without the scope middlewares lists %d reachable validators", key, len(reachable))
 			}
+			continue
+		}
+		if signatureOnlyRoutes[strings.Replace(key, "@api", "", 1)] {
+			if len(reachable) != 0 {
+				t.Errorf("%s skips the scope middlewares but lists %d reachable validators", key, len(reachable))
+			}
+			classes, _ := row["accepted_credential_classes"].([]any)
+			if len(classes) == 0 {
+				t.Errorf("%s: a signature-only route accepts no credential class", key)
+			}
+			for _, class := range classes {
+				if name, _ := class.(string); !strings.HasSuffix(name, "_webhook_signature") {
+					t.Errorf("%s: signature-only route accepts credential class %q", key, name)
+				}
+			}
+			seenExempt[key] = true
 			continue
 		}
 		notes := map[string]bool{}
@@ -338,6 +355,11 @@ func TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators(t *tes
 			}
 		}
 		checked++
+	}
+	for route := range signatureOnlyRoutes {
+		if !seenExempt[route+"@api"] {
+			t.Errorf("signature-only route %q has no api-listener row", route)
+		}
 	}
 	if checked < 200 {
 		t.Fatalf("only %d api-listener rows were checked", checked)

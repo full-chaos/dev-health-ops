@@ -22,7 +22,7 @@ venue_oracle_package_tests() {
 # the discovery cannot reach is never silently dropped: it is either in the
 # registry (and run, proof required) or the verb fails BEFORE running
 # anything. check_venue_oracle_registry (also the public verb
-# `venue-oracle-registry`, run by tests/tooling/test_venue_oracle_registry.py
+# `venue-oracle-registry`, run by the Go tooling checks
 # on every PR, no Go toolchain needed) fails when
 #   - the registry is empty or malformed, a file's rows are unsorted or
 #     duplicated, a row sits in the wrong package's file, or the retired

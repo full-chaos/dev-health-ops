@@ -61,6 +61,8 @@ internal/auth/contracts	contracts.go	internal/auth/authapi
 internal/auth/contracts	contracts.go	internal/auth/authruntime
 internal/auth/contracts	contracts.go	internal/auth/contracts
 internal/auth/contracts	contracts.go	internal/auth/contracts/provisioning
+internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus
+internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus/gen
 internal/auth/contracts	contracts.go	internal/auth/httpapi
 internal/auth/contracts	contracts.go	internal/auth/identity
 internal/auth/contracts	contracts.go	internal/auth/identity/local
@@ -69,8 +71,11 @@ internal/auth/contracts	contracts.go	internal/auth/identity/saml
 internal/auth/contracts	contracts.go	internal/auth/identity/social
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts
+internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus
+internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus/gen
 internal/auth/keystore	open_unix.go	cmd/auth-service
 internal/auth/keystore	open_unix.go	cmd/dho
+internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
 internal/auth/keystore	open_unix.go	internal/auth/keystore
 internal/auth/keystore	open_unix.go	internal/token
@@ -657,8 +662,10 @@ internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/sessionscen
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle/goldenhygiene
 internal/testsupport/venueoracle	golden_walk.go	internal/workerservice
+internal/testsupport/venueoracle	gopin.go	internal/adminops
 internal/testsupport/venueoracle	gopin.go	internal/api/teamsidentity/adminstampvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice
+internal/testsupport/venueoracle	gopin.go	internal/apiservice/admin
 internal/testsupport/venueoracle	gopin.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	opened.go	internal/admincli
 internal/testsupport/venueoracle	opened.go	internal/adminops

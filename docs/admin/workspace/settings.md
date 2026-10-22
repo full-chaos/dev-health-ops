@@ -153,11 +153,11 @@ It is off until an organization owner or administrator turns it on, and it
 applies only while the model Ask Dev uses is on the `anthropic` provider; for
 any other provider the setting has no effect.
 
-The cache has a price. Anthropic charges 25% more than the normal input price
+The cache has a price. Anthropic charges about 25% more than the normal input price
 to write the cached part, and about a tenth of it to read the cached part back
 within five minutes. An organization that asks several questions within five
 minutes of each other pays less; an organization whose questions are always
-more than five minutes apart pays 25% more on that fixed part. The question
+more than five minutes apart pays about 25% more on that fixed part. The question
 itself and the answer are priced as before.
 
 Admin API: `GET /api/v1/admin/llm-settings/prompt-cache` reads `enabled`,

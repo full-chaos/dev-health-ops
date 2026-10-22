@@ -723,3 +723,62 @@ func TestTheOverrideSeesCustodyLatchedStates(t *testing.T) {
 		t.Fatalf("the override saw %+v; want b compromised", seen)
 	}
 }
+
+// A JSON type error in another entry fails the strict decode; the compromised
+// entry still latches, in either entry order.
+func TestATypeErrorInAnotherEntryStillLatchesTheCompromise(t *testing.T) {
+	bad := `{"kid":5,"state":"active","file":"a.pem"}`
+	compromisedEntry := `{"kid":"b","state":"compromised","file":"b.pem"}`
+	for name, body := range map[string]string{
+		"bad entry first": `{"keys":[` + bad + `,` + compromisedEntry + `]}`,
+		"bad entry last":  `{"keys":[` + compromisedEntry + `,` + bad + `]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKeyFile(t, dir, "a.pem")
+			writeKeyFile(t, dir, "b.pem")
+			custody := NewFileCustody(writeManifest(t, dir, body))
+			ctx := context.Background()
+			if _, err := custody.Keys(ctx); err == nil {
+				t.Fatal("a manifest with a type error was accepted")
+			}
+			writeManifest(t, dir, entries("a", "retiring", "b", "active"))
+			if _, err := custody.Sign(ctx, "b", []byte("m")); err == nil {
+				t.Fatal("a kid a refused manifest named compromised signed")
+			}
+		})
+	}
+}
+
+// A compromised entry's public key latches whatever fails first: another
+// entry's missing key file (either order), or a strict refusal of the
+// manifest. A copy of the key under another kid never signs.
+func TestACompromisedKeyLatchesBeforeAnyOtherEntryCanFail(t *testing.T) {
+	for name, body := range map[string]string{
+		"missing file first":     entries("a", "active", "b", "compromised"),
+		"missing file last":      entries("b", "compromised", "a", "active"),
+		"refused manifest":       `{"keys":[{"kid":5,"state":"active","file":"a.pem"},{"kid":"b","state":"compromised","file":"b.pem"}]}`,
+		"refused, trailing data": `{"keys":[{"kid":"a","state":"active","file":"a.pem"},{"kid":"b","state":"compromised","file":"b.pem"}]} {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKeyFile(t, dir, "b.pem")
+			custody := NewFileCustody(writeManifest(t, dir, body))
+			ctx := context.Background()
+			if _, err := custody.Keys(ctx); err == nil {
+				t.Fatal("the manifest was accepted")
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, "b.pem"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "c.pem"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			writeManifest(t, dir, entries("c", "active"))
+			if _, err := custody.Sign(ctx, "c", []byte("m")); err == nil {
+				t.Fatal("a compromised public key signed under another kid")
+			}
+		})
+	}
+}

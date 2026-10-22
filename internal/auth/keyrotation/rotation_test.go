@@ -370,17 +370,20 @@ type fakeRow struct {
 	scanErr    bool
 }
 
-// fakeRowSet is a signing_keys result set; scanErr rows fail Scan.
+// fakeRowSet is a signing_keys result set; a scanErr row fails Scan and,
+// as pgx v5 does, closes the set.
 type fakeRowSet struct {
-	rows []fakeRow
-	i    int
+	rows   []fakeRow
+	i      int
+	closed bool
 }
 
-func (f *fakeRowSet) Next() bool { f.i++; return f.i <= len(f.rows) }
+func (f *fakeRowSet) Next() bool { f.i++; return !f.closed && f.i <= len(f.rows) }
 
 func (f *fakeRowSet) Scan(dest ...any) error {
 	row := f.rows[f.i-1]
 	if row.scanErr {
+		f.closed = true
 		return errors.New("scan failed")
 	}
 	*dest[0].(*string), *dest[1].(*string), *dest[2].(**string) = row.kid, row.state, row.x
@@ -390,10 +393,11 @@ func (f *fakeRowSet) Scan(dest ...any) error {
 func (f *fakeRowSet) Err() error { return nil }
 func (f *fakeRowSet) Close()     {}
 
-// A row the reader cannot read fails the read, but every row is scanned and
-// the readable rows come back with the error, so their compromises latch: a
-// compromised row with an unreadable public key keeps its kid.
-func TestReadKeyStatesScansPastAnUnreadableRow(t *testing.T) {
+// A failed read returns the rows read before it ended, with the error, so
+// their compromises latch: a row whose public key does not decode is skipped
+// and reading goes on (a compromised one keeps its kid); a Scan error ends
+// the read, as pgx closes the rows.
+func TestReadKeyStatesReturnsTheRowsReadWithTheError(t *testing.T) {
 	good := func(public ed25519.PublicKey) *string {
 		x := base64.RawURLEncoding.EncodeToString(public)
 		return &x
@@ -402,10 +406,11 @@ func TestReadKeyStatesScansPastAnUnreadableRow(t *testing.T) {
 	pb, pd := publicKey(t), publicKey(t)
 	set := &fakeRowSet{rows: []fakeRow{
 		{kid: "a", state: "active", x: &bad},
-		{scanErr: true},
 		{kid: "b", state: "compromised", x: good(pb)},
 		{kid: "c", state: "compromised", x: nil},
 		{kid: "d", state: "active", x: good(pd)},
+		{scanErr: true},
+		{kid: "e", state: "compromised", x: good(publicKey(t))},
 	}}
 	rows, err := readKeyStates(set)
 	if err == nil {
@@ -417,6 +422,6 @@ func TestReadKeyStatesScansPastAnUnreadableRow(t *testing.T) {
 	}
 	if len(rows) != 3 || !got["b"].PublicKey.Equal(pb) || got["b"].State != compromised ||
 		got["c"].State != compromised || got["c"].PublicKey != nil || !got["d"].PublicKey.Equal(pd) {
-		t.Fatalf("rows = %+v; want b and d whole and c by kid", rows)
+		t.Fatalf("rows = %+v; want b and d whole, c by kid, nothing after the Scan error", rows)
 	}
 }

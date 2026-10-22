@@ -265,8 +265,9 @@ func (c *FileCustody) Keys(ctx context.Context) ([]Key, error) {
 // contract: a set with any key that is not custodied, or with one key under two
 // kids, is refused whole. States are the effective ones (see latch).
 func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, error) {
-	// load latches the kids the manifest names compromised, even when it
-	// refuses the manifest.
+	// load latches every compromised entry (kid and key file) before it
+	// parses the manifest strictly, so nothing below, and no refusal of the
+	// manifest, can skip a compromise.
 	entries, err := c.load(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -281,11 +282,6 @@ func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, erro
 		public, err := parseEd25519Public(pemBytes)
 		if err != nil {
 			return nil, nil, err
-		}
-		// A compromised entry's public key latches as soon as it is read,
-		// before the duplicate check can refuse the set.
-		if entry.State == StateCompromised {
-			c.compromised.latchKey(entry.KeyID, public)
 		}
 		if publics[string(public)] {
 			return nil, nil, failure(ReasonDuplicatePublicKey, nil)
@@ -389,30 +385,49 @@ func (c *FileCustody) load(ctx context.Context) ([]manifestEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, err := decodeManifest(raw)
-	c.compromised.latchKids(entries)
-	if err != nil {
-		return nil, err
+	c.latchCompromisedEntries(raw)
+	return parseManifest(raw)
+}
+
+// latchCompromisedEntries decodes the manifest's entries leniently, one at a
+// time, ignoring every error (a malformed sibling, trailing data, a missing
+// file), and latches each entry whose state is compromised: its kid, and the
+// public key of its key file when that file reads and parses. It runs before
+// the strict parse and before any other key file is read, so no refusal and
+// no entry order can skip a compromise.
+func (c *FileCustody) latchCompromisedEntries(raw []byte) {
+	var document struct {
+		Keys []json.RawMessage `json:"keys"`
 	}
-	return entries, nil
+	_ = json.NewDecoder(bytes.NewReader(raw)).Decode(&document)
+	for _, item := range document.Keys {
+		var entry struct {
+			KeyID string `json:"kid"`
+			State string `json:"state"`
+			File  string `json:"file"`
+		}
+		_ = json.Unmarshal(item, &entry)
+		if State(entry.State) != StateCompromised || entry.KeyID == "" {
+			continue
+		}
+		c.compromised.latchKids([]manifestEntry{{KeyID: entry.KeyID, State: StateCompromised}})
+		if !bareFileName(entry.File) {
+			continue
+		}
+		pemBytes, err := readCustodiedFile(c.keyPath(manifestEntry{File: entry.File}), MaxKeyFileBytes)
+		if err != nil {
+			continue
+		}
+		if public, err := parseEd25519Public(pemBytes); err == nil {
+			c.compromised.latchKey(entry.KeyID, public)
+		}
+	}
 }
 
 // parseManifest decodes a closed manifest: an unknown member, trailing data,
 // an empty set, an invalid kid, state or file name, or a repeated kid or file
 // is refused.
 func parseManifest(raw []byte) ([]manifestEntry, error) {
-	entries, err := decodeManifest(raw)
-	if err != nil {
-		return nil, err
-	}
-	return entries, nil
-}
-
-// decodeManifest is parseManifest that also returns the decoded entries of a
-// manifest it refuses after decoding (trailing data, an invalid or repeated
-// entry), so custody can latch the compromises they name. A document refused
-// before decoding returns no entries.
-func decodeManifest(raw []byte) ([]manifestEntry, error) {
 	if err := exactMembers(raw); err != nil {
 		return nil, err
 	}
@@ -423,7 +438,7 @@ func decodeManifest(raw []byte) ([]manifestEntry, error) {
 		return nil, failure(ReasonManifestUnparseable, err)
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return document.Keys, failure(ReasonManifestUnparseable, nil)
+		return nil, failure(ReasonManifestUnparseable, nil)
 	}
 	if len(document.Keys) == 0 {
 		return nil, failure(ReasonManifestInvalid, nil)
@@ -432,7 +447,7 @@ func decodeManifest(raw []byte) ([]manifestEntry, error) {
 	for _, entry := range document.Keys {
 		if !KeyIDPattern.MatchString(entry.KeyID) || !entry.State.Valid() || !bareFileName(entry.File) ||
 			kids[entry.KeyID] || files[entry.File] {
-			return document.Keys, failure(ReasonManifestInvalid, nil)
+			return nil, failure(ReasonManifestInvalid, nil)
 		}
 		kids[entry.KeyID], files[entry.File] = true, true
 	}

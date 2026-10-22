@@ -37,10 +37,13 @@ func NewReader(pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) *Reade
 
 var _ token.KeyStateSource = (*Reader)(nil)
 
-// KeyStates returns every key's state and public key. A row it cannot read
-// fails the read, but every row is still scanned and the readable rows are
-// returned with the error, so the runtime latches their compromises (a
-// compromised row with an unreadable public key carries its kid).
+// KeyStates returns every key's state and public key. A row whose public key
+// does not decode fails the read, scanning continues, and the readable rows
+// are returned with the error so the runtime latches their compromises (a
+// compromised row with an unreadable public key carries its kid). A Scan
+// error ends the read (pgx closes the rows): the rows read before it are
+// returned with the error. Both fail closed; the schema (primary key, NOT
+// NULL columns, the status CHECK) keeps either from happening.
 func (r *Reader) KeyStates(ctx context.Context) ([]token.KeyStateRow, error) {
 	rows, err := r.pool.Query(ctx, `SELECT kid, status, public_key_jwk->>'x' FROM `+r.q+`.signing_keys ORDER BY kid`)
 	if err != nil {

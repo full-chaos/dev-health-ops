@@ -264,3 +264,105 @@ func TestRefusalTextNeverEchoesTheValue(t *testing.T) {
 		t.Errorf("canonical refusal echoes the credential value: %q", err.Error())
 	}
 }
+
+// A type that embeds a queue type serializes its fields and satisfies its
+// interfaces without declaring a Kind method of its own, so discovery by
+// declaration misses it. Every embedder of a listed type must be listed.
+func TestEveryQueueTypeEmbedderIsScanned(t *testing.T) {
+	root := repoRoot(t)
+	listed := map[string]bool{}
+	known := map[string]bool{}
+	for _, typ := range append(append([]reflect.Type{}, payloadTypes...), queueArgTypes...) {
+		listed[typ.PkgPath()[strings.LastIndex(typ.PkgPath(), "/")+1:]+"."+typ.Name()] = true
+		if strings.HasSuffix(typ.Name(), "Args") || strings.HasSuffix(typ.Name(), "Payload") {
+			known[typ.Name()] = true
+		}
+	}
+	embedders, err := queuecreds.FindEmbedders(root, []string{"internal", "cmd"}, known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range embedders {
+		if !listed[label] {
+			t.Errorf("%s embeds a queue type and the credential scan does not list it", label)
+		}
+	}
+}
+
+// Probe every string schema with each known credential shape. Only the pinned
+// strings may accept one.
+func TestCredentialShapedStringsAreAdmittedOnlyWhereAnIdIsFreeText(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "contracts", "auth", "v1", "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes, err := queuecreds.CredentialProbes(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := queuecreds.AdmittingStrings(root, probes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(append([]string{}, queuecreds.FreeTextIdentifiers...), queuecreds.RuntimeBoundStrings...)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("strings that accept a credential-shaped value:\n got  %q\n want %q", got, want)
+	}
+}
+
+// domain.type accepts a credential-shaped value in the schema; Decode must
+// refuse it for every kind, because the value has to equal the kind's
+// registered domain_link word, and no registered word may look like a credential.
+func TestDomainTypeRefusesCredentialShapedValues(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "contracts", "auth", "v1", "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes, err := queuecreds.CredentialProbes(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := valueScanner(t, root)
+	registry, err := jobcontract.LoadRegistry(filepath.Join(root, "contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.Jobs) < 20 {
+		t.Fatalf("registry lists %d jobs", len(registry.Jobs))
+	}
+	for _, job := range registry.Jobs {
+		if rule := values.Match(job.DomainLink); rule != "" {
+			t.Errorf("%s domain_link %q matches %s", job.Kind, job.DomainLink, rule)
+		}
+	}
+	control, _ := json.Marshal(map[string]any{
+		"contract_version": 1, "correlation_id": "job-heartbeat-0001", "idempotency_key": "heartbeat:2026-07-21T12:00:00Z",
+		"domain":  map[string]any{"type": "schedule_occurrence", "id": "00000000-0000-4000-8000-000000000001"},
+		"payload": map[string]any{"scheduled_for": "2026-07-21T12:00:00Z"},
+	})
+	if _, err := jobcontract.Decode(jobcontract.KindHeartbeat, control); err != nil {
+		t.Fatalf("the control envelope is refused: %v", err)
+	}
+	for _, probe := range probes {
+		domainType := probe
+		if len(domainType) > 64 {
+			domainType = domainType[:64]
+		}
+		envelope, err := json.Marshal(map[string]any{
+			"contract_version": 1,
+			"correlation_id":   "job-heartbeat-0001",
+			"idempotency_key":  "heartbeat:2026-07-21T12:00:00Z",
+			"domain":           map[string]any{"type": domainType, "id": "00000000-0000-4000-8000-000000000001"},
+			"payload":          map[string]any{"scheduled_for": "2026-07-21T12:00:00Z"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobcontract.Decode(jobcontract.KindHeartbeat, envelope); err == nil {
+			t.Errorf("Decode accepted domain.type %q", domainType)
+		}
+	}
+}

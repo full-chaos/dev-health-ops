@@ -6,12 +6,14 @@ package queuecreds
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -196,7 +199,7 @@ const contractDir = "contracts/jobs/v1"
 func ScanContracts(root string, values *ValueScanner) (ContractScan, error) {
 	var scan ContractScan
 	dir := filepath.Join(root, filepath.FromSlash(contractDir))
-	schemaFiles, err := filepath.Glob(filepath.Join(dir, "schemas", "*.json"))
+	schemaFiles, err := jsonFilesUnder(filepath.Join(dir, "schemas"))
 	if err != nil {
 		return scan, err
 	}
@@ -210,7 +213,7 @@ func ScanContracts(root string, values *ValueScanner) (ContractScan, error) {
 		label := relativeLabel(dir, file)
 		walkSchema(&scan, values, label, "$", node, false)
 	}
-	exampleFiles, err := filepath.Glob(filepath.Join(dir, "examples", "*.json"))
+	exampleFiles, err := jsonFilesUnder(filepath.Join(dir, "examples"))
 	if err != nil {
 		return scan, err
 	}
@@ -223,6 +226,23 @@ func ScanContracts(root string, values *ValueScanner) (ContractScan, error) {
 		walkValue(&scan, values, relativeLabel(dir, file), "$", node)
 	}
 	return scan, nil
+}
+
+// jsonFilesUnder lists every .json file below dir, however deep, so a schema
+// filed in a subdirectory is scanned like any other.
+func jsonFilesUnder(dir string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".json") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files, err
 }
 
 func relativeLabel(dir, file string) string {
@@ -263,6 +283,11 @@ func walkSchema(scan *ContractScan, values *ValueScanner, file, path string, nod
 	typeName, _ := schema["type"].(string)
 	if _, patterned := schema["patternProperties"]; patterned {
 		scan.add(where, "patternProperties lets a payload carry names the contract does not list")
+	}
+	for _, keyword := range []string{"$ref", "$dynamicRef", "$recursiveRef", "$anchor", "$dynamicAnchor"} {
+		if _, present := schema[keyword]; present {
+			scan.add(where, keyword+" points at a schema the scan does not read")
+		}
 	}
 	if hasProperties || typeName == "object" {
 		// The envelope's payload slot is open by design; each kind's own
@@ -518,35 +543,39 @@ type TaggedField struct {
 	Children []TaggedChild
 }
 
-// TaggedFields lists every field with a json tag in the package.
+// TaggedFields lists every serialized field of every struct type in the
+// package: a field with a json tag under its tag name, an exported field
+// without one under its Go name (encoding/json writes it that way).
 func (parsed PackageTypes) TaggedFields() []TaggedField {
 	var fields []TaggedField
 	collect := func(function string, root ast.Node) {
 		ast.Inspect(root, func(node ast.Node) bool {
-			field, ok := node.(*ast.Field)
-			if !ok || field.Tag == nil {
-				return true
-			}
-			name, ok := jsonName(field)
+			structType, ok := node.(*ast.StructType)
 			if !ok {
 				return true
 			}
-			tagged := TaggedField{Func: function, Name: name}
-			if structType, isStruct := field.Type.(*ast.StructType); isStruct {
-				tagged.Struct = true
-				for _, child := range structType.Fields.List {
-					childName, named := jsonName(child)
-					if !named && len(child.Names) == 1 {
-						childName = child.Names[0].Name
-					}
-					typeName := "?"
-					if ident, isIdent := child.Type.(*ast.Ident); isIdent {
-						typeName = ident.Name
-					}
-					tagged.Children = append(tagged.Children, TaggedChild{Name: childName, Type: typeName})
+			for _, field := range structType.Fields.List {
+				name, ok := serializedName(field)
+				if !ok {
+					continue
 				}
+				tagged := TaggedField{Func: function, Name: name}
+				if inner, isStruct := field.Type.(*ast.StructType); isStruct {
+					tagged.Struct = true
+					for _, child := range inner.Fields.List {
+						childName, named := serializedName(child)
+						if !named && len(child.Names) == 1 {
+							childName = child.Names[0].Name
+						}
+						typeName := "?"
+						if ident, isIdent := child.Type.(*ast.Ident); isIdent {
+							typeName = ident.Name
+						}
+						tagged.Children = append(tagged.Children, TaggedChild{Name: childName, Type: typeName})
+					}
+				}
+				fields = append(fields, tagged)
 			}
-			fields = append(fields, tagged)
 			return true
 		})
 	}
@@ -562,20 +591,25 @@ func (parsed PackageTypes) TaggedFields() []TaggedField {
 	return fields
 }
 
-func jsonName(field *ast.Field) (string, bool) {
-	if field.Tag == nil {
-		return "", false
+// serializedName returns the name encoding/json gives a struct field. Embedded
+// fields and unexported fields without a tag name are not named fields.
+func serializedName(field *ast.Field) (string, bool) {
+	if field.Tag != nil {
+		if raw, err := strconv.Unquote(field.Tag.Value); err == nil {
+			if tag, present := reflect.StructTag(raw).Lookup("json"); present {
+				if tag == "-" {
+					return "", false
+				}
+				if name, _, _ := strings.Cut(tag, ","); name != "" {
+					return name, true
+				}
+			}
+		}
 	}
-	raw, err := strconv.Unquote(field.Tag.Value)
-	if err != nil {
-		return "", false
+	if len(field.Names) == 1 && field.Names[0].IsExported() {
+		return field.Names[0].Name, true
 	}
-	tag, ok := reflect.StructTag(raw).Lookup("json")
-	if !ok {
-		return "", false
-	}
-	name, _, _ := strings.Cut(tag, ",")
-	return name, name != "" && name != "-"
+	return "", false
 }
 
 // Exemption pins one operator JSON field whose name reads as a credential but
@@ -643,4 +677,259 @@ func (parsed PackageTypes) OperatorFindings(label string, exemptions []Exemption
 		}
 	}
 	return findings
+}
+
+// FindEmbedders lists the struct types below root/dirs that embed one of the
+// known type names, directly or through another embedder. An embedding type
+// serializes the fields of the embedded type and can add its own, and it
+// satisfies the queue interfaces through the embedded methods without declaring
+// them, so a search by declared method or by name suffix misses it. Labels are
+// "<package directory base>.<type>".
+func FindEmbedders(root string, dirs []string, known map[string]bool) ([]string, error) {
+	type declared struct {
+		label    string
+		name     string
+		embedded []string
+	}
+	var all []declared
+	fset := token.NewFileSet()
+	for _, dir := range dirs {
+		err := filepath.WalkDir(filepath.Join(root, filepath.FromSlash(dir)), func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				if base := entry.Name(); base == "testdata" || base == "node_modules" || base == "vendor" || strings.HasPrefix(base, ".") {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if err != nil {
+				return err
+			}
+			for _, decl := range file.Decls {
+				gen, ok := decl.(*ast.GenDecl)
+				if !ok || gen.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range gen.Specs {
+					typeSpec := spec.(*ast.TypeSpec)
+					structType, isStruct := typeSpec.Type.(*ast.StructType)
+					if !isStruct {
+						continue
+					}
+					entry := declared{label: filepath.Base(filepath.Dir(path)) + "." + typeSpec.Name.Name, name: typeSpec.Name.Name}
+					for _, field := range structType.Fields.List {
+						if len(field.Names) == 0 {
+							if name := embeddedTypeName(field.Type); name != "" {
+								entry.embedded = append(entry.embedded, name)
+							}
+						}
+					}
+					all = append(all, entry)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	names := map[string]bool{}
+	for name := range known {
+		names[name] = true
+	}
+	found := map[string]struct{}{}
+	for changed := true; changed; {
+		changed = false
+		for _, entry := range all {
+			if _, done := found[entry.label]; done {
+				continue
+			}
+			for _, embedded := range entry.embedded {
+				if names[embedded] {
+					found[entry.label] = struct{}{}
+					names[entry.name] = true
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	return sortedKeys(found), nil
+}
+
+func embeddedTypeName(expr ast.Expr) string {
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return typed.Name
+	case *ast.StarExpr:
+		return embeddedTypeName(typed.X)
+	case *ast.SelectorExpr:
+		return typed.Sel.Name
+	case *ast.IndexExpr:
+		return embeddedTypeName(typed.X)
+	case *ast.IndexListExpr:
+		return embeddedTypeName(typed.X)
+	}
+	return ""
+}
+
+// CredentialProbes builds one probe string for every credential shape the
+// value scanner knows: a JWT, each credential_prefix marker followed by hex and
+// by base64url text, each authorization_scheme marker followed by a token, a
+// provider token, a PEM header and a URL with userinfo. The probes are built at
+// run time so no secret-shaped literal sits in the tree.
+func CredentialProbes(credentialClasses []byte) ([]string, error) {
+	scanner, err := NewValueScanner(credentialClasses)
+	if err != nil {
+		return nil, err
+	}
+	segment := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
+	hexText := strings.Repeat("0123456789abcdef", 2)
+	urlText := segment("probe-probe-probe-probe-probe-probe")
+	probes := []string{
+		segment(`{"alg":"none"}`) + "." + segment(`{"sub":"probe"}`) + "." + segment("probe-signature"),
+		"gl" + "pat-" + urlText[:20],
+		"-----BEGIN " + "PRIVATE KEY-----",
+		"postgres://user:" + "probe@host/db",
+	}
+	for _, rule := range scanner.rules {
+		if prefix, ok := strings.CutPrefix(rule.name, "prefix:"); ok {
+			probes = append(probes, prefix+hexText, prefix+urlText)
+		}
+		if scheme, ok := strings.CutPrefix(rule.name, "scheme:"); ok {
+			probes = append(probes, scheme+" "+urlText)
+		}
+	}
+	for _, probe := range probes {
+		if scanner.Match(probe) == "" {
+			return nil, fmt.Errorf("probe %q matches no value rule", probe)
+		}
+	}
+	return probes, nil
+}
+
+var (
+	uuidFormat = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+)
+
+// admits reports whether a string schema accepts value. Only the keywords that
+// restrict a string are applied; an unknown format restricts nothing.
+func admits(schema map[string]any, value string) (bool, error) {
+	if constant, ok := schema["const"]; ok {
+		return constant == value, nil
+	}
+	if enum, ok := schema["enum"].([]any); ok {
+		for _, entry := range enum {
+			if entry == value {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	length := float64(len([]rune(value)))
+	if limit, ok := schema["maxLength"].(json.Number); ok {
+		if max, err := limit.Float64(); err == nil && length > max {
+			return false, nil
+		}
+	}
+	if limit, ok := schema["minLength"].(json.Number); ok {
+		if min, err := limit.Float64(); err == nil && length < min {
+			return false, nil
+		}
+	}
+	if pattern, ok := schema["pattern"].(string); ok {
+		compiled, err := regexp.Compile(pattern)
+		if err != nil {
+			return false, fmt.Errorf("pattern %q: %w", pattern, err)
+		}
+		if !compiled.MatchString(value) {
+			return false, nil
+		}
+	}
+	switch schema["format"] {
+	case "uuid":
+		return uuidFormat.MatchString(value), nil
+	case "date-time":
+		_, err := time.Parse(time.RFC3339Nano, value)
+		return err == nil, nil
+	case "date":
+		_, err := time.Parse("2006-01-02", value)
+		return err == nil, nil
+	}
+	return true, nil
+}
+
+// AdmittingStrings lists, as "<file> <path>", every string property of the
+// envelope schema and the payload schemas that accepts at least one probe.
+func AdmittingStrings(root string, probes []string) ([]string, error) {
+	dir := filepath.Join(root, filepath.FromSlash(contractDir))
+	files, err := jsonFilesUnder(filepath.Join(dir, "schemas"))
+	if err != nil {
+		return nil, err
+	}
+	files = append([]string{filepath.Join(dir, "envelope.schema.json")}, files...)
+	admitting := map[string]struct{}{}
+	for _, file := range files {
+		node, err := readJSON(file)
+		if err != nil {
+			return nil, err
+		}
+		label := relativeLabel(dir, file)
+		var walkErr error
+		var walk func(path string, node any)
+		walk = func(path string, node any) {
+			schema, ok := node.(map[string]any)
+			if !ok || walkErr != nil {
+				return
+			}
+			if schema["type"] == "string" {
+				for _, probe := range probes {
+					accepted, err := admits(schema, probe)
+					if err != nil {
+						walkErr = fmt.Errorf("%s %s: %w", label, path, err)
+						return
+					}
+					if accepted {
+						admitting[label+" "+path] = struct{}{}
+						break
+					}
+				}
+			}
+			if properties, ok := schema["properties"].(map[string]any); ok {
+				for _, name := range sortedMapKeys(properties) {
+					walk(path+".properties."+name, properties[name])
+				}
+			}
+			if items, present := schema["items"]; present {
+				walk(path+".items", items)
+			}
+		}
+		walk("$", node)
+		if walkErr != nil {
+			return nil, walkErr
+		}
+	}
+	return sortedKeys(admitting), nil
+}
+
+// FreeTextIdentifiers are the two envelope strings that accept any bounded
+// token-shaped text (acp, 2026-10-22). The gate pins this list: a third string
+// that accepts a credential-shaped value, or one of these two that stops
+// accepting it, fails the gate. A runtime value guard is tracked separately.
+var FreeTextIdentifiers = []string{
+	"envelope.schema.json $.properties.correlation_id",
+	"envelope.schema.json $.properties.idempotency_key",
+}
+
+// RuntimeBoundStrings accept a credential-shaped value in the JSON schema but
+// not at decode time: jobcontract.Decode requires the value to equal the kind's
+// registered domain_link word. The gate executes that refusal.
+var RuntimeBoundStrings = []string{
+	"envelope.schema.json $.properties.domain.properties.type",
 }

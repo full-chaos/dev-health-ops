@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -352,6 +353,186 @@ func logResolvedDatabase() {
 			}
 			if text != "" && strings.Count(text, "\n")+1 != len(tc.expect) {
 				t.Errorf("want %d findings, got:\n%s", len(tc.expect), text)
+			}
+		})
+	}
+}
+
+func TestContractScanReadsReferencesAndNestedSchemas(t *testing.T) {
+	root := repoRoot(t)
+	values := valueScanner(t, root)
+	t.Run("reference to an outside schema", func(t *testing.T) {
+		temp := copyContracts(t)
+		mutateJSON(t, temp, heartbeatSchema, func(node map[string]any) {
+			schemaProperties(node)["scheduled_for"] = map[string]any{"$ref": "../outside.schema.json"}
+		})
+		scan, err := queuecreds.ScanContracts(temp, values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := wholeText(scan.Findings)
+		if !strings.Contains(text, "$ref points at a schema the scan does not read") || len(scan.Findings) != 1 {
+			t.Fatalf("want exactly the reference finding, got:\n%s", text)
+		}
+	})
+	t.Run("schema in a subdirectory", func(t *testing.T) {
+		temp := copyContracts(t)
+		base, err := queuecreds.ScanContracts(temp, values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nested := filepath.Join(temp, "contracts", "jobs", "v1", "schemas", "nested")
+		if err := os.MkdirAll(nested, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := `{"type":"object","additionalProperties":false,"properties":{"access_token":{"type":"string","pattern":"^a$"}}}`
+		if err := os.WriteFile(filepath.Join(nested, "x.schema.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		scan, err := queuecreds.ScanContracts(temp, values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := wholeText(scan.Findings)
+		if scan.Schemas != base.Schemas+1 || !strings.Contains(text, "nested/x.schema.json") || len(scan.Findings) != 1 {
+			t.Fatalf("want the nested schema scanned with one finding, got %d schemas:\n%s", scan.Schemas, text)
+		}
+	})
+}
+
+func TestOperatorScanReadsUntaggedFields(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		expect string
+	}{
+		{"exported untagged field", "type out struct {\n\tAccessToken string\n}\n", "json tag AccessToken: tag name reads as a credential"},
+		{"unexported untagged field", "type out struct {\n\taccessToken string\n}\n", ""},
+		{"untagged field hidden from json", "type out struct {\n\tAccessToken string `json:\"-\"`\n}\n", ""},
+		{"untagged benign field", "type out struct {\n\tCount int\n\tCredentialFingerprint string\n}\n", ""},
+		{"parameter named like a credential", "func f(AccessToken string) {}\n", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text := wholeText(writePackage(t, tc.source).OperatorFindings("p", nil))
+			if tc.expect == "" && text != "" {
+				t.Fatalf("unexpected findings:\n%s", text)
+			}
+			if tc.expect != "" && (!strings.Contains(text, tc.expect) || strings.Count(text, "\n") != 0) {
+				t.Fatalf("want exactly %q, got:\n%s", tc.expect, text)
+			}
+		})
+	}
+}
+
+func TestFindEmbeddersFollowsEmbeddingChains(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "p")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := `package p
+
+import "example.test/jobruntime"
+
+type Direct struct {
+	jobruntime.HeartbeatArgs
+	Token string
+}
+type Pointer struct{ *Direct }
+type Generic struct{ Wrapper[Pointer] }
+type Wrapper[T any] struct{}
+type Unrelated struct{ Count int }
+type Named struct{ inner jobruntime.HeartbeatArgs }
+`
+	if err := os.WriteFile(filepath.Join(dir, "p.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "internal", "testdata"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "internal", "testdata", "t.go"), []byte("package t\ntype Skipped struct{ HeartbeatArgs }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := queuecreds.FindEmbedders(root, []string{"internal"}, map[string]bool{"HeartbeatArgs": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"p.Direct", "p.Pointer"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("embedders = %v, want %v", got, want)
+	}
+	if _, err := queuecreds.FindEmbedders(root, []string{"missing"}, nil); err == nil {
+		t.Fatal("a missing directory was scanned as empty")
+	}
+}
+
+func TestAdmittingStringsReportsAPlantedLooseProperty(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "contracts", "auth", "v1", "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes, err := queuecreds.CredentialProbes(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		plant func(t *testing.T, temp string)
+		extra string
+		lost  string
+	}{
+		{"no change", func(*testing.T, string) {}, "", ""},
+		{"payload property loosened to a token alphabet", func(t *testing.T, temp string) {
+			mutateJSON(t, temp, providerSchema, func(node map[string]any) {
+				unit := schemaProperties(node)["unit_id"].(map[string]any)
+				delete(unit, "format")
+				unit["pattern"] = "^[A-Za-z0-9._-]+$"
+			})
+		}, "schemas/sync.provider_unit.v1.schema.json $.properties.unit_id", ""},
+		{"payload property with no restriction", func(t *testing.T, temp string) {
+			mutateJSON(t, temp, providerSchema, func(node map[string]any) {
+				unit := schemaProperties(node)["unit_id"].(map[string]any)
+				delete(unit, "format")
+				delete(unit, "pattern")
+			})
+		}, "schemas/sync.provider_unit.v1.schema.json $.properties.unit_id", ""},
+		{"date-time property with a pattern that matches anything", func(t *testing.T, temp string) {
+			mutateJSON(t, temp, heartbeatSchema, func(node map[string]any) {
+				schemaProperties(node)["scheduled_for"] = map[string]any{"type": "string", "format": "date-time", "pattern": ".*"}
+			})
+		}, "", ""},
+		{"free-text identifier tightened", func(t *testing.T, temp string) {
+			mutateJSON(t, temp, "contracts/jobs/v1/envelope.schema.json", func(node map[string]any) {
+				schemaProperties(node)["correlation_id"].(map[string]any)["pattern"] = "^job-[0-9]{4}$"
+			})
+		}, "", "envelope.schema.json $.properties.correlation_id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			temp := copyContracts(t)
+			tc.plant(t, temp)
+			got, err := queuecreds.AdmittingStrings(temp, probes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := append(append([]string{}, queuecreds.FreeTextIdentifiers...), queuecreds.RuntimeBoundStrings...)
+			if tc.lost != "" {
+				kept := base[:0]
+				for _, entry := range base {
+					if entry != tc.lost {
+						kept = append(kept, entry)
+					}
+				}
+				base = kept
+			}
+			if tc.extra != "" {
+				base = append(base, tc.extra)
+			}
+			sort.Strings(base)
+			if !reflect.DeepEqual(got, base) {
+				t.Fatalf("admitting strings:\n got  %q\n want %q", got, base)
 			}
 		})
 	}

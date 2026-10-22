@@ -123,4 +123,6 @@ VALUES ($1, 'llmmodelrule-admin@example.com', true, true, false, 0, now(), now()
 			t.Errorf("provider %q needs no model: status %d %s", provider, status, got)
 		}
 	}
+
+	venueoracle.WriteGoOnlyProof(t, "Go-only rule test: the Python plane saved a model-less BYO provider, so there is no Python answer to compare; the route's refusals and the rows after them are asserted directly")
 }

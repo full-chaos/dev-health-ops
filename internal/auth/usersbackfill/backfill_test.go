@@ -95,10 +95,10 @@ func TestMapCarriesFlagsAndName(t *testing.T) {
 
 type pagedSource struct{ rows []Row }
 
-func (s pagedSource) Page(_ context.Context, after uuid.UUID, limit int) ([]Row, error) {
+func (s pagedSource) Page(_ context.Context, after *uuid.UUID, limit int) ([]Row, error) {
 	var out []Row
 	for _, r := range s.rows {
-		if strings.Compare(r.ID.String(), after.String()) > 0 {
+		if after == nil || strings.Compare(r.ID.String(), after.String()) > 0 {
 			out = append(out, r)
 			if len(out) == limit {
 				break
@@ -201,5 +201,17 @@ func TestReportLinesCarryCountsOnly(t *testing.T) {
 	}
 	if !strings.Contains(out, "not_carried=is_superuser,token_version,last_login_at") || !strings.Contains(out, "skipped.unknown_hash_format=1") {
 		t.Fatalf("report incomplete:\n%s", out)
+	}
+}
+
+func TestRunCopiesTheAllZeroID(t *testing.T) {
+	rows := append([]Row{{ID: uuid.Nil, Email: "z@example.test", Active: true}}, rowsFor(3)...)
+	sink := &memSink{seen: map[uuid.UUID]identity.BackfillTarget{}}
+	rep, err := Run(context.Background(), pagedSource{rows: rows}, sink, Options{BatchSize: 2})
+	if err != nil || rep.Seen != 4 || rep.Inserted != 4 {
+		t.Fatalf("report: %+v %v", rep, err)
+	}
+	if _, ok := sink.seen[uuid.Nil]; !ok {
+		t.Fatal("all-zero id row was not written")
 	}
 }

@@ -41,9 +41,10 @@ const (
 // NotCarried names the public.users fields that have no auth-side column.
 var NotCarried = []string{"is_superuser", "token_version", "last_login_at"}
 
-// Source pages public.users in id order.
+// Source pages public.users in id order. A nil after starts at the first row,
+// so the all-zero id is an ordinary key.
 type Source interface {
-	Page(ctx context.Context, after uuid.UUID, limit int) ([]Row, error)
+	Page(ctx context.Context, after *uuid.UUID, limit int) ([]Row, error)
 }
 
 // Sink writes one user. *identity.Store satisfies it.
@@ -116,7 +117,7 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 		batch = 500
 	}
 	rep := Report{DryRun: opts.DryRun, Skipped: map[string]int{}}
-	after := uuid.Nil
+	var after *uuid.UUID
 	for {
 		rows, err := src.Page(ctx, after, batch)
 		if err != nil {
@@ -158,7 +159,8 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 				rep.DisplayNameDrift++
 			}
 		}
-		after = rows[len(rows)-1].ID
+		last := rows[len(rows)-1].ID
+		after = &last
 	}
 }
 

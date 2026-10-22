@@ -92,7 +92,7 @@ func NewKeyStates(config KeyStatesConfig) *KeyStates {
 }
 
 // Rows returns the current snapshot. It reads the source at most once per
-// refresh interval.
+// refresh interval and latches every compromised row of a read as it lands.
 func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -100,6 +100,7 @@ func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 	if !s.attempted || now.Sub(s.attemptAt) >= s.refreshEvery {
 		s.attempted, s.attemptAt = true, now
 		if rows, err := s.source.KeyStates(ctx); err == nil {
+			s.latch(nil, rows)
 			s.rows, s.readAt, s.have = rows, now, true
 		}
 	}
@@ -110,8 +111,11 @@ func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 }
 
 // override is the custody StateOverride over this snapshot, with every
-// compromise seen so far latched.
+// compromise seen so far latched. The latch always comes first: a compromise
+// shown by custody or by the snapshot is recorded before anything in this call
+// can fail, so a call that fails closed still latches it.
 func (s *KeyStates) override(ctx context.Context, keys []keystore.Key) ([]keystore.Key, error) {
+	s.latch(keys, nil)
 	rows, err := s.Rows(ctx)
 	if err != nil {
 		return nil, err
@@ -123,22 +127,28 @@ func (s *KeyStates) override(ctx context.Context, keys []keystore.Key) ([]keysto
 	out := append([]keystore.Key(nil), applied...)
 	s.latchMu.Lock()
 	defer s.latchMu.Unlock()
-	for _, row := range rows {
-		if row.State == StateCompromised {
-			s.deniedKids[row.KeyID], s.deniedPublics[string(row.PublicKey)] = true, true
-		}
-	}
-	for _, key := range out {
-		if key.State == StateCompromised {
-			s.deniedKids[key.KeyID], s.deniedPublics[string(key.PublicKey)] = true, true
-		}
-	}
 	for i := range out {
 		if s.deniedKids[out[i].KeyID] || s.deniedPublics[string(out[i].PublicKey)] {
 			out[i].State = StateCompromised
 		}
 	}
 	return out, nil
+}
+
+// latch records every compromised key and row.
+func (s *KeyStates) latch(keys []keystore.Key, rows []KeyStateRow) {
+	s.latchMu.Lock()
+	defer s.latchMu.Unlock()
+	for _, key := range keys {
+		if key.State == StateCompromised {
+			s.deniedKids[key.KeyID], s.deniedPublics[string(key.PublicKey)] = true, true
+		}
+	}
+	for _, row := range rows {
+		if row.State == StateCompromised {
+			s.deniedKids[row.KeyID], s.deniedPublics[string(row.PublicKey)] = true, true
+		}
+	}
 }
 
 // applyKeyStates gives custody's keys their effective states. With no rows

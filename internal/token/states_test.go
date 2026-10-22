@@ -348,3 +348,76 @@ func TestACompromisedRowLatchesBeforeCustodyHoldsTheKey(t *testing.T) {
 		t.Fatal("a key the table once marked compromised signed after the table emptied")
 	}
 }
+
+// Every early return of the overlay comes after the latch: a compromise seen
+// in custody or in a read snapshot is latched even when that same call fails
+// closed, and a later snapshot naming the key active does not re-enable it.
+func TestEveryOverlayEarlyReturnLatchesFirst(t *testing.T) {
+	pa, pb, px := ed25519.PublicKey(make32(1)), ed25519.PublicKey(make32(2)), ed25519.PublicKey(make32(9))
+	custody := func(bState State) []keystore.Key {
+		return []keystore.Key{{KeyID: "a", State: StateActive, PublicKey: pa}, {KeyID: "b", State: bState, PublicKey: pb}}
+	}
+	restored := []KeyStateRow{{KeyID: "a", State: StateRetiring, PublicKey: pa}, {KeyID: "b", State: StateActive, PublicKey: pb}}
+	cases := map[string]struct {
+		firstCustody []keystore.Key
+		firstRows    []KeyStateRow
+		firstErr     error
+		want         Reason
+	}{
+		// applyKeyStates refuses the set (a's row names another public key)
+		// in the same call that first shows b compromised.
+		"a public key mismatch before a compromised row": {
+			firstCustody: custody(StatePending),
+			firstRows:    []KeyStateRow{{KeyID: "a", State: StateActive, PublicKey: px}, {KeyID: "b", State: StateCompromised, PublicKey: pb}},
+			want:         ReasonKeyStateMismatch,
+		},
+		// The snapshot is unavailable in the call where custody shows b
+		// compromised.
+		"no snapshot while custody shows the compromise": {
+			firstCustody: custody(StateCompromised),
+			firstErr:     errors.New("database unreachable"),
+			want:         ReasonKeyStatesUnavailable,
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			source := &fakeStates{rows: c.firstRows, err: c.firstErr}
+			clock := &fakeClock{now: time.Unix(0, 0)}
+			states := newStates(source, clock)
+			ctx := context.Background()
+			if _, err := states.override(ctx, c.firstCustody); !reasonIs(err, c.want) {
+				t.Fatalf("first call = %v, want %s", err, c.want)
+			}
+			source.set(restored, nil)
+			clock.advance(10 * time.Second)
+			out, err := states.override(ctx, custody(StatePending))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out[1].State != StateCompromised {
+				t.Fatalf("b after the restored snapshot = %s; a compromise seen in a failing call was not latched", out[1].State)
+			}
+		})
+	}
+}
+
+// The review repro end to end: a mismatch in the snapshot that first shows a
+// compromise, then a restored snapshot, through the signer.
+func TestAMismatchDoesNotSkipTheCompromiseLatch(t *testing.T) {
+	dir := t.TempDir()
+	publicA, publicB := writeKey(t, dir, "a"), writeKey(t, dir, "b")
+	source := &fakeStates{rows: []KeyStateRow{
+		{KeyID: "a", State: StateActive, PublicKey: ed25519.PublicKey(make32(9))}, {KeyID: "b", State: StateCompromised, PublicKey: publicB},
+	}}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	signer := NewFileSigner(FileConfig{KeySetPath: writeSet(t, dir, "a", "active", "b", "pending"), States: newStates(source, clock)})
+	ctx := context.Background()
+	if _, _, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err == nil {
+		t.Fatal("a snapshot with a public key mismatch signed")
+	}
+	source.set([]KeyStateRow{{KeyID: "a", State: StateRetiring, PublicKey: publicA}, {KeyID: "b", State: StateActive, PublicKey: publicB}}, nil)
+	clock.advance(10 * time.Second)
+	if _, kid, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err == nil {
+		t.Fatalf("previously compromised key %q signed after a mismatch then a restored snapshot", kid)
+	}
+}

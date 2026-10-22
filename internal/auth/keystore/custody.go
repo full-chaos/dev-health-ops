@@ -267,6 +267,8 @@ func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, erro
 		publics[string(public)] = true
 		keys = append(keys, Key{KeyID: entry.KeyID, State: entry.State, Algorithm: Algorithm, PublicKey: public})
 	}
+	// Latch custody's own compromises before the override can fail.
+	keys = c.compromised.apply(keys)
 	if c.states != nil {
 		if keys, err = c.states(ctx, keys); err != nil {
 			return nil, nil, err

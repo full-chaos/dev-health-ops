@@ -588,3 +588,33 @@ func TestFileSourceFollowsTheStateOverride(t *testing.T) {
 		t.Fatal("Sign succeeded with the state source failing")
 	}
 }
+
+// A manifest compromise latches even when the state override fails in that
+// same call.
+func TestAManifestCompromiseLatchesWhenTheOverrideFails(t *testing.T) {
+	dir := t.TempDir()
+	writeKeyFile(t, dir, "a.pem")
+	writeKeyFile(t, dir, "b.pem")
+	manifest := writeManifest(t, dir, entries("a", "active", "b", "compromised"))
+	var mu sync.Mutex
+	failing := true
+	custody := NewFileCustodyWithStates(manifest, func(ctx context.Context, keys []Key) ([]Key, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if failing {
+			return nil, errors.New("states unavailable")
+		}
+		return overrideTo(map[string]State{"a": StateRetiring, "b": StateActive}, nil)(ctx, keys)
+	})
+	ctx := context.Background()
+	if _, err := custody.Keys(ctx); err == nil {
+		t.Fatal("Keys succeeded with the override failing")
+	}
+	writeManifest(t, dir, entries("a", "retiring", "b", "active"))
+	mu.Lock()
+	failing = false
+	mu.Unlock()
+	if _, err := custody.Sign(ctx, "b", []byte("m")); err == nil {
+		t.Fatal("a key the manifest showed compromised signed after a failing override call")
+	}
+}

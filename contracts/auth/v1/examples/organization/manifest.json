@@ -46,6 +46,18 @@
       "expect_instance_location": "/",
       "expect_keyword": "additionalProperties",
       "why": "An extra member."
+    },
+    {
+      "file": "invalid-organization-id-long.json",
+      "expect_instance_location": "/organization_id",
+      "expect_keyword": "pattern",
+      "why": "Ids have a fixed length (22 characters after the prefix)."
+    },
+    {
+      "file": "invalid-organization-id-short.json",
+      "expect_instance_location": "/organization_id",
+      "expect_keyword": "pattern",
+      "why": "One character short."
     }
   ]
 }

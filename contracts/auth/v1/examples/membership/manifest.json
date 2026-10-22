@@ -56,6 +56,30 @@
       "expect_instance_location": "/role",
       "expect_keyword": "type",
       "why": "An active member always holds a role."
+    },
+    {
+      "file": "invalid-membership-id-long.json",
+      "expect_instance_location": "/membership_id",
+      "expect_keyword": "pattern",
+      "why": "The longest id the old range allowed."
+    },
+    {
+      "file": "invalid-invited-with-role.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "type",
+      "why": "An invited member has no role."
+    },
+    {
+      "file": "invalid-invited-with-joined-at.json",
+      "expect_instance_location": "/joined_at",
+      "expect_keyword": "type",
+      "why": "An invited member has not joined."
+    },
+    {
+      "file": "invalid-active-without-joined-at.json",
+      "expect_instance_location": "/joined_at",
+      "expect_keyword": "type",
+      "why": "An active member has joined."
     }
   ]
 }

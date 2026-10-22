@@ -18,8 +18,8 @@
     "email": {
       "type": "string",
       "maxLength": 254,
-      "pattern": "^[^ \t\r\nA-Z@]{1,64}@[^ \t\r\nA-Z@]{1,189}$",
-      "description": "Invitee address, lowercase."
+      "pattern": "^[a-z0-9_%+-]+([.][a-z0-9_%+-]+)*@([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z]{2,63}$",
+      "description": "Invitee address: lowercase ASCII, a dot-atom local part, a dotted domain with a letter-only top label. A strict subset of the addresses the login-key normalizer keeps unchanged; the server still normalizes and refuses a value that is not its own fixed point."
     },
     "role": {
       "enum": [

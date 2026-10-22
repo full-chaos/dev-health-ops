@@ -22,7 +22,7 @@
     },
     "organization_id": {
       "type": "string",
-      "pattern": "^org_[A-Za-z0-9_-]{22,64}$",
+      "pattern": "^org_[A-Za-z0-9_-]{22}$",
       "description": "Organization id. Server-minted, never copied from caller input."
     },
     "slug": {

@@ -40,6 +40,12 @@
       "expect_instance_location": "/invite_id",
       "expect_keyword": "pattern",
       "why": "An id of another aggregate."
+    },
+    {
+      "file": "invalid-invite-id-long.json",
+      "expect_instance_location": "/invite_id",
+      "expect_keyword": "pattern",
+      "why": "Fixed length."
     }
   ]
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
@@ -257,4 +258,78 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// Resource ids are fixed length (22 characters after the prefix, the base64url
+// of a 16-byte id), and the longest one the schema accepts is an id the
+// provisioning wire can carry.
+func TestProvisioningResourceIDsAreFixedLengthAndFitTheWire(t *testing.T) {
+	suffix := strings.Repeat("A", 22)
+	for _, c := range []struct{ surface, field, aggregate string }{
+		{"organization", "organization_id", "organization"},
+		{"membership", "membership_id", "membership"},
+		{"membership", "principal_id", "principal"},
+		{"invite", "organization_id", "organization"},
+		{"invite", "invited_by", "principal"},
+	} {
+		pattern := schemaNode(t, c.surface, "properties", c.field, "pattern").(string)
+		if !strings.HasSuffix(pattern, "{22}$") {
+			t.Errorf("%s.%s pattern %q is not fixed length", c.surface, c.field, pattern)
+		}
+		if provisioning.WireID(c.aggregate, suffix) == "" {
+			t.Errorf("%s.%s: a 22 character id is not carried by the provisioning wire", c.surface, c.field)
+		}
+	}
+	if pattern := schemaNode(t, "invite", "properties", "invite_id", "pattern").(string); !strings.HasSuffix(pattern, "{22}$") {
+		t.Errorf("invite.invite_id pattern %q is not fixed length", pattern)
+	}
+}
+
+// The invite address pattern accepts only addresses the login-key normalizer
+// keeps unchanged, and refuses what it cannot normalize.
+func TestInviteEmailPatternIsASubsetOfTheNormalizerFixedPoints(t *testing.T) {
+	pattern := regexp.MustCompile(schemaNode(t, "invite-create-request", "properties", "email", "pattern").(string))
+	accepted := []string{
+		"a@example.com", "new.member@example.com", "first.last+tag@sub.example.org", "a_b-c%d@ex-ample.io",
+		"x@a.b.c.dev", "user123@mail.example.net",
+	}
+	for _, address := range accepted {
+		if !pattern.MatchString(address) {
+			t.Errorf("pattern refuses %q", address)
+			continue
+		}
+		if got, err := identity.NormalizeEmail(address); err != nil || got != address {
+			t.Errorf("pattern accepts %q but NormalizeEmail gives %q, %v", address, got, err)
+		}
+	}
+	refused := []string{
+		"a@.", "a@", "@example.com", "a@example", "a@example.1", "a..b@example.com", ".a@example.com", "a.@example.com",
+		"New@example.com", "\u00c9@example.com", "a b@example.com", "a@-example.com", "a@example-.com", "a@@example.com",
+		"a@example.com\n", "<a@example.com>", "a@exa mple.com",
+	}
+	for _, address := range refused {
+		if pattern.MatchString(address) {
+			t.Errorf("pattern accepts %q", address)
+		}
+	}
+}
+
+// Each membership status that provisioning events can carry is accepted by the
+// event vocabulary under its event spelling. provisioning-event.v1 does not
+// pair a verb with a status (a v2 question); this proves only that the
+// documented spelling is the accepted one.
+func TestMembershipEventSpellingIsAcceptedByTheEventVocabulary(t *testing.T) {
+	id := "mbr_" + strings.Repeat("A", 22)
+	for _, c := range []struct{ resource, event, verb string }{
+		{"invited", "pending", "membership.invited"},
+		{"active", "active", "membership.activated"},
+		{"removed", "removed", "membership.removed"},
+	} {
+		if err := provisioning.CheckEvent("membership", id, c.verb, map[string]any{"status": c.event}); err != nil {
+			t.Errorf("%s (%s) as event status %q: %v", c.verb, c.resource, c.event, err)
+		}
+	}
+	if err := provisioning.CheckEvent("membership", id, "membership.invited", map[string]any{"status": "invited"}); err == nil {
+		t.Error("the event vocabulary accepts the resource spelling invited as an event status")
+	}
 }

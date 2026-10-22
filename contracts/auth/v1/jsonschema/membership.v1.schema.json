@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/membership.v1.schema.json",
   "title": "Auth Control Plane membership (v1 wire format)",
-  "description": "A principal's membership of an organization (auth.memberships). role is an organization role key and is null until the membership is active; an active membership always holds a role. status is the resource spelling (invited); provisioning events spell the same state pending (README).",
+  "description": "A principal's membership of an organization (auth.memberships). role is an organization role key. An invited membership has no role and has not joined (role and joined_at are null); an active membership holds a role and has joined (both are set); a suspended or removed membership keeps what it had. status is the resource spelling (invited); provisioning events spell the same state pending (README).",
   "type": "object",
   "required": [
     "schema_version",
@@ -24,17 +24,17 @@
     },
     "membership_id": {
       "type": "string",
-      "pattern": "^mbr_[A-Za-z0-9_-]{22,64}$",
+      "pattern": "^mbr_[A-Za-z0-9_-]{22}$",
       "description": "Membership id. Server-minted, never copied from caller input."
     },
     "organization_id": {
       "type": "string",
-      "pattern": "^org_[A-Za-z0-9_-]{22,64}$",
+      "pattern": "^org_[A-Za-z0-9_-]{22}$",
       "description": "The organization."
     },
     "principal_id": {
       "type": "string",
-      "pattern": "^prn_[A-Za-z0-9_-]{22,64}$",
+      "pattern": "^prn_[A-Za-z0-9_-]{22}$",
       "description": "The member principal."
     },
     "role": {
@@ -85,21 +85,50 @@
       "description": "When the member accepted; null until then."
     }
   },
-  "if": {
-    "properties": {
-      "status": {
-        "const": "active"
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "invited"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "role": {
+            "type": "null"
+          },
+          "joined_at": {
+            "type": "null"
+          }
+        }
       }
     },
-    "required": [
-      "status"
-    ]
-  },
-  "then": {
-    "properties": {
-      "role": {
-        "type": "string"
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "active"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "joined_at": {
+            "type": "string"
+          }
+        }
       }
     }
-  }
+  ]
 }

@@ -46,6 +46,30 @@
       "expect_instance_location": "/",
       "expect_keyword": "required",
       "why": "No address."
+    },
+    {
+      "file": "invalid-email-empty-domain-label.json",
+      "expect_instance_location": "/email",
+      "expect_keyword": "pattern",
+      "why": "A domain with no labels."
+    },
+    {
+      "file": "invalid-email-non-ascii-uppercase.json",
+      "expect_instance_location": "/email",
+      "expect_keyword": "pattern",
+      "why": "Not at the normalized lowercase fixed point."
+    },
+    {
+      "file": "invalid-email-double-dot.json",
+      "expect_instance_location": "/email",
+      "expect_keyword": "pattern",
+      "why": "An empty local-part atom."
+    },
+    {
+      "file": "invalid-email-numeric-top-label.json",
+      "expect_instance_location": "/email",
+      "expect_keyword": "pattern",
+      "why": "A top label of digits."
     }
   ]
 }

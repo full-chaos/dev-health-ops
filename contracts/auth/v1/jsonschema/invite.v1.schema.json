@@ -23,12 +23,12 @@
     },
     "invite_id": {
       "type": "string",
-      "pattern": "^inv_[A-Za-z0-9_-]{22,64}$",
+      "pattern": "^inv_[A-Za-z0-9_-]{22}$",
       "description": "Invite id. Server-minted, never copied from caller input."
     },
     "organization_id": {
       "type": "string",
-      "pattern": "^org_[A-Za-z0-9_-]{22,64}$",
+      "pattern": "^org_[A-Za-z0-9_-]{22}$",
       "description": "The organization."
     },
     "role": {
@@ -51,7 +51,7 @@
     },
     "invited_by": {
       "type": "string",
-      "pattern": "^prn_[A-Za-z0-9_-]{22,64}$",
+      "pattern": "^prn_[A-Za-z0-9_-]{22}$",
       "description": "The inviting principal."
     },
     "created_at": {

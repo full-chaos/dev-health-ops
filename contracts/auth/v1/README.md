@@ -32,10 +32,18 @@ here; the operations arrive with the routes that serve them. Rules:
 - `membership.v1` status is the memberships status of the auth schema:
   `invited`, `active`, `suspended`, `removed`. The provisioning event spells the
   same states differently: `invited` (event `pending`); the other three are
-  spelt alike. An active membership always holds a role; the role is null until then.
+  spelt alike. `provisioning-event.v1` does not pair a verb with a status; that
+  pairing is a v2 question, so a test proves only that the documented spelling is
+  the one the event vocabulary accepts. An invited membership has no role and has
+  not joined (both null); an active one has both.
 - A provisioning event's `role_id` is `rol_` + the role key.
-- Ids are server-minted: `org_`, `mbr_`, `inv_` (the invite's own prefix; its
+- Ids are server-minted and fixed length (the prefix and the 22 base64url characters of a 16-byte id, the
+  encoding session ids use): `org_`, `mbr_`, `inv_` (the invite's own prefix; its
   aggregate joins `provisioning-event.v1` with its first producer) and `prn_`.
+- `invite-create-request.v1` email is lowercase ASCII with a dot-atom local part and a
+  dotted domain: a strict subset of the addresses the login-key normalizer keeps
+  unchanged (a test holds it). The server still normalizes and refuses any value
+  that is not its own fixed point.
 - `invite.v1` carries no e-mail address, no hint of one and no token. The
   invite token is an `org_invite_token` credential (`credential-classes.json`).
 

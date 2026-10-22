@@ -325,7 +325,7 @@ func (v *Venue) DiagnoseAPIRole(t *testing.T, ctx context.Context) string {
 		return err.Error()
 	}
 	defer pool.Close()
-	gaps, err := postgres.DiagnoseRolePosture(ctx, pool, v.Roles["api"], postgres.APIPosture())
+	gaps, err := postgres.DiagnoseRolePosture(ctx, pool, v.Roles["api"], postgres.APIPosture(false))
 	return fmt.Sprintf("gaps=%v err=%v", gaps, err)
 }
 
@@ -372,12 +372,12 @@ func (v *Venue) migrate(t *testing.T, ctx context.Context, logger *slog.Logger) 
 	}
 	defer pool.Close()
 	var grants []riverstore.TableGrant
-	for _, table := range postgres.APIPosture().RequiredTables {
+	for _, table := range postgres.APIPosture(false).RequiredTables {
 		grants = append(grants, riverstore.TableGrant{TableName: table.TableName, AllowInsert: table.AllowInsert,
 			AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete})
 	}
 	var columnGrants []riverstore.ColumnGrant
-	for _, column := range postgres.APIPosture().ColumnScoped {
+	for _, column := range postgres.APIPosture(false).ColumnScoped {
 		columnGrants = append(columnGrants, riverstore.ColumnGrant{TableName: column.TableName, ColumnName: column.ColumnName, Privilege: column.Privilege})
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, pool, riverstore.MigrationOptions{

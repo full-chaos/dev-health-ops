@@ -190,7 +190,7 @@ func TestBuildDepsStartsWithAnUnverifiableProcessLicense(t *testing.T) {
 	t.Cleanup(func() { licensing.SetProcessLicense(nil) })
 	licensing.SetProcessLicense(&licensing.ProcessLicense{Tier: "enterprise"})
 	var logs bytes.Buffer
-	_, components, err := buildDeps(context.Background(), config.Config{}, health.NewRegistry(time.Second), slog.New(slog.NewJSONHandler(&logs, nil)))
+	_, components, err := buildDeps(context.Background(), config.Config{}, health.NewRegistry(time.Second), slog.New(slog.NewJSONHandler(&logs, nil)), AuthProxyConfig{})
 	closeComponents(components)
 	if err != nil {
 		t.Fatalf("buildDeps refused to start: %v", err)

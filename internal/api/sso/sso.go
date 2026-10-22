@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
@@ -96,6 +97,10 @@ type Deps struct {
 	// and its body checks in front stay. It gets the full route pattern; nil
 	// serves local.
 	Inner func(pattern string, local http.Handler) http.Handler
+	// Issuer, set when auth-service owns sessions (AUTH_PROXY_SESSIONS),
+	// issues the SSO login's token pair; go-api then mints none and writes
+	// no refresh_tokens row. nil mints in go-api.
+	Issuer sessionissue.Issuer
 }
 
 type handlers struct{ Deps }

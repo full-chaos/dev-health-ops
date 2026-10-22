@@ -284,6 +284,10 @@ func newProviderForOrgSource(
 	return provider, false, err
 }
 
+// validateRawBaseURL is the SSRF lookup the fallback log makes; a test swaps it
+// to count lookups.
+var validateRawBaseURL = llmorgsettings.ValidateBaseURL
+
 // logOrgBaseURLSSRFFallback re-checks the org's RAW (unvalidated)
 // base_url against the SSRF guard specifically to decide whether THIS
 // fallback (platform env instead of org credentials) has a security
@@ -297,7 +301,19 @@ var logOrgBaseURLSSRFFallback = func(ctx context.Context, orgSettings llmorgsett
 	if err != nil || !configured || rawURL == "" {
 		return
 	}
-	if ok, _ := llmorgsettings.ValidateBaseURL(ctx, rawURL); ok {
+	carriesKey, keyErr := orgSettings.StoredBaseURLCarriesKey(ctx, orgID, provider)
+	if keyErr != nil {
+		return
+	}
+	if carriesKey {
+		log.Printf(
+			"investment/explain: org %s configured a BYO base_url for provider %s that carried the api key; "+
+				"refused before any lookup; falling back to the platform default provider",
+			orgID, provider,
+		)
+		return
+	}
+	if ok, _ := validateRawBaseURL(ctx, rawURL); ok {
 		return // not usable for some OTHER reason (e.g. incomplete api_key)
 	}
 	scheme, host := schemeAndHostForLogging(rawURL)

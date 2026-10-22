@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
@@ -16,7 +17,19 @@ type IdentityStore interface {
 	ByID(ctx context.Context, id uuid.UUID) (*identity.Principal, error)
 	ProvisionLocal(ctx context.Context, req identity.LocalProvisionRequest) (uuid.UUID, error)
 	SetEmailVerified(ctx context.Context, principal uuid.UUID, at time.Time, actor identity.Actor) error
-	SetPasswordHash(ctx context.Context, principal uuid.UUID, hash string, actor identity.Actor) error
+	SetPasswordHashWith(ctx context.Context, principal uuid.UUID, hash string, actor identity.Actor, end func(context.Context, audit.TxOps) error) error
+}
+
+// SessionEnder ends every credential class of a principal inside a caller's
+// transaction (*session.Store.EndAllInTx).
+type SessionEnder interface {
+	EndAllInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) error
+}
+
+// ResetLinkEnder deletes a principal's unconsumed reset links inside a
+// caller's transaction (*PGLinks.EndResetLinksInTx).
+type ResetLinkEnder interface {
+	EndResetLinksInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) error
 }
 
 // IdentityAccounts adapts the B2 store to Accounts. Every write is a
@@ -26,6 +39,11 @@ type IdentityAccounts struct {
 	// RequestID returns the audit request id of the call (C1's
 	// requestid.Audit once it merges); nil means none.
 	RequestID func(context.Context) *string
+	// Sessions ends the principal's other credentials in the password
+	// transaction (*session.Store).
+	Sessions SessionEnder
+	// Links ends the principal's unconsumed reset links in the same transaction.
+	Links ResetLinkEnder
 	// Now is the verification time; nil means time.Now.
 	Now func() time.Time
 }
@@ -72,8 +90,13 @@ func (a IdentityAccounts) SetEmailVerified(ctx context.Context, id uuid.UUID) er
 	return a.Store.SetEmailVerified(ctx, id, now(), a.actor(ctx))
 }
 
-func (a IdentityAccounts) SetPasswordHash(ctx context.Context, id uuid.UUID, hash string) error {
-	return a.Store.SetPasswordHash(ctx, id, hash, a.actor(ctx))
+func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, id uuid.UUID, hash string) error {
+	return a.Store.SetPasswordHashWith(ctx, id, hash, a.actor(ctx), func(ctx context.Context, tx audit.TxOps) error {
+		if err := a.Sessions.EndAllInTx(ctx, tx, id); err != nil {
+			return err
+		}
+		return a.Links.EndResetLinksInTx(ctx, tx, id)
+	})
 }
 
 var _ Accounts = IdentityAccounts{}

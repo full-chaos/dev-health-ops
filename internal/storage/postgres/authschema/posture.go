@@ -2,6 +2,7 @@ package authschema
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -166,6 +167,9 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 		return nil, err
 	}
 	if err := collect(functionViolations(ctx, conn, options)); err != nil {
+		return nil, err
+	}
+	if err := collect(declaredFunctionViolations(ctx, conn, options)); err != nil {
 		return nil, err
 	}
 	if err := collect(schemaAndDatabaseViolations(ctx, conn, options)); err != nil {
@@ -410,12 +414,13 @@ func functionViolations(ctx context.Context, conn *pgx.Conn, options Options) ([
 		JOIN pg_roles owner ON owner.oid = p.proowner
 		WHERE `+systemSchemaFilter+`
 		  AND p.prosecdef
+		  AND NOT (n.nspname = $2 AND p.proname = ANY($3::text[]))
 		  AND (
 		        owner.rolname = current_user
 		     OR owner.oid = (SELECT nspowner FROM pg_namespace WHERE nspname = $2)
 		  )
 		  AND has_function_privilege($1, p.oid, 'EXECUTE')`,
-		options.RuntimeRole, options.Schema,
+		options.RuntimeRole, options.Schema, declaredFunctionNames(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading effective function privileges", ErrMigrationFailed)
@@ -438,6 +443,87 @@ func functionViolations(ctx context.Context, conn *pgx.Conn, options Options) ([
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("%w: reading effective function privileges", ErrMigrationFailed)
+	}
+	return violations, nil
+}
+
+func declaredFunctionNames() []string {
+	names := make([]string, 0, len(RuntimeFunctions()))
+	for _, function := range RuntimeFunctions() {
+		names = append(names, function.Name)
+	}
+	return names
+}
+
+// declaredFunctionViolations checks each function RuntimeFunctions declares in
+// both directions: the runtime role can execute it, PUBLIC cannot, it is a
+// SECURITY DEFINER with a pinned search_path owned by a role other than the
+// runtime role, and the runtime role is not a member of that owner.
+func declaredFunctionViolations(ctx context.Context, conn *pgx.Conn, options Options) ([]Violation, error) {
+	var violations []Violation
+	for _, function := range RuntimeFunctions() {
+		var found, runtimeExecutes, publicExecutes, definer, pinned, runtimeOwns bool
+		err := conn.QueryRow(ctx, `
+			SELECT true,
+			       has_function_privilege($1, p.oid, 'EXECUTE'),
+			       EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+			               WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
+			       p.prosecdef,
+			       EXISTS (SELECT 1 FROM unnest(COALESCE(p.proconfig, '{}')) c WHERE c LIKE 'search_path=%'),
+			       pg_has_role($1, p.proowner, 'MEMBER')
+			FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+			WHERE n.nspname = $2 AND p.proname = $3`,
+			options.RuntimeRole, options.Schema, function.Name,
+		).Scan(&found, &runtimeExecutes, &publicExecutes, &definer, &pinned, &runtimeOwns)
+		if errors.Is(err, pgx.ErrNoRows) {
+			violations = append(violations, Violation{
+				Kind: "function", Schema: options.Schema, Object: function.Name + "()", Privilege: "EXECUTE",
+				Detail: "declared in RuntimeFunctions (" + function.RemovedBy + ") but the function does not exist",
+			})
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: reading the declared function %s", ErrMigrationFailed, function.Name)
+		}
+		add := func(detail string) {
+			violations = append(violations, Violation{
+				Kind: "function", Schema: options.Schema, Object: function.Name + "()", Privilege: "EXECUTE",
+				Detail: detail + " (" + function.RemovedBy + ")",
+			})
+		}
+		if !runtimeExecutes {
+			add("declared in RuntimeFunctions but the runtime role cannot execute it (missing grant)")
+		}
+		if publicExecutes {
+			add("PUBLIC can execute it")
+		}
+		if !definer || !pinned {
+			add("it is not a SECURITY DEFINER function with a pinned search_path")
+		}
+		if runtimeOwns {
+			add("the runtime role owns it or is a member of its owner")
+		}
+		for _, target := range function.Writes {
+			var exists bool
+			if err := conn.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, publicSchema+"."+target.Table).Scan(&exists); err != nil {
+				return nil, fmt.Errorf("%w: reading the table %s the function writes", ErrMigrationFailed, target.Table)
+			}
+			if !exists {
+				continue
+			}
+			var owns bool
+			if err := conn.QueryRow(ctx, `
+				SELECT has_column_privilege(p.proowner, $1::regclass, $2, 'UPDATE')
+				FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+				WHERE n.nspname = $3 AND p.proname = $4`,
+				publicSchema+"."+target.Table, target.Column, options.Schema, function.Name,
+			).Scan(&owns); err != nil {
+				return nil, fmt.Errorf("%w: reading the owner's privilege on %s", ErrMigrationFailed, target.Table)
+			}
+			if !owns {
+				add("its owner cannot UPDATE " + publicSchema + "." + target.Table + "(" + target.Column + "): the function would fail at its first call")
+			}
+		}
 	}
 	return violations, nil
 }

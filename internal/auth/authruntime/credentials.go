@@ -87,7 +87,7 @@ func credentialRoutes(
 	}
 	links := local.NewPGLinks(pool, schema)
 	flows, err := local.NewFlows(local.FlowsConfig{
-		Accounts: local.IdentityAccounts{Store: identities, RequestID: requestid.Audit},
+		Accounts: local.IdentityAccounts{Store: identities, RequestID: requestid.Audit, Sessions: sessions, Links: links},
 		Links:    links, Sessions: sessions, Mail: sender, Locker: links,
 		UsersOwnedByAuth: true,
 	})

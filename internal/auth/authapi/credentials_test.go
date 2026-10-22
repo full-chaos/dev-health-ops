@@ -38,7 +38,7 @@ type credFakes struct {
 	password  string
 	pwdSet    int
 	revoked   int
-	revokeErr error
+	endErr    error
 	created   int
 	issueErr  error
 	principal uuid.UUID
@@ -70,9 +70,13 @@ func (c *credFakes) SetEmailVerified(_ context.Context, id uuid.UUID) error {
 	c.user.IsVerified = true
 	return nil
 }
-func (c *credFakes) SetPasswordHash(_ context.Context, _ uuid.UUID, hash string) error {
+func (c *credFakes) SetPasswordEndingSessions(_ context.Context, _ uuid.UUID, hash string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.endErr != nil {
+		return c.endErr
+	}
+	c.revoked++
 	c.pwdSet++
 	c.user.PasswordHash = &hash
 	return nil
@@ -114,12 +118,6 @@ func (c *credFakes) Current(context.Context, uuid.UUID) (session.Record, error) 
 }
 func (c *credFakes) Revoke(context.Context, uuid.UUID, session.Actor) (bool, error) {
 	return true, nil
-}
-func (c *credFakes) RevokeAll(context.Context, uuid.UUID, session.Actor) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.revoked++
-	return 1, c.revokeErr
 }
 
 const credKnownEmail = "member@example.com"
@@ -438,9 +436,9 @@ func TestChangePasswordReadsTheBodyBeforeTheBearer(t *testing.T) {
 	}
 }
 
-func TestFailedRevocationFailsClosedOnResetAndChange(t *testing.T) {
+func TestAFailedPasswordWriteFailsClosedOnResetAndChange(t *testing.T) {
 	c := newCredFixture(t)
-	c.fakes.revokeErr = errors.New("sessions store down")
+	c.fakes.endErr = errors.New("sessions store down")
 	c.call(http.MethodPost, PatternForgotPassword, `{"email":"`+credKnownEmail+`"}`, nil)
 	secret, _ := c.linkFor(local.PurposePasswordReset)
 	r := c.call(http.MethodPost, PatternResetPassword, `{"token":"`+secret+`","new_password":"another-password-1"}`, nil)
@@ -448,13 +446,13 @@ func TestFailedRevocationFailsClosedOnResetAndChange(t *testing.T) {
 		t.Fatalf("reset with failed revocation = %d, want go-api's 500", r.Code)
 	}
 	c = newCredFixture(t)
-	c.fakes.revokeErr = errors.New("sessions store down")
+	c.fakes.endErr = errors.New("sessions store down")
 	header := c.bearer(c.grant())
 	r = c.call(http.MethodPost, PatternChangePassword, `{"current_password":"current-password-1","new_password":"Brand-new-pass-77!"}`, header)
 	if r.Code != http.StatusInternalServerError || strings.Contains(r.Body.String(), "access_token") {
 		t.Fatalf("change with failed revocation = %d %s, want a 500 without a token", r.Code, r.Body)
 	}
-	if !strings.Contains(c.logs.String(), reasonSessionsNotRevoked) || strings.Contains(c.logs.String(), "sessions store down") {
-		t.Fatal("the failed revocation must be logged by reason code only")
+	if strings.Contains(c.logs.String(), "sessions store down") || c.fakes.pwdSet != 0 || c.fakes.created != 0 {
+		t.Fatal("a failed write must change nothing, issue no session and log no error text")
 	}
 }

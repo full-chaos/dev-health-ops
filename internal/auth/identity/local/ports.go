@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 // Purpose is a link credential purpose (link_credentials.purpose, 0010).
@@ -43,13 +42,16 @@ type Accounts interface {
 	// ProvisionLocal returns identity.ErrEmailTaken for a taken email.
 	ProvisionLocal(ctx context.Context, req ProvisionLocalRequest) (uuid.UUID, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
-	SetPasswordHash(ctx context.Context, id uuid.UUID, hash string) error
+	// SetPasswordEndingSessions sets the password and ends every other
+	// credential of the principal (auth sessions, go-api token version and
+	// refresh tokens) in one transaction: an error leaves the password as it
+	// was.
+	SetPasswordEndingSessions(ctx context.Context, id uuid.UUID, hash string) error
 }
 
 // SessionAdmin is the B1 session store as the flows use it.
 type SessionAdmin interface {
 	Sessions
-	RevokeAll(ctx context.Context, principalID uuid.UUID, actor session.Actor) (int, error)
 }
 
 // IssueRequest asks Links for one new credential. A zero PrincipalID is a

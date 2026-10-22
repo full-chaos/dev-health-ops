@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
@@ -15,7 +16,14 @@ type recordingStore struct {
 	verifiedAt  time.Time
 	actors      []identity.Actor
 	principal   *identity.Principal
+	ended       bool
 }
+
+type recordingEnder struct{}
+
+func (recordingEnder) EndAllInTx(context.Context, audit.TxOps, uuid.UUID) error { return nil }
+
+func (recordingEnder) EndResetLinksInTx(context.Context, audit.TxOps, uuid.UUID) error { return nil }
 
 func (s *recordingStore) ByEmail(context.Context, string) (*identity.Principal, error) {
 	return s.principal, nil
@@ -33,8 +41,9 @@ func (s *recordingStore) SetEmailVerified(_ context.Context, _ uuid.UUID, at tim
 	s.actors = append(s.actors, a)
 	return nil
 }
-func (s *recordingStore) SetPasswordHash(_ context.Context, _ uuid.UUID, _ string, a identity.Actor) error {
+func (s *recordingStore) SetPasswordHashWith(ctx context.Context, _ uuid.UUID, _ string, a identity.Actor, end func(context.Context, audit.TxOps) error) error {
 	s.actors = append(s.actors, a)
+	s.ended = end != nil
 	return nil
 }
 
@@ -42,7 +51,7 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	rid := uuid.NewString()
 	fixed := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	store := &recordingStore{principal: &identity.Principal{ID: uuid.New(), IsActive: true, IsVerified: true}}
-	acc := IdentityAccounts{Store: store, RequestID: func(context.Context) *string { return &rid }, Now: func() time.Time { return fixed }}
+	acc := IdentityAccounts{Store: store, Sessions: recordingEnder{}, Links: recordingEnder{}, RequestID: func(context.Context) *string { return &rid }, Now: func() time.Time { return fixed }}
 	ctx := context.Background()
 	name := "Ada"
 	if _, err := acc.ProvisionLocal(ctx, ProvisionLocalRequest{Email: "a@example.com", FullName: &name, PasswordHash: "$2b$12$hash"}); err != nil {
@@ -54,8 +63,8 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	if err := acc.SetEmailVerified(ctx, uuid.New()); err != nil || !store.verifiedAt.Equal(fixed) {
 		t.Errorf("verified at %v, err %v", store.verifiedAt, err)
 	}
-	if err := acc.SetPasswordHash(ctx, uuid.New(), "$2b$12$h"); err != nil {
-		t.Fatal(err)
+	if err := acc.SetPasswordEndingSessions(ctx, uuid.New(), "$2b$12$h"); err != nil || !store.ended {
+		t.Fatalf("set password: err %v, ending hook passed %v", err, store.ended)
 	}
 	for i, a := range store.actors {
 		if a.RequestID == nil || *a.RequestID != rid {

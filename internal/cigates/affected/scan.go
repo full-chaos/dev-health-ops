@@ -525,6 +525,12 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "plan-reads: --root is required")
 		return 2
 	}
+	absRoot, err := filepath.Abs(*root)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	*root = absRoot
 	dir := *tablesDir
 	if dir == "" {
 		dir = filepath.Join(*root, "internal", "cigates", "affected")

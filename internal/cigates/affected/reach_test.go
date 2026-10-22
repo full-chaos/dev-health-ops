@@ -167,3 +167,41 @@ func TestReachTableDefectsPlanFull(t *testing.T) {
 			changed: []string{"AGENTS.md"}, want: "NONE"},
 	})
 }
+
+// A relative --root (the form the tool's own messages print) places every read: the table equals the absolute-root one.
+func TestReachRelativeRootEqualsAbsoluteRoot(t *testing.T) {
+	head := map[string]string{
+		"b/b.go":      reachReader,
+		"c/c_test.go": reachCaller,
+		"d/d_test.go": reachTest("d", "\t_ = b.Name()\n"),
+		"e/e.go":      "package e\n",
+		"f/f.go":      "package f\n",
+	}
+	f, _ := reachFixture(t, head)
+	if res := writeTables(t, f.root); res.code != 0 {
+		t.Fatalf("plan-reads --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	reach := filepath.Join(f.root, tablesDir, "reach.tsv")
+	absolute, err := os.ReadFile(reach)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(absolute), "b\tb.go\tc") {
+		t.Fatalf("absolute-root reach.tsv has no placed row for b:\n%s", absolute)
+	}
+	if err := os.Remove(reach); err != nil {
+		t.Fatal(err)
+	}
+	env := inheritedEnv([]string{"GOFLAGS", "GOWORK", "GOTOOLCHAIN"}, "GOFLAGS=-mod=mod", "GOWORK=off", "GOTOOLCHAIN=local",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	if res := (cmdSpec{dir: f.root, env: env}).run(cigate(t), "plan-reads", "--root", ".", "--write"); res.code != 0 {
+		t.Fatalf("plan-reads --root . --write exited %d:\n%s%s", res.code, res.stdout, res.stderr)
+	}
+	relative, err := os.ReadFile(reach)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(relative) != string(absolute) {
+		t.Fatalf("--root . reach.tsv differs from the absolute-root table:\n%s\nwant:\n%s", relative, absolute)
+	}
+}

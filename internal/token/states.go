@@ -26,6 +26,9 @@ const (
 	// ReasonKeyStateMismatch: custody holds a key under a registered kid whose
 	// registered public key is another.
 	ReasonKeyStateMismatch Reason = "key_state_public_key_mismatch"
+	// ReasonKeyStateInvalid: a row carries a state outside the five rotation
+	// states.
+	ReasonKeyStateInvalid Reason = "key_state_invalid"
 )
 
 // KeyStateRow is one key's durable rotation state (the signing_keys table).
@@ -155,7 +158,9 @@ func (s *KeyStates) latch(keys []keystore.Key, rows []KeyStateRow) {
 // the custody states stand (a deployment that has not adopted the rotation
 // state machine). Otherwise the rows are authoritative: a key with no row is
 // neither published nor signing (retired), and a key is compromised when its
-// row, a compromised row's public key, or custody says so.
+// row, a compromised row's public key, or custody says so. A row in an
+// unknown state, then a registered kid with another public key, refuse the
+// whole set; neither depends on row order.
 func applyKeyStates(keys []keystore.Key, rows []KeyStateRow) ([]keystore.Key, error) {
 	if len(rows) == 0 {
 		return keys, nil
@@ -163,6 +168,9 @@ func applyKeyStates(keys []keystore.Key, rows []KeyStateRow) ([]keystore.Key, er
 	byKid := make(map[string]KeyStateRow, len(rows))
 	denied := map[string]bool{}
 	for _, row := range rows {
+		if !row.State.Valid() {
+			return nil, failure(ReasonKeyStateInvalid)
+		}
 		byKid[row.KeyID] = row
 		if row.State == StateCompromised {
 			denied[string(row.PublicKey)] = true

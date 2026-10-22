@@ -421,3 +421,94 @@ func TestAMismatchDoesNotSkipTheCompromiseLatch(t *testing.T) {
 		t.Fatalf("previously compromised key %q signed after a mismatch then a restored snapshot", kid)
 	}
 }
+
+// permutations returns every order of rows.
+func permutations(rows []KeyStateRow) [][]KeyStateRow {
+	if len(rows) <= 1 {
+		return [][]KeyStateRow{append([]KeyStateRow(nil), rows...)}
+	}
+	var out [][]KeyStateRow
+	for i := range rows {
+		rest := append(append([]KeyStateRow(nil), rows[:i]...), rows[i+1:]...)
+		for _, tail := range permutations(rest) {
+			out = append(out, append([]KeyStateRow{rows[i]}, tail...))
+		}
+	}
+	return out
+}
+
+// Over every order of a mismatch row, a compromised row, an unknown-state row
+// and a good row, the overlay latches the same set and fails with the same
+// reason.
+func TestRowOrderDoesNotChangeTheLatchOrTheError(t *testing.T) {
+	pa, pb, pc, pd, px := ed25519.PublicKey(make32(1)), ed25519.PublicKey(make32(2)), ed25519.PublicKey(make32(3)), ed25519.PublicKey(make32(4)), ed25519.PublicKey(make32(9))
+	custody := []keystore.Key{
+		{KeyID: "a", State: StateActive, PublicKey: pa}, {KeyID: "b", State: StatePending, PublicKey: pb},
+		{KeyID: "c", State: StatePending, PublicKey: pc}, {KeyID: "d", State: StatePending, PublicKey: pd},
+	}
+	mismatch := KeyStateRow{KeyID: "a", State: StateActive, PublicKey: px}
+	compromisedRow := KeyStateRow{KeyID: "b", State: StateCompromised, PublicKey: pb}
+	revoked := KeyStateRow{KeyID: "c", State: "revoked", PublicKey: pc}
+	ok := KeyStateRow{KeyID: "d", State: StatePending, PublicKey: pd}
+	for name, c := range map[string]struct {
+		rows []KeyStateRow
+		want Reason
+	}{
+		"mismatch, compromised, revoked, ok": {[]KeyStateRow{mismatch, compromisedRow, revoked, ok}, ReasonKeyStateInvalid},
+		"mismatch, compromised, ok":          {[]KeyStateRow{mismatch, compromisedRow, ok}, ReasonKeyStateMismatch},
+		"compromised, revoked, ok":           {[]KeyStateRow{compromisedRow, revoked, ok}, ReasonKeyStateInvalid},
+	} {
+		orders := permutations(c.rows)
+		for _, rows := range orders {
+			source := &fakeStates{rows: rows}
+			states := newStates(source, &fakeClock{now: time.Unix(0, 0)})
+			if _, err := states.override(context.Background(), custody); !reasonIs(err, c.want) {
+				t.Fatalf("%s, order %v: err = %v, want %s", name, kidsOf(rows), err, c.want)
+			}
+			if len(states.deniedKids) != 1 || !states.deniedKids["b"] || len(states.deniedPublics) != 1 || !states.deniedPublics[string(pb)] {
+				t.Fatalf("%s, order %v: latched kids %v, %d public keys; want exactly b", name, kidsOf(rows), states.deniedKids, len(states.deniedPublics))
+			}
+		}
+		if want := map[int]int{4: 24, 3: 6}[len(c.rows)]; len(orders) != want {
+			t.Fatalf("%s: %d orders, want %d", name, len(orders), want)
+		}
+	}
+}
+
+func kidsOf(rows []KeyStateRow) []string {
+	var out []string
+	for _, row := range rows {
+		out = append(out, row.KeyID)
+	}
+	return out
+}
+
+// An overlay error after the latch fails closed: no signature, no key set,
+// no readiness, never a partial success.
+func TestAnOverlayErrorFailsClosed(t *testing.T) {
+	for name, rows := range map[string]func(publicA, publicB ed25519.PublicKey) []KeyStateRow{
+		"public key mismatch": func(_, publicB ed25519.PublicKey) []KeyStateRow {
+			return []KeyStateRow{{KeyID: "a", State: StateActive, PublicKey: ed25519.PublicKey(make32(9))}, {KeyID: "b", State: StateCompromised, PublicKey: publicB}}
+		},
+		"unknown state": func(publicA, publicB ed25519.PublicKey) []KeyStateRow {
+			return []KeyStateRow{{KeyID: "a", State: StateActive, PublicKey: publicA}, {KeyID: "b", State: "revoked", PublicKey: publicB}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			publicA, publicB := writeKey(t, dir, "a"), writeKey(t, dir, "b")
+			source := &fakeStates{rows: rows(publicA, publicB)}
+			signer := NewFileSigner(FileConfig{KeySetPath: writeSet(t, dir, "a", "active", "b", "pending"), States: newStates(source, &fakeClock{now: time.Unix(0, 0)})})
+			ctx := context.Background()
+			if compact, kid, err := signer.Sign(ctx, "at+jwt", []byte(`{}`)); err == nil || compact != "" || kid != "" {
+				t.Fatalf("Sign = %q, %q, %v; want no token and an error", compact, kid, err)
+			}
+			if set, err := signer.KeySet(ctx); err == nil || len(set.Keys()) != 0 {
+				t.Fatalf("KeySet = %d keys, %v; want none and an error", len(set.Keys()), err)
+			}
+			if err := signer.Check(ctx); err == nil {
+				t.Fatal("Check passed on a refused snapshot")
+			}
+		})
+	}
+}

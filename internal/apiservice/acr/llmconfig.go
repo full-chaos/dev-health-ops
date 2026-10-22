@@ -36,6 +36,9 @@ const (
 	NoConfigReasonHeader    = "X-Org-Llm-Config-Reason"
 	NoConfigReasonGateShut  = "byo_llm_gate_closed"
 	NoConfigReasonTurnedOff = "byo_llm_turned_off"
+	// NoConfigReasonBaseURLCarriesKey names a stored config whose base_url holds
+	// an api key; the route never serves such a url.
+	NoConfigReasonBaseURLCarriesKey = "byo_base_url_carries_key"
 )
 
 // noConfigReasonFor names a BYO org whose saved configs are for other purposes
@@ -176,6 +179,15 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			case cfg.UnresolvedPurpose != "":
 				w.Header().Set(NoConfigReasonHeader, noConfigReasonFor(cfg.UnresolvedPurpose))
 			}
+			writeDetail(w, http.StatusNotFound, "Not found")
+			return
+		}
+		if cfg.KeyInBaseURL || llmorgsettings.BaseURLCarriesKey(cfg.BaseURL, cfg.APIKey.Reveal()) {
+			logger.WarnContext(ctx, "acr llm-config: none served",
+				slog.String("org_id", orgID), slog.String("credential_id", credentialID), slog.String("reason", NoConfigReasonBaseURLCarriesKey))
+			countLLMConfig(ctx, NoConfigReasonBaseURLCarriesKey)
+			w.Header().Set(NoConfigHeader, NoConfigValue)
+			w.Header().Set(NoConfigReasonHeader, NoConfigReasonBaseURLCarriesKey)
 			writeDetail(w, http.StatusNotFound, "Not found")
 			return
 		}

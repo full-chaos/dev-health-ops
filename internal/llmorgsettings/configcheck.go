@@ -35,11 +35,28 @@ func CheckProvider(provider string) (string, ConfigReason) {
 // CheckCredentials is the credentials half for a known provider. A base_url
 // split error is an error, not a reason.
 func CheckCredentials(ctx context.Context, provider, apiKey, baseURL string) (ConfigReason, error) {
+	return checkCredentials(ctx, provider, apiKey, baseURL, false)
+}
+
+// CheckOrgConfig is CheckConfig over an OrgConfig: its KeyInBaseURL flag (a key
+// the org stores other than the served one) refuses the url before any lookup.
+func CheckOrgConfig(ctx context.Context, cfg OrgConfig) (ConfigReason, error) {
+	name, reason := CheckProvider(cfg.Provider)
+	if reason != ConfigActive {
+		return reason, nil
+	}
+	return checkCredentials(ctx, name, cfg.APIKey.Reveal(), cfg.BaseURL, cfg.KeyInBaseURL)
+}
+
+func checkCredentials(ctx context.Context, provider, apiKey, baseURL string, keyInBaseURL bool) (ConfigReason, error) {
 	if apiKey == "" && baseURL == "" {
 		return ConfigMissingCredentials, nil
 	}
 	if !credentialsComplete(provider, apiKey) {
 		return ConfigMissingCredentials, nil
+	}
+	if keyInBaseURL {
+		return ConfigInvalidBaseURL, nil
 	}
 	ok, _, _, err := ValidateBaseURLForKeys(ctx, baseURL, apiKey)
 	if err != nil {

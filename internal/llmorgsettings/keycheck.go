@@ -48,25 +48,29 @@ func KeyLeakForms(apiKey string) []string {
 		return nil
 	}
 	forms := []string{strings.ToLower(apiKey)}
-	if len(apiKey) < 8 {
-		return forms
-	}
-	forms = append(forms, url.QueryEscape(apiKey), url.PathEscape(apiKey), hex.EncodeToString([]byte(apiKey)))
+	derived := []string{url.QueryEscape(apiKey), url.PathEscape(apiKey), hex.EncodeToString([]byte(apiKey))}
 	for shift := 0; shift < 3; shift++ {
 		raw := append(make([]byte, shift), apiKey...)
 		for _, enc := range []*base64.Encoding{base64.RawStdEncoding, base64.RawURLEncoding} {
 			text := enc.EncodeToString(raw)
 			start := []int{0, 2, 3}[shift]
 			if len(text) > start+2 {
-				forms = append(forms, text[start:len(text)-2])
+				derived = append(derived, text[start:len(text)-2])
 			}
 		}
 	}
-	for index, form := range forms {
-		forms[index] = strings.ToLower(form)
+	for _, form := range derived {
+		if len(form) >= minDerivedFormLen {
+			forms = append(forms, strings.ToLower(form))
+		}
 	}
 	return forms
 }
+
+// minDerivedFormLen is the shortest escaped, hex or base64 form checked: a
+// shorter form of a very short key is ordinary url text, not a leak. Every form
+// of a key of eight bytes or more is at least this long.
+const minDerivedFormLen = 8
 
 // CarriesKey is whether text holds any of the lower-cased key forms, as written
 // or once its percent-escapes are decoded (a server reads %73k as sk).

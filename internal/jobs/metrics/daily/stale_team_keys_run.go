@@ -166,7 +166,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		}
 		keys := make([]staleKey, 0, len(triplet.MetricsDaily))
 		for _, row := range triplet.MetricsDaily {
-			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
+			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, teamkeytables.LegacyRowView})
 		}
 		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
@@ -185,7 +185,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		}
 		keys := make([]staleKey, 0, len(triplet.UserMetricsDaily))
 		for _, row := range triplet.UserMetricsDaily {
-			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.UserIdentity})
+			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.UserIdentity, teamkeytables.LegacyRowView})
 		}
 		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
@@ -213,7 +213,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		}
 		keys := make([]staleKey, 0, len(computed.rows))
 		for _, row := range computed.rows {
-			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
+			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status, teamkeytables.LegacyRowView})
 		}
 		return runStaleKeys{scope: computed.read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {

@@ -334,7 +334,6 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAccessTokenIssuer:      "other-issuer",
 		EnvAccessTokenAudience:    "other-audience",
 		EnvTrustedProxies:         "10.0.0.5,192.168.0.0/16",
-		EnvCompatRoutes:           "true",
 		"SOCIAL_GITHUB_CLIENT_ID": "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID": "gl-client",
 		"SOCIAL_GOOGLE_CLIENT_ID": "google-client",
@@ -359,7 +358,6 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAccessTokenIssuer:      func(c Config) string { return c.Session.AccessIssuer },
 		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
 		EnvTrustedProxies:         func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
-		EnvCompatRoutes:           func(c Config) string { return strconv.FormatBool(c.Session.CompatRoutes) },
 		"SOCIAL_GITHUB_CLIENT_ID": func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID": func(c Config) string { return c.Social["gitlab"].ID },
 		"SOCIAL_GOOGLE_CLIENT_ID": func(c Config) string { return c.Social["google"].ID },
@@ -389,14 +387,6 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			if option.Env == EnvSigningKeySetFile {
 				delete(env, EnvSigningKeyFile)
 				delete(env, EnvSigningKeyID)
-			}
-			if option.Env == EnvCompatRoutes {
-				// The compat routes need the session secrets; the baseline has them too.
-				env = sessionEnv(testAccessSecret, testSuccessorKey)
-				var err error
-				if base, err = Load(Spec{LookupEnv: lookupFrom(env)}); err != nil {
-					t.Fatal(err)
-				}
 			}
 			env[option.Env] = value
 			cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})

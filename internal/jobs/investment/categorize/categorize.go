@@ -114,6 +114,9 @@ type CategorizeOptions struct {
 	// only; the Provider itself is already bound to them.
 	ProviderName string
 	Model        string
+	// Telemetry receives the request, validation and outcome signals. Nil
+	// records nothing.
+	Telemetry LLMTelemetry
 }
 
 // ErrNoProvider is returned when CategorizeTextBundle is called without a
@@ -126,7 +129,7 @@ func CategorizeTextBundle(ctx context.Context, bundle units.TextBundle, opts Cat
 	if opts.Provider == nil {
 		return CategorizationOutcome{}, ErrNoProvider
 	}
-	completion, err := opts.Provider.Complete(ctx, CategorizationRequest(BuildPrompt(bundle.SourceBlock)))
+	completion, err := opts.complete(ctx, CategorizationRequest(BuildPrompt(bundle.SourceBlock)), StageInitial)
 	if err != nil {
 		return CategorizationOutcome{}, err
 	}
@@ -166,12 +169,14 @@ func categorizeCompletion(
 	opts CategorizeOptions, tally completionTally,
 ) (CategorizationOutcome, error) {
 	validation := validateCompletionText(completionText, bundle)
+	opts.recordValidation(StageInitial, tally.ResolvedModel, validation)
 	if validation.OK {
+		opts.recordOutcome(tally.ResolvedModel, StatusOK)
 		return successOutcome(validation, StatusOK, tally), nil
 	}
 
 	repairPrompt := BuildRepairPrompt(validation.Errors, bundle.SourceBlock, completionText)
-	repaired, err := opts.Provider.Complete(ctx, CategorizationRequest(repairPrompt))
+	repaired, err := opts.complete(ctx, CategorizationRequest(repairPrompt), StageRepair)
 	if err != nil {
 		return CategorizationOutcome{}, &ModelAnsweredError{Err: err}
 	}
@@ -186,9 +191,12 @@ func categorizeCompletion(
 	}
 
 	validation = validateCompletionText(repaired.Text, bundle)
+	opts.recordValidation(StageRepair, tally.ResolvedModel, validation)
 	if validation.OK {
+		opts.recordOutcome(tally.ResolvedModel, StatusRepaired)
 		return successOutcome(validation, StatusRepaired, tally), nil
 	}
+	opts.recordOutcome(tally.ResolvedModel, StatusInvalidLLMOutput)
 
 	// Both attempts failed validation. This is NOT an error return: the
 	// reference produces a real outcome with the fallback distribution and

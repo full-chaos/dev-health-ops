@@ -67,6 +67,9 @@ type NativeExecutor struct {
 	// servedObserver receives the outcome counts of each served decision run.
 	// Nil is tolerated.
 	servedObserver ServedObserver
+	// llmTelemetry receives the investment LLM signals of each run (CHAOS-8722).
+	// Nil is tolerated.
+	llmTelemetry categorize.LLMTelemetry
 	// shadowHTTPClient replaces the HTTP client of the shadow backend. Nil, the
 	// production value, selects the hardened client.
 	shadowHTTPClient *http.Client
@@ -81,6 +84,12 @@ type NativeExecutor struct {
 // tolerated everywhere it is read.
 func (executor *NativeExecutor) SetShadowObserver(observer ShadowObserver) {
 	executor.shadowObserver = observer
+}
+
+// SetLLMTelemetry wires the investment LLM signals. Nil is tolerated everywhere
+// it is read.
+func (executor *NativeExecutor) SetLLMTelemetry(telemetry categorize.LLMTelemetry) {
+	executor.llmTelemetry = telemetry
 }
 
 // SetServedObserver wires the optional served-decision telemetry. Nil is
@@ -365,6 +374,7 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 				fmt.Errorf("build the served decision backend: %w", err))
 		}
 	}
+	materializer.SetLLMTelemetry(executor.llmTelemetry)
 	if served != nil {
 		served.SetObserver(executor.servedObserver)
 		defer func() { _ = served.Close() }()

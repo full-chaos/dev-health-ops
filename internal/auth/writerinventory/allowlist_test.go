@@ -90,12 +90,9 @@ var Allowlist = []Entry{
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
 	{File: "internal/auth/session/legacy.go", Func: "Store.ExchangeLegacy", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/legacy.go", Func: "Store.revokeLegacyFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},
-	// CHAOS-10411 moves Create onto insertSession and removes Create's two rows: one writer of each table.
 	{File: "internal/auth/session/signin.go", Func: "Store.insertSession", Table: "auth.refresh_credentials", Verb: "INSERT"},
 	{File: "internal/auth/session/signin.go", Func: "Store.insertSession", Table: "auth.sessions", Verb: "INSERT"},
 	{File: "internal/auth/session/store.go", Func: "Store.BumpRevision", Table: "auth.sessions", Verb: "UPDATE"},
-	{File: "internal/auth/session/store.go", Func: "Store.Create", Table: "auth.refresh_credentials", Verb: "INSERT"},
-	{File: "internal/auth/session/store.go", Func: "Store.Create", Table: "auth.sessions", Verb: "INSERT"},
 	{File: "internal/auth/session/store.go", Func: "Store.revokeSessions", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/session/store.go", Func: "Store.revokeSessions", Table: "auth.sessions", Verb: "UPDATE"},
 	{File: "internal/auth/session/store.go", Func: "Store.rotate", Table: "auth.refresh_credentials", Verb: "INSERT"},

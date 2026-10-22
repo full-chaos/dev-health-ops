@@ -150,7 +150,17 @@ func compatRoutes(
 			LockoutKey: contracts.NewSecretString(cfg.Session.LockoutKey.Reveal()),
 		}
 	}
-	return authapi.CompatRoutes(deps)
+	routes, err := authapi.CompatRoutes(deps)
+	if err != nil {
+		return nil, err
+	}
+	links, err := authapi.SocialLinkRoutes(authapi.SocialLinkDeps{
+		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Social: socialService,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(routes, links...), nil
 }
 
 // Main runs the command and exits with its status.

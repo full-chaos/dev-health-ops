@@ -228,6 +228,7 @@ internal/queryapi/investmentexplain	llm_token_usage_golden_test.go	internal/quer
 internal/queryapi/investmentexplain	parser_golden_test.go	internal/queryapi/investmentexplain/testdata	dir
 internal/queryapi/investmentexplain	prompt_golden_test.go	internal/queryapi/investmentexplain/testdata	dir
 internal/queryapi/investmentexplain	resolve_model_name_golden_test.go	internal/queryapi/investmentexplain/testdata	dir
+internal/queryapi/rowview	census_test.go	unexpressed	-
 internal/queryapi/server	build_routes_integration_test.go	unexpressed	-
 internal/queryapi/server	direct_env_reads_test.go	unexpressed	-
 internal/queryapi/server	edge_users_test.go	unexpressed	-

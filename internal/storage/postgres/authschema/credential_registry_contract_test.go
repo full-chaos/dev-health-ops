@@ -2,6 +2,7 @@ package authschema
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +64,8 @@ func TestCredentialScopeShapeMatchesThePrincipalContract(t *testing.T) {
 }
 
 // TestCredentialClassCheckEqualsThePrincipalContractsVocabulary: migration 0008
-// closes credential_class to the vocabulary principal.v1 carries, so a stored
+// closes credential_class (the last migration that redefines the CHECK, 0017,
+// is the one compared) to the vocabulary principal.v1 carries, so a stored
 // class always has a wire name. The list is copied into SQL, so it is compared
 // here, both directions.
 func TestCredentialClassCheckEqualsThePrincipalContractsVocabulary(t *testing.T) {
@@ -95,13 +97,13 @@ func TestCredentialClassCheckEqualsThePrincipalContractsVocabulary(t *testing.T)
 	}
 	var sql string
 	for _, m := range migrations {
-		if m.Version == 8 {
+		if strings.Contains(m.SQL, "ADD CONSTRAINT credential_registry_credential_class_closed") {
 			sql = m.SQL
 		}
 	}
-	start := strings.Index(sql, "credential_registry_credential_class_closed")
+	start := strings.Index(sql, "ADD CONSTRAINT credential_registry_credential_class_closed")
 	if start < 0 {
-		t.Fatal("migration 0008 does not close credential_class")
+		t.Fatal("no migration closes credential_class")
 	}
 	body := sql[start:]
 	body = body[strings.Index(body, "IN (")+len("IN ("):]
@@ -110,13 +112,45 @@ func TestCredentialClassCheckEqualsThePrincipalContractsVocabulary(t *testing.T)
 	for _, part := range strings.Split(body, ",") {
 		got[strings.Trim(strings.TrimSpace(part), "'")] = true
 	}
+	for _, problem := range classCheckDifferences(want, got) {
+		t.Error(problem)
+	}
+}
+
+// classCheckDifferences returns, in both directions, the principal.v1 classes
+// the CHECK lacks and the CHECK classes principal.v1 does not carry.
+func classCheckDifferences(want []string, got map[string]bool) []string {
+	var problems []string
+	remaining := map[string]bool{}
+	for class := range got {
+		remaining[class] = true
+	}
 	for _, class := range want {
 		if !got[class] {
-			t.Errorf("principal.v1 class %q is missing from the 0008 CHECK", class)
+			problems = append(problems, fmt.Sprintf("principal.v1 class %q is missing from the credential_class CHECK", class))
 		}
-		delete(got, class)
+		delete(remaining, class)
 	}
-	for extra := range got {
-		t.Errorf("the 0008 CHECK admits %q, which principal.v1 does not carry", extra)
+	for extra := range remaining {
+		problems = append(problems, fmt.Sprintf("the credential_class CHECK admits %q, which principal.v1 does not carry", extra))
+	}
+	return problems
+}
+
+// TestTheClassCheckComparisonFailsWhenTheyDifferByOneClassEitherWay plants one
+// class of difference in each direction.
+func TestTheClassCheckComparisonFailsWhenTheyDifferByOneClassEitherWay(t *testing.T) {
+	want := []string{"a_class", "b_class", "c_class"}
+	same := map[string]bool{"a_class": true, "b_class": true, "c_class": true}
+	if problems := classCheckDifferences(want, same); len(problems) != 0 {
+		t.Fatalf("equal sets reported %v", problems)
+	}
+	checkLacks := map[string]bool{"a_class": true, "b_class": true}
+	if problems := classCheckDifferences(want, checkLacks); len(problems) != 1 {
+		t.Errorf("a class missing from the CHECK reported %v, want one problem", problems)
+	}
+	checkExtra := map[string]bool{"a_class": true, "b_class": true, "c_class": true, "d_class": true}
+	if problems := classCheckDifferences(want, checkExtra); len(problems) != 1 {
+		t.Errorf("a class the CHECK adds reported %v, want one problem", problems)
 	}
 }

@@ -3,7 +3,6 @@ package customerpush
 import (
 	"context"
 	"errors"
-	"math"
 	"net/http"
 	"time"
 
@@ -288,7 +287,7 @@ func (h *handlers) listSourceBatches(w http.ResponseWriter, r *http.Request) {
 	from, _ := errs.QueryDatetime("from", pybody.LastQuery(values, "from"))
 	to, _ := errs.QueryDatetime("to", pybody.LastQuery(values, "to"))
 	limit, _ := errs.QueryInt("limit", pybody.LastQuery(values, "limit"), 50, int64Pointer(1), int64Pointer(200))
-	offset, _ := errs.QueryInt("offset", pybody.LastQuery(values, "offset"), 0, int64Pointer(0), int64Pointer(math.MaxInt64))
+	offset, _ := errs.QueryInt("offset", pybody.LastQuery(values, "offset"), 0, int64Pointer(0), pybody.Int64Max())
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
@@ -325,7 +324,7 @@ func (h *handlers) getBatch(w http.ResponseWriter, r *http.Request) {
 	values := r.URL.Query()
 	var errs pybody.Errors
 	limit, _ := errs.QueryInt("rejected_records_limit", pybody.LastQuery(values, "rejected_records_limit"), 50, int64Pointer(1), int64Pointer(200))
-	offset, _ := errs.QueryInt("rejected_records_offset", pybody.LastQuery(values, "rejected_records_offset"), 0, int64Pointer(0), int64Pointer(math.MaxInt64))
+	offset, _ := errs.QueryInt("rejected_records_offset", pybody.LastQuery(values, "rejected_records_offset"), 0, int64Pointer(0), pybody.Int64Max())
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return

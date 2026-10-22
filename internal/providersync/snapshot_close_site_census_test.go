@@ -79,6 +79,8 @@ var validToOutsideTheSnapshotRule = map[string]string{
 		"and the owner-at-T differential is asked before the write and before the delete",
 	"internal/providersync.ownershipCompactionSpec.scan": "ownership interval compaction: copies the valid_to a stored row already holds into the " +
 		"in-memory row it reads; sets no new close",
+	"internal/providersync.readCatalogEvidenceRows": "the evidence start of a catalog link (CHAOS-10521): copies the valid_to a " +
+		"stored row already holds into the in-memory row it reads; sets no new close",
 	"internal/providersync.tombstoneOf": "ownership interval compaction: writes the rows a merged run folds again under their own sort key " +
 		"as supersede tombstones (valid_to = valid_from, covering no instant), so a reader sees the merged row and no inner row in one step; " +
 		"the tombstones are deleted after the readback",

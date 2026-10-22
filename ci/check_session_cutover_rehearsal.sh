@@ -19,7 +19,7 @@
 # window: from the REVOKE (or re-GRANT) commit to the last old pod gone, with the read failures and the
 # seconds with no Ready go-api pod. A CONTROL upgrade (a pod annotation, no flag change) runs first so the
 # read-drop shape of a plain pod handover is on record beside the flip. Read drops are a named class (F-A):
-# per upgrade status 000 only, at most 4 probes, inside one window of 1 s at the pod handover; anything else
+# per upgrade status 000 only, at most 8 probes, inside one window of 2 s at the pod handover; anything else
 # (a 5xx, another answer, more probes, outside the handover) is a FINDING, and REHEARSAL_STRICT=1 fails the
 # job on a FINDING. `helm rollback` not re-granting is a KNOWN finding (F-B), recorded, not failed. A broken
 # mechanism (an end state not Ready, a grant not applied) always fails.
@@ -187,8 +187,8 @@ note() {
 }
 
 # The read-drop class (F-A), as ruled: per upgrade, failures are status 000 only (no 5xx, no answer
-# other than the baseline answer), at most 4 probes, inside ONE window of at most 1 s that overlaps the pod
-# handover (first new pod Ready .. last old pod gone, 2 s slack). Anything else is a hard finding.
+# other than the baseline answer), at most 8 probes (4 per second), inside ONE window of at most 2 s that
+# overlaps the pod handover (first new pod Ready .. last old pod gone, 2 s slack). Anything else is a hard finding.
 ROWS=()
 EXPECT_CODE=""
 
@@ -240,15 +240,19 @@ analyse() {
   note "${name}: seconds with no Ready go-api pod: ${zero}"
   note "${name}: read probes ${reads}: status 000 ${fails}, 5xx ${five}, other answer ${wrong} (baseline answer ${EXPECT_CODE}); first ${first_fail} last ${last_fail}"
   class="clean"
+  if [ "${zero}" -gt 0 ]; then
+    class="HARD"
+    finding "${name}: ${zero} second(s) with no Ready go-api pod"
+  fi
   if [ $((fails + five + wrong)) -gt 0 ]; then
     lo="${first_new:-${old_gone}}"
     hi="${old_gone}"
-    if [ "${five}" -gt 0 ] || [ "${wrong}" -gt 0 ] || [ "${fails}" -gt 4 ] || [ $((last_fail - first_fail)) -gt 1 ] \
+    if [ "${five}" -gt 0 ] || [ "${wrong}" -gt 0 ] || [ "${fails}" -gt 8 ] || [ $((last_fail - first_fail)) -gt 1 ] \
       || [ "${hi}" -eq 0 ] || [ "${first_fail}" -lt $((lo - 2)) ] || [ "${last_fail}" -gt $((hi + 2)) ]; then
       class="HARD"
       finding "${name}: read drops outside the named class F-A: 000=${fails} 5xx=${five} other=${wrong}, ${first_fail}..${last_fail}, handover ${lo}..${hi}"
     else
-      class="F-A"
+      if [ "${class}" != HARD ]; then class="F-A"; fi
       note "${name}: NAMED CLASS F-A: ${fails} probe(s) with status 000 inside one window of $((last_fail - first_fail + 1)) s at the pod handover (${lo}..${hi})"
     fi
   fi

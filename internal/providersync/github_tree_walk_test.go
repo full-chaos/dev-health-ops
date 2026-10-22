@@ -22,6 +22,27 @@ type walkEntry struct{ path, kind, sha string }
 type walkTreeFake struct {
 	trees map[string][]walkEntry
 	gets  int
+	// truncateAbove marks a recursive answer truncated (and empty) when the
+	// subtree has more entries than this; 0 never truncates.
+	truncateAbove int
+}
+
+// flatten lists every entry below sha with its path relative to sha, in the
+// order GitHub's recursive listing uses (a directory, then what is inside it).
+func (fake *walkTreeFake) flatten(sha, prefix string, out *[]walkEntry) {
+	for _, entry := range fake.trees[sha] {
+		if len(*out) > 20_000 {
+			return
+		}
+		path := entry.path
+		if prefix != "" {
+			path = prefix + "/" + entry.path
+		}
+		*out = append(*out, walkEntry{path: path, kind: entry.kind, sha: entry.sha})
+		if entry.kind == "tree" {
+			fake.flatten(entry.sha, path, out)
+		}
+	}
 }
 
 func (fake *walkTreeFake) Do(request *http.Request) (*http.Response, error) {
@@ -33,8 +54,16 @@ func (fake *walkTreeFake) Do(request *http.Request) (*http.Response, error) {
 		status, body = http.StatusNotFound, `{"message":"Not Found"}`
 	} else {
 		fake.gets++
+		truncated := false
+		if request.URL.Query().Get("recursive") == "true" {
+			entries = nil
+			fake.flatten(sha, "", &entries)
+			if len(entries) > 20_000 || (fake.truncateAbove > 0 && len(entries) > fake.truncateAbove) {
+				entries, truncated = nil, true
+			}
+		}
 		var out bytes.Buffer
-		out.WriteString(`{"tree":[`)
+		fmt.Fprintf(&out, `{"truncated":%t,"tree":[`, truncated)
 		for index, entry := range entries {
 			if index > 0 {
 				out.WriteByte(',')
@@ -107,7 +136,7 @@ func TestGitHubTreeWalkStopsAtACycleButWalksTheSameDirectoryTwiceUnderTwoParents
 		"root": {{path: "loop", kind: "tree", sha: "a"}},
 		"a":    {{path: "again", kind: "tree", sha: "root"}},
 	}}
-	if _, _, err := cyclic.walk(t, defaultGitHubTreeWalkLimits()); walkLimitOf(t, err).Limit != GitHubTreeWalkLimitCycle {
+	if _, _, err := cyclic.walk(t, serialWalkLimits()); walkLimitOf(t, err).Limit != GitHubTreeWalkLimitCycle {
 		t.Fatalf("err=%v", err)
 	}
 	if cyclic.gets > 3 {
@@ -117,17 +146,17 @@ func TestGitHubTreeWalkStopsAtACycleButWalksTheSameDirectoryTwiceUnderTwoParents
 		"root": {{path: "x", kind: "tree", sha: "same"}, {path: "y", kind: "tree", sha: "same"}},
 		"same": {{path: "f.go", kind: "blob"}},
 	}}
-	paths, stats, err := siblings.walk(t, defaultGitHubTreeWalkLimits())
+	paths, stats, err := siblings.walk(t, serialWalkLimits())
 	if err != nil || len(paths) != 2 || stats.dirs != 3 {
 		t.Fatalf("identical directories under two parents are legal: paths=%v dirs=%d err=%v", paths, stats.dirs, err)
 	}
 }
 
 func TestGitHubTreeWalkDepthCeilingIsInclusive(t *testing.T) {
-	if paths, stats, err := walkChain(64).walk(t, defaultGitHubTreeWalkLimits()); err != nil || len(paths) != 1 || stats.depth != 64 {
+	if paths, stats, err := walkChain(64).walk(t, serialWalkLimits()); err != nil || len(paths) != 1 || stats.depth != 64 {
 		t.Fatalf("depth %d must pass: paths=%v stats=%+v err=%v", 64, paths, stats, err)
 	}
-	_, _, err := walkChain(64+1).walk(t, defaultGitHubTreeWalkLimits())
+	_, _, err := walkChain(64+1).walk(t, serialWalkLimits())
 	if limit := walkLimitOf(t, err); limit.Limit != GitHubTreeWalkLimitDepth || limit.Value != 64 {
 		t.Fatalf("limit=%+v", limit)
 	}
@@ -135,11 +164,11 @@ func TestGitHubTreeWalkDepthCeilingIsInclusive(t *testing.T) {
 
 func TestGitHubTreeWalkDirectoryCeilingIsInclusive(t *testing.T) {
 	fake := walkWide(5_000)
-	if paths, stats, err := fake.walk(t, defaultGitHubTreeWalkLimits()); err != nil || stats.dirs != 5_000 || len(paths) != 5_000-1 {
+	if paths, stats, err := fake.walk(t, serialWalkLimits()); err != nil || stats.dirs != 5_000 || len(paths) != 5_000-1 {
 		t.Fatalf("%d directories must pass: dirs=%d paths=%d err=%v", 5_000, stats.dirs, len(paths), err)
 	}
 	over := walkWide(5_000 + 1)
-	_, stats, err := over.walk(t, defaultGitHubTreeWalkLimits())
+	_, stats, err := over.walk(t, serialWalkLimits())
 	if limit := walkLimitOf(t, err); limit.Limit != GitHubTreeWalkLimitDirs || stats.dirs != 5_000 || over.gets != 5_000 {
 		t.Fatalf("limit=%+v dirs=%d gets=%d: the walk must stop BEFORE the request over the ceiling", limit, stats.dirs, over.gets)
 	}
@@ -168,10 +197,10 @@ func walkEntries(last int) *walkTreeFake {
 
 func TestGitHubTreeWalkEntryCeilingIsInclusive(t *testing.T) {
 	// 100 root entries + 99 x 1,000 + 900 = exactly 100,000.
-	if _, stats, err := walkEntries(900).walk(t, defaultGitHubTreeWalkLimits()); err != nil || stats.entries != 100_000 {
+	if _, stats, err := walkEntries(900).walk(t, serialWalkLimits()); err != nil || stats.entries != 100_000 {
 		t.Fatalf("%d entries must pass: stats=%+v err=%v", 100_000, stats, err)
 	}
-	_, _, err := walkEntries(901).walk(t, defaultGitHubTreeWalkLimits())
+	_, _, err := walkEntries(901).walk(t, serialWalkLimits())
 	if limit := walkLimitOf(t, err); limit.Limit != GitHubTreeWalkLimitEntries || limit.Value != 100_000 {
 		t.Fatalf("limit=%+v", limit)
 	}
@@ -180,7 +209,7 @@ func TestGitHubTreeWalkEntryCeilingIsInclusive(t *testing.T) {
 func TestGitHubTreeWalkStopsBeforeTheNextRequestWhenItsTimeBudgetIsSpent(t *testing.T) {
 	fake := walkWide(10)
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
-	limits := defaultGitHubTreeWalkLimits()
+	limits := serialWalkLimits()
 	limits.now = func() time.Time {
 		current := now
 		now = now.Add(5 * time.Minute)
@@ -196,7 +225,7 @@ func TestGitHubTreeWalkStopsBeforeTheNextRequestWhenItsTimeBudgetIsSpent(t *test
 	// The job deadline too close to use the result stops it the same way.
 	deadlined, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute))
 	defer cancel()
-	_, _, _, err = gitHubWalkTreeLimited(deadlined, walkWide(3).client(t), "/repos/acme/api", "root", "", defaultGitHubTreeWalkLimits())
+	_, _, _, err = gitHubWalkTreeLimited(deadlined, walkWide(3).client(t), "/repos/acme/api", "root", "", serialWalkLimits())
 	if limit := walkLimitOf(t, err); limit.Limit != GitHubTreeWalkLimitTime {
 		t.Fatalf("deadline limit=%+v", limit)
 	}
@@ -229,7 +258,7 @@ func TestGitHubTreeWalkPassesTheMeasuredOrganisationTrees(t *testing.T) {
 				fake.trees[sha] = blobs
 			}
 			fake.trees["root"] = root
-			paths, stats, err := fake.walk(t, defaultGitHubTreeWalkLimits())
+			paths, stats, err := fake.walk(t, serialWalkLimits())
 			if err != nil || len(paths) != tc.blobs || stats.dirs != tc.dirs {
 				t.Fatalf("paths=%d stats=%+v err=%v", len(paths), stats, err)
 			}
@@ -445,7 +474,7 @@ func TestGitHubTreeWalkWarnsOncePerCeilingAtHalf(t *testing.T) {
 			client := fake.client(t)
 			metrics := providerfoundation.NewMetrics()
 			client.Metrics = metrics
-			limits := defaultGitHubTreeWalkLimits()
+			limits := serialWalkLimits()
 			if c.clock != nil {
 				limits.now = c.clock()
 			}
@@ -476,7 +505,7 @@ func TestGitHubTreeWalkWarnsAboutHalfTheTimeEvenWhenTheBudgetStopsItAtThatEntry(
 	start := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	offsets := []time.Duration{0, 0, 12 * time.Minute} // walk start, root entry, first child entry
 	calls := 0
-	limits := defaultGitHubTreeWalkLimits()
+	limits := serialWalkLimits()
 	limits.now = func() time.Time {
 		offset := offsets[min(calls, len(offsets)-1)]
 		calls++
@@ -542,7 +571,7 @@ func TestGitHubTreeWalkWarnsAboutHalfTheTimeBeforeADeadlineMarginStop(t *testing
 	defer cancel()
 	offsets := []time.Duration{0, 0, 2 * time.Minute, 3 * time.Minute}
 	calls := 0
-	limits := defaultGitHubTreeWalkLimits()
+	limits := serialWalkLimits()
 	limits.now = func() time.Time {
 		offset := offsets[min(calls, len(offsets)-1)]
 		calls++
@@ -568,7 +597,7 @@ func TestGitHubTreeWalkWarnsAboutHalfTheTimeBeforeADeadlineMarginStop(t *testing
 // missed the threshold, fired early, or never fired before a deadline stop
 // (r3 repro). Also one nanosecond either side of half, for even and odd ceilings.
 func TestGitHubTreeWalkTimeHalfCompareKeepsFullPrecision(t *testing.T) {
-	margin := defaultGitHubTreeWalkLimits().deadlineMargin
+	margin := serialWalkLimits().deadlineMargin
 	cases := []struct {
 		name    string
 		budget  time.Duration // custom budget (0 = default 12 min)
@@ -598,7 +627,7 @@ func TestGitHubTreeWalkTimeHalfCompareKeepsFullPrecision(t *testing.T) {
 			}
 			offsets := []time.Duration{0, 0, c.elapsed}
 			calls := 0
-			limits := defaultGitHubTreeWalkLimits()
+			limits := serialWalkLimits()
 			if c.budget > 0 {
 				limits.budget = c.budget
 			}
@@ -622,5 +651,97 @@ func TestGitHubTreeWalkTimeHalfCompareKeepsFullPrecision(t *testing.T) {
 				t.Fatalf("counter=%d want %d", got, want)
 			}
 		})
+	}
+}
+
+// serialWalkLimits are the production limits with the one-request-per-directory
+// walk: the ceilings above are measured in directory requests.
+func serialWalkLimits() gitHubTreeWalkLimits {
+	limits := defaultGitHubTreeWalkLimits()
+	limits.recursiveSubtrees = false
+	return limits
+}
+
+// hybridTree is root -> pkg0..pkgN-1, each with filesPer blobs and one nested dir.
+func hybridTree(pkgs, filesPer int) *walkTreeFake {
+	fake := &walkTreeFake{trees: map[string][]walkEntry{}}
+	root := make([]walkEntry, 0, pkgs+1)
+	root = append(root, walkEntry{path: "README.md", kind: "blob"})
+	for pkg := 0; pkg < pkgs; pkg++ {
+		sha, nested := fmt.Sprintf("p%d", pkg), fmt.Sprintf("n%d", pkg)
+		root = append(root, walkEntry{path: fmt.Sprintf("pkg%d", pkg), kind: "tree", sha: sha})
+		entries := []walkEntry{{path: "inner", kind: "tree", sha: nested}}
+		for file := 0; file < filesPer; file++ {
+			entries = append(entries, walkEntry{path: fmt.Sprintf("f%d.go", file), kind: "blob"})
+		}
+		fake.trees[sha] = entries
+		fake.trees[nested] = []walkEntry{{path: "deep.go", kind: "blob"}}
+	}
+	fake.trees["root"] = root
+	return fake
+}
+
+func TestGitHubTreeWalkHybridMatchesTheSerialWalkWithFarFewerRequests(t *testing.T) {
+	serial := hybridTree(300, 4)
+	want, serialStats, err := serial.walk(t, serialWalkLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hybrid := hybridTree(300, 4)
+	got, stats, err := hybrid.walk(t, defaultGitHubTreeWalkLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("hybrid paths differ from the serial walk: %d vs %d", len(got), len(want))
+	}
+	if serial.gets != 601 || hybrid.gets != 1 {
+		t.Fatalf("serial gets=%d hybrid gets=%d, want 601 and 1", serial.gets, hybrid.gets)
+	}
+	if stats.dirs != serialStats.dirs || stats.entries != serialStats.entries || stats.depth != serialStats.depth {
+		t.Fatalf("hybrid stats=%+v serial stats=%+v", stats, serialStats)
+	}
+}
+
+func TestGitHubTreeWalkHybridDescendsOnlyBelowATruncatedAnswer(t *testing.T) {
+	serial := hybridTree(300, 4)
+	want, _, err := serial.walk(t, serialWalkLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each package subtree has 6 entries; the root has 1801 and is truncated.
+	hybrid := hybridTree(300, 4)
+	hybrid.truncateAbove = 100
+	got, _, err := hybrid.walk(t, defaultGitHubTreeWalkLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("hybrid paths differ from the serial walk: %d vs %d", len(got), len(want))
+	}
+	// root: recursive (truncated) + listing; each pkg: one recursive answer.
+	if hybrid.gets != 2+300 {
+		t.Fatalf("gets=%d, want 302", hybrid.gets)
+	}
+}
+
+func TestGitHubTreeWalkHybridKeepsTheCeilings(t *testing.T) {
+	limits := defaultGitHubTreeWalkLimits()
+	limits.maxDirs = 100
+	_, _, err := hybridTree(300, 4).walk(t, limits)
+	if walkLimitOf(t, err).Limit != GitHubTreeWalkLimitDirs {
+		t.Fatalf("error=%v, want the directory ceiling", err)
+	}
+	limits = defaultGitHubTreeWalkLimits()
+	limits.maxEntries = 500
+	_, _, err = hybridTree(300, 4).walk(t, limits)
+	if walkLimitOf(t, err).Limit != GitHubTreeWalkLimitEntries {
+		t.Fatalf("error=%v, want the entry ceiling", err)
+	}
+	limits = defaultGitHubTreeWalkLimits()
+	limits.maxDepth = 1
+	_, _, err = hybridTree(3, 1).walk(t, limits)
+	if walkLimitOf(t, err).Limit != GitHubTreeWalkLimitDepth {
+		t.Fatalf("error=%v, want the depth ceiling", err)
 	}
 }

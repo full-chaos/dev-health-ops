@@ -161,3 +161,22 @@ func TestAnalyzeRepoFilesMatchesOneShotResultsAndCap(t *testing.T) {
 }
 
 func intPtr(value int) *int { return &value }
+
+func TestAnalyzeRepoFilesLargestProdShapeStaysUnderProductionBudget(t *testing.T) {
+	// bigboy's largest repo: 8049 non-empty files, ~110 MB of text, max file 407 KB.
+	shared := fakePythonFile("shared.py", 14*1024).Contents
+	source := &fakeComplexitySource{}
+	for index := 0; index < 8049; index++ {
+		source.gitRows = append(source.gitRows, complexityFileContent{
+			Path: fmt.Sprintf("src/pkg%04d/m%04d.py", index/50, index), Contents: shared})
+	}
+
+	results := runAnalyze(t, source, nil, complexityFetchBudgetBytes)
+
+	if len(results) != 8049 {
+		t.Fatalf("results = %d, want 8049", len(results))
+	}
+	if source.maxFetchBytes > complexityFetchBudgetBytes {
+		t.Fatalf("one fetch held %d bytes, production budget %d", source.maxFetchBytes, int64(complexityFetchBudgetBytes))
+	}
+}

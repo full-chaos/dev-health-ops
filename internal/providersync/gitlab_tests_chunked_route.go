@@ -398,7 +398,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 				start = cursor.Index
 			}
 			if start > len(page.Items) {
-				return ErrChunkCheckpointConflict
+				return NewChunkStoreError(errGitLabTestsPageShrank)
 			}
 			for index := start; index < len(page.Items); index++ {
 				before := cursor
@@ -540,7 +540,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 			start = cursor.Index
 		}
 		if start > len(page.Items) {
-			return ErrChunkCheckpointConflict
+			return NewChunkStoreError(errGitLabTestsPageShrank)
 		}
 		for index := start; index < len(page.Items); index++ {
 			before := cursor
@@ -692,3 +692,7 @@ func (handler GitLabTestsRouteHandler) CollectChunks(
 }
 
 var _ ChunkedCompleteRouteHandler = GitLabTestsRouteHandler{}
+
+// errGitLabTestsPageShrank: the provider page is fetched again on retry and may
+// have grown back, so a saved cursor index past its end is not a settled state.
+var errGitLabTestsPageShrank = errors.New("gitlab tests page is shorter than the saved cursor index")

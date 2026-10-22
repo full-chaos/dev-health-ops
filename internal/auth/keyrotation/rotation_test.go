@@ -363,3 +363,60 @@ func TestNoKeyMaterialReachesAnAuditAttribute(t *testing.T) {
 		}
 	}
 }
+
+type fakeRow struct {
+	kid, state string
+	x          *string
+	scanErr    bool
+}
+
+// fakeRowSet is a signing_keys result set; scanErr rows fail Scan.
+type fakeRowSet struct {
+	rows []fakeRow
+	i    int
+}
+
+func (f *fakeRowSet) Next() bool { f.i++; return f.i <= len(f.rows) }
+
+func (f *fakeRowSet) Scan(dest ...any) error {
+	row := f.rows[f.i-1]
+	if row.scanErr {
+		return errors.New("scan failed")
+	}
+	*dest[0].(*string), *dest[1].(*string), *dest[2].(**string) = row.kid, row.state, row.x
+	return nil
+}
+
+func (f *fakeRowSet) Err() error { return nil }
+func (f *fakeRowSet) Close()     {}
+
+// A row the reader cannot read fails the read, but every row is scanned and
+// the readable rows come back with the error, so their compromises latch: a
+// compromised row with an unreadable public key keeps its kid.
+func TestReadKeyStatesScansPastAnUnreadableRow(t *testing.T) {
+	good := func(public ed25519.PublicKey) *string {
+		x := base64.RawURLEncoding.EncodeToString(public)
+		return &x
+	}
+	bad := "not base64 !"
+	pb, pd := publicKey(t), publicKey(t)
+	set := &fakeRowSet{rows: []fakeRow{
+		{kid: "a", state: "active", x: &bad},
+		{scanErr: true},
+		{kid: "b", state: "compromised", x: good(pb)},
+		{kid: "c", state: "compromised", x: nil},
+		{kid: "d", state: "active", x: good(pd)},
+	}}
+	rows, err := readKeyStates(set)
+	if err == nil {
+		t.Fatal("a read with unreadable rows succeeded")
+	}
+	got := map[string]token.KeyStateRow{}
+	for _, row := range rows {
+		got[row.KeyID] = row
+	}
+	if len(rows) != 3 || !got["b"].PublicKey.Equal(pb) || got["b"].State != compromised ||
+		got["c"].State != compromised || got["c"].PublicKey != nil || !got["d"].PublicKey.Equal(pd) {
+		t.Fatalf("rows = %+v; want b and d whole and c by kid", rows)
+	}
+}

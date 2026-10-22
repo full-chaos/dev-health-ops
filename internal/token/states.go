@@ -38,7 +38,9 @@ type KeyStateRow struct {
 	PublicKey ed25519.PublicKey
 }
 
-// KeyStateSource reads every key's durable rotation state.
+// KeyStateSource reads every key's durable rotation state. On an error it
+// returns the rows it could read (a compromised row whose public key it could
+// not read carries its kid only); they are latched, never used.
 type KeyStateSource interface {
 	KeyStates(ctx context.Context) ([]KeyStateRow, error)
 }
@@ -102,8 +104,11 @@ func (s *KeyStates) Rows(ctx context.Context) ([]KeyStateRow, error) {
 	now := s.now()
 	if !s.attempted || now.Sub(s.attemptAt) >= s.refreshEvery {
 		s.attempted, s.attemptAt = true, now
-		if rows, err := s.source.KeyStates(ctx); err == nil {
-			s.latch(nil, rows)
+		rows, err := s.source.KeyStates(ctx)
+		// A failed read may still return the rows it read: their
+		// compromises latch before the read is discarded.
+		s.latch(nil, rows)
+		if err == nil {
 			s.rows, s.readAt, s.have = rows, now, true
 		}
 	}

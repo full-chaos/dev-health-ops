@@ -201,6 +201,14 @@ type latch struct {
 	publics map[string]bool
 }
 
+// latchKey records one compromised key.
+func (l *latch) latchKey(kid string, public ed25519.PublicKey) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.kids[kid] = true
+	l.publics[string(public)] = true
+}
+
 // latchKids records the kids entries name compromised.
 func (l *latch) latchKids(entries []manifestEntry) {
 	l.mu.Lock()
@@ -257,13 +265,12 @@ func (c *FileCustody) Keys(ctx context.Context) ([]Key, error) {
 // contract: a set with any key that is not custodied, or with one key under two
 // kids, is refused whole. States are the effective ones (see latch).
 func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, error) {
+	// load latches the kids the manifest names compromised, even when it
+	// refuses the manifest.
 	entries, err := c.load(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Latch the kids the manifest names compromised before any key file read
-	// can fail; their public keys latch once read (below).
-	c.compromised.latchKids(entries)
 	keys := make([]Key, 0, len(entries))
 	publics := map[string]bool{}
 	for _, entry := range entries {
@@ -275,13 +282,19 @@ func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, erro
 		if err != nil {
 			return nil, nil, err
 		}
+		// A compromised entry's public key latches as soon as it is read,
+		// before the duplicate check can refuse the set.
+		if entry.State == StateCompromised {
+			c.compromised.latchKey(entry.KeyID, public)
+		}
 		if publics[string(public)] {
 			return nil, nil, failure(ReasonDuplicatePublicKey, nil)
 		}
 		publics[string(public)] = true
 		keys = append(keys, Key{KeyID: entry.KeyID, State: entry.State, Algorithm: Algorithm, PublicKey: public})
 	}
-	// Latch custody's own compromises before the override can fail.
+	// The override sees the effective (latched) states, and custody's own
+	// compromises latch before the override can fail.
 	keys = c.compromised.apply(keys)
 	if c.states != nil {
 		if keys, err = c.states(ctx, keys); err != nil {
@@ -376,13 +389,30 @@ func (c *FileCustody) load(ctx context.Context) ([]manifestEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseManifest(raw)
+	entries, err := decodeManifest(raw)
+	c.compromised.latchKids(entries)
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 // parseManifest decodes a closed manifest: an unknown member, trailing data,
 // an empty set, an invalid kid, state or file name, or a repeated kid or file
 // is refused.
 func parseManifest(raw []byte) ([]manifestEntry, error) {
+	entries, err := decodeManifest(raw)
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// decodeManifest is parseManifest that also returns the decoded entries of a
+// manifest it refuses after decoding (trailing data, an invalid or repeated
+// entry), so custody can latch the compromises they name. A document refused
+// before decoding returns no entries.
+func decodeManifest(raw []byte) ([]manifestEntry, error) {
 	if err := exactMembers(raw); err != nil {
 		return nil, err
 	}
@@ -393,7 +423,7 @@ func parseManifest(raw []byte) ([]manifestEntry, error) {
 		return nil, failure(ReasonManifestUnparseable, err)
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return nil, failure(ReasonManifestUnparseable, nil)
+		return document.Keys, failure(ReasonManifestUnparseable, nil)
 	}
 	if len(document.Keys) == 0 {
 		return nil, failure(ReasonManifestInvalid, nil)
@@ -402,7 +432,7 @@ func parseManifest(raw []byte) ([]manifestEntry, error) {
 	for _, entry := range document.Keys {
 		if !KeyIDPattern.MatchString(entry.KeyID) || !entry.State.Valid() || !bareFileName(entry.File) ||
 			kids[entry.KeyID] || files[entry.File] {
-			return nil, failure(ReasonManifestInvalid, nil)
+			return document.Keys, failure(ReasonManifestInvalid, nil)
 		}
 		kids[entry.KeyID], files[entry.File] = true, true
 	}

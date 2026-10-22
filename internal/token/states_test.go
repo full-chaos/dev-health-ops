@@ -512,3 +512,52 @@ func TestAnOverlayErrorFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// partialStates is a source whose read fails after returning some rows.
+type partialStates struct {
+	fakeStates
+	partial []KeyStateRow
+}
+
+func (p *partialStates) KeyStates(ctx context.Context) ([]KeyStateRow, error) {
+	p.mu.Lock()
+	partial := p.partial
+	p.mu.Unlock()
+	if partial != nil {
+		return partial, errors.New("row unreadable")
+	}
+	return p.fakeStates.KeyStates(ctx)
+}
+
+// A read that fails after reading a compromised row latches that row before
+// the read is discarded.
+func TestAFailedReadStillLatchesTheRowsItRead(t *testing.T) {
+	pa, pb := ed25519.PublicKey(make32(1)), ed25519.PublicKey(make32(2))
+	for name, partial := range map[string][]KeyStateRow{
+		"a compromised row with its public key": {{KeyID: "b", State: StateCompromised, PublicKey: pb}},
+		"a compromised row with its kid only":   {{KeyID: "b", State: StateCompromised}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			source := &partialStates{partial: partial}
+			clock := &fakeClock{now: time.Unix(0, 0)}
+			states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL, Now: clock.Now})
+			custody := []keystore.Key{{KeyID: "a", State: StateActive, PublicKey: pa}, {KeyID: "b", State: StatePending, PublicKey: pb}}
+			ctx := context.Background()
+			if _, err := states.override(ctx, custody); !reasonIs(err, ReasonKeyStatesUnavailable) {
+				t.Fatalf("override over a failed first read = %v", err)
+			}
+			source.mu.Lock()
+			source.partial = nil
+			source.rows = []KeyStateRow{{KeyID: "a", State: StateRetiring, PublicKey: pa}, {KeyID: "b", State: StateActive, PublicKey: pb}}
+			source.mu.Unlock()
+			clock.advance(10 * time.Second)
+			out, err := states.override(ctx, custody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out[1].State != StateCompromised {
+				t.Fatalf("b = %s after a failed read showed it compromised", out[1].State)
+			}
+		})
+	}
+}

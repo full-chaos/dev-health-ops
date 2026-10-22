@@ -37,27 +37,40 @@ func NewReader(pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) *Reade
 
 var _ token.KeyStateSource = (*Reader)(nil)
 
-// KeyStates returns every key's state and public key.
+// KeyStates returns every key's state and public key. A row it cannot read
+// fails the read, but every row is still scanned and the readable rows are
+// returned with the error, so the runtime latches their compromises (a
+// compromised row with an unreadable public key carries its kid).
 func (r *Reader) KeyStates(ctx context.Context) ([]token.KeyStateRow, error) {
 	rows, err := r.pool.Query(ctx, `SELECT kid, status, public_key_jwk->>'x' FROM `+r.q+`.signing_keys ORDER BY kid`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return readKeyStates(rows)
+}
+
+func readKeyStates(rows rowSet) ([]token.KeyStateRow, error) {
 	var out []token.KeyStateRow
+	var first error
 	for rows.Next() {
 		var kid, state string
 		var x *string
 		if err := rows.Scan(&kid, &state, &x); err != nil {
-			return nil, err
+			first = errors.Join(first, err)
+			continue
 		}
 		public, err := publicKeyOf(x)
 		if err != nil {
-			return nil, err
+			first = errors.Join(first, err)
+			if token.State(state) == token.StateCompromised {
+				out = append(out, token.KeyStateRow{KeyID: kid, State: token.StateCompromised})
+			}
+			continue
 		}
 		out = append(out, token.KeyStateRow{KeyID: kid, State: token.State(state), PublicKey: public})
 	}
-	return out, rows.Err()
+	return out, errors.Join(first, rows.Err())
 }
 
 // Denylist returns the compromised keys: their kids and public keys are

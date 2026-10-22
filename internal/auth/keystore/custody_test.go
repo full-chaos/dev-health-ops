@@ -636,3 +636,90 @@ func TestAManifestCompromiseLatchesWhenAKeyFileFails(t *testing.T) {
 		t.Fatal("a kid the manifest showed compromised signed after a failing key file read")
 	}
 }
+
+// A manifest refused after it decoded (an invalid entry, a repeated kid,
+// trailing data) still latches the kids it names compromised.
+func TestARefusedManifestStillLatchesItsCompromisedKids(t *testing.T) {
+	for name, body := range map[string]string{
+		"an entry in an unknown state": `{"keys":[{"kid":"a","state":"active","file":"a.pem"},{"kid":"b","state":"compromised","file":"b.pem"},{"kid":"c","state":"revoked","file":"c.pem"}]}`,
+		"a repeated kid":               `{"keys":[{"kid":"a","state":"active","file":"a.pem"},{"kid":"b","state":"compromised","file":"b.pem"},{"kid":"b","state":"pending","file":"c.pem"}]}`,
+		"trailing data":                `{"keys":[{"kid":"a","state":"active","file":"a.pem"},{"kid":"b","state":"compromised","file":"b.pem"}]} {}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, file := range []string{"a.pem", "b.pem", "c.pem"} {
+				writeKeyFile(t, dir, file)
+			}
+			custody := NewFileCustody(writeManifest(t, dir, body))
+			ctx := context.Background()
+			if _, err := custody.Keys(ctx); err == nil {
+				t.Fatal("the manifest was accepted")
+			}
+			writeManifest(t, dir, entries("a", "retiring", "b", "active"))
+			if _, err := custody.Sign(ctx, "b", []byte("m")); err == nil {
+				t.Fatal("a kid a refused manifest named compromised signed")
+			}
+		})
+	}
+}
+
+// A set refused for one key under two kids still latches the compromised
+// entry's public key: the copy cannot sign under its other kid, in either
+// entry order.
+func TestADuplicatePublicKeyStillLatchesTheCompromisedKey(t *testing.T) {
+	for name, pairs := range map[string][]string{
+		"compromised first": {"b", "compromised", "c", "pending"},
+		"compromised last":  {"c", "pending", "b", "compromised"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeKeyFile(t, dir, "b.pem")
+			raw, err := os.ReadFile(filepath.Join(dir, "b.pem"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "c.pem"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			custody := NewFileCustody(writeManifest(t, dir, entries(pairs...)))
+			ctx := context.Background()
+			if _, err := custody.Keys(ctx); err == nil || reasonOf(t, err) != ReasonDuplicatePublicKey {
+				t.Fatalf("Keys = %v, want %s", err, ReasonDuplicatePublicKey)
+			}
+			writeManifest(t, dir, entries("c", "active"))
+			if _, err := custody.Sign(ctx, "c", []byte("m")); err == nil {
+				t.Fatal("a compromised public key signed under another kid")
+			}
+		})
+	}
+}
+
+// The override receives the effective states: a kid custody has latched
+// reaches it compromised even when the manifest now names it active.
+func TestTheOverrideSeesCustodyLatchedStates(t *testing.T) {
+	dir := t.TempDir()
+	writeKeyFile(t, dir, "a.pem")
+	writeKeyFile(t, dir, "b.pem")
+	manifest := writeManifest(t, dir, entries("a", "active", "b", "compromised"))
+	var mu sync.Mutex
+	var seen []Key
+	custody := NewFileCustodyWithStates(manifest, func(_ context.Context, keys []Key) ([]Key, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append([]Key(nil), keys...)
+		return keys, nil
+	})
+	ctx := context.Background()
+	if _, err := custody.Keys(ctx); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest(t, dir, entries("a", "retiring", "b", "active"))
+	if _, err := custody.Keys(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 || seen[1].KeyID != "b" || seen[1].State != StateCompromised {
+		t.Fatalf("the override saw %+v; want b compromised", seen)
+	}
+}

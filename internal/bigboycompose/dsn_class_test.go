@@ -22,7 +22,8 @@ import (
 
 type bigboyClassedService struct {
 	name, class string
-	env         map[string]string
+	env         map[string]string // the environment the process ends with: env_file, then environment
+	own         map[string]string // the service's own environment: keys it sets, empty ones included
 }
 
 func envOfBigboy(t *testing.T, name string, node yaml.Node) map[string]string {
@@ -107,18 +108,40 @@ func bigboyClassedServices(t *testing.T, text []byte) []bigboyClassedService {
 		if class == "" {
 			continue
 		}
-		env := envOfBigboy(t, name, service.Environment)
+		own := envOfBigboy(t, name, service.Environment)
+		env := own
 		loads, err := dsnclass.LoadsHostEnvFile(service.EnvFile)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if loads {
-			env = dsnclass.WithEnvFile(dsnclass.HostEnvFile(hostEnvExample(t)), env)
+			env = dsnclass.WithEnvFile(dsnclass.HostEnvFile(hostEnvExample(t)), own)
 		}
-		found = append(found, bigboyClassedService{name: name, class: class, env: env})
+		found = append(found, bigboyClassedService{name: name, class: class, env: env, own: own})
 	}
 	sort.Slice(found, func(a, b int) bool { return found[a].name < found[b].name })
 	return found
+}
+
+// guardedBlanks is the set a guarded service (a River worker, the reconciler, the scheduler, a stream runner) sets to
+// empty in its own environment, because the host env file ./ops/.env is opaque and any of these names can reach it
+// from there: the DSN-like names no worker class reads, the coordinator DSN on a class that does not read it, and the
+// queue DSN on a stream runner.
+func guardedBlanks(class string) []string {
+	blanks := []string{
+		"API_DATABASE_URI", "AUTH_DATABASE_URI", "AUTH_MIGRATION_DATABASE_URI", "DATABASE_URI", "DATABASE_URL",
+		"GO_API_REGISTRY_POSTGRES_URI", "MIGRATION_DATABASE_URI", "POSTGRES_URL",
+	}
+	switch {
+	case class == "operator":
+		return nil
+	case class == "reconciler" || class == "scheduler":
+	case strings.HasPrefix(class, "stream-"):
+		blanks = append(blanks, "COORDINATOR_DATABASE_URI", "WORKER_DATABASE_URI")
+	default:
+		blanks = append(blanks, "COORDINATOR_DATABASE_URI")
+	}
+	return blanks
 }
 
 func bigboyDSNFindings(t *testing.T, text []byte) []string {
@@ -140,6 +163,11 @@ func bigboyDSNFindings(t *testing.T, text []byte) []string {
 			continue
 		}
 		covered[service.class] = true
+		for _, name := range guardedBlanks(service.class) {
+			if value, set := service.own[name]; !set || strings.TrimSpace(value) != "" {
+				findings = append(findings, fmt.Sprintf("%s (class %s) does not set %s to empty in its own environment", service.name, service.class, name))
+			}
+		}
 		for _, name := range dsnclass.Foreign(dsnclass.Carried(service.env), allowed) {
 			findings = append(findings, fmt.Sprintf("%s (class %s) carries %s, which is not a DSN of its class", service.name, service.class, name))
 		}
@@ -240,6 +268,37 @@ func TestBigboyDSNClassSeesPlantedForeignNames(t *testing.T) {
 		}
 		t.Fatal("a worker that loads ./ops/.env with no blank DATABASE_URI was not refused")
 	})
+	for _, tc := range []struct{ service, line, want string }{
+		{"go-scheduler", "      AUTH_DATABASE_URI: ''", "go-scheduler (class scheduler) does not set AUTH_DATABASE_URI"},
+		{"go-stream-ingest", "      WORKER_DATABASE_URI: ''", "go-stream-ingest (class stream-ingest) does not set WORKER_DATABASE_URI"},
+		{"go-worker", "      COORDINATOR_DATABASE_URI: ''", "go-worker (class sync) does not set COORDINATOR_DATABASE_URI"},
+	} {
+		t.Run("a blank removed from "+tc.service, func(t *testing.T) {
+			var kept []string
+			inService, removed := false, false
+			for _, row := range strings.Split(text, "\n") {
+				if row == "  "+tc.service+":" {
+					inService = true
+				} else if inService && len(row) > 2 && row[:2] == "  " && row[2] != ' ' {
+					inService = false
+				}
+				if inService && row == tc.line {
+					removed = true
+					continue
+				}
+				kept = append(kept, row)
+			}
+			if !removed {
+				t.Fatalf("%s carries no %q to remove", tc.service, tc.line)
+			}
+			for _, finding := range bigboyDSNFindings(t, []byte(strings.Join(kept, "\n"))) {
+				if strings.HasPrefix(finding, tc.want) {
+					return
+				}
+			}
+			t.Fatalf("no finding %q", tc.want)
+		})
+	}
 	before := map[string]bool{}
 	for _, finding := range bigboyDSNFindings(t, []byte(text)) {
 		before[finding] = true

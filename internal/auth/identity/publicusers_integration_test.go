@@ -187,3 +187,49 @@ func TestSetEmailVerifiedProjectsToPublicUsers(t *testing.T) {
 func uniqueEmailCom(prefix string) string {
 	return prefix + "-" + uuid.NewString()[:8] + "@example.com"
 }
+
+// With the switch off (UsersOwnedByAuth false) none of the write paths touches
+// public.users: provisioning is refused and a password or verification change
+// of an existing account leaves its public row byte for byte as it was.
+func TestSwitchOffWritesNothingToPublicUsers(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	hash := projectionHash(t, "switch-off-first-material")
+	id, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmailCom("proj-off"), PasswordHash: &hash, Actor: SelfSignUp(nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := e.publicUser(t, ctx, id)
+	total := e.count(t, ctx, `SELECT count(*) FROM public.users`)
+	var stamp time.Time
+	if err := e.admin.QueryRow(ctx, `SELECT updated_at FROM public.users WHERE id = $1`, id).Scan(&stamp); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := e.store.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmailCom("proj-off-new"), Actor: SelfSignUp(nil)}); !errors.Is(err, ErrSignupNotAvailable) {
+		t.Fatalf("ProvisionLocal with the switch off = %v", err)
+	}
+	key := ExternalKey{Issuer: "https://github.com", Provider: ProviderGitHub, Subject: "off-" + uuid.NewString()}
+	if _, err := e.store.ProvisionFederated(ctx, ProvisionRequest{Key: key, Email: uniqueEmailCom("proj-off-fed"), Actor: SelfSignUp(nil)}); !errors.Is(err, ErrSignupNotAvailable) {
+		t.Fatalf("ProvisionFederated with the switch off = %v", err)
+	}
+	if err := e.store.SetPasswordHash(ctx, id, projectionHash(t, "switch-off-second-material"), Actor{}); !errors.Is(err, ErrSignupNotAvailable) {
+		t.Fatalf("SetPasswordHash with the switch off = %v", err)
+	}
+	if err := e.store.SetEmailVerified(ctx, id, time.Now(), Actor{}); !errors.Is(err, ErrSignupNotAvailable) {
+		t.Fatalf("SetEmailVerified with the switch off = %v", err)
+	}
+
+	after, _ := e.publicUser(t, ctx, id)
+	var stampAfter time.Time
+	if err := e.admin.QueryRow(ctx, `SELECT updated_at FROM public.users WHERE id = $1`, id).Scan(&stampAfter); err != nil {
+		t.Fatal(err)
+	}
+	if after.PasswordHash == nil || *after.PasswordHash != hash || after.IsVerified != before.IsVerified || !stamp.Equal(stampAfter) {
+		t.Fatalf("a switch-off call changed the public row: before %+v after %+v", before, after)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM public.users`); n != total {
+		t.Fatalf("public.users rows %d -> %d with the switch off", total, n)
+	}
+}

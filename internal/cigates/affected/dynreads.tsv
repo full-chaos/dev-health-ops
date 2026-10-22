@@ -13,6 +13,7 @@ cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
 internal/api/credentials	probes.go
 internal/api/syncadmin	dataset_writer_census_test.go
+internal/api/syncadmin	dataset_writer_lock_census_test.go
 internal/api/syncadmin	gate_reader_census_test.go
 internal/api/syncadmin	repositories_write_venue_oracle_integration_test.go
 internal/api/teamsidentity	deleted_at_writer_census_test.go

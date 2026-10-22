@@ -12,8 +12,9 @@ package investment
 //   - batch_store.py's audit rows (Postgres investment_batch_jobs/items) of
 //     provider batch mode (batchmode.go): nothing read them, and no batch is
 //     resumed from them; the batch log line carries the provider job id.
-//   - llm_telemetry*.py metric emission. units/telemetrylabels.go has the label
-//     helpers; the emit sites are not ported. Counters, not correctness.
+//   - llm_telemetry*.py span events (llm.complete, llm.validation): the metrics
+//     are ported (telemetry_investment_llm.go in jobruntime, emitted from
+//     categorize and this package); the LLM request spans are llmspan.go's.
 //   - Org-scoped BYO provider/credential resolution (CHAOS-5006). The caller
 //     supplies an already-resolved provider.
 
@@ -131,6 +132,8 @@ type Stats struct {
 	// stay out of the evidence JSON.
 	failureClassByIndex map[int]string
 	llmSucceeded        int
+	// batchAnswered is true when a provider batch answered the run's units.
+	batchAnswered       bool
 	Components          int            `json:"components"`
 	TotalComponents     int            `json:"total_components"`
 	Records             int            `json:"records"`
@@ -304,6 +307,30 @@ type Materializer struct {
 	// served is the optional served decision backend (serveddecision.go). Nil is
 	// the default and means the generative provider serves the run.
 	served *ServedDecision
+	// llmTelemetry receives the investment LLM signals of the generative path
+	// (CHAOS-8722). Nil records nothing.
+	llmTelemetry categorize.LLMTelemetry
+	// batchAnswered is true once a provider batch answered the units of the
+	// run; it only picks a metric label (failedUnitModel).
+	batchAnswered bool
+}
+
+// failedUnitModel is the model label of a failed unit's llm_task_failed
+// outcome. Python labels a failed batch unit with the provider's model
+// (materialize.py:608-672) and a failed synchronous one with the configured
+// model (:1676).
+func (m *Materializer) failedUnitModel(cfg Config) string {
+	if m.batchAnswered {
+		return m.provider.Model()
+	}
+	return cfg.Model
+}
+
+// SetLLMTelemetry wires the investment LLM signals. Nil records nothing.
+func (m *Materializer) SetLLMTelemetry(telemetry categorize.LLMTelemetry) {
+	if m != nil {
+		m.llmTelemetry = telemetry
+	}
 }
 
 // ErrUnavailable reports a Materializer built without a collaborator it needs.
@@ -532,10 +559,10 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		// allocation view rather than show up as uncategorised.
 		switch {
 		case result.Bundle.TextCharCount < minEvidenceChars:
-			outcomes[index] = categorize.FallbackOutcome(categorize.StatusInsufficientChars)
+			outcomes[index] = categorize.RecordedFallbackOutcome(m.llmTelemetry, categorize.StatusInsufficientChars, cfg.ProviderName, cfg.Model)
 			gated = append(gated, entry)
 		case result.Bundle.TextSourceCount == 0:
-			outcomes[index] = categorize.FallbackOutcome(categorize.StatusNoTextSources)
+			outcomes[index] = categorize.RecordedFallbackOutcome(m.llmTelemetry, categorize.StatusNoTextSources, cfg.ProviderName, cfg.Model)
 		default:
 			pending = append(pending, entry)
 		}
@@ -693,6 +720,9 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			// outcome means its LLM task failed non-fatally. It still gets a
 			// row, with the fallback distribution.
 			outcome = failedUnitOutcome(stats, entry.index)
+			categorize.ObserveOutcome(m.llmTelemetry, categorize.LLMOutcomeObservation{
+				Provider: cfg.ProviderName, Model: m.failedUnitModel(cfg), Status: categorize.StatusLLMTaskFailed,
+			})
 		}
 
 		record := entry.result.Investment
@@ -996,6 +1026,7 @@ func (m *Materializer) categorizePending(
 	// batch; every unit result, failure or outcome, goes through the same
 	// account as a synchronous call's.
 	if m.categorizeBatch(callCtx, cfg, pending, limit, account) {
+		m.batchAnswered = true
 		return account.err()
 	}
 	m.forEachPending(callCtx, limit, pending, account, func(ctx context.Context, entry preprocessed) (categorize.CategorizationOutcome, error) {

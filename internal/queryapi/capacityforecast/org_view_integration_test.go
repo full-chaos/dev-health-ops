@@ -45,6 +45,7 @@ func TestCapacityReadsTakeTheOrgViewOfWorkItemMetrics(t *testing.T) {
 	newer := today.AddDate(0, 0, -1)
 	first := time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)
 	second := first.Add(time.Hour)
+	third := second.Add(time.Hour)
 
 	insert := `INSERT INTO work_item_metrics_daily
 		(day, provider, work_scope_id, team_id, team_name, items_started, items_completed, items_started_unassigned,
@@ -60,7 +61,7 @@ func TestCapacityReadsTakeTheOrgViewOfWorkItemMetrics(t *testing.T) {
 	}{
 		{older, 2, 1, first, "", "legacy row of a day that was never recomputed"},
 		{newer, 7, 5, first, "", "legacy row of the recomputed day"},
-		{newer, 0, 0, second, "", "the retraction of that legacy row"},
+		{newer, 0, 0, third, "", "the retraction of that legacy row, the NEWEST row of the day"},
 		{newer, 4, 3, second, "org", "org row of the recomputed day"},
 		{newer, 6, 4, second, "scope", "scope row of the recomputed day"},
 	} {

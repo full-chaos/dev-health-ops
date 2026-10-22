@@ -618,3 +618,21 @@ func TestAManifestCompromiseLatchesWhenTheOverrideFails(t *testing.T) {
 		t.Fatal("a key the manifest showed compromised signed after a failing override call")
 	}
 }
+
+// A kid the manifest names compromised latches even when reading a key file
+// fails in that same call.
+func TestAManifestCompromiseLatchesWhenAKeyFileFails(t *testing.T) {
+	dir := t.TempDir()
+	writeKeyFile(t, dir, "a.pem")
+	manifest := writeManifest(t, dir, entries("a", "active", "b", "compromised"))
+	custody := NewFileCustody(manifest)
+	ctx := context.Background()
+	if _, err := custody.Keys(ctx); err == nil {
+		t.Fatal("Keys succeeded with b.pem missing")
+	}
+	writeKeyFile(t, dir, "b.pem")
+	writeManifest(t, dir, entries("a", "retiring", "b", "active"))
+	if _, err := custody.Sign(ctx, "b", []byte("m")); err == nil {
+		t.Fatal("a kid the manifest showed compromised signed after a failing key file read")
+	}
+}

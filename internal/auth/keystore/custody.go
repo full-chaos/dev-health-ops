@@ -201,6 +201,17 @@ type latch struct {
 	publics map[string]bool
 }
 
+// latchKids records the kids entries name compromised.
+func (l *latch) latchKids(entries []manifestEntry) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, entry := range entries {
+		if entry.State == StateCompromised {
+			l.kids[entry.KeyID] = true
+		}
+	}
+}
+
 // apply records the compromised kids and public keys of keys and returns the
 // keys with the effective state: a key whose kid or public key was ever seen
 // compromised is compromised.
@@ -250,6 +261,9 @@ func (c *FileCustody) readSet(ctx context.Context) ([]manifestEntry, []Key, erro
 	if err != nil {
 		return nil, nil, err
 	}
+	// Latch the kids the manifest names compromised before any key file read
+	// can fail; their public keys latch once read (below).
+	c.compromised.latchKids(entries)
 	keys := make([]Key, 0, len(entries))
 	publics := map[string]bool{}
 	for _, entry := range entries {

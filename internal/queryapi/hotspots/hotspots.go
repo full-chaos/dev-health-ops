@@ -86,6 +86,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // MaxHotspotsRows mirrors Python's MAX_HOTSPOTS_ROWS -- the hard cap on
@@ -362,7 +363,10 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 
 	effLimit := effectiveLimit(limit)
 	sinceDay := dateFromInput(sinceUtc)
-	untilDay := dateFromInput(untilUtc)
+	untilDay, err := clipUntilDay(ctx, untilUtc)
+	if err != nil {
+		return nil, err
+	}
 
 	rawRows, err := fetchHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, effLimit)
 	if err != nil {
@@ -506,4 +510,18 @@ func quotePython(s string) string {
 		b = append(b, '%', hex[c>>4], hex[c&0x0f])
 	}
 	return string(b)
+}
+
+// windowToday is the clock of the window when no GraphQL operation carries one. A test replaces it.
+var windowToday = func() time.Time { return time.Now().UTC() }
+
+// clipUntilDay is the until day of the input, kept to the last final day: an end of today or later is yesterday
+// (D6083, D6101). The day is the one dateFromInput reads; a since day after it leaves an empty window.
+func clipUntilDay(ctx context.Context, untilUtc time.Time) (string, error) {
+	year, month, day := untilUtc.Date()
+	clipped, err := timewindow.ClipLastDay(time.Date(year, month, day, 0, 0, 0, 0, time.UTC), timewindow.RequestToday(ctx, windowToday))
+	if err != nil {
+		return "", fmt.Errorf("hotspots: until_utc is out of range: %w", err)
+	}
+	return dateFromInput(clipped), nil
 }

@@ -725,7 +725,8 @@ func (o Operator) GetLLMSettings(ctx context.Context, orgID string, config LLMSe
 
 // SetLLMSettings is `admin llm-settings set`: an empty provider is refused, then
 // the same access gate and upsert as the PUT route (no budget, no concurrency: the
-// verb has neither). Any failure after the input checks reads "failed to update
+// verb has neither), so a BYO provider without a model is refused as the route
+// does. Any failure after the input checks reads "failed to update
 // LLM settings" (Python's catch-all), the refusals their own message.
 func (o Operator) SetLLMSettings(ctx context.Context, orgID string, in LLMSettingsInput, config LLMSettingsConfig) (map[string]any, error) {
 	provider := pythonparity.Strip(in.Provider)
@@ -736,7 +737,7 @@ func (o Operator) SetLLMSettings(ctx context.Context, orgID string, in LLMSettin
 	refusal, err := h.byoLLMAccess(ctx, orgID, false)
 	if refusal == nil && err == nil {
 		var out *pyjson.Object
-		out, refusal, err = h.applyLLMSettings(ctx, orgID, llmUpsert{provider: provider, model: in.Model, apiKey: in.APIKey, baseURL: in.BaseURL})
+		out, refusal, err = h.applyLLMSettings(ctx, orgID, llmUpsert{provider: provider, model: in.Model, apiKey: in.APIKey, baseURL: in.BaseURL, requireModel: true})
 		if refusal == nil && err == nil {
 			return llmSettingsDocument(out), nil
 		}

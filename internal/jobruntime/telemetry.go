@@ -1520,6 +1520,9 @@ type MetricsCollector struct {
 	// investmentServedOutcomes (CHAOS-8914): the outcomes of the served
 	// decision mode -- see InvestmentServedRun.
 	investmentServedOutcomes map[investmentServedOutcomeLabels]uint64
+	// investmentLLMState (CHAOS-8722): the investment LLM request, validation
+	// and outcome series; nil until the first observation.
+	investmentLLMState *investmentLLMState
 	// incidentValidFromGuardRows (CHAOS-4269/CHAOS-4295): per-reason counter
 	// of operational_service_repository_mappings rows IncidentExecutor's
 	// loader matched, split by whether the NULL-OK valid_from guard was
@@ -3886,6 +3889,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeInvestmentRepoAttribution(&output)
 	collector.writeInvestmentShadowPhase(&output)
 	collector.writeInvestmentServedRun(&output)
+	collector.writeInvestmentLLM(&output)
 	collector.writeIncidentValidFromGuard(&output)
 	collector.writeTeamCatalogDispatch(&output)
 	collector.writeTeamCatalogRowsWritten(&output)

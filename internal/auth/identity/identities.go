@@ -107,10 +107,10 @@ func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider P
 	if err != nil || !found {
 		return Principal{}, false, err
 	}
-	if err := s.refuseSecondProviderIdentity(ctx, key, userID); err != nil {
-		return Principal{ID: userID}, false, err
-	}
-	if err := s.Project(ctx, userID); err != nil {
+	if err := s.projectChecked(ctx, userID, &key); err != nil {
+		if errors.Is(err, ErrProviderAlreadyLinked) {
+			return Principal{ID: userID}, false, err
+		}
 		return Principal{}, false, err
 	}
 	if err := s.projectIdentity(ctx, key, userID); err != nil {
@@ -190,23 +190,6 @@ WHERE u.auth_provider = $1 AND u.auth_provider_id = $2`,
 		return uuid.Nil, false, ErrLegacyNotMember
 	}
 	return found[0], true, nil
-}
-
-// refuseSecondProviderIdentity is ErrProviderAlreadyLinked when the legacy
-// user already holds another subject at the key's issuer and provider. It is
-// read before Project, so a refused projection writes no principal or user
-// row; projectIdentity repeats the check under the principal lock.
-func (s *Store) refuseSecondProviderIdentity(ctx context.Context, key ExternalKey, userID uuid.UUID) error {
-	var others int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+s.q+`.external_identities
-WHERE principal_id = $1 AND issuer = $2 AND provider = $3 AND subject <> $4`,
-		userID, key.Issuer, string(key.Provider), key.Subject).Scan(&others); err != nil {
-		return s.storeErr(ctx, "read provider identities", err)
-	}
-	if others > 0 {
-		return ErrProviderAlreadyLinked
-	}
-	return nil
 }
 
 // projectIdentity links key to the projected legacy user. A principal that

@@ -339,10 +339,15 @@ Every `contracts/auth/v1/endpoint-profiles.*.json` carries a top-level
 - **Reachable.** `source_commit` is a 40-hex id that resolves in the repo and is
   an ancestor of `HEAD`. A shallow checkout fails the check and says so; it is
   the one benign cause.
-- **Not stale.** Every anchor line in this repo (a `path`/`line` anchor or a
-  row's `source` `file`/`line`) reads the same at `source_commit` as in the
-  tree under test. An ancestor check alone would pass a stale base, so this
-  half is what catches an inventory whose anchors moved after it was derived.
+- **Not stale.** Every anchor in this repo (a `path`/`line` anchor or a row's
+  `source` `file`/`line`) holds in one of two ways: the line reads the same at
+  `source_commit` as in the tree under test at the same line number, or the
+  tree line's exact text occurs exactly once in that file at `source_commit`
+  and exactly once in the tree (a pure line shift, for example after a squash
+  merge). Text that did not exist at `source_commit`, or that occurs twice or
+  more on either side, fails. An ancestor check alone would pass a stale base,
+  so this half is what catches an inventory whose anchors changed after it was
+  derived.
 
 Not verified: that the anchored line is the right symbol (the rows gate in
 `internal/queryapi/server` owns that), and anchors that name another repo.

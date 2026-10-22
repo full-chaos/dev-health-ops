@@ -38,12 +38,12 @@ func Allowed(class string) []string {
 
 // Secret names the DSN secret an environment variable name stands for, and
 // reports whether it stands for one. The pattern is exactly: the name, with an
-// optional "_FILE" suffix removed, ends in "_URI" and contains DATABASE or
-// POSTGRES. A new connection secret therefore falls under the table until it is
+// optional "_FILE" suffix removed, ends in "_URI" or "_URL" and contains
+// DATABASE or POSTGRES. A new connection secret therefore falls under the table until it is
 // added to it. Component-form variables (DEV_HEALTH_PG_*) are not matched.
 func Secret(name string) (string, bool) {
 	base := strings.TrimSuffix(name, "_FILE")
-	if strings.HasSuffix(base, "_URI") && (strings.Contains(base, "DATABASE") || strings.Contains(base, "POSTGRES")) {
+	if (strings.HasSuffix(base, "_URI") || strings.HasSuffix(base, "_URL")) && (strings.Contains(base, "DATABASE") || strings.Contains(base, "POSTGRES")) {
 		return base, true
 	}
 	return "", false

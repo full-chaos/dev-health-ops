@@ -282,7 +282,7 @@ spec:
               names it does not hold. The process also refuses to start with any
               other DSN variable (internal/platform/dsnclass).
             */}}
-            {{- range $blank := list "DATABASE_URI" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI" }}
+            {{- range $blank := list "DATABASE_URI" "DATABASE_URL" "POSTGRES_URL" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI" }}
             - {name: {{ $blank }}, value: ""}
             {{- end }}
             {{- if not $coordinator }}

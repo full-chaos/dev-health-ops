@@ -275,8 +275,9 @@ func TestStreamRunnerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
 	done := make(chan int, 1)
 	go func() {
 		done <- shell.Execute(ctx, streamRunnerSpec, nil, secrets.LookupEnv(lookup), shell.IO{
-			Stdout: &stdout,
-			Stderr: &stderr,
+			Stdout:  &stdout,
+			Stderr:  &stderr,
+			Environ: []string{},
 		})
 	}()
 

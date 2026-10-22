@@ -71,7 +71,8 @@ type IO struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	// Environ is the process environment in os.Environ form, read by the DSN
-	// class guard. Main sets it; a nil Environ skips the guard (tests).
+	// class guard. A nil Environ means the real process environment, so the guard
+	// never skips; a test that wants none passes an empty, non-nil list.
 	Environ []string
 }
 
@@ -225,9 +226,9 @@ func warnEnvOnlySettings(logger *slog.Logger, cfg config.Config) {
 }
 
 // CheckDSNClass is the start-up guard: nil when the spec has no DSN class or the
-// environment holds no DSN variable outside it. A nil environ is not checked.
+// environment holds no DSN variable outside it.
 func CheckDSNClass(spec Spec, environ []string) error {
-	if spec.DSNClass == "" || environ == nil {
+	if spec.DSNClass == "" {
 		return nil
 	}
 	return dsnclass.CheckEnviron(spec.DSNClass, environ)
@@ -329,7 +330,11 @@ func Execute(
 		return 0
 	}
 
-	if err := CheckDSNClass(spec, streams.Environ); err != nil {
+	environ := streams.Environ
+	if environ == nil {
+		environ = os.Environ()
+	}
+	if err := CheckDSNClass(spec, environ); err != nil {
 		// The refusal names variables and the class, never a value.
 		fmt.Fprintf(streams.Stderr, "start refused: %s\n", err)
 		return 1

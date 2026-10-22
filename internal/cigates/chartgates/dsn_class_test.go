@@ -128,7 +128,7 @@ func workerGroupsRenderOnlyTheirClassDSNSecrets(g *guard) {
 // is visible to a worker; a name the chart does not know still is, and the
 // start-up guard refuses it.
 func workerGroupsBlankSharedDSNNames(g *guard) {
-	known := []string{"DATABASE_URI", "API_DATABASE_URI", "GO_API_REGISTRY_POSTGRES_URI", "COORDINATOR_DATABASE_URI", "WORKER_DATABASE_URI"}
+	known := []string{"DATABASE_URI", "DATABASE_URL", "POSTGRES_URL", "API_DATABASE_URI", "GO_API_REGISTRY_POSTGRES_URI", "COORDINATOR_DATABASE_URI", "WORKER_DATABASE_URI"}
 	var sets []string
 	for _, k := range known {
 		sets = append(sets, "secrets.data."+k+"=postgresql://x@h/db")
@@ -203,7 +203,7 @@ func TestDSNClassGuardsPlantedDefects(t *testing.T) {
 			mut(chartFile(workers), "{{- if not $coordinator }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}\n            {{- end }}", "{{- if true }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}\n            {{- end }}"),
 			workerContainersRenderNoDuplicateEnvNames, "names env COORDINATOR_DATABASE_URI 2 times"},
 		{"workers-stop-blanking-the-other-roles-dsn-names", chartAndManifest,
-			mut(chartFile(workers), `list "DATABASE_URI" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI"`, `list`),
+			mut(chartFile(workers), `list "DATABASE_URI" "DATABASE_URL" "POSTGRES_URL" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI"`, `list`),
 			workerGroupsBlankSharedDSNNames, "carries API_DATABASE_URI"},
 		{"non-coordinator-groups-stop-blanking-the-coordinator-dsn", chartAndManifest,
 			mut(chartFile(workers), "{{- if not $coordinator }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}", "{{- if false }}\n            - {name: COORDINATOR_DATABASE_URI, value: \"\"}"),

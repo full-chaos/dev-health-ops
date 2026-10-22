@@ -43,6 +43,10 @@ func PublicReadColumns() []ColumnGrant {
 		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier"}},
 		{Table: "saml_assertion_replays", Columns: []string{"provider_id", "assertion_id", "expires_at"}},
 		{Table: "org_licenses", Columns: []string{"org_id", "tier", "features_override"}},
+		// The session issue route checks go-api's auth-session-issuer
+		// service credential by its hash (last_used_at is not read or
+		// stamped).
+		{Table: "internal_service_credentials", Columns: []string{"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"}},
 	}
 }
 

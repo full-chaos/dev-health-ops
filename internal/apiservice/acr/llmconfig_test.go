@@ -107,6 +107,38 @@ func TestLLMConfigServesTheStoredConfigWithTheKey(t *testing.T) {
 	}
 }
 
+func TestLLMConfigServesThePromptCacheOptInOnlyWhenOptedIn(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		optedIn  bool
+		wantKey  bool
+		wantBool bool
+	}{
+		{"opted in", true, true, true},
+		{"not opted in: the field is omitted, not false", false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := configured()
+			source.cfg.PromptCache = tc.optedIn
+			response, body := call(t, &fakeVerifier{}, source, io.Discard, testOrg, "Bearer "+testToken)
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d body=%s", response.StatusCode, body)
+			}
+			var got map[string]any
+			if err := json.Unmarshal([]byte(body), &got); err != nil {
+				t.Fatal(err)
+			}
+			value, present := got["prompt_cache"]
+			if present != tc.wantKey || (present && value != tc.wantBool) {
+				t.Fatalf("prompt_cache = %v (present %v), want present %v value %v; body=%s", value, present, tc.wantKey, tc.wantBool, body)
+			}
+			if got["schema_version"] != "acr_llm_config.v1" || got["api_key"] != testKey {
+				t.Fatalf("the rest of the body changed: %s", body)
+			}
+		})
+	}
+}
+
 func TestLLMConfigRefusals(t *testing.T) {
 	cases := []struct {
 		name     string

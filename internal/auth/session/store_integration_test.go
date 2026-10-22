@@ -561,7 +561,10 @@ func TestRefusalsWriteNothing(t *testing.T) {
 		}
 		return doc
 	}
-	unknown, _ := newCredential()
+	unknown, err := NewUnstoredCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	expiredCredential := e.create(t, ctx, e.principal(t, ctx))
 	e.guarded(t, ctx, `UPDATE auth.refresh_credentials SET expires_at = now() - interval '1 second' WHERE token_hash = $1`, hashCredential(expiredCredential.Credential))
@@ -581,7 +584,7 @@ func TestRefusalsWriteNothing(t *testing.T) {
 		want       Reason
 	}{
 		{"malformed jwt", contracts.NewSecretString("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln"), ReasonMalformed},
-		{"unknown", unknown, ReasonRefreshUnknown},
+		{"unstored credential", unknown, ReasonRefreshUnknown},
 		{"expired credential", expiredCredential.Credential, ReasonRefreshExpired},
 		{"expired session", expiredSession.Credential, ReasonSessionExpired},
 		{"disabled principal", disabled.Credential, ReasonPrincipalDeactivated},

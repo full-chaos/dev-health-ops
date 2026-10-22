@@ -64,6 +64,30 @@ func TestBaseURLCarriesKeyThroughPercentEscapes(t *testing.T) {
 	}
 }
 
+// The llm-config route flags a served url that carries ANY key the org stores,
+// the default row's or a purpose override's, not only the served one.
+func TestStoredKeyInBaseURLChecksEveryStoredKey(t *testing.T) {
+	raw := orgSettings{keyAPIKey: storedTestKey, PurposeKey(PurposeInvestigate, keyAPIKey): freshTestKey, PurposeKey(PurposeExplain, keyAPIKey): ""}
+	for name, tc := range map[string]struct {
+		baseURL string
+		want    bool
+	}{
+		"default key":             {"https://p.example.invalid/" + storedTestKey, true},
+		"purpose key":             {"https://" + freshTestKey + ".example.invalid/v1", true},
+		"escaped default key":     {"https://p.example.invalid/%73k-stored-0123456789", true},
+		"clean":                   {"https://p.example.invalid/v1", false},
+		"empty url":               {"", false},
+		"another key is not ours": {"https://p.example.invalid/sk-someone-else-0123456789", false},
+	} {
+		if got := storedKeyInBaseURL(raw, tc.baseURL); got != tc.want {
+			t.Fatalf("%s: storedKeyInBaseURL(%q) = %v, want %v", name, tc.baseURL, got, tc.want)
+		}
+	}
+	if storedKeyInBaseURL(orgSettings{}, "https://p.example.invalid/v1") {
+		t.Fatal("an org with no stored key cannot carry one")
+	}
+}
+
 func percentEscapeAll(s string) string {
 	var out strings.Builder
 	for i := 0; i < len(s); i++ {

@@ -32,6 +32,9 @@ type OrgConfig struct {
 	// value change moves it, including a delete of a row that was not the newest.
 	// The prompt-cache row is one of them, so a flip of the opt-in moves it.
 	Version string
+	// KeyInBaseURL is set when the served BaseURL carries any api key the org
+	// stores (the default row's or a purpose override's), not only the served one.
+	KeyInBaseURL bool
 	// GateClosed is set only with found=false: BYO settings are stored but the
 	// byo_llm gate is closed, so the org runs on the platform default.
 	GateClosed bool
@@ -179,7 +182,27 @@ WHERE org_id = $1 AND category = $2 AND key = ANY($3) ORDER BY key`,
 		APIKey:      secrets.NewHidden(settings[keyAPIKey]),
 		PromptCache: promptCacheOptIn(raw, provider),
 		Version:     version,
+
+		KeyInBaseURL: storedKeyInBaseURL(raw, settings[keyBaseURL]),
 	}, true, nil
+}
+
+// storedKeyInBaseURL is whether baseURL carries any api key stored for the org,
+// the default row's or a purpose override's.
+func storedKeyInBaseURL(raw orgSettings, baseURL string) bool {
+	if baseURL == "" {
+		return false
+	}
+	keys := []string{keyAPIKey}
+	for _, purpose := range Purposes {
+		keys = append(keys, PurposeKey(purpose, keyAPIKey))
+	}
+	for _, key := range keys {
+		if BaseURLCarriesKey(baseURL, raw[key]) {
+			return true
+		}
+	}
+	return false
 }
 
 // versionRow is one stored BYO row as the version digest reads it.

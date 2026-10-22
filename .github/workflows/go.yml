@@ -142,6 +142,7 @@ on:
       # alone must run go-quality.
       - 'internal/httpguard/*.tsv'
       - 'internal/cigates/affected/*.tsv'
+      - 'internal/cigates/chpin/*.tsv'
       - 'internal/cigates/outboundtransport/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
@@ -362,6 +363,7 @@ on:
       # alone must run go-quality.
       - 'internal/httpguard/*.tsv'
       - 'internal/cigates/affected/*.tsv'
+      - 'internal/cigates/chpin/*.tsv'
       - 'internal/cigates/outboundtransport/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'

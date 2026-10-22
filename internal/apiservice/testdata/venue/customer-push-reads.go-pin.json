@@ -1,0 +1,4 @@
+{
+  "batch offset huge": "422 {\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"rejected_records_offset\"],\"msg\":\"Input should be less than or equal to 9223372036854775807\"}]}",
+  "batches huge offset": "422 {\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be less than or equal to 9223372036854775807\"}]}"
+}

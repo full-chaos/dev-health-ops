@@ -9,7 +9,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,8 +25,15 @@ const (
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "..", "..")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := contracts.RepoRoot(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func sum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }

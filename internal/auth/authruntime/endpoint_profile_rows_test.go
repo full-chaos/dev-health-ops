@@ -275,6 +275,9 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 	constants := map[string]string{
 		"/v1/token/refresh": "PatternRefresh", "/v1/sessions/current": "PatternCurrent",
 		"/v1/sessions/revoke": "PatternRevoke", "/v1/sessions/revoke-all": "PatternRevokeAll",
+		"/api/v1/auth/login": "PatternCompatLogin", "/api/v1/auth/refresh": "PatternCompatRefresh",
+		"/api/v1/auth/logout": "PatternCompatLogout", "/api/v1/auth/social-login": "PatternCompatSocialLogin",
+		"/internal/v1/sessions": "PatternIssueSession",
 	}
 	checked := 0
 	var walk func(node any, where string)

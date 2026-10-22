@@ -11,6 +11,11 @@ import (
 
 const bodyKey contextKey = 101
 
+// WithBody stores a decoded body in ctx, as BodyFirst does before the handler runs.
+func WithBody(ctx context.Context, body pybody.Body) context.Context {
+	return context.WithValue(ctx, bodyKey, body)
+}
+
 // BodyFrom returns the body BodyFirst stored in ctx, and whether one was
 // stored at all (a route wrapped only with Wrap never sets it).
 func BodyFrom(ctx context.Context) (pybody.Body, bool) {
@@ -47,6 +52,6 @@ func (g *Guard) BodyFirst(level Authz, next http.Handler) http.Handler {
 			WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)
 			return
 		}
-		guarded.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), bodyKey, body)))
+		guarded.ServeHTTP(w, r.WithContext(WithBody(r.Context(), body)))
 	})
 }

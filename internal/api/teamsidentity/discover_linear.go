@@ -73,9 +73,7 @@ type linearTeamsResponse struct {
 			} `json:"pageInfo"`
 		} `json:"teams"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []linearGraphQLErrorEntry `json:"errors"`
 }
 
 // discoverLinear mirrors TeamDiscoveryService.discover_linear
@@ -104,7 +102,7 @@ func discoverLinear(ctx context.Context, credential providerfoundation.Credentia
 		}
 		response, err := client.Do(ctx, "POST", "/graphql", bytes.NewReader(body))
 		if err != nil {
-			return nil, err
+			return nil, linearTransportFailure(err)
 		}
 		raw, readErr := io.ReadAll(response.Body)
 		response.Body.Close()
@@ -116,7 +114,7 @@ func discoverLinear(ctx context.Context, credential providerfoundation.Credentia
 			return nil, fmt.Errorf("decode linear teams response: %w", err)
 		}
 		if len(payload.Errors) > 0 {
-			return nil, fmt.Errorf("linear graphql error: %s", payload.Errors[0].Message)
+			return nil, linearErrorsFailure(payload.Errors, linearGenericError(payload.Errors))
 		}
 		for _, node := range payload.Data.Teams.Nodes {
 			associations := pyjson.NewObject()

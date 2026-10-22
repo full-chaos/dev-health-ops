@@ -455,6 +455,7 @@ func buildNativeInvestmentExecutor(
 		executor.SetObserver(investment.CollectorRepoAttributionObserver{Collector: collector})
 		executor.SetShadowObserver(investment.CollectorShadowObserver{Collector: collector})
 		executor.SetServedObserver(investment.CollectorServedObserver{Collector: collector, Logger: logger})
+		executor.SetLLMTelemetry(investment.CollectorLLMTelemetry{Collector: collector})
 	}
 	return executor, nil
 }

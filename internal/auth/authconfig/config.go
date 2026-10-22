@@ -89,10 +89,6 @@ const (
 	// padding): the HMAC key of the lockout identifier (local.Config). Set,
 	// with the session secrets, it mounts the login route. Secret.
 	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
-	// EnvCompatRoutes mounts go-api's /api/v1/auth/{refresh,logout,
-	// social-login} (and login, with the lockout key) beside the session
-	// routes: true or false, default false.
-	EnvCompatRoutes = "AUTH_SERVICE_COMPAT_ROUTES"
 	// EnvTrustedProxies lists the proxies whose X-Forwarded-For names the
 	// client (internal/auth/clientaddr).
 	EnvTrustedProxies = clientaddr.Env
@@ -208,8 +204,6 @@ type SessionTokens struct {
 	AccessIssuer   string
 	AccessAudience string
 	SuccessorKey   secrets.Value
-	// CompatRoutes mounts go-api's compatibility routes (EnvCompatRoutes).
-	CompatRoutes bool
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
 	LockoutKey   secrets.Value
@@ -251,7 +245,6 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("signing_keyset_configured", c.SigningKeySetPath != ""),
 		slog.String("signing_key_id", c.SigningKeyID),
 		slog.Bool("api_routes_enabled", c.Session.Enabled),
-		slog.Bool("compat_routes_enabled", c.Session.CompatRoutes),
 		slog.Bool("login_route_enabled", c.Session.LoginEnabled),
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
@@ -423,24 +416,15 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			EnvAccessTokenSecret, EnvSessionSuccessorKey,
 		)
 	}
-	compat := false
-	if raw := strings.TrimSpace(valueOf(lookup, EnvCompatRoutes)); raw != "" {
-		if compat, err = strconv.ParseBool(raw); err != nil {
-			return SessionTokens{}, fmt.Errorf("%s must be true or false", EnvCompatRoutes)
-		}
-	}
 	_, hasLockout, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
 	if err != nil {
 		return SessionTokens{}, err
 	}
-	switch {
-	case compat && !hasAccess:
-		return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
-			EnvCompatRoutes, EnvAccessTokenSecret, EnvSessionSuccessorKey)
-	case hasLockout && !compat:
-		return SessionTokens{}, fmt.Errorf("%s mounts login, which is a compatibility route: it needs %s=true",
-			EnvLoginLockoutKey, EnvCompatRoutes)
-	case !hasAccess:
+	if !hasAccess {
+		if hasLockout {
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
+				EnvLoginLockoutKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+		}
 		return out, nil
 	}
 	if len([]rune(access.Reveal())) < minAccessTokenSecretLength {
@@ -453,7 +437,7 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			"%s must be %d bytes, base64url without padding", EnvSessionSuccessorKey, sessionSuccessorKeyBytes,
 		)
 	}
-	out.Enabled, out.AccessSecret, out.SuccessorKey, out.CompatRoutes = true, access, successor, compat
+	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
 	lockout, _, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
 	if err != nil {
 		return SessionTokens{}, err

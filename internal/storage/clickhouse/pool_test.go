@@ -75,3 +75,32 @@ func TestDialTimeoutEnvOverrides(t *testing.T) {
 		}
 	}
 }
+
+func TestAsyncInsertDefaultsToOffAndADSNSettingWins(t *testing.T) {
+	options, err := clickHouseOptions(DefaultConfig("clickhouse://u:p@ch.example.invalid:9440/db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := options.Settings[AsyncInsertSetting]; got != 0 {
+		t.Fatalf("async_insert = %v, want 0", got)
+	}
+	options, err = clickHouseOptions(DefaultConfig("clickhouse://u:p@ch.example.invalid:9440/db?async_insert=1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := options.Settings[AsyncInsertSetting]; got == 0 {
+		t.Fatalf("an explicit DSN async_insert was overwritten: %v", got)
+	}
+}
+
+func TestWithAsyncInsertOff(t *testing.T) {
+	for in, want := range map[string]string{
+		"clickhouse://h:9000/db":                "clickhouse://h:9000/db?async_insert=0",
+		"clickhouse://h:9000/db?secure=true":    "clickhouse://h:9000/db?secure=true&async_insert=0",
+		"clickhouse://h:9000/db?async_insert=1": "clickhouse://h:9000/db?async_insert=1",
+	} {
+		if got := WithAsyncInsertOff(in); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}

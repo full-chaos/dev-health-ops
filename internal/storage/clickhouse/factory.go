@@ -69,6 +69,12 @@ func clickHouseOptions(config Config) (*clickhouse.Options, error) {
 	if err != nil {
 		return nil, ErrInvalidConfig
 	}
+	if options.Settings == nil {
+		options.Settings = clickhouse.Settings{}
+	}
+	if _, set := options.Settings[AsyncInsertSetting]; !set {
+		options.Settings[AsyncInsertSetting] = 0
+	}
 	options.MaxOpenConns = config.MaxOpenConns
 	options.MaxIdleConns = config.MaxIdleConns
 	options.DialTimeout = config.DialTimeout

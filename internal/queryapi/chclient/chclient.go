@@ -40,7 +40,7 @@ func Options(dsn string) dhclickhouse.Options {
 	maxBytesToRead := uint64(0)
 	maxResultRows := MaxResultRows
 	return dhclickhouse.Options{
-		DSN:             dsn,
+		DSN:             chstorage.WithAsyncInsertOff(dsn),
 		MaxOpenConns:    PoolMaxOpenConns,
 		MaxIdleConns:    PoolMaxIdleConns,
 		ConnMaxLifetime: chstorage.PoolConnMaxLifetime(),

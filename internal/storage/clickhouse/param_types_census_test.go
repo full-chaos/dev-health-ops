@@ -1,3 +1,7 @@
+//go:build !race
+
+// golang/go#81122: go/types races under parallel go/packages loading; remove when the toolchain carries the fix (golang/go#81871).
+
 package clickhouse
 
 import (

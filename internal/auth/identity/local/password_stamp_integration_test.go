@@ -51,7 +51,7 @@ func newEndRig(t *testing.T, ctx context.Context) *endRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rig := &endRig{env: env, links: links, sessions: sessions, accounts: IdentityAccounts{Store: store, Sessions: sessions}}
+	rig := &endRig{env: env, links: links, sessions: sessions, accounts: IdentityAccounts{Store: store, Sessions: sessions, Links: links}}
 	rig.flows, err = NewFlows(FlowsConfig{Accounts: rig.accounts, Links: links, Sessions: sessions, Mail: &liveMail{},
 		Locker: links, UsersOwnedByAuth: true, Hash: cheapHash})
 	if err != nil {

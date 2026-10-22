@@ -149,7 +149,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE ROLE " + authorizedDomainRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + domainAuthorizationPass + "'",
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + authorizedDomainRole,
 		"GRANT USAGE ON SCHEMA public TO " + authorizedDomainRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.byo_llm_budget_reservations, public.tier_limits, public.webhook_deliveries TO " + authorizedDomainRole,
+		"GRANT SELECT ON TABLE public.alembic_version, public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.byo_llm_budget_reservations, public.tier_limits, public.webhook_deliveries TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + authorizedDomainRole,
@@ -261,9 +261,14 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"UPDATE public.external_ingest_recompute_jobs SET status = 'bridge_claimed' WHERE id = 1"); err != nil {
 		t.Fatalf("domain external-recompute UPDATE failed: %v", err)
 	}
+	// CHAOS-8785: the schema gate's read is the one thing the domain role may do with the table.
+	if _, err := domain.Exec(ctx, "SELECT version_num FROM public.alembic_version"); err != nil {
+		t.Fatalf("domain role cannot read alembic_version for the schema gate: %v", err)
+	}
 	for name, statement := range map[string]string{
 		"unrelated table SELECT": "SELECT id FROM public.unrelated_semantic_table",
-		"Alembic SELECT":         "SELECT version_num FROM public.alembic_version",
+		"Alembic UPDATE":         "UPDATE public.alembic_version SET version_num = version_num",
+		"Alembic DELETE":         "DELETE FROM public.alembic_version",
 		"route UPDATE":           "UPDATE public.sync_dispatch_transport_routes SET id = id",
 		"worker outbox UPDATE":   "UPDATE public.worker_job_outbox SET state = 'forbidden'",
 		"domain DELETE":          "DELETE FROM public.sync_dispatch_outbox",

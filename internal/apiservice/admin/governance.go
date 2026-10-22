@@ -77,19 +77,16 @@ func truthyQuery(values url.Values, name string) string {
 	return value
 }
 
-// pageParams validates the limit (ge=1, le=maxLimit) and offset (ge=0) query
-// parameters as FastAPI's Query() does, appending any error to errs.
+// pageParams validates the limit (ge=1, le=maxLimit) and offset (ge=0, and
+// within int64: the page query binds it as a bigint) query parameters as
+// FastAPI's Query() does, appending any error to errs.
 func pageParams(errs *pybody.Errors, values url.Values, defaultLimit, maxLimit int64) (limit, offset int64) {
 	one, zero := int64(1), int64(0)
 	if value, ok := errs.QueryInt("limit", queryPtr(values, "limit"), defaultLimit, &one, &maxLimit); ok {
 		limit = value.Int64()
 	}
-	if value, ok := errs.QueryInt("offset", queryPtr(values, "offset"), 0, &zero, nil); ok {
-		if value.IsInt64() {
-			offset = value.Int64()
-		} else {
-			offset = -1
-		}
+	if value, ok := errs.QueryInt("offset", queryPtr(values, "offset"), 0, &zero, pybody.Int64Max()); ok {
+		offset = value.Int64()
 	}
 	return limit, offset
 }
@@ -125,6 +122,21 @@ func pydanticValueError(loc []pyjson.Value, input pyjson.Value, message string) 
 func pathUUID(r *http.Request, name string) (uuid.UUID, bool) {
 	id, err := pythonparity.ParseUUID(r.PathValue(name))
 	return id, err == nil
+}
+
+const (
+	invalidFeatureFlagIDDetail = "Invalid feature flag id"
+	invalidFeatureIDDetail     = "Invalid feature id"
+	invalidAuditLogIDDetail    = "Invalid audit log id"
+	invalidUserIDDetail        = "Invalid user id"
+	invalidIPEntryIDDetail     = "Invalid IP allowlist entry id"
+	invalidRetentionIDDetail   = "Invalid retention policy id"
+)
+
+// writeInvalidID answers a malformed id of the request's own input with a
+// fixed named 400 that carries none of the input text.
+func writeInvalidID(w http.ResponseWriter, detail string) {
+	policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
 }
 
 // jsonColumnValue decodes a stored `json` column as SQLAlchemy's JSON type

@@ -36,8 +36,20 @@ type tables struct {
 	walks    []walkRow
 	dynReads []siteRow
 	edges    []edgeRow
+	// reach: package<TAB>site -> the packages whose programs reach the site (reach.tsv)
+	reach     map[string]map[string]bool
+	reachRows map[string]string // reach.tsv row -> its line number
 
 	generatedRows map[string]map[string]string
+}
+
+// reachOf is the reachers of a code-scope site, and whether reach.tsv places it (no `*` row).
+func (t *tables) reachOf(pkg, site string) (map[string]bool, bool) {
+	rs, ok := t.reach[pkg+"\t"+site]
+	if !ok || rs[reachAny] {
+		return nil, false
+	}
+	return rs, true
 }
 
 func readTSV(file string, fields int) ([][]string, []int, error) {
@@ -203,7 +215,7 @@ func (t *tables) suggest(p string) string {
 // The generated tables: `cigate plan-reads --write` writes them from the code (dynreads.go), and plan-reads and
 // plan-verdict fail (FULL) on any difference, so a row is never narrower or wider than the code. site is the base name
 // of the Go file: a _test.go site is a read of the package's own tests (the package alone is selected), any other site
-// is a read of its non-test code (every test binary that links the package is selected).
+// is a read of its non-test code (the packages whose programs reach the site in reach.tsv are selected: reach.go).
 //
 //	walks.tsv     package<TAB>site<TAB>root<TAB>depth   the site walks root (`.` = the repository) to depth tree or dir;
 //	                                                    root `unexpressed` (depth `-`): a walk the tool cannot bound
@@ -319,6 +331,29 @@ func loadGenerated(dir string, t *tables) error {
 		}
 		t.edges = append(t.edges, edgeRow{siteRow: s, target: r[2]})
 		t.generatedRows[edgesFile][strings.Join(r, "\t")] = fmt.Sprint(s.line)
+	}
+	rows, lines, err = readTSV(filepath.Join(dir, reachFile), 3)
+	if err != nil {
+		return err
+	}
+	t.reach, t.reachRows = map[string]map[string]bool{}, map[string]string{}
+	for i, r := range rows {
+		s, err := loadSite(reachFile, lines[i], r[0], r[1])
+		if err != nil {
+			return err
+		}
+		if s.test() {
+			return fmt.Errorf("%s:%d: site %q is a test file: only code-scope sites have reach rows", reachFile, s.line, s.site)
+		}
+		if r[2] != reachAny && r[2] != reachNone && r[2] != "." && !cleanRel(r[2]) {
+			return fmt.Errorf("%s:%d: reacher %q is not a clean repository directory, ., %s or %s", reachFile, s.line, r[2], reachAny, reachNone)
+		}
+		k := r[0] + "\t" + r[1]
+		if t.reach[k] == nil {
+			t.reach[k] = map[string]bool{}
+		}
+		t.reach[k][r[2]] = true
+		t.reachRows[strings.Join(r, "\t")] = fmt.Sprint(s.line)
 	}
 	return nil
 }

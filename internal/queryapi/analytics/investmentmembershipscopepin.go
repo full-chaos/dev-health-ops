@@ -115,11 +115,19 @@ func resolveInvestmentMembershipScope(ctx context.Context, client QueryClient, o
 	return entry.state, entry.err
 }
 
+// membershipScopeStateFlight shares one state statement between the concurrent
+// requests of one organisation.
+var membershipScopeStateFlight = &inflight[InvestmentMembershipScopeState]{}
+
 // resolveAndObserveInvestmentMembershipScope fetches the state, logs the
 // resolution at debug, and records the stale-projection telemetry when the
 // projection trails the newest investment rows.
 func resolveAndObserveInvestmentMembershipScope(ctx context.Context, client QueryClient, orgID string, timeoutSeconds int) (InvestmentMembershipScopeState, error) {
-	state, err := fetchInvestmentMembershipScopeState(ctx, client, orgID, timeoutSeconds)
+	key := (&flightKey{}).str("membership-scope-state").str(orgID).num(int64(timeoutSeconds)).String()
+	state, err := membershipScopeStateFlight.do(ctx, key, func(s InvestmentMembershipScopeState) InvestmentMembershipScopeState { return s },
+		func(ctx context.Context) (InvestmentMembershipScopeState, error) {
+			return fetchInvestmentMembershipScopeState(ctx, client, orgID, timeoutSeconds)
+		})
 	if err != nil {
 		return state, err
 	}

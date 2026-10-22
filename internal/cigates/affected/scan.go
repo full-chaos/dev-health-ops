@@ -1,6 +1,7 @@
 package affected
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -12,9 +13,11 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // readCalls are the calls whose string arguments name a file or a directory the caller reads.
@@ -31,6 +34,9 @@ const (
 	ReadDyn  = "dyn"
 	ReadWalk = "walk"
 	ReadEdge = "edge"
+	// ReadOpaque: a file the call graph of reach.tsv cannot see through (go:linkname, cgo, plugin); its tables are
+	// defective, so every plan is FULL.
+	ReadOpaque = "opaque"
 )
 
 // Read is one place a package names a repository path, or reads, walks, runs or loads one.
@@ -186,11 +192,16 @@ func ScanReads(root string) ([]Read, error) {
 	var dirs []string
 	for _, rel := range sources {
 		fset := token.NewFileSet()
-		f, err := parser.ParseFile(fset, filepath.Join(root, filepath.FromSlash(rel)), nil, parser.SkipObjectResolution)
+		src, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			return nil, err
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(root, filepath.FromSlash(rel)), src, parser.SkipObjectResolution)
 		if err != nil {
 			return nil, err
 		}
 		reads = append(reads, scanFile(fset, f, rel, top)...)
+		reads = append(reads, opaqueReads(fset, f, rel, src)...)
 		d := path.Dir(rel)
 		if byDir[d] == nil {
 			dirs = append(dirs, d)
@@ -209,6 +220,40 @@ func ScanReads(root string) ([]Read, error) {
 		return out[i].Line < out[j].Line
 	})
 	return out, nil
+}
+
+var (
+	linknameDirective = regexp.MustCompile(`(?m)^//go:linkname\s`)
+	notIntegration    = regexp.MustCompile(`(?m)^//go:build .*!\s*integration\b`)
+)
+
+// opaqueReads names what in one file hides calls from the static call graph.
+func opaqueReads(fset *token.FileSet, f *ast.File, rel string, src []byte) []Read {
+	var out []Read
+	add := func(line int, what string) {
+		out = append(out, Read{Package: path.Dir(rel), File: rel, Line: line, Test: strings.HasSuffix(rel, "_test.go"), Kind: ReadOpaque, Literal: what})
+	}
+	if bytes.Contains(src, []byte("//go:linkname")) {
+		if loc := linknameDirective.FindIndex(src); loc != nil {
+			add(bytes.Count(src[:loc[0]], []byte("\n"))+1, "go:linkname")
+		}
+	}
+	// reach.tsv loads the module with the integration tag only: an untagged build is a subset of that build unless a
+	// file is built only without the tag.
+	if bytes.Contains(src, []byte("integration")) {
+		if loc := notIntegration.FindIndex(src); loc != nil {
+			add(bytes.Count(src[:loc[0]], []byte("\n"))+1, "a build constraint on !integration")
+		}
+	}
+	for _, im := range f.Imports {
+		switch p, _ := strconv.Unquote(im.Path.Value); p {
+		case "C":
+			add(fset.Position(im.Pos()).Line, "cgo")
+		case "plugin":
+			add(fset.Position(im.Pos()).Line, "plugin")
+		}
+	}
+	return out
 }
 
 func callName(e ast.Expr) string {
@@ -368,7 +413,45 @@ func checkReads(root string, t *tables, reads []Read) guardResult {
 			}
 		}
 	}
+	// reach.tsv places every code-scope site and no other; its reachers are checked by plan-reads --reach.
+	sites := codeSites(reads)
+	for _, k := range sortedKeys(sites) {
+		if _, ok := t.reach[k]; !ok {
+			report(fmt.Sprintf("%s: %s has no %s row; run cigate plan-reads --root . --write", strings.SplitN(k, "\t", 2)[0], sites[k][0], reachFile))
+		}
+	}
+	for _, row := range sortedKeys(t.reachRows) {
+		f := strings.SplitN(row, "\t", 3)
+		if _, ok := sites[f[0]+"\t"+f[1]]; !ok {
+			report(fmt.Sprintf("%s:%s: %s names no code-scope site the tool cannot bound; run cigate plan-reads --root . --write", reachFile, t.reachRows[row], row))
+		}
+	}
+	for _, r := range reads {
+		if r.Kind == ReadOpaque {
+			report(fmt.Sprintf("%s:%d: %s hides calls from the call graph of %s: every plan is FULL", r.File, r.Line, r.Literal, reachFile))
+		}
+	}
 	return g
+}
+
+// checkReach recomputes reach.tsv and returns one defect per differing row.
+func checkReach(root string, t *tables, reads []Read) ([]string, reachStats, error) {
+	want, st, err := reachRows(root, reads)
+	if err != nil {
+		return nil, st, err
+	}
+	var defects []string
+	for _, row := range sortedKeys(want) {
+		if _, ok := t.reachRows[row]; !ok {
+			defects = append(defects, fmt.Sprintf("%s: missing row %s (run cigate plan-reads --root . --write)", reachFile, row))
+		}
+	}
+	for _, row := range sortedKeys(t.reachRows) {
+		if !want[row] {
+			defects = append(defects, fmt.Sprintf("%s:%s: %s is a row the call graph does not call for (run cigate plan-reads --root . --write)", reachFile, t.reachRows[row], row))
+		}
+	}
+	return defects, st, nil
 }
 
 var tableWhat = map[string]string{walksFile: "walk", dynReadsFile: "unbounded read", edgesFile: "run or load of Go packages"}
@@ -433,7 +516,8 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	root := fs.String("root", "", "repository root")
 	tablesDir := fs.String("tables", "", "directory of the read tables (default ROOT/internal/cigates/affected)")
-	write := fs.Bool("write", false, "write walks.tsv, dynreads.tsv and edges.tsv from the code, then check")
+	write := fs.Bool("write", false, "write walks.tsv, dynreads.tsv, edges.tsv and reach.tsv from the code, then check")
+	checkCallGraph := fs.Bool("reach", false, "also recompute reach.tsv from the call graph (go/packages, SSA, RTA) and fail on any difference")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -441,6 +525,12 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "plan-reads: --root is required")
 		return 2
 	}
+	absRoot, err := filepath.Abs(*root)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	*root = absRoot
 	dir := *tablesDir
 	if dir == "" {
 		dir = filepath.Join(*root, "internal", "cigates", "affected")
@@ -455,6 +545,16 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
+		rows, st, err := reachRows(*root, reads)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := writeReach(dir, rows); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		printReachStats(stdout, st)
 	}
 	t, err := loadTables(dir)
 	if err != nil {
@@ -462,6 +562,15 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	g := checkReads(*root, t, reads)
+	if *checkCallGraph && !*write {
+		defects, st, err := checkReach(*root, t, reads)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		printReachStats(stdout, st)
+		g.defects = append(g.defects, defects...)
+	}
 	for _, d := range g.defects {
 		fmt.Fprintln(stdout, d)
 	}
@@ -482,9 +591,14 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "plan-reads: %d defect(s) in the read tables\n", len(g.defects))
 		return 1
 	}
-	fmt.Fprintf(stdout, "plan-reads: %d read(s) covered by %d reads, %d walks, %d dynreads and %d edges row(s)\n", len(reads),
-		len(t.reads), len(t.walks), len(t.dynReads), len(t.edges))
+	fmt.Fprintf(stdout, "plan-reads: %d read(s) covered by %d reads, %d walks, %d dynreads, %d edges and %d reach row(s)\n", len(reads),
+		len(t.reads), len(t.walks), len(t.dynReads), len(t.edges), len(t.reachRows))
 	return 0
+}
+
+func printReachStats(w io.Writer, st reachStats) {
+	fmt.Fprintf(w, "plan-reads: reach.tsv over %d code-scope site file(s), %d program run(s) over %d tag set(s): %s wall, peak RSS %d MiB\n",
+		st.sites, st.programs, len(reachTags), st.wall.Round(time.Second), st.peakRSSMiB)
 }
 
 // writeGenerated writes walks.tsv, dynreads.tsv and edges.tsv as the reads call for them.

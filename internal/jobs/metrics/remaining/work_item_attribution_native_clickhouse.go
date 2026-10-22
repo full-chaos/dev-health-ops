@@ -611,6 +611,10 @@ func workItemAttributionEffectiveChangeSignal(updatedAt, validFrom time.Time, va
 // detectScope reads the org-wide and scoped watermarks, compares them
 // against ownership-table activity, and returns the affected set. See
 // ComputeOrg's doc comment for the scoping rule itself.
+//
+// The ownership queries here read a change signal, not a validity window. Which owners an item has at its day,
+// including the first recorded owners before a repository's first record (D5987 C), is decided by LoadRepos alone
+// (the shared ownershipwindow fragment); a row inserted with a future first valid_from is caught by its updated_at.
 func (executor *WorkItemAttributionExecutor) detectScope(
 	ctx context.Context, orgID string, now time.Time,
 ) (workItemAttributionScopeDecision, error) {

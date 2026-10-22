@@ -1,0 +1,64 @@
+<clickhouse>
+  <!-- Retention of ClickHouse's own system log tables on the self-hosted compose stack.
+       text_log and trace_log grow fastest: 3 days. query_log stays 14 days: diagnosis reads
+       system.query_log. The rest: 7 days. text_log logs warning and above only.
+       ttl_only_drop_parts drops whole expired parts instead of rewriting them.
+       A change takes effect when the clickhouse container is recreated. -->
+  <text_log>
+    <level>warning</level>
+    <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </text_log>
+  <trace_log>
+    <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </trace_log>
+  <query_log>
+    <ttl>event_date + INTERVAL 14 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </query_log>
+  <query_thread_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </query_thread_log>
+  <query_views_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </query_views_log>
+  <metric_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </metric_log>
+  <asynchronous_metric_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </asynchronous_metric_log>
+  <part_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </part_log>
+  <processors_profile_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </processors_profile_log>
+  <session_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </session_log>
+  <crash_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </crash_log>
+  <error_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </error_log>
+  <asynchronous_insert_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </asynchronous_insert_log>
+  <background_schedule_pool_log>
+    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    <settings>ttl_only_drop_parts=1</settings>
+  </background_schedule_pool_log>
+</clickhouse>

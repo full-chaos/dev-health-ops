@@ -148,7 +148,7 @@ func (h *handlers) listRetentionPolicies(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	org, err := pythonparity.ParseUUID(orgID)
-	if err != nil || offset < 0 {
+	if err != nil {
 		policy.WriteInternal(w)
 		return
 	}
@@ -270,9 +270,13 @@ VALUES ($1, $2, $3, $4, $5, true, $6, $7, $7)`,
 // policy_id; it answers the 500 or 404 itself and returns false.
 func (h *handlers) loadRetentionPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, orgID string) (*retentionPolicy, bool) {
 	org, orgErr := pythonparity.ParseUUID(orgID)
-	policyID, policyOK := pathUUID(r, "policy_id")
-	if orgErr != nil || !policyOK {
+	if orgErr != nil {
 		policy.WriteInternal(w)
+		return nil, false
+	}
+	policyID, policyOK := pathUUID(r, "policy_id")
+	if !policyOK {
+		writeInvalidID(w, invalidRetentionIDDetail)
 		return nil, false
 	}
 	found, err := h.store.retentionPolicyByID(ctx, org, policyID)
@@ -410,9 +414,13 @@ func (h *handlers) executeRetentionPolicy(w http.ResponseWriter, r *http.Request
 		return
 	}
 	org, orgErr := pythonparity.ParseUUID(orgID)
-	policyID, policyOK := pathUUID(r, "policy_id")
-	if orgErr != nil || !policyOK {
+	if orgErr != nil {
 		policy.WriteInternal(w)
+		return
+	}
+	policyID, policyOK := pathUUID(r, "policy_id")
+	if !policyOK {
+		writeInvalidID(w, invalidRetentionIDDetail)
 		return
 	}
 	found, err := h.store.retentionPolicyByID(ctx, org, policyID)

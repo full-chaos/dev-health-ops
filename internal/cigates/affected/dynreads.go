@@ -42,6 +42,7 @@ const (
 	kGlob   = "globlist" // the result of filepath.Glob(pattern): paths under its root
 	kGoMod  = "gomod"    // a go.mod or go.sum in an unbounded directory
 	kDyn    = "dyn"
+	kSet    = "set" // two or more of const, repo and temp: value holds their elements, see setElems
 )
 
 const (
@@ -64,6 +65,11 @@ func join(a, b pathInfo) pathInfo {
 		return b
 	case b.kind == kBottom || a == b:
 		return a
+	}
+	if ea, ok := setElems(a); ok {
+		if eb, ok := setElems(b); ok {
+			return mkSet(append(ea, eb...))
+		}
 	}
 	return dynInfo
 }
@@ -174,17 +180,20 @@ func shortName(name string) string {
 // dirGroup is the Go files of one directory: a package and its external test package. Constants, package variables
 // and function parameters are resolved within it.
 type dirGroup struct {
-	dir     string
-	module  string
-	files   []*srcFile
-	consts  map[string]map[string]ast.Expr // package name -> constant -> value
-	vars    map[string]map[string]ast.Expr // package name -> package variable assigned once at its declaration
-	funcs   map[string][]*funcDecl         // name -> declarations of that name (functions and methods, both packages)
-	chdir   bool
-	pkgOf   map[*srcFile]string
-	params  map[*ast.FuncDecl][]pathInfo
-	bindOK  map[*ast.FuncDecl]bool
-	varKind map[string]map[string]pathInfo
+	dir    string
+	module string
+	files  []*srcFile
+	consts map[string]map[string]ast.Expr // package name -> constant -> value
+	vars   map[string]map[string]ast.Expr // package name -> package variable assigned once at its declaration
+	funcs  map[string][]*funcDecl         // name -> declarations of that name (functions and methods, both packages)
+	chdir  bool
+	// chdirOpen: the package changes directory to somewhere that is not a temp dir (or not provably one)
+	chdirOpen bool
+	pkgOf     map[*srcFile]string
+	params    map[*ast.FuncDecl][]pathInfo
+	bindOK    map[*ast.FuncDecl]bool
+	varKind   map[string]map[string]pathInfo
+	immut     map[immutKey]bool // immutableTable/immutableValue, which every bind pass asks again
 }
 
 type funcDecl struct {
@@ -236,7 +245,7 @@ func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 				calls[x.Fun] = true
 				name := s.callName(x.Fun)
 				if isChdir(name) {
-					g.chdir = true
+					g.chdir, g.chdirOpen = true, true
 				}
 			case *ast.AssignStmt:
 				for _, l := range x.Lhs {
@@ -311,6 +320,8 @@ type scope struct {
 	parent *scope
 	vals   map[string]pathInfo
 	fixed  map[string]bool // closure parameters: an assignment makes them dyn
+	tables map[string]*ast.CompositeLit
+	views  map[string]*tableView
 }
 
 func newScope(parent *scope) *scope {
@@ -493,6 +504,13 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 		return pathInfo{kind: kConst, value: v}
 	}
 	switch x := e.(type) {
+	case *ast.SelectorExpr:
+		if id, ok := x.X.(*ast.Ident); ok {
+			if v, ok := sc.view(id.Name); ok {
+				return c.fieldKind(v, x.Sel.Name, sc)
+			}
+		}
+		return dynInfo
 	case *ast.ParenExpr:
 		return c.pathKind(x.X, sc)
 	case *ast.Ident:
@@ -611,6 +629,20 @@ func (c *fileCtx) under(base pathInfo, rest string) pathInfo {
 			return dynInfo
 		}
 		return base
+	case kSet:
+		var out []string
+		for _, m := range members(base) {
+			if m.kind == kConst {
+				return dynInfo
+			}
+			u := c.under(m, rest)
+			el, ok := setElems(u)
+			if !ok {
+				return dynInfo
+			}
+			out = append(out, el...)
+		}
+		return mkSet(out)
 	}
 	return dynInfo
 }
@@ -624,7 +656,7 @@ func (c *fileCtx) resolve(v string) pathInfo {
 	if v == "" {
 		v = "."
 	}
-	if c.g.chdir {
+	if c.g.chdirOpen {
 		return dynInfo
 	}
 	if !c.s.test {
@@ -699,6 +731,12 @@ func (c *fileCtx) bind(body ast.Node, sc *scope) {
 				}
 				for i, l := range a.Lhs {
 					if id, ok := l.(*ast.Ident); ok && i < len(a.Rhs) {
+						if lit := compositeOf(a.Rhs[i]); lit != nil && a.Tok == token.DEFINE && len(a.Lhs) == len(a.Rhs) && c.g.immutable(body, id.Name, a) {
+							if sc.tables == nil {
+								sc.tables = map[string]*ast.CompositeLit{}
+							}
+							sc.tables[id.Name] = lit
+						}
 						set(id.Name, c.pathKind(a.Rhs[i], sc))
 					}
 				}
@@ -713,18 +751,41 @@ func (c *fileCtx) bind(body ast.Node, sc *scope) {
 			case *ast.RangeStmt:
 				val := dynInfo
 				key := dynInfo
+				var lit *ast.CompositeLit
 				if id, ok := a.X.(*ast.Ident); ok {
 					v, found := sc.lookup(id.Name)
+					local, isTable := sc.table(id.Name)
 					switch {
+					case isTable:
+						lit = local
 					case v.kind == kList:
 						val = pathInfo{kind: kEntry, value: v.value}
 					case v.kind == kGlob:
 						val = pathInfo{kind: kWalk, value: v.value, depth: v.depth}
 					case !found:
-						if lit := compositeOf(c.g.vars[c.pkg][id.Name]); lit != nil {
-							key, val = c.elemKinds(lit)
-						}
+						lit = compositeOf(c.g.vars[c.pkg][id.Name])
 					}
+				} else if cl, ok := a.X.(*ast.CompositeLit); ok {
+					lit = cl
+				}
+				structTable := false
+				if lit != nil {
+					if _, isStruct := structElems(lit); isStruct {
+						structTable = true
+						key, _ = c.elemKinds(lit, sc)
+						if id, ok := a.Value.(*ast.Ident); ok && a.Tok == token.DEFINE {
+							if c.g.immutable(body, id.Name, nil) {
+								sc.addView(id.Name, lit)
+							} else {
+								sc.addView(id.Name, nil)
+							}
+						}
+					} else {
+						key, val = c.elemKinds(lit, sc)
+					}
+				}
+				if id, ok := a.Value.(*ast.Ident); ok && (!structTable || a.Tok != token.DEFINE) {
+					sc.addView(id.Name, nil)
 				}
 				if id, ok := a.Key.(*ast.Ident); ok {
 					set(id.Name, key)
@@ -792,6 +853,7 @@ func (c *fileCtx) walkRoot(arg ast.Expr, sc *scope, glob bool) pathInfo {
 // analyze returns every dynamic read, walk, run and load of the files of one directory.
 func (g *dirGroup) analyze() []Read {
 	g.bindParams()
+	g.boundChdirs()
 	var out []Read
 	for _, s := range g.files {
 		c := &fileCtx{g: g, s: s, pkg: g.pkgOf[s]}
@@ -1111,18 +1173,24 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 	}
 	read := func(arg ast.Expr, what string) {
 		in := c.pathKind(arg, sc)
-		if in.kind == kConst {
-			in = c.resolve(in.value)
+		parts := []pathInfo{in}
+		if in.kind == kSet {
+			parts = members(in)
 		}
-		switch in.kind {
-		case kRepo:
-			add(Read{Kind: ReadPath, Line: line, Path: in.value, Literal: what})
-		case kWalk:
-			add(Read{Kind: ReadWalk, Line: line, Root: in.value, Depth: in.depth, Literal: what})
-		case kTemp, kConst, kGoMod:
-			// a temp file, a module file, or a path below the directory of the test binary that runs this code
-		default:
-			dyn(what)
+		for _, p := range parts {
+			if p.kind == kConst {
+				p = c.resolve(p.value)
+			}
+			switch p.kind {
+			case kRepo:
+				add(Read{Kind: ReadPath, Line: line, Path: p.value, Literal: what})
+			case kWalk:
+				add(Read{Kind: ReadWalk, Line: line, Root: p.value, Depth: p.depth, Literal: what})
+			case kTemp, kConst, kGoMod:
+				// a temp file, a module file, or a path below the directory of the test binary that runs this code
+			default:
+				dyn(what)
+			}
 		}
 	}
 	_, isRead := readArg[name]
@@ -1151,7 +1219,9 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 	}
 	// A directory change moves every relative read of the test binary that runs this code: the call is unbounded.
 	if isChdir(name) {
-		dyn(name)
+		if len(x.Args) != 1 || c.pathKind(x.Args[0], sc).kind != kTemp {
+			dyn(name)
+		}
 		return
 	}
 	if otherExec[name] {
@@ -1298,7 +1368,7 @@ func (c *fileCtx) execEdges(x *ast.CallExpr, name string, sc *scope, line int, a
 // a command passed on, returned or stored may get its directory elsewhere: unknown.
 func (c *fileCtx) cmdDir(x *ast.CallExpr, sc *scope) pathInfo {
 	def := pathInfo{kind: kRepo, value: c.g.dir}
-	if !c.s.test || c.g.chdir {
+	if !c.s.test || c.g.chdirOpen {
 		def = dynInfo
 	}
 	holder := c.holder(x)
@@ -1635,7 +1705,7 @@ func (c *fileCtx) patternValue(e ast.Expr, sc *scope) (string, bool) {
 // takes no other value; the default is the directory the call runs in.
 func (c *fileCtx) configDir(e ast.Expr, sc *scope, call *ast.CallExpr) pathInfo {
 	def := pathInfo{kind: kRepo, value: c.g.dir}
-	if !c.s.test || c.g.chdir {
+	if !c.s.test || c.g.chdirOpen {
 		def = dynInfo
 	}
 	lit := compositeOf(e)
@@ -1727,13 +1797,12 @@ func isLocator(name string) bool {
 
 // elemKinds is the key and value kinds of ranging over a composite literal: a map's keys and values, a slice's
 // elements (its keys are indexes). An element that is not a path is dyn.
-func (c *fileCtx) elemKinds(lit *ast.CompositeLit) (key, val pathInfo) {
+func (c *fileCtx) elemKinds(lit *ast.CompositeLit, sc *scope) (key, val pathInfo) {
 	_, isMap := lit.Type.(*ast.MapType)
 	_, isSlice := lit.Type.(*ast.ArrayType)
 	if !isMap && !isSlice || len(lit.Elts) == 0 {
 		return dynInfo, dynInfo
 	}
-	empty := newScope(nil)
 	key, val = pathInfo{}, pathInfo{}
 	if isSlice {
 		key = dynInfo
@@ -1741,12 +1810,12 @@ func (c *fileCtx) elemKinds(lit *ast.CompositeLit) (key, val pathInfo) {
 	for _, el := range lit.Elts {
 		if kv, ok := el.(*ast.KeyValueExpr); ok {
 			if isMap {
-				key = join(key, c.pathKind(kv.Key, empty))
+				key = join(key, c.pathKind(kv.Key, sc))
 			}
-			val = join(val, c.pathKind(kv.Value, empty))
+			val = join(val, c.pathKind(kv.Value, sc))
 			continue
 		}
-		val = join(val, c.pathKind(el, empty))
+		val = join(val, c.pathKind(el, sc))
 	}
 	return key, val
 }

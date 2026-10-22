@@ -17,7 +17,7 @@
 --     and frees its tuple: uniqueness holds among rows that are not revoked, so a
 --     re-grant is a new row and the earlier granted_by / revoked_by stay verbatim.
 --   * once revoked, a row is history: a BEFORE UPDATE trigger refuses any change
---     of its key, role, expiry, granted_by, revoked_by or revoked_at (an
+--     of its id, key, role, expiry, created_at, granted_by, revoked_by or revoked_at (an
 --     un-revoke included). DELETE is not covered here: the runtime role still holds
 --     DELETE on resource_grants until revoke-by-mark replaces it (W4 4.21).
 --   * principal and organization foreign keys are RESTRICT: deactivate first,
@@ -113,13 +113,15 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
     IF OLD.revoked_at IS NOT NULL AND (
-        NEW.principal_id    IS DISTINCT FROM OLD.principal_id
+        NEW.id              IS DISTINCT FROM OLD.id
+        OR NEW.principal_id    IS DISTINCT FROM OLD.principal_id
         OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
         OR NEW.role_key        IS DISTINCT FROM OLD.role_key
         OR NEW.resource_kind   IS DISTINCT FROM OLD.resource_kind
         OR NEW.resource_id     IS DISTINCT FROM OLD.resource_id
         OR NEW.granted_by      IS DISTINCT FROM OLD.granted_by
         OR NEW.expires_at      IS DISTINCT FROM OLD.expires_at
+        OR NEW.created_at      IS DISTINCT FROM OLD.created_at
         OR NEW.revoked_at      IS DISTINCT FROM OLD.revoked_at
         OR NEW.revoked_by      IS DISTINCT FROM OLD.revoked_by
     ) THEN

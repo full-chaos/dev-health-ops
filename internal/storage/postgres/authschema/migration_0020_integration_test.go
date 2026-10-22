@@ -84,6 +84,7 @@ func TestMigration0020GrantServiceAccountWorkloadShape(t *testing.T) {
 		`SET revoked_by = '` + m20Grantee + `'`,
 		`SET granted_by = '` + m20Owner + `'`,
 		`SET resource_id = 'acme/other'`,
+		`SET created_at = created_at - interval '1 day'`,
 		`SET role_key = '` + m20RoleKey + `', expires_at = now() + interval '1 day'`,
 	} {
 		m10Fail(t, exec(`UPDATE auth.resource_grants `+change+` `+revoked), "changing a revoked grant: "+change)

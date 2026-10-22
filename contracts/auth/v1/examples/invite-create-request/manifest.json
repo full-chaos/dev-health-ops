@@ -1,0 +1,51 @@
+{
+  "description": "The golden corpus for the invite-create-request.v1 body. No client-only rule: every rule is a schema rule.",
+  "accept": [
+    {
+      "file": "valid.json",
+      "why": "An e-mail and a role."
+    },
+    {
+      "file": "valid-with-ttl.json",
+      "why": "An explicit lifetime."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-email-uppercase.json",
+      "expect_instance_location": "/email",
+      "expect_keyword": "pattern",
+      "why": "The address is sent already normalized (lowercase)."
+    },
+    {
+      "file": "invalid-email-no-at.json",
+      "expect_instance_location": "/email",
+      "expect_keyword": "pattern",
+      "why": "Not an address."
+    },
+    {
+      "file": "invalid-role-owner-escalation.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "enum",
+      "why": "superuser is not a role."
+    },
+    {
+      "file": "invalid-ttl-too-long.json",
+      "expect_instance_location": "/ttl_seconds",
+      "expect_keyword": "maximum",
+      "why": "A lifetime over the 30 day ceiling."
+    },
+    {
+      "file": "invalid-organization-id-present.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "The organization comes from the route."
+    },
+    {
+      "file": "invalid-email-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No address."
+    }
+  ]
+}

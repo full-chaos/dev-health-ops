@@ -1,0 +1,45 @@
+{
+  "description": "The golden corpus for the invite.v1 resource. It carries no e-mail address and no token. No client-only rule: every rule is a schema rule.",
+  "accept": [
+    {
+      "file": "valid-pending.json",
+      "why": "A pending invite."
+    },
+    {
+      "file": "valid-accepted.json",
+      "why": "An accepted invite."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-email-present.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "The invitee address is never echoed."
+    },
+    {
+      "file": "invalid-token-present.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "The token is never echoed."
+    },
+    {
+      "file": "invalid-status-unknown.json",
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "why": "A status outside the closed set."
+    },
+    {
+      "file": "invalid-role-owner-platform.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "enum",
+      "why": "A platform role is not an invite role."
+    },
+    {
+      "file": "invalid-invite-id-prefix.json",
+      "expect_instance_location": "/invite_id",
+      "expect_keyword": "pattern",
+      "why": "An id of another aggregate."
+    }
+  ]
+}

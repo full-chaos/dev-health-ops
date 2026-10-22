@@ -1,0 +1,51 @@
+{
+  "description": "The golden corpus for the organization.v1 resource. No client-only rule: every rule is a schema rule.",
+  "accept": [
+    {
+      "file": "valid-active.json",
+      "why": "An active organization."
+    },
+    {
+      "file": "valid-suspended.json",
+      "why": "A suspended organization at a later revision."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-status-unknown.json",
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "why": "A status outside the closed set."
+    },
+    {
+      "file": "invalid-slug-uppercase.json",
+      "expect_instance_location": "/slug",
+      "expect_keyword": "pattern",
+      "why": "A slug is lowercase."
+    },
+    {
+      "file": "invalid-organization-id-prefix.json",
+      "expect_instance_location": "/organization_id",
+      "expect_keyword": "pattern",
+      "why": "An id of another aggregate."
+    },
+    {
+      "file": "invalid-revision-zero.json",
+      "expect_instance_location": "/revision",
+      "expect_keyword": "minimum",
+      "why": "Revisions start at 1."
+    },
+    {
+      "file": "invalid-name-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No name."
+    },
+    {
+      "file": "invalid-top-level-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "An extra member."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+- url: https://nbsp.example/
+  owner: a
+  reason: b
+  expires: '2000-01-01'
+- url: https://spaced.example/
+  owner: a
+  reason: b
+  expires: '2000-01-01'

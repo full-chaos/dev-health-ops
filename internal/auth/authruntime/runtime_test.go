@@ -761,11 +761,11 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		t.Fatalf("with the session secrets: mounted %s, want %s", got, sessionOnly)
 	}
 	compat := load(compatEnvironment)
-	if got, want := mountedBy(compat), sessionOnly+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /api/v1/auth/social-login"; got != want {
+	if got, want := mountedBy(compat), sessionOnly+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login"; got != want {
 		t.Fatalf("with the compat routes: mounted %s, want %s", got, want)
 	}
 	compat.Session.LoginEnabled = false
-	if got, want := mountedBy(compat), sessionOnly+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/social-login"; got != want {
+	if got, want := mountedBy(compat), sessionOnly+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login"; got != want {
 		t.Fatalf("without the lockout key: mounted %s, want %s", got, want)
 	}
 }

@@ -1,0 +1,5 @@
+ERROR: x.html: expected one main landmark, found 0
+ERROR: x.html: expected one primary content article, found 0
+ERROR: x.html: expected one content h1, found 0
+ERROR: x.html: Material skip link was not found
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

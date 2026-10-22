@@ -1,0 +1,3 @@
+usage: check_docs_cloudflare_host.py [-h] --origin ORIGIN
+                                     --redirects REDIRECTS
+check_docs_cloudflare_host.py: error: the following arguments are required: --origin

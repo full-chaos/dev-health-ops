@@ -1,0 +1,5 @@
+- page: guide.md
+  disposition: retire
+  owner: a
+  last-reviewed: '2999-01-01'
+  replacement: 3

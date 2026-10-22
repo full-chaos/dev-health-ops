@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // raceMarker is what `check_go.sh auth race-integration` counts: a race test
@@ -54,6 +55,9 @@ func newPGEnv(t *testing.T, ctx context.Context) *pgEnv {
 		t.Fatalf("admin pool: %v", err)
 	}
 	t.Cleanup(admin.Close)
+	// go-api's tables: a session pins public.users.token_version, and the
+	// legacy exchange reads and revokes public.refresh_tokens.
+	pgschema.Apply(ctx, t, admin)
 	role, err := containers.RoleName("local_login_runtime", instance)
 	if err != nil {
 		t.Fatalf("derive role: %v", err)

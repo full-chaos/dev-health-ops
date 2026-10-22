@@ -593,8 +593,14 @@ func normalizeRound2Decision(choice chatChoice) *providerFailure {
 	if choice.Message.Content == nil {
 		return newProviderFailure(errCodeInvalidResponse)
 	}
+	return validateFinalAnswerContent(*choice.Message.Content)
+}
+
+// validateFinalAnswerContent is the final_answer envelope check both probers apply to the model's
+// round 2 text.
+func validateFinalAnswerContent(content string) *providerFailure {
 	var payload map[string]any
-	if err := json.Unmarshal([]byte(*choice.Message.Content), &payload); err != nil {
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
 		return newProviderFailure(errCodeInvalidResponse)
 	}
 	// Codex r1 P1 (CHAOS-6976): openai_compatible.py's

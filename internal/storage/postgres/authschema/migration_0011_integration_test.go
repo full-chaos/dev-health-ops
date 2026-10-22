@@ -168,6 +168,18 @@ func TestMigration0011PreflightCountsRowsACompetingWriterCommits(t *testing.T) {
 		t.Fatalf("writer connection: %v", err)
 	}
 	defer func() { _ = writer.Close(context.Background()) }()
+	var writerPID int
+	if err := writer.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&writerPID); err != nil {
+		t.Fatal(err)
+	}
+	// pg_stat_activity is snapshotted once per transaction, so the poll below
+	// cannot run inside the writer's transaction: it would keep reading the
+	// first (pre-block) snapshot.
+	observer, err := pgx.Connect(ctx, env.conn.Config().ConnString())
+	if err != nil {
+		t.Fatalf("observer connection: %v", err)
+	}
+	t.Cleanup(func() { _ = observer.Close(context.Background()) })
 	tx, err := writer.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -192,8 +204,9 @@ func TestMigration0011PreflightCountsRowsACompetingWriterCommits(t *testing.T) {
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		var waiting int
-		if err := writer.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND query LIKE '%-- 0011 credential_registry.revoked_reason%'`).Scan(&waiting); err != nil {
+		if err := observer.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE $1 = ANY(pg_blocking_pids(pid)) AND wait_event_type = 'Lock'
+			AND query LIKE '%-- 0011 credential_registry.revoked_reason%'`, writerPID).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting > 0 {

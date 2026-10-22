@@ -1,0 +1,11 @@
+# Canonical documentation publication summary
+
+- Public pages: **3**
+- Frozen IA nodes: **5**
+- Published URLs: **3**
+- Withheld IA nodes: **5**
+- Legacy redirect sources: **2**
+- Unclassified Markdown pages: **4**
+- Validation errors: **2**
+
+The public documentation is sourced from `docs/`; the previous documentation tree has been retired and is available only in git history.

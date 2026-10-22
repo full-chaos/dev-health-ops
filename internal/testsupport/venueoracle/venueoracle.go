@@ -40,6 +40,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -324,7 +325,7 @@ func (v *Venue) DiagnoseAPIRole(t *testing.T, ctx context.Context) string {
 		return err.Error()
 	}
 	defer pool.Close()
-	gaps, err := postgres.DiagnoseRolePosture(ctx, pool, v.Roles["api"], postgres.APIPosture())
+	gaps, err := postgres.DiagnoseRolePosture(ctx, pool, v.Roles["api"], postgres.APIPosture(false))
 	return fmt.Sprintf("gaps=%v err=%v", gaps, err)
 }
 
@@ -371,12 +372,12 @@ func (v *Venue) migrate(t *testing.T, ctx context.Context, logger *slog.Logger) 
 	}
 	defer pool.Close()
 	var grants []riverstore.TableGrant
-	for _, table := range postgres.APIPosture().RequiredTables {
+	for _, table := range postgres.APIPosture(false).RequiredTables {
 		grants = append(grants, riverstore.TableGrant{TableName: table.TableName, AllowInsert: table.AllowInsert,
 			AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete})
 	}
 	var columnGrants []riverstore.ColumnGrant
-	for _, column := range postgres.APIPosture().ColumnScoped {
+	for _, column := range postgres.APIPosture(false).ColumnScoped {
 		columnGrants = append(columnGrants, riverstore.ColumnGrant{TableName: column.TableName, ColumnName: column.ColumnName, Privilege: column.Privilege})
 	}
 	if _, err := riverstore.ApplyPinnedMigrations(ctx, pool, riverstore.MigrationOptions{
@@ -561,6 +562,9 @@ func Compare(request Request, python, goResponse Response, options DiffOptions) 
 	if intendedNoStore(request, py, gr) {
 		skip = withSkipped(skip, "cache-control")
 	}
+	if intendedAllowWidening(request, py, gr) {
+		skip = withSkipped(skip, "allow")
+	}
 	compared := headerUnion(py.Headers, gr.Headers, skip)
 	for _, header := range compared {
 		pv, pok := py.Headers[header]
@@ -591,6 +595,26 @@ func intendedNoStore(request Request, py, gr Response) bool {
 		return false
 	}
 	return gr.Headers["cache-control"] == "no-store"
+}
+
+// intendedAllowWidening is the declared divergence "admin 405 Allow lists every served method" (chris, CHAOS-10555,
+// RFC 9110 10.2.1): Starlette named only the first matching route's methods, which the frozen goldens carry; Go lists
+// every method the path serves (internal/apiservice pins the exact list). It applies only to a 405 on an admin path
+// whose Go Allow is a strict superset of the frozen one; any other Allow difference still compares.
+func intendedAllowWidening(request Request, py, gr Response) bool {
+	if py.Status != http.StatusMethodNotAllowed || gr.Status != http.StatusMethodNotAllowed || !strings.HasPrefix(request.Path, "/api/v1/admin/") {
+		return false
+	}
+	pyAllow, goAllow := strings.Split(py.Headers["allow"], ", "), strings.Split(gr.Headers["allow"], ", ")
+	if py.Headers["allow"] == "" || len(goAllow) <= len(pyAllow) {
+		return false
+	}
+	for _, method := range pyAllow {
+		if !slices.Contains(goAllow, method) {
+			return false
+		}
+	}
+	return true
 }
 
 func withSkipped(skip map[string]bool, name string) map[string]bool {

@@ -40,8 +40,13 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
+
+// ownershipWindow is the validity test of an ownership row at {as_of}: the one rule of package ownershipwindow (the first
+// recorded owners apply before the first record, D5987 option C, CHAOS-9404). Every query of this file renders it.
+var ownershipWindow = ownershipwindow.Window(ownershipwindow.Names{Org: "org_id", AsOf: "as_of"})
 
 // OwnedRepoIDs returns the distinct set of repo IDs team_repo_ownership links
 // to teamID in orgID, active as of asOf.
@@ -52,7 +57,10 @@ import (
 // valid_from <= asOf AND (valid_to IS NULL OR valid_to > asOf). A row whose
 // valid_from has not yet arrived, or whose valid_to has already passed, does
 // not count -- an ownership claim is scoped to the instant it actually
-// applied, not to whenever it happened to be written.
+// applied, not to whenever it happened to be written. The one exception is the
+// instant BEFORE a repository's first recorded ownership: its first recorded
+// owners apply (D5987 option C, CHAOS-9404; package ownershipwindow holds the
+// rule, which every reader of this package renders).
 //
 // A NULL repo_id does NOT mean unresolved. codex adversarial review
 // (2026-09-04, round 3, P1): the GitHub team-autoimport producer
@@ -229,8 +237,7 @@ func OwnerSharesByRepo(
                AND lower(r.repo) = lower(o.repo_full_name)
         WHERE o.org_id = {org_id:String}
           AND (o.repo_id IS NOT NULL OR r.matched = 1)
-          AND o.valid_from <= {as_of:DateTime64(3, 'UTC')}
-          AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
+          AND `+ownershipWindow+`
         ORDER BY (o.is_primary = 1) DESC, o.specificity DESC, o.updated_at DESC, o.team_id ASC
     `, clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", dateTime64Literal(asOf)))
 	if err != nil {
@@ -431,8 +438,7 @@ func OwnersByRepo(
         WHERE o.org_id = {org_id:String}
           AND o.team_id != ''
           AND (o.repo_id IS NOT NULL OR r.matched = 1)
-          AND o.valid_from <= {as_of:DateTime64(3, 'UTC')}
-          AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
+          AND `+ownershipWindow+`
           AND coalesce(toString(o.repo_id), toString(r.id)) IN (
               SELECT toString(id) AS id
               FROM repos FINAL
@@ -504,8 +510,7 @@ func ownedRepoIDText(
         WHERE o.org_id = {org_id:String}
           AND o.team_id = {team_id:String}
           AND (o.repo_id IS NOT NULL OR r.matched = 1)
-          AND o.valid_from <= {as_of:DateTime64(3, 'UTC')}
-          AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
+          AND `+ownershipWindow+`
     `, clickhouse.Named("org_id", orgID), clickhouse.Named("team_id", teamID), clickhouse.Named("as_of", dateTime64Literal(asOf)))
 	if err != nil {
 		return nil, err

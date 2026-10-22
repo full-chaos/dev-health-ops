@@ -1,0 +1,4 @@
+ERROR: /: X-Content-Type-Options is not nosniff
+ERROR: /: Referrer-Policy is not strict-origin-when-cross-origin
+ERROR: /: production response unexpectedly has X-Robots-Tag noindex
+ERROR: /: response body does not contain the Dev Health site identity

@@ -27,9 +27,10 @@ var publicReadOracle = map[string][]string{
 	"memberships": {"user_id", "org_id", "role", "joined_at", "created_at"},
 	"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
 		"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
-	"organizations":          {"id", "slug", "name", "is_active", "tier"},
-	"saml_assertion_replays": {"provider_id", "assertion_id", "expires_at"},
-	"org_licenses":           {"org_id", "tier", "features_override"},
+	"organizations":                {"id", "slug", "name", "is_active", "tier"},
+	"saml_assertion_replays":       {"provider_id", "assertion_id", "expires_at"},
+	"org_licenses":                 {"org_id", "tier", "features_override"},
+	"internal_service_credentials": {"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"},
 }
 
 type publicReadsEnv struct {
@@ -67,7 +68,11 @@ func newPublicReadsFixture(t *testing.T, ctx context.Context, hide ...string) *p
 		if _, err := conn.Exec(ctx, fmt.Sprintf(`GRANT CREATE ON SCHEMA public TO %s`, Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 			t.Fatal(err)
 		}
+		owned := []string{LegacyRefreshTokenGrant().Table}
 		for table := range publicReadOracle {
+			owned = append(owned, table)
+		}
+		for _, table := range owned {
 			if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`,
 				Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 				t.Fatalf("hand public.%s to the migration login: %v", table, err)

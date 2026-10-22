@@ -1,6 +1,9 @@
 package admin
 
 import (
+	"context"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
@@ -58,5 +61,68 @@ func TestBudgetLockKeyMatchesPython(t *testing.T) {
 		if got := llmbudget.LockKey(org); got != want {
 			t.Errorf("budgetLockKey(%s) = %d, python %d", org, got, want)
 		}
+	}
+}
+
+func TestApplyLLMSettingsRefusesABYOProviderWithoutAModel(t *testing.T) {
+	key := "sk-rotated-" + "0123456789"
+	const want = `{"detail":{"error":"model_required","feature":"byo_llm","message":"model is required when a BYO LLM provider is saved"}}`
+	for name, in := range map[string]llmUpsert{
+		"model absent":           {provider: "openai"},
+		"model empty":            {provider: "openai", model: strPtr("")},
+		"model blank":            {provider: "openai", model: strPtr(" \t\n ")},
+		"key rotation, no model": {provider: "openai", apiKey: &key},
+		"key and base url":       {provider: "anthropic", apiKey: &key, baseURL: strPtr("https://example.invalid/v1")},
+		"padded capital":         {provider: "  OpenAI  "},
+		"unknown provider":       {provider: "ollama"},
+	} {
+		in.requireModel = true
+		h := &handlers{
+			validateURL: func(context.Context, string) (bool, string, error) { return true, "", nil },
+			storedKey:   func(context.Context, string) (string, error) { return "", nil },
+		}
+		out, refusal, err := h.applyLLMSettings(context.Background(), "org", in)
+		if err != nil || out != nil || refusal == nil || refusal.status != 400 {
+			t.Fatalf("%s: out=%v refusal=%v err=%v", name, out, refusal, err)
+		}
+		rec := httptest.NewRecorder()
+		refusal.write(rec)
+		if got := strings.TrimSpace(rec.Body.String()); got != want {
+			t.Errorf("%s: body %s, want %s", name, got, want)
+		}
+		if strings.Contains(rec.Body.String(), key) {
+			t.Errorf("%s: body carries the key", name)
+		}
+	}
+}
+
+func TestByoProviderNeedsModel(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in   llmUpsert
+		need bool
+	}{
+		"openai with model":        {llmUpsert{provider: "openai", model: strPtr("gpt-4o")}, false},
+		"model with outer blanks":  {llmUpsert{provider: "openai", model: strPtr(" m ")}, false},
+		"auto, no model":           {llmUpsert{provider: "auto"}, false},
+		"mock, no model":           {llmUpsert{provider: "MOCK"}, false},
+		"none, no model":           {llmUpsert{provider: " none "}, false},
+		"blank provider, no model": {llmUpsert{provider: "   "}, false},
+		"openai, no model":         {llmUpsert{provider: "openai"}, true},
+		"openai, blank model":      {llmUpsert{provider: "openai", model: strPtr("  ")}, true},
+	} {
+		if got := byoProviderNeedsModel(tc.in); got != tc.need {
+			t.Errorf("%s: got %v, want %v", name, got, tc.need)
+		}
+	}
+}
+
+func TestApplyLLMSettingsChecksTheBaseURLBeforeTheModel(t *testing.T) {
+	h := &handlers{
+		validateURL: func(context.Context, string) (bool, string, error) { return false, "bad host", nil },
+		storedKey:   func(context.Context, string) (string, error) { return "", nil },
+	}
+	_, refusal, err := h.applyLLMSettings(context.Background(), "org", llmUpsert{provider: "openai", baseURL: strPtr("http://x.invalid"), requireModel: true})
+	if err != nil || refusal == nil || refusal.status != 400 || refusal.message() != "bad host" {
+		t.Fatalf("refusal=%v err=%v", refusal, err)
 	}
 }

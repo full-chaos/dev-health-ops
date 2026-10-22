@@ -223,3 +223,91 @@ func TestAuthenticateRESTRequestLogsTheUsersLookupCause(t *testing.T) {
 		t.Fatalf("the users lookup failure was logged without its cause:\n%s", logged.String())
 	}
 }
+
+func authWithEdgeUsersAndOrg(t *testing.T, users policy.Store, orgID string) (bool, *httptest.ResponseRecorder) {
+	t.Helper()
+	edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api", users)
+	if err != nil {
+		t.Fatalf("NewEdgeVerifier: %v", err)
+	}
+	envelopeVerifier, err := principal.NewVerifier(t.TempDir()+"/missing-jwks.json", "test-issuer", "test-audience")
+	if err != nil {
+		t.Fatalf("principal.NewVerifier: %v", err)
+	}
+	claims := validTestEdgeClaims(orgID)
+	if orgID == "" {
+		delete(claims, "org_id")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+signTestEdgeToken(t, claims))
+	rec := httptest.NewRecorder()
+	_, ok := authenticateRESTRequest(rec, req, envelopeVerifier, edgeVerifier, "test")
+	return ok, rec
+}
+
+func TestAuthenticateRESTRequestOrglessEdgeToken(t *testing.T) {
+	active := &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}
+	super := &fakeEdgeUsers{state: policy.UserState{IsActive: true, IsSuperuser: true}, found: true}
+
+	ok, rec := authWithEdgeUsersAndOrg(t, active, "")
+	if ok || rec.Code != http.StatusForbidden {
+		t.Fatalf("orgless non-superuser: ok=%v status=%d body=%s, want refused 403", ok, rec.Code, rec.Body.String())
+	}
+	if want := `{"detail":"Organization context required"}`; rec.Body.String() != want {
+		t.Fatalf("body = %q, want %q", rec.Body.String(), want)
+	}
+	if ok, rec := authWithEdgeUsersAndOrg(t, super, ""); !ok {
+		t.Fatalf("orgless superuser refused: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if ok, rec := authWithEdgeUsersAndOrg(t, active, "org-1"); !ok {
+		t.Fatalf("org'd token refused: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// A planted route behind authenticateRESTRequest: the handler never runs for
+// an orgless non-superuser, and runs for the others.
+func TestOrglessEdgeTokenNeverReachesAPlantedRoute(t *testing.T) {
+	ran := 0
+	for _, tc := range []struct {
+		name  string
+		users *fakeEdgeUsers
+		org   string
+		code  int
+		ran   int
+	}{
+		{"orgless member", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}, "", http.StatusForbidden, 0},
+		{"orgless superuser", &fakeEdgeUsers{state: policy.UserState{IsActive: true, IsSuperuser: true}, found: true}, "", http.StatusOK, 1},
+		{"member with org", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}, "org-1", http.StatusOK, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ran = 0
+			edgeVerifier, err := principal.NewEdgeVerifier(edgeTestSecret, "dev-health-ops", "dev-health-api", tc.users)
+			if err != nil {
+				t.Fatal(err)
+			}
+			envelopeVerifier, err := principal.NewVerifier(t.TempDir()+"/missing-jwks.json", "test-issuer", "test-audience")
+			if err != nil {
+				t.Fatal(err)
+			}
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/v1/planted", func(w http.ResponseWriter, r *http.Request) {
+				if _, ok := authenticateRESTRequest(w, r, envelopeVerifier, edgeVerifier, "test"); !ok {
+					return
+				}
+				ran++
+				w.WriteHeader(http.StatusOK)
+			})
+			claims := validTestEdgeClaims(tc.org)
+			if tc.org == "" {
+				delete(claims, "org_id")
+			}
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/planted", nil)
+			req.Header.Set("Authorization", "Bearer "+signTestEdgeToken(t, claims))
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != tc.code || ran != tc.ran {
+				t.Fatalf("status=%d ran=%d, want %d/%d", rec.Code, ran, tc.code, tc.ran)
+			}
+		})
+	}
+}

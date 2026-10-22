@@ -24,18 +24,39 @@ var readCalls = map[string]bool{
 	"fs.WalkDir": true, "fs.Glob": true, "fs.ReadFile": true, "fs.ReadDir": true, "fs.Sub": true, "os.OpenFile": true,
 }
 
-// Read is one place a package names a repository path.
+// Kinds of Read: a path named or resolved (ReadPath), a read the tool cannot bound (ReadDyn), a walk of Root to Depth
+// (ReadWalk), a run or load of the Go packages of Target (ReadEdge). dynreads.go finds the last three.
+const (
+	ReadPath = ""
+	ReadDyn  = "dyn"
+	ReadWalk = "walk"
+	ReadEdge = "edge"
+)
+
+// Read is one place a package names a repository path, or reads, walks, runs or loads one.
 type Read struct {
 	Package string // directory of the package, relative to the repository root
 	File    string // repository path of the Go file
 	Line    int
 	Test    bool   // the file is a _test.go file
-	Path    string // the repository path named
+	Kind    string // ReadPath, ReadDyn, ReadWalk or ReadEdge
+	Path    string // ReadPath: the repository path named
+	Root    string // ReadWalk: the directory walked, or unexpressed
+	Depth   string // ReadWalk: tree or dir
+	Target  string // ReadEdge: the packages run or loaded (dir, dir/..., **/dir), or unexpressed
 	Literal string
 }
 
 func (r Read) String() string {
 	what := fmt.Sprintf("names %s (literal %q)", r.Path, r.Literal)
+	switch r.Kind {
+	case ReadDyn:
+		what = fmt.Sprintf("reads a path the tool cannot bound (%s)", r.Literal)
+	case ReadWalk:
+		what = fmt.Sprintf("walks %s (%s; %s)", r.Root, r.Depth, r.Literal)
+	case ReadEdge:
+		what = fmt.Sprintf("runs or loads %s (%s)", r.Target, r.Literal)
+	}
 	return fmt.Sprintf("%s:%d %s", r.File, r.Line, what)
 }
 
@@ -161,6 +182,8 @@ func ScanReads(root string) ([]Read, error) {
 		return nil, err
 	}
 	var reads []Read
+	byDir := map[string][]*srcFile{}
+	var dirs []string
 	for _, rel := range sources {
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, filepath.Join(root, filepath.FromSlash(rel)), nil, parser.SkipObjectResolution)
@@ -168,9 +191,18 @@ func ScanReads(root string) ([]Read, error) {
 			return nil, err
 		}
 		reads = append(reads, scanFile(fset, f, rel, top)...)
+		d := path.Dir(rel)
+		if byDir[d] == nil {
+			dirs = append(dirs, d)
+		}
+		byDir[d] = append(byDir[d], newSrcFile(rel, fset, f))
+	}
+	module := modulePath(root)
+	for _, d := range dirs {
+		reads = append(reads, newDirGroup(d, module, byDir[d]).analyze()...)
 	}
 	out := reads
-	sort.Slice(out, func(i, j int) bool {
+	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
 			return out[i].File < out[j].File
 		}
@@ -247,10 +279,21 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool)
 	return out
 }
 
+// guardResult is what the guard of the read tables finds: one line per defect, and the rows that fix them.
+type guardResult struct {
+	defects []string
+	add     map[string]map[string]bool // table file -> rows to add
+	remove  map[string]map[string]bool // generated table file -> rows to remove
+	replace map[string]bool            // reads.tsv rows to replace (`old -> new`)
+}
+
 // checkReads returns one line per defect: a read with no covering reads.tsv row, a code read declared only as test, a
-// row for a package directory with no Go file. A read of a path in no class needs no row.
-func checkReads(root string, t *tables, reads []Read) (defects []string, add, replace map[string]bool) {
-	add, replace = map[string]bool{}, map[string]bool{}
+// row for a package directory with no Go file, and every difference between the generated tables (walks.tsv,
+// dynreads.tsv, edges.tsv) and the rows the code calls for. A read of a path in no class needs no reads.tsv row: a
+// change there is FULL.
+func checkReads(root string, t *tables, reads []Read) guardResult {
+	g := guardResult{add: map[string]map[string]bool{readsFile: {}}, remove: map[string]map[string]bool{}, replace: map[string]bool{}}
+	add := g.add[readsFile]
 	declared := map[string]map[string]string{} // package -> class -> scope
 	for _, r := range t.reads {
 		if declared[r.pkg] == nil {
@@ -258,15 +301,17 @@ func checkReads(root string, t *tables, reads []Read) (defects []string, add, re
 		}
 		declared[r.pkg][r.class] = r.scope
 	}
-	var out []string
 	seen := map[string]bool{}
 	report := func(s string) {
 		if !seen[s] {
 			seen[s] = true
-			out = append(out, s)
+			g.defects = append(g.defects, s)
 		}
 	}
 	for _, r := range reads {
+		if r.Kind != ReadPath {
+			continue
+		}
 		scope := scopeTest
 		if !r.Test {
 			scope = scopeCode
@@ -282,7 +327,7 @@ func checkReads(root string, t *tables, reads []Read) (defects []string, add, re
 		case scope == scopeCode && !t.covers(r.Path, codeOnly(declared[r.Package])):
 			report(fmt.Sprintf("%s: %s is read by non-test code, so the row must be %s\t%s\t%s (its importers' tests read it too)", r.Package, r, r.Package, scopeCode, class))
 			if declared[r.Package][class] == scopeTest {
-				replace[r.Package+"\t"+scopeTest+"\t"+class+" -> "+r.Package+"\t"+scopeCode+"\t"+class] = true
+				g.replace[r.Package+"\t"+scopeTest+"\t"+class+" -> "+r.Package+"\t"+scopeCode+"\t"+class] = true
 			} else {
 				add[r.Package+"\t"+scopeCode+"\t"+class] = true
 			}
@@ -305,7 +350,53 @@ func checkReads(root string, t *tables, reads []Read) (defects []string, add, re
 			delete(add, row) // the code row covers the tests' reads too
 		}
 	}
-	return out, add, replace
+	gen := generatedRows(reads)
+	have := t.generated()
+	for _, file := range generatedFiles {
+		g.add[file], g.remove[file] = map[string]bool{}, map[string]bool{}
+		for _, row := range sortedKeys(gen[file]) {
+			if _, ok := have[file][row]; !ok {
+				pkg := strings.SplitN(row, "\t", 2)[0]
+				report(fmt.Sprintf("%s: undeclared %s: %s; add the %s row %s", pkg, tableWhat[file], gen[file][row], file, row))
+				g.add[file][row] = true
+			}
+		}
+		for _, row := range sortedKeys(have[file]) {
+			if _, ok := gen[file][row]; !ok {
+				report(fmt.Sprintf("%s:%s: %s is a row the code does not call for (the code's rows come from its AST)", file, have[file][row], row))
+				g.remove[file][row] = true
+			}
+		}
+	}
+	return g
+}
+
+var tableWhat = map[string]string{walksFile: "walk", dynReadsFile: "unbounded read", edgesFile: "run or load of Go packages"}
+
+// generatedRows is the walks.tsv, dynreads.tsv and edges.tsv rows the reads call for, each with one sample read.
+func generatedRows(reads []Read) map[string]map[string]string {
+	out := map[string]map[string]string{walksFile: {}, dynReadsFile: {}, edgesFile: {}}
+	for _, r := range reads {
+		site := path.Base(r.File)
+		var file, row string
+		switch r.Kind {
+		case ReadWalk:
+			file, row = walksFile, r.Package+"\t"+site+"\t"+r.Root+"\t"+r.Depth
+		case ReadDyn:
+			file, row = dynReadsFile, r.Package+"\t"+site
+		case ReadEdge:
+			if r.Target == "" {
+				continue
+			}
+			file, row = edgesFile, r.Package+"\t"+site+"\t"+r.Target
+		default:
+			continue
+		}
+		if _, ok := out[file][row]; !ok {
+			out[file][row] = r.String()
+		}
+	}
+	return out
 }
 
 // printRows prints a heading and the rows under it, one exact TSV line each, sorted, ready to paste.
@@ -334,13 +425,15 @@ func codeOnly(classes map[string]string) map[string]string {
 	return out
 }
 
-// PlanReads is the guard of the declared-read table: it fails, naming each one, when a Go package reads a path of a
-// declared class without a reads.tsv row that covers it.
+// PlanReads is the guard of the read tables: it fails, naming each one, when a Go package reads a path of a declared
+// class without a reads.tsv row that covers it, or when walks.tsv, dynreads.tsv or edges.tsv differ from the rows the
+// code calls for. With --write it writes the three generated tables from the code instead.
 func PlanReads(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("plan-reads", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	root := fs.String("root", "", "repository root")
-	tablesDir := fs.String("tables", "", "directory of classes.tsv and reads.tsv (default ROOT/internal/cigates/affected)")
+	tablesDir := fs.String("tables", "", "directory of the read tables (default ROOT/internal/cigates/affected)")
+	write := fs.Bool("write", false, "write walks.tsv, dynreads.tsv and edges.tsv from the code, then check")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -352,32 +445,85 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	if dir == "" {
 		dir = filepath.Join(*root, "internal", "cigates", "affected")
 	}
-	t, err := loadTables(dir)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
 	reads, err := ScanReads(*root)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	defects, add, replace := checkReads(*root, t, reads)
-	for _, d := range defects {
-		fmt.Fprintln(stdout, d)
-	}
-	if len(defects) > 0 {
-		table := filepath.ToSlash(filepath.Join(dir, readsFile))
-		if rel, err := filepath.Rel(*root, filepath.Join(dir, readsFile)); err == nil && !strings.HasPrefix(rel, "..") {
-			table = filepath.ToSlash(rel)
+	if *write {
+		if err := writeGenerated(dir, reads); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
-		printRows(stdout, "add these rows to "+table+":", add)
-		printRows(stdout, "replace these rows in "+table+":", replace)
-		fmt.Fprintf(stdout, "plan-reads: %d defect(s) in the declared-read table\n", len(defects))
+	}
+	t, err := loadTables(dir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "plan-reads: %d read(s) covered by %d reads row(s)\n", len(reads), len(t.reads))
+	g := checkReads(*root, t, reads)
+	for _, d := range g.defects {
+		fmt.Fprintln(stdout, d)
+	}
+	if len(g.defects) > 0 {
+		table := func(file string) string {
+			p := filepath.ToSlash(filepath.Join(dir, file))
+			if rel, err := filepath.Rel(*root, filepath.Join(dir, file)); err == nil && !strings.HasPrefix(rel, "..") {
+				p = filepath.ToSlash(rel)
+			}
+			return p
+		}
+		printRows(stdout, "add these rows to "+table(readsFile)+":", g.add[readsFile])
+		printRows(stdout, "replace these rows in "+table(readsFile)+":", g.replace)
+		for _, file := range generatedFiles {
+			printRows(stdout, "add these rows to "+table(file)+" (or run cigate plan-reads --write):", g.add[file])
+			printRows(stdout, "remove these rows from "+table(file)+" (or run cigate plan-reads --write):", g.remove[file])
+		}
+		fmt.Fprintf(stdout, "plan-reads: %d defect(s) in the read tables\n", len(g.defects))
+		return 1
+	}
+	fmt.Fprintf(stdout, "plan-reads: %d read(s) covered by %d reads, %d walks, %d dynreads and %d edges row(s)\n", len(reads),
+		len(t.reads), len(t.walks), len(t.dynReads), len(t.edges))
 	return 0
+}
+
+// writeGenerated writes walks.tsv, dynreads.tsv and edges.tsv as the reads call for them.
+func writeGenerated(dir string, reads []Read) error {
+	gen := generatedRows(reads)
+	for _, file := range generatedFiles {
+		var b strings.Builder
+		b.WriteString(generatedHeader[file])
+		for _, row := range sortedKeys(gen[file]) {
+			b.WriteString(row + "\n")
+		}
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(b.String()), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// modulePath is the module path of ROOT/go.mod, "" when there is none.
+func modulePath(root string) string {
+	raw, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(string(raw), "\n") {
+		if f := strings.Fields(l); len(f) >= 2 && f[0] == "module" {
+			return strings.Trim(f[1], `"`)
+		}
+	}
+	return ""
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // joinLiterals reads a Join whose string-literal arguments, from one naming a first-level entry on, spell one path:

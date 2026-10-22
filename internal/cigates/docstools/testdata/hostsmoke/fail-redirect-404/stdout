@@ -1,0 +1,2 @@
+ERROR: /old/: expected a permanent redirect, received 404
+ERROR: /old/: expected Location {ORIGIN}/new/, found 

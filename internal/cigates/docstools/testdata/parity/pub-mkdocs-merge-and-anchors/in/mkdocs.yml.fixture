@@ -1,0 +1,3 @@
+x: &n
+  - Home: index.md
+nav: *n

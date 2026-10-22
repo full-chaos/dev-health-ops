@@ -34,25 +34,102 @@ const llmVenueOperatorMax = "10000000"
 // The two modes' golden digests, named away from the words a secret scanner
 // keys on (key/token/secret/password/api/auth/access/client/passwd), each on
 // its own declaration line with no such word sharing the line.
+// llmModelRuling retires the Python reference of the answers the model rule
+// changes (CHAOS-10538): the Python plane saved a BYO provider without a model;
+// the Go route refuses it. Go's own answers are pinned, and the rule tests
+// (TestLLMSettingsRefusesABYOProviderWithoutAModel) own the contract.
+const llmModelRuling = "CHAOS-10538 D6107: BYO provider without a model is refused (400 model_required)"
+
+// llmModelRetired names the requests whose Python answer the rule retires: each
+// model-less BYO PUT that reaches the write path, and every later request that
+// reads or writes the rows of an org where Python applied such a PUT (Go kept
+// the earlier rows, so its state differs from the frozen Python state from
+// there on). Requests the Go route answers before the write path (422, the
+// gates, an invalid base_url) stay compared with Python.
+var llmModelRetired = map[string]bool{
+	"W put provider only":                         true,
+	"W put every field":                           true,
+	"W get after every field":                     true,
+	"W put keeps key when omitted":                true,
+	"W put short key":                             true,
+	"W put 8 char key":                            true,
+	"W put 9 char key":                            true,
+	"W put unicode key":                           true,
+	"W put empty key":                             true,
+	"W put null key keeps":                        true,
+	"W put long key":                              true,
+	"W put whitespace provider":                   true,
+	"W put dotted capital I provider":             true,
+	"W put final sigma provider":                  true,
+	"W put tab provider":                          true,
+	"W put model null clears":                     true,
+	"W put model unicode":                         true,
+	"W put concurrency 1":                         true,
+	"W put concurrency 32":                        true,
+	"W put concurrency string":                    true,
+	"W put concurrency float":                     true,
+	"W put concurrency bool":                      true,
+	"W put concurrency null keeps":                true,
+	"W base_url percent host":                     true,
+	"W base_url percent suffix host":              true,
+	"W base_url empty":                            true,
+	"W base_url null":                             true,
+	"W base_url public literal":                   true,
+	"W base_url port ok":                          true,
+	"W base_url empty port":                       true,
+	"W base_url unicode host":                     true,
+	"W base_url uppercase scheme":                 true,
+	"W get after refusal":                         true,
+	"W budget zero":                               true,
+	"W budget at the operator ceiling":            true,
+	"W budget over the ceiling rolls back":        true,
+	"W get after rollback":                        true,
+	"W budget huge":                               true,
+	"W budget string":                             true,
+	"W budget float whole":                        true,
+	"W budget bool":                               true,
+	"W budget exponent":                           true,
+	"W budget null":                               true,
+	"W budget replaces":                           true,
+	"W budget same value":                         true,
+	"W impersonated without budget":               true,
+	"W budget licence ceiling":                    true,
+	"W budget over licence ceiling":               true,
+	"W budget licence text ceiling":               true,
+	"W budget over licence text ceiling":          true,
+	"W budget invalid licence ceiling":            true,
+	"W budget zero under invalid licence ceiling": true,
+	"W budget float licence ceiling":              true,
+	"W budget licence above operator":             true,
+	"W budget licence above operator ok":          true,
+	"W budget licence without the key":            true,
+	"W budget licence null overrides":             true,
+	"W put over empty-string rows":                true,
+	"W get after empty-string rows":               true,
+	"W get final write org":                       true,
+	"W delete write org":                          true,
+}
+
 const (
 	llmSettingsRoutesEncryptedGoldenDigest    = "8406fe1dbdd8b3bc7556426178e4dc7c43f7eab33f1a454c07ef3256d646f140"
 	llmSettingsRoutesNoEncryptionGoldenDigest = "d8df8c6f79575fcbc32c2295909dbe40e575935233acd667634f6c585f9f4d2d"
 )
 
 func TestLLMSettingsRoutesVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest)
+	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "192204b949f4c0d12747eca19862807ea78653712f715fb6c16467625ad7b6f0")
 }
 
 // TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
 // planes with no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting raises in
 // Python, an unhandled 500.
 func TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest)
+	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest, "f6c7691ce9e1927c8ccdf2c06cb6c50021de61ce55315273891ebf9194349c46")
 }
 
-func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest string) {
+func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, governanceGolden("llmsettings_"+mode, t.Name(), digest))
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/llmsettings_" + mode + ".go-pin.json", SHA256: pinDigest, Ruling: llmModelRuling})
 	root := repoRoot(t)
 	nextID := goldenIDs("llm")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-settings-32-bytes!"
@@ -363,24 +440,30 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 			deps.Decryptor = decryptor
 		}
 	})
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
+		Retire: func(request venueoracle.Request) bool { return llmModelRetired[request.Name] },
+		Pin:    pin,
+	})
 	t.Log(receipt)
 
-	compare := func(name, query string) {
+	pinRows := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
-		source := golden.CompareRows(t, name, goRows)
-		if source == "" {
-			t.Errorf("%s: the query matched no rows on the Python plane; the comparison proves nothing", name)
+		golden.RetireRows(t, name, llmModelRuling)
+		if goRows == "" {
+			t.Errorf("%s after the writes are empty", name)
 		}
+		pin.Check(t, name+" rows", goRows)
 	}
-	compare("settings rows", `SELECT org_id, category, key, is_encrypted, (CASE WHEN is_encrypted AND value LIKE 'v1:%' THEN 'v1:<token>' ELSE value END),
+	pinRows("settings rows", `SELECT org_id, category, key, is_encrypted, (CASE WHEN is_encrypted AND value LIKE 'v1:%' THEN 'v1:<token>' ELSE value END),
 	description, (updated_at > '2026-06-01')::text
 FROM settings ORDER BY org_id, category, key`)
 
 	if withKey {
 		checkBudgetLockSerializes(t, ctx, venue, goBase, orgs["empty"].id, venue.Tokens["empty"])
 	}
+	pin.Finish(t)
 	golden.Finish(t)
 }
 
@@ -417,7 +500,7 @@ func checkBudgetLockSerializes(t *testing.T, ctx context.Context, venue *venueor
 	done := make(chan answer, 1)
 	go func() {
 		request, _ := http.NewRequest(http.MethodPut, goBase+"/api/v1/admin/llm-settings",
-			strings.NewReader(`{"provider":"openai","budget_limit_micro_usd":1234}`))
+			strings.NewReader(`{"provider":"openai","model":"m","budget_limit_micro_usd":1234}`))
 		request.Header.Set("Authorization", "Bearer "+token)
 		request.Header.Set("Content-Type", "application/json")
 		response, err := http.DefaultClient.Do(request)

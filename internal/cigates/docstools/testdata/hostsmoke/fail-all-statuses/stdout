@@ -1,0 +1,6 @@
+ERROR: /: expected HTTP 200, received 503
+ERROR: /use/: expected HTTP 200, received 500
+ERROR: /reference/metrics/weighting-and-aggregation/: expected HTTP 200, received 404
+ERROR: /phase-11-intentional-missing-page/: expected HTTP 404, received 200
+ERROR: /old/: expected a permanent redirect, received 200
+ERROR: /old/: expected Location {ORIGIN}/new/, found 

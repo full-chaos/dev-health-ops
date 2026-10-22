@@ -61,7 +61,7 @@ VALUES ($1, $2, NULL, 'a', 'checkout', $2, 'd', now())`, rowID, orgID); err != n
 		t.Fatal(err)
 	}
 
-	posture := postgresstore.APIPosture()
+	posture := postgresstore.APIPosture(false)
 	options := riverstore.MigrationOptions{Schema: "river", DomainRole: domainRole, QueueRole: queueRole, APIRole: apiRole}
 	for _, table := range posture.RequiredTables {
 		options.APIGrants = append(options.APIGrants, riverstore.TableGrant{

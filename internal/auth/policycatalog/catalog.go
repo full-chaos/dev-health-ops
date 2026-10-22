@@ -76,7 +76,51 @@ type Catalog struct {
 	grants  map[string]map[string]bool
 }
 
+// reservedRoles are names that stand for unbounded authority; no catalog may
+// define them (roles.v1 schema carries the same list).
+var reservedRoles = map[string]bool{"superuser": true, "root": true, "all": true, "any": true, "everyone": true}
+
+func refuseDuplicateMembers(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			kt, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key, _ := kt.(string)
+			if seen[key] {
+				return fmt.Errorf("duplicate object member %q", key)
+			}
+			seen[key] = true
+			if err := refuseDuplicateMembers(dec); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for dec.More() {
+			if err := refuseDuplicateMembers(dec); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = dec.Token()
+	return err
+}
+
 func decodeStrict(raw []byte, v any) error {
+	if err := refuseDuplicateMembers(json.NewDecoder(bytes.NewReader(raw))); err != nil {
+		return err
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
@@ -127,7 +171,7 @@ func Load(actionsJSON, rolesJSON []byte) (*Catalog, error) {
 		return nil, invalid("no actions")
 	}
 	for _, r := range rf.Roles {
-		if !rolePattern.MatchString(r.Role) {
+		if !rolePattern.MatchString(r.Role) || reservedRoles[r.Role] {
 			return nil, invalid("role %q is not a valid name", r.Role)
 		}
 		if !validScope(r.Scope) {

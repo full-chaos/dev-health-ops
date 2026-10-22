@@ -125,6 +125,10 @@ func TestLoadRefusesMalformedCatalogs(t *testing.T) {
 		"wrong schema version":      {strings.Replace(okA, `actions.v1`, `actions.v2`, 1), okR},
 		"zero catalog version":      {strings.Replace(okA, `"catalog_version":1`, `"catalog_version":0`, 1), okR},
 		"version mismatch":          {okA, strings.Replace(okR, `"catalog_version":1`, `"catalog_version":2`, 1)},
+		"duplicate member":          {strings.Replace(okA, `"catalog_version":1`, `"catalog_version":1,"catalog_version":2`, 1), okR},
+		"duplicate nested member":   {okA, strings.Replace(okR, `"scope":"organization","actions"`, `"scope":"organization","scope":"platform","actions"`, 1)},
+		"reserved role superuser":   {okA, strings.Replace(okR, `"role":"r"`, `"role":"superuser"`, 1)},
+		"reserved role root":        {okA, strings.Replace(okR, `"role":"r"`, `"role":"root"`, 1)},
 		"not json":                  {"{", okR},
 		"trailing data":             {okA + "{}", okR},
 	}
@@ -140,6 +144,14 @@ func TestLoadRefusesARoleHoldingEveryAction(t *testing.T) {
 	r := `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b","a.c"]}]}`
 	if _, err := Load([]byte(a), []byte(r)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRoleSchemaRefusesAReservedRole(t *testing.T) {
+	doc := map[string]any{"schema_version": "roles.v1", "catalog_version": 1, "description": "d",
+		"roles": []any{map[string]any{"role": "superuser", "scope": "organization", "actions": []any{"a.b"}}}}
+	if err := contracts.Validate(repoRoot(t), "role-catalog.v1", doc); err == nil {
+		t.Fatal("the role schema accepted superuser")
 	}
 }
 

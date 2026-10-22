@@ -35,7 +35,16 @@
         "properties": {
           "role": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9_]*$"
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "not": {
+              "enum": [
+                "superuser",
+                "root",
+                "all",
+                "any",
+                "everyone"
+              ]
+            }
           },
           "scope": {
             "enum": [

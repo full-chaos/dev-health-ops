@@ -227,9 +227,9 @@
       ],
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
-      "disclosure_behavior": "Every refusal is a go-api shaped error body with an auth-outcome reason code; a store or key failure is a 5xx. The body never echoes the credential.",
+      "disclosure_behavior": "Every refusal of a presented credential is a 401 whose go-api shaped body is {\"detail\":{\"message\":...}} with no reason code and no credential; the reason code goes to the audit row and the log only. A store or key failure is a 5xx.",
       "gaps": [
-        "A go-api refresh JWT (ops_refresh_token, a JSON body field like refresh_credential) is also exchanged once for a new session by session.Store.ExchangeLegacy; the row names only refresh_credential because two body-carried classes have no head selector."
+        "ops_refresh_token (a go-api refresh JWT in the same JSON body field refresh_token) is also accepted and exchanged once for a new session by session.Store.ExchangeLegacy, but this row lists refresh_credential only: both classes are body-carried, so no head selector (scheme, prefix, header or JWT header) can tell them apart and the selector gate would refuse a two-class row. The gap ends with the legacy refresh window (CHAOS-10408); the body-carried selector kind that would let the row list both is CHAOS-10583."
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/refresh [dev-health-auth-service @api]",
@@ -315,7 +315,7 @@
       ],
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the provider token is checked against the provider's userinfo endpoint on every call.",
-      "disclosure_behavior": "Every refusal is a go-api shaped error body with an auth-outcome reason code; a store or key failure is a 5xx. The body never echoes the credential.",
+      "disclosure_behavior": "Every refusal of a presented credential is a 401 whose go-api shaped body is {\"detail\":{\"message\":...}} with no reason code and no credential; the reason code goes to the audit row and the log only. A store or key failure is a 5xx.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/social-login [dev-health-auth-service @api]",
@@ -346,7 +346,7 @@
           "direction": "returned_to_caller",
           "issuer": null,
           "lifetime_seconds": 604800,
-          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
+          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family. When the user has no membership (needs_onboarding) go-api records no refresh token, so the answer carries a credential-shaped placeholder that no session holds (session.NewUnstoredCredential)."
         }
       ],
       "method": "POST",
@@ -373,7 +373,7 @@
       ],
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call.",
-      "disclosure_behavior": "Every refusal is a go-api shaped error body with an auth-outcome reason code; a store or key failure is a 5xx. The body never echoes the credential.",
+      "disclosure_behavior": "Every refusal is an error.v1 envelope (schema_version, status, reason_code) with no credential and no detail text; a store or key failure is an error.v1 5xx.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/sessions [dev-health-auth-service @api]",

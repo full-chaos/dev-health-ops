@@ -7,7 +7,7 @@
 //
 // A step counts as a cache writer when it is actions/cache or actions/cache/save, sets a non-empty cache-to, sets a setup action's
 // cache input, or omits that input on an action whose cache defaults ON (setup-go, setup-uv, setup-gradle). A writer is allowed
-// only when it is switched off for a supplied ref by the expression `github.event.inputs.ref == ”` in its own `if`, or in the
+// only when it is switched off for a supplied ref by a condition comparing github.event.inputs.ref with the empty string in its own `if`, or in the
 // value of cache-to.
 package cachepoison_test
 
@@ -31,8 +31,9 @@ type step struct {
 }
 
 type job struct {
-	Uses  string `yaml:"uses"`
-	Steps []step `yaml:"steps"`
+	Uses  string         `yaml:"uses"`
+	With  map[string]any `yaml:"with"`
+	Steps []step         `yaml:"steps"`
 }
 
 type workflow struct {
@@ -90,6 +91,25 @@ func withString(s step, key string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(fmt.Sprint(v)), true
+}
+
+// suppliesRef holds when the workflow has a trigger through which an outside party can name a ref.
+func suppliesRef(ev map[string]bool) bool {
+	for _, e := range []string{"workflow_dispatch", "workflow_call", "workflow_run", "repository_dispatch", "pull_request_target"} {
+		if ev[e] {
+			return true
+		}
+	}
+	return false
+}
+
+func passesUntrustedRef(with map[string]any, ev map[string]bool) bool {
+	for _, v := range with {
+		if untrustedRef(fmt.Sprint(v), ev) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func untrustedRef(ref string, ev map[string]bool) string {
@@ -159,8 +179,8 @@ func violations(file string, raw []byte) ([]string, error) {
 	ev := events(wf.On)
 	var out []string
 	for name, j := range wf.Jobs {
-		if j.Uses != "" {
-			out = append(out, fmt.Sprintf("%s: job %s calls the reusable workflow %s, which this guard does not follow", file, name, j.Uses))
+		if j.Uses != "" && (suppliesRef(ev) || passesUntrustedRef(j.With, ev)) {
+			out = append(out, fmt.Sprintf("%s: job %s calls the reusable workflow %s under a trigger or input that can supply an untrusted ref, which this guard does not follow", file, name, j.Uses))
 		}
 		reason := ""
 		for _, s := range j.Steps {
@@ -294,13 +314,30 @@ func TestPlants(t *testing.T) {
 	}
 }
 
-func TestReusableWorkflowCallIsRefused(t *testing.T) {
-	raw := []byte("on: workflow_dispatch\njobs:\n  call:\n    uses: ./.github/workflows/other.yml\n")
-	got, err := violations("plant.yml", raw)
-	if err != nil {
-		t.Fatal(err)
+func TestReusableWorkflowCalls(t *testing.T) {
+	const call = "jobs:\n  call:\n    uses: ./.github/workflows/other.yml\n"
+	cases := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"trusted push-only call", "on: push\n" + call, 0},
+		{"trusted pull_request call", "on: pull_request\n" + call, 0},
+		{"workflow_dispatch call", "on: workflow_dispatch\n" + call, 1},
+		{"pull_request_target call", "on: pull_request_target\n" + call, 1},
+		{"workflow_run call", "on: [push, workflow_run]\n" + call, 1},
+		{"push call passing a dispatch input as the ref", "on: push\n" + call + "    with:\n      ref: ${{ inputs.ref }}\n", 1},
+		{"push call passing a constant", "on: push\n" + call + "    with:\n      ref: main\n", 0},
 	}
-	if len(got) != 1 {
-		t.Fatalf("want 1 violation, got %v", got)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := violations("plant.yml", []byte(c.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != c.want {
+				t.Fatalf("want %d violations, got %v", c.want, got)
+			}
+		})
 	}
 }

@@ -79,7 +79,7 @@ trap 'exit 143' TERM HUP
 
 K() { kubectl --context "kind-${CLUSTER}" -n "${NS}" "$@"; }
 # Manifests live in files under ci/auth_k8s/ and are filled from the environment: a large
-# here-document in a script can hang bash (tests/tooling/test_local_validate_heredocs.py).
+# here-document in a script can hang bash (guarded by the Go heredoc check).
 K_RENDER() {
   # shellcheck disable=SC2016
   envsubst '${LOCAL_PG} ${LOCAL_SVC} ${LOCAL_MIG} ${name} ${mode} ${fsgroup} ${mount}' <"$1"

@@ -186,7 +186,8 @@ func TestFeatureFlagTimeseries_SeededRealClickHouse_ExactBuckets(t *testing.T) {
 		}
 	}
 
-	const start, end = "2026-01-05", "2026-01-08"
+	// end is the EXCLUSIVE end of a request built by hand: the last day read is 2026-01-08.
+	const start, end = "2026-01-05", "2026-01-09"
 	check("FLAG_ACTIVATION_RATE", run(MeasureFlagActivationRate, BucketIntervalDay, start, end), map[string][]bucket{
 		"repo-a": {{"2026-01-05", fp(40)}, {"2026-01-06", nil}, {"2026-01-07", fp(50)}, {"2026-01-08", fp(50)}},
 		"repo-b": {{"2026-01-05", fp(0)}},

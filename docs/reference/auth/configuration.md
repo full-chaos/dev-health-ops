@@ -63,6 +63,18 @@ and `/readyz` fails closed, naming the check. See the
 
 Durations take Go syntax (`30s`, `5m`).
 
+### Session issue route
+
+With the compatibility routes mounted, auth-service also serves `POST /internal/v1/sessions`. go-api calls it, while auth-service owns sessions (`AUTH_PROXY_SESSIONS`), for the sign-in flows go-api still serves (login, switch-org, accept-invite, change-password, social and SSO login).
+
+- The caller presents `Authorization: Bearer svc_authsess_...`, an `auth-session-issuer` row of go-api's `internal_service_credentials` with scope `sessions:issue`. auth-service checks its SHA-256 there (`authschema.PublicReadColumns` grants the read). A missing, revoked, expired, other-service or other-scope credential gets 401.
+- The body is exactly `{"principal_id", "organization_id" (a UUID or null), "amr"}`. The user must exist and be active, and, with an organization, be a member of it (403 otherwise).
+- The session is pinned to the user's `token_version` and created with one `auth.session.issued` audit row (`source` `go-api-delegated`, the `amr`, the service credential's id, the end user's client address and user agent) in one transaction. The answer is `{"access_token", "refresh_token", "token_type": "bearer", "expires_in"}`.
+- Credential steps, at roll go:
+  - mint: `dho service-credentials create --service auth-session-issuer --scope sessions:issue`; the token goes into go-api's `AUTH_SESSION_ISSUE_TOKEN` Secret key;
+  - rotate: `dho service-credentials rotate <id> --overlap-seconds 3600`, update the Secret, and roll go-api inside the overlap;
+  - revoke: `dho service-credentials revoke <id>`.
+
 ## auth-migrate
 
 | Flag | Environment | Rule |

@@ -179,6 +179,14 @@ counted in both windows and is not split pro rata, so the breakdowns of adjacent
 whole period. The REST `/investment` body, the sunburst, the quality counts, the Home tile and the Operating Review
 share the one predicate (`analytics.InvestmentWindowClause`).
 
+One window, one end (CHAOS-10118, D6083, D6101). Every reader takes its window from `timewindow`: a window names its
+last day, that day counts (the end is inclusive), and a day that is not over is in no window, even when it is named. A
+window with no end date, and one whose end date is today or later, is the trailing window `[today-N, today)`, the last
+day yesterday. The GraphQL `dateRange`, the explain `date_range` and the `end_date` of every REST read bind the same
+exclusive end, `timewindow.ExclusiveEnd`: the day after the last named day, never later than today. The daily tables
+are read with `day < end`, the work units with `to_ts < end`: one bound, one reading. The clock is UTC: no org
+timezone is read yet (TODO: the org's own timezone, where an org sets one, is the one clock D6083 names).
+
 `ISSUE_SIZE` is served only where its sizing coverage rides in the same answer (D6027). It is the default of the
 REST `/investment` response, which then carries `sizing_coverage`, `unsized_unit_count` and, when fewer than half of
 the units carry a size, `sizing_note`, and of the explanation, which carries the same three fields on each finding's
@@ -290,7 +298,7 @@ next to `filters`:
 | Field | Meaning | Default |
 |---|---|---|
 | `measure` | `ISSUE_SIZE` (the page's measure: each unit weighs its issue size, 1 when unsized), `COUNT` or `THROUGHPUT` (same as `COUNT`); any other name, `CHURN_LOC` included, is refused. The explanation never weighs by a unit's `effort_value` | `ISSUE_SIZE` |
-| `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is `[start_date, end_date)`. It replaces `filters.time`. | `filters.time`: a relative `range_days` is the trailing window `[today-N, today)`, its last day is yesterday (D6083), the same window every ops reader takes from `timewindow.Compute`; an explicit `end_date` in `filters.time` stays inclusive |
+| `date_range` | `{"start_date", "end_date"}`, bound as the page binds `dateRange`: the window is the days `start_date` to `end_date`, both counted (D6101), the end never later than yesterday. It replaces `filters.time`. | `filters.time`: a relative `range_days` is the trailing window `[today-N, today)`, its last day is yesterday (D6083), the same window every ops reader takes from `timewindow.Compute`; an explicit `end_date` in `filters.time` is inclusive too and never later than yesterday (D6101) |
 | `use_investment` | Accepted for parity with the page; no effect, because theme and subcategory always use the canonical categorization on both surfaces | none |
 
 `filters.scope.level` keeps its lowercase values. Scope `org` and scope `team` with no ids cover the same rows, as on the page.

@@ -43,6 +43,10 @@ func PublicReadColumns() []ColumnGrant {
 		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier"}},
 		{Table: "saml_assertion_replays", Columns: []string{"provider_id", "assertion_id", "expires_at"}},
 		{Table: "org_licenses", Columns: []string{"org_id", "tier", "features_override"}},
+		// The session issue route checks go-api's auth-session-issuer
+		// service credential by its hash (last_used_at is not read or
+		// stamped).
+		{Table: "internal_service_credentials", Columns: []string{"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"}},
 	}
 }
 
@@ -153,6 +157,9 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 		if err != nil {
 			return nil, err
 		}
+		if !exists && options.RequirePublicTables {
+			return nil, fmt.Errorf("%w: %s.%s", ErrPublicTableMissing, publicSchema, entry.Table)
+		}
 		if !exists {
 			logger.WarnContext(ctx, "skipped public read grants: the table does not exist",
 				"schema", publicSchema, "table", entry.Table)
@@ -182,6 +189,9 @@ func publicReadStatements(ctx context.Context, conn querier, options Options, lo
 	exists, err := publicTableState(ctx, conn, write.Table)
 	if err != nil {
 		return nil, err
+	}
+	if !exists && options.RequirePublicTables {
+		return nil, fmt.Errorf("%w: %s.%s", ErrPublicTableMissing, publicSchema, write.Table)
 	}
 	if !exists {
 		logger.WarnContext(ctx, "skipped the legacy refresh token grant: the table does not exist",

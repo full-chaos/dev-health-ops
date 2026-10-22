@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
@@ -113,7 +112,7 @@ func TestBuildResponseServesTheDriverCaptionFromOneBatchedRead(t *testing.T) {
 	resp, err := BuildResponse(context.Background(), client, nil, "org-1", Filters{
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
 		Scope: ScopeFilter{Level: "org"},
-	}, time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC))
+	}, goldenNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +151,7 @@ func TestBuildResponseSurvivesAFailedDriverCaptionRead(t *testing.T) {
 	resp, err := BuildResponse(context.Background(), client, nil, "org-1", Filters{
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
 		Scope: ScopeFilter{Level: "org"},
-	}, time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC))
+	}, goldenNow)
 	if err != nil {
 		t.Fatalf("a failed caption read failed the request: %v", err)
 	}

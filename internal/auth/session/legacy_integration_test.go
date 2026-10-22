@@ -6,6 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,7 +123,7 @@ func TestExchangeLegacyRevokesTheGoAPITokenAndStartsAPinnedSession(t *testing.T)
 	}
 }
 
-func TestExchangeLegacyAgainWithinTheGraceWindowRevokesNothing(t *testing.T) {
+func TestExchangeLegacyAgainWithinTheGraceWindowAnswersTheSameCredential(t *testing.T) {
 	ctx := testContext(t)
 	e := newEnv(t, ctx)
 	user := e.goUser(t, ctx, 0)
@@ -129,13 +132,142 @@ func TestExchangeLegacyAgainWithinTheGraceWindowRevokesNothing(t *testing.T) {
 	if err != nil || first.Reason != ReasonAccepted {
 		t.Fatalf("first exchange = %s, %v", first.Reason, err)
 	}
+	revokedAt := e.goRevokedAt(t, ctx, "jti-twice")
 	second, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-twice"))
-	if err != nil || second.Reason != ReasonSessionRevoked {
-		t.Fatalf("second exchange in the grace window = %s, %v; want session_revoked", second.Reason, err)
+	if err != nil || second.Reason != ReasonGraceReplay {
+		t.Fatalf("second exchange in the grace window = %s, %v; want refresh_grace_replay", second.Reason, err)
+	}
+	if second.Credential.Reveal() != first.Credential.Reveal() || second.Session.ID != first.Session.ID || !second.ExpiresAt.Equal(first.ExpiresAt) {
+		t.Fatal("the replay did not answer the first exchange's credential, session and expiry")
+	}
+	if again := e.goRevokedAt(t, ctx, "jti-twice"); again == nil || !again.Equal(*revokedAt) {
+		t.Fatal("the replay changed the go-api row's revocation")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user.String()); n != 1 {
+		t.Fatalf("%d sessions, want 1", n)
 	}
 	current, err := e.store.Current(ctx, first.Session.ID)
 	if err != nil || current.RevokedAt != nil {
 		t.Fatalf("the exchanged session was revoked by a replay in the grace window (%v)", err)
+	}
+	if next := e.exchange(t, ctx, e.store, second.Credential); next.Reason != ReasonAccepted {
+		t.Fatalf("the replayed credential rotates as %s, want accepted", next.Reason)
+	}
+}
+
+func TestExchangeLegacyConcurrentlyCreatesOneSession(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	e.goRefresh(t, ctx, user, uuid.New(), "jti-race", time.Hour)
+	const callers = 4
+	results := make([]Result, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i], errs[i] = e.store.ExchangeLegacy(ctx, legacy(user, "jti-race"))
+		}()
+	}
+	wg.Wait()
+	accepted := 0
+	for i, result := range results {
+		if errs[i] != nil || !result.Reason.Success() {
+			t.Fatalf("caller %d = %s, %v; want a success", i, result.Reason, errs[i])
+		}
+		if result.Reason == ReasonAccepted {
+			accepted++
+		}
+		if result.Credential.Reveal() != results[0].Credential.Reveal() {
+			t.Fatalf("caller %d got another credential", i)
+		}
+	}
+	if accepted != 1 {
+		t.Fatalf("%d callers were accepted, want 1", accepted)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user.String()); n != 1 {
+		t.Fatalf("%d sessions, want 1", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.refresh_credentials WHERE session_id = $1`, results[0].Session.ID.String()); n != 1 {
+		t.Fatalf("%d credentials, want 1", n)
+	}
+}
+
+func TestExchangeLegacyReplayAfterANativeRotationRevokesTheFamily(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	family := uuid.New()
+	e.goRefresh(t, ctx, user, family, "jti-rotated", time.Hour)
+	e.goRefresh(t, ctx, user, family, "jti-rotated-sibling", time.Hour)
+	first, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-rotated"))
+	if err != nil || first.Reason != ReasonAccepted {
+		t.Fatalf("first exchange = %s, %v", first.Reason, err)
+	}
+	if next := e.exchange(t, ctx, e.store, first.Credential); next.Reason != ReasonAccepted {
+		t.Fatalf("native rotation = %s", next.Reason)
+	}
+	result, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-rotated"))
+	if err != nil || result.Reason != ReasonRefreshReused || result.Credential.Reveal() != "" {
+		t.Fatalf("replay after a rotation = %s, %v; want refresh_reused and no credential", result.Reason, err)
+	}
+	current, err := e.store.Current(ctx, first.Session.ID)
+	if err != nil || current.RevokedAt == nil {
+		t.Fatalf("the session is live after the family revoke (%v)", err)
+	}
+	if e.goRevokedAt(t, ctx, "jti-rotated-sibling") == nil {
+		t.Fatal("the go-api family is still live")
+	}
+}
+
+func TestExchangeLegacyReplayForADeactivatedPrincipalRevokesTheFamily(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	family := uuid.New()
+	e.goRefresh(t, ctx, user, family, "jti-off", time.Hour)
+	e.goRefresh(t, ctx, user, family, "jti-off-sibling", time.Hour)
+	first, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-off"))
+	if err != nil || first.Reason != ReasonAccepted {
+		t.Fatalf("first exchange = %s, %v", first.Reason, err)
+	}
+	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user.String())
+	result, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-off"))
+	if err != nil || result.Reason != ReasonPrincipalDeactivated || result.Credential.Reveal() != "" {
+		t.Fatalf("replay for a deactivated principal = %s, %v; want principal_deactivated and no credential", result.Reason, err)
+	}
+	if e.goRevokedAt(t, ctx, "jti-off-sibling") == nil {
+		t.Fatal("the go-api family is still live")
+	}
+	current, err := e.store.Current(ctx, first.Session.ID)
+	if err != nil || current.RevokedAt == nil {
+		t.Fatalf("the session is live after the family revoke (%v)", err)
+	}
+}
+
+func TestExchangeLegacyReplayWithAnotherSuccessorKeyAsksForARetry(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 0)
+	e.goRefresh(t, ctx, user, uuid.New(), "jti-key", time.Hour)
+	first, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-key"))
+	if err != nil || first.Reason != ReasonAccepted {
+		t.Fatalf("first exchange = %s, %v", first.Reason, err)
+	}
+	otherKey, _ := testKey(t)
+	rotated := e.newStore(t, otherKey, Config{})
+	result, err := rotated.ExchangeLegacy(ctx, legacy(user, "jti-key"))
+	if !errors.Is(err, ErrGraceUnavailable) || result.Reason != ReasonDependency {
+		t.Fatalf("replay under another key = %s, %v; want dependency and ErrGraceUnavailable", result.Reason, err)
+	}
+	current, err := e.store.Current(ctx, first.Session.ID)
+	if err != nil || current.RevokedAt != nil {
+		t.Fatalf("the retry answer revoked the session (%v)", err)
+	}
+	if again, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-key")); err != nil || again.Reason != ReasonGraceReplay {
+		t.Fatalf("replay under the original key = %s, %v; want refresh_grace_replay", again.Reason, err)
 	}
 }
 
@@ -275,5 +407,31 @@ func TestExchangeRefusesAPinlessSessionWithoutRotating(t *testing.T) {
 	again, err := e.store.Exchange(ctx, credential)
 	if err != nil || again.Reason != ReasonRevisionStale {
 		t.Fatalf("the same credential again = %s, %v; want revision_stale, not reuse", again.Reason, err)
+	}
+}
+
+// A go-api refresh token whose row go-api revoked (a password reset or change,
+// an admin password set or a soft delete keep revoking them while
+// auth-service owns sessions) is never exchanged, at any distance from the
+// revocation.
+func TestExchangeLegacyRefusesATokenGoAPIRevoked(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 1)
+	for name, age := range map[string]time.Duration{"just revoked": 0, "revoked earlier": GraceWindow + time.Minute} {
+		jti := "jti-revoked-" + strings.ReplaceAll(name, " ", "-")
+		e.goRefresh(t, ctx, user, uuid.New(), jti, time.Hour)
+		digest := sha256.Sum256([]byte(jti))
+		if _, err := e.admin.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = now() - make_interval(secs => $2::double precision)
+			WHERE token_hash = $1`, hex.EncodeToString(digest[:]), age.Seconds()); err != nil {
+			t.Fatal(err)
+		}
+		result, err := e.store.ExchangeLegacy(ctx, legacy(user, jti))
+		if err != nil || result.Reason.Success() || result.Credential.Reveal() != "" {
+			t.Fatalf("%s: exchange = %s (%v), want a refusal and no credential", name, result.Reason, err)
+		}
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user.String()); n != 0 {
+		t.Fatalf("%d sessions from revoked go-api tokens, want 0", n)
 	}
 }

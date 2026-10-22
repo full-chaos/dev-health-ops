@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
+	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -398,7 +399,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	out, refusal, err := h.applyLLMSettings(ctx, orgID, llmUpsert{
 		provider: *provider, model: model, apiKey: apiKey, baseURL: baseURL,
-		concurrency: concurrency, budgetLimitMu: budgetLimitMu,
+		concurrency: concurrency, budgetLimitMu: budgetLimitMu, requireModel: true,
 	})
 	if err != nil {
 		var step *llmStepError
@@ -421,6 +422,20 @@ type llmUpsert struct {
 	provider                   string
 	model, apiKey, baseURL     *string
 	concurrency, budgetLimitMu *big.Int
+	// requireModel is the PUT route's rule: a BYO provider needs a model.
+	requireModel bool
+}
+
+// byoProviderNeedsModel is whether a default-row save names a BYO provider
+// (anything but the "no BYO" blank, auto, mock and none, as llmorgsettings reads them)
+// without a model: the row would hold no model, and a BYO org never draws the
+// platform model, so Ask Dev would refuse.
+func byoProviderNeedsModel(in llmUpsert) bool {
+	switch pythonparity.Lower(pythonparity.Strip(in.provider)) {
+	case "", "auto", "mock", "none":
+		return false
+	}
+	return in.model == nil || pythonparity.Strip(*in.model) == ""
 }
 
 // applyLLMSettings is llm_settings.py's upsert_llm_settings over settings.py's:
@@ -456,6 +471,10 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 			reason = "Invalid LLM base_url"
 		}
 		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", reason), nil
+	}
+
+	if in.requireModel && byoProviderNeedsModel(in) {
+		return nil, newLLMRefusal(http.StatusBadRequest, "error", "model_required", "feature", byoLLMFeature, "message", "model is required when a BYO LLM provider is saved"), nil
 	}
 
 	tx, err := h.store.Pool.Begin(ctx)
@@ -567,14 +586,16 @@ func (h *handlers) deleteLLMSettings(w http.ResponseWriter, r *http.Request) {
 // deleteLLMSettingsRows is the one delete both the HTTP route and the
 // `admin llm-settings delete` operator path run (CHAOS-6975). The org's
 // readiness record and every role certification row are derived from the
-// credentials, so they go in the same statement (Python left them behind).
+// credentials, so they go in the same statement (Python left them behind). The
+// prompt-cache opt-in goes in it too: it belongs to the saved config, and a
+// config saved later starts off.
 // It returns how many CREDENTIAL rows existed: orphan derived rows are cleared
 // but are not a credential, so a caller answers "not found" on zero.
 func (h *handlers) deleteLLMSettingsRows(ctx context.Context, orgID string) (int, error) {
 	rows, err := h.store.Pool.Query(ctx,
 		`DELETE FROM settings WHERE org_id = $1 AND category = $2
-		   AND (key = ANY($3) OR key = $4 OR starts_with(key, $5)) RETURNING key`,
-		orgID, llmCategory, llmSettingKeys, askDevAgentReadinessKey, llmRoleCertificationPrefix)
+		   AND (key = ANY($3) OR key = $4 OR starts_with(key, $5) OR key = $6) RETURNING key`,
+		orgID, llmCategory, llmSettingKeys, askDevAgentReadinessKey, llmRoleCertificationPrefix, llmorgsettings.KeyPromptCache)
 	if err != nil {
 		return 0, err
 	}

@@ -66,7 +66,7 @@ func TestGoldenTeamScoped(t *testing.T) {
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
 		Scope: ScopeFilter{Level: "team", IDs: []string{"team-1"}},
 	}
-	now := time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC)
+	now := goldenNow
 
 	got, err := BuildResponse(context.Background(), client, nil, "org-1", f, now)
 	if err != nil {
@@ -102,7 +102,7 @@ func TestGoldenRepoScoped(t *testing.T) {
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day(2024, 1, 8))},
 		Scope: ScopeFilter{Level: "repo", IDs: []string{"checkout-service"}},
 	}
-	now := time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC)
+	now := goldenNow
 
 	got, err := BuildResponse(context.Background(), client, nil, "org-1", f, now)
 	if err != nil {

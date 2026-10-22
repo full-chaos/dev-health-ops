@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -66,6 +67,10 @@ WHERE id = $1::uuid AND status IN ('active', 'candidate', 'ready')`, bindingID,
 }
 
 var errBindingNotFound = errors.New("pagerduty webhook binding not found")
+
+// loadBinding is the binding read the handler uses. Production never assigns
+// it after this declaration; only tests swap it.
+var loadBinding = loadReceivableBinding
 
 // markCandidateReadyFromVerifiedPing ports
 // PagerDutyWebhookBindingService.mark_candidate_ready_from_verified_ping:
@@ -480,40 +485,44 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 			policy.WriteDetail(w, http.StatusTooManyRequests, policy.ErrorDetail("Rate limit exceeded. Please try again later."), nil)
 			return
 		}
-		bindingID := r.PathValue("binding_id")
-		parsed, err := uuid.Parse(bindingID)
-		if err != nil {
-			policy.WriteDetail(w, http.StatusNotFound, bindingNotFoundDetail, nil)
-			return
-		}
-		canonicalBindingID := parsed.String()
 		subscriptionHeader := r.Header.Get("X-Webhook-Subscription")
 		if subscriptionHeader == "" {
-			policy.WriteDetail(w, http.StatusUnauthorized, invalidSignatureDetail, nil)
+			refusePagerDuty(w, r, d.logger(), refusalSubscriptionMissing)
 			return
 		}
 		if d.Pool == nil {
 			policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
 			return
 		}
-		binding, err := loadReceivableBinding(r.Context(), d.Pool, canonicalBindingID)
-		if errors.Is(err, errBindingNotFound) {
-			policy.WriteDetail(w, http.StatusNotFound, bindingNotFoundDetail, nil)
-			return
-		}
-		if err != nil {
-			d.logger().Error("pagerduty_webhook load binding failed", "binding_id", canonicalBindingID, "error", err)
-			policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
-			return
-		}
-		if binding.ID != canonicalBindingID || subscriptionHeader != binding.ProviderSubscriptionID {
-			d.logger().Warn("pagerduty_webhook.audit rejected", "binding_id", canonicalBindingID, "reason", "subscription_mismatch")
-			policy.WriteDetail(w, http.StatusUnauthorized, invalidSignatureDetail, nil)
-			return
+		refusal := ""
+		var binding pagerdutyBinding
+		canonicalBindingID := ""
+		if parsed, err := uuid.Parse(r.PathValue("binding_id")); err != nil {
+			refusal = refusalInvalidBindingID
+		} else {
+			canonicalBindingID = parsed.String()
+			found, err := loadBinding(r.Context(), d.Pool, canonicalBindingID)
+			switch {
+			case errors.Is(err, errBindingNotFound):
+				refusal = refusalBindingUnavailable
+			case err != nil:
+				d.logger().Error("pagerduty_webhook load binding failed", "binding_id", canonicalBindingID, "error", err)
+				policy.WriteDetail(w, http.StatusInternalServerError, "webhook store is unavailable", nil)
+				return
+			case found.ID != canonicalBindingID || subscriptionHeader != found.ProviderSubscriptionID:
+				refusal = refusalSubscriptionMismatch
+			default:
+				binding = found
+			}
 		}
 		body, httpErr := readBodyLimited(r)
 		if httpErr != nil {
 			policy.WriteDetail(w, httpErr.Status, httpErr.Detail, nil)
+			return
+		}
+		if refusal != "" {
+			mirrorSignatureWork(body, r.Header.Get("X-PagerDuty-Signature"))
+			refusePagerDuty(w, r, d.logger(), refusal)
 			return
 		}
 		secretBytes, err := d.Decryptor.Decrypt(secrets.NewValue(binding.SigningSecretEncrypted))
@@ -523,7 +532,7 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 			return
 		}
 		if !verifyPagerDutySignature(body, r.Header.Get("X-PagerDuty-Signature"), secretBytes) {
-			policy.WriteDetail(w, http.StatusUnauthorized, invalidSignatureDetail, nil)
+			refusePagerDuty(w, r, d.logger(), refusalInvalidSignature)
 			return
 		}
 		webhook, err := parsePagerDutyWebhook(body)
@@ -606,6 +615,27 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 		d.logger().Info("pagerduty_webhook.audit accepted", "binding_id", canonicalBindingID, "event_id", webhook.Event.ID)
 		w.WriteHeader(http.StatusAccepted)
 	}
+}
+
+const (
+	refusalInvalidBindingID     = "invalid_binding_id"
+	refusalBindingUnavailable   = "binding_unavailable"
+	refusalSubscriptionMissing  = "subscription_missing"
+	refusalSubscriptionMismatch = "subscription_mismatch"
+	refusalInvalidSignature     = "invalid_signature"
+)
+
+var mirrorSecret = []byte("pagerduty-refusal-mirror-key")
+
+func mirrorSignatureWork(body []byte, signatureHeader string) {
+	_ = verifyPagerDutySignature(body, signatureHeader, mirrorSecret)
+}
+
+// refusePagerDuty is the one answer to a delivery that does not authenticate
+// to a binding, with its reason class as the only log attribute.
+func refusePagerDuty(w http.ResponseWriter, r *http.Request, logger *slog.Logger, reason string) {
+	logger.WarnContext(r.Context(), "pagerduty_webhook.audit rejected", "reason", reason)
+	policy.WriteDetail(w, http.StatusUnauthorized, invalidSignatureDetail, nil)
 }
 
 func sha256Hex(body []byte) string {

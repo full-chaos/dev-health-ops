@@ -7,7 +7,7 @@
 //
 // A step counts as a cache writer when it is actions/cache or actions/cache/save, sets a non-empty cache-to, sets a setup action's
 // cache input, or omits that input on an action whose cache defaults ON (setup-go, setup-uv, setup-gradle). A writer is allowed
-// only when it is switched off for a supplied ref by the expression `github.event.inputs.ref == ''` in its own `if`, or in the
+// only when it is switched off for a supplied ref by the expression `github.event.inputs.ref == ”` in its own `if`, or in the
 // value of cache-to.
 package cachepoison_test
 
@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -30,6 +31,7 @@ type step struct {
 }
 
 type job struct {
+	Uses  string `yaml:"uses"`
 	Steps []step `yaml:"steps"`
 }
 
@@ -38,7 +40,27 @@ type workflow struct {
 	Jobs map[string]job `yaml:"jobs"`
 }
 
-const refGate = "inputs.ref == ''"
+const refGate = "github.event.inputs.ref == ''"
+
+var (
+	bracketKey = regexp.MustCompile(`\[\s*['"]([^'"]*)['"]\s*\]`)
+	// gatedValue is the only value shape that switches a writer off for a supplied ref: GATE && 'literal' || '' (or true/false).
+	gatedValue = regexp.MustCompile(`^(?:\$\{\{)?\s*` + regexp.QuoteMeta(refGate) + `\s*&&\s*(?:'[^']*'|true)\s*\|\|\s*(?:''|false)\s*(?:\}\})?$`)
+)
+
+// norm lower-cases an expression (property names are case-insensitive), turns bracket keys into dotted ones and folds blanks.
+func norm(s string) string {
+	return strings.Join(strings.Fields(bracketKey.ReplaceAllString(strings.ToLower(s), ".$1")), " ")
+}
+
+// gatedIf holds when the step runs only if no ref was supplied: the gate is present and nothing in the condition (an ||, a
+// negation, a status function such as always()) can make it true anyway.
+func gatedIf(cond string) bool {
+	c := norm(cond)
+	return strings.Contains(c, refGate) && !strings.Contains(c, "||") && !strings.Contains(c, "!") && !strings.Contains(c, "()")
+}
+
+func gatedWith(v string) bool { return gatedValue.MatchString(norm(v)) }
 
 func events(on any) map[string]bool {
 	out := map[string]bool{}
@@ -71,6 +93,7 @@ func withString(s step, key string) (string, bool) {
 }
 
 func untrustedRef(ref string, ev map[string]bool) string {
+	ref = norm(ref)
 	switch {
 	case strings.Contains(ref, "inputs."):
 		return "dispatch-supplied ref"
@@ -88,7 +111,7 @@ func off(v string) bool { return v == "" || v == "false" }
 
 // cacheWriter says whether the step writes a cache and why.
 func cacheWriter(s step) (string, bool) {
-	if strings.Contains(s.If, refGate) {
+	if gatedIf(s.If) {
 		return "", false
 	}
 	switch name := action(s.Uses); {
@@ -111,18 +134,18 @@ func cacheWriter(s step) (string, bool) {
 		if !set {
 			return s.Uses + " (" + key + " defaults ON)", true
 		}
-		if !off(v) && !strings.Contains(v, refGate) {
+		if !off(v) && !gatedWith(v) {
 			return s.Uses + " (" + key + ": " + v + ")", true
 		}
 		return "", false
 	case strings.HasPrefix(name, "actions/setup-") || name == "ruby/setup-ruby":
 		for _, key := range []string{"cache", "bundler-cache"} {
-			if v, set := withString(s, key); set && !off(v) && !strings.Contains(v, refGate) {
+			if v, set := withString(s, key); set && !off(v) && !gatedWith(v) {
 				return s.Uses + " (" + key + ": " + v + ")", true
 			}
 		}
 	}
-	if v, set := withString(s, "cache-to"); set && !off(v) && !strings.Contains(v, refGate) {
+	if v, set := withString(s, "cache-to"); set && !off(v) && !gatedWith(v) {
 		return s.Uses + " (cache-to: " + v + ")", true
 	}
 	return "", false
@@ -136,6 +159,9 @@ func violations(file string, raw []byte) ([]string, error) {
 	ev := events(wf.On)
 	var out []string
 	for name, j := range wf.Jobs {
+		if j.Uses != "" {
+			out = append(out, fmt.Sprintf("%s: job %s calls the reusable workflow %s, which this guard does not follow", file, name, j.Uses))
+		}
 		reason := ""
 		for _, s := range j.Steps {
 			if action(s.Uses) != "actions/checkout" {
@@ -150,6 +176,9 @@ func violations(file string, raw []byte) ([]string, error) {
 			continue
 		}
 		for _, s := range j.Steps {
+			if strings.HasPrefix(s.Uses, "./") {
+				out = append(out, fmt.Sprintf("%s: job %s checks out a %s and runs the local action %s, which this guard does not follow", file, name, reason, s.Uses))
+			}
 			if why, bad := cacheWriter(s); bad {
 				out = append(out, fmt.Sprintf("%s: job %s checks out a %s and writes a cache in step %q: %s", file, name, reason, s.Name, why))
 			}
@@ -178,7 +207,13 @@ func repoRoot(t *testing.T) string {
 }
 
 func TestNoWorkflowWritesACacheAfterAnUntrustedCheckout(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join(repoRoot(t), ".github", "workflows", "*.yml"))
+	dir := filepath.Join(repoRoot(t), ".github", "workflows")
+	yml, err := filepath.Glob(filepath.Join(dir, "*.yml"))
+	yaml, err2 := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	files := append(yml, yaml...)
+	if err == nil {
+		err = err2
+	}
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no workflows found: %v", err)
 	}
@@ -233,6 +268,18 @@ func TestPlants(t *testing.T) {
 		{"plain pull_request head checkout is allowed", wf("pull_request", "\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n      - uses: actions/setup-go@dddd\n"), 0},
 		{"checkout without ref", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 0},
 		{"derived needs output ref", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ needs.build.outputs.sha }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 0},
+		{"if with || always() still runs", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: github.event.inputs.ref == '' || always()\n        with:\n          path: x\n          key: k\n"), 1},
+		{"if with always() and the gate still runs", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: always() && github.event.inputs.ref == ''\n        with:\n          path: x\n          key: k\n"), 1},
+		{"if negating the gate", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: ${{ !(github.event.inputs.ref == '') }}\n        with:\n          path: x\n          key: k\n"), 1},
+		{"if with the gate and another term", wf("workflow_dispatch", dispatchCheckout+"      - uses: actions/cache@bbbb\n        if: github.event_name == 'push' && github.event.inputs.ref == ''\n        with:\n          path: x\n          key: k\n"), 0},
+		{"cache-to with || fallback that writes", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-to: ${{ github.event.inputs.ref == '' || 'type=gha' }}\n"), 1},
+		{"cache-to gate with a non-empty fallback", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-to: ${{ github.event.inputs.ref == '' && 'type=gha' || 'type=gha,mode=min' }}\n"), 1},
+		{"bracket form of the ref input", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ github.event.inputs['ref'] }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 1},
+		{"bracket form of the inputs context", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ inputs[\"ref\"] }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 1},
+		{"upper case inputs context", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n        with:\n          ref: ${{ INPUTS.Ref }}\n      - uses: actions/cache@bbbb\n        with:\n          path: x\n          key: k\n"), 1},
+		{"bracket form of the gate", wf("workflow_dispatch", dispatchCheckout+"      - uses: docker/build-push-action@cccc\n        with:\n          cache-to: ${{ github.event.inputs['ref'] == '' && 'type=gha' || '' }}\n"), 0},
+		{"local composite action after an untrusted checkout", wf("workflow_dispatch", dispatchCheckout+"      - uses: ./.github/actions/build\n"), 1},
+		{"local composite action after a trusted checkout", wf("workflow_dispatch", "\n      - uses: actions/checkout@aaaa\n      - uses: ./.github/actions/build\n"), 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -244,5 +291,16 @@ func TestPlants(t *testing.T) {
 				t.Fatalf("want %d violations, got %d: %v", c.want, len(got), got)
 			}
 		})
+	}
+}
+
+func TestReusableWorkflowCallIsRefused(t *testing.T) {
+	raw := []byte("on: workflow_dispatch\njobs:\n  call:\n    uses: ./.github/workflows/other.yml\n")
+	got, err := violations("plant.yml", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 violation, got %v", got)
 	}
 }

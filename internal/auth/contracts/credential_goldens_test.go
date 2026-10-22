@@ -55,6 +55,7 @@ var goMessageForCredentialKeyword = map[string]string{
 	"not": "not:", "maxLength": "maxLength:", "maxItems": "maxItems:", "uniqueItems": "uniqueItems:",
 	"const": "const:", "enum": "enum:", "required": "required:", "pattern": "pattern:",
 	"additionalProperties": "unexpected additional properties",
+	"minLength":            "minLength:", "type": "type:",
 }
 
 func (s credentialSurface) corpus(t *testing.T) credentialCorpus {
@@ -224,6 +225,20 @@ func TestClientEnforcedCredentialFixturesValidateButTheClientRefusesThem(t *test
 				// A transition: next must parse on its own (the document is fine),
 				// and following `after` must be refused.
 				prevRaw := s.read(t, entry.After)
+				if s.surface == CredentialListSurface {
+					prevPage, err := ParseCredentialList(root, prevRaw, now)
+					if err != nil {
+						t.Fatalf("the `after` page does not parse: %v", err)
+					}
+					nextPage, err := ParseCredentialList(root, raw, now)
+					if err != nil {
+						t.Fatalf("the page must parse on its own: %v", err)
+					}
+					if err := CheckCredentialPage(prevPage, nextPage); err == nil {
+						t.Fatalf("the page %s -> %s was accepted (%s)", entry.After, entry.File, entry.Why)
+					}
+					return
+				}
 				prev, err := ParseCredentialEntry(root, prevRaw, now)
 				if err != nil {
 					t.Fatalf("the `after` fixture does not parse: %v", err)
@@ -528,34 +543,47 @@ func TestEveryDisplayPrefixTheEntryAllowsCanBeginAValidReceiptSecret(t *testing.
 	}
 }
 
-func TestAListLargerThanAnyBoundIsRepresentable(t *testing.T) {
-	// With no pagination, a count bound would make a big registry unrepresentable
-	// with no truncation signal (round 2 executed a 201-item list against the old
-	// maxItems 200).
+func TestARegistryLargerThanAPageIsRepresentedByPagesWithATruncationSignal(t *testing.T) {
 	s := credentialSurfaces[1]
 	var base struct {
-		SchemaVersion string           `json:"schema_version"`
-		Items         []map[string]any `json:"items"`
+		Items []map[string]any `json:"items"`
 	}
 	if err := json.Unmarshal(s.read(t, "valid-two-items.json"), &base); err != nil {
 		t.Fatal(err)
 	}
-	var items []map[string]any
-	for i := 0; i < 1000; i++ {
-		item := map[string]any{}
-		for k, v := range base.Items[0] {
-			item[k] = v
+	const total = 1000
+	var pages []CredentialList
+	for start := 0; start < total; start += CredentialListMaxPageSize {
+		var items []map[string]any
+		for i := start; i < start+CredentialListMaxPageSize; i++ {
+			item := map[string]any{}
+			for k, v := range base.Items[0] {
+				item[k] = v
+			}
+			item["id"] = fmt.Sprintf("crd_EXAMPLE%020d", i)
+			items = append(items, item)
 		}
-		item["id"] = fmt.Sprintf("crd_EXAMPLE%020d", i)
-		items = append(items, item)
+		document := map[string]any{"schema_version": CredentialListSurface, "items": items}
+		if start+CredentialListMaxPageSize < total {
+			document["next_cursor"] = fmt.Sprintf("cursor_EXAMPLE%020d", start)
+		}
+		encoded, _ := json.Marshal(document)
+		page, err := ParseCredentialList(testRoot(t), encoded, clockOf(t, s.corpus(t)))
+		if err != nil {
+			t.Fatalf("the page at %d was refused: %v", start, err)
+		}
+		pages = append(pages, page)
 	}
-	document := map[string]any{"schema_version": CredentialListSurface, "items": items}
-	if err := Validate(testRoot(t), CredentialListSurface, document); err != nil {
-		t.Fatalf("a 1000-item list was refused: %v", err)
+	for i := 1; i < len(pages); i++ {
+		if err := CheckCredentialPage(pages[i-1], pages[i]); err != nil {
+			t.Fatalf("page %d does not follow page %d: %v", i, i-1, err)
+		}
 	}
-	encoded, _ := json.Marshal(document)
-	if _, err := ParseCredentialList(testRoot(t), encoded, clockOf(t, s.corpus(t))); err != nil {
-		t.Fatalf("the client refused a 1000-item list: %v", err)
+	if pages[len(pages)-1].NextCursor != nil {
+		t.Fatal("the last page carries a cursor")
+	}
+	if pages[0].NextCursor == nil {
+		t.Fatal("a registry larger than a page was returned with no truncation signal")
 	}
 }
 

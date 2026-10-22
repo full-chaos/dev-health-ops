@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -2523,4 +2524,39 @@ func TestAPIRoleCollisionStillRefusedWhenAPIRoleIsActuallyInPlay(t *testing.T) {
 			t.Fatalf("got %v, want the API_DATABASE_ROLE distinctness error", err)
 		}
 	})
+}
+
+func TestLinkTokenSecretsAreOptionalAndFileCapable(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	secretFile := filepath.Join(dir, "link")
+	if err := os.WriteFile(secretFile, []byte("link-from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := map[string]string{
+		"POSTGRES_URI": "postgresql://app:app@db.internal:5432/appdb", "JWT_SECRET_KEY": "jwt-key",
+	}
+	load := func(extra map[string]string) Config {
+		values := map[string]string{}
+		for k, v := range base {
+			values[k] = v
+		}
+		for k, v := range extra {
+			values[k] = v
+		}
+		cfg, err := Load(Spec{Service: APIServiceName, LookupEnv: lookup(values)})
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		return cfg
+	}
+	none := load(nil)
+	if none.LinkTokenSecret.Configured() || none.LinkTokenSecretPrevious.Configured() {
+		t.Fatal("link secrets are configured with neither variable set")
+	}
+	both := load(map[string]string{"LINK_TOKEN_SECRET_FILE": secretFile, "LINK_TOKEN_SECRET_PREVIOUS": "link-old"})
+	if both.LinkTokenSecret.Reveal() != "link-from-file" || both.LinkTokenSecretPrevious.Reveal() != "link-old" {
+		t.Fatalf("link secrets = %q, %q", both.LinkTokenSecret.Reveal(), both.LinkTokenSecretPrevious.Reveal())
+	}
 }

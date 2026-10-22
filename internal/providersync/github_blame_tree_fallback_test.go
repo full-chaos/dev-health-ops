@@ -29,6 +29,8 @@ type gitHubBigTreeDoer struct {
 	filesPerDir  int
 	linesPerFile int
 	linesByPath  map[string]int
+	// emptyPaths answer blame with no ranges (GitHub: a path the tree lacks).
+	emptyPaths map[string]bool
 	// recursive: "full" (normal, not truncated), "truncated" (GitHub flag,
 	// partial list), "" (derived: over the cap when large enough).
 	recursive string
@@ -152,6 +154,10 @@ func (doer *gitHubBigTreeDoer) Do(request *http.Request) (*http.Response, error)
 		}
 		if lines == 0 {
 			lines = 2
+		}
+		if doer.emptyPaths[requestBody.Variables["path"]] {
+			body = `{"data":{"repository":{"object":{"blame":{"ranges":[]}}}}}`
+			break
 		}
 		body = fmt.Sprintf(`{"data":{"repository":{"object":{"blame":{"ranges":[{"startingLine":1,"endingLine":%d,"commit":{"oid":"abc123","author":{"name":"Ada","email":"ada@example.com"}}}]}}}}}`, lines)
 	default:

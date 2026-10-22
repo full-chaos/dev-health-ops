@@ -81,7 +81,10 @@ func TestHelpDeclaresTheDocumentedEnvironmentHandful(t *testing.T) {
 	// added -- the query-api's registry DSN and the proof route's edge JWT
 	// secret, declared for dev-health-query-api when it moved onto the option
 	// registry. Both hold a real secret value.
-	if len(required) > 23 {
+	// 23 -> 25: LINK_TOKEN_SECRET, LINK_TOKEN_SECRET_PREVIOUS added -- the link
+	// signing key and its rotation-overlap key; neither is required (unset, links
+	// are signed with JWT_SECRET_KEY), both hold a real secret value.
+	if len(required) > 25 {
 		t.Fatalf("required environment grew to %d settings: %v", len(required), required)
 	}
 	for _, name := range required {

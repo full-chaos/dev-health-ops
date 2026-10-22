@@ -55,6 +55,11 @@ const transportErrorRef = "#/components/schemas/TransportError"
 // auth-v1's OpenAPI describes none of them: go-api's contract is theirs.
 const compatPathPrefix = "/api/v1/auth/"
 
+// internalPathPrefix is go-api's internal call space: POST /internal/v1/sessions
+// is the session issue call go-api makes with its service credential, never a
+// browser or SDK surface, so auth-v1's public OpenAPI describes none of it.
+const internalPathPrefix = "/internal/v1/"
+
 // openAPIPathProblems checks the OpenAPI document against the auth-service API
 // rows: one operation per API row outside go-api's path space and no other,
 // every $ref inside an operation names an existing component schema, and
@@ -66,7 +71,7 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 	for _, row := range rows {
 		id, _ := row["id"].(string)
 		route, _ := row["route"].(string)
-		if !strings.HasSuffix(id, "@api]") || strings.HasPrefix(route, compatPathPrefix) {
+		if !strings.HasSuffix(id, "@api]") || strings.HasPrefix(route, compatPathPrefix) || strings.HasPrefix(route, internalPathPrefix) {
 			continue
 		}
 		key := strings.ToLower(row["method"].(string)) + " " + row["route"].(string)
@@ -197,6 +202,9 @@ func TestTheOpenAPIPathGateRefusesPlantedMismatches(t *testing.T) {
 			op := document["paths"].(map[string]any)["/v1/sessions/current"].(map[string]any)["get"].(map[string]any)
 			delete(op["responses"].(map[string]any)["400"].(map[string]any), "content")
 		},
+		"an operation in go-api's internal path space": func(document map[string]any) {
+			document["paths"].(map[string]any)["/internal/v1/sessions"] = map[string]any{"post": map[string]any{"responses": map[string]any{"200": map[string]any{"description": "x", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Session"}}}}}}}
+		},
 		"an operation in go-api's path space": func(document map[string]any) {
 			document["paths"].(map[string]any)["/api/v1/auth/login"] = map[string]any{"post": map[string]any{"responses": map[string]any{"200": map[string]any{"description": "x", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Session"}}}}}}}
 		},
@@ -214,7 +222,7 @@ func TestTheOpenAPIPathGateRefusesPlantedMismatches(t *testing.T) {
 // merely starts like it included, still needs its operation.
 func TestTheOpenAPIPathGateExemptsOnlyGoAPIsPathSpace(t *testing.T) {
 	document := loadOpenAPIRaw(t)
-	for _, route := range []string{"/v1/new-route", "/api/v1/authx/login", "/api/v1/auth"} {
+	for _, route := range []string{"/v1/new-route", "/api/v1/authx/login", "/api/v1/auth", "/internal/v1x/sessions", "/internal/v1"} {
 		rows := append(authServiceRows(t), map[string]any{
 			"id": "POST " + route + " [dev-health-auth-service @api]", "method": "POST", "route": route,
 		})

@@ -150,6 +150,17 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			},
 		},
 		{
+			name:       "org_missing",
+			wantReason: ReasonOrgMissing,
+			wantIss:    edgeTestIssuer,
+			wantAud:    edgeTestAudience,
+			token: func() string {
+				claims := validEdgeClaims("")
+				delete(claims, "org_id")
+				return signEdgeToken(t, edgeTestSecret, claims)
+			},
+		},
+		{
 			name:       "user_lookup_failed",
 			wantReason: ReasonUserLookupFailed,
 			wantIss:    edgeTestIssuer,

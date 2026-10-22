@@ -86,7 +86,7 @@ func provision(t *testing.T, ctx context.Context, uri string, roles map[string]s
 // builds its api leg: the role name, and grants derived from APIPosture().
 func migrate(t *testing.T, ctx context.Context, admin *pgxpool.Pool, roles map[string]string) {
 	t.Helper()
-	posture := postgres.APIPosture()
+	posture := postgres.APIPosture(false)
 	grants := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
 	for _, table := range posture.RequiredTables {
 		grants = append(grants, riverstore.TableGrant{TableName: table.TableName,
@@ -167,14 +167,14 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS public.integration_credentials (id uuid PRIMARY KEY, is_active boolean, updated_at timestamptz)"); err != nil {
 		t.Fatalf("stand-in integration_credentials: %v", err)
 	}
-	for _, table := range postgres.APIPosture().RequiredTables {
+	for _, table := range postgres.APIPosture(false).RequiredTables {
 		if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS public."+table.TableName+" (id uuid PRIMARY KEY)"); err != nil {
 			t.Fatalf("stand-in %s: %v", table.TableName, err)
 		}
 	}
 
 	// a column-scoped grant needs its column on the stand-in table
-	for _, column := range postgres.APIPosture().ColumnScoped {
+	for _, column := range postgres.APIPosture(false).ColumnScoped {
 		if _, err := admin.Exec(ctx, "ALTER TABLE public."+column.TableName+" ADD COLUMN IF NOT EXISTS "+column.ColumnName+" uuid"); err != nil {
 			t.Fatalf("stand-in column %s.%s: %v", column.TableName, column.ColumnName, err)
 		}
@@ -188,7 +188,7 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	// is refused until a migration grants the posture.
 	provision(t, ctx, instance.URI, roles, roles["api"])
 	api := connectAs(t, ctx, instance.URI, roles["api"], apiRolePassword)
-	if err := postgres.CheckAPIAuthorization(ctx, api, roles["api"], "river"); err == nil {
+	if err := postgres.CheckAPIAuthorization(ctx, api, roles["api"], "river", false); err == nil {
 		t.Fatal("api role ready before any migration granted its posture")
 	}
 	store := PGStore{Pool: api}
@@ -198,7 +198,7 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 
 	// 3. The next migration grants exactly the posture.
 	migrate(t, ctx, admin, roles)
-	if err := postgres.CheckAPIAuthorization(ctx, api, roles["api"], "river"); err != nil {
+	if err := postgres.CheckAPIAuthorization(ctx, api, roles["api"], "river", false); err != nil {
 		t.Fatalf("api role not ready after the migration: %v", err)
 	}
 	// The api role's users UPDATE privilege tracks postgres.APIPosture()'s
@@ -209,7 +209,7 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	// reading the SAME manifest rather than re-asserting an independent
 	// guess that goes stale the next time a route area's own grants change.
 	var wantUpdate bool
-	for _, table := range postgres.APIPosture().RequiredTables {
+	for _, table := range postgres.APIPosture(false).RequiredTables {
 		if table.TableName == "users" {
 			wantUpdate = table.AllowUpdate
 			break
@@ -220,7 +220,7 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 		t.Fatalf("check users UPDATE privilege: %v", err)
 	}
 	if writable != wantUpdate {
-		t.Fatalf("api role UPDATE on users = %v, want %v (per postgres.APIPosture())", writable, wantUpdate)
+		t.Fatalf("api role UPDATE on users = %v, want %v (per postgres.APIPosture(false))", writable, wantUpdate)
 	}
 
 	// 4. Seed and read through PGStore as the api role.

@@ -239,3 +239,30 @@ func TestCompatRefreshOfAPinlessSessionAnswersGoAPIsInvalidRefresh(t *testing.T)
 		t.Fatalf("revoked %v, want nothing", f.sessions.revoked)
 	}
 }
+
+func TestCompatRefreshAnswersAGraceReplayOfAGoAPIRefreshToken(t *testing.T) {
+	f := newCompatFixture(t)
+	replay := accepted(f.record)
+	replay.Reason = session.ReasonGraceReplay
+	f.sessions.legacyResult = replay
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", response.Code, response.Body)
+	}
+	if body := decodeObject(t, response.Body.Bytes()); body["refresh_token"] != credential() {
+		t.Fatalf("body %s, want the replayed credential", response.Body)
+	}
+}
+
+func TestCompatRefreshAnswersARetryWhenAGraceReplayCannotBeRecomputed(t *testing.T) {
+	f := newCompatFixture(t)
+	f.sessions.legacyResult = session.Result{Reason: session.ReasonDependency}
+	f.sessions.legacyErr = session.ErrGraceUnavailable
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
+	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "refresh_token") {
+		t.Fatalf("status %d: %s; want the store-failure answer with no credential", response.Code, response.Body)
+	}
+	if len(f.sessions.revoked) != 0 {
+		t.Fatalf("revoked %v, want nothing", f.sessions.revoked)
+	}
+}

@@ -75,6 +75,10 @@ func execute(
 	stdout io.Writer,
 	stderr io.Writer,
 ) int {
+	grantsOnly := len(args) > 0 && args[0] == "grants"
+	if grantsOnly {
+		args = args[1:]
+	}
 	flags := flag.NewFlagSet(serviceName, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	check := flags.Bool("check", false,
@@ -90,6 +94,10 @@ func execute(
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "argument error: positional arguments are not accepted")
+		return 2
+	}
+	if *check && grantsOnly {
+		fmt.Fprintln(stderr, "argument error: -check does not apply to grants")
 		return 2
 	}
 	if *showVersion {
@@ -161,6 +169,22 @@ func execute(
 	}
 
 	logger := logging.NewJSON(stderr, slog.LevelInfo)
+	if grantsOnly {
+		result, err := authschema.Grants(ctx, pool, authschema.Options{
+			Schema:               schema,
+			RuntimeRole:          runtimeRole,
+			SessionReaderRoles:   readers,
+			Logger:               logger,
+			AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "grants failed: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "auth grants applied at version %d, runtime grants applied to %q, session read grants applied to %d roles\n",
+			result.CurrentVersion, runtimeRole, len(readers))
+		return 0
+	}
 	result, err := authschema.Apply(ctx, pool, authschema.Options{
 		Schema:             schema,
 		RuntimeRole:        runtimeRole,

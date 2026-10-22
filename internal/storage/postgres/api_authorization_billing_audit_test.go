@@ -9,7 +9,7 @@ import (
 // column, never the table: the audit text and state stay out of reach of an UPDATE.
 func TestAPIPostureLetsTheAPIRoleUpdateOnlyTheBillingAuditActor(t *testing.T) {
 	t.Parallel()
-	posture := APIPosture()
+	posture := APIPosture(false)
 	var table *TablePrivilege
 	for i := range posture.RequiredTables {
 		if posture.RequiredTables[i].TableName == "billing_audit_log" {

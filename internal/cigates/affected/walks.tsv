@@ -7,6 +7,7 @@ internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-
 internal/api/syncadmin	gate_reader_census_test.go	unexpressed	-
 internal/api/teamsidentity	deleted_at_writer_census_test.go	unexpressed	-
 internal/api/teamsidentity	team_id_writer_census_test.go	unexpressed	-
+internal/apiservice	endpoint_profile_scan_test.go	unexpressed	-
 internal/apiservice/admin	routeguard_test.go	internal/apiservice/admin	dir
 internal/apiservice/admin	routeguard_test.go	unexpressed	-
 internal/atlassianteams	vendored_documents_test.go	third_party/vendor/atlassian/patches	dir
@@ -27,9 +28,12 @@ internal/auth/contracts	fixture_secret_scanner_test.go	unexpressed	-
 internal/auth/contracts	jwks_document_goldens_test.go	unexpressed	-
 internal/auth/contracts	principal_contract_goldens_test.go	unexpressed	-
 internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-
+internal/auth/contracts	reject_location_test.go	unexpressed	-
 internal/auth/contracts	schema_dialect_test.go	unexpressed	-
 internal/auth/contracts	session_goldens_test.go	unexpressed	-
 internal/auth/contracts	transport_error_goldens_test.go	unexpressed	-
+internal/auth/contracts/tokencorpus	corpus.go	unexpressed	-
+internal/auth/contracts/tokencorpus	corpus_test.go	unexpressed	-
 internal/auth/identity	externalkey_test.go	internal/auth/identity	dir
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir
 internal/auth/writerinventory	scan_test.go	unexpressed	-
@@ -165,6 +169,7 @@ internal/jobs/operational	billingemail_test.go	internal/jobs/operational/testdat
 internal/jobs/operational	venue_golden_address_test.go	internal/jobs/operational/testdata/golden	dir
 internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree
+internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-
 internal/localgit	blame.go	unexpressed	-
 internal/localgit	refs.go	unexpressed	-
 internal/migrationmatrix	restendpoints.go	unexpressed	-

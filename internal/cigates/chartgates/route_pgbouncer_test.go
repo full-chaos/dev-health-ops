@@ -490,19 +490,19 @@ func pgScopesRoleDSNsAndPreservesDirectMigrations(g *guard) {
 		args := strs(c["args"])
 		g.expect(str(at(env["POSTGRES_URI"], "valueFrom", "secretKeyRef", "key")) == "POSTGRES_URI", "%s POSTGRES_URI must be a secretKeyRef to POSTGRES_URI", grp)
 		if streamGroups[grp] {
-			g.expect(!has(env, "WORKER_DATABASE_URI"), "%s receives the queue-control DSN", grp)
+			g.expect(!holds(env, "WORKER_DATABASE_URI"), "%s receives the queue-control DSN", grp)
 		} else {
 			g.expect(str(at(env["WORKER_DATABASE_URI"], "valueFrom", "secretKeyRef", "key")) == "WORKER_DATABASE_URI", "%s WORKER_DATABASE_URI must be a secretKeyRef to WORKER_DATABASE_URI", grp)
 		}
 		g.expect(sortedHas(args, "--queue-database-mode=session") && sortedHas(args, "--domain-transaction-pooler=true"), "%s lacks the pool-mode flags: %v", grp, args)
 		for _, n := range []string{"WORKER_DATABASE_MODE", "PGBOUNCER_TRANSACTION_MODE", "MIGRATION_DATABASE_URI", "MIGRATION_DATABASE_URI_FILE"} {
-			g.expect(!has(env, n), "%s sets %s in its environment", grp, n)
+			g.expect(!holds(env, n), "%s sets %s in its environment", grp, n)
 		}
 		if grp == "reconciler" || grp == "scheduler" {
 			g.expect(str(at(env["COORDINATOR_DATABASE_URI"], "valueFrom", "secretKeyRef", "key")) == "COORDINATOR_DATABASE_URI", "%s must read COORDINATOR_DATABASE_URI", grp)
-			g.expect(sortedHas(args, "--coordinator-database-mode=session") && !has(env, "COORDINATOR_DATABASE_MODE"), "%s coordinator mode must be a flag", grp)
+			g.expect(sortedHas(args, "--coordinator-database-mode=session") && !holds(env, "COORDINATOR_DATABASE_MODE"), "%s coordinator mode must be a flag", grp)
 		} else {
-			g.expect(!has(env, "COORDINATOR_DATABASE_URI") && !has(env, "COORDINATOR_DATABASE_MODE"), "%s receives the coordinator DSN", grp)
+			g.expect(!holds(env, "COORDINATOR_DATABASE_URI") && !holds(env, "COORDINATOR_DATABASE_MODE"), "%s receives the coordinator DSN", grp)
 		}
 	}
 	jobs := ofKind(docs, "Job")

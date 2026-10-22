@@ -273,6 +273,24 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" $ }}, key: CLICKHOUSE_NATIVE_URI}}
             {{- end }}
             {{- end }}
+            {{- /*
+              The shared ConfigMap and Secret below reach every group through
+              envFrom, and an operator may keep other database DSNs in them
+              (the API role's, the migration role's, a legacy alias). An explicit
+              env entry beats an envFrom key of the same name and an empty value
+              is absent to the process, so each worker group blanks the DSN
+              names it does not hold. The process also refuses to start with any
+              other DSN variable (internal/platform/dsnclass).
+            */}}
+            {{- range $blank := list "DATABASE_URI" "API_DATABASE_URI" "GO_API_REGISTRY_POSTGRES_URI" "MIGRATION_DATABASE_URI" "AUTH_DATABASE_URI" "AUTH_MIGRATION_DATABASE_URI" }}
+            - {name: {{ $blank }}, value: ""}
+            {{- end }}
+            {{- if not $coordinator }}
+            - {name: COORDINATOR_DATABASE_URI, value: ""}
+            {{- end }}
+            {{- if $group.runtimeProfile }}
+            - {name: WORKER_DATABASE_URI, value: ""}
+            {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             # Every Go worker group uses the bounded domain transaction pool. River
             # worker and coordinator groups also use the River queue session pool;

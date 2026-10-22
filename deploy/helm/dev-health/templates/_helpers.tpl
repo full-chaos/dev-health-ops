@@ -377,8 +377,9 @@ CLICKHOUSE_URI: {{ include "dev-health.clickhouseURI" . | quote }}
 {{- if and .Values.clickhouse.enabled (not (index .Values.secrets.data "CLICKHOUSE_NATIVE_URI")) }}
 CLICKHOUSE_NATIVE_URI: {{ include "dev-health.clickhouseNativeURI" . | quote }}
 {{- end }}
-{{- /* No database DSN alias is derived here: this Secret is read through envFrom by every
-   worker group, and each worker class holds only the DSN variables of its own class. */}}
+{{- if and .Values.postgresql.enabled (not (index .Values.secrets.data "DATABASE_URI")) }}
+DATABASE_URI: {{ include "dev-health.postgresURI" . | quote }}
+{{- end }}
 {{- end }}
 
 {{/*

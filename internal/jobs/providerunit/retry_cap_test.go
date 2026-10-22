@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,8 +67,43 @@ func runUnitAttempt(t *testing.T, err error, attempt int) (*classRepository, err
 	return repository, handler.Work(context.Background(), execution)
 }
 
+// isPermanentReturn reads the marker the River adapter classifies on (its
+// category and cancel fields), never the error text. jobruntime exports no
+// accessor, so the unexported fields are read by reflection.
 func isPermanentReturn(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "category: "+string(jobruntime.CategoryPermanent))
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		value := reflect.ValueOf(current)
+		if value.Kind() != reflect.Pointer || value.Elem().Kind() != reflect.Struct ||
+			value.Type().Elem().Name() != "markedError" ||
+			value.Type().Elem().PkgPath() != reflect.TypeOf(jobruntime.Retryable(nil)).Elem().PkgPath() {
+			continue
+		}
+		category := value.Elem().FieldByName("category")
+		cancel := value.Elem().FieldByName("cancel")
+		if !category.IsValid() || !cancel.IsValid() {
+			panic("jobruntime.markedError lost its category or cancel field")
+		}
+		return category.String() == string(jobruntime.CategoryPermanent) && cancel.Bool()
+	}
+	return false
+}
+
+type lookalikeError struct{}
+
+func (lookalikeError) Error() string {
+	return "job error category: " + string(jobruntime.CategoryPermanent)
+}
+
+func TestPermanentReturnIsReadFromTheMarkerNotTheText(t *testing.T) {
+	if !isPermanentReturn(jobruntime.Permanent(errors.New("x"))) {
+		t.Fatal("a Permanent marker is not seen as permanent")
+	}
+	if isPermanentReturn(jobruntime.Retryable(errors.New("x"))) {
+		t.Fatal("a Retryable marker is seen as permanent")
+	}
+	if isPermanentReturn(lookalikeError{}) {
+		t.Fatal("an error with the permanent text but no marker is seen as permanent")
+	}
 }
 
 func TestCappedClassEndsAtItsCapUnderItsCauseClass(t *testing.T) {

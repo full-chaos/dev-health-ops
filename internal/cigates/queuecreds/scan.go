@@ -6,6 +6,7 @@ package queuecreds
 
 import (
 	"bytes"
+	"encoding"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,8 @@ func (finding Finding) String() string { return finding.Where + ": " + finding.W
 var (
 	deniedNameTokens = set("token", "tokens", "secret", "secrets", "password", "passwd", "passphrase", "pwd",
 		"bearer", "authorization", "cookie", "cookies", "jwt", "credential", "credentials", "dsn", "apikey")
-	keyQualifiers = set("api", "private", "signing", "encryption", "secret", "access", "auth", "master")
+	keyQualifiers = set("api", "private", "signing", "encryption", "secret", "access", "auth", "master",
+		"service", "account", "client", "session", "webhook", "ssh", "bearer", "jwt", "credential")
 	// A denied word that ends in one of these words names a non-reusable
 	// attribute of a credential (its fingerprint, its hash, its id), not the
 	// credential itself.
@@ -120,7 +122,12 @@ var staticValueRules = []valueRule{
 	{"jwt", regexp.MustCompile(`eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*`)},
 	{"private-key-block", regexp.MustCompile(`-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----`)},
 	{"url-userinfo", regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s:@]+:[^/\s@]+@`)},
-	{"provider-token", regexp.MustCompile(`\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|sk_live_[A-Za-z0-9]{16,})`)},
+	{"github-token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}`)},
+	{"github-pat", regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{20,}`)},
+	{"gitlab-token", regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{16,}`)},
+	{"slack-token", regexp.MustCompile(`\bxox[abprs]-[A-Za-z0-9-]{10,}`)},
+	{"aws-key-id", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}`)},
+	{"stripe-key", regexp.MustCompile(`\bsk_live_[A-Za-z0-9]{16,}`)},
 }
 
 // NewValueScanner derives the value rules from the credential-classes contract:
@@ -395,6 +402,10 @@ func walkType(findings *[]Finding, path string, typ reflect.Type, active map[ref
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
+	if hasCustomMarshaler(typ) {
+		*findings = append(*findings, Finding{path, "custom marshaler hides the serialized shape from the scan"})
+		return
+	}
 	switch typ.Kind() {
 	case reflect.Interface:
 		*findings = append(*findings, Finding{path, "interface value can carry an open payload"})
@@ -432,6 +443,31 @@ func walkType(findings *[]Finding, path string, typ reflect.Type, active map[ref
 			walkType(findings, child, field.Type, active)
 		}
 	}
+}
+
+var (
+	jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	textMarshalerType = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
+)
+
+// hasCustomMarshaler reports whether encoding/json would call a method instead
+// of walking the fields of typ. Interfaces, maps and byte slices have their own
+// finding.
+func hasCustomMarshaler(typ reflect.Type) bool {
+	switch typ.Kind() {
+	case reflect.Interface, reflect.Map:
+		return false
+	case reflect.Slice, reflect.Array:
+		if typ.Elem().Kind() == reflect.Uint8 {
+			return false
+		}
+	}
+	for _, marshaler := range []reflect.Type{jsonMarshalerType, textMarshalerType} {
+		if typ.Implements(marshaler) || reflect.PointerTo(typ).Implements(marshaler) {
+			return true
+		}
+	}
+	return false
 }
 
 // jsonFieldName returns the serialized name of a field. For an embedded field
@@ -656,6 +692,7 @@ func (exemption Exemption) matches(field TaggedField) bool {
 // any more (a stale row is a failure, not a silent pass).
 func (parsed PackageTypes) OperatorFindings(label string, exemptions []Exemption) []Finding {
 	var findings []Finding
+	findings = append(findings, parsed.outputShapeFindings(label)...)
 	used := make([]bool, len(exemptions))
 	for _, field := range parsed.TaggedFields() {
 		if !CredentialName(field.Name) {
@@ -794,7 +831,12 @@ func CredentialProbes(credentialClasses []byte) ([]string, error) {
 	urlText := segment("probe-probe-probe-probe-probe-probe")
 	probes := []string{
 		segment(`{"alg":"none"}`) + "." + segment(`{"sub":"probe"}`) + "." + segment("probe-signature"),
+		"gh" + "p_" + urlText[:24],
+		"github_" + "pat_" + urlText,
 		"gl" + "pat-" + urlText[:20],
+		"xox" + "b-" + hexText,
+		"AK" + "IA" + "0123456789ABCDEF",
+		"sk_" + "live_" + hexText,
 		"-----BEGIN " + "PRIVATE KEY-----",
 		"postgres://user:" + "probe@host/db",
 	}
@@ -809,6 +851,15 @@ func CredentialProbes(credentialClasses []byte) ([]string, error) {
 	for _, probe := range probes {
 		if scanner.Match(probe) == "" {
 			return nil, fmt.Errorf("probe %q matches no value rule", probe)
+		}
+	}
+	for _, rule := range scanner.rules {
+		covered := false
+		for _, probe := range probes {
+			covered = covered || rule.pattern.MatchString(probe)
+		}
+		if !covered {
+			return nil, fmt.Errorf("value rule %s has no probe", rule.name)
 		}
 	}
 	return probes, nil
@@ -865,6 +916,29 @@ func admits(schema map[string]any, value string) (bool, error) {
 	return true, nil
 }
 
+// isStringSchema reports whether a schema node constrains a string: it names the
+// type string (alone or in a list), or it carries a string-only keyword with no
+// type at all.
+func isStringSchema(schema map[string]any) bool {
+	switch typed := schema["type"].(type) {
+	case string:
+		return typed == "string"
+	case []any:
+		for _, entry := range typed {
+			if entry == "string" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, keyword := range []string{"pattern", "format", "minLength", "maxLength"} {
+		if _, present := schema[keyword]; present {
+			return true
+		}
+	}
+	return false
+}
+
 // AdmittingStrings lists, as "<file> <path>", every string property of the
 // envelope schema and the payload schemas that accepts at least one probe.
 func AdmittingStrings(root string, probes []string) ([]string, error) {
@@ -888,7 +962,7 @@ func AdmittingStrings(root string, probes []string) ([]string, error) {
 			if !ok || walkErr != nil {
 				return
 			}
-			if schema["type"] == "string" {
+			if isStringSchema(schema) {
 				for _, probe := range probes {
 					accepted, err := admits(schema, probe)
 					if err != nil {
@@ -906,8 +980,24 @@ func AdmittingStrings(root string, probes []string) ([]string, error) {
 					walk(path+".properties."+name, properties[name])
 				}
 			}
-			if items, present := schema["items"]; present {
-				walk(path+".items", items)
+			for _, keyword := range []string{"items", "additionalProperties", "contains", "not", "if", "then", "else", "propertyNames"} {
+				if child, present := schema[keyword]; present {
+					walk(path+"."+keyword, child)
+				}
+			}
+			for _, keyword := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
+				if children, present := schema[keyword].([]any); present {
+					for index, child := range children {
+						walk(path+"."+keyword+"["+strconv.Itoa(index)+"]", child)
+					}
+				}
+			}
+			for _, keyword := range []string{"$defs", "definitions", "patternProperties", "dependentSchemas"} {
+				if defs, present := schema[keyword].(map[string]any); present {
+					for _, name := range sortedMapKeys(defs) {
+						walk(path+"."+keyword+"."+name, defs[name])
+					}
+				}
 			}
 		}
 		walk("$", node)
@@ -932,4 +1022,147 @@ var FreeTextIdentifiers = []string{
 // registered domain_link word. The gate executes that refusal.
 var RuntimeBoundStrings = []string{
 	"envelope.schema.json $.properties.domain.properties.type",
+}
+
+// outputShapeFindings reads the two operator output shapes a field scan cannot
+// see: the keys of map literals, which become JSON object names, and embedded
+// types from other packages, whose fields the scan cannot read.
+func (parsed PackageTypes) outputShapeFindings(label string) []Finding {
+	var findings []Finding
+	for _, file := range parsed.files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.CompositeLit:
+				if _, isMap := typed.Type.(*ast.MapType); !isMap {
+					return true
+				}
+				for _, element := range typed.Elts {
+					pair, ok := element.(*ast.KeyValueExpr)
+					if !ok {
+						continue
+					}
+					literal, ok := pair.Key.(*ast.BasicLit)
+					if !ok || literal.Kind != token.STRING {
+						continue
+					}
+					if key, err := strconv.Unquote(literal.Value); err == nil && CredentialName(key) {
+						findings = append(findings, Finding{label + " map key " + key, "key name reads as a credential"})
+					}
+				}
+			case *ast.StructType:
+				for _, field := range typed.Fields.List {
+					if len(field.Names) != 0 {
+						continue
+					}
+					expr := field.Type
+					if star, isStar := expr.(*ast.StarExpr); isStar {
+						expr = star.X
+					}
+					if selector, isSelector := expr.(*ast.SelectorExpr); isSelector {
+						findings = append(findings, parsed.importedEmbedFindings(label, file, selector)...)
+					}
+				}
+			}
+			return true
+		})
+	}
+	return findings
+}
+
+// importedEmbedFindings reads an embedded type from another package of this
+// module field by field. An embedded type from outside the module cannot be
+// read and is a finding of its own.
+func (parsed PackageTypes) importedEmbedFindings(label string, file *ast.File, selector *ast.SelectorExpr) []Finding {
+	qualifier, _ := selector.X.(*ast.Ident)
+	importPath := ""
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := filepath.Base(path)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if qualifier != nil && name == qualifier.Name {
+			importPath = path
+		}
+	}
+	unreadable := Finding{label + " embedded field " + selector.Sel.Name,
+		"embeds the imported type " + selector.Sel.Name + ", which the scan cannot read"}
+	root, modulePath, err := moduleOf(parsed.Dir)
+	if err != nil || !strings.HasPrefix(importPath, modulePath+"/") {
+		return []Finding{unreadable}
+	}
+	return embeddedTypeFindings(root, modulePath, importPath, selector.Sel.Name, label+" embedded "+selector.Sel.Name, 0)
+}
+
+func moduleOf(dir string) (root, modulePath string, err error) {
+	for current := dir; ; current = filepath.Dir(current) {
+		data, readErr := os.ReadFile(filepath.Join(current, "go.mod"))
+		if readErr == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if path, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+					return current, strings.TrimSpace(path), nil
+				}
+			}
+			return "", "", errors.New("go.mod names no module")
+		}
+		if filepath.Dir(current) == current {
+			return "", "", errors.New("go.mod not found")
+		}
+	}
+}
+
+const maxEmbedDepth = 6
+
+func embeddedTypeFindings(root, modulePath, importPath, typeName, label string, depth int) []Finding {
+	unreadable := Finding{label, "embedded type " + typeName + " cannot be read by the scan"}
+	if depth > maxEmbedDepth {
+		return []Finding{unreadable}
+	}
+	dir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(importPath, modulePath+"/")))
+	imported, err := ParsePackage(dir)
+	if err != nil {
+		return []Finding{unreadable}
+	}
+	var findings []Finding
+	found := false
+	for _, file := range imported.files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				typeSpec := spec.(*ast.TypeSpec)
+				structType, isStruct := typeSpec.Type.(*ast.StructType)
+				if typeSpec.Name.Name != typeName || !isStruct {
+					continue
+				}
+				found = true
+				for _, field := range structType.Fields.List {
+					if name, ok := serializedName(field); ok && CredentialName(name) {
+						findings = append(findings, Finding{label + " field " + name, "field name reads as a credential"})
+					}
+					if len(field.Names) == 0 {
+						expr := field.Type
+						if star, isStar := expr.(*ast.StarExpr); isStar {
+							expr = star.X
+						}
+						switch embedded := expr.(type) {
+						case *ast.Ident:
+							findings = append(findings, embeddedTypeFindings(root, modulePath, importPath, embedded.Name, label+" embedded "+embedded.Name, depth+1)...)
+						case *ast.SelectorExpr:
+							findings = append(findings, Finding{label + " embedded " + embedded.Sel.Name, "embeds a type from a second package the scan does not follow"})
+						}
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		return []Finding{unreadable}
+	}
+	return findings
 }

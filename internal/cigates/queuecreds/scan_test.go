@@ -192,7 +192,7 @@ func TestValueScannerNeedsAuthDerivedRules(t *testing.T) {
 func TestCredentialNameWords(t *testing.T) {
 	for _, name := range []string{
 		"access_token", "refreshToken", "RefreshToken", "client_secret", "Password", "bearer", "Authorization",
-		"api_key", "APIKey", "private_key", "signing_key", "dsn", "DSN", "session_cookie", "jwt", "svc_credential", "claimToken",
+		"service_account_key", "client_key", "session_key", "account_key", "api_key", "APIKey", "private_key", "signing_key", "dsn", "DSN", "session_cookie", "jwt", "svc_credential", "claimToken",
 	} {
 		if !queuecreds.CredentialName(name) {
 			t.Errorf("%q should read as a credential", name)
@@ -533,6 +533,175 @@ func TestAdmittingStringsReportsAPlantedLooseProperty(t *testing.T) {
 			sort.Strings(base)
 			if !reflect.DeepEqual(got, base) {
 				t.Fatalf("admitting strings:\n got  %q\n want %q", got, base)
+			}
+		})
+	}
+}
+
+func TestAdmittingStringsCoversEveryProviderShapeAndComposition(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "contracts", "auth", "v1", "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes, err := queuecreds.CredentialProbes(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const unit = "schemas/sync.provider_unit.v1.schema.json $.properties.unit_id"
+	loosen := func(pattern string) func(*testing.T, string) {
+		return func(t *testing.T, temp string) {
+			mutateJSON(t, temp, providerSchema, func(node map[string]any) {
+				schemaProperties(node)["unit_id"] = map[string]any{"type": "string", "pattern": pattern}
+			})
+		}
+	}
+	cases := []struct {
+		name  string
+		plant func(*testing.T, string)
+		found string
+	}{
+		{"github personal token", loosen("^ghp_[A-Za-z0-9]{20,}$"), unit},
+		{"github fine-grained token", loosen("^github_pat_[A-Za-z0-9_]{20,}$"), unit},
+		{"gitlab token", loosen("^glpat-[A-Za-z0-9_-]{16,}$"), unit},
+		{"slack token", loosen("^xoxb-[A-Za-z0-9-]{10,}$"), unit},
+		{"aws key id", loosen("^AKIA[0-9A-Z]{16}$"), unit},
+		{"stripe key", loosen("^sk_live_[A-Za-z0-9]{16,}$"), unit},
+		{"bearer header", loosen("^Bearer [A-Za-z0-9._~+/=-]{8,}$"), unit},
+		{"pem header", loosen("^-----BEGIN [A-Z ]+-----$"), unit},
+		{"url with userinfo", loosen("^postgres://[^/]+@[^/]+/[a-z]+$"), unit},
+		{"allOf child", func(t *testing.T, temp string) {
+			mutateJSON(t, temp, providerSchema, func(node map[string]any) {
+				schemaProperties(node)["unit_id"] = map[string]any{"allOf": []any{map[string]any{"type": "string", "pattern": "^Bearer .+$"}}}
+			})
+		}, unit + ".allOf[0]"},
+		{"anyOf child", func(t *testing.T, temp string) {
+			mutateJSON(t, temp, providerSchema, func(node map[string]any) {
+				schemaProperties(node)["unit_id"] = map[string]any{"anyOf": []any{map[string]any{"type": "string", "pattern": "^Bearer .+$"}}}
+			})
+		}, unit + ".anyOf[0]"},
+		{"oneOf child", func(t *testing.T, temp string) {
+			mutateJSON(t, temp, providerSchema, func(node map[string]any) {
+				schemaProperties(node)["unit_id"] = map[string]any{"oneOf": []any{map[string]any{"type": "string", "pattern": "^Bearer .+$"}}}
+			})
+		}, unit + ".oneOf[0]"},
+		{"definitions entry", func(t *testing.T, temp string) {
+			mutateJSON(t, temp, providerSchema, func(node map[string]any) {
+				node["$defs"] = map[string]any{"loose": map[string]any{"type": "string", "pattern": "^Bearer .+$"}}
+			})
+		}, "schemas/sync.provider_unit.v1.schema.json $.$defs.loose"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			temp := copyContracts(t)
+			tc.plant(t, temp)
+			got, err := queuecreds.AdmittingStrings(temp, probes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, entry := range got {
+				found = found || entry == tc.found
+			}
+			if !found {
+				t.Fatalf("planted acceptance at %q not reported:\n%q", tc.found, got)
+			}
+		})
+	}
+}
+
+type marshaled struct{ Hidden string }
+
+func (marshaled) MarshalJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+type pointerMarshaled struct{ Hidden string }
+
+func (*pointerMarshaled) MarshalJSON() ([]byte, error) { return []byte(`{}`), nil }
+
+type textMarshaled struct{ Hidden string }
+
+func (textMarshaled) MarshalText() ([]byte, error) { return []byte(`x`), nil }
+
+type holdsMarshaled struct {
+	Inner []pointerMarshaled `json:"inner"`
+}
+
+func TestScanTypeReportsCustomMarshalers(t *testing.T) {
+	for name, typ := range map[string]reflect.Type{
+		"value receiver": reflect.TypeOf(marshaled{}), "pointer receiver": reflect.TypeOf(pointerMarshaled{}),
+		"text marshaler": reflect.TypeOf(textMarshaled{}), "nested in a slice": reflect.TypeOf(holdsMarshaled{}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			text := wholeText(queuecreds.ScanType("T", typ))
+			if !strings.Contains(text, "custom marshaler hides the serialized shape from the scan") {
+				t.Fatalf("custom marshaler not reported:\n%s", text)
+			}
+		})
+	}
+}
+
+func TestOperatorScanReadsMapKeysAndImportedEmbeds(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		expect string
+	}{
+		{"map literal key", "func f() any { return map[string]any{\"access_token\": 1} }\n", "map key access_token: key name reads as a credential"},
+		{"map literal key in a nested value", "func f() any { return map[string]any{\"ok\": map[string]string{\"refresh_token\": \"\"}} }\n", "map key refresh_token"},
+		{"benign map keys", "func f() any { return map[string]any{\"count\": 1, \"credential_fingerprint\": \"\"} }\n", ""},
+		{"imported embedded type", "import \"net/http\"\ntype out struct {\n\thttp.Cookie\n}\n", "embeds the imported type Cookie, which the scan cannot read"},
+		{"local embedded type", "type inner struct{ Count int }\ntype out struct {\n\tinner\n}\n", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text := wholeText(writePackage(t, tc.source).OperatorFindings("p", nil))
+			if tc.expect == "" && text != "" {
+				t.Fatalf("unexpected findings:\n%s", text)
+			}
+			if tc.expect != "" && !strings.Contains(text, tc.expect) {
+				t.Fatalf("want %q in:\n%s", tc.expect, text)
+			}
+		})
+	}
+}
+
+func TestOperatorScanFollowsEmbeddedTypesOfTheModule(t *testing.T) {
+	write := func(root, rel, body string) {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name   string
+		inner  string
+		expect string
+	}{
+		{"clean embedded struct", "type Inner struct {\n\tCount int `json:\"count\"`\n}\n", ""},
+		{"credential field in the embedded struct", "type Inner struct {\n\tAccessToken string `json:\"access_token\"`\n}\n", "field access_token: field name reads as a credential"},
+		{"untagged credential field", "type Inner struct {\n\tPassword string\n}\n", "field Password: field name reads as a credential"},
+		{"embedded in the embedded struct", "type Base struct {\n\tSecret string\n}\ntype Inner struct {\n\tBase\n}\n", "embedded Base field Secret: field name reads as a credential"},
+		{"missing type", "type Other struct{}\n", "embedded type Inner cannot be read by the scan"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			write(root, "go.mod", "module example.test/m\n\ngo 1.22\n")
+			write(root, "q/q.go", "package q\n"+tc.inner)
+			write(root, "p/p.go", "package p\n\nimport \"example.test/m/q\"\n\ntype out struct {\n\tq.Inner\n}\n")
+			parsed, err := queuecreds.ParsePackage(filepath.Join(root, "p"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := wholeText(parsed.OperatorFindings("p", nil))
+			if tc.expect == "" && text != "" {
+				t.Fatalf("unexpected findings:\n%s", text)
+			}
+			if tc.expect != "" && !strings.Contains(text, tc.expect) {
+				t.Fatalf("want %q in:\n%s", tc.expect, text)
 			}
 		})
 	}

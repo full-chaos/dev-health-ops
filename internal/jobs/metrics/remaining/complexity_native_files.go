@@ -14,7 +14,10 @@ import (
 // into memory. go-heavy runs several queues in one 768Mi container, and the
 // scope has no max_files, so a repo's whole git_files text used to be held at
 // once (CHAOS-10586: OOMKilled 4 s into the job). A single file larger than
-// the budget is still fetched alone.
+// the budget is still fetched alone, and so are all rows of one path: git_files
+// can hold several unmerged versions of a path, the old flow analysed each
+// row, and splitting them across batches would double-fetch them. The budget
+// is therefore soft by the listed bytes of one path's duplicate rows.
 const complexityFetchBudgetBytes = 16 << 20
 
 // complexityFileSize is one candidate file with the bytes its text will cost.

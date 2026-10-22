@@ -122,14 +122,13 @@ printf 'SMTP sink pid %s on port %s\n' "${SINK_PID}" "${AUTH_PROOF_SMTP_PORT}"
 printf 'step 1: up --build --wait go-api auth-service\n'
 compose --profile auth up --build --detach --wait --wait-timeout 900 go-api auth-service
 assert_project_prefixed
-{
-  printf '\\set token %s\n' "'${AUTH_SESSION_ISSUE_TOKEN}'"
-  cat <<'SQL'
+compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
+  < <(printf '\\set token %s\n' "'${AUTH_SESSION_ISSUE_TOKEN}'"; cat <<'SQL'
 INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
 VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'), left(:'token', 16),
         '["sessions:issue"]', now());
 SQL
-} | compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
+  ) \
   || die "could not store the session issue credential"
 API_PORT="$(compose port go-api 8000 | sed 's/.*://')"
 [[ "${API_PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral go-api port (${API_PORT})"

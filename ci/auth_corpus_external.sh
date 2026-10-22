@@ -175,14 +175,13 @@ if [ "${LEG}" = "acp" ]; then
     # the state file, before the sessions flag turns on (go-api refuses to start with the flag and no credential).
     ISSUE_TOKEN="svc_authsess_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
     [[ "${ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "could not build a session issue credential"
-    {
-      printf '\\set token %s\n' "'${ISSUE_TOKEN}'"
-      cat <<'SQL'
+    compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
+      < <(printf '\\set token %s\n' "'${ISSUE_TOKEN}'"; cat <<'SQL'
 INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
 VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'), left(:'token', 16),
         '["sessions:issue"]', now());
 SQL
-    } | compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
+      ) \
       || die "could not store the session issue credential"
     printf 'export AUTH_SESSION_ISSUE_TOKEN=%q\n' "${ISSUE_TOKEN}" >>"${STATE}"
     unset ISSUE_TOKEN

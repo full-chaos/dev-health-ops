@@ -281,6 +281,21 @@ var additiveExemptions = []additiveExemption{
 		reason: "credential_class admits internal_svc_authsess_token; the redefined list is the old list plus " +
 			"that one value, so it only widens (CHAOS-10465)",
 	},
+	{
+		version:    19,
+		regression: `constraint memberships.memberships_status_check redefined "CHECK ((status = ANY (ARRAY['invited'::text, 'active'::text, 'suspended'::text])))" -> "CHECK ((status = ANY (ARRAY['invited'::text, 'active'::text, 'suspended'::text, 'removed'::text])))"`,
+		reason:     "membership status admits removed; the redefined list is the old list plus that one value, so it only widens (CHAOS-10638)",
+	},
+	{
+		version:    19,
+		regression: `constraint memberships.memberships_organization_id_fkey redefined "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE CASCADE" -> "FOREIGN KEY (organization_id) REFERENCES auth.organizations(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still has a membership is refused instead of deleting the memberships (CHAOS-10638)",
+	},
+	{
+		version:    19,
+		regression: `constraint memberships.memberships_principal_id_fkey redefined "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE CASCADE" -> "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
+		reason:     "deleting an organization or a principal that still has a membership is refused instead of deleting the memberships (CHAOS-10638)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

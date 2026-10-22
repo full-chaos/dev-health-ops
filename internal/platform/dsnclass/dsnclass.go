@@ -38,15 +38,44 @@ func Allowed(class string) []string {
 
 // Secret names the DSN secret an environment variable name stands for, and
 // reports whether it stands for one. The pattern is exactly: the name, with an
-// optional "_FILE" suffix removed, ends in "_URI" or "_URL" and contains
-// DATABASE or POSTGRES. A new connection secret therefore falls under the table until it is
-// added to it. Component-form variables (DEV_HEALTH_PG_*) are not matched.
+// optional "_FILE" suffix removed, ends in "_URI", "_URL" or "_DSN" and contains
+// DATABASE, POSTGRES or PG. A new connection secret therefore falls under the
+// table until it is added to it. Component-form variables (DEV_HEALTH_PG_*) are
+// not matched.
 func Secret(name string) (string, bool) {
 	base := strings.TrimSuffix(name, "_FILE")
-	if (strings.HasSuffix(base, "_URI") || strings.HasSuffix(base, "_URL")) && (strings.Contains(base, "DATABASE") || strings.Contains(base, "POSTGRES")) {
-		return base, true
+	if !hasAnySuffix(base, "_URI", "_URL", "_DSN") {
+		return "", false
 	}
-	return "", false
+	if !containsAny(base, "DATABASE", "POSTGRES", "PG") {
+		return "", false
+	}
+	return base, true
+}
+
+func hasAnySuffix(name string, suffixes ...string) bool {
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAny(name string, parts ...string) bool {
+	for _, part := range parts {
+		if strings.Contains(name, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// postgresValue reports whether a value is a PostgreSQL connection URL by its
+// scheme. The value is read for this test only and never kept or reported.
+func postgresValue(value string) bool {
+	lower := strings.ToLower(value)
+	return strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://")
 }
 
 // Foreign returns the names that stand for a DSN secret outside the class's
@@ -76,22 +105,29 @@ func (refusal *Refusal) Error() string {
 var validName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 
 // CheckEnviron refuses an environment (os.Environ form, "NAME=value") in which a
-// variable that stands for a DSN secret outside the class's set has a non-empty
-// value. An empty value counts as absent. A name that is not a plain identifier
+// variable with a non-empty value either stands for a DSN secret outside the
+// class's set (Secret), or carries a postgres:// or postgresql:// URL under a
+// name that is not one of the class's allowed names. An allowed name passes
+// whatever its value. An empty value counts as absent. A PostgreSQL connection
+// in libpq key=value form under a foreign name is not recognised (a named limit). A name that is not a plain identifier
 // cannot stand for a DSN secret and is ignored, so no free text reaches a log.
 func CheckEnviron(class string, environ []string) error {
-	var names []string
+	var foreign []string
 	for _, entry := range environ {
 		name, value, found := strings.Cut(entry, "=")
-		if !found || value == "" {
+		if !found || value == "" || !validName.MatchString(name) {
 			continue
 		}
-		if !validName.MatchString(name) {
+		if secret, ok := Secret(name); ok {
+			if !slices.Contains(allowed[class], secret) {
+				foreign = append(foreign, name)
+			}
 			continue
 		}
-		names = append(names, name)
+		if postgresValue(value) {
+			foreign = append(foreign, name)
+		}
 	}
-	foreign := Foreign(class, names)
 	if len(foreign) == 0 {
 		return nil
 	}

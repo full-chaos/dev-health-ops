@@ -286,7 +286,7 @@ type investmentExplainRequestBody struct {
 	UseInvestment *bool                       `json:"use_investment"`
 }
 
-// investmentExplainDateRange is the page's dateRange: the window [StartDate, EndDate).
+// investmentExplainDateRange is the page's dateRange: the window of the days StartDate to EndDate, both counted (D6101).
 type investmentExplainDateRange struct {
 	StartDate time.Time
 	EndDate   time.Time
@@ -534,7 +534,10 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 	// WindowErr there), and before any scope is resolved.
 	startTS, endTS, windowErr := timeWindow(body.Filters)
 	if body.DateRange != nil {
-		startTS, endTS, windowErr = body.DateRange.StartDate, body.DateRange.EndDate, nil
+		// The page's dateRange names its last day, inclusive, and a day that is not over is in no window (D6101): the
+		// same end every other reader binds (timewindow.ExclusiveEnd).
+		startTS, windowErr = body.DateRange.StartDate, nil
+		endTS, windowErr = timewindow.ExclusiveEnd(body.DateRange.EndDate, now)
 	}
 	var repoIDs []string
 	var reposNamed bool
@@ -599,7 +602,7 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 	if body.DateRange != nil {
 		filtersForCacheKey = map[string]any{
 			"filters":    filtersForCacheKey,
-			"date_range": []any{body.DateRange.StartDate.Format("2006-01-02"), body.DateRange.EndDate.Format("2006-01-02")},
+			"date_range": []any{startTS.Format("2006-01-02"), endTS.AddDate(0, 0, -1).Format("2006-01-02")},
 		}
 	}
 

@@ -1,0 +1,427 @@
+{
+  "description": "The signed golden corpus for access-token.v1. Each vector is a header text, a payload text and a hex signature; the signing input is base64url(header) + \".\" + base64url(payload). A verifier decides every vector at the fixed clock and audience of its row, in decision_order, and must reach the row's decision. Only the public JWKS is committed.",
+  "surface": "access-token.v1",
+  "issuer": "https://auth.example.test",
+  "leeway_seconds": 0,
+  "removed_kids": [
+    "auth-example-2026-04"
+  ],
+  "removed_public_keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "use": "sig",
+      "kid": "auth-example-2026-04",
+      "x": "H72MJ_45gFmj771_aLTZ9F8D6IlfY1yH8IUEZG83t14"
+    }
+  ],
+  "decision_order": [
+    "contract",
+    "unknown_kid",
+    "signature",
+    "issuer",
+    "audience",
+    "not_yet_valid",
+    "expired"
+  ],
+  "vectors": [
+    {
+      "file": "invalid-alg-hs256-public-key-as-secret.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "alg HS256 with a valid HMAC keyed by the published public key: the symmetric-confusion shape."
+    },
+    {
+      "file": "invalid-alg-hs256-unrelated-secret.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "alg HS256 with a valid HMAC under some other secret."
+    },
+    {
+      "file": "invalid-alg-lowercase.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "alg spelled eddsa with a valid EdDSA signature: the name is case-sensitive."
+    },
+    {
+      "file": "invalid-alg-none.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "alg none with an empty signature."
+    },
+    {
+      "file": "invalid-aud-api-token-at-auth-service.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid dev-health-api token presented to auth-service."
+    },
+    {
+      "file": "invalid-aud-auth-token-at-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid auth-service token presented to dev-health-api."
+    },
+    {
+      "file": "invalid-aud-unknown.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "an audience outside the contract's two."
+    },
+    {
+      "file": "invalid-delayed-nbf-before-nbf.json",
+      "now": 1760000399,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "not_yet_valid",
+      "why": "nbf later than iat: the clock is after iat and one second before nbf, so the token is not yet valid."
+    },
+    {
+      "file": "invalid-duplicate-claim-aud.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "duplicate_member",
+      "why": "aud appears twice with two valid audiences; the signature is valid over those bytes."
+    },
+    {
+      "file": "invalid-duplicate-claim-exp.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "duplicate_member",
+      "why": "exp appears twice."
+    },
+    {
+      "file": "invalid-duplicate-header-alg.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "duplicate_member",
+      "why": "alg appears twice in the header; the signature is valid over those bytes."
+    },
+    {
+      "file": "invalid-duplicate-header-kid.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "duplicate_member",
+      "why": "kid appears twice in the header with two published kids."
+    },
+    {
+      "file": "invalid-exp-equals-now.json",
+      "now": 1760000600,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "expired",
+      "why": "The clock equals exp: expired from exp inclusive."
+    },
+    {
+      "file": "invalid-exp-not-after-nbf.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "client_rule",
+      "why": "exp equals nbf: an empty validity window."
+    },
+    {
+      "file": "invalid-exp-one-second-ago.json",
+      "now": 1760000601,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "expired",
+      "why": "One second past exp."
+    },
+    {
+      "file": "invalid-iat-one-second-ahead.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "not_yet_valid",
+      "why": "iat and nbf one second after the clock."
+    },
+    {
+      "file": "invalid-iss-not-an-https-url.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "an http issuer."
+    },
+    {
+      "file": "invalid-iss-other-issuer.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "issuer",
+      "why": "A well-formed issuer that is not the one the verifier pins, signed by a published key."
+    },
+    {
+      "file": "invalid-kid-absent.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "no kid member."
+    },
+    {
+      "file": "invalid-kid-empty.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "an empty kid."
+    },
+    {
+      "file": "invalid-kid-removed.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "key_set": "published_and_removed",
+      "expect": "reject",
+      "reason": "unknown_kid",
+      "why": "Valid claims signed by a key that was published and has been removed from the set. The row runs with that key in the verifier's key set (a stale cache): it must still refuse the kid."
+    },
+    {
+      "file": "invalid-kid-unknown.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "unknown_kid",
+      "why": "A kid that was never published."
+    },
+    {
+      "file": "invalid-lifetime-over-the-ceiling.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "client_rule",
+      "why": "exp - iat one second over the ceiling."
+    },
+    {
+      "file": "invalid-nbf-one-second-ahead.json",
+      "now": 1759999999,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "not_yet_valid",
+      "why": "One second before nbf."
+    },
+    {
+      "file": "invalid-order-audience-over-expiry.json",
+      "now": 1760000600,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "Two failures: the wrong audience for the verifier and a token that has expired. The audience refusal comes first."
+    },
+    {
+      "file": "invalid-order-audience-over-not-yet-valid.json",
+      "now": 1759999999,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "Two failures: the wrong audience for the verifier and a clock before nbf. The audience refusal comes first."
+    },
+    {
+      "file": "invalid-order-contract-over-unknown-kid.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "Two failures: typ JWT and a kid never published. The contract refusal comes first."
+    },
+    {
+      "file": "invalid-order-issuer-over-audience.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "issuer",
+      "why": "Two failures: another issuer and the wrong audience for the verifier. The issuer refusal comes first."
+    },
+    {
+      "file": "invalid-order-signature-over-issuer.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "Two failures: another issuer and a signature by a key outside the set. The signature refusal comes first."
+    },
+    {
+      "file": "invalid-principal-type-workload.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "principal_type workload: a user access token is human only."
+    },
+    {
+      "file": "invalid-signature-bit-flip.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "A valid signature with its last bit flipped."
+    },
+    {
+      "file": "invalid-signature-empty.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "An empty signature under alg EdDSA."
+    },
+    {
+      "file": "invalid-signature-payload-tampered.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "A payload changed by one byte after signing."
+    },
+    {
+      "file": "invalid-signature-truncated.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "A 63-byte signature."
+    },
+    {
+      "file": "invalid-signature-wrong-key.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "The active kid, signed by a key outside the set."
+    },
+    {
+      "file": "invalid-signature-wrong-published-key.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "The active kid, signed by the other published key."
+    },
+    {
+      "file": "invalid-sub-integer.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "sub as a JSON number."
+    },
+    {
+      "file": "invalid-sub-user-prefix.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "sub with the user-id prefix, not a principal id."
+    },
+    {
+      "file": "invalid-typ-jwt.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "typ JWT: the token's type is at+jwt."
+    },
+    {
+      "file": "invalid-typ-uppercase.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "typ is case-sensitive."
+    },
+    {
+      "file": "valid-api-no-organization.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "No org_id: the session acts in no organization."
+    },
+    {
+      "file": "valid-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "The ordinary token for go-api and query-api, signed by the active key."
+    },
+    {
+      "file": "valid-at-nbf.json",
+      "now": 1760000000,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "The clock equals nbf: valid from nbf inclusive."
+    },
+    {
+      "file": "valid-auth-service.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "accept",
+      "why": "The token for auth-service's own session routes, verified as that audience."
+    },
+    {
+      "file": "valid-delayed-nbf-at-nbf.json",
+      "now": 1760000400,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "nbf later than iat: the clock equals nbf, after iat, so the token is valid."
+    },
+    {
+      "file": "valid-last-second-before-exp.json",
+      "now": 1760000599,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "One second before exp: the last valid instant."
+    },
+    {
+      "file": "valid-lifetime-at-the-ceiling.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "exp - iat equals the ceiling (3600 s): the longest lifetime a verifier accepts."
+    },
+    {
+      "file": "valid-signed-by-overlap-key.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "Signed by the key published for the rotation overlap: both keys of the set verify."
+    }
+  ]
+}

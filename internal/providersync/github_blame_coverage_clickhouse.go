@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -170,3 +171,65 @@ func gitHubBlameProgressPathCount(state GitHubBlameProgressState) int {
 
 var _ GitHubBlameCoverage = GitHubBlameClickHouseCoverage{}
 var _ GitHubBlameGenerationProgressProbe = GitHubBlameClickHouseCoverage{}
+
+// FilesInventory reads the blob paths of one repository banked by the files
+// dataset: the rows written within window of the newest write. git_files is
+// never pruned, so a path deleted from the repository keeps its last row; the
+// window drops it once a later sync rewrote the rest. It reads one repository
+// of one tenant and returns at most maximumGitHubBlameCoveragePaths paths.
+func (coverage GitHubBlameClickHouseCoverage) FilesInventory(
+	ctx context.Context,
+	claim Claim,
+	repoID string,
+	window time.Duration,
+) (GitHubBlameFilesInventoryResult, error) {
+	if ctx == nil || coverage.Conn == nil || coverage.Lease == nil ||
+		claim.Validate() != nil || claim.Provider != "github" ||
+		claim.Dataset != "blame" || repoID == "" || window <= 0 {
+		return GitHubBlameFilesInventoryResult{}, ErrInvalidConfiguration
+	}
+	if err := coverage.Lease.Assert(ctx); err != nil {
+		return GitHubBlameFilesInventoryResult{}, err
+	}
+	maxPaths := coverage.MaxPaths
+	if maxPaths == 0 {
+		maxPaths = maximumGitHubBlameCoveragePaths
+	}
+	if maxPaths < 1 || maxPaths > maximumGitHubBlameCoveragePaths {
+		return GitHubBlameFilesInventoryResult{}, ErrInvalidConfiguration
+	}
+	rows, err := coverage.Conn.Query(ctx, `
+SELECT path, last_synced
+FROM git_files FINAL
+WHERE org_id = ? AND repo_id = ?
+  AND last_synced >= (
+      SELECT max(last_synced) FROM git_files WHERE org_id = ? AND repo_id = ?
+  ) - toIntervalSecond(?)
+LIMIT ?`, claim.OrgID, repoID, claim.OrgID, repoID, int64(window/time.Second), maxPaths+1)
+	if err != nil {
+		return GitHubBlameFilesInventoryResult{}, err
+	}
+	defer rows.Close()
+	var result GitHubBlameFilesInventoryResult
+	for rows.Next() {
+		var path string
+		var syncedAt time.Time
+		if err := rows.Scan(&path, &syncedAt); err != nil {
+			return GitHubBlameFilesInventoryResult{}, err
+		}
+		if path == "" {
+			return GitHubBlameFilesInventoryResult{}, providerfoundation.ErrNormalizationInvalid
+		}
+		if len(result.Paths) >= maxPaths {
+			return GitHubBlameFilesInventoryResult{}, ErrGitHubBlameProgressUnavailable
+		}
+		result.Paths = append(result.Paths, path)
+		if syncedAt.After(result.NewestSyncedAt) {
+			result.NewestSyncedAt = syncedAt
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return GitHubBlameFilesInventoryResult{}, err
+	}
+	return result, nil
+}

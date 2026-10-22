@@ -1,0 +1,4 @@
+ERROR: x.html: content h1 has no accessible text
+ERROR: x.html: content h1 has no accessible text
+ERROR: x.html: expected one content h1, found 3
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

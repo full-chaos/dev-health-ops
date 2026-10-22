@@ -57,7 +57,7 @@ def build(*, mode: str, full_check: bool) -> None:
     (ROOT / ".build").mkdir(parents=True, exist_ok=True)
 
     if full_check:
-        _run([sys.executable, "scripts/validate_docs_v2_publication.py"])
+        _run([*CIGATE_DOCS, "validate-publication"])
 
     _run(
         [
@@ -92,8 +92,8 @@ def build(*, mode: str, full_check: bool) -> None:
         )
         _run(
             [
-                sys.executable,
-                "scripts/check_docs_candidate_accessibility.py",
+                *CIGATE_DOCS,
+                "check-docs-accessibility",
                 "--site-dir",
                 str(SITE_DIR.relative_to(ROOT)),
                 "--css",

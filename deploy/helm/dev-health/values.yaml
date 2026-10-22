@@ -215,6 +215,12 @@ authService:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
     hookEvents: [pre-install, pre-upgrade]
+    # -- CHAOS-10581: the grants-only pass (`auth-migrate grants`) after the ops
+    #    migrate Job, on migrations.hook.events. It fails the release when a
+    #    listed public table is missing. false removes it (escape hatch); the
+    #    public read grants then wait for the next auth-migrate run.
+    grantsHook:
+      enabled: true
     backoffLimit: 0
     activeDeadlineSeconds: 600
     resources:

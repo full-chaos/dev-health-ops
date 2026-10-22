@@ -1,6 +1,6 @@
 # Path classes of the declared-read guard (cigate plan-reads): class<TAB>glob, `**` = any number of path segments.
 # A package that names a path of a class in a string literal needs a reads.tsv row for that class. The plan verdict
-# (cigate plan-verdict) plans FULL for any changed path that is not a .go file; these classes do not narrow it.
+# (cigate plan-verdict) selects the packages that read the class of a changed non-Go path; a path in no class plans FULL.
 .beads	.beads/**
 .claude	.claude/**
 .codex-review	.codex-review*

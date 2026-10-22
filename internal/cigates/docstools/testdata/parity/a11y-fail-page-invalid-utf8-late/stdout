@@ -1,0 +1,2 @@
+ERROR: bad.html: could not parse HTML: 'utf-8' codec can't decode bytes in position 219-220: unexpected end of data
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

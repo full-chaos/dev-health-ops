@@ -357,7 +357,7 @@ if [ -f "${ASSERT_SUMMARY_JSON}" ]; then
     # One line per family (rows_written_<family>=<n>) rather than the whole
     # JSON blob behind a `name<<DELIMITER` block: that delimiter syntax reads
     # as an unterminated heredoc to ci/*.sh's heredoc-pipe-wedge scanner
-    # (tests/tooling/test_local_validate_heredocs.py), which does not parse
+    # (the Go heredoc guard), which does not parse
     # bash well enough to see it is inside a quoted `echo` string, not an
     # actual heredoc.
     jq -r 'to_entries[] | "rows_written_\(.key)=\(.value.rows_written)"' "${ASSERT_SUMMARY_JSON}" >>"${GITHUB_OUTPUT}"

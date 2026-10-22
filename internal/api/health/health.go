@@ -161,17 +161,10 @@ func (d Deps) checkPostgres(ctx context.Context) (string, string) {
 		return "postgres", "down"
 	}
 	defer rows.Close()
-	satisfied := false
-	for rows.Next() {
-		var revision string
-		if err := rows.Scan(&revision); err != nil {
-			return "postgres", "down"
-		}
-		satisfied = satisfied || satisfyingRevisions[revision]
-	}
-	if rows.Err() != nil || !satisfied {
+	satisfied, recorded := schemaSatisfiedByRows(rows)
+	if !satisfied {
 		d.Logger.WarnContext(ctx, "api health: postgres schema below the required revision",
-			slog.String("minimum", minimumSchemaRevision))
+			slog.String("minimum", minimumSchemaRevision), slog.Any("recorded", recorded))
 		return "postgres", "down"
 	}
 	return "postgres", "ok"

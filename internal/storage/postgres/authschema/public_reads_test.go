@@ -15,9 +15,10 @@ func TestPublicReadColumnsMatchTheReviewedList(t *testing.T) {
 		"memberships": {"user_id", "org_id", "role", "joined_at", "created_at"},
 		"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
 			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
-		"organizations":          {"id", "slug", "name", "is_active", "tier"},
-		"saml_assertion_replays": {"provider_id", "assertion_id", "expires_at"},
-		"org_licenses":           {"org_id", "tier", "features_override"},
+		"organizations":                {"id", "slug", "name", "is_active", "tier"},
+		"saml_assertion_replays":       {"provider_id", "assertion_id", "expires_at"},
+		"org_licenses":                 {"org_id", "tier", "features_override"},
+		"internal_service_credentials": {"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"},
 	}
 	got := map[string][]string{}
 	for _, entry := range PublicReadColumns() {
@@ -46,5 +47,26 @@ func TestSystemSchemaFilterFormsAgree(t *testing.T) {
 	want := "n.nspname NOT IN (" + strings.Join(quoted, ", ") + ") AND n.nspname NOT LIKE '" + systemSchemaPattern + "'"
 	if systemSchemaFilter != want {
 		t.Errorf("systemSchemaFilter = %q, bound form says %q", systemSchemaFilter, want)
+	}
+}
+
+// The write grant on go-api's refresh tokens is temporary and revoke-only:
+// SELECT on what the legacy exchange reads, UPDATE on revoked_at alone, and
+// CHAOS-10408 as its removal. This test goes with the grant.
+func TestLegacyRefreshTokenGrantIsRevokeOnlyAndNamesItsRemoval(t *testing.T) {
+	grant := LegacyRefreshTokenGrant()
+	if grant.Table != "refresh_tokens" || grant.RemovedBy != "CHAOS-10408" {
+		t.Fatalf("grant on %q removed by %q, want refresh_tokens removed by CHAOS-10408", grant.Table, grant.RemovedBy)
+	}
+	if strings.Join(grant.Update, ",") != "revoked_at" {
+		t.Fatalf("UPDATE on %v, want revoked_at only", grant.Update)
+	}
+	if got := strings.Join(grant.Select, ","); got != "token_hash,user_id,org_id,family_id,expires_at,revoked_at" {
+		t.Fatalf("SELECT on %s", got)
+	}
+	for _, entry := range PublicReadColumns() {
+		if entry.Table == grant.Table {
+			t.Fatal("refresh_tokens is in PublicReadColumns as well; the read-only manifest would hide the write grant")
+		}
 	}
 }

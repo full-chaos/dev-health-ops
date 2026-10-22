@@ -854,6 +854,11 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 				identityConflictDetail(), "saml", "provisioning")
 			return
 		}
+		if errors.Is(err, errMembershipRequired) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
+				membershipRequiredDetail(), "saml", "provisioning")
+			return
+		}
 		var processing ssoProcessing
 		if !asSSOProcessing(err, &processing) {
 			h.fail(w, r, "saml provisioning", err)

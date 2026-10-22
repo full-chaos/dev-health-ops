@@ -164,7 +164,7 @@ func TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate(t *test
 		Dimension: DimensionTeam,
 		Measure:   MeasureCount,
 		StartDate: mustGraphQLDate("2026-01-01"),
-		EndDate:   mustGraphQLDate("2026-01-08"),
+		EndDate:   mustGraphQLDate("2026-01-09"), // the exclusive end of a request built by hand: the last day read is 2026-01-08
 		TopN:      10,
 	}
 	q, err := compileBreakdownOver(req, "team_id", orgID, queryTimeoutSecs, false, nil)

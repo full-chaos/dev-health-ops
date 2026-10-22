@@ -65,9 +65,10 @@ const teamScopedWorkItemTeamAttributionSource = `(
 // WORK_TYPE stays permanently on the fixed hand-written template path
 // (compiler.py:495-518), regardless of UseInvestment.
 type FlowMatrixRequest struct {
-	Dimension     Dimension
-	Measure       Measure
-	StartDate     graphqldate.Date
+	Dimension Dimension
+	Measure   Measure
+	StartDate graphqldate.Date
+	// EndDate is the EXCLUSIVE end of the window (windowEndExclusive): the day after the last day the request names.
 	EndDate       graphqldate.Date
 	MaxNodes      int
 	MaxEdges      int
@@ -94,11 +95,15 @@ func FlowMatrixRequestFromInput(input model.FlowMatrixRequestInput) (FlowMatrixR
 	if input.DateRange == nil {
 		return FlowMatrixRequest{}, newValidationError("dateRange", nil, "flowMatrix.dateRange is required")
 	}
+	start, end, err := dateRangeBounds(input.DateRange)
+	if err != nil {
+		return FlowMatrixRequest{}, err
+	}
 	return FlowMatrixRequest{
 		Dimension:     dim,
 		Measure:       measure,
-		StartDate:     input.DateRange.StartDate,
-		EndDate:       input.DateRange.EndDate,
+		StartDate:     start,
+		EndDate:       end,
 		MaxNodes:      input.MaxNodes,
 		MaxEdges:      input.MaxEdges,
 		UseInvestment: input.UseInvestment,
@@ -664,7 +669,7 @@ const flowMatrixTeamActivitySelect = `
     FROM work_item_cycle_times AS wct FINAL
     INNER JOIN ` + teamScopedWorkItemTeamAttributionSource + ` AS t
       ON t.work_item_id = wct.work_item_id
-    WHERE wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
+    WHERE wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
       AND wct.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
       AND t.team_id != ''
@@ -749,7 +754,7 @@ const flowMatrixRepoEnrichedSelect = `
       ON t.work_item_id = wct.work_item_id
     INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
     WHERE wct.org_id = {org_id:String}
-      AND wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
+      AND wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
       AND wi.org_id = {org_id:String}
       AND t.team_id IS NOT NULL
       AND t.team_id != ''
@@ -815,7 +820,7 @@ const flowMatrixWorkTypeEnrichedSelect = `
     FROM work_item_cycle_times AS wct FINAL
     INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
     WHERE wct.org_id = {org_id:String}
-      AND wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
+      AND wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
       AND wi.org_id = {org_id:String}
 `
 
@@ -849,7 +854,7 @@ SELECT
     toFloat64(uniqExact(wct.work_item_id)) AS value
 FROM work_item_cycle_times AS wct FINAL
 INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
-WHERE wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
+WHERE wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
   AND wct.org_id = {org_id:String}
   AND wi.org_id = {org_id:String}
   AND wi.repo_id IS NOT NULL
@@ -907,7 +912,7 @@ SELECT
     toFloat64(uniqExact(wct.work_item_id)) AS value
 FROM work_item_cycle_times AS wct FINAL
 INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
-WHERE wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
+WHERE wct.day >= {start_date:Date} AND wct.day < {end_date:Date}
   AND wct.org_id = {org_id:String}
   AND wi.org_id = {org_id:String}
   AND wi.type IS NOT NULL AND wi.type != ''

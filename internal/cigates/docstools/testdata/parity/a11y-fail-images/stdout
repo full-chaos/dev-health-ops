@@ -1,0 +1,3 @@
+ERROR: x.html: content image is missing an alt attribute
+ERROR: x.html: content image has empty alt text without being marked decorative
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

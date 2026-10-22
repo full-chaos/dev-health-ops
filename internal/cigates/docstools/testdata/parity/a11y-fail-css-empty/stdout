@@ -1,0 +1,3 @@
+ERROR: extra.css: custom CSS has no visible-focus rule
+ERROR: extra.css: custom CSS has no reduced-motion handling
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

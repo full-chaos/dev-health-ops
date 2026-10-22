@@ -256,7 +256,7 @@ See each ticket for the exact file:line evidence cited above.
 
 ## Drift gate
 
-`tests/docs/test_python_go_ledger_drift.py` runs inside the unmarked pure-Python unit suite (`ci/local_validate.sh`'s full-suite stage, and CI's `pytest tests -m "not benchmark and not clickhouse"`), so it cannot be silently skipped. It fails when:
+The ledger drift gate (`tests/docs/test_python_go_ledger_drift.py`) was removed with the Python test suite, and no automated gate currently enforces the rules below. The removed gate failed when:
 
 1. `contracts/jobs/v1/registry.json` gains, loses, or renames a job kind without a matching `KIND_LEDGER` row in `scripts/gen_python_go_ledger_docs.py`.
 2. `internal/syncdispatchruntime/bridge.go` gains, loses, or renames a `bridge.call`/`bridge.callWithResult` route string without a matching `BRIDGE_ROUTE_LEDGER` row.
@@ -264,4 +264,4 @@ See each ticket for the exact file:line evidence cited above.
 4. `internal/scheduler/sync/source_discovery.go`'s `sourceDiscoveryProviders` map gains, loses, or renames a provider without a matching `SOURCE_DISCOVERY_LEDGER` row (CHAOS-4602) -- the fourth mechanism, covering the one class of drift the first three could never catch (source discovery is neither a kind, a route, nor a worker file; see [Provider source discovery](#provider-source-discovery)).
 5. The generated blocks in this page are stale relative to the curated dicts (someone edited a `_LEDGER` entry but forgot to regenerate).
 
-`test_every_registry_kind_and_bridge_route_and_worker_file_has_a_curated_row` is the falsification control: it plants an untracked kind/route/file/source-discovery-provider in memory and asserts the generator's consistency guard actually raises, so the guard's ability to fail is proven on every CI run rather than assumed.
+The removed `test_every_registry_kind_and_bridge_route_and_worker_file_has_a_curated_row` was the falsification control: it planted an untracked kind/route/file/source-discovery-provider in memory and asserts the generator's consistency guard actually raises, so the guard's ability to fail is proven on every CI run rather than assumed.

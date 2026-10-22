@@ -15,8 +15,10 @@ const (
 	ReasonSessionRevoked       Reason = "session_revoked"
 	ReasonSessionExpired       Reason = "session_expired"
 	ReasonPrincipalDeactivated Reason = "principal_deactivated"
-	ReasonStoreUnavailable     Reason = "store_unavailable"
-	ReasonDependency           Reason = "dependency_unavailable"
+	// ReasonRevisionStale refuses a session without a legacy_token_version pin.
+	ReasonRevisionStale    Reason = "revision_stale"
+	ReasonStoreUnavailable Reason = "store_unavailable"
+	ReasonDependency       Reason = "dependency_unavailable"
 )
 
 // Success reports whether the reason is one a successful exchange carries.
@@ -24,7 +26,7 @@ func (r Reason) Success() bool { return r == ReasonAccepted || r == ReasonGraceR
 
 var allReasons = []Reason{
 	ReasonAccepted, ReasonGraceReplay, ReasonMalformed, ReasonRefreshUnknown, ReasonRefreshExpired,
-	ReasonRefreshReused, ReasonSessionRevoked, ReasonSessionExpired, ReasonPrincipalDeactivated,
+	ReasonRefreshReused, ReasonSessionRevoked, ReasonSessionExpired, ReasonPrincipalDeactivated, ReasonRevisionStale,
 	ReasonStoreUnavailable, ReasonDependency,
 }
 

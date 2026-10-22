@@ -36,6 +36,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/ownershipwindow"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -168,6 +169,7 @@ func ownershipBindings(names bindingNames, orgID string, teamList []string, asOf
 // FINAL and the catalog guards are one definition. The select list stays with the caller: it reads o.team_id,
 // o.repo_id and r.id.
 func ownershipFromWhere(names bindingNames, teamFiltered bool) string {
+	window := ownershipwindow.Names{Org: names.org, AsOf: names.asOf}
 	teamFilter := ""
 	if teamFiltered {
 		teamFilter = "\n      AND o.team_id IN {" + names.teams + ":Array(String)}"
@@ -183,14 +185,14 @@ func ownershipFromWhere(names bindingNames, teamFiltered bool) string {
            AND lower(r.repo) = lower(o.repo_full_name)
     WHERE o.org_id = {%[1]s:String}%[2]s
       AND o.team_id != ''
+      AND %[4]s
       AND (o.repo_id IS NOT NULL OR r.matched = 1)
-      AND o.valid_from <= {%[3]s:DateTime64(3, 'UTC')}
-      AND (o.valid_to IS NULL OR o.valid_to > {%[3]s:DateTime64(3, 'UTC')})
+      AND %[5]s
       AND coalesce(toString(o.repo_id), toString(r.id)) IN (
           SELECT toString(id) AS id
           FROM repos FINAL
           WHERE org_id = {%[1]s:String}
-      )`, names.org, teamFilter, names.asOf)
+      )`, names.org, teamFilter, names.asOf, ownershipwindow.ActiveTeam(window), ownershipwindow.Window(window))
 }
 
 // Binding names of OwnerShares and RepoShare. They differ from RepoCondition's, so a statement that carries a team

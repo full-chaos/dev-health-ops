@@ -9,6 +9,7 @@ deploy/helm/dev-health	117
 internal/api/credentials	36
 internal/api/syncadmin	37
 internal/api/teamsidentity	47
+internal/cigates/affected	195
 internal/cigates/affectedmatrix	102
 internal/cigates/affectedmodule	32
 internal/cigates/affectedreject	173

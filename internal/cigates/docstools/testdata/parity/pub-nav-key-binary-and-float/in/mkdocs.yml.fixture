@@ -1,0 +1,5 @@
+nav:
+  - !!binary YQ==: index.md
+  - .inf: reference.md
+  - 1e22: guide/intro.md
+  - -0.0: guide/advanced/index.md

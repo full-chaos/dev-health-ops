@@ -220,45 +220,67 @@ func LatestWorkUnitInvestmentsSource() string {
 // (see LatestWorkUnitInvestmentsSource above, which wraps every nullable
 // column the same way) and is what makes the CHAOS-5483 coverage split an
 // exact partition rather than a best-effort one.
-func LatestWorkUnitRepoEffortSource() string {
-	return `(
+func LatestWorkUnitRepoEffortSource() string { return latestWorkUnitRepoEffortSource(false) }
+
+// latestWorkUnitRepoEffortWithTotalsSource is LatestWorkUnitRepoEffortSource with the unit's totals beside every
+// repository row: repo_row_count and repo_effort_sum, the count and the effort sum of the unit's rows of that source.
+// The allocation weight of a row is its effort over repo_effort_sum (1/repo_row_count when that sum is 0:
+// allocationWeightExpr).
+func latestWorkUnitRepoEffortWithTotalsSource() string { return latestWorkUnitRepoEffortSource(true) }
+
+// latestWorkUnitRepoEffortSource reads work_unit_repo_effort ONCE (CHAOS-9231). The text it replaced grouped the table
+// per (unit, repository), grouped it again per unit for the unit's newest generation and joined the two; every reader
+// that weighted a row (the grouped sankey, the breakdowns, the coverage) then read this source a second time for the
+// unit's totals, so one statement scanned the table four times. Here the newest generation is the window max over the
+// per-repository latest computed_at (the max over all of a unit's rows, as before) and the totals are windows over the rows
+// that remain. The rows, their columns and their values are those of the grouped-and-joined text (the seeded equivalence
+// test against the frozen reference text: p9231_latest_sources_integration_test.go).
+func latestWorkUnitRepoEffortSource(withTotals bool) string {
+	totals := ""
+	if withTotals {
+		totals = `,
+            count() OVER (PARTITION BY org_id, work_unit_id) AS repo_row_count,
+            sum(repo_effort_value) OVER (PARTITION BY org_id, work_unit_id) AS repo_effort_sum`
+	}
+	return fmt.Sprintf(`(
         SELECT
-            d.work_unit_id AS work_unit_id,
-            d.repo_id AS repo_id,
-            d.effort_metric AS effort_metric,
-            d.repo_effort_value AS repo_effort_value,
-            d.allocation_source AS allocation_source,
-            d.repo_source AS repo_source,
-            d.org_id AS org_id,
-            d.latest_repo_effort_computed_at AS latest_repo_effort_computed_at,
-            1 AS has_allocation
+            work_unit_id,
+            repo_id,
+            effort_metric,
+            repo_effort_value,
+            allocation_source,
+            repo_source,
+            org_id,
+            latest_repo_effort_computed_at,
+            1 AS has_allocation%s
         FROM (
             SELECT
-                work_unit_id,
-                repo_id,
-                org_id,
-                argMax(effort_metric, computed_at) AS effort_metric,
-                argMax(effort_value, computed_at) AS repo_effort_value,
-                argMax(allocation_source, computed_at) AS allocation_source,
-                (argMax(tuple(repo_source), computed_at)).1 AS repo_source,
-                max(computed_at) AS latest_repo_effort_computed_at
-            FROM work_unit_repo_effort
-            WHERE org_id = {org_id:String}
-            GROUP BY org_id, work_unit_id, repo_id
-        ) AS d
-        INNER JOIN (
-            SELECT
-                org_id,
-                work_unit_id,
-                max(computed_at) AS unit_generation_at
-            FROM work_unit_repo_effort
-            WHERE org_id = {org_id:String}
-            GROUP BY org_id, work_unit_id
-        ) AS g
-            ON g.org_id = d.org_id
-            AND g.work_unit_id = d.work_unit_id
-        WHERE d.latest_repo_effort_computed_at = g.unit_generation_at
-    )`
+                d.work_unit_id AS work_unit_id,
+                d.repo_id AS repo_id,
+                d.effort_metric AS effort_metric,
+                d.repo_effort_value AS repo_effort_value,
+                d.allocation_source AS allocation_source,
+                d.repo_source AS repo_source,
+                d.org_id AS org_id,
+                d.latest_repo_effort_computed_at AS latest_repo_effort_computed_at,
+                max(d.latest_repo_effort_computed_at) OVER (PARTITION BY d.org_id, d.work_unit_id) AS unit_generation_at
+            FROM (
+                SELECT
+                    work_unit_id,
+                    repo_id,
+                    org_id,
+                    argMax(effort_metric, computed_at) AS effort_metric,
+                    argMax(effort_value, computed_at) AS repo_effort_value,
+                    argMax(allocation_source, computed_at) AS allocation_source,
+                    (argMax(tuple(repo_source), computed_at)).1 AS repo_source,
+                    max(computed_at) AS latest_repo_effort_computed_at
+                FROM work_unit_repo_effort
+                WHERE org_id = {org_id:String}
+                GROUP BY org_id, work_unit_id, repo_id
+            ) AS d
+        )
+        WHERE latest_repo_effort_computed_at = unit_generation_at
+    )`, totals)
 }
 
 // --- compiler.py:162-190: the compiler's OWN repo-allocation source ----
@@ -311,25 +333,13 @@ func repoAllocationInvestmentSource() string {
                 LEFT JOIN %s AS wure
                     ON wure.org_id = wui.org_id
                     AND wure.work_unit_id = wui.work_unit_id
-                LEFT JOIN %s AS wurc
-                    ON wurc.org_id = wui.org_id
-                    AND wurc.work_unit_id = wui.work_unit_id
-            ) AS work_unit_investments`, unitRepoExpr("wure", "wui"), allocationWeightExpr("wure", "wurc"), LatestWorkUnitInvestmentsSource(), LatestWorkUnitRepoEffortSource(), repoEffortTotalsSource())
-}
-
-// repoEffortTotalsSource is one row per unit: its repository-row count and the sum of its repository efforts.
-func repoEffortTotalsSource() string {
-	return fmt.Sprintf(`(
-                    SELECT org_id, work_unit_id, count() AS repo_row_count, sum(repo_effort_value) AS repo_effort_sum
-                    FROM %s
-                    GROUP BY org_id, work_unit_id
-                )`, LatestWorkUnitRepoEffortSource())
+            ) AS work_unit_investments`, unitRepoExpr("wure", "wui"), allocationWeightExpr("wure", "wure"), LatestWorkUnitInvestmentsSource(), latestWorkUnitRepoEffortWithTotalsSource())
 }
 
 // allocationWeightExpr is the share of a unit one repository row stands for: the row's effort over the sum of the
 // unit's repository efforts, or 1/n over its n rows when that sum is 0. Every unit sums to exactly 1 across its rows,
-// whatever its stored unit effort, so it is counted once on every path (CHAOS-9321). totalsAlias is a join of
-// repoEffortTotalsSource.
+// whatever its stored unit effort, so it is counted once on every path (CHAOS-9321). totalsAlias is the alias of a source
+// that carries repo_row_count and repo_effort_sum (latestWorkUnitRepoEffortWithTotalsSource, the same alias as effortAlias).
 func allocationWeightExpr(effortAlias, totalsAlias string) string {
 	return fmt.Sprintf("if(%[2]s.repo_effort_sum > 0, %[1]s.repo_effort_value / %[2]s.repo_effort_sum, 1.0 / %[2]s.repo_row_count)", effortAlias, totalsAlias)
 }

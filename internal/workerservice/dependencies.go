@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate/chgate"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
@@ -30,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/workersignals"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/pgconfig"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -453,9 +456,12 @@ type workerDependencySources struct {
 	// coordinator queue never needed ClickHouse before, so this queue's own
 	// builder is now in that group instead of the ctx-less one below.
 	buildSyncCoordinator func(context.Context, config.Config, workerDatabase, *jobruntime.Registry, jobruntime.Observer, *slog.Logger, *river.Workers) (workerFamily, error)
-	buildRiverProcess    workerProcessBuilder
-	buildWorkgraph       workerFamilyBuilder
-	contractRoot         string
+	// checkClickHouseSchema is the ClickHouse schema gate (nil = not gated): a non-nil error is a
+	// ClickHouse schema behind this build.
+	checkClickHouseSchema func(context.Context, config.Config) error
+	buildRiverProcess     workerProcessBuilder
+	buildWorkgraph        workerFamilyBuilder
+	contractRoot          string
 	// newClaimLiveness constructs the CHAOS-4029 claim-liveness tracker (see
 	// claim_liveness.go), pre-seeded per selected queue. Injectable so a test
 	// can capture the returned *claimLiveness and call SetStaleWindow on it
@@ -466,18 +472,19 @@ type workerDependencySources struct {
 }
 
 var productionWorkerDependencySources = workerDependencySources{
-	openDatabase:         openWorkerDatabase,
-	loadRuntimeRegistry:  jobruntime.Load,
-	newRiverClientID:     defaultRiverClientID,
-	buildOperational:     buildOperationalWorker,
-	buildSyncCoordinator: buildSyncCoordinatorWorker,
-	buildDaily:           buildDailyWorker,
-	buildReports:         buildReportWorker,
-	buildProviderSync:    buildProviderSyncWorker,
-	buildRiverProcess:    newRiverWorkerProcess,
-	buildWorkgraph:       buildWorkgraphWorker,
-	contractRoot:         defaultContractRoot,
-	newClaimLiveness:     newClaimLiveness,
+	openDatabase:          openWorkerDatabase,
+	checkClickHouseSchema: enforceClickHouseSchema,
+	loadRuntimeRegistry:   jobruntime.Load,
+	newRiverClientID:      defaultRiverClientID,
+	buildOperational:      buildOperationalWorker,
+	buildSyncCoordinator:  buildSyncCoordinatorWorker,
+	buildDaily:            buildDailyWorker,
+	buildReports:          buildReportWorker,
+	buildProviderSync:     buildProviderSyncWorker,
+	buildRiverProcess:     newRiverWorkerProcess,
+	buildWorkgraph:        buildWorkgraphWorker,
+	contractRoot:          defaultContractRoot,
+	newClaimLiveness:      newClaimLiveness,
 }
 
 func defaultRiverClientID() string {
@@ -1736,6 +1743,10 @@ func buildWorkerDependencies(
 			schemagate.Enforce(ctx, slog.Default(), "worker", dependencies.database) != nil {
 			dependencies.databaseErr = dependencyUnavailable("worker_schema_behind")
 		}
+		if dependencies.databaseErr == nil && dependencies.database != nil && sources.checkClickHouseSchema != nil &&
+			sources.checkClickHouseSchema(ctx, cfg) != nil {
+			dependencies.databaseErr = dependencyUnavailable("worker_clickhouse_schema_behind")
+		}
 		if dependencies.databaseErr != nil && dependencies.database != nil {
 			dependencies.database.Close()
 			dependencies.database = nil
@@ -2354,4 +2365,27 @@ func (component workerDatabaseLifecycle) Shutdown(context.Context) error {
 		component.database.Close()
 	}
 	return nil
+}
+
+// enforceClickHouseSchema opens one short ClickHouse connection and gates on schema_migrations. A
+// worker with no ClickHouse configured, or one that cannot connect, is not gated: the open
+// failure is a WARN and the worker's own lazy opens report it where they happen.
+func enforceClickHouseSchema(ctx context.Context, cfg config.Config) error {
+	if !cfg.ClickHouseURI.Configured() {
+		return nil
+	}
+	logger := slog.Default()
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()))
+	if err != nil {
+		logger.WarnContext(ctx, "clickhouse schema gate skipped", "process", "worker", "class", "unreachable")
+		return nil
+	}
+	defer func() { _ = conn.Close() }()
+	return chgate.Enforce(ctx, logger, "worker", connRecorder{conn: conn})
+}
+
+type connRecorder struct{ conn driver.Conn }
+
+func (recorder connRecorder) AppliedVersions(ctx context.Context) ([]string, error) {
+	return chgate.ConnApplied(ctx, recorder.conn)
 }

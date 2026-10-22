@@ -360,6 +360,12 @@
       },
       "TransportError": {
         "$ref": "../jsonschema/transport-error.v1.schema.json"
+      },
+      "ActionCatalog": {
+        "$ref": "../jsonschema/action-catalog.v1.schema.json"
+      },
+      "RoleCatalog": {
+        "$ref": "../jsonschema/role-catalog.v1.schema.json"
       }
     }
   }

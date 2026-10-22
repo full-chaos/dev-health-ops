@@ -17,6 +17,7 @@ package ownershipwindow
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
@@ -39,13 +40,11 @@ func ActiveTeam(n Names) string {
 	return fmt.Sprintf("trimBoth(o.team_id) NOT IN (%s)", InactiveTeams(n))
 }
 
-// firstRecords is an uncorrelated scalar subquery: a Map(String, DateTime64) from the id of each repository to the
-// first valid_from of its ownership rows of active teams.
-func firstRecords(n Names) string {
-	return fmt.Sprintf(`(
-        SELECT mapFromArrays(groupArray(repo_key), groupArray(first_from))
-        FROM (
-            SELECT %[2]s AS repo_key, min(o.valid_from) AS first_from
+// FirstRecordsQuery is a statement of the first record of each repository: one row (repo_key String, first_from
+// DateTime64(3, 'UTC')) per repository, from the first valid_from of its ownership rows of active teams, under the rules of
+// the package comment. It reads only the organization placeholder of n, and has no source filter.
+func FirstRecordsQuery(n Names) string {
+	return fmt.Sprintf(`SELECT %[2]s AS repo_key, min(o.valid_from) AS first_from
             FROM team_repo_ownership AS o FINAL
             LEFT JOIN (
                 SELECT org_id, provider, id, repo, 1 AS matched
@@ -59,9 +58,27 @@ func firstRecords(n Names) string {
               AND o.team_id != ''
               AND %[3]s
               AND (o.repo_id IS NOT NULL OR r.matched = 1)
-            GROUP BY repo_key
+            GROUP BY repo_key`, n.Org, RepoKey, ActiveTeam(n))
+}
+
+// ClampAsOf is the instant a row of a repository is tested at when the repository's first record is first: the later of
+// the two. The zero first (a repository with no record) leaves at as it is.
+func ClampAsOf(at, first time.Time) time.Time {
+	if first.After(at) {
+		return first
+	}
+	return at
+}
+
+// firstRecords is an uncorrelated scalar subquery: a Map(String, DateTime64) from the id of each repository to the
+// first valid_from of its ownership rows of active teams.
+func firstRecords(n Names) string {
+	return fmt.Sprintf(`(
+        SELECT mapFromArrays(groupArray(repo_key), groupArray(first_from))
+        FROM (
+            %s
         )
-    )`, n.Org, RepoKey, ActiveTeam(n))
+    )`, FirstRecordsQuery(n))
 }
 
 // EffectiveAsOf is the instant the validity window of the row's repository is tested at: the bound instant, or the

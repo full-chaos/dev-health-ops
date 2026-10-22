@@ -295,7 +295,8 @@ jobs:
           # now fixed to match this file's own pattern instead.
           outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # A dispatch-supplied ref is untrusted code: it must not write the shared gha cache (cigates/cachepoison).
+          cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}
 
       - name: Export digest
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
@@ -491,7 +492,8 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-dho
           outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # A dispatch-supplied ref is untrusted code: it must not write the shared gha cache (cigates/cachepoison).
+          cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}
 
       - name: Export digest
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
@@ -686,7 +688,8 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-api-tools
           outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # A dispatch-supplied ref is untrusted code: it must not write the shared gha cache (cigates/cachepoison).
+          cache-to: ${{ github.event.inputs.ref == '' && 'type=gha,mode=max' || '' }}
 
       - name: Check CA bundle in the built image
         if: matrix.platform == 'linux/amd64'

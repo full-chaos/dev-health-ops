@@ -2,6 +2,7 @@ package legacyingest
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -205,14 +206,29 @@ func keyClass(keys []string, secret string) string {
 	return "none"
 }
 
-// matchesAnyKey compares the digest of the presented key with the digest of
-// every configured key, without stopping at the first match.
+// keyedDigestSeed keys the digests that equalise key lengths for the
+// comparison; it is random per process and never leaves it.
+var keyedDigestSeed = func() []byte {
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		panic("legacyingest: no randomness for the key comparison: " + err.Error())
+	}
+	return seed
+}()
+
+func keyedDigest(value string) []byte {
+	mac := hmac.New(sha256.New, keyedDigestSeed)
+	mac.Write([]byte(value))
+	return mac.Sum(nil)
+}
+
+// matchesAnyKey compares the keyed digest of the presented key with the
+// keyed digest of every configured key, without stopping at the first match.
 func matchesAnyKey(presented string, keys []string) bool {
-	want := sha256.Sum256([]byte(presented))
+	want := keyedDigest(presented)
 	matched := 0
 	for _, key := range keys {
-		have := sha256.Sum256([]byte(key))
-		matched |= subtle.ConstantTimeCompare(want[:], have[:])
+		matched |= subtle.ConstantTimeCompare(want, keyedDigest(key))
 	}
 	return matched == 1
 }

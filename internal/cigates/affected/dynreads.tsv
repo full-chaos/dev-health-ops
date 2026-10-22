@@ -26,6 +26,7 @@ internal/apiservice/billingvenue	billing_webhook_venue_oracle_integration_test.g
 internal/atlassianteams	absence_test.go
 internal/atlassianteams	vendored_documents_test.go
 internal/atlassianteams	vendored_patch_chain_test.go
+internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go

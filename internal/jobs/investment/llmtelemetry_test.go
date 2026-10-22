@@ -115,3 +115,17 @@ func TestCollectorLLMTelemetryReachesTheCollector(t *testing.T) {
 	// A nil collector is a no-op.
 	CollectorLLMTelemetry{}.ObserveOutcome(categorize.LLMOutcomeObservation{})
 }
+
+// A failed batch unit is labelled with the provider's model, a failed
+// synchronous one with the configured model.
+func TestAFailedUnitIsLabelledAsPythonLabelsIt(t *testing.T) {
+	m := &Materializer{provider: categorize.MockProvider{}}
+	cfg := Config{ProviderName: "mock", Model: "configured-model"}
+	if got := m.failedUnitModel(cfg); got != "configured-model" {
+		t.Fatalf("synchronous: %q", got)
+	}
+	m.batchAnswered = true
+	if got := m.failedUnitModel(cfg); got != "mock" {
+		t.Fatalf("batch: %q, want the provider's model mock", got)
+	}
+}

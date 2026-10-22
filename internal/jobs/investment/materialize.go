@@ -132,6 +132,8 @@ type Stats struct {
 	// stay out of the evidence JSON.
 	failureClassByIndex map[int]string
 	llmSucceeded        int
+	// batchAnswered is true when a provider batch answered the run's units.
+	batchAnswered       bool
 	Components          int            `json:"components"`
 	TotalComponents     int            `json:"total_components"`
 	Records             int            `json:"records"`
@@ -308,6 +310,20 @@ type Materializer struct {
 	// llmTelemetry receives the investment LLM signals of the generative path
 	// (CHAOS-8722). Nil records nothing.
 	llmTelemetry categorize.LLMTelemetry
+	// batchAnswered is true once a provider batch answered the units of the
+	// run; it only picks a metric label (failedUnitModel).
+	batchAnswered bool
+}
+
+// failedUnitModel is the model label of a failed unit's llm_task_failed
+// outcome. Python labels a failed batch unit with the provider's model
+// (materialize.py:608-672) and a failed synchronous one with the configured
+// model (:1676).
+func (m *Materializer) failedUnitModel(cfg Config) string {
+	if m.batchAnswered {
+		return m.provider.Model()
+	}
+	return cfg.Model
 }
 
 // SetLLMTelemetry wires the investment LLM signals. Nil records nothing.
@@ -705,7 +721,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			// row, with the fallback distribution.
 			outcome = failedUnitOutcome(stats, entry.index)
 			categorize.ObserveOutcome(m.llmTelemetry, categorize.LLMOutcomeObservation{
-				Provider: cfg.ProviderName, Model: cfg.Model, Status: categorize.StatusLLMTaskFailed,
+				Provider: cfg.ProviderName, Model: m.failedUnitModel(cfg), Status: categorize.StatusLLMTaskFailed,
 			})
 		}
 
@@ -1010,6 +1026,7 @@ func (m *Materializer) categorizePending(
 	// batch; every unit result, failure or outcome, goes through the same
 	// account as a synchronous call's.
 	if m.categorizeBatch(callCtx, cfg, pending, limit, account) {
+		m.batchAnswered = true
 		return account.err()
 	}
 	m.forEachPending(callCtx, limit, pending, account, func(ctx context.Context, entry preprocessed) (categorize.CategorizationOutcome, error) {

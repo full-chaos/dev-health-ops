@@ -165,6 +165,20 @@ authService:
       repository: postgres
       tag: "18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
       pullPolicy: IfNotPresent
+  # -- The session routes' key material, by secretKeyRef (the chart creates no
+  #    Secret). Both keys render together or not at all; goApi.authProxy.sessions
+  #    fails the render while the successor key is unset.
+  sessionKeys:
+    # -- AUTH_JWT_SECRET_KEY, the HS256 access-token key. Empty name/key use the
+    #    Secret and key go-api reads as JWT_SECRET_KEY (hs256Secret), so the two
+    #    cannot differ.
+    accessToken:
+      secretName: ""
+      secretKey: ""
+    # -- AUTH_SESSION_SUCCESSOR_KEY: 32 bytes, base64url without padding.
+    successor:
+      secretName: ""
+      secretKey: AUTH_SESSION_SUCCESSOR_KEY
   # -- Whole seconds ("20s"). Must stay below terminationGracePeriodSeconds: the whole
   #    ordered shutdown (readiness gate, API, operator, database) is bounded
   #    by it.
@@ -214,6 +228,13 @@ authService:
     #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
+    # -- The logins that must read auth sessions while goApi.authProxy.sessions
+    #    is on: go-api's API_DATABASE_ROLE and query-api's registry login. Both
+    #    are granted like sessionReaderRoles (the rendered list is the union);
+    #    sessions=true fails the render while either is empty.
+    sessionReaders:
+      goApi: ""
+      queryApi: ""
     hookEvents: [pre-install, pre-upgrade]
     # -- CHAOS-10581: the grants-only pass (`auth-migrate grants`) after the ops
     #    migrate Job, on migrations.hook.events. It fails the release when a

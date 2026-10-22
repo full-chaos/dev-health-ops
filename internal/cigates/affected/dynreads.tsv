@@ -596,6 +596,7 @@ internal/workerservice	reports_test.go
 internal/workerservice	rescue_workers_test.go
 internal/workerservice	river_soft_stop_integration_test.go
 internal/workerservice	river_soft_stop_test.go
+internal/workerservice	schema_gate_test.go
 internal/workerservice	sync_claim_taps_integration_test.go
 internal/workerservice	sync_dispatch_integration_test.go
 internal/workerservice	sync_dispatch_test.go

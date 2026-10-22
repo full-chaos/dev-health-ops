@@ -67,6 +67,7 @@ internal/netclass
 internal/operationalordering
 internal/ownershipwindow
 internal/pgmigrate
+internal/pgmigrate/schemagate
 internal/platform/buildstamp
 internal/platform/config
 internal/platform/dbphase

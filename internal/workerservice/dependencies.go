@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -228,6 +229,15 @@ func openWorkerDatabase(ctx context.Context, cfg config.Config) (workerDatabase,
 	}
 	database.warmReadinessProbes()
 	return database, nil
+}
+
+// RecordedRevisions is the schema gate's read: the domain role's SELECT on
+// alembic_version, on the readiness pool.
+func (database *postgresWorkerDatabase) RecordedRevisions(ctx context.Context) ([]string, error) {
+	if database == nil || database.pools == nil {
+		return nil, &schemagate.ReadError{Class: "no_pool"}
+	}
+	return schemagate.PoolRecorded(ctx, database.pools.ReadinessPool())
 }
 
 func (database *postgresWorkerDatabase) DomainReady(ctx context.Context) error {
@@ -1126,6 +1136,10 @@ func configureWorkerDependenciesWithSources(
 			// forever, and nothing terminated the process -- an alive-but-unready
 			// zombie instead of an attributable crash-loop (CHAOS-3873).
 			dependencies.close()
+			var failure dependencyFailure
+			if errors.As(dependencies.databaseErr, &failure) {
+				return nil, failure
+			}
 			return nil, dependencyUnavailable("worker_database_open_failed")
 		}
 		// A rejected or absent DSN configuration stays live and unready on
@@ -1718,6 +1732,10 @@ func buildWorkerDependencies(
 		dependencies.databaseErr = errWorkerDependencyUnavailable
 	} else {
 		dependencies.database, dependencies.databaseErr = sources.openDatabase(ctx, cfg)
+		if dependencies.databaseErr == nil && dependencies.database != nil &&
+			schemagate.Enforce(ctx, slog.Default(), "worker", dependencies.database) != nil {
+			dependencies.databaseErr = dependencyUnavailable("worker_schema_behind")
+		}
 		if dependencies.databaseErr != nil && dependencies.database != nil {
 			dependencies.database.Close()
 			dependencies.database = nil

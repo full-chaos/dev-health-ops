@@ -97,6 +97,11 @@ AUTH_SESSION_SUCCESSOR_KEY="${AUTH_SESSION_SUCCESSOR_KEY:-$(head -c 32 /dev/uran
 export AUTH_SESSION_SUCCESSOR_KEY
 AUTH_LOGIN_LOCKOUT_KEY="${AUTH_LOGIN_LOCKOUT_KEY:-$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')}"
 export AUTH_LOGIN_LOCKOUT_KEY
+# go-api reads this auth-session-issuer credential when it asks auth-service for a session (sessions flag on); its
+# row is stored once the stack is up. Built at run time, never printed.
+AUTH_SESSION_ISSUE_TOKEN="svc_authsess_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+[[ "${AUTH_SESSION_ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "could not build a session issue credential"
+export AUTH_SESSION_ISSUE_TOKEN
 WEB_DIR="${AUTH_PROOF_WEB_DIR:?AUTH_PROOF_WEB_DIR must name a dev-health-web checkout}"
 [ -f "${WEB_DIR}/vitest.auth-proxy.config.ts" ] || die "${WEB_DIR} has no vitest.auth-proxy.config.ts (the web side of CHAOS-10230)"
 
@@ -117,6 +122,14 @@ printf 'SMTP sink pid %s on port %s\n' "${SINK_PID}" "${AUTH_PROOF_SMTP_PORT}"
 printf 'step 1: up --build --wait go-api auth-service\n'
 compose --profile auth up --build --detach --wait --wait-timeout 900 go-api auth-service
 assert_project_prefixed
+compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
+  < <(printf '\\set token %s\n' "'${AUTH_SESSION_ISSUE_TOKEN}'"; cat <<'SQL'
+INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
+VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'), left(:'token', 16),
+        '["sessions:issue"]', now());
+SQL
+  ) \
+  || die "could not store the session issue credential"
 API_PORT="$(compose port go-api 8000 | sed 's/.*://')"
 [[ "${API_PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral go-api port (${API_PORT})"
 BASE="http://127.0.0.1:${API_PORT}"

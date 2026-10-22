@@ -280,6 +280,12 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 	}
 	key := profile.ExternalKey
 	principal, found, err := s.lookup(ctx, key)
+	if errors.Is(err, ErrProviderLinked) && principal.ID != who.PrincipalID {
+		// The subject belongs to another principal's go-api account, which
+		// holds a different subject at this provider.
+		reason = ReasonIdentityConflict
+		return identity.Identity{}, identity.ErrIdentityConflict
+	}
 	if err != nil {
 		reason = lookupReason(err)
 		return identity.Identity{}, err

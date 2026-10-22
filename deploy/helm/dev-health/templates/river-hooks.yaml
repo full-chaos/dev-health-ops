@@ -414,6 +414,12 @@ spec:
               value: {{ .Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
             - name: RIVER_COORDINATOR_DATABASE_ROLE
               value: {{ .Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
+            {{- if .Values.goApi.authProxy.sessions }}
+            {{- /* go-api's AUTH_PROXY_SESSIONS: the api role's
+            refresh_tokens grants follow it (postgres.APIPosture). */}}
+            - name: AUTH_PROXY_SESSIONS
+              value: "true"
+            {{- end }}
           envFrom:
             - secretRef:
                 {{- if .Values.secrets.create }}

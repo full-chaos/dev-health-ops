@@ -165,10 +165,12 @@ func (h handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "load membership", err)
 		return
 	}
-	pair, err := h.issueMembershipTokens(ctx, tx, r, user, membership)
-	if err != nil {
-		h.fail(w, r, "issue tokens", err)
-		return
+	var pair tokenPair
+	if h.Issuer == nil {
+		if pair, err = h.issueMembershipTokens(ctx, tx, r, user, membership); err != nil {
+			h.fail(w, r, "issue tokens", err)
+			return
+		}
 	}
 	if err := h.auditUserEvent(ctx, r, tx, user, audit.ActionPasswordChanged, "User changed own password"); err != nil {
 		h.fail(w, r, "audit", err)
@@ -177,6 +179,14 @@ func (h handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(ctx); err != nil {
 		h.fail(w, r, "commit", err)
 		return
+	}
+	if h.Issuer != nil {
+		// auth-service reads the user and pins the session to its
+		// token_version: it must see the committed change.
+		if pair, err = h.issueMembershipTokens(ctx, nil, r, user, membership); err != nil {
+			h.fail(w, r, "issue tokens", err)
+			return
+		}
 	}
 	h.Logger.InfoContext(ctx, "change-password succeeded: other sessions revoked", "user_id", caller.UserID)
 	policy.WriteModel(w, http.StatusOK, loginResponse(pair, membership == nil && !user.IsSuperuser, userInfo(user, membership), nil), nil)

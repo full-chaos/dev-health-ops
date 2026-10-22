@@ -158,6 +158,15 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 		id := membership.OrgID
 		orgUUID = &id
 	}
+	if h.Issuer != nil {
+		pair, err := h.issueSession(ctx, r, user.ID, orgUUID, amrFederated)
+		if err != nil {
+			h.fail(w, r, "issue session", err)
+			return
+		}
+		policy.WriteModel(w, http.StatusOK, loginResponse(pair, needsOnboarding, userInfo(user, membership), &isNewUser), nil)
+		return
+	}
 	pair, jti, family, err := h.mintPair(user, orgID, role, h.Now())
 	if err != nil {
 		h.fail(w, r, "mint tokens", err)

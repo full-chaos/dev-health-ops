@@ -128,7 +128,7 @@ umask 077
 printf 'secrets:\n  data:\n    API_DATABASE_URI: "postgres://devhealth_api:%s@%s-postgresql:5432/devhealth?sslmode=disable"\n    JWT_SECRET_KEY: "%s"\n' \
   "${API_PASSWORD}" "${FULL}" "${JWT_KEY}" >"${WORK}/secrets-base.yaml"
 printf 'secrets:\n  data:\n    AUTH_SESSION_ISSUE_TOKEN: "%s"\n' "${ISSUE_TOKEN}" >"${WORK}/secrets-session.yaml"
-printf 'authService:\n  sessionKeys:\n    successor:\n      secretName: auth-session\n' >"${WORK}/successor.yaml"
+printf 'authService:\n  migrate:\n    sessionReaders:\n      queryApi: devhealth_query\n  sessionKeys:\n    successor:\n      secretName: auth-session\n' >"${WORK}/successor.yaml"
 
 CHART="${ROOT}/deploy/helm/dev-health"
 HELM_BASE=("${RELEASE}" "${CHART}" --kube-context "kind-${CLUSTER}" --namespace "${NS}"
@@ -143,7 +143,7 @@ K rollout status statefulset/"${FULL}-clickhouse" --timeout=240s
 K rollout status deploy/"${FULL}-valkey" --timeout=240s
 
 PSU() { K exec -i "${FULL}-postgresql-0" -- psql -U devhealth -d devhealth -At -v ON_ERROR_STOP=1 "$@"; }
-printf "CREATE ROLE devhealth_api LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\nCREATE ROLE devhealth_auth LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n" \
+printf "CREATE ROLE devhealth_api LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\nCREATE ROLE devhealth_query NOLOGIN;\nCREATE ROLE devhealth_auth LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n" \
   "${API_PASSWORD}" "${AUTH_PASSWORD}" | PSU -f -
 printf 'host=%s-postgresql port=5432 user=devhealth_auth password=%s dbname=devhealth sslmode=disable' "${FULL}" "'${AUTH_PASSWORD}'" \
   | K create secret generic auth-db --from-file=AUTH_DATABASE_URI=/dev/stdin
@@ -278,10 +278,12 @@ guard() { # <must-name> <helm --set...>
   grep -q "${must}" <<<"${out}" || die "guard: the refusal does not name ${must}: ${out:0:400}"
   printf 'guard: refused, naming %s\n' "${must}"
 }
-guard authService.sessionKeys.successor.secretName --set goApi.authProxy.sessions=true
+guard authService.sessionKeys.successor.secretName --set goApi.authProxy.sessions=true \
+  --set authService.migrate.sessionReaders.queryApi=devhealth_query
 guard sessionReaders.goApi --set goApi.authProxy.sessions=true --set authService.migrate.sessionReaders.goApi= \
+  --set authService.migrate.sessionReaders.queryApi=devhealth_query \
   --set authService.sessionKeys.successor.secretName=auth-session
-guard sessionReaders.queryApi --set goApi.authProxy.sessions=true --set authService.migrate.sessionReaders.queryApi= \
+guard sessionReaders.queryApi --set goApi.authProxy.sessions=true \
   --set authService.sessionKeys.successor.secretName=auth-session
 
 # --- the rehearsal ---------------------------------------------------------------------------------------

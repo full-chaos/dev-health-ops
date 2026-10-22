@@ -1,6 +1,8 @@
 # Release values for ci/check_session_cutover_rehearsal.sh. Prod-shaped for the pieces the
-# session cutover touches: goApi probes and args as in the prod values, and the session-reader
-# roles from the deploy repo's prod values (authService.migrate.sessionReaders, deploy prep leaf).
+# session cutover touches: goApi probes and args as in the prod values, and the
+# go-api session reader role from the deploy repo's prod values (sessionReaders.goApi). The query-api
+# reader is NOT set here: the owner login is the auth migration login and may not be a reader, so prod
+# sets none; the script's flip layer adds a separate role, because the chart refuses sessions=true without one.
 # Everything the cutover does not touch is off. Credentials never appear here: the script writes
 # them to a mode-0600 values file it creates itself.
 web: {enabled: false}
@@ -27,7 +29,7 @@ authService:
   migrate:
     secretName: auth-migrate-db
     image: {repository: rehearsal/auth-migrate, tag: local, pullPolicy: Never}
-    sessionReaders: {goApi: devhealth_api, queryApi: devhealth}
+    sessionReaders: {goApi: devhealth_api}
 migrations:
   hook:
     image: rehearsal/dho:local

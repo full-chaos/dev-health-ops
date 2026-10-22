@@ -126,7 +126,7 @@ func refsOf(allOf any) []string {
 func TestInventoryRowsDeclareTheHS256OptInExplicitly(t *testing.T) {
 	resolved, _ := resolveEndpointProfileSchema(t)
 	classes := accessTokenClasses(t)
-	for _, file := range []string{"endpoint-profiles.auth-service.json", "endpoint-profiles.query-api.json"} {
+	for _, file := range []string{"endpoint-profiles.auth-service.json", "endpoint-profiles.query-api.json", "endpoint-profiles.go-api.json"} {
 		t.Run(file, func(t *testing.T) {
 			path := "contracts/auth/v1/" + file
 			if err := resolved.Validate(readJSONFile(t, path)); err != nil {

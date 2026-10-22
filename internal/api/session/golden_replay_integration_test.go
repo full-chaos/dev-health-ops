@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -114,6 +115,22 @@ func startStack(t *testing.T, ctx context.Context) stack {
 // handlers sign and validate link tokens with.
 func startStackWithMail(t *testing.T, ctx context.Context, mail authmail.Config) stack {
 	t.Helper()
+	return startStackWithMailAndIssuer(t, ctx, mail, nil, nil)
+}
+
+// startStackWith is startStack with issuer as session.Deps.Issuer (non-nil:
+// auth-service owns sessions, AUTH_PROXY_SESSIONS) and, when routePool is
+// set, the routes on the pool it returns for the seeded database instead of
+// the admin pool.
+func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issuer,
+	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool) stack {
+	t.Helper()
+	return startStackWithMailAndIssuer(t, ctx, authmail.Config{}, issuer, routePool)
+}
+
+func startStackWithMailAndIssuer(t *testing.T, ctx context.Context, mail authmail.Config, issuer sessionissue.Issuer,
+	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool) stack {
+	t.Helper()
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -173,14 +190,19 @@ func startStackWithMail(t *testing.T, ctx context.Context, mail authmail.Config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	routesPool := pool
+	if routePool != nil {
+		routesPool = routePool(t, ctx, pool, pg.URI)
+	}
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: routesPool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
 	oauth := oauthprovider.NewClient()
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
-	routes := session.Routes(session.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
-		Signer: signer, Mail: mail, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger})
+	routes := session.Routes(session.Deps{Pool: routesPool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
+		Signer: signer, Mail: mail, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger,
+		Issuer: issuer})
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)

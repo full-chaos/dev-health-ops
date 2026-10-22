@@ -9,11 +9,12 @@
     inventory has no current equivalent: it is a record. The live, Go-owned profile
     rows are
     [`endpoint-profiles.auth-service.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/endpoint-profiles.auth-service.json)
-    and
     [`endpoint-profiles.query-api.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/endpoint-profiles.query-api.json)
+    and
+    [`endpoint-profiles.go-api.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/endpoint-profiles.go-api.json)
     (schema: [`endpoint-profile.schema.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/endpoint-profile.schema.json)),
     checked by the Go tests in `internal/auth/contracts/` (`endpoint_profiles_*_test.go`)
-    and `internal/queryapi/server/` (`endpoint_profile_rows_test.go`). Each row
+    `internal/queryapi/server/` and `internal/apiservice/` (`endpoint_profile_rows_test.go`). Each row
     carries a `file:line` anchor. This page summarizes; it does not repeat every
     anchor inline.
 
@@ -356,8 +357,9 @@ every anchor line holds.
 ## Contributor guide: registering a new route or credential class
 
 1. **New route, existing credential class.** Add a row to the profile file of the
-   service that serves it (`contracts/auth/v1/endpoint-profiles.query-api.json` or
-   `contracts/auth/v1/endpoint-profiles.auth-service.json`) with `id`, `route`/`method`
+   service that serves it (`contracts/auth/v1/endpoint-profiles.query-api.json`,
+   `contracts/auth/v1/endpoint-profiles.auth-service.json` or
+   `contracts/auth/v1/endpoint-profiles.go-api.json`) with `id`, `route`/`method`
    (or `graphql_field_name`), `source` anchor, `classification`, and — if
    protected — `accepted_credential_classes` from
    `contracts/auth/v1/credential-classes.json`'s closed vocabulary plus

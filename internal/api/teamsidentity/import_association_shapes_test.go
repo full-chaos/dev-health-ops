@@ -103,3 +103,25 @@ func TestImportAcceptedAssociationShapesPassValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestImportReportsEveryFieldErrorInOneResponse pins CHAOS-10593: association
+// errors used to be dropped when another field of the same team was also
+// invalid.
+func TestImportReportsEveryFieldErrorInOneResponse(t *testing.T) {
+	counter := &storeTouchCounter{}
+	body := `{"teams":[{"provider_type":"jira","provider_team_id":"T1","associations":{"project_keys":[7],"repo_patterns":5}}]}`
+	rec := postImportBody(t, Store{Conn: counter}, body)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422\nbody: %s", rec.Code, rec.Body.String())
+	}
+	const want = `{"detail":[` +
+		`{"type":"missing","loc":["body","teams",0,"name"],"msg":"Field required"},` +
+		`{"type":"string_type","loc":["body","teams",0,"associations","project_keys",0],"msg":"Input should be a valid string"},` +
+		`{"type":"list_type","loc":["body","teams",0,"associations","repo_patterns"],"msg":"Input should be a valid list or string"}]}`
+	if got := rec.Body.String(); got != want {
+		t.Errorf("body = %s\nwant   %s", got, want)
+	}
+	if counter.calls != 0 {
+		t.Errorf("store touched %d times, want 0", counter.calls)
+	}
+}

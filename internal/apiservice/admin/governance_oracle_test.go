@@ -435,10 +435,13 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		}
 	}
 
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/governance.go-pin.json", SHA256: governancePinSHA256, Ruling: governanceRuling})
 	var createdLedger createdByLedger
 	users := map[string]uuid.UUID{"ent": adminEnt, "comm": adminComm, "ovr": adminOvr, "tier": adminTier, "bogus": adminBogus, "none": adminNoLicense}
 	receipt := venueoracle.Diff(t, goBase, compared, pythonCompared, venueoracle.DiffOptions{
 		Golden: golden,
+		Retire: retiredGovernanceRequest,
+		Pin:    pin,
 		// Ids are redacted from the comparison, so a created row's id is
 		// checked here instead: the Go response must carry a valid UUID that
 		// names the row it inserted.
@@ -486,6 +489,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		},
 	})
 	t.Log(receipt)
+	pin.Finish(t)
 	createdLedger.verifyThenReset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_ip_allowlist")
 
 	compare := func(name, query string) {
@@ -523,4 +527,20 @@ FROM org_feature_overrides ORDER BY feature_id::text, org_id::text`)
 		}
 	}
 	golden.Finish(t)
+}
+
+// governanceRuling retired the Python reference of the four feature-override
+// requests that name a malformed id: Python answered 500 for them, the Go api
+// answers a named 400 (the 500 was the bug).
+const governanceRuling = "CHAOS-10593 (fcs lead decision 2026-10-22): a malformed feature-override org or override id answers a named 400, not the old Python 500"
+
+// governancePinSHA256 is the digest of testdata/governance/governance.go-pin.json.
+const governancePinSHA256 = "fc9ec0db2ab1945eba364a875903d07c5c00c5b4d49158473f316e3d3ac2387f"
+
+func retiredGovernanceRequest(request venueoracle.Request) bool {
+	switch request.Name {
+	case "overrides list malformed org", "W override create malformed org", "W override patch malformed id", "W override delete malformed":
+		return true
+	}
+	return false
 }

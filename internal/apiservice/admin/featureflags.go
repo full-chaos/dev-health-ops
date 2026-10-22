@@ -168,12 +168,31 @@ func (h *handlers) listFeatureFlags(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusOK, list, nil)
 }
 
+const (
+	invalidOrgIDDetail      = "Invalid organization id"
+	invalidOverrideIDDetail = "Invalid override id"
+)
+
+// writeInvalidOverrideID answers a malformed {org_id} or {override_id} of the
+// feature-override routes with a named 400, never the generic 500.
+func writeInvalidOverrideID(w http.ResponseWriter, detail string) {
+	policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
+}
+
+// overrideOrgID reads the {org_id} of a feature-override route.
+func overrideOrgID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, ok := pathUUID(r, "org_id")
+	if !ok {
+		writeInvalidOverrideID(w, invalidOrgIDDetail)
+	}
+	return id, ok
+}
+
 // listFeatureOverrides is features.py's list_feature_overrides.
 func (h *handlers) listFeatureOverrides(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	orgID, ok := pathUUID(r, "org_id")
+	orgID, ok := overrideOrgID(w, r)
 	if !ok {
-		policy.WriteInternal(w)
 		return
 	}
 	stored, err := entitlements.List(ctx, h.store.Pool, orgID)
@@ -257,8 +276,12 @@ func (h *handlers) createFeatureOverride(w http.ResponseWriter, r *http.Request)
 		writeValidation(w, errs)
 		return
 	}
+	if !orgOK {
+		writeInvalidOverrideID(w, invalidOrgIDDetail)
+		return
+	}
 	featureID, featureOK := pythonparity.ParseUUID(featureIDRaw)
-	if !orgOK || featureOK != nil {
+	if featureOK != nil {
 		policy.WriteInternal(w)
 		return
 	}
@@ -354,10 +377,14 @@ func (h *handlers) updateFeatureOverride(w http.ResponseWriter, r *http.Request)
 		writeValidation(w, errs)
 		return
 	}
-	overrideID, idOK := pathUUID(r, "override_id")
 	orgID, orgOK := pathUUID(r, "org_id")
-	if !idOK || !orgOK {
-		policy.WriteInternal(w)
+	if !orgOK {
+		writeInvalidOverrideID(w, invalidOrgIDDetail)
+		return
+	}
+	overrideID, idOK := pathUUID(r, "override_id")
+	if !idOK {
+		writeInvalidOverrideID(w, invalidOverrideIDDetail)
 		return
 	}
 	updater, err := pythonparity.ParseUUID(user.UserID)
@@ -448,10 +475,14 @@ func pyValuesEqual(a, b pyjson.Value) bool {
 // deleteFeatureOverride is features.py's delete_feature_override.
 func (h *handlers) deleteFeatureOverride(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	overrideID, idOK := pathUUID(r, "override_id")
 	orgID, orgOK := pathUUID(r, "org_id")
-	if !idOK || !orgOK {
-		policy.WriteInternal(w)
+	if !orgOK {
+		writeInvalidOverrideID(w, invalidOrgIDDetail)
+		return
+	}
+	overrideID, idOK := pathUUID(r, "override_id")
+	if !idOK {
+		writeInvalidOverrideID(w, invalidOverrideIDDetail)
 		return
 	}
 	removed, err := entitlements.Revoke(ctx, h.store.Pool, orgID, &overrideID, "")

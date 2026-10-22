@@ -117,6 +117,7 @@ internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed
 internal/cigates/workflows	strip_hook_test.go	unexpressed
 internal/cigates/workflows	workflows_builder_images_test.go	unexpressed
+internal/cigates/workflows	workflows_go_integration_pr_scope_test.go	unexpressed
 internal/cigates/workflows	workflows_path_filters_test.go	unexpressed
 internal/cigates/workflows	workflows_wire_parity_test.go	unexpressed
 internal/fixturescli	provider_worlds_producer_integration_test.go	unexpressed

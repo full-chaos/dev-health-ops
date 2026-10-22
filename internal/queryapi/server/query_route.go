@@ -5921,6 +5921,12 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	if err != nil {
 		return queryRouteHandlers{}, nil, nil, err
 	}
+	// A database behind this build is refused before anything else is built; the gate logs its own line. One read at start,
+	// the pool stays lazy for requests.
+	if err := enforceQueryAPISchemaGate(context.Background(), slog.Default(), pgPool); err != nil {
+		pgPool.Close()
+		return queryRouteHandlers{}, nil, nil, err
+	}
 
 	verifier, err := principal.NewVerifier(cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience)
 	if err != nil {

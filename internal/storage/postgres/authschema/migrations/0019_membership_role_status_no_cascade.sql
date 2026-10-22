@@ -1,4 +1,4 @@
--- 0018 memberships: role, status 'removed', no cascade from organizations or
+-- 0019 memberships: role, status 'removed', no cascade from organizations or
 -- principals. NOT ADDITIVE in three places, on purpose (additiveExemptions):
 -- the status CHECK is redefined (widened by 'removed', nothing removed), and the
 -- two cascading foreign keys become RESTRICT. Nothing is dropped from stored data.

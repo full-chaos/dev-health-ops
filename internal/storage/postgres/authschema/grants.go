@@ -68,7 +68,7 @@ func (t TablePrivilege) privileges() []string {
 //     is changed by a migration or an administrative path, never by the
 //     service evaluating it. A service that can edit the actions it is
 //     checked against can widen its own authority.
-//   - memberships has no DELETE: a member leaves by status 'removed' (0018), so
+//   - memberships has no DELETE: a member leaves by status 'removed' (0019), so
 //     the edge and its revision history survive.
 //   - platform_role_assignments has no UPDATE: changing an elevation is a
 //     revoke followed by a grant, which leaves two audit rows instead of one

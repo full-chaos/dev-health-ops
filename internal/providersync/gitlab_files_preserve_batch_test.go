@@ -12,7 +12,7 @@ import (
 
 type gitLabFilesReadbackConn struct {
 	driver.Conn
-	existing map[string]*string
+	existing map[[2]string]*string
 	queries  int
 	args     [][]any
 }
@@ -20,10 +20,11 @@ type gitLabFilesReadbackConn struct {
 func (conn *gitLabFilesReadbackConn) Query(_ context.Context, _ string, args ...any) (driver.Rows, error) {
 	conn.queries++
 	conn.args = append(conn.args, args)
+	repoID, _ := args[1].(string)
 	paths, _ := args[2].([]string)
 	rows := &gitLabFilesReadbackRows{}
 	for _, path := range paths {
-		if contents, ok := conn.existing[path]; ok {
+		if contents, ok := conn.existing[[2]string{repoID, path}]; ok {
 			rows.rows = append(rows.rows, [2]any{path, contents})
 		}
 	}
@@ -55,7 +56,8 @@ func TestGitLabFilesPreserveExistingContentsBatchesQueries(t *testing.T) {
 	const repoA, repoB = "c7198fbc-1945-3717-05d8-eb78866b4e79", "d7198fbc-1945-3717-05d8-eb78866b4e79"
 	known := "package known\n"
 	fresh := "fresh\n"
-	conn := &gitLabFilesReadbackConn{existing: map[string]*string{"p/0": &known, "p/7": &known, "p/null": nil}}
+	other := "package other\n"
+	conn := &gitLabFilesReadbackConn{existing: map[[2]string]*string{{repoA, "p/0"}: &known, {repoA, "p/7"}: &known, {repoA, "p/null"}: nil, {repoB, "p/0"}: &other}}
 	var rows []gitFileRow
 	for i := 0; i < 200; i++ {
 		rows = append(rows, gitFileRow{RepoID: repoA, Path: fmt.Sprintf("p/%d", i), LastSynced: now, OrgID: "org-a"})
@@ -81,13 +83,13 @@ func TestGitLabFilesPreserveExistingContentsBatchesQueries(t *testing.T) {
 	if rows[201].Contents != &fresh {
 		t.Fatalf("fresh contents must stay authoritative")
 	}
-	if rows[202].Contents != &known {
-		t.Fatalf("repo B row must hydrate from its own repo query")
+	if rows[202].Contents != &other || rows[0].Contents != &known {
+		t.Fatalf("same path in two repos must hydrate from its own repo row")
 	}
 }
 
 func TestGitLabFilesPreserveExistingContentsChunksLongPathLists(t *testing.T) {
-	conn := &gitLabFilesReadbackConn{existing: map[string]*string{}}
+	conn := &gitLabFilesReadbackConn{existing: map[[2]string]*string{}}
 	long := strings.Repeat("x", 4000)
 	var rows []gitFileRow
 	for i := 0; i < 100; i++ {

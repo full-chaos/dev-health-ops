@@ -116,7 +116,7 @@ const providerNotFoundDetail = "The provider reported that the requested project
 func (h handlers) providerFailure(w http.ResponseWriter, r *http.Request, what string, err error) {
 	var providerErr *providerfoundation.ProviderError
 	if errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorNotFound {
-		h.logger.WarnContext(r.Context(), "provider reported not found", slog.String("path", r.URL.Path), slog.String("step", what))
+		h.logger.WarnContext(r.Context(), "provider reported not found", slog.String("step", what))
 		policy.WriteDetail(w, http.StatusNotFound, providerNotFoundDetail, nil)
 		return
 	}

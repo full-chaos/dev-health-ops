@@ -148,6 +148,9 @@ USER_ID="$(psql_one "SELECT id FROM public.users WHERE email = '${EMAIL}'")"
 [[ "${USER_ID}" =~ ^[0-9a-f-]{36}$ ]] || die "the seeded user has no id (${USER_ID})"
 printf 'seeded user %s\n' "${USER_ID}"
 
+# auth-migrate ran before the application schema existed, so its public read grants were skipped
+# (the table did not exist); a second run, as compose.yml documents, applies them.
+compose --profile auth run --rm --no-deps auth-migrate
 printf 'step 2b: the auth runtime role holds the public read grants and nothing wider (CHAOS-10224)\n'
 ROLE="${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}"
 for col in id email password_hash full_name username auth_provider auth_provider_id is_active is_verified is_superuser token_version; do

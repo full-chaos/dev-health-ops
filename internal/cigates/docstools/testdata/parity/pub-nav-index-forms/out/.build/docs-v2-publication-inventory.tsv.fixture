@@ -1,0 +1,6 @@
+page_id	canonical_url	source_path	nav_path	label	content_type	owner	lifecycle	publication_state
+home-001	/	index.md	B	B	landing	team-a	active	public-canonical
+	//		C	C		documentation	active	public-canonical
+	//		D	D		documentation	active	public-canonical
+g2	/guide/advanced/	guide/advanced/index.md	A	A	howto	documentation	beta	public-canonical
+	/x/index.md/	x/index.md/	E	E		documentation	active	public-canonical

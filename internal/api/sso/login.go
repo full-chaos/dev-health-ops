@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -99,48 +100,60 @@ func (h handlers) finishSSOLogin(ctx context.Context, w http.ResponseWriter, r *
 		orgUUID = &id
 	}
 	now := h.Now()
-	jti, err := newJTI()
-	if err != nil {
-		h.fail(w, r, "mint token", err)
-		return
-	}
-	access, err := h.Signer.Access(edgetoken.AccessClaims{
-		UserID: user.id.String(), Email: user.email, OrgID: loginOrgID, Role: role, IsSuperuser: user.isSuperuser,
-		Username: user.username, FullName: user.fullName, TokenVersion: user.tokenVersion,
-	}, now, jti)
-	if err != nil {
-		h.fail(w, r, "mint access token", err)
-		return
-	}
-	// r1 review (CHAOS-6658, P1): the earlier version of this function
-	// minted a stateless refresh JWT and never inserted a refresh_tokens
-	// row, faithfully matching SSOService's own AuthService.
-	// create_token_pair (services/auth.py:282-283) -- but /auth/refresh
-	// (api/auth/routers/refresh.py:158, ported here as refreshByHash)
-	// does a real DB lookup by the token's own jti on BOTH planes, and
-	// 401s when no row exists. Python's version of both SSO callback
-	// routes was never actually reachable (the pre-CHAOS-6658 dead-state
-	// finding), so this Python bug never had a live consequence; once this
-	// Go port fixed the state bug and made the routes real, the SAME
-	// stateless mint would have shipped a login whose OWN refresh_token
-	// 401s on first use -- a real, executed, reproduced defect (r1's
-	// second P1 on #3347), not a parity target worth preserving. Fixed
-	// here (shared by both OIDC and SAML, since both call this function)
-	// by storing the refresh token the same way the password-login route
-	// does (session/tokens.go storeRefresh), inside the same transaction
-	// as the audit/login-time writes.
-	family := uuid.New()
-	refreshJTI, err := newJTI()
-	if err != nil {
-		h.fail(w, r, "mint token", err)
-		return
-	}
-	refreshExpiresAt := now.Add(7 * 24 * time.Hour)
-	refresh, err := h.Signer.RefreshUntil(edgetoken.RefreshClaims{UserID: user.id.String(), OrgID: loginOrgID, FamilyID: family.String()},
-		now, refreshExpiresAt, refreshJTI)
-	if err != nil {
-		h.fail(w, r, "mint refresh token", err)
-		return
+	var access, refresh, refreshJTI string
+	var family uuid.UUID
+	var refreshExpiresAt time.Time
+	if h.Issuer != nil {
+		pair, err := h.Issuer.Issue(ctx, r, sessionissue.Request{PrincipalID: user.id, OrganizationID: orgUUID, AMR: []string{"fed"}})
+		if err != nil {
+			h.fail(w, r, "issue session", err)
+			return
+		}
+		access, refresh = pair.Access, pair.Refresh
+	} else {
+		jti, err := newJTI()
+		if err != nil {
+			h.fail(w, r, "mint token", err)
+			return
+		}
+		access, err = h.Signer.Access(edgetoken.AccessClaims{
+			UserID: user.id.String(), Email: user.email, OrgID: loginOrgID, Role: role, IsSuperuser: user.isSuperuser,
+			Username: user.username, FullName: user.fullName, TokenVersion: user.tokenVersion,
+		}, now, jti)
+		if err != nil {
+			h.fail(w, r, "mint access token", err)
+			return
+		}
+		// r1 review (CHAOS-6658, P1): the earlier version of this function
+		// minted a stateless refresh JWT and never inserted a refresh_tokens
+		// row, faithfully matching SSOService's own AuthService.
+		// create_token_pair (services/auth.py:282-283) -- but /auth/refresh
+		// (api/auth/routers/refresh.py:158, ported here as refreshByHash)
+		// does a real DB lookup by the token's own jti on BOTH planes, and
+		// 401s when no row exists. Python's version of both SSO callback
+		// routes was never actually reachable (the pre-CHAOS-6658 dead-state
+		// finding), so this Python bug never had a live consequence; once this
+		// Go port fixed the state bug and made the routes real, the SAME
+		// stateless mint would have shipped a login whose OWN refresh_token
+		// 401s on first use -- a real, executed, reproduced defect (r1's
+		// second P1 on #3347), not a parity target worth preserving. Fixed
+		// here (shared by both OIDC and SAML, since both call this function)
+		// by storing the refresh token the same way the password-login route
+		// does (session/tokens.go storeRefresh), inside the same transaction
+		// as the audit/login-time writes.
+		family = uuid.New()
+		refreshJTI, err = newJTI()
+		if err != nil {
+			h.fail(w, r, "mint token", err)
+			return
+		}
+		refreshExpiresAt = now.Add(7 * 24 * time.Hour)
+		refresh, err = h.Signer.RefreshUntil(edgetoken.RefreshClaims{UserID: user.id.String(), OrgID: loginOrgID, FamilyID: family.String()},
+			now, refreshExpiresAt, refreshJTI)
+		if err != nil {
+			h.fail(w, r, "mint refresh token", err)
+			return
+		}
 	}
 
 	tx, err := h.Pool.Begin(ctx)
@@ -154,14 +167,16 @@ func (h handlers) finishSSOLogin(ctx context.Context, w http.ResponseWriter, r *
 		h.fail(w, r, "record login", err)
 		return
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO refresh_tokens
+	if h.Issuer == nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO refresh_tokens
 	(id, user_id, org_id, token_hash, family_id, expires_at, revoked_at, replaced_by_hash, successor_jti,
 	 ip_address, user_agent, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9)`,
-		uuid.New(), user.id, orgUUID, hashRefreshJTI(refreshJTI), family, refreshExpiresAt.UTC(),
-		clientHost(r), userAgentHeader(r), now.UTC()); err != nil {
-		h.fail(w, r, "store refresh token", err)
-		return
+			uuid.New(), user.id, orgUUID, hashRefreshJTI(refreshJTI), family, refreshExpiresAt.UTC(),
+			clientHost(r), userAgentHeader(r), now.UTC()); err != nil {
+			h.fail(w, r, "store refresh token", err)
+			return
+		}
 	}
 	meta := pyjson.NewObject()
 	meta.Set("provider_id", providerID.String())

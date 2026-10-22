@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
@@ -168,7 +169,7 @@ func (h compatHandlers) loginSucceeded(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	h.rec.record(r.Context(), opCompatLogin, "success", string(outcome.Reason), nil)
-	writeCompatModel(w, loginResponse(access, *issued, attempt.membership == nil && !attempt.user.IsSuperuser,
+	writeCompatModel(w, loginResponse(access, issued.Credential, attempt.membership == nil && !attempt.user.IsSuperuser,
 		userInfo(outcome.PrincipalID, attempt.user, attempt.membership), nil))
 }
 
@@ -214,6 +215,9 @@ func (h compatHandlers) loginUnverified(w http.ResponseWriter, r *http.Request, 
 // organization_id references.
 func (h compatHandlers) auditOrganization(ctx context.Context, principal uuid.UUID, requested *uuid.UUID) (*uuid.UUID, error) {
 	if requested != nil {
+		// Projected even when the sign-in is refused: the audit row's
+		// organization must exist, and the projection mirrors go-api's own
+		// organization row, idempotently.
 		err := h.Projector.ProjectOrganization(ctx, *requested)
 		switch {
 		case err == nil:
@@ -260,6 +264,9 @@ func (h compatHandlers) auditSignInFailed(ctx context.Context, principal uuid.UU
 		event.OrganizationID = &text
 	}
 	if principal != uuid.Nil {
+		// A refused sign-in still projects the go-api user: the audit row
+		// names the principal, the projection mirrors a go-api row that
+		// already exists, and it is idempotent.
 		err := h.Projector.Project(ctx, principal)
 		switch {
 		case err == nil:
@@ -378,10 +385,10 @@ func optionalText(value *string) pyjson.Value {
 
 // loginResponse is go-api's LoginResponse; isNewUser appends
 // SocialLoginResponse's is_new_user when non-nil.
-func loginResponse(access string, issued session.Issued, needsOnboarding bool, user *pyjson.Object, isNewUser *bool) *pyjson.Object {
+func loginResponse(access string, refresh contracts.SecretString, needsOnboarding bool, user *pyjson.Object, isNewUser *bool) *pyjson.Object {
 	out := pyjson.NewObject()
 	out.Set("access_token", access)
-	out.Set("refresh_token", issued.Credential.Reveal())
+	out.Set("refresh_token", refresh.Reveal())
 	out.Set("token_type", "bearer")
 	out.Set("expires_in", pyjson.IntOf(int64(AccessExpiresIn)))
 	out.Set("needs_onboarding", needsOnboarding)

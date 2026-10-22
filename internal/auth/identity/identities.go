@@ -107,7 +107,10 @@ func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider P
 	if err != nil || !found {
 		return Principal{}, false, err
 	}
-	if err := s.Project(ctx, userID); err != nil {
+	if err := s.projectChecked(ctx, userID, &key); err != nil {
+		if errors.Is(err, ErrProviderAlreadyLinked) {
+			return Principal{ID: userID}, false, err
+		}
 		return Principal{}, false, err
 	}
 	if err := s.projectIdentity(ctx, key, userID); err != nil {

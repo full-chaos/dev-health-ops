@@ -201,9 +201,10 @@ func (executor *ComplexityExecutor) ComputePartition(
 	blameUnusableRepos := 0
 	rowsWritten := 0
 
+	source := clickhouseComplexitySource{conn: executor.conn}
 	for _, repo := range repos {
-		files, blameUnusable, err := executor.loadRepoFileContents(
-			ctx, repo.ID, run.OrganizationID, scanConfig, scope.MaxFiles,
+		fileResults, blameUnusable, err := analyzeRepoFiles(
+			ctx, source, repo.ID, run.OrganizationID, scanConfig, scope.MaxFiles, complexityFetchBudgetBytes,
 		)
 		if err != nil {
 			return CompatibilityOutcome{}, err
@@ -211,36 +212,13 @@ func (executor *ComplexityExecutor) ComputePartition(
 		if blameUnusable {
 			blameUnusableRepos++
 		}
-
-		filtered := filterComplexityFiles(scanConfig, files, scope.MaxFiles)
-		if len(filtered) == 0 {
+		if len(fileResults) == 0 {
 			continue
 		}
 
 		ref, err := buildComplexityRef(ctx, executor.conn, repo.ID, run.OrganizationID)
 		if err != nil {
 			return CompatibilityOutcome{}, err
-		}
-
-		fileResults := make([]complexity.FileComplexity, 0, len(filtered))
-		for _, file := range filtered {
-			result, analyzeErr := complexity.AnalyzeFile(file.Path, file.Contents, scanConfig.Thresholds)
-			if analyzeErr != nil {
-				// ErrLanguageNotPorted included: fail loud, no fallback --
-				// see this type's own doc, point 3.
-				return CompatibilityOutcome{}, fmt.Errorf(
-					"complexity: repo %s file %s: %w", repo.ID, file.Path, analyzeErr)
-			}
-			if result == nil {
-				// Not analysed at all, or the analyzer skipped an
-				// unparseable source -- both are Python's `None`, never a
-				// zero row.
-				continue
-			}
-			fileResults = append(fileResults, *result)
-		}
-		if len(fileResults) == 0 {
-			continue
 		}
 
 		reposWithData++
@@ -275,100 +253,4 @@ func (executor *ComplexityExecutor) ComputePartition(
 		_ = executor.observer.ObserveComplexityPartition(len(repos), reposWithData, blameUnusableRepos)
 	}
 	return CompatibilityOutcome{RowsWritten: &rowsWritten}, nil
-}
-
-// loadRepoFileContents ports run_complexity_db_job's per-repo file-source
-// selection (job_complexity_db.py:303-374): git_files first, then a
-// git_blame fallback for whatever git_files is missing, budgeted by
-// max_files across both phases via fileselect.go's plan functions.
-//
-// The returned blameUnusable mirrors Python's own flag: true only when there
-// were files this repo could not recover from EITHER source (see
-// complexity.BlameUnusable / complexity.EmptyGitFilesBlameUnusable) --
-// purely a telemetry signal, it does not change what gets returned.
-func (executor *ComplexityExecutor) loadRepoFileContents(
-	ctx context.Context, repoID uuid.UUID, orgID string, scanConfig complexity.ScanConfig, maxFiles *int,
-) ([]complexityFileContent, bool, error) {
-	totalFiles, nonEmpty, err := gitFileCounts(ctx, executor.conn, repoID, orgID)
-	if err != nil {
-		return nil, false, err
-	}
-
-	var files []complexityFileContent
-	blameUnusable := false
-
-	if nonEmpty > 0 {
-		gitFiles, loadErr := loadComplexityGitFiles(ctx, executor.conn, repoID, orgID, maxFiles)
-		if loadErr != nil {
-			return nil, false, loadErr
-		}
-		files = append(files, gitFiles...)
-
-		plan := complexity.PlanNonEmptyBranch(maxFiles, totalFiles, nonEmpty, len(gitFiles))
-		if plan.AttemptBlameFallback {
-			missingPaths, missingErr := loadComplexityMissingPaths(ctx, executor.conn, repoID, orgID, plan.BlameLimit)
-			if missingErr != nil {
-				return nil, false, missingErr
-			}
-			filteredMissing := make([]string, 0, len(missingPaths))
-			for _, path := range missingPaths {
-				if scanConfig.ShouldProcess(path) {
-					filteredMissing = append(filteredMissing, path)
-				}
-			}
-			if len(filteredMissing) > 0 {
-				hasBlameText, blameTextErr := hasComplexityBlameLineText(ctx, executor.conn, repoID, orgID)
-				if blameTextErr != nil {
-					return nil, false, blameTextErr
-				}
-				if hasBlameText {
-					blameFiles, blameErr := loadComplexityBlameContents(
-						ctx, executor.conn, repoID, orgID, filteredMissing, plan.BlameLimit,
-					)
-					if blameErr != nil {
-						return nil, false, blameErr
-					}
-					files = append(files, blameFiles...)
-				} else {
-					blameUnusable = complexity.BlameUnusable(len(filteredMissing), hasBlameText)
-				}
-			}
-		}
-	} else {
-		hasBlameText, blameTextErr := hasComplexityBlameLineText(ctx, executor.conn, repoID, orgID)
-		if blameTextErr != nil {
-			return nil, false, blameTextErr
-		}
-		blameUnusable = complexity.EmptyGitFilesBlameUnusable(totalFiles, hasBlameText)
-		plan := complexity.PlanEmptyBranch(maxFiles, hasBlameText)
-		if plan.AttemptBlameFallback {
-			blameFiles, blameErr := loadComplexityBlameContents(ctx, executor.conn, repoID, orgID, nil, plan.BlameLimit)
-			if blameErr != nil {
-				return nil, false, blameErr
-			}
-			files = append(files, blameFiles...)
-		}
-	}
-
-	return files, blameUnusable, nil
-}
-
-// filterComplexityFiles ports _filter_files (job_complexity_db.py:227-236):
-// the FINAL should_process gate and max_files cap, applied to the merged
-// git_files+git_blame result -- the one place both apply together, even
-// though max_files also bounded each DB read individually.
-func filterComplexityFiles(
-	scanConfig complexity.ScanConfig, files []complexityFileContent, maxFiles *int,
-) []complexityFileContent {
-	filtered := make([]complexityFileContent, 0, len(files))
-	for _, file := range files {
-		if !scanConfig.ShouldProcess(file.Path) {
-			continue
-		}
-		filtered = append(filtered, file)
-		if maxFiles != nil && len(filtered) >= *maxFiles {
-			break
-		}
-	}
-	return filtered
 }

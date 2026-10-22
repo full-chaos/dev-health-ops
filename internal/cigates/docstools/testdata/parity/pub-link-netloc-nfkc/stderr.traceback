@@ -1,0 +1,1 @@
+ValueError: netloc 'a＠b.com' contains invalid characters under NFKC normalization

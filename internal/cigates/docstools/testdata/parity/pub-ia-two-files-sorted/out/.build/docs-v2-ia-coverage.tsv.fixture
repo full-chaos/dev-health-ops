@@ -1,0 +1,5 @@
+page_id	canonical_url	label	kind	state
+home	/	Home	landing	implemented
+g2	/guide/advanced/	Adv	guide	implemented
+g1	/guide/intro/	Intro	guide	implemented
+r1	/reference/	Ref	ref	implemented

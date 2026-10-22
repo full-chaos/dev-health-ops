@@ -413,7 +413,7 @@ func (h handlers) inferMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	members, err := inferJiraMembers(ctx, jira, projectKey, days)
 	if err != nil {
-		h.internal(w, r, "infer team members", err)
+		h.providerFailure(w, r, "infer team members", err)
 		return
 	}
 	identities, err := h.store.ListIdentities(ctx, orgID, false)

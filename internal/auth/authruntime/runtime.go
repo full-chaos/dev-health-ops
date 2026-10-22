@@ -40,6 +40,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -71,9 +72,9 @@ type IO struct {
 const maxInFlightRequests = 64
 
 // sessionRoutes is the service's mounted route set when cfg.Session is
-// enabled, and nothing otherwise: the session routes (CHAOS-10228) and, with
-// AUTH_SERVICE_COMPAT_ROUTES=true, go-api's compatibility refresh, logout and
-// social-login, and login when the lockout key is set too. Without the session
+// enabled, and nothing otherwise: the session routes (CHAOS-10228) and
+// go-api's compatibility refresh, logout and social-login, and login when the
+// lockout key is set too. Without the session
 // secrets the service stays as CHAOS-4881 built it, dormant: every path
 // receives the 404 envelope and no token is issued. No deployed stack sets
 // those secrets yet, and go-api routes to these only behind its AUTH_PROXY_*
@@ -98,8 +99,8 @@ func sessionRoutes(
 	routes, err := authapi.Routes(authapi.Deps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
 	})
-	if err != nil || !cfg.Session.CompatRoutes {
-		return routes, err
+	if err != nil {
+		return nil, err
 	}
 	compat, err := compatRoutes(cfg, logger, pool, schema, sessions, issuer)
 	if err != nil {
@@ -137,7 +138,7 @@ func compatRoutes(
 	}
 	deps := authapi.CompatDeps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
-		Projector: identities, Social: socialService,
+		Projector: identities, Social: socialService, ServiceCredentials: servicecred.PG{Pool: pool},
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, pool, schema, event)
 		},
@@ -390,7 +391,11 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
-	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra))
+	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
+		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
+	})...)
+	logger.InfoContext(ctx, "auth API routes", "api_routes_mounted", len(routes) > 0, "routes", len(routes)+len(extra),
+		"discovery_mounted", cfg.TokenIssuerURL != "")
 	routes = append(routes, extra...)
 
 	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))

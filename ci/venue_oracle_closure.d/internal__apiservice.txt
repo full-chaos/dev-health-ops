@@ -29,6 +29,7 @@ internal/api/ratelimit
 internal/api/recordvalidation
 internal/api/restcore
 internal/api/session
+internal/api/sessionissue
 internal/api/sso
 internal/api/syncadmin
 internal/api/teamsidentity
@@ -71,6 +72,7 @@ internal/mintcli/edgetoken
 internal/mintcli/envelope
 internal/netclass
 internal/operationalordering
+internal/ownershipwindow
 internal/pgmigrate
 internal/platform/buildstamp
 internal/platform/config

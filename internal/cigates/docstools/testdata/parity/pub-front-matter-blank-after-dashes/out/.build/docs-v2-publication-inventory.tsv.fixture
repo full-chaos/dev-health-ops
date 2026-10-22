@@ -1,0 +1,5 @@
+page_id	canonical_url	source_path	nav_path	label	content_type	owner	lifecycle	publication_state
+home-001	/	index.md	Home	Home	landing	team-a	active	public-canonical
+g2	/guide/advanced/	guide/advanced/index.md	Guide > Advanced	Advanced	howto	documentation	beta	public-canonical
+g1	/guide/intro/	guide/intro.md	Guide > Intro	Intro	guide	documentation	active	public-canonical
+sp-1	/reference/	reference.md	Reference	Reference	reference	documentation	active	public-canonical

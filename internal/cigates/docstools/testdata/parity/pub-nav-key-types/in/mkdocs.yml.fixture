@@ -1,0 +1,6 @@
+nav:
+  - 1: index.md
+  - 2.50: guide/intro.md
+  - true: reference.md
+  - ~: guide/advanced/index.md
+  - 2001-02-03: docs-extra.md

@@ -65,10 +65,10 @@ func TestGroupCStatements_CarryTheOrgPredicateOnEveryTable(t *testing.T) {
 	}
 	for _, st := range statements {
 		if strings.Contains(st, "FROM ai_workflow_issue_edges FINAL") {
-			if got := strings.Count(st, "org_id = {org_id:String}"); got != 5 {
-				t.Errorf("the edge union has %d org predicates, want one per branch (5)", got)
+			if got := strings.Count(st, "org_id = {org_id:String}"); got != 7 {
+				t.Errorf("the edge union has %d org predicates, want one per branch (5) plus the work_graph_issue_pr branch and its link subquery (7)", got)
 			}
-			for _, table := range []string{"ai_workflow_artifact_edges", "work_graph_pr_review_outcome_edges", "work_graph_pr_deployment_edges", "work_graph_deployment_incident_edges"} {
+			for _, table := range []string{"ai_workflow_artifact_edges", "work_graph_pr_review_outcome_edges", "work_graph_pr_deployment_edges", "work_graph_deployment_incident_edges", "work_graph_issue_pr"} {
 				if !strings.Contains(st, "FROM "+table+" FINAL") {
 					t.Errorf("the edge union lacks %s", table)
 				}

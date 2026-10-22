@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
@@ -162,6 +163,34 @@ const (
 	moduleRootRel = "../.."
 )
 
+// realScan is the one walk of the real module per test binary: the scan loads and type-checks every package for two targets, so
+// every test that needs it shares the result (read-only) instead of loading the module again.
+type realScan struct {
+	found    map[site]int
+	problems []string
+	outside  []string
+	facts    map[fnKey]*fnFacts
+}
+
+var (
+	realScanMu    sync.Mutex
+	realScanDone  *realScan
+	realScanCount int
+)
+
+func realScanOnce(t *testing.T, root string, patterns, replaced []string) *realScan {
+	t.Helper()
+	realScanMu.Lock()
+	defer realScanMu.Unlock()
+	if realScanDone == nil {
+		facts := map[fnKey]*fnFacts{}
+		found, problems, outside := scanPackages(t, root, patterns, replaced, func(string) bool { return false }, "", facts)
+		realScanDone = &realScan{found: found, problems: problems, outside: outside, facts: facts}
+		realScanCount++
+	}
+	return realScanDone
+}
+
 // realWalkProblems walks the real module and returns every problem against redirect_sites.tsv and against the pinned scope list.
 func realWalkProblems(t *testing.T, pinned []string, allowUpdate bool) ([]string, map[site]int, map[site]row) {
 	t.Helper()
@@ -174,8 +203,9 @@ func realWalkProblems(t *testing.T, pinned []string, allowUpdate bool) ([]string
 	for _, module := range replaced {
 		patterns = append(patterns, module+"/...")
 	}
-	facts := map[fnKey]*fnFacts{}
-	found, problems, outside := scanPackages(t, root, patterns, replaced, func(string) bool { return false }, "", facts)
+	scan := realScanOnce(t, root, patterns, replaced)
+	found, facts, outside := scan.found, scan.facts, scan.outside
+	problems := append([]string(nil), scan.problems...)
 	rows := readRows(t, rowFile)
 	if allowUpdate && *updateSites {
 		writeRows(t, rowFile, found, rows)

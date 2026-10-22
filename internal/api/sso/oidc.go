@@ -492,6 +492,11 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 				identityConflictDetail(), "oidc", "provisioning")
 			return
 		}
+		if errors.Is(err, errMembershipRequired) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
+				membershipRequiredDetail(), "oidc", "provisioning")
+			return
+		}
 		var processing ssoProcessing
 		if !asSSOProcessing(err, &processing) {
 			h.fail(w, r, "oidc provisioning", err)

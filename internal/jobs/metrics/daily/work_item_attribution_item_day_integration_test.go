@@ -51,10 +51,10 @@ func TestTheBackstopAndTheDailyFamilyGiveAnItemTheOwnerOfItsOwnDay(t *testing.T)
 		wantTeam string
 	}{
 		{
-			name:   "completed long before the ownership of its repository was first known",
+			name:   "completed long before the ownership of its repository was first known: the first owners apply (D5987 C)",
 			status: "done", completed: itemDayTime(daysAgo(60)),
 			ownership: []ownership{{team: "team-new", validFrom: anHourAgo}},
-			itemDay:   today.AddDate(0, 0, -60), wantTeam: "",
+			itemDay:   today.AddDate(0, 0, -60), wantTeam: "team-new",
 		},
 		{
 			name:   "completed under the owner before a change of owner",
@@ -77,10 +77,10 @@ func TestTheBackstopAndTheDailyFamilyGiveAnItemTheOwnerOfItsOwnDay(t *testing.T)
 			itemDay: today.AddDate(0, 0, -60), wantTeam: "team-old",
 		},
 		{
-			name:   "completed long before the ownership was first known some days ago",
+			name:   "completed long before the ownership was first known some days ago: the first owners apply (D5987 C)",
 			status: "done", completed: itemDayTime(daysAgo(60)),
 			ownership: []ownership{{team: "team-new", validFrom: daysAgo(5)}},
-			itemDay:   today.AddDate(0, 0, -60), wantTeam: "",
+			itemDay:   today.AddDate(0, 0, -60), wantTeam: "team-new",
 		},
 		{
 			// The facts are those at the START of the completion day: a change

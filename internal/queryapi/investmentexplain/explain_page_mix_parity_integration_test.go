@@ -68,7 +68,8 @@ func TestExplainSharesEqualTheInvestmentPagesMix(t *testing.T) {
 			Filters:       &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputTeam, Ids: []string{}}},
 			Breakdowns: []model.BreakdownRequestInput{{
 				Dimension: dimension, Measure: model.MeasureInputCount, TopN: 100,
-				DateRange: &model.DateRangeInput{StartDate: graphqldate.New(windowStart), EndDate: graphqldate.New(windowEnd)},
+				// the page names its last day, inclusive (D6101); the explain below reads [windowStart, windowEnd)
+				DateRange: &model.DateRangeInput{StartDate: graphqldate.New(windowStart), EndDate: graphqldate.New(windowEnd.AddDate(0, 0, -1))},
 			}},
 		})
 		if err != nil {

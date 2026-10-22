@@ -36,7 +36,7 @@ func TestNoPlaintextCredentialColumnInTheAppliedSchema(t *testing.T) {
 	env := newAuthFixture(t, ctx)
 
 	rows, err := env.admin.Query(ctx, `
-		SELECT table_name, column_name
+		SELECT table_name, column_name, data_type
 		FROM information_schema.columns
 		WHERE table_schema = $1
 		ORDER BY table_name, ordinal_position`, env.schema)
@@ -48,8 +48,8 @@ func TestNoPlaintextCredentialColumnInTheAppliedSchema(t *testing.T) {
 	total, candidates := 0, 0
 	var offenders []string
 	for rows.Next() {
-		var table, column string
-		if err := rows.Scan(&table, &column); err != nil {
+		var table, column, dataType string
+		if err := rows.Scan(&table, &column, &dataType); err != nil {
 			t.Fatalf("read a column: %v", err)
 		}
 		total++
@@ -57,10 +57,7 @@ func TestNoPlaintextCredentialColumnInTheAppliedSchema(t *testing.T) {
 			continue
 		}
 		candidates++
-		if _, approved := approvedSecretColumns[column]; approved {
-			continue
-		}
-		if hasApprovedSuffix(column) {
+		if secretColumnApproved(table, column, dataType) {
 			continue
 		}
 		offenders = append(offenders, table+"."+column)
@@ -77,7 +74,7 @@ func TestNoPlaintextCredentialColumnInTheAppliedSchema(t *testing.T) {
 	if len(offenders) > 0 {
 		t.Fatalf(
 			"column(s) whose name suggests credential material: %s\n"+
-				"Store a hash or a reference, or add the column to approvedSecretColumns with the reason it is safe.",
+				"Store a hash or a reference, or add the column to approvedSecretColumns (or, for one table's column, approvedSecretTableColumns) with the reason it is safe.",
 			strings.Join(offenders, ", "),
 		)
 	}
@@ -105,7 +102,7 @@ func TestCatalogSecretRuleCatchesWhatTheTextScannerMissed(t *testing.T) {
 	}
 
 	rows, err := env.admin.Query(ctx, `
-		SELECT table_name, column_name
+		SELECT table_name, column_name, data_type
 		FROM information_schema.columns
 		WHERE table_schema = $1`, env.schema)
 	if err != nil {
@@ -115,15 +112,12 @@ func TestCatalogSecretRuleCatchesWhatTheTextScannerMissed(t *testing.T) {
 
 	found := map[string]bool{}
 	for rows.Next() {
-		var table, column string
-		if err := rows.Scan(&table, &column); err != nil {
+		var table, column, dataType string
+		if err := rows.Scan(&table, &column, &dataType); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if secretRoot.MatchString(column) &&
-			!hasApprovedSuffix(column) {
-			if _, approved := approvedSecretColumns[column]; !approved {
-				found[column] = true
-			}
+		if secretRoot.MatchString(column) && !secretColumnApproved(table, column, dataType) {
+			found[column] = true
 		}
 	}
 	for _, column := range []string{"api_token", "client_secret", "session_token", "private_material"} {

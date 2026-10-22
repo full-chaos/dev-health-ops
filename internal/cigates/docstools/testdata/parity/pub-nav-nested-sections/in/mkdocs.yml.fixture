@@ -1,0 +1,7 @@
+nav:
+  - A:
+      - B:
+          - C: index.md
+          - guide/intro.md
+      - D: reference.md
+  - guide/advanced/index.md

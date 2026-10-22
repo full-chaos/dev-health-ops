@@ -127,6 +127,18 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opRefresh, unauthorized(reason), nil)
 		return
 	}
+	switch checkPin(ctx, h.rec.logger, record, user) {
+	case pinMissing:
+		h.rec.refuse(w, r, opRefresh, unauthorized(reasonRevisionStale), nil)
+		return
+	case pinStale:
+		if _, revokeErr := h.Sessions.Revoke(ctx, record.ID, session.Actor{RequestID: requestid.Audit(ctx)}); revokeErr != nil {
+			h.rec.refuse(w, r, opRefresh, unavailable(reasonStoreUnavailable), revokeErr)
+			return
+		}
+		h.rec.refuse(w, r, opRefresh, unauthorized(reasonRevisionStale), nil)
+		return
+	}
 	role := roleText(nil, false)
 	if record.OrganizationID != nil {
 		value, member, roleErr := h.Users.Role(ctx, record.PrincipalID, *record.OrganizationID)

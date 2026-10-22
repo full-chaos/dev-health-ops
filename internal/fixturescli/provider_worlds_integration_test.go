@@ -190,5 +190,7 @@ var githubWorld = providerWorld{
 			Sources:  [][2]string{{githubOrg + "/payments-api", "payments-api"}, {githubOrg + "/platform-core", "platform-core"}},
 			Datasets: []string{"repo-metadata", "prs", "work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},
 		{Kind: "work_graph"},
+		// The next sync of the catalog, after the work is synced: each link starts at its evidence (CHAOS-10521).
+		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}, Phase: "second"},
 	},
 }

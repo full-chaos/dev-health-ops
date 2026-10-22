@@ -218,11 +218,11 @@ func TestCheckAPIAuthorizationRefusesALoginThatOnlyActsAsTheRole(t *testing.T) {
 	externalIngestTables(t, ctx, admin, role)
 
 	direct := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
-	if err := CheckAPIAuthorization(ctx, direct, role, grantSchema); err != nil {
+	if err := CheckAPIAuthorization(ctx, direct, role, grantSchema, false); err != nil {
 		t.Fatalf("the control (a direct login as the api role) failed: %v", err)
 	}
 	actingAs, login := actingAsPool(t, ctx, admin, instance.URI, dbName, role, instance)
-	if err := CheckAPIAuthorization(ctx, actingAs, role, grantSchema); !errors.Is(err, ErrPostureRefused) {
+	if err := CheckAPIAuthorization(ctx, actingAs, role, grantSchema, false); !errors.Is(err, ErrPostureRefused) {
 		t.Fatalf("api: a login that only acts as the role (session_user=%s) passed readiness: error %v", login, err)
 	}
 }

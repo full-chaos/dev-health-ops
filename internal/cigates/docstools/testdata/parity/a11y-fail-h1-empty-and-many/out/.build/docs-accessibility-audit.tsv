@@ -1,0 +1,4 @@
+page	finding
+x.html	content h1 has no accessible text
+x.html	content h1 has no accessible text
+x.html	expected one content h1, found 3

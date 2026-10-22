@@ -18,10 +18,15 @@ import (
 //
 //	half 1, unreachable: source_commit must name a commit that resolves in the
 //	  repo and is an ancestor of HEAD. ENFORCED by problemsForSourceCommit.
-//	half 2, stale but reachable: every anchor line must read the same at
-//	  source_commit as in the tree under test. ENFORCED by the same function,
-//	  for anchors in the repo that owns the inventory (path/line anchors and
-//	  source{file,line}); an anchor naming another repo is not checkable here.
+//	half 2, stale but reachable: every anchor must hold at source_commit and
+//	  in the tree under test. An anchor holds when the line reads the same at
+//	  the same number in both, OR when the tree line's exact text occurs exactly
+//	  once in that file at source_commit and exactly once in the tree (a pure
+//	  line shift, which a squash merge can cause). Text absent at source_commit,
+//	  or occurring twice or more on either side, fails. ENFORCED by the same
+//	  function, for anchors in the repo that owns the inventory (path/line
+//	  anchors and source{file,line}); an anchor naming another repo is not
+//	  checkable here.
 //
 // NOT enforced: that the anchor's line is the RIGHT symbol (the rows gate in
 // internal/queryapi/server owns that), and anchors in other repos' inventories.
@@ -63,6 +68,16 @@ func collectAnchors(node any, out map[lineAnchor]bool) {
 			collectAnchors(child, out)
 		}
 	}
+}
+
+func countLine(text, want string) int {
+	n := 0
+	for _, l := range strings.Split(text, "\n") {
+		if l == want {
+			n++
+		}
+	}
+	return n
 }
 
 func lineOfText(text string, line int) (string, bool) {
@@ -119,7 +134,8 @@ func problemsForSourceCommit(repo, name string, document map[string]any) []strin
 		}
 		oldLine, okThen := lineOfText(then, a.line)
 		newLine, okNow := lineOfText(string(raw), a.line)
-		if !okThen || !okNow || oldLine != newLine {
+		shifted := okNow && countLine(then, newLine) == 1 && countLine(string(raw), newLine) == 1
+		if !shifted && (!okThen || !okNow || oldLine != newLine) {
 			problems = append(problems, fmt.Sprintf("%s: %s:%d reads %q at source_commit %s but %q in the tree: the anchors were not derived against source_commit (stale base)", name, a.file, a.line, strings.TrimSpace(oldLine), commit, strings.TrimSpace(newLine)))
 		}
 	}
@@ -178,16 +194,67 @@ func TestSourceCommitFixtureRejectsAnUnreachableCommit(t *testing.T) {
 	}
 }
 
-// The acr case: the base is reachable (an ancestor of HEAD, so an ancestry
-// check alone passes) but the anchor line reads differently there.
-func TestSourceCommitFixtureRejectsAStaleButReachableBase(t *testing.T) {
-	dir, base, _ := fixtureRepo(t)
-	if _, err := gitOut(dir, "merge-base", "--is-ancestor", base, "HEAD"); err != nil {
-		t.Fatalf("fixture is wrong: the stale base must be an ancestor of HEAD: %v", err)
+func fixtureRepoWith(t *testing.T, before, after string) (dir, base, tip string) {
+	t.Helper()
+	dir = t.TempDir()
+	run := func(args ...string) string {
+		out, err := gitOut(dir, append([]string{"-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"}, args...)...)
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return out
 	}
-	problems := problemsForSourceCommit(dir, "fixture", inventoryAt(base, 5))
+	run("init", "-q")
+	write := func(content string) {
+		if err := os.WriteFile(filepath.Join(dir, "routes.go"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(before)
+	run("add", "routes.go")
+	run("commit", "-q", "-m", "base")
+	base = run("rev-parse", "HEAD")
+	write(after)
+	run("commit", "-q", "-am", "tip")
+	return dir, base, run("rev-parse", "HEAD")
+}
+
+// A line shifted by an insertion, its text unique in both trees, passes.
+func TestSourceCommitFixtureAcceptsAShiftedAnchorWithUniqueText(t *testing.T) {
+	dir, base, _ := fixtureRepo(t)
+	if problems := problemsForSourceCommit(dir, "fixture", inventoryAt(base, 5)); len(problems) != 0 {
+		t.Fatalf("a pure line shift was refused: %v", problems)
+	}
+}
+
+// Same line number, different text, and the new text did not exist before.
+func TestSourceCommitFixtureRejectsChangedTextAtTheSameLine(t *testing.T) {
+	dir, base, _ := fixtureRepoWith(t, "package x\n\nfunc a() {}\nmux.Handle(\"/a\", h)\n", "package x\n\nfunc a() {}\nmux.Handle(\"/b\", h)\n")
+	problems := problemsForSourceCommit(dir, "fixture", inventoryAt(base, 4))
 	if len(problems) != 1 || !strings.Contains(problems[0], "stale base") {
-		t.Fatalf("a stale-but-reachable source_commit was not refused: %v", problems)
+		t.Fatalf("changed text at the same line was not refused: %v", problems)
+	}
+}
+
+// A new text, absent at source_commit, at a shifted line.
+func TestSourceCommitFixtureRejectsATextAbsentAtSourceCommit(t *testing.T) {
+	dir, base, _ := fixtureRepoWith(t, "package x\n\nfunc a() {}\nmux.Handle(\"/a\", h)\n", "package x\n\nfunc a() {}\nfunc b() {}\nmux.Handle(\"/a\", h)\nmux.Handle(\"/new\", h)\n")
+	problems := problemsForSourceCommit(dir, "fixture", inventoryAt(base, 6))
+	if len(problems) != 1 || !strings.Contains(problems[0], "stale base") {
+		t.Fatalf("a text absent at source_commit was not refused: %v", problems)
+	}
+}
+
+// A shifted text that occurs twice in the tree, then twice at source_commit.
+func TestSourceCommitFixtureRejectsADuplicatedText(t *testing.T) {
+	line := "mux.Handle(\"/a\", h)\n"
+	dir, base, _ := fixtureRepoWith(t, "package x\n\nfunc a() {}\n"+line, "package x\n\nfunc a() {}\nfunc b() {}\n"+line+line)
+	if problems := problemsForSourceCommit(dir, "fixture", inventoryAt(base, 5)); len(problems) != 1 {
+		t.Fatalf("a text duplicated in the tree was accepted: %v", problems)
+	}
+	dir, base, _ = fixtureRepoWith(t, "package x\n"+line+line, "package x\nfunc b() {}\nfunc c() {}\n"+line)
+	if problems := problemsForSourceCommit(dir, "fixture", inventoryAt(base, 4)); len(problems) != 1 {
+		t.Fatalf("a text duplicated at source_commit was accepted: %v", problems)
 	}
 }
 

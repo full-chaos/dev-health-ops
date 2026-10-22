@@ -44,8 +44,11 @@ func analyticsSelection(ctx context.Context) analytics.Selection {
 			selected.EvidenceQualityByGroup = true
 		case "sankey":
 			for _, inner := range graphql.CollectFields(graphql.GetOperationContext(ctx), field.Selections, nil) {
-				if inner.Name == "coverage" {
+				switch inner.Name {
+				case "coverage":
 					selected.SankeyCoverage = true
+				case "nodes", "edges":
+					selected.SankeyFlow = true
 				}
 			}
 		}

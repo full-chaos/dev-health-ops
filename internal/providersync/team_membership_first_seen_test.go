@@ -60,7 +60,7 @@ func TestFirstSeenMembershipValidFromReusesTheEarliestOpenStamp(t *testing.T) {
 // is classified; a catalog writer must call its first-seen function, and the
 // writer that plans its own rows must go through the snapshot rule.
 var membershipWriters = map[string]struct {
-	role   string // "catalog": the run stamps valid_from, reuse is required; "planner": PlanSnapshot; "closer"/"operator": see note
+	role   string // "catalog": the run stamps valid_from, reuse is required; "planner": PlanSnapshot; "closer"/"operator"/"evidence": see note
 	reuse  string // catalog: the function every run passes its rows through
 	caller string // catalog: the file that calls it
 	note   string
@@ -73,6 +73,7 @@ var membershipWriters = map[string]struct {
 	"internal/atlassianteams/write.go":                     {role: "planner", note: "the Atlassian Teams writer plans its memberships (planMemberships) through PlanSnapshot: first-seen valid_from and closes of departed members"},
 	"internal/providersync/jira_project_as_team_retire.go": {role: "closer", note: "one-time retraction of the Jira project-as-team rows: writes each row again with valid_to set"},
 	"internal/providersync/team_id_carry.go":               {role: "carry", note: "the one-shot team id carry: moves the links of an old team id to the new one, keeping the earliest valid_from of the old id (min(valid_from)), so it adds no open row per run"},
+	"internal/providersync/catalog_evidence_start.go":      {role: "evidence", note: "the evidence start of a catalog link (CHAOS-10521): writes the first row of a link again at its earliest evidence and retires the old key as an empty interval; a repeat run moves nothing, so it adds no open row per run"},
 	"internal/api/teamsidentity/drift_apply.go":            {role: "operator", note: "an operator's reviewed identity-drift change: one write with the valid_from of the reviewed row, not a per-sync writer"},
 }
 

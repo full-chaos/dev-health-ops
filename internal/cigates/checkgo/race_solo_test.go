@@ -223,7 +223,7 @@ func TestRaceLegRunsItsSoloPackageLastAndInItsOwnGoTest(t *testing.T) {
 		if err := os.WriteFile(log, nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_GO_LOG=" + log, "FAKE_GO_LISTING=" + listPath, "TMPDIR=" + dir, "GO_RACE_SOLO=" + soloFile}
+		env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_GO_LOG=" + log, "FAKE_GO_LISTING=" + listPath, "TMPDIR=" + dir, "GO_RACE_SOLO=" + soloFile, "GO_TEST_JSON_DIR=" + filepath.Join(dir, "json")}
 		stdout, errs, err := soloExec(t, root, env, "", "bash", "ci/check_go.sh", "ci-leg", "race", fmt.Sprint(shard), "3")
 		if err != nil {
 			t.Fatalf("race leg %d/3 failed: %v\n%s\n%s", shard, err, stdout, errs)

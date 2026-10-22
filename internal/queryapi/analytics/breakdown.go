@@ -19,9 +19,10 @@ type BreakdownRequest struct {
 	Dimension Dimension
 	Measure   Measure
 	StartDate graphqldate.Date
-	EndDate   graphqldate.Date
-	TopN      int
-	Keys      []string
+	// EndDate is the EXCLUSIVE end of the window (windowEndExclusive): the day after the last day the request names.
+	EndDate graphqldate.Date
+	TopN    int
+	Keys    []string
 }
 
 // BreakdownRequestFromInput converts the GraphQL input, validating
@@ -45,11 +46,15 @@ func BreakdownRequestFromInput(input model.BreakdownRequestInput) (BreakdownRequ
 	if err := validateBreakdownKeys(input.Keys); err != nil {
 		return BreakdownRequest{}, err
 	}
+	start, end, err := dateRangeBounds(input.DateRange)
+	if err != nil {
+		return BreakdownRequest{}, err
+	}
 	return BreakdownRequest{
 		Dimension: dim,
 		Measure:   measure,
-		StartDate: input.DateRange.StartDate,
-		EndDate:   input.DateRange.EndDate,
+		StartDate: start,
+		EndDate:   end,
 		TopN:      input.TopN,
 		Keys:      input.Keys,
 	}, nil

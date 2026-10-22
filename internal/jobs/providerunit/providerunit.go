@@ -159,6 +159,11 @@ const (
 	// truncated. The tree it would walk again is the same, so the unit ends on
 	// the first attempt instead of repeating the walk five times (CHAOS-8829).
 	TreeWalkLimitCategory = "tree_walk_limit"
+	// CheckpointConflictCategory covers a chunk checkpoint that disagrees with
+	// the persisted chunks (route version, chunk count, ordinal, digest, cursor,
+	// payload size). The same persisted state gives the same conflict on every
+	// attempt, and the scope's next run is a new unit with a new checkpoint.
+	CheckpointConflictCategory = "checkpoint_conflict"
 )
 
 // timeLimitReserve is how long before the job deadline the unit's
@@ -176,6 +181,9 @@ const failureWriteTimeout = 5 * time.Second
 // providersync.CauseClassUnclassified. Never error text.
 const (
 	causeClassBudgetContended = "budget_contended"
+	// A database error the chunk store flattened into the checkpoint conflict
+	// (providersync.ChunkStoreError): transient, so the retry policy stays.
+	causeClassCheckpointStoreError = "checkpoint_store_error"
 	// "provider_" + providerfoundation.ErrorClass for the rest.
 	causeClassProviderPrefix = "provider_"
 )
@@ -201,6 +209,10 @@ func causeClass(err error, timedOut bool) string {
 	}
 	if errors.Is(err, providerfoundation.ErrBudgetContended) {
 		return causeClassBudgetContended
+	}
+	var storeErr *providersync.ChunkStoreError
+	if errors.As(err, &storeErr) {
+		return causeClassCheckpointStoreError
 	}
 	var providerErr *providerfoundation.ProviderError
 	if errors.As(err, &providerErr) && !providerErr.AfterResponse() {
@@ -232,6 +244,10 @@ func deterministicTerminalCategory(err error) (string, bool) {
 			return TimeLimitCategory, true
 		}
 		return TreeWalkLimitCategory, true
+	}
+	var storeErr *providersync.ChunkStoreError
+	if errors.Is(err, providersync.ErrChunkCheckpointConflict) && !errors.As(err, &storeErr) {
+		return CheckpointConflictCategory, true
 	}
 	if errors.Is(err, providersync.ErrGitHubFilesSubtreeTruncated) ||
 		errors.Is(err, providersync.ErrGitHubBlameFileListTooLarge) {

@@ -1,0 +1,8 @@
+ERROR: B.html: html element has no lang attribute
+ERROR: Z/x.html: html element has no lang attribute
+ERROR: a/B.html: html element has no lang attribute
+ERROR: a/b.html: html element has no lang attribute
+ERROR: a/c/d.html: html element has no lang attribute
+ERROR: a-b.html: html element has no lang attribute
+ERROR: a.html: html element has no lang attribute
+Accessibility structural audit failed; report: .build/docs-accessibility-audit.tsv

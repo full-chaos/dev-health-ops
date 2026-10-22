@@ -89,6 +89,7 @@ Design docs (read the guardrails at minimum):
 | `effective_principal_envelope` | active | human | |
 | `refresh_credential` | active | human | |
 | `user_access_token` | **unconsumed** | human | |
+| `internal_svc_authsess_token` | active | service_account | |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 6 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -113,6 +114,16 @@ validator (`POST /v1/token/refresh`); its four API routes and three operator
 routes have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`.
 It does not replace `ops_refresh_token` yet: go-api still mints that one until
 the session cutover.
+
+**`internal_svc_authsess_token` (CHAOS-10465).** The go-api service credential
+(`svc_authsess_` plus 32 random bytes, service `auth-session-issuer`, scope
+`sessions:issue`) that `POST /internal/v1/sessions` accepts. It shares the
+`internal_service_credentials` table with `svc_acr_` and `svc_worker_`, which
+carry other prefixes, services and scopes. auth-service is its only validator
+(`servicecred.PG.Check`); the verbs of `dev-hops service-credentials` mint,
+rotate and revoke it. The route and go-api's four compatibility routes
+(`/api/v1/auth/{login,refresh,logout,social-login}`) have rows in
+`contracts/auth/v1/endpoint-profiles.auth-service.json`.
 
 **`user_access_token` (CHAOS-10442).** The EdDSA user access token of TRD
 section 11, the successor of `ops_access_token_hs256`. It is class 33. Its wire

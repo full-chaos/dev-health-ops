@@ -97,7 +97,7 @@ func (store *InProcessChunkLedger) LoadChunkCheckpoint(
 	}
 	if ctx.Err() != nil {
 		// The Postgres query fails and every scan failure is a conflict.
-		return ChunkCheckpoint{}, ErrChunkCheckpointConflict
+		return ChunkCheckpoint{}, NewChunkStoreError(ctx.Err())
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -302,7 +302,7 @@ func (store *InProcessChunkLedger) LoadPreparedChunk(
 		return PreparedProviderChunk{}, ErrInvalidConfiguration
 	}
 	if ctx.Err() != nil {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+		return PreparedProviderChunk{}, NewChunkStoreError(ctx.Err())
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()

@@ -449,3 +449,34 @@ func TestEdgeCarrier_ClaimsMatchTheEnvelopeCarrierForTheSameIdentity(t *testing.
 		t.Fatalf("claims disagree between carriers: envelope=%+v edge=%+v", (*envelopeSeen)[0], (*edgeSeen)[0])
 	}
 }
+
+func TestEdgeCarrier_OrglessTokenNeedsALiveSuperuserRow(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		super bool
+		org   string
+		code  int
+		ran   int
+	}{
+		{"orgless member keeps the bare 401", false, "", http.StatusUnauthorized, 0},
+		{"orgless live superuser is served", true, "", http.StatusOK, 1},
+		{"member with an org is unchanged", false, ecOrg.String(), http.StatusOK, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeEdgeStore{
+				states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: tc.super, TokenVersion: 5}},
+				found:   map[uuid.UUID]bool{ecUser: true},
+				members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
+			}
+			handler, seen := iaDispatchWithEdge(t, nil, ecEdgeAuth(t, store), store)
+			token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: tc.org, role: "member", isSuperuser: true, tokenVersion: 5})
+			rec := ecPost(handler, token)
+			if rec.Code != tc.code || len(*seen) != tc.ran {
+				t.Fatalf("status=%d ran=%d body=%q, want %d/%d", rec.Code, len(*seen), rec.Body.String(), tc.code, tc.ran)
+			}
+			if tc.code == http.StatusUnauthorized && rec.Body.String() != "unauthorized\n" {
+				t.Fatalf("body = %q, want the bare 401 body", rec.Body.String())
+			}
+		})
+	}
+}

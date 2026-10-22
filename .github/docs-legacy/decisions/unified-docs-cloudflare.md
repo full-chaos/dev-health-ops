@@ -12,13 +12,10 @@ Dev Health publishes one public documentation site at
 
 - `ops/docs` is the canonical public documentation source.
 - Documentation and demo assets use Cloudflare Workers Static Assets.
-- GitHub Actions is the only preview and production deployment authority.
-  Workers Builds is disabled and deployment workflows verify that state through
-  API readback.
+- Cloudflare Workers Builds (worker `dev-health-docs`) builds and deploys production from `main`; GitHub Actions only builds, validates, and smoke-tests.
 - Deployment workflows use exactly `wrangler@4.107.0` with compatibility date
   `2026-07-16`.
-- Previews share one Cloudflare Access service-token policy. Production custom
-  domains remain anonymously readable.
+- Production custom domains remain anonymously readable.
 - Documentation releases retain immutable, versioned artifacts. Deployments
   emit source SHA/ref, release version or `main`, a sorted content digest,
   preview URL, Worker version ID, deployment ID, and previous version ID.
@@ -32,10 +29,10 @@ audience-specific duplicates. The demo remains a root-domain static export, so
 it can change independently without becoming a documentation host. Cloudflare
 Pages is not a production or preview path for either site.
 
-Deployment and rollback are intentionally workflow-owned: a local command may
-assemble and test assets, but it cannot publish them. A workflow must fail when
-trusted deployment credentials, required checks, artifacts, or deployment
-outputs are absent.
+Deployment is owned by Cloudflare Workers Builds, which builds and deploys
+from `main`. Rollback is a Cloudflare dashboard step or `make docs:rollback`.
+The GitHub workflow builds and validates the assets and can smoke-test the
+live host; it holds no deployment credentials.
 
 ## Traceability
 

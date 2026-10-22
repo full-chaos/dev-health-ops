@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,5 +276,31 @@ func TestExchangeRefusesAPinlessSessionWithoutRotating(t *testing.T) {
 	again, err := e.store.Exchange(ctx, credential)
 	if err != nil || again.Reason != ReasonRevisionStale {
 		t.Fatalf("the same credential again = %s, %v; want revision_stale, not reuse", again.Reason, err)
+	}
+}
+
+// A go-api refresh token whose row go-api revoked (a password reset or change,
+// an admin password set or a soft delete keep revoking them while
+// auth-service owns sessions) is never exchanged, at any distance from the
+// revocation.
+func TestExchangeLegacyRefusesATokenGoAPIRevoked(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	user := e.goUser(t, ctx, 1)
+	for name, age := range map[string]time.Duration{"just revoked": 0, "revoked earlier": GraceWindow + time.Minute} {
+		jti := "jti-revoked-" + strings.ReplaceAll(name, " ", "-")
+		e.goRefresh(t, ctx, user, uuid.New(), jti, time.Hour)
+		digest := sha256.Sum256([]byte(jti))
+		if _, err := e.admin.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = now() - make_interval(secs => $2::double precision)
+			WHERE token_hash = $1`, hex.EncodeToString(digest[:]), age.Seconds()); err != nil {
+			t.Fatal(err)
+		}
+		result, err := e.store.ExchangeLegacy(ctx, legacy(user, jti))
+		if err != nil || result.Reason.Success() || result.Credential.Reveal() != "" {
+			t.Fatalf("%s: exchange = %s (%v), want a refusal and no credential", name, result.Reason, err)
+		}
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user.String()); n != 0 {
+		t.Fatalf("%d sessions from revoked go-api tokens, want 0", n)
 	}
 }

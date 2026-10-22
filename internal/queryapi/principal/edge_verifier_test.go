@@ -77,18 +77,14 @@ func TestEdgeVerifier_AcceptsValidAccessToken(t *testing.T) {
 	}
 }
 
-func TestEdgeVerifier_MissingOrgIDDefaultsEmpty(t *testing.T) {
+func TestEdgeVerifier_MissingOrgIDIsRefusedForANonSuperuser(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
 	claims := validEdgeClaims("")
 	delete(claims, "org_id")
 	token := signEdgeToken(t, edgeTestSecret, claims)
 
-	got, err := v.Verify(context.Background(), token)
-	if err != nil {
-		t.Fatalf("Verify: unexpected error: %v", err)
-	}
-	if got.OrgID != "" {
-		t.Fatalf("OrgID = %q, want empty", got.OrgID)
+	if _, err := v.Verify(context.Background(), token); err == nil {
+		t.Fatal("Verify: nil error for a token with no org_id")
 	}
 }
 

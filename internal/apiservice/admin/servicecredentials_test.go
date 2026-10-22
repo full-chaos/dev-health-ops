@@ -29,6 +29,14 @@ func TestServiceTokenShapeAndHash(t *testing.T) {
 	if want := "svc_worker_" + strings.Repeat("_", 42) + "8"; worker != want {
 		t.Fatalf("worker token %q, want %q", worker, want)
 	}
+	serviceCredentialRandom = bytes.NewReader(make([]byte, 32))
+	issuer, err := generateServiceToken(ServiceAuthSessionIssuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "svc_authsess_" + strings.Repeat("A", 43); issuer != want {
+		t.Fatalf("issuer token %q, want %q", issuer, want)
+	}
 	if got := HashServiceToken("abc"); got != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
 		t.Fatalf("hash %s", got)
 	}
@@ -43,6 +51,9 @@ func TestServiceCredentialScopes(t *testing.T) {
 	if err != nil || strings.Join(got, ",") != "workers:operate,workers:read" {
 		t.Fatalf("scopes %v err %v", got, err)
 	}
+	if got, err := ServiceCredentialScopes(ServiceAuthSessionIssuer, []string{"sessions:issue"}); err != nil || strings.Join(got, ",") != "sessions:issue" {
+		t.Fatalf("issuer scopes %v err %v", got, err)
+	}
 	for name, tc := range map[string]struct {
 		service string
 		scopes  []string
@@ -52,6 +63,8 @@ func TestServiceCredentialScopes(t *testing.T) {
 		"another service's": {ServiceACR, []string{"workers:read"}},
 		"one bad of two":    {ServiceWorkerOperator, []string{"workers:read", "entitlements:read"}},
 		"unknown service":   {"bogus", []string{"entitlements:read"}},
+		"issuer, acr scope": {ServiceAuthSessionIssuer, []string{"entitlements:read"}},
+		"acr, issue scope":  {ServiceACR, []string{"sessions:issue"}},
 	} {
 		if _, err := ServiceCredentialScopes(tc.service, tc.scopes); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -62,7 +75,7 @@ func TestServiceCredentialScopes(t *testing.T) {
 			}
 		}
 	}
-	if !equalStrings(ServiceNames(), []string{"acr", "worker-operator"}) {
+	if !equalStrings(ServiceNames(), []string{"acr", "auth-session-issuer", "worker-operator"}) {
 		t.Fatalf("service names %v", ServiceNames())
 	}
 }

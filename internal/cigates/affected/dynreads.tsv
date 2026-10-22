@@ -74,6 +74,8 @@ internal/auth/contracts	session_goldens_test.go
 internal/auth/contracts	session_hardening_test.go
 internal/auth/contracts	transport_error_goldens_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
+internal/auth/contracts/tokencorpus	corpus.go
+internal/auth/contracts/tokencorpus	corpus_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity/local	corpus_helpers_integration_test.go
@@ -212,7 +214,9 @@ internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	raceshard_test.go
 internal/cigates/testshard	standin_test.go
 internal/cigates/testshard	trimpath_test.go
+internal/cigates/testshard	unweightedpkg_test.go
 internal/cigates/testshard	weightscensus_test.go
+internal/cigates/webproxyproof	proof_test.go
 internal/cigates/weightsfiles	ci_script_helpers_test.go
 internal/cigates/weightsfiles	race_weights_files_test.go
 internal/cigates/workflowpaths	workflow_path_filters_test.go
@@ -224,6 +228,7 @@ internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go
 internal/cigates/workflows	live_e2e_no_python_test.go
+internal/cigates/workflows	race_json_artifact_test.go
 internal/cigates/workflows	race_pool_routing_test.go
 internal/cigates/workflows	ttl_registry_test.go
 internal/cigates/workflows	workflows_common_test.go

@@ -28,6 +28,7 @@ internal/apiservice/admin	TestPagerDutyServicesVenueOracle	run
 internal/apiservice/admin	TestPagerDutyServicesWithoutOAuthAppVenueOracle	run
 internal/apiservice/admin	TestPagerDutyStatusAndPreflightVenueOracle	run
 internal/apiservice/admin	TestPagerDutyWebhookBindingsVenueOracle	run
+internal/apiservice/admin	TestPromptCacheOptIn	run
 internal/apiservice/admin	TestRateLimitPathCardinalityVenueOracle	run
 internal/apiservice/admin	TestRetentionRoutesVenueOracle	run
 internal/apiservice/admin	TestServiceModelSelfServiceToggle	run

@@ -191,7 +191,7 @@ func batchLineBilled(result categorize.BatchItemResult) bool {
 // logBatchLine writes the llm.call line of one answered batch line; batch
 // requests always send a strict json_schema.
 func logBatchLine(ctx context.Context, model string, result categorize.BatchItemResult) {
-	categorize.LogCompletion(ctx, categorize.CompletionResult{Model: model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, FormatPath: "schema"})
+	categorize.LogCompletion(ctx, categorize.CompletionResult{Model: model, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, CachedInputTokens: result.CachedInputTokens, FormatPath: "schema"})
 }
 
 // lineFailure is the error of a line with no completion; a line that carries

@@ -1,5 +1,8 @@
 # package	scope	class
 cmd/cigate	test	compose.yml
+cmd/cigate	test	docs
+cmd/cigate	test	docs-data
+cmd/cigate	test	mkdocs.yml
 cmd/dev-health-migration-matrix	code	contracts
 cmd/dev-health-migration-matrix	code	docs
 cmd/dho	test	compose.yml
@@ -55,6 +58,8 @@ internal/cigates/checkgo	test	ci
 internal/cigates/docmaketargets	test	.github
 internal/cigates/docmaketargets	test	Makefile
 internal/cigates/docs	test	.github
+internal/cigates/docs	test	ci
+internal/cigates/docs	test	deploy
 internal/cigates/docs	test	docs
 internal/cigates/docs	test	docs-data
 internal/cigates/docs	test	mkdocs.yml
@@ -62,6 +67,7 @@ internal/cigates/docsprepare	test	docs-data
 internal/cigates/docstools	code	contracts
 internal/cigates/docstools	code	deploy
 internal/cigates/docstools	code	docs
+internal/cigates/docstools	code	docs-data
 internal/cigates/docstools	code	mkdocs.yml
 internal/cigates/docstools	test	.github
 internal/cigates/docstools	test	Makefile

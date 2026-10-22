@@ -4,7 +4,6 @@ summary: Harden secrets, identities, network paths, stores, images, dependencies
 content_type: task-guide
 owner: security
 source_of_truth:
-  - docs/security/credential-encryption-rotation.md
   - current deployment and credential implementation
 applicability: current
 lifecycle: active

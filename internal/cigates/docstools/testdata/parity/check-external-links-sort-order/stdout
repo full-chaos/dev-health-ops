@@ -1,0 +1,2 @@
+ERROR: a/x.html: allowlist entry for https://one.example/ expired on 2000-01-01 (owner: a, reason: b)
+ERROR: a.html: allowlist entry for https://two.example/ expired on 2000-01-01 (owner: a, reason: b)

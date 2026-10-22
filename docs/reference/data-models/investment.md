@@ -8,8 +8,8 @@ source_of_truth:
   - internal/jobs/investment/chquery/teamownership.go
   - internal/jobs/investment/hierarchycascade.go
   - internal/jobs/investment/materialize.go
-  - src/dev_health_ops/investment_taxonomy.py
-  - src/dev_health_ops/work_graph/investment/
+  - internal/jobs/workgraph/units/taxonomy.go
+  - internal/jobs/investment/
   - internal/queryapi/investment/reader.go
 applicability: current
 lifecycle: active
@@ -66,7 +66,8 @@ materialization timestamp, and joins to this organization's current repository
 catalog. A unit that ended before a team's first ownership row of a repository gets
 no share of that repository on main today; the rule of record (chris 2026-10-12, D5987
 option C) is that the repository's first recorded owners apply backward, tracked in
-CHAOS-9404. A later change of a team's repositories does not move the effort of a unit that
+CHAOS-10518 (the shared readers of `internal/teamownership` and `internal/queryapi/teamscope`
+apply it since CHAOS-9404). A later change of a team's repositories does not move the effort of a unit that
 ended before the change. One run holds units of many end times, so the reader
 loads the donor teams of the issues, and the ownership rows of those donor teams
 that began at or before the materialization timestamp, once; each unit selects
@@ -231,7 +232,8 @@ it reaches. The denominator is unchanged. The TEAM grouping of the Investment fl
 (CHAOS-9297): each effort row takes the owner of its repository, a co-owned repository is shared among its
 owners by their linked share (the main owner by its share, each lesser owner by its own lesser share; equally only on a tie or when no share is measured), and a repository with no owner is `unassigned`, so the unassigned share of the flow is `1 - teamCoverage`
 except for a unit that spans an owned and an unowned repository (the coverage assigns it whole, the flow splits its
-effort). Only the work-unit team list still shows the vote.
+effort). The owners are those at the present, by the one ownership rule of `internal/ownershipwindow` (D5987 option C): a repository whose
+first recorded ownership starts later has its first recorded owners now, and a team that is inactive owns nothing. Only the work-unit team list still shows the vote.
 
 ## Repository coverage: two numbers, not one
 
@@ -306,8 +308,8 @@ finding names what the share counts ("of work").
 > are gone. The migrations that created them stay in the chain. The paragraphs below describe how those tables were written and read BEFORE this change (the
 > daily writer and the newest-row-per-key read rule): history for reading old rows, not current behaviour.
 
-`investment_metrics_daily` and its feeder rule set `src/dev_health_ops/config/investment_areas.yaml`
-are a **pre-WorkUnit legacy path** (`src/dev_health_ops/analytics/investment.py`). The YAML file's
+`investment_metrics_daily` and its feeder rule set (`investment_areas.yaml`)
+were a **pre-WorkUnit legacy path** (removed with the Python api). The YAML file's
 own header states this: "feeds only the pre-WorkUnit daily `investment_*` metric tables... do not
 use this file for canonical WorkUnit categorization." Its `investment_area` values (e.g.
 `security`, `infrastructure`) are free-form legacy labels — **not** the fixed five-theme taxonomy

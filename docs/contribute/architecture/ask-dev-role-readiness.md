@@ -4,16 +4,9 @@ summary: Why Ask Dev certifies a provider per role instead of with one pass/fail
 content_type: architecture
 owner: engineering
 source_of_truth:
-  - src/dev_health_ops/llm/agent/roles.py
-  - src/dev_health_ops/llm/agent/role_readiness.py
-  - src/dev_health_ops/llm/agent/probes/legacy_agent.py
-  - src/dev_health_ops/llm/agent/readiness.py
-  - src/dev_health_ops/llm/agent/openai_compatible.py
-  - src/dev_health_ops/api/dev/production_runtime.py
-  - src/dev_health_ops/api/admin/routers/ask_dev.py
-  - src/dev_health_ops/api/admin/routers/platform_ask_dev.py
-  - src/dev_health_ops/api/admin/routers/settings.py
-  - tests/api/dev/test_live_openai_smoke.py
+  - internal/apiservice/admin/llmsettingsreadiness.go
+  - internal/apiservice/admin/llmreadinessprobe.go
+  - internal/apiservice/admin/settings.go
   - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
 applicability: current
 lifecycle: active
@@ -247,7 +240,7 @@ request shape.
 
 ## The live convergence gate
 
-`tests/api/dev/test_live_openai_smoke.py` exercises the real adapter against
+`tests/api/dev/test_live_openai_smoke.py` (removed with the Python api) exercises the real adapter against
 a real OpenAI-compatible endpoint when live credentials are configured. By
 default, a missing credential is a `pytest.skip` -- an ordinary local run
 without live credentials configured is not an error. Setting

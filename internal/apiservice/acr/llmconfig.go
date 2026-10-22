@@ -28,13 +28,14 @@ const llmConfigSchemaVersion = "acr_llm_config.v1"
 
 // NoConfigHeader marks the 404 that means "the org has no BYO config".
 // NoConfigReasonHeader rides beside it only when BYO settings are stored but
-// the byo_llm gate is closed, so acr refuses the turn instead of reading "no
+// the byo_llm gate is closed, an org admin turned them off, or none serves this purpose, so acr refuses the turn instead of reading "no
 // config"; the marker value stays "none" for the worker client.
 const (
-	NoConfigHeader         = "X-Org-Llm-Config"
-	NoConfigValue          = "none"
-	NoConfigReasonHeader   = "X-Org-Llm-Config-Reason"
-	NoConfigReasonGateShut = "byo_llm_gate_closed"
+	NoConfigHeader          = "X-Org-Llm-Config"
+	NoConfigValue           = "none"
+	NoConfigReasonHeader    = "X-Org-Llm-Config-Reason"
+	NoConfigReasonGateShut  = "byo_llm_gate_closed"
+	NoConfigReasonTurnedOff = "byo_llm_turned_off"
 )
 
 // noConfigReasonFor names a BYO org whose saved configs are for other purposes
@@ -154,6 +155,8 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			switch {
 			case cfg.GateClosed:
 				outcome, reason = "byo_llm_gate_closed", "byo_llm_gate_closed"
+			case cfg.TurnedOff:
+				outcome, reason = NoConfigReasonTurnedOff, NoConfigReasonTurnedOff
 			case cfg.UnresolvedPurpose != "":
 				outcome, reason = "byo_no_purpose_config", noConfigReasonFor(cfg.UnresolvedPurpose)
 			}
@@ -167,6 +170,8 @@ func llmConfigHandler(verifier CredentialVerifier, source LLMConfigSource, logge
 			switch {
 			case cfg.GateClosed:
 				w.Header().Set(NoConfigReasonHeader, NoConfigReasonGateShut)
+			case cfg.TurnedOff:
+				w.Header().Set(NoConfigReasonHeader, NoConfigReasonTurnedOff)
 			case cfg.UnresolvedPurpose != "":
 				w.Header().Set(NoConfigReasonHeader, noConfigReasonFor(cfg.UnresolvedPurpose))
 			}

@@ -4,7 +4,6 @@ summary: Grant the minimum product access required and verify SSO or role change
 content_type: task-guide
 owner: platform-product
 source_of_truth:
-  - docs/sso-setup.md
   - current authentication and authorization implementation
 applicability: current
 lifecycle: active

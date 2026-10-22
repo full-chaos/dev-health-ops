@@ -4,8 +4,7 @@ summary: The Ask Dev Wave 3.1 v2 wire contracts -- intent, resolution, plan, fra
 content_type: architecture
 owner: engineering
 source_of_truth:
-  - src/dev_health_ops/api/dev/contracts_v2/
-  - src/dev_health_ops/api/dev/contract_fixtures_v2.py
+  - contracts/ask-dev/v2/examples/
   - contracts/ask-dev/v2/
   - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
   - Amendment PRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)

@@ -4,8 +4,6 @@ summary: Configure Postgres semantic state, session-pooled River control, ClickH
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
-  - docs/architecture/data-pipeline.md
-  - docs/architecture/dispatch-outbox.md
   - current migration and storage implementation
 applicability: current
 lifecycle: active

@@ -1,0 +1,10 @@
+page	finding
+index.html	html element has no lang attribute
+index.html	document title is empty
+index.html	expected one main landmark, found 0
+index.html	expected one primary content article, found 0
+index.html	expected one content h1, found 0
+index.html	Material skip link was not found
+extra.css	custom CSS has no visible-focus rule
+extra.css	custom CSS has no reduced-motion handling
+extra.css	outline is removed without an alternative visible focus style

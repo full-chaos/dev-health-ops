@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -47,12 +48,22 @@ func providersyncNames(t *testing.T) []string {
 	return names
 }
 
+var providersyncShardMemo sync.Map // key -> []string; the awk and weights paths of a planted case are unique temp files
+
 func providersyncShard(t *testing.T, awk, weights string, names []string, shard, count int) ([]string, error) {
 	t.Helper()
+	key := strings.Join([]string{awk, weights, strconv.Itoa(shard), strconv.Itoa(count), strings.Join(names, "\n")}, "\x00")
+	if v, ok := providersyncShardMemo.Load(key); ok {
+		return v.([]string), nil
+	}
 	cmd := exec.Command("awk", "-v", "shard="+strconv.Itoa(shard), "-v", "count="+strconv.Itoa(count), "-v", "weights="+weights, "-f", awk)
 	cmd.Stdin = strings.NewReader(strings.Join(names, "\n") + "\n")
 	out, err := cmd.Output()
-	return strings.Fields(string(out)), err
+	res := strings.Fields(string(out))
+	if err == nil {
+		providersyncShardMemo.Store(key, res)
+	}
+	return res, err
 }
 
 func providersyncSorted(s []string) []string {

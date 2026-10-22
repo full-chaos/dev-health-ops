@@ -86,10 +86,6 @@ on:
       # a PR touching only the denylist is classified non-Go and go-quality
       # passes vacuously.
       - 'internal/auth/passwordpolicy/data/**'
-      # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/__init__.py (deleted);
-      # the path resolver reads that literal as any remaining __init__.py, so every one stays a trigger.
-      - 'tests/__init__.py'
-      - 'tests/**/__init__.py'
       - 'tests/fixtures/**'
       # the CHAOS-10376 guards read every tracked .py and ci/requirements-*.txt (the provider-limits page and mkdocs.yml: docs-drift.yml)
       - '**/*.py'
@@ -172,6 +168,10 @@ on:
       - 'docs/robots.txt'
       # read by internal/cigates/docsprepare: the real redirect manifest must keep fitting the tool's narrow contract
       - 'docs-data/redirects.tsv'
+      - 'docs-data/freshness-inventory.yml'
+      - 'docs-data/external-link-allowlist.yml'
+      # file names internal/cigates/docstools (validate-inventory-review) names; no Go test reads these files
+      - 'docs-data/inventory/**'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'
@@ -303,10 +303,6 @@ on:
       # a PR touching only the denylist is classified non-Go and go-quality
       # passes vacuously.
       - 'internal/auth/passwordpolicy/data/**'
-      # scanconfig_test.go's frozen fnmatch inputs name src/dev_health_ops/__init__.py (deleted);
-      # the path resolver reads that literal as any remaining __init__.py, so every one stays a trigger.
-      - 'tests/__init__.py'
-      - 'tests/**/__init__.py'
       - 'tests/fixtures/**'
       # the CHAOS-10376 guards read every tracked .py and ci/requirements-*.txt (the provider-limits page and mkdocs.yml: docs-drift.yml)
       - '**/*.py'
@@ -389,6 +385,10 @@ on:
       - 'docs/robots.txt'
       # read by internal/cigates/docsprepare: the real redirect manifest must keep fitting the tool's narrow contract
       - 'docs-data/redirects.tsv'
+      - 'docs-data/freshness-inventory.yml'
+      - 'docs-data/external-link-allowlist.yml'
+      # file names internal/cigates/docstools (validate-inventory-review) names; no Go test reads these files
+      - 'docs-data/inventory/**'
       - 'ci/check_migration_matrix.sh'
       - 'ci/check_migration_matrix_test.sh'
       - 'ci/go_worker_fixture_test.sh'

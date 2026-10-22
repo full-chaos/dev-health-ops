@@ -454,8 +454,9 @@ func acceptanceScriptedTransport(baseURL string) (bool, error) {
 }
 
 // Rates are integer micro-USD per one million tokens: input, cached input,
-// output.
-type Rates struct{ Input, CachedInput, Output int64 }
+// output, and cache-write input (a prompt token the provider wrote to its
+// cache; equal to Input for a provider with no cache-write surcharge).
+type Rates struct{ Input, CachedInput, Output, CacheWriteInput int64 }
 
 // platformPriceKeys is openai_compatible._PLATFORM_MODEL_PRICES's keys in
 // order; scriptedModel is its carve-out entry (exact match only).
@@ -508,19 +509,19 @@ func PriceRates(provider, model, baseURL string) (*Rates, error) {
 			return nil, err
 		}
 		if scripted {
-			return &Rates{1_000, 1_000, 1_000}, nil
+			return &Rates{Input: 1_000, CachedInput: 1_000, Output: 1_000, CacheWriteInput: 1_000}, nil
 		}
 	}
 	if normalizedProvider != "openai" || !officialOpenAIEndpoint(baseURL) {
 		return nil, nil
 	}
 	if normalized == "gpt-5-mini" {
-		return &Rates{250_000, 25_000, 2_000_000}, nil
+		return &Rates{Input: 250_000, CachedInput: 25_000, Output: 2_000_000, CacheWriteInput: 250_000}, nil
 	}
 	canonical, ok := canonicalPricedModel(model)
 	if !ok || canonical == scriptedModel {
 		return nil, nil
 	}
 	pair := platformRates[canonical]
-	return &Rates{pair[0], pair[0], pair[1]}, nil
+	return &Rates{Input: pair[0], CachedInput: pair[0], Output: pair[1], CacheWriteInput: pair[0]}, nil
 }

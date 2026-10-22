@@ -154,6 +154,90 @@ Same as Python (recorded pairs): an absent key (`genqm-missing-registry-queue`, 
 key (`genqm-key-case-folded-kind`, `genqm-key-case-folded-queue`) and a Unicode-folded key
 (`genqm-key-unicode-folded-state`, U+017F): `KeyError` naming the key, rc 1.
 
+# Recorded Python/Go parity pairs, link and freshness verbs
+
+Cases `check-docs-links-*`, `check-freshness-*` and `check-external-links-*` under `parity/`, and
+`argparse-cases.json`. The Python side was recorded once from `scripts/check_docs_links.py`,
+`scripts/check_freshness_inventory.py` and `scripts/check_external_links.py` as at ops `8f2e19e471` (frozen under
+`refusals/`), with Python 3.14.7 and PyYAML 6.0.3, in a network namespace with no network (`unshare -rn`), so no case
+reached the internet. Each script ran from `$W/scripts/` with cwd `$W` (its `ROOT`) and the case's `in/` and `symlinks`
+in `$W`; `{E9}` in a path is `é`. `$W` is replaced by `{WORK}`.
+
+A case with `stderr.prefix` has a Python traceback whose message the Go verb does not reproduce word for word (a
+PyYAML parser message, a UnicodeDecodeError position): `stderr.python` holds the Python exception text, and the Go
+verb prints one line that starts with the text of `stderr.prefix` (`yaml.` for a PyYAML parse error). The dates in
+these cases are far in the past or the future, so no recorded output depends on the day it runs; the review cadence
+itself is tested with a fixed date.today() in `link_gates_test.go`.
+
+`argparse-cases.json`: for each argument list, the exit code of the script in a work dir holding only an empty
+`site/`, and either the argparse error message (exit 2), `help` (usage on stdout, exit 0) or stdout and stderr.
+`TestArgumentParsingMatchesPythonArgparse` compares the Go verb with each row.
+
+# validate-inventory-review
+
+Cases `parity/val-*`. Recorded with Python 3.14.7 (`python3.14 -I`, the version CI ran the script on) from
+`scripts/validate_docs_inventory_review.py` as at ops `8f2e19e47` (frozen as
+`refusals/validate_docs_inventory_review.py.frozen`), the script itself unmodified. Recorded again with 3.12.3: every
+rc, stdout, stderr, stderr.traceback and out/ file is byte-identical; only the 72 whole tracebacks (`stderr.python`)
+differ, in their frame layout.
+
+Per case, in a fresh work directory `$W`: write the inputs (below), make the links of `symlinks`, pad (below), then run, with cwd `$W`,
+`python3 -I pyrun.py validate-inventory-review <script> <args after the verb>` with `PYTHONHASHSEED=0`. `pyrun.py`
+sets `sys.argv[0]` to the verb (so argparse names the verb, not the `.py` file) and `exec`s the script as `__main__`.
+Store rc and stdout, every file the run created or changed under `out/`, and stderr with `$W`, the script directory and
+the recorder directory replaced by `{WORK}`, `{SCRIPTS}` and `{RECORDER}`. When stderr is a traceback it is kept whole
+as `stderr.python`, and `stderr.traceback` holds the exception text that ends it (it can be several lines: the
+`Inventory review failed:` message is); the Go verb prints exactly that text. Cases `val-x-*` were built from `val-ok`'s
+inputs by one edit each; for an accepted edit of the factual JSON the committed TSV and summary were written by the
+script's own `_write_factual_tsv` and `_summary`.
+
+Inputs: a case with a `base` file (`val-ok`) starts from that case's `in/`; its own `in/` holds only the files that
+differ and is written over it; its `drop` file lists base inputs it does not have (removed). A `.fixture` suffix is
+dropped from a name: it marks an input that is not valid JSON. In stored paths `{DOT}` stands for a leading dot (the
+`.build` directories, which the repository's ignore rules would drop), `{FF}` and `{FE}` for those raw bytes of a
+non-UTF-8 name, and `{E9}` for e-acute (`caseRel` in `parity_test.go`). `placeInputs` in `parity_test.go` does this for every
+case; the recording did the same, so the recorded bytes are those of the full inputs.
+
+Padding: the script checks fixed sizes (439 disposition rows: 303 ops, 136 web). A case holds a few rows; its `counts`
+file says how many ("disposition ops web"). Before the run, Python's and Go's alike (`ivPadCase` in
+`validate_inventory_review_cases_test.go`), the disposition matrix gets the first `303-ops` ops and `136-web` web rows of
+the one shared filler file `validate_inventory_filler.tsv` (valid, non-public rows) appended, the web snapshot the same
+web rows, and `docs-data/inventory/ops-~pad.tsv` the ops rows under the standard header. A file that is missing or not a regular file is not padded. So the recorded script and the Go verb check the
+real constants.
+
+`validate_inventory_argparse.golden.json`: Python 3.14.7 argparse with the script's three options over 5657 argument
+vectors (recipe inside). 736 rows differ on 3.12.3 (3.14 reports an ambiguous prefix only when it consumes it, treats
+`-1e5` / `-.5x` as negative numbers, splits `-x=y` prefixes at `=`, and prints Unicode 16 characters in repr); each keeps
+the 3.12.3 result in `py312` and the Go verb follows 3.14.7. `TestValidateInventoryArgparseMatchesPython` compares exit code, help, usage error and the
+`str(Path)` of each value.
+
+The refusal inventory (`refusals/validate-inventory-review.tsv`) maps every line of the frozen script that can refuse
+to the cases (run live through the built binary by `TestValidateInventoryRefusalRowsRunLiveThroughTheCLI`) or Go tests
+that answer it.
+
+Not recordable, hand-written in `validate_inventory_review_refusals_test.go` with what Python 3.14.7 printed (3.12.3 printed the same):
+mode 000 inputs (`PermissionError`; an unreadable IA directory is an empty glob in Python, so every target URL is
+non-IA).
+
+Python's order is not fixed in two places: `REQUIRED_DISPOSITION_FIELDS` is a set (the "missing <field>" lines of one
+row come in hash order; Go uses a fixed order, the cases were recorded with `PYTHONHASHSEED=0` and have one missing
+field per row) and `LIST_FIELDS` (which list field's `TypeError` comes first when two are bad).
+
+## Stricter than Python (RISK-NOTES)
+
+The Go verb refuses these (exit 1, no stdout, one stderr line `cigate: refused (stricter than the Python checker): ...`);
+`TestValidateInventoryStricterThanPython` pins each.
+
+| input | Python 3.14.7 (and 3.12.3) |
+| --- | --- |
+| a JSON string with a lone surrogate (`\ud800`) in a field the TSV writes | rc 1, `UnicodeEncodeError` |
+| the same in a key nothing writes | rc 0 |
+| JSON nested deeper than 200 | rc 0 (its limit is higher) |
+| `publication_classification` / `artifact_type` values of mixed types (None next to str) | rc 1, `TypeError: '<' not supported ...` |
+| two or more numeric (bool/int/float) classification or artifact-type values | sorts them; rc 0 when the snapshots match |
+| `rows` a str, an empty str, or an object; a row given as a list of pairs | iterates it (`dict()` of the items); rc 0 or rc 1 by shape |
+| a non-UTF-8 file name the `ops-*.tsv` or `*.tsv` glob matches (one it does not match is skipped, as Python skips it: `val-x-nonutf8-names-glob-misses`) | rc 0 |
+
 # Part c1: check-built-site-links, check-docs-search
 
 Cases `parity/links-*`, `parity/search-*` and the helper corpora under `helpers/`. Recorded once with
@@ -236,3 +320,23 @@ Unicode rows: U+00E9 and U+0663 before the variable name (not a credential), U+0
 ## Unicode word table
 
 The `\b` of the credential pattern is Python's `\w` (letter, number, underscore by Python's Unicode data). Go 1.27 ships Unicode 17.0.0, CI Python 3.14 ships 16.0.0. `codeprereq_unicode.go` lists the 4657 code points that Go counts as word characters and Python does not (no code point is a word character in Python only); the verb treats them as non-word. `TestCodePrerequisitesUnicodeTableMatchesGo` fails when `unicode.Version` differs from the version the table was generated for, and when a listed code point is no Go word character. No test runs Python. To generate the table again (by hand, outside CI), print every code point with `unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_'` from a Go program, then with python3.14 compare it against `re.match(r'\w', chr(c))` for every code point except the surrogates, and write the ranges where Go says word and Python does not (and note any range where Python says word and Go does not: the verb would have to treat those as word) into `codeprereq_unicode.go` with both versions (`unicodedata.unidata_version`, `unicode.Version`).
+
+# Part c2: check-docs-accessibility
+
+Cases `parity/a11y-*` (74), corpora `helpers/htmlevents.jsonl` (2838: events of html.parser.HTMLParser(convert_charrefs=True).feed(text)),
+`helpers/a11yaudit.jsonl` (2838: findings of `_audit_html`), `helpers/tabindex.jsonl` (3420: `int(text) > 0`, every Python decimal digit and space),
+`helpers/utf8err.jsonl` (2832: `str(UnicodeDecodeError)`), frozen script `refusals/check_docs_candidate_accessibility.py.frozen`.
+Recorded with Python 3.14.7 (`python3.14 -I -B`) from `scripts/check_docs_candidate_accessibility.py` at the merge base.
+Also run, not stored: 133728 further fuzz inputs (events and findings) with 0 differences; on the real built site (212 pages) and on a copy
+with 60 pages mutated, Python and Go gave the same stdout and report bytes.
+Tables: `pytables/html5_names.txt` (keys of html.entities.html5), `pytables/decimal.tsv` (code points >= 0x80 with a decimal value, Unicode 16.0.0).
+Stricter than Python 3.14.7: arguments (as part 1); a page name that is not UTF-8; a named pipe named *.html; the 80 decimal digits Unicode 16 added (`pytables/decimal_unicode16.txt`) in a tabindex: Python 3.14.7 reads them in `int()`, Python 3.13 (Unicode 15.1), on which Cloudflare Workers Builds ran the former script, refuses them, and Go refuses (refusal row `a11y tabindex Unicode 16 digit`, `TestTabindexRefusesUnicode16Digits`; the 80 rows of the corpus that held them are left out, so the corpus is the same under 3.13.15 and 3.14.7). Same text as Python: UnicodeDecodeError
+(position and reason), OSError of an unreadable page, FileExistsError/NotADirectoryError of a report parent.
+
+# Part c2: validate-publication
+
+Cases `parity/pub-*` (163), corpora under `helpers/` (YAML 2770 documents recorded with `yaml.safe_load`, base64, `str.title`, csv reader and writer, nav flattening, `sorted()` TypeError, `urlparse`, links, front matter, canonical URL, stem and title), frozen script `refusals/validate_docs_v2_publication.py.frozen`, refusal inventory `refusals/validate-publication.tsv` (39 rows) and `cmd/cigate/docs_pub_refusals_test.go` (81 rows).
+Recorded with Python 3.14.7 and PyYAML 6.0.3 (pure-Python SafeLoader) from `scripts/validate_docs_v2_publication.py` at the merge base. On the real repository tree (211 pages, 138 redirects, 239 IA nodes) Python and Go gave the same stdout, stderr and the three `.build` files; the verb passes the real `mkdocs.yml` and the front matter of all 207 pages that have one.
+The loader is a port of the PyYAML 6.0.3 SafeLoader (`dc_pub_yaml_*.go`): the standard YAML 1.1 tags, anchors, merge keys and implicit types as `safe_load`; other tags are refused.
+Stricter than Python (named): compose nesting deeper than 400 (RecursionError; Python stops near 485); a lone surrogate escape in a double-quoted scalar; a scalar that matches an implicit type only through `$` before a final newline; a non-ASCII decimal digit in an explicit `!!int` or `!!float`; `str()` of a set with two or more members (hash order); a bracketed netloc in a link; a page file name that is not UTF-8.
+Different on purpose: a YAML exception prints as one line (kind plus the first line of `str(exc)`); the `sorted()` TypeError text is exact below 64 IA rows and may differ from 64 up (the exit code does not).

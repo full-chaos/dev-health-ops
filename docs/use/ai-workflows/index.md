@@ -6,9 +6,6 @@ owner: product-analytics
 source_of_truth:
   - current /ai product surfaces
   - current /superadmin/context-fabric/validation surface
-  - docs/user-guide/views/ai-impact.md
-  - docs/user-guide/views/ai-review-load.md
-  - docs/user-guide/views/ai-risk.md
   - PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar
   - full-chaos/context-fabric-agents README.md
   - full-chaos/context-fabric-agents docs/usage.md

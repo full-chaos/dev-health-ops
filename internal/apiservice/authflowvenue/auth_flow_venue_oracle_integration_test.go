@@ -393,7 +393,7 @@ VALUES ($1, $2, $3, NULL, 'local', true, $4, false, 0, now() - interval '1 day',
 		{inviteExpired, orgA, "ivan@example.com", "member", "pending", "-1 hour"},
 		{inviteAccepted, orgA, "ivan@example.com", "member", "accepted", "3 days"},
 		{inviteOrgD, orgD, "oscar@example.com", "member", "pending", "3 days"},
-		{inviteMember, orgA, "someone@example.com", "viewer", "pending", "3 days"},
+		{inviteMember, orgA, "alice@example.com", "viewer", "pending", "3 days"},
 	} {
 		_, tokenHash := linkToken(invite.id)
 		exec(`INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by_id, status, expires_at, created_at, updated_at)

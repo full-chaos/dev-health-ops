@@ -11,6 +11,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
+	"google.golang.org/grpc"
 )
 
 // Pipeline is the OTLP side of a MeterProvider.
@@ -79,9 +80,9 @@ func (e *countingExporter) Export(ctx context.Context, rm *metricdata.ResourceMe
 func dialOptions(endpoint string) []otlpmetricgrpc.Option {
 	scheme, _, hasScheme := strings.Cut(endpoint, "://")
 	if !hasScheme {
-		return []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(endpoint), otlpmetricgrpc.WithInsecure()}
+		return []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(endpoint), otlpmetricgrpc.WithInsecure(), otlpmetricgrpc.WithDialOption(grpc.WithNoProxy())}
 	}
-	options := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpointURL(endpoint)}
+	options := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpointURL(endpoint), otlpmetricgrpc.WithDialOption(grpc.WithNoProxy())}
 	if !strings.EqualFold(scheme, "https") {
 		options = append(options, otlpmetricgrpc.WithInsecure())
 	}

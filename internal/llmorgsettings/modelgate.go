@@ -23,6 +23,7 @@ const (
 	CodeOwnModelGateClosed      = "own_model_gate_closed"
 	CodeServiceModelNotEntitled = "service_model_not_entitled"
 	CodeAIFeaturesTurnedOff     = "ai_features_turned_off"
+	CodeOwnModelTurnedOff       = "own_model_turned_off"
 	// CodeNothing is row B5: no acr_service_model (MCP ruling: ai_features_turned_off).
 	CodeNothing = CodeAIFeaturesTurnedOff
 
@@ -59,6 +60,8 @@ type Inputs struct {
 	ConfigReason ConfigReason
 	// GateClosed: the byo_llm plan gate is closed for the org.
 	GateClosed bool
+	// TurnedOff: an org admin turned the saved configuration off; the org has no usable own model.
+	TurnedOff bool
 	// ServiceModelOn is the effective acr_service_model.
 	ServiceModelOn bool
 	// Fallback is platform_model_fallback.
@@ -67,7 +70,8 @@ type Inputs struct {
 
 // Decide is the D6107 table, in the order of decide.go: the effective acr_service_model comes first.
 // Flag off: ai_features_turned_off for every org (B1-off, B5), before any BYO, gate or grant question.
-// Flag on: a saved config is B2 own_model_gate_closed (even with the grant), B1' a 403 whose detail is the ConfigReason (missing_credentials, invalid_base_url, unknown_provider, not_configured, unreadable_row) when it cannot serve, B1 own
+// Flag on: a saved config is B2 own_model_gate_closed (even with the grant), a saved config an org admin turned off is
+// no own model (platform with the grant, else own_model_turned_off), B1' a 403 whose detail is the ConfigReason (missing_credentials, invalid_base_url, unknown_provider, not_configured, unreadable_row) when it cannot serve, B1 own
 // model; no config is B3 platform (with the grant) or B4 service_model_not_entitled.
 // unreadable_row is gate-only: the org LLM status route answers an undecryptable stored value with an error (its
 // Python behaviour), so only the gate names it. A base_url the parser rejects is invalid_base_url here, while the
@@ -81,6 +85,11 @@ func Decide(in Inputs) Decision {
 		switch {
 		case in.GateClosed:
 			return refuse(CodeOwnModelGateClosed)
+		case in.TurnedOff:
+			if in.Fallback {
+				return Decision{Kind: Platform}
+			}
+			return refuse(CodeOwnModelTurnedOff)
 		case !in.ConfigUsable:
 			reason := in.ConfigReason
 			if reason == "" || reason == ConfigActive {
@@ -169,10 +178,10 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 	if err != nil {
 		return Inputs{}, fmt.Errorf("llmorgsettings: effective %s: %w", ACRServiceModelFeatureKey, err)
 	}
-	// platform_model_fallback decides only an org with no saved config and acr_service_model on; every other
+	// platform_model_fallback decides only an org with no saved config (or one turned off) and acr_service_model on; every other
 	// path is settled without it, so a failed lookup there must not refuse an org that does not need it.
 	fallback := licensing.Decision{}
-	if !saved && serviceModelOn {
+	if (!saved || cfg.TurnedOff) && serviceModelOn {
 		if fallback, err = s.Licensing.Decide(ctx, orgID, PlatformModelFallbackFeatureKey); err != nil {
 			return Inputs{}, fmt.Errorf("llmmodelgate: %s: %w", PlatformModelFallbackFeatureKey, err)
 		}
@@ -187,7 +196,7 @@ func (s PgSource) Inputs(ctx context.Context, orgID string) (Inputs, error) {
 		usable, reason = checked == ConfigActive, checked
 	}
 	return Inputs{
-		Saved: saved, ConfigUsable: usable, ConfigReason: reason, GateClosed: cfg.GateClosed,
+		Saved: saved, ConfigUsable: usable, ConfigReason: reason, GateClosed: cfg.GateClosed, TurnedOff: cfg.TurnedOff,
 		ServiceModelOn: serviceModelOn, Fallback: fallback.Allowed,
 	}, nil
 }

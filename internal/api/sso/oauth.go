@@ -581,6 +581,16 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 				"User not found and auto-provisioning is disabled", "oauth", "provisioning")
 			return
 		}
+		if errors.Is(err, errIdentityConflict) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
+				identityConflictDetail(), "oauth", "provisioning")
+			return
+		}
+		if errors.Is(err, errMembershipRequired) {
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
+				membershipRequiredDetail(), "oauth", "provisioning")
+			return
+		}
 		h.fail(w, r, "oauth provisioning", err)
 		return
 	}
@@ -690,72 +700,46 @@ func oauthAuthProviderValue(providerType string) string { return providerType }
 // oauthProvisionUser is oauth_callback's OWN inline user lookup/creation
 // (router.py:1214-1274) -- NOT SSOService.provision_or_get_user
 // (provision.go's provisionOrGetUser), which OIDC/SAML call instead. The
-// two paths are genuinely different in Python, not merely differently
-// factored: this one sets avatar_url and auth_provider=github/gitlab/
-// google (not oidc/saml), and its update-path conditions differ (auth_
-// provider/auth_provider_id only rewritten when they actually changed,
-// matching router.py:1249-1251 -- provisionOrGetUser instead rewrites them
-// unconditionally on every login, per ITS OWN doc comment explaining why
-// that is a no-op difference for OIDC/SAML specifically; that reasoning
-// does NOT transfer here, since OAuth logins for the SAME email can
-// legitimately alternate between providers in a way OIDC/SAML cannot, so
-// the conditional check is preserved faithfully instead of simplified
-// away).
+// two paths differ in Python: this one sets avatar_url and auth_provider=
+// github/gitlab/google (not oidc/saml). Existing accounts are selected by
+// (auth_provider, auth_provider_id); the identity columns are never rewritten
+// (resolveSSOIdentity).
 func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, providerType string, claims oauthClaims) (*provisionedUser, *provisionedMembership, error) {
 	authProviderValue := oauthAuthProviderValue(providerType)
 	var (
 		id                                            uuid.UUID
 		existingEmail                                 string
 		username, existingFullName, existingAvatarURL *string
-		currentAuthProvider, currentAuthProviderID    *string
 		isSuperuser                                   bool
 		tokenVersion                                  int64
 	)
-	err := h.Pool.QueryRow(ctx, `SELECT id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, is_superuser, token_version
-FROM users WHERE email = $1::text`, claims.email).Scan(&id, &existingEmail, &username, &existingFullName,
-		&existingAvatarURL, &currentAuthProvider, &currentAuthProviderID, &isSuperuser, &tokenVersion)
+	userID, found, err := h.resolveSSOIdentity(ctx, authProviderValue, claims.externalID, claims.email)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = pgx.ErrNoRows
+	if found {
+		err = h.Pool.QueryRow(ctx, `SELECT id, email, username, full_name, avatar_url, is_superuser, token_version
+FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &existingFullName,
+			&existingAvatarURL, &isSuperuser, &tokenVersion)
+	}
 
 	now := h.Now().UTC()
 	if errors.Is(err, pgx.ErrNoRows) {
 		if !row.AutoProvision {
 			return nil, nil, errOAuthAutoProvisionDisabled
 		}
-		newID := uuid.New()
-		var fullNamePtr, avatarURLPtr, externalIDPtr *string
-		if claims.fullName != "" {
-			fullNamePtr = &claims.fullName
-		}
-		if claims.avatarURL != "" {
-			avatarURLPtr = &claims.avatarURL
-		}
-		if claims.externalID != "" {
-			externalIDPtr = &claims.externalID
-		}
-		var usernamePtr *string
-		if claims.username != "" {
-			usernamePtr = &claims.username
-		}
-		if _, err := h.Pool.Exec(ctx, `INSERT INTO users
-	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, is_active, is_verified, is_superuser,
-	 token_version, last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, false, 0, $8, $8, $8)`,
-			newID, claims.email, usernamePtr, fullNamePtr, avatarURLPtr, authProviderValue, externalIDPtr, now); err != nil {
-			return nil, nil, err
-		}
-		return &provisionedUser{id: newID, email: claims.email, username: usernamePtr, fullName: fullNamePtr, tokenVersion: 0}, nil, nil
+		return nil, nil, errMembershipRequired
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 
-	newAuthProvider := currentAuthProvider
-	newAuthProviderID := currentAuthProviderID
-	if stringOrEmpty(currentAuthProvider) != authProviderValue {
-		newAuthProvider = &authProviderValue
-		if claims.externalID != "" {
-			newAuthProviderID = &claims.externalID
-		}
+	membership, err := h.requireMembership(ctx, id, row.OrgID)
+	if err != nil {
+		return nil, nil, err
 	}
+
 	newAvatarURL := existingAvatarURL
 	if claims.avatarURL != "" && stringOrEmpty(existingAvatarURL) == "" {
 		newAvatarURL = &claims.avatarURL
@@ -764,36 +748,13 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, false, 0, $8, $8, $8)`,
 	if claims.fullName != "" && stringOrEmpty(existingFullName) == "" {
 		newFullName = &claims.fullName
 	}
-	if _, err := h.Pool.Exec(ctx, `UPDATE users SET auth_provider = $2, auth_provider_id = $3, avatar_url = $4, full_name = $5,
-	last_login_at = $6, updated_at = $6 WHERE id = $1::uuid`,
-		id, newAuthProvider, newAuthProviderID, newAvatarURL, newFullName, now); err != nil {
+	if _, err := h.Pool.Exec(ctx, `UPDATE users SET avatar_url = $2, full_name = $3,
+	last_login_at = $4, updated_at = $4 WHERE id = $1::uuid`,
+		id, newAvatarURL, newFullName, now); err != nil {
 		return nil, nil, err
 	}
 
-	providerOrgID, err := pythonparity.ParseUUID(row.OrgID)
-	if err != nil {
-		return nil, nil, err
-	}
-	var membership *provisionedMembership
-	var membershipOrgID uuid.UUID
-	var role *string
-	err = h.Pool.QueryRow(ctx, `SELECT org_id, role FROM memberships WHERE user_id = $1::uuid AND org_id = $2::uuid`,
-		id, providerOrgID).Scan(&membershipOrgID, &role)
-	switch {
-	case err == nil:
-		roleText := "member"
-		if role != nil {
-			roleText = *role
-		}
-		membership = &provisionedMembership{orgID: membershipOrgID, role: roleText}
-	case errors.Is(err, pgx.ErrNoRows):
-		// No membership: onboarding required, matching Python's own log
-		// line and nil membership (router.py:1269-1274).
-	default:
-		return nil, nil, err
-	}
-
-	return &provisionedUser{id: id, email: claims.email, username: username, fullName: newFullName,
+	return &provisionedUser{id: id, email: existingEmail, username: username, fullName: newFullName,
 		isSuperuser: isSuperuser, tokenVersion: tokenVersion}, membership, nil
 }
 

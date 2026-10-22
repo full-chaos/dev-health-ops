@@ -5,7 +5,6 @@ content_type: generated-reference
 owner: product-analytics
 source_of_truth:
   - internal/jobs/workgraph/units/taxonomy.go
-  - src/dev_health_ops/core/taxonomy.py
 applicability: current
 lifecycle: active
 ---

@@ -4,12 +4,12 @@ summary: Work-item team attribution — the 9-source precedence model, provider 
 content_type: architecture
 owner: engineering
 source_of_truth:
-  - src/dev_health_ops/metrics/compute_work_items.py
-  - src/dev_health_ops/providers/teams.py
+  - internal/teamattribution/cascade.go
+  - internal/providersync/team_repo_ownership_derivation_clickhouse.go
+  - internal/synccli/teamscatalog.go
   - internal/chmigrate/history/051_team_attribution_dimensions.sql
   - internal/chmigrate/history/053_manual_attribution_fallbacks.sql
   - internal/workerservice/daily.go
-  - internal/jobs/metrics/daily/compatibility_http.go
 applicability: current
 lifecycle: active
 ---
@@ -727,9 +727,8 @@ ticket and fails when it turns green, until it is moved to `pass`; every provide
 `not_applicable` entry with its rule, and every check of an entity is a cell or an `omitted` entry with its
 rule. The rule the cells apply is written once in the test (`ownersAt`): the rows valid on the item's day
 (§0.4j), of active teams, with the first recorded owners applied backward before the first record (D5987,
-option C); the shared ownership readers are judged against that rule at now and on every item day. Known red
-today: ownership and membership start at the sync, and the shared readers do not apply the first owners
-backward (CHAOS-9404),
+option C); the shared ownership readers are judged against that rule at now and on every item day, and apply the
+first owners backward (CHAOS-9404). Known red today: ownership and membership start at the sync (CHAOS-10521),
 and GitLab ownership names the project by path (CHAOS-8883). The inferred repository owner starts at its earliest
 linked evidence since CHAOS-9403 (#4049): its cell is pass. The GitHub cell of a pull request's `linked_issue` row
 is pass since CHAOS-9409: owners tied at the top rank with no main row (two `provider_access` grants) are all the
@@ -741,7 +740,8 @@ defects the matrix exists to catch into the same state the production verbs wrot
 landscape grouped by membership, an issue-key prefix taken as a native link, a pull request team inherited
 without a linked issue, from a donor without a team of its own or naming another team than its issue's, a
 co-owner written as a candidate row, a reader with its own ownership SQL, a tied team written as a co-owner, a
-shared reader that names one tied owner) and requires the judging cell to turn red on each.
+shared reader that names one tied owner, a shared reader that gives no owner before a repository's first record)
+and requires the judging cell to turn red on each.
 
 **The full-tie cell (CHAOS-9533, D5990).** None of the worlds holds a repository that two teams reach with equal
 link counts at every tier, so the matrix adds one to each world before the production verbs run: a repository,
@@ -2337,9 +2337,17 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
 
 > **Superseded (chris, 2026-10-12 17:26Z, lead D5987, option C):** for a day before the first recorded ownership
 > of a repository, the repository's FIRST recorded owners apply backward; the earlier rule ("an item of a day
-> before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. Not yet
-> implemented in the readers (`OwnersByRepo`, `AuthoritativeOwnersByRepo`, `teamscope`): CHAOS-9404; the
-> `valid_from` of the inferred derivation is CHAOS-9403.
+> before the first known ownership stays unassigned", chris 2026-10-10, D5922) no longer holds. The one rule is
+> `internal/ownershipwindow` (CHAOS-9404): the instant a reader tests an ownership row at is clamped up to the
+> repository's first record, so the rows valid at the first record are the owners. It is rendered by the shared
+> readers (`OwnedRepoIDs`, `OwnersByRepo`, `OwnerSharesByRepo` and `AuthoritativeOwnersByRepo` of
+> `internal/teamownership`) and by `internal/queryapi/teamscope` (`RepoCondition`, `OwnerShares`, `RepoShare`). The
+> first record of a repository is the earliest `valid_from` of its rows of ACTIVE teams (an inactive team owns
+> nothing, section 0.4g rule 1, so it does not set it, in `teamscope` too); an instant at or after the first record
+> reads as before, and an instant in a gap between two records has no owner. Not yet applying it: the work-item
+> cascade `LoadRepos` (CHAOS-10517), the investment materialize fallback (CHAOS-10518), `work_item_attribution`
+> (CHAOS-10519) and the investment team ownership read of `queryapi/analytics` (CHAOS-10520); the `valid_from` of
+> the catalog writers (the sync time) is CHAOS-10521; the `valid_from` of the inferred derivation is CHAOS-9403.
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
   `completed_at`), and the start of the current day for an item that is not completed. A done item with no
@@ -2518,8 +2526,8 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 >
 > | Producer | Chain | Honours the 3 flags? | Providers |
 > |---|---|---|---|
-> | Go post-sync River job → HTTP bridge → Python `populate()` | `internal/syncdispatchruntime/worker.go:93` (`RegisterTeamAutoimportWorker`, the one bounded-registry River kind this runtime hosts) → `internal/syncdispatchruntime/bridge.go:113` (`POST /api/internal/worker-sync/team-autoimport`) → `src/dev_health_ops/api/internal/worker_sync.py:269-278` (`team_autoimport_reference`) → `workers/team_autoimport.py:228` (`run_post_sync_team_autoimport`) → `team_autoimport_<provider>.populate()` (file:line above) | **Yes** — reads `sync_options`' three independent booleans | jira always; github/gitlab/linear only when their native collector degrades (resolver/collector error, or no registered native collector) — see `teamCatalogAutoimportBridge` below |
-> | Go reference-discovery River job → HTTP bridge → `run_team_autoimport_strict` | `internal/syncdispatchruntime/worker.go:83` (`referenceDiscoveryWorker`, registered unconditionally, unlike the gated team-autoimport kind above) → `internal/syncdispatchruntime/bridge.go:137` (`POST /api/internal/worker-sync/reference-discovery-populate`) → `src/dev_health_ops/api/internal/worker_sync.py:287` (`reference_discovery_populate_reference`) → `workers/reference_discovery.py:226,217` (`run_reference_discovery_populate_for_sync_run` calling `run_team_autoimport_strict`) → `team_autoimport_<provider>.populate()` | **Yes, as of CHAOS-4437** — `run_team_autoimport_strict` now threads `import_categories` from the canonical `SyncConfiguration.sync_options` the same way the post-sync path does (`workers/team_autoimport_categories.py`'s module docstring). Dispatch-blocking sprint/cycle discovery (Jira, Linear) stays unconditional regardless of category selection — dispatch itself only checks the `SyncRunReferenceDiscovery.status` column, never CH team/sprint rows directly, so gating the team/project/member WRITE is safe. Also used by backfill. | jira always; github/gitlab/linear only when their native collector degrades, same fallback as above |
+> | Go post-sync River job → HTTP bridge → Python `populate()` | `internal/syncdispatchruntime/worker.go:93` (`RegisterTeamAutoimportWorker`, the one bounded-registry River kind this runtime hosts) → `internal/syncdispatchruntime/bridge.go:113` (`POST /api/internal/worker-sync/team-autoimport`) → `src/dev_health_ops/api/internal/worker_sync.py:269-278` (removed with the Python api) (`team_autoimport_reference`) → `workers/team_autoimport.py:228` (`run_post_sync_team_autoimport`) → `team_autoimport_<provider>.populate()` (file:line above) | **Yes** — reads `sync_options`' three independent booleans | jira always; github/gitlab/linear only when their native collector degrades (resolver/collector error, or no registered native collector) — see `teamCatalogAutoimportBridge` below |
+> | Go reference-discovery River job → HTTP bridge → `run_team_autoimport_strict` | `internal/syncdispatchruntime/worker.go:83` (`referenceDiscoveryWorker`, registered unconditionally, unlike the gated team-autoimport kind above) → `internal/syncdispatchruntime/bridge.go:137` (`POST /api/internal/worker-sync/reference-discovery-populate`) → `src/dev_health_ops/api/internal/worker_sync.py:287` (removed with the Python api) (`reference_discovery_populate_reference`) → `workers/reference_discovery.py:226,217` (`run_reference_discovery_populate_for_sync_run` calling `run_team_autoimport_strict`) → `team_autoimport_<provider>.populate()` | **Yes, as of CHAOS-4437** — `run_team_autoimport_strict` now threads `import_categories` from the canonical `SyncConfiguration.sync_options` the same way the post-sync path does (`workers/team_autoimport_categories.py`'s module docstring). Dispatch-blocking sprint/cycle discovery (Jira, Linear) stays unconditional regardless of category selection — dispatch itself only checks the `SyncRunReferenceDiscovery.status` column, never CH team/sprint rows directly, so gating the team/project/member WRITE is safe. Also used by backfill. | jira always; github/gitlab/linear only when their native collector degrades, same fallback as above |
 > | Linear Go-native route — `internal/providersync` (CHAOS-4431, PR #1989) | `LinearTeamCatalogCollector` behind the SAME claim-free `TeamCatalogCollector` seam as github/gitlab below (`TeamCatalogDiscoveryExecutor` for reference-discovery, `teamCatalogAutoimportBridge` for post-sync) → `LinearReferenceCatalogRouteHandler.CollectReferenceCatalog` (GraphQL walk: teams, members, projects, cycles/sprints) → `LinearReferenceCatalogClickHouseEffects`, `source='native'` | **Yes**, plus the CHAOS-4444 drift-review engine (`team_drift_review.go`/`identity_drift_review.go`, shared by all three native routes): every observed team ALWAYS records a `team_provider_observations` row; `applyTeamSyncPolicyGuard` excludes a non-auto-apply-`sync_policy` team from the write and (policy 1 only — policy 2 stages nothing) diffs it against the persisted row, staging/superseding/resolving `team_drift_changes` rows; `applyTeamMembershipConflictGuard` excludes a membership conflicting with an active manual membership/fallback to a different team AND stages the conflict as an identity `team_drift_changes` row, resolving/superseding stale pending rows for members no longer observed. Sprints/cycles stay unconditional, same rule as the bridge row above. | linear, when its native collector is reached (built + unit-tested on `team-catalog-native-dispatch`; **not yet merged to main** — main deploy-frozen) |
 > | GitHub Go-native route — `internal/providersync` (CHAOS-4434, PR #1984, stacked on #1989) | native via #1984 (`TeamCatalogCollector`, both guards — sync_policy + membership-conflict, same shapes as Linear's, both now backed by the CHAOS-4444 staged-review engine — plus `team_repo_ownership` via `provider_access`) | **Yes**, same staged-review behavior as Linear | github, when its native collector is reached (stacked on the shared base, **not yet merged to main**) |
 > | GitLab Go-native route — `internal/providersync` (CHAOS-4432, PR #1985, stacked on #1989) | `GitLabTeamCatalogCollector` (registered `Native["gitlab"]` + `case "gitlab":` in `ResolveClient`, same shape as Linear/GitHub) walks root/subgroups/per-group-projects/native-projects in `discover_gitlab`'s ONE unified walk → writes `teams`/`team_project_ownership`/`team_memberships` (`source='provider_access'`) + native `projects`, same tables Linear's native route uses. `applyGitLabTeamSyncPolicyGuard`/`gitlabMembershipConflictsWithManualState` mirror Linear's corrected any-other-team-differs guards, both backed by the CHAOS-4444 staged-review engine. **Non-strict walk failure ≠ Linear's partial-prefix preservation**: Python's `_populate_async` has no inner per-stage catch (`team_discovery.py:225-278`), so a non-strict failure anywhere in the walk returns a clean `TeamCatalogResult{Skipped: true, SkipReason: "<stage>_fetch_failed"}` -- no writes, no partial rows -- reported as `TeamCatalogOutcomeSkipped`, never a silent zero-row "native" success. Strict re-raises unchanged. | **Yes** | gitlab, when its native collector is reached (stacked on the shared base, **not yet merged to main**) |
@@ -2622,7 +2630,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > form (untouched — it is the ReplacingMergeTree dedup key). A `members` cell is `yes` only when this
 > end-to-end resolution is **proven** (a no-email assignee — aliased AND non-aliased — resolves to the
 > auto-imported team via *both* paths —
-> `tests/workers/test_team_autoimport_e2e_sync_surface.py`), not when a row is merely written.
+> `tests/workers/test_team_autoimport_e2e_sync_surface.py` (removed with the Python api)), not when a row is merely written.
 
 - **Resolver row (CS2):** the precedence resolver (`resolve_team_attribution`) is exercised for all
   four providers — Linear (`test_issue_project_wins_over_linked_issue`,
@@ -2705,7 +2713,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   `(source_work_item_id, relationship_type_raw)` provenance key Python uses.
   That key shape is pinned by test on BOTH sides
   (`work_item_cross_provider_donor_test.go`,
-  `tests/metrics/test_cross_provider_donor_edges.py`): both runtimes write
+  `tests/metrics/test_cross_provider_donor_edges.py` (removed with the Python api)): both runtimes write
   `work_item_team_attributions` for the same items, so a divergence in it
   would undo CHAOS-4112 from whichever side drifted.
   **Failure policy differs from Python deliberately:** the Go read retries once
@@ -2774,7 +2782,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   (migration 060) + loader fan-out, so a member mapped to *two different* canonicals (provider id →
   canonicalA, email → canonicalB) attributes via the ladder on **either** canonical — previously only
   `facets[0]` + `raw_email` were indexed, so an assignee resolving to canonicalB missed the ladder and
-  fell back to the weaker roster path. Proven in `tests/test_team_autoimport_executor.py` (canonicalB
+  fell back to the weaker roster path. Proven in `tests/test_team_autoimport_executor.py` (removed with the Python api) (canonicalB
   ladder hit) + the provider×entity writer assertions in
   `tests/workers/test_team_autoimport_{github_gitlab,jira,linear}.py`.
 
@@ -2901,7 +2909,7 @@ metrics.daily_dispatch (Go, go_default/river)
   → Python compute_work_item_team_attributions / write_work_item_team_attributions
 ```
 
-`HTTPCompatibilityExecutor` (`internal/jobs/metrics/daily/compatibility_http.go`) was a thin, fixed
+`HTTPCompatibilityExecutor` (removed with the Python api) was a thin, fixed
 bridge: it posted `{operation, run_id, partition_id}` to one hardcoded internal path and treated
 anything other than an HTTP 2xx with `{"status": "success"|"skipped"}` as a failure. It carried no
 executable, command, or credential — the server side decided which reviewed Python computation ran.
@@ -3993,7 +4001,7 @@ triggered explicitly.
 > `team_id` and `source` **inside** the ReplacingMergeTree key, so a re-attribution event (a scope
 > reassigned to a different team) inserts a *new* candidate row rather than replacing the old one —
 > `FINAL` alone cannot retire a superseded candidate because its key differs. This is asserted in
-> `tests/test_team_attribution_provenance_live.py` (CHAOS-2605) and explained in a comment at
+> `tests/test_team_attribution_provenance_live.py` (removed with the Python api) (CHAOS-2605) and explained in a comment at
 > `api/graphql/resolvers/team_attribution.py:99-107`. Any new caller that reads
 > `work_item_team_attributions` without both `FINAL` and the fence will silently see stale
 > candidates. A code comment at `investment_flow.py:259-267` documents this pattern as the single
@@ -4169,7 +4177,7 @@ migration's DDL exactly — same manually-synchronized pin as
 
 ## Stale references to this document (swept 2026-08-19, CHAOS-3968)
 
-This page's old pre-migration path, `docs/architecture/team-attribution.md`, is still cited in
+This page's old pre-migration path, `docs/contribute/architecture/team-attribution.md`, is still cited in
 several places found by a repo-wide sweep. This restoration is docs-only and does not touch code, so
 only the two doc references were fixed here; the rest are reported for a follow-up code change.
 
@@ -4177,14 +4185,14 @@ only the two doc references were fixed here; the rest are reported for a follow-
 - `AGENTS.md:38` and `:40` — now point at `docs/contribute/architecture/team-attribution.md`.
 
 **Still stale — code comments, out of scope for a docs-only change:**
-- `src/dev_health_ops/metrics/compute_work_items.py:135` (on `_SOURCE_ORDER`) and `:154` (on
+- `src/dev_health_ops/metrics/compute_work_items.py:135` (removed with the Python api) (on `_SOURCE_ORDER`) and `:154` (on
   `_DONOR_SOURCES`) — two citations in this one file, not one.
-- `src/dev_health_ops/external_ingest/sinks.py:514`.
+- `src/dev_health_ops/external_ingest/sinks.py:514` (removed with the Python api).
 
 **Planning records — now honoured, not just flagged:**
 - `docs-data/redirects.tsv:50`, `docs-data/inventory/disposition-matrix.tsv:118`, and
   `docs-data/inventory/ops-reference.tsv:25` record a ratified `documentation-remediation-audit`
-  disposition for `docs/architecture/team-attribution.md`: `move-and-rewrite` into
+  disposition for `docs/contribute/architecture/team-attribution.md`: `move-and-rewrite` into
   `/reference/data-models/work-graph/`, publishing only the durable supported contract while
   "implementation history stays internal." That disposition was never executed — the source file was
   deleted instead, and the redirect it produced pointed at a page that never received the content.
@@ -4198,7 +4206,7 @@ only the two doc references were fixed here; the rest are reported for a follow-
   what "stays internal" meant relative to the customer-facing `use/`/`reference/` tier the disposition
   was written against, not "does not get published at all."
 
-**A caveat for the code comments above:** they cite the raw repo path `docs/architecture/team-attribution.md`,
+**A caveat for the code comments above:** they cite the raw repo path `docs/contribute/architecture/team-attribution.md`,
 which does not exist under any name after the original deletion — neither this page nor
 `work-graph.md` share that literal path, and the mkdocs redirect only rewrites published site URLs,
 not GitHub file links in source comments. Fixing those four comments needs a code change; whoever
@@ -4221,10 +4229,10 @@ detail the comments actually reference (the resolver internals), not at `work-gr
 | GitHub comment / body capture | `providers/github/normalize.py` (`extract_github_comment_dependencies`, `extract_github_dependencies`) |
 | GitLab capture | `providers/gitlab/normalize.py` |
 | Recovery runbook | §5 above; backfill `backfill/runner.py`, investment `workers/work_graph_tasks.py` |
-| Tests | `tests/test_linked_issue_team_inheritance.py`, `tests/test_pr_issue_link_capture.py` |
+| Tests | `tests/test_linked_issue_team_inheritance.py` (removed with the Python api), `tests/test_pr_issue_link_capture.py` (removed with the Python api) |
 | Schema (base + widened) | `internal/chmigrate/history/051_team_attribution_dimensions.sql`, `internal/chmigrate/history/053_manual_attribution_fallbacks.sql` — see §0.6 |
-| Go dispatch → Python compatibility bridge (added §0.6) | `internal/workerservice/daily.go` (`NewHTTPCompatibilityExecutor`), `internal/jobs/metrics/daily/compatibility_http.go` |
+| Go dispatch → Python compatibility bridge (added §0.6) | `internal/workerservice/daily.go` (`NewHTTPCompatibilityExecutor`) (HTTP compatibility executor removed with the Python api) |
 
-> All Python paths above are repo-relative to `src/dev_health_ops/` (e.g. `metrics/compute_work_items.py`
-> is `src/dev_health_ops/metrics/compute_work_items.py`). All Go paths are repo-relative to `ops/`.
+> All Python paths above are repo-relative to `src/dev_health_ops/` (e.g. `metrics/compute_work_items.py`,
+> removed with the Python api; its Go owner is `internal/teamattribution/cascade.go`). All Go paths are repo-relative to `ops/`.
 > Every path in this table was verified to still exist during the 2026-08-19 restoration (CHAOS-3968).

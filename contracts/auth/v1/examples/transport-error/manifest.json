@@ -1,0 +1,73 @@
+{
+  "description": "The golden corpus for the transport-error.v1 wire contract. The accept fixtures are the transport's own answers (a Go test renders each code with httpapi.WriteError and compares). No client-only rule: the envelope has no field a schema cannot check.",
+  "accept": [
+    {
+      "file": "valid-not-found.json",
+      "why": "The transport's not_found answer, as httpapi.WriteError renders it (TestTransportErrorGoldensAreWhatTheTransportWrites)."
+    },
+    {
+      "file": "valid-method-not-allowed.json",
+      "why": "The transport's method_not_allowed answer, as httpapi.WriteError renders it (TestTransportErrorGoldensAreWhatTheTransportWrites)."
+    },
+    {
+      "file": "valid-payload-too-large.json",
+      "why": "The transport's payload_too_large answer, as httpapi.WriteError renders it (TestTransportErrorGoldensAreWhatTheTransportWrites)."
+    },
+    {
+      "file": "valid-rate-limited.json",
+      "why": "The transport's rate_limited answer, as httpapi.WriteError renders it (TestTransportErrorGoldensAreWhatTheTransportWrites)."
+    },
+    {
+      "file": "valid-invalid-request.json",
+      "why": "The transport's invalid_request answer, as httpapi.WriteError renders it (TestTransportErrorGoldensAreWhatTheTransportWrites)."
+    },
+    {
+      "file": "valid-internal-error.json",
+      "why": "The transport's internal_error answer, as httpapi.WriteError renders it (TestTransportErrorGoldensAreWhatTheTransportWrites)."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-error-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No error member."
+    },
+    {
+      "file": "invalid-code-unknown.json",
+      "expect_instance_location": "/error/code",
+      "expect_keyword": "enum",
+      "why": "A code outside the closed set."
+    },
+    {
+      "file": "invalid-message-free-text.json",
+      "expect_instance_location": "/error/message",
+      "expect_keyword": "enum",
+      "why": "Dependency text in the message: exactly what the fixed texts exist to exclude."
+    },
+    {
+      "file": "invalid-detail-member.json",
+      "expect_instance_location": "/error",
+      "expect_keyword": "additionalProperties",
+      "why": "An extra member echoing the request path."
+    },
+    {
+      "file": "invalid-request-id-absent.json",
+      "expect_instance_location": "/error",
+      "expect_keyword": "required",
+      "why": "No request id: auth-service always mints one."
+    },
+    {
+      "file": "invalid-request-id-client-shaped.json",
+      "expect_instance_location": "/error/request_id",
+      "expect_keyword": "pattern",
+      "why": "A client-chosen id: auth-service never reuses one."
+    },
+    {
+      "file": "invalid-top-level-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "An extra top-level member."
+    }
+  ]
+}

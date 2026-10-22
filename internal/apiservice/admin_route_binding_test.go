@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -158,37 +158,77 @@ func TestAdminNoStoreBindingPlantedTablesAreCaught(t *testing.T) {
 	}
 }
 
-// HEAD on an admin GET route answers 405 with Allow, as the Python api did (FastAPI routes no HEAD there; frozen goldens
-// "HEAD schemas" and "me: HEAD" are 405, Allow: GET), and keeps Cache-Control: no-store: the real mux matches HEAD to the
-// GET pattern, so it falls under the declared admin no-store divergence.
+// HEAD on an admin GET route answers 405 (FastAPI routes no HEAD there; frozen goldens "HEAD schemas" and "me: HEAD" are
+// 405) with an Allow that lists every method the path serves (RFC 9110 10.2.1; Starlette named only the first route's),
+// and keeps Cache-Control: no-store: the real mux matches HEAD to the GET pattern, so it falls under the declared admin
+// no-store divergence. The walk covers the full mounted set (every admin-prefixed package, ClickHouse stub included).
 func TestHeadOnAdminGetRoutesAnswers405WithNoStore(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), "postgres://binding@127.0.0.1:1/binding?connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger())}, quietLogger()))
+	routes := Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}}, quietLogger())
+	server, err := NewServer(apiTestConfig(), quietLogger(), routes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	checked := 0
-	adminRoute := map[string]bool{}
-	for _, route := range admin.Routes(admin.Deps{Guard: policy.NewGuard(nil, nil)}) {
-		adminRoute[route.Method+" "+route.Pattern] = true
+	methods := map[string][]string{}
+	for _, route := range routes {
+		if route.Pattern == adminPrefix || strings.HasPrefix(route.Pattern, adminPrefix+"/") {
+			methods[route.Pattern] = append(methods[route.Pattern], route.Method)
+		}
 	}
+	checked, tableGets := 0, 0
 	for _, entry := range httpapi.AdminRoutes {
 		method, pattern, _ := strings.Cut(entry, " ")
-		if method != http.MethodGet || !adminRoute[entry] {
+		if method != http.MethodGet {
 			continue
 		}
+		tableGets++
+		set := append([]string(nil), methods[pattern]...)
+		if len(set) == 0 {
+			t.Errorf("GET %s is in the admin table but not mounted", pattern)
+			continue
+		}
+		sort.Strings(set)
+		want := strings.Join(set, ", ")
 		checked++
 		response := serve(server.Handler(), httptest.NewRequest(http.MethodHead, concrete(pattern), nil))
-		allow := response.Header().Get("Allow")
-		if response.Code != http.StatusMethodNotAllowed || !strings.Contains(", "+allow+",", " GET,") || response.Header().Get("Cache-Control") != "no-store" {
-			t.Errorf("HEAD %s: status %d Allow %q Cache-Control %q; want 405, Allow with GET, no-store", pattern, response.Code, allow, response.Header().Get("Cache-Control"))
+		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != want || response.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("HEAD %s: status %d Allow %q Cache-Control %q; want 405, Allow %q, no-store", pattern, response.Code, response.Header().Get("Allow"), response.Header().Get("Cache-Control"), want)
 		}
 	}
-	if checked < 30 {
-		t.Fatalf("only %d admin GET routes checked", checked)
+	if checked != tableGets || checked < headCheckedFloor {
+		t.Fatalf("%d admin GET routes checked of %d in the table, want all and at least %d", checked, tableGets, headCheckedFloor)
+	}
+}
+
+// headCheckedFloor keeps the walk from passing on a table that shrank; the table grows with main, so the count is not pinned.
+const headCheckedFloor = 60
+
+// The all-methods Allow is the HEAD refusal's only: the 405 of any other method keeps the path's declared Allow, the
+// first FastAPI route's (frozen goldens pin it).
+func TestAdminDeclaredAllowIsKeptForNonHeadMethods(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://binding@127.0.0.1:1/binding?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(Deps{Pool: pool, Guard: policy.NewGuard(nil, quietLogger()), ClickHouse: nilConn{}}, quietLogger()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for target, c := range map[string]struct{ method, allow string }{
+		"/api/v1/admin/credentials":                {http.MethodPut, "GET"},
+		"/api/v1/admin/customer-push/sources":      {http.MethodPut, "POST"},
+		"/api/v1/admin/settings/general/site_name": {http.MethodPost, "GET"},
+		"/api/v1/admin/teams/eng":                  {http.MethodPut, "DELETE"},
+	} {
+		want := c.allow
+		response := serve(server.Handler(), httptest.NewRequest(c.method, target, nil))
+		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != want {
+			t.Errorf("%s: status %d Allow %q; want 405, Allow %q", c.method+" "+target, response.Code, response.Header().Get("Allow"), want)
+		}
 	}
 }

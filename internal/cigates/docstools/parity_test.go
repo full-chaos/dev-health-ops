@@ -16,6 +16,9 @@ import (
 // command runner, a git repository. They run after the case inputs are in the work directory and before the verb.
 var caseSetups []func(t *testing.T, caseDir, work string, sub map[string]string)
 
+// caseScaffold holds the files a setup hook wrote for the current case that are neither inputs nor outputs.
+var caseScaffold map[string]bool
+
 func runDocs(args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	code := docstools.Run(args, &stdout, &stderr)
@@ -42,25 +45,17 @@ func TestCLIOutputParityRecordedPair(t *testing.T) {
 	}
 }
 
-func replayCase(t *testing.T, dir string) {
+func replayCase(t *testing.T, dir string) { replayCaseWith(t, dir, runDocs) }
+
+// replayCaseWith replays a case with run (in process, or the built cigate binary) as the verb.
+func replayCaseWith(t *testing.T, dir string, run func(args ...string) (int, string, string)) {
 	work := t.TempDir()
 	expected := map[string]bool{}
-	in := filepath.Join(dir, "in")
-	_ = filepath.Walk(in, func(path string, info os.FileInfo, err error) error {
-		if err == nil && info.Mode().IsRegular() {
-			rel, _ := filepath.Rel(in, path)
-			rel = caseName(strings.TrimSuffix(rel, ".fixture"))
-			expected[rel] = true
-			writeTree(t, filepath.Join(work, rel), mustRead(t, path), info.Mode().Perm())
-		} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			rel, _ := filepath.Rel(in, path)
-			copySymlink(t, path, filepath.Join(work, rel))
-		}
-		return nil
-	})
+	placeInputs(t, dir, work, expected)
 	seedSymlinks(t, filepath.Join(dir, "symlinks"), work)
 	sub := map[string]string{"{WORK}": work}
 	t.Chdir(work)
+	caseScaffold = map[string]bool{}
 	if raw, err := os.ReadFile(filepath.Join(dir, "cwd")); err == nil {
 		// the case runs from a directory below the work directory (the former scripts found their root from their own path)
 		sub := filepath.Join(work, strings.TrimSpace(string(raw)))
@@ -91,7 +86,7 @@ func replayCase(t *testing.T, dir string) {
 		}
 	}
 
-	code, stdout, stderr := runDocs(args...)
+	code, stdout, stderr := run(args...)
 	if want := strings.TrimSpace(mustRead(t, filepath.Join(dir, "rc"))); want != strconv.Itoa(code) {
 		t.Errorf("exit %d, recorded %s", code, want)
 	}
@@ -99,9 +94,24 @@ func replayCase(t *testing.T, dir string) {
 		t.Errorf("stdout differs from the recording\ngot:\n%q\nrecorded:\n%q", stdout, want)
 	}
 	if line, err := os.ReadFile(filepath.Join(dir, "stderr.traceback")); err == nil {
-		// Python stopped on an uncaught exception: the verb prints exactly this one line on stderr instead.
-		if want := subst(string(line)); stderr != want || strings.Count(stderr, "\n") != 1 {
-			t.Errorf("stderr is not the one error line that replaces the Python traceback\ngot:\n%q\nwant:\n%q", stderr, want)
+		// Python stopped on an uncaught exception: the verb prints exactly the exception text on stderr instead. It is
+		// one line, or, when the case keeps the whole recorded traceback (stderr.python), the text that ends it.
+		want := subst(string(line))
+		if full, err := os.ReadFile(filepath.Join(dir, "stderr.python")); err == nil {
+			if !strings.HasPrefix(string(full), "Traceback (most recent call last):\n") || !strings.HasSuffix(string(full), "\n"+string(line)) {
+				t.Errorf("stderr.traceback is not the exception text that ends the recorded traceback stderr.python")
+			}
+		} else if strings.Count(want, "\n") != 1 {
+			t.Errorf("stderr.traceback without stderr.python must be one line")
+		}
+		if stderr != want {
+			t.Errorf("stderr is not the exception text that replaces the Python traceback\ngot:\n%q\nwant:\n%q", stderr, want)
+		}
+	} else if prefix, err := os.ReadFile(filepath.Join(dir, "stderr.prefix")); err == nil {
+		// Python died on an exception whose message Go does not reproduce word for word (stderr.python holds it): the
+		// verb prints one line that starts with this text, the exception's kind or module.
+		if want := subst(strings.TrimSuffix(string(prefix), "\n")); !strings.HasPrefix(stderr, want) || strings.Count(stderr, "\n") != 1 || !strings.HasSuffix(stderr, "\n") {
+			t.Errorf("stderr is not one error line starting with %q\ngot:\n%q", want, stderr)
 		}
 	} else if want := subst(mustRead(t, filepath.Join(dir, "stderr"))); stderr != want {
 		t.Errorf("stderr differs from the recording\ngot:\n%q\nrecorded:\n%q", stderr, want)
@@ -110,7 +120,7 @@ func replayCase(t *testing.T, dir string) {
 	_ = filepath.Walk(out, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(out, path)
-			rel = caseName(rel)
+			rel = caseRel(strings.TrimSuffix(rel, ".fixture"))
 			expected[rel] = true
 			if got, want := mustRead(t, filepath.Join(work, rel)), mustRead(t, path); got != want {
 				t.Errorf("%s differs from the recording\ngot:\n%q\nrecorded:\n%q", rel, got, want)
@@ -122,7 +132,7 @@ func replayCase(t *testing.T, dir string) {
 	_ = filepath.Walk(work, func(path string, info os.FileInfo, err error) error {
 		if err == nil && info.Mode().IsRegular() {
 			rel, _ := filepath.Rel(work, path)
-			if !expected[rel] {
+			if !expected[rel] && !caseScaffold[rel] {
 				left = append(left, rel)
 			}
 		}
@@ -134,10 +144,40 @@ func replayCase(t *testing.T, dir string) {
 	}
 }
 
-// caseName turns the placeholders of a stored file name into the characters they stand for: git quotes a non-ASCII name,
-// and the workflow path-filter guards read file names from `git ls-files`.
-func caseName(rel string) string {
-	return strings.NewReplacer("{E9}", "é", "{FC}", "ü").Replace(rel)
+// placeInputs writes a case's inputs into work: first the inputs of the case named in its base file (if any), then
+// its own in/ over them, then it removes the paths its drop file lists (one per line).
+func placeInputs(t *testing.T, dir, work string, expected map[string]bool) {
+	t.Helper()
+	if raw, err := os.ReadFile(filepath.Join(dir, "base")); err == nil {
+		placeInputs(t, filepath.Join(filepath.Dir(dir), strings.TrimSpace(string(raw))), work, expected)
+	}
+	in := filepath.Join(dir, "in")
+	_ = filepath.Walk(in, func(path string, info os.FileInfo, err error) error {
+		if err == nil && info.Mode().IsRegular() {
+			rel, _ := filepath.Rel(in, path)
+			rel = caseRel(strings.TrimSuffix(rel, ".fixture"))
+			expected[rel] = true
+			writeTree(t, filepath.Join(work, rel), mustRead(t, path), info.Mode().Perm())
+		} else if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			rel, _ := filepath.Rel(in, path)
+			copySymlink(t, path, filepath.Join(work, rel))
+		}
+		return nil
+	})
+	if raw, err := os.ReadFile(filepath.Join(dir, "drop")); err == nil {
+		for _, rel := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+			if err := os.Remove(filepath.Join(work, rel)); err != nil {
+				t.Fatalf("%s: drop %s: %v", dir, rel, err)
+			}
+			delete(expected, rel)
+		}
+	}
+}
+
+// caseRel is the work-directory path of a stored case file: tokens stand for what a tracked path cannot hold well,
+// {E9} for e-acute, {DOT} for a leading dot an ignore rule would match (.build), {FF} and {FE} for those raw bytes.
+func caseRel(rel string) string {
+	return strings.NewReplacer("{E9}", "é", "{DOT}", ".", "{FC}", "ü", "{FF}", "\xff", "{FE}", "\xfe").Replace(rel)
 }
 
 func mustRead(t *testing.T, path string) string {

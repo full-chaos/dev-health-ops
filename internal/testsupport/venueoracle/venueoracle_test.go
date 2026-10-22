@@ -36,7 +36,12 @@ func TestCompareDecisionTable(t *testing.T) {
 		return body
 	}
 	const orglessToken = "orgless-token"
-	orgless := DiffOptions{OrglessTokens: map[string]bool{orglessToken: true}}
+	orgless := DiffOptions{OrglessTokens: map[string]bool{orglessToken: true}, orglessHeaderNames: map[string]bool{"content-type": true, "content-length": true, "vary": true}}
+	jsonHeaders := map[string]string{"content-type": "application/json", "content-length": "1"}
+	htmlHeaders := map[string]string{"content-type": "text/html", "content-length": "1"}
+	newHeader := map[string]string{"content-type": "application/json", "content-length": "1", "x-policy": "regressed"}
+	noStore := map[string]string{"content-type": "application/json", "cache-control": "no-store"}
+	staleCache := map[string]string{"content-type": "application/json", "cache-control": "max-age=60"}
 	orglessRequest := func(method, path, token string) Request {
 		return Request{Method: method, Path: path, Headers: map[string]string{"Authorization": "Bearer " + token}}
 	}
@@ -63,16 +68,21 @@ func TestCompareDecisionTable(t *testing.T) {
 		{"admin Allow that drops a frozen method", response(405, "{}", with(map[string]string{"allow": "GET, POST"})), response(405, "{}", with(map[string]string{"allow": "DELETE, GET, PATCH"})), DiffOptions{}, Request{Method: "PUT", Path: "/api/v1/admin/teams/eng"}, false},
 		{"admin Allow of the same size and another method", response(405, "{}", with(map[string]string{"allow": "GET"})), response(405, "{}", with(map[string]string{"allow": "POST"})), DiffOptions{}, Request{Method: "PUT", Path: "/api/v1/admin/teams/eng"}, false},
 		{"widened Allow with another body", response(405, "{}", with(map[string]string{"allow": "GET"})), response(405, `{"x":1}`, with(map[string]string{"allow": "DELETE, GET"})), DiffOptions{}, Request{Method: "PUT", Path: "/api/v1/admin/teams/eng"}, false},
-		{"org-less refusal where Python answered another status", response(200, `{"session_id":"cs_venue_5"}`, with(map[string]string{"vary": "Origin"})), response(403, OrglessRefusalBody, base), orgless, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), true},
-		{"org-less refusal where Python refused with another body", response(403, `{"detail":"Admin access required"}`, base), response(403, OrglessRefusalBody, base), orgless, orglessRequest("GET", "/api/v1/billing/invoices", orglessToken), true},
-		{"org-less refusal with a query string", response(400, `{"detail":"x"}`, base), response(403, OrglessRefusalBody, base), orgless, orglessRequest("GET", "/api/v1/billing/subscriptions?org_id=nope", orglessToken), true},
-		{"refusal for a token that is not on the org-less list", response(200, "{}", base), response(403, OrglessRefusalBody, base), orgless, orglessRequest("POST", "/api/v1/billing/checkout", "an-org-bearing-token"), false},
-		{"refusal with no credential at all", response(200, "{}", base), response(403, OrglessRefusalBody, base), orgless, Request{Method: "POST", Path: "/api/v1/billing/checkout"}, false},
-		{"refusal of a route the caller may reach", response(200, "{}", base), response(403, OrglessRefusalBody, base), orgless, orglessRequest("GET", "/api/v1/auth/me", orglessToken), false},
-		{"refusal of a listed path by another method", response(405, "{}", base), response(403, OrglessRefusalBody, base), orgless, orglessRequest("DELETE", "/api/v1/auth/me", orglessToken), true},
+		{"org-less refusal where Python answered another status", response(200, `{"session_id":"cs_venue_5"}`, with(map[string]string{"vary": "Origin"})), response(403, OrglessRefusalBody, jsonHeaders), orgless, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), true},
+		{"org-less refusal where Python refused with another body", response(403, `{"detail":"Admin access required"}`, base), response(403, OrglessRefusalBody, jsonHeaders), orgless, orglessRequest("GET", "/api/v1/billing/invoices", orglessToken), true},
+		{"org-less refusal with a query string", response(400, `{"detail":"x"}`, base), response(403, OrglessRefusalBody, jsonHeaders), orgless, orglessRequest("GET", "/api/v1/billing/subscriptions?org_id=nope", orglessToken), true},
+		{"refusal for a token that is not on the org-less list", response(200, "{}", base), response(403, OrglessRefusalBody, jsonHeaders), orgless, orglessRequest("POST", "/api/v1/billing/checkout", "an-org-bearing-token"), false},
+		{"refusal with no credential at all", response(200, "{}", base), response(403, OrglessRefusalBody, jsonHeaders), orgless, Request{Method: "POST", Path: "/api/v1/billing/checkout"}, false},
+		{"refusal of a route the caller may reach", response(200, "{}", base), response(403, OrglessRefusalBody, jsonHeaders), orgless, orglessRequest("GET", "/api/v1/auth/me", orglessToken), false},
+		{"refusal of a listed path by another method", response(405, "{}", base), response(403, OrglessRefusalBody, jsonHeaders), orgless, orglessRequest("DELETE", "/api/v1/auth/me", orglessToken), true},
 		{"403 with another body than D6145's", response(200, "{}", base), response(403, `{"detail":"Admin access required"}`, base), orgless, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), false},
 		{"D6145 body under another status", response(200, "{}", base), response(400, OrglessRefusalBody, base), orgless, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), false},
-		{"refusal with the rule off", response(200, "{}", base), response(403, OrglessRefusalBody, base), DiffOptions{}, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), false},
+		{"refusal with the rule off", response(200, "{}", base), response(403, OrglessRefusalBody, jsonHeaders), DiffOptions{}, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), false},
+		{"refusal with the wrong content type", response(200, "{}", base), response(403, OrglessRefusalBody, htmlHeaders), orgless, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), false},
+		{"refusal with a header no Python answer carries", response(200, "{}", base), response(403, OrglessRefusalBody, newHeader), orgless, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), false},
+		{"refusal with a stale cache header", response(200, "{}", base), response(403, OrglessRefusalBody, staleCache), orgless, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), false},
+		{"refusal with the admin no-store header", response(200, "{}", base), response(403, OrglessRefusalBody, noStore), orgless, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), true},
+		{"refusal when Diff gave the rule no header names", response(200, "{}", base), response(403, OrglessRefusalBody, jsonHeaders), DiffOptions{OrglessTokens: orgless.OrglessTokens}, orglessRequest("POST", "/api/v1/billing/checkout", orglessToken), false},
 		{"normalized body skips length", response(200, `{"id":"a"}`, with(map[string]string{"content-length": "10"})), response(200, `{"id":"bb"}`, with(map[string]string{"content-length": "11"})), DiffOptions{Normalize: blankID}, Request{}, true},
 		{"normalized body still differs", response(200, `{"id":"a"}`, base), response(200, `{"x":1}`, base), DiffOptions{Normalize: blankID}, Request{}, false},
 		{"unnormalized body keeps length", response(200, "{}", base), response(200, "{}", with(map[string]string{"content-length": "3"})), DiffOptions{Normalize: blankID}, Request{}, false},

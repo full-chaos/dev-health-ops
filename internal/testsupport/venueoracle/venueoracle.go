@@ -435,6 +435,10 @@ type DiffOptions struct {
 	// NormalizePython runs on the Python body only, after OnOrglessRefused, for a value a declared divergence shifts
 	// on the Python plane alone (a counter a Python-only side effect advanced).
 	NormalizePython func(request Request, body string) string
+	// orglessHeaderNames is set by Diff: every header name any Python answer of the run carries. A refusal's headers
+	// must come from it (or be a Volatile header or content-length); nil refuses the rule, so a direct Compare call
+	// cannot skip headers without it.
+	orglessHeaderNames map[string]bool
 }
 
 // OrglessRefusalBody is the exact answer D6145 gives a caller with no organization on a guarded route.
@@ -467,6 +471,15 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	}
 	var receipt strings.Builder
 	orglessRefused := 0
+	var orglessHeaders string
+	if options.OrglessTokens != nil {
+		options.orglessHeaderNames = map[string]bool{}
+		for _, answer := range python {
+			for name := range answer.Headers {
+				options.orglessHeaderNames[name] = true
+			}
+		}
+	}
 	for index, request := range requests {
 		goResponse := Do(t, goBase, request)
 		if options.Inspect != nil {
@@ -474,6 +487,11 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 		}
 		if intendedOrglessRefusal(request, python[index], goResponse, options) {
 			orglessRefused++
+			if shown := refusalHeaderText(goResponse); orglessHeaders == "" {
+				orglessHeaders = shown
+			} else if shown != orglessHeaders {
+				t.Errorf("%s: the org-less refusal's headers %s differ from the first refusal's %s", request.Name, shown, orglessHeaders)
+			}
 			if options.OnOrglessRefused != nil {
 				options.OnOrglessRefused(request)
 			}
@@ -666,11 +684,47 @@ func intendedOrglessRefusal(request Request, python, goResponse Response, option
 		return false
 	}
 	bearer, ok := strings.CutPrefix(request.Headers["Authorization"], "Bearer ")
-	if !ok || !options.OrglessTokens[bearer] {
+	if !ok || !options.OrglessTokens[bearer] || !orglessHeadersFit(goResponse, options.orglessHeaderNames) {
 		return false
 	}
 	target, err := url.ParseRequestURI(request.Path)
 	return err == nil && !policy.OrglessMayReach(request.Method, target.Path)
+}
+
+// orglessHeadersFit holds Go's refusal to a JSON answer whose headers are all ones the frozen Python answers carry (or
+// transport headers): the rule skips the comparison with Python's headers, never the check that Go's own are the usual
+// ones, so a wrong content type, a CORS or security header that changed, or a new header is still a DIFF.
+func orglessHeadersFit(goResponse Response, known map[string]bool) bool {
+	if known == nil || goResponse.Headers["content-type"] != "application/json" {
+		return false
+	}
+	for name, value := range goResponse.Headers {
+		if name == "content-length" || Volatile[name] {
+			continue
+		}
+		if name == "cache-control" {
+			if value != "no-store" {
+				return false
+			}
+			continue
+		}
+		if !known[name] {
+			return false
+		}
+	}
+	return true
+}
+
+// refusalHeaderText is the refusal's headers outside the transport ones, in a fixed order.
+func refusalHeaderText(response Response) string {
+	var lines []string
+	for name, value := range response.Headers {
+		if name != "content-length" && !Volatile[name] {
+			lines = append(lines, name+": "+value)
+		}
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "; ")
 }
 
 func withSkipped(skip map[string]bool, name string) map[string]bool {

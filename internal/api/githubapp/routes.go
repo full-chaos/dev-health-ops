@@ -217,7 +217,7 @@ func (h handlers) installCallback(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "upsert installation", err)
 		return
 	} else if conflict {
-		detail(w, http.StatusConflict, "installation already linked to another organization")
+		h.refuseLinkedElsewhere(ctx, w)
 		return
 	}
 
@@ -247,6 +247,11 @@ func (h handlers) installCallback(w http.ResponseWriter, r *http.Request) {
 	out.Set("credential_name", "github-app")
 	out.Set("return_to", canonicalizeReturnTo(verified.ReturnTo))
 	policy.WriteModel(w, http.StatusOK, out, nil)
+}
+
+// refuseLinkedElsewhere answers an installation another organization holds.
+func (h handlers) refuseLinkedElsewhere(_ context.Context, w http.ResponseWriter) {
+	detail(w, http.StatusConflict, "installation already linked to another organization")
 }
 
 // consumeState is _consume_install_state_jti, reporting whether the state was

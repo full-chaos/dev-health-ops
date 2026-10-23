@@ -1,8 +1,11 @@
 package affected
 
 import (
+	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -77,5 +80,40 @@ func TestGuardFnErrorSurfacesOnlyWhereTheGuardIsReached(t *testing.T) {
 	v, err := plan(guardFnInput(t, "go.mod", func() ([]string, error) { return nil, boom }))
 	if err != nil || v.Kind != "FULL" {
 		t.Fatalf("early verdict %+v, err %v: want FULL, the scan error is not reached", v, err)
+	}
+}
+
+// On a tree whose Go source does not parse, a verdict that returns before the guard no longer fails on the scan: it
+// plans FULL (every package runs, so go build/vet and plan-reads fail on the same source in that run). A verdict that
+// reaches the guard still fails with the scan error.
+func TestUnparsableTreeEarlyFullDoesNotScanAndGuardPathStillFails(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"a/a.go": "package a\n\nfunc f(\n",
+		"golist.json": `{"ImportPath":"m/a","Dir":` + strconv.Quote(filepath.Join(root, "a")) + `,"Module":{"Path":"m"}}` + "\n" +
+			`{"ImportPath":"m/a.test"}` + "\n",
+		"keys.txt":    "a\n",
+		"early.txt":   "go.mod\n",
+		"guarded.txt": "a/a.go\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	verdict := func(changed string) (int, string, string) {
+		var out, errb bytes.Buffer
+		code := PlanVerdict([]string{"--event", "pull_request",
+			"--changed", filepath.Join(root, changed), "--golist", filepath.Join(root, "golist.json"),
+			"--keys", filepath.Join(root, "keys.txt"), "--root", root}, &out, &errb)
+		return code, out.String(), errb.String()
+	}
+	if code, out, errs := verdict("early.txt"); code != 0 || !strings.HasPrefix(out, "FULL shared change: go.mod") || errs != "" {
+		t.Fatalf("early FULL on an unparsable tree: rc %d stdout %q stderr %q, want rc 0, FULL, no scan error", code, out, errs)
+	}
+	if code, _, errs := verdict("guarded.txt"); code != 1 || !strings.Contains(errs, "scan the Go sources for reads:") {
+		t.Fatalf("guard path on an unparsable tree: rc %d stderr %q, want rc 1 with the scan error", code, errs)
 	}
 }

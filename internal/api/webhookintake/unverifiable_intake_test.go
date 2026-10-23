@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -13,6 +14,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 type intakeCase struct {
@@ -308,6 +311,63 @@ func TestDerivedGitLabDigestMatchesADirectCompare(t *testing.T) {
 			if got := verifyGitLabWithKey(token, key); got != want {
 				t.Fatalf("secret length %d, token length %d: got %v, want %v", length, len(token), got, want)
 			}
+		}
+	}
+}
+
+// The production logger blanks any REGISTERED credential out of log text. A refusal's log line must
+// not depend on the configured credential, even one that is a word of the line itself.
+func TestRefusalLogLineIsTheSameThroughTheProductionLogger(t *testing.T) {
+	cases := []struct{ provider, envName, word string }{
+		{"github", "GITHUB_WEBHOOK_SECRET", "signature"},
+		{"gitlab", "GITLAB_WEBHOOK_TOKEN", "validation"},
+		{"jira", "JIRA_WEBHOOK_SECRET", "signature"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			sigHeader := map[string]string{"github": "X-Hub-Signature-256", "gitlab": "X-Gitlab-Token", "jira": "X-Hub-Signature"}[tc.provider]
+			logOf := func(secret string) string {
+				t.Setenv("GITHUB_WEBHOOK_SECRET", "")
+				t.Setenv("GITLAB_WEBHOOK_TOKEN", "")
+				t.Setenv("JIRA_WEBHOOK_SECRET", "")
+				t.Setenv(tc.envName, secret)
+				var out bytes.Buffer
+				handler, path := intakeDeps(tc.provider, "", logging.NewJSON(&out, slog.LevelDebug))
+				req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+				req.Header.Set(sigHeader, "sha256="+hexMAC("guess", "{}"))
+				req.Header.Set("X-GitHub-Event", "push")
+				req.Header.Set("X-GitHub-Delivery", "d")
+				req.Header.Set("X-Gitlab-Event", "Push Hook")
+				handler(httptest.NewRecorder(), req)
+				var record map[string]any
+				if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &record); err != nil {
+					t.Fatalf("log %q: %v", out.String(), err)
+				}
+				return record["msg"].(string)
+			}
+			// The absent credential first: a registered credential stays registered for the process.
+			absent := logOf("")
+			if configured := logOf(tc.word); configured != absent {
+				t.Fatalf("refusal log with a configured credential %q vs an absent one %q", configured, absent)
+			}
+		})
+	}
+}
+
+// Deriving the verification material is a startup step: no request does it.
+func TestNoRequestDerivesVerificationMaterial(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab", "jira"} {
+		handler, path := intakeDeps(provider, "configured", slog.New(slog.NewTextHandler(io.Discard, nil)))
+		before := keyDerivations.Load()
+		for i := 0; i < 5; i++ {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+			req.Header.Set("X-GitHub-Event", "push")
+			req.Header.Set("X-GitHub-Delivery", "d")
+			req.Header.Set("X-Gitlab-Event", "Push Hook")
+			handler(httptest.NewRecorder(), req)
+		}
+		if after := keyDerivations.Load(); after != before {
+			t.Fatalf("%s: %d derivations during requests, want 0", provider, after-before)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"io"
 	"log/slog"
+	"sync/atomic"
 )
 
 // unverifiableKey stands in for a provider whose verification credential is not set: no caller
@@ -32,6 +33,10 @@ func verifyingSecret(configured string) string {
 	return unverifiableKey
 }
 
+// The credentials are read with os.Getenv, not registered with the log redactor: the intake
+// handlers never log a credential, and a registered value would be blanked out of any log text that
+// contains it, so a refusal's log line would depend on the configured credential.
+
 // verifyingKey is the fixed-size material a handler verifies with, made once when the handler is
 // built (startup): the per-request work then does not depend on the length of the provider
 // credential or on whether one is set. hmacKey is at most one SHA-256 block (a longer key is
@@ -42,9 +47,13 @@ type verifyingKey struct {
 	digest  [sha256.Size]byte
 }
 
+// keyDerivations counts newVerifyingKey calls; a test pins that no request derives one.
+var keyDerivations atomic.Int64
+
 const sha256BlockSize = 64
 
 func newVerifyingKey(configured string) verifyingKey {
+	keyDerivations.Add(1)
 	secret := []byte(verifyingSecret(configured))
 	key := secret
 	if len(key) > sha256BlockSize {

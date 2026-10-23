@@ -171,6 +171,11 @@ func newProvider(serviceName, environment, endpoint string, sampleRate float64) 
 	if err != nil {
 		return nil, err
 	}
+	return providerWithExporter(exporter, serviceName, environment, sampleRate)
+}
+
+// providerWithExporter is the one place a provider is built: every span reaches exporter through scrubExporter.
+func providerWithExporter(exporter sdktrace.SpanExporter, serviceName, environment string, sampleRate float64) (*sdktrace.TracerProvider, error) {
 	res, err := resource.New(context.Background(), resource.WithAttributes(
 		attribute.String("service.name", serviceName),
 		attribute.String("deployment.environment", environment),
@@ -182,7 +187,7 @@ func newProvider(serviceName, environment, endpoint string, sampleRate float64) 
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(countingSampler{inner: sdktrace.ParentBased(sampler(sampleRate)), counters: spanOutcomes}),
 		sdktrace.WithSpanProcessor(endCounter{counters: spanOutcomes}),
-		sdktrace.WithBatcher(countingExporter{SpanExporter: exporter, counters: spanOutcomes}),
+		sdktrace.WithBatcher(countingExporter{SpanExporter: scrubExporter{SpanExporter: exporter}, counters: spanOutcomes}),
 	)
 	return provider, nil
 }

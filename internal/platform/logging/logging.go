@@ -174,7 +174,7 @@ func (r attrRedactor) replace(groups []string, attr slog.Attr) (result slog.Attr
 	value := attr.Value.Resolve()
 	switch value.Kind() {
 	case slog.KindString:
-		attr.Value = slog.StringValue(bound(RedactText(value.String())))
+		attr.Value = slog.StringValue(RedactKeyedText(attr.Key, value.String()))
 	case slog.KindAny:
 		attr.Value = r.redactAny(value.Any())
 	}

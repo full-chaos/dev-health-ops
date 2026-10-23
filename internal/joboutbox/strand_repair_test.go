@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -18,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river/rivertype"
 
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
@@ -969,17 +968,24 @@ func TestStrandRepairFilterByClaimPreservesEarlierCountsOnLaterUnknownState(t *t
 // CHAOS-8431: the partial index of the job_kind migration and retiredKindsSQL must name the same kinds, or the
 // retired-kind survey stops proving the index predicate.
 func TestTheRetiredKindIndexPredicateNamesTheRetiredKinds(t *testing.T) {
-	files, err := filepath.Glob("../pgmigrate/sql/*_add_worker_job_outbox_job_kind_index.sql")
-	if err != nil || len(files) != 1 {
-		t.Fatalf("want exactly one job_kind index migration, got %v (err %v)", files, err)
-	}
-	body, err := os.ReadFile(files[0])
+	chain, err := pgmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
+	var body []byte
+	matches := 0
+	for _, file := range chain {
+		if strings.HasSuffix(file.Name, "_add_worker_job_outbox_job_kind_index.sql") {
+			body = []byte(file.SQL)
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("want exactly one job_kind index migration in the chain, got %d", matches)
+	}
 	predicate := regexp.MustCompile(`(?s)WHERE\s+job_kind\s+IN\s*\(([^)]*)\)`).FindStringSubmatch(string(body))
 	if predicate == nil {
-		t.Fatalf("%s has no WHERE job_kind IN (...) predicate", files[0])
+		t.Fatalf("%s has no WHERE job_kind IN (...) predicate", "the job_kind index migration")
 	}
 	var inMigration []string
 	for _, kind := range regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(predicate[1], -1) {

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/membership-update-request.v1.schema.json",
+  "title": "Auth Control Plane membership update request (v1 wire format)",
+  "description": "Body of a membership change: a new role, a new status, or both, against the revision the caller read. status cannot be set to invited (an invite creates that state). Ownership transfer is not part of this body.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "expected_revision"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "membership-update-request.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies)."
+    },
+    "expected_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Aggregate revision (provisioning-event.v1 payload.revision). Integer token only; a decimal-form token is refused by every client (README, integer guard)."
+    },
+    "role": {
+      "enum": [
+        "viewer",
+        "member",
+        "admin",
+        "owner"
+      ],
+      "description": "An organization role key of the closed catalog (contracts/auth/v1/vocabulary/roles.v1.json). A platform role, superuser and every other value are refused."
+    },
+    "status": {
+      "enum": [
+        "active",
+        "suspended",
+        "removed"
+      ],
+      "description": "Requested status."
+    }
+  },
+  "minProperties": 3
+}

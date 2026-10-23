@@ -1,0 +1,50 @@
+# Rollback rehearsal for the sessions flag (CHAOS-10407), executed in a kind cluster from images
+# built from this tree: a real `helm upgrade` flip (sessions=true), the flag-off re-GRANT by
+# `helm upgrade` and by `helm rollback`, with read, grant and pod probes running through every
+# phase. The logic is ci/check_session_cutover_rehearsal.sh. The flags flip inside the kind cluster
+# only; nothing here touches a deployed environment.
+#
+# A PROOF, deliberately NOT a required check, and NOT run on every pull request: it runs on
+# workflow_dispatch and on a pull request that changes the files below ONLY (the auth chart
+# templates, the hooks the flip runs, the session posture and this rehearsal). Its name is distinct
+# from every required context. REHEARSAL_STRICT=1 (the dispatch input) turns a finding into a failure.
+name: Session cutover rehearsal
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'ci/check_session_cutover_rehearsal.sh'
+      - 'ci/session_rehearsal/**'
+      - '.github/workflows/session-cutover-rehearsal.yml'
+      - 'deploy/helm/dev-health/templates/auth-*.yaml'
+      - 'deploy/helm/dev-health/templates/go-api-deployment.yaml'
+      - 'deploy/helm/dev-health/templates/river-hooks.yaml'
+      - 'internal/storage/postgres/api_authorization*.go'
+      - 'internal/rivermigrate/rivermigrate.go'
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: 'Fail the job on a finding (1) or only report it (0)'
+        required: false
+        default: '0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  session-cutover-rehearsal:
+    name: session-cutover-rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rehearse the sessions flip and its rollback in a kind cluster
+        env:
+          REHEARSAL_STRICT: ${{ github.event.inputs.strict || '0' }}
+        run: bash ci/check_session_cutover_rehearsal.sh

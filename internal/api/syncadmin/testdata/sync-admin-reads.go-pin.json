@@ -1,0 +1,5 @@
+{
+  "backfill jobs ?offset=99999999999999999999": "422 {\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be less than or equal to 9223372036854775807\"}]}",
+  "jobs no scheduled job huge offset": "422 {\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be less than or equal to 9223372036854775807\"}]}",
+  "jobs planner ?offset=99999999999999999999": "422 {\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be less than or equal to 9223372036854775807\"}]}"
+}

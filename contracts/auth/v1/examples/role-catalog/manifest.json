@@ -1,0 +1,51 @@
+{
+  "description": "The golden corpus for the roles.v1 catalog. No client-only rule: every rule is a schema rule.",
+  "accept": [
+    {
+      "file": "valid-organization-role.json",
+      "why": "One organization role with an explicit action list."
+    },
+    {
+      "file": "valid-platform-role.json",
+      "why": "An organization and a platform role."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-role-superuser.json",
+      "expect_instance_location": "/roles/0/role",
+      "expect_keyword": "not",
+      "why": "superuser is a reserved name, not a role."
+    },
+    {
+      "file": "invalid-action-wildcard.json",
+      "expect_instance_location": "/roles/0/actions/0",
+      "expect_keyword": "pattern",
+      "why": "A wildcard is not an action."
+    },
+    {
+      "file": "invalid-action-duplicate.json",
+      "expect_instance_location": "/roles/0/actions",
+      "expect_keyword": "uniqueItems",
+      "why": "An action listed twice."
+    },
+    {
+      "file": "invalid-scope-unknown.json",
+      "expect_instance_location": "/roles/0/scope",
+      "expect_keyword": "enum",
+      "why": "A scope outside the closed set."
+    },
+    {
+      "file": "invalid-roles-empty.json",
+      "expect_instance_location": "/roles",
+      "expect_keyword": "minItems",
+      "why": "A catalog with no role."
+    },
+    {
+      "file": "invalid-role-member.json",
+      "expect_instance_location": "/roles/0",
+      "expect_keyword": "additionalProperties",
+      "why": "Inheritance is not representable."
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "description": "The golden corpus for the invite-accept-request.v1 body. The token is an org_invite_token credential. No client-only rule: every rule is a schema rule.",
+  "accept": [
+    {
+      "file": "valid.json",
+      "why": "A token of the org_invite_token form."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-token-short.json",
+      "expect_instance_location": "/token",
+      "expect_keyword": "pattern",
+      "why": "A token with a short id half."
+    },
+    {
+      "file": "invalid-token-uppercase.json",
+      "expect_instance_location": "/token",
+      "expect_keyword": "pattern",
+      "why": "The token is lowercase hex."
+    },
+    {
+      "file": "invalid-email-present.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Acceptance is bound to the token, not to a caller-supplied address."
+    },
+    {
+      "file": "invalid-token-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "No token."
+    }
+  ]
+}

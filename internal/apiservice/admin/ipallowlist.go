@@ -132,7 +132,7 @@ func (h *handlers) listIPAllowlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	org, err := pythonparity.ParseUUID(orgID)
-	if err != nil || offset < 0 {
+	if err != nil {
 		policy.WriteInternal(w)
 		return
 	}
@@ -256,9 +256,13 @@ func (h *handlers) getIPAllowlistEntry(w http.ResponseWriter, r *http.Request) {
 // answers the 500 or 404 itself and returns false.
 func (h *handlers) loadIPEntry(ctx context.Context, w http.ResponseWriter, r *http.Request, orgID string) (*ipEntry, bool) {
 	org, orgErr := pythonparity.ParseUUID(orgID)
-	entryID, entryOK := pathUUID(r, "entry_id")
-	if orgErr != nil || !entryOK {
+	if orgErr != nil {
 		policy.WriteInternal(w)
+		return nil, false
+	}
+	entryID, entryOK := pathUUID(r, "entry_id")
+	if !entryOK {
+		writeInvalidID(w, invalidIPEntryIDDetail)
 		return nil, false
 	}
 	entry, err := scanIPEntry(h.store.Pool.QueryRow(ctx,

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"golang.org/x/sync/errgroup"
 )
 
 // WorkUnitTimeRange ports api/models/schemas.py's WorkUnitTimeRange.
@@ -129,6 +130,10 @@ func pythonIsoFormat(t time.Time) string {
 	return base + t.Format("-07:00")
 }
 
+// workUnitLookupChains is the number of independent lookup chains BuildWorkUnitInvestments
+// runs at once, and so the most pool connections one call takes after the unit rows.
+const workUnitLookupChains = 3
+
 // BuildWorkUnitInvestments ports build_work_unit_investments
 // (work_units.py:234-460) exactly, including its two attribution passes
 // (a flat batch fetch across all rows, then a per-row recomputation for
@@ -180,18 +185,13 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		rows = filtered
 	}
 
-	var quoteRows []WorkUnitInvestmentQuoteRow
+	var unitRuns []WorkUnitRunPair
 	if opts.IncludeText {
-		var unitRuns []WorkUnitRunPair
 		for _, row := range rows {
 			runID := derefString(row.CategorizationRunID)
 			if row.WorkUnitID != "" && runID != "" {
 				unitRuns = append(unitRuns, WorkUnitRunPair{WorkUnitID: row.WorkUnitID, RunID: runID})
 			}
-		}
-		quoteRows, err = reader.FetchWorkUnitInvestmentQuotes(ctx, opts.OrgID, unitRuns)
-		if err != nil {
-			return nil, err
 		}
 	}
 
@@ -200,10 +200,6 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		if repoID := derefString(row.RepoID); repoID != "" {
 			repoIDValues = append(repoIDValues, repoID)
 		}
-	}
-	repoScopes, err := reader.FetchRepoScopes(ctx, opts.OrgID, repoIDValues)
-	if err != nil {
-		return nil, err
 	}
 
 	var issueIDs, prRefs []string
@@ -218,22 +214,54 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 			prRepoUUIDs = append(prRepoUUIDs, match[1])
 		}
 	}
-	repoIdentities, err := reader.FetchRepoIdentities(ctx, opts.OrgID, prRepoUUIDs)
-	if err != nil {
-		return nil, err
-	}
-	var prWorkItemIDs []string
-	for _, ref := range prRefs {
-		if id, ok := prRefWorkItemID(ref, repoIdentities); ok {
-			prWorkItemIDs = append(prWorkItemIDs, id)
-		}
-	}
-	teamAssignments, err := reader.FetchWorkItemTeamAssignments(ctx, opts.OrgID, append(append([]string{}, issueIDs...), prWorkItemIDs...))
-	if err != nil {
-		return nil, err
-	}
 
-	sourceTitles := reader.quoteSourceTitles(ctx, opts.OrgID, quoteRows)
+	// Three chains hang on the unit rows alone and share nothing: quotes then their
+	// titles, repo scopes, and repo identities then team assignments (the PR work item
+	// ids come from the identities). They run at once, so a request holds at most
+	// workUnitLookupChains connections of the pool, and its depth is the longest chain.
+	var (
+		quoteRows       []WorkUnitInvestmentQuoteRow
+		sourceTitles    map[quoteSource]string
+		repoScopes      map[string]string
+		repoIdentities  map[string]repoIdentity
+		teamAssignments map[string]teamAssignment
+	)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(workUnitLookupChains)
+	group.Go(func() error {
+		if opts.IncludeText {
+			var err error
+			quoteRows, err = reader.FetchWorkUnitInvestmentQuotes(groupCtx, opts.OrgID, unitRuns)
+			if err != nil {
+				return err
+			}
+		}
+		sourceTitles = reader.quoteSourceTitles(groupCtx, opts.OrgID, quoteRows)
+		return nil
+	})
+	group.Go(func() error {
+		var err error
+		repoScopes, err = reader.FetchRepoScopes(groupCtx, opts.OrgID, repoIDValues)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		repoIdentities, err = reader.FetchRepoIdentities(groupCtx, opts.OrgID, prRepoUUIDs)
+		if err != nil {
+			return err
+		}
+		var prWorkItemIDs []string
+		for _, ref := range prRefs {
+			if id, ok := prRefWorkItemID(ref, repoIdentities); ok {
+				prWorkItemIDs = append(prWorkItemIDs, id)
+			}
+		}
+		teamAssignments, err = reader.FetchWorkItemTeamAssignments(groupCtx, opts.OrgID, append(append([]string{}, issueIDs...), prWorkItemIDs...))
+		return err
+	})
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
 
 	quotesByUnit := map[string][]WorkUnitInvestmentQuoteRow{}
 	for _, quote := range quoteRows {

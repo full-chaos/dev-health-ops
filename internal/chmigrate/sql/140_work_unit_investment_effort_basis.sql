@@ -1,0 +1,14 @@
+-- Commit stats are capped (50 on a full sync, 300 per project), so a unit whose
+-- commits have no git_commit_stats row ends with effort_value 0 and effort_metric
+-- churn_loc, the same as a measured zero.
+--
+-- effort_basis says which it is, written by the materializer:
+--   measured        no linked commits, or every linked commit has a stats row
+--   partial_capped  some linked commit has no stats row, or all lack one but the
+--                   effort came from another tier
+--   unmeasured      every linked commit lacks a stats row and the effort is 0
+--
+-- '' means "not recorded": every row written before this migration, until the
+-- unit is materialized again. It never means "measured". Readers must tolerate
+-- the column missing.
+ALTER TABLE work_unit_investments ADD COLUMN IF NOT EXISTS effort_basis LowCardinality(String) DEFAULT '' COMMENT 'measured | partial_capped | unmeasured. Empty = not recorded (rows written before migration 140): never read as measured.';

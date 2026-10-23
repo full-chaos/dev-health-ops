@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -150,6 +151,15 @@ func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerD
 	}
 	database.warmReadinessProbes()
 	return database, nil
+}
+
+// RecordedRevisions is the schema gate's read: the domain role's SELECT on
+// alembic_version, on the readiness pool.
+func (database *postgresReconcilerDatabase) RecordedRevisions(ctx context.Context) ([]string, error) {
+	if database == nil || database.pools == nil {
+		return nil, &schemagate.ReadError{Class: "no_pool"}
+	}
+	return schemagate.PoolRecorded(ctx, database.pools.ReadinessPool())
 }
 
 func (database *postgresReconcilerDatabase) DomainReady(ctx context.Context) error {
@@ -775,6 +785,9 @@ func buildReconcilerDependencies(
 		dependencies.database, dependencies.databaseErr = sources.openDatabase(ctx, cfg)
 		if dependencies.databaseErr != nil {
 			dependencies.databaseErr = dependencyUnavailable("reconciler_database_open_failed")
+			dependencies.disableDatabase()
+		} else if dependencies.database != nil && schemagate.Enforce(ctx, logger, "reconciler", dependencies.database) != nil {
+			dependencies.databaseErr = dependencyUnavailable("reconciler_schema_behind")
 			dependencies.disableDatabase()
 		}
 	}

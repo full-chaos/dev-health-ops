@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 var names = Names{Org: "scope_org", AsOf: "scope_as_of"}
@@ -84,6 +85,39 @@ func TestPackageImportsNoReader(t *testing.T) {
 			if strings.Contains(path, "internal/teamownership") || strings.Contains(path, "internal/queryapi") {
 				t.Errorf("%s imports %s: the leaf must not import a reader", entry.Name(), path)
 			}
+		}
+	}
+}
+
+func TestFirstRecordsQueryIsTheStatementTheWindowReads(t *testing.T) {
+	rows := FirstRecordsQuery(names)
+	if !strings.HasPrefix(rows, "SELECT "+RepoKey+" AS repo_key, min(o.valid_from) AS first_from") {
+		t.Errorf("the statement does not give (repo_key, first_from):\n%s", rows)
+	}
+	if !strings.Contains(firstRecords(names), rows) {
+		t.Errorf("the window's first-record subquery is not built from FirstRecordsQuery:\n%s", firstRecords(names))
+	}
+	if strings.Contains(rows, "source") || strings.Contains(rows, names.AsOf) {
+		t.Errorf("the statement filters by source or reads the instant:\n%s", rows)
+	}
+	if strings.Count(rows, "{scope_org:String}") != 2+strings.Count(ActiveTeam(names), "{scope_org:String}") {
+		t.Errorf("the statement names a placeholder the caller did not give:\n%s", rows)
+	}
+}
+
+func TestClampAsOfIsTheLaterInstant(t *testing.T) {
+	early, late := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name            string
+		at, first, want time.Time
+	}{
+		{"before the first record", early, late, late},
+		{"at the first record", late, late, late},
+		{"after the first record", late, early, late},
+		{"no record", early, time.Time{}, early},
+	} {
+		if got := ClampAsOf(tc.at, tc.first); !got.Equal(tc.want) {
+			t.Errorf("%s: ClampAsOf = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

@@ -179,7 +179,7 @@ func auditListQuery(r *http.Request) (auditFilter, int64, int64, pybody.Errors) 
 }
 
 // where renders the filter's conditions after any leading ones. A malformed
-// user_id is `uuid.UUID(...)` raising, an unhandled 500.
+// user_id is `uuid.UUID(...)` raising (the caller answers a named 400).
 func (f auditFilter) where(conditions []string, args []any) ([]string, []any, bool) {
 	add := func(column string, value any) {
 		args = append(args, value)
@@ -280,8 +280,8 @@ func (h *handlers) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conditions, args, valid := filter.where([]string{"a.org_id = $1"}, []any{org})
-	if !valid || offset < 0 {
-		policy.WriteInternal(w)
+	if !valid {
+		writeInvalidID(w, invalidUserIDDetail)
 		return
 	}
 	logs, total, err := h.store.auditPage(ctx, conditions, args, limit, offset)
@@ -301,8 +301,8 @@ func (h *handlers) listPlatformAuditLogs(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	conditions, args, valid := filter.where(nil, nil)
-	if !valid || offset < 0 {
-		policy.WriteInternal(w)
+	if !valid {
+		writeInvalidID(w, invalidUserIDDetail)
 		return
 	}
 	logs, total, err := h.store.auditPage(ctx, conditions, args, limit, offset)
@@ -324,9 +324,13 @@ func (h *handlers) getAuditLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	org, orgErr := pythonparity.ParseUUID(orgID)
-	logID, logOK := pathUUID(r, "log_id")
-	if orgErr != nil || !logOK {
+	if orgErr != nil {
 		policy.WriteInternal(w)
+		return
+	}
+	logID, logOK := pathUUID(r, "log_id")
+	if !logOK {
+		writeInvalidID(w, invalidAuditLogIDDetail)
 		return
 	}
 	log, err := scanAuditLog(h.store.Pool.QueryRow(ctx,
@@ -395,9 +399,13 @@ func (h *handlers) getUserAuditActivity(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	org, orgErr := pythonparity.ParseUUID(orgID)
-	userID, userOK := pathUUID(r, "user_id")
-	if orgErr != nil || !userOK {
+	if orgErr != nil {
 		policy.WriteInternal(w)
+		return
+	}
+	userID, userOK := pathUUID(r, "user_id")
+	if !userOK {
+		writeInvalidID(w, invalidUserIDDetail)
 		return
 	}
 	logs, err := h.store.queryAuditLogs(ctx, `SELECT `+auditLogColumns+auditLogFrom+`

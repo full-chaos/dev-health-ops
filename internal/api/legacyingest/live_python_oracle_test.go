@@ -88,6 +88,40 @@ func goAnswer(t *testing.T, item oracleCase) (int, string, [][2]string, [][]any)
 	return recorder.Code, recorder.Body.String(), store.streams, clickhouse.batch.rows
 }
 
+// strictDivergences are the named cases where Go answers more strictly than
+// the frozen FastAPI program (D6129). Each entry says what Go answers.
+var strictDivergences = []struct {
+	name string
+	// applies reports whether the case is in the divergence.
+	applies func(oracleCase) bool
+}{
+	{
+		name: "dev-environment-without-credentials-answers-401",
+		applies: func(item oracleCase) bool {
+			getenv := func(key string) string { return item.Env[key] }
+			return len(apiKeys(getenv)) == 0 && getenv("INGEST_SIGNING_SECRET") == ""
+		},
+	},
+}
+
+// withDevKey gives a divergent case the credential the frozen program did not
+// need, so the rest of its answer is still compared.
+func withDevKey(item oracleCase) oracleCase {
+	env := map[string]string{}
+	for key, value := range item.Env {
+		env[key] = value
+	}
+	env["INGEST_API_KEYS"] = "oracle-key"
+	headers := map[string]string{"X-API-Key": "oracle-key"}
+	for key, value := range item.Headers {
+		if !strings.EqualFold(key, "X-API-Key") {
+			headers[key] = value
+		}
+	}
+	item.Env, item.Headers = env, headers
+	return item
+}
+
 func credentials(secret, body string) string { return sign(secret, body) }
 
 func authCorpus() []oracleCase {
@@ -144,7 +178,7 @@ func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
 	if len(want) != len(corpus) {
 		t.Fatalf("python answered %d of %d", len(want), len(corpus))
 	}
-	mismatches, statuses := 0, map[int]int{}
+	mismatches, statuses, diverged := 0, map[int]int{}, map[string]int{}
 	for index, item := range corpus {
 		var answer struct {
 			Status int
@@ -161,6 +195,25 @@ func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
 		decoder.UseNumber()
 		_ = decoder.Decode(&answer.Rows)
 		status, body, stream, rows := goAnswer(t, item)
+		for _, divergence := range strictDivergences {
+			// A body that fails to decode is answered before any credential check.
+			decodeStage := answer.Status == http.StatusBadRequest || (answer.Status == http.StatusUnprocessableEntity && strings.Contains(answer.Body, `"json_invalid"`))
+			if decodeStage || !divergence.applies(item) {
+				continue
+			}
+			if status != http.StatusUnauthorized || body != `{"detail":"Invalid API key"}` || len(stream) != 0 || len(rows) != 0 {
+				mismatches++
+				t.Errorf("%s: %s env=%v: go answered %d %.200s, want the 401 refusal", divergence.name, item.Route, item.Env, status, body)
+				continue
+			}
+			if answer.Status == http.StatusUnauthorized {
+				continue
+			}
+			diverged[divergence.name]++
+			// Python let the request in; the same request with a credential
+			// must still match Python's answer.
+			status, body, stream, rows = goAnswer(t, withDevKey(item))
+		}
 		statuses[status]++
 		wantBody, gotBody := ingestionID.ReplaceAllString(answer.Body, `"ingestion_id":"<id>"`), ingestionID.ReplaceAllString(body, `"ingestion_id":"<id>"`)
 		if answer.Status == http.StatusInternalServerError && status == http.StatusUnprocessableEntity {
@@ -186,9 +239,12 @@ func TestLegacyIngestMatchesFrozenFastAPI(t *testing.T) {
 	if mismatches > 0 {
 		t.Fatalf("%d of %d cases differ", mismatches, len(corpus))
 	}
+	if diverged["dev-environment-without-credentials-answers-401"] == 0 {
+		t.Fatal("the dev-environment divergence matched no case")
+	}
 	frozen.SkipDiff(t)
 	frozen.Finish(t)
-	t.Logf("%d cases compared (statuses %v); 0 mismatches", len(corpus), statuses)
+	t.Logf("%d cases compared (statuses %v, stricter divergences %v); 0 mismatches", len(corpus), statuses, diverged)
 }
 
 // normalizedRows renders a telemetry insert the way the Python program

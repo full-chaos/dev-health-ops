@@ -169,7 +169,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE ROLE " + runtimeAuthorizationQueueRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + runtimeAuthorizationQueuePass + "'",
 		"GRANT CONNECT ON DATABASE " + dbName + " TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
 		"GRANT USAGE ON SCHEMA public TO " + runtimeAuthorizationDomainRole + ", " + runtimeAuthorizationQueueRole,
-		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.byo_llm_budget_reservations, public.tier_limits, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT ON TABLE public.alembic_version, public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.byo_llm_budget_reservations, public.tier_limits, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + runtimeAuthorizationDomainRole,

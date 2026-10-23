@@ -61,6 +61,8 @@ func TestSchemaGuardsReadEveryEngineSpelling(t *testing.T) {
 		{"cloud shared plain MergeTree", "SharedMergeTree", "SharedMergeTree(" + cloudPath + ") ORDER BY (org_id, day)", false},
 		{"cloud shared aggregating", "SharedAggregatingMergeTree", "SharedAggregatingMergeTree(" + cloudPath + ") ORDER BY (org_id, day)", false},
 		{"cloud shared without replication arguments", "SharedReplacingMergeTree", "SharedReplacingMergeTree(computed_at) ORDER BY (org_id, day)", false},
+		{"self-hosted extra is_deleted argument", "ReplacingMergeTree", "ReplacingMergeTree(computed_at, is_deleted) ORDER BY (org_id, day)", false},
+		{"cloud shared extra is_deleted argument", "SharedReplacingMergeTree", "SharedReplacingMergeTree(" + cloudPath + ", computed_at, is_deleted) ORDER BY (org_id, day)", false},
 		{"unparseable engine_full", "SharedReplacingMergeTree", "SharedReplacingMergeTree('/p', '{replica}', computed_at ORDER BY x", false},
 		{"not a MergeTree", "View", "View", false},
 	}

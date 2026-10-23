@@ -51,14 +51,18 @@ func Parse(s string) (Clause, error) {
 }
 
 // VersionColumn returns the ReplacingMergeTree version column, or "" when the
-// clause names none. It refuses a clause of another family, and a version
-// argument that is not a plain column name.
+// clause names none. It refuses a clause of another family, a version argument
+// that is not a plain column name, and any argument after the version (the
+// is_deleted form changes what FINAL returns).
 func (c Clause) VersionColumn() (string, error) {
 	if c.Family != FamilyReplacing {
 		return "", fmt.Errorf("%w: %s is not %s", ErrShape, c.Name, FamilyReplacing)
 	}
 	if len(c.Args) == 0 {
 		return "", nil
+	}
+	if len(c.Args) > 1 {
+		return "", fmt.Errorf("%w: %s has arguments after the version column: %q", ErrShape, c.Name, strings.Join(c.Args, ", "))
 	}
 	column, ok := Identifier(c.Args[0])
 	if !ok {

@@ -38,8 +38,8 @@ func Secret(configured string) string {
 
 // Key is the fixed-size material a handler verifies with. It is made once when the handler is built
 // (startup), so the work of a request does not depend on the length of the credential or on whether
-// one is set. HMACKey is at most one SHA-256 block (a longer credential is hashed first, which is what
-// HMAC does with it); Digest is the SHA-256 of the credential, for a plain token compare.
+// one is set. HMACKey is exactly one SHA-256 block (a longer credential is hashed first and a shorter
+// one zero-padded, which is what HMAC does with it); Digest is the SHA-256 of the credential, for a plain token compare.
 type Key struct {
 	HMACKey []byte
 	Digest  [sha256.Size]byte
@@ -61,5 +61,9 @@ func New(configured string) Key {
 		hashed := sha256.Sum256(key)
 		key = hashed[:]
 	}
-	return Key{HMACKey: key, Digest: sha256.Sum256(secret)}
+	// Zero-padded to the block size, which is what HMAC does with a shorter key: the same MAC, and
+	// hmac.New copies the same number of bytes for every credential.
+	padded := make([]byte, sha256BlockSize)
+	copy(padded, key)
+	return Key{HMACKey: padded, Digest: sha256.Sum256(secret)}
 }

@@ -92,7 +92,8 @@ func TestUnverifiableWebhookAnswersLikeAWrongSecret(t *testing.T) {
 			wrong := driveWebhook(t, configured, "sk_test_unit", now, c.body, c.header)
 			absent := driveWebhook(t, "", "sk_test_unit", now, c.body, c.header)
 			noClient := driveWebhook(t, "", "", now, c.body, c.header)
-			for name, got := range map[string]webhookOutcome{"absent secret": absent, "absent secret and API client": noClient} {
+			wrongNoClient := driveWebhook(t, configured, "", now, c.body, c.header)
+			for name, got := range map[string]webhookOutcome{"absent secret": absent, "absent secret and API client": noClient, "wrong secret and no API client": wrongNoClient} {
 				if got.status != wrong.status || got.body != wrong.body {
 					t.Fatalf("%s: %d %q, a wrong secret gives %d %q", name, got.status, got.body, wrong.status, wrong.body)
 				}
@@ -206,11 +207,13 @@ func TestWebhookRefusalLogIsTheSameThroughTheProductionLogger(t *testing.T) {
 		h.stripeWebhook(httptest.NewRecorder(), req)
 		return withoutTime(out.String())
 	}
-	realistic := "whsec_" + hex.EncodeToString(bytes.Repeat([]byte{7, 9, 11}, 12))
+	// Not a vendor-key shape: only the registry can blank it.
+	realistic := hex.EncodeToString(bytes.Repeat([]byte{7, 9, 11}, 12))
 	absent := logOf("")
 	if configured := logOf(realistic); configured != absent || absent == "" {
 		t.Fatalf("refusal log with a configured secret\n%s\nwith an absent one\n%s", configured, absent)
 	}
+	secrets.Register("test webhook secret", realistic)
 	var echoed bytes.Buffer
 	logging.NewJSON(&echoed, slog.LevelDebug).Warn("echoed " + realistic)
 	if strings.Contains(echoed.String(), realistic) || !strings.Contains(echoed.String(), "[REDACTED]") {
@@ -227,5 +230,12 @@ func TestStartupLogNamesEachAbsentCredentialOnce(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) != 1 || !strings.Contains(out.String(), "STRIPE_WEBHOOK_SECRET") {
 		t.Fatalf("log = %q, want one line for the webhook secret", out.String())
+	}
+	out.Reset()
+	startupLogOnce = sync.Once{}
+	LogUnconfigured(logger, secrets.NewValue("whsec"), secrets.NewValue(""))
+	lines = strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 1 || !strings.Contains(out.String(), "STRIPE_SECRET_KEY") || strings.Contains(out.String(), "STRIPE_WEBHOOK_SECRET") {
+		t.Fatalf("log = %q, want one line for the API key only", out.String())
 	}
 }

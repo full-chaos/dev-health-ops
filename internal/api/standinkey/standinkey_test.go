@@ -65,12 +65,15 @@ func TestDerivedHMACKeyMatchesADirectHMACForEveryLength(t *testing.T) {
 		if mac(New(secret).HMACKey) != mac([]byte(secret)) {
 			t.Fatalf("length %d: the derived key gives another MAC", length)
 		}
-		if len(New(secret).HMACKey) > 64 {
-			t.Fatalf("length %d: the derived key is longer than one block", length)
+		if len(New(secret).HMACKey) != 64 {
+			t.Fatalf("length %d: the derived key is %d bytes, want exactly one block", length, len(New(secret).HMACKey))
 		}
 		if New(secret).Digest != sha256.Sum256([]byte(secret)) {
 			t.Fatalf("length %d: the digest is not the SHA-256 of the credential", length)
 		}
+	}
+	if len(New("").HMACKey) != 64 {
+		t.Fatal("the stand-in key is not one block")
 	}
 	if mac(New("").HMACKey) == mac(nil) {
 		t.Fatal("an absent credential gives the MAC of the empty key")

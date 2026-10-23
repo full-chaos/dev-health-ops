@@ -111,7 +111,8 @@ func TestEveryTableReadWithFINALRequiresTheReplacingEngine(t *testing.T) {
 	// exactly the gap this replaces.
 	source := capacityClickHouseSource(t)
 	for table, requirement := range capacityTableRequirements {
-		readWithFINAL := strings.Contains(source, table+" FINAL")
+		readWithFINAL := strings.Contains(source, table+" FINAL") ||
+			strings.Contains(source, "SELECT * FROM "+table+" WHERE")
 		if readWithFINAL && !requirement.readWithFINAL {
 			t.Errorf(
 				"%s is read with FINAL but its requirement does not demand the "+

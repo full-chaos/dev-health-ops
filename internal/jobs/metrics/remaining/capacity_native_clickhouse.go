@@ -20,10 +20,25 @@ import (
 
 // The capacity reads, ported from capacity_queries.py.
 //
-// All three go through work_item_metrics_daily FINAL. FINAL is Python's choice
-// and is reproduced rather than improved on: that table is a ReplacingMergeTree
-// and dropping FINAL would read superseded rows, which is the same class of
-// silent divergence the DORA ordering contract turned out to be.
+// All three read the newest version of each work_item_metrics_daily row, not
+// FINAL. That table is a ReplacingMergeTree and superseded rows must not be
+// summed. FINAL collapses by the WHOLE deployed sorting key, so a key with an
+// extra column would keep rows that should collapse; capacityNewestRows
+// collapses by the required key columns instead, whatever else the key holds.
+
+// capacityNewestRows returns a FROM-clause subquery holding one row per
+// required sorting key: the newest by computed_at.
+//
+// The scope filter sits INSIDE, before LIMIT 1 BY; every filter that tests a
+// key column is safe there. The live-row predicate tests measure columns and
+// must stay OUTSIDE: it has to see the newest row, not skip it for an older
+// live one. cityHash64(*) breaks a computed_at tie by row content, so equal
+// versions never pick at random.
+func capacityNewestRows(where string) string {
+	return "(SELECT * FROM work_item_metrics_daily WHERE " + where +
+		" ORDER BY computed_at DESC, cityHash64(*) DESC LIMIT 1 BY " +
+		strings.Join(capacityTableRequirements["work_item_metrics_daily"].sortingKey, ", ") + ")"
+}
 
 // capacityScopeFilters builds the shared WHERE fragments.
 //
@@ -82,12 +97,11 @@ func (executor *CapacityExecutor) loadThroughput(
 
 	query := fmt.Sprintf(`
         SELECT day, SUM(items_completed) AS items_completed
-        FROM work_item_metrics_daily FINAL
+        FROM %s
         WHERE %s
-          AND %s
         GROUP BY day
         ORDER BY day
-    `, strings.Join(conditions, " AND "), liverow.Predicate("work_item_metrics_daily", ""))
+    `, capacityNewestRows(strings.Join(conditions, " AND ")), liverow.Predicate("work_item_metrics_daily", ""))
 
 	rows, err := executor.conn.Query(ctx, query, namedArguments(arguments)...)
 	if err != nil {
@@ -132,14 +146,12 @@ func (executor *CapacityExecutor) loadBacklog(
 	// reported that day.
 	query := fmt.Sprintf(`
         SELECT sum(wip_count_end_of_day) AS wip_count_end_of_day
-        FROM work_item_metrics_daily FINAL
-        WHERE %s
-          AND day = (
+        FROM %s
+        WHERE day = (
               SELECT max(day)
-              FROM work_item_metrics_daily FINAL
-              WHERE %s
+              FROM %s
           )
-    `, where, where)
+    `, capacityNewestRows(where), capacityNewestRows(where))
 
 	// sum() over a UInt32 column widens to UInt64, so the destination has to
 	// be uint64 rather than the column's own type. An aggregate always returns
@@ -202,11 +214,9 @@ func (executor *CapacityExecutor) resolveScopes(
 	// team id), not a team with a backlog of zero.
 	query := `
         SELECT DISTINCT team_id, work_scope_id
-        FROM work_item_metrics_daily FINAL
-        WHERE day >= today() - 30
-        AND org_id = {org_id:String}
-        AND ` + rowview.OrgPredicate("work_item_metrics_daily", "") + `
-        AND ` + liverow.Predicate("work_item_metrics_daily", "") + `
+        FROM ` + capacityNewestRows("day >= today() - 30 AND org_id = {org_id:String} AND "+
+		rowview.OrgPredicate("work_item_metrics_daily", "")) + `
+        WHERE ` + liverow.Predicate("work_item_metrics_daily", "") + `
     `
 	rows, err := executor.conn.Query(
 		ctx, query, clickhouse.Named("org_id", organizationID))

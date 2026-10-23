@@ -175,12 +175,36 @@ WHERE s.id = $1`, req.SourceID, req.CredentialID, orgID.String()).Scan(&ok)
 	return "", nil
 }
 
+// maxStoredSigningSecretBytes bounds the stored ciphertext of a binding's
+// signing secret; the intake read side refuses a longer stored value.
+const maxStoredSigningSecretBytes = 1024
+
+var errBindingSecretTooLarge = errors.New("signing secret is too large")
+
+func storedSigningSecretFits(stored string) bool {
+	return len(stored) <= maxStoredSigningSecretBytes
+}
+
+// bindingInsertFailed answers a failed insertCandidate: an oversize secret is
+// the caller's 400 (no secret text, length or limit in it), any other failure
+// is the route's 500.
+func (h *handlers) bindingInsertFailed(ctx context.Context, w http.ResponseWriter, what string, err error) {
+	if errors.Is(err, errBindingSecretTooLarge) {
+		policy.WriteDetail(w, http.StatusBadRequest, errBindingSecretTooLarge.Error(), nil)
+		return
+	}
+	h.internalError(ctx, w, what, err)
+}
+
 // insertCandidate is the repository's create with status candidate: the
 // secret encrypted with the settings key, key version v1.
 func (h *handlers) insertCandidate(ctx context.Context, tx pgx.Tx, orgID uuid.UUID, req bindingRequest, at time.Time) (bindingRow, error) {
 	sealed, err := h.decryptor.Encrypt([]byte(req.SigningSecret))
 	if err != nil {
 		return bindingRow{}, err
+	}
+	if !storedSigningSecretFits(sealed.Reveal()) {
+		return bindingRow{}, errBindingSecretTooLarge
 	}
 	return scanBinding(tx.QueryRow(ctx, `
 INSERT INTO pagerduty_webhook_bindings (id, org_id, integration_source_id, credential_id, provider_subscription_id, signing_secret_encrypted, signing_secret_key_version, status, created_at, updated_at)
@@ -254,7 +278,7 @@ func (h *handlers) createPagerDutyBinding(w http.ResponseWriter, r *http.Request
 	}
 	created, err := h.insertCandidate(ctx, tx, orgUUID, req, h.bindingNow())
 	if err != nil {
-		h.internalError(ctx, w, "create pagerduty binding", err)
+		h.bindingInsertFailed(ctx, w, "create pagerduty binding", err)
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -333,7 +357,7 @@ WHERE integration_source_id = $1 AND status IN ('active', 'candidate', 'ready') 
 	}
 	created, err := h.insertCandidate(ctx, tx, orgUUID, req, h.bindingNow())
 	if err != nil {
-		h.internalError(ctx, w, "create pagerduty rotation candidate", err)
+		h.bindingInsertFailed(ctx, w, "create pagerduty rotation candidate", err)
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -40,7 +40,7 @@ var adminFieldFiles = map[string]bool{
 
 const (
 	byIDPrefix  = "by-id route, behaviour today:"
-	noIDPrefix  = "no resource id, behaviour today:"
+	noIDPrefix  = "no path resource id, behaviour today:"
 	cachePrefix = "none: per-request read ("
 )
 

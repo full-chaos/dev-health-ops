@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -431,18 +432,43 @@ func scanProjectedSummary(scanner summaryScanner) (JobSummary, error) {
 		return JobSummary{}, err
 	}
 	summary.State = JobState(state)
+	omitCredentialShapedArguments(&summary)
 	return summary, nil
+}
+
+// omitCredentialShapedArguments drops the argument-derived fields of a summary
+// when any of them has the shape of a credential, as summaryFromRiverRow does
+// for a job the decoder refuses. A guard that cannot load drops them too.
+func omitCredentialShapedArguments(summary *JobSummary) {
+	scanner, err := credshape.Default()
+	if err == nil {
+		fields := []string{summary.CorrelationID, summary.Domain.Type, summary.Domain.ID}
+		if summary.OrganizationID != nil {
+			fields = append(fields, *summary.OrganizationID)
+		}
+		refused := false
+		for _, field := range fields {
+			refused = refused || scanner.Match(field) != ""
+		}
+		if !refused {
+			return
+		}
+	}
+	summary.CorrelationID, summary.OrganizationID, summary.Domain = "", nil, jobcontract.DomainLink{}
+	summary.ArgumentsRefused = true
 }
 
 func summaryFromRiverRow(row *rivertype.JobRow) (JobSummary, error) {
 	if row == nil {
 		return JobSummary{}, ErrBackendConfiguration
 	}
+	refused := false
 	envelope, err := jobcontract.Decode(row.Kind, row.EncodedArgs)
 	if errors.Is(err, jobcontract.ErrCredentialShapedValue) {
 		// A refused job stays readable and cancellable: only the row's own
 		// fields are reported, nothing taken from its arguments.
 		envelope, err = jobcontract.Envelope{}, nil
+		refused = true
 	}
 	if err != nil {
 		return JobSummary{}, err
@@ -461,6 +487,8 @@ func summaryFromRiverRow(row *rivertype.JobRow) (JobSummary, error) {
 		CorrelationID:  envelope.CorrelationID,
 		OrganizationID: envelope.OrganizationID,
 		Domain:         envelope.Domain,
+
+		ArgumentsRefused: refused,
 	}, nil
 }
 

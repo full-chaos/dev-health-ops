@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -47,7 +48,8 @@ func newForecastID() string {
 // separately written copies would be free to drift while both still looked
 // right.
 func capacityScopeFilters(orgID string, teamIDs []string, workScopeID *string) ([]string, []clickhouse.Binding) {
-	conditions := []string{"org_id = {org_id:String}"}
+	// Each item once in the organization (CHAOS-8498 sums a team set, CHAOS-8863 views): legacy rows and the org view.
+	conditions := []string{"org_id = {org_id:String}", rowview.OrgPredicate("work_item_metrics_daily", "")}
 	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
 	// Falsy checks, matching capacity_queries.py: an empty string is "unscoped",
 	// not "scoped to the empty id".

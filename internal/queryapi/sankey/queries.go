@@ -14,6 +14,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -221,9 +222,10 @@ func fetchExpenseCounts(ctx context.Context, client QueryClient, startDay, endDa
         FROM work_item_metrics_daily FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND org_id = {org_id:String}
+          AND %s
             %s
         %s
-    `, scopeFilterSQL, settingsMaxExecutionTime())
+    `, rowview.OrgPredicate("work_item_metrics_daily", ""), scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},

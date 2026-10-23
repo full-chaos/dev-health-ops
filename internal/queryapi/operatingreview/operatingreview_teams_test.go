@@ -166,7 +166,7 @@ func TestResolveInput_SeveralTeamsBindTheSelectionOnTheTeamReadsOnly(t *testing.
 		}
 		// Each team's rows stay apart inside the read, as in the all-teams mode.
 		if groupBy, grouped := map[string]string{
-			"work_items":      "GROUP BY day, provider, work_scope_id, team_id",
+			"work_items":      "GROUP BY day, provider, work_scope_id, row_view, team_id",
 			"state_durations": "GROUP BY day, provider, work_scope_id, status, team_id",
 		}[table]; grouped && !strings.Contains(statement, groupBy) {
 			t.Errorf("call %d (%s): the inner read does not group by team (%q)", call, table, groupBy)

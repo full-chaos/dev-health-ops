@@ -196,6 +196,7 @@ internal/storage/postgres/authschema	test	contracts
 internal/storage/river	test	contracts
 internal/syncdispatchcontract	test	contracts
 internal/syncroute	test	contracts
+internal/testsupport/authrows	test	ci
 internal/testsupport/ratchet	code	ci
 internal/testsupport/ratchet/cmd/ratchets	test	ci
 internal/testsupport/venuechanged	test	.github

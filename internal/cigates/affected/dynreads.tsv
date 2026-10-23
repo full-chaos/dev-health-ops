@@ -535,6 +535,7 @@ internal/teamattribution	is_primary_census_test.go
 internal/teamcreated	census_test.go
 internal/teamprovider	census_test.go
 internal/teamresolve	golden_test.go
+internal/testsupport/authrows	golden_test.go
 internal/testsupport/chschema	contract_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go

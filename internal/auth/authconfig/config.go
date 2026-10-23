@@ -89,6 +89,9 @@ const (
 	// padding): the HMAC key of the lockout identifier (local.Config). Set,
 	// with the session secrets, it mounts the login route. Secret.
 	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
+	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
+	// bearer-only social link and unlink routes; it needs the session secrets.
+	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
 	// EnvTrustedProxies lists the proxies whose X-Forwarded-For names the
 	// client (internal/auth/clientaddr).
 	EnvTrustedProxies = clientaddr.Env
@@ -211,6 +214,8 @@ type SessionTokens struct {
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
 	LockoutKey   secrets.Value
+	// SocialLinkRoutes mounts the social link and unlink routes.
+	SocialLinkRoutes bool
 }
 
 // SocialClient is this service's OAuth client at one social provider.
@@ -250,6 +255,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("signing_key_id", c.SigningKeyID),
 		slog.Bool("api_routes_enabled", c.Session.Enabled),
 		slog.Bool("login_route_enabled", c.Session.LoginEnabled),
+		slog.Bool("social_link_routes_enabled", c.Session.SocialLinkRoutes),
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
@@ -427,7 +433,15 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	if err != nil {
 		return SessionTokens{}, err
 	}
+	linkRoutes, err := strictBool(lookup, EnvSocialLinkRoutes)
+	if err != nil {
+		return SessionTokens{}, err
+	}
 	if !hasAccess {
+		if linkRoutes {
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
+				EnvSocialLinkRoutes, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+		}
 		if hasLockout {
 			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
 				EnvLoginLockoutKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
@@ -445,6 +459,7 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		)
 	}
 	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
+	out.SocialLinkRoutes = linkRoutes
 	lockout, _, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
 	if err != nil {
 		return SessionTokens{}, err
@@ -459,6 +474,18 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	}
 	out.LoginEnabled, out.LockoutKey = true, lockout
 	return out, nil
+}
+
+// strictBool reads an unset or blank name as false and accepts only "true"
+// and "false" otherwise: a typo must not silently leave a route unmounted.
+func strictBool(lookup secrets.LookupEnv, name string) (bool, error) {
+	switch strings.TrimSpace(valueOf(lookup, name)) {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be \"true\" or \"false\"", name)
 }
 
 // signingKey resolves the signing-key custody settings.

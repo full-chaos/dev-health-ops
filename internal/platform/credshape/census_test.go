@@ -28,18 +28,23 @@ func repoRoot(t testing.TB) string {
 // not refuse a value and use their own shape sets; each is listed with the
 // reason it is not this detector.
 var redactionDetectors = map[string]string{
-	"internal/platform/logging/text.go":                 "log redaction, own vendor-key set",
-	"internal/platform/errortext/matchers.go":           "error text redaction",
-	"internal/jobs/investment/categorize/errors.go":     "LLM error text redaction",
-	"internal/testsupport/venueoracle/golden_tokens.go": "frozen-oracle golden token check",
-	"internal/pythonparity/errorsanitize.go":            "frozen Python parity port",
+	"internal/platform/logging/text.go":                         "log redaction, own vendor-key set",
+	"internal/platform/errortext/matchers.go":                   "error text redaction",
+	"internal/jobs/investment/categorize/errors.go":             "LLM error text redaction",
+	"internal/testsupport/venueoracle/golden_tokens.go":         "frozen-oracle golden token check",
+	"internal/pythonparity/errorsanitize.go":                    "frozen Python parity port",
+	"internal/testsupport/credentialshapes/credentialshapes.go": "fixtures the text redactors are proven on",
+	"internal/testsupport/sessionscenario/sessionscenario.go":   "session scenario helper, JWT text pattern",
 }
 
 func TestOneCredentialShapeImplementation(t *testing.T) {
 	scanner := defaultScanner(t)
-	needles := []string{"eyJ", "-----BEGIN", "-----BEGIN "}
+	// A provider prefix is a token only at the start of a literal or after a
+	// regexp boundary; "eyJ" and a PEM header are not parts of ordinary words.
+	anywhere := []string{"eyJ", "-----BEGIN"}
+	var prefixes []string
 	for _, shape := range scanner.Shapes() {
-		needles = append(needles, shape.Prefix)
+		prefixes = append(prefixes, shape.Prefix)
 	}
 	root := repoRoot(t)
 	found := map[string]bool{}
@@ -70,8 +75,14 @@ func TestOneCredentialShapeImplementation(t *testing.T) {
 				if err != nil {
 					return true
 				}
-				for _, needle := range needles {
-					if strings.HasPrefix(text, needle) || (len(needle) >= 4 && strings.Contains(text, needle)) {
+				for _, needle := range anywhere {
+					if strings.Contains(text, needle) {
+						found[rel] = true
+					}
+				}
+				for _, prefix := range prefixes {
+					if strings.HasPrefix(text, prefix) || strings.Contains(text, `\b`+prefix) ||
+						strings.Contains(text, "|"+prefix) || strings.Contains(text, "(?:"+prefix) {
 						found[rel] = true
 					}
 				}

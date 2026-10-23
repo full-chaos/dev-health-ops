@@ -211,3 +211,28 @@ func BenchmarkDecodeGuarded(b *testing.B) {
 		}
 	}
 }
+
+func benchmarkTokenWalk(b *testing.B, guarded bool) {
+	scanner, err := credshape.Default()
+	if err != nil {
+		b.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(contractRoot(b), "examples", "sync.provider_unit.v1.json"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var guard *valueGuard
+		if guarded {
+			guard = &valueGuard{scanner: scanner}
+		}
+		if err := validateJSONTokens(data, guard); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkTokenWalkPlain(b *testing.B)   { benchmarkTokenWalk(b, false) }
+func BenchmarkTokenWalkGuarded(b *testing.B) { benchmarkTokenWalk(b, true) }

@@ -722,7 +722,7 @@ func walkSafeFixture(value any) error {
 }
 
 func decodeGeneric(data []byte, destination any) error {
-	if err := validateJSONTokens(data); err != nil {
+	if err := validateJSONTokens(data, nil); err != nil {
 		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))

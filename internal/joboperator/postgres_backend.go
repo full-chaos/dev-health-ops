@@ -439,6 +439,11 @@ func summaryFromRiverRow(row *rivertype.JobRow) (JobSummary, error) {
 		return JobSummary{}, ErrBackendConfiguration
 	}
 	envelope, err := jobcontract.Decode(row.Kind, row.EncodedArgs)
+	if errors.Is(err, jobcontract.ErrCredentialShapedValue) {
+		// A refused job stays readable and cancellable: only the row's own
+		// fields are reported, nothing taken from its arguments.
+		envelope, err = jobcontract.Envelope{}, nil
+	}
 	if err != nil {
 		return JobSummary{}, err
 	}

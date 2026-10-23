@@ -38,8 +38,8 @@ done
 # ops.authService.keySet.keys, the deploy umbrella chart's alias) in the FIRST
 # YAML document of the values file carries both secretName: NAME and
 # secretKey: KEY as direct fields of a direct item of keys.
-# Block scalars need no special case: only items at the direct indent of keys
-# count, and a block scalar's lines are always indented deeper than that.
+# A line whose inline value is not empty, a comment or an anchor hides every
+# deeper line after it (block scalars, multi-line scalars, flow collections).
 # Limits, all failing closed (a false refusal, never a false accept): a quoted
 # scalar left open on a line under that path, a flow-style keys value, CRLF line
 # endings, a `---` after content ends the document being read.
@@ -49,17 +49,30 @@ listed() {
     function path(   i, p) { p = ""; for (i = 1; i <= depth; i++) p = p "/" sk[i]; return p }
     function is_keys(   p) { p = path(); return (p == "/authService/keySet/keys" || p == "/ops/authService/keySet/keys") }
     function pop_to(limit) { while (depth > 0 && si[depth] >= limit) depth-- }
-    function open_quote(v,   q, n, i, c) {
-      q = substr(v, 1, 1)
-      if (q != "\"" && q != "\x27") { return "" }
+    function scan_from(v, i0, q,   n, i, c) {
       n = length(v)
-      for (i = 2; i <= n; i++) {
+      for (i = i0; i <= n; i++) {
         c = substr(v, i, 1)
         if (q == "\"" && c == "\\") { i++; continue }
         if (q == "\x27" && c == "\x27") { if (substr(v, i + 1, 1) == "\x27") { i++; continue } ; return "" }
         if (q == "\"" && c == "\"") { return "" }
       }
       return q
+    }
+    function open_quote(v,   q) {
+      q = substr(v, 1, 1)
+      if (q != "\"" && q != "\x27") { return "" }
+      return scan_from(v, 2, q)
+    }
+    function inline_value(line,   r, v) {
+      r = line
+      if (sub(/^ *- */, "", r)) { if (r !~ /^[^ #\x27"][^:]*:( |$)/) { v = r } else { sub(/^[^:]*:/, "", r); v = r } }
+      else if (r ~ /^ *[^ #][^:]*:( |$)/) { sub(/^[^:]*:/, "", r); v = r }
+      else { return "" }
+      sub(/(^|[[:space:]])#.*$/, "", v)
+      gsub(/&[^ ]+/, "", v)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      return v
     }
     function value_of(line,   v) {
       v = line
@@ -74,9 +87,15 @@ listed() {
       content = 1
       line = $0
       ind = match(line, /[^ ]/) - 1
-      if (qopen != "") { if (index(line, qopen) > 0) { qopen = "" } ; next }
+      if (qopen != "") { qopen = scan_from(line, 1, qopen); next }
+      if (skipind >= 0 && ind > skipind) { next }
+      skipind = -1
       isdash = (line ~ /^ *- /)
       eff = isdash ? ind + 2 : ind
+      if (inline_value(line) != "") {
+        skipind = ind
+        if (isdash && line ~ /^ *- +[^ #\x27"][^:]*:( |$)/) { skipind = eff }
+      }
       v = value_of(line)
       oq = open_quote(v)
       if (oq != "") { qopen = oq; if (is_keys()) { bad = 1 } }
@@ -108,7 +127,7 @@ listed() {
         if (name == want_name && key == want_key) { found = 1 }
       }
     }
-    BEGIN { qopen = ""; kd = -1 }
+    BEGIN { qopen = ""; kd = -1; skipind = -1 }
     END { exit (bad || !found) ? 1 : 0 }
   ' "$values"
 }

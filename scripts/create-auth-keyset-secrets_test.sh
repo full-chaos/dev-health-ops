@@ -345,6 +345,37 @@ refuse_in "$t/doc2.yaml" --key key-d2:d.pem
 printf 'authService:\r\n  keySet:\r\n    keys:\r\n      - secretName: key-a\r\n        secretKey: signing-key.pem\r\n' >"$t/crlf.yaml"
 refuse_in "$t/crlf.yaml" --key key-a:signing-key.pem
 
+# An inline value hides every deeper line: block scalars and flow values holding fake lists.
+for ind in '|' '>-' '!!str |' '&a |' '|2'; do
+  printf 'authService:\n  keySet:\n    keys: %s\n      %s\n        %s\n' "$ind" "- secretName: key-evil" "secretKey: e.pem" >"$t/blk.yaml"
+  refuse_in "$t/blk.yaml" --key key-evil:e.pem
+done
+printf 'authService:\n  keySet: |\n    keys:\n      - secretName: key-evil\n        secretKey: e.pem\n' >"$t/blk.yaml"
+refuse_in "$t/blk.yaml" --key key-evil:e.pem
+printf 'authService: |\n  keySet:\n    keys:\n      - secretName: key-evil\n        secretKey: e.pem\n' >"$t/blk.yaml"
+refuse_in "$t/blk.yaml" --key key-evil:e.pem
+printf 'ops: >\n  authService:\n    keySet:\n      keys:\n        - secretName: key-evil\n          secretKey: e.pem\n' >"$t/blk.yaml"
+refuse_in "$t/blk.yaml" --key key-evil:e.pem
+printf 'authService:\n  keySet:\n    keys:\n      - secretName: key-a\n        secretKey: signing-key.pem\n      - |\n        secretName: key-evil\n        secretKey: e.pem\n' >"$t/blk.yaml"
+refuse_in "$t/blk.yaml" --key key-evil:e.pem
+# Anchors and comments on a parent are not inline values: the real file still reads.
+printf 'authService:\n  keySet: &ks # c\n    keys: # c\n      - secretName: key-an\n        secretKey: a.pem\n' >"$t/anc.yaml"
+: >"$FAKE_ARGV"
+"$script" --context ctx --namespace ns --values "$t/anc.yaml" --key key-an:a.pem >"$t/out" 2>"$t/err" || { cat "$t/err"; fail "anchored parents refused"; }
+
+# Quote continuation lines use the same escape rules.
+printf 'authService:\n  keySet:\n    keys:\n      - secretName: key-a\n        secretKey: signing-key.pem\n        note: "x\n          \\"\n      - secretName: key-p2\n        secretKey: p.pem\n          z"\n' >"$t/q2.yaml"
+refuse_in "$t/q2.yaml" --key key-p2:p.pem
+refuse_in "$t/q2.yaml" --key key-a:signing-key.pem
+printf "authService:\n  keySet:\n    keys:\n      - secretName: key-a\n        secretKey: signing-key.pem\n        note: 'x\n          it''s\n      - secretName: key-p3\n        secretKey: p.pem\n          z'\n" >"$t/q3.yaml"
+refuse_in "$t/q3.yaml" --key key-p3:p.pem
+refuse_in "$t/q3.yaml" --key key-a:signing-key.pem
+
+printf 'authService:\n  description: "x\n    \\"\n  keySet:\n    keys:\n      - secretName: key-p4\n        secretKey: p.pem\n    z"\n' >"$t/q4.yaml"
+refuse_in "$t/q4.yaml" --key key-p4:p.pem
+printf "authService:\n  description: 'x\n    it''s\n  keySet:\n    keys:\n      - secretName: key-p5\n        secretKey: p.pem\n    z'\n" >"$t/q5.yaml"
+refuse_in "$t/q5.yaml" --key key-p5:p.pem
+
 # A failing second mktemp removes the first work directory.
 mkdir -p "$t/mk"
 cat >"$t/mk/mktemp" <<'FAKE'

@@ -130,8 +130,11 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	python := golden.Python(t, venue, requests)
 	inspectDiagnostics := inspectBackfillDiagnostics(t)
 	derived := newDerivedTargets(`[]`, ids.cfgPlanner, ids.cfgNoSources, ids.cfgCrossOrg)
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/sync-admin-reads.go-pin.json", SHA256: syncAdminReadsPinSHA256, Ruling: syncAdminReadsRuling})
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
+		Retire: retiredSyncAdminReadsRequest,
+		Pin:    pin,
 		// lag_seconds is now minus the watermark at request time, and the
 		// two planes answer minutes apart: the digits are blanked on both.
 		// catching_up and ticks_behind are compared (every seeded
@@ -166,7 +169,25 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 	derived.finish(t)
+	pin.Finish(t)
 	golden.Finish(t)
+}
+
+// syncAdminReadsRuling retired the Python reference of the list requests that
+// carry an offset past int64: Python answered an unhandled 500 (or, with no
+// scheduled job, an empty 200 before it bound the page), the Go api answers
+// the pinned 422 range refusal of every other bad offset, before any lookup.
+const syncAdminReadsRuling = "CHAOS-10656 (fcs lead decision 2026-10-22): an offset past int64 answers the pinned 422 range refusal, not the old Python 500"
+
+// syncAdminReadsPinSHA256 is the digest of testdata/sync-admin-reads.go-pin.json.
+const syncAdminReadsPinSHA256 = "55f6b3c9d156e62972f92596a32a123e41f3ea3f86b7ebbaa9e4674669d05331"
+
+func retiredSyncAdminReadsRequest(request venueoracle.Request) bool {
+	switch request.Name {
+	case "jobs planner ?offset=99999999999999999999", "jobs no scheduled job huge offset", "backfill jobs ?offset=99999999999999999999":
+		return true
+	}
+	return false
 }
 
 func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Request {

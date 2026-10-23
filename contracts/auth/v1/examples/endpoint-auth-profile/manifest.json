@@ -40,6 +40,10 @@
     {
       "file": "valid-multi-class-envelope-vs-user-token-by-typ.json",
       "why": "The envelope and the user access token share Bearer and alg EdDSA; only the JWS typ separates them, so the selector is jwt_header_typ/jwt (the envelope's). Each class pins its own typ."
+    },
+    {
+      "file": "valid-multi-class-content-type-selector.json",
+      "why": "Two classes accepted and the credential of one is in the body: the device_code grant (application/json) against a bearer ACR client credential. Only the device-code class declares a content_type marker, so the selector content_type/application/json picks exactly one. (The wire profile cannot list acr_workload_identity_exchange; the gate unit tests cover the device-code against token-exchange pair on the real registry.)"
     }
   ],
   "reject": [
@@ -348,6 +352,18 @@
       "expect_instance_location": "/tokens/ops_access_token_hs256/algorithm",
       "expect_keyword": "const",
       "why": "The multi-class shape of the HS256 pin rule: the HS256 class's entry in tokens names algorithm HS256, so the legacy token is never pinned to another verifier."
+    },
+    {
+      "file": "invalid-content-type-name-not-a-media-type.json",
+      "expect_instance_location": "/class_disambiguator/name",
+      "expect_keyword": "pattern",
+      "why": "A content_type selector names a lowercase type/subtype; `json` is not a media type."
+    },
+    {
+      "file": "invalid-slash-name-on-a-header-selector.json",
+      "expect_instance_location": "/class_disambiguator/name",
+      "expect_keyword": "not",
+      "why": "`/` is allowed only in a content_type name; a header, scheme, prefix or JWT field name never carries one."
     }
   ],
   "reject_by_client": [
@@ -366,6 +382,10 @@
     {
       "file": "invalid-user-access-token-pins-hs256.json",
       "why": "The same join for alg: the route accepts user_access_token but pins algorithm HS256, not the class marker EdDSA."
+    },
+    {
+      "file": "invalid-content-type-selector-no-accepted-class-owns-it.json",
+      "why": "Schema-valid, refused by the profile gate: the route accepts acr_device_flow_code and acr_client_credential and selects by application/x-www-form-urlencoded, a media type neither declares."
     }
   ]
 }

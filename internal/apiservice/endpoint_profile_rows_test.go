@@ -323,18 +323,16 @@ func TestEveryAPIListenerRowNamesTheScopeMiddlewaresAsReachableValidators(t *tes
 			}
 			continue
 		}
-		if signatureOnlyRoutes[strings.Replace(key, "@api", "", 1)] {
+		if wantClass, exempt := signatureOnlyRoutes[strings.Replace(key, "@api", "", 1)]; exempt {
 			if len(reachable) != 0 {
 				t.Errorf("%s skips the scope middlewares but lists %d reachable validators", key, len(reachable))
 			}
 			classes, _ := row["accepted_credential_classes"].([]any)
-			if len(classes) == 0 {
-				t.Errorf("%s: a signature-only route accepts no credential class", key)
+			if len(classes) != 1 || classes[0] != wantClass {
+				t.Errorf("%s: signature-only route accepts %v, want exactly [%s]", key, classes, wantClass)
 			}
-			for _, class := range classes {
-				if name, _ := class.(string); !strings.HasSuffix(name, "_webhook_signature") {
-					t.Errorf("%s: signature-only route accepts credential class %q", key, name)
-				}
+			if row["classification"] != "protected" {
+				t.Errorf("%s: signature-only route is not classified protected", key)
 			}
 			seenExempt[key] = true
 			continue

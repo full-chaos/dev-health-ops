@@ -81,13 +81,13 @@ The check covers **two** shas, for the two halves of the page:
 | **Last verified** (this line) | a human's, about the hand-curated citation and CLI-verb rows | 40-hex, ancestor of `HEAD` |
 | `ops_sha` in [`last-render.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/migration-status/v1/last-render.json) | the tool's, about the generated cells | same two, and it is written by `-render` itself, so it cannot be typed by hand |
 
-`ops_sha` is the **merge-base with main** at render time -- the last main commit the render observed -- not
-the commit `-render` ran on. That distinction is load-bearing: a squash merge replaces a branch's commits
+`ops_sha` is a **merge-base with main** the render observed -- not the commit `-render` ran on. `-render` keeps
+the committed value while it is still an ancestor of `HEAD` and writes the current merge-base only when it is not,
+so two PRs that re-render on different main commits write the same bytes and do not conflict on this line. That distinction is load-bearing: a squash merge replaces a branch's commits
 with one new commit, so a branch tip recorded here becomes unreachable from main and strands the ancestry
 check on main permanently. #2389 shipped exactly that mistake and reddened `go-quality` for every PR until
 it was fixed. The merge-base survives the squash and still bounds staleness, because a render from a
-long-stale branch carries a correspondingly old merge-base. The commit `-render` actually ran on is recorded
-beside it as `render_commit`, for the audit trail, and is deliberately never ancestry-checked.
+long-stale branch carries a correspondingly old merge-base.
 
 Re-verifying the generated half is by hand, needs a live Postgres and a fleet file, and is optional:
 
@@ -211,7 +211,7 @@ candidate_build)` and never carries it forward across any of the four changing. 
 says nothing about whether a new binary is the one that was measured: re-run `dho goapi prove` against the deployed build.
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-10-20T20:45:19Z against main merge-base `28adf8cd326b3f7bf99adc3e6568ac7ada46c006`; SDL digest pin `sha256:70c727ac76a2203a8f5a48378f9d9911bbd1275d52db2a6f625ceed2ee72c821`; fleet read 2026-10-15T21:07:21Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1._
+_Rendered against main merge-base `28adf8cd326b3f7bf99adc3e6568ac7ada46c006`; SDL digest pin `sha256:70c727ac76a2203a8f5a48378f9d9911bbd1275d52db2a6f625ceed2ee72c821`; fleet read 2026-10-15T21:07:21Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1._
 
 _query-api serves all **64** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._
 <!-- END GENERATED GO API OPERATIONS -->

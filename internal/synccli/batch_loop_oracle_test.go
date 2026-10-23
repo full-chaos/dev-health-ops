@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -205,7 +206,8 @@ func TestBatchLoopMatchesFrozenPython(t *testing.T) {
 				failing[r.Name] = r.Fail
 			}
 		}
-		h.hold = func(providersync.InProcessRun) { time.Sleep(50 * time.Millisecond) }
+		var gate *peakGate
+		h.hold, gate = loopHold(h, want.Shape.Peak, loopGateLimit)
 		h.fail = func(run providersync.InProcessRun) error {
 			if failing[byID[run.SourceExternalID]] != "" {
 				return fmt.Errorf("scripted failure of %s", byID[run.SourceExternalID])
@@ -213,6 +215,10 @@ func TestBatchLoopMatchesFrozenPython(t *testing.T) {
 			return nil
 		}
 		code, _, stderr := runVerb(t, "deployments", h.executor(), args, inlineEnv)
+		if gate.timedOut() {
+			mismatches++
+			t.Errorf("%s: the peak gate timed out after %s: observed peak %d, expected (frozen) peak %d", label, loopGateLimit, h.peak, want.Shape.Peak)
+		}
 
 		var got [][2]string
 		for _, event := range h.events {
@@ -273,6 +279,51 @@ func TestBatchLoopMatchesFrozenPython(t *testing.T) {
 	}
 	golden.SkipDiff(t)
 	golden.Finish(t)
+}
+
+// loopGateLimit bounds how long a run waits for the expected peak: correct code reaches it as soon as the
+// goroutines are scheduled, so only a loop that runs fewer at once than the frozen Python waits this long.
+const loopGateLimit = 10 * time.Second
+
+const loopOverlap = 50 * time.Millisecond
+
+type peakGate struct {
+	expired bool // guarded by the harness mu
+	h       *batchHarness
+}
+
+func (g *peakGate) timedOut() bool {
+	g.h.mu.Lock()
+	defer g.h.mu.Unlock()
+	return g.expired
+}
+
+// loopHold is the hold of every run of a batch-loop case: a run waits until want runs have been in flight
+// at once, so the observed peak does not depend on how soon the scheduler starts each goroutine (a fixed
+// sleep lost a start under -race load). A run that waits past limit marks the gate expired and releases
+// every waiting run; the caller fails the case on it. After the gate a run still holds loopOverlap, so a
+// loop that runs MORE at once than the frozen Python shows a higher peak, as with the former fixed hold.
+func loopHold(h *batchHarness, want int, limit time.Duration) (func(providersync.InProcessRun), *peakGate) {
+	gate := &peakGate{h: h}
+	h.started = sync.NewCond(&h.mu)
+	return func(providersync.InProcessRun) {
+		defer time.Sleep(loopOverlap)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.peak >= want || gate.expired {
+			return
+		}
+		timer := time.AfterFunc(limit, func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			gate.expired = true
+			h.started.Broadcast()
+		})
+		defer timer.Stop()
+		for h.peak < want && !gate.expired {
+			h.started.Wait()
+		}
+	}, gate
 }
 
 func failuresOf(c loopCase) []string {

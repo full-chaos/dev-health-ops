@@ -42,8 +42,10 @@ internal/atlassianteams	vendored_redirect_test.go	unexpressed
 internal/auth/contracts	endpoint_profile_source_commit_test.go	unexpressed
 internal/auth/identity/oidc	environment_proxy_test.go	unexpressed
 internal/cigates	governance.go	unexpressed
+internal/cigates/affected	always_select_test.go	unexpressed
 internal/cigates/affected	ci_script_helpers_test.go	unexpressed
 internal/cigates/affected	plan.go	unexpressed
+internal/cigates/affected	reach.go	unexpressed
 internal/cigates/affected	scan.go	unexpressed
 internal/cigates/affectedmatrix	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedmodule	ci_script_helpers_test.go	unexpressed
@@ -111,10 +113,12 @@ internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_test.go	unexpressed
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed
 internal/cigates/workflows	ci_script_helpers_test.go	unexpressed
+internal/cigates/workflows	go_workers_compose_proof_test.go	unexpressed
 internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed
 internal/cigates/workflows	strip_hook_test.go	unexpressed
 internal/cigates/workflows	workflows_builder_images_test.go	unexpressed
+internal/cigates/workflows	workflows_go_integration_pr_scope_test.go	unexpressed
 internal/cigates/workflows	workflows_path_filters_test.go	unexpressed
 internal/cigates/workflows	workflows_wire_parity_test.go	unexpressed
 internal/fixturescli	provider_worlds_producer_integration_test.go	unexpressed

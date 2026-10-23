@@ -62,6 +62,16 @@ func TestRedProofs(t *testing.T) {
 		{"two-hop path variable", "func f(r *http.Request, l *slog.Logger) { p := r.URL.Path; q := p; l.Error(\"x\", \"path\", q) }", "R6"},
 		{"path variable used in a closure", "func f(r *http.Request, l *slog.Logger) { p := r.URL.Path; defer func() { l.Info(\"done\", \"path\", p) }() }", "R6"},
 		{"path variable derived in a closure", "func f(r *http.Request, l *slog.Logger) { p := r.URL.Path; func() { q := p + \"/x\"; l.Info(\"done\", \"path\", q) }() }", "R6"},
+		{"function-variable alias of a constructor", "var str = attribute.String\nfunc f(v string) { _ = str(\"api_token\", v) }", "R1"},
+		{"attribute.Key form", "func f(v string) { _ = attribute.Key(\"api_token\").String(v) }", "R1"},
+		{"concatenated constant key", "const k = \"api_\" + \"token\"\nfunc f(v string) { _ = attribute.String(k, v) }", "R1"},
+		{"function-local constant key", "func f(v string) { const k = \"api_token\"; _ = attribute.String(k, v) }", "R1"},
+		{"camel-case identity label", "func f(c metric.Int64Counter, o string) { c.Add(context.Background(), 1, metric.WithAttributes(attribute.String(\"orgId\", o))) }", "R2"},
+		{"attribute.Key metric label", "func f(c metric.Int64Counter, o string) { c.Add(context.Background(), 1, metric.WithAttributes(attribute.Key(\"org_id\").String(o))) }", "R2"},
+		{"raw path through a same-package helper", "func p(r *http.Request) string { return r.URL.Path }\nfunc f(r *http.Request, l *slog.Logger) { l.Error(\"x\", \"path\", p(r)) }", "R6"},
+		{"raw path through a helper of a helper", "func p(r *http.Request) string { return r.URL.Path }\nfunc q(r *http.Request) string { x := p(r); return x + \"/\" }\nfunc f(r *http.Request, l *slog.Logger) { l.Error(\"x\", \"path\", q(r)) }", "R6"},
+		{"raw URL string", "func f(r *http.Request, l *slog.Logger) { l.Error(\"x\", \"u\", r.URL.String()) }", "R6"},
+		{"raw path bound with With", "func f(r *http.Request, l *slog.Logger) { l.With(\"path\", r.URL.Path).Info(\"x\") }", "R6"},
 		{"planted bare digest as attribute", "func f(v []byte) { _ = attribute.String(\"who\", string(sha256.Sum256(v)[:])) }", "R7"},
 	}
 	for _, tc := range cases {
@@ -90,6 +100,38 @@ func TestPathTaintDoesNotFollowOrdinaryCalls(t *testing.T) {
 	body := "func f(r *http.Request, l *slog.Logger, do func(string) (int, error)) {\n\tp := r.URL.Path\n\tstatus, _ := do(p)\n\tl.Info(\"x\", \"status\", status)\n}\n"
 	if got := scanSource(t, header+body); len(got) != 0 {
 		t.Fatalf("findings: %v", got)
+	}
+}
+
+func TestCrossFileConstantKeyIsResolved(t *testing.T) {
+	got := scanFiles(t, map[string]string{
+		"a.go": "package sample\n\nconst Key = \"api_\" + \"token\"\n",
+		"b.go": "package sample\n\nimport \"go.opentelemetry.io/otel/attribute\"\n\nfunc f(v string) { _ = attribute.String(Key, v) }\n",
+	})
+	if got != "R1" {
+		t.Fatalf("rules = %q, want R1", got)
+	}
+}
+
+func TestVersionedAliasedRiverImportIsResolved(t *testing.T) {
+	source := "package sample\n\nimport riverv2 \"github.com/riverqueue/river/v2\"\n\nfunc f() { _, _ = riverv2.NewClient(nil, &riverv2.Config{}) }\n"
+	if got := rules(scanSource(t, source)); got != "R5" {
+		t.Fatalf("rules = %q, want R5", got)
+	}
+}
+
+func TestBoundedHelperIsNotARawPath(t *testing.T) {
+	body := "func class(r *http.Request) string { if r.URL.Path == \"/q\" { return \"query\" }; return \"other\" }\nfunc f(r *http.Request, l *slog.Logger) { l.Info(\"x\", \"path_class\", class(r)) }\n"
+	if got := scanSource(t, header+body); len(got) != 0 {
+		t.Fatalf("findings: %v", got)
+	}
+}
+
+func TestFindingsCarryTheirFunctionForSiteKeyedPins(t *testing.T) {
+	body := "func first(r *http.Request, l *slog.Logger) { l.Info(\"x\", \"path\", r.URL.Path) }\nfunc second(r *http.Request, l *slog.Logger) { l.Info(\"x\", \"path\", r.URL.Path) }\n"
+	got := scanSource(t, header+body)
+	if len(got) != 2 || got[0].Func != "first" || got[1].Func != "second" {
+		t.Fatalf("findings do not name their functions: %v", got)
 	}
 }
 
@@ -165,4 +207,23 @@ func TestEmptyScanFailsClosed(t *testing.T) {
 	if _, err := emitscan.Scan(root, []string{"internal"}); err == nil {
 		t.Fatal("a scan that read no file did not fail")
 	}
+}
+
+func scanFiles(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "sample")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := emitscan.Scan(root, []string{"internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rules(got)
 }

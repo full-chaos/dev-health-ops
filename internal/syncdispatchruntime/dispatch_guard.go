@@ -99,12 +99,6 @@ type guardDecision struct {
 	authorizedUnitIDs map[string]bool
 }
 
-// defaultSyncRunMaxUnits mirrors guard.py's _resolve_total_unit_cap default
-// (SYNC_RUN_MAX_UNITS, fallback 1000).
-func defaultSyncRunMaxUnits() int {
-	return envPositiveInt("SYNC_RUN_MAX_UNITS", 1000)
-}
-
 // syncUnitConcurrencyPerBucket mirrors guard.py's
 // SYNC_UNIT_CONCURRENCY_PER_BUCKET (fallback 8).
 func syncUnitConcurrencyPerBucket() int {
@@ -345,16 +339,11 @@ func authorizeRun(ctx context.Context, tx pgx.Tx, logger *synclog.Logger, orgID,
 	// accounting to buckets that were never real candidates.
 	allBuckets := sortedDispatchBuckets(candidatesByBucket, deferredBuckets)
 
-	// Python: any resolution failure (missing org, missing tier_limits
-	// table, a malformed override) falls back to the env default
-	// unconditionally (CHAOS-2580) -- ResolveMaxSyncUnitsCap's own doc
-	// warns callers wanting that parity must substitute the default
-	// themselves; this is that substitution.
-	totalCap, err := scheduledsync.ResolveMaxSyncUnitsCap(ctx, tx, orgID, defaultSyncRunMaxUnits())
-	if err != nil {
-		totalCap = defaultSyncRunMaxUnits()
-	}
-	if len(units) > totalCap {
+	// The total cap is opt-in (SYNC_RUN_MAX_UNITS; unset or 0 = none) and is the
+	// same value the materializer reads; the org's tier limit no longer sets it
+	// (CHAOS-10955).
+	totalCap := scheduledsync.UnitCapFromEnv()
+	if totalCap > 0 && len(units) > totalCap {
 		capped := make([]string, 0, len(units)-totalCap)
 		for _, unit := range units[totalCap:] {
 			capped = append(capped, unit.id)

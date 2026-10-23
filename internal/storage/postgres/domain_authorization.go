@@ -608,9 +608,10 @@ type RolePosture struct {
 //     only writer.
 //   - tier_limits joins the dual-grant set, SELECT-only, driven by CHAOS-4175
 //     family 3 (native dispatch_sync_run): DispatchGuard's total-cap check
-//     (internal/syncdispatchruntime/dispatch_guard.go, via
-//     scheduledsync.ResolveMaxSyncUnitsCap -> loadPlanLimits) runs on
-//     pools.Domain and reads it for limit-override fallback keys, alongside
+//     (internal/syncdispatchruntime/dispatch_guard.go) ran on
+//     pools.Domain via loadPlanLimits and read it for limit-override fallback
+//     keys (CHAOS-10955: that check now reads the opt-in SYNC_RUN_MAX_UNITS
+//     env value only; the grant stays as it was), alongside
 //     organizations/org_licenses (both already domain-granted). This is NOT a
 //     move out of coordinatorPosture: loadPlanLimits is the SAME function the
 //     coordinator-side scheduler materializer already calls in its own

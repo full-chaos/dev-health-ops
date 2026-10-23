@@ -128,7 +128,7 @@ func NewNativeMaterializer(domainPool *pgxpool.Pool) (*NativeMaterializer, error
 		return nil, ErrInvalidMaterializer
 	}
 	overlap := boundedEnvInt("SYNC_WATERMARK_OVERLAP", 0, 0)
-	cap := boundedEnvInt("SYNC_RUN_MAX_UNITS", 1000, 1)
+	cap := UnitCapFromEnv()
 	refreshSeconds := boundedEnvInt("SYNC_EXECUTED_PROOF_REFRESH_SECONDS", 300, 30)
 	// boundedEnvInt only lower-bounds. Without an upper bound here too, a
 	// value shaped like a typo (or a deliberately huge one) multiplied by
@@ -512,7 +512,7 @@ func (materializer *NativeMaterializer) Materialize(
 	if err := errIfOnlySkippedDatasetsHadWork(loaded.featureOffSkippedDatasets, len(units)); err != nil {
 		return PlanResult{}, err
 	}
-	if len(units) > loaded.totalUnitCap {
+	if loaded.totalUnitCap > 0 && len(units) > loaded.totalUnitCap {
 		return PlanResult{}, fmt.Errorf("%w: plan has %d units over cap %d", ErrInvalidPlan, len(units), loaded.totalUnitCap)
 	}
 	if (len(units) > 0 || zeroUnitPlanNeedsCredentialStamp(loaded.provider)) && loaded.terminalReason == "" {
@@ -1159,8 +1159,7 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 		return &value, true
 	}
 	backfill, backfillSet := resolveOverride("backfill_days")
-	unitCap, unitCapSet := resolveOverride("max_sync_units")
-	rows, err := tx.Query(ctx, `SELECT limit_key,limit_value FROM public.tier_limits WHERE tier=$1 AND limit_key IN ('backfill_days','max_sync_units')`, resolvedTier)
+	rows, err := tx.Query(ctx, `SELECT limit_key,limit_value FROM public.tier_limits WHERE tier=$1 AND limit_key='backfill_days'`, resolvedTier)
 	if err != nil {
 		return nil, 0, fmt.Errorf("load scheduled sync tier limits: %w", err)
 	}
@@ -1173,9 +1172,6 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 		}
 		if key == "backfill_days" && !backfillSet {
 			backfill, backfillSet = parseOptionalPositiveInt(value)
-		}
-		if key == "max_sync_units" && !unitCapSet {
-			unitCap, unitCapSet = parseOptionalPositiveInt(value)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1191,34 +1187,16 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 			backfill = &value
 		}
 	}
-	totalCap := defaultUnitCap
-	if unitCap != nil {
-		totalCap = *unitCap
-	}
-	return backfill, totalCap, nil
+	return backfill, defaultUnitCap, nil
 }
 
-// ResolveMaxSyncUnitsCap resolves the org's tier-based max_sync_units cap --
-// the same organizations/org_licenses/tier_limits resolution loadPlanLimits
-// already performs for scheduling, shared (not duplicated) for
-// DispatchGuard's total-cap check (CHAOS-4175 family 3, port of
-// guard.py's DispatchGuard.authorize_run / TierLimitService.get_limit).
-//
-// Callers porting Python's _resolve_total_unit_cap must NOT propagate a
-// non-nil error as a hard failure: Python's version catches every exception
-// (missing org, missing tier_limits table, a malformed override) and falls
-// back to defaultCap unconditionally, by design (CHAOS-2580's savepoint
-// discussion). loadPlanLimits, in contrast, treats a genuinely missing
-// organizations row as ErrOccurrenceIneligible -- a meaningful signal for
-// the SCHEDULER's own caller, but not one DispatchGuard's fallback-on-any-
-// error semantics should adopt. A caller wanting Python parity should catch
-// any error from this function and substitute defaultCap itself.
-func ResolveMaxSyncUnitsCap(ctx context.Context, tx pgx.Tx, orgID string, defaultCap int) (int, error) {
-	_, totalCap, err := loadPlanLimits(ctx, tx, orgID, defaultCap)
-	if err != nil {
-		return 0, err
-	}
-	return totalCap, nil
+// UnitCapFromEnv is the total unit cap of one planned sync run, read by the
+// materializer and by DispatchGuard alike: SYNC_RUN_MAX_UNITS, opt-in. Unset,
+// empty, zero, negative or unparseable means NO cap (0); a positive value is
+// the cap. The org's tier limit and limits_override no longer set it
+// (CHAOS-10955: the tier default quarantined valid backfills).
+func UnitCapFromEnv() int {
+	return boundedEnvInt("SYNC_RUN_MAX_UNITS", 0, 0)
 }
 
 func parseOptionalPositiveInt(value *string) (*int, bool) {

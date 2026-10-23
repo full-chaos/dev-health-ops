@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -109,7 +110,7 @@ func TestNewNativeMaterializerPortsPythonEnvironmentBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if materializer.watermarkOverlap != 0 || materializer.defaultUnitCap != 1 {
+	if materializer.watermarkOverlap != 0 || materializer.defaultUnitCap != 0 {
 		t.Fatalf("bounded settings: overlap=%s cap=%d", materializer.watermarkOverlap, materializer.defaultUnitCap)
 	}
 
@@ -119,7 +120,7 @@ func TestNewNativeMaterializerPortsPythonEnvironmentBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if materializer.watermarkOverlap != 0*time.Second || materializer.defaultUnitCap != 1000 {
+	if materializer.watermarkOverlap != 0*time.Second || materializer.defaultUnitCap != 0 {
 		t.Fatalf("fallback settings: overlap=%s cap=%d", materializer.watermarkOverlap, materializer.defaultUnitCap)
 	}
 }
@@ -265,21 +266,21 @@ func TestNewNativeMaterializerMirrorsPythonIntWhitespaceGrammar(t *testing.T) {
 			wantOverlap: 3600 * time.Second, wantCap: 250,
 		},
 		// Whitespace stripping must not defeat the bounds: Python clamps a
-		// padded negative to 0 (overlap) and to 1 (unit cap), exactly as it
+		// padded negative to 0 (overlap) and the opt-in unit cap reads it as 0 (off), exactly as it
 		// clamps an unpadded one.
 		{
 			name: "padded negative still clamps to the bound", overlapRaw: " -10 ", capRaw: " -10 ",
-			wantOverlap: 0, wantCap: 1,
+			wantOverlap: 0, wantCap: 0,
 		},
 		// Interior whitespace is NOT stripped by int() and must stay a
 		// fallback on both sides.
 		{
 			name: "interior space is not an integer", overlapRaw: "60 48", capRaw: "2 5",
-			wantOverlap: 0, wantCap: 1000,
+			wantOverlap: 0, wantCap: 0,
 		},
 		{
 			name: "whitespace only is not an integer", overlapRaw: "   ", capRaw: "   ",
-			wantOverlap: 0, wantCap: 1000,
+			wantOverlap: 0, wantCap: 0,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -360,7 +361,7 @@ func TestRejectedEnvIntWarnsWithTheRawValue(t *testing.T) {
 		},
 		{
 			name: "non-ASCII digits in the unit cap", setting: "SYNC_RUN_MAX_UNITS",
-			raw: "٣٠", inForce: 1000,
+			raw: "٣٠", inForce: 0,
 			apply: func(t *testing.T) {
 				t.Setenv("SYNC_RUN_MAX_UNITS", "٣٠")
 				if _, err := NewNativeMaterializer(&pgxpool.Pool{}); err != nil {
@@ -482,5 +483,35 @@ func TestDeterministicUnitIDsUseRunAndOrdinal(t *testing.T) {
 	}
 	if first != replay || first == second {
 		t.Fatalf("unit identities are not stable and ordinal-partitioned: first=%s replay=%s second=%s", first, replay, second)
+	}
+}
+
+// TestUnitCapFromEnvIsOptInAndDefaultsOff pins CHAOS-10955: no unit cap unless
+// SYNC_RUN_MAX_UNITS holds a positive integer.
+func TestUnitCapFromEnvIsOptInAndDefaultsOff(t *testing.T) {
+	for _, test := range []struct {
+		name, raw string
+		set       bool
+		want      int
+	}{
+		{name: "unset", want: 0},
+		{name: "empty", set: true, raw: "", want: 0},
+		{name: "zero", set: true, raw: "0", want: 0},
+		{name: "negative", set: true, raw: "-5", want: 0},
+		{name: "not a number", set: true, raw: "many", want: 0},
+		{name: "positive", set: true, raw: "250", want: 250},
+		{name: "positive padded", set: true, raw: " 250 ", want: 250},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("SYNC_RUN_MAX_UNITS", test.raw)
+			if !test.set {
+				if err := os.Unsetenv("SYNC_RUN_MAX_UNITS"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := UnitCapFromEnv(); got != test.want {
+				t.Fatalf("UnitCapFromEnv() = %d, want %d", got, test.want)
+			}
+		})
 	}
 }

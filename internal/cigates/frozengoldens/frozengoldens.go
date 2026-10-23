@@ -36,14 +36,15 @@ var manifestFile []byte
 type Manifest struct {
 	Files map[string]string   // path -> sha256 of the content
 	Pins  map[string][]string // test source path -> sorted sha256 literals it holds
+	Shape map[string]string   // test source path -> Shape of that source (golden-open, finish and skip counts)
 }
 
 // Load parses the embedded manifest.
 func Load() (Manifest, error) { return Parse(strings.NewReader(string(manifestFile))) }
 
-// Parse reads a manifest: `file<TAB>path<TAB>sha256` and `pins<TAB>path<TAB>sha256,sha256`; # lines are comments.
+// Parse reads a manifest: `file<TAB>path<TAB>sha256` and `pins<TAB>path<TAB>sha256,sha256<TAB>shape`; # lines are comments.
 func Parse(r io.Reader) (Manifest, error) {
-	m := Manifest{Files: map[string]string{}, Pins: map[string][]string{}}
+	m := Manifest{Files: map[string]string{}, Pins: map[string][]string{}, Shape: map[string]string{}}
 	scanner := bufio.NewScanner(r)
 	for line := 1; scanner.Scan(); line++ {
 		text := scanner.Text()
@@ -51,8 +52,8 @@ func Parse(r io.Reader) (Manifest, error) {
 			continue
 		}
 		fields := strings.Split(text, "\t")
-		if len(fields) != 3 {
-			return m, fmt.Errorf("manifest line %d: want 3 tab-separated fields", line)
+		if len(fields) < 3 || len(fields) > 4 {
+			return m, fmt.Errorf("manifest line %d: want 3 or 4 tab-separated fields", line)
 		}
 		switch fields[0] {
 		case "file":
@@ -61,6 +62,9 @@ func Parse(r io.Reader) (Manifest, error) {
 			pins := strings.Split(fields[2], ",")
 			sort.Strings(pins)
 			m.Pins[fields[1]] = pins
+			if len(fields) == 4 {
+				m.Shape[fields[1]] = fields[3]
+			}
 		default:
 			return m, fmt.Errorf("manifest line %d: unknown kind %q", line, fields[0])
 		}
@@ -68,9 +72,15 @@ func Parse(r io.Reader) (Manifest, error) {
 	return m, scanner.Err()
 }
 
-// GuardedPaths is every path the git half refuses a change to: the frozen files and the manifest itself.
+// GuardedDirs are directories the git half guards whole, whatever the manifest lists: an existing file in them that
+// is modified, deleted or renamed against the base is refused, so a manifest weakened in the same change set (an entry
+// dropped, a golden deleted) does not clear itself.
+var GuardedDirs = []string{"internal/pgmigrate/testdata/golden", "internal/pgmigrate/baseline", "internal/api/health/testdata/golden"}
+
+// GuardedPaths is every path the git half refuses a change to: the manifest itself, its frozen files and the guarded
+// directories.
 func (m Manifest) GuardedPaths() []string {
-	out := []string{ManifestPath}
+	out := append([]string{ManifestPath}, GuardedDirs...)
 	for path := range m.Files {
 		out = append(out, path)
 	}
@@ -79,6 +89,19 @@ func (m Manifest) GuardedPaths() []string {
 }
 
 var pinLiteral = regexp.MustCompile(`"([0-9a-f]{64})"`)
+
+var (
+	goldenOpen   = regexp.MustCompile(`\b(OpenGolden|openStatesGolden|frozenPython)\(|\bgoldens\.Outputs\(`)
+	goldenFinish = regexp.MustCompile(`\.(Finish|SkipDiff)\(t\)`)
+	skipToken    = regexp.MustCompile(`\bt\.Skip(f|Now)?\(|\.SkipNow\(`)
+)
+
+// Shape is what a test source that holds pins still does with them: how many golden-open calls, golden finish calls
+// and skip tokens it has. A frozen comparison replaced by t.Skip, a dropped call or an added skip changes it. An early
+// return inside a test body is not seen here; the venueoracle TestMain already fails a golden opened and not consumed.
+func Shape(source []byte) string {
+	return fmt.Sprintf("opens=%d,finishes=%d,skips=%d", len(goldenOpen.FindAll(source, -1)), len(goldenFinish.FindAll(source, -1)), len(skipToken.FindAll(source, -1)))
+}
 
 // Check compares the tree under root with the manifest and returns one line per difference: a frozen file whose
 // content changed or is missing, a golden file the manifest does not list, a test source whose sha256 literals
@@ -133,6 +156,9 @@ func Check(root string, m Manifest) []string {
 			seen[rel] = true
 			if len(got) == 0 && !listed {
 				continue
+			}
+			if want, ok := m.Shape[rel]; ok && Shape(data) != want {
+				problems = append(problems, fmt.Sprintf("%s: the frozen comparisons changed (%s, frozen %s)", rel, Shape(data), want))
 			}
 			if strings.Join(got, ",") != strings.Join(want, ",") {
 				problems = append(problems, fmt.Sprintf("%s: sha256 pins are [%s], frozen [%s]", rel, strings.Join(got, ","), strings.Join(want, ",")))

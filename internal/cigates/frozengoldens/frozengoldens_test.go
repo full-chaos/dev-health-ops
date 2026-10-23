@@ -131,6 +131,18 @@ func TestTheGuardIsRedOnEveryKindOfPlantedChange(t *testing.T) {
 			swapped := strings.Replace(string(data), string(pin), strings.Repeat("0", 64), 1)
 			_ = os.WriteFile(path, []byte(swapped), 0o644)
 		}, someSource + ": sha256 pins are"},
+		"a frozen comparison replaced by t.Skip, the pin literal kept": {func(root string) {
+			path := filepath.Join(root, someSource)
+			data, _ := os.ReadFile(path)
+			swapped := strings.Replace(string(data), "venueoracle.OpenGolden(", "t.Skip(\"gone\"); venueoracle.OpenGolden(", 1)
+			_ = os.WriteFile(path, []byte(swapped), 0o644)
+		}, someSource + ": the frozen comparisons changed"},
+		"a golden-open call removed, the pin literal kept": {func(root string) {
+			path := filepath.Join(root, someSource)
+			data, _ := os.ReadFile(path)
+			swapped := strings.Replace(string(data), "venueoracle.OpenGolden(", "venueoracle.Renamed(", 1)
+			_ = os.WriteFile(path, []byte(swapped), 0o644)
+		}, someSource + ": the frozen comparisons changed"},
 		"a pin added to an unlisted test source": {func(root string) {
 			_ = os.WriteFile(filepath.Join(root, "internal/pgmigrate/new_pin_test.go"), []byte("package pgmigrate\n\nconst x = \""+strings.Repeat("a", 64)+"\"\n"), 0o644)
 		}, "internal/pgmigrate/new_pin_test.go: sha256 pins are"},
@@ -198,5 +210,45 @@ func TestTheGitHalfSeesAPlantedEditAndFailsClosedWithoutABase(t *testing.T) {
 	got, err := Changed(repo, base, m.GuardedPaths())
 	if err != nil || strings.Join(got, ",") != golden+","+ManifestPath && strings.Join(got, ",") != ManifestPath+","+golden {
 		t.Fatalf("Changed = %v, %v, want the golden and the manifest", got, err)
+	}
+}
+
+// A change set that adds a weakened manifest and deletes a golden in the same breath clears the manifest-derived
+// paths; the guarded directories are what still reports the deletion (CHAOS-10751 review).
+func TestTheGitHalfSeesADeletedGoldenWhateverTheManifestSays(t *testing.T) {
+	repo := t.TempDir()
+	golden := "internal/pgmigrate/testdata/golden/alias.json"
+	for path, body := range map[string]string{golden: "{}", "internal/pgmigrate/baseline/head.json": "{}", "other.txt": "x"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, repo, "init", "-q", "-b", "main")
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-q", "-m", "base")
+	git(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	git(t, repo, "checkout", "-q", "-b", "change")
+	base, err := MergeBase(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weak := Manifest{Files: map[string]string{}, Pins: map[string][]string{}, Shape: map[string]string{}}
+	if err := os.Remove(filepath.Join(repo, golden)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, filepath.Dir(ManifestPath)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ManifestPath), []byte("# weakened\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-q", "-m", "weaken")
+	got, err := Changed(repo, base, weak.GuardedPaths())
+	if err != nil || len(got) != 1 || got[0] != golden {
+		t.Fatalf("Changed = %v, %v, want just the deleted golden (the added manifest is new, not a change)", got, err)
 	}
 }

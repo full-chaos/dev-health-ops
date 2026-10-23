@@ -243,6 +243,108 @@ authService:
 V
 refuse_in "$t/flow.yaml" --key key-fl:f.pem
 
+# Prod shape: the deploy umbrella chart aliases ops, so authService sits under ops:.
+mkv prod.yaml <<'V'
+global:
+  note: "a: b"
+ops:
+  # CHAOS-10624: comments with colons: and - dashes
+  authService:
+    enabled: true
+    image:
+      repository: ghcr.io/full-chaos/dev-health-go-auth-service@sha256:b9ac
+    signingKey:
+      secretName: auth-signing-key
+      keyId: auth-prod-2026-10
+    keySet:
+      enabled: true
+      keys:
+        - kid: auth-prod-2026-10
+          state: active
+          file: auth-prod-2026-10.pem
+          secretName: auth-signing-key
+          secretKey: signing-key.pem
+        - kid: auth-prod-2026-11
+          state: pending
+          file: auth-prod-2026-11.pem
+          secretName: auth-signing-key-2
+          secretKey: signing-key.pem
+    networkPolicy:
+      egress:
+        database:
+          to:
+            - podSelector:
+                matchLabels:
+                  app: pg
+V
+: >"$FAKE_ARGV"; : >"$FAKE_VALUES"
+"$script" --context ctx --namespace ns --values "$t/prod.yaml" --key auth-signing-key-2:signing-key.pem >"$t/out" 2>"$t/err" || { cat "$t/err"; fail "prod-shaped values file refused"; }
+grep -q 'auth-signing-key-2 key=signing-key.pem created' "$t/out" || fail "prod-shaped create"
+refuse_in "$t/prod.yaml" --key auth-signing-key-2:other.pem
+
+# Direct items only, scalar shapes, escapes and a second document.
+mkv alias.yaml <<'V'
+authService:
+  keySet:
+    keys:
+      - secretName: key-a
+        secretKey: signing-key.pem
+        aliases:
+          - secretName: key-n
+            secretKey: n.pem
+V
+refuse_in "$t/alias.yaml" --key key-n:n.pem
+for first in 'note: &n |' 'note: !!str &n |' '- |' '-   >-'; do
+  case "$first" in
+    -*) body=$(printf '        extra:\n          %s\n            - secretName: key-an\n              secretKey: a.pem\n' "$first") ;;
+    *) body=$(printf '        %s\n          - secretName: key-an\n            secretKey: a.pem\n' "$first") ;;
+  esac
+  printf 'authService:\n  keySet:\n    keys:\n      - secretName: key-a\n        secretKey: signing-key.pem\n%s\n' "$body" >"$t/anch.yaml"
+  refuse_in "$t/anch.yaml" --key key-an:a.pem
+done
+mkv escq.yaml <<'V'
+authService:
+  keySet:
+    keys:
+      - secretName: key-a
+        secretKey: signing-key.pem
+        note: "a \"
+          - secretName: key-eq
+            secretKey: e.pem
+          z"
+V
+refuse_in "$t/escq.yaml" --key key-eq:e.pem
+refuse_in "$t/escq.yaml" --key key-a:signing-key.pem
+mkv sq.yaml <<'V'
+authService:
+  keySet:
+    keys:
+      - secretName: key-a
+        secretKey: signing-key.pem
+        note: 'it''s
+          - secretName: key-sq
+            secretKey: s.pem
+          z'
+V
+refuse_in "$t/sq.yaml" --key key-sq:s.pem
+refuse_in "$t/sq.yaml" --key key-a:signing-key.pem
+mkv doc2.yaml <<'V'
+authService:
+  keySet:
+    keys:
+      - secretName: key-a
+        secretKey: signing-key.pem
+---
+authService:
+  keySet:
+    keys:
+      - secretName: key-d2
+        secretKey: d.pem
+V
+refuse_in "$t/doc2.yaml" --key key-d2:d.pem
+printf 'authService:\r\n  keySet:\r\n    keys:\r\n      - secretName: key-a\r\n        secretKey: signing-key.pem\r\n' >"$t/crlf.yaml"
+refuse_in "$t/crlf.yaml" --key key-a:signing-key.pem
+
 # A failing second mktemp removes the first work directory.
 mkdir -p "$t/mk"
 cat >"$t/mk/mktemp" <<'FAKE'

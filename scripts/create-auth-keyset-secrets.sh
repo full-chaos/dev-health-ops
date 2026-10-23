@@ -34,42 +34,71 @@ done
 }
 [ -f "$values" ] || { printf 'refused: --values is not a file\n' >&2; exit 2; }
 
-# listed NAME KEY: succeeds when ONE entry of authService.keySet.keys in the
-# values file carries both secretName: NAME and secretKey: KEY as direct
-# fields. Anything it cannot read with certainty (a quoted scalar over several
-# lines under that path, a flow-style keys value) fails closed.
+# listed NAME KEY: succeeds when ONE entry of authService.keySet.keys (or
+# ops.authService.keySet.keys, the deploy umbrella chart's alias) in the FIRST
+# YAML document of the values file carries both secretName: NAME and
+# secretKey: KEY as direct fields of a direct item of keys.
+# Block scalars need no special case: only items at the direct indent of keys
+# count, and a block scalar's lines are always indented deeper than that.
+# Limits, all failing closed (a false refusal, never a false accept): a quoted
+# scalar left open on a line under that path, a flow-style keys value, CRLF line
+# endings, a `---` after content ends the document being read.
 listed() {
   awk -v want_name="$1" -v want_key="$2" '
     function clean(v) { sub(/[[:space:]]+#.*$/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); gsub(/^"|"$/, "", v); return v }
     function path(   i, p) { p = ""; for (i = 1; i <= depth; i++) p = p "/" sk[i]; return p }
+    function is_keys(   p) { p = path(); return (p == "/authService/keySet/keys" || p == "/ops/authService/keySet/keys") }
     function pop_to(limit) { while (depth > 0 && si[depth] >= limit) depth-- }
+    function open_quote(v,   q, n, i, c) {
+      q = substr(v, 1, 1)
+      if (q != "\"" && q != "\x27") { return "" }
+      n = length(v)
+      for (i = 2; i <= n; i++) {
+        c = substr(v, i, 1)
+        if (q == "\"" && c == "\\") { i++; continue }
+        if (q == "\x27" && c == "\x27") { if (substr(v, i + 1, 1) == "\x27") { i++; continue } ; return "" }
+        if (q == "\"" && c == "\"") { return "" }
+      }
+      return q
+    }
+    function value_of(line,   v) {
+      v = line
+      if (sub(/^ *- +/, "", v) && v !~ /^[^ #][^:]*:( |$)/) { return v }
+      if (match(v, /:[[:space:]]+/)) { return substr(v, RSTART + RLENGTH) }
+      return ""
+    }
+    /^---([[:space:]]|$)/ || /^\.\.\.([[:space:]]|$)/ { if (content) { stop = 1 } ; next }
+    stop { next }
     /^[[:space:]]*(#|$)/ { next }
     {
+      content = 1
       line = $0
       ind = match(line, /[^ ]/) - 1
       if (qopen != "") { if (index(line, qopen) > 0) { qopen = "" } ; next }
-      if (blk >= 0 && ind > blk) { next }
-      blk = -1
-      eff = ind
       isdash = (line ~ /^ *- /)
-      if (isdash) { eff = ind + 2 }
-      if (line ~ /:[[:space:]]+(![^ ]+[[:space:]]+)?[|>][-+0-9]*[[:space:]]*(#.*)?$/) { blk = eff }
-      if (line ~ /:[[:space:]]+"[^"]*$/) { qopen = "\""; if (inpath) { bad = 1 } }
-      else if (line ~ /:[[:space:]]+\x27[^\x27]*$/) { qopen = "\x27"; if (inpath) { bad = 1 } }
+      eff = isdash ? ind + 2 : ind
+      v = value_of(line)
+      oq = open_quote(v)
+      if (oq != "") { qopen = oq; if (is_keys()) { bad = 1 } }
       if (isdash) {
         pop_to(ind + 1)
-        inpath = (path() == "/authService/keySet/keys")
-        if (inpath) { dash = ind; active = 1; name = ""; key = "" } else { active = 0 }
+        if (is_keys()) {
+          if (kd < 0) { kd = ind }
+          if (ind != kd) { next }
+          dash = ind; active = 1; name = ""; key = ""
+        } else { active = 0 }
         sub(/^ *- /, "", line); ind = eff
       } else {
         if (active && ind <= dash) { active = 0 }
-        if (!(active && ind == dash + 2) && !(active && ind > dash)) {
+        if (active && ind > dash) {
+          if (ind != dash + 2) { next }
+        } else {
           if (match(line, /^ *[^ #][^:]*:( |$)/)) {
             k = line; sub(/^ */, "", k); sub(/:( .*)?$/, "", k)
             pop_to(ind)
             depth++; sk[depth] = k; si[depth] = ind
-            inpath = (path() == "/authService/keySet/keys")
-                }
+            if (is_keys()) { kd = -1 }
+          }
           next
         }
       }
@@ -79,7 +108,7 @@ listed() {
         if (name == want_name && key == want_key) { found = 1 }
       }
     }
-    BEGIN { blk = -1; qopen = "" }
+    BEGIN { qopen = ""; kd = -1 }
     END { exit (bad || !found) ? 1 : 0 }
   ' "$values"
 }

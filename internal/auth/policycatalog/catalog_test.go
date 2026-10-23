@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "4337f3509db0ba9bfdbb80f35c30ca450dfe169abb5a1bf18598dc2b92719ccf"
-	rolesSHA   = "867899e8151541437162b6fed8eae0f00fb5c6117367b9e657193d7729418446"
+	actionsSHA = "28451944e8aba2b32880898539cf597b39670e00151298424619e6c1b716a004"
+	rolesSHA   = "6b6d91b678f4db3dce219171c04f8a61fc309514505fea14a80abfc122cd5dc0"
 )
 
 func repoRoot(t *testing.T) string {
@@ -265,8 +265,10 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 			t.Errorf("action %s has scope %s", a.ID, a.Scope)
 		}
 	}
-	if len(c.Actions()) != len(std) {
-		t.Errorf("catalog has %d actions, permissions.go %d", len(c.Actions()), len(std))
+	// acr.context.read, members.update and authz.decide are catalogued beyond the legacy permission set.
+	const beyondLegacy = 3
+	if len(c.Actions()) != len(std)+beyondLegacy {
+		t.Errorf("catalog has %d actions, permissions.go %d plus %d beyond it", len(c.Actions()), len(std), beyondLegacy)
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot(t), "internal/api/session/permissions.go")); err != nil {
 		t.Fatal(err)

@@ -3,7 +3,7 @@
     "acr_client_credential"
   ],
   "action": "acr.context.read",
-  "cache_class": "resource_revision_bound",
+  "cache_class": "decision_bound",
   "classification": "protected",
   "current_state_required": false,
   "denial_disclosure": "forbidden",

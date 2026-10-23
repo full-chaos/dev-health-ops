@@ -192,10 +192,7 @@ func CheckActionCachePolicy(profile map[string]any) error {
 	}
 	entry, known := catalogActions()[action]
 	if !known {
-		if _, exempt := uncataloguedCachedActions[action]; !exempt {
-			return fmt.Errorf("action cache policy: a cached profile must name a catalog action, not %q", action)
-		}
-		return nil
+		return fmt.Errorf("action cache policy: a cached profile must name a catalog action, not %q", action)
 	}
 	if entry.high {
 		return fmt.Errorf("action cache policy: action %q is high risk and its profile cache_class must be none", action)
@@ -204,13 +201,6 @@ func CheckActionCachePolicy(profile map[string]any) error {
 		return fmt.Errorf("action cache policy: action %q profile cache_class must be none or the catalog class", action)
 	}
 	return nil
-}
-
-// uncataloguedCachedActions is the pinned exemption list: the actions today's
-// valid example profiles cache although actions.v1 does not hold them yet. A
-// census test pins the list exactly; it is deleted once these are catalogued.
-var uncataloguedCachedActions = map[string]string{
-	"acr.context.read": "acr namespace, not yet catalogued",
 }
 
 // catalogActions maps every catalog action to its risk and cache class. It reads the embedded actions.v1 catalog directly:

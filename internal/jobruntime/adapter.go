@@ -332,6 +332,11 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 	}
 	decoded, err := jobcontract.Decode(adapter.descriptor.Kind, job.EncodedArgs)
 	if err != nil {
+		if errors.Is(err, jobcontract.ErrCredentialShapedValue) {
+			choice.reason = ReasonCredentialShapedValue
+			// The refusal text holds a field path and a rule id only.
+			return choice, envelope, WithSafeCause(err)
+		}
 		return choice, envelope, err
 	}
 	typed := job.Args.ContractEnvelope()

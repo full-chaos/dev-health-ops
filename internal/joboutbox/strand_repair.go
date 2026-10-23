@@ -583,7 +583,7 @@ func (repair *StrandRepair) filterByClaim(
 			// err != nil, and phase 3 must not run on an unclassified claim
 			// state.
 			return nil, liveCount, settledCount, fmt.Errorf(
-				"job_kind=%q dedupe_key=%q: %w", candidate.jobKind, candidate.dedupeKey, ErrUnavailable,
+				"outbox_id=%q job_kind=%q: %w", candidate.outboxID, candidate.jobKind, ErrUnavailable,
 			)
 		}
 	}

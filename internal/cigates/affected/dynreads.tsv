@@ -137,6 +137,7 @@ internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
+internal/cigates/chconstructor	chconstructor_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	race_solo_load_test.go
@@ -193,6 +194,7 @@ internal/cigates/nopython	trackedfiles_test.go
 internal/cigates/proofteardown	harness_test.go
 internal/cigates/proofteardown	teardown_test.go
 internal/cigates/queuecreds	gate_test.go
+internal/cigates/queuecreds	queuerows_test.go
 internal/cigates/queuecreds	scan.go
 internal/cigates/queuecreds	scan_test.go
 internal/cigates/raceunweighted	raceunweighted_test.go
@@ -306,6 +308,7 @@ internal/ingressplanes	real_nginx_integration_test.go
 internal/ingressplanes/cmd/routerconf	main.go
 internal/ingressplanes/cmd/routerconf	main_test.go
 internal/jobcontract	capability.go
+internal/jobcontract	guard_test.go
 internal/jobcontract	registry.go
 internal/jobcontract	registry_test.go
 internal/jobcontract	types_test.go
@@ -370,6 +373,8 @@ internal/mintcli/envelopekeys	verify_roundtrip_test.go
 internal/operationalordering	finalreads_test.go
 internal/ownershipwindow	ownershipwindow_test.go
 internal/platform/config	route_switch_absence_test.go
+internal/platform/credshape	census_test.go
+internal/platform/credshape	credshape_test.go
 internal/platform/fernet	fernet_test.go
 internal/platform/logging	binaries_enumeration_test.go
 internal/platform/logging	provider_origin_sources_test.go

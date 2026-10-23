@@ -207,6 +207,15 @@ func Map(row Row) (target identity.BackfillTarget, class string, notCarried bool
 		}
 		target.PasswordHash = row.PasswordHash
 	}
+	key, class, notCarried := mapIdentity(row)
+	target.Identity = key
+	return target, class, notCarried
+}
+
+// mapIdentity is the identity half of Map: the social provider identity a row
+// carries, a skip class when it is not valid, or notCarried for a provider
+// outside the social set. It does not look at the password hash.
+func mapIdentity(row Row) (key *identity.ExternalKey, class string, notCarried bool) {
 	provider, subject := "", ""
 	if row.AuthProvider != nil {
 		provider = *row.AuthProvider
@@ -218,15 +227,15 @@ func Map(row Row) (target identity.BackfillTarget, class string, notCarried bool
 	case provider == "" || provider == "local":
 	case identity.Provider(provider).IsSocial():
 		issuer, _ := identity.SocialIssuer(identity.Provider(provider))
-		key := identity.ExternalKey{Issuer: issuer, Provider: identity.Provider(provider), Subject: subject}
-		if key.Validate() != nil {
-			return target, SkipInvalidIdentity, false
+		k := identity.ExternalKey{Issuer: issuer, Provider: identity.Provider(provider), Subject: subject}
+		if k.Validate() != nil {
+			return nil, SkipInvalidIdentity, false
 		}
-		target.Identity = &key
+		key = &k
 	default:
 		notCarried = true
 	}
-	return target, "", notCarried
+	return key, "", notCarried
 }
 
 func isBcrypt(hash string) bool {

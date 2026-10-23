@@ -60,6 +60,7 @@ internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testd
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-
 internal/cigates/cachepoison	cachepoison_test.go	.github/workflows	dir
 internal/cigates/chartgates	helpers_test.go	unexpressed	-
+internal/cigates/chconstructor	chconstructor_test.go	.	tree
 internal/cigates/checkgo	support_test.go	unexpressed	-
 internal/cigates/docs	docs_helpers_test.go	unexpressed	-
 internal/cigates/docsprepare	docsprepare.go	unexpressed	-
@@ -86,6 +87,7 @@ internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-
 internal/cigates/nopython	tests_python_test.go	unexpressed	-
 internal/cigates/outboundtransport	outboundtransport_test.go	.	tree
+internal/cigates/queuecreds	queuerows_test.go	unexpressed	-
 internal/cigates/queuecreds	scan.go	unexpressed	-
 internal/cigates/queuecreds	scan_test.go	contracts/jobs/v1	tree
 internal/cigates/raceunweighted	raceunweighted_test.go	unexpressed	-
@@ -192,6 +194,8 @@ internal/pgmigrate	chain_tail_integration_test.go	internal/pgmigrate/testdata/po
 internal/pgmigrate	chain_tail_test.go	unexpressed	-
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree
 internal/platform/config	route_switch_absence_test.go	unexpressed	-
+internal/platform/credshape	census_test.go	unexpressed	-
+internal/platform/credshape	credshape_test.go	contracts/jobs/v1/examples	dir
 internal/platform/fernet	fernet_test.go	unexpressed	-
 internal/platform/secrets	declared_fields_test.go	internal	tree
 internal/platform/secrets	envreads_test.go	.	tree

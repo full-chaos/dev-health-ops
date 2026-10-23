@@ -80,6 +80,7 @@ jobs:
               - 'contracts/graphql/v1/**'
               - 'contracts/sync-dispatch/v1/**'
               - 'contracts/auth/v1/vocabulary/**'
+              - 'contracts/auth/v1/**'
               - '.github/workflows/live-e2e.yml'
 
   live-e2e:

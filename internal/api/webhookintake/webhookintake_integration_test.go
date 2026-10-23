@@ -452,3 +452,64 @@ func TestPagerDutyWebhookInvalidSignatureRejectedNoStreamEntry(t *testing.T) {
 		t.Fatalf("binding status = %q, want candidate", status)
 	}
 }
+
+func TestPagerDutyWebhookRefusesUnknownAndRevokedBindingsLikeABadSignature(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pgInstance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pgInstance.Close(ctx) })
+	pool, err := pgxpool.New(ctx, pgInstance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	createWebhookIntakeTables(t, ctx, pool)
+
+	valkeyInstance, err := containers.StartValkey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = valkeyInstance.Close(ctx) })
+	client, err := valkey.Open(ctx, valkey.DefaultConfig(valkeyInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+
+	orgID := uuid.New()
+	seedFeatureEnabled(t, ctx, pool, orgID)
+	decryptor := newTestDecryptor(t)
+	active := seedPagerDutyBinding(t, ctx, pool, decryptor, orgID, "active", "sub-1", "pd-secret")
+	revoked := seedPagerDutyBinding(t, ctx, pool, decryptor, orgID, "active", "sub-2", "pd-secret-2")
+	if _, err := pool.Exec(ctx, `UPDATE pagerduty_webhook_bindings SET status = 'inactive', revoked_at = now(), credential_id = NULL WHERE id = $1`, revoked); err != nil {
+		t.Fatalf("retire pagerduty binding: %v", err)
+	}
+
+	deps := Deps{Pool: pool, Valkey: client, Decryptor: decryptor, limiters: newRateLimiters(nil, nil)}
+	body := []byte(`{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":"2026-01-01T00:00:00Z","data":{}}}`)
+	send := func(id uuid.UUID, subscription, secret string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/pagerduty/"+id.String(), bytesReader(body))
+		req.SetPathValue("binding_id", id.String())
+		req.Header.Set("X-Webhook-Subscription", subscription)
+		req.Header.Set("X-PagerDuty-Signature", pagerdutySign(secret, body))
+		recorder := httptest.NewRecorder()
+		deps.handlePagerDutyWebhook()(recorder, req)
+		return recorder
+	}
+	reference := send(active, "sub-1", "wrong-secret")
+	for name, got := range map[string]*httptest.ResponseRecorder{
+		"unknown binding":    send(uuid.New(), "sub-1", "pd-secret"),
+		"revoked binding":    send(revoked, "sub-2", "pd-secret-2"),
+		"other subscription": send(active, "sub-x", "pd-secret"),
+	} {
+		if got.Code != reference.Code || got.Body.String() != reference.Body.String() {
+			t.Errorf("%s: %d %s, want %d %s", name, got.Code, got.Body.String(), reference.Code, reference.Body.String())
+		}
+	}
+	if reference.Code != http.StatusUnauthorized {
+		t.Fatalf("reference status = %d", reference.Code)
+	}
+}

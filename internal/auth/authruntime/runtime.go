@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
+	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -52,6 +53,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/token"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// keyStateSource reads the signing keys' durable rotation states. Tests that
+// run configure without a database replace it.
+var keyStateSource = func(pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) token.KeyStateSource {
+	return keyrotation.NewReader(pool, schema)
+}
 
 // Readiness check names. They are metric label values (see
 // health.Registry.RegisterRequired's name pattern) and the strings an operator
@@ -166,7 +173,21 @@ func compatRoutes(
 			LockoutKey: contracts.NewSecretString(cfg.Session.LockoutKey.Reveal()),
 		}
 	}
-	return authapi.CompatRoutes(deps)
+	routes, err := authapi.CompatRoutes(deps)
+	if err != nil {
+		return nil, err
+	}
+	var link social.Domain
+	if cfg.Session.SocialLinkRoutes {
+		link = socialService
+	}
+	links, err := authapi.SocialLinkRoutes(authapi.SocialLinkDeps{
+		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Social: link,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(routes, links...), nil
 }
 
 // Main runs the command and exits with its status.
@@ -334,12 +355,20 @@ func configureWithRoutes(
 		}
 	}
 
+	schemaID, err := authschema.NewValidatedIdentifier(cfg.DatabaseSchema)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+
 	// The token signer is built here and proved by readiness; nothing issues
-	// with it yet.
+	// with it yet. Key states come from the rotation state machine's table
+	// (a cached snapshot; an empty table keeps custody's own states).
 	signer := token.NewFileSigner(token.FileConfig{
 		KeySetPath: cfg.SigningKeySetPath,
 		KeyPath:    cfg.SigningKeyPath,
 		KeyID:      cfg.SigningKeyID,
+		States:     token.NewKeyStates(token.KeyStatesConfig{Source: keyStateSource(store.Pool(), schemaID)}),
 	})
 
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
@@ -397,11 +426,6 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	schemaID, err := authschema.NewValidatedIdentifier(cfg.DatabaseSchema)
-	if err != nil {
-		closeStore()
-		return nil, err
-	}
 	routes, err := sessionRoutes(cfg, logger, store.Pool(), schemaID, signer)
 	if err != nil {
 		closeStore()

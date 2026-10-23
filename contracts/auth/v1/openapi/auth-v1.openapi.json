@@ -366,6 +366,27 @@
       },
       "RoleCatalog": {
         "$ref": "../jsonschema/role-catalog.v1.schema.json"
+      },
+      "Organization": {
+        "$ref": "../jsonschema/organization.v1.schema.json"
+      },
+      "OrganizationCreateRequest": {
+        "$ref": "../jsonschema/organization-create-request.v1.schema.json"
+      },
+      "Membership": {
+        "$ref": "../jsonschema/membership.v1.schema.json"
+      },
+      "MembershipUpdateRequest": {
+        "$ref": "../jsonschema/membership-update-request.v1.schema.json"
+      },
+      "Invite": {
+        "$ref": "../jsonschema/invite.v1.schema.json"
+      },
+      "InviteCreateRequest": {
+        "$ref": "../jsonschema/invite-create-request.v1.schema.json"
+      },
+      "InviteAcceptRequest": {
+        "$ref": "../jsonschema/invite-accept-request.v1.schema.json"
       }
     }
   }

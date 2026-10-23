@@ -308,8 +308,11 @@ func TestThroughputQueryUsesTheClientSideWindow(t *testing.T) {
 	// the window decides which rows load at all.
 	arguments := map[string]any{}
 	conditions := capacityScopeFilters("org", capacityTarget{}, arguments)
-	if len(conditions) != 1 || !strings.Contains(conditions[0], "org_id") {
+	if len(conditions) != 2 || !strings.Contains(conditions[0], "org_id") {
 		t.Fatalf("an unscoped forecast must still be org-scoped: %v", conditions)
+	}
+	if conditions[1] != "(work_item_metrics_daily.row_view IN ('', 'org'))" {
+		t.Errorf("the read must take the org view of the table (CHAOS-8863): %v", conditions)
 	}
 	if _, bound := arguments["team_id"]; bound {
 		t.Error("team_id must not be bound when the scope carries none")
@@ -318,7 +321,7 @@ func TestThroughputQueryUsesTheClientSideWindow(t *testing.T) {
 	teamID := "team-a"
 	arguments = map[string]any{}
 	conditions = capacityScopeFilters("org", capacityTarget{TeamID: &teamID}, arguments)
-	if len(conditions) != 2 {
+	if len(conditions) != 3 {
 		t.Fatalf("a team-scoped forecast needs both filters: %v", conditions)
 	}
 	if arguments["team_id"] != teamID {
@@ -333,7 +336,7 @@ func TestEmptyScopeValuesDoNotBecomeFilters(t *testing.T) {
 	arguments := map[string]any{}
 	conditions := capacityScopeFilters(
 		"org", capacityTarget{TeamID: &empty, WorkScopeID: &empty}, arguments)
-	if len(conditions) != 1 {
+	if len(conditions) != 2 {
 		t.Fatalf("empty scope values must not add filters: %v", conditions)
 	}
 }
@@ -374,11 +377,11 @@ func TestDiscoveredEmptyScopeIsNotTheSameAsAnAbsentOne(t *testing.T) {
 	// ...while the FILTER treats both alike, matching Python's `if team_id:`
 	// falsy check. Same value, different question.
 	arguments := map[string]any{}
-	if conditions := capacityScopeFilters("org", discovered, arguments); len(conditions) != 1 {
+	if conditions := capacityScopeFilters("org", discovered, arguments); len(conditions) != 2 {
 		t.Errorf("an empty discovered scope must add no filter: %v", conditions)
 	}
 	arguments = map[string]any{}
-	if conditions := capacityScopeFilters("org", explicit, arguments); len(conditions) != 1 {
+	if conditions := capacityScopeFilters("org", explicit, arguments); len(conditions) != 2 {
 		t.Errorf("an absent scope must add no filter: %v", conditions)
 	}
 }

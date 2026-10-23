@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -77,6 +78,14 @@ func scopeFilter(orgID string, teamIDs []string, workScopeID *string) ([]string,
 	return conditions, bindings
 }
 
+// workItemScopeFilter is scopeFilter for a read of work_item_metrics_daily: it adds the view predicate, so every
+// item counts once in the organization (legacy rows and the org view, CHAOS-8863). estimate_coverage_metrics_daily has
+// no view column and keeps scopeFilter.
+func workItemScopeFilter(orgID string, teamIDs []string, workScopeID *string) ([]string, []clickhouse.Binding) {
+	conditions, bindings := scopeFilter(orgID, teamIDs, workScopeID)
+	return append(conditions, rowview.OrgPredicate("work_item_metrics_daily", "")), bindings
+}
+
 // startDate ports `utc_today() - timedelta(weeks=history_weeks)`.
 //
 // Derived from the caller's clock on the CLIENT side, exactly as Python does,
@@ -111,7 +120,7 @@ func loadThroughputHistory(
 	ctx context.Context, client QueryClient, orgID string,
 	teamIDs []string, workScopeID *string, historyWeeks int, today time.Time,
 ) ([]int, error) {
-	conditions, bindings := scopeFilter(orgID, teamIDs, workScopeID)
+	conditions, bindings := workItemScopeFilter(orgID, teamIDs, workScopeID)
 	conditions = append([]string{"day >= {start_date:Date}"}, conditions...)
 	bindings = append(bindings, clickhouse.Binding{
 		Name: "start_date", Value: startDate(today, historyWeeks),
@@ -128,7 +137,7 @@ func loadThroughputHistory(
                 argMax(items_completed, computed_at) AS items_completed
             FROM work_item_metrics_daily
             WHERE %s
-            GROUP BY day, provider, work_scope_id, team_id
+            GROUP BY day, provider, work_scope_id, team_id, row_view
             HAVING %s
         )
         GROUP BY day
@@ -172,7 +181,7 @@ func loadWorkItemOverlay(
 	ctx context.Context, client QueryClient, orgID string,
 	teamIDs []string, workScopeID *string, historyWeeks int, today time.Time,
 ) (float64, float64, error) {
-	conditions, bindings := scopeFilter(orgID, teamIDs, workScopeID)
+	conditions, bindings := workItemScopeFilter(orgID, teamIDs, workScopeID)
 	conditions = append([]string{"day >= {start_date:Date}"}, conditions...)
 	bindings = append(bindings, clickhouse.Binding{
 		Name: "start_date", Value: startDate(today, historyWeeks),
@@ -199,7 +208,7 @@ func loadWorkItemOverlay(
                         argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
                     FROM work_item_metrics_daily
                     WHERE %s
-                    GROUP BY day, provider, work_scope_id, team_id
+                    GROUP BY day, provider, work_scope_id, team_id, row_view
                     HAVING %s
                 )
                 GROUP BY day
@@ -217,7 +226,7 @@ func loadWorkItemOverlay(
                 FROM work_item_metrics_daily
                 WHERE %s
                   AND %s
-                GROUP BY day, provider, work_scope_id, team_id
+                GROUP BY day, provider, work_scope_id, team_id, row_view
             )
         ) AS current_part
     `, where, measuredWorkItemKey, where, newestrow.PerTeamPredicate("work_item_metrics_daily", where))
@@ -262,7 +271,7 @@ func loadStaleWIP(
 	ctx context.Context, client QueryClient, orgID string,
 	teamIDs []string, workScopeID *string,
 ) (*float64, *float64, error) {
-	conditions, bindings := scopeFilter(orgID, teamIDs, workScopeID)
+	conditions, bindings := workItemScopeFilter(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
 
 	// The same predicate appears twice on purpose: the subquery finds the
@@ -284,7 +293,7 @@ func loadStaleWIP(
             FROM work_item_metrics_daily
             WHERE %s
             AND %s
-            GROUP BY provider, work_scope_id, team_id
+            GROUP BY provider, work_scope_id, team_id, row_view
         )
         WHERE wip_age_p50_hours IS NOT NULL OR wip_age_p90_hours IS NOT NULL
     `, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
@@ -478,7 +487,7 @@ func loadBacklog(
 	ctx context.Context, client QueryClient, orgID string,
 	teamIDs []string, workScopeID *string,
 ) (int, error) {
-	conditions, bindings := scopeFilter(orgID, teamIDs, workScopeID)
+	conditions, bindings := workItemScopeFilter(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
 
 	query := fmt.Sprintf(`
@@ -492,7 +501,7 @@ func loadBacklog(
             FROM work_item_metrics_daily
             WHERE %s
             AND %s
-            GROUP BY team_id, work_scope_id, provider
+            GROUP BY team_id, work_scope_id, provider, row_view
         )
     `, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
 

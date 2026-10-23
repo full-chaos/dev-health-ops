@@ -9,3 +9,6 @@ internal/auth/authconfig/config.go:generic-api-key:205
 docs/reference/auth/configuration.md:generic-api-key:61
 # CHAOS-10450: test fixture (a base64 session successor key) in an earlier branch commit; the test now builds it at runtime. Not a credential.
 internal/auth/authruntime/access_class_test.go:generic-api-key:30
+# CHAOS-10450: the same two enum-value lines after main added lines above them in the merge commit.
+internal/auth/authconfig/config.go:generic-api-key:208
+docs/reference/auth/configuration.md:generic-api-key:62

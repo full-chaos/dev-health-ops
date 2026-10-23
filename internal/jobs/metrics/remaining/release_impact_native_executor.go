@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
@@ -259,6 +260,9 @@ func (e *ReleaseImpactExecutor) ComputePartition(
 	return CompatibilityOutcome{RowsWritten: &rowsWritten}, nil
 }
 
+// releaseImpactPairConcurrency bounds the pairs of one day read at once.
+const releaseImpactPairConcurrency = 8
+
 // computeOneDay ports _compute_day (release_impact.py:88-122): the scope
 // decision, the CHAOS-4258 degraded signal, and -- when pairs exist -- every
 // per-pair record, written in one batch.
@@ -297,13 +301,24 @@ func (e *ReleaseImpactExecutor) computeOneDay(
 	}
 	coverageRatio := CoverageRatio(len(distinctReleases), scope.TotalReleases)
 
-	rows := make([]releaseImpactRow, 0, len(scope.Pairs))
-	for _, pair := range scope.Pairs {
-		row, err := e.computeReleaseEnv(ctx, orgID, day, pair, coverageRatio, computedAt)
-		if err != nil {
-			return 0, err
-		}
-		rows = append(rows, row)
+	// Each pair is a chain of independent reads; run a bounded number at once
+	// so a day costs ceil(pairs/limit) chains of round trips, not pairs chains.
+	// Rows stay in pair order, which the write and the golden compare rely on.
+	rows := make([]releaseImpactRow, len(scope.Pairs))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(releaseImpactPairConcurrency)
+	for index, pair := range scope.Pairs {
+		group.Go(func() error {
+			row, err := e.computeReleaseEnv(groupCtx, orgID, day, pair, coverageRatio, computedAt)
+			if err != nil {
+				return err
+			}
+			rows[index] = row
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return 0, err
 	}
 	return e.reader.writeReleaseImpactRows(ctx, rows)
 }

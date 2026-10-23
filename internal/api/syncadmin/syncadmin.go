@@ -170,8 +170,15 @@ func (h *handlers) fail(w http.ResponseWriter, r *http.Request, step string, err
 	h.logger.ErrorContext(r.Context(), "sync admin: request failed",
 		slog.String("route", r.Pattern), slog.String("step", step), slog.String("request_id", r.Header.Get("X-Request-Id")),
 		slog.String("error", err.Error()))
+	if providersync.IsDeadlockDetected(err) {
+		// Backstop only: the selection lock hierarchy prevents the deadlock.
+		policy.WriteDetail(w, http.StatusConflict, concurrentChangeDetail, nil)
+		return
+	}
 	policy.WriteInternal(w)
 }
+
+const concurrentChangeDetail = "The sync configuration changed at the same time; retry the request"
 
 func writeQueryErrors(w http.ResponseWriter, errs pybody.Errors) {
 	policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)

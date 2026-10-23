@@ -54,6 +54,7 @@ internal/apiservice	githubapp_config.go	internal/apiservice/externalingestvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/metricsvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/ownershipvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/ssovenue
+internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho
 internal/auth/contracts	contracts.go	internal/audit
@@ -70,6 +71,7 @@ internal/auth/contracts	contracts.go	internal/auth/identity/local
 internal/auth/contracts	contracts.go	internal/auth/identity/oidc
 internal/auth/contracts	contracts.go	internal/auth/identity/saml
 internal/auth/contracts	contracts.go	internal/auth/identity/social
+internal/auth/contracts	contracts.go	internal/auth/keyrotation
 internal/auth/contracts	contracts.go	internal/auth/linkmail
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/session
@@ -78,10 +80,12 @@ internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus
 internal/auth/contracts/tokencorpus	corpus.go	internal/auth/contracts/tokencorpus/gen
+internal/auth/keystore	open_unix.go	cmd/auth-migrate
 internal/auth/keystore	open_unix.go	cmd/auth-service
 internal/auth/keystore	open_unix.go	cmd/dho
 internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
+internal/auth/keystore	open_unix.go	internal/auth/keyrotation
 internal/auth/keystore	open_unix.go	internal/auth/keystore
 internal/auth/keystore	open_unix.go	internal/token
 internal/cigates	governance.go	cmd/cigate

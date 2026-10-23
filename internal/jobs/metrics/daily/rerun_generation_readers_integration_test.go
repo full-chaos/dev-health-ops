@@ -169,21 +169,21 @@ func readRerunReaders(t *testing.T, ctx context.Context, conn driver.Conn) rerun
 	scan("sankey expense counts", `
 SELECT CAST(sum(new_items_count) AS Float64), CAST(sum(items_completed) AS Float64)
 FROM work_item_metrics_daily FINAL
-WHERE day >= ? AND day < ? AND org_id = ?`, []any{day, next, org}, &reads.newItems, &reads.completed)
+WHERE day >= ? AND day < ? AND org_id = ? AND row_view IN ('', 'org')`, []any{day, next, org}, &reads.newItems, &reads.completed)
 	scan("sankey state status counts", `
 SELECT CAST(sum(items_touched) AS Float64)
 FROM work_item_state_durations_daily FINAL
-WHERE day >= ? AND day < ? AND org_id = ?`, []any{day, next, org}, &reads.itemsTouched)
+WHERE day >= ? AND day < ? AND org_id = ? AND row_view IN ('', 'org')`, []any{day, next, org}, &reads.itemsTouched)
 	const blocked = `
 SELECT sum(duration_hours) FROM (
     SELECT day, provider, work_scope_id, team_id, status, argMax(duration_hours, computed_at) AS duration_hours
     FROM work_item_state_durations_daily
-    WHERE day >= ? AND day < ? AND status = 'blocked' %s AND org_id = ?
-    GROUP BY day, provider, work_scope_id, team_id, status)`
+    WHERE day >= ? AND day < ? AND status = 'blocked' %s AND org_id = ? AND row_view IN ('', 'org')
+    GROUP BY day, provider, work_scope_id, team_id, status, row_view)`
 	scan("home blocked hours", fmt.Sprintf(blocked, ""), []any{day, next, org}, &reads.blockedHours)
 	scan("capacity throughput", `
 SELECT toUInt64(sum(items_completed)) FROM work_item_metrics_daily FINAL
-WHERE day >= ? AND org_id = ?`, []any{day, org}, &reads.throughput)
+WHERE day >= ? AND org_id = ? AND row_view IN ('', 'org')`, []any{day, org}, &reads.throughput)
 	scan("estimate coverage backlog", `
 SELECT toUInt64(sum(backlog_size)) FROM estimate_coverage_metrics_daily FINAL
 WHERE day = ? AND org_id = ?`, []any{day, org}, &reads.backlog)
@@ -192,7 +192,7 @@ WHERE day = ? AND org_id = ?`, []any{day, org}, &reads.backlog)
 		var hours float64
 		scan("team throughput of "+team, `
 SELECT toUInt64(sum(items_completed)) FROM work_item_metrics_daily FINAL
-WHERE day >= ? AND org_id = ? AND team_id IN ?`, []any{day, org, []string{team}}, &completed)
+WHERE day >= ? AND org_id = ? AND team_id IN ? AND row_view IN ('', 'org')`, []any{day, org, []string{team}}, &completed)
 		scan("team blocked hours of "+team, fmt.Sprintf(blocked, "AND team_id IN ?"), []any{day, next, []string{team}, org}, &hours)
 		reads.teamCompleted[team], reads.teamBlocked[team] = completed, hours
 	}
@@ -206,7 +206,11 @@ func storedRerunRows(t *testing.T, ctx context.Context, conn driver.Conn) uint64
 	var total uint64
 	for _, table := range []string{"work_item_metrics_daily", "work_item_state_durations_daily", "estimate_coverage_metrics_daily"} {
 		var count uint64
-		if err := conn.QueryRow(ctx, `SELECT count() FROM `+table+` WHERE org_id = ? AND day = ?`,
+		orgView := ""
+		if table != "estimate_coverage_metrics_daily" {
+			orgView = " AND row_view IN ('', 'org')"
+		}
+		if err := conn.QueryRow(ctx, `SELECT count() FROM `+table+` WHERE org_id = ? AND day = ?`+orgView,
 			rerunReaderOrg, rerunReaderDay).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
 		}

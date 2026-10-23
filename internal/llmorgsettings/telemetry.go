@@ -8,7 +8,7 @@ package llmorgsettings
 // closes it with two signals:
 //
 //   - decryptFailureCounter/defaultRecordDecryptFailure: every failed
-//     Decrypt() call, by org, plus an ERROR log line -- the row is still
+//     Decrypt() call (no per-org label: the org id is on the span and the log line), plus an ERROR log line -- the row is still
 //     skipped (Python parity, `except ValueError: continue`), it is just
 //     no longer silent about it.
 //   - keyValidationFailedCounter/defaultCheckKeyOnFirstDecrypt: the
@@ -31,6 +31,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func mustLLMOrgSettingsCounter(name, description string) metric.Int64Counter {
@@ -49,7 +50,7 @@ func mustLLMOrgSettingsCounter(name, description string) metric.Int64Counter {
 
 var decryptFailureCounter = mustLLMOrgSettingsCounter(
 	"devhealth_llmorgsettings_decrypt_failure_total",
-	"Encrypted org LLM setting rows whose Decrypt() call failed (wrong SETTINGS_ENCRYPTION_KEY or a corrupt row), by org_id. loadRawSettings still skips the row (Python parity), but this used to be entirely silent.",
+	"Encrypted org LLM setting rows whose Decrypt() call failed (wrong SETTINGS_ENCRYPTION_KEY or a corrupt row), as one series. loadRawSettings still skips the row (Python parity), but this used to be entirely silent.",
 )
 
 var keyValidationFailedCounter = mustLLMOrgSettingsCounter(
@@ -66,7 +67,8 @@ var keyValidationFailedCounter = mustLLMOrgSettingsCounter(
 var recordDecryptFailure = defaultRecordDecryptFailure
 
 func defaultRecordDecryptFailure(ctx context.Context, orgID string) {
-	decryptFailureCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("org_id", orgID)))
+	decryptFailureCounter.Add(ctx, 1)
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("org_id", orgID))
 	slog.ErrorContext(ctx, "llmorgsettings: failed to decrypt an encrypted org LLM setting; skipping the row",
 		"component", "llmorgsettings", "org_id", orgID)
 }

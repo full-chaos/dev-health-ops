@@ -185,8 +185,8 @@ func loadComplexityMissingPaths(
 	`
 	arguments := map[string]any{"repo_id": repoID.String(), "org_id": orgID}
 	if limit != nil {
-		query += " LIMIT {limit:UInt64}"
-		arguments["limit"] = uint64(*limit)
+		query += " LIMIT {limit_n:UInt64}"
+		arguments["limit_n"] = uint64(*limit)
 	}
 	rows, err := conn.Query(ctx, query, namedArguments(arguments)...)
 	if err != nil {

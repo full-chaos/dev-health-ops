@@ -169,7 +169,7 @@ func listStatement(groups string) string {
             ` + groups + `
         )
         ORDER BY failed_runs DESC, job_name, ifNull(workflow_name, ''), ifNull(provider, '')
-        LIMIT {limit:UInt64}`
+        LIMIT {limit_n:UInt64}`
 }
 
 func countStatement(groups string) string {
@@ -212,7 +212,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, since, until
 	}
 	groups := groupsStatement(scopeFilter)
 
-	rows, err := client.Query(ctx, listStatement(groups), append(append([]clickhouse.Binding{}, bindings...), clickhouse.Binding{Name: "limit", Value: clampLimit(limit)}))
+	rows, err := client.Query(ctx, listStatement(groups), append(append([]clickhouse.Binding{}, bindings...), clickhouse.Binding{Name: "limit_n", Value: clampLimit(limit)}))
 	if err != nil {
 		return nil, fmt.Errorf("testopsjobfailures: query: %w", err)
 	}

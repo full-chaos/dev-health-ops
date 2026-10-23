@@ -146,7 +146,24 @@ type githubFilesChunkCursor struct {
 	Walked        bool       `json:"walked,omitempty"`
 	NoCommit      bool       `json:"no_commit,omitempty"`
 	Done          bool       `json:"done,omitempty"`
+	// A walk a ceiling stops is read in slices of the sorted path list. Ordinal
+	// counts within the current slice, which is [WalkAfter, WalkNext). WalkKnown
+	// says WalkNext was fixed (empty: the last slice), so a later attempt reads
+	// the same slice whatever its own ceilings allow. Segments counts finished
+	// slices; PathsDone and EligibleDone are their paths.
+	WalkAfter    string `json:"walk_after,omitempty"`
+	WalkNext     string `json:"walk_next,omitempty"`
+	WalkKnown    bool   `json:"walk_known,omitempty"`
+	Segments     int    `json:"segments,omitempty"`
+	PathsDone    int    `json:"paths_done,omitempty"`
+	EligibleDone int    `json:"eligible_done,omitempty"`
 }
+
+// gitHubFilesMaxWalkSegments bounds the slices of one unit to this many. A
+// repository that needs one more stops with the tree walk ceiling, before it
+// writes the slice that could not be the last (no rows of a unit that cannot
+// finish), as a walk that no slice can finish does.
+const gitHubFilesMaxWalkSegments = 20
 
 func decodeGitHubFilesChunkCursor(raw string) (githubFilesChunkCursor, error) {
 	if raw == "" {
@@ -157,6 +174,9 @@ func decodeGitHubFilesChunkCursor(raw string) (githubFilesChunkCursor, error) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cursor); err != nil || cursor.Version != 1 || cursor.Ordinal < 0 ||
 		cursor.Rows < 0 || cursor.Contents < 0 || cursor.Oversize < 0 || cursor.Unavailable < 0 || cursor.PinLost < 0 || cursor.PathsTotal < 0 || cursor.EligibleTotal < 0 || cursor.Requests < 0 || cursor.Chunks < 0 ||
+		cursor.Segments < 0 || cursor.Segments >= gitHubFilesMaxWalkSegments || cursor.PathsDone < 0 || cursor.EligibleDone < 0 ||
+		len(cursor.WalkAfter) > gitHubWalkFrontierMaxBytes || len(cursor.WalkNext) > gitHubWalkFrontierMaxBytes ||
+		(cursor.WalkNext != "" && (!cursor.WalkKnown || cursor.WalkNext <= cursor.WalkAfter)) ||
 		(cursor.TreeRef == "" && !cursor.NoCommit) {
 		return githubFilesChunkCursor{}, ErrInvalidConfiguration
 	}
@@ -285,7 +305,7 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 			return emitFinal(cursor)
 		}
 	}
-	paths, sizes, walked, err := gitHubFilesInventory(ctx, client, claim.OrgID, root, cursor.TreeRef, repoPayload.FullName)
+	segment, err := gitHubFilesInventory(ctx, client, claim.OrgID, root, cursor, repoPayload.FullName)
 	if err != nil && resumedPin && gitHubFilesPinGone(err) && cursor.PinLost < gitHubFilesMaxRepins {
 		// The tree the cursor pinned no longer exists (its commit was
 		// garbage-collected or force-pushed away), so the cursor can never
@@ -313,27 +333,90 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 			}
 			return emitFinal(cursor)
 		}
-		paths, sizes, walked, err = gitHubFilesInventory(ctx, client, claim.OrgID, root, cursor.TreeRef, repoPayload.FullName)
+		segment, err = gitHubFilesInventory(ctx, client, claim.OrgID, root, cursor, repoPayload.FullName)
 	}
 	if err != nil {
 		return err
 	}
-	cursor.PathsTotal = len(paths)
-	cursor.EligibleTotal = 0
-	for _, filePath := range paths {
-		if gitHubFileContentEligible(filePath, sizes[filePath]) {
-			cursor.EligibleTotal++
-		}
-	}
-	cursor.Walked = cursor.Walked || walked
-	sort.Strings(paths)
-	if cursor.Ordinal > len(paths) {
-		return ErrInvalidConfiguration
-	}
 	// fetched keeps the text of every blob read in this attempt, by presence, so
 	// a chunk shortened below to fit is not read twice.
 	fetched := map[string]string{}
-	for cursor.Ordinal < len(paths) {
+	for {
+		paths, sizes := segment.paths, segment.sizes
+		if !cursor.WalkKnown {
+			if segment.next != "" && cursor.Segments+1 >= gitHubFilesMaxWalkSegments {
+				return continueGitHubFilesTraversal(fmt.Errorf(
+					"ref=%s: %w", cursor.TreeRef, &GitHubTreeWalkLimitError{Limit: GitHubTreeWalkLimitDirs, Value: gitHubTreeWalkMaxDirs * gitHubFilesMaxWalkSegments},
+				), repoPayload.FullName)
+			}
+			cursor.WalkNext, cursor.WalkKnown = segment.next, true
+		}
+		eligible := 0
+		for _, filePath := range paths {
+			if gitHubFileContentEligible(filePath, sizes[filePath]) {
+				eligible++
+			}
+		}
+		cursor.PathsTotal = cursor.PathsDone + len(paths)
+		cursor.EligibleTotal = cursor.EligibleDone + eligible
+		cursor.Walked = cursor.Walked || segment.walked
+		sort.Strings(paths)
+		if cursor.Ordinal > len(paths) {
+			return ErrInvalidConfiguration
+		}
+		segmentAfter := cursor.WalkAfter
+		before, cursor, err = handler.emitGitHubFilesSegment(
+			ctx, client, claim, repoID, owner, repository, repoPayload.FullName, normalizedAt, baseRequests, &requests, emit, fetched,
+			segment, before, cursor, eligible,
+		)
+		if err != nil {
+			return err
+		}
+		if cursor.WalkAfter == segmentAfter {
+			if cursor.WalkNext == "" {
+				return emitFinal(cursor)
+			}
+			cursor = advanceGitHubFilesSegment(cursor, len(paths), eligible)
+		}
+		segment, err = gitHubFilesInventory(ctx, client, claim.OrgID, root, cursor, repoPayload.FullName)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// advanceGitHubFilesSegment moves the cursor to the slice after the current one.
+func advanceGitHubFilesSegment(cursor githubFilesChunkCursor, paths, eligible int) githubFilesChunkCursor {
+	cursor.PathsDone += paths
+	cursor.EligibleDone += eligible
+	cursor.PathsTotal, cursor.EligibleTotal = cursor.PathsDone, cursor.EligibleDone
+	cursor.WalkAfter, cursor.WalkNext, cursor.WalkKnown = cursor.WalkNext, "", false
+	cursor.Segments++
+	cursor.Ordinal = 0
+	return cursor
+}
+
+// emitGitHubFilesSegment emits the chunks of one slice, from cursor.Ordinal. A
+// chunk that ends a slice which has a next one carries the cursor of that next
+// slice, so a later attempt does not read this one again.
+func (handler GitHubFilesRouteHandler) emitGitHubFilesSegment(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	claim Claim,
+	repoID, owner, repository, repoFullName string,
+	normalizedAt time.Time,
+	baseRequests int,
+	requests *int,
+	emit func(ChunkRouteEmission) error,
+	fetched map[string]string,
+	segment gitHubFilesSegment,
+	before string,
+	cursor githubFilesChunkCursor,
+	eligible int,
+) (string, githubFilesChunkCursor, error) {
+	paths, sizes := segment.paths, segment.sizes
+	segmentAfter := cursor.WalkAfter
+	for cursor.WalkAfter == segmentAfter && cursor.Ordinal < len(paths) {
 		end, declared := cursor.Ordinal, 0
 		for end < len(paths) && end-cursor.Ordinal < gitHubFileChunkMaxRows {
 			cost := 0
@@ -354,7 +437,7 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 		}
 		contents, err := fetchGitHubFileContents(ctx, client, owner, repository, cursor.TreeRef, missing, sizes)
 		if err != nil {
-			return continueGitHubFilesTraversal(err, repoPayload.FullName)
+			return before, cursor, continueGitHubFilesTraversal(err, repoFullName)
 		}
 		for filePath, text := range contents {
 			fetched[filePath] = text
@@ -385,7 +468,7 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 					row.Contents = &content
 				}
 				if err := row.validate(claim); err != nil {
-					return err
+					return before, cursor, err
 				}
 				if row.Contents != nil {
 					next.Contents++
@@ -396,15 +479,18 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 			}
 			effect, err = effectBatchFromValues("git_files", EffectReadbackRequired, rows)
 			if err != nil {
-				return err
+				return before, cursor, err
 			}
 			next.Ordinal = end
 			next.Rows += len(rows)
 			next.Chunks++
-			next.Requests = baseRequests + requests
+			if end == len(paths) && next.WalkNext != "" {
+				next = advanceGitHubFilesSegment(next, len(paths), eligible)
+			}
+			next.Requests = baseRequests + *requests
 			after, err = next.encode()
 			if err != nil {
-				return err
+				return before, cursor, err
 			}
 			if gitHubFilesChunkFits(claim, effect, before, after) {
 				break
@@ -414,7 +500,7 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 				continue
 			}
 			if rows[0].Contents == nil {
-				return ErrChunkPolicyExceeded
+				return before, cursor, ErrChunkPolicyExceeded
 			}
 			dropped[rows[0].Path] = true
 		}
@@ -426,14 +512,14 @@ func (handler GitHubFilesRouteHandler) CollectChunks(
 		}
 		batch := CompleteRouteBatch{Effects: []EffectBatch{effect}}
 		if err := emit(ChunkRouteEmission{Batch: batch, CursorBefore: before, CursorAfter: after}); err != nil {
-			return err
+			return before, cursor, err
 		}
 		for _, row := range rows {
 			delete(fetched, row.Path)
 		}
 		before, cursor = after, next
 	}
-	return emitFinal(cursor)
+	return before, cursor, nil
 }
 
 // gitHubFilesMaxRepins bounds the restarts of one unit: a repository whose
@@ -458,22 +544,43 @@ func gitHubFileDeclaredBytes(size *int) int {
 	return *size
 }
 
-// gitHubFilesInventory lists every blob of treeRef: the recursive listing, or
-// the directory walk when that listing is truncated or above the object cap.
+// gitHubFilesWalkLimits are the ceilings of one slice of a files walk; tests
+// lower them to cut a small tree into slices.
+var gitHubFilesWalkLimits = rootListedWalkLimits
+
+// gitHubFilesSegment is one slice of the blob inventory of a tree: the paths in
+// [cursor.WalkAfter, next) and their sizes. next is the lower bound of the part
+// after it; empty means the slice reaches the end of the tree.
+type gitHubFilesSegment struct {
+	paths  []string
+	sizes  map[string]*int
+	walked bool
+	next   string
+}
+
+// gitHubFilesInventory lists the blobs of cursor.TreeRef from cursor.WalkAfter
+// on: the recursive listing, or the directory walk when that listing is
+// truncated or above the object cap. A walk a ceiling stops ends the slice
+// there. A slice whose end the cursor fixed is read to exactly that end.
 func gitHubFilesInventory(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	orgID, root, treeRef, fullName string,
-) ([]string, map[string]*int, bool, error) {
-	return gitHubFilesInventoryCached(ctx, client, defaultGitHubTreeWalkCache, orgID, root, treeRef, fullName)
+	orgID, root string,
+	cursor githubFilesChunkCursor,
+	fullName string,
+) (gitHubFilesSegment, error) {
+	return gitHubFilesInventoryCached(ctx, client, defaultGitHubTreeWalkCache, orgID, root, cursor, fullName)
 }
 
 func gitHubFilesInventoryCached(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	cache *gitHubTreeWalkCache,
-	orgID, root, treeRef, fullName string,
-) ([]string, map[string]*int, bool, error) {
+	orgID, root string,
+	cursor githubFilesChunkCursor,
+	fullName string,
+) (gitHubFilesSegment, error) {
+	treeRef := cursor.TreeRef
 	var tree gitHubTreePayload
 	treeErr := fetchObjectRoute(ctx, client, githubTreeRoute, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
 	var tooLarge *providerfoundation.ObjectTooLargeError
@@ -485,32 +592,55 @@ func gitHubFilesInventoryCached(
 			"cap_bytes", tooLarge.CapBytes, "content_length", tooLarge.ContentLength,
 		)
 	} else if treeErr != nil {
-		return nil, nil, false, continueGitHubFilesTraversal(treeErr, fullName)
+		return gitHubFilesSegment{}, continueGitHubFilesTraversal(treeErr, fullName)
 	}
 	if treeCapExceeded || tree.Truncated {
-		if paths, sizes, ok := cache.get(orgID, root, treeRef, time.Now()); ok {
+		if paths, sizes, next, ok := cache.getSlice(orgID, root, treeRef, cursor.WalkAfter, time.Now()); ok &&
+			(!cursor.WalkKnown || next == cursor.WalkNext) {
 			slog.Info("github files tree walk", "walk_cache", "hit", "paths", len(paths))
-			return paths, sizes, true, nil
+			return gitHubFilesSegment{paths: paths, sizes: sizes, walked: true, next: next}, nil
 		}
-		paths, sizes, stats, walkErr := gitHubWalkTreeLimited(ctx, client, root, treeRef, "", rootListedWalkLimits())
+		limits := gitHubFilesWalkLimits()
+		limits.after = cursor.WalkAfter
+		if cursor.WalkKnown {
+			limits.until = cursor.WalkNext
+		}
+		result, walkErr := gitHubWalkTreeSlice(ctx, client, root, treeRef, limits)
+		if walkErr == nil && result.Stopped != nil && cursor.WalkKnown {
+			// The slice was fixed by an earlier attempt; one that cannot be read
+			// to the same end would shift every ordinal after it.
+			walkErr = result.Stopped
+		}
 		if walkErr != nil {
-			logGitHubTreeWalkStop(walkErr, stats)
-			return nil, nil, true, continueGitHubFilesTraversal(fmt.Errorf("ref=%s: %w", treeRef, walkErr), fullName)
+			logGitHubTreeWalkStop(walkErr, result.Stats)
+			return gitHubFilesSegment{}, continueGitHubFilesTraversal(fmt.Errorf("ref=%s: %w", treeRef, walkErr), fullName)
 		}
-		cache.put(orgID, root, treeRef, paths, sizes, time.Now())
-		slog.Info("github files tree walk", "walk_cache", "miss", "paths", len(paths), "dirs", stats.dirs, "entries", stats.entries)
-		return paths, sizes, true, nil
+		next := result.Next
+		if cursor.WalkKnown {
+			next = cursor.WalkNext
+		}
+		cache.putSlice(orgID, root, treeRef, cursor.WalkAfter, next, result.Paths, result.Sizes, time.Now())
+		slog.Info(
+			"github files tree walk", "walk_cache", "miss", "paths", len(result.Paths),
+			"dirs", result.Stats.dirs, "entries", result.Stats.entries, "segment", cursor.Segments, "more", next != "",
+		)
+		return gitHubFilesSegment{paths: result.Paths, sizes: result.Sizes, walked: true, next: next}, nil
 	}
 	paths := make([]string, 0, len(tree.Tree))
 	sizes := make(map[string]*int, len(tree.Tree))
 	for _, entry := range tree.Tree {
-		if entry.Type != "blob" || entry.Path == "" {
+		if entry.Type != "blob" || entry.Path == "" || entry.Path < cursor.WalkAfter ||
+			(cursor.WalkKnown && cursor.WalkNext != "" && entry.Path >= cursor.WalkNext) {
 			continue
 		}
 		paths = append(paths, entry.Path)
 		sizes[entry.Path] = entry.Size
 	}
-	return paths, sizes, false, nil
+	next := ""
+	if cursor.WalkKnown {
+		next = cursor.WalkNext
+	}
+	return gitHubFilesSegment{paths: paths, sizes: sizes, next: next}, nil
 }
 
 func continueGitHubFilesTraversal(err error, repository string) error {

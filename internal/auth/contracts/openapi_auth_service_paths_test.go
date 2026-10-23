@@ -123,13 +123,20 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 			if bearer[key] && !bearerScheme {
 				problems = append(problems, fmt.Sprintf("OpenAPI operation %s accepts a bearer credential class in its profile row but declares no bearer security requirement", key))
 			}
-			if len(refs) == 0 {
+			if len(refs) == 0 && method != "head" {
 				problems = append(problems, fmt.Sprintf("OpenAPI operation %s references no schema", key))
 			}
 			responses, _ := operation["responses"].(map[string]any)
+			if method == "head" {
+				for status, answer := range responses {
+					if body, _ := answer.(map[string]any); body["content"] != nil {
+						problems = append(problems, fmt.Sprintf("OpenAPI operation %s: its %s declares a body, and a HEAD answer carries none", key, status))
+					}
+				}
+			}
 			for _, status := range transportStatuses {
 				response, declared := responses[status].(map[string]any)
-				if !declared {
+				if !declared || method == "head" {
 					continue
 				}
 				content, _ := response["content"].(map[string]any)
@@ -186,6 +193,10 @@ func TestTheOpenAPIPathGateRefusesPlantedMismatches(t *testing.T) {
 			document["components"].(map[string]any)["securitySchemes"].(map[string]any)["apiKeyOnly"] = map[string]any{"type": "apiKey", "in": "header", "name": "X-Key"}
 			op := document["paths"].(map[string]any)["/v1/sessions/revoke"].(map[string]any)["post"].(map[string]any)
 			op["security"] = []any{map[string]any{"apiKeyOnly": []any{}}}
+		},
+		"a HEAD answer declares a body": func(document map[string]any) {
+			op := document["paths"].(map[string]any)["/.well-known/jwks.json"].(map[string]any)["head"].(map[string]any)
+			op["responses"].(map[string]any)["200"].(map[string]any)["content"] = map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Jwks"}}}
 		},
 		"an operation no row profiles": func(document map[string]any) {
 			document["paths"].(map[string]any)["/v1/extra"] = map[string]any{"get": map[string]any{"responses": map[string]any{"200": map[string]any{"description": "x", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Session"}}}}}}}

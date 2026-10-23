@@ -1,3 +1,5 @@
+contracts/auth/v1
+contracts/auth/v1/vocabulary
 contracts/graphql/v1
 internal/aftercommit
 internal/api/externalurl
@@ -78,8 +80,10 @@ internal/ownershipwindow
 internal/pgmigrate
 internal/platform/buildstamp
 internal/platform/config
+internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
 internal/platform/fernet
@@ -161,6 +165,7 @@ internal/queryapi/workgraph
 internal/queryapi/workunitexplain
 internal/scheduler/sync
 internal/storage/clickhouse
+internal/storage/clickhouse/engineclause
 internal/storage/clickhouse/latestrow
 internal/storage/clickhouse/liverow
 internal/storage/postgres

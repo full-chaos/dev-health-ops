@@ -29,7 +29,7 @@ func TestSignatureOnlySetIsUnchangedByTheGate(t *testing.T) {
 		"POST /api/v1/webhooks/github":                 "github_webhook_signature",
 		"POST /api/v1/webhooks/gitlab":                 "gitlab_webhook_signature",
 		"POST /api/v1/webhooks/jira":                   "jira_webhook_signature",
-		"POST /api/v1/webhooks/pagerduty/{binding_id}": "pagerduty_oauth_credential",
+		"POST /api/v1/webhooks/pagerduty/{binding_id}": "pagerduty_webhook_signature",
 	}
 	if !reflect.DeepEqual(signatureOnlyRoutes, want) {
 		t.Fatalf("the signature-only set changed: %v", signatureOnlyRoutes)

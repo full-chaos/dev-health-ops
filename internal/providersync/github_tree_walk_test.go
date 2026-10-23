@@ -339,7 +339,7 @@ func TestGitHubFilesInventoryEndsOnACeilingWithTheTypedLimit(t *testing.T) {
 		return deep.Do(request)
 	}))
 	client := gitHubRepositoryClient(t, doer, "https://api.github.com")
-	_, _, _, err := gitHubFilesInventory(context.Background(), client, "org", "/repos/acme/api", "root", "acme/api")
+	_, err := gitHubFilesInventory(context.Background(), client, "org", "/repos/acme/api", githubFilesChunkCursor{Version: 1, TreeRef: "root"}, "acme/api")
 	if walkLimitOf(t, err).Limit != GitHubTreeWalkLimitDepth || !errors.Is(err, ErrGitHubFilesTraversalFailed) {
 		t.Fatalf("err=%v", err)
 	}

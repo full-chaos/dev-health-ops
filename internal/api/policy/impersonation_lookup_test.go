@@ -24,7 +24,9 @@ func TestImpersonationSessionLookupErrorIsRefused(t *testing.T) {
 	var logs bytes.Buffer
 	scope := NewScope(authenticator(t, store), slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	token := sign(t, claims(func(c jwt.MapClaims) { c["is_superuser"] = true }))
-	got := serve(scope.Impersonation(echo), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token})
+	mux := http.NewServeMux()
+	mux.Handle("GET /x/{id}", scope.Impersonation(echo))
+	got := serve(mux, http.MethodGet, "/x/an-unbounded-id", map[string]string{"Authorization": "Bearer " + token})
 	if got.status != http.StatusInternalServerError {
 		t.Fatalf("status %d body %q, want 500: the active-session lookup failed", got.status, got.body)
 	}
@@ -35,11 +37,14 @@ func TestImpersonationSessionLookupErrorIsRefused(t *testing.T) {
 		t.Fatalf("%d session lookups, want 1", store.sessionCalls)
 	}
 	// The refusal must be visible at the default (Info) level, with the store
-	// error and the request path, so a fault that turns admin requests into
+	// error and the route template (never the raw path), so a fault that turns admin requests into
 	// 500s is not silent.
-	for _, want := range []string{"level=ERROR", "session lookup failed; refusing the request", "path=/x", "store down"} {
+	for _, want := range []string{"level=ERROR", "session lookup failed; refusing the request", "path=\"GET /x/{id}\"", "store down"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Fatalf("log %q lacks %q", logs.String(), want)
 		}
+	}
+	if strings.Contains(logs.String(), "an-unbounded-id") {
+		t.Fatal("the log carries the raw request path")
 	}
 }

@@ -65,8 +65,6 @@ var negativeProofs = map[string]negativeProof{
 	"go-api|POST /api/v1/ingest/telemetry [dev-health-ops-api @api]":                          {file: proofLegacy, test: legacyTest},
 	"go-api|POST /api/v1/ingest/work-items [dev-health-ops-api @api]":                         {file: proofLegacy, test: legacyTest},
 	"go-api|POST /api/v1/webhooks/github [dev-health-ops-api @api]":                           {file: proofWebhooks, test: webhookTest},
-	"go-api|POST /api/v1/webhooks/gitlab [dev-health-ops-api @api]":                           {file: proofWebhooks, test: webhookTest},
-	"go-api|POST /api/v1/webhooks/jira [dev-health-ops-api @api]":                             {file: proofWebhooks, test: webhookTest},
 	"go-api|POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]":           {file: proofWebhooks, test: webhookTest},
 	"query-api|GET /buildinfo [dev-health-query-api @query,internal]":                         {file: proofMCP, test: buildInfoTest},
 	"query-api|POST /query [dev-health-query-api @mcp]":                                       {file: proofMCP, test: mcpTest},
@@ -176,7 +174,7 @@ func TestEveryNegativeProofNamesARealTestThatSendsUserTokens(t *testing.T) {
 	}
 }
 
-// The census: 27 derived rows = 26 proven + 1 exempt. A change to either count is a decision, made here.
+// The census: 25 derived rows = 24 proven + 1 exempt. A change to either count is a decision, made here.
 func TestNegativeProofCensus(t *testing.T) {
 	proven, exempt := 0, 0
 	for _, proof := range negativeProofs {
@@ -186,7 +184,7 @@ func TestNegativeProofCensus(t *testing.T) {
 			proven++
 		}
 	}
-	if len(derivedRows(t)) != 27 || proven != 26 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 27, 26, 1", len(derivedRows(t)), proven, exempt)
+	if len(derivedRows(t)) != 25 || proven != 24 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 25, 24, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

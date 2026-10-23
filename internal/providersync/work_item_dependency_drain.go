@@ -82,7 +82,7 @@ var ErrWorkItemDependencyDrainMutation = errors.New("work item dependency drain:
 var ErrWorkItemDependencyDrainReadback = errors.New("work item dependency drain: readback after delete differs")
 
 // ErrWorkItemDependencyDrainTable means the table is not the table the tool was written for.
-var ErrWorkItemDependencyDrainTable = errors.New("work item dependency drain: table engine or sorting key is not the expected one")
+var ErrWorkItemDependencyDrainTable = errors.New("work item dependency drain: table version column or sorting key is not the expected one")
 
 // WorkItemDependencyDrainOptions drives DrainWorkItemDependencies.
 type WorkItemDependencyDrainOptions struct {
@@ -192,9 +192,12 @@ func verifyDependencyTableShape(ctx context.Context, conn driver.Conn) error {
 		clickhouse.Named("table", WorkItemDependencyDrainTable)).Scan(&engineFull, &sortingKey); err != nil {
 		return fmt.Errorf("%w: %v", ErrWorkItemDependencyDrainTable, err)
 	}
-	if clause, err := engineclause.Parse(engineFull); err != nil || !clause.IsReplacingOn("last_synced") ||
-		sortingKey != "org_id, source_work_item_id, target_work_item_id, relationship_type" {
-		return ErrWorkItemDependencyDrainTable
+	const wantKey = "org_id, source_work_item_id, target_work_item_id, relationship_type"
+	if clause, err := engineclause.Parse(engineFull); err != nil || !clause.IsVersionedOn("last_synced") {
+		return fmt.Errorf("%w: %s needs last_synced as its engine version column, found engine %q", ErrWorkItemDependencyDrainTable, WorkItemDependencyDrainTable, engineFull)
+	}
+	if sortingKey != wantKey {
+		return fmt.Errorf("%w: %s needs sorting key (%s), found (%s)", ErrWorkItemDependencyDrainTable, WorkItemDependencyDrainTable, wantKey, sortingKey)
 	}
 	return nil
 }

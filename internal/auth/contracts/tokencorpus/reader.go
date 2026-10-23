@@ -74,7 +74,14 @@ func check(root string, c *Corpus, jwks Jwks, v Vector, now int64, audience stri
 		switch step {
 		case ReasonContract:
 			document := `{"header":` + v.HeaderJSON + `,"claims":` + v.PayloadJSON + `}`
-			if _, err := contracts.ParseAccessToken(root, []byte(document)); err != nil {
+			parse := contracts.ParseAccessToken
+			if c.Manifest.Surface == SurfaceWorkload {
+				parse = func(root string, raw []byte) (*contracts.AccessToken, error) {
+					_, err := contracts.ParseWorkloadToken(root, raw)
+					return nil, err
+				}
+			}
+			if _, err := parse(root, []byte(document)); err != nil {
 				var refusal *contracts.CredentialRefusal
 				if errors.As(err, &refusal) {
 					return Decision{Reason: ReasonContract, Stage: refusal.Stage}, nil

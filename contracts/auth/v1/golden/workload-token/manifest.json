@@ -1,0 +1,540 @@
+{
+  "description": "The signed golden corpus for workload-token.v1. Each vector is a header text, a payload text and a hex signature; the signing input is base64url(header) + \".\" + base64url(payload). A verifier decides every vector at the fixed clock and audience (the service it is) of its row, in decision_order, and must reach the row's decision. Only the public JWKS is committed.",
+  "surface": "workload-token.v1",
+  "issuer": "https://auth.example.test",
+  "leeway_seconds": 0,
+  "removed_kids": [
+    "auth-example-2026-04"
+  ],
+  "removed_public_keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "use": "sig",
+      "kid": "auth-example-2026-04",
+      "x": "IxoibvCFWL7FyOwSfNqo77e5yQPpQGElZYQ77YcXK3U"
+    }
+  ],
+  "decision_order": [
+    "contract",
+    "unknown_kid",
+    "signature",
+    "issuer",
+    "audience",
+    "not_yet_valid",
+    "expired"
+  ],
+  "vectors": [
+    {
+      "file": "invalid-alg-hs256-public-key-as-secret.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "alg HS256 with a valid HMAC keyed by the published public key: the symmetric-confusion shape."
+    },
+    {
+      "file": "invalid-alg-hs256-unrelated-secret.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "alg HS256 with a valid HMAC under some other secret."
+    },
+    {
+      "file": "invalid-alg-lowercase.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "alg spelled eddsa with a valid EdDSA signature: the name is case-sensitive."
+    },
+    {
+      "file": "invalid-alg-none.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "alg none with an empty signature."
+    },
+    {
+      "file": "invalid-aud-array.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "two audiences: a workload token names exactly one service."
+    },
+    {
+      "file": "invalid-aud-unknown.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "an audience no workload token carries."
+    },
+    {
+      "file": "invalid-aud-user-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "the user-token audience dev-health-api: not a workload audience."
+    },
+    {
+      "file": "invalid-aud-wrong-service.json",
+      "now": 1760000100,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid auth-service workload token presented to dev-health-api: the audience is exactly one service."
+    },
+    {
+      "file": "invalid-claim-org-id.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "a org_id: a workload token acts for no organization."
+    },
+    {
+      "file": "invalid-claim-scope.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "a scope: nothing in a workload token grants a permission."
+    },
+    {
+      "file": "invalid-claim-sid.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "a sid: a workload token has no session."
+    },
+    {
+      "file": "invalid-delayed-nbf-before-nbf.json",
+      "now": 1760000059,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "not_yet_valid",
+      "why": "nbf later than iat: the clock is after iat and one second before nbf."
+    },
+    {
+      "file": "invalid-duplicate-claim-aud.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "duplicate_member",
+      "why": "aud appears twice; the last is the verifier's audience and the signature is valid over those bytes."
+    },
+    {
+      "file": "invalid-duplicate-claim-exp.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "duplicate_member",
+      "why": "exp appears twice."
+    },
+    {
+      "file": "invalid-duplicate-header-alg.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "duplicate_member",
+      "why": "alg appears twice in the header."
+    },
+    {
+      "file": "invalid-duplicate-header-kid.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "duplicate_member",
+      "why": "kid appears twice with two published kids."
+    },
+    {
+      "file": "invalid-duplicate-header-typ.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "duplicate_member",
+      "why": "typ appears twice (at+jwt, then workload+jwt); the signature is valid over those bytes."
+    },
+    {
+      "file": "invalid-exp-equals-now.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "expired",
+      "why": "The clock equals exp: expired from exp inclusive."
+    },
+    {
+      "file": "invalid-exp-not-after-nbf.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "client_rule",
+      "why": "exp equals nbf: an empty validity window."
+    },
+    {
+      "file": "invalid-exp-one-second-ago.json",
+      "now": 1760000301,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "expired",
+      "why": "One second past exp."
+    },
+    {
+      "file": "invalid-iat-one-second-ahead.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "not_yet_valid",
+      "why": "iat and nbf one second after the clock."
+    },
+    {
+      "file": "invalid-iss-not-an-https-url.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "an http issuer."
+    },
+    {
+      "file": "invalid-iss-other-issuer.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "issuer",
+      "why": "A well-formed issuer that is not the one the verifier pins, signed by a published key."
+    },
+    {
+      "file": "invalid-kid-absent.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "no kid member."
+    },
+    {
+      "file": "invalid-kid-empty.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "an empty kid."
+    },
+    {
+      "file": "invalid-kid-removed.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "key_set": "published_and_removed",
+      "expect": "reject",
+      "reason": "unknown_kid",
+      "why": "Valid claims signed by a key that was published and has been removed. The row runs with that key in the verifier's key set (a stale cache): it must still refuse the kid."
+    },
+    {
+      "file": "invalid-kid-unknown.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "unknown_kid",
+      "why": "A kid that was never published."
+    },
+    {
+      "file": "invalid-lifetime-one-hour.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "client_rule",
+      "why": "exp - iat of 3600 s, the user access token's ceiling: a workload token never lives that long."
+    },
+    {
+      "file": "invalid-lifetime-over-the-ceiling.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "client_rule",
+      "why": "exp - iat one second over the 300 s ceiling."
+    },
+    {
+      "file": "invalid-nbf-one-second-ahead.json",
+      "now": 1759999999,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "not_yet_valid",
+      "why": "One second before nbf."
+    },
+    {
+      "file": "invalid-order-audience-over-expiry.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "Two failures: the wrong service and an expired token. The audience refusal comes first."
+    },
+    {
+      "file": "invalid-order-audience-over-not-yet-valid.json",
+      "now": 1759999999,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "Two failures: the wrong service and a clock before nbf. The audience refusal comes first."
+    },
+    {
+      "file": "invalid-order-contract-over-unknown-kid.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "Two failures: typ at+jwt and a kid never published. The contract refusal comes first."
+    },
+    {
+      "file": "invalid-order-issuer-over-audience.json",
+      "now": 1760000100,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "issuer",
+      "why": "Two failures: another issuer and the wrong service. The issuer refusal comes first."
+    },
+    {
+      "file": "invalid-order-signature-over-issuer.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "Two failures: another issuer and a signature by a key outside the set. The signature refusal comes first."
+    },
+    {
+      "file": "invalid-principal-type-human.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "principal_type human: a workload token is workload only."
+    },
+    {
+      "file": "invalid-signature-bit-flip.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "A valid signature with its last bit flipped."
+    },
+    {
+      "file": "invalid-signature-empty.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "An empty signature under alg EdDSA."
+    },
+    {
+      "file": "invalid-signature-payload-tampered.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "A payload changed by one byte after signing."
+    },
+    {
+      "file": "invalid-signature-truncated.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "A 63-byte signature."
+    },
+    {
+      "file": "invalid-signature-wrong-key.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "The active kid, signed by a key outside the set."
+    },
+    {
+      "file": "invalid-signature-wrong-published-key.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "signature",
+      "why": "The active kid, signed by the other published key."
+    },
+    {
+      "file": "invalid-sub-integer.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "sub as a JSON number."
+    },
+    {
+      "file": "invalid-sub-user-prefix.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "sub with the user-id prefix, not a principal id."
+    },
+    {
+      "file": "invalid-typ-absent.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "no typ member: a missing typ is refused."
+    },
+    {
+      "file": "invalid-typ-access-token.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "typ at+jwt with a valid signature: the user access token's type is never a workload token's."
+    },
+    {
+      "file": "invalid-typ-application-prefix.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "an application/-prefixed media type is not the typ."
+    },
+    {
+      "file": "invalid-typ-empty.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "an empty typ."
+    },
+    {
+      "file": "invalid-typ-jwt-lowercase.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "typ jwt: the effective principal envelope's type."
+    },
+    {
+      "file": "invalid-typ-jwt-uppercase.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "typ JWT: the HS256 token's type."
+    },
+    {
+      "file": "invalid-typ-mixed-case.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "typ is case-sensitive: no mixed-case form."
+    },
+    {
+      "file": "invalid-typ-trailing-space.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "a trailing space is not the typ."
+    },
+    {
+      "file": "invalid-typ-uppercase.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "typ is case-sensitive: exact bytes."
+    },
+    {
+      "file": "invalid-user-access-token-signed-by-the-active-key.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "a genuine user access token signed by the active key and presented as a workload token."
+    },
+    {
+      "file": "valid-at-nbf.json",
+      "now": 1760000000,
+      "verify_as_audience": "auth-service",
+      "expect": "accept",
+      "why": "The clock equals nbf: valid from nbf inclusive."
+    },
+    {
+      "file": "valid-auth-service.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "accept",
+      "why": "The ordinary workload token for auth-service, typ workload+jwt, signed by the active key."
+    },
+    {
+      "file": "valid-delayed-nbf-at-nbf.json",
+      "now": 1760000060,
+      "verify_as_audience": "auth-service",
+      "expect": "accept",
+      "why": "nbf later than iat: the clock equals nbf, so the token is valid."
+    },
+    {
+      "file": "valid-last-second-before-exp.json",
+      "now": 1760000299,
+      "verify_as_audience": "auth-service",
+      "expect": "accept",
+      "why": "One second before exp: the last valid instant."
+    },
+    {
+      "file": "valid-lifetime-at-the-ceiling.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "accept",
+      "why": "exp - iat equals the ceiling (300 s): the longest lifetime a verifier accepts."
+    },
+    {
+      "file": "valid-signed-by-overlap-key.json",
+      "now": 1760000100,
+      "verify_as_audience": "auth-service",
+      "expect": "accept",
+      "why": "Signed by the key published for the rotation overlap: both keys of the set verify."
+    }
+  ]
+}

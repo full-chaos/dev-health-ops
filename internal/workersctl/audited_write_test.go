@@ -69,6 +69,7 @@ func directWriteVerbs() map[string]directWriteVerb {
 		"providersync carry-team-ids":                        {argv: []string{"providersync", "carry-team-ids", "--org-stdin"}, dryRun: true, stdin: org + "\n"},
 		"providersync compact-ownership-intervals":           {argv: []string{"providersync", "compact-ownership-intervals", "--org-stdin", "--apply", "--workers-paused"}, stdin: org + "\n"},
 		"providersync drain-removed-dependencies":            {argv: []string{"providersync", "drain-removed-dependencies", "--org-stdin", "--apply", "--workers-paused"}, stdin: org + "\n"},
+		"metrics daily-marker-backfill":                      {argv: []string{"metrics", "daily-marker-backfill", "--org", org, "--from", "2026-08-01", "--to", "2026-08-01"}, dryRun: true},
 		"sync-dispatch-outbox close-backlog":                 {argv: []string{"sync-dispatch-outbox", "close-backlog"}, dryRun: true},
 	}
 }
@@ -238,4 +239,25 @@ func sortedSet(set map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// A refused caller never reaches ClickHouse from daily-marker-backfill: the
+// process settings that name it are not read, and no audit intent is written.
+func TestMarkerBackfillRefusalReadsNoClickHouseSetting(t *testing.T) {
+	verb := directWriteVerbs()["metrics daily-marker-backfill"]
+	for mode, flags := range map[string][]string{"write": auditFlags(), "dry-run": {"--dry-run"}} {
+		auditor := &refusingAuditor{}
+		runtime := verb.runtimeFor(commandRuntimeWithAuditor(t, commandAuthorizer{err: joboperator.ErrAuthorization}, auditor))
+		var looked []string
+		runtime.lookup = func(key string) (string, bool) {
+			looked = append(looked, key)
+			return "", false
+		}
+		var stdout, stderr bytes.Buffer
+		code := dispatch(context.Background(), runtime, append(slices.Clone(verb.argv), flags...), &stdout, &stderr)
+		if code != 1 || stderr.String() != unauthorizedJSON || stdout.Len() != 0 || len(auditor.events) != 0 || len(looked) != 0 {
+			t.Errorf("%s: code=%d stdout=%q stderr=%q intents=%d settings read=%v, want unauthorized and nothing touched",
+				mode, code, stdout.String(), stderr.String(), len(auditor.events), looked)
+		}
+	}
 }

@@ -43,6 +43,7 @@ internal/platform/config
 internal/platform/credshape
 internal/platform/dbphase
 internal/platform/dbspan
+internal/platform/dsnclass
 internal/platform/errortext
 internal/platform/errortext/hardened
 internal/platform/fernet

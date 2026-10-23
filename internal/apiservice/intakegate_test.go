@@ -1,7 +1,10 @@
 package apiservice
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -67,9 +70,9 @@ func TestIntakeGateCountsEveryIdShapeOnceAheadOfScope(t *testing.T) {
 		budget int
 	}{
 		{"canonical id", func(int) string { return uuid.NewString() }, 600},
-		{"malformed id", func(i int) string { return "not-a-uuid-" + uuid.NewString()[:8] + string(rune('a'+i%26)) }, 600},
-		{"too long id", func(int) string { return strings.Repeat("a", 200) + uuid.NewString() }, 600},
-		{"percent segment", func(int) string { return "%31" + uuid.NewString() }, 600},
+		{"malformed id", func(i int) string { return "not-a-uuid-" + uuid.NewString()[:8] + string(rune('a'+i%26)) }, 60},
+		{"too long id", func(int) string { return strings.Repeat("a", 200) + uuid.NewString() }, 60},
+		{"percent segment", func(int) string { return "%31" + uuid.NewString() }, 60},
 		{"dot segment", func(int) string { return "." }, 60},
 		{"double dot segment", func(int) string { return ".." }, 60},
 	}
@@ -252,5 +255,133 @@ func TestEveryRequestThatReachesAnIntakeHandlerIsCountedOnce(t *testing.T) {
 	}
 	if reachedCount < 8 {
 		t.Fatalf("only %d probes reached an intake handler: the probe no longer reaches the routes", reachedCount)
+	}
+}
+
+func TestIntakeGateLogsALimiterStoreFailureOnce(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	failure := errors.New("dial tcp 10.9.8.7:6379: connection refused: password=hunter2 org=11111111-2222-3333-4444-555555555555")
+	deps := Deps{}
+	gate := newIntakeGate(&deps, logger, func(Deps) (httpapi.CounterStore, error) { return nil, failure })
+	if gate == nil || deps.Limits == nil {
+		t.Fatal("the gate or the in-process store was not built")
+	}
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want exactly one log line, got %d: %q", len(lines), logs.String())
+	}
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if entry["level"] != "ERROR" || entry["msg"] != "api: the shared rate limiter is unavailable; intake deliveries count in the in-process limiter" {
+		t.Fatalf("log entry %v", entry)
+	}
+	for _, leaked := range []string{"10.9.8.7", "6379", "hunter2", "11111111-2222", "connection refused", "dial tcp"} {
+		if strings.Contains(logs.String(), leaked) {
+			t.Errorf("the log carries %q", leaked)
+		}
+	}
+	if _, ok := entry["error"].(map[string]any); !ok {
+		t.Fatalf("the failure is not logged as the error class group: %v", entry)
+	}
+	server, err := NewServerWithGate(apiTestConfig(), logger, webhookintake.Routes(webhookintake.Deps{Logger: logger}), gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := 0
+	for i := 0; i < 61; i++ {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/pagerduty/"+uuid.NewString()[:36], nil)
+		request.URL.Path = "/api/v1/webhooks/pagerduty/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+		request.RemoteAddr = "203.0.113.50:4242"
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		last = recorder.Code
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("the fallback gate answered %d on the 61st delivery, want 429", last)
+	}
+}
+
+type exactKeyRecorder struct{ keys []string }
+
+func (r *exactKeyRecorder) Increment(_ context.Context, hit httpapi.Hit) (int64, error) {
+	if hit.Limit.ID == "webhook_pagerduty" {
+		r.keys = append(r.keys, hit.Path)
+	}
+	return 1, nil
+}
+func (*exactKeyRecorder) Peek(context.Context, httpapi.Hit) (int64, error) { return 0, nil }
+func (*exactKeyRecorder) Backend() string                                  { return "memory" }
+
+// The gate keys the per-binding bucket on the id the handler will read: driven
+// through the real server and router, a request that reaches the handler is
+// keyed on exactly the canonical form of the id the handler's path value holds,
+// and no request, reached or not, is keyed on the canonical form of an id that
+// is not the whole remainder of its path.
+func TestGateAndHandlerAcceptTheSameIdSpellings(t *testing.T) {
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	var reachedWith []string
+	routes := webhookintake.Routes(webhookintake.Deps{Logger: quiet})
+	for index := range routes {
+		routes[index].Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reachedWith = append(reachedWith, r.PathValue("binding_id"))
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
+	recorder := &exactKeyRecorder{}
+	server, err := NewServerWithGate(apiTestConfig(), quiet, routes, webhookintake.NewGate(recorder, nil, quiet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	canonical := id.String()
+	const prefix = "/api/v1/webhooks/pagerduty/"
+	targets := []string{
+		canonical, strings.ToUpper(canonical), "urn:uuid:" + canonical, "{" + canonical + "}", strings.ReplaceAll(canonical, "-", ""),
+		strings.ToUpper(canonical[:18]) + canonical[18:], "%31" + canonical[1:], "%2" + "F" + canonical, canonical + "%2F", canonical + "%2f",
+		canonical + "%2Fextra", canonical + "/", canonical + "/extra", "extra/" + canonical, "/" + canonical, canonical[:35], canonical + "0",
+		"not-a-uuid", "..", ".", "", strings.Repeat("a", 3000), "%67" + canonical[1:],
+	}
+	reached := 0
+	for _, tail := range targets {
+		reachedWith, recorder.keys = nil, nil
+		request := httptest.NewRequest(http.MethodPost, "/", nil)
+		parsed, err := url.ParseRequestURI(prefix + tail)
+		if err != nil {
+			continue
+		}
+		request.URL = parsed
+		request.RequestURI = prefix + tail
+		request.RemoteAddr = "203.0.113.77:4242"
+		server.Handler().ServeHTTP(httptest.NewRecorder(), request)
+		if len(recorder.keys) != 1 {
+			if len(recorder.keys) == 0 && len(reachedWith) == 0 {
+				continue
+			}
+			t.Errorf("tail %q: %d exact-bucket keys, want one", tail, len(recorder.keys))
+			continue
+		}
+		key := recorder.keys[0]
+		reached += len(reachedWith)
+		for _, pv := range reachedWith {
+			want := prefix + "malformed"
+			if got, err := uuid.Parse(pv); err == nil && !strings.Contains(pv, "/") {
+				want = prefix + got.String()
+			}
+			if key != want {
+				t.Errorf("tail %q: the handler read %q, the gate keyed %q, want %q", tail, pv, key, want)
+			}
+		}
+		if key == prefix+canonical {
+			decoded, err := url.PathUnescape(strings.TrimPrefix(request.URL.EscapedPath(), prefix))
+			if got, perr := uuid.Parse(decoded); err != nil || perr != nil || got != id || strings.Contains(decoded, "/") {
+				t.Errorf("tail %q produced the canonical key of the valid id without being exactly that id", tail)
+			}
+		}
+	}
+	if reached < 8 {
+		t.Fatalf("only %d probes reached the handler: the check no longer sees the router", reached)
 	}
 }

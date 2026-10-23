@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/ratelimit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -107,9 +109,9 @@ func NewGate(store httpapi.CounterStore, now func() time.Time, logger *slog.Logg
 }
 
 // Provider names the intake route a request is for, from its method and its
-// decoded path (the path the mux routes on): the three fixed routes, and the
-// PagerDuty route with exactly one segment after its prefix, whatever that
-// segment holds.
+// decoded path (the path the mux routes on): the three fixed routes, and every
+// path under the PagerDuty prefix, whatever follows it, so no spelling of that
+// route is left uncounted.
 func Provider(method, path string) (string, bool) {
 	if method != http.MethodPost {
 		return "", false
@@ -119,7 +121,7 @@ func Provider(method, path string) (string, bool) {
 			return provider, true
 		}
 	}
-	if id, ok := strings.CutPrefix(path, routePrefix+"/pagerduty/"); ok && id != "" && !strings.Contains(id, "/") {
+	if strings.HasPrefix(path, pagerdutyPathBase) {
 		return providerPagerDuty, true
 	}
 	return "", false
@@ -149,7 +151,7 @@ func (g *Gate) Admit(r *http.Request, provider string) func(http.ResponseWriter)
 		{template, routeTemplates[provider], throttleTemplate},
 	}
 	if failClosed {
-		steps = append(steps, step{g.limiters.pagerduty, r.URL.Path, throttleExact})
+		steps = append(steps, step{g.limiters.pagerduty, exactBucketPath(r.URL.Path), throttleExact})
 	}
 	for _, s := range steps {
 		var allowed bool
@@ -174,4 +176,27 @@ func (g *Gate) Admit(r *http.Request, provider string) func(http.ResponseWriter)
 		}
 	}
 	return nil
+}
+
+// malformedBucket names the one exact-path bucket every PagerDuty path whose
+// id is not a single UUID shares: caller text is never a store key.
+const malformedBucket = "malformed"
+
+// pagerdutyPathBase is the PagerDuty route up to its id.
+const pagerdutyPathBase = routePrefix + "/pagerduty/"
+
+// exactBucketPath is the per-binding bucket key of a PagerDuty path: the
+// canonical (lowercase, hyphenated) form of the one UUID after the prefix, so
+// every spelling of one id shares a bucket and distinct ids never do; any
+// remainder that is not exactly one UUID (an extra or trailing slash, junk, a
+// different length) is the shared malformed bucket. The prefix is the one the
+// handler's uuid.Parse sees, so the gate and the handler read the same id.
+func exactBucketPath(path string) string {
+	id, _ := strings.CutPrefix(path, pagerdutyPathBase)
+	if !strings.Contains(id, "/") {
+		if parsed, err := uuid.Parse(id); err == nil {
+			return pagerdutyPathBase + parsed.String()
+		}
+	}
+	return pagerdutyPathBase + malformedBucket
 }

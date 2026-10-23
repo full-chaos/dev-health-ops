@@ -81,6 +81,8 @@ internal/cigates/docstools	refusals_pub_test.go	unexpressed	-
 internal/cigates/docstools	refusals_test.go	unexpressed	-
 internal/cigates/docstools	validate_inventory_review.go	unexpressed	-
 internal/cigates/docstools	validate_inventory_review_refusals_test.go	unexpressed	-
+internal/cigates/frozengoldens	frozengoldens.go	unexpressed	-
+internal/cigates/frozengoldens	frozengoldens_test.go	unexpressed	-
 internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-
 internal/cigates/nopython	tests_python_test.go	unexpressed	-
@@ -187,6 +189,8 @@ internal/migrationmatrix	restendpoints.go	unexpressed	-
 internal/operationalordering	finalreads_test.go	unexpressed	-
 internal/operationalordering	one_resolver_test.go	.	tree
 internal/ownershipwindow	ownershipwindow_test.go	internal/ownershipwindow	dir
+internal/pgmigrate	chain_tail_integration_test.go	internal/pgmigrate/testdata/postfreeze/two	tree
+internal/pgmigrate	chain_tail_test.go	unexpressed	-
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree
 internal/platform/config	route_switch_absence_test.go	unexpressed	-
 internal/platform/fernet	fernet_test.go	unexpressed	-

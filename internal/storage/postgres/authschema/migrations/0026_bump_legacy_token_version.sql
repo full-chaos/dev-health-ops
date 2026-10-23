@@ -1,4 +1,4 @@
--- 0018 an increment-only way to raise go-api's users.token_version (CHAOS-10705).
+-- 0026 an increment-only way to raise go-api's users.token_version (CHAOS-10705).
 -- ADDITIVE ONLY. See 0001's header.
 --
 -- A password reset or change ends the access tokens go-api minted without a

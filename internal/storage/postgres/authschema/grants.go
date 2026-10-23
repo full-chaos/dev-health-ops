@@ -133,7 +133,7 @@ type DefinerFunction struct {
 type ColumnTarget struct{ Table, Column string }
 
 // RuntimeFunctions is the complete list of SECURITY DEFINER functions the
-// runtime role may execute. bump_legacy_token_version (migration 0018) can only
+// runtime role may execute. bump_legacy_token_version (migration 0026) can only
 // add one to go-api's users.token_version, so a password change ends go-api's
 // access tokens without giving the role UPDATE on public.users, where a column
 // grant could write a lower value and make old tokens valid again.

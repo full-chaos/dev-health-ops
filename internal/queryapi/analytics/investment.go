@@ -646,7 +646,7 @@ func investmentContextFor(orgID string, dimensions []Dimension, forceTeamJoin, r
 		// ClickHouse implicitly promotes a Date value to midnight UTC
 		// DateTime for this comparison, matching Python's own date (not
 		// datetime) request.start_date/end_date parameters.
-		DateFilter:        InvestmentWindowClause(true),
+		DateFilter:        investmentDateFilter(dimensions),
 		ExtraClauses:      strings.Join(joins, "\n"),
 		UseInvestment:     true,
 		UseRepoAllocation: useRepoAllocation,
@@ -669,4 +669,20 @@ func canonicalOnlyDimension(d Dimension) bool {
 // the chart is in its coverage (CHAOS-9221 rounds 135 and 138).
 func unitRepoExpr(effortAlias, unitAlias string) string {
 	return fmt.Sprintf("if(%[1]s.work_unit_id != '', %[1]s.repo_id, %[2]s.repo_id)", effortAlias, unitAlias)
+}
+
+// categorisedOnlySQL keeps the units that reached the model. A unit under the evidence gate (too little text, or no
+// text source) carries a fixed uniform prior, not a measured split.
+const categorisedOnlySQL = "work_unit_investments.categorization_status NOT IN ('insufficient_evidence', 'no_text_sources')"
+
+// investmentDateFilter is the window of an investment read. A read that shows the theme or subcategory MIX leaves out
+// the gated units, so the shares describe the categorised units only; every other dimension counts work units and keeps them.
+func investmentDateFilter(dimensions []Dimension) string {
+	filter := InvestmentWindowClause(true)
+	for _, d := range dimensions {
+		if d == DimensionTheme || d == DimensionSubcategory {
+			return filter + "\n  AND " + categorisedOnlySQL
+		}
+	}
+	return filter
 }

@@ -139,3 +139,61 @@ func TestAnOversizedStoredSecretIsRefusedLikeAnUnknownBinding(t *testing.T) {
 		t.Fatalf("%d decrypt steps, want the one dummy step", decryptWork.Load()-work)
 	}
 }
+
+// A stored secret sealed to the largest ciphertext at or under the cap is a
+// usable binding; the next size up is refused like an unknown binding, with
+// the same single decrypt step.
+func TestStoredSecretCapBoundaryClassesAreEqualOnEitherSide(t *testing.T) {
+	const capBytes = 8192
+	if maxStoredSecretBytes != capBytes {
+		t.Fatalf("the stored-secret cap is %d, the contract is %d", maxStoredSecretBytes, capBytes)
+	}
+	f := newRefusalFixture(t, "active")
+	body := []byte(`{"event":{"id":"E1","event_type":"pagey.ping","occurred_at":"2026-01-01T00:00:00Z","data":{}}}`)
+	sealTo := func(size int) (secret, ciphertext string) {
+		secret = strings.Repeat("s", size)
+		sealed, err := f.deps.Decryptor.Encrypt([]byte(secret))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return secret, sealed.Reveal()
+	}
+	var atCap, overCap struct{ secret, ciphertext string }
+	for size := 5000; ; size++ {
+		secret, ciphertext := sealTo(size)
+		if len(ciphertext) > capBytes {
+			overCap.secret, overCap.ciphertext = secret, ciphertext
+			break
+		}
+		atCap.secret, atCap.ciphertext = secret, ciphertext
+	}
+	if len(atCap.ciphertext) > capBytes || len(overCap.ciphertext) <= capBytes || len(overCap.ciphertext)-len(atCap.ciphertext) > 32 {
+		t.Fatalf("boundary sizes %d and %d around %d", len(atCap.ciphertext), len(overCap.ciphertext), capBytes)
+	}
+	previous := loadBinding
+	var current string
+	loadBinding = func(ctx context.Context, pool *pgxpool.Pool, id string) (pagerdutyBinding, error) {
+		found, err := previous(ctx, pool, id)
+		found.SigningSecretEncrypted = current
+		return found, err
+	}
+	t.Cleanup(func() { loadBinding = previous })
+
+	current = atCap.ciphertext
+	work := decryptWork.Load()
+	if got, _ := f.send(f.bindingID, f.sub, pagerdutySign(atCap.secret, body), body); got.Code != http.StatusNoContent {
+		t.Fatalf("a secret at the cap answered %d", got.Code)
+	}
+	if decryptWork.Load()-work != 1 {
+		t.Fatalf("%d decrypt steps at the cap, want 1", decryptWork.Load()-work)
+	}
+	current = overCap.ciphertext
+	work = decryptWork.Load()
+	got, _ := f.send(f.bindingID, f.sub, pagerdutySign(overCap.secret, body), body)
+	if got.Code != http.StatusUnauthorized || got.Body.String() != `{"detail":"Invalid signature"}` {
+		t.Fatalf("a secret over the cap answered %d %s", got.Code, got.Body.String())
+	}
+	if decryptWork.Load()-work != 1 {
+		t.Fatalf("%d decrypt steps over the cap, want 1", decryptWork.Load()-work)
+	}
+}
